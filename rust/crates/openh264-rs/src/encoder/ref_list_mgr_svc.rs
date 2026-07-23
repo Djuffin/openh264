@@ -1,0 +1,1900 @@
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    unused_variables,
+    unused_unsafe
+)]
+
+//! Reference picture list management and Long-Term Reference (LTR) control.
+//!
+//! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
+//! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
+
+use crate::lib::*;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+pub const STR_ROOM: i32 = 1;
+pub const MAX_SHORT_REF_COUNT: usize = 16;
+pub const MAX_REF_PIC_COUNT: usize = 16;
+pub const LONG_TERM_REF_NUM: i32 = 2;
+pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
+pub const MAX_TEMPORAL_LEVEL: usize = 8;
+pub const MAX_DEPENDENCY_LAYER: usize = 4;
+pub const MAX_REFERENCE_MMCO_COUNT_NUM: usize = 4;
+pub const MAX_REFERENCE_REORDER_COUNT_NUM: usize = 2;
+
+// Key frame & LTR feedback request types (matching codec_app_def.h)
+pub const NO_RECOVERY_REQUSET: u32 = 0;
+pub const LTR_RECOVERY_REQUEST: u32 = 1;
+pub const IDR_RECOVERY_REQUEST: u32 = 2;
+pub const NO_LTR_MARKING_FEEDBACK: u32 = 3;
+pub const LTR_MARKING_SUCCESS: u32 = 4;
+pub const LTR_MARKING_FAILED: u32 = 5;
+
+// Reference picture reception status
+pub const RECIEVE_UNKOWN: u8 = 0;
+pub const RECIEVE_SUCCESS: u8 = 1;
+pub const RECIEVE_FAILED: u8 = 2;
+
+// H.264 MMCO (Memory Management Control Operation) types
+pub const MMCO_END: i32 = 0;
+pub const MMCO_SHORT2UNUSED: i32 = 1;
+pub const MMCO_LONG2UNUSED: i32 = 2;
+pub const MMCO_SHORT2LONG: i32 = 3;
+pub const MMCO_SET_MAX_LONG: i32 = 4;
+pub const MMCO_RESET: i32 = 5;
+pub const MMCO_LONG: i32 = 6;
+
+// ============================================================================
+// Enumerations
+// ============================================================================
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LTR_MARKING_PROCESS_MODE {
+    LTR_DIRECT_MARK = 0,
+    LTR_DELAY_MARK = 1,
+}
+pub use LTR_MARKING_PROCESS_MODE::*;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum COMPARE_FRAME_NUM {
+    FRAME_NUM_EQUAL = 0x01,
+    FRAME_NUM_BIGGER = 0x02,
+    FRAME_NUM_SMALLER = 0x04,
+    FRAME_NUM_OVER_MAX = 0x08,
+}
+pub use COMPARE_FRAME_NUM::*;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum EWelsSliceType {
+    P_SLICE = 0,
+    B_SLICE = 1,
+    I_SLICE = 2,
+    SP_SLICE = 3,
+    SI_SLICE = 4,
+    UNKNOWN_SLICE = 5,
+}
+pub use EWelsSliceType::*;
+
+// ============================================================================
+// Core Data Structures
+// ============================================================================
+
+/// Long-Term Reference (LTR) state machine.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SLTRState {
+    /// LTR mark feedback status
+    pub uiLtrMarkState: u32,
+    /// Unsolved LTR mark feedback frame number from decoder
+    pub iLtrMarkFbFrameNum: i32,
+    /// Last LTR or IDR recover frame number
+    pub iLastRecoverFrameNum: i32,
+    /// Last correct frame number on decoder side
+    pub iLastCorFrameNumDec: i32,
+    /// Current frame number on decoder side
+    pub iCurFrameNumInDec: i32,
+    /// Direct mark or delay mark mode
+    pub iLTRMarkMode: i32,
+    /// Successfully marked LTR count
+    pub iLTRMarkSuccessNum: i32,
+    /// Current long-term reference index to mark
+    pub iCurLtrIdx: i32,
+    /// Active LTR index per temporal layer
+    pub iLastLtrIdx: [i32; MAX_TEMPORAL_LAYER_NUM],
+    /// Screen content Scene LTR index
+    pub iSceneLtrIdx: i32,
+    /// Frame interval since last LTR mark
+    pub uiLtrMarkInterval: u32,
+    /// Whether current frame is marked as LTR
+    pub bLTRMarkingFlag: bool,
+    /// Whether LTR marking is enabled
+    pub bLTRMarkEnable: bool,
+    /// Whether a T0 lost feedback was received
+    pub bReceivedT0LostFlag: bool,
+}
+
+impl Default for SLTRState {
+    fn default() -> Self {
+        Self {
+            uiLtrMarkState: NO_LTR_MARKING_FEEDBACK,
+            iLtrMarkFbFrameNum: -1,
+            iLastRecoverFrameNum: 0,
+            iLastCorFrameNumDec: -1,
+            iCurFrameNumInDec: -1,
+            iLTRMarkMode: LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32,
+            iLTRMarkSuccessNum: 0,
+            iCurLtrIdx: 0,
+            iLastLtrIdx: [0; MAX_TEMPORAL_LAYER_NUM],
+            iSceneLtrIdx: 0,
+            uiLtrMarkInterval: 0,
+            bLTRMarkingFlag: false,
+            bLTRMarkEnable: false,
+            bReceivedT0LostFlag: false,
+        }
+    }
+}
+
+/// Feature storage for screen content reference pictures.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SScreenBlockFeatureStorage {
+    pub bRefBlockFeatureCalculated: bool,
+}
+
+/// Reconstructed reference picture representation in the DPB.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SPicture {
+    pub pBuffer: *mut u8,
+    pub pData: [*mut u8; 3],
+    pub iLineSize: [i32; 3],
+    pub iWidthInPixel: i32,
+    pub iHeightInPixel: i32,
+    pub iPictureType: i32,
+    pub iFramePoc: i32,
+    pub fFrameRate: f32,
+    pub iFrameNum: i32,
+    pub uiRefMbType: *mut u32,
+    pub pRefMbQp: *mut u8,
+    pub pMbSkipSad: *mut i32,
+    pub sMvList: *mut std::ffi::c_void,
+    pub iMarkFrameNum: i32,
+    pub iLongTermPicNum: i32,
+    pub bUsedAsRef: bool,
+    pub bIsLongRef: bool,
+    pub bIsSceneLTR: bool,
+    pub uiRecieveConfirmed: u8,
+    pub uiTemporalId: u8,
+    pub uiSpatialId: u8,
+    pub iFrameAverageQp: i32,
+    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
+}
+
+impl SPicture {
+    pub unsafe fn SetUnref(&mut self) {
+        self.iFramePoc = -1;
+        self.iFrameNum = -1;
+        self.uiTemporalId = 255;
+        self.uiSpatialId = 255;
+        self.iLongTermPicNum = -1;
+        self.bIsLongRef = false;
+        self.uiRecieveConfirmed = RECIEVE_FAILED;
+        self.iMarkFrameNum = -1;
+        self.bUsedAsRef = false;
+        if !self.pScreenBlockFeatureStorage.is_null() {
+            (*self.pScreenBlockFeatureStorage).bRefBlockFeatureCalculated = false;
+        }
+    }
+}
+
+impl Default for SPicture {
+    fn default() -> Self {
+        Self {
+            pBuffer: std::ptr::null_mut(),
+            pData: [std::ptr::null_mut(); 3],
+            iLineSize: [0; 3],
+            iWidthInPixel: 0,
+            iHeightInPixel: 0,
+            iPictureType: 0,
+            iFramePoc: -1,
+            fFrameRate: 0.0,
+            iFrameNum: -1,
+            uiRefMbType: std::ptr::null_mut(),
+            pRefMbQp: std::ptr::null_mut(),
+            pMbSkipSad: std::ptr::null_mut(),
+            sMvList: std::ptr::null_mut(),
+            iMarkFrameNum: -1,
+            iLongTermPicNum: -1,
+            bUsedAsRef: false,
+            bIsLongRef: false,
+            bIsSceneLTR: false,
+            uiRecieveConfirmed: RECIEVE_FAILED,
+            uiTemporalId: 255,
+            uiSpatialId: 255,
+            iFrameAverageQp: 0,
+            pScreenBlockFeatureStorage: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// Reference picture lists for a spatial dependency layer.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SRefList {
+    pub pShortRefList: [*mut SPicture; 1 + MAX_SHORT_REF_COUNT],
+    pub pLongRefList: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
+    pub pNextBuffer: *mut SPicture,
+    pub pRef: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
+    pub uiShortRefCount: u8,
+    pub uiLongRefCount: u8,
+}
+
+impl Default for SRefList {
+    fn default() -> Self {
+        Self {
+            pShortRefList: [std::ptr::null_mut(); 1 + MAX_SHORT_REF_COUNT],
+            pLongRefList: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
+            pNextBuffer: std::ptr::null_mut(),
+            pRef: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
+            uiShortRefCount: 0,
+            uiLongRefCount: 0,
+        }
+    }
+}
+
+/// Reference picture list reordering syntax element.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SReorderingSyntax {
+    pub uiAbsDiffPicNumMinus1: u32,
+    pub iLongTermPicNum: u16,
+    pub uiReorderingOfPicNumsIdc: u16,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SRefPicListReorderSyntax {
+    pub SReorderingSyntax: [SReorderingSyntax; MAX_REFERENCE_REORDER_COUNT_NUM],
+}
+
+/// Decoded reference picture marking MMCO command syntax.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SMmcoRef {
+    pub iMmcoType: i32,
+    pub iShortFrameNum: i32,
+    pub iDiffOfPicNum: i32,
+    pub iLongTermPicNum: i32,
+    pub iLongTermFrameIdx: i32,
+    pub iMaxLongTermFrameIdx: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SRefPicMarking {
+    pub SMmcoRef: [SMmcoRef; MAX_REFERENCE_MMCO_COUNT_NUM],
+    pub uiMmcoCount: u8,
+    pub bNoOutputOfPriorPicsFlag: bool,
+    pub bLongTermRefFlag: bool,
+    pub bAdaptiveRefPicMarkingModeFlag: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SSliceHeader {
+    pub sRefReordering: SRefPicListReorderSyntax,
+    pub sRefMarking: SRefPicMarking,
+    pub uiRefCount: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SSliceHeaderExt {
+    pub sSliceHeader: SSliceHeader,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SSlice {
+    pub sSliceHeaderExt: SSliceHeaderExt,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SSpatialLayerInternal {
+    pub iHighestTemporalId: i32,
+    pub iFrameNum: i32,
+    pub iPOC: i32,
+    pub uiIdrPicId: u32,
+    pub bEncCurFrmAsIdrFlag: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SWelsSvcCodingParam {
+    pub iUsageType: EUsageType,
+    pub iLTRRefNum: i32,
+    pub iNumRefFrame: i32,
+    pub uiGopSize: u32,
+    pub bEnableLongTermReference: bool,
+    pub iLtrMarkPeriod: i32,
+    pub iSpatialLayerNum: i32,
+    pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SWelsSPS {
+    pub uiLog2MaxFrameNum: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SDqLayer {
+    pub iMaxSliceNum: i32,
+    pub ppSliceInLayer: *mut *mut SSlice,
+    pub pRefOri: [*mut SPicture; MAX_REF_PIC_COUNT],
+}
+
+impl Default for SDqLayer {
+    fn default() -> Self {
+        Self {
+            iMaxSliceNum: 0,
+            ppSliceInLayer: std::ptr::null_mut(),
+            pRefOri: [std::ptr::null_mut(); MAX_REF_PIC_COUNT],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SVAAFrameInfo {
+    pub uiValidLongTermPicIdx: u32,
+    pub uiMarkLongTermPicIdx: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SVAAFrameInfoExt {
+    pub sVaaInfo: SVAAFrameInfo,
+    pub iNumOfAvailableRef: i32,
+    pub iVaaBestRefFrameNum: i32,
+    pub pVaaBestBlockStaticIdc: *mut u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SExpandPicFunc {
+    pub pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+    pub pfExpandChromaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SWelsFuncPtrList {
+    pub sExpandPicFunc: SExpandPicFunc,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SLogContext {
+    pub pLogCtx: *mut std::ffi::c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SLTRRecoverRequest {
+    pub uiFeedbackType: u32,
+    pub uiIDRPicId: u32,
+    pub iLastCorrectFrameNum: i32,
+    pub iCurrentFrameNum: i32,
+    pub iLayerId: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SLTRMarkingFeedback {
+    pub uiFeedbackType: u32,
+    pub uiIDRPicId: u32,
+    pub iLTRFrameNum: i32,
+    pub iLayerId: i32,
+}
+
+#[repr(C)]
+pub struct CWelsPreProcessVtbl {
+    pub UpdateSrcListLosslessScreenRefSelectionWithLtr: unsafe extern "C" fn(*mut CWelsPreProcess, *mut SPicture, i32, u32, *mut *mut SPicture),
+    pub UpdateSrcList: unsafe extern "C" fn(*mut CWelsPreProcess, *mut SPicture, i32, *mut *mut SPicture, u8),
+    pub UpdateBlockIdcForScreen: unsafe extern "C" fn(*mut CWelsPreProcess, *mut u8, *mut SPicture, *mut SPicture),
+    pub GetRefFrameInfo: unsafe extern "C" fn(*mut CWelsPreProcess, i32, bool, *mut *mut SPicture) -> i32,
+}
+
+#[repr(C)]
+pub struct CWelsPreProcess {
+    pub vptr: *const CWelsPreProcessVtbl,
+}
+
+/// Master encoder context state for reference list management.
+#[repr(C)]
+pub struct sWelsEncCtx {
+    pub pSvcParam: *mut SWelsSvcCodingParam,
+    pub pSps: *mut SWelsSPS,
+    pub uiDependencyId: u8,
+    pub uiTemporalId: u8,
+    pub eSliceType: i32,
+    pub bCurFrameMarkedAsSceneLtr: bool,
+    pub pCurDqLayer: *mut SDqLayer,
+    pub pDecPic: *mut SPicture,
+    pub pEncPic: *mut SPicture,
+    pub ppRefPicListExt: [*mut SRefList; MAX_DEPENDENCY_LAYER],
+    pub pLtr: [SLTRState; MAX_DEPENDENCY_LAYER],
+    pub bRefOfCurTidIsLtr: [[bool; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
+    pub pRefList0: [*mut SPicture; MAX_REF_PIC_COUNT],
+    pub iNumRef0: i32,
+    pub pVaa: *mut SVAAFrameInfoExt,
+    pub pVpp: *mut CWelsPreProcess,
+    pub pFuncList: *mut SWelsFuncPtrList,
+    pub pReferenceStrategy: *mut (dyn IWelsReferenceStrategy + 'static),
+    pub sLogCtx: SLogContext,
+}
+
+// ============================================================================
+// Helper Utilities & Logging
+// ============================================================================
+
+#[inline]
+pub unsafe fn ExpandReferencingPicture(
+    pData: [*mut u8; 3],
+    iWidth: i32,
+    iHeight: i32,
+    iLineSize: [i32; 3],
+    pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+    pfExpandChromaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+) {
+    if let Some(fLuma) = pfExpandLumaPicture {
+        if !pData[0].is_null() {
+            fLuma(pData[0], iLineSize[0], iWidth, iHeight);
+        }
+    }
+    if let Some(fChroma) = pfExpandChromaPicture {
+        let iChromaWidth = iWidth >> 1;
+        let iChromaHeight = iHeight >> 1;
+        if !pData[1].is_null() {
+            fChroma(pData[1], iLineSize[1], iChromaWidth, iChromaHeight);
+        }
+        if !pData[2].is_null() {
+            fChroma(pData[2], iLineSize[2], iChromaWidth, iChromaHeight);
+        }
+    }
+}
+
+// ============================================================================
+// Global Reference Picture List Lifecycle Functions
+// ============================================================================
+
+/// Reset LTR marking, recovery, and feedback state to defaults.
+pub unsafe fn ResetLtrState(pLtr: *mut SLTRState) {
+    if pLtr.is_null() {
+        return;
+    }
+    (*pLtr).bReceivedT0LostFlag = false;
+    (*pLtr).iLastRecoverFrameNum = 0;
+    (*pLtr).iLastCorFrameNumDec = -1;
+    (*pLtr).iCurFrameNumInDec = -1;
+
+    // LTR mark
+    (*pLtr).iLTRMarkMode = LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
+    (*pLtr).iLTRMarkSuccessNum = 0;
+    (*pLtr).bLTRMarkingFlag = false;
+    (*pLtr).bLTRMarkEnable = false;
+    (*pLtr).iCurLtrIdx = 0;
+    (*pLtr).iLastLtrIdx = [0; MAX_TEMPORAL_LAYER_NUM];
+    (*pLtr).uiLtrMarkInterval = 0;
+
+    // LTR mark feedback
+    (*pLtr).uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
+    (*pLtr).iLtrMarkFbFrameNum = -1;
+}
+
+/// Reset active reference picture lists for current spatial layer.
+pub unsafe fn WelsResetRefList(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+
+    for i in 0..=(MAX_SHORT_REF_COUNT) {
+        (*pRefList).pShortRefList[i] = std::ptr::null_mut();
+    }
+    let ltrRefNum = if !(*pCtx).pSvcParam.is_null() {
+        (*(*pCtx).pSvcParam).iLTRRefNum as usize
+    } else {
+        0
+    };
+    for i in 0..=(ltrRefNum) {
+        if i <= MAX_REF_PIC_COUNT {
+            (*pRefList).pLongRefList[i] = std::ptr::null_mut();
+        }
+    }
+    let numRefFrame = if !(*pCtx).pSvcParam.is_null() {
+        (*(*pCtx).pSvcParam).iNumRefFrame as usize
+    } else {
+        0
+    };
+    for i in 0..=(numRefFrame) {
+        if i <= MAX_REF_PIC_COUNT {
+            let pPic = (*pRefList).pRef[i];
+            if !pPic.is_null() {
+                (*pPic).SetUnref();
+            }
+        }
+    }
+
+    (*pRefList).uiLongRefCount = 0;
+    (*pRefList).uiShortRefCount = 0;
+    (*pRefList).pNextBuffer = (*pRefList).pRef[0];
+}
+
+/// Remove a long-term reference entry by index from pLongRefList.
+pub unsafe fn DeleteLTRFromLongList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
+    if pCtx.is_null() {
+        return;
+    }
+    let pRefList = (*pCtx).ppRefPicListExt[(*pCtx).uiDependencyId as usize];
+    if pRefList.is_null() {
+        return;
+    }
+    let count = (*pRefList).uiLongRefCount as i32;
+    let mut k = iIdx;
+    while k < count - 1 {
+        (*pRefList).pLongRefList[k as usize] = (*pRefList).pLongRefList[(k + 1) as usize];
+        k += 1;
+    }
+    if k >= 0 && (k as usize) <= MAX_REF_PIC_COUNT {
+        (*pRefList).pLongRefList[k as usize] = std::ptr::null_mut();
+    }
+    if (*pRefList).uiLongRefCount > 0 {
+        (*pRefList).uiLongRefCount -= 1;
+    }
+}
+
+/// Remove a short-term reference entry by index from pShortRefList.
+pub unsafe fn DeleteSTRFromShortList(pCtx: *mut sWelsEncCtx, iIdx: i32) {
+    if pCtx.is_null() {
+        return;
+    }
+    let pRefList = (*pCtx).ppRefPicListExt[(*pCtx).uiDependencyId as usize];
+    if pRefList.is_null() {
+        return;
+    }
+    let count = (*pRefList).uiShortRefCount as i32;
+    let mut k = iIdx;
+    while k < count - 1 {
+        (*pRefList).pShortRefList[k as usize] = (*pRefList).pShortRefList[(k + 1) as usize];
+        k += 1;
+    }
+    if k >= 0 && (k as usize) <= MAX_SHORT_REF_COUNT {
+        (*pRefList).pShortRefList[k as usize] = std::ptr::null_mut();
+    }
+    if (*pRefList).uiShortRefCount > 0 {
+        (*pRefList).uiShortRefCount -= 1;
+    }
+}
+
+/// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
+pub unsafe fn DeleteNonSceneLTR(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() {
+        return;
+    }
+    let pRefList = (*pCtx).ppRefPicListExt[(*pCtx).uiDependencyId as usize];
+    if pRefList.is_null() {
+        return;
+    }
+    let numRef = (*(*pCtx).pSvcParam).iNumRefFrame;
+    let mut i = 0;
+    while i < numRef {
+        let pRef = (*pRefList).pLongRefList[i as usize];
+        if !pRef.is_null()
+            && (*pRef).bUsedAsRef
+            && (*pRef).bIsLongRef
+            && (!(*pRef).bIsSceneLTR)
+            && ((*pCtx).uiTemporalId < (*pRef).uiTemporalId || (*pCtx).bCurFrameMarkedAsSceneLtr)
+        {
+            (*pRef).SetUnref();
+            DeleteLTRFromLongList(pCtx, i);
+            i -= 1;
+        }
+        i += 1;
+    }
+}
+
+/// Modular frame number distance comparison arithmetic.
+pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32) -> i32 {
+    if iFrameNumA > iMaxFrameNumPlus1 || iFrameNumB > iMaxFrameNumPlus1 {
+        return -2;
+    }
+    let iDiffAB = (iFrameNumA as i64 - iFrameNumB as i64).abs();
+    let iDiffMin = iDiffAB;
+    if iDiffMin == 0 {
+        return COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32;
+    }
+
+    let iNumA = ((iFrameNumA + iMaxFrameNumPlus1) as i64 - iFrameNumB as i64).abs();
+    if iNumA == 0 {
+        return COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32;
+    } else if iDiffMin > iNumA {
+        return COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32;
+    }
+
+    let iNumB = ((iFrameNumB + iMaxFrameNumPlus1) as i64 - iFrameNumA as i64).abs();
+    if iNumB == 0 {
+        return COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32;
+    } else if iDiffMin > iNumB {
+        return COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32;
+    }
+
+    if iFrameNumA > iFrameNumB {
+        COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
+    } else {
+        COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32
+    }
+}
+
+/// Purges unacknowledged or invalid LTR frames based on decoder feedback.
+pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pSvcParam.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    for i in 0..LONG_TERM_REF_NUM {
+        let pPic = (*pRefList).pLongRefList[i as usize];
+        if !pPic.is_null() {
+            let cond1 = CompareFrameNum((*pPic).iFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
+                == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
+                && ((CompareFrameNum((*pPic).iFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
+                    & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
+                    != 0);
+
+            if cond1 {
+                (*pPic).SetUnref();
+                DeleteLTRFromLongList(pCtx, i);
+                pLtr.bLTRMarkEnable = true;
+                if (*pRefList).uiLongRefCount == 0 {
+                    pParamInternal.bEncCurFrmAsIdrFlag = true;
+                }
+            } else {
+                let cond2 = CompareFrameNum((*pPic).iMarkFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
+                    == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
+                    && ((CompareFrameNum((*pPic).iMarkFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
+                        & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
+                        != 0)
+                    && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32;
+
+                if cond2 {
+                    (*pPic).SetUnref();
+                    DeleteLTRFromLongList(pCtx, i);
+                    pLtr.bLTRMarkEnable = true;
+                    if (*pRefList).uiLongRefCount == 0 {
+                        pParamInternal.bEncCurFrmAsIdrFlag = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
+pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
+        for i in 0..((*pRefList).uiLongRefCount as i32) {
+            let pPic = (*pRefList).pLongRefList[i as usize];
+            if !pPic.is_null()
+                && (*pPic).iFrameNum == pLtr.iLtrMarkFbFrameNum
+                && (*pPic).uiRecieveConfirmed != RECIEVE_SUCCESS
+            {
+                (*pPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
+                if !(*pCtx).pVaa.is_null() {
+                    (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = (*pPic).iLongTermPicNum as u32;
+                }
+                pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
+                pLtr.iLastRecoverFrameNum = pLtr.iLtrMarkFbFrameNum;
+                pLtr.iLastCorFrameNumDec = pLtr.iLtrMarkFbFrameNum;
+
+                let mut j = 0;
+                while j < (*pRefList).uiLongRefCount as i32 {
+                    let pLong = (*pRefList).pLongRefList[j as usize];
+                    if !pLong.is_null() && (*pLong).iLongTermPicNum != pLtr.iCurLtrIdx {
+                        (*pLong).SetUnref();
+                        DeleteLTRFromLongList(pCtx, j);
+                    } else {
+                        j += 1;
+                    }
+                }
+
+                pLtr.iLTRMarkSuccessNum += 1;
+                pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
+                pLtr.iLTRMarkMode = if pLtr.iLTRMarkSuccessNum >= LONG_TERM_REF_NUM {
+                    LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32
+                } else {
+                    LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32
+                };
+                pLtr.bLTRMarkEnable = true;
+                break;
+            }
+        }
+        pLtr.uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
+    } else if pLtr.uiLtrMarkState == LTR_MARKING_FAILED {
+        for i in 0..((*pRefList).uiLongRefCount as i32) {
+            let pPic = (*pRefList).pLongRefList[i as usize];
+            if !pPic.is_null() && (*pPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
+                (*pPic).SetUnref();
+                DeleteLTRFromLongList(pCtx, i);
+                break;
+            }
+        }
+        pLtr.uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
+        pLtr.bLTRMarkEnable = true;
+
+        if pLtr.iLTRMarkSuccessNum == 0 {
+            pParamInternal.bEncCurFrmAsIdrFlag = true;
+        }
+    }
+}
+
+/// Executes promotion and movement of frames from short-term to long-term lists.
+pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pSps.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
+    let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
+        (gopSize >> 1) as i32
+    } else {
+        1
+    };
+    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let mut i = 0usize;
+    let mut bMoveLtrFromShortToLong = false;
+    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    if (*pCtx).eSliceType == EWelsSliceType::I_SLICE as i32 {
+        i = 0;
+        let pShort = (*pRefList).pShortRefList[i];
+        if !pShort.is_null() {
+            (*pShort).uiRecieveConfirmed = RECIEVE_SUCCESS;
+        }
+    } else if pLtr.bLTRMarkingFlag {
+        if !(*pCtx).pVaa.is_null() {
+            (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u32;
+        }
+
+        if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
+            for idx in 0..((*pRefList).uiShortRefCount as usize) {
+                let pShort = (*pRefList).pShortRefList[idx];
+                if !pShort.is_null() {
+                    if CompareFrameNum(
+                        pParamInternal.iFrameNum,
+                        (*pShort).iFrameNum + iGoPFrameNumInterval,
+                        iMaxFrameNumPlus1,
+                    ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
+                    {
+                        i = idx;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (*pCtx).eSliceType == EWelsSliceType::I_SLICE as i32 || pLtr.bLTRMarkingFlag {
+        let pShort = (*pRefList).pShortRefList[i];
+        if !pShort.is_null() {
+            (*pShort).bIsLongRef = true;
+            (*pShort).iLongTermPicNum = pLtr.iCurLtrIdx;
+            (*pShort).iMarkFrameNum = pParamInternal.iFrameNum;
+        }
+    }
+
+    if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32
+        && (*pCtx).eSliceType != EWelsSliceType::I_SLICE as i32
+        && !pLtr.bLTRMarkingFlag
+    {
+        for j in 0..((*pRefList).uiShortRefCount as usize) {
+            let pShort = (*pRefList).pShortRefList[j];
+            if !pShort.is_null() && (*pShort).bIsLongRef {
+                i = j;
+                bMoveLtrFromShortToLong = true;
+                break;
+            }
+        }
+    }
+
+    if (pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 && pLtr.bLTRMarkingFlag)
+        || ((pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32) && bMoveLtrFromShortToLong)
+    {
+        let tid = (*pCtx).uiTemporalId as usize;
+        if uiDid < MAX_DEPENDENCY_LAYER && tid < MAX_TEMPORAL_LEVEL {
+            (*pCtx).bRefOfCurTidIsLtr[uiDid][tid] = true;
+        }
+
+        let longCount = (*pRefList).uiLongRefCount as usize;
+        if longCount > 0 {
+            for k in (1..=longCount).rev() {
+                if k <= MAX_REF_PIC_COUNT {
+                    (*pRefList).pLongRefList[k] = (*pRefList).pLongRefList[k - 1];
+                }
+            }
+        }
+        (*pRefList).pLongRefList[0] = (*pRefList).pShortRefList[i];
+        (*pRefList).uiLongRefCount += 1;
+        if (*pRefList).uiLongRefCount as i32 > (*(*pCtx).pSvcParam).iLTRRefNum {
+            let lastIdx = ((*pRefList).uiLongRefCount - 1) as usize;
+            let pLast = (*pRefList).pLongRefList[lastIdx];
+            if !pLast.is_null() {
+                (*pLast).SetUnref();
+            }
+            DeleteLTRFromLongList(pCtx, lastIdx as i32);
+        }
+        DeleteSTRFromShortList(pCtx, i as i32);
+    }
+}
+
+/// Executes promotion of screen content references to long-term reference slots.
+pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pDecPic.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+    let iLtrIdx = (*(*pCtx).pDecPic).iLongTermPicNum;
+    if !(*pCtx).pVaa.is_null() {
+        (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = (*(*pCtx).pDecPic).iLongTermPicNum as u32;
+    }
+
+    if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
+        let pLong = (*pRefList).pLongRefList[iLtrIdx as usize];
+        if !pLong.is_null() {
+            (*pLong).SetUnref();
+        } else {
+            (*pRefList).uiLongRefCount += 1;
+        }
+        (*pRefList).pLongRefList[iLtrIdx as usize] = (*pCtx).pDecPic;
+    }
+}
+
+/// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
+pub unsafe fn PrefetchNextBuffer(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return;
+    }
+    let kiNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
+
+    (*pRefList).pNextBuffer = std::ptr::null_mut();
+    for i in 0..=(kiNumRef as usize) {
+        if i <= MAX_REF_PIC_COUNT {
+            let pPic = (*pRefList).pRef[i];
+            if !pPic.is_null() && !(*pPic).bUsedAsRef {
+                (*pRefList).pNextBuffer = pPic;
+                break;
+            }
+        }
+    }
+
+    if (*pRefList).pNextBuffer.is_null() && (*pRefList).uiShortRefCount > 0 {
+        let lastIdx = ((*pRefList).uiShortRefCount - 1) as usize;
+        (*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
+        if !(*pRefList).pNextBuffer.is_null() {
+            (*(*pRefList).pNextBuffer).SetUnref();
+        }
+    }
+
+    (*pCtx).pDecPic = (*pRefList).pNextBuffer;
+}
+
+/// Updates reference picture list after current frame reconstruction.
+pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
+    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+        return false;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() || (*pRefList).pRef[0].is_null() {
+        return false;
+    }
+
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let kuiTid = (*pCtx).uiTemporalId;
+    let kuiDid = (*pCtx).uiDependencyId;
+    let keSliceType = (*pCtx).eSliceType;
+
+    if !(*pCtx).pDecPic.is_null() {
+        let pDecPic = (*pCtx).pDecPic;
+        if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId {
+            if !(*pCtx).pFuncList.is_null() {
+                ExpandReferencingPicture(
+                    (*pDecPic).pData,
+                    (*pDecPic).iWidthInPixel,
+                    (*pDecPic).iHeightInPixel,
+                    (*pDecPic).iLineSize,
+                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandLumaPicture,
+                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandChromaPicture,
+                );
+            }
+        }
+
+        (*pDecPic).uiTemporalId = kuiTid;
+        (*pDecPic).uiSpatialId = kuiDid;
+        (*pDecPic).iFrameNum = pParamD.iFrameNum;
+        (*pDecPic).iFramePoc = pParamD.iPOC;
+        (*pDecPic).uiRecieveConfirmed = RECIEVE_UNKOWN;
+        (*pDecPic).bUsedAsRef = true;
+
+        let shortCount = (*pRefList).uiShortRefCount as usize;
+        for iRefIdx in (0..shortCount).rev() {
+            if iRefIdx + 1 <= MAX_SHORT_REF_COUNT {
+                (*pRefList).pShortRefList[iRefIdx + 1] = (*pRefList).pShortRefList[iRefIdx];
+            }
+        }
+        (*pRefList).pShortRefList[0] = pDecPic;
+        (*pRefList).uiShortRefCount += 1;
+    }
+
+    if keSliceType == EWelsSliceType::P_SLICE as i32 {
+        if (*pCtx).uiTemporalId == 0 {
+            if (*(*pCtx).pSvcParam).bEnableLongTermReference {
+                LTRMarkProcess(pCtx);
+                DeleteInvalidLTR(pCtx);
+                HandleLTRMarkFeedback(pCtx);
+
+                pLtr.bReceivedT0LostFlag = false;
+                pLtr.bLTRMarkingFlag = false;
+                pLtr.uiLtrMarkInterval += 1;
+            }
+
+            let mut i = ((*pRefList).uiShortRefCount as i32) - 1;
+            while i > 0 {
+                let pShort = (*pRefList).pShortRefList[i as usize];
+                if !pShort.is_null() {
+                    (*pShort).SetUnref();
+                }
+                DeleteSTRFromShortList(pCtx, i);
+                i -= 1;
+            }
+            if (*pRefList).uiShortRefCount > 0 {
+                let p0 = (*pRefList).pShortRefList[0];
+                if !p0.is_null() && ((*p0).uiTemporalId > 0 || (*p0).iFrameNum != pParamD.iFrameNum) {
+                    (*p0).SetUnref();
+                    DeleteSTRFromShortList(pCtx, 0);
+                }
+            }
+        }
+    } else {
+        if (*(*pCtx).pSvcParam).bEnableLongTermReference {
+            LTRMarkProcess(pCtx);
+
+            pLtr.iCurLtrIdx = (pLtr.iCurLtrIdx + 1) % LONG_TERM_REF_NUM;
+            pLtr.iLTRMarkSuccessNum = 1;
+            pLtr.bLTRMarkEnable = true;
+            pLtr.uiLtrMarkInterval = 0;
+
+            if !(*pCtx).pVaa.is_null() {
+                (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = 0;
+                (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = 0;
+            }
+        }
+    }
+
+    if !(*pCtx).pReferenceStrategy.is_null() {
+        (*(*pCtx).pReferenceStrategy).EndofUpdateRefList();
+    }
+    true
+}
+
+/// Checks whether candidate frame number is already occupied in LTR list.
+pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pSps.is_null() {
+        return false;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pLtr = &(*pCtx).pLtr[uiDid];
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return false;
+    }
+    let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
+    let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
+        (gopSize >> 1) as i32
+    } else {
+        1
+    };
+    let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+    let pParamInternal = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    for i in 0..((*pRefList).uiLongRefCount as usize) {
+        let pLong = (*pRefList).pLongRefList[i];
+        if !pLong.is_null() {
+            let cond1 = pParamInternal.iFrameNum == (*pLong).iFrameNum
+                && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
+            let cond2 = CompareFrameNum(
+                pParamInternal.iFrameNum + iGoPFrameNumInterval,
+                (*pLong).iFrameNum,
+                iMaxFrameNumPlus1,
+            ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
+                && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32;
+
+            if cond1 || cond2 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Replicates base slice header reference marking syntax across all slices.
+pub unsafe fn WelsMarkMMCORefInfoWithBase(
+    ppSliceList: *mut *mut SSlice,
+    pBaseSlice: *mut SSlice,
+    kiCountSliceNum: i32,
+) {
+    if ppSliceList.is_null() || pBaseSlice.is_null() {
+        return;
+    }
+    let pBaseMarking = &(*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    for iSliceIdx in 0..kiCountSliceNum {
+        let pSlice = *ppSliceList.add(iSliceIdx as usize);
+        if !pSlice.is_null() {
+            (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = *pBaseMarking;
+        }
+    }
+}
+
+/// Constructs MMCO reference marking commands for slice headers.
+pub unsafe fn WelsMarkMMCORefInfo(
+    pCtx: *mut sWelsEncCtx,
+    pLtr: *mut SLTRState,
+    ppSliceList: *mut *mut SSlice,
+    kiCountSliceNum: i32,
+) {
+    if pCtx.is_null() || pLtr.is_null() || ppSliceList.is_null() || kiCountSliceNum <= 0 {
+        return;
+    }
+    let pBaseSlice = *ppSliceList.add(0);
+    if pBaseSlice.is_null() {
+        return;
+    }
+    let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
+    let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
+        (gopSize >> 1) as i32
+    } else {
+        1
+    };
+
+    *pRefPicMark = SRefPicMarking::default();
+
+    if (*(*pCtx).pSvcParam).bEnableLongTermReference && (*pLtr).bLTRMarkingFlag {
+        if (*pLtr).iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32 {
+            let count0 = pRefPicMark.uiMmcoCount as usize;
+            pRefPicMark.SMmcoRef[count0].iMaxLongTermFrameIdx = LONG_TERM_REF_NUM - 1;
+            pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SET_MAX_LONG;
+            pRefPicMark.uiMmcoCount += 1;
+
+            let count1 = pRefPicMark.uiMmcoCount as usize;
+            pRefPicMark.SMmcoRef[count1].iDiffOfPicNum = iGoPFrameNumInterval;
+            pRefPicMark.SMmcoRef[count1].iMmcoType = MMCO_SHORT2UNUSED;
+            pRefPicMark.uiMmcoCount += 1;
+
+            let count2 = pRefPicMark.uiMmcoCount as usize;
+            pRefPicMark.SMmcoRef[count2].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+            pRefPicMark.SMmcoRef[count2].iMmcoType = MMCO_LONG;
+            pRefPicMark.uiMmcoCount += 1;
+        } else if (*pLtr).iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
+            let count0 = pRefPicMark.uiMmcoCount as usize;
+            pRefPicMark.SMmcoRef[count0].iDiffOfPicNum = iGoPFrameNumInterval;
+            pRefPicMark.SMmcoRef[count0].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+            pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SHORT2LONG;
+            pRefPicMark.uiMmcoCount += 1;
+        }
+    }
+
+    WelsMarkMMCORefInfoWithBase(ppSliceList, pBaseSlice, kiCountSliceNum);
+}
+
+/// Evaluates LTR marking criteria and populates slice header MMCO commands.
+pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let kiCountSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+
+    if (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bLTRMarkEnable && (*pCtx).uiTemporalId == 0 {
+        if !pLtr.bReceivedT0LostFlag
+            && (pLtr.uiLtrMarkInterval as i32) > (*(*pCtx).pSvcParam).iLtrMarkPeriod
+            && CheckCurMarkFrameNumUsed(pCtx)
+        {
+            pLtr.bLTRMarkingFlag = true;
+            pLtr.bLTRMarkEnable = false;
+            pLtr.uiLtrMarkInterval = 0;
+            for i in 0..MAX_TEMPORAL_LAYER_NUM {
+                if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
+                    pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
+                }
+            }
+        } else {
+            pLtr.bLTRMarkingFlag = false;
+        }
+    }
+
+    WelsMarkMMCORefInfo(
+        pCtx,
+        pLtr,
+        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        kiCountSliceNum,
+    );
+}
+
+/// Evaluates LTR recovery request feedback packets from decoder.
+pub unsafe fn FilterLTRRecoveryRequest(
+    pCtx: *mut sWelsEncCtx,
+    pLTRRecoverRequest: *mut SLTRRecoverRequest,
+) -> i32 {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || pLTRRecoverRequest.is_null() {
+        return 0;
+    }
+    if !(*(*pCtx).pSvcParam).bEnableLongTermReference {
+        for iDid in 0..((*(*pCtx).pSvcParam).iSpatialLayerNum as usize) {
+            let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iDid];
+            pParamInternal.bEncCurFrmAsIdrFlag = true;
+        }
+    } else {
+        let pRequest = pLTRRecoverRequest;
+        let iLayerId = (*pRequest).iLayerId;
+        if iLayerId < 0 || iLayerId >= (*(*pCtx).pSvcParam).iSpatialLayerNum {
+            return 0;
+        }
+
+        let pLtr = &mut (*pCtx).pLtr[iLayerId as usize];
+        let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize];
+
+        if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == pParamInternal.uiIdrPicId {
+            if (*pRequest).iLastCorrectFrameNum == -1 {
+                pParamInternal.bEncCurFrmAsIdrFlag = true;
+                return 1;
+            } else if (*pRequest).iCurrentFrameNum == -1 {
+                pLtr.bReceivedT0LostFlag = true;
+                return 1;
+            } else {
+                let cond1 = (CompareFrameNum(pLtr.iLastRecoverFrameNum, (*pRequest).iLastCorrectFrameNum, iMaxFrameNumPlus1)
+                    & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
+                    != 0;
+                let cond2 = ((CompareFrameNum(pLtr.iLastRecoverFrameNum, (*pRequest).iCurrentFrameNum, iMaxFrameNumPlus1)
+                    & (COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32 | COMPARE_FRAME_NUM::FRAME_NUM_SMALLER as i32))
+                    != 0)
+                    && CompareFrameNum(pLtr.iLastRecoverFrameNum, (*pRequest).iLastCorrectFrameNum, iMaxFrameNumPlus1)
+                        == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32;
+
+                if cond1 || cond2 {
+                    pLtr.bReceivedT0LostFlag = true;
+                    pLtr.iLastCorFrameNumDec = (*pRequest).iLastCorrectFrameNum;
+                    pLtr.iCurFrameNumInDec = (*pRequest).iCurrentFrameNum;
+                }
+            }
+        }
+    }
+    1
+}
+
+/// Updates LTR marking confirmation or failure feedback from decoder.
+pub unsafe fn FilterLTRMarkingFeedback(
+    pCtx: *mut sWelsEncCtx,
+    pLTRMarkingFeedback: *mut SLTRMarkingFeedback,
+) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || pLTRMarkingFeedback.is_null() {
+        return;
+    }
+    let iLayerId = (*pLTRMarkingFeedback).iLayerId;
+    if iLayerId < 0 || iLayerId >= (*(*pCtx).pSvcParam).iSpatialLayerNum {
+        return;
+    }
+    let pLtr = &mut (*pCtx).pLtr[iLayerId as usize];
+    if (*(*pCtx).pSvcParam).bEnableLongTermReference {
+        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize];
+        if (*pLTRMarkingFeedback).uiIDRPicId == pParamInternal.uiIdrPicId
+            && ((*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_SUCCESS
+                || (*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_FAILED)
+        {
+            pLtr.uiLtrMarkState = (*pLTRMarkingFeedback).uiFeedbackType;
+            pLtr.iLtrMarkFbFrameNum = (*pLTRMarkingFeedback).iLTRFrameNum;
+        }
+    }
+}
+
+/// Builds active reference picture list pRefList0 for motion estimation.
+pub unsafe fn WelsBuildRefList(
+    pCtx: *mut sWelsEncCtx,
+    kiPOC: i32,
+    iBestLtrRefIdx: i32,
+) -> bool {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+        return false;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() {
+        return false;
+    }
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let kiNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
+    let kuiTid = (*pCtx).uiTemporalId;
+    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    (*pCtx).iNumRef0 = 0;
+    if (*pCtx).eSliceType != EWelsSliceType::I_SLICE as i32 {
+        if (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bReceivedT0LostFlag && (*pCtx).uiTemporalId == 0 {
+            for i in 0..((*pRefList).uiLongRefCount as usize) {
+                let pLong = (*pRefList).pLongRefList[i];
+                if !pLong.is_null() && (*pLong).uiRecieveConfirmed == RECIEVE_SUCCESS {
+                    let numRef0 = (*pCtx).iNumRef0 as usize;
+                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = pLong;
+                    (*pCtx).pRefList0[numRef0] = pLong;
+                    (*pCtx).iNumRef0 += 1;
+                    pLtr.iLastRecoverFrameNum = pParamD.iFrameNum;
+                    break;
+                }
+            }
+        } else {
+            for i in 0..((*pRefList).uiShortRefCount as usize) {
+                let pRef = (*pRefList).pShortRefList[i];
+                if !pRef.is_null()
+                    && (*pRef).bUsedAsRef
+                    && (*pRef).iFramePoc >= 0
+                    && (*pRef).uiTemporalId <= kuiTid
+                {
+                    let numRef0 = (*pCtx).iNumRef0 as usize;
+                    (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = pRef;
+                    (*pCtx).pRefList0[numRef0] = pRef;
+                    (*pCtx).iNumRef0 += 1;
+                }
+            }
+        }
+    } else {
+        WelsResetRefList(pCtx);
+        ResetLtrState(&mut (*pCtx).pLtr[uiDid]);
+        for k in 0..MAX_TEMPORAL_LEVEL {
+            (*pCtx).bRefOfCurTidIsLtr[uiDid][k] = false;
+        }
+        (*pCtx).pRefList0[0] = std::ptr::null_mut();
+    }
+
+    if (*pCtx).iNumRef0 > kiNumRef {
+        (*pCtx).iNumRef0 = kiNumRef;
+    }
+    (*pCtx).iNumRef0 > 0 || (*pCtx).eSliceType == EWelsSliceType::I_SLICE as i32
+}
+
+/// Invokes VPP UpdateBlockIdcForScreen to update static block map.
+pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pVaa.is_null() || (*pCtx).pVpp.is_null() {
+        return;
+    }
+    let pVaaExt = (*pCtx).pVaa;
+    for idx in 0..((*pCtx).iNumRef0 as usize) {
+        let pRef = (*pCtx).pRefList0[idx];
+        if !pRef.is_null() && (*pVaaExt).iVaaBestRefFrameNum != (*pRef).iFrameNum {
+            ((*(*(*pCtx).pVpp).vptr).UpdateBlockIdcForScreen)(
+                (*pCtx).pVpp,
+                (*pVaaExt).pVaaBestBlockStaticIdc,
+                pRef,
+                (*pCtx).pEncPic,
+            );
+        }
+    }
+}
+
+/// Serializes slice header reference picture reordering syntax and marking flags.
+pub unsafe fn WelsUpdateSliceHeaderSyntax(
+    pCtx: *mut sWelsEncCtx,
+    iAbsDiffPicNumMinus1: i32,
+    ppSliceList: *mut *mut SSlice,
+    uiFrameType: i32,
+) {
+    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || ppSliceList.is_null() {
+        return;
+    }
+    let kiCountSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pLtr = &(*pCtx).pLtr[uiDid];
+
+    for iIdx in 0..kiCountSliceNum {
+        let pSlice = *ppSliceList.add(iIdx as usize);
+        if pSlice.is_null() {
+            continue;
+        }
+        let pSliceHdr = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
+        let pRefReorder = &mut pSliceHdr.sRefReordering;
+        let pRefPicMark = &mut pSliceHdr.sRefMarking;
+
+        pSliceHdr.uiRefCount = (*pCtx).iNumRef0;
+        if (*pCtx).iNumRef0 > 0 {
+            let pRef0 = (*pCtx).pRefList0[0];
+            let isLongRef = !pRef0.is_null() && (*pRef0).bIsLongRef;
+            if !isLongRef || !(*(*pCtx).pSvcParam).bEnableLongTermReference {
+                pRefReorder.SReorderingSyntax[0].uiReorderingOfPicNumsIdc = 0;
+                pRefReorder.SReorderingSyntax[0].uiAbsDiffPicNumMinus1 = iAbsDiffPicNumMinus1 as u32;
+                pRefReorder.SReorderingSyntax[1].uiReorderingOfPicNumsIdc = 3;
+            } else {
+                let mut iRefIdx = 0usize;
+                while (iRefIdx as i32) < (*pCtx).iNumRef0 {
+                    if iRefIdx < MAX_REFERENCE_REORDER_COUNT_NUM {
+                        pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 2;
+                        let pR = (*pCtx).pRefList0[iRefIdx];
+                        if !pR.is_null() {
+                            pRefReorder.SReorderingSyntax[iRefIdx].iLongTermPicNum = (*pR).iLongTermPicNum as u16;
+                        }
+                    }
+                    iRefIdx += 1;
+                }
+                if iRefIdx < MAX_REFERENCE_REORDER_COUNT_NUM {
+                    pRefReorder.SReorderingSyntax[iRefIdx].uiReorderingOfPicNumsIdc = 3;
+                }
+            }
+        }
+
+        if uiFrameType == EVideoFrameType::VideoFrameTypeIDR as i32 {
+            pRefPicMark.bNoOutputOfPriorPicsFlag = false;
+            pRefPicMark.bLongTermRefFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
+        } else {
+            if (*(*pCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
+            } else {
+                pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bLTRMarkingFlag;
+            }
+        }
+    }
+}
+
+/// Updates reference picture syntax and picture number delta in slice headers.
+pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+        return;
+    }
+    let mut iAbsDiffPicNumMinus1 = -1i32;
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pParamD = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    if (*pCtx).iNumRef0 > 0 {
+        let pRef0 = (*pCtx).pRefList0[0];
+        if !pRef0.is_null() {
+            iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRef0).iFrameNum - 1;
+            if iAbsDiffPicNumMinus1 < 0 && !(*pCtx).pSps.is_null() {
+                iAbsDiffPicNumMinus1 += 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+            }
+        }
+    }
+
+    WelsUpdateSliceHeaderSyntax(
+        pCtx,
+        iAbsDiffPicNumMinus1,
+        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        kiFrameType,
+    );
+}
+
+/// Synchronizes reconstructed picture metadata back to the source input picture.
+pub unsafe fn UpdateOriginalPicInfo(pOrigPic: *mut SPicture, pReconPic: *mut SPicture) {
+    if pOrigPic.is_null() || pReconPic.is_null() {
+        return;
+    }
+    (*pOrigPic).iPictureType = (*pReconPic).iPictureType;
+    (*pOrigPic).iFramePoc = (*pReconPic).iFramePoc;
+    (*pOrigPic).iFrameNum = (*pReconPic).iFrameNum;
+    (*pOrigPic).uiSpatialId = (*pReconPic).uiSpatialId;
+    (*pOrigPic).uiTemporalId = (*pReconPic).uiTemporalId;
+    (*pOrigPic).iLongTermPicNum = (*pReconPic).iLongTermPicNum;
+    (*pOrigPic).bUsedAsRef = (*pReconPic).bUsedAsRef;
+    (*pOrigPic).bIsLongRef = (*pReconPic).bIsLongRef;
+    (*pOrigPic).bIsSceneLTR = (*pReconPic).bIsSceneLTR;
+    (*pOrigPic).iFrameAverageQp = (*pReconPic).iFrameAverageQp;
+}
+
+pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() {
+        return;
+    }
+    let iDIdx = (*pCtx).uiDependencyId as i32;
+    UpdateOriginalPicInfo((*pCtx).pEncPic, (*pCtx).pDecPic);
+    PrefetchNextBuffer(pCtx);
+    if !(*pCtx).pVpp.is_null() && !(*pCtx).pVaa.is_null() {
+        let pLongRefList = (*(*pCtx).ppRefPicListExt[iDIdx as usize]).pLongRefList.as_mut_ptr();
+        ((*(*(*pCtx).pVpp).vptr).UpdateSrcListLosslessScreenRefSelectionWithLtr)(
+            (*pCtx).pVpp,
+            (*pCtx).pEncPic,
+            iDIdx,
+            (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx,
+            pLongRefList,
+        );
+    }
+}
+
+pub unsafe fn UpdateSrcPicList(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() {
+        return;
+    }
+    let iDIdx = (*pCtx).uiDependencyId as i32;
+    UpdateOriginalPicInfo((*pCtx).pEncPic, (*pCtx).pDecPic);
+    PrefetchNextBuffer(pCtx);
+    if !(*pCtx).pVpp.is_null() {
+        let pRefList = (*pCtx).ppRefPicListExt[iDIdx as usize];
+        let pShortRefList = (*pRefList).pShortRefList.as_mut_ptr();
+        let shortCount = (*pRefList).uiShortRefCount;
+        ((*(*(*pCtx).pVpp).vptr).UpdateSrcList)(
+            (*pCtx).pVpp,
+            (*pCtx).pEncPic,
+            iDIdx,
+            pShortRefList,
+            shortCount,
+        );
+    }
+}
+
+/// Screen content specialized reference picture list update.
+pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
+    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || (*pCtx).pSvcParam.is_null() {
+        return false;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    if pRefList.is_null() || (*pRefList).pRef[0].is_null() {
+        return false;
+    }
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let kuiTid = (*pCtx).uiTemporalId;
+
+    if !(*pCtx).pDecPic.is_null() {
+        let pDecPic = (*pCtx).pDecPic;
+        if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId {
+            if !(*pCtx).pFuncList.is_null() {
+                ExpandReferencingPicture(
+                    (*pDecPic).pData,
+                    (*pDecPic).iWidthInPixel,
+                    (*pDecPic).iHeightInPixel,
+                    (*pDecPic).iLineSize,
+                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandLumaPicture,
+                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandChromaPicture,
+                );
+            }
+        }
+
+        (*pDecPic).uiTemporalId = (*pCtx).uiTemporalId;
+        (*pDecPic).uiSpatialId = (*pCtx).uiDependencyId;
+        (*pDecPic).iFrameNum = pParamD.iFrameNum;
+        (*pDecPic).iFramePoc = pParamD.iPOC;
+        (*pDecPic).bUsedAsRef = true;
+        (*pDecPic).bIsLongRef = true;
+        (*pDecPic).bIsSceneLTR = pLtr.bLTRMarkingFlag
+            || ((*(*pCtx).pSvcParam).bEnableLongTermReference
+                && (*pCtx).eSliceType == EWelsSliceType::I_SLICE as i32);
+        (*pDecPic).iLongTermPicNum = pLtr.iCurLtrIdx;
+    }
+
+    if (*pCtx).eSliceType == EWelsSliceType::P_SLICE as i32 {
+        DeleteNonSceneLTR(pCtx);
+        LTRMarkProcessScreen(pCtx);
+        pLtr.bLTRMarkingFlag = false;
+        pLtr.uiLtrMarkInterval += 1;
+    } else {
+        LTRMarkProcessScreen(pCtx);
+        pLtr.iCurLtrIdx = 1;
+        pLtr.iSceneLtrIdx = 1;
+        pLtr.uiLtrMarkInterval = 0;
+        if !(*pCtx).pVaa.is_null() {
+            (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = 0;
+        }
+    }
+
+    if !(*pCtx).pReferenceStrategy.is_null() {
+        (*(*pCtx).pReferenceStrategy).EndofUpdateRefList();
+    }
+    true
+}
+
+/// Screen content specialized reference picture list builder.
+pub unsafe fn WelsBuildRefListScreen(
+    pCtx: *mut sWelsEncCtx,
+    iPOC: i32,
+    iBestLtrRefIdx: i32,
+) -> bool {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pVaa.is_null() || (*pCtx).pCurDqLayer.is_null() {
+        return false;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    let pParam = (*pCtx).pSvcParam;
+    let pVaaExt = (*pCtx).pVaa;
+    let iNumRef = (*pParam).iNumRefFrame;
+    let pParamD = &(*pParam).sDependencyLayers[uiDid];
+    (*pCtx).iNumRef0 = 0;
+
+    if (*pCtx).eSliceType != EWelsSliceType::I_SLICE as i32 {
+        let mut iLtrRefIdx = 0i32;
+        let mut pRefOri: *mut SPicture = std::ptr::null_mut();
+
+        for idx in 0..(*pVaaExt).iNumOfAvailableRef {
+            if !(*pCtx).pVpp.is_null() {
+                iLtrRefIdx = ((*(*(*pCtx).pVpp).vptr).GetRefFrameInfo)(
+                    (*pCtx).pVpp,
+                    idx,
+                    (*pCtx).bCurFrameMarkedAsSceneLtr,
+                    &mut pRefOri,
+                );
+            }
+            if iLtrRefIdx >= 0 && iLtrRefIdx <= (*pParam).iLTRRefNum {
+                let pRefPic = (*pRefList).pLongRefList[iLtrRefIdx as usize];
+                if !pRefPic.is_null() && (*pRefPic).bUsedAsRef && (*pRefPic).bIsLongRef {
+                    if (*pRefPic).uiTemporalId <= (*pCtx).uiTemporalId
+                        && (!(*pCtx).bCurFrameMarkedAsSceneLtr || (*pRefPic).bIsSceneLTR)
+                    {
+                        let num0 = (*pCtx).iNumRef0 as usize;
+                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = pRefOri;
+                        (*pCtx).pRefList0[num0] = pRefPic;
+                        (*pCtx).iNumRef0 += 1;
+                    }
+                }
+            } else {
+                let mut i = iNumRef;
+                while i >= 0 {
+                    let pLong = (*pRefList).pLongRefList[i as usize];
+                    if pLong.is_null() {
+                        i -= 1;
+                        continue;
+                    } else if (*pLong).uiTemporalId == 0 || (*pLong).uiTemporalId < (*pCtx).uiTemporalId {
+                        let num0 = (*pCtx).iNumRef0 as usize;
+                        (*(*pCtx).pCurDqLayer).pRefOri[num0] = pRefOri;
+                        (*pCtx).pRefList0[num0] = pLong;
+                        (*pCtx).iNumRef0 += 1;
+                        break;
+                    }
+                    i -= 1;
+                }
+            }
+        }
+    } else {
+        WelsResetRefList(pCtx);
+        ResetLtrState(&mut (*pCtx).pLtr[uiDid]);
+        (*pCtx).pRefList0[0] = std::ptr::null_mut();
+    }
+
+    if (*pCtx).iNumRef0 > iNumRef {
+        (*pCtx).iNumRef0 = iNumRef;
+    }
+    (*pCtx).iNumRef0 > 0 || (*pCtx).eSliceType == EWelsSliceType::I_SLICE as i32
+}
+
+pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
+    kiFrameNum < (1 << 30)
+}
+
+pub unsafe fn WelsMarkMMCORefInfoScreen(
+    pCtx: *mut sWelsEncCtx,
+    pLtr: *mut SLTRState,
+    ppSliceList: *mut *mut SSlice,
+    kiCountSliceNum: i32,
+) {
+    if pCtx.is_null() || pLtr.is_null() || ppSliceList.is_null() || kiCountSliceNum <= 0 {
+        return;
+    }
+    let pBaseSlice = *ppSliceList.add(0);
+    if pBaseSlice.is_null() {
+        return;
+    }
+    let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    let iMaxLtrIdx = (*(*pCtx).pSvcParam).iNumRefFrame - STR_ROOM - 1;
+
+    *pRefPicMark = SRefPicMarking::default();
+    if (*(*pCtx).pSvcParam).bEnableLongTermReference {
+        let count0 = pRefPicMark.uiMmcoCount as usize;
+        pRefPicMark.SMmcoRef[count0].iMaxLongTermFrameIdx = iMaxLtrIdx;
+        pRefPicMark.SMmcoRef[count0].iMmcoType = MMCO_SET_MAX_LONG;
+        pRefPicMark.uiMmcoCount += 1;
+
+        let count1 = pRefPicMark.uiMmcoCount as usize;
+        pRefPicMark.SMmcoRef[count1].iLongTermFrameIdx = (*pLtr).iCurLtrIdx;
+        pRefPicMark.SMmcoRef[count1].iMmcoType = MMCO_LONG;
+        pRefPicMark.uiMmcoCount += 1;
+    }
+
+    WelsMarkMMCORefInfoWithBase(ppSliceList, pBaseSlice, kiCountSliceNum);
+}
+
+pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
+    if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || (*pCtx).pCurDqLayer.is_null() {
+        return;
+    }
+    let uiDid = (*pCtx).uiDependencyId as usize;
+    let pLtr = &mut (*pCtx).pLtr[uiDid];
+    let gopSize = (*(*pCtx).pSvcParam).uiGopSize;
+    let iMaxTid = if gopSize > 0 { (31 - gopSize.leading_zeros()) as i32 } else { 0 };
+    let mut iMaxActualLtrIdx = -1i32;
+    let pParamD = &(*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+
+    if (*(*pCtx).pSvcParam).bEnableLongTermReference {
+        let maxTidAdj = if iMaxTid > 1 { iMaxTid } else { 1 };
+        iMaxActualLtrIdx = (*(*pCtx).pSvcParam).iNumRefFrame - STR_ROOM - 1 - maxTidAdj;
+    }
+
+    let pRefList = (*pCtx).ppRefPicListExt[uiDid];
+    let iNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
+    let iLongRefNum = iNumRef - STR_ROOM;
+    let bIsRefListNotFull = ((*pRefList).uiLongRefCount as i32) < iLongRefNum;
+
+    if !(*(*pCtx).pSvcParam).bEnableLongTermReference {
+        pLtr.iCurLtrIdx = (*pCtx).uiTemporalId as i32;
+    } else {
+        if iMaxActualLtrIdx != -1 && (*pCtx).uiTemporalId == 0 && (*pCtx).bCurFrameMarkedAsSceneLtr {
+            pLtr.bLTRMarkingFlag = true;
+            pLtr.uiLtrMarkInterval = 0;
+            pLtr.iCurLtrIdx = pLtr.iSceneLtrIdx % (iMaxActualLtrIdx + 1);
+            pLtr.iSceneLtrIdx += 1;
+        } else {
+            pLtr.bLTRMarkingFlag = false;
+            if bIsRefListNotFull {
+                for i in 0..iLongRefNum {
+                    if (*pRefList).pLongRefList[i as usize].is_null() {
+                        pLtr.iCurLtrIdx = i;
+                        break;
+                    }
+                }
+            } else {
+                let mut iRefNum_t = [0i32; MAX_TEMPORAL_LAYER_NUM];
+                for i in 0..((*pRefList).uiLongRefCount as usize) {
+                    let pPic = (*pRefList).pLongRefList[i];
+                    if !pPic.is_null() && (*pPic).bUsedAsRef && (*pPic).bIsLongRef && !(*pPic).bIsSceneLTR {
+                        let tid = (*pPic).uiTemporalId as usize;
+                        if tid < MAX_TEMPORAL_LAYER_NUM {
+                            iRefNum_t[tid] += 1;
+                        }
+                    }
+                }
+
+                let mut iMaxMultiRefTid = if iMaxTid != 0 { iMaxTid - 1 } else { 0 };
+                for i in 0..MAX_TEMPORAL_LAYER_NUM {
+                    if iRefNum_t[i] > 1 {
+                        iMaxMultiRefTid = i as i32;
+                    }
+                }
+
+                let mut iLongestDeltaFrameNum = -1i32;
+                let iMaxFrameNum = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
+
+                for i in 0..((*pRefList).uiLongRefCount as usize) {
+                    let pPic = (*pRefList).pLongRefList[i];
+                    if !pPic.is_null()
+                        && (*pPic).bUsedAsRef
+                        && (*pPic).bIsLongRef
+                        && !(*pPic).bIsSceneLTR
+                        && iMaxMultiRefTid == (*pPic).uiTemporalId as i32
+                    {
+                        if !IsValidFrameNum((*pPic).iFrameNum) {
+                            return;
+                        }
+                        let iDeltaFrameNum = if pParamD.iFrameNum >= (*pPic).iFrameNum {
+                            pParamD.iFrameNum - (*pPic).iFrameNum
+                        } else {
+                            pParamD.iFrameNum + iMaxFrameNum - (*pPic).iFrameNum
+                        };
+
+                        if iDeltaFrameNum > iLongestDeltaFrameNum {
+                            pLtr.iCurLtrIdx = (*pPic).iLongTermPicNum;
+                            iLongestDeltaFrameNum = iDeltaFrameNum;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for i in 0..MAX_TEMPORAL_LAYER_NUM {
+        if ((*pCtx).uiTemporalId as usize) < i || (*pCtx).uiTemporalId == 0 {
+            pLtr.iLastLtrIdx[i] = pLtr.iCurLtrIdx;
+        }
+    }
+
+    let iSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    WelsMarkMMCORefInfoScreen(
+        pCtx,
+        pLtr,
+        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        iSliceNum,
+    );
+}
+
+pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
+
+// ============================================================================
+// Polymorphic Reference Strategy Hierarchy
+// ============================================================================
+
+pub trait IWelsReferenceStrategy {
+    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool;
+    unsafe fn MarkPic(&mut self);
+    unsafe fn UpdateRefList(&mut self) -> bool;
+    unsafe fn EndofUpdateRefList(&mut self);
+    unsafe fn AfterBuildRefList(&mut self);
+    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx);
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CWelsReference_TemporalLayer {
+    pub m_pEncoderCtx: *mut sWelsEncCtx,
+}
+
+impl CWelsReference_TemporalLayer {
+    pub fn new() -> Self {
+        Self {
+            m_pEncoderCtx: std::ptr::null_mut(),
+        }
+    }
+}
+
+impl IWelsReferenceStrategy for CWelsReference_TemporalLayer {
+    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
+        self.m_pEncoderCtx = pCtx;
+    }
+    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
+        WelsBuildRefList(self.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
+    }
+    unsafe fn MarkPic(&mut self) {
+        WelsMarkPic(self.m_pEncoderCtx);
+    }
+    unsafe fn UpdateRefList(&mut self) -> bool {
+        WelsUpdateRefList(self.m_pEncoderCtx)
+    }
+    unsafe fn EndofUpdateRefList(&mut self) {
+        PrefetchNextBuffer(self.m_pEncoderCtx);
+    }
+    unsafe fn AfterBuildRefList(&mut self) {
+        DoNothing(self.m_pEncoderCtx);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CWelsReference_Screen {
+    pub base: CWelsReference_TemporalLayer,
+}
+
+impl CWelsReference_Screen {
+    pub fn new() -> Self {
+        Self {
+            base: CWelsReference_TemporalLayer::new(),
+        }
+    }
+}
+
+impl IWelsReferenceStrategy for CWelsReference_Screen {
+    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
+        self.base.Init(pCtx);
+    }
+    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
+        WelsBuildRefList(self.base.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
+    }
+    unsafe fn MarkPic(&mut self) {
+        WelsMarkPic(self.base.m_pEncoderCtx);
+    }
+    unsafe fn UpdateRefList(&mut self) -> bool {
+        WelsUpdateRefList(self.base.m_pEncoderCtx)
+    }
+    unsafe fn EndofUpdateRefList(&mut self) {
+        UpdateSrcPicList(self.base.m_pEncoderCtx);
+    }
+    unsafe fn AfterBuildRefList(&mut self) {
+        UpdateBlockStatic(self.base.m_pEncoderCtx);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CWelsReference_LosslessWithLtr {
+    pub base: CWelsReference_Screen,
+}
+
+impl CWelsReference_LosslessWithLtr {
+    pub fn new() -> Self {
+        Self {
+            base: CWelsReference_Screen::new(),
+        }
+    }
+}
+
+impl IWelsReferenceStrategy for CWelsReference_LosslessWithLtr {
+    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
+        self.base.Init(pCtx);
+    }
+    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
+        WelsBuildRefListScreen(self.base.base.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
+    }
+    unsafe fn MarkPic(&mut self) {
+        WelsMarkPicScreen(self.base.base.m_pEncoderCtx);
+    }
+    unsafe fn UpdateRefList(&mut self) -> bool {
+        WelsUpdateRefListScreen(self.base.base.m_pEncoderCtx)
+    }
+    unsafe fn EndofUpdateRefList(&mut self) {
+        UpdateSrcPicListLosslessScreenRefSelectionWithLtr(self.base.base.m_pEncoderCtx);
+    }
+    unsafe fn AfterBuildRefList(&mut self) {
+        UpdateBlockStatic(self.base.base.m_pEncoderCtx);
+    }
+}
+
+pub unsafe fn CreateReferenceStrategy(
+    pCtx: *mut sWelsEncCtx,
+    keUsageType: EUsageType,
+    kbLtrEnabled: bool,
+) -> *mut (dyn IWelsReferenceStrategy + 'static) {
+    let mut strategy: Box<dyn IWelsReferenceStrategy> = match keUsageType {
+        EUsageType::ScreenContentRealTime => {
+            if kbLtrEnabled {
+                Box::new(CWelsReference_LosslessWithLtr::new())
+            } else {
+                Box::new(CWelsReference_Screen::new())
+            }
+        }
+        EUsageType::CameraVideoRealTime | EUsageType::CameraVideoNonRealTime | _ => {
+            Box::new(CWelsReference_TemporalLayer::new())
+        }
+    };
+    strategy.Init(pCtx);
+    Box::into_raw(strategy)
+}
