@@ -1069,10 +1069,10 @@ pub unsafe fn GetColocatedMb(
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][10].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[15].as_ptr()), 4);
 
                 let colocRefPtr = *(*colocPic).pRefIndex[listIdx].add(iMbXy);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx][0..].as_mut_ptr() as *mut u8, 2, 2, 4, colocRefPtr[0] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx][2..].as_mut_ptr() as *mut u8, 2, 2, 4, colocRefPtr[3] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx][8..].as_mut_ptr() as *mut u8, 2, 2, 4, colocRefPtr[12] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx][10..].as_mut_ptr() as *mut u8, 2, 2, 4, colocRefPtr[15] as u8 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(0) as *mut u8, 2, 2, 4, colocRefPtr[0] as u8 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(2) as *mut u8, 2, 2, 4, colocRefPtr[3] as u8 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(8) as *mut u8, 2, 2, 4, colocRefPtr[12] as u8 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(10) as *mut u8, 2, 2, 4, colocRefPtr[15] as u8 as u32, 1);
             }
             if (coloc_mbType & MB_TYPE_L1) == 0 {
                 SetRectBlock((*pCurDqLayer).iColocRefIndex[1].as_mut_ptr() as *mut u8, 4, 4, 4, REF_NOT_IN_LIST as u8 as u32, 1);

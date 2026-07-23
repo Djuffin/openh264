@@ -551,7 +551,7 @@ impl Default for SBitStringAux {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SSps {
     pub iSpsId: i32,
     pub uiProfileIdc: u32,
@@ -565,8 +565,14 @@ pub struct SSps {
     pub iScalingList8x8: [[i32; 64]; 6],
 }
 
+impl Default for SSps {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SPps {
     pub iPpsId: i32,
     pub iSpsId: i32,
@@ -578,6 +584,12 @@ pub struct SPps {
     pub iChromaQpIndexOffset: [i32; 2],
     pub iScalingList4x4: [[i32; 16]; 6],
     pub iScalingList8x8: [[i32; 64]; 6],
+}
+
+impl Default for SPps {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]

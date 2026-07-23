@@ -461,6 +461,7 @@ pub unsafe fn FmoNextMb(pFmo: PFmo, kiMbXy: MB_XY_T) -> MB_XY_T {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
         use crate::decoder::parameter_sets::{SPps, SSps};
 
     #[test]

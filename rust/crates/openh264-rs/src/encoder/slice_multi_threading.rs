@@ -411,7 +411,7 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 pub fn WelsEmms() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        std::arch::x86_64::_mm_empty();
+        std::arch::asm!("emms");
     }
 }
 
@@ -1006,6 +1006,7 @@ pub unsafe fn SetOneSliceBsBufferUnderMultithread(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_div_round() {

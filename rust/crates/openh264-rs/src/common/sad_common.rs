@@ -455,6 +455,7 @@ pub fn sample_sad_16x16(sample1: &[u8], stride1: usize, sample2: &[u8], stride2:
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_wels_abs() {

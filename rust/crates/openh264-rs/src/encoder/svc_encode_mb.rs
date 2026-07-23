@@ -1189,6 +1189,7 @@ pub unsafe fn WelsTryPUVskip(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_hadamard_4x4_dc_identity() {

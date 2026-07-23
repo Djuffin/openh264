@@ -1855,6 +1855,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_set_unref_resets_fields() {

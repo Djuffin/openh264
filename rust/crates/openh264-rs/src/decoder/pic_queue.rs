@@ -807,6 +807,7 @@ pub unsafe fn DestroyPicBuff(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_picture_alignment_geometry() {

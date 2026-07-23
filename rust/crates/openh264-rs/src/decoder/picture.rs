@@ -365,6 +365,7 @@ impl SPicture {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_picture_initialization() {

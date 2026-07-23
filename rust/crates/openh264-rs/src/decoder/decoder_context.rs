@@ -735,7 +735,7 @@ impl Default for SWelsLastDecPicInfo {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SBufferInfo {
     pub iBufferStatus: i32,
     pub uiInBsTimeStamp: u64,
@@ -744,6 +744,12 @@ pub struct SBufferInfo {
     pub iStride: [i32; 2],
     pub iWidth: i32,
     pub iHeight: i32,
+}
+
+impl Default for SBufferInfo {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -772,11 +778,17 @@ pub struct SPictReoderingStatus {
 pub type PPictReoderingStatus = *mut SPictReoderingStatus;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SParserBsInfo {
     pub iNalNum: i32,
     pub iNalLenInByte: [i32; 128],
     pub pDstBs: *mut u8,
+}
+
+impl Default for SParserBsInfo {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -876,14 +888,14 @@ impl Default for SMbCache {
     fn default() -> Self {
         Self {
             pMbType: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMv: [[[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE]],
-            pRefIndex: [[[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE]],
+            pMv: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
+            pRefIndex: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
             pDirect: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pNoSubMbPartSizeLessThan8x8Flag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pTransformSize8x8Flag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pLumaQp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pChromaQp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMvd: [[[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE]],
+            pMvd: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
             pCbfDc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pNzc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pNzcRs: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
@@ -893,7 +905,7 @@ impl Default for SMbCache {
             pIntraNxNAvailFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pChromaPredMode: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pCbp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMotionPredFlag: [[[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE]],
+            pMotionPredFlag: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
             pSubMbType: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pSliceIdc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
             pResidualPredFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
@@ -1099,6 +1111,7 @@ pub type PWelsDecoderThreadCTX = *mut SWelsDecoderThreadCTX;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_decoder_constants() {

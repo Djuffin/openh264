@@ -220,6 +220,7 @@ pub fn rbsp_to_ebsp(src: &[u8], dst: &mut [u8]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_get_value_4_bytes() {

@@ -1252,6 +1252,7 @@ pub unsafe fn WelsWriteMbResidual(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_cbp_lookup_tables() {

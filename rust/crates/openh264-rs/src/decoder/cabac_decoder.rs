@@ -1187,6 +1187,7 @@ pub unsafe fn DecodeUEGMvCabac(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_renorm_table_bounds() {

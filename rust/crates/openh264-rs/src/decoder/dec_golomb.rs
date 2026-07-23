@@ -389,6 +389,7 @@ macro_rules! WELS_CHECK_SE_UPPER_ERROR_NOLOG {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
         use crate::decoder::bit_stream::DecInitBits;
 
     #[test]

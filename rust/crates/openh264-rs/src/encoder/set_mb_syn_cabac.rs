@@ -1033,6 +1033,7 @@ pub type PWriteBlockResidualCabac = unsafe extern "C" fn(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_state_ctx_packing() {

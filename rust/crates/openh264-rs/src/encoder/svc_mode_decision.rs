@@ -444,7 +444,7 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 // External C Routine Declarations
 // ============================================================================
 
-extern "C" {
+unsafe extern "C" {
     pub fn WelsMdInterJudgePskip(
         pEncCtx: *mut sWelsEncCtx,
         pWelsMd: *mut SWelsMD,

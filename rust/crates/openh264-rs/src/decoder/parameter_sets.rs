@@ -427,6 +427,7 @@ impl TagSps {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_vui_defaults() {

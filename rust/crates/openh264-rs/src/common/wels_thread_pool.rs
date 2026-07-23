@@ -818,6 +818,7 @@ impl CWelsThreadPool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     struct DummySink {
         executed: bool,

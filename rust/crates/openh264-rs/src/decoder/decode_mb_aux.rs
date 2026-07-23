@@ -313,6 +313,7 @@ pub unsafe extern "C" fn IdctResAddPred8x8_lsx(pPred: *mut u8, kiStride: i32, pR
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_wels_clip1() {

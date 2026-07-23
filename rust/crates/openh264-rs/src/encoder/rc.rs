@@ -2483,6 +2483,7 @@ pub fn WelsUpdateSkipFrameStatus() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_rc_convert_qp_qstep() {
