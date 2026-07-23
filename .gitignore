@@ -63,3 +63,8 @@ codec/build/iOS/dec/welsdec/build/
 /gradle/
 /gradlew.bat
 /local.properties
+
+# Rust build outputs
+Cargo.lock
+target/
+
