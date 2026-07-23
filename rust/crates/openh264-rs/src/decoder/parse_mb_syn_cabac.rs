@@ -1,0 +1,2655 @@
+// Copyright (c) 2009-2013, Cisco Systems
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in
+//      the documentation and/or other materials provided with the
+//      distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+//! # CABAC Macroblock Syntax Parsing Engine
+//!
+//! Translated from `codec/decoder/core/src/parse_mb_syn_cabac.cpp` and
+//! `codec/decoder/core/inc/parse_mb_syn_cabac.h`.
+//!
+//! Implements the macroblock and sub-macroblock layer entropy parsing algorithms for
+//! H.264 / AVC Context-Based Adaptive Binary Arithmetic Coding (CABAC), adhering strictly to
+//! ISO/IEC 14496-10 (ITU-T H.264) Section 7.3.5 and Section 9.3.
+
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    unused_variables,
+    unused_unsafe
+)]
+
+use std::ptr;
+
+use super::bit_stream::{InitReadBits, SBitStringAux};
+use super::cabac_decoder::{
+    DecodeBinCabac, DecodeBypassCabac, DecodeTerminateCabac, DecodeUEGLevelCabac, DecodeUEGMvCabac,
+    DecodeUnaryBinCabac, InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, PWelsCabacCtx,
+    PWelsCabacDecEngine, SWelsCabacCtx, SWelsCabacDecEngine,
+};
+
+// ============================================================================
+// Constants, Macros & Error Codes
+// ============================================================================
+
+pub const IDX_UNUSED: i16 = -1;
+
+pub const NEW_CTX_OFFSET_MB_TYPE_I: i32 = 3;
+pub const NEW_CTX_OFFSET_SKIP: i32 = 11;
+pub const NEW_CTX_OFFSET_SUBMB_TYPE: i32 = 21;
+pub const NEW_CTX_OFFSET_B_SUBMB_TYPE: i32 = 36;
+pub const NEW_CTX_OFFSET_MVD: i32 = 40;
+pub const NEW_CTX_OFFSET_REF_NO: i32 = 54;
+pub const NEW_CTX_OFFSET_DELTA_QP: i32 = 60;
+pub const NEW_CTX_OFFSET_CIPR: i32 = 64;
+pub const NEW_CTX_OFFSET_IPR: i32 = 68;
+pub const NEW_CTX_OFFSET_CBP: i32 = 73;
+pub const NEW_CTX_OFFSET_CBF: i32 = 85;
+pub const NEW_CTX_OFFSET_MAP: i32 = 105;
+pub const NEW_CTX_OFFSET_LAST: i32 = 166;
+pub const NEW_CTX_OFFSET_ONE: i32 = 227;
+pub const NEW_CTX_OFFSET_ABS: i32 = 232;
+pub const NEW_CTX_OFFSET_TS_8x8_FLAG: i32 = 399;
+pub const NEW_CTX_OFFSET_MAP_8x8: i32 = 402;
+pub const NEW_CTX_OFFSET_LAST_8x8: i32 = 417;
+pub const NEW_CTX_OFFSET_ONE_8x8: i32 = 426;
+pub const NEW_CTX_OFFSET_ABS_8x8: i32 = 431;
+
+pub const CTX_NUM_MVD: i32 = 7;
+pub const CTX_NUM_CBP: i32 = 4;
+
+pub const LIST_0: usize = 0;
+pub const LIST_1: usize = 1;
+pub const LIST_A: usize = 2;
+pub const MV_A: usize = 2;
+
+pub const REF_NOT_AVAIL: i8 = -2;
+pub const REF_NOT_IN_LIST: i8 = -1;
+
+pub const ERR_NONE: i32 = 0;
+pub const ERR_LEVEL_SLICE_DATA: i32 = 6;
+pub const ERR_LEVEL_MB_DATA: i32 = 7;
+
+pub const ERR_INFO_INVALID_SUB_MB_TYPE: i32 = 1037;
+pub const ERR_INFO_INVALID_REF_INDEX: i32 = 1040;
+pub const ERR_INFO_REFERENCE_PIC_LOST: i32 = 1075;
+pub const ERR_CABAC_NO_BS_TO_READ: i32 = 201;
+
+pub const dsBitstreamError: i32 = 0x02;
+pub const dsRefLost: i32 = 0x04;
+pub const ERROR_CON_DISABLE: i32 = 0;
+
+#[inline(always)]
+pub const fn GENERATE_ERROR_NO(iErrLevel: i32, iErrInfo: i32) -> i32 {
+    (iErrLevel << 16) | (iErrInfo & 0xFFFF)
+}
+
+// Slice Types
+pub const P_SLICE: u8 = 0;
+pub const B_SLICE: u8 = 1;
+pub const I_SLICE: u8 = 2;
+
+// Macroblock Types
+pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
+pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
+pub const MB_TYPE_INTRA8x8: u32 = 0x00000004;
+pub const MB_TYPE_16x16: u32 = 0x00000008;
+pub const MB_TYPE_16x8: u32 = 0x00000010;
+pub const MB_TYPE_8x16: u32 = 0x00000020;
+pub const MB_TYPE_8x8: u32 = 0x00000040;
+pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
+pub const MB_TYPE_SKIP: u32 = 0x00000100;
+pub const MB_TYPE_INTRA_PCM: u32 = 0x00000200;
+pub const MB_TYPE_DIRECT: u32 = 0x00000800;
+pub const MB_TYPE_P0L0: u32 = 0x00001000;
+pub const MB_TYPE_P1L0: u32 = 0x00002000;
+pub const MB_TYPE_P0L1: u32 = 0x00004000;
+pub const MB_TYPE_P1L1: u32 = 0x00008000;
+
+pub const SUB_MB_TYPE_8x8: u32 = 0x00000001;
+pub const SUB_MB_TYPE_8x4: u32 = 0x00000002;
+pub const SUB_MB_TYPE_4x8: u32 = 0x00000004;
+pub const SUB_MB_TYPE_4x4: u32 = 0x00000008;
+
+pub const MB_TYPE_INTRA: u32 =
+    MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA_PCM;
+
+#[inline(always)]
+pub const fn IS_INTRA(t: u32) -> bool {
+    (t & MB_TYPE_INTRA) != 0
+}
+#[inline(always)]
+pub const fn IS_SKIP(t: u32) -> bool {
+    (t & MB_TYPE_SKIP) != 0
+}
+#[inline(always)]
+pub const fn IS_DIRECT(t: u32) -> bool {
+    (t & MB_TYPE_DIRECT) != 0
+}
+#[inline(always)]
+pub const fn IS_INTER_16x16(t: u32) -> bool {
+    (t & MB_TYPE_16x16) != 0
+}
+#[inline(always)]
+pub const fn IS_INTER_16x8(t: u32) -> bool {
+    (t & MB_TYPE_16x8) != 0
+}
+#[inline(always)]
+pub const fn IS_INTER_8x16(t: u32) -> bool {
+    (t & MB_TYPE_8x16) != 0
+}
+#[inline(always)]
+pub const fn IS_Inter_8x8(t: u32) -> bool {
+    (t & MB_TYPE_8x8) != 0
+}
+#[inline(always)]
+pub const fn IS_SUB_8x8(t: u32) -> bool {
+    (t & SUB_MB_TYPE_8x8) != 0
+}
+#[inline(always)]
+pub const fn IS_SUB_8x4(t: u32) -> bool {
+    (t & SUB_MB_TYPE_8x4) != 0
+}
+#[inline(always)]
+pub const fn IS_SUB_4x8(t: u32) -> bool {
+    (t & SUB_MB_TYPE_4x8) != 0
+}
+#[inline(always)]
+pub const fn IS_SUB_4x4(t: u32) -> bool {
+    (t & SUB_MB_TYPE_4x4) != 0
+}
+#[inline(always)]
+pub const fn IS_DIR(a: u32, part: usize, list: usize) -> bool {
+    (a & (MB_TYPE_P0L0 << (part + 2 * list))) != 0
+}
+
+// Residual Properties
+pub const I16_LUMA_DC: i32 = 1;
+pub const I16_LUMA_AC: i32 = 2;
+pub const LUMA_DC_AC: i32 = 3;
+pub const CHROMA_DC: i32 = 4;
+pub const CHROMA_AC: i32 = 5;
+pub const LUMA_DC_AC_8: i32 = 6;
+pub const CHROMA_DC_U: i32 = 7;
+pub const CHROMA_DC_V: i32 = 8;
+pub const CHROMA_AC_U: i32 = 9;
+pub const CHROMA_AC_V: i32 = 10;
+pub const LUMA_DC_AC_INTRA: i32 = 11;
+
+// ============================================================================
+// Global Lookup Tables
+// ============================================================================
+
+pub const g_kMaxPos: [i16; 11] = [IDX_UNUSED, 15, 14, 15, 3, 14, 63, 3, 3, 14, 14];
+pub const g_kMaxC2: [i16; 11] = [IDX_UNUSED, 4, 4, 4, 3, 4, 4, 3, 3, 4, 4];
+pub const g_kBlockCat2CtxOffsetCBF: [i16; 11] = [IDX_UNUSED, 0, 4, 8, 12, 16, 0, 12, 12, 16, 16];
+pub const g_kBlockCat2CtxOffsetMap: [i16; 11] = [IDX_UNUSED, 0, 15, 29, 44, 47, 0, 44, 44, 47, 47];
+pub const g_kBlockCat2CtxOffsetLast: [i16; 11] = [IDX_UNUSED, 0, 15, 29, 44, 47, 0, 44, 44, 47, 47];
+pub const g_kBlockCat2CtxOffsetOne: [i16; 11] = [IDX_UNUSED, 0, 10, 20, 30, 39, 0, 30, 30, 39, 39];
+pub const g_kBlockCat2CtxOffsetAbs: [i16; 11] = [IDX_UNUSED, 0, 10, 20, 30, 39, 0, 30, 30, 39, 39];
+
+pub const g_kTopBlkInsideMb: [u8; 24] = [
+    0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+];
+
+pub const g_kLeftBlkInsideMb: [u8; 24] = [
+    0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+];
+
+pub const g_kuiScan4: [u8; 16] = [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15];
+
+pub const g_kuiCache30ScanIdx: [u8; 16] = [
+    7, 8, 13, 14, 9, 10, 15, 16, 19, 20, 25, 26, 21, 22, 27, 28,
+];
+
+pub const g_kCacheNzcScanIdx: [u8; 27] = [
+    9, 10, 17, 18, 11, 12, 19, 20, 25, 26, 33, 34, 27, 28, 35, 36, 14, 15, 22, 23, 38, 39, 46, 47,
+    41, 42, 43,
+];
+
+pub const g_kuiIdx2CtxSignificantCoeffFlag8x8: [u8; 64] = [
+    0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5, 4, 4, 4, 4, 3, 3, 6, 7, 7, 7, 8, 9, 10, 9, 8,
+    7, 7, 6, 11, 12, 13, 11, 6, 7, 8, 9, 14, 10, 9, 8, 6, 11, 12, 13, 11, 6, 9, 14, 10, 9, 11,
+    12, 13, 11, 14, 10, 12, 14,
+];
+
+pub const g_kuiIdx2CtxLastSignificantCoeffFlag8x8: [u8; 64] = [
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8,
+    8, 8,
+];
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SPartMbInfo {
+    pub iType: u32,
+    pub iPartCount: i8,
+    pub iPartWidth: i8,
+}
+
+pub const g_ksInterPSubMbTypeInfo: [SPartMbInfo; 4] = [
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4, iPartCount: 4, iPartWidth: 1 },
+];
+
+pub const g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
+    SPartMbInfo { iType: MB_TYPE_DIRECT, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0, iPartCount: 4, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
+];
+
+pub const g_kuiDequantCoeff: [[u16; 8]; 52] = [
+    [10, 13, 10, 13, 16, 13, 16, 13], [11, 14, 11, 14, 18, 14, 18, 14],
+    [13, 16, 13, 16, 20, 16, 20, 16], [14, 18, 14, 18, 23, 18, 23, 18],
+    [16, 20, 16, 20, 25, 20, 25, 20], [18, 23, 18, 23, 29, 23, 29, 23],
+    [20, 26, 20, 26, 32, 26, 32, 26], [22, 28, 22, 28, 36, 28, 36, 28],
+    [26, 32, 26, 32, 40, 32, 40, 32], [28, 36, 28, 36, 45, 36, 45, 36],
+    [32, 40, 32, 40, 51, 40, 51, 40], [36, 45, 36, 45, 57, 45, 57, 45],
+    [40, 51, 40, 51, 64, 51, 64, 51], [45, 57, 45, 57, 72, 57, 72, 57],
+    [51, 64, 51, 64, 81, 64, 81, 64], [57, 72, 57, 72, 91, 72, 91, 72],
+    [64, 81, 64, 81, 102, 81, 102, 81], [72, 91, 72, 91, 114, 91, 114, 91],
+    [80, 102, 80, 102, 128, 102, 128, 102], [90, 114, 90, 114, 144, 114, 144, 114],
+    [102, 128, 102, 128, 161, 128, 161, 128], [114, 144, 114, 144, 181, 144, 181, 144],
+    [128, 161, 128, 161, 203, 161, 203, 161], [144, 181, 144, 181, 229, 181, 229, 181],
+    [160, 203, 160, 203, 256, 203, 256, 203], [181, 229, 181, 229, 287, 229, 287, 229],
+    [203, 256, 203, 256, 323, 256, 323, 256], [229, 287, 229, 287, 362, 287, 362, 287],
+    [256, 323, 256, 323, 406, 323, 406, 323], [287, 362, 287, 362, 458, 362, 458, 362],
+    [323, 406, 323, 406, 512, 406, 512, 406], [362, 458, 362, 458, 575, 458, 575, 458],
+    [406, 512, 406, 512, 645, 512, 645, 512], [458, 575, 458, 575, 724, 575, 724, 575],
+    [512, 645, 512, 645, 813, 645, 813, 645], [575, 724, 575, 724, 912, 724, 912, 724],
+    [645, 813, 645, 813, 1024, 813, 1024, 813], [724, 912, 724, 912, 1149, 912, 1149, 912],
+    [813, 1024, 813, 1024, 1290, 1024, 1290, 1024], [912, 1149, 912, 1149, 1448, 1149, 1448, 1149],
+    [1024, 1290, 1024, 1290, 1625, 1290, 1625, 1290], [1149, 1448, 1149, 1448, 1825, 1448, 1825, 1448],
+    [1290, 1625, 1290, 1625, 2048, 1625, 2048, 1625], [1448, 1825, 1448, 1825, 2299, 1825, 2299, 1825],
+    [1625, 2048, 1625, 2048, 2580, 2048, 2580, 2048], [1825, 2299, 1825, 2299, 2896, 2299, 2896, 2299],
+    [2048, 2580, 2048, 2580, 3251, 2580, 3251, 2580], [2299, 2896, 2299, 2896, 3650, 2896, 3650, 2896],
+    [2580, 3251, 2580, 3251, 4096, 3251, 4096, 3251], [2896, 3650, 2896, 3650, 4598, 3650, 4598, 3650],
+    [3251, 4096, 3251, 4096, 5161, 4096, 5161, 4096], [3650, 4598, 3650, 4598, 5793, 4598, 5793, 4598],
+];
+
+pub const g_kuiDequantCoeff8x8: [[u16; 64]; 52] = {
+    let mut table = [[0u16; 64]; 52];
+    let base = [
+        20, 19, 25, 19, 20, 19, 25, 19, 19, 18, 24, 18, 19, 18, 24, 18, 25, 24, 32, 24, 25, 24, 32,
+        24, 19, 18, 24, 18, 19, 18, 24, 18, 20, 19, 25, 19, 20, 19, 25, 19, 19, 18, 24, 18, 19, 18,
+        24, 18, 25, 24, 32, 24, 25, 24, 32, 24, 19, 18, 24, 18, 19, 18, 24, 18,
+    ];
+    let mut qp = 0;
+    while qp < 52 {
+        let scale = 1usize << (qp / 6);
+        let mut i = 0;
+        while i < 64 {
+            table[qp][i] = (base[i] * scale) as u16;
+            i += 1;
+        }
+        qp += 1;
+    }
+    table
+};
+
+// ============================================================================
+// Core Context Structures & Type Definitions
+// ============================================================================
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SWelsNeighAvail {
+    pub iLeftAvail: i32,
+    pub iTopAvail: i32,
+    pub iLeftTopAvail: i32,
+    pub iRightTopAvail: i32,
+    pub iLeftType: i32,
+    pub iTopType: i32,
+    pub iLeftTopType: i32,
+    pub iRightTopType: i32,
+    pub iLeftCbp: u8,
+    pub iTopCbp: u8,
+}
+pub type PWelsNeighAvail = *mut SWelsNeighAvail;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSubPictureLimits {
+    pub iMinVmv: i16,
+    pub iMaxVmv: i16,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSps {
+    pub uiChromaFormatIdc: u32,
+    pub iMbWidth: i32,
+    pub iMbHeight: i32,
+    pub pSLevelLimits: *mut SSubPictureLimits,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSliceHeader {
+    pub pSps: *mut SSps,
+    pub uiRefCount: [i32; 2],
+    pub iDirectSpatialMvPredFlag: i32,
+    pub iMvScale: [[i32; 32]; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSliceHeaderExt {
+    pub sSliceHeader: SSliceHeader,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSlice {
+    pub sSliceHeaderExt: SSliceHeaderExt,
+    pub iLastDeltaQp: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SLayerInfo {
+    pub sSliceInLayer: SSlice,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SPicture {
+    pub pRefIndex: [[*mut i8; 16]; 2],
+    pub pMbType: *mut u32,
+    pub pMv: [[*mut [i16; 2]; 16]; 2],
+    pub iLinesize: [i32; 3],
+    pub pData: [*mut u8; 3],
+    pub bIsComplete: bool,
+    pub bIsLongRef: bool,
+    pub iFramePoc: i32,
+    pub pRefPic: [[*mut SPicture; 16]; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SDqLayer {
+    pub sLayerInfo: SLayerInfo,
+    pub pBitStringAux: *mut SBitStringAux,
+    pub pDec: *mut SPicture,
+    pub iMbWidth: i32,
+    pub iMbHeight: i32,
+    pub iMbX: i32,
+    pub iMbY: i32,
+    pub iMbXyIndex: i32,
+    pub uiLayerDqId: i32,
+    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
+    pub pTransformSize8x8Flag: *mut bool,
+    pub pSubMbType: *mut [u32; 4],
+    pub pChromaPredMode: *mut i8,
+    pub pCbp: *mut u32,
+    pub pCbfDc: *mut u16,
+    pub pLumaQp: *mut u8,
+    pub pChromaQp: *mut [u8; 2],
+    pub pScaledTCoeff: *mut [i16; 384],
+    pub pNzc: *mut [u8; 24],
+    pub pDirect: *mut [i8; 16],
+    pub pMvd: [*mut [[i16; 2]; 16]; 2],
+    pub iColocMv: [[[i16; 2]; 16]; 2],
+    pub iColocIntra: [bool; 16],
+    pub iColocRefIndex: [[i8; 16]; 2],
+}
+pub type PDqLayer = *mut SDqLayer;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SDecoderParam {
+    pub eEcActiveIdc: i32,
+    pub bParseOnly: bool,
+    pub iMultipleThreadIdc: u16,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SRefPic {
+    pub pRefList: [[*mut SPicture; 16]; 2],
+    pub uiRefCount: [i32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SLogContext {
+    pub pLogCtx: *mut std::ffi::c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SWelsDecoderContext {
+    pub pCabacDecEngine: PWelsCabacDecEngine,
+    pub pCabacCtx: PWelsCabacCtx,
+    pub eSliceType: u8,
+    pub pCurDqLayer: PDqLayer,
+    pub pDec: *mut SPicture,
+    pub sRefPic: SRefPic,
+    pub bMbRefConcealed: bool,
+    pub bRPLRError: bool,
+    pub iErrorCode: i32,
+    pub pParam: *mut SDecoderParam,
+    pub bUseScalingList: bool,
+    pub pDequant_coeff4x4: [*const [u16; 8]; 6],
+    pub pDequant_coeff8x8: [*const [u16; 64]; 2],
+    pub pSps: *mut SSps,
+    pub sLogCtx: SLogContext,
+}
+pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+
+// ============================================================================
+// Helper Utilities & Math Primitives
+// ============================================================================
+
+#[inline(always)]
+pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
+    let mut min = a;
+    let mut max = a;
+    if b < min {
+        min = b;
+    }
+    if b > max {
+        max = b;
+    }
+    if c < min {
+        min = c;
+    }
+    if c > max {
+        max = c;
+    }
+    (a as i32 + b as i32 + c as i32 - min as i32 - max as i32) as i16
+}
+
+#[inline(always)]
+pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
+    if pCtx.is_null() || (*pCtx).pParam.is_null() {
+        1
+    } else {
+        (*(*pCtx).pParam).iMultipleThreadIdc as i32
+    }
+}
+
+#[inline(always)]
+pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCavlc: bool) {
+    match *pResidualProperty {
+        CHROMA_AC_U => {
+            *pMBproperty = 1;
+            *pResidualProperty = if bCavlc { CHROMA_AC } else { CHROMA_AC_U };
+        }
+        CHROMA_AC_V => {
+            *pMBproperty = 2;
+            *pResidualProperty = if bCavlc { CHROMA_AC } else { CHROMA_AC_V };
+        }
+        LUMA_DC_AC_INTRA => {
+            *pMBproperty = 0;
+            *pResidualProperty = LUMA_DC_AC;
+        }
+        _ => {
+            *pMBproperty = *pResidualProperty;
+        }
+    }
+}
+
+// ============================================================================
+// IDCT Dequantization Primitives
+// ============================================================================
+
+pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: PWelsDecoderContext) {
+    let kiQMul = if (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[0].is_null() {
+        (*(*pCtx).pDequant_coeff4x4[0].add(iQp as usize))[0] as i32
+    } else {
+        (g_kuiDequantCoeff[iQp as usize][0] as i32) << 4
+    };
+
+    let mut iTemp = [0i32; 16];
+    let kiXOffset = [0usize, 16, 64, 80];
+    let kiYOffset = [0usize, 32, 128, 160];
+
+    for i in 0..4 {
+        let kiOffset = kiYOffset[i];
+        let kiX1 = kiOffset + kiXOffset[2];
+        let kiX2 = 16 + kiOffset;
+        let kiX3 = kiOffset + kiXOffset[3];
+        let kiI4 = i << 2;
+        let kiZ0 = *pBlock.add(kiOffset) as i32 + *pBlock.add(kiX1) as i32;
+        let kiZ1 = *pBlock.add(kiOffset) as i32 - *pBlock.add(kiX1) as i32;
+        let kiZ2 = *pBlock.add(kiX2) as i32 - *pBlock.add(kiX3) as i32;
+        let kiZ3 = *pBlock.add(kiX2) as i32 + *pBlock.add(kiX3) as i32;
+
+        iTemp[kiI4] = kiZ0 + kiZ3;
+        iTemp[1 + kiI4] = kiZ1 + kiZ2;
+        iTemp[2 + kiI4] = kiZ1 - kiZ2;
+        iTemp[3 + kiI4] = kiZ0 - kiZ3;
+    }
+
+    for i in 0..4 {
+        let kiOffset = kiXOffset[i];
+        let kiI4 = 4 + i;
+        let kiZ0 = iTemp[i] + iTemp[4 + kiI4];
+        let kiZ1 = iTemp[i] - iTemp[4 + kiI4];
+        let kiZ2 = iTemp[kiI4] - iTemp[8 + kiI4];
+        let kiZ3 = iTemp[kiI4] + iTemp[8 + kiI4];
+
+        *pBlock.add(kiOffset) = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
+        *pBlock.add(kiYOffset[1] + kiOffset) = (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        *pBlock.add(kiYOffset[2] + kiOffset) = (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        *pBlock.add(kiYOffset[3] + kiOffset) = (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
+    }
+}
+
+pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
+    let iA = *pBlock as i32;
+    let iB = *pBlock.add(16) as i32;
+    let iC = *pBlock.add(32) as i32;
+    let iD = *pBlock.add(48) as i32;
+
+    let iE = iA - iB;
+    let iA_sum = iA + iB;
+    let iB_sub = iC - iD;
+    let iC_sum = iC + iD;
+
+    *pBlock = (iA_sum + iC_sum) as i16;
+    *pBlock.add(16) = (iE + iB_sub) as i16;
+    *pBlock.add(32) = (iA_sum - iC_sum) as i16;
+    *pBlock.add(48) = (iE - iB_sub) as i16;
+}
+
+// ============================================================================
+// Cache Update & Spatial Availability Helpers
+// ============================================================================
+
+pub unsafe fn DecodeCabacIntraMbType(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    ctx_base: i32,
+) -> u32 {
+    let mut uiCode: u32 = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(ctx_base as isize);
+
+    if DecodeBinCabac(pCabacDecEngine, pBinCtx, &mut uiCode) != ERR_NONE {
+        return 0;
+    }
+    if uiCode == 0 {
+        return 0; // I4x4
+    }
+
+    if DecodeTerminateCabac(pCabacDecEngine, &mut uiCode) != ERR_NONE {
+        return 0;
+    }
+    if uiCode != 0 {
+        return 25; // PCM
+    }
+
+    let mut uiMbType: u32 = 1; // I16x16
+    DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(1), &mut uiCode);
+    uiMbType += 12 * uiCode;
+
+    DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(2), &mut uiCode);
+    if uiCode != 0 {
+        DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(2), &mut uiCode);
+        uiMbType += 4 + 4 * uiCode;
+    }
+    DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+    uiMbType += 2 * uiCode;
+    DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+    uiMbType += uiCode;
+    uiMbType
+}
+
+pub unsafe fn UpdateP16x8RefIdxCabac(
+    pCurDqLayer: PDqLayer,
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    iPartIdx: i32,
+    iRef: i8,
+    iListIdx: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+    let iScan4Idx4 = 4 + iScan4Idx;
+    let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+    let iCacheIdx6 = 6 + iCacheIdx;
+
+    let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize][iMbXy];
+    for offset in 0..4 {
+        *pDecRef.add(iScan4Idx + offset) = iRef;
+        *pDecRef.add(iScan4Idx4 + offset) = iRef;
+        (*pRefIndex)[iListIdx as usize][iCacheIdx + offset] = iRef;
+        (*pRefIndex)[iListIdx as usize][iCacheIdx6 + offset] = iRef;
+    }
+}
+
+pub unsafe fn UpdateP8x16RefIdxCabac(
+    pCurDqLayer: PDqLayer,
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    mut iPartIdx: i32,
+    iRef: i8,
+    iListIdx: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    for _ in 0..2 {
+        let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+        let iScan4Idx4 = 4 + iScan4Idx;
+        let iCacheIdx6 = 6 + iCacheIdx;
+
+        let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize][iMbXy];
+        for offset in 0..2 {
+            *pDecRef.add(iScan4Idx + offset) = iRef;
+            *pDecRef.add(iScan4Idx4 + offset) = iRef;
+            (*pRefIndex)[iListIdx as usize][iCacheIdx + offset] = iRef;
+            (*pRefIndex)[iListIdx as usize][iCacheIdx6 + offset] = iRef;
+        }
+        iPartIdx += 8;
+    }
+}
+
+pub unsafe fn UpdateP8x8RefIdxCabac(
+    pCurDqLayer: PDqLayer,
+    _pRefIndex: *mut [[i8; 30]; LIST_A],
+    iPartIdx: i32,
+    iRef: i8,
+    iListIdx: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+    let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize][iMbXy];
+    *pDecRef.add(iScan4Idx) = iRef;
+    *pDecRef.add(iScan4Idx + 1) = iRef;
+    *pDecRef.add(iScan4Idx + 4) = iRef;
+    *pDecRef.add(iScan4Idx + 5) = iRef;
+}
+
+pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy);
+    (*pDirect)[iScan4Idx] = 1;
+    (*pDirect)[iScan4Idx + 1] = 1;
+    (*pDirect)[iScan4Idx + 4] = 1;
+    (*pDirect)[iScan4Idx + 5] = 1;
+}
+
+pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy);
+    for i in (0..16).step_by(4) {
+        let kuiScan4Idx = g_kuiScan4[i] as usize;
+        let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
+        (*pDirect)[kuiScan4Idx] = 1;
+        (*pDirect)[kuiScan4Idx + 1] = 1;
+        (*pDirect)[kuiScan4IdxPlus4] = 1;
+        (*pDirect)[kuiScan4IdxPlus4 + 1] = 1;
+    }
+}
+
+pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut SDqLayer, pMvd: *const i16, iListIdx: i8) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let mvd_x = *pMvd;
+    let mvd_y = *pMvd.add(1);
+    for i in 0..16 {
+        (*(*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy))[i] = [mvd_x, mvd_y];
+    }
+}
+
+pub unsafe fn UpdateP16x8MvdCabac(
+    pCurDqLayer: *mut SDqLayer,
+    pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
+    mut iPartIdx: i32,
+    pMvd: *const i16,
+    iListIdx: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let mvd_pair = [*pMvd, *pMvd.add(1)];
+    for _ in 0..2 {
+        let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+        let iScan4Idx4 = 4 + iScan4Idx;
+        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+        let iCacheIdx6 = 6 + iCacheIdx;
+
+        let pMvdTarget = (*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy);
+        for off in 0..2 {
+            (*pMvdTarget)[iScan4Idx + off] = mvd_pair;
+            (*pMvdTarget)[iScan4Idx4 + off] = mvd_pair;
+            (*pMvdCache)[iListIdx as usize][iCacheIdx + off] = mvd_pair;
+            (*pMvdCache)[iListIdx as usize][iCacheIdx6 + off] = mvd_pair;
+        }
+        iPartIdx += 4;
+    }
+}
+
+pub unsafe fn UpdateP8x16MvdCabac(
+    pCurDqLayer: *mut SDqLayer,
+    pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
+    mut iPartIdx: i32,
+    pMvd: *const i16,
+    iListIdx: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let mvd_pair = [*pMvd, *pMvd.add(1)];
+    for _ in 0..2 {
+        let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+        let iScan4Idx4 = 4 + iScan4Idx;
+        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+        let iCacheIdx6 = 6 + iCacheIdx;
+
+        let pMvdTarget = (*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy);
+        for off in 0..2 {
+            (*pMvdTarget)[iScan4Idx + off] = mvd_pair;
+            (*pMvdTarget)[iScan4Idx4 + off] = mvd_pair;
+            (*pMvdCache)[iListIdx as usize][iCacheIdx + off] = mvd_pair;
+            (*pMvdCache)[iListIdx as usize][iCacheIdx6 + off] = mvd_pair;
+        }
+        iPartIdx += 8;
+    }
+}
+
+pub unsafe fn UpdateP8x8RefCacheIdxCabac(
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    iPartIdx: i16,
+    listIdx: i32,
+    iRef: i8,
+) {
+    let uiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+    (*pRefIndex)[listIdx as usize][uiCacheIdx] = iRef;
+    (*pRefIndex)[listIdx as usize][uiCacheIdx + 1] = iRef;
+    (*pRefIndex)[listIdx as usize][uiCacheIdx + 6] = iRef;
+    (*pRefIndex)[listIdx as usize][uiCacheIdx + 7] = iRef;
+}
+
+// ============================================================================
+// Macroblock Header & Syntax Parsing Functions
+// ============================================================================
+
+pub unsafe fn ParseEndOfSliceCabac(pCtx: PWelsDecoderContext, uiBinVal: &mut u32) -> i32 {
+    *uiBinVal = 0;
+    let err = DecodeTerminateCabac((*pCtx).pCabacDecEngine, uiBinVal);
+    if err != ERR_NONE {
+        return err;
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseSkipFlagCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    uiSkip: &mut u32,
+) -> i32 {
+    *uiSkip = 0;
+    let mut iCtxInc: i32 = NEW_CTX_OFFSET_SKIP;
+    iCtxInc += (((*pNeighAvail).iLeftAvail != 0 && !IS_SKIP((*pNeighAvail).iLeftType as u32))
+        as i32)
+        + (((*pNeighAvail).iTopAvail != 0 && !IS_SKIP((*pNeighAvail).iTopType as u32)) as i32);
+    if (*pCtx).eSliceType == B_SLICE {
+        iCtxInc += 13;
+    }
+    let pBinCtx = (*pCtx).pCabacCtx.offset(iCtxInc as isize);
+    let err = DecodeBinCabac((*pCtx).pCabacDecEngine, pBinCtx, uiSkip);
+    if err != ERR_NONE {
+        return err;
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseMBTypeISliceCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    uiBinVal: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    *uiBinVal = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_MB_TYPE_I as isize);
+
+    let iIdxA = ((*pNeighAvail).iLeftAvail != 0
+        && ((*pNeighAvail).iLeftType as u32 != MB_TYPE_INTRA4x4
+            && (*pNeighAvail).iLeftType as u32 != MB_TYPE_INTRA8x8)) as i32;
+    let iIdxB = ((*pNeighAvail).iTopAvail != 0
+        && ((*pNeighAvail).iTopType as u32 != MB_TYPE_INTRA4x4
+            && (*pNeighAvail).iTopType as u32 != MB_TYPE_INTRA8x8)) as i32;
+    let iCtxInc = iIdxA + iIdxB;
+
+    let mut err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(iCtxInc as isize), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    *uiBinVal = uiCode;
+
+    if *uiBinVal != 0 {
+        err = DecodeTerminateCabac(pCabacDecEngine, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode == 1 {
+            *uiBinVal = 25; // I_PCM
+        } else {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiBinVal = 1 + uiCode * 12;
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(4), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+                if err != ERR_NONE {
+                    return err;
+                }
+                *uiBinVal += 4;
+                if uiCode != 0 {
+                    *uiBinVal += 4;
+                }
+            }
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(6), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiBinVal += uiCode << 1;
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(7), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiBinVal += uiCode;
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseMBTypePSliceCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    uiMbType: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    *uiMbType = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_SKIP as isize);
+
+    let mut err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+
+    if uiCode != 0 {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(6), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            err = DecodeTerminateCabac(pCabacDecEngine, &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                *uiMbType = 30; // MB_TYPE_INTRA_PCM
+                return ERR_NONE;
+            }
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(7), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType = 6 + uiCode * 12;
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(8), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                *uiMbType += 4;
+                err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(8), &mut uiCode);
+                if err != ERR_NONE {
+                    return err;
+                }
+                if uiCode != 0 {
+                    *uiMbType += 4;
+                }
+            }
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(9), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType += uiCode << 1;
+
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(9), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType += uiCode;
+        } else {
+            *uiMbType = 5; // Intra 4x4
+        }
+    } else {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(4), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(6), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                *uiMbType = 1;
+            } else {
+                *uiMbType = 2;
+            }
+        } else {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                *uiMbType = 3;
+            } else {
+                *uiMbType = 0;
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseMBTypeBSliceCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    uiMbType: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    *uiMbType = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(27);
+
+    let iIdxA = ((*pNeighAvail).iLeftAvail != 0 && !IS_DIRECT((*pNeighAvail).iLeftType as u32)) as i32;
+    let iIdxB = ((*pNeighAvail).iTopAvail != 0 && !IS_DIRECT((*pNeighAvail).iTopType as u32)) as i32;
+    let iCtxInc = iIdxA + iIdxB;
+
+    let mut err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(iCtxInc as isize), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+
+    if uiCode == 0 {
+        *uiMbType = 0; // Bi_Direct
+    } else {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode == 0 {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType = 1 + uiCode; // 16x16 L0L1
+        } else {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(4), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType = uiCode << 3;
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType |= uiCode << 2;
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType |= uiCode << 1;
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType |= uiCode;
+
+            if *uiMbType < 8 {
+                *uiMbType += 3;
+                return ERR_NONE;
+            } else if *uiMbType == 13 {
+                *uiMbType = DecodeCabacIntraMbType(pCtx, pNeighAvail, 32) + 23;
+                return ERR_NONE;
+            } else if *uiMbType == 14 {
+                *uiMbType = 11; // Bi8x16
+                return ERR_NONE;
+            } else if *uiMbType == 15 {
+                *uiMbType = 22; // 8x8
+                return ERR_NONE;
+            }
+
+            *uiMbType <<= 1;
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(5), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiMbType |= uiCode;
+            *uiMbType -= 4;
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseTransformSize8x8FlagCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    bTransformSize8x8Flag: &mut bool,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_TS_8x8_FLAG as isize);
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbWidth = (*pCurDqLayer).iMbWidth as usize;
+
+    let iIdxA = if (*pNeighAvail).iLeftAvail != 0 {
+        *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy - 1) as i32
+    } else {
+        0
+    };
+    let iIdxB = if (*pNeighAvail).iTopAvail != 0 {
+        *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy - iMbWidth) as i32
+    } else {
+        0
+    };
+    let iCtxInc = iIdxA + iIdxB;
+
+    let err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(iCtxInc as isize), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    *bTransformSize8x8Flag = uiCode != 0;
+    ERR_NONE
+}
+
+pub unsafe fn ParseSubMBTypeCabac(
+    pCtx: PWelsDecoderContext,
+    _pNeighAvail: *const SWelsNeighAvail,
+    uiSubMbType: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_SUBMB_TYPE as isize);
+
+    let mut err = DecodeBinCabac(pCabacDecEngine, pBinCtx, &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode != 0 {
+        *uiSubMbType = 0;
+    } else {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(1), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(2), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiSubMbType = 3 - uiCode;
+        } else {
+            *uiSubMbType = 1;
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseBSubMBTypeCabac(
+    pCtx: PWelsDecoderContext,
+    _pNeighAvail: *const SWelsNeighAvail,
+    uiSubMbType: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_B_SUBMB_TYPE as isize);
+
+    let mut err = DecodeBinCabac(pCabacDecEngine, pBinCtx, &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode == 0 {
+        *uiSubMbType = 0; // B_Direct_8x8
+        return ERR_NONE;
+    }
+
+    err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(1), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode == 0 {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        *uiSubMbType = 1 + uiCode; // B_L0_8x8, B_L1_8x8
+        return ERR_NONE;
+    }
+
+    *uiSubMbType = 3;
+    err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(2), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode != 0 {
+        err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *uiSubMbType = 11 + uiCode; // B_L1_4x4, B_Bi_4x4
+            return ERR_NONE;
+        }
+        *uiSubMbType += 4;
+    }
+
+    err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    *uiSubMbType += 2 * uiCode;
+
+    err = DecodeBinCabac(pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    *uiSubMbType += uiCode;
+    ERR_NONE
+}
+
+pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &mut i32) -> i32 {
+    let mut uiCode: u32 = 0;
+    *iBinVal = 0;
+    let mut err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_IPR as isize),
+        &mut uiCode,
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode == 1 {
+        *iBinVal = -1;
+    } else {
+        let pCtx1 = (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_IPR + 1) as isize);
+        err = DecodeBinCabac((*pCtx).pCabacDecEngine, pCtx1, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        *iBinVal |= uiCode as i32;
+
+        err = DecodeBinCabac((*pCtx).pCabacDecEngine, pCtx1, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        *iBinVal |= (uiCode as i32) << 1;
+
+        err = DecodeBinCabac((*pCtx).pCabacDecEngine, pCtx1, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        *iBinVal |= (uiCode as i32) << 2;
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseIntraPredModeChromaCabac(
+    pCtx: PWelsDecoderContext,
+    uiNeighAvail: u8,
+    iBinVal: &mut i32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pChromaPredMode = (*pCurDqLayer).pChromaPredMode;
+    let pMbType = (*(*pCurDqLayer).pDec).pMbType;
+    let iLeftAvail = uiNeighAvail & 0x04;
+    let iTopAvail = uiNeighAvail & 0x01;
+
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXyTop = iMbXy - (*pCurDqLayer).iMbWidth as usize;
+    let iMbXyLeft = iMbXy - 1;
+
+    *iBinVal = 0;
+
+    let iIdxB = (iTopAvail != 0
+        && (*pChromaPredMode.add(iMbXyTop) > 0 && *pChromaPredMode.add(iMbXyTop) <= 3)
+        && *pMbType.add(iMbXyTop) != MB_TYPE_INTRA_PCM) as i32;
+    let iIdxA = (iLeftAvail != 0
+        && (*pChromaPredMode.add(iMbXyLeft) > 0 && *pChromaPredMode.add(iMbXyLeft) <= 3)
+        && *pMbType.add(iMbXyLeft) != MB_TYPE_INTRA_PCM) as i32;
+    let iCtxInc = iIdxA + iIdxB;
+
+    let mut err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CIPR + iCtxInc) as isize),
+        &mut uiCode,
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    *iBinVal = uiCode as i32;
+
+    if *iBinVal != 0 {
+        let mut iSym: u32 = 0;
+        err = DecodeBinCabac(
+            (*pCtx).pCabacDecEngine,
+            (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CIPR + 3) as isize),
+            &mut iSym,
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+        if iSym == 0 {
+            *iBinVal = (iSym + 1) as i32;
+            return ERR_NONE;
+        }
+        iSym = 0;
+        loop {
+            err = DecodeBinCabac(
+                (*pCtx).pCabacDecEngine,
+                (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CIPR + 3) as isize),
+                &mut uiCode,
+            );
+            if err != ERR_NONE {
+                return err;
+            }
+            iSym += 1;
+            if uiCode == 0 || iSym >= 1 {
+                break;
+            }
+        }
+        if uiCode != 0 && iSym == 1 {
+            iSym += 1;
+        }
+        *iBinVal = (iSym + 1) as i32;
+    }
+    ERR_NONE
+}
+
+// ============================================================================
+// Inter Motion Vector & Reference Index Parsing
+// ============================================================================
+
+pub unsafe fn ParseRefIdxCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    _nzc: *mut u8,
+    ref_idx: *mut [[i8; 30]; LIST_A],
+    direct: *const i8,
+    iListIdx: i32,
+    iZOrderIdx: i32,
+    iActiveRefNum: i32,
+    _b8mode: i32,
+    iRefIdxVal: &mut i8,
+) -> i32 {
+    if iActiveRefNum == 1 {
+        *iRefIdxVal = 0;
+        return ERR_NONE;
+    }
+
+    let mut uiCode: u32 = 0;
+    let mut iIdxA: i32;
+    let mut iIdxB: i32;
+    let mut iCtxInc: i32 = 0;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let pRefIdxInMB = (*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize][iMbXy];
+    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
+
+    let scan_cache = g_kuiCache30ScanIdx[iZOrderIdx as usize] as usize;
+
+    if iZOrderIdx == 0 {
+        iIdxB = ((*pNeighAvail).iTopAvail != 0
+            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+            && (*ref_idx)[iListIdx as usize][scan_cache - 6] > 0) as i32;
+        iIdxA = ((*pNeighAvail).iLeftAvail != 0
+            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+            && (*ref_idx)[iListIdx as usize][scan_cache - 1] > 0) as i32;
+        if (*pCtx).eSliceType == B_SLICE {
+            if iIdxB > 0 && !direct.is_null() && *direct.add(scan_cache - 6) == 0 {
+                iCtxInc += 2;
+            }
+            if iIdxA > 0 && !direct.is_null() && *direct.add(scan_cache - 1) == 0 {
+                iCtxInc += 1;
+            }
+        }
+    } else if iZOrderIdx == 4 {
+        iIdxB = ((*pNeighAvail).iTopAvail != 0
+            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+            && (*ref_idx)[iListIdx as usize][scan_cache - 6] > 0) as i32;
+        iIdxA = (*pRefIdxInMB.add(g_kuiScan4[iZOrderIdx as usize] as usize - 1) > 0) as i32;
+        if (*pCtx).eSliceType == B_SLICE {
+            if iIdxB > 0 && !direct.is_null() && *direct.add(scan_cache - 6) == 0 {
+                iCtxInc += 2;
+            }
+            if iIdxA > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 1) == 0 {
+                iCtxInc += 1;
+            }
+        }
+    } else if iZOrderIdx == 8 {
+        iIdxB = (*pRefIdxInMB.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) > 0) as i32;
+        iIdxA = ((*pNeighAvail).iLeftAvail != 0
+            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+            && (*ref_idx)[iListIdx as usize][scan_cache - 1] > 0) as i32;
+        if (*pCtx).eSliceType == B_SLICE {
+            if iIdxB > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) == 0 {
+                iCtxInc += 2;
+            }
+            if iIdxA > 0 && !direct.is_null() && *direct.add(scan_cache - 1) == 0 {
+                iCtxInc += 1;
+            }
+        }
+    } else {
+        iIdxB = (*pRefIdxInMB.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) > 0) as i32;
+        iIdxA = (*pRefIdxInMB.add(g_kuiScan4[iZOrderIdx as usize] as usize - 1) > 0) as i32;
+        if (*pCtx).eSliceType == B_SLICE {
+            if iIdxB > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) == 0 {
+                iCtxInc += 2;
+            }
+            if iIdxA > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 1) == 0 {
+                iCtxInc += 1;
+            }
+        }
+    }
+
+    if (*pCtx).eSliceType != B_SLICE {
+        iCtxInc = iIdxA + (iIdxB << 1);
+    }
+
+    let mut err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_REF_NO + iCtxInc) as isize),
+        &mut uiCode,
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode != 0 {
+        err = DecodeUnaryBinCabac(
+            (*pCtx).pCabacDecEngine,
+            (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_REF_NO + 4) as isize),
+            1,
+            &mut uiCode,
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+        uiCode += 1;
+    }
+    *iRefIdxVal = uiCode as i8;
+    ERR_NONE
+}
+
+pub unsafe fn ParseMvdInfoCabac(
+    pCtx: PWelsDecoderContext,
+    _pNeighAvail: *const SWelsNeighAvail,
+    pRefIndex: *const [[i8; 30]; LIST_A],
+    pMvdCache: *const [[[i16; 2]; 30]; LIST_A],
+    index: i32,
+    iListIdx: i8,
+    iMvComp: i8,
+    iMvdVal: &mut i16,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let mut iIdxA: i32 = 0;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(
+        (NEW_CTX_OFFSET_MVD + (iMvComp as i32) * CTX_NUM_MVD) as isize,
+    );
+    *iMvdVal = 0;
+
+    let cache_idx = g_kuiCache30ScanIdx[index as usize] as usize;
+    if (*pRefIndex)[iListIdx as usize][cache_idx - 6] >= 0 {
+        iIdxA = ((*pMvdCache)[iListIdx as usize][cache_idx - 6][iMvComp as usize] as i32).abs();
+    }
+    if (*pRefIndex)[iListIdx as usize][cache_idx - 1] >= 0 {
+        iIdxA += ((*pMvdCache)[iListIdx as usize][cache_idx - 1][iMvComp as usize] as i32).abs();
+    }
+
+    let mut iCtxInc = 0;
+    if iIdxA >= 3 {
+        iCtxInc = 1 + (iIdxA > 32) as i32;
+    }
+
+    let mut err = DecodeBinCabac((*pCtx).pCabacDecEngine, pBinCtx.offset(iCtxInc as isize), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode != 0 {
+        err = DecodeUEGMvCabac((*pCtx).pCabacDecEngine, pBinCtx.offset(3), 3, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        *iMvdVal = (uiCode + 1) as i16;
+        err = DecodeBypassCabac((*pCtx).pCabacDecEngine, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            *iMvdVal = -*iMvdVal;
+        }
+    } else {
+        *iMvdVal = 0;
+    }
+    ERR_NONE
+}
+
+pub unsafe fn PredMv(
+    iMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    iRefIndex: *mut [[i8; 30]; LIST_A],
+    listIdx: usize,
+    iPartIdx: usize,
+    iPartWidth: usize,
+    iRef: i8,
+    iMVP: &mut [i16; 2],
+) {
+    let kuiLeftIdx = (g_kuiCache30ScanIdx[iPartIdx] - 1) as usize;
+    let kuiTopIdx = (g_kuiCache30ScanIdx[iPartIdx] - 6) as usize;
+    let kuiRightTopIdx = kuiTopIdx + iPartWidth;
+    let kuiLeftTopIdx = kuiTopIdx - 1;
+
+    let kiLeftRef = (*iRefIndex)[listIdx][kuiLeftIdx];
+    let kiTopRef = (*iRefIndex)[listIdx][kuiTopIdx];
+    let kiRightTopRef = (*iRefIndex)[listIdx][kuiRightTopIdx];
+    let kiLeftTopRef = (*iRefIndex)[listIdx][kuiLeftTopIdx];
+    let mut iDiagonalRef = kiRightTopRef;
+
+    let iAMV = (*iMotionVector)[listIdx][kuiLeftIdx];
+    let iBMV = (*iMotionVector)[listIdx][kuiTopIdx];
+    let mut iCMV = (*iMotionVector)[listIdx][kuiRightTopIdx];
+
+    if REF_NOT_AVAIL == iDiagonalRef {
+        iDiagonalRef = kiLeftTopRef;
+        iCMV = (*iMotionVector)[listIdx][kuiLeftTopIdx];
+    }
+
+    let iMatchRef = (iRef == kiLeftRef) as i32 + (iRef == kiTopRef) as i32 + (iRef == iDiagonalRef) as i32;
+
+    if REF_NOT_AVAIL == kiTopRef && REF_NOT_AVAIL == iDiagonalRef && kiLeftRef >= REF_NOT_IN_LIST {
+        *iMVP = iAMV;
+        return;
+    }
+
+    if 1 == iMatchRef {
+        if iRef == kiLeftRef {
+            *iMVP = iAMV;
+        } else if iRef == kiTopRef {
+            *iMVP = iBMV;
+        } else {
+            *iMVP = iCMV;
+        }
+    } else {
+        iMVP[0] = WelsMedian(iAMV[0], iBMV[0], iCMV[0]);
+        iMVP[1] = WelsMedian(iAMV[1], iBMV[1], iCMV[1]);
+    }
+}
+
+pub unsafe fn PredInter16x8Mv(
+    iMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    iRefIndex: *mut [[i8; 30]; LIST_A],
+    listIdx: usize,
+    iPartIdx: usize,
+    iRef: i8,
+    iMVP: &mut [i16; 2],
+) {
+    if 0 == iPartIdx {
+        let kiTopRef = (*iRefIndex)[listIdx][1];
+        if iRef == kiTopRef {
+            *iMVP = (*iMotionVector)[listIdx][1];
+            return;
+        }
+    } else {
+        let kiLeftRef = (*iRefIndex)[listIdx][18];
+        if iRef == kiLeftRef {
+            *iMVP = (*iMotionVector)[listIdx][18];
+            return;
+        }
+    }
+    PredMv(iMotionVector, iRefIndex, listIdx, iPartIdx, 4, iRef, iMVP);
+}
+
+pub unsafe fn PredInter8x16Mv(
+    iMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    iRefIndex: *mut [[i8; 30]; LIST_A],
+    listIdx: usize,
+    iPartIdx: usize,
+    iRef: i8,
+    iMVP: &mut [i16; 2],
+) {
+    if 0 == iPartIdx {
+        let kiLeftRef = (*iRefIndex)[listIdx][6];
+        if iRef == kiLeftRef {
+            *iMVP = (*iMotionVector)[listIdx][6];
+            return;
+        }
+    } else {
+        let mut iDiagonalRef = (*iRefIndex)[listIdx][5];
+        let mut index = 5;
+        if REF_NOT_AVAIL == iDiagonalRef {
+            iDiagonalRef = (*iRefIndex)[listIdx][2];
+            index = 2;
+        }
+        if iRef == iDiagonalRef {
+            *iMVP = (*iMotionVector)[listIdx][index];
+            return;
+        }
+    }
+    PredMv(iMotionVector, iRefIndex, listIdx, iPartIdx, 2, iRef, iMVP);
+}
+
+pub unsafe fn UpdateP16x16MotionInfo(
+    pCurDqLayer: PDqLayer,
+    listIdx: usize,
+    iRef: i8,
+    pMv: &[i16; 2],
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[listIdx][iMbXy];
+    let pDecMv = (*(*pCurDqLayer).pDec).pMv[listIdx][iMbXy];
+
+    for i in (0..16).step_by(4) {
+        let kuiScan4Idx = g_kuiScan4[i] as usize;
+        let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
+
+        *pDecRef.add(kuiScan4Idx) = iRef;
+        *pDecRef.add(kuiScan4Idx + 1) = iRef;
+        *pDecRef.add(kuiScan4IdxPlus4) = iRef;
+        *pDecRef.add(kuiScan4IdxPlus4 + 1) = iRef;
+
+        *pDecMv.add(kuiScan4Idx) = *pMv;
+        *pDecMv.add(1 + kuiScan4Idx) = *pMv;
+        *pDecMv.add(kuiScan4IdxPlus4) = *pMv;
+        *pDecMv.add(1 + kuiScan4IdxPlus4) = *pMv;
+    }
+}
+
+pub unsafe fn UpdateP16x8MotionInfo(
+    pCurDqLayer: PDqLayer,
+    pMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    listIdx: usize,
+    mut iPartIdx: usize,
+    iRef: i8,
+    pMv: &[i16; 2],
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    for _ in 0..2 {
+        let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
+        let iScan4Idx4 = 4 + iScan4Idx;
+        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
+        let iCacheIdx6 = 6 + iCacheIdx;
+
+        let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[listIdx][iMbXy];
+        let pDecMv = (*(*pCurDqLayer).pDec).pMv[listIdx][iMbXy];
+
+        for off in 0..2 {
+            *pDecRef.add(iScan4Idx + off) = iRef;
+            *pDecRef.add(iScan4Idx4 + off) = iRef;
+            *pDecMv.add(iScan4Idx + off) = *pMv;
+            *pDecMv.add(iScan4Idx4 + off) = *pMv;
+
+            (*pRefIndex)[listIdx][iCacheIdx + off] = iRef;
+            (*pRefIndex)[listIdx][iCacheIdx6 + off] = iRef;
+            (*pMotionVector)[listIdx][iCacheIdx + off] = *pMv;
+            (*pMotionVector)[listIdx][iCacheIdx6 + off] = *pMv;
+        }
+        iPartIdx += 4;
+    }
+}
+
+pub unsafe fn UpdateP8x16MotionInfo(
+    pCurDqLayer: PDqLayer,
+    pMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    listIdx: usize,
+    mut iPartIdx: usize,
+    iRef: i8,
+    pMv: &[i16; 2],
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    for _ in 0..2 {
+        let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
+        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
+        let iScan4Idx4 = 4 + iScan4Idx;
+        let iCacheIdx6 = 6 + iCacheIdx;
+
+        let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[listIdx][iMbXy];
+        let pDecMv = (*(*pCurDqLayer).pDec).pMv[listIdx][iMbXy];
+
+        for off in 0..2 {
+            *pDecRef.add(iScan4Idx + off) = iRef;
+            *pDecRef.add(iScan4Idx4 + off) = iRef;
+            *pDecMv.add(iScan4Idx + off) = *pMv;
+            *pDecMv.add(iScan4Idx4 + off) = *pMv;
+
+            (*pRefIndex)[listIdx][iCacheIdx + off] = iRef;
+            (*pRefIndex)[listIdx][iCacheIdx6 + off] = iRef;
+            (*pMotionVector)[listIdx][iCacheIdx + off] = *pMv;
+            (*pMotionVector)[listIdx][iCacheIdx6 + off] = *pMv;
+        }
+        iPartIdx += 8;
+    }
+}
+
+pub unsafe fn Update8x8RefIdx(
+    pCurDqLayer: PDqLayer,
+    iPartIdx: i16,
+    listIdx: usize,
+    iRef: i8,
+) {
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+    let pDecRef = (*(*pCurDqLayer).pDec).pRefIndex[listIdx][iMbXy];
+    *pDecRef.add(iScan4Idx) = iRef;
+    *pDecRef.add(iScan4Idx + 1) = iRef;
+    *pDecRef.add(iScan4Idx + 4) = iRef;
+    *pDecRef.add(iScan4Idx + 5) = iRef;
+}
+
+pub unsafe fn ParseInterPMotionInfoCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    pNonZeroCount: *mut u8,
+    pMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+) -> i32 {
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
+    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    let ppRefPic = (*pCtx).sRefPic.pRefList[LIST_0].as_ptr();
+    let pRefCount0 = pSliceHeader.uiRefCount[0];
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let mut pMv = [0i16; 2];
+    let mut pMvd = [0i16; 2];
+    let mut iRef = [0i8; 2];
+
+    let iMinVmv = (*(*pSliceHeader.pSps).pSLevelLimits).iMinVmv;
+    let iMaxVmv = (*(*pSliceHeader.pSps).pSLevelLimits).iMaxVmv;
+
+    let bIsPending = GetThreadCount(pCtx) > 1;
+    let mbType = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+
+    match mbType {
+        MB_TYPE_16x16 => {
+            let iPartIdx = 0;
+            let err = ParseRefIdxCabac(
+                pCtx,
+                pNeighAvail,
+                pNonZeroCount,
+                pRefIndex,
+                ptr::null(),
+                LIST_0 as i32,
+                iPartIdx,
+                pRefCount0,
+                0,
+                &mut iRef[0],
+            );
+            if err != ERR_NONE {
+                return err;
+            }
+            if iRef[0] < 0 || iRef[0] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[0] as usize)).is_null() {
+                (*pCtx).bMbRefConcealed = true;
+                if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                    iRef[0] = 0;
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                } else {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                }
+            }
+            let pPic0 = *ppRefPic.add(iRef[0] as usize);
+            (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                || (*pCtx).bMbRefConcealed
+                || !(pPic0.is_null() || (*pPic0).bIsComplete || bIsPending);
+
+            PredMv(pMotionVector, pRefIndex, LIST_0, 0, 4, iRef[0], &mut pMv);
+            let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+            if err != ERR_NONE { return err; }
+            err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+            if err != ERR_NONE { return err; }
+
+            pMv[0] += pMvd[0];
+            pMv[1] += pMvd[1];
+
+            UpdateP16x16MotionInfo(pCurDqLayer, LIST_0, iRef[0], &pMv);
+            UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i8);
+        }
+        MB_TYPE_16x8 => {
+            for i in 0..2 {
+                let iPartIdx = i << 3;
+                let err = ParseRefIdxCabac(
+                    pCtx,
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pRefIndex,
+                    ptr::null(),
+                    LIST_0 as i32,
+                    iPartIdx,
+                    pRefCount0,
+                    0,
+                    &mut iRef[i as usize],
+                );
+                if err != ERR_NONE {
+                    return err;
+                }
+                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[i as usize] as usize)).is_null() {
+                    (*pCtx).bMbRefConcealed = true;
+                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        iRef[i as usize] = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+                let pPic = *ppRefPic.add(iRef[i as usize] as usize);
+                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                    || (*pCtx).bMbRefConcealed
+                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                UpdateP16x8RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
+            }
+            for i in 0..2 {
+                let iPartIdx = i << 3;
+                PredInter16x8Mv(pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &mut pMv);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+                if err != ERR_NONE { return err; }
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+                if err != ERR_NONE { return err; }
+
+                pMv[0] += pMvd[0];
+                pMv[1] += pMvd[1];
+
+                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &pMv);
+                UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), LIST_0 as i8);
+            }
+        }
+        MB_TYPE_8x16 => {
+            for i in 0..2 {
+                let iPartIdx = i << 2;
+                let err = ParseRefIdxCabac(
+                    pCtx,
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pRefIndex,
+                    ptr::null(),
+                    LIST_0 as i32,
+                    iPartIdx,
+                    pRefCount0,
+                    0,
+                    &mut iRef[i as usize],
+                );
+                if err != ERR_NONE {
+                    return err;
+                }
+                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[i as usize] as usize)).is_null() {
+                    (*pCtx).bMbRefConcealed = true;
+                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        iRef[i as usize] = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+                let pPic = *ppRefPic.add(iRef[i as usize] as usize);
+                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                    || (*pCtx).bMbRefConcealed
+                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                UpdateP8x16RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
+            }
+            for i in 0..2 {
+                let iPartIdx = i << 2;
+                PredInter8x16Mv(pMotionVector, pRefIndex, LIST_0, (i << 2) as usize, iRef[i as usize], &mut pMv);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+                if err != ERR_NONE { return err; }
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+                if err != ERR_NONE { return err; }
+
+                pMv[0] += pMvd[0];
+                pMv[1] += pMvd[1];
+
+                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &pMv);
+                UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), LIST_0 as i8);
+            }
+        }
+        MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
+            let mut pRefIdx = [0i8; 4];
+            let mut pSubPartCount = [0i8; 4];
+            let mut pPartW = [0i8; 4];
+            let mut uiSubMbType: u32 = 0;
+
+            for i in 0..4 {
+                let err = ParseSubMBTypeCabac(pCtx, pNeighAvail, &mut uiSubMbType);
+                if err != ERR_NONE {
+                    return err;
+                }
+                if uiSubMbType >= 4 {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
+                }
+                (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                pSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount;
+                pPartW[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
+
+                let flag_ptr = (*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy);
+                *flag_ptr = *flag_ptr && (uiSubMbType == 0);
+            }
+
+            for i in 0..4 {
+                let iIdx8 = (i << 2) as i32;
+                let err = ParseRefIdxCabac(
+                    pCtx,
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pRefIndex,
+                    ptr::null(),
+                    LIST_0 as i32,
+                    iIdx8,
+                    pRefCount0,
+                    1,
+                    &mut pRefIdx[i],
+                );
+                if err != ERR_NONE {
+                    return err;
+                }
+                if pRefIdx[i] < 0 || pRefIdx[i] as i32 >= pRefCount0 || (*ppRefPic.add(pRefIdx[i] as usize)).is_null() {
+                    (*pCtx).bMbRefConcealed = true;
+                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        pRefIdx[i] = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+                let pPic = *ppRefPic.add(pRefIdx[i] as usize);
+                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                    || (*pCtx).bMbRefConcealed
+                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, pRefIndex, iIdx8, pRefIdx[i], LIST_0 as i8);
+            }
+
+            for i in 0..4 {
+                let iPartCount = pSubPartCount[i] as usize;
+                uiSubMbType = (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i];
+                let iBlockW = pPartW[i] as usize;
+                let mut iCacheIdx = g_kuiCache30ScanIdx[i << 2] as usize;
+
+                (*pRefIndex)[0][iCacheIdx] = pRefIdx[i];
+                (*pRefIndex)[0][iCacheIdx + 1] = pRefIdx[i];
+                (*pRefIndex)[0][iCacheIdx + 6] = pRefIdx[i];
+                (*pRefIndex)[0][iCacheIdx + 7] = pRefIdx[i];
+
+                for j in 0..iPartCount {
+                    let iPartIdx = (i << 2) + j * iBlockW;
+                    let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
+                    iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
+
+                    PredMv(pMotionVector, pRefIndex, LIST_0, iPartIdx, iBlockW, pRefIdx[i], &mut pMv);
+                    let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
+                    if err != ERR_NONE { return err; }
+                    err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 1, &mut pMvd[1]);
+                    if err != ERR_NONE { return err; }
+
+                    pMv[0] += pMvd[0];
+                    pMv[1] += pMvd[1];
+
+                    let pDecMv = (*(*pCurDqLayer).pDec).pMv[0][iMbXy];
+                    let pMvdTarget = (*pCurDqLayer).pMvd[0].add(iMbXy);
+
+                    if SUB_MB_TYPE_8x8 == uiSubMbType {
+                        *pDecMv.add(iScan4Idx) = pMv;
+                        *pDecMv.add(iScan4Idx + 1) = pMv;
+                        *pDecMv.add(iScan4Idx + 4) = pMv;
+                        *pDecMv.add(iScan4Idx + 5) = pMv;
+
+                        (*pMvdTarget)[iScan4Idx] = pMvd;
+                        (*pMvdTarget)[iScan4Idx + 1] = pMvd;
+                        (*pMvdTarget)[iScan4Idx + 4] = pMvd;
+                        (*pMvdTarget)[iScan4Idx + 5] = pMvd;
+
+                        (*pMotionVector)[0][iCacheIdx] = pMv;
+                        (*pMotionVector)[0][iCacheIdx + 1] = pMv;
+                        (*pMotionVector)[0][iCacheIdx + 6] = pMv;
+                        (*pMotionVector)[0][iCacheIdx + 7] = pMv;
+
+                        (*pMvdCache)[0][iCacheIdx] = pMvd;
+                        (*pMvdCache)[0][iCacheIdx + 1] = pMvd;
+                        (*pMvdCache)[0][iCacheIdx + 6] = pMvd;
+                        (*pMvdCache)[0][iCacheIdx + 7] = pMvd;
+                    } else if SUB_MB_TYPE_8x4 == uiSubMbType {
+                        *pDecMv.add(iScan4Idx) = pMv;
+                        *pDecMv.add(iScan4Idx + 1) = pMv;
+                        (*pMvdTarget)[iScan4Idx] = pMvd;
+                        (*pMvdTarget)[iScan4Idx + 1] = pMvd;
+
+                        (*pMotionVector)[0][iCacheIdx] = pMv;
+                        (*pMotionVector)[0][iCacheIdx + 1] = pMv;
+                        (*pMvdCache)[0][iCacheIdx] = pMvd;
+                        (*pMvdCache)[0][iCacheIdx + 1] = pMvd;
+                    } else if SUB_MB_TYPE_4x8 == uiSubMbType {
+                        *pDecMv.add(iScan4Idx) = pMv;
+                        *pDecMv.add(iScan4Idx + 4) = pMv;
+                        (*pMvdTarget)[iScan4Idx] = pMvd;
+                        (*pMvdTarget)[iScan4Idx + 4] = pMvd;
+
+                        (*pMotionVector)[0][iCacheIdx] = pMv;
+                        (*pMotionVector)[0][iCacheIdx + 6] = pMv;
+                        (*pMvdCache)[0][iCacheIdx] = pMvd;
+                        (*pMvdCache)[0][iCacheIdx + 6] = pMvd;
+                    } else {
+                        *pDecMv.add(iScan4Idx) = pMv;
+                        (*pMvdTarget)[iScan4Idx] = pMvd;
+                        (*pMotionVector)[0][iCacheIdx] = pMv;
+                        (*pMvdCache)[0][iCacheIdx] = pMvd;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseInterBMotionInfoCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    pNonZeroCount: *mut u8,
+    pMotionVector: *mut [[[i16; 2]; 30]; LIST_A],
+    pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
+    pRefIndex: *mut [[i8; 30]; LIST_A],
+    pDirect: *mut [i8; 30],
+) -> i32 {
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
+    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+
+    let pRefCount = pSliceHeader.uiRefCount;
+    let mbType = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+
+    let mut pMv = [0i16; 2];
+    let mut pMvd = [0i16; 2];
+    let mut iRef = [0i8; 2];
+
+    let bIsPending = GetThreadCount(pCtx) > 1;
+
+    if IS_INTER_16x16(mbType) {
+        let iPartIdx = 0;
+        for listIdx in LIST_0..LIST_A {
+            iRef[listIdx] = REF_NOT_IN_LIST;
+            if IS_DIR(mbType, 0, listIdx) {
+                let err = ParseRefIdxCabac(
+                    pCtx,
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pRefIndex,
+                    (*pDirect).as_ptr(),
+                    listIdx as i32,
+                    iPartIdx,
+                    pRefCount[listIdx],
+                    0,
+                    &mut iRef[listIdx],
+                );
+                if err != ERR_NONE {
+                    return err;
+                }
+                let ppRefPic = (*pCtx).sRefPic.pRefList[listIdx].as_ptr();
+                if iRef[listIdx] < 0
+                    || iRef[listIdx] as i32 >= pRefCount[listIdx]
+                    || (*ppRefPic.add(iRef[listIdx] as usize)).is_null()
+                {
+                    (*pCtx).bMbRefConcealed = true;
+                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        iRef[listIdx] = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+            }
+        }
+        for listIdx in LIST_0..LIST_A {
+            if IS_DIR(mbType, 0, listIdx) {
+                PredMv(pMotionVector, pRefIndex, listIdx, 0, 4, iRef[listIdx], &mut pMv);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 0, &mut pMvd[0]);
+                if err != ERR_NONE { return err; }
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 1, &mut pMvd[1]);
+                if err != ERR_NONE { return err; }
+                pMv[0] += pMvd[0];
+                pMv[1] += pMvd[1];
+            } else {
+                pMv = [0, 0];
+                pMvd = [0, 0];
+            }
+            UpdateP16x16MotionInfo(pCurDqLayer, listIdx, iRef[listIdx], &pMv);
+            UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i8);
+        }
+    }
+    ERR_NONE
+}
+
+// ============================================================================
+// Coded Block Pattern & Delta QP Parsing
+// ============================================================================
+
+pub unsafe fn ParseCbpInfoCabac(
+    pCtx: PWelsDecoderContext,
+    pNeighAvail: *const SWelsNeighAvail,
+    uiCbp: &mut u32,
+) -> i32 {
+    let mut iIdxA: i32;
+    let mut iIdxB: i32;
+    let mut pALeftMb = [0i32; 2];
+    let mut pBTopMb = [0i32; 2];
+    *uiCbp = 0;
+    let mut pCbpBit = [0u32; 6];
+    let mut iCtxInc: i32;
+
+    pBTopMb[0] = ((*pNeighAvail).iTopAvail != 0
+        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+        && (((*pNeighAvail).iTopCbp & (1 << 2)) == 0)) as i32;
+    pBTopMb[1] = ((*pNeighAvail).iTopAvail != 0
+        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+        && (((*pNeighAvail).iTopCbp & (1 << 3)) == 0)) as i32;
+    pALeftMb[0] = ((*pNeighAvail).iLeftAvail != 0
+        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+        && (((*pNeighAvail).iLeftCbp & (1 << 1)) == 0)) as i32;
+    pALeftMb[1] = ((*pNeighAvail).iLeftAvail != 0
+        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+        && (((*pNeighAvail).iLeftCbp & (1 << 3)) == 0)) as i32;
+
+    // left_top 8x8 block
+    iCtxInc = pALeftMb[0] + (pBTopMb[0] << 1);
+    let mut err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + iCtxInc) as isize),
+        &mut pCbpBit[0],
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if pCbpBit[0] != 0 {
+        *uiCbp += 0x01;
+    }
+
+    // right_top 8x8 block
+    iIdxA = (pCbpBit[0] == 0) as i32;
+    iCtxInc = iIdxA + (pBTopMb[1] << 1);
+    err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + iCtxInc) as isize),
+        &mut pCbpBit[1],
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if pCbpBit[1] != 0 {
+        *uiCbp += 0x02;
+    }
+
+    // left_bottom 8x8 block
+    iIdxB = (pCbpBit[0] == 0) as i32;
+    iCtxInc = pALeftMb[1] + (iIdxB << 1);
+    err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + iCtxInc) as isize),
+        &mut pCbpBit[2],
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if pCbpBit[2] != 0 {
+        *uiCbp += 0x04;
+    }
+
+    // right_bottom 8x8 block
+    iIdxB = (pCbpBit[1] == 0) as i32;
+    iIdxA = (pCbpBit[2] == 0) as i32;
+    iCtxInc = iIdxA + (iIdxB << 1);
+    err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + iCtxInc) as isize),
+        &mut pCbpBit[3],
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+    if pCbpBit[3] != 0 {
+        *uiCbp += 0x08;
+    }
+
+    if (*(*pCtx).pSps).uiChromaFormatIdc == 0 {
+        return ERR_NONE;
+    }
+
+    // Chroma
+    iIdxB = ((*pNeighAvail).iTopAvail != 0
+        && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM as i32
+            || (((*pNeighAvail).iTopCbp >> 4) != 0))) as i32;
+    iIdxA = ((*pNeighAvail).iLeftAvail != 0
+        && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM as i32
+            || (((*pNeighAvail).iLeftCbp >> 4) != 0))) as i32;
+
+    iCtxInc = iIdxA + (iIdxB << 1);
+    err = DecodeBinCabac(
+        (*pCtx).pCabacDecEngine,
+        (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + CTX_NUM_CBP + iCtxInc) as isize),
+        &mut pCbpBit[4],
+    );
+    if err != ERR_NONE {
+        return err;
+    }
+
+    if pCbpBit[4] != 0 {
+        iIdxB = ((*pNeighAvail).iTopAvail != 0
+            && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM as i32
+                || (((*pNeighAvail).iTopCbp >> 4) == 2))) as i32;
+        iIdxA = ((*pNeighAvail).iLeftAvail != 0
+            && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM as i32
+                || (((*pNeighAvail).iLeftCbp >> 4) == 2))) as i32;
+        iCtxInc = iIdxA + (iIdxB << 1);
+        err = DecodeBinCabac(
+            (*pCtx).pCabacDecEngine,
+            (*pCtx).pCabacCtx.offset((NEW_CTX_OFFSET_CBP + 2 * CTX_NUM_CBP + iCtxInc) as isize),
+            &mut pCbpBit[5],
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+        *uiCbp += 1 << (4 + pCbpBit[5]);
+    }
+
+    ERR_NONE
+}
+
+pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, iQpDelta: &mut i32) -> i32 {
+    let mut uiCode: u32 = 0;
+    let pCurrSlice = &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sSliceInLayer;
+    *iQpDelta = 0;
+    let pBinCtx = (*pCtx).pCabacCtx.offset(NEW_CTX_OFFSET_DELTA_QP as isize);
+    let iCtxInc = (pCurrSlice.iLastDeltaQp != 0) as i32;
+
+    let mut err = DecodeBinCabac((*pCtx).pCabacDecEngine, pBinCtx.offset(iCtxInc as isize), &mut uiCode);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCode != 0 {
+        err = DecodeUnaryBinCabac((*pCtx).pCabacDecEngine, pBinCtx.offset(2), 1, &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        uiCode += 1;
+        *iQpDelta = ((uiCode + 1) >> 1) as i32;
+        if (uiCode & 1) == 0 {
+            *iQpDelta = -*iQpDelta;
+        }
+    }
+    pCurrSlice.iLastDeltaQp = *iQpDelta;
+    ERR_NONE
+}
+
+pub unsafe fn ParseCbfInfoCabac(
+    pNeighAvail: *const SWelsNeighAvail,
+    pNzcCache: *const u8,
+    iZIndex: i32,
+    iResProperty: i32,
+    pCtx: PWelsDecoderContext,
+    uiCbfBit: &mut u32,
+) -> i32 {
+    let mut nA: i8;
+    let mut nB: i8;
+    let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex as usize;
+    let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth as usize;
+    let mut iLeftBlkXy = iCurrBlkXy - 1;
+    let pCbfDc = (*(*pCtx).pCurDqLayer).pCbfDc;
+    let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
+    *uiCbfBit = 0;
+    nA = IS_INTRA(*pMbType.add(iCurrBlkXy)) as i8;
+    nB = nA;
+
+    if iResProperty == I16_LUMA_DC || iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
+        if (*pNeighAvail).iTopAvail != 0 {
+            nB = (*pMbType.add(iTopBlkXy) == MB_TYPE_INTRA_PCM
+                || ((*pCbfDc.add(iTopBlkXy) >> iResProperty) & 1) != 0) as i8;
+        }
+        if (*pNeighAvail).iLeftAvail != 0 {
+            nA = (*pMbType.add(iLeftBlkXy) == MB_TYPE_INTRA_PCM
+                || ((*pCbfDc.add(iLeftBlkXy) >> iResProperty) & 1) != 0) as i8;
+        }
+        let iCtxInc = (nA as i32) + ((nB as i32) << 1);
+        let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
+        let err = DecodeBinCabac(
+            (*pCtx).pCabacDecEngine,
+            (*pCtx).pCabacCtx.offset(ctx_offset as isize),
+            uiCbfBit,
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+        if *uiCbfBit != 0 {
+            *pCbfDc.add(iCurrBlkXy) |= 1 << iResProperty;
+        }
+    } else {
+        let top_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 8) as usize;
+        if *pNzcCache.add(top_nzc_idx) != 0xff {
+            if g_kTopBlkInsideMb[iZIndex as usize] != 0 {
+                iTopBlkXy = iCurrBlkXy;
+            }
+            nB = (*pNzcCache.add(top_nzc_idx) != 0 || *pMbType.add(iTopBlkXy) == MB_TYPE_INTRA_PCM) as i8;
+        }
+        let left_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 1) as usize;
+        if *pNzcCache.add(left_nzc_idx) != 0xff {
+            if g_kLeftBlkInsideMb[iZIndex as usize] != 0 {
+                iLeftBlkXy = iCurrBlkXy;
+            }
+            nA = (*pNzcCache.add(left_nzc_idx) != 0 || *pMbType.add(iLeftBlkXy) == MB_TYPE_INTRA_PCM) as i8;
+        }
+        let iCtxInc = (nA as i32) + ((nB as i32) << 1);
+        let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
+        let err = DecodeBinCabac(
+            (*pCtx).pCabacDecEngine,
+            (*pCtx).pCabacCtx.offset(ctx_offset as isize),
+            uiCbfBit,
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseSignificantMapCabac(
+    mut pSignificantMap: *mut i32,
+    iResProperty: i32,
+    pCtx: PWelsDecoderContext,
+    uiCoeffNum: &mut u32,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let map_base = if iResProperty == LUMA_DC_AC_8 {
+        NEW_CTX_OFFSET_MAP_8x8
+    } else {
+        NEW_CTX_OFFSET_MAP
+    };
+    let last_base = if iResProperty == LUMA_DC_AC_8 {
+        NEW_CTX_OFFSET_LAST_8x8
+    } else {
+        NEW_CTX_OFFSET_LAST
+    };
+
+    let pMapCtx = (*pCtx)
+        .pCabacCtx
+        .offset((map_base + g_kBlockCat2CtxOffsetMap[iResProperty as usize] as i32) as isize);
+    let pLastCtx = (*pCtx)
+        .pCabacCtx
+        .offset((last_base + g_kBlockCat2CtxOffsetLast[iResProperty as usize] as i32) as isize);
+
+    *uiCoeffNum = 0;
+    let i1 = g_kMaxPos[iResProperty as usize] as i32;
+
+    for i in 0..i1 {
+        let iCtx = if iResProperty == LUMA_DC_AC_8 {
+            g_kuiIdx2CtxSignificantCoeffFlag8x8[i as usize] as i32
+        } else {
+            i
+        };
+
+        let mut err = DecodeBinCabac((*pCtx).pCabacDecEngine, pMapCtx.offset(iCtx as isize), &mut uiCode);
+        if err != ERR_NONE {
+            return err;
+        }
+        if uiCode != 0 {
+            *pSignificantMap = 1;
+            pSignificantMap = pSignificantMap.add(1);
+            *uiCoeffNum += 1;
+
+            let iLastCtx = if iResProperty == LUMA_DC_AC_8 {
+                g_kuiIdx2CtxLastSignificantCoeffFlag8x8[i as usize] as i32
+            } else {
+                i
+            };
+            err = DecodeBinCabac((*pCtx).pCabacDecEngine, pLastCtx.offset(iLastCtx as isize), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                ptr::write_bytes(pSignificantMap, 0, (i1 - i) as usize);
+                return ERR_NONE;
+            }
+        } else {
+            *pSignificantMap = 0;
+            pSignificantMap = pSignificantMap.add(1);
+        }
+    }
+
+    *pSignificantMap = 1;
+    *uiCoeffNum += 1;
+
+    ERR_NONE
+}
+
+pub unsafe fn ParseSignificantCoeffCabac(
+    pSignificant: *mut i32,
+    iResProperty: i32,
+    pCtx: PWelsDecoderContext,
+) -> i32 {
+    let mut uiCode: u32 = 0;
+    let one_base = if iResProperty == LUMA_DC_AC_8 {
+        NEW_CTX_OFFSET_ONE_8x8
+    } else {
+        NEW_CTX_OFFSET_ONE
+    };
+    let abs_base = if iResProperty == LUMA_DC_AC_8 {
+        NEW_CTX_OFFSET_ABS_8x8
+    } else {
+        NEW_CTX_OFFSET_ABS
+    };
+
+    let pOneCtx = (*pCtx)
+        .pCabacCtx
+        .offset((one_base + g_kBlockCat2CtxOffsetOne[iResProperty as usize] as i32) as isize);
+    let pAbsCtx = (*pCtx)
+        .pCabacCtx
+        .offset((abs_base + g_kBlockCat2CtxOffsetAbs[iResProperty as usize] as i32) as isize);
+
+    let iMaxType = g_kMaxC2[iResProperty as usize] as i32;
+    let mut i = g_kMaxPos[iResProperty as usize] as i32;
+    let mut pCoff = pSignificant.offset(i as isize);
+    let mut c1: i32 = 1;
+    let mut c2: i32 = 0;
+
+    while i >= 0 {
+        if *pCoff != 0 {
+            let mut err = DecodeBinCabac((*pCtx).pCabacDecEngine, pOneCtx.offset(c1 as isize), &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            *pCoff += uiCode as i32;
+            if *pCoff == 2 {
+                let err = DecodeUEGLevelCabac((*pCtx).pCabacDecEngine, pAbsCtx.offset(c2 as isize), &mut uiCode);
+                if err != (ERR_NONE as u32) {
+                    return err as i32;
+                }
+                *pCoff += uiCode as i32;
+                c2 += 1;
+                if c2 > iMaxType {
+                    c2 = iMaxType;
+                }
+                c1 = 0;
+            } else if c1 != 0 {
+                c1 += 1;
+                if c1 > 4 {
+                    c1 = 4;
+                }
+            }
+            err = DecodeBypassCabac((*pCtx).pCabacDecEngine, &mut uiCode);
+            if err != ERR_NONE {
+                return err;
+            }
+            if uiCode != 0 {
+                *pCoff = -*pCoff;
+            }
+        }
+        pCoff = pCoff.offset(-1);
+        i -= 1;
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseResidualBlockCabac8x8(
+    _pNeighAvail: *const SWelsNeighAvail,
+    pNonZeroCountCache: *mut u8,
+    _pBsAux: *mut SBitStringAux,
+    iIndex: i32,
+    _iMaxNumCoeff: i32,
+    pScanTable: *const u8,
+    iResProperty: i32,
+    sTCoeff: *mut i16,
+    uiQp: u8,
+    pCtx: PWelsDecoderContext,
+) -> i32 {
+    let mut uiTotalCoeffNum: u32 = 0;
+    let mut pSignificantMap = [0i32; 64];
+
+    let mut iMbResProperty: i32 = 0;
+    let mut iResProp = iResProperty;
+    GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
+
+    let pDeQuantMul: *const u16 = if (*pCtx).bUseScalingList {
+        (*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize]
+            .add(uiQp as usize) as *const u16
+    } else {
+        g_kuiDequantCoeff8x8[uiQp as usize].as_ptr()
+    };
+
+    let mut err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx, &mut uiTotalCoeffNum);
+    if err != ERR_NONE {
+        return err;
+    }
+    err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx);
+    if err != ERR_NONE {
+        return err;
+    }
+
+    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[iIndex as usize] as usize) = uiTotalCoeffNum as u8;
+    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 1) as usize] as usize) = uiTotalCoeffNum as u8;
+    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 2) as usize] as usize) = uiTotalCoeffNum as u8;
+    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 3) as usize] as usize) = uiTotalCoeffNum as u8;
+
+    if uiTotalCoeffNum == 0 {
+        return ERR_NONE;
+    }
+
+    if iResProperty == LUMA_DC_AC_8 {
+        let qp_shift = uiQp / 6;
+        for j in 0..64 {
+            if pSignificantMap[j] != 0 {
+                let i = *pScanTable.add(j) as usize;
+                let dequant_val = *pDeQuantMul.add(i) as i32;
+                let sig_val = pSignificantMap[j];
+                *sTCoeff.add(i) = if uiQp >= 36 {
+                    ((sig_val * dequant_val) * (1 << (qp_shift - 6))) as i16
+                } else {
+                    ((sig_val * dequant_val + (1 << (5 - qp_shift))) >> (6 - qp_shift)) as i16
+                };
+            }
+        }
+    }
+
+    ERR_NONE
+}
+
+pub unsafe fn ParseResidualBlockCabac(
+    pNeighAvail: *const SWelsNeighAvail,
+    pNonZeroCountCache: *mut u8,
+    _pBsAux: *mut SBitStringAux,
+    iIndex: i32,
+    _iMaxNumCoeff: i32,
+    pScanTable: *const u8,
+    iResProperty: i32,
+    sTCoeff: *mut i16,
+    uiQp: u8,
+    pCtx: PWelsDecoderContext,
+) -> i32 {
+    let mut uiTotalCoeffNum: u32 = 0;
+    let mut uiCbpBit: u32 = 0;
+    let mut pSignificantMap = [0i32; 16];
+
+    let mut iMbResProperty: i32 = 0;
+    let mut iResProp = iResProperty;
+    GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
+
+    let pDeQuantMul: *const u16 = if (*pCtx).bUseScalingList {
+        (*pCtx).pDequant_coeff4x4[iMbResProperty as usize]
+            .add(uiQp as usize) as *const u16
+    } else {
+        g_kuiDequantCoeff[uiQp as usize].as_ptr()
+    };
+
+    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, iIndex, iResProperty, pCtx, &mut uiCbpBit);
+    if err != ERR_NONE {
+        return err;
+    }
+    if uiCbpBit != 0 {
+        err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx, &mut uiTotalCoeffNum);
+        if err != ERR_NONE {
+            return err;
+        }
+        err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx);
+        if err != ERR_NONE {
+            return err;
+        }
+    }
+
+    let iCurNzCacheIdx = g_kCacheNzcScanIdx[iIndex as usize] as usize;
+    *pNonZeroCountCache.add(iCurNzCacheIdx) = uiTotalCoeffNum as u8;
+    if uiTotalCoeffNum == 0 {
+        return ERR_NONE;
+    }
+
+    if iResProperty == I16_LUMA_DC {
+        for j in 0..16 {
+            let scan_idx = *pScanTable.add(j) as usize;
+            *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
+        }
+        WelsLumaDcDequantIdct(sTCoeff, uiQp as i32, pCtx);
+    } else if iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
+        for j in 0..4 {
+            let scan_idx = *pScanTable.add(j) as usize;
+            *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
+        }
+        WelsChromaDcIdct(sTCoeff);
+        let dequant_mul0 = *pDeQuantMul as i64;
+        if !(*pCtx).bUseScalingList {
+            for j in 0..4 {
+                let scan_idx = *pScanTable.add(j) as usize;
+                let val = *sTCoeff.add(scan_idx) as i64;
+                *sTCoeff.add(scan_idx) = ((val * dequant_mul0) >> 1) as i16;
+            }
+        } else {
+            for j in 0..4 {
+                let scan_idx = *pScanTable.add(j) as usize;
+                let val = *sTCoeff.add(scan_idx) as i64;
+                *sTCoeff.add(scan_idx) = ((val * dequant_mul0) >> 5) as i16;
+            }
+        }
+    } else {
+        for j in 0..16 {
+            if pSignificantMap[j] != 0 {
+                let scan_idx = *pScanTable.add(j) as usize;
+                let sig_val = pSignificantMap[j] as i64;
+                if !(*pCtx).bUseScalingList {
+                    let mul = *pDeQuantMul.add(scan_idx & 0x07) as i32;
+                    *sTCoeff.add(scan_idx) = (pSignificantMap[j] * mul) as i16;
+                } else {
+                    let mul = *pDeQuantMul.add(scan_idx) as i64;
+                    *sTCoeff.add(scan_idx) = (((sig_val * mul) + 8) >> 4) as i16;
+                }
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
+    let pCabacDecEngine = (*pCtx).pCabacDecEngine;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pBsAux = (*pCurDqLayer).pBitStringAux;
+    let iDstStrideLuma = (*(*pCurDqLayer).pDec).iLinesize[0];
+    let iDstStrideChroma = (*(*pCurDqLayer).pDec).iLinesize[1];
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbY = (*pCurDqLayer).iMbY;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+
+    let iMbOffsetLuma = (iMbX + iMbY * iDstStrideLuma) << 4;
+    let iMbOffsetChroma = (iMbX + iMbY * iDstStrideChroma) << 3;
+
+    let mut pMbDstY = (*(*pCtx).pDec).pData[0].add(iMbOffsetLuma as usize);
+    let mut pMbDstU = (*(*pCtx).pDec).pData[1].add(iMbOffsetChroma as usize);
+    let mut pMbDstV = (*(*pCtx).pDec).pData[2].add(iMbOffsetChroma as usize);
+
+    *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
+    RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux as *mut _);
+
+    let iBytesLeft = (*pBsAux).pEndBuf.offset_from((*pBsAux).pCurBuf);
+    if iBytesLeft < 384 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
+    }
+    let mut pPtrSrc = (*pBsAux).pCurBuf;
+    if !(*(*pCtx).pParam).bParseOnly {
+        for _ in 0..16 {
+            ptr::copy_nonoverlapping(pPtrSrc, pMbDstY, 16);
+            pMbDstY = pMbDstY.add(iDstStrideLuma as usize);
+            pPtrSrc = pPtrSrc.add(16);
+        }
+        for _ in 0..8 {
+            ptr::copy_nonoverlapping(pPtrSrc, pMbDstU, 8);
+            pMbDstU = pMbDstU.add(iDstStrideChroma as usize);
+            pPtrSrc = pPtrSrc.add(8);
+        }
+        for _ in 0..8 {
+            ptr::copy_nonoverlapping(pPtrSrc, pMbDstV, 8);
+            pMbDstV = pMbDstV.add(iDstStrideChroma as usize);
+            pPtrSrc = pPtrSrc.add(8);
+        }
+    }
+
+    (*pBsAux).pCurBuf = (*pBsAux).pCurBuf.add(384);
+
+    *(*pCurDqLayer).pLumaQp.add(iMbXy) = 0;
+    (*(*pCurDqLayer).pChromaQp.add(iMbXy))[0] = 0;
+    (*(*pCurDqLayer).pChromaQp.add(iMbXy))[1] = 0;
+    ptr::write_bytes((*pCurDqLayer).pNzc.add(iMbXy) as *mut u8, 16, 24);
+
+    let mut err = InitReadBits(pBsAux, 1);
+    if err != ERR_NONE {
+        return err;
+    }
+    err = InitCabacDecEngineFromBS(pCabacDecEngine, pBsAux as *mut _);
+    if err != ERR_NONE {
+        return err;
+    }
+
+    ERR_NONE
+}

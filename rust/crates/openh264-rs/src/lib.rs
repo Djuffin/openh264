@@ -1,7 +1,22 @@
 //! Low-level C ABI type definitions matching OpenH264 C interface.
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    unused_variables,
+    unused_unsafe,
+    unused_imports,
+    unsafe_op_in_unsafe_fn
+)]
 
 use std::ffi::c_void;
+
+pub mod common;
+pub mod decoder;
+pub mod encoder;
+pub mod api;
+
 
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
 pub const MAX_QUALITY_LAYER_NUM: usize = 4;
@@ -317,25 +332,5 @@ pub struct OpenH264Version {
     pub uReserved: u32,
 }
 
-#[repr(C)]
-pub struct ISVCEncoderVtbl {
-    pub Initialize: unsafe extern "C" fn(*mut ISVCEncoderHandle, *const SEncParamBase) -> i32,
-    pub InitializeExt: unsafe extern "C" fn(*mut ISVCEncoderHandle, *const SEncParamExt) -> i32,
-    pub GetDefaultParams: unsafe extern "C" fn(*mut ISVCEncoderHandle, *mut SEncParamExt) -> i32,
-    pub Uninitialize: unsafe extern "C" fn(*mut ISVCEncoderHandle) -> i32,
-    pub EncodeFrame: unsafe extern "C" fn(*mut ISVCEncoderHandle, *const SSourcePicture, *mut SFrameBSInfo) -> i32,
-    pub EncodeParameterSets: unsafe extern "C" fn(*mut ISVCEncoderHandle, *mut SFrameBSInfo) -> i32,
-    pub ForceIntraFrame: unsafe extern "C" fn(*mut ISVCEncoderHandle, bool) -> i32,
-    pub SetOption: unsafe extern "C" fn(*mut ISVCEncoderHandle, EncoderOption, *mut c_void) -> i32,
-    pub GetOption: unsafe extern "C" fn(*mut ISVCEncoderHandle, EncoderOption, *mut c_void) -> i32,
-}
+pub use crate::api::codec_api::*;
 
-#[repr(C)]
-pub struct ISVCEncoderHandle {
-    pub vptr: *const ISVCEncoderVtbl,
-}
-
-unsafe extern "C" {
-    pub fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32;
-    pub fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoderHandle);
-}

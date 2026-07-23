@@ -1,0 +1,762 @@
+// Copyright (c) 2009-2013, Cisco Systems
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in
+//      the documentation and/or other materials provided with the
+//      distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+//! # OpenH264 Encoder: NAL Unit Encapsulation Engine
+//!
+//! Translated from `codec/encoder/core/inc/nal_encap.h` and `codec/encoder/core/src/nal_encap.cpp`.
+//!
+//! Handles NAL unit start position demarcations, unescaped RBSP payload accounting,
+//! Annex B start code prefix injection (`0x00000001`), standard 1-byte AVC and 4-byte SVC
+//! extension NAL headers, emulation prevention byte escaping (`0x000003`), and SVC prefix NAL serialization.
+
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    unused_variables,
+    unused_unsafe
+)]
+
+use core::ffi::c_void;
+
+// ============================================================================
+// Constants & Return Codes
+// ============================================================================
+
+/// Size in bytes of the Annex B 4-byte start code prefix (`0x00 0x00 0x00 0x01`).
+pub const NAL_HEADER_SIZE: usize = 4;
+
+/// Return codes matching OpenH264 encoder error specifications.
+pub const ENC_RETURN_SUCCESS: i32 = 0;
+pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
+pub const ENC_RETURN_UNSUPPORTED_PARA: i32 = 0x02;
+pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
+pub const ENC_RETURN_CORRECTED: i32 = 0x08;
+pub const ENC_RETURN_INVALIDINPUT: i32 = 0x10;
+pub const ENC_RETURN_MEMOVERFLOWFOUND: i32 = 0x20;
+pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
+pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
+
+// ============================================================================
+// Enums & Structs
+// ============================================================================
+
+/// NAL Unit Type (5 bits) per ITU-T H.264 / AVC and Annex G (SVC).
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum EWelsNalUnitType {
+    NAL_UNIT_UNSPEC_0 = 0,
+    NAL_UNIT_CODED_SLICE = 1,
+    NAL_UNIT_CODED_SLICE_DPA = 2,
+    NAL_UNIT_CODED_SLICE_DPB = 3,
+    NAL_UNIT_CODED_SLICE_DPC = 4,
+    NAL_UNIT_CODED_SLICE_IDR = 5,
+    NAL_UNIT_SEI = 6,
+    NAL_UNIT_SPS = 7,
+    NAL_UNIT_PPS = 8,
+    NAL_UNIT_AU_DELIMITER = 9,
+    NAL_UNIT_END_OF_SEQ = 10,
+    NAL_UNIT_END_OF_STR = 11,
+    NAL_UNIT_FILLER_DATA = 12,
+    NAL_UNIT_SPS_EXT = 13,
+    NAL_UNIT_PREFIX = 14,
+    NAL_UNIT_SUBSET_SPS = 15,
+    NAL_UNIT_DEPTH_PARAM = 16,
+    NAL_UNIT_RESV_17 = 17,
+    NAL_UNIT_RESV_18 = 18,
+    NAL_UNIT_AUX_CODED_SLICE = 19,
+    NAL_UNIT_CODED_SLICE_EXT = 20,
+    NAL_UNIT_MVC_SLICE_EXT = 21,
+    NAL_UNIT_RESV_22 = 22,
+    NAL_UNIT_RESV_23 = 23,
+    NAL_UNIT_UNSPEC_24 = 24,
+    NAL_UNIT_UNSPEC_25 = 25,
+    NAL_UNIT_UNSPEC_26 = 26,
+    NAL_UNIT_UNSPEC_27 = 27,
+    NAL_UNIT_UNSPEC_28 = 28,
+    NAL_UNIT_UNSPEC_29 = 29,
+    NAL_UNIT_UNSPEC_30 = 30,
+    NAL_UNIT_UNSPEC_31 = 31,
+}
+
+impl Default for EWelsNalUnitType {
+    fn default() -> Self {
+        EWelsNalUnitType::NAL_UNIT_UNSPEC_0
+    }
+}
+
+impl From<i32> for EWelsNalUnitType {
+    fn from(val: i32) -> Self {
+        match val {
+            0 => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+            1 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE,
+            2 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPA,
+            3 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPB,
+            4 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPC,
+            5 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
+            6 => EWelsNalUnitType::NAL_UNIT_SEI,
+            7 => EWelsNalUnitType::NAL_UNIT_SPS,
+            8 => EWelsNalUnitType::NAL_UNIT_PPS,
+            9 => EWelsNalUnitType::NAL_UNIT_AU_DELIMITER,
+            10 => EWelsNalUnitType::NAL_UNIT_END_OF_SEQ,
+            11 => EWelsNalUnitType::NAL_UNIT_END_OF_STR,
+            12 => EWelsNalUnitType::NAL_UNIT_FILLER_DATA,
+            13 => EWelsNalUnitType::NAL_UNIT_SPS_EXT,
+            14 => EWelsNalUnitType::NAL_UNIT_PREFIX,
+            15 => EWelsNalUnitType::NAL_UNIT_SUBSET_SPS,
+            16 => EWelsNalUnitType::NAL_UNIT_DEPTH_PARAM,
+            17 => EWelsNalUnitType::NAL_UNIT_RESV_17,
+            18 => EWelsNalUnitType::NAL_UNIT_RESV_18,
+            19 => EWelsNalUnitType::NAL_UNIT_AUX_CODED_SLICE,
+            20 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
+            21 => EWelsNalUnitType::NAL_UNIT_MVC_SLICE_EXT,
+            22 => EWelsNalUnitType::NAL_UNIT_RESV_22,
+            23 => EWelsNalUnitType::NAL_UNIT_RESV_23,
+            24 => EWelsNalUnitType::NAL_UNIT_UNSPEC_24,
+            25 => EWelsNalUnitType::NAL_UNIT_UNSPEC_25,
+            26 => EWelsNalUnitType::NAL_UNIT_UNSPEC_26,
+            27 => EWelsNalUnitType::NAL_UNIT_UNSPEC_27,
+            28 => EWelsNalUnitType::NAL_UNIT_UNSPEC_28,
+            29 => EWelsNalUnitType::NAL_UNIT_UNSPEC_29,
+            30 => EWelsNalUnitType::NAL_UNIT_UNSPEC_30,
+            31 => EWelsNalUnitType::NAL_UNIT_UNSPEC_31,
+            _ => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+        }
+    }
+}
+
+/// NAL Reference IDC (2 bits) indicating reference priority.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum EWelsNalRefIdc {
+    NRI_PRI_LOWEST = 0,
+    NRI_PRI_LOW = 1,
+    NRI_PRI_HIGH = 2,
+    NRI_PRI_HIGHEST = 3,
+}
+
+impl Default for EWelsNalRefIdc {
+    fn default() -> Self {
+        EWelsNalRefIdc::NRI_PRI_LOWEST
+    }
+}
+
+/// Bit-stream auxiliary reading / writing state tracker.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SBitStringAux {
+    pub pStartBuf: *mut u8,
+    pub pEndBuf: *mut u8,
+    pub iBits: i32,
+    pub iIndex: isize,
+    pub pCurBuf: *mut u8,
+    pub uiCurBits: u32,
+    pub iLeftBits: i32,
+}
+
+impl Default for SBitStringAux {
+    fn default() -> Self {
+        Self {
+            pStartBuf: core::ptr::null_mut(),
+            pEndBuf: core::ptr::null_mut(),
+            iBits: 0,
+            iIndex: 0,
+            pCurBuf: core::ptr::null_mut(),
+            uiCurBits: 0,
+            iLeftBits: 32,
+        }
+    }
+}
+
+/// 1-Byte Base AVC NAL Unit Header.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SNalUnitHeader {
+    pub uiForbiddenZeroBit: u8,
+    pub uiNalRefIdc: u8,
+    pub eNalUnitType: EWelsNalUnitType,
+    pub uiReservedOneByte: u8,
+}
+
+impl Default for SNalUnitHeader {
+    fn default() -> Self {
+        Self {
+            uiForbiddenZeroBit: 0,
+            uiNalRefIdc: 0,
+            eNalUnitType: EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+            uiReservedOneByte: 0,
+        }
+    }
+}
+
+/// Extended SVC NAL Unit Header.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SNalUnitHeaderExt {
+    pub sNalUnitHeader: SNalUnitHeader,
+    pub bIdrFlag: bool,
+    pub uiPriorityId: u8,
+    pub iNoInterLayerPredFlag: i8,
+    pub uiDependencyId: u8,
+    pub uiQualityId: u8,
+    pub uiTemporalId: u8,
+    pub bUseRefBasePicFlag: bool,
+    pub bDiscardableFlag: bool,
+    pub bOutputFlag: bool,
+    pub uiReservedThree2Bits: u8,
+    pub uiLayerDqId: u8,
+    pub bNalExtFlag: bool,
+}
+
+impl Default for SNalUnitHeaderExt {
+    fn default() -> Self {
+        Self {
+            sNalUnitHeader: SNalUnitHeader::default(),
+            bIdrFlag: false,
+            uiPriorityId: 0,
+            iNoInterLayerPredFlag: 0,
+            uiDependencyId: 0,
+            uiQualityId: 0,
+            uiTemporalId: 0,
+            bUseRefBasePicFlag: false,
+            bDiscardableFlag: false,
+            bOutputFlag: false,
+            uiReservedThree2Bits: 0,
+            uiLayerDqId: 0,
+            bNalExtFlag: false,
+        }
+    }
+}
+
+/// Raw payload data descriptor for a NAL unit before encapsulation.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SWelsNalRaw {
+    pub pRawData: *mut u8,
+    pub iPayloadSize: i32,
+    pub sNalExt: SNalUnitHeaderExt,
+    pub iStartPos: i32,
+}
+
+impl Default for SWelsNalRaw {
+    fn default() -> Self {
+        Self {
+            pRawData: core::ptr::null_mut(),
+            iPayloadSize: 0,
+            sNalExt: SNalUnitHeaderExt::default(),
+            iStartPos: 0,
+        }
+    }
+}
+
+/// Top-level frame bitstream output container and NAL descriptor list manager.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SWelsEncoderOutput {
+    pub pBsBuffer: *mut u8,
+    pub uiSize: u32,
+    pub sBsWrite: SBitStringAux,
+    pub sNalList: *mut SWelsNalRaw,
+    pub pNalLen: *mut i32,
+    pub iCountNals: i32,
+    pub iNalIndex: i32,
+    pub iLayerBsIndex: i32,
+}
+
+impl Default for SWelsEncoderOutput {
+    fn default() -> Self {
+        Self {
+            pBsBuffer: core::ptr::null_mut(),
+            uiSize: 0,
+            sBsWrite: SBitStringAux::default(),
+            sNalList: core::ptr::null_mut(),
+            pNalLen: core::ptr::null_mut(),
+            iCountNals: 0,
+            iNalIndex: 0,
+            iLayerBsIndex: 0,
+        }
+    }
+}
+
+/// Thread-local bitstream state allocated per slice.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SWelsSliceBs {
+    pub pBs: *mut u8,
+    pub uiBsSize: u32,
+    pub uiBsPos: u32,
+    pub pBsBuffer: *mut u8,
+    pub uiSize: u32,
+    pub sBsWrite: SBitStringAux,
+    pub sNalList: [SWelsNalRaw; 2],
+    pub iNalLen: [i32; 2],
+    pub iNalIndex: i32,
+}
+
+impl Default for SWelsSliceBs {
+    fn default() -> Self {
+        Self {
+            pBs: core::ptr::null_mut(),
+            uiBsSize: 0,
+            uiBsPos: 0,
+            pBsBuffer: core::ptr::null_mut(),
+            uiSize: 0,
+            sBsWrite: SBitStringAux::default(),
+            sNalList: [SWelsNalRaw::default(), SWelsNalRaw::default()],
+            iNalLen: [0, 0],
+            iNalIndex: 0,
+        }
+    }
+}
+
+// ============================================================================
+// Bitstream Helper Functions
+// ============================================================================
+
+/// Computes the current bit position in the bitstream auxiliary writer.
+#[inline]
+pub unsafe fn BsGetBitsPos(pBs: *const SBitStringAux) -> i32 {
+    let p_bs = &*pBs;
+    let byte_diff = p_bs.pCurBuf.offset_from(p_bs.pStartBuf) as i32;
+    (byte_diff << 3) + 32 - p_bs.iLeftBits
+}
+
+/// Writes `iLen` bits with value `kuiValue` into the bitstream writer.
+#[inline]
+pub unsafe fn BsWriteBits(pBitString: *mut SBitStringAux, mut iLen: i32, kuiValue: u32) -> i32 {
+    let pBs = &mut *pBitString;
+    if iLen < pBs.iLeftBits {
+        pBs.uiCurBits = (pBs.uiCurBits << iLen) | kuiValue;
+        pBs.iLeftBits -= iLen;
+    } else {
+        iLen -= pBs.iLeftBits;
+        pBs.uiCurBits = (pBs.uiCurBits << pBs.iLeftBits) | (kuiValue >> iLen);
+        let bytes = pBs.uiCurBits.to_be_bytes();
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), pBs.pCurBuf, 4);
+        pBs.pCurBuf = pBs.pCurBuf.add(4);
+        pBs.uiCurBits = if iLen == 0 {
+            0
+        } else {
+            kuiValue & ((1u32 << iLen) - 1)
+        };
+        pBs.iLeftBits = 32 - iLen;
+    }
+    0
+}
+
+/// Writes a single bit into the bitstream writer.
+#[inline]
+pub unsafe fn BsWriteOneBit(pBitString: *mut SBitStringAux, kuiValue: u32) -> i32 {
+    BsWriteBits(pBitString, 1, kuiValue)
+}
+
+/// Flushes remaining accumulator bits to the bitstream buffer.
+#[inline]
+pub unsafe fn BsFlush(pBitString: *mut SBitStringAux) -> i32 {
+    let pBs = &mut *pBitString;
+    if pBs.iLeftBits < 32 {
+        let val = pBs.uiCurBits << pBs.iLeftBits;
+        let bytes = val.to_be_bytes();
+        let bytes_to_write = (4 - pBs.iLeftBits / 8) as usize;
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), pBs.pCurBuf, bytes_to_write);
+        pBs.pCurBuf = pBs.pCurBuf.add(bytes_to_write);
+        pBs.iLeftBits = 32;
+        pBs.uiCurBits = 0;
+    }
+    0
+}
+
+/// Writes RBSP stop bit `1` followed by zero-padding bits to align to the next byte boundary.
+#[inline]
+pub unsafe fn BsRbspTrailingBits(pBitString: *mut SBitStringAux) -> i32 {
+    BsWriteOneBit(pBitString, 1);
+    BsFlush(pBitString);
+    0
+}
+
+// ============================================================================
+// Core NAL Encapsulation Functions
+// ============================================================================
+
+/// Initializes a new raw NAL unit entry in the global encoder output context.
+///
+/// # Safety
+/// - `pEncoderOuput` must point to a valid and properly initialized `SWelsEncoderOutput` structure.
+/// - `pEncoderOuput.sNalList` must have enough capacity for `iNalIndex`.
+#[inline]
+pub unsafe extern "C" fn WelsLoadNal(
+    pEncoderOuput: *mut SWelsEncoderOutput,
+    kiType: i32,
+    kiNalRefIdc: i32,
+) {
+    let pWelsEncoderOuput = &mut *pEncoderOuput;
+    let pRawNal = &mut *pWelsEncoderOuput
+        .sNalList
+        .add(pWelsEncoderOuput.iNalIndex as usize);
+    let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
+    let kiStartPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
+
+    sNalUnitHeader.eNalUnitType = EWelsNalUnitType::from(kiType);
+    sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
+    sNalUnitHeader.uiForbiddenZeroBit = 0;
+
+    pRawNal.pRawData = pWelsEncoderOuput.pBsBuffer.add(kiStartPos as usize);
+    pRawNal.iStartPos = kiStartPos;
+    pRawNal.iPayloadSize = 0;
+}
+
+/// Finalizes the raw NAL unit currently being written in `pEncoderOuput`.
+///
+/// # Safety
+/// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
+#[inline]
+pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
+    let pWelsEncoderOuput = &mut *pEncoderOuput;
+    let pIdx = &mut pWelsEncoderOuput.iNalIndex;
+    let pRawNal = &mut *pWelsEncoderOuput.sNalList.add(*pIdx as usize);
+    let kiEndPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
+
+    /* count payload size of raw NAL */
+    pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
+
+    *pIdx += 1;
+}
+
+/// Initializes a raw NAL unit entry for a thread-local slice bitstream context.
+///
+/// # Safety
+/// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
+#[inline]
+pub unsafe extern "C" fn WelsLoadNalForSlice(
+    pSliceBs: *mut SWelsSliceBs,
+    kiType: i32,
+    kiNalRefIdc: i32,
+) {
+    let pSlice = &mut *pSliceBs;
+    let pRawNal = &mut pSlice.sNalList[pSlice.iNalIndex as usize];
+    let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
+    let pBitStringAux = &pSlice.sBsWrite;
+    let kiStartPos = BsGetBitsPos(pBitStringAux) >> 3;
+
+    sNalUnitHeader.eNalUnitType = EWelsNalUnitType::from(kiType);
+    sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
+    sNalUnitHeader.uiForbiddenZeroBit = 0;
+
+    pRawNal.pRawData = pSlice.pBsBuffer.add(kiStartPos as usize);
+    pRawNal.iStartPos = kiStartPos;
+    pRawNal.iPayloadSize = 0;
+}
+
+/// Finalizes the slice-thread-local raw NAL unit payload size and advances the NAL index.
+///
+/// # Safety
+/// - `pSliceBs` must point to a valid `SWelsSliceBs` structure.
+#[inline]
+pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
+    let pSlice = &mut *pSliceBs;
+    let pIdx = &mut pSlice.iNalIndex;
+    let pRawNal = &mut pSlice.sNalList[*pIdx as usize];
+    let pBitStringAux = &pSlice.sBsWrite;
+    let kiEndPos = BsGetBitsPos(pBitStringAux) >> 3;
+
+    /* count payload size of raw NAL */
+    pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
+    *pIdx += 1;
+}
+
+/// Encapsulates an unescaped raw NAL payload into an Annex B compliant byte stream (EBSP).
+///
+/// Prepends the 4-byte start code prefix (`0x00000001`), packs the 1-byte base NAL header
+/// or 4-byte SVC extension header, and performs emulation prevention byte insertion (`0x03`).
+///
+/// # Safety
+/// - `pRawNal` must point to a valid `SWelsNalRaw` descriptor.
+/// - If `kbNALExt` is true, `pNalHeaderExt` must point to a valid `SNalUnitHeaderExt`.
+/// - `pDst` must point to a writable memory region of at least `kiDstBufferLen` bytes.
+#[inline]
+pub unsafe extern "C" fn WelsEncodeNal(
+    pRawNal: *mut SWelsNalRaw,
+    pNalHeaderExt: *mut c_void,
+    kiDstBufferLen: i32,
+    pDst: *mut c_void,
+    pDstLen: *mut i32,
+) -> i32 {
+    let raw_nal = &*pRawNal;
+    let nal_type = raw_nal.sNalExt.sNalUnitHeader.eNalUnitType;
+    let kbNALExt = nal_type == EWelsNalUnitType::NAL_UNIT_PREFIX
+        || nal_type == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+
+    let iAssumedNeededLength =
+        (NAL_HEADER_SIZE as i32) + (if kbNALExt { 3 } else { 0 }) + raw_nal.iPayloadSize + 1;
+
+    if iAssumedNeededLength <= 0 {
+        return ENC_RETURN_UNEXPECTED;
+    }
+
+    // Since for each 0x000 need a 0x03, the needed length will not exceed (iAssumedNeededLength + iAssumedNeededLength / 3).
+    // Here adjusted to >> 1 to omit division.
+    if kiDstBufferLen < (iAssumedNeededLength + (iAssumedNeededLength >> 1)) {
+        return ENC_RETURN_MEMALLOCERR;
+    }
+
+    let pDstStart = pDst as *mut u8;
+    let mut pDstPointer = pDstStart;
+    let mut pSrcPointer = raw_nal.pRawData;
+    let pSrcEnd = raw_nal.pRawData.add(raw_nal.iPayloadSize as usize);
+    let mut iZeroCount: i32 = 0;
+
+    if !pDstLen.is_null() {
+        *pDstLen = 0;
+    }
+
+    // 4-byte Annex B start code prefix: 0x00 0x00 0x00 0x01
+    let kuiStartCodePrefix: [u8; 4] = [0, 0, 0, 1];
+    core::ptr::copy_nonoverlapping(kuiStartCodePrefix.as_ptr(), pDstPointer, 4);
+    pDstPointer = pDstPointer.add(4);
+
+    // 1-Byte NAL Unit Header
+    let nri = raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc;
+    let utype = raw_nal.sNalExt.sNalUnitHeader.eNalUnitType as u8;
+    *pDstPointer = (nri << 5) | (utype & 0x1f);
+    pDstPointer = pDstPointer.add(1);
+
+    if kbNALExt {
+        let sNalExt = &*(pNalHeaderExt as *const SNalUnitHeaderExt);
+
+        // Extension Byte 1: reserved_one_bit (0x80) | idr_flag (bit 6)
+        *pDstPointer = 0x80 | ((sNalExt.bIdrFlag as u8) << 6);
+        pDstPointer = pDstPointer.add(1);
+
+        // Extension Byte 2: no_inter_layer_pred_flag (0x80) | dependency_id (bits 6..4)
+        *pDstPointer = 0x80 | ((sNalExt.uiDependencyId) << 4);
+        pDstPointer = pDstPointer.add(1);
+
+        // Extension Byte 3: temporal_id (bits 7..5) | discardable_flag (bit 3) | reserved_three_2bits (0x07)
+        *pDstPointer = ((sNalExt.uiTemporalId) << 5)
+            | ((sNalExt.bDiscardableFlag as u8) << 3)
+            | 0x07;
+        pDstPointer = pDstPointer.add(1);
+    }
+
+    // Emulation prevention escaping loop
+    while pSrcPointer < pSrcEnd {
+        let byte_val = *pSrcPointer;
+        if iZeroCount == 2 && byte_val <= 3 {
+            // Add emulation prevention byte 0x03
+            *pDstPointer = 3;
+            pDstPointer = pDstPointer.add(1);
+            iZeroCount = 0;
+        }
+        if byte_val == 0 {
+            iZeroCount += 1;
+        } else {
+            iZeroCount = 0;
+        }
+        *pDstPointer = byte_val;
+        pDstPointer = pDstPointer.add(1);
+        pSrcPointer = pSrcPointer.add(1);
+    }
+
+    let iNalLength = pDstPointer.offset_from(pDstStart) as i32;
+    if !pDstLen.is_null() {
+        *pDstLen = iNalLength;
+    }
+
+    ENC_RETURN_SUCCESS
+}
+
+/// Writes the RBSP payload for an SVC Prefix NAL unit (NAL unit type 14).
+///
+/// # Safety
+/// - `pBitStringAux` must point to a valid `SBitStringAux` structure.
+#[inline]
+pub unsafe extern "C" fn WelsWriteSVCPrefixNal(
+    pBitStringAux: *mut SBitStringAux,
+    kiNalRefIdc: i32,
+    _kbIdrFlag: bool,
+) -> i32 {
+    if kiNalRefIdc > 0 {
+        BsWriteOneBit(pBitStringAux, 0); // bStoreRefBasePicFlag = false
+        BsWriteOneBit(pBitStringAux, 0); // additional_prefix_nal_unit_extension_flag = false
+        BsRbspTrailingBits(pBitStringAux);
+    }
+    0
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    
+    #[test]
+    fn test_wels_encode_nal_standard_avc() {
+        let mut raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
+        let mut raw_nal = SWelsNalRaw::default();
+        raw_nal.pRawData = raw_payload.as_mut_ptr();
+        raw_nal.iPayloadSize = raw_payload.len() as i32;
+        raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
+        raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGHEST as u8;
+
+        let mut dst_buffer = [0u8; 128];
+        let mut dst_len: i32 = 0;
+
+        let ret = unsafe {
+            WelsEncodeNal(
+                &mut raw_nal,
+                core::ptr::null_mut(),
+                dst_buffer.len() as i32,
+                dst_buffer.as_mut_ptr() as *mut c_void,
+                &mut dst_len,
+            )
+        };
+
+        assert_eq!(ret, ENC_RETURN_SUCCESS);
+        assert!(dst_len > 0);
+
+        // Check start code prefix: 00 00 00 01
+        assert_eq!(&dst_buffer[0..4], &[0x00, 0x00, 0x00, 0x01]);
+
+        // Check 1-byte NAL header: (3 << 5) | 1 = 0x61
+        assert_eq!(dst_buffer[4], (3 << 5) | 1);
+
+        // Check escaped bytes:
+        // [0x00, 0x00, 0x01] -> [0x00, 0x00, 0x03, 0x01]
+        // [0xAA]
+        // [0x00, 0x00, 0x00] -> [0x00, 0x00, 0x03, 0x00]
+        // [0xBB]
+        let expected_payload = [0x00, 0x00, 0x03, 0x01, 0xAA, 0x00, 0x00, 0x03, 0x00, 0xBB];
+        assert_eq!(&dst_buffer[5..5 + expected_payload.len()], &expected_payload);
+        assert_eq!(dst_len as usize, 5 + expected_payload.len());
+    }
+
+    #[test]
+    fn test_wels_encode_nal_svc_extension() {
+        let mut raw_payload = [0x12, 0x34];
+        let mut raw_nal = SWelsNalRaw::default();
+        raw_nal.pRawData = raw_payload.as_mut_ptr();
+        raw_nal.iPayloadSize = raw_payload.len() as i32;
+        raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+        raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGH as u8;
+
+        let mut ext_header = SNalUnitHeaderExt::default();
+        ext_header.bIdrFlag = true;
+        ext_header.uiDependencyId = 2;
+        ext_header.uiTemporalId = 3;
+        ext_header.bDiscardableFlag = true;
+
+        let mut dst_buffer = [0u8; 128];
+        let mut dst_len: i32 = 0;
+
+        let ret = unsafe {
+            WelsEncodeNal(
+                &mut raw_nal,
+                &mut ext_header as *mut _ as *mut c_void,
+                dst_buffer.len() as i32,
+                dst_buffer.as_mut_ptr() as *mut c_void,
+                &mut dst_len,
+            )
+        };
+
+        assert_eq!(ret, ENC_RETURN_SUCCESS);
+
+        // Start code: 00 00 00 01
+        assert_eq!(&dst_buffer[0..4], &[0x00, 0x00, 0x00, 0x01]);
+
+        // Base NAL header: (2 << 5) | 20 = 0x40 | 0x14 = 0x54
+        assert_eq!(dst_buffer[4], (2 << 5) | 20);
+
+        // Ext Byte 1: 0x80 | (1 << 6) = 0xC0
+        assert_eq!(dst_buffer[5], 0xC0);
+
+        // Ext Byte 2: 0x80 | (2 << 4) = 0xA0
+        assert_eq!(dst_buffer[6], 0xA0);
+
+        // Ext Byte 3: (3 << 5) | (1 << 3) | 0x07 = 0x60 | 0x08 | 0x07 = 0x6F
+        assert_eq!(dst_buffer[7], 0x6F);
+
+        // Payload bytes
+        assert_eq!(&dst_buffer[8..10], &[0x12, 0x34]);
+        assert_eq!(dst_len, 10);
+    }
+
+    #[test]
+    fn test_wels_encode_nal_buffer_too_small() {
+        let mut raw_payload = [0x00; 100];
+        let mut raw_nal = SWelsNalRaw::default();
+        raw_nal.pRawData = raw_payload.as_mut_ptr();
+        raw_nal.iPayloadSize = 100;
+        raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
+
+        let mut dst_buffer = [0u8; 10]; // Much too small
+        let mut dst_len: i32 = 0;
+
+        let ret = unsafe {
+            WelsEncodeNal(
+                &mut raw_nal,
+                core::ptr::null_mut(),
+                dst_buffer.len() as i32,
+                dst_buffer.as_mut_ptr() as *mut c_void,
+                &mut dst_len,
+            )
+        };
+
+        assert_eq!(ret, ENC_RETURN_MEMALLOCERR);
+    }
+
+    #[test]
+    fn test_wels_load_and_unload_nal_slice() {
+        let mut bs_buf = vec![0u8; 1024];
+        let mut slice_bs = SWelsSliceBs::default();
+        slice_bs.pBsBuffer = bs_buf.as_mut_ptr();
+        slice_bs.uiSize = 1024;
+        slice_bs.sBsWrite.pStartBuf = bs_buf.as_mut_ptr();
+        slice_bs.sBsWrite.pCurBuf = bs_buf.as_mut_ptr();
+        slice_bs.sBsWrite.pEndBuf = unsafe { bs_buf.as_mut_ptr().add(1024) };
+        slice_bs.sBsWrite.iLeftBits = 32;
+
+        unsafe {
+            WelsLoadNalForSlice(
+                &mut slice_bs,
+                EWelsNalUnitType::NAL_UNIT_CODED_SLICE as i32,
+                EWelsNalRefIdc::NRI_PRI_HIGH as i32,
+            );
+            assert_eq!(slice_bs.sNalList[0].iStartPos, 0);
+
+            // Simulate writing 16 bits (2 bytes)
+            BsWriteBits(&mut slice_bs.sBsWrite, 16, 0xABCD);
+            BsFlush(&mut slice_bs.sBsWrite);
+
+            WelsUnloadNalForSlice(&mut slice_bs);
+            assert_eq!(slice_bs.sNalList[0].iPayloadSize, 2);
+            assert_eq!(slice_bs.iNalIndex, 1);
+        }
+    }
+}

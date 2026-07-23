@@ -1,0 +1,2519 @@
+// Copyright (c) 2010-2013, Cisco Systems
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in
+//      the documentation and/or other materials provided with the
+//      distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+//! # OpenH264 Video Decoder: In-Loop Deblocking Filter
+//!
+//! Translated from `codec/decoder/core/inc/deblocking.h` and `codec/decoder/core/src/deblocking.cpp`.
+//!
+//! Implements the normative H.264/AVC in-loop adaptive deblocking filter for macroblocks,
+//! including boundary strength (bS) derivation for P-slices and B-slices, slice-level iteration,
+//! macroblock edge availability masks, and SIMD dispatch table initialization.
+
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    unused_variables,
+    unused_unsafe
+)]
+
+
+// ============================================================================
+// Constants & Configuration Flags
+// ============================================================================
+
+pub const NO_SUPPORTED_FILTER_IDX: i32 = -1;
+pub const LEFT_FLAG_BIT: i32 = 0;
+pub const TOP_FLAG_BIT: i32 = 1;
+pub const LEFT_FLAG_MASK: i32 = 0x01;
+pub const TOP_FLAG_MASK: i32 = 0x02;
+
+pub const MB_BLOCK4x4_NUM: usize = 16;
+pub const LIST_0: usize = 0;
+pub const LIST_1: usize = 1;
+pub const LIST_A: usize = 2;
+pub const REF_NOT_IN_LIST: i8 = -1;
+pub const MV_A: usize = 2;
+
+// AVC Macroblock Types
+pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
+pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
+pub const MB_TYPE_INTRA8x8: u32 = 0x00000004;
+pub const MB_TYPE_16x16: u32 = 0x00000008;
+pub const MB_TYPE_16x8: u32 = 0x00000010;
+pub const MB_TYPE_8x16: u32 = 0x00000020;
+pub const MB_TYPE_8x8: u32 = 0x00000040;
+pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
+pub const MB_TYPE_SKIP: u32 = 0x00000100;
+pub const MB_TYPE_INTRA_PCM: u32 = 0x00000200;
+pub const MB_TYPE_INTRA_BL: u32 = 0x00000400;
+pub const MB_TYPE_DIRECT: u32 = 0x00000800;
+
+pub const MB_TYPE_INTRA: u32 =
+    MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA_PCM;
+
+#[inline(always)]
+pub fn IS_INTRA(mb_type: u32) -> bool {
+    (mb_type & MB_TYPE_INTRA) != 0
+}
+
+#[inline(always)]
+pub fn IS_SKIP(mb_type: u32) -> bool {
+    (mb_type & MB_TYPE_SKIP) != 0
+}
+
+#[inline(always)]
+pub fn IS_INTER_16x16(mb_type: u32) -> bool {
+    (mb_type & MB_TYPE_16x16) != 0
+}
+
+// CPU Feature Flags
+pub const WELS_CPU_SSSE3: i32 = 0x00000008;
+pub const WELS_CPU_NEON: i32 = 0x00000010;
+pub const WELS_CPU_MMI: i32 = 0x00000020;
+pub const WELS_CPU_MSA: i32 = 0x00000040;
+pub const WELS_CPU_LSX: i32 = 0x00000080;
+
+// ============================================================================
+// H.264 / AVC Static Deblocking Lookup Tables
+// ============================================================================
+
+/// Table 8-16: Alpha table with +12 index offset padding
+pub static g_kuiAlphaTable: [u8; 52 + 24] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 4, 4, 5, 6,
+    7, 8, 9, 10, 12, 13, 15, 17, 20, 22,
+    25, 28, 32, 36, 40, 45, 50, 56, 63, 71,
+    80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
+    255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+];
+
+/// Table 8-16: Beta table with +12 index offset padding
+pub static g_kiBetaTable: [i8; 52 + 24] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 2, 2, 2, 3,
+    3, 3, 3, 4, 4, 4, 6, 6, 7, 7,
+    8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
+    13, 13, 14, 14, 15, 15, 16, 16, 17, 17,
+    18, 18,
+    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+];
+
+/// Table 8-17: Tc0 table indexed by (IndexA + 12) and bS (0..3)
+pub static g_kiTc0Table: [[i8; 4]; 52 + 24] = [
+    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
+    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
+    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
+    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
+    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 1],
+    [-1, 0, 0, 1], [-1, 0, 0, 1], [-1, 0, 0, 1], [-1, 0, 1, 1], [-1, 0, 1, 1], [-1, 1, 1, 1],
+    [-1, 1, 1, 1], [-1, 1, 1, 1], [-1, 1, 1, 1], [-1, 1, 1, 2], [-1, 1, 1, 2], [-1, 1, 1, 2],
+    [-1, 1, 1, 2], [-1, 1, 2, 3], [-1, 1, 2, 3], [-1, 2, 2, 3], [-1, 2, 2, 4], [-1, 2, 3, 4],
+    [-1, 2, 3, 4], [-1, 3, 3, 5], [-1, 3, 4, 6], [-1, 3, 4, 6], [-1, 4, 5, 7], [-1, 4, 5, 8],
+    [-1, 4, 6, 9], [-1, 5, 7, 10], [-1, 6, 8, 11], [-1, 6, 8, 13], [-1, 7, 10, 14], [-1, 8, 11, 16],
+    [-1, 9, 12, 18], [-1, 10, 13, 20], [-1, 11, 15, 23], [-1, 13, 17, 25],
+    [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25],
+    [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25],
+];
+
+pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
+    [0, 4, 8, 12, 3, 7, 11, 15],
+    [0, 1, 2, 3, 12, 13, 14, 15],
+];
+
+pub static g_kuiTableB8x8Idx: [[u8; 16]; 2] = [
+    [
+        0, 1, 4, 5, 8, 9, 12, 13,
+        2, 3, 6, 7, 10, 11, 14, 15,
+    ],
+    [
+        0, 1, 4, 5, 2, 3, 6, 7,
+        8, 9, 12, 13, 10, 11, 14, 15,
+    ],
+];
+
+pub static g_kuiMbCountScan4Idx: [u8; 24] = [
+    0, 1, 4, 5,
+    2, 3, 6, 7,
+    8, 9, 12, 13,
+    10, 11, 14, 15,
+    16, 17, 20, 21,
+    18, 19, 22, 23,
+];
+
+#[inline(always)]
+pub fn alpha_table(x: i32) -> u8 {
+    let idx = (x + 12) as usize;
+    if idx < g_kuiAlphaTable.len() {
+        g_kuiAlphaTable[idx]
+    } else {
+        255
+    }
+}
+
+#[inline(always)]
+pub fn beta_table(x: i32) -> i8 {
+    let idx = (x + 12) as usize;
+    if idx < g_kiBetaTable.len() {
+        g_kiBetaTable[idx]
+    } else {
+        18
+    }
+}
+
+#[inline(always)]
+pub fn tc0_table(x: i32) -> &'static [i8; 4] {
+    let idx = (x + 12) as usize;
+    if idx < g_kiTc0Table.len() {
+        &g_kiTc0Table[idx]
+    } else {
+        &g_kiTc0Table[g_kiTc0Table.len() - 1]
+    }
+}
+
+// ============================================================================
+// Core Type Definitions & C Layout Structs
+// ============================================================================
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum EWelsSliceType {
+    #[default]
+    P_SLICE = 0,
+    B_SLICE = 1,
+    I_SLICE = 2,
+    SP_SLICE = 3,
+    SI_SLICE = 4,
+    UNKNOWN_SLICE = 5,
+}
+
+#[repr(C)]
+pub struct SPicture {
+    pub pBuffer: [*mut u8; 4],
+    pub pData: [*mut u8; 4],
+    pub iLinesize: [i32; 4],
+    pub iPlanes: i32,
+    pub bIdrFlag: bool,
+    pub iWidthInPixel: i32,
+    pub iHeightInPixel: i32,
+    pub iFramePoc: i32,
+    pub bUsedAsRef: bool,
+    pub bIsLongRef: bool,
+    pub iRefCount: i8,
+    pub pSetUnRef: Option<unsafe extern "C" fn(*mut SPicture)>,
+    pub bIsComplete: bool,
+    pub uiTemporalId: u8,
+    pub uiSpatialId: u8,
+    pub uiQualityId: u8,
+    pub iFrameNum: i32,
+    pub iFrameWrapNum: i32,
+    pub iLongTermFrameIdx: i32,
+    pub uiLongTermPicNum: u32,
+    pub iSpsId: i32,
+    pub iPpsId: i32,
+    pub uiTimeStamp: u64,
+    pub uiDecodingTimeStamp: u32,
+    pub iPicBuffIdx: i32,
+    pub eSliceType: EWelsSliceType,
+    pub bIsUngroupedMultiSlice: bool,
+    pub bNewSeqBegin: bool,
+    pub iMbEcedNum: i32,
+    pub iMbEcedPropNum: i32,
+    pub iMbNum: i32,
+    pub pMbCorrectlyDecodedFlag: *mut bool,
+    pub pNzc: *mut [i8; 24],
+    pub pMbType: *mut u32,
+    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+}
+pub type PPicture = *mut SPicture;
+
+#[repr(C)]
+pub struct SSps {
+    pub uiTotalMbCount: i32,
+}
+pub type PSps = *mut SSps;
+
+#[repr(C)]
+pub struct SPps {
+    pub uiNumSliceGroups: u32,
+}
+pub type PPps = *mut SPps;
+
+#[repr(C)]
+pub struct SSliceHeader {
+    pub pSps: *mut SSps,
+    pub pPps: *mut SPps,
+    pub eSliceType: EWelsSliceType,
+    pub iFirstMbInSlice: i32,
+    pub uiDisableDeblockingFilterIdc: i32,
+    pub iSliceAlphaC0Offset: i8,
+    pub iSliceBetaOffset: i8,
+}
+pub type PSliceHeader = *mut SSliceHeader;
+
+#[repr(C)]
+pub struct SSliceHeaderExt {
+    pub sSliceHeader: SSliceHeader,
+}
+pub type PSliceHeaderExt = *mut SSliceHeaderExt;
+
+#[repr(C)]
+pub struct SSlice {
+    pub sSliceHeaderExt: SSliceHeaderExt,
+    pub eSliceType: EWelsSliceType,
+    pub iTotalMbInCurSlice: i32,
+}
+pub type PSlice = *mut SSlice;
+
+#[repr(C)]
+pub struct SLayerInfo {
+    pub sSliceInLayer: SSlice,
+}
+
+#[repr(C)]
+pub struct SDqLayer {
+    pub sLayerInfo: SLayerInfo,
+    pub pBitStringAux: *mut std::ffi::c_void,
+    pub pFmo: *mut std::ffi::c_void,
+    pub pMbType: *mut u32,
+    pub pSliceIdc: *mut i32,
+    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pMvd: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pDirect: *mut [i8; MB_BLOCK4x4_NUM],
+    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
+    pub pTransformSize8x8Flag: *mut bool,
+    pub pLumaQp: *mut i8,
+    pub pChromaQp: *mut [i8; 2],
+    pub pCbp: *mut i8,
+    pub pCbfDc: *mut u16,
+    pub pNzc: *mut [i8; 24],
+    pub pNzcRs: *mut [i8; 24],
+    pub pResidualPredFlag: *mut i8,
+    pub pInterPredictionDoneFlag: *mut i8,
+    pub pMbCorrectlyDecodedFlag: *mut bool,
+    pub pMbRefConcealedFlag: *mut bool,
+    pub pScaledTCoeff: *mut std::ffi::c_void,
+    pub pIntraPredMode: *mut [i8; 8],
+    pub pIntra4x4FinalMode: *mut [i8; MB_BLOCK4x4_NUM],
+    pub pIntraNxNAvailFlag: *mut u8,
+    pub pChromaPredMode: *mut i8,
+    pub pSubMbType: *mut [u32; 4],
+    pub iLumaStride: i32,
+    pub iChromaStride: i32,
+    pub pPred: [*mut u8; 3],
+    pub iMbX: i32,
+    pub iMbY: i32,
+    pub iMbXyIndex: i32,
+    pub iMbWidth: i32,
+    pub iMbHeight: i32,
+    pub iSliceIdcBackup: i32,
+    pub uiSpsId: u32,
+    pub uiPpsId: u32,
+    pub uiDisableInterLayerDeblockingFilterIdc: u32,
+    pub iInterLayerSliceAlphaC0Offset: i32,
+    pub iInterLayerSliceBetaOffset: i32,
+    pub iSliceGroupChangeCycle: i32,
+    pub pRefPicListReordering: *mut std::ffi::c_void,
+    pub pPredWeightTable: *mut std::ffi::c_void,
+    pub pRefPicMarking: *mut std::ffi::c_void,
+    pub pRefPicBaseMarking: *mut std::ffi::c_void,
+    pub pRef: *mut SPicture,
+    pub pDec: *mut SPicture,
+}
+pub type PDqLayer = *mut SDqLayer;
+
+#[repr(C)]
+pub struct SRefPic {
+    pub pRefList: [*mut *mut SPicture; LIST_A],
+}
+
+// Function Pointer Typedefs
+pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
+    pCurDqLayer: *mut SDqLayer,
+    filter: *mut SDeblockingFilter,
+    boundry_flag: i32,
+);
+
+pub type PLumaDeblockingLT4Func = unsafe extern "C" fn(
+    iSampleY: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+    iTc: *mut i8,
+);
+
+pub type PLumaDeblockingEQ4Func = unsafe extern "C" fn(
+    iSampleY: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+);
+
+pub type PChromaDeblockingLT4Func = unsafe extern "C" fn(
+    iSampleCb: *mut u8,
+    iSampleCr: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+    iTc: *mut i8,
+);
+
+pub type PChromaDeblockingEQ4Func = unsafe extern "C" fn(
+    iSampleCb: *mut u8,
+    iSampleCr: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+);
+
+pub type PChromaDeblockingLT4Func2 = unsafe extern "C" fn(
+    iSampleCbr: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+    iTc: *mut i8,
+);
+
+pub type PChromaDeblockingEQ4Func2 = unsafe extern "C" fn(
+    iSampleCbr: *mut u8,
+    iStride: i32,
+    iAlpha: i32,
+    iBeta: i32,
+);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SDeblockingFunc {
+    pub pfLumaDeblockingLT4Ver: Option<PLumaDeblockingLT4Func>,
+    pub pfLumaDeblockingEQ4Ver: Option<PLumaDeblockingEQ4Func>,
+    pub pfLumaDeblockingLT4Hor: Option<PLumaDeblockingLT4Func>,
+    pub pfLumaDeblockingEQ4Hor: Option<PLumaDeblockingEQ4Func>,
+
+    pub pfChromaDeblockingLT4Ver: Option<PChromaDeblockingLT4Func>,
+    pub pfChromaDeblockingEQ4Ver: Option<PChromaDeblockingEQ4Func>,
+    pub pfChromaDeblockingLT4Hor: Option<PChromaDeblockingLT4Func>,
+    pub pfChromaDeblockingEQ4Hor: Option<PChromaDeblockingEQ4Func>,
+
+    pub pfChromaDeblockingLT4Ver2: Option<PChromaDeblockingLT4Func2>,
+    pub pfChromaDeblockingEQ4Ver2: Option<PChromaDeblockingEQ4Func2>,
+    pub pfChromaDeblockingLT4Hor2: Option<PChromaDeblockingLT4Func2>,
+    pub pfChromaDeblockingEQ4Hor2: Option<PChromaDeblockingEQ4Func2>,
+}
+
+impl Default for SDeblockingFunc {
+    fn default() -> Self {
+        Self {
+            pfLumaDeblockingLT4Ver: None,
+            pfLumaDeblockingEQ4Ver: None,
+            pfLumaDeblockingLT4Hor: None,
+            pfLumaDeblockingEQ4Hor: None,
+            pfChromaDeblockingLT4Ver: None,
+            pfChromaDeblockingEQ4Ver: None,
+            pfChromaDeblockingLT4Hor: None,
+            pfChromaDeblockingEQ4Hor: None,
+            pfChromaDeblockingLT4Ver2: None,
+            pfChromaDeblockingEQ4Ver2: None,
+            pfChromaDeblockingLT4Hor2: None,
+            pfChromaDeblockingEQ4Hor2: None,
+        }
+    }
+}
+pub type PDeblockingFunc = *mut SDeblockingFunc;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SDeblockingFilter {
+    pub pCsData: [*mut u8; 3],
+    pub iCsStride: [i32; 2],
+    pub eSliceType: EWelsSliceType,
+    pub iSliceAlphaC0Offset: i8,
+    pub iSliceBetaOffset: i8,
+    pub iChromaQP: [i8; 2],
+    pub iLumaQP: i8,
+    pub pLoopf: *mut SDeblockingFunc,
+    pub pRefPics: [*mut *mut SPicture; LIST_A],
+}
+
+impl Default for SDeblockingFilter {
+    fn default() -> Self {
+        Self {
+            pCsData: [std::ptr::null_mut(); 3],
+            iCsStride: [0; 2],
+            eSliceType: EWelsSliceType::P_SLICE,
+            iSliceAlphaC0Offset: 0,
+            iSliceBetaOffset: 0,
+            iChromaQP: [0; 2],
+            iLumaQP: 0,
+            pLoopf: std::ptr::null_mut(),
+            pRefPics: [std::ptr::null_mut(); LIST_A],
+        }
+    }
+}
+pub type PDeblockingFilter = *mut SDeblockingFilter;
+
+#[repr(C)]
+pub struct SWelsDecoderContext {
+    pub pCurDqLayer: *mut SDqLayer,
+    pub pDec: *mut SPicture,
+    pub pFmo: *mut std::ffi::c_void,
+    pub sDeblockingFunc: SDeblockingFunc,
+    pub sRefPic: SRefPic,
+}
+pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+
+// ============================================================================
+// Boundary Strength Evaluation Macros & Helper Primitives
+// ============================================================================
+
+#[inline(always)]
+pub fn GET_ALPHA_BETA_FROM_QP(
+    iQp: i32,
+    iAlphaOffset: i32,
+    iBetaOffset: i32,
+    iIndexA: &mut i32,
+    iAlpha: &mut i32,
+    iBeta: &mut i32,
+) {
+    *iIndexA = iQp + iAlphaOffset;
+    *iAlpha = alpha_table(*iIndexA) as i32;
+    *iBeta = beta_table(iQp + iBetaOffset) as i32;
+}
+
+#[inline(always)]
+pub fn TC0_TBL_LOOKUP(tc: &mut [i8; 4], iIndexA: i32, pBS: &[u8], bChroma: i8) {
+    let tbl = tc0_table(iIndexA);
+    tc[0] = tbl[(pBS[0] & 3) as usize] + bChroma;
+    tc[1] = tbl[(pBS[1] & 3) as usize] + bChroma;
+    tc[2] = tbl[(pBS[2] & 3) as usize] + bChroma;
+    tc[3] = tbl[(pBS[3] & 3) as usize] + bChroma;
+}
+
+#[inline(always)]
+pub unsafe fn MB_BS_MV(
+    pRefPic0: *mut SPicture,
+    pRefPic1: *mut SPicture,
+    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMbXy: usize,
+    iMbBn: usize,
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> u8 {
+    if pRefPic0 != pRefPic1 {
+        return 1;
+    }
+    let mv_curr = (*iMotionVector.add(iMbXy))[iIndex];
+    let mv_neigh = (*iMotionVector.add(iMbBn))[iNeighIndex];
+    if (mv_curr[0] as i32 - mv_neigh[0] as i32).abs() >= 4
+        || (mv_curr[1] as i32 - mv_neigh[1] as i32).abs() >= 4
+    {
+        1
+    } else {
+        0
+    }
+}
+
+#[inline(always)]
+pub unsafe fn ON_MB_BS_MV_DIFF(
+    iMV_A: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMV_B: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMbXy: usize,
+    iMbBn: usize,
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> bool {
+    let mv_a = (*iMV_A.add(iMbXy))[iIndex];
+    let mv_b = (*iMV_B.add(iMbBn))[iNeighIndex];
+    (mv_a[0] as i32 - mv_b[0] as i32).abs() >= 4 || (mv_a[1] as i32 - mv_b[1] as i32).abs() >= 4
+}
+
+#[inline(always)]
+pub unsafe fn IN_MB_BS_MV_DIFF(
+    iMV_A: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMV_B: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMbXy: usize,
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> bool {
+    let mv_a = (*iMV_A.add(iMbXy))[iIndex];
+    let mv_b = (*iMV_B.add(iMbXy))[iNeighIndex];
+    (mv_a[0] as i32 - mv_b[0] as i32).abs() >= 4 || (mv_a[1] as i32 - mv_b[1] as i32).abs() >= 4
+}
+
+#[inline(always)]
+pub unsafe fn ON_MB_BS(
+    ref_p0: *mut SPicture,
+    ref_q0: *mut SPicture,
+    ref_p1: *mut SPicture,
+    ref_q1: *mut SPicture,
+    mv0: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    mv1: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMbXy: usize,
+    iMbBn: usize,
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> u8 {
+    let res = if ref_p0 != ref_p1 {
+        if ref_p0 == ref_q0 {
+            ON_MB_BS_MV_DIFF(mv0, mv0, iMbXy, iMbBn, iIndex, iNeighIndex)
+                || ON_MB_BS_MV_DIFF(mv1, mv1, iMbXy, iMbBn, iIndex, iNeighIndex)
+        } else {
+            ON_MB_BS_MV_DIFF(mv0, mv1, iMbXy, iMbBn, iIndex, iNeighIndex)
+                || ON_MB_BS_MV_DIFF(mv1, mv0, iMbXy, iMbBn, iIndex, iNeighIndex)
+        }
+    } else {
+        (ON_MB_BS_MV_DIFF(mv0, mv0, iMbXy, iMbBn, iIndex, iNeighIndex)
+            || ON_MB_BS_MV_DIFF(mv1, mv1, iMbXy, iMbBn, iIndex, iNeighIndex))
+            && (ON_MB_BS_MV_DIFF(mv0, mv1, iMbXy, iMbBn, iIndex, iNeighIndex)
+                || ON_MB_BS_MV_DIFF(mv1, mv0, iMbXy, iMbBn, iIndex, iNeighIndex))
+    };
+    if res { 1 } else { 0 }
+}
+
+#[inline(always)]
+pub unsafe fn SMB_EDGE_MV(
+    pRefPics: &[*mut std::ffi::c_void; MB_BLOCK4x4_NUM],
+    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> u8 {
+    let p_ref0 = pRefPics[iIndex];
+    let p_ref1 = pRefPics[iNeighIndex];
+    if p_ref0 != p_ref1 {
+        return 1;
+    }
+    let mv0 = (*iMotionVector)[iIndex];
+    let mv1 = (*iMotionVector)[iNeighIndex];
+    let diff0 = (mv0[0] as i32 - mv1[0] as i32).abs();
+    let diff1 = (mv0[1] as i32 - mv1[1] as i32).abs();
+    if ((diff0 & !3) | (diff1 & !3)) != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[inline(always)]
+pub unsafe fn BS_EDGE(
+    bsx1: u8,
+    pRefPics: &[*mut std::ffi::c_void; MB_BLOCK4x4_NUM],
+    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iIndex: usize,
+    iNeighIndex: usize,
+) -> u8 {
+    let smb = SMB_EDGE_MV(pRefPics, iMotionVector, iIndex, iNeighIndex);
+    (bsx1 | smb) << (if bsx1 != 0 { 1 } else { 0 })
+}
+
+#[inline(always)]
+pub unsafe fn IN_SMB_EDGE_MV(
+    refs: &[[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A],
+    mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    iMbXy: usize,
+    iIndex: usize,
+    iNeighborIndex: usize,
+) -> u8 {
+    let cond1 = (refs[LIST_0][iIndex] == refs[LIST_0][iNeighborIndex])
+        && (refs[LIST_1][iIndex] == refs[LIST_1][iNeighborIndex]);
+    let cond2 = (refs[LIST_0][iIndex] == refs[LIST_1][iNeighborIndex])
+        && (refs[LIST_1][iIndex] == refs[LIST_0][iNeighborIndex]);
+
+    if cond1 || cond2 {
+        if refs[LIST_0][iIndex] != refs[LIST_1][iIndex] {
+            if refs[LIST_0][iIndex] == refs[LIST_0][iNeighborIndex] {
+                if IN_MB_BS_MV_DIFF(mv[LIST_0], mv[LIST_0], iMbXy, iIndex, iNeighborIndex)
+                    || IN_MB_BS_MV_DIFF(mv[LIST_1], mv[LIST_1], iMbXy, iIndex, iNeighborIndex)
+                {
+                    1
+                } else {
+                    0
+                }
+            } else {
+                if IN_MB_BS_MV_DIFF(mv[LIST_0], mv[LIST_1], iMbXy, iIndex, iNeighborIndex)
+                    || IN_MB_BS_MV_DIFF(mv[LIST_1], mv[LIST_0], iMbXy, iIndex, iNeighborIndex)
+                {
+                    1
+                } else {
+                    0
+                }
+            }
+        } else {
+            let a = IN_MB_BS_MV_DIFF(mv[LIST_0], mv[LIST_0], iMbXy, iIndex, iNeighborIndex)
+                || IN_MB_BS_MV_DIFF(mv[LIST_1], mv[LIST_1], iMbXy, iIndex, iNeighborIndex);
+            let b = IN_MB_BS_MV_DIFF(mv[LIST_0], mv[LIST_1], iMbXy, iIndex, iNeighborIndex)
+                || IN_MB_BS_MV_DIFF(mv[LIST_1], mv[LIST_0], iMbXy, iIndex, iNeighborIndex);
+            if a && b { 1 } else { 0 }
+        }
+    } else {
+        1
+    }
+}
+
+#[inline(always)]
+pub unsafe fn IN_BS_EDGE(
+    bsx1: u8,
+    refs: &[[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A],
+    mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    iMbXy: usize,
+    iIndex: usize,
+    iNeighborIndex: usize,
+) -> u8 {
+    let smb = IN_SMB_EDGE_MV(refs, mv, iMbXy, iIndex, iNeighborIndex);
+    (bsx1 | smb) << (if bsx1 != 0 { 1 } else { 0 })
+}
+
+#[inline(always)]
+pub unsafe fn GetPNzc(pCurDqLayer: *mut SDqLayer, iMbXy: i32) -> *mut i8 {
+    if !pCurDqLayer.is_null()
+        && !(*pCurDqLayer).pDec.is_null()
+        && !(*(*pCurDqLayer).pDec).pNzc.is_null()
+    {
+        return (*(*(*pCurDqLayer).pDec).pNzc.add(iMbXy as usize)).as_mut_ptr();
+    }
+    (*(*pCurDqLayer).pNzc.add(iMbXy as usize)).as_mut_ptr()
+}
+
+// ============================================================================
+// Internal Boundary Strength Matrix Computations
+// ============================================================================
+
+#[inline(always)]
+pub unsafe fn DeblockingBSInsideMBAvsbase(
+    pNnzTab: *const i8,
+    nBS: &mut [[[u8; 4]; 4]; 2],
+    iLShiftFactor: i32,
+) {
+    let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 16);
+    let shift = iLShiftFactor as u32;
+
+    nBS[0][1][0] = (nnz[0] | nnz[1]) << shift;
+    nBS[0][2][0] = (nnz[1] | nnz[2]) << shift;
+    nBS[0][3][0] = (nnz[2] | nnz[3]) << shift;
+
+    nBS[0][1][1] = (nnz[4] | nnz[5]) << shift;
+    nBS[0][2][1] = (nnz[5] | nnz[6]) << shift;
+    nBS[0][3][1] = (nnz[6] | nnz[7]) << shift;
+
+    nBS[1][1][0] = (nnz[0] | nnz[4]) << shift;
+    nBS[1][1][1] = (nnz[1] | nnz[5]) << shift;
+    nBS[1][1][2] = (nnz[2] | nnz[6]) << shift;
+    nBS[1][1][3] = (nnz[3] | nnz[7]) << shift;
+
+    nBS[0][1][2] = (nnz[8] | nnz[9]) << shift;
+    nBS[0][2][2] = (nnz[9] | nnz[10]) << shift;
+    nBS[0][3][2] = (nnz[10] | nnz[11]) << shift;
+
+    nBS[1][2][0] = (nnz[4] | nnz[8]) << shift;
+    nBS[1][2][1] = (nnz[5] | nnz[9]) << shift;
+    nBS[1][2][2] = (nnz[6] | nnz[10]) << shift;
+    nBS[1][2][3] = (nnz[7] | nnz[11]) << shift;
+
+    nBS[0][1][3] = (nnz[12] | nnz[13]) << shift;
+    nBS[0][2][3] = (nnz[13] | nnz[14]) << shift;
+    nBS[0][3][3] = (nnz[14] | nnz[15]) << shift;
+
+    nBS[1][3][0] = (nnz[8] | nnz[12]) << shift;
+    nBS[1][3][1] = (nnz[9] | nnz[13]) << shift;
+    nBS[1][3][2] = (nnz[10] | nnz[14]) << shift;
+    nBS[1][3][3] = (nnz[11] | nnz[15]) << shift;
+}
+
+#[inline(always)]
+pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
+    pNnzTab: *const i8,
+    nBS: &mut [[[u8; 4]; 4]; 2],
+    iLShiftFactor: i32,
+) {
+    let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
+    let mut i8x8NnzTab = [0u8; 4];
+    for i in 0..4 {
+        let iBlkIdx = i << 2;
+        i8x8NnzTab[i] = nnz[g_kuiMbCountScan4Idx[iBlkIdx] as usize]
+            | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 1] as usize]
+            | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 2] as usize]
+            | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 3] as usize];
+    }
+
+    let shift = iLShiftFactor as u32;
+    // vertical
+    let val_v0 = (i8x8NnzTab[0] | i8x8NnzTab[1]) << shift;
+    nBS[0][2][0] = val_v0;
+    nBS[0][2][1] = val_v0;
+
+    let val_v1 = (i8x8NnzTab[2] | i8x8NnzTab[3]) << shift;
+    nBS[0][2][2] = val_v1;
+    nBS[0][2][3] = val_v1;
+
+    // horizontal
+    let val_h0 = (i8x8NnzTab[0] | i8x8NnzTab[2]) << shift;
+    nBS[1][2][0] = val_h0;
+    nBS[1][2][1] = val_h0;
+
+    let val_h1 = (i8x8NnzTab[1] | i8x8NnzTab[3]) << shift;
+    nBS[1][2][2] = val_h1;
+    nBS[1][2][3] = val_h1;
+}
+
+#[inline(always)]
+pub unsafe fn DeblockingBSInsideMBNormal(
+    pFilter: *mut SDeblockingFilter,
+    pCurDqLayer: *mut SDqLayer,
+    nBS: &mut [[[u8; 4]; 4]; 2],
+    pNnzTab: *const i8,
+    iMbXy: i32,
+) {
+    let pDec = (*pCurDqLayer).pDec;
+    let iRefIdx = *(*pDec).pRefIndex[LIST_0].add(iMbXy as usize);
+    let mut iRefs: [*mut std::ffi::c_void; MB_BLOCK4x4_NUM] =
+        [std::ptr::null_mut(); MB_BLOCK4x4_NUM];
+    for i in 0..MB_BLOCK4x4_NUM {
+        if iRefIdx[i] > REF_NOT_IN_LIST {
+            iRefs[i] = *(*pFilter).pRefPics[LIST_0].add(iRefIdx[i] as usize)
+                as *mut std::ffi::c_void;
+        } else {
+            iRefs[i] = std::ptr::null_mut();
+        }
+    }
+
+    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let pMv = (*pDec).pMv[LIST_0].add(iMbXy as usize);
+    let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
+
+    if is_8x8 {
+        let mut i8x8NnzTab = [0u8; 4];
+        for i in 0..4 {
+            let iBlkIdx = i << 2;
+            i8x8NnzTab[i] = nnz[g_kuiMbCountScan4Idx[iBlkIdx] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 1] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 2] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 3] as usize];
+        }
+
+        let val_v0 = BS_EDGE(
+            i8x8NnzTab[0] | i8x8NnzTab[1],
+            &iRefs,
+            pMv,
+            g_kuiMbCountScan4Idx[1 << 2] as usize,
+            g_kuiMbCountScan4Idx[0] as usize,
+        );
+        nBS[0][2][0] = val_v0;
+        nBS[0][2][1] = val_v0;
+
+        let val_v1 = BS_EDGE(
+            i8x8NnzTab[2] | i8x8NnzTab[3],
+            &iRefs,
+            pMv,
+            g_kuiMbCountScan4Idx[3 << 2] as usize,
+            g_kuiMbCountScan4Idx[2 << 2] as usize,
+        );
+        nBS[0][2][2] = val_v1;
+        nBS[0][2][3] = val_v1;
+
+        let val_h0 = BS_EDGE(
+            i8x8NnzTab[0] | i8x8NnzTab[2],
+            &iRefs,
+            pMv,
+            g_kuiMbCountScan4Idx[2 << 2] as usize,
+            g_kuiMbCountScan4Idx[0] as usize,
+        );
+        nBS[1][2][0] = val_h0;
+        nBS[1][2][1] = val_h0;
+
+        let val_h1 = BS_EDGE(
+            i8x8NnzTab[1] | i8x8NnzTab[3],
+            &iRefs,
+            pMv,
+            g_kuiMbCountScan4Idx[3 << 2] as usize,
+            g_kuiMbCountScan4Idx[1 << 2] as usize,
+        );
+        nBS[1][2][2] = val_h1;
+        nBS[1][2][3] = val_h1;
+    } else {
+        let mut uiBsx4 = [0u8; 4];
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[i] | nnz[i + 1];
+        }
+        nBS[0][1][0] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 1, 0);
+        nBS[0][2][0] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 2, 1);
+        nBS[0][3][0] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 3, 2);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[4 + i] | nnz[4 + i + 1];
+        }
+        nBS[0][1][1] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 5, 4);
+        nBS[0][2][1] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 6, 5);
+        nBS[0][3][1] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 7, 6);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[8 + i] | nnz[8 + i + 1];
+        }
+        nBS[0][1][2] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 9, 8);
+        nBS[0][2][2] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 10, 9);
+        nBS[0][3][2] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 11, 10);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[12 + i] | nnz[12 + i + 1];
+        }
+        nBS[0][1][3] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 13, 12);
+        nBS[0][2][3] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 14, 13);
+        nBS[0][3][3] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 15, 14);
+
+        // horizontal
+        for i in 0..4 {
+            uiBsx4[i] = nnz[i] | nnz[4 + i];
+        }
+        nBS[1][1][0] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 4, 0);
+        nBS[1][1][1] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 5, 1);
+        nBS[1][1][2] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 6, 2);
+        nBS[1][1][3] = BS_EDGE(uiBsx4[3], &iRefs, pMv, 7, 3);
+
+        for i in 0..4 {
+            uiBsx4[i] = nnz[4 + i] | nnz[8 + i];
+        }
+        nBS[1][2][0] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 8, 4);
+        nBS[1][2][1] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 9, 5);
+        nBS[1][2][2] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 10, 6);
+        nBS[1][2][3] = BS_EDGE(uiBsx4[3], &iRefs, pMv, 11, 7);
+
+        for i in 0..4 {
+            uiBsx4[i] = nnz[8 + i] | nnz[12 + i];
+        }
+        nBS[1][3][0] = BS_EDGE(uiBsx4[0], &iRefs, pMv, 12, 8);
+        nBS[1][3][1] = BS_EDGE(uiBsx4[1], &iRefs, pMv, 13, 9);
+        nBS[1][3][2] = BS_EDGE(uiBsx4[2], &iRefs, pMv, 14, 10);
+        nBS[1][3][3] = BS_EDGE(uiBsx4[3], &iRefs, pMv, 15, 11);
+    }
+}
+
+#[inline(always)]
+pub unsafe fn DeblockingBSliceBSInsideMBNormal(
+    pFilter: *mut SDeblockingFilter,
+    pCurDqLayer: *mut SDqLayer,
+    nBS: &mut [[[u8; 4]; 4]; 2],
+    pNnzTab: *const i8,
+    iMbXy: i32,
+) {
+    let mut iRefs: [[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A] =
+        [[std::ptr::null_mut(); MB_BLOCK4x4_NUM]; LIST_A];
+
+    for l in 0..LIST_A {
+        let iRefIdx = *(*(*pCurDqLayer).pDec).pRefIndex[l].add(iMbXy as usize);
+        for i in 0..MB_BLOCK4x4_NUM {
+            if iRefIdx[i] > REF_NOT_IN_LIST {
+                iRefs[l][i] = *(*pFilter).pRefPics[l].add(iRefIdx[i] as usize)
+                    as *mut std::ffi::c_void;
+            } else {
+                iRefs[l][i] = std::ptr::null_mut();
+            }
+        }
+    }
+
+    let pMv = &(*(*pCurDqLayer).pDec).pMv;
+    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
+
+    if is_8x8 {
+        let mut i8x8NnzTab = [0u8; 4];
+        for i in 0..4 {
+            let iBlkIdx = i << 2;
+            i8x8NnzTab[i] = nnz[g_kuiMbCountScan4Idx[iBlkIdx] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 1] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 2] as usize]
+                | nnz[g_kuiMbCountScan4Idx[iBlkIdx + 3] as usize];
+        }
+
+        let iIndex_v0 = g_kuiMbCountScan4Idx[1 << 2] as usize;
+        let iNeigborIndex_v0 = g_kuiMbCountScan4Idx[0] as usize;
+        let val_v0 = IN_BS_EDGE(
+            i8x8NnzTab[0] | i8x8NnzTab[1],
+            &iRefs,
+            pMv,
+            iMbXy as usize,
+            iIndex_v0,
+            iNeigborIndex_v0,
+        );
+        nBS[0][2][0] = val_v0;
+        nBS[0][2][1] = val_v0;
+
+        let iIndex_v1 = g_kuiMbCountScan4Idx[3 << 2] as usize;
+        let iNeigborIndex_v1 = g_kuiMbCountScan4Idx[2 << 2] as usize;
+        let val_v1 = IN_BS_EDGE(
+            i8x8NnzTab[2] | i8x8NnzTab[3],
+            &iRefs,
+            pMv,
+            iMbXy as usize,
+            iIndex_v1,
+            iNeigborIndex_v1,
+        );
+        nBS[0][2][2] = val_v1;
+        nBS[0][2][3] = val_v1;
+
+        let iIndex_h0 = g_kuiMbCountScan4Idx[2 << 2] as usize;
+        let iNeigborIndex_h0 = g_kuiMbCountScan4Idx[0] as usize;
+        let val_h0 = IN_BS_EDGE(
+            i8x8NnzTab[0] | i8x8NnzTab[2],
+            &iRefs,
+            pMv,
+            iMbXy as usize,
+            iIndex_h0,
+            iNeigborIndex_h0,
+        );
+        nBS[1][2][0] = val_h0;
+        nBS[1][2][1] = val_h0;
+
+        let iIndex_h1 = g_kuiMbCountScan4Idx[3 << 2] as usize;
+        let iNeigborIndex_h1 = g_kuiMbCountScan4Idx[1 << 2] as usize;
+        let val_h1 = IN_BS_EDGE(
+            i8x8NnzTab[1] | i8x8NnzTab[3],
+            &iRefs,
+            pMv,
+            iMbXy as usize,
+            iIndex_h1,
+            iNeigborIndex_h1,
+        );
+        nBS[1][2][2] = val_h1;
+        nBS[1][2][3] = val_h1;
+    } else {
+        let mut uiBsx4 = [0u8; 4];
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[i] | nnz[i + 1];
+        }
+        nBS[0][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 1, 0);
+        nBS[0][2][0] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 2, 1);
+        nBS[0][3][0] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 3, 2);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[4 + i] | nnz[4 + i + 1];
+        }
+        nBS[0][1][1] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 5, 4);
+        nBS[0][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 6, 5);
+        nBS[0][3][1] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 7, 6);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[8 + i] | nnz[8 + i + 1];
+        }
+        nBS[0][1][2] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 9, 8);
+        nBS[0][2][2] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 10, 9);
+        nBS[0][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 11, 10);
+
+        for i in 0..3 {
+            uiBsx4[i] = nnz[12 + i] | nnz[12 + i + 1];
+        }
+        nBS[0][1][3] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 13, 12);
+        nBS[0][2][3] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 14, 13);
+        nBS[0][3][3] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 15, 14);
+
+        // horizontal
+        for i in 0..4 {
+            uiBsx4[i] = nnz[i] | nnz[4 + i];
+        }
+        nBS[1][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 4, 0);
+        nBS[1][1][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 5, 1);
+        nBS[1][1][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 6, 2);
+        nBS[1][1][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 7, 3);
+
+        for i in 0..4 {
+            uiBsx4[i] = nnz[4 + i] | nnz[8 + i];
+        }
+        nBS[1][2][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 8, 4);
+        nBS[1][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 9, 5);
+        nBS[1][2][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 10, 6);
+        nBS[1][2][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 11, 7);
+
+        for i in 0..4 {
+            uiBsx4[i] = nnz[8 + i] | nnz[12 + i];
+        }
+        nBS[1][3][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 12, 8);
+        nBS[1][3][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 13, 9);
+        nBS[1][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 14, 10);
+        nBS[1][3][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 15, 11);
+    }
+}
+
+// ============================================================================
+// Marginal Boundary Strength Calculation Routines
+// ============================================================================
+
+pub unsafe fn DeblockingBsMarginalMBAvcbase(
+    pFilter: *mut SDeblockingFilter,
+    pCurDqLayer: *mut SDqLayer,
+    iEdge: i32,
+    iNeighMb: i32,
+    iMbXy: i32,
+) -> u32 {
+    let mut uiBSx4 = 0u32;
+    let pBS = (&mut uiBSx4 as *mut u32) as *mut u8;
+
+    let pBIdx = &g_kuiTableBIdx[iEdge as usize][0..4];
+    let pBnIdx = &g_kuiTableBIdx[iEdge as usize][4..8];
+    let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
+    let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
+
+    let pRefIdxArr = if !(*pCurDqLayer).pDec.is_null() {
+        (*(*pCurDqLayer).pDec).pRefIndex[LIST_0]
+    } else {
+        (*pCurDqLayer).pRefIndex[LIST_0]
+    };
+
+    let is_8x8_curr = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let is_8x8_neigh = *(*pCurDqLayer).pTransformSize8x8Flag.add(iNeighMb as usize);
+
+    let pMvArr = if !(*pCurDqLayer).pDec.is_null() {
+        (*(*pCurDqLayer).pDec).pMv[LIST_0]
+    } else {
+        (*pCurDqLayer).pMv[LIST_0]
+    };
+
+    let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
+    let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb) as *const u8;
+
+    if is_8x8_curr && is_8x8_neigh {
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                if uiNzc == 0 {
+                    uiNzc |= *pNzcCurr.add(pB8x8Idx[i * 4 + j] as usize)
+                        | *pNzcNeigh.add(pBn8x8Idx[i * 4 + j] as usize);
+                }
+            }
+            if uiNzc != 0 {
+                *pBS.add(i << 1) = 2;
+                *pBS.add(1 + (i << 1)) = 2;
+            } else {
+                let idx_curr = pB8x8Idx[i * 4] as usize;
+                let idx_neigh = pBn8x8Idx[i * 4] as usize;
+                let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[idx_curr];
+                let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[idx_neigh];
+
+                let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+
+                let val = MB_BS_MV(
+                    ref0,
+                    ref1,
+                    pMvArr,
+                    iMbXy as usize,
+                    iNeighMb as usize,
+                    idx_curr,
+                    idx_neigh,
+                );
+                *pBS.add(i << 1) = val;
+                *pBS.add(1 + (i << 1)) = val;
+            }
+        }
+    } else if is_8x8_curr {
+        let mut bn_idx_pos = 0usize;
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                uiNzc |= *pNzcCurr.add(pB8x8Idx[i * 4 + j] as usize);
+            }
+            for j in 0..2 {
+                let bn_idx = pBnIdx[bn_idx_pos] as usize;
+                if (uiNzc | *pNzcNeigh.add(bn_idx)) != 0 {
+                    *pBS.add(j + (i << 1)) = 2;
+                } else {
+                    let b_idx = pB8x8Idx[i * 4] as usize;
+                    let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
+                    let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+
+                    let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    *pBS.add(j + (i << 1)) = MB_BS_MV(
+                        ref0,
+                        ref1,
+                        pMvArr,
+                        iMbXy as usize,
+                        iNeighMb as usize,
+                        b_idx,
+                        bn_idx,
+                    );
+                }
+                bn_idx_pos += 1;
+            }
+        }
+    } else if is_8x8_neigh {
+        let mut b_idx_pos = 0usize;
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                uiNzc |= *pNzcNeigh.add(pBn8x8Idx[i * 4 + j] as usize);
+            }
+            for j in 0..2 {
+                let b_idx = pBIdx[b_idx_pos] as usize;
+                if (uiNzc | *pNzcCurr.add(b_idx)) != 0 {
+                    *pBS.add(j + (i << 1)) = 2;
+                } else {
+                    let bn_idx = pBn8x8Idx[i * 4] as usize;
+                    let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
+                    let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+
+                    let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    *pBS.add(j + (i << 1)) = MB_BS_MV(
+                        ref0,
+                        ref1,
+                        pMvArr,
+                        iMbXy as usize,
+                        iNeighMb as usize,
+                        b_idx,
+                        bn_idx,
+                    );
+                }
+                b_idx_pos += 1;
+            }
+        }
+    } else {
+        // only 4x4 transform
+        for i in 0..4 {
+            let b_idx = pBIdx[i] as usize;
+            let bn_idx = pBnIdx[i] as usize;
+            if (*pNzcCurr.add(b_idx) | *pNzcNeigh.add(bn_idx)) != 0 {
+                *pBS.add(i) = 2;
+            } else {
+                let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
+                let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+
+                let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+
+                *pBS.add(i) = MB_BS_MV(
+                    ref0,
+                    ref1,
+                    pMvArr,
+                    iMbXy as usize,
+                    iNeighMb as usize,
+                    b_idx,
+                    bn_idx,
+                );
+            }
+        }
+    }
+
+    uiBSx4
+}
+
+pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
+    pFilter: *mut SDeblockingFilter,
+    pCurDqLayer: *mut SDqLayer,
+    iEdge: i32,
+    iNeighMb: i32,
+    iMbXy: i32,
+) -> u32 {
+    let mut uiBSx4 = 0u32;
+    let pBS = (&mut uiBSx4 as *mut u32) as *mut u8;
+
+    let pBIdx = &g_kuiTableBIdx[iEdge as usize][0..4];
+    let pBnIdx = &g_kuiTableBIdx[iEdge as usize][4..8];
+    let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
+    let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
+
+    let iRefIdx0 = (*(*pCurDqLayer).pDec).pRefIndex[LIST_0];
+    let iRefIdx1 = (*(*pCurDqLayer).pDec).pRefIndex[LIST_1];
+
+    let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
+    let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb) as *const u8;
+
+    let is_8x8_curr = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let is_8x8_neigh = *(*pCurDqLayer).pTransformSize8x8Flag.add(iNeighMb as usize);
+
+    if is_8x8_curr && is_8x8_neigh {
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                if uiNzc == 0 {
+                    uiNzc |= *pNzcCurr.add(pB8x8Idx[i * 4 + j] as usize)
+                        | *pNzcNeigh.add(pBn8x8Idx[i * 4 + j] as usize);
+                }
+            }
+            if uiNzc != 0 {
+                *pBS.add(i << 1) = 2;
+                *pBS.add(1 + (i << 1)) = 2;
+            } else {
+                *pBS.add(i << 1) = 1;
+                *pBS.add(1 + (i << 1)) = 1;
+
+                let b_idx = pB8x8Idx[i * 4] as usize;
+                let bn_idx = pBn8x8Idx[i * 4] as usize;
+
+                let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
+                let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
+                let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
+                let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+
+                let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+
+                if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
+                    || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
+                {
+                    let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
+                    let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                    let val = ON_MB_BS(
+                        ref_p0,
+                        ref_q0,
+                        ref_p1,
+                        ref_q1,
+                        pMv0,
+                        pMv1,
+                        iMbXy as usize,
+                        iNeighMb as usize,
+                        b_idx,
+                        bn_idx,
+                    );
+                    *pBS.add(i << 1) = val;
+                    *pBS.add(1 + (i << 1)) = val;
+                }
+            }
+        }
+    } else if is_8x8_curr {
+        let mut bn_idx_pos = 0usize;
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                uiNzc |= *pNzcCurr.add(pB8x8Idx[i * 4 + j] as usize);
+            }
+            for j in 0..2 {
+                let bn_idx = pBnIdx[bn_idx_pos] as usize;
+                if (uiNzc | *pNzcNeigh.add(bn_idx)) != 0 {
+                    *pBS.add(j + (i << 1)) = 2;
+                } else {
+                    *pBS.add(j + (i << 1)) = 1;
+                    let b_idx = pB8x8Idx[i * 4] as usize;
+
+                    let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
+                    let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
+                    let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
+                    let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+
+                    let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
+                        || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
+                    {
+                        let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
+                        let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                        *pBS.add(j + (i << 1)) = ON_MB_BS(
+                            ref_p0,
+                            ref_q0,
+                            ref_p1,
+                            ref_q1,
+                            pMv0,
+                            pMv1,
+                            iMbXy as usize,
+                            iNeighMb as usize,
+                            b_idx,
+                            bn_idx,
+                        );
+                    }
+                }
+                bn_idx_pos += 1;
+            }
+        }
+    } else if is_8x8_neigh {
+        let mut b_idx_pos = 0usize;
+        for i in 0..2 {
+            let mut uiNzc = 0u8;
+            for j in 0..4 {
+                uiNzc |= *pNzcNeigh.add(pBn8x8Idx[i * 4 + j] as usize);
+            }
+            for j in 0..2 {
+                let b_idx = pBIdx[b_idx_pos] as usize;
+                if (uiNzc | *pNzcCurr.add(b_idx)) != 0 {
+                    *pBS.add(j + (i << 1)) = 2;
+                } else {
+                    *pBS.add(j + (i << 1)) = 1;
+                    let bn_idx = pBn8x8Idx[i * 4] as usize;
+
+                    let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
+                    let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
+                    let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
+                    let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+
+                    let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
+                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                    } else {
+                        std::ptr::null_mut()
+                    };
+
+                    if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
+                        || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
+                    {
+                        let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
+                        let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                        *pBS.add(j + (i << 1)) = ON_MB_BS(
+                            ref_p0,
+                            ref_q0,
+                            ref_p1,
+                            ref_q1,
+                            pMv0,
+                            pMv1,
+                            iMbXy as usize,
+                            iNeighMb as usize,
+                            b_idx,
+                            bn_idx,
+                        );
+                    }
+                }
+                b_idx_pos += 1;
+            }
+        }
+    } else {
+        // 4x4 transform
+        for i in 0..4 {
+            let b_idx = pBIdx[i] as usize;
+            let bn_idx = pBnIdx[i] as usize;
+            if (*pNzcCurr.add(b_idx) | *pNzcNeigh.add(bn_idx)) != 0 {
+                *pBS.add(i) = 2;
+            } else {
+                *pBS.add(i) = 1;
+
+                let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
+                let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
+                let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
+                let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+
+                let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+                let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
+                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                } else {
+                    std::ptr::null_mut()
+                };
+
+                if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
+                    || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
+                {
+                    let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
+                    let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                    *pBS.add(i) = ON_MB_BS(
+                        ref_p0,
+                        ref_q0,
+                        ref_p1,
+                        ref_q1,
+                        pMv0,
+                        pMv1,
+                        iMbXy as usize,
+                        iNeighMb as usize,
+                        b_idx,
+                        bn_idx,
+                    );
+                }
+            }
+        }
+    }
+
+    uiBSx4
+}
+
+// ============================================================================
+// Macroblock Availability
+// ============================================================================
+
+#[inline]
+pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut SDqLayer, iFilterIdc: i32) -> i32 {
+    let iMbY = (*pCurDqLayer).iMbY;
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex;
+    let bLeftFlag: bool;
+    let bTopFlag: bool;
+
+    if 2 == iFilterIdc {
+        let pSliceIdc = (*pCurDqLayer).pSliceIdc;
+        bLeftFlag = (iMbX > 0) && (*pSliceIdc.add(iMbXy as usize) == *pSliceIdc.add((iMbXy - 1) as usize));
+        bTopFlag = (iMbY > 0)
+            && (*pSliceIdc.add(iMbXy as usize)
+                == *pSliceIdc.add((iMbXy - (*pCurDqLayer).iMbWidth) as usize));
+    } else {
+        bLeftFlag = iMbX > 0;
+        bTopFlag = iMbY > 0;
+    }
+    ((bLeftFlag as i32) << LEFT_FLAG_BIT) | ((bTopFlag as i32) << TOP_FLAG_BIT)
+}
+
+// ============================================================================
+// Edge Filtering Dispatch Subroutines
+// ============================================================================
+
+#[inline]
+pub unsafe fn FilteringEdgeLumaH(
+    pFilter: *mut SDeblockingFilter,
+    pPix: *mut u8,
+    iStride: i32,
+    pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+    let mut tc = [0i8; 4];
+
+    GET_ALPHA_BETA_FROM_QP(
+        (*pFilter).iLumaQP as i32,
+        (*pFilter).iSliceAlphaC0Offset as i32,
+        (*pFilter).iSliceBetaOffset as i32,
+        &mut iIndexA,
+        &mut iAlpha,
+        &mut iBeta,
+    );
+
+    if (iAlpha | iBeta) != 0 {
+        let bs_slice = std::slice::from_raw_parts(pBS, 4);
+        TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
+            func(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+        }
+    }
+}
+
+#[inline]
+pub unsafe fn FilteringEdgeLumaV(
+    pFilter: *mut SDeblockingFilter,
+    pPix: *mut u8,
+    iStride: i32,
+    pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+    let mut tc = [0i8; 4];
+
+    GET_ALPHA_BETA_FROM_QP(
+        (*pFilter).iLumaQP as i32,
+        (*pFilter).iSliceAlphaC0Offset as i32,
+        (*pFilter).iSliceBetaOffset as i32,
+        &mut iIndexA,
+        &mut iAlpha,
+        &mut iBeta,
+    );
+
+    if (iAlpha | iBeta) != 0 {
+        let bs_slice = std::slice::from_raw_parts(pBS, 4);
+        TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
+            func(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+        }
+    }
+}
+
+#[inline]
+pub unsafe fn FilteringEdgeLumaIntraH(
+    pFilter: *mut SDeblockingFilter,
+    pPix: *mut u8,
+    iStride: i32,
+    _pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    GET_ALPHA_BETA_FROM_QP(
+        (*pFilter).iLumaQP as i32,
+        (*pFilter).iSliceAlphaC0Offset as i32,
+        (*pFilter).iSliceBetaOffset as i32,
+        &mut iIndexA,
+        &mut iAlpha,
+        &mut iBeta,
+    );
+
+    if (iAlpha | iBeta) != 0 {
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingEQ4Ver {
+            func(pPix, iStride, iAlpha, iBeta);
+        }
+    }
+}
+
+#[inline]
+pub unsafe fn FilteringEdgeLumaIntraV(
+    pFilter: *mut SDeblockingFilter,
+    pPix: *mut u8,
+    iStride: i32,
+    _pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    GET_ALPHA_BETA_FROM_QP(
+        (*pFilter).iLumaQP as i32,
+        (*pFilter).iSliceAlphaC0Offset as i32,
+        (*pFilter).iSliceBetaOffset as i32,
+        &mut iIndexA,
+        &mut iAlpha,
+        &mut iBeta,
+    );
+
+    if (iAlpha | iBeta) != 0 {
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingEQ4Hor {
+            func(pPix, iStride, iAlpha, iBeta);
+        }
+    }
+}
+
+pub unsafe fn FilteringEdgeChromaH(
+    pFilter: *mut SDeblockingFilter,
+    pPixCb: *mut u8,
+    pPixCr: *mut u8,
+    iStride: i32,
+    pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+    let mut tc = [0i8; 4];
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            let bs_slice = std::slice::from_raw_parts(pBS, 4);
+            TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver {
+                func(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
+                let bs_slice = std::slice::from_raw_parts(pBS, 4);
+                TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver2 {
+                    func(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+                }
+            }
+        }
+    }
+}
+
+pub unsafe fn FilteringEdgeChromaV(
+    pFilter: *mut SDeblockingFilter,
+    pPixCb: *mut u8,
+    pPixCr: *mut u8,
+    iStride: i32,
+    pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+    let mut tc = [0i8; 4];
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            let bs_slice = std::slice::from_raw_parts(pBS, 4);
+            TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor {
+                func(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
+                let bs_slice = std::slice::from_raw_parts(pBS, 4);
+                TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor2 {
+                    func(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+                }
+            }
+        }
+    }
+}
+
+pub unsafe fn FilteringEdgeChromaIntraH(
+    pFilter: *mut SDeblockingFilter,
+    pPixCb: *mut u8,
+    pPixCr: *mut u8,
+    iStride: i32,
+    _pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Ver {
+                func(pPixCb, pPixCr, iStride, iAlpha, iBeta);
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Ver2 {
+                    func(pPixCbCr, iStride, iAlpha, iBeta);
+                }
+            }
+        }
+    }
+}
+
+pub unsafe fn FilteringEdgeChromaIntraV(
+    pFilter: *mut SDeblockingFilter,
+    pPixCb: *mut u8,
+    pPixCr: *mut u8,
+    iStride: i32,
+    _pBS: *const u8,
+) {
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Hor {
+                func(pPixCb, pPixCr, iStride, iAlpha, iBeta);
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Hor2 {
+                    func(pPixCbCr, iStride, iAlpha, iBeta);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Inter Macroblock Deblocking Sequence
+// ============================================================================
+
+unsafe fn DeblockingInterMb(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    nBS: &[[[u8; 4]; 4]; 2],
+    iBoundryFlag: i32,
+) {
+    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbY = (*pCurDqLayer).iMbY;
+
+    let iCurLumaQp = *(*pCurDqLayer).pLumaQp.add(iMbXyIndex as usize) as i32;
+    let pCurChromaQp = *(*pCurDqLayer).pChromaQp.add(iMbXyIndex as usize);
+    let iLineSize = (*pFilter).iCsStride[0];
+    let iLineSizeUV = (*pFilter).iCsStride[1];
+
+    let pDestY = (*pFilter).pCsData[0].add(((iMbY * iLineSize + iMbX) << 4) as usize);
+    let pDestCb = (*pFilter).pCsData[1].add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
+    let pDestCr = (*pFilter).pCsData[2].add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
+
+    // Vertical margin
+    if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
+        let iLeftXyIndex = (iMbXyIndex - 1) as usize;
+        (*pFilter).iLumaQP =
+            ((iCurLumaQp + *(*pCurDqLayer).pLumaQp.add(iLeftXyIndex) as i32 + 1) >> 1) as i8;
+        for i in 0..2 {
+            (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
+                + (*(*pCurDqLayer).pChromaQp.add(iLeftXyIndex))[i] as i32
+                + 1)
+                >> 1) as i8;
+        }
+
+        if nBS[0][0][0] == 0x04 {
+            FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize, std::ptr::null());
+            FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSizeUV, std::ptr::null());
+        } else {
+            let bs_word = (nBS[0][0].as_ptr() as *const u32).read_unaligned();
+            if bs_word != 0 {
+                FilteringEdgeLumaV(pFilter, pDestY, iLineSize, nBS[0][0].as_ptr());
+                FilteringEdgeChromaV(pFilter, pDestCb, pDestCr, iLineSizeUV, nBS[0][0].as_ptr());
+            }
+        }
+    }
+
+    (*pFilter).iLumaQP = iCurLumaQp as i8;
+    (*pFilter).iChromaQP[0] = pCurChromaQp[0];
+    (*pFilter).iChromaQP[1] = pCurChromaQp[1];
+
+    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXyIndex as usize);
+
+    let bs_01 = (nBS[0][1].as_ptr() as *const u32).read_unaligned();
+    if bs_01 != 0 && !is_8x8 {
+        FilteringEdgeLumaV(pFilter, pDestY.add(1 << 2), iLineSize, nBS[0][1].as_ptr());
+    }
+
+    let bs_02 = (nBS[0][2].as_ptr() as *const u32).read_unaligned();
+    if bs_02 != 0 {
+        FilteringEdgeLumaV(pFilter, pDestY.add(2 << 2), iLineSize, nBS[0][2].as_ptr());
+        FilteringEdgeChromaV(
+            pFilter,
+            pDestCb.add(2 << 1),
+            pDestCr.add(2 << 1),
+            iLineSizeUV,
+            nBS[0][2].as_ptr(),
+        );
+    }
+
+    let bs_03 = (nBS[0][3].as_ptr() as *const u32).read_unaligned();
+    if bs_03 != 0 && !is_8x8 {
+        FilteringEdgeLumaV(pFilter, pDestY.add(3 << 2), iLineSize, nBS[0][3].as_ptr());
+    }
+
+    // Horizontal margin
+    if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
+        let iTopXyIndex = (iMbXyIndex - (*pCurDqLayer).iMbWidth) as usize;
+        (*pFilter).iLumaQP =
+            ((iCurLumaQp + *(*pCurDqLayer).pLumaQp.add(iTopXyIndex) as i32 + 1) >> 1) as i8;
+        for i in 0..2 {
+            (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
+                + (*(*pCurDqLayer).pChromaQp.add(iTopXyIndex))[i] as i32
+                + 1)
+                >> 1) as i8;
+        }
+
+        if nBS[1][0][0] == 0x04 {
+            FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize, std::ptr::null());
+            FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSizeUV, std::ptr::null());
+        } else {
+            let bs_word = (nBS[1][0].as_ptr() as *const u32).read_unaligned();
+            if bs_word != 0 {
+                FilteringEdgeLumaH(pFilter, pDestY, iLineSize, nBS[1][0].as_ptr());
+                FilteringEdgeChromaH(pFilter, pDestCb, pDestCr, iLineSizeUV, nBS[1][0].as_ptr());
+            }
+        }
+    }
+
+    (*pFilter).iLumaQP = iCurLumaQp as i8;
+    (*pFilter).iChromaQP[0] = pCurChromaQp[0];
+    (*pFilter).iChromaQP[1] = pCurChromaQp[1];
+
+    let bs_11 = (nBS[1][1].as_ptr() as *const u32).read_unaligned();
+    if bs_11 != 0 && !is_8x8 {
+        FilteringEdgeLumaH(
+            pFilter,
+            pDestY.add(((1 << 2) * iLineSize) as usize),
+            iLineSize,
+            nBS[1][1].as_ptr(),
+        );
+    }
+
+    let bs_12 = (nBS[1][2].as_ptr() as *const u32).read_unaligned();
+    if bs_12 != 0 {
+        FilteringEdgeLumaH(
+            pFilter,
+            pDestY.add(((2 << 2) * iLineSize) as usize),
+            iLineSize,
+            nBS[1][2].as_ptr(),
+        );
+        FilteringEdgeChromaH(
+            pFilter,
+            pDestCb.add(((2 << 1) * iLineSizeUV) as usize),
+            pDestCr.add(((2 << 1) * iLineSizeUV) as usize),
+            iLineSizeUV,
+            nBS[1][2].as_ptr(),
+        );
+    }
+
+    let bs_13 = (nBS[1][3].as_ptr() as *const u32).read_unaligned();
+    if bs_13 != 0 && !is_8x8 {
+        FilteringEdgeLumaH(
+            pFilter,
+            pDestY.add(((3 << 2) * iLineSize) as usize),
+            iLineSize,
+            nBS[1][3].as_ptr(),
+        );
+    }
+}
+
+// ============================================================================
+// Intra Macroblock Deblocking Pipelines
+// ============================================================================
+
+pub unsafe fn FilteringEdgeLumaHV(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    iBoundryFlag: i32,
+) {
+    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbY = (*pCurDqLayer).iMbY;
+    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let iLineSize = (*pFilter).iCsStride[0];
+
+    let pDestY = (*pFilter).pCsData[0].add(((iMbY * iLineSize + iMbX) << 4) as usize);
+    let iCurQp = *(*pCurDqLayer).pLumaQp.add(iMbXyIndex as usize) as i32;
+
+    let mut iTc = [0i8; 4];
+    let uiBSx4 = [3u8; 4];
+
+    // Luma V
+    if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
+        (*pFilter).iLumaQP = ((iCurQp
+            + *(*pCurDqLayer).pLumaQp.add((iMbXyIndex - 1) as usize) as i32
+            + 1)
+            >> 1) as i8;
+        FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize, std::ptr::null());
+    }
+
+    (*pFilter).iLumaQP = iCurQp as i8;
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    GET_ALPHA_BETA_FROM_QP(
+        (*pFilter).iLumaQP as i32,
+        (*pFilter).iSliceAlphaC0Offset as i32,
+        (*pFilter).iSliceBetaOffset as i32,
+        &mut iIndexA,
+        &mut iAlpha,
+        &mut iBeta,
+    );
+
+    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXyIndex as usize);
+
+    if (iAlpha | iBeta) != 0 {
+        TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
+
+        if !is_8x8 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
+                func(pDestY.add(1 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+            }
+        }
+
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
+            func(pDestY.add(2 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+        }
+
+        if !is_8x8 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
+                func(pDestY.add(3 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+            }
+        }
+    }
+
+    // Luma H
+    if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
+        (*pFilter).iLumaQP = ((iCurQp
+            + *(*pCurDqLayer).pLumaQp.add((iMbXyIndex - iMbWidth) as usize) as i32
+            + 1)
+            >> 1) as i8;
+        FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize, std::ptr::null());
+    }
+
+    (*pFilter).iLumaQP = iCurQp as i8;
+    if (iAlpha | iBeta) != 0 {
+        if !is_8x8 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
+                func(
+                    pDestY.add(((1 << 2) * iLineSize) as usize),
+                    iLineSize,
+                    iAlpha,
+                    iBeta,
+                    iTc.as_mut_ptr(),
+                );
+            }
+        }
+
+        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
+            func(
+                pDestY.add(((2 << 2) * iLineSize) as usize),
+                iLineSize,
+                iAlpha,
+                iBeta,
+                iTc.as_mut_ptr(),
+            );
+        }
+
+        if !is_8x8 {
+            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
+                func(
+                    pDestY.add(((3 << 2) * iLineSize) as usize),
+                    iLineSize,
+                    iAlpha,
+                    iBeta,
+                    iTc.as_mut_ptr(),
+                );
+            }
+        }
+    }
+}
+
+pub unsafe fn FilteringEdgeChromaHV(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    iBoundryFlag: i32,
+) {
+    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbY = (*pCurDqLayer).iMbY;
+    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let iLineSize = (*pFilter).iCsStride[1];
+
+    let pDestCb = (*pFilter).pCsData[1].add(((iMbY * iLineSize + iMbX) << 3) as usize);
+    let pDestCr = (*pFilter).pCsData[2].add(((iMbY * iLineSize + iMbX) << 3) as usize);
+    let pCurQp = *(*pCurDqLayer).pChromaQp.add(iMbXyIndex as usize);
+
+    let mut iTc = [0i8; 4];
+    let uiBSx4 = [3u8; 4];
+
+    // Chroma V
+    if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
+        for i in 0..2 {
+            (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
+                + (*(*pCurDqLayer).pChromaQp.add((iMbXyIndex - 1) as usize))[i] as i32
+                + 1)
+                >> 1) as i8;
+        }
+        FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSize, std::ptr::null());
+    }
+
+    (*pFilter).iChromaQP[0] = pCurQp[0];
+    (*pFilter).iChromaQP[1] = pCurQp[1];
+
+    let mut iIndexA = 0i32;
+    let mut iAlpha = 0i32;
+    let mut iBeta = 0i32;
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor {
+                func(
+                    pDestCb.add(2 << 1),
+                    pDestCr.add(2 << 1),
+                    iLineSize,
+                    iAlpha,
+                    iBeta,
+                    iTc.as_mut_ptr(),
+                );
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                let pDestCbCr = if i == 0 {
+                    pDestCb.add(2 << 1)
+                } else {
+                    pDestCr.add(2 << 1)
+                };
+                TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor2 {
+                    func(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+                }
+            }
+        }
+    }
+
+    // Chroma H
+    if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
+        for i in 0..2 {
+            (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
+                + (*(*pCurDqLayer).pChromaQp.add((iMbXyIndex - iMbWidth) as usize))[i] as i32
+                + 1)
+                >> 1) as i8;
+        }
+        FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSize, std::ptr::null());
+    }
+
+    (*pFilter).iChromaQP[0] = pCurQp[0];
+    (*pFilter).iChromaQP[1] = pCurQp[1];
+
+    if (*pFilter).iChromaQP[0] == (*pFilter).iChromaQP[1] {
+        GET_ALPHA_BETA_FROM_QP(
+            (*pFilter).iChromaQP[0] as i32,
+            (*pFilter).iSliceAlphaC0Offset as i32,
+            (*pFilter).iSliceBetaOffset as i32,
+            &mut iIndexA,
+            &mut iAlpha,
+            &mut iBeta,
+        );
+        if (iAlpha | iBeta) != 0 {
+            TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
+            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver {
+                func(
+                    pDestCb.add(((2 << 1) * iLineSize) as usize),
+                    pDestCr.add(((2 << 1) * iLineSize) as usize),
+                    iLineSize,
+                    iAlpha,
+                    iBeta,
+                    iTc.as_mut_ptr(),
+                );
+            }
+        }
+    } else {
+        for i in 0..2 {
+            GET_ALPHA_BETA_FROM_QP(
+                (*pFilter).iChromaQP[i] as i32,
+                (*pFilter).iSliceAlphaC0Offset as i32,
+                (*pFilter).iSliceBetaOffset as i32,
+                &mut iIndexA,
+                &mut iAlpha,
+                &mut iBeta,
+            );
+            if (iAlpha | iBeta) != 0 {
+                TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
+                let pDestCbCr = if i == 0 {
+                    pDestCb.add(((2 << 1) * iLineSize) as usize)
+                } else {
+                    pDestCr.add(((2 << 1) * iLineSize) as usize)
+                };
+                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver2 {
+                    func(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+unsafe fn DeblockingIntraMb(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    iBoundryFlag: i32,
+) {
+    FilteringEdgeLumaHV(pCurDqLayer, pFilter, iBoundryFlag);
+    FilteringEdgeChromaHV(pCurDqLayer, pFilter, iBoundryFlag);
+}
+
+// ============================================================================
+// Macroblock-Level Top-Level Deblocking Dispatcher
+// ============================================================================
+
+pub unsafe fn WelsDeblockingMb(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    iBoundryFlag: i32,
+) {
+    let mut nBS = [[[0u8; 4]; 4]; 2];
+
+    let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
+    let iCurMbType = if !(*pCurDqLayer).pDec.is_null() {
+        *(*(*pCurDqLayer).pDec).pMbType.add(iMbXyIndex as usize)
+    } else {
+        *(*pCurDqLayer).pMbType.add(iMbXyIndex as usize)
+    };
+
+    let pSliceHeader = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
+    let bBSlice = pSliceHeader.eSliceType == EWelsSliceType::B_SLICE;
+
+    match iCurMbType {
+        MB_TYPE_INTRA4x4 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
+            DeblockingIntraMb(pCurDqLayer, pFilter, iBoundryFlag);
+        }
+        _ => {
+            if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
+                let iMbNb = iMbXyIndex - 1;
+                let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
+                    *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
+                } else {
+                    *(*pCurDqLayer).pMbType.add(iMbNb as usize)
+                };
+
+                let val = if IS_INTRA(uiMbType) {
+                    0x04040404u32
+                } else if bBSlice {
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex)
+                } else {
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex)
+                };
+                (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(val);
+            } else {
+                (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(0);
+            }
+
+            if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
+                let iMbNb = iMbXyIndex - (*pCurDqLayer).iMbWidth;
+                let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
+                    *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
+                } else {
+                    *(*pCurDqLayer).pMbType.add(iMbNb as usize)
+                };
+
+                let val = if IS_INTRA(uiMbType) {
+                    0x04040404u32
+                } else if bBSlice {
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex)
+                } else {
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex)
+                };
+                (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(val);
+            } else {
+                (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(0);
+            }
+
+            if IS_SKIP(iCurMbType) {
+                (nBS[0][1].as_mut_ptr() as *mut u32).write_unaligned(0);
+                (nBS[0][2].as_mut_ptr() as *mut u32).write_unaligned(0);
+                (nBS[0][3].as_mut_ptr() as *mut u32).write_unaligned(0);
+                (nBS[1][1].as_mut_ptr() as *mut u32).write_unaligned(0);
+                (nBS[1][2].as_mut_ptr() as *mut u32).write_unaligned(0);
+                (nBS[1][3].as_mut_ptr() as *mut u32).write_unaligned(0);
+            } else if IS_INTER_16x16(iCurMbType) {
+                let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add((*pCurDqLayer).iMbXyIndex as usize);
+                if !is_8x8 {
+                    DeblockingBSInsideMBAvsbase(GetPNzc(pCurDqLayer, iMbXyIndex), &mut nBS, 1);
+                } else {
+                    DeblockingBSInsideMBAvsbase8x8(GetPNzc(pCurDqLayer, iMbXyIndex), &mut nBS, 1);
+                }
+            } else if bBSlice {
+                DeblockingBSliceBSInsideMBNormal(
+                    pFilter,
+                    pCurDqLayer,
+                    &mut nBS,
+                    GetPNzc(pCurDqLayer, iMbXyIndex),
+                    iMbXyIndex,
+                );
+            } else {
+                DeblockingBSInsideMBNormal(
+                    pFilter,
+                    pCurDqLayer,
+                    &mut nBS,
+                    GetPNzc(pCurDqLayer, iMbXyIndex),
+                    iMbXyIndex,
+                );
+            }
+
+            DeblockingInterMb(pCurDqLayer, pFilter, &nBS, iBoundryFlag);
+        }
+    }
+}
+
+// ============================================================================
+// Slice-Level In-Loop Deblocking Filter Pipelines
+// ============================================================================
+
+pub unsafe fn WelsDeblockingFilterSlice(
+    pCtx: *mut SWelsDecoderContext,
+    pDeblockMb: Option<PDeblockingFilterMbFunc>,
+) {
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let iMbWidth = (*pCurDqLayer).iMbWidth;
+    let iTotalMbCount = (*pSliceHeaderExt.sSliceHeader.pSps).uiTotalMbCount;
+
+    let mut pFilter = SDeblockingFilter::default();
+    let pFmo = (*pCtx).pFmo;
+    let mut iNextMbXyIndex: i32;
+    let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
+    let mut iCountNumMb = 0i32;
+    let mut iBoundryFlag: i32;
+    let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc;
+
+    // Step 1: Initialize filter parameters
+    pFilter.pCsData[0] = (*(*pCtx).pDec).pData[0];
+    pFilter.pCsData[1] = (*(*pCtx).pDec).pData[1];
+    pFilter.pCsData[2] = (*(*pCtx).pDec).pData[2];
+
+    pFilter.iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
+    pFilter.iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
+
+    pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType;
+
+    pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
+    pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
+
+    pFilter.pLoopf = &mut (*pCtx).sDeblockingFunc;
+    pFilter.pRefPics[0] = (*pCtx).sRefPic.pRefList[0];
+    pFilter.pRefPics[1] = (*pCtx).sRefPic.pRefList[1];
+
+    // Step 2: Macroblock deblocking loop
+    if iFilterIdc == 0 || iFilterIdc == 2 {
+        iNextMbXyIndex = pSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+        (*pCurDqLayer).iMbX = iNextMbXyIndex % iMbWidth;
+        (*pCurDqLayer).iMbY = iNextMbXyIndex / iMbWidth;
+        (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
+
+        loop {
+            iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
+
+            if let Some(func) = pDeblockMb {
+                func(pCurDqLayer, &mut pFilter, iBoundryFlag);
+            }
+
+            iCountNumMb += 1;
+            if iCountNumMb >= iTotalNumMb {
+                break;
+            }
+
+            if (*pSliceHeaderExt.sSliceHeader.pPps).uiNumSliceGroups > 1 {
+                // Flexible Macroblock Ordering slice group transition
+                iNextMbXyIndex += 1;
+            } else {
+                iNextMbXyIndex += 1;
+            }
+
+            if iNextMbXyIndex == -1 || iNextMbXyIndex >= iTotalMbCount {
+                break;
+            }
+
+            (*pCurDqLayer).iMbX = iNextMbXyIndex % iMbWidth;
+            (*pCurDqLayer).iMbY = iNextMbXyIndex / iMbWidth;
+            (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
+        }
+    }
+}
+
+pub unsafe fn WelsDeblockingInitFilter(
+    pCtx: *mut SWelsDecoderContext,
+    pFilter: *mut SDeblockingFilter,
+    iFilterIdc: *mut i32,
+) {
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+
+    *pFilter = SDeblockingFilter::default();
+    *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc;
+
+    (*pFilter).pCsData[0] = (*(*pCtx).pDec).pData[0];
+    (*pFilter).pCsData[1] = (*(*pCtx).pDec).pData[1];
+    (*pFilter).pCsData[2] = (*(*pCtx).pDec).pData[2];
+
+    (*pFilter).iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
+    (*pFilter).iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
+
+    (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType;
+
+    (*pFilter).iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
+    (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
+
+    (*pFilter).pLoopf = &mut (*pCtx).sDeblockingFunc;
+    (*pFilter).pRefPics[0] = (*pCtx).sRefPic.pRefList[0];
+    (*pFilter).pRefPics[1] = (*pCtx).sRefPic.pRefList[1];
+}
+
+pub unsafe fn WelsDeblockingFilterMB(
+    pCurDqLayer: *mut SDqLayer,
+    pFilter: *mut SDeblockingFilter,
+    iFilterIdc: i32,
+    pDeblockMb: Option<PDeblockingFilterMbFunc>,
+) {
+    if iFilterIdc == 0 || iFilterIdc == 2 {
+        let iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
+        if let Some(func) = pDeblockMb {
+            func(pCurDqLayer, pFilter, iBoundryFlag);
+        }
+    }
+}
+
+// ============================================================================
+// SIMD Function Pointer Dispatch Initialization
+// ============================================================================
+
+pub unsafe fn DeblockingInit(pFunc: *mut SDeblockingFunc, iCpu: i32) {
+    (*pFunc).pfLumaDeblockingLT4Ver = Some(DeblockLumaLt4V_c);
+    (*pFunc).pfLumaDeblockingEQ4Ver = Some(DeblockLumaEq4V_c);
+    (*pFunc).pfLumaDeblockingLT4Hor = Some(DeblockLumaLt4H_c);
+    (*pFunc).pfLumaDeblockingEQ4Hor = Some(DeblockLumaEq4H_c);
+
+    (*pFunc).pfChromaDeblockingLT4Ver = Some(DeblockChromaLt4V_c);
+    (*pFunc).pfChromaDeblockingEQ4Ver = Some(DeblockChromaEq4V_c);
+    (*pFunc).pfChromaDeblockingLT4Hor = Some(DeblockChromaLt4H_c);
+    (*pFunc).pfChromaDeblockingEQ4Hor = Some(DeblockChromaEq4H_c);
+
+    (*pFunc).pfChromaDeblockingLT4Ver2 = Some(DeblockChromaLt4V2_c);
+    (*pFunc).pfChromaDeblockingEQ4Ver2 = Some(DeblockChromaEq4V2_c);
+    (*pFunc).pfChromaDeblockingLT4Hor2 = Some(DeblockChromaLt4H2_c);
+    (*pFunc).pfChromaDeblockingEQ4Hor2 = Some(DeblockChromaEq4H2_c);
+}
