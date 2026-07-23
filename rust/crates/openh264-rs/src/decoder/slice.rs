@@ -501,6 +501,7 @@ pub fn calc_implicit_weight(poc_curr: i32, poc_ref0: i32, poc_ref1: i32) -> i32 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_slice_header_default() {

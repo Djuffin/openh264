@@ -1188,6 +1188,7 @@ pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: *mut SWels
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_non_zero_count_average() {

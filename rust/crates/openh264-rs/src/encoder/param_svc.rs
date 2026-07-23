@@ -989,6 +989,7 @@ pub unsafe fn AllocCodingParam(pParam: *mut *mut SWelsSvcCodingParam, pMa: *mut 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_log_factor() {

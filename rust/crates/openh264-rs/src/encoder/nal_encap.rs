@@ -615,6 +615,7 @@ pub unsafe extern "C" fn WelsWriteSVCPrefixNal(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_wels_encode_nal_standard_avc() {

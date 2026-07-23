@@ -310,6 +310,7 @@ pub unsafe extern "C" fn WelsI16x16LumaPredH_lsx(pPred: *mut u8, pRef: *mut u8, 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_i16x16_luma_pred_v() {

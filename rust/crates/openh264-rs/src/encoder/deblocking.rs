@@ -1820,6 +1820,7 @@ pub unsafe extern "C" fn DeblockingInit(pFunc: *mut DeblockingFunc, _iCpu: i32) 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_alpha_beta_table_lookups() {

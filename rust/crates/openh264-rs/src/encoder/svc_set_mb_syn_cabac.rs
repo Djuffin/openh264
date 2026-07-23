@@ -1717,6 +1717,7 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_cal_nonzero_count_2x2() {

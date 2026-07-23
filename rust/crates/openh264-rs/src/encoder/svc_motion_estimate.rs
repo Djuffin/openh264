@@ -1897,6 +1897,7 @@ pub unsafe extern "C" fn ReleaseScreenBlockFeatureStorage(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_constants_and_tables() {

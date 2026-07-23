@@ -209,6 +209,7 @@ impl Drop for CMemoryAlign {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_memory_align_creation() {

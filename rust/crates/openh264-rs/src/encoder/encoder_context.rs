@@ -1,23 +1,15 @@
-//! OpenH264 Video Encoder Core Context and State Machine
-//!
-//! Translated from `codec/encoder/core/inc/encoder_context.h` and
-//! `codec/encoder/core/src/encoder.cpp`.
-
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_unsafe
-)]
+pub const MAX_DEPENDENCY_LAYER: usize = 4;
+/// OpenH264 Video Encoder Core Context and State Machine
+///
+/// Translated from `codec/encoder/core/inc/encoder_context.h` and
+/// `codec/encoder/core/src/encoder.cpp`.
 
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
 use crate::{
     EUsageType, RCMode, SEncParamExt, SEncoderStatistics, SSliceArgument,
     SSpatialLayerConfig, SSourcePicture, VideoFormat,
-    MAX_DEPENDENCY_LAYER, MAX_QUALITY_LAYER_NUM, MAX_TEMPORAL_LAYER_NUM,
+    MAX_QUALITY_LAYER_NUM, MAX_TEMPORAL_LAYER_NUM,
 };
 
 // ============================================================================
@@ -1144,6 +1136,7 @@ pub unsafe extern "C" fn WelsSetMemZero_c_extern(pDst: *mut c_void, iSize: i32) 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_calc_bi_stride() {

@@ -1137,6 +1137,7 @@ pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_copy_16x16_and_8x8() {

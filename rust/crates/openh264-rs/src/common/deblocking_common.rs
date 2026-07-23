@@ -539,6 +539,7 @@ pub unsafe extern "C" fn DeblockingInit(pFunc: *mut SDeblockingFunc, _iCpu: i32)
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_wels_non_zero_count() {

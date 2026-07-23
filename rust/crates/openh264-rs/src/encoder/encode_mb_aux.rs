@@ -1351,6 +1351,7 @@ pub unsafe extern "C" fn WelsInitEncodingFuncs(pFuncList: *mut SWelsFuncPtrList,
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_fdct_t4() {

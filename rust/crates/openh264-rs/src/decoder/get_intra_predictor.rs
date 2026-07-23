@@ -1682,6 +1682,7 @@ pub unsafe extern "C" fn WelsI16x16LumaPredDcNA_c(pPred: *mut u8, kiStride: i32)
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     
     #[test]
     fn test_clip1() {

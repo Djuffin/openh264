@@ -1,3 +1,4 @@
+use crate::*;
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -12,7 +13,6 @@
 //! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
 //! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
 
-use crate::lib::*;
 
 // ============================================================================
 // Constants

@@ -840,8 +840,8 @@ pub unsafe fn CreateTaskManage(
 
 #[cfg(test)]
 mod tests {
-    
-    #[test]
+    use super::*;
+    use std::ptr::null_mut;
     fn test_task_list_operations() {
         let mut list = CWelsTaskList::new();
         assert_eq!(list.size(), 0);

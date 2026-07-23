@@ -1,3 +1,7 @@
+pub const MAX_DEPENDENCY_LAYER: usize = 4;
+pub const FRAME_SAD: i32 = 0;
+pub const GOM_SAD: i32 = 1;
+pub const GOM_VAR: i32 = 2;
 // Copyright (c) 2011-2013, Cisco Systems
 // All rights reserved.
 //
@@ -26,14 +30,14 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # Video Pre-Processing & Video Analysis/Assessment (VAA) Subsystem
-//!
-//! Translated from `codec/encoder/core/inc/wels_preprocess.h` and `codec/encoder/core/src/wels_preprocess.cpp`.
-//!
-//! Handles raw YUV 4:2:0 ingestion, cropping, border padding, bilateral denoising,
-//! spatial downsampling pyramids, video analytics assessment (8x8 SAD, 16x16 variance/SSD,
-//! background macroblock detection, adaptive quantization delta-QP estimation),
-//! scene change detection, scroll motion vector detection, and multi-reference picture ranking.
+/// # Video Pre-Processing & Video Analysis/Assessment (VAA) Subsystem
+///
+/// Translated from `codec/encoder/core/inc/wels_preprocess.h` and `codec/encoder/core/src/wels_preprocess.cpp`.
+///
+/// Handles raw YUV 4:2:0 ingestion, cropping, border padding, bilateral denoising,
+/// spatial downsampling pyramids, video analytics assessment (8x8 SAD, 16x16 variance/SSD,
+/// background macroblock detection, adaptive quantization delta-QP estimation),
+/// scene change detection, scroll motion vector detection, and multi-reference picture ranking.
 
 #![allow(
     non_snake_case,

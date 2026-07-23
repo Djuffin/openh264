@@ -677,12 +677,18 @@ pub struct SMmcoRef {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SRefPicMarking {
     pub bNoOutputOfPriorPicsFlag: bool,
     pub bLongTermRefFlag: bool,
     pub bAdaptiveRefPicMarkingModeFlag: bool,
     pub sMmcoRef: [SMmcoRef; MAX_MMCO_COUNT],
+}
+
+impl Default for SRefPicMarking {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -695,10 +701,16 @@ pub struct SMmcoBase {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SRefBasePicMarking {
     pub bAdaptiveRefBasePicMarkingModeFlag: bool,
     pub mmco_base: [SMmcoBase; MAX_MMCO_COUNT],
+}
+
+impl Default for SRefBasePicMarking {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
