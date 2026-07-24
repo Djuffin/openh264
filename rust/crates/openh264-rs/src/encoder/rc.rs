@@ -587,7 +587,7 @@ pub struct SWelsRcFunc {
     pub pfWelsRcMbInfoUpdate: PWelsRCMBInfoUpdateFunc,
     pub pfWelsCheckSkipBasedMaxbr: PWelsCheckFrameSkipBasedMaxbrFunc,
     pub pfWelsUpdateBufferWhenSkip: PWelsUpdateBufferWhenFrameSkippedFunc,
-    pub pfWelsUpdateMaxBrWindowStatus: PWelsUpdateMaxBrWindowStatusFunc,
+    pub pfWelsUpdateMaxBrWindowStatus: PWelsUpdateMaxBrCheckWindowStatusFunc,
     pub pfWelsRcPostFrameSkipping: PWelsRCPostFrameSkippingFunc,
 }
 
@@ -1545,7 +1545,7 @@ pub unsafe fn RcVBufferCalculationSkip(pEncCtx: *mut sWelsEncCtx) {
 }
 
 /// Enforces maximum bitrate constraints over dual sliding time windows.
-pub unsafe fn CheckFrameSkipBasedMaxbr(
+pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
     pEncCtx: *mut sWelsEncCtx,
     _uiTimeStamp: i64,
     iDidIdx: i32,
@@ -1708,7 +1708,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 }
 
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
-pub unsafe fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
+pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(iCurDid as usize);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
@@ -1725,7 +1725,7 @@ pub unsafe fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i
 }
 
 /// Advances the 5000 ms sliding check window for maximum bitrate monitoring.
-pub unsafe fn UpdateMaxBrCheckWindowStatus(
+pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
     pEncCtx: *mut sWelsEncCtx,
     iSpatialNum: i32,
     uiTimeStamp: i64,

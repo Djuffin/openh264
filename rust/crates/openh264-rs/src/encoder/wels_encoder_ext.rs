@@ -41,6 +41,7 @@ pub const LONG_TERM_REF_NUM: i32 = 1;
 pub const LONG_TERM_REF_NUM_SCREEN: i32 = 2;
 
 pub const VIDEO_CODING_LAYER: u8 = 0;
+pub const NON_VIDEO_CODING_LAYER: u8 = 1;
 
 pub const SPATIAL_LAYER_ALL: i32 = -1;
 pub const SPATIAL_LAYER_0: i32 = 0;
@@ -246,6 +247,14 @@ pub struct SSpatialLayerInternal {
     pub iActualWidth: i32,
     pub iActualHeight: i32,
     pub sRecFileName: [u8; 256],
+    pub iCodingIndex: i32,
+    pub iPOC: i32,
+    pub uiIdrPicId: u32,
+    pub iFrameNum: i32,
+    pub bEncCurFrmAsIdrFlag: bool,
+    pub iDecompositionStages: i32,
+    pub iHighestTemporalId: i32,
+    pub iFrameIndex: i32,
 }
 
 impl Default for SSpatialLayerInternal {
@@ -254,6 +263,14 @@ impl Default for SSpatialLayerInternal {
             iActualWidth: 0,
             iActualHeight: 0,
             sRecFileName: [0; 256],
+            iCodingIndex: 0,
+            iPOC: 0,
+            uiIdrPicId: 0,
+            iFrameNum: 0,
+            bEncCurFrmAsIdrFlag: false,
+            iDecompositionStages: 0,
+            iHighestTemporalId: 0,
+            iFrameIndex: 0,
         }
     }
 }
@@ -510,11 +527,7 @@ pub struct SWelsSvcRc {
     pub iActualBitRate: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLTRState {
-    pub bLTRMarkingFlag: bool,
-}
+pub use crate::encoder::encoder_context::SLTRState;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -562,37 +575,197 @@ impl Default for TagVideoEncoderStatistics {
     }
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct sWelsEncCtx {
-    pub pSvcParam: *mut SWelsSvcCodingParam,
-    pub sEncoderStatistics: [TagVideoEncoderStatistics; MAX_SPATIAL_LAYER_NUM],
-    pub pWelsSvcRc: [SWelsSvcRc; MAX_SPATIAL_LAYER_NUM],
-    pub pLtr: *mut SLTRState,
-    pub uiLastTimestamp: i64,
-    pub uiStartTimestamp: i64,
-    pub iLastStatisticsLogTs: i64,
-    pub iStatisticsLogInterval: i32,
-    pub bDeliveryFlag: bool,
-}
-
-impl Default for sWelsEncCtx {
-    fn default() -> Self {
-        Self {
-            pSvcParam: null_mut(),
-            sEncoderStatistics: [TagVideoEncoderStatistics::default(); MAX_SPATIAL_LAYER_NUM],
-            pWelsSvcRc: [SWelsSvcRc::default(); MAX_SPATIAL_LAYER_NUM],
-            pLtr: null_mut(),
-            uiLastTimestamp: 0,
-            uiStartTimestamp: 0,
-            iLastStatisticsLogTs: 0,
-            iStatisticsLogInterval: 1000,
-            bDeliveryFlag: false,
-        }
-    }
-}
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // Core encoder functions implementations / fallbacks
+pub unsafe fn WelsWriteSpsSyntax(
+    pSps: *const crate::encoder::param_svc::SWelsSPS,
+    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
+    _bBaseLayer: bool,
+) -> i32 {
+    if pSps.is_null() || pBs.is_null() {
+        return 1;
+    }
+    let sps = &*pSps;
+    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 8, sps.uiProfileIdc as u32);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet0Flag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet1Flag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet2Flag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet3Flag { 1 } else { 0 });
+    if sps.uiProfileIdc == 77 || sps.uiProfileIdc == 88 || sps.uiProfileIdc == 100 {
+        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
+        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
+        crate::encoder::svc_encode_slice::BsWriteBits(pBs, 2, 0);
+    } else {
+        crate::encoder::svc_encode_slice::BsWriteBits(pBs, 4, 0);
+    }
+    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 8, sps.iLevelIdc as u32);
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiSpsId);
+
+    if sps.uiProfileIdc == 83
+        || sps.uiProfileIdc == 86
+        || sps.uiProfileIdc == 100
+        || sps.uiProfileIdc == 110
+        || sps.uiProfileIdc == 122
+        || sps.uiProfileIdc == 244
+        || sps.uiProfileIdc == 44
+    {
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 1);
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
+        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    }
+
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiLog2MaxFrameNum.saturating_sub(4));
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiPocType);
+    if sps.uiPocType == 0 {
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iLog2MaxPocLsb - 4).max(0) as u32);
+    }
+
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.iNumRefFrames as u32);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bGapsInFrameNumValueAllowedFlag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iMbWidth - 1).max(0) as u32);
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iMbHeight - 1).max(0) as u32);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
+
+    let d8x8 = if sps.iLevelIdc >= 30 { 1 } else { 0 };
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, d8x8);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bFrameCroppingFlag { 1 } else { 0 });
+    if sps.bFrameCroppingFlag {
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropLeft as u32);
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropRight as u32);
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropTop as u32);
+        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropBottom as u32);
+    }
+
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    0
+}
+
+pub unsafe fn WelsWriteSpsNal(
+    pSps: *const crate::encoder::param_svc::SWelsSPS,
+    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
+) -> i32 {
+    WelsWriteSpsSyntax(pSps, pBs, true);
+    crate::encoder::nal_encap::BsRbspTrailingBits(pBs);
+    0
+}
+
+pub unsafe fn WelsWritePpsSyntax(
+    pPps: *const crate::encoder::param_svc::SWelsPPS,
+    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
+) -> i32 {
+    if pPps.is_null() || pBs.is_null() {
+        return 1;
+    }
+    let pps = &*pPps;
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.iPpsId);
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.iSpsId);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if pps.bEntropyCodingModeFlag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.uiNumSliceGroups.saturating_sub(1));
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 2, 0);
+    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.iPicInitQp as i32 - 26);
+    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.iPicInitQs as i32 - 26);
+    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.uiChromaQpIndexOffset as i32);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if pps.bDeblockingFilterControlPresentFlag { 1 } else { 0 });
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
+    crate::encoder::nal_encap::BsRbspTrailingBits(pBs);
+    0
+}
+
+pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: usize, pNalSize: *mut i32) -> i32 {
+    let pOut = (*pCtx).pOut;
+    if pOut.is_null() {
+        return 1;
+    }
+    let iNal = (*pOut).iNalIndex;
+    crate::encoder::nal_encap::WelsLoadNal(pOut, crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32, 3);
+
+    let pSps = if !(*pCtx).pSpsArray.is_null() {
+        (*pCtx).pSpsArray.add(kiSpsIdx) as *const crate::encoder::param_svc::SWelsSPS
+    } else {
+        return 1;
+    };
+    WelsWriteSpsNal(pSps, &mut (*pOut).sBsWrite);
+    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+
+    let pRawNal = (*pOut).sNalList.add(iNal as usize);
+    let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
+    let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
+
+    let ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, null_mut(), avail_len, pDst, pNalSize);
+    if ret == ENC_RETURN_SUCCESS {
+        (*pCtx).iPosBsBuffer += *pNalSize;
+    }
+    ret
+}
+
+pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: usize, pNalSize: *mut i32) -> i32 {
+    let pOut = (*pCtx).pOut;
+    if pOut.is_null() {
+        return 1;
+    }
+    let iNal = (*pOut).iNalIndex;
+    crate::encoder::nal_encap::WelsLoadNal(pOut, crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32, 3);
+
+    let pPps = if !(*pCtx).pPPSArray.is_null() {
+        (*pCtx).pPPSArray.add(kiPpsIdx) as *const crate::encoder::param_svc::SWelsPPS
+    } else {
+        return 1;
+    };
+    WelsWritePpsSyntax(pPps, &mut (*pOut).sBsWrite);
+    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+
+    let pRawNal = (*pOut).sNalList.add(iNal as usize);
+    let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
+    let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
+
+    let ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, null_mut(), avail_len, pDst, pNalSize);
+    if ret == ENC_RETURN_SUCCESS {
+        (*pCtx).iPosBsBuffer += *pNalSize;
+    }
+    ret
+}
+
+pub unsafe fn WelsWriteParameterSets(
+    pCtx: *mut sWelsEncCtx,
+    pNalLen: *mut i32,
+    pNumNal: *mut i32,
+    pTotalLength: *mut i32,
+) -> i32 {
+    let mut iSize = 0i32;
+    let mut iCountNal = 0i32;
+    let mut iNalLength = 0i32;
+
+    let sps_count = if (*pCtx).iSpsNum > 0 { (*pCtx).iSpsNum as usize } else { 1 };
+    for iIdx in 0..sps_count {
+        if WelsWriteOneSPS(pCtx, iIdx, &mut iNalLength) == ENC_RETURN_SUCCESS {
+            *pNalLen.add(iCountNal as usize) = iNalLength;
+            iSize += iNalLength;
+            iCountNal += 1;
+        }
+    }
+
+    let pps_count = if (*pCtx).iPpsNum > 0 { (*pCtx).iPpsNum as usize } else { 1 };
+    for iIdx in 0..pps_count {
+        if WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength) == ENC_RETURN_SUCCESS {
+            *pNalLen.add(iCountNal as usize) = iNalLength;
+            iSize += iNalLength;
+            iCountNal += 1;
+        }
+    }
+
+    *pNumNal = iCountNal;
+    *pTotalLength = iSize;
+    ENC_RETURN_SUCCESS
+}
+
 pub unsafe fn WelsInitEncoderExtRust(
     ppCtx: *mut *mut sWelsEncCtx,
     pCfg: *const SWelsSvcCodingParam,
@@ -607,6 +780,71 @@ pub unsafe fn WelsInitEncoderExtRust(
     ctx.pSvcParam = Box::into_raw(cfg_clone);
     let ltr = Box::new(SLTRState::default());
     ctx.pLtr = Box::into_raw(ltr);
+
+    let buf_size = 1024 * 1024 * 4;
+    ctx.iFrameBsSize = buf_size as i32;
+    ctx.pFrameBs = vec![0u8; buf_size].leak().as_mut_ptr();
+
+    let mut out = Box::new(crate::encoder::encoder_context::SWelsEncoderOutput::default());
+    out.pBsBuffer = vec![0u8; buf_size].leak().as_mut_ptr();
+    let max_nals = 64usize;
+    let nal_list = vec![crate::encoder::svc_encode_slice::SWelsNalRaw::default(); max_nals].leak().as_mut_ptr();
+    let nal_len = vec![0i32; max_nals].leak().as_mut_ptr();
+    out.sNalList = nal_list;
+    out.pNalLen = nal_len;
+    out.iCountNals = max_nals as i32;
+
+    let out_ptr = Box::into_raw(out);
+    ctx.pOut = out_ptr;
+
+    let func_list = Box::new(crate::encoder::encoder_context::SWelsFuncPtrList::default());
+    let func_ptr = Box::into_raw(func_list);
+    ctx.pFuncList = func_ptr;
+
+    let mb_w = (((*pCfg).iPicWidth + 15) >> 4) as i32;
+    let mb_h = (((*pCfg).iPicHeight + 15) >> 4) as i32;
+    let total_mbs = if mb_w > 0 && mb_h > 0 { (mb_w * mb_h) as usize } else { 0 };
+
+    let mut dq_layer = Box::new(crate::encoder::svc_encode_slice::SDqLayer::default());
+    dq_layer.iMbWidth = mb_w;
+    dq_layer.iMbHeight = mb_h;
+    if total_mbs > 0 {
+        dq_layer.sMbDataP = vec![crate::encoder::svc_encode_slice::SMB::default(); total_mbs].leak().as_mut_ptr();
+    }
+    let slice = Box::new(crate::encoder::svc_encode_slice::SSlice::default());
+    dq_layer.sSliceBufferInfo[0].pSliceBuffer = Box::into_raw(slice);
+    ctx.pCurDqLayer = Box::into_raw(dq_layer);
+
+    let mut svc_rc = vec![crate::encoder::rc::SWelsSvcRc::default(); 4];
+    for rc in svc_rc.iter_mut() {
+        rc.iMaxQp = 51;
+        rc.iMinQp = 0;
+    }
+    ctx.pWelsSvcRc = svc_rc.leak().as_mut_ptr();
+
+    let sps = Box::new(crate::encoder::param_svc::SWelsSPS {
+        uiProfileIdc: 66,
+        iLevelIdc: 30,
+        iMbWidth: (((*pCfg).iPicWidth + 15) >> 4) as i16,
+        iMbHeight: (((*pCfg).iPicHeight + 15) >> 4) as i16,
+        uiLog2MaxFrameNum: 4,
+        uiPocType: 0,
+        iLog2MaxPocLsb: 4,
+        iNumRefFrames: 1,
+        bFrameCroppingFlag: false,
+        ..Default::default()
+    });
+    ctx.pSpsArray = Box::into_raw(sps) as *mut _;
+    ctx.iSpsNum = 1;
+
+    let pps = Box::new(crate::encoder::param_svc::SWelsPPS {
+        iPicInitQp: 26,
+        uiNumSliceGroups: 1,
+        ..Default::default()
+    });
+    ctx.pPPSArray = Box::into_raw(pps) as *mut _;
+    ctx.iPpsNum = 1;
+
     *ppCtx = Box::into_raw(ctx);
     0
 }
@@ -622,19 +860,95 @@ pub unsafe fn WelsUninitEncoderExtRust(ppCtx: *mut *mut sWelsEncCtx) {
     if !ctx.pLtr.is_null() {
         let _ = Box::from_raw(ctx.pLtr);
     }
+    if !ctx.pOut.is_null() {
+        let out = Box::from_raw(ctx.pOut);
+        if !out.pBsBuffer.is_null() {
+            let _ = Vec::from_raw_parts(out.pBsBuffer, out.uiSize as usize, out.uiSize as usize);
+        }
+    }
+    if !ctx.pFrameBs.is_null() {
+        let _ = Vec::from_raw_parts(ctx.pFrameBs, ctx.iFrameBsSize as usize, ctx.iFrameBsSize as usize);
+    }
+    if !ctx.pSpsArray.is_null() {
+        let _ = Box::from_raw(ctx.pSpsArray as *mut crate::encoder::param_svc::SWelsSPS);
+    }
+    if !ctx.pPPSArray.is_null() {
+        let _ = Box::from_raw(ctx.pPPSArray as *mut crate::encoder::param_svc::SWelsPPS);
+    }
     *ppCtx = null_mut();
 }
 
 pub unsafe fn WelsEncoderEncodeExtRust(
     pCtx: *mut sWelsEncCtx,
-    pBsInfo: *mut SFrameBSInfo,
+    pFbi: *mut SFrameBSInfo,
     pSrcPic: *const SSourcePicture,
 ) -> i32 {
-    if pCtx.is_null() || pBsInfo.is_null() || pSrcPic.is_null() {
+    if pCtx.is_null() || pFbi.is_null() || pSrcPic.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
-    (*pBsInfo).eFrameType = EVideoFrameType::VideoFrameTypeIDR as i32;
-    (*pBsInfo).uiTimeStamp = (*pSrcPic).uiTimeStamp;
+
+    let pLayerBsInfo = &mut (*pFbi).sLayerInfo[0];
+    (*pFbi).eFrameType = EVideoFrameType::VideoFrameTypeIDR as i32;
+    (*pFbi).iLayerNum = 0;
+    (*pFbi).uiTimeStamp = (*pSrcPic).uiTimeStamp;
+
+    pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
+    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    crate::encoder::encoder_context::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as u32);
+    (*pCtx).iPosBsBuffer = 0;
+
+    let mut iCountNal = 0;
+    let mut iTotalLength = 0;
+    let ret = WelsWriteParameterSets(pCtx, pLayerBsInfo.pNalLengthInByte, &mut iCountNal, &mut iTotalLength);
+    if ret != ENC_RETURN_SUCCESS {
+        return ret;
+    }
+
+    pLayerBsInfo.uiSpatialId = 0;
+    pLayerBsInfo.uiTemporalId = 0;
+    pLayerBsInfo.uiQualityId = 0;
+    pLayerBsInfo.uiLayerType = NON_VIDEO_CODING_LAYER;
+    pLayerBsInfo.iNalCount = iCountNal;
+    (*pFbi).iLayerNum = 1;
+
+    let eNalType = crate::encoder::encoder_context::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+    let eNalRefIdc = crate::encoder::encoder_context::EWelsNalRefIdc::NRI_PRI_HIGHEST;
+    (*pCtx).eNalType = eNalType;
+    (*pCtx).eNalPriority = eNalRefIdc;
+
+    if !(*pCtx).pCurDqLayer.is_null() {
+        crate::encoder::nal_encap::WelsLoadNal((*pCtx).pOut, eNalType as i32, eNalRefIdc as i32);
+        let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0].pSliceBuffer;
+        crate::encoder::svc_encode_slice::SetSliceBoundaryInfo((*pCtx).pCurDqLayer, pCurSlice, 0);
+
+        let slice_ret = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, pCurSlice, eNalType as i32);
+        if slice_ret == ENC_RETURN_SUCCESS {
+            crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+            let mut iSliceSize = 0i32;
+            let pRawNal = (*(*pCtx).pOut).sNalList.add((*(*pCtx).pOut).iNalIndex as usize - 1);
+            let pNalHeaderExt = null_mut();
+            let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
+            let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
+
+            let enc_nal_ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, pNalHeaderExt, avail_len, pDst, &mut iSliceSize);
+            if enc_nal_ret == ENC_RETURN_SUCCESS && iSliceSize > 0 {
+                let vcl_layer = &mut (*pFbi).sLayerInfo[1];
+                vcl_layer.pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+                vcl_layer.pNalLengthInByte = (*(*pCtx).pOut).pNalLen.add(iCountNal as usize);
+                *vcl_layer.pNalLengthInByte = iSliceSize;
+                vcl_layer.uiSpatialId = 0;
+                vcl_layer.uiTemporalId = 0;
+                vcl_layer.uiQualityId = 0;
+                vcl_layer.uiLayerType = VIDEO_CODING_LAYER;
+                vcl_layer.iNalCount = 1;
+                (*pFbi).iLayerNum = 2;
+                (*pCtx).iPosBsBuffer += iSliceSize;
+            }
+        }
+    }
+
+    crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
+
     ENC_RETURN_SUCCESS
 }
 
@@ -643,9 +957,30 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pBsInfo: *mut SFrameBSInfo,
 ) -> i32 {
     if pCtx.is_null() || pBsInfo.is_null() {
-        return 1;
+        return ENC_RETURN_INVALIDINPUT;
     }
-    0
+    let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
+    pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
+    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    crate::encoder::encoder_context::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as u32);
+    (*pCtx).iPosBsBuffer = 0;
+
+    let mut iCountNal = 0;
+    let mut iTotalLength = 0;
+    let ret = WelsWriteParameterSets(pCtx, pLayerBsInfo.pNalLengthInByte, &mut iCountNal, &mut iTotalLength);
+    if ret != ENC_RETURN_SUCCESS {
+        return ret;
+    }
+
+    pLayerBsInfo.uiSpatialId = 0;
+    pLayerBsInfo.uiTemporalId = 0;
+    pLayerBsInfo.uiQualityId = 0;
+    pLayerBsInfo.uiLayerType = NON_VIDEO_CODING_LAYER;
+    pLayerBsInfo.iNalCount = iCountNal;
+    (*pBsInfo).iLayerNum = 1;
+    (*pBsInfo).eFrameType = EVideoFrameType::VideoFrameTypeInvalid as i32;
+
+    ENC_RETURN_SUCCESS
 }
 
 pub unsafe fn ForceCodingIDR(pCtx: *mut sWelsEncCtx, _iLayerId: i32) -> i32 {
@@ -1111,8 +1446,11 @@ impl CWelsH264SVCEncoder {
                     (*self.m_pEncContext).uiStartTimestamp = kiCurrentFrameTs;
                 }
 
-                pStatistics.uiAverageFrameQP =
-                    (*self.m_pEncContext).pWelsSvcRc[iDid as usize].iAverageFrameQp;
+                pStatistics.uiAverageFrameQP = if !(*self.m_pEncContext).pWelsSvcRc.is_null() {
+                    (*(*self.m_pEncContext).pWelsSvcRc.add(iDid as usize)).iAverageFrameQp as u32
+                } else {
+                    26
+                };
 
                 if eFrameType == EVideoFrameType::VideoFrameTypeIDR as i32
                     || eFrameType == EVideoFrameType::VideoFrameTypeI as i32

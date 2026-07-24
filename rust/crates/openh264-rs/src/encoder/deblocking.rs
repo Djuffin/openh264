@@ -179,12 +179,7 @@ pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
 // ============================================================================
 
 /// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
+pub use crate::encoder::svc_encode_slice::SMVUnitXY;
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
@@ -246,7 +241,7 @@ pub struct TagMB {
     pub iCbpDc: i32,
 }
 
-pub type SMB = TagMB;
+pub use crate::encoder::svc_encode_slice::SMB;
 pub type PMb = *mut SMB;
 
 // Function Pointer Typedefs
@@ -306,85 +301,8 @@ pub struct tagDeblockingFunc {
 
 pub type DeblockingFunc = tagDeblockingFunc;
 
-/// Function pointer list matching `SWelsFuncPtrList`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsFuncPtrList {
-    pub pfDeblocking: DeblockingFunc,
-    pub pfSetNZCZero: Option<PSetNoneZeroCountZeroFunc>,
-}
-
-/// Decoded picture representation matching `SPicture`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pData: [*mut u8; 4],
-    pub iLineSize: [i32; 4],
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pData: [std::ptr::null_mut(); 4],
-            iLineSize: [0; 4],
-        }
-    }
-}
-
-/// Slice Header syntax matching `SSliceHeader`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeader {
-    pub uiDisableDeblockingFilterIdc: u8,
-    pub iSliceAlphaC0Offset: i8,
-    pub iSliceBetaOffset: i8,
-    pub iFirstMbInSlice: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-}
-
-/// Spatial dependency layer context matching `SDqLayer`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub sMbDataP: *mut SMB,
-    pub ppSliceInLayer: *mut *mut SSlice,
-    pub pDecPic: *mut SPicture,
-    pub iLoopFilterDisableIdc: i32,
-}
-
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            iMbWidth: 0,
-            iMbHeight: 0,
-            sMbDataP: std::ptr::null_mut(),
-            ppSliceInLayer: std::ptr::null_mut(),
-            pDecPic: std::ptr::null_mut(),
-            iLoopFilterDisableIdc: 0,
-        }
-    }
-}
-
-/// Top-level encoder context matching `sWelsEncCtx`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct sWelsEncCtx {
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pFuncList: *mut SWelsFuncPtrList,
-}
+pub use crate::encoder::encoder_context::{SPicture, SWelsFuncPtrList, sWelsEncCtx};
+pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 
 // ============================================================================
 // Math & Bitwise Inline Macros
@@ -652,7 +570,7 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
     if uiCurMbType != MB_TYPE_SKIP {
         if !pFunc.is_null() {
             if let Some(set_nzc) = (*pFunc).pfSetNZCZero {
-                set_nzc((*pCurMb).pNonZeroCount);
+                set_nzc((*pCurMb).pNonZeroCount, 24);
             }
         }
         if uiCurMbType == MB_TYPE_16x16 {
@@ -1635,6 +1553,9 @@ pub unsafe fn DeblockingMbAvcbase(
 // ============================================================================
 
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
+    if pCurDq.is_null() || (*pCurDq).ppSliceInLayer.is_null() || (*(*pCurDq).ppSliceInLayer).is_null() || (*pCurDq).sMbDataP.is_null() || (*pCurDq).pDecPic.is_null() {
+        return;
+    }
     let kiMbWidth = (*pCurDq).iMbWidth;
     let kiMbHeight = (*pCurDq).iMbHeight;
     let mut pCurrentMbBlock = (*pCurDq).sMbDataP;
