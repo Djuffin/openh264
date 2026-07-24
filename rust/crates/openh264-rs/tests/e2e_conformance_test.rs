@@ -1,6 +1,8 @@
 //! End-to-end conformance and FFmpeg integration tests for openh264-rs.
 //! Ported and adopted from `rust/crates/e2e_tests.rs`.
 
+#![allow(non_snake_case, unused_imports)]
+
 mod common;
 use openh264_rs::api::codec_api::*;
 use std::fs;

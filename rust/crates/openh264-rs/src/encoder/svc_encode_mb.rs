@@ -513,13 +513,13 @@ pub unsafe fn WelsDequantLumaDc4x4(pRes: *mut i16, kiQp: i32) {
     let kiQF0S = (1 << (1 - kiQF0)) as i32;
 
     while i >= 0 {
-        *pRes.offset(i) = (((*pRes.offset(i) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16);
+        *pRes.offset(i) = ((*pRes.offset(i) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
         *pRes.offset(i - 1) =
-            (((*pRes.offset(i - 1) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16);
+            ((*pRes.offset(i - 1) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
         *pRes.offset(i - 2) =
-            (((*pRes.offset(i - 2) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16);
+            ((*pRes.offset(i - 2) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
         *pRes.offset(i - 3) =
-            (((*pRes.offset(i - 3) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16);
+            ((*pRes.offset(i - 3) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
         i -= 4;
     }
 }

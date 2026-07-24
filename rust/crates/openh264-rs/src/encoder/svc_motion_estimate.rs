@@ -1659,7 +1659,7 @@ pub unsafe fn FeatureSearchOne(
 }
 
 pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
-    mut sFeatureSearchIn: SFeatureSearchIn,
+    sFeatureSearchIn: SFeatureSearchIn,
     kuiMaxSearchPoint: u32,
     pMe: *mut SWelsME,
 ) {

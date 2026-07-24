@@ -1452,7 +1452,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
-    let mut iCurMbIdx = 0;
+    let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
@@ -1528,7 +1528,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
-    let mut iCurMbIdx = 0;
+    let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
     let kiPartitionId = (kiSliceIdx % (*pEncCtx).iActiveThreadsNum) as usize;
@@ -1634,7 +1634,7 @@ pub unsafe fn WelsMdInterMbLoop(
     let pMbList = (*pCurLayer).sMbDataP;
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
-    let mut iCurMbIdx = -1;
+    let mut iCurMbIdx: i32;
     let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
     let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
@@ -1734,7 +1734,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let mut iNumMbCoded = 0;
     let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
     let mut iNextMbIdx = kiSliceFirstMbXY;
-    let mut iCurMbIdx = -1;
+    let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
     let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
         (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize)
@@ -2174,8 +2174,8 @@ pub unsafe fn InitSliceBoundaryInfo(
     let kiCountNumMbInFrame = kiMBWidth * kiMBHeight;
 
     for iSliceIdx in 0..kiSliceNumInFrame {
-        let mut iFirstMBInSlice = 0;
-        let mut iMbNumInSlice = 0;
+        let mut iFirstMBInSlice: i32;
+        let mut iMbNumInSlice: i32;
 
         match (*pSliceArgument).uiSliceMode {
             SliceMode::SmSingleSlice => {
@@ -2612,7 +2612,7 @@ pub unsafe fn CalculateNewSliceNum(
     let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID] + 1;
 
     let mut iIncreaseSliceNum = if iMBNumInPartition > 0 {
-        ((iLeftMBNum * INT_MULTIPLY / iMBNumInPartition) * iMaxSliceNumOld)
+        (iLeftMBNum * INT_MULTIPLY / iMBNumInPartition) * iMaxSliceNumOld
     } else {
         0
     };

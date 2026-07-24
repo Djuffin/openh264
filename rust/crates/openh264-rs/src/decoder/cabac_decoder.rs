@@ -644,8 +644,8 @@ pub unsafe fn WelsCabacGlobalInit(pCtx: PWelsDecoderContext) {
                     let m = g_kiCabacGlobalContextIdx[iIdx][iModel][0] as i32;
                     let n = g_kiCabacGlobalContextIdx[iIdx][iModel][1] as i32;
                     let iPreCtxState = WELS_CLIP3(((m * iQp) >> 4) + n, 1, 126);
-                    let mut uiValMps: u8 = 0;
-                    let mut uiStateIdx: u8 = 0;
+                    let uiValMps: u8;
+                    let uiStateIdx: u8;
                     if iPreCtxState <= 63 {
                         uiStateIdx = (63 - iPreCtxState) as u8;
                         uiValMps = 0;
@@ -828,7 +828,7 @@ pub unsafe fn DecodeBinCabac(
         return ERR_INFO_INVALID_ACCESS;
     }
     unsafe {
-        let mut iErrorInfo = ERR_NONE;
+        let iErrorInfo: i32;
         let uiState = (*pBinCtx).uiState as usize;
         let mut uiBinVal = (*pBinCtx).uiMPS as u32;
         let mut uiOffset = (*pDecEngine).uiOffset;
@@ -896,7 +896,7 @@ pub unsafe fn DecodeBypassCabac(
         return ERR_INFO_INVALID_ACCESS;
     }
     unsafe {
-        let mut iErrorInfo = ERR_NONE;
+        let iErrorInfo: i32;
         let mut iBitsLeft = (*pDecEngine).iBitsLeft;
         let mut uiOffset = (*pDecEngine).uiOffset;
 
@@ -1002,7 +1002,7 @@ pub unsafe fn DecodeUnaryBinCabac(
             return ERR_NONE;
         }
 
-        let mut pCtx = pBinCtx.offset(iCtxOffset as isize);
+        let pCtx = pBinCtx.offset(iCtxOffset as isize);
         let mut sym_val: u32 = 0;
         loop {
             let mut uiCode: u32 = 0;

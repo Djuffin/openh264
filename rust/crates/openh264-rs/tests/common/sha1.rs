@@ -1,5 +1,7 @@
 //! SHA-1 hasher implementation for bitstream and frame verification.
 
+#![allow(dead_code)]
+
 #[derive(Default)]
 pub struct Sha1Hasher {
     state: [u32; 5],

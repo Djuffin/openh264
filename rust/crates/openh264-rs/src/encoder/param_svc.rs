@@ -541,8 +541,8 @@ impl SWelsSvcCodingParam {
 
         self.SUsedPicRect.iLeft = 0;
         self.SUsedPicRect.iTop = 0;
-        self.SUsedPicRect.iWidth = ((self.iPicWidth >> 1) << 1);
-        self.SUsedPicRect.iHeight = ((self.iPicHeight >> 1) << 1);
+        self.SUsedPicRect.iWidth = (self.iPicWidth >> 1) << 1;
+        self.SUsedPicRect.iHeight = (self.iPicHeight >> 1) << 1;
 
         self.iMultipleThreadIdc = pCodingParam.iMultipleThreadIdc;
         self.bUseLoadBalancing = pCodingParam.bUseLoadBalancing;
@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn test_param_defaults() {
-        let mut param = SWelsSvcCodingParam::new();
+        let param = SWelsSvcCodingParam::new();
         assert_eq!(param.uiGopSize, 1);
         assert_eq!(param.fMaxFrameRate, 30.0);
         assert_eq!(param.iSpatialLayerNum, 1);

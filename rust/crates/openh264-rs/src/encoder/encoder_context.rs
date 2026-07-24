@@ -63,7 +63,7 @@ pub const BLOCK_SIZE_ALL: usize = 8;
 /// Calculates 4-byte (32-bit DWORD) aligned row stride for bitmap image buffers.
 #[inline(always)]
 pub fn CALC_BI_STRIDE(width: i32, bitcount: i32) -> i32 {
-    (((width * bitcount + 31) & !31) >> 3)
+    ((width * bitcount + 31) & !31) >> 3 
 }
 
 // ============================================================================
@@ -1028,7 +1028,7 @@ pub unsafe fn DecideFrameType(
     }
     let pSvcParam = (*pEncCtx).pSvcParam;
     let pParamInternal = &mut (*pSvcParam).sDependencyLayers[kiDidx as usize];
-    let mut iFrameType = EVideoFrameType::VideoFrameTypeInvalid;
+    let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
 
     if (*pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
@@ -1194,9 +1194,9 @@ mod tests {
         let mut param = SWelsSvcCodingParam::default();
         let mut vaa = SVAAFrameInfo::default();
         let mut ctx = unsafe { std::mem::zeroed::<sWelsEncCtx>() };
+        param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
         ctx.pSvcParam = &mut param;
         ctx.pVaa = &mut vaa;
-        param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
 
         unsafe {
             let ft = DecideFrameType(&mut ctx, 1, 0, false);
