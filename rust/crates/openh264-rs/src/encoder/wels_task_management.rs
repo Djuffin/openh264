@@ -437,9 +437,13 @@ impl WelsTaskBarrier {
         }
     }
 
-    pub fn wait_for_completion(&self, wait_count: i32) {
+    pub fn set_count(&self, wait_count: i32) {
         let mut count = self.lock.lock().unwrap();
         *count = wait_count;
+    }
+
+    pub fn wait_for_completion(&self) {
+        let mut count = self.lock.lock().unwrap();
         while *count > 0 {
             count = self.cvar.wait(count).unwrap();
         }
@@ -702,6 +706,7 @@ impl CWelsTaskManageBase {
         }
 
         let iCurrentTaskCount = self.m_iWaitTaskNum;
+        self.barrier.set_count(iCurrentTaskCount);
         for iIdx in 0..iCurrentTaskCount {
             let task_node = unsafe { (*pTargetTaskList).getNode(iIdx) };
             if !self.m_pThreadPool.is_null() {
@@ -715,7 +720,7 @@ impl CWelsTaskManageBase {
             }
         }
 
-        self.barrier.wait_for_completion(iCurrentTaskCount);
+        self.barrier.wait_for_completion();
         ENC_RETURN_SUCCESS
     }
 

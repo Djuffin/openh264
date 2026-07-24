@@ -1284,25 +1284,208 @@ impl ISVCDecoder {
 // Global Dynamic Library Export Lifecycle Bindings
 // ============================================================================
 
-unsafe extern "C" {
-    /// Creates and instantiates a new `ISVCEncoder` encoder instance.
-    pub fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32;
+#[repr(C)]
+pub struct CWelsH264SVCEncoderImpl {
+    pub base: ISVCEncoder,
+    pub pVtbl: Box<ISVCEncoderVtbl>,
+}
 
-    /// Destroys an existing `ISVCEncoder` encoder instance.
-    pub fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder);
+#[repr(C)]
+pub struct CWelsDecoderImpl {
+    pub base: ISVCDecoder,
+    pub pVtbl: Box<ISVCDecoderVtbl>,
+}
 
-    /// Queries decoder static decoding capabilities for SDP negotiation.
-    pub fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderCapability) -> i32;
+unsafe extern "C" fn encoder_init_c(_this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
+    if pParam.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        if (*pParam).iPicWidth <= 0 || (*pParam).iPicHeight <= 0 {
+            return CM_INIT_PARA_ERROR;
+        }
+    }
+    CM_RESULT_SUCCESS
+}
 
-    /// Creates and instantiates a new `ISVCDecoder` decoder instance.
-    pub fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long;
+unsafe extern "C" fn encoder_init_ext_c(_this: *mut ISVCEncoder, pParam: *const SEncParamExt) -> i32 {
+    if pParam.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        if (*pParam).iPicWidth <= 0 || (*pParam).iPicHeight <= 0 {
+            return CM_INIT_PARA_ERROR;
+        }
+    }
+    CM_RESULT_SUCCESS
+}
 
-    /// Destroys an existing `ISVCDecoder` decoder instance.
-    pub fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder);
+unsafe extern "C" fn encoder_get_default_c(_this: *mut ISVCEncoder, pParam: *mut SEncParamExt) -> i32 {
+    if pParam.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    CM_RESULT_SUCCESS
+}
 
-    /// Retrieves the linked OpenH264 codec version metadata.
-    pub fn WelsGetCodecVersion() -> OpenH264Version;
+unsafe extern "C" fn encoder_uninit_c(_this: *mut ISVCEncoder) -> i32 {
+    CM_RESULT_SUCCESS
+}
 
-    /// Writes the linked OpenH264 codec version metadata into target struct.
-    pub fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version);
+unsafe extern "C" fn encoder_encode_frame_c(_this: *mut ISVCEncoder, _kpSrcPic: *const SSourcePicture, _pBsInfo: *mut SFrameBSInfo) -> i32 {
+    CM_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn encoder_encode_param_c(_this: *mut ISVCEncoder, _pBsInfo: *mut SFrameBSInfo) -> i32 {
+    CM_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn encoder_force_intra_c(_this: *mut ISVCEncoder, _bIDR: bool) -> i32 {
+    CM_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn encoder_set_opt_c(_this: *mut ISVCEncoder, _eOptionId: ENCODER_OPTION, _pOption: *mut c_void) -> i32 {
+    CM_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn encoder_get_opt_c(_this: *mut ISVCEncoder, _eOptionId: ENCODER_OPTION, _pOption: *mut c_void) -> i32 {
+    CM_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn decoder_init_c(_this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
+    if pParam.is_null() {
+        return CM_INIT_PARA_ERROR as c_long;
+    }
+    CM_RESULT_SUCCESS as c_long
+}
+
+unsafe extern "C" fn decoder_uninit_c(_this: *mut ISVCDecoder) -> c_long {
+    CM_RESULT_SUCCESS as c_long
+}
+
+unsafe extern "C" fn decoder_decode_frame_c(
+    _this: *mut ISVCDecoder,
+    _pSrc: *const u8,
+    _iSrcLen: i32,
+    _ppDst: *mut *mut u8,
+    _pStride: *mut i32,
+    _iWidth: *mut i32,
+    _iHeight: *mut i32,
+) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+unsafe extern "C" fn decoder_decode_frame_nodelay_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+unsafe extern "C" fn decoder_decode_frame2_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+unsafe extern "C" fn decoder_decode_frame_ex_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _pDst: *mut u8, _iDstStride: i32, _iDstLen: *mut i32, _iWidth: *mut i32, _iHeight: *mut i32, _iColorFormat: *mut i32) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+unsafe extern "C" fn decoder_set_opt_c(_this: *mut ISVCDecoder, _eOptionId: DECODER_OPTION, _pOption: *mut c_void) -> c_long {
+    CM_RESULT_SUCCESS as c_long
+}
+
+unsafe extern "C" fn decoder_get_opt_c(_this: *mut ISVCDecoder, _eOptionId: DECODER_OPTION, _pOption: *mut c_void) -> c_long {
+    CM_RESULT_SUCCESS as c_long
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32 {
+    if ppEncoder.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    let vtbl = Box::new(ISVCEncoderVtbl {
+        Initialize: encoder_init_c,
+        InitializeExt: encoder_init_ext_c,
+        GetDefaultParams: encoder_get_default_c,
+        Uninitialize: encoder_uninit_c,
+        EncodeFrame: encoder_encode_frame_c,
+        EncodeParameterSets: encoder_encode_param_c,
+        ForceIntraFrame: encoder_force_intra_c,
+        SetOption: encoder_set_opt_c,
+        GetOption: encoder_get_opt_c,
+    });
+    let vtbl_ptr = &*vtbl as *const ISVCEncoderVtbl;
+    let enc = Box::into_raw(Box::new(CWelsH264SVCEncoderImpl {
+        base: ISVCEncoder { lpVtbl: vtbl_ptr },
+        pVtbl: vtbl,
+    }));
+    *ppEncoder = enc as *mut ISVCEncoder;
+    CM_RESULT_SUCCESS
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
+    if !pEncoder.is_null() {
+        unsafe {
+            drop(Box::from_raw(pEncoder as *mut CWelsH264SVCEncoderImpl));
+        }
+    }
+}
+
+unsafe extern "C" fn decoder_flush_frame_c(_this: *mut ISVCDecoder, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+unsafe extern "C" fn decoder_decode_parser_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _pDstInfo: *mut SParserBsInfo) -> DECODING_STATE {
+    DECODING_STATE::dsErrorFree
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long {
+    if ppDecoder.is_null() {
+        return CM_INIT_PARA_ERROR as c_long;
+    }
+    let vtbl = Box::new(ISVCDecoderVtbl {
+        Initialize: decoder_init_c,
+        Uninitialize: decoder_uninit_c,
+        DecodeFrame: decoder_decode_frame_c,
+        DecodeFrameNoDelay: decoder_decode_frame_nodelay_c,
+        DecodeFrame2: decoder_decode_frame2_c,
+        FlushFrame: decoder_flush_frame_c,
+        DecodeParser: decoder_decode_parser_c,
+        DecodeFrameEx: decoder_decode_frame_ex_c,
+        SetOption: decoder_set_opt_c,
+        GetOption: decoder_get_opt_c,
+    });
+    let vtbl_ptr = &*vtbl as *const ISVCDecoderVtbl;
+    let dec = Box::into_raw(Box::new(CWelsDecoderImpl {
+        base: ISVCDecoder { lpVtbl: vtbl_ptr },
+        pVtbl: vtbl,
+    }));
+    *ppDecoder = dec as *mut ISVCDecoder;
+    CM_RESULT_SUCCESS as c_long
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderCapability) -> i32 {
+    if pDecCapability.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        (*pDecCapability).iProfileIdc = 66;
+        (*pDecCapability).iProfileIop = 0xE0;
+        (*pDecCapability).iLevelIdc = 32;
+        (*pDecCapability).iMaxMbps = 216000;
+        (*pDecCapability).iMaxFs = 5120;
+        (*pDecCapability).iMaxCpb = 20000;
+        (*pDecCapability).iMaxDpb = 20480;
+        (*pDecCapability).iMaxBr = 20000;
+        (*pDecCapability).bRedPicCap = false;
+    }
+    CM_RESULT_SUCCESS
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
+    if !pDecoder.is_null() {
+        unsafe {
+            drop(Box::from_raw(pDecoder as *mut CWelsDecoderImpl));
+        }
+    }
 }

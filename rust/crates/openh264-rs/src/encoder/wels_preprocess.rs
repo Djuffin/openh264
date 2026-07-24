@@ -2715,3 +2715,51 @@ impl CWelsPreProcess {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vaa_enum_defaults() {
+        assert_eq!(ESceneChangeIdc::default(), ESceneChangeIdc::SIMILAR_SCENE);
+        assert_eq!(EStaticBlockIdc::default(), EStaticBlockIdc::NO_STATIC);
+        assert_eq!(EMethods::default(), EMethods::METHOD_NULL);
+    }
+
+    #[test]
+    fn test_wels_preprocess_init_and_uninit() {
+        let mut align = CMemoryAlign::new(16);
+        let mut preprocess = CWelsPreProcess::new();
+        unsafe {
+            let mut param = SEncParamExt::default();
+            param.iPicWidth = 128;
+            param.iPicHeight = 128;
+            param.fMaxFrameRate = 30.0;
+            param.iSpatialLayerNum = 1;
+            param.sSpatialLayers[0].iVideoWidth = 128;
+            param.sSpatialLayers[0].iVideoHeight = 128;
+            param.sSpatialLayers[0].fFrameRate = 30.0;
+
+            let ret = preprocess.WelsPreprocessInit(&mut param, &mut align);
+            assert_eq!(ret, ENC_RETURN_SUCCESS);
+
+            preprocess.WelsPreprocessFree(&mut align);
+        }
+    }
+
+    #[test]
+    fn test_downsample_buffer_geometry() {
+        let mut scaled_pic = Scaled_Picture::default();
+        assert_eq!(scaled_pic.iScaledWidth[0], 0);
+        assert_eq!(scaled_pic.iScaledHeight[0], 0);
+        assert!(scaled_pic.pScaledInputPicture.is_null());
+    }
+
+    #[test]
+    fn test_ref_judgement_defaults() {
+        let judgement = SRefJudgement::default();
+        assert_eq!(judgement.iMinFrameComplexity, i32::MAX as i64);
+        assert_eq!(judgement.iMinFrameNumGap, i32::MAX);
+    }
+}
