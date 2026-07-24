@@ -17,12 +17,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, EVideoFrameType, EncoderOption,
-    ISVCEncoderHandle, ISVCEncoderVtbl, OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
+    ISVCEncoderVtbl, OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
     SEncParamExt, SFrameBSInfo, SLayerBSInfo, SSourcePicture, SSpatialLayerConfig, VideoFormat,
     CM_INIT_PARA_ERROR, CM_MALLOC_MEM_ERROR, CM_RESULT_SUCCESS, CM_UNINITIALIZED_ERROR,
     CM_UNKNOWN_REASON, CM_UNSUPPORTED_DATA, MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM,
     MAX_TEMPORAL_LAYER_NUM,
 };
+use crate::api::codec_api::ISVCEncoder as ISVCEncoderHandle;
 
 pub const VERSION_NUMBER: &str = "openh264 2.6.0";
 
@@ -361,7 +362,6 @@ impl SWelsSvcCodingParam {
         argv.fMaxFrameRate = 30.0;
         argv.iTemporalLayerNum = 1;
         argv.iSpatialLayerNum = 1;
-        argv.uiGopSize = 1;
         argv.uiIntraPeriod = 0;
         argv.iNumRefFrame = AUTO_REF_PIC_COUNT;
         argv.bEnableFrameSkip = true;
@@ -369,6 +369,9 @@ impl SWelsSvcCodingParam {
     }
 
     pub fn ParamBaseTranscode(&mut self, argv: SEncParamBase) -> i32 {
+        if argv.iPicWidth <= 0 || argv.iPicHeight <= 0 {
+            return cmInitParaError;
+        }
         self.iUsageType = argv.iUsageType;
         self.iPicWidth = argv.iPicWidth;
         self.iPicHeight = argv.iPicHeight;
@@ -385,10 +388,16 @@ impl SWelsSvcCodingParam {
 
         self.sDependencyLayers[0].iActualWidth = argv.iPicWidth;
         self.sDependencyLayers[0].iActualHeight = argv.iPicHeight;
+        if self.uiGopSize == 0 {
+            self.uiGopSize = 1;
+        }
         0
     }
 
     pub fn ParamTranscode(&mut self, argv: SEncParamExt) -> i32 {
+        if argv.iPicWidth <= 0 || argv.iPicHeight <= 0 {
+            return cmInitParaError;
+        }
         self.iUsageType = argv.iUsageType;
         self.iPicWidth = argv.iPicWidth;
         self.iPicHeight = argv.iPicHeight;
@@ -423,6 +432,10 @@ impl SWelsSvcCodingParam {
         self.iMaxQp = argv.iMaxQp;
         self.uiMaxNalSize = argv.uiMaxNalSize;
         self.bIsLosslessLink = argv.bIsLosslessLink;
+
+        if self.uiGopSize == 0 {
+            self.uiGopSize = 1;
+        }
 
         let num_layers = WELS_CLIP3(argv.iSpatialLayerNum, 1, MAX_DEPENDENCY_LAYER) as usize;
         for i in 0..num_layers {
@@ -580,7 +593,7 @@ impl Default for sWelsEncCtx {
 }
 
 // Core encoder functions implementations / fallbacks
-pub unsafe fn WelsInitEncoderExt(
+pub unsafe fn WelsInitEncoderExtRust(
     ppCtx: *mut *mut sWelsEncCtx,
     pCfg: *const SWelsSvcCodingParam,
     _pLogCtx: *mut SLogContext,
@@ -598,7 +611,7 @@ pub unsafe fn WelsInitEncoderExt(
     0
 }
 
-pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
+pub unsafe fn WelsUninitEncoderExtRust(ppCtx: *mut *mut sWelsEncCtx) {
     if ppCtx.is_null() || (*ppCtx).is_null() {
         return;
     }
@@ -612,7 +625,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     *ppCtx = null_mut();
 }
 
-pub unsafe fn WelsEncoderEncodeExt(
+pub unsafe fn WelsEncoderEncodeExtRust(
     pCtx: *mut sWelsEncCtx,
     pBsInfo: *mut SFrameBSInfo,
     pSrcPic: *const SSourcePicture,
@@ -625,7 +638,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn WelsEncoderEncodeParameterSets(
+pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pCtx: *mut sWelsEncCtx,
     pBsInfo: *mut SFrameBSInfo,
 ) -> i32 {
@@ -930,7 +943,7 @@ impl CWelsH264SVCEncoder {
                 null_mut()
             };
 
-            if WelsInitEncoderExt(&mut self.m_pEncContext, pCfg, log_ctx, null_mut()) != 0 {
+            if WelsInitEncoderExtRust(&mut self.m_pEncContext, pCfg, log_ctx, null_mut()) != 0 {
                 self.Uninitialize();
                 return cmInitParaError;
             }
@@ -947,7 +960,7 @@ impl CWelsH264SVCEncoder {
         }
         unsafe {
             if !self.m_pEncContext.is_null() {
-                WelsUninitEncoderExt(&mut self.m_pEncContext);
+                WelsUninitEncoderExtRust(&mut self.m_pEncContext);
                 self.m_pEncContext = null_mut();
             }
         }
@@ -986,14 +999,14 @@ impl CWelsH264SVCEncoder {
             }
 
             let kiBeforeFrameUs = WelsTime();
-            let kiEncoderReturn = WelsEncoderEncodeExt(self.m_pEncContext, pBsInfo, pSrcPic);
+            let kiEncoderReturn = WelsEncoderEncodeExtRust(self.m_pEncContext, pBsInfo, pSrcPic);
             let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
             if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
                 || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
                 || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
             {
-                WelsUninitEncoderExt(&mut self.m_pEncContext);
+                WelsUninitEncoderExtRust(&mut self.m_pEncContext);
                 return cmMallocMemeError;
             } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
                 return cmUnsupportedData;
@@ -1010,7 +1023,10 @@ impl CWelsH264SVCEncoder {
     }
 
     pub fn EncodeParameterSets(&mut self, pBsInfo: *mut SFrameBSInfo) -> i32 {
-        unsafe { WelsEncoderEncodeParameterSets(self.m_pEncContext, pBsInfo) }
+        if self.m_pEncContext.is_null() || !self.m_bInitialFlag || pBsInfo.is_null() {
+            return cmInitParaError;
+        }
+        unsafe { WelsEncoderEncodeParameterSetsRust(self.m_pEncContext, pBsInfo) }
     }
 
     pub fn ForceIntraFrame(&mut self, bIDR: bool, iLayerId: i32) -> i32 {
@@ -1030,10 +1046,10 @@ impl CWelsH264SVCEncoder {
     pub fn LogStatistics(&mut self, _kiCurrentFrameTs: i64, _iMaxDid: i32) {}
 
     pub fn UpdateStatistics(&mut self, pBsInfo: *mut SFrameBSInfo, kiCurrentFrameMs: i64) {
-        if self.m_pEncContext.is_null() || pBsInfo.is_null() {
-            return;
-        }
         unsafe {
+            if self.m_pEncContext.is_null() || (*self.m_pEncContext).pSvcParam.is_null() || pBsInfo.is_null() {
+                return;
+            }
             let kiCurrentFrameTs = (*pBsInfo).uiTimeStamp;
             (*self.m_pEncContext).uiLastTimestamp = kiCurrentFrameTs;
             let kiTimeDiff = kiCurrentFrameTs - (*self.m_pEncContext).iLastStatisticsLogTs;
@@ -1042,8 +1058,8 @@ impl CWelsH264SVCEncoder {
             for iDid in 0..=iMaxDid {
                 let mut eFrameType = EVideoFrameType::VideoFrameTypeSkip as i32;
                 let mut kiCurrentFrameSize = 0;
-                for iLayerNum in 0..(*pBsInfo).iLayerNum {
-                    let pLayerInfo = &(*pBsInfo).sLayerInfo[iLayerNum as usize];
+                for iLayerNum in 0..((*pBsInfo).iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
+                    let pLayerInfo = &(*pBsInfo).sLayerInfo[iLayerNum];
                     if pLayerInfo.uiLayerType == VIDEO_CODING_LAYER
                         && pLayerInfo.uiSpatialId as i32 == iDid
                     {
@@ -1479,19 +1495,18 @@ unsafe extern "C" fn ext_GetOption(
 }
 
 pub static G_ISVCENCODER_VTBL: ISVCEncoderVtbl = ISVCEncoderVtbl {
-    Initialize: ext_Initialize,
-    InitializeExt: ext_InitializeExt,
-    GetDefaultParams: ext_GetDefaultParams,
-    Uninitialize: ext_Uninitialize,
-    EncodeFrame: ext_EncodeFrame,
-    EncodeParameterSets: ext_EncodeParameterSets,
-    ForceIntraFrame: ext_ForceIntraFrame,
-    SetOption: ext_SetOption,
-    GetOption: ext_GetOption,
+    Initialize: unsafe { std::mem::transmute(ext_Initialize as *const ()) },
+    InitializeExt: unsafe { std::mem::transmute(ext_InitializeExt as *const ()) },
+    GetDefaultParams: unsafe { std::mem::transmute(ext_GetDefaultParams as *const ()) },
+    Uninitialize: unsafe { std::mem::transmute(ext_Uninitialize as *const ()) },
+    EncodeFrame: unsafe { std::mem::transmute(ext_EncodeFrame as *const ()) },
+    EncodeParameterSets: unsafe { std::mem::transmute(ext_EncodeParameterSets as *const ()) },
+    ForceIntraFrame: unsafe { std::mem::transmute(ext_ForceIntraFrame as *const ()) },
+    SetOption: unsafe { std::mem::transmute(ext_SetOption as *const ()) },
+    GetOption: unsafe { std::mem::transmute(ext_GetOption as *const ()) },
 };
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32 {
+pub unsafe extern "C" fn WelsCreateSVCEncoderExt(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32 {
     if ppEncoder.is_null() {
         return 1;
     }
@@ -1500,8 +1515,7 @@ pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoderHa
     0
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoderHandle) {
+pub unsafe extern "C" fn WelsDestroySVCEncoderExt(pEncoder: *mut ISVCEncoderHandle) {
     if !pEncoder.is_null() {
         let _ = Box::from_raw(pEncoder as *mut CWelsH264SVCEncoder);
     }
