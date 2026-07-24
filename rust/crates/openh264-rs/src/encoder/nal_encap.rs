@@ -167,32 +167,7 @@ impl Default for EWelsNalRefIdc {
     }
 }
 
-/// Bit-stream auxiliary reading / writing state tracker.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub iBits: i32,
-    pub iIndex: isize,
-    pub pCurBuf: *mut u8,
-    pub uiCurBits: u32,
-    pub iLeftBits: i32,
-}
-
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: core::ptr::null_mut(),
-            pEndBuf: core::ptr::null_mut(),
-            iBits: 0,
-            iIndex: 0,
-            pCurBuf: core::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 32,
-        }
-    }
-}
+pub use crate::encoder::svc_encode_slice::SBitStringAux;
 
 /// 1-Byte Base AVC NAL Unit Header.
 #[repr(C)]
@@ -415,6 +390,9 @@ pub unsafe extern "C" fn WelsLoadNal(
     kiType: i32,
     kiNalRefIdc: i32,
 ) {
+    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_null() {
+        return;
+    }
     let pWelsEncoderOuput = &mut *pEncoderOuput;
     let pRawNal = &mut *pWelsEncoderOuput
         .sNalList
@@ -426,7 +404,11 @@ pub unsafe extern "C" fn WelsLoadNal(
     sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
     sNalUnitHeader.uiForbiddenZeroBit = 0;
 
-    pRawNal.pRawData = pWelsEncoderOuput.pBsBuffer.add(kiStartPos as usize);
+    pRawNal.pRawData = if !pWelsEncoderOuput.pBsBuffer.is_null() {
+        pWelsEncoderOuput.pBsBuffer.add(kiStartPos as usize)
+    } else {
+        std::ptr::null_mut()
+    };
     pRawNal.iStartPos = kiStartPos;
     pRawNal.iPayloadSize = 0;
 }
@@ -437,6 +419,9 @@ pub unsafe extern "C" fn WelsLoadNal(
 /// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
 #[inline]
 pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
+    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_null() {
+        return;
+    }
     let pWelsEncoderOuput = &mut *pEncoderOuput;
     let pIdx = &mut pWelsEncoderOuput.iNalIndex;
     let pRawNal = &mut *pWelsEncoderOuput.sNalList.add(*pIdx as usize);
@@ -507,6 +492,9 @@ pub unsafe extern "C" fn WelsEncodeNal(
     pDst: *mut c_void,
     pDstLen: *mut i32,
 ) -> i32 {
+    if pRawNal.is_null() || pDst.is_null() || pDstLen.is_null() {
+        return ENC_RETURN_INVALIDINPUT;
+    }
     let raw_nal = &*pRawNal;
     let nal_type = raw_nal.sNalExt.sNalUnitHeader.eNalUnitType;
     let kbNALExt = nal_type == EWelsNalUnitType::NAL_UNIT_PREFIX

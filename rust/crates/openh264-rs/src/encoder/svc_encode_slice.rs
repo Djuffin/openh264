@@ -57,17 +57,7 @@ use crate::{
 // Constants and Definitions
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
+pub use crate::encoder::encoder_context::EWelsSliceType;
 
 pub const P_SLICE: i32 = 0;
 pub const B_SLICE: i32 = 1;
@@ -482,6 +472,8 @@ pub struct SBitStringAux {
     pub pCurBuf: *mut u8,
     pub uiCurBits: u32,
     pub iLeftBits: i32,
+    pub uiBufSize: u32,
+    pub iBits: i32,
 }
 
 impl Default for SBitStringAux {
@@ -492,6 +484,8 @@ impl Default for SBitStringAux {
             pCurBuf: std::ptr::null_mut(),
             uiCurBits: 0,
             iLeftBits: 32,
+            uiBufSize: 0,
+            iBits: 0,
         }
     }
 }
@@ -649,20 +643,7 @@ impl Default for SLayerInfo {
     }
 }
 
-#[repr(C)]
-pub struct SPicture {
-    pub iLineSize: [i32; 4],
-    pub uiRefMbType: *mut u32,
-    pub uiTemporalId: u8,
-    pub iPictureType: i32,
-    pub iFramePoc: i32,
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+pub use crate::encoder::encoder_context::SPicture;
 
 #[repr(C)]
 pub struct SDqLayer {
@@ -698,21 +679,7 @@ impl Default for SDqLayer {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsNalRaw {
-    pub pNalP: *mut u8,
-    pub iNalLength: i32,
-}
-
-impl Default for SWelsNalRaw {
-    fn default() -> Self {
-        Self {
-            pNalP: std::ptr::null_mut(),
-            iNalLength: 0,
-        }
-    }
-}
+pub use crate::encoder::nal_encap::SWelsNalRaw;
 
 #[repr(C)]
 pub struct SWelsOut {
@@ -728,41 +695,10 @@ impl Default for SWelsOut {
     }
 }
 
-#[repr(C)]
-pub struct SWelsRcFunc {
-    pub pfWelsRcMbInit: unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice),
-    pub pfWelsRcMbInfoUpdate: unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, iCostLuma: i32, pSlice: *mut SSlice),
-}
+pub use crate::encoder::encoder_context::{SWelsFuncPtrList, SWelsRcFunc};
 
-#[repr(C)]
-pub struct SWelsFuncPtrList {
-    pub pfDctFourT4: unsafe extern "C" fn(pDct: *mut i16, pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32),
-    pub pfIDctFourT4: unsafe extern "C" fn(pRec: *mut u8, iStride: i32, pPred: *mut u8, iPredStride: i32, pRes: *mut i16),
-    pub pfInterMd: unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pMd: *mut SWelsMD, pSlice: *mut SSlice, pCurMb: *mut SMB, pMbCache: *mut SMbCache),
-    pub pfWelsSpatialWriteMbSyn: unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) -> i32,
-    pub pfStashMBStatus: unsafe extern "C" fn(pDss: *mut SDynamicSlicingStack, pSlice: *mut SSlice, iMbSkipRun: i32),
-    pub pfStashPopMBStatus: unsafe extern "C" fn(pDss: *mut SDynamicSlicingStack, pSlice: *mut SSlice) -> i32,
-    pub pfGetBsPosition: unsafe extern "C" fn(pSlice: *mut SSlice) -> i32,
-    pub pfMdBackgroundInfoUpdate: unsafe extern "C" fn(pCurLayer: *mut SDqLayer, pCurMb: *mut SMB, bCollocatedPredFlag: bool, iPictureType: i32),
-    pub pfRc: SWelsRcFunc,
-    pub pParametersetStrategy: *mut c_void,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSvcRc {
-    pub bGomRC: bool,
-    pub iBitsPerMb: i32,
-    pub iMaxQp: u8,
-    pub iMinQp: u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpatialLayerInternal {
-    pub iFrameNum: i32,
-    pub uiIdrPicId: u16,
-}
+pub use crate::encoder::rc::SWelsSvcRc;
+pub use crate::encoder::wels_encoder_ext::SSpatialLayerInternal;
 
 #[repr(C)]
 pub struct SSliceThreading {
@@ -776,38 +712,7 @@ impl Default for SSliceThreading {
     }
 }
 
-#[repr(C)]
-pub struct sWelsEncCtx {
-    pub pSvcParam: *mut crate::SEncParamExt,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pEncPic: *mut SPicture,
-    pub pDecPic: *mut SPicture,
-    pub pRefPic: *mut SPicture,
-    pub pOut: *mut SWelsOut,
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pMemAlign: *mut CMemoryAlign,
-    pub pSliceThreading: *mut SSliceThreading,
-    pub pWelsSvcRc: *mut SWelsSvcRc,
-    pub eSliceType: EWelsSliceType,
-    pub uiDependencyId: u8,
-    pub iGlobalQp: i32,
-    pub iNumRef0: u8,
-    pub iActiveThreadsNum: i32,
-    pub iFrameBsSize: i32,
-    pub bNeedPrefixNalFlag: i32,
-    pub iMvdCostTableStride: i32,
-    pub iMvdCostTableSize: usize,
-    pub pMvdCostTable: *mut u16,
-    pub pDynamicBsBuffer: [*mut u8; MAX_THREADS_NUM],
-    pub iSliceBufferSize: [i32; MAX_SPATIAL_LAYER_NUM],
-    pub sLogCtx: *mut c_void,
-}
-
-impl Default for sWelsEncCtx {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
@@ -1310,13 +1215,15 @@ pub unsafe fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, 
     let stride = (*pCurLayer).iEncStride[0];
 
     if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        (func_list.pfDctFourT4)(
-            (*pMbCache).pCoeffLevel,
-            (*pMbCache).SPicData.pEncMb[0],
-            stride,
-            (*pMbCache).pMemPredLuma,
-            16,
-        );
+        if let Some(dct) = func_list.pfDctFourT4 {
+            dct(
+                (*pMbCache).pCoeffLevel,
+                (*pMbCache).SPicData.pEncMb[0],
+                stride,
+                (*pMbCache).pMemPredLuma,
+                16,
+            );
+        }
     }
 }
 
@@ -1333,11 +1240,14 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, p
     let pCsCr = (*pMbCache).SPicData.pCsMb[2];
 
     if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        (func_list.pfDctFourT4)(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-        (func_list.pfIDctFourT4)(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
-
-        (func_list.pfDctFourT4)(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
-        (func_list.pfIDctFourT4)(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
+        if let Some(dct) = func_list.pfDctFourT4 {
+            dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
+            dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
+        }
+        if let Some(idct) = func_list.pfIDctFourT4 {
+            idct(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
+            idct(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
+        }
     }
 }
 
@@ -1352,8 +1262,10 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     let pBestPred = (*pMbCache).pMemPredChroma;
 
     if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        (func_list.pfDctFourT4)(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-        (func_list.pfDctFourT4)(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
+        if let Some(dct) = func_list.pfDctFourT4 {
+            dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
+            dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
+        }
     }
 }
 
@@ -1364,16 +1276,16 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
     let mb_type = (*pMb).uiMbType;
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
         let pMbCache = &mut (*pSlice).sMbCacheInfo;
-        let pDecY = (*pMbCache).SPicData.pDecMb[0];
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
         let pScaledTcoeff = (*pMbCache).pCoeffLevel;
-        let kiDecStrideLuma = (*(*pDq).pDecPic).iLineSize[0];
         let kiDecStrideChroma = (*(*pDq).pDecPic).iLineSize[1];
 
         if let Some(func_list) = (*pCtx).pFuncList.as_ref() {
-            (func_list.pfIDctFourT4)(pDecU, kiDecStrideChroma, pDecU, kiDecStrideChroma, pScaledTcoeff.add(256));
-            (func_list.pfIDctFourT4)(pDecV, kiDecStrideChroma, pDecV, kiDecStrideChroma, pScaledTcoeff.add(320));
+            if let Some(idct) = func_list.pfIDctFourT4 {
+                idct(pDecU, kiDecStrideChroma, pDecU, kiDecStrideChroma, pScaledTcoeff.add(256));
+                idct(pDecV, kiDecStrideChroma, pDecV, kiDecStrideChroma, pScaledTcoeff.add(320));
+            }
         }
     }
 }
@@ -1446,6 +1358,9 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         return ENC_RETURN_INVALIDINPUT;
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
+    if pCurLayer.is_null() || (*pCurLayer).sMbDataP.is_null() || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
+        return ENC_RETURN_SUCCESS;
+    }
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let pSliceHdExt = &mut (*pSlice).sSliceHeaderExt;
     let pMbList = (*pCurLayer).sMbDataP;
@@ -1466,13 +1381,17 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
 
     loop {
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfStashMBStatus)(&mut sDss, pSlice, 0);
+            if let Some(func) = func_list.pfStashMBStatus {
+                func(&mut sDss, pSlice, 0);
+            }
         }
         iCurMbIdx = iNextMbIdx;
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInit)(pEncCtx, pCurMb, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
+                func(pEncCtx, pCurMb, pSlice);
+            }
         }
 
         loop {
@@ -1481,12 +1400,16 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                iEncReturn = (func_list.pfWelsSpatialWriteMbSyn)(pEncCtx, pSlice, pCurMb);
+                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
+                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
+                }
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                    if let Some(func) = func_list.pfStashPopMBStatus {
+                        func(&mut sDss, pSlice);
+                    }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1501,8 +1424,12 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfMdBackgroundInfoUpdate)(pCurLayer, pCurMb, (*pMbCache).bCollocatedPredFlag, I_SLICE);
-            (func_list.pfRc.pfWelsRcMbInfoUpdate)(pEncCtx, pCurMb, sMd.iCostLuma, pSlice);
+            if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
+                func(pCurLayer, pCurMb, (*pMbCache).bCollocatedPredFlag, I_SLICE);
+            }
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInfoUpdate {
+                func(pEncCtx, pCurMb, sMd.iCostLuma, pSlice);
+            }
         }
 
         iNumMbCoded += 1;
@@ -1531,7 +1458,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kiPartitionId = (kiSliceIdx % (*pEncCtx).iActiveThreadsNum) as usize;
+    let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
         (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
     } else {
@@ -1547,13 +1474,17 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfStashMBStatus)(&mut sDss, pSlice, 0);
-            (func_list.pfRc.pfWelsRcMbInit)(pEncCtx, pCurMb, pSlice);
+            if let Some(func) = func_list.pfStashMBStatus {
+                func(&mut sDss, pSlice, 0);
+            }
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
+                func(pEncCtx, pCurMb, pSlice);
+            }
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*(*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize)).iMaxQp;
-            (*pCurMb).uiLumaQp = max_qp;
+            (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
 
@@ -1563,12 +1494,16 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                iEncReturn = (func_list.pfWelsSpatialWriteMbSyn)(pEncCtx, pSlice, pCurMb);
+                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
+                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
+                }
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                    if let Some(func) = func_list.pfStashPopMBStatus {
+                        func(&mut sDss, pSlice);
+                    }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1581,7 +1516,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         }
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            sDss.iCurrentPos = (func_list.pfGetBsPosition)(pSlice);
+            if let Some(func) = func_list.pfGetBsPosition {
+                sDss.iCurrentPos = func(pSlice);
+            }
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -1592,7 +1529,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             &mut sDss,
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                if let Some(func) = func_list.pfStashPopMBStatus {
+                    func(&mut sDss, pSlice);
+                }
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
@@ -1602,7 +1541,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         (*pCurMb).uiSliceIdc = kiSliceIdx as u16;
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInfoUpdate)(pEncCtx, pCurMb, sMd.iCostLuma, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInfoUpdate {
+                func(pEncCtx, pCurMb, sMd.iCostLuma, pSlice);
+            }
         }
 
         iNumMbCoded += 1;
@@ -1624,8 +1565,8 @@ pub unsafe fn WelsMdInterMbLoop(
     pWelsMd: *mut c_void,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
+    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+        return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = (*pSlice).pSliceBsa;
@@ -1638,7 +1579,7 @@ pub unsafe fn WelsMdInterMbLoop(
     let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
     let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
-        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize)
+        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize as usize)
     } else {
         std::ptr::null_mut()
     };
@@ -1654,36 +1595,48 @@ pub unsafe fn WelsMdInterMbLoop(
 
     loop {
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfStashMBStatus)(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+            if let Some(func) = func_list.pfStashMBStatus {
+                func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+            }
         }
         iCurMbIdx = iNextMbIdx;
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInit)(pEncCtx, pCurMb, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
+                func(pEncCtx, pCurMb, pSlice);
+            }
         }
 
         loop {
             WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                (func_list.pfInterMd)(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
-                (func_list.pfMdBackgroundInfoUpdate)(
-                    pCurLayer,
-                    pCurMb,
-                    (*pMbCache).bCollocatedPredFlag,
-                    if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
-                );
+                if let Some(func) = func_list.pfInterMd {
+                    func(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
+                }
+                if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
+                    func(
+                        pCurLayer,
+                        pCurMb,
+                        (*pMbCache).bCollocatedPredFlag,
+                        if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
+                    );
+                }
             }
             UpdateNonZeroCountCache(pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                iEncReturn = (func_list.pfWelsSpatialWriteMbSyn)(pEncCtx, pSlice, pCurMb);
+                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
+                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
+                }
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    (*pSlice).iMbSkipRun = (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                    if let Some(func) = func_list.pfStashPopMBStatus {
+                        (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                    }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1699,7 +1652,9 @@ pub unsafe fn WelsMdInterMbLoop(
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, pCurMb);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInfoUpdate)(pEncCtx, pCurMb, (*pMd).iCostLuma, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInfoUpdate {
+                func(pEncCtx, pCurMb, (*pMd).iCostLuma, pSlice);
+            }
         }
 
         iNumMbCoded += 1;
@@ -1722,8 +1677,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pWelsMd: *mut c_void,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
+    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+        return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = (*pSlice).pSliceBsa;
@@ -1737,12 +1692,12 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
     let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
-        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize)
+        (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize as usize)
     } else {
         std::ptr::null_mut()
     };
     let kiSliceIdx = (*pSlice).iSliceIdx;
-    let kiPartitionId = (kiSliceIdx % (*pEncCtx).iActiveThreadsNum) as usize;
+    let kiPartitionId = (kiSliceIdx % ((*pEncCtx).iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
         (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset
     } else {
@@ -1755,42 +1710,54 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
     loop {
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfStashMBStatus)(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+            if let Some(func) = func_list.pfStashMBStatus {
+                func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+            }
         }
         iCurMbIdx = iNextMbIdx;
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInit)(pEncCtx, pCurMb, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
+                func(pEncCtx, pCurMb, pSlice);
+            }
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = (*(*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize)).iMaxQp;
-            (*pCurMb).uiLumaQp = max_qp;
+            (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
 
         loop {
             WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                (func_list.pfInterMd)(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
-                (func_list.pfMdBackgroundInfoUpdate)(
-                    pCurLayer,
-                    pCurMb,
-                    (*pMbCache).bCollocatedPredFlag,
-                    if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
-                );
+                if let Some(func) = func_list.pfInterMd {
+                    func(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
+                }
+                if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
+                    func(
+                        pCurLayer,
+                        pCurMb,
+                        (*pMbCache).bCollocatedPredFlag,
+                        if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
+                    );
+                }
             }
             UpdateNonZeroCountCache(pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                iEncReturn = (func_list.pfWelsSpatialWriteMbSyn)(pEncCtx, pSlice, pCurMb);
+                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
+                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
+                }
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    (*pSlice).iMbSkipRun = (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                    if let Some(func) = func_list.pfStashPopMBStatus {
+                        (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                    }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1803,7 +1770,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            sDss.iCurrentPos = (func_list.pfGetBsPosition)(pSlice);
+            if let Some(func) = func_list.pfGetBsPosition {
+                sDss.iCurrentPos = func(pSlice);
+            }
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -1814,7 +1783,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             &mut sDss,
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                (*pSlice).iMbSkipRun = (func_list.pfStashPopMBStatus)(&mut sDss, pSlice);
+                if let Some(func) = func_list.pfStashPopMBStatus {
+                    (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                }
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
@@ -1825,7 +1796,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, pCurLayer, pSlice, pCurMb);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            (func_list.pfRc.pfWelsRcMbInfoUpdate)(pEncCtx, pCurMb, (*pMd).iCostLuma, pSlice);
+            if let Some(func) = func_list.pfRc.pfWelsRcMbInfoUpdate {
+                func(pEncCtx, pCurMb, (*pMd).iCostLuma, pSlice);
+            }
         }
 
         iNumMbCoded += 1;
@@ -2042,7 +2015,7 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     let pCurSlice = pSlice as *mut SSlice;
     let iCurMbIdx = (*pCurMb).iMbXY;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
-    let kiPartitionId = ((*pCurSlice).iSliceIdx % kiActiveThreadsNum) as usize;
+    let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;
     let kiEndMbIdxOfPartition = (*(*pEncCtx).pCurDqLayer).EndMbIdxOfPartition[kiPartitionId];
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
@@ -2606,7 +2579,7 @@ pub unsafe fn CalculateNewSliceNum(
         return ENC_RETURN_SUCCESS;
     }
 
-    let iPartitionID = ((*pLastCodedSlice).iSliceIdx % (*pCtx).iActiveThreadsNum) as usize;
+    let iPartitionID = ((*pLastCodedSlice).iSliceIdx % ((*pCtx).iActiveThreadsNum as i32)) as usize;
     let pCurLayer = (*pCtx).pCurDqLayer;
     let iMBNumInPartition = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).FirstMbIdxOfPartition[iPartitionID] + 1;
     let iLeftMBNum = (*pCurLayer).EndMbIdxOfPartition[iPartitionID] - (*pCurLayer).LastCodedMbIdxOfPartition[iPartitionID] + 1;
@@ -2828,7 +2801,7 @@ pub unsafe fn FrameBsRealloc(
     let pMA = (*pCtx).pMemAlign;
     let mut iCountNals = (*(*pCtx).pOut).iCountNals;
     let spatial_layers = if !(*pCtx).pSvcParam.is_null() { (*(*pCtx).pSvcParam).iSpatialLayerNum } else { 1 };
-    iCountNals += kiMaxSliceNumOld * (spatial_layers + (*pCtx).bNeedPrefixNalFlag);
+    iCountNals += kiMaxSliceNumOld * (spatial_layers + if (*pCtx).bNeedPrefixNalFlag { 1 } else { 0 });
 
     let pNalList = (*pMA).WelsMallocz(
         (iCountNals as usize * std::mem::size_of::<SWelsNalRaw>()) as u32,
@@ -2876,7 +2849,7 @@ pub unsafe fn SliceLayerInfoUpdate(
         (*(*pCtx).pCurDqLayer).iMaxSliceNum = iMaxSliceNum;
     }
 
-    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum);
+    let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, (*pCtx).iActiveThreadsNum as i32);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }

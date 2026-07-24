@@ -181,6 +181,8 @@ pub struct SPicture {
     pub bIsSceneLTR: bool,
     pub iFrameNum: i32,
     pub iPOC: i32,
+    pub iFramePoc: i32,
+    pub iPictureType: i32,
     pub uiTemporalId: u8,
     pub uiSpatialId: u8,
     pub iMarkFrameNum: i32,
@@ -199,6 +201,8 @@ impl Default for SPicture {
             bIsSceneLTR: false,
             iFrameNum: 0,
             iPOC: 0,
+            iFramePoc: 0,
+            iPictureType: 0,
             uiTemporalId: 0,
             uiSpatialId: 0,
             iMarkFrameNum: 0,
@@ -208,15 +212,6 @@ impl Default for SPicture {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpatialLayerInternal {
-    pub iFrameNum: i32,
-    pub iPOC: i32,
-    pub iFrameIndex: i32,
-    pub iCodingIndex: i32,
-    pub bEncCurFrmAsIdrFlag: bool,
-}
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsSPS {
@@ -254,99 +249,9 @@ impl Default for SLayerInfo {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-}
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSvcCodingParam {
-    pub iUsageType: EUsageType,
-    pub iPicWidth: i32,
-    pub iPicHeight: i32,
-    pub iTargetBitrate: i32,
-    pub iRCMode: RCMode,
-    pub fMaxFrameRate: f32,
-    pub iTemporalLayerNum: i32,
-    pub iSpatialLayerNum: i32,
-    pub sSpatialLayers: [SSpatialLayerConfig; MAX_DEPENDENCY_LAYER],
-    pub iComplexityMode: i32,
-    pub uiIntraPeriod: u32,
-    pub iNumRefFrame: i32,
-    pub eSpsPpsIdStrategy: i32,
-    pub bPrefixNalAddingCtrl: bool,
-    pub bEnableSSEI: bool,
-    pub bSimulcastAVC: bool,
-    pub iPaddingFlag: i32,
-    pub iEntropyCodingModeFlag: i32,
-    pub bEnableFrameCroppingFlag: bool,
-    pub iLoopFilterDisableIdc: i32,
-    pub iLoopFilterAlphaC0Offset: i32,
-    pub iLoopFilterBetaOffset: i32,
-    pub bEnableDenoise: bool,
-    pub bEnableSceneChangeDetect: bool,
-    pub bEnableBackgroundDetection: bool,
-    pub bEnableAdaptiveQuant: bool,
-    pub bEnableFrameSkip: bool,
-    pub bEnableLongTermReference: bool,
-    pub iLtrMarkPeriod: i32,
-    pub iMultipleThreadIdc: u16,
-    pub bUseLoadBalancing: bool,
-    pub iMaxBitrate: i32,
-    pub iMinQp: i32,
-    pub iMaxQp: i32,
-    pub uiMaxNalSize: u32,
-    pub bIsLosslessLink: bool,
-    pub iLTRRefNum: i32,
-    pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
-}
-
-impl Default for SWelsSvcCodingParam {
-    fn default() -> Self {
-        Self {
-            iUsageType: EUsageType::CameraVideoRealTime,
-            iPicWidth: 0,
-            iPicHeight: 0,
-            iTargetBitrate: 0,
-            iRCMode: RCMode::RcQualityMode,
-            fMaxFrameRate: 30.0,
-            iTemporalLayerNum: 1,
-            iSpatialLayerNum: 1,
-            sSpatialLayers: [SSpatialLayerConfig::default(); MAX_DEPENDENCY_LAYER],
-            iComplexityMode: LOW_COMPLEXITY,
-            uiIntraPeriod: 0,
-            iNumRefFrame: 1,
-            eSpsPpsIdStrategy: 1,
-            bPrefixNalAddingCtrl: false,
-            bEnableSSEI: false,
-            bSimulcastAVC: false,
-            iPaddingFlag: 0,
-            iEntropyCodingModeFlag: 0,
-            bEnableFrameCroppingFlag: false,
-            iLoopFilterDisableIdc: 0,
-            iLoopFilterAlphaC0Offset: 0,
-            iLoopFilterBetaOffset: 0,
-            bEnableDenoise: false,
-            bEnableSceneChangeDetect: true,
-            bEnableBackgroundDetection: true,
-            bEnableAdaptiveQuant: true,
-            bEnableFrameSkip: true,
-            bEnableLongTermReference: false,
-            iLtrMarkPeriod: 0,
-            iMultipleThreadIdc: 1,
-            bUseLoadBalancing: false,
-            iMaxBitrate: 0,
-            iMinQp: 0,
-            iMaxQp: 51,
-            uiMaxNalSize: 0,
-            bIsLosslessLink: false,
-            iLTRRefNum: 0,
-            sDependencyLayers: [SSpatialLayerInternal::default(); MAX_DEPENDENCY_LAYER],
-        }
-    }
-}
+pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -356,49 +261,9 @@ pub struct SVAAFrameInfo {
     pub eSceneChangeIdc: ESceneChangeIdc,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub pCurBuf: *mut u8,
-    pub uiBufSize: u32,
-    pub iBits: i32,
-}
+pub use crate::encoder::svc_encode_slice::SBitStringAux;
 
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            pCurBuf: std::ptr::null_mut(),
-            uiBufSize: 0,
-            iBits: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsEncoderOutput {
-    pub sBsWrite: SBitStringAux,
-    pub pBsBuffer: *mut u8,
-    pub uiSize: u32,
-    pub iNalIndex: i32,
-    pub iLayerBsIndex: i32,
-}
-
-impl Default for SWelsEncoderOutput {
-    fn default() -> Self {
-        Self {
-            sBsWrite: SBitStringAux::default(),
-            pBsBuffer: std::ptr::null_mut(),
-            uiSize: 0,
-            iNalIndex: 0,
-            iLayerBsIndex: 0,
-        }
-    }
-}
+pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -421,25 +286,23 @@ pub struct SDqIdc {
     pub uiTId: u8,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMB {
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiMbType: u32,
-}
+pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SSliceThreading {
     pub uiSliceNum: i32,
+    pub mutexSliceNumUpdate: *mut c_void,
+    pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSvcRc {
-    pub iQp: i32,
+impl Default for SSliceThreading {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
+
+pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -456,15 +319,20 @@ pub struct SMcFunc {
     pub pfChromaInterpolation: Option<unsafe extern "C" fn(*mut u8, i32, *const u8, i32, i32, i32, i32, i32)>,
 }
 
+pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
-pub struct SDeblockingFunc {
-    pub pfDeblockingLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32, *mut i8)>,
-    pub pfDeblockingChroma: Option<unsafe extern "C" fn(*mut u8, *mut u8, i32, i32, i32, *mut i8)>,
+pub struct SWelsRcFunc {
+    pub pfWelsRcMbInit: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice)>,
+    pub pfWelsRcMbInfoUpdate: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, iCostLuma: i32, pSlice: *mut SSlice)>,
+    pub pfWelsRcPictureInit: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>,
+    pub pfWelsRcPictureInfoUpdate: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iLayerSize: i32)>,
+    pub pfWelsRcPicDelayJudge: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>,
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsFuncPtrList {
     pub sExpandPicFunc: SExpandPicFunc,
     pub sMcFuncs: SMcFunc,
@@ -478,23 +346,16 @@ pub struct SWelsFuncPtrList {
     pub pfMdBackgroundInfoUpdate: Option<
         unsafe extern "C" fn(*mut SDqLayer, *mut SMB, bool, i32),
     >,
+    pub pfDctFourT4: Option<unsafe extern "C" fn(pDct: *mut i16, pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32)>,
+    pub pfIDctFourT4: Option<unsafe extern "C" fn(pRec: *mut u8, iStride: i32, pPred: *mut u8, iPredStride: i32, pRes: *mut i16)>,
+    pub pfInterMd: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pMd: *mut crate::encoder::svc_encode_slice::SWelsMD, pSlice: *mut SSlice, pCurMb: *mut SMB, pMbCache: *mut crate::encoder::svc_encode_slice::SMbCache)>,
+    pub pfWelsSpatialWriteMbSyn: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) -> i32>,
+    pub pfStashMBStatus: Option<unsafe extern "C" fn(pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack, pSlice: *mut SSlice, iMbSkipRun: i32)>,
+    pub pfStashPopMBStatus: Option<unsafe extern "C" fn(pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack, pSlice: *mut SSlice) -> i32>,
+    pub pfGetBsPosition: Option<unsafe extern "C" fn(pSlice: *mut SSlice) -> i32>,
+    pub pfSetNZCZero: Option<unsafe extern "C" fn(*mut i8, i32)>,
+    pub pfRc: SWelsRcFunc,
     pub pParametersetStrategy: *mut c_void,
-}
-
-impl Default for SWelsFuncPtrList {
-    fn default() -> Self {
-        Self {
-            sExpandPicFunc: SExpandPicFunc::default(),
-            sMcFuncs: SMcFunc::default(),
-            pfDeblocking: SDeblockingFunc::default(),
-            pfSetMemZeroSize8: None,
-            pfSetMemZeroSize64Aligned16: None,
-            pfSetMemZeroSize64: None,
-            pfInterMdBackgroundDecision: None,
-            pfMdBackgroundInfoUpdate: None,
-            pParametersetStrategy: std::ptr::null_mut(),
-        }
-    }
 }
 
 // ============================================================================
@@ -675,7 +536,7 @@ pub struct sWelsEncCtx {
     pub pPSOVector: *mut SParaSetOffset,
     pub pMemAlign: *mut CMemoryAlign,
     pub uiStartTimestamp: i64,
-    pub sEncoderStatistics: [SEncoderStatistics; MAX_DEPENDENCY_LAYER],
+    pub sEncoderStatistics: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
     pub iStatisticsLogInterval: i32,
     pub iLastStatisticsLogTs: i64,
     pub iEncoderError: i32,
@@ -684,6 +545,12 @@ pub struct sWelsEncCtx {
     pub sWelsCabacContexts: [[[SStateCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub uiLastTimestamp: i64,
     pub pDynamicBsBuffer: [*mut u8; MAX_THREADS_NUM],
+}
+
+impl Default for sWelsEncCtx {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 // ============================================================================

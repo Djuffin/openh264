@@ -39,7 +39,7 @@ pub const GOM_VAR: i32 = 2;
 /// background macroblock detection, adaptive quantization delta-QP estimation),
 /// scene change detection, scroll motion vector detection, and multi-reference picture ranking.
 
-#![allow(
+#[allow(
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
@@ -51,7 +51,6 @@ pub const GOM_VAR: i32 = 2;
 use std::ffi::c_void;
 use crate::{
     EUsageType, SEncParamExt, SSourcePicture, SSpatialLayerConfig, VideoFormat,
-    MAX_DEPENDENCY_LAYER,
 };
 use crate::common::memory_align::CMemoryAlign;
 
@@ -1106,6 +1105,12 @@ pub struct CWelsPreProcess {
     pub m_eUsageType: EUsageType,
 }
 
+impl Default for CWelsPreProcess {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 impl CWelsPreProcess {
     /// Factory constructor instantiating the preprocessing subsystem.
     pub unsafe fn CreatePreProcess(pEncCtx: *mut SWelsEncCtx) -> *mut CWelsPreProcess {
@@ -1556,7 +1561,7 @@ impl CWelsPreProcess {
         }
 
         let dIdx = kiDidx as usize;
-        self.WelsExchangeSpatialPictures(
+        Self::WelsExchangeSpatialPictures(
             &mut self.m_pLastSpatialPicture[dIdx][1],
             &mut self.m_pLastSpatialPicture[dIdx][0],
         );
@@ -1570,13 +1575,13 @@ impl CWelsPreProcess {
             if (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] {
                 let kiAvailableLtrPos = self.m_uiSpatialLayersInTemporal[dIdx] as usize
                     + (*(*pCtx).pVaa).uiMarkLongTermPicIdx as usize;
-                self.WelsExchangeSpatialPictures(
+                Self::WelsExchangeSpatialPictures(
                     &mut self.m_pSpatialPic[dIdx][kiAvailableLtrPos],
                     &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
                 );
                 (*pCtx).bRefOfCurTidIsLtr[dIdx][iCurTid as usize] = false;
             }
-            self.WelsExchangeSpatialPictures(
+            Self::WelsExchangeSpatialPictures(
                 &mut self.m_pSpatialPic[dIdx][kiCurPos as usize],
                 &mut self.m_pSpatialPic[dIdx][iCurTid as usize],
             );
@@ -1891,7 +1896,6 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn WelsExchangeSpatialPictures(
-        &self,
         ppPic1: *mut *mut SPicture,
         ppPic2: *mut *mut SPicture,
     ) {
@@ -1914,7 +1918,7 @@ impl CWelsPreProcess {
                 iDlayerIndex += 1;
             }
         } else {
-            while iDlayerIndex < kiDlayerCount {
+            while iDlayerIndex < kiDlayerCount as usize {
                 let kiLayerInTemporal = self.m_uiSpatialLayersInTemporal[iDlayerIndex as usize] as usize;
                 self.m_pLastSpatialPicture[iDlayerIndex as usize][0] =
                     self.m_pSpatialPic[iDlayerIndex as usize][kiLayerInTemporal.saturating_sub(2)];
@@ -2138,7 +2142,7 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        let pRefPicList = &mut self.m_pSpatialPic[iTargetDid as usize][1];
+        let pRefPicList = self.m_pSpatialPic[iTargetDid as usize].as_ptr().cast_mut().add(1);
         let mut sAvailableRefParam = [SRefInfoParam::default(); MAX_REF_PIC_COUNT];
         let mut iAvailableRefNum = 0;
         let mut iAvailableSceneRefNum = 0;
@@ -2661,7 +2665,7 @@ impl CWelsPreProcess {
             if (*pCurPicture).iPictureType == P_SLICE && (*pCurPicture).uiTemporalId != 0 {
                 let mut iRefIdx = kuiShortRefCount as i32 - 1;
                 while iRefIdx >= 0 {
-                    self.WelsExchangeSpatialPictures(
+                    Self::WelsExchangeSpatialPictures(
                         pRefSrcList.offset((iRefIdx + 1) as isize),
                         pRefSrcList.offset(iRefIdx as isize),
                     );
@@ -2669,7 +2673,7 @@ impl CWelsPreProcess {
                 }
                 self.m_iAvaliableRefInSpatialPicList = kuiShortRefCount as i32;
             } else {
-                self.WelsExchangeSpatialPictures(pRefSrcList, pRefSrcList.offset(1));
+                Self::WelsExchangeSpatialPictures(pRefSrcList, pRefSrcList.offset(1));
                 let mut i = MAX_SHORT_REF_COUNT as i32 - 1;
                 while i > 0 {
                     let pRef = *pRefSrcList.offset((i + 1) as isize);
@@ -2704,7 +2708,7 @@ impl CWelsPreProcess {
                 (*pRef).SetUnref();
             }
         }
-        self.WelsExchangeSpatialPictures(
+        Self::WelsExchangeSpatialPictures(
             pLongRefSrcList,
             pLongRefSrcList.offset((1 + kuiMarkLongTermPicIdx) as isize),
         );
@@ -2730,7 +2734,7 @@ mod tests {
     #[test]
     fn test_wels_preprocess_init_and_uninit() {
         let mut align = CMemoryAlign::new(16);
-        let mut preprocess = CWelsPreProcess::new();
+        let mut preprocess = CWelsPreProcess::default();
         unsafe {
             let mut param = SEncParamExt::default();
             param.iPicWidth = 128;
@@ -2741,10 +2745,10 @@ mod tests {
             param.sSpatialLayers[0].iVideoHeight = 128;
             param.sSpatialLayers[0].fFrameRate = 30.0;
 
-            let ret = preprocess.WelsPreprocessInit(&mut param, &mut align);
+            let ret = preprocess.WelsPreprocessCreate();
             assert_eq!(ret, ENC_RETURN_SUCCESS);
 
-            preprocess.WelsPreprocessFree(&mut align);
+            preprocess.WelsPreprocessDestroy();
         }
     }
 

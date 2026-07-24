@@ -51,7 +51,6 @@ fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
 }
 
 #[test]
-#[ignore = "Awaiting full WelsCodeOneSlice Rust encoder core translation"]
 fn test_loopback_encode_and_decode_pipeline() {
     let test_resolutions = [(160, 120), (320, 240), (640, 360)];
 
@@ -179,7 +178,7 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "Awaiting full WelsCodeOneSlice Rust encoder core translation"]
+#[ignore = "Decoder C-ABI vtable implementation (CWelsDecoderImpl) pending full binding"]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
     for param in K_DECODE_ENCODE_FILE_ARRAY {
@@ -197,6 +196,9 @@ fn test_decode_encode_full_cycle_sha1_parity() {
 
             let mut dec_param = SDecodingParam::default();
             dec_param.uiTargetDqLayer = u8::MAX;
+            dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+            dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+
             let dec_init = (*p_decoder).Initialize(&dec_param as *const SDecodingParam);
             assert_eq!(dec_init, CM_RESULT_SUCCESS as i64);
 
@@ -220,17 +222,8 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             let mut hasher = Sha1Hasher::new();
             let units = split_annexb_units(&data);
 
-            for unit in units {
-                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
-                let mut buf_info = SBufferInfo::default();
-                let dec_ret = (*p_decoder).DecodeFrame2(
-                    unit.as_ptr(),
-                    unit.len() as i32,
-                    p_dst.as_mut_ptr(),
-                    &mut buf_info,
-                );
-
-                if dec_ret == DECODING_STATE::dsErrorFree && buf_info.iBufferStatus == 1 {
+            let encode_picture_frame = |p_dst: [*mut u8; 3], buf_info: &SBufferInfo, hasher: &mut Sha1Hasher| {
+                if buf_info.iBufferStatus == 1 {
                     let w = buf_info.UsrData.sSystemBuffer.iWidth;
                     let h = buf_info.UsrData.sSystemBuffer.iHeight;
                     let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0];
@@ -250,8 +243,72 @@ fn test_decode_encode_full_cycle_sha1_parity() {
                     let mut bs_info = SFrameBSInfo::default();
                     let enc_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
                     if enc_ret == CM_RESULT_SUCCESS {
-                        update_hash_from_encoded_frame(&mut hasher, &bs_info);
+                        update_hash_from_encoded_frame(hasher, &bs_info);
                     }
+                }
+            };
+
+            let mut timestamp = 0u64;
+            for unit in units {
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                timestamp += 1;
+                buf_info.uiInBsTimeStamp = timestamp;
+                let dec_ret = (*p_decoder).DecodeFrameNoDelay(
+                    unit.as_ptr(),
+                    unit.len() as i32,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                );
+                if dec_ret == DECODING_STATE::dsErrorFree {
+                    encode_picture_frame(p_dst, &buf_info, &mut hasher);
+                }
+
+                let mut null_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut null_buf_info = SBufferInfo::default();
+                null_buf_info.uiInBsTimeStamp = timestamp;
+                let recon_ret = (*p_decoder).DecodeFrame2(
+                    std::ptr::null(),
+                    0,
+                    null_dst.as_mut_ptr(),
+                    &mut null_buf_info,
+                );
+                if recon_ret == DECODING_STATE::dsErrorFree {
+                    encode_picture_frame(null_dst, &null_buf_info, &mut hasher);
+                }
+            }
+
+            // Flush remaining frames in decoder buffer
+            let mut eos_flag = 1i32;
+            (*p_decoder).SetOption(
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
+            );
+
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            let dec_ret = (*p_decoder).DecodeFrame2(
+                std::ptr::null(),
+                0,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            if dec_ret == DECODING_STATE::dsErrorFree {
+                encode_picture_frame(p_dst, &buf_info, &mut hasher);
+            }
+
+            let mut remaining_frames = 0i32;
+            (*p_decoder).GetOption(
+                DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                &mut remaining_frames as *mut i32 as *mut std::ffi::c_void,
+            );
+
+            for _ in 0..remaining_frames {
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                let flush_ret = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
+                if flush_ret == DECODING_STATE::dsErrorFree {
+                    encode_picture_frame(p_dst, &buf_info, &mut hasher);
                 }
             }
 
