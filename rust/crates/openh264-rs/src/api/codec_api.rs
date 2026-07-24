@@ -14,6 +14,7 @@
 )]
 
 use std::ffi::{c_char, c_long, c_void};
+use std::ptr;
 
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
@@ -1288,6 +1289,7 @@ impl ISVCDecoder {
 pub struct CWelsH264SVCEncoderImpl {
     pub base: ISVCEncoder,
     pub pVtbl: Box<ISVCEncoderVtbl>,
+    pub inner: crate::encoder::wels_encoder_ext::CWelsH264SVCEncoder,
 }
 
 #[repr(C)]
@@ -1296,47 +1298,64 @@ pub struct CWelsDecoderImpl {
     pub pVtbl: Box<ISVCDecoderVtbl>,
 }
 
-unsafe extern "C" fn encoder_init_c(_this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
-    if pParam.is_null() {
+unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
+    if this.is_null() || pParam.is_null() {
         return CM_INIT_PARA_ERROR;
     }
     unsafe {
-        if (*pParam).iPicWidth <= 0 || (*pParam).iPicHeight <= 0 {
-            return CM_INIT_PARA_ERROR;
-        }
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.Initialize(pParam as *const crate::SEncParamBase)
     }
-    CM_RESULT_SUCCESS
 }
 
-unsafe extern "C" fn encoder_init_ext_c(_this: *mut ISVCEncoder, pParam: *const SEncParamExt) -> i32 {
-    if pParam.is_null() {
+unsafe extern "C" fn encoder_init_ext_c(this: *mut ISVCEncoder, pParam: *const SEncParamExt) -> i32 {
+    if this.is_null() || pParam.is_null() {
         return CM_INIT_PARA_ERROR;
     }
     unsafe {
-        if (*pParam).iPicWidth <= 0 || (*pParam).iPicHeight <= 0 {
-            return CM_INIT_PARA_ERROR;
-        }
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.InitializeExt(pParam as *const crate::SEncParamExt)
     }
-    CM_RESULT_SUCCESS
 }
 
-unsafe extern "C" fn encoder_get_default_c(_this: *mut ISVCEncoder, pParam: *mut SEncParamExt) -> i32 {
-    if pParam.is_null() {
+unsafe extern "C" fn encoder_get_default_c(this: *mut ISVCEncoder, pParam: *mut SEncParamExt) -> i32 {
+    if this.is_null() || pParam.is_null() {
         return CM_INIT_PARA_ERROR;
     }
-    CM_RESULT_SUCCESS
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.GetDefaultParams(pParam as *mut crate::SEncParamExt)
+    }
 }
 
-unsafe extern "C" fn encoder_uninit_c(_this: *mut ISVCEncoder) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_uninit_c(this: *mut ISVCEncoder) -> i32 {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.Uninitialize()
+    }
 }
 
-unsafe extern "C" fn encoder_encode_frame_c(_this: *mut ISVCEncoder, _kpSrcPic: *const SSourcePicture, _pBsInfo: *mut SFrameBSInfo) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_encode_frame_c(this: *mut ISVCEncoder, kpSrcPic: *const SSourcePicture, pBsInfo: *mut SFrameBSInfo) -> i32 {
+    if this.is_null() || kpSrcPic.is_null() || pBsInfo.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.EncodeFrame(kpSrcPic as *const crate::SSourcePicture, pBsInfo as *mut crate::SFrameBSInfo)
+    }
 }
 
-unsafe extern "C" fn encoder_encode_param_c(_this: *mut ISVCEncoder, _pBsInfo: *mut SFrameBSInfo) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_encode_param_c(this: *mut ISVCEncoder, pBsInfo: *mut SFrameBSInfo) -> i32 {
+    if this.is_null() || pBsInfo.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.EncodeParameterSets(pBsInfo as *mut crate::SFrameBSInfo)
+    }
 }
 
 unsafe extern "C" fn encoder_force_intra_c(_this: *mut ISVCEncoder, _bIDR: bool) -> i32 {
@@ -1410,12 +1429,13 @@ pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) 
         SetOption: encoder_set_opt_c,
         GetOption: encoder_get_opt_c,
     });
-    let vtbl_ptr = &*vtbl as *const ISVCEncoderVtbl;
-    let enc = Box::into_raw(Box::new(CWelsH264SVCEncoderImpl {
-        base: ISVCEncoder { lpVtbl: vtbl_ptr },
+    let mut enc = Box::new(CWelsH264SVCEncoderImpl {
+        base: ISVCEncoder { lpVtbl: ptr::null() },
         pVtbl: vtbl,
-    }));
-    *ppEncoder = enc as *mut ISVCEncoder;
+        inner: crate::encoder::wels_encoder_ext::CWelsH264SVCEncoder::new(),
+    });
+    enc.base.lpVtbl = &*enc.pVtbl as *const ISVCEncoderVtbl;
+    *ppEncoder = Box::into_raw(enc) as *mut ISVCEncoder;
     CM_RESULT_SUCCESS
 }
 
@@ -1453,12 +1473,12 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         SetOption: decoder_set_opt_c,
         GetOption: decoder_get_opt_c,
     });
-    let vtbl_ptr = &*vtbl as *const ISVCDecoderVtbl;
-    let dec = Box::into_raw(Box::new(CWelsDecoderImpl {
-        base: ISVCDecoder { lpVtbl: vtbl_ptr },
+    let mut dec = Box::new(CWelsDecoderImpl {
+        base: ISVCDecoder { lpVtbl: ptr::null() },
         pVtbl: vtbl,
-    }));
-    *ppDecoder = dec as *mut ISVCDecoder;
+    });
+    dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
+    *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
     CM_RESULT_SUCCESS as c_long
 }
 

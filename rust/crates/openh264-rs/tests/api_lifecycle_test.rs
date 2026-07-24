@@ -146,7 +146,10 @@ fn test_encoder_create_and_destroy_lifecycle() {
         assert_eq!(get_def_ret, CM_RESULT_SUCCESS);
 
         // 4. EncodeFrame
-        let src_pic = SSourcePicture::default();
+        let mut src_pic = SSourcePicture::default();
+        src_pic.iPicWidth = 160;
+        src_pic.iPicHeight = 120;
+        src_pic.iColorFormat = 23;
         let mut bs_info = SFrameBSInfo::default();
         let enc_frame_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
         assert_eq!(enc_frame_ret, CM_RESULT_SUCCESS);
