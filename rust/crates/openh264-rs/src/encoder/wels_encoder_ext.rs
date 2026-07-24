@@ -798,54 +798,16 @@ pub unsafe fn WelsInitEncoderExtRust(
     ctx.pOut = out_ptr;
 
     let func_list = Box::new(crate::encoder::encoder_context::SWelsFuncPtrList::default());
-    let func_ptr = Box::into_raw(func_list);
-    ctx.pFuncList = func_ptr;
+    ctx.pFuncList = Box::into_raw(func_list);
 
-    let mb_w = (((*pCfg).iPicWidth + 15) >> 4) as i32;
-    let mb_h = (((*pCfg).iPicHeight + 15) >> 4) as i32;
-    let total_mbs = if mb_w > 0 && mb_h > 0 { (mb_w * mb_h) as usize } else { 0 };
+    let ctx_ptr = Box::into_raw(ctx);
+    let _ = crate::encoder::encoder_context::InitFunctionPointers(
+        ctx_ptr,
+        (*ctx_ptr).pSvcParam,
+        0,
+    );
 
-    let mut dq_layer = Box::new(crate::encoder::svc_encode_slice::SDqLayer::default());
-    dq_layer.iMbWidth = mb_w;
-    dq_layer.iMbHeight = mb_h;
-    if total_mbs > 0 {
-        dq_layer.sMbDataP = vec![crate::encoder::svc_encode_slice::SMB::default(); total_mbs].leak().as_mut_ptr();
-    }
-    let slice = Box::new(crate::encoder::svc_encode_slice::SSlice::default());
-    dq_layer.sSliceBufferInfo[0].pSliceBuffer = Box::into_raw(slice);
-    ctx.pCurDqLayer = Box::into_raw(dq_layer);
-
-    let mut svc_rc = vec![crate::encoder::rc::SWelsSvcRc::default(); 4];
-    for rc in svc_rc.iter_mut() {
-        rc.iMaxQp = 51;
-        rc.iMinQp = 0;
-    }
-    ctx.pWelsSvcRc = svc_rc.leak().as_mut_ptr();
-
-    let sps = Box::new(crate::encoder::param_svc::SWelsSPS {
-        uiProfileIdc: 66,
-        iLevelIdc: 30,
-        iMbWidth: (((*pCfg).iPicWidth + 15) >> 4) as i16,
-        iMbHeight: (((*pCfg).iPicHeight + 15) >> 4) as i16,
-        uiLog2MaxFrameNum: 4,
-        uiPocType: 0,
-        iLog2MaxPocLsb: 4,
-        iNumRefFrames: 1,
-        bFrameCroppingFlag: false,
-        ..Default::default()
-    });
-    ctx.pSpsArray = Box::into_raw(sps) as *mut _;
-    ctx.iSpsNum = 1;
-
-    let pps = Box::new(crate::encoder::param_svc::SWelsPPS {
-        iPicInitQp: 26,
-        uiNumSliceGroups: 1,
-        ..Default::default()
-    });
-    ctx.pPPSArray = Box::into_raw(pps) as *mut _;
-    ctx.iPpsNum = 1;
-
-    *ppCtx = Box::into_raw(ctx);
+    *ppCtx = ctx_ptr;
     0
 }
 

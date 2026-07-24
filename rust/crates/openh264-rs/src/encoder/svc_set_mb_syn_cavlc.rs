@@ -127,7 +127,7 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
     39, 39, 39,
 ];
 
-pub const g_kuiGolombUELength: [u32; 256] = [
+pub const g_kuiGolombUELength: &[u32] = &[
     1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
     9, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
     11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
@@ -473,7 +473,7 @@ pub struct sWelsEncCtx {
 // ============================================================================
 
 /// Calculates non-zero count, level, run, and total zero statistics for CAVLC transform blocks.
-pub unsafe fn CavlcParamCal_c(
+pub unsafe extern "C" fn CavlcParamCal_c(
     pCoffLevel: *mut i16,
     pRun: *mut u8,
     pLevel: *mut i16,
@@ -581,7 +581,7 @@ pub unsafe fn WriteBlockResidualCavlc(
         let iVal = iLevel[i as usize] as i32;
         let mut iLevelCode = (iVal - 1) * 2;
         let sign = (iLevelCode >> 31) as u32;
-        iLevelCode = ((iLevelCode ^ (sign as i32)) + ((sign as i32) << 1));
+        iLevelCode = (iLevelCode ^ (sign as i32)) + ((sign as i32) << 1);
         if i == iTrailingOnes && iTrailingOnes < 3 {
             iLevelCode -= 2;
         }
@@ -607,7 +607,7 @@ pub unsafe fn WriteBlockResidualCavlc(
         }
 
         n = iLevelPrefix + 1 + iLevelSuffixSize;
-        iValue = ((1u32 << iLevelSuffixSize) | (iLevelSuffix as u32));
+        iValue = (1u32 << iLevelSuffixSize) | (iLevelSuffix as u32);
         BsWriteBits(pBs, n, iValue);
 
         if uiSuffixLength == 0 {
@@ -1248,6 +1248,50 @@ pub unsafe fn WelsWriteMbResidual(
         }
     }
     0
+}
+
+pub unsafe extern "C" fn StashMBStatusCavlc(
+    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pSlice: *mut SSlice,
+    iMbSkipRun: i32,
+) {
+    if pDss.is_null() || pSlice.is_null() {
+        return;
+    }
+    let pBs = (*pSlice).pSliceBsa;
+    if !pBs.is_null() {
+        (*pDss).pBsStackBufPtr = (*pBs).pCurBuf;
+        (*pDss).uiBsStackCurBits = (*pBs).uiCurBits;
+        (*pDss).iBsStackLeftBits = (*pBs).iLeftBits;
+    }
+    (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp as u8;
+    (*pDss).iMbSkipRunStack = iMbSkipRun;
+}
+
+pub unsafe extern "C" fn StashPopMBStatusCavlc(
+    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pSlice: *mut SSlice,
+) -> i32 {
+    if pDss.is_null() || pSlice.is_null() {
+        return 0;
+    }
+    let pBs = (*pSlice).pSliceBsa;
+    if !pBs.is_null() {
+        (*pBs).pCurBuf = (*pDss).pBsStackBufPtr;
+        (*pBs).uiCurBits = (*pDss).uiBsStackCurBits;
+        (*pBs).iLeftBits = (*pDss).iBsStackLeftBits;
+    }
+    (*pSlice).uiLastMbQp = (*pDss).uiLastMbQp;
+    (*pDss).iMbSkipRunStack
+}
+
+pub unsafe extern "C" fn GetBsPosCavlc(pSlice: *mut SSlice) -> i32 {
+    if pSlice.is_null() || (*pSlice).pSliceBsa.is_null() {
+        return 0;
+    }
+    crate::encoder::vlc_encoder::BsGetBitsPos(
+        (*pSlice).pSliceBsa as *const crate::encoder::vlc_encoder::SBitStringAux
+    )
 }
 
 #[cfg(test)]

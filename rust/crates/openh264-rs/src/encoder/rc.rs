@@ -2383,8 +2383,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 }
 
 /// Populates the rate control function dispatch table.
-pub unsafe fn WelsRcInitFuncPointers(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
-    let pRcf = &mut (*(*pEncCtx).pFuncList).pfRc;
+pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     match iRcMode {
         RCMode::RcOffMode => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitDisable);
@@ -2446,7 +2445,9 @@ pub unsafe fn WelsRcInitFuncPointers(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode)
 
 /// Top-level initialization entry point called during encoder creation.
 pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
-    WelsRcInitFuncPointers(pEncCtx, iRcMode);
+    if !pEncCtx.is_null() && !(*pEncCtx).pFuncList.is_null() {
+        WelsRcInitFuncPointers(&mut (*(*pEncCtx).pFuncList).pfRc, iRcMode);
+    }
     RcInitSequenceParameter(pEncCtx);
 }
 
