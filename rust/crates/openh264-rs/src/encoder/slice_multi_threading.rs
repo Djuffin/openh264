@@ -573,7 +573,7 @@ pub unsafe fn DynamicAdjustSlicing(
     let mut iMaximalMbNum;
     let mut iMbNumLeft = kiCountNumMb;
     let mut iRunLen = [0i32; MAX_THREADS_NUM];
-    let mut iSliceIdx = 0i32;
+    let mut iSliceIdx: i32;
 
     let pSvcParam = (*pCtx).pSvcParam;
     if pSvcParam.is_null() {

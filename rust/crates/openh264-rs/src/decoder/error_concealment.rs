@@ -1049,7 +1049,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
 }
 
 /// Expand border pixels outward to allow out-of-bounds motion vector compensation.
-pub unsafe extern "C" fn ExpandReferencingPicture(
+pub unsafe fn ExpandReferencingPicture(
     pData: [*mut u8; 4],
     iWidth: i32,
     iHeight: i32,
@@ -1193,6 +1193,7 @@ mod tests {
         unsafe {
             assert_eq!(NeedErrorCon(&mut ctx), false);
             mb_flags[2] = false;
+            let _ = mb_flags;
             assert_eq!(NeedErrorCon(&mut ctx), true);
         }
     }

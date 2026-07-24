@@ -704,17 +704,17 @@ pub unsafe fn WriteBlockResidualCavlc(
         let mut iTotalCoeffs: i32 = 0;
         let mut iTrailingOnes: i32 = 0;
         let mut iTotalZeros: i32 = 0;
-        let mut iZerosLeft: i32 = 0;
+        let mut iZerosLeft: i32;
         let mut uiSign: u32 = 0;
-        let mut iLevelCode: i32 = 0;
-        let mut iLevelPrefix: i32 = 0;
-        let mut iLevelSuffix: i32 = 0;
-        let mut uiSuffixLength: i32 = 0;
-        let mut iLevelSuffixSize: i32 = 0;
-        let mut iValue: i32 = 0;
+        let mut iLevelCode: i32;
+        let mut iLevelPrefix: i32;
+        let mut iLevelSuffix: i32;
+        let mut uiSuffixLength: i32;
+        let mut iLevelSuffixSize: i32;
+        let mut iValue: i32;
         let mut iThreshold: i32;
         let mut iZeroLeft: i32;
-        let mut n: i32 = 0;
+        let mut n: i32;
 
         let mut pBufPtr = (*pBs).pCurBuf;
         let mut uiCurBits = (*pBs).uiCurBits;

@@ -1334,8 +1334,8 @@ pub unsafe fn ParseRefIdxCabac(
     }
 
     let mut uiCode: u32 = 0;
-    let mut iIdxA: i32;
-    let mut iIdxB: i32;
+    let iIdxA: i32;
+    let iIdxB: i32;
     let mut iCtxInc: i32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;

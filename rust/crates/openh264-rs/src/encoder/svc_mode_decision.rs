@@ -645,7 +645,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     let bTrySkip =
         kbMbLeftAvailPskip | kbMbTopAvailPskip | kbMbTopLeftAvailPskip | kbMbTopRightAvailPskip;
     let mut bKeepSkip = kbMbLeftAvailPskip & kbMbTopAvailPskip & kbMbTopRightAvailPskip;
-    let mut bSkip = false;
+    let bSkip: bool;
 
     if let Some(pfBgd) = (*(*pEncCtx).pFuncList).pfInterMdBackgroundDecision {
         if pfBgd(pEncCtx, pWelsMd, pSlice, pCurMb, pMbCache, &mut bKeepSkip) {

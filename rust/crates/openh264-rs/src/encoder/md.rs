@@ -506,7 +506,7 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
         let iTmpValue = ((kiValue as u32) << 1) - 1;
         BsSizeUE(iTmpValue)
     } else {
-        let iTmpValue = ((-kiValue as u32) << 1);
+        let iTmpValue = (-kiValue as u32) << 1;
         BsSizeUE(iTmpValue)
     }
 }

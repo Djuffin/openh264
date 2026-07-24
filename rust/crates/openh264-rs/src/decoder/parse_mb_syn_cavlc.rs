@@ -734,8 +734,8 @@ pub unsafe fn WelsFillCacheNonZeroCount(
         let na = &*pNeighAvail;
         let dq = &*pCurDqLayer;
         let iCurXy = dq.iMbXyIndex;
-        let mut iTopXy = 0;
-        let mut iLeftXy = 0;
+        let iTopXy: i32;
+        let iLeftXy: i32;
 
         if na.iTopAvail != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
