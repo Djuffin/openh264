@@ -354,113 +354,7 @@ pub struct SPosOffset {
     pub iBottomOffset: i32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SSps {
-    pub uiProfileIdc: u32,
-    pub bConstraintSet0Flag: bool,
-    pub bConstraintSet1Flag: bool,
-    pub bConstraintSet2Flag: bool,
-    pub bConstraintSet3Flag: bool,
-    pub uiLevelIdc: u32,
-    pub iSpsId: i32,
-    pub uiLog2MaxFrameNum: u32,
-    pub uiPocType: u32,
-    pub iLog2MaxPocLsb: i32,
-    pub bDeltaPicOrderAlwaysZeroFlag: bool,
-    pub iOffsetForNonRefPic: i32,
-    pub iOffsetForTopToBottomField: i32,
-    pub iNumRefFramesInPocCycle: i32,
-    pub iOffsetForRefFrame: [i32; 256],
-    pub iNumRefFrames: i32,
-    pub bGapsInFrameNumValueAllowedFlag: bool,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub bFrameMbsOnlyFlag: bool,
-    pub bDirect8x8InferenceFlag: bool,
-    pub bFrameCroppingFlag: bool,
-    pub sFrameCrop: SPosOffset,
-    pub bVuiParamPresentFlag: bool,
-}
-pub type PSps = *mut SSps;
-
-impl Default for SSps {
-    fn default() -> Self {
-        Self {
-            uiProfileIdc: 0,
-            bConstraintSet0Flag: false,
-            bConstraintSet1Flag: false,
-            bConstraintSet2Flag: false,
-            bConstraintSet3Flag: false,
-            uiLevelIdc: 0,
-            iSpsId: 0,
-            uiLog2MaxFrameNum: 0,
-            uiPocType: 0,
-            iLog2MaxPocLsb: 0,
-            bDeltaPicOrderAlwaysZeroFlag: false,
-            iOffsetForNonRefPic: 0,
-            iOffsetForTopToBottomField: 0,
-            iNumRefFramesInPocCycle: 0,
-            iOffsetForRefFrame: [0; 256],
-            iNumRefFrames: 0,
-            bGapsInFrameNumValueAllowedFlag: false,
-            iMbWidth: 0,
-            iMbHeight: 0,
-            bFrameMbsOnlyFlag: false,
-            bDirect8x8InferenceFlag: false,
-            bFrameCroppingFlag: false,
-            sFrameCrop: SPosOffset::default(),
-            bVuiParamPresentFlag: false,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SPps {
-    pub iPpsId: i32,
-    pub iSpsId: i32,
-    pub bEntropyCodingModeFlag: bool,
-    pub bPicOrderPresentFlag: bool,
-    pub uiNumSliceGroups: u32,
-    pub uiSliceGroupMapType: u32,
-    pub uiNumRefIdxL0DefaultActive: u32,
-    pub uiNumRefIdxL1DefaultActive: u32,
-    pub bWeightedPredFlag: bool,
-    pub uiWeightedBipredIdc: u32,
-    pub iPicInitQp: i32,
-    pub iPicInitQs: i32,
-    pub iChromaQpIndexOffset: i32,
-    pub bDeblockingFilterControlPresentFlag: bool,
-    pub bConstrainedIntraPredFlag: bool,
-    pub bRedundantPicCntPresentFlag: bool,
-    pub bTransform8x8ModeFlag: bool,
-}
-pub type PPps = *mut SPps;
-
-impl Default for SPps {
-    fn default() -> Self {
-        Self {
-            iPpsId: 0,
-            iSpsId: 0,
-            bEntropyCodingModeFlag: false,
-            bPicOrderPresentFlag: false,
-            uiNumSliceGroups: 0,
-            uiSliceGroupMapType: 0,
-            uiNumRefIdxL0DefaultActive: 0,
-            uiNumRefIdxL1DefaultActive: 0,
-            bWeightedPredFlag: false,
-            uiWeightedBipredIdc: 0,
-            iPicInitQp: 0,
-            iPicInitQs: 0,
-            iChromaQpIndexOffset: 0,
-            bDeblockingFilterControlPresentFlag: false,
-            bConstrainedIntraPredFlag: false,
-            bRedundantPicCntPresentFlag: false,
-            bTransform8x8ModeFlag: false,
-        }
-    }
-}
+pub use crate::decoder::decoder_core::{SSps, SPps, PSps, PPps};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -520,6 +414,9 @@ pub struct SSliceHeader {
     pub eSliceType: i32,
     pub iFirstMbInSlice: i32,
     pub iFrameNum: i32,
+    pub bFieldPicFlag: bool,
+    pub bBottomFiledFlag: bool,
+    pub uiIdrPicId: u16,
     pub iPicOrderCntLsb: i32,
     pub iDeltaPicOrderCntBottom: i32,
     pub iDeltaPicOrderCnt: [i32; 2],
@@ -542,6 +439,9 @@ impl Default for SSliceHeader {
             eSliceType: 0,
             iFirstMbInSlice: 0,
             iFrameNum: 0,
+            bFieldPicFlag: false,
+            bBottomFiledFlag: false,
+            uiIdrPicId: 0,
             iPicOrderCntLsb: 0,
             iDeltaPicOrderCntBottom: 0,
             iDeltaPicOrderCnt: [0; 2],

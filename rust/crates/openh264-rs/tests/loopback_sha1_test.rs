@@ -178,7 +178,6 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "Decoder C-ABI vtable implementation (CWelsDecoderImpl) pending full binding"]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
     for param in K_DECODE_ENCODE_FILE_ARRAY {

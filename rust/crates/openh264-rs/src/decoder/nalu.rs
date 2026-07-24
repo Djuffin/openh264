@@ -1557,7 +1557,7 @@ pub unsafe fn ParsePps(
     pPps.bDeblockingFilterControlPresentFlag = uiCode != 0;
 
     if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pPps.bConstainedIntraPredFlag = uiCode != 0;
+    pPps.bConstrainedIntraPredFlag = uiCode != 0;
 
     if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bRedundantPicCntPresentFlag = uiCode != 0;
