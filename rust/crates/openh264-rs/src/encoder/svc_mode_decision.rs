@@ -14,7 +14,7 @@
 
 use std::ffi::c_void;
 
-use crate::encoder::md::WelsMedian;
+use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
 use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::vlc_encoder::BsSizeUE;
@@ -496,54 +496,91 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 // External C Routine Declarations
 // ============================================================================
 
+pub unsafe extern "C" fn WelsMdInterUpdatePskip(
+    _pCurDqLayer: *mut SDqLayer,
+    _pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+    _pMbCache: *mut SMbCache,
+) {
+    if !pCurMb.is_null() {
+        (*pCurMb).uiCbp = 0;
+        (*pCurMb).uiMbType = MB_TYPE_SKIP;
+    }
+}
+
+pub unsafe extern "C" fn WelsMdInterJudgePskip(
+    pEncCtx: *mut sWelsEncCtx,
+    pWelsMd: *mut SWelsMD,
+    pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+    pMbCache: *mut SMbCache,
+    _bTrySkip: bool,
+) -> bool {
+    if pEncCtx.is_null() || pWelsMd.is_null() || pSlice.is_null() || pCurMb.is_null() || pMbCache.is_null() {
+        return false;
+    }
+    PredictSadSkip(
+        (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
+        (*pMbCache).bMbTypeSkip,
+        (*pMbCache).iSadCostSkip,
+        0,
+        &mut (*pWelsMd).iSadPredSkip,
+    );
+    false
+}
+
+pub unsafe extern "C" fn WelsMdInterDecidedPskip(
+    pEncCtx: *mut sWelsEncCtx,
+    pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+    pMbCache: *mut SMbCache,
+) {
+    if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() || pMbCache.is_null() {
+        return;
+    }
+    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    (*pCurMb).uiMbType = MB_TYPE_SKIP;
+    WelsMdInterUpdatePskip(pCurDqLayer, pSlice, pCurMb, pMbCache);
+}
+
+pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
+    pEncCtx: *mut sWelsEncCtx,
+    _pWelsMd: *mut SWelsMD,
+    pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+    _pMbCache: *mut SMbCache,
+    bSkip: bool,
+) {
+    if bSkip {
+        WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb, _pMbCache);
+    } else {
+        WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
+        WelsPMbChromaEncode(
+            pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
+            pSlice as *mut crate::encoder::svc_encode_slice::SSlice,
+            pCurMb as *mut crate::encoder::svc_encode_slice::SMB,
+        );
+    }
+}
+
+pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
+    _pEncCtx: *mut sWelsEncCtx,
+    _pWelsMd: *mut SWelsMD,
+    pCurMb: *mut SMB,
+    _pMbCache: *mut SMbCache,
+) {
+    if pCurMb.is_null() {
+        return;
+    }
+    if (*pCurMb).uiMbType == MB_TYPE_INTRA16x16 {
+        (*pCurMb).uiCbp = 0;
+    }
+    if !(*pCurMb).pSadCost.is_null() {
+        *(*pCurMb).pSadCost.offset(0) = 0;
+    }
+}
+
 unsafe extern "C" {
-    pub fn WelsMdInterJudgePskip(
-        pEncCtx: *mut sWelsEncCtx,
-        pWelsMd: *mut SWelsMD,
-        pSlice: *mut SSlice,
-        pCurMb: *mut SMB,
-        pMbCache: *mut SMbCache,
-        bTrySkip: bool,
-    ) -> bool;
-
-    pub fn WelsMdInterDecidedPskip(
-        pEncCtx: *mut sWelsEncCtx,
-        pSlice: *mut SSlice,
-        pCurMb: *mut SMB,
-        pMbCache: *mut SMbCache,
-    );
-
-    pub fn PredictSad(
-        pRefIndexCache: *mut i8,
-        pSadCostCache: *mut i32,
-        uiRef: i32,
-        pSadPred: *mut i32,
-    );
-
-    pub fn PredictSadSkip(
-        pRefIndexCache: *mut i8,
-        pMbSkipCache: *mut bool,
-        pSadCostCache: *mut i32,
-        uiRef: i32,
-        iSadPredSkip: *mut i32,
-    );
-
-    pub fn WelsMdInterSecondaryModesEnc(
-        pEncCtx: *mut sWelsEncCtx,
-        pWelsMd: *mut SWelsMD,
-        pSlice: *mut SSlice,
-        pCurMb: *mut SMB,
-        pMbCache: *mut SMbCache,
-        bSkip: bool,
-    );
-
-    pub fn WelsMdIntraSecondaryModesEnc(
-        pEncCtx: *mut sWelsEncCtx,
-        pWelsMd: *mut SWelsMD,
-        pCurMb: *mut SMB,
-        pMbCache: *mut SMbCache,
-    );
-
     pub fn WelsMdBackgroundMbEnc(
         pEnc: *mut sWelsEncCtx,
         pMd: *mut SWelsMD,
@@ -556,13 +593,6 @@ unsafe extern "C" {
     pub fn WelsRecPskip(
         pCurDq: *mut SDqLayer,
         pFunc: *mut SWelsFuncPtrList,
-        pCurMb: *mut SMB,
-        pMbCache: *mut SMbCache,
-    );
-
-    pub fn WelsMdInterUpdatePskip(
-        pCurDqLayer: *mut SDqLayer,
-        pSlice: *mut SSlice,
         pCurMb: *mut SMB,
         pMbCache: *mut SMbCache,
     );

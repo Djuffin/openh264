@@ -416,6 +416,78 @@ pub type PIDctI16x16DcFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *m
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
 pub type PSetMemoryZero = unsafe extern "C" fn(*mut c_void, i32);
 
+#[inline(always)]
+fn WelsClip1(val: i32) -> u8 {
+    if val < 0 {
+        0
+    } else if val > 255 {
+        255
+    } else {
+        val as u8
+    }
+}
+
+pub unsafe extern "C" fn WelsIDctT4Rec_c(
+    pRec: *mut u8,
+    iStride: i32,
+    pPred: *mut u8,
+    iPredStride: i32,
+    pDct: *mut i16,
+) {
+    if pRec.is_null() || pPred.is_null() || pDct.is_null() {
+        return;
+    }
+    let mut iTemp = [0i16; 16];
+
+    let iDstStridex2 = iStride << 1;
+    let iDstStridex3 = iStride + iDstStridex2;
+    let iPredStridex2 = iPredStride << 1;
+    let iPredStridex3 = iPredStride + iPredStridex2;
+
+    for i in 0..4 {
+        let iIdx = i << 2;
+        let kiHorSumU = *pDct.add(iIdx) as i32 + *pDct.add(iIdx + 2) as i32;
+        let kiHorDelU = *pDct.add(iIdx) as i32 - *pDct.add(iIdx + 2) as i32;
+        let kiHorSumD = *pDct.add(iIdx + 1) as i32 + (*pDct.add(iIdx + 3) as i32 >> 1);
+        let kiHorDelD = (*pDct.add(iIdx + 1) as i32 >> 1) - *pDct.add(iIdx + 3) as i32;
+
+        iTemp[iIdx] = (kiHorSumU + kiHorSumD) as i16;
+        iTemp[iIdx + 1] = (kiHorDelU + kiHorDelD) as i16;
+        iTemp[iIdx + 2] = (kiHorDelU - kiHorDelD) as i16;
+        iTemp[iIdx + 3] = (kiHorSumU - kiHorSumD) as i16;
+    }
+
+    for i in 0..4 {
+        let kiVerSumL = iTemp[i] as i32 + iTemp[8 + i] as i32;
+        let kiVerDelL = iTemp[i] as i32 - iTemp[8 + i] as i32;
+        let kiVerDelR = (iTemp[4 + i] as i32 >> 1) - iTemp[12 + i] as i32;
+        let kiVerSumR = iTemp[4 + i] as i32 + (iTemp[12 + i] as i32 >> 1);
+
+        *pRec.add(i) = WelsClip1(*pPred.add(i) as i32 + ((kiVerSumL + kiVerSumR + 32) >> 6));
+        *pRec.add(iStride as usize + i) = WelsClip1(*pPred.add(iPredStride as usize + i) as i32 + ((kiVerDelL + kiVerDelR + 32) >> 6));
+        *pRec.add(iDstStridex2 as usize + i) = WelsClip1(*pPred.add(iPredStridex2 as usize + i) as i32 + ((kiVerDelL - kiVerDelR + 32) >> 6));
+        *pRec.add(iDstStridex3 as usize + i) = WelsClip1(*pPred.add(iPredStridex3 as usize + i) as i32 + ((kiVerSumL - kiVerSumR + 32) >> 6));
+    }
+}
+
+pub unsafe extern "C" fn WelsIDctFourT4_c(
+    pRec: *mut u8,
+    iStride: i32,
+    pPred: *mut u8,
+    iPredStride: i32,
+    pDct: *mut i16,
+) {
+    if pRec.is_null() || pPred.is_null() || pDct.is_null() {
+        return;
+    }
+    let iDstStridex4 = (iStride << 2) as usize;
+    let iPredStridex4 = (iPredStride << 2) as usize;
+    WelsIDctT4Rec_c(pRec, iStride, pPred, iPredStride, pDct);
+    WelsIDctT4Rec_c(pRec.add(4), iStride, pPred.add(4), iPredStride, pDct.add(16));
+    WelsIDctT4Rec_c(pRec.add(iDstStridex4), iStride, pPred.add(iPredStridex4), iPredStride, pDct.add(32));
+    WelsIDctT4Rec_c(pRec.add(iDstStridex4 + 4), iStride, pPred.add(iPredStridex4 + 4), iPredStride, pDct.add(48));
+}
+
 #[repr(C)]
 pub struct SWelsFuncPtrList {
     pub pfCopy16x16Aligned: Option<PCopyAlignedFunc>,

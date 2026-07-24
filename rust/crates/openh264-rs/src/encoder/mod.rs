@@ -10,6 +10,8 @@ pub mod svc_encode_mb;
 pub mod svc_encode_slice;
 pub mod svc_mode_decision;
 pub mod svc_motion_estimate;
+pub mod svc_set_mb_syn_cabac;
+pub mod svc_set_mb_syn_cavlc;
 pub mod vlc_encoder;
 pub mod rc;
 pub mod wels_encoder_ext;

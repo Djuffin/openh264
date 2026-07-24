@@ -321,15 +321,7 @@ pub struct SMcFunc {
 
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsRcFunc {
-    pub pfWelsRcMbInit: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice)>,
-    pub pfWelsRcMbInfoUpdate: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, iCostLuma: i32, pSlice: *mut SSlice)>,
-    pub pfWelsRcPictureInit: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>,
-    pub pfWelsRcPictureInfoUpdate: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iLayerSize: i32)>,
-    pub pfWelsRcPicDelayJudge: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>,
-}
+pub use crate::encoder::rc::SWelsRcFunc;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -732,6 +724,35 @@ pub unsafe fn InitFunctionPointers(
 
     WelsInitBGDFunc(pFuncList, (*pParam).bEnableBackgroundDetection);
 
+    (*pFuncList).pfDctFourT4 = Some(crate::encoder::encode_mb_aux::WelsDctFourT4_c);
+    (*pFuncList).pfIDctFourT4 = Some(crate::encoder::svc_encode_mb::WelsIDctFourT4_c);
+
+    (*pFuncList).pfInterMd = Some(std::mem::transmute(
+        crate::encoder::svc_mode_decision::WelsMdSpatialelInterMbIlfmdNoilp as *const ()
+    ));
+    (*pFuncList).pfWelsSpatialWriteMbSyn = Some(std::mem::transmute(
+        crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn as *const ()
+    ));
+    (*pFuncList).pfStashMBStatus = Some(std::mem::transmute(
+        crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc as *const ()
+    ));
+    (*pFuncList).pfStashPopMBStatus = Some(std::mem::transmute(
+        crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc as *const ()
+    ));
+    (*pFuncList).pfGetBsPosition = Some(std::mem::transmute(
+        crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc as *const ()
+    ));
+
+    crate::encoder::deblocking::DeblockingInit(
+        &mut (*pFuncList).pfDeblocking as *mut _,
+        _uiCpuFlag as i32,
+    );
+
+    crate::encoder::rc::WelsRcInitFuncPointers(
+        &mut (*pFuncList).pfRc,
+        (*pParam).iRCMode,
+    );
+
     ENC_RETURN_SUCCESS
 }
 
@@ -1068,6 +1089,34 @@ mod tests {
         unsafe {
             let ft = DecideFrameType(&mut ctx, 1, 0, false);
             assert_eq!(ft, EVideoFrameType::VideoFrameTypeIDR);
+        }
+    }
+
+    #[test]
+    fn test_init_function_pointers() {
+        unsafe {
+            let mut func_list = SWelsFuncPtrList::default();
+            let mut param = SWelsSvcCodingParam::default();
+            let mut ctx = sWelsEncCtx::default();
+            ctx.pFuncList = &mut func_list;
+            ctx.pSvcParam = &mut param;
+
+            let ret = InitFunctionPointers(&mut ctx, &mut param, 0);
+            assert_eq!(ret, ENC_RETURN_SUCCESS);
+
+            assert!(func_list.pfSetMemZeroSize8.is_some());
+            assert!(func_list.pfSetMemZeroSize64Aligned16.is_some());
+            assert!(func_list.pfSetMemZeroSize64.is_some());
+
+            assert!(func_list.pfDctFourT4.is_some());
+            assert!(func_list.pfIDctFourT4.is_some());
+            assert!(func_list.pfInterMd.is_some());
+            assert!(func_list.pfWelsSpatialWriteMbSyn.is_some());
+            assert!(func_list.pfStashMBStatus.is_some());
+            assert!(func_list.pfStashPopMBStatus.is_some());
+            assert!(func_list.pfGetBsPosition.is_some());
+
+            assert!(func_list.pfDeblocking.pfDeblockingFilterSlice.is_some());
         }
     }
 }
