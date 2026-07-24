@@ -14,6 +14,11 @@
 
 use std::ffi::c_void;
 
+use crate::encoder::md::WelsMedian;
+use crate::encoder::svc_encode_mb::WelsEncInterY;
+use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
+use crate::encoder::vlc_encoder::BsSizeUE;
+
 // ============================================================================
 // Constants and Thresholds
 // ============================================================================
@@ -23,6 +28,37 @@ pub const DELTA_QP_BGD_THD: i32 = 3;
 pub const KNOWN_CHROMA_TOO_LARGE: i32 = 640;
 pub const SMALLEST_INVISIBLE: i32 = 128; // 2 * 64
 pub const MBVAASIGN_FLAT: u8 = 15;
+
+pub const MB_LEFT_BIT: u32 = 0;
+pub const MB_TOP_BIT: u32 = 1;
+pub const MB_TOPRIGHT_BIT: u32 = 2;
+pub const REF_NOT_AVAIL: i8 = -2;
+
+pub const g_kuiCache30ScanIdx: [u8; 16] = [
+    7, 8, 13, 14, 9, 10, 15, 16, 19, 20, 25, 26, 21, 22, 27, 28,
+];
+
+pub const I16_PRED_V: i8 = 0;
+pub const I16_PRED_H: i8 = 1;
+pub const I16_PRED_DC: i8 = 2;
+pub const I16_PRED_P: i8 = 3;
+pub const I16_PRED_DC_L: i8 = 4;
+pub const I16_PRED_DC_T: i8 = 5;
+pub const I16_PRED_DC_128: i8 = 6;
+pub const I16_PRED_INVALID: i8 = -1;
+
+pub const g_kiIntra16AvaliMode: [[i8; 5]; 8] = [
+    [I16_PRED_DC_128, I16_PRED_INVALID, I16_PRED_INVALID, I16_PRED_INVALID, 1],
+    [I16_PRED_DC_L, I16_PRED_H, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [I16_PRED_DC_T, I16_PRED_V, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_INVALID, 3],
+    [I16_PRED_DC_128, I16_PRED_INVALID, I16_PRED_INVALID, I16_PRED_INVALID, 1],
+    [I16_PRED_DC_L, I16_PRED_H, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [I16_PRED_DC_T, I16_PRED_V, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_P, 4],
+];
+
+pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
 
 // Neighbor Availability Bitmasks
 pub const LEFT_MB_POS: u8 = 0x01;
@@ -264,6 +300,9 @@ pub struct SMbCache {
     pub pMemPredLuma: *mut u8,
     pub pMemPredChroma: *mut u8,
     pub sMbMvp: [SMVUnitXY; 16],
+    pub pCoeffLevel: *mut i16,
+    pub uiNeighborIntra: u8,
+    pub uiLumaI16x16Mode: i32,
 }
 
 #[repr(C)]
@@ -295,6 +334,9 @@ pub struct SDqLayer {
 #[derive(Copy, Clone)]
 pub struct SSlice {
     pub sMbCacheInfo: SMbCache,
+    pub uiMvcNum: u32,
+    pub sMvc: [SMVUnitXY; 5],
+    pub sScaleShift: u8,
 }
 
 #[repr(C)]
@@ -394,6 +436,16 @@ pub struct SWelsFuncPtrList {
     pub pfCopy8x8Aligned:
         Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *const u8, iSrcStride: i32)>,
     pub pfGetMbSignFromInterVaa: Option<unsafe extern "C" fn(pSad8x8: *const i32) -> u8>,
+    pub pfMotionSearch: [Option<
+        unsafe extern "C" fn(
+            pFunc: *mut SWelsFuncPtrList,
+            pCurDqLayer: *mut SDqLayer,
+            pMe: *mut SWelsME,
+            pSlice: *mut SSlice,
+        ),
+    >; 2],
+    pub pfGetLumaI16x16Pred: [Option<unsafe extern "C" fn(pDst: *mut u8, pDec: *const u8, iLineSizeDec: i32)>; 7],
+    pub pfDctFourT4: Option<unsafe extern "C" fn(pRes: *mut i16, pEncMb: *const u8, iEncStride: i32, pBestPred: *const u8, iStride: i32)>,
 }
 
 #[repr(C)]
@@ -476,28 +528,6 @@ unsafe extern "C" {
         iSadPredSkip: *mut i32,
     );
 
-    pub fn WelsMdP16x16(
-        pFunc: *mut SWelsFuncPtrList,
-        pCurDqLayer: *mut SDqLayer,
-        pWelsMd: *mut SWelsMD,
-        pSlice: *mut SSlice,
-        pCurMb: *mut SMB,
-    ) -> i32;
-
-    pub fn WelsMdI16x16(
-        pFunc: *mut SWelsFuncPtrList,
-        pCurDqLayer: *mut SDqLayer,
-        pMbCache: *mut SMbCache,
-        iLambda: i32,
-    ) -> i32;
-
-    pub fn WelsMdP8x8(
-        pFunc: *mut SWelsFuncPtrList,
-        pCurDqLayer: *mut SDqLayer,
-        pWelsMd: *mut SWelsMD,
-        pSlice: *mut SSlice,
-    ) -> i32;
-
     pub fn WelsMdInterSecondaryModesEnc(
         pEncCtx: *mut sWelsEncCtx,
         pWelsMd: *mut SWelsMD,
@@ -512,26 +542,6 @@ unsafe extern "C" {
         pWelsMd: *mut SWelsMD,
         pCurMb: *mut SMB,
         pMbCache: *mut SMbCache,
-    );
-
-    pub fn PredSkipMv(pMbCache: *mut SMbCache, sMvp: *mut SMVUnitXY);
-
-    pub fn PredMv(
-        kpMvComp: *const SMVComponentUnit,
-        iPartIdx: i8,
-        iPartW: i8,
-        iRef: i32,
-        sMvp: *mut SMVUnitXY,
-    );
-
-    pub fn PredInter16x8Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: *mut SMVUnitXY);
-    pub fn PredInter8x16Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: *mut SMVUnitXY);
-
-    pub fn UpdateP16x16MotionInfo(
-        pMbCache: *mut SMbCache,
-        pCurMb: *mut SMB,
-        kiRef: i8,
-        pMv: *mut SMVUnitXY,
     );
 
     pub fn WelsMdBackgroundMbEnc(
@@ -556,9 +566,352 @@ unsafe extern "C" {
         pCurMb: *mut SMB,
         pMbCache: *mut SMbCache,
     );
+}
 
-    pub fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB);
-    pub fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB);
+// ============================================================================
+// Native Mode Decision & Motion Prediction Implementations
+// ============================================================================
+
+pub unsafe extern "C" fn PredMv(
+    kpMvComp: *const SMVComponentUnit,
+    iPartIdx: i8,
+    iPartW: i8,
+    iRef: i32,
+    sMvp: *mut SMVUnitXY,
+) {
+    if kpMvComp.is_null() || sMvp.is_null() {
+        return;
+    }
+    let kuiLeftIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize - 1;
+    let kuiTopIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize - 6;
+
+    let iLeftRef = (*kpMvComp).iRefIndexCache[kuiLeftIdx] as i32;
+    let iTopRef = (*kpMvComp).iRefIndexCache[kuiTopIdx] as i32;
+    let iRightTopRef = (*kpMvComp).iRefIndexCache[kuiTopIdx + iPartW as usize] as i32;
+    let iDiagonalRef: i32;
+
+    let sMvA = (*kpMvComp).sMotionVectorCache[kuiLeftIdx];
+    let sMvB = (*kpMvComp).sMotionVectorCache[kuiTopIdx];
+    let sMvC: SMVUnitXY;
+
+    if REF_NOT_AVAIL as i32 == iRightTopRef {
+        iDiagonalRef = (*kpMvComp).iRefIndexCache[kuiTopIdx - 1] as i32;
+        sMvC = (*kpMvComp).sMotionVectorCache[kuiTopIdx - 1];
+    } else {
+        iDiagonalRef = iRightTopRef;
+        sMvC = (*kpMvComp).sMotionVectorCache[kuiTopIdx + iPartW as usize];
+    }
+
+    if (REF_NOT_AVAIL as i32 == iTopRef) && (REF_NOT_AVAIL as i32 == iDiagonalRef) && iLeftRef != REF_NOT_AVAIL as i32 {
+        *sMvp = sMvA;
+        return;
+    }
+
+    let mut iMatchRef = (if iRef == iLeftRef { 1 } else { 0 }) << MB_LEFT_BIT;
+    iMatchRef |= (if iRef == iTopRef { 1 } else { 0 }) << MB_TOP_BIT;
+    iMatchRef |= (if iRef == iDiagonalRef { 1 } else { 0 }) << MB_TOPRIGHT_BIT;
+
+    match iMatchRef {
+        1 => *sMvp = sMvA, // LEFT_MB_POS
+        2 => *sMvp = sMvB, // TOP_MB_POS
+        4 => *sMvp = sMvC, // TOPRIGHT_MB_POS
+        _ => {
+            (*sMvp).iMvX = WelsMedian(sMvA.iMvX as i32, sMvB.iMvX as i32, sMvC.iMvX as i32) as i16;
+            (*sMvp).iMvY = WelsMedian(sMvA.iMvY as i32, sMvB.iMvY as i32, sMvC.iMvY as i32) as i16;
+        }
+    }
+}
+
+pub unsafe extern "C" fn PredSkipMv(pMbCache: *mut SMbCache, sMvp: *mut SMVUnitXY) {
+    if pMbCache.is_null() || sMvp.is_null() {
+        return;
+    }
+    let kpMvComp = &(*pMbCache).sMvComponents;
+    let kiLeftRef = kpMvComp.iRefIndexCache[6] as i32;
+    let kiTopRef = kpMvComp.iRefIndexCache[1] as i32;
+
+    if REF_NOT_AVAIL as i32 == kiLeftRef
+        || REF_NOT_AVAIL as i32 == kiTopRef
+        || (0 == kiLeftRef && kpMvComp.sMotionVectorCache[6].iMvX == 0 && kpMvComp.sMotionVectorCache[6].iMvY == 0)
+        || (0 == kiTopRef && kpMvComp.sMotionVectorCache[1].iMvX == 0 && kpMvComp.sMotionVectorCache[1].iMvY == 0)
+    {
+        *sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
+        return;
+    }
+
+    PredMv(kpMvComp, 0, 4, 0, sMvp);
+}
+
+pub unsafe extern "C" fn PredInter16x8Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: *mut SMVUnitXY) {
+    if pMbCache.is_null() || sMvp.is_null() {
+        return;
+    }
+    let kpMvComp = &(*pMbCache).sMvComponents;
+    if 0 == iPartIdx {
+        let kiTopRef = kpMvComp.iRefIndexCache[1];
+        if iRef == kiTopRef {
+            *sMvp = kpMvComp.sMotionVectorCache[1];
+            return;
+        }
+    } else {
+        let kiLeftRef = kpMvComp.iRefIndexCache[18];
+        if iRef == kiLeftRef {
+            *sMvp = kpMvComp.sMotionVectorCache[18];
+            return;
+        }
+    }
+    PredMv(kpMvComp, iPartIdx as i8, 4, iRef as i32, sMvp);
+}
+
+pub unsafe extern "C" fn PredInter8x16Mv(pMbCache: *mut SMbCache, iPartIdx: i32, iRef: i8, sMvp: *mut SMVUnitXY) {
+    if pMbCache.is_null() || sMvp.is_null() {
+        return;
+    }
+    let kpMvComp = &(*pMbCache).sMvComponents;
+    if 0 == iPartIdx {
+        let kiLeftRef = kpMvComp.iRefIndexCache[6];
+        if iRef == kiLeftRef {
+            *sMvp = kpMvComp.sMotionVectorCache[6];
+            return;
+        }
+    } else {
+        let mut iDiagonalRef = kpMvComp.iRefIndexCache[5];
+        let mut iIndex = 5usize;
+        if REF_NOT_AVAIL == iDiagonalRef {
+            iDiagonalRef = kpMvComp.iRefIndexCache[2];
+            iIndex = 2;
+        }
+        if iRef == iDiagonalRef {
+            *sMvp = kpMvComp.sMotionVectorCache[iIndex];
+            return;
+        }
+    }
+    PredMv(kpMvComp, iPartIdx as i8, 2, iRef as i32, sMvp);
+}
+
+pub unsafe extern "C" fn UpdateP16x16MotionInfo(
+    pMbCache: *mut SMbCache,
+    pCurMb: *mut SMB,
+    kiRef: i8,
+    pMv: *mut SMVUnitXY,
+) {
+    if pMbCache.is_null() || pCurMb.is_null() || pMv.is_null() {
+        return;
+    }
+    let pMvComp = &mut (*pMbCache).sMvComponents;
+    for i in 0..16 {
+        pMvComp.iRefIndexCache[g_kuiCache30ScanIdx[i] as usize] = kiRef;
+        pMvComp.sMotionVectorCache[g_kuiCache30ScanIdx[i] as usize] = *pMv;
+    }
+    if !(*pCurMb).sMv.is_null() {
+        for i in 0..16 {
+            *(*pCurMb).sMv.offset(i as isize) = *pMv;
+        }
+    }
+    if !(*pCurMb).pRefIndex.is_null() {
+        std::ptr::write_bytes((*pCurMb).pRefIndex, kiRef as u8, 4);
+    }
+}
+
+pub unsafe extern "C" fn WelsMdI16x16(
+    pFunc: *mut SWelsFuncPtrList,
+    pCurDqLayer: *mut SDqLayer,
+    pMbCache: *mut SMbCache,
+    iLambda: i32,
+) -> i32 {
+    if pFunc.is_null() || pCurDqLayer.is_null() || pMbCache.is_null() {
+        return i32::MAX;
+    }
+    let pPredI16x16: [*mut u8; 2] = [
+        (*pMbCache).pMemPredLuma,
+        if !(*pMbCache).pMemPredLuma.is_null() { (*pMbCache).pMemPredLuma.add(256) } else { std::ptr::null_mut() },
+    ];
+    let mut pDst = pPredI16x16[0];
+    let pDec = (*pMbCache).SPicData.pCsMb[0];
+    let pEnc = (*pMbCache).SPicData.pEncMb[0];
+    let iLineSizeDec = (*pCurDqLayer).iCsStride[0];
+    let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
+    let mut iBestMode;
+    let mut iBestCost = i32::MAX;
+    let mut iIdx = 0usize;
+
+    let iOffset = ((*pMbCache).uiNeighborIntra & 0x07) as usize;
+    let iAvailCount = g_kiIntra16AvaliMode[iOffset][4] as usize;
+    let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
+
+    iBestMode = kpAvailMode[0] as i32;
+    for i in 0..iAvailCount {
+        let iCurMode = kpAvailMode[i] as i32;
+        if iCurMode >= 0 && iCurMode < 7 {
+            if let Some(pred_fn) = (*pFunc).pfGetLumaI16x16Pred[iCurMode as usize] {
+                pred_fn(pDst, pDec, iLineSizeDec);
+            }
+            let mut iCurCost = 0;
+            if let Some(cost_fn) = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16] {
+                iCurCost = cost_fn(pDst, 16, pEnc, iLineSizeEnc);
+            }
+            let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
+            iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
+            if iCurCost < iBestCost {
+                iBestMode = iCurMode;
+                iBestCost = iCurCost;
+                iIdx ^= 0x01;
+                pDst = pPredI16x16[iIdx];
+            }
+        }
+    }
+    (*pMbCache).pMemPredChroma = pPredI16x16[iIdx];
+    (*pMbCache).pMemPredLuma = pPredI16x16[iIdx ^ 0x01];
+    (*pMbCache).uiLumaI16x16Mode = iBestMode;
+    iBestCost
+}
+
+pub unsafe extern "C" fn WelsMdP16x16(
+    pFunc: *mut SWelsFuncPtrList,
+    pCurLayer: *mut SDqLayer,
+    pWelsMd: *mut SWelsMD,
+    pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+) -> i32 {
+    if pFunc.is_null() || pCurLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() || pCurMb.is_null() {
+        return i32::MAX;
+    }
+    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16 as *mut SWelsME;
+    let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
+    let kiMbWidth = (*pCurLayer).iMbWidth;
+    let kiMbHeight = (*pCurLayer).iMbHeight;
+
+    (*pSlice).uiMvcNum = 0;
+    (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*pMe16x16).sMvBase;
+    (*pSlice).uiMvcNum += 1;
+
+    if (uiNeighborAvail & LEFT_MB_POS as u32) != 0 {
+        let left_mb = pCurMb.offset(-1);
+        if !left_mb.is_null() {
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*left_mb).sP16x16Mv;
+            (*pSlice).uiMvcNum += 1;
+        }
+    }
+    if (uiNeighborAvail & TOP_MB_POS as u32) != 0 {
+        let top_mb = pCurMb.offset(-(kiMbWidth as isize));
+        if !top_mb.is_null() {
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*top_mb).sP16x16Mv;
+            (*pSlice).uiMvcNum += 1;
+        }
+    }
+
+    if !(*pCurLayer).pRefPic.is_null() && (*(*pCurLayer).pRefPic).iPictureType == P_SLICE {
+        let ref_pic = (*pCurLayer).pRefPic;
+        if ((*pCurMb).iMbX as i32) < kiMbWidth - 1 {
+            let sTempMv = *(*ref_pic).sMvList.offset(((*pCurMb).iMbXY + 1) as isize);
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
+            (*pSlice).uiMvcNum += 1;
+        }
+        if ((*pCurMb).iMbY as i32) < kiMbHeight - 1 {
+            let sTempMv = *(*ref_pic).sMvList.offset(((*pCurMb).iMbXY + kiMbWidth) as isize);
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvX = sTempMv.iMvX >> (*pSlice).sScaleShift;
+            (*pSlice).sMvc[(*pSlice).uiMvcNum as usize].iMvY = sTempMv.iMvY >> (*pSlice).sScaleShift;
+            (*pSlice).uiMvcNum += 1;
+        }
+    }
+
+    PredMv(
+        &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+        0,
+        4,
+        0,
+        &mut (*pMe16x16).sMvp as *mut SMVUnitXY,
+    );
+
+    if let Some(search_fn) = (*pFunc).pfMotionSearch[0] {
+        search_fn(pFunc, pCurLayer, pMe16x16, pSlice);
+    }
+
+    (*pCurMb).sP16x16Mv = (*pMe16x16).sMv;
+    if !(*pCurLayer).pDecPic.is_null() && !(*(*pCurLayer).pDecPic).sMvList.is_null() {
+        *(*(*pCurLayer).pDecPic).sMvList.offset((*pCurMb).iMbXY as isize) = (*pMe16x16).sMv;
+    }
+
+    (*pMe16x16).uiSatdCost as i32
+}
+
+pub unsafe extern "C" fn WelsMdP8x8(
+    pFunc: *mut SWelsFuncPtrList,
+    pCurDqLayer: *mut SDqLayer,
+    pWelsMd: *mut SWelsMD,
+    pSlice: *mut SSlice,
+) -> i32 {
+    if pFunc.is_null() || pCurDqLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() {
+        return i32::MAX;
+    }
+    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
+    let iLineSizeRef = if !(*pCurDqLayer).pRefPic.is_null() {
+        (*(*pCurDqLayer).pRefPic).iLineSize[0]
+    } else {
+        iLineSizeEnc
+    };
+
+    let mut iCostP8x8 = 0i32;
+    for i in 0..4 {
+        let iIdxX = i & 1;
+        let iIdxY = i >> 1;
+        let iPixelX = iIdxX << 3;
+        let iPixelY = iIdxY << 3;
+        let iStrideEnc = iPixelX + (iPixelY * iLineSizeEnc);
+        let iStrideRef = iPixelX + (iPixelY * iLineSizeRef);
+
+        let sMe8x8 = &mut (*pWelsMd).sMe.sMe8x8[i as usize] as *mut SWelsME;
+        (*sMe8x8).sMvp = SMVUnitXY::default();
+        PredMv(
+            &(*pMbCache).sMvComponents as *const SMVComponentUnit,
+            (i << 2) as i8,
+            2,
+            (*pWelsMd).uiRef as i32,
+            &mut (*sMe8x8).sMvp as *mut SMVUnitXY,
+        );
+
+        if let Some(search_fn) = (*pFunc).pfMotionSearch[0] {
+            search_fn(pFunc, pCurDqLayer, sMe8x8, pSlice);
+        }
+
+        iCostP8x8 += (*sMe8x8).uiSatdCost as i32;
+    }
+    iCostP8x8
+}
+
+pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
+    if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() {
+        return;
+    }
+    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pCurDqLayer = (*pEncCtx).pCurDqLayer;
+    let pFuncList = (*pEncCtx).pFuncList;
+    if pCurDqLayer.is_null() || pFuncList.is_null() {
+        return;
+    }
+
+    let pCoeffLevel = (*pMbCache).pCoeffLevel;
+    let pEncMb = (*pMbCache).SPicData.pEncMb[0];
+    let iEncStride = (*pCurDqLayer).iEncStride[0];
+    let pMemPredLuma = (*pMbCache).pMemPredLuma;
+
+    if !pCoeffLevel.is_null() && !pEncMb.is_null() && !pMemPredLuma.is_null() {
+        if let Some(dct_fn) = (*pFuncList).pfDctFourT4 {
+            dct_fn(pCoeffLevel, pEncMb, iEncStride, pMemPredLuma, 16);
+            dct_fn(pCoeffLevel.add(64), pEncMb.add(8), iEncStride, pMemPredLuma.add(8), 16);
+            dct_fn(pCoeffLevel.add(128), pEncMb.add((8 * iEncStride) as usize), iEncStride, pMemPredLuma.add(128), 16);
+            dct_fn(pCoeffLevel.add(192), pEncMb.add((8 * iEncStride + 8) as usize), iEncStride, pMemPredLuma.add(136), 16);
+        }
+    }
+
+    WelsEncInterY(
+        pFuncList as *mut crate::encoder::svc_encode_mb::SWelsFuncPtrList,
+        pCurMb as *mut crate::encoder::svc_encode_mb::SMB,
+        pMbCache as *mut crate::encoder::svc_encode_mb::SMbCache,
+    );
 }
 
 // ============================================================================
@@ -1159,7 +1512,11 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
-    WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
+    WelsPMbChromaEncode(
+        pEncCtx as *mut crate::encoder::svc_encode_slice::sWelsEncCtx,
+        pSlice as *mut crate::encoder::svc_encode_slice::SSlice,
+        pCurMb as *mut crate::encoder::svc_encode_slice::SMB,
+    );
 
     if let Some(copy16) = (*pFunc).pfCopy16x16Aligned {
         copy16(
@@ -1413,3 +1770,231 @@ pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: *
 }
 
 pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: *mut SWelsMD) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pred_mv_basic_median() {
+        unsafe {
+            let mut mv_comp = SMVComponentUnit::default();
+            // Cache index 6 is Left (kuiLeftIdx), 1 is Top (kuiTopIdx), 5 is RightTop (kuiTopIdx + 4)
+            mv_comp.iRefIndexCache[6] = 0;
+            mv_comp.iRefIndexCache[1] = 0;
+            mv_comp.iRefIndexCache[5] = 0;
+
+            mv_comp.sMotionVectorCache[6] = SMVUnitXY { iMvX: 10, iMvY: 20 };
+            mv_comp.sMotionVectorCache[1] = SMVUnitXY { iMvX: 30, iMvY: 40 };
+            mv_comp.sMotionVectorCache[5] = SMVUnitXY { iMvX: 20, iMvY: 30 };
+
+            let mut sMvp = SMVUnitXY::default();
+            PredMv(&mv_comp as *const SMVComponentUnit, 0, 4, 0, &mut sMvp as *mut SMVUnitXY);
+
+            // Median of (10, 30, 20) is 20; Median of (20, 40, 30) is 30
+            assert_eq!(sMvp.iMvX, 20);
+            assert_eq!(sMvp.iMvY, 30);
+        }
+    }
+
+    #[test]
+    fn test_pred_skip_mv_zero_ref() {
+        unsafe {
+            let mut mb_cache = SMbCache {
+                uiRefMbType: 0,
+                bMbTypeSkip: std::ptr::null_mut(),
+                iSadCost: std::ptr::null_mut(),
+                iSadCostSkip: std::ptr::null_mut(),
+                sMvComponents: SMVComponentUnit::default(),
+                SPicData: SSampleDealingPicData::default(),
+                pSkipMb: std::ptr::null_mut(),
+                pMemPredLuma: std::ptr::null_mut(),
+                pMemPredChroma: std::ptr::null_mut(),
+                sMbMvp: [SMVUnitXY::default(); 16],
+                pCoeffLevel: std::ptr::null_mut(),
+                uiNeighborIntra: 0,
+                uiLumaI16x16Mode: 0,
+            };
+
+            // When left & top ref MVs are (0,0) and ref=0, PredSkipMv returns (0,0)
+            mb_cache.sMvComponents.iRefIndexCache[6] = 0;
+            mb_cache.sMvComponents.iRefIndexCache[1] = 0;
+            mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+            mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 0, iMvY: 0 };
+
+            let mut sMvp = SMVUnitXY { iMvX: 99, iMvY: 99 };
+            PredSkipMv(&mut mb_cache as *mut SMbCache, &mut sMvp as *mut SMVUnitXY);
+
+            assert_eq!(sMvp.iMvX, 0);
+            assert_eq!(sMvp.iMvY, 0);
+        }
+    }
+
+    #[test]
+    fn test_pred_inter_16x8_8x16_mv() {
+        unsafe {
+            let mut mb_cache = SMbCache {
+                uiRefMbType: 0,
+                bMbTypeSkip: std::ptr::null_mut(),
+                iSadCost: std::ptr::null_mut(),
+                iSadCostSkip: std::ptr::null_mut(),
+                sMvComponents: SMVComponentUnit::default(),
+                SPicData: SSampleDealingPicData::default(),
+                pSkipMb: std::ptr::null_mut(),
+                pMemPredLuma: std::ptr::null_mut(),
+                pMemPredChroma: std::ptr::null_mut(),
+                sMbMvp: [SMVUnitXY::default(); 16],
+                pCoeffLevel: std::ptr::null_mut(),
+                uiNeighborIntra: 0,
+                uiLumaI16x16Mode: 0,
+            };
+
+            mb_cache.sMvComponents.iRefIndexCache[1] = 0; // Top ref for 16x8 part 0
+            mb_cache.sMvComponents.sMotionVectorCache[1] = SMVUnitXY { iMvX: 12, iMvY: 34 };
+
+            let mut sMvp = SMVUnitXY::default();
+            PredInter16x8Mv(&mut mb_cache as *mut SMbCache, 0, 0, &mut sMvp as *mut SMVUnitXY);
+            assert_eq!(sMvp.iMvX, 12);
+            assert_eq!(sMvp.iMvY, 34);
+
+            mb_cache.sMvComponents.iRefIndexCache[6] = 0; // Left ref for 8x16 part 0
+            mb_cache.sMvComponents.sMotionVectorCache[6] = SMVUnitXY { iMvX: 56, iMvY: 78 };
+
+            let mut sMvp8x16 = SMVUnitXY::default();
+            PredInter8x16Mv(&mut mb_cache as *mut SMbCache, 0, 0, &mut sMvp8x16 as *mut SMVUnitXY);
+            assert_eq!(sMvp8x16.iMvX, 56);
+            assert_eq!(sMvp8x16.iMvY, 78);
+        }
+    }
+
+    #[test]
+    fn test_update_p16x16_motion_info() {
+        unsafe {
+            let mut mb_cache = SMbCache {
+                uiRefMbType: 0,
+                bMbTypeSkip: std::ptr::null_mut(),
+                iSadCost: std::ptr::null_mut(),
+                iSadCostSkip: std::ptr::null_mut(),
+                sMvComponents: SMVComponentUnit::default(),
+                SPicData: SSampleDealingPicData::default(),
+                pSkipMb: std::ptr::null_mut(),
+                pMemPredLuma: std::ptr::null_mut(),
+                pMemPredChroma: std::ptr::null_mut(),
+                sMbMvp: [SMVUnitXY::default(); 16],
+                pCoeffLevel: std::ptr::null_mut(),
+                uiNeighborIntra: 0,
+                uiLumaI16x16Mode: 0,
+            };
+
+            let mut mv_arr = [SMVUnitXY::default(); 16];
+            let mut ref_arr = [0u8; 4];
+
+            let mut cur_mb = SMB {
+                uiMbType: MB_TYPE_16x16,
+                uiSubMbType: [0; 4],
+                iMbXY: 0,
+                iMbX: 0,
+                iMbY: 0,
+                uiNeighborAvail: 0,
+                uiCbp: 0,
+                sMv: mv_arr.as_mut_ptr(),
+                pRefIndex: ref_arr.as_mut_ptr() as *mut i8,
+                pSadCost: std::ptr::null_mut(),
+                pIntra4x4PredMode: std::ptr::null_mut(),
+                pNonZeroCount: std::ptr::null_mut(),
+                sP16x16Mv: SMVUnitXY::default(),
+                uiLumaQp: 26,
+                uiChromaQp: 26,
+                uiSliceIdc: 0,
+                uiChromPredMode: 0,
+                iLumaDQp: 0,
+                sMvd: [SMVUnitXY::default(); 16],
+                iCbpDc: 0,
+            };
+
+            let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
+            UpdateP16x16MotionInfo(
+                &mut mb_cache as *mut SMbCache,
+                &mut cur_mb as *mut SMB,
+                0,
+                &mut target_mv as *mut SMVUnitXY,
+            );
+
+            assert_eq!(mv_arr[0], target_mv);
+            assert_eq!(ref_arr[0], 0);
+            assert_eq!(
+                mb_cache.sMvComponents.sMotionVectorCache[g_kuiCache30ScanIdx[0] as usize],
+                target_mv
+            );
+        }
+    }
+
+    #[test]
+    fn test_wels_md_i16x16_cost() {
+        unsafe {
+            let mut func_list = SWelsFuncPtrList {
+                sSampleDealingFuncs: SSampleDealingFuncs {
+                    pfSampleSad: [None, None, None, None, None, None, None],
+                },
+                sMcFuncs: SMcFunc {
+                    pMcLumaFunc: None,
+                    pMcChromaFunc: None,
+                },
+                pfInterMdBackgroundDecision: None,
+                pfSCDPSkipDecision: None,
+                pfUpdateMbMv: None,
+                pfCopy16x16Aligned: None,
+                pfCopy8x8Aligned: None,
+                pfGetMbSignFromInterVaa: None,
+                pfMotionSearch: [None, None],
+                pfGetLumaI16x16Pred: [None; 7],
+                pfDctFourT4: None,
+            };
+
+            let mut pred_buf = [128u8; 512];
+            let mut cs_mb = [128u8; 256];
+            let mut enc_mb = [128u8; 256];
+
+            let mut mb_cache = SMbCache {
+                uiRefMbType: 0,
+                bMbTypeSkip: std::ptr::null_mut(),
+                iSadCost: std::ptr::null_mut(),
+                iSadCostSkip: std::ptr::null_mut(),
+                sMvComponents: SMVComponentUnit::default(),
+                SPicData: SSampleDealingPicData {
+                    pEncMb: [enc_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
+                    pRefMb: [std::ptr::null_mut(); 3],
+                    pCsMb: [cs_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
+                },
+                pSkipMb: std::ptr::null_mut(),
+                pMemPredLuma: pred_buf.as_mut_ptr(),
+                pMemPredChroma: std::ptr::null_mut(),
+                sMbMvp: [SMVUnitXY::default(); 16],
+                pCoeffLevel: std::ptr::null_mut(),
+                uiNeighborIntra: 0x07, // All neighbors available
+                uiLumaI16x16Mode: 0,
+            };
+
+            let mut dq_layer = SDqLayer {
+                iMbWidth: 10,
+                iMbHeight: 10,
+                pRefLayer: std::ptr::null_mut(),
+                sMbDataP: std::ptr::null_mut(),
+                iEncStride: [16; 4],
+                pRefPic: std::ptr::null_mut(),
+                pDecPic: std::ptr::null_mut(),
+                pRefOri: [std::ptr::null_mut(); 2],
+                iCsStride: [16; 4],
+            };
+
+            let cost = WelsMdI16x16(
+                &mut func_list as *mut SWelsFuncPtrList,
+                &mut dq_layer as *mut SDqLayer,
+                &mut mb_cache as *mut SMbCache,
+                10,
+            );
+
+            assert!(cost < i32::MAX);
+        }
+    }
+}
