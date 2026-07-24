@@ -1296,6 +1296,10 @@ pub struct CWelsH264SVCEncoderImpl {
 pub struct CWelsDecoderImpl {
     pub base: ISVCDecoder,
     pub pVtbl: Box<ISVCDecoderVtbl>,
+    pub pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
+    pub align: crate::common::CMemoryAlign,
+    pub param: crate::SDecodingParam,
+    pub bEndOfStream: bool,
 }
 
 unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
@@ -1370,14 +1374,42 @@ unsafe extern "C" fn encoder_get_opt_c(_this: *mut ISVCEncoder, _eOptionId: ENCO
     CM_RESULT_SUCCESS
 }
 
-unsafe extern "C" fn decoder_init_c(_this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
-    if pParam.is_null() {
+unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
+    if this.is_null() || pParam.is_null() {
         return CM_INIT_PARA_ERROR as c_long;
+    }
+    let dec_impl = this as *mut CWelsDecoderImpl;
+    unsafe {
+        (*dec_impl).param = *pParam;
+
+        if (*dec_impl).pCtx.is_null() {
+            let mut ctx_box: Box<crate::decoder::decoder_context::SWelsDecoderContext> = Box::new(std::mem::zeroed());
+            ctx_box.pMemAlign = &mut (*dec_impl).align;
+            ctx_box.pParam = &mut (*dec_impl).param as *mut _ as *mut _;
+            let p_ctx = Box::into_raw(ctx_box);
+            let ret = crate::decoder::decoder_core::WelsInitStaticMemory(p_ctx as *mut _);
+            if ret != 0 {
+                drop(Box::from_raw(p_ctx));
+                return CM_INIT_PARA_ERROR as c_long;
+            }
+            (*dec_impl).pCtx = p_ctx as *mut _;
+        }
     }
     CM_RESULT_SUCCESS as c_long
 }
 
-unsafe extern "C" fn decoder_uninit_c(_this: *mut ISVCDecoder) -> c_long {
+unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR as c_long;
+    }
+    let dec_impl = this as *mut CWelsDecoderImpl;
+    unsafe {
+        if !(*dec_impl).pCtx.is_null() {
+            crate::decoder::decoder_core::WelsFreeStaticMemory((*dec_impl).pCtx as *mut _);
+            drop(Box::from_raw((*dec_impl).pCtx as *mut crate::decoder::decoder_context::SWelsDecoderContext));
+            (*dec_impl).pCtx = ptr::null_mut();
+        }
+    }
     CM_RESULT_SUCCESS as c_long
 }
 
@@ -1393,23 +1425,142 @@ unsafe extern "C" fn decoder_decode_frame_c(
     DECODING_STATE::dsErrorFree
 }
 
-unsafe extern "C" fn decoder_decode_frame_nodelay_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+unsafe extern "C" fn decoder_decode_frame_nodelay_c(
+    this: *mut ISVCDecoder,
+    kpSrc: *const u8,
+    kiSrcLen: i32,
+    ppDst: *mut *mut u8,
+    pDstInfo: *mut SBufferInfo,
+) -> DECODING_STATE {
+    decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo)
+}
+
+unsafe extern "C" fn decoder_decode_frame2_c(
+    this: *mut ISVCDecoder,
+    kpSrc: *const u8,
+    kiSrcLen: i32,
+    ppDst: *mut *mut u8,
+    pDstInfo: *mut SBufferInfo,
+) -> DECODING_STATE {
+    if this.is_null() {
+        return DECODING_STATE::dsInitialOptExpected;
+    }
+    let dec_impl = this as *mut CWelsDecoderImpl;
+    unsafe {
+        let p_ctx = (*dec_impl).pCtx;
+        if p_ctx.is_null() {
+            return DECODING_STATE::dsInitialOptExpected;
+        }
+
+        if !pDstInfo.is_null() {
+            (*pDstInfo).iBufferStatus = 0;
+        }
+
+        if !kpSrc.is_null() && kiSrcLen > 0 {
+            (*p_ctx).bEndOfStreamFlag = false;
+            let input_slice = std::slice::from_raw_parts(kpSrc, kiSrcLen as usize);
+            let units = crate::split_annexb_units(input_slice);
+
+            for unit in units {
+                let mut consumed_bytes = 0i32;
+                let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
+                let mut unit_vec = unit.to_vec();
+                let p_payload = crate::decoder::nalu::ParseNalHeader(
+                    p_ctx as *mut _,
+                    &mut nal_header,
+                    unit_vec.as_mut_ptr(),
+                    unit_vec.len() as i32,
+                    unit_vec.as_mut_ptr(),
+                    unit_vec.len() as i32,
+                    &mut consumed_bytes,
+                );
+
+                if !p_payload.is_null() {
+                    let nal_type = nal_header.eNalUnitType;
+                    if crate::decoder::nalu::IS_PARAM_SETS_NALS(nal_type) {
+                        crate::decoder::nalu::ParseNonVclNal(
+                            p_ctx as *mut _,
+                            p_payload,
+                            (unit_vec.len() as i32) - consumed_bytes,
+                            unit_vec.as_mut_ptr(),
+                            unit_vec.len() as i32,
+                        );
+                    } else if (nal_type == crate::decoder::nalu::EWelsNalUnitType::NAL_UNIT_CODED_SLICE || nal_type == crate::decoder::nalu::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR) {
+                        crate::decoder::decoder_core::WelsDecodeAccessUnitStart(p_ctx as *mut _);
+                        crate::decoder::decode_slice::WelsDecodeAndConstructSlice(p_ctx as *mut _);
+                        crate::decoder::decoder_core::WelsDecodeAccessUnitEnd(p_ctx as *mut _);
+                        crate::decoder::decoder_core::DecodeFrameConstruction(p_ctx as *mut _, ppDst, pDstInfo as *mut _);
+                    }
+                }
+            }
+        } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag {
+            (*p_ctx).bEndOfStreamFlag = true;
+            if !(*p_ctx).pDec.is_null() {
+                crate::decoder::decoder_core::DecodeFrameConstruction(p_ctx as *mut _, ppDst, pDstInfo as *mut _);
+            }
+        }
+    }
     DECODING_STATE::dsErrorFree
 }
 
-unsafe extern "C" fn decoder_decode_frame2_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+unsafe extern "C" fn decoder_decode_frame_ex_c(
+    _this: *mut ISVCDecoder,
+    _pSrc: *const u8,
+    _iSrcLen: i32,
+    _pDst: *mut u8,
+    _iDstStride: i32,
+    _iDstLen: *mut i32,
+    _iWidth: *mut i32,
+    _iHeight: *mut i32,
+    _iColorFormat: *mut i32,
+) -> DECODING_STATE {
     DECODING_STATE::dsErrorFree
 }
 
-unsafe extern "C" fn decoder_decode_frame_ex_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _pDst: *mut u8, _iDstStride: i32, _iDstLen: *mut i32, _iWidth: *mut i32, _iHeight: *mut i32, _iColorFormat: *mut i32) -> DECODING_STATE {
-    DECODING_STATE::dsErrorFree
-}
-
-unsafe extern "C" fn decoder_set_opt_c(_this: *mut ISVCDecoder, _eOptionId: DECODER_OPTION, _pOption: *mut c_void) -> c_long {
+unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODER_OPTION, pOption: *mut c_void) -> c_long {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR as c_long;
+    }
+    let dec_impl = this as *mut CWelsDecoderImpl;
+    unsafe {
+        match eOptionId {
+            DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
+                if !pOption.is_null() {
+                    let val = *(pOption as *const i32);
+                    (*dec_impl).bEndOfStream = val != 0;
+                    if !(*dec_impl).pCtx.is_null() {
+                        (*(*dec_impl).pCtx).bEndOfStreamFlag = val != 0;
+                    }
+                }
+            }
+            DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
+                if !pOption.is_null() && !(*dec_impl).pCtx.is_null() {
+                    let val = *(pOption as *const ERROR_CON_IDC);
+                    (*dec_impl).param.eEcActiveIdc = val;
+                }
+            }
+            _ => {}
+        }
+    }
     CM_RESULT_SUCCESS as c_long
 }
 
-unsafe extern "C" fn decoder_get_opt_c(_this: *mut ISVCDecoder, _eOptionId: DECODER_OPTION, _pOption: *mut c_void) -> c_long {
+unsafe extern "C" fn decoder_get_opt_c(this: *mut ISVCDecoder, eOptionId: DECODER_OPTION, pOption: *mut c_void) -> c_long {
+    if this.is_null() || pOption.is_null() {
+        return CM_INIT_PARA_ERROR as c_long;
+    }
+    let dec_impl = this as *mut CWelsDecoderImpl;
+    unsafe {
+        match eOptionId {
+            DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
+                *(pOption as *mut i32) = 0;
+            }
+            DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
+                *(pOption as *mut i32) = if (*dec_impl).bEndOfStream { 1 } else { 0 };
+            }
+            _ => {}
+        }
+    }
     CM_RESULT_SUCCESS as c_long
 }
 
@@ -1448,8 +1599,8 @@ pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
     }
 }
 
-unsafe extern "C" fn decoder_flush_frame_c(_this: *mut ISVCDecoder, _ppDst: *mut *mut u8, _pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
-    DECODING_STATE::dsErrorFree
+unsafe extern "C" fn decoder_flush_frame_c(this: *mut ISVCDecoder, ppDst: *mut *mut u8, pDstInfo: *mut SBufferInfo) -> DECODING_STATE {
+    decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo)
 }
 
 unsafe extern "C" fn decoder_decode_parser_c(_this: *mut ISVCDecoder, _pSrc: *const u8, _iSrcLen: i32, _pDstInfo: *mut SParserBsInfo) -> DECODING_STATE {
@@ -1476,6 +1627,10 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
     let mut dec = Box::new(CWelsDecoderImpl {
         base: ISVCDecoder { lpVtbl: ptr::null() },
         pVtbl: vtbl,
+        pCtx: ptr::null_mut(),
+        align: crate::common::CMemoryAlign::new(16),
+        param: crate::SDecodingParam::default(),
+        bEndOfStream: false,
     });
     dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
     *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
@@ -1505,7 +1660,13 @@ pub unsafe extern "C" fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderC
 pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
     if !pDecoder.is_null() {
         unsafe {
-            drop(Box::from_raw(pDecoder as *mut CWelsDecoderImpl));
+            let dec_impl = pDecoder as *mut CWelsDecoderImpl;
+            if !(*dec_impl).pCtx.is_null() {
+                crate::decoder::decoder_core::WelsFreeStaticMemory((*dec_impl).pCtx);
+                drop(Box::from_raw((*dec_impl).pCtx));
+                (*dec_impl).pCtx = ptr::null_mut();
+            }
+            drop(Box::from_raw(dec_impl));
         }
     }
 }
