@@ -1,7 +1,54 @@
-//! Integration test for end-to-end loopback encode/decode pipeline.
-//! Ported from `test/api/decode_encode_test.cpp` and `test/api/encode_decode_api_test.cpp`.
-
+mod common;
+use common::Sha1Hasher;
 use openh264_rs::api::codec_api::*;
+
+fn update_hash_from_encoded_frame(hasher: &mut Sha1Hasher, bs_info: &SFrameBSInfo) {
+    for i in 0..bs_info.iLayerNum as usize {
+        let layer = &bs_info.sLayerInfo[i];
+        let mut layer_size = 0usize;
+        if !layer.pNalLengthInByte.is_null() {
+            for j in 0..layer.iNalCount as usize {
+                unsafe {
+                    layer_size += *layer.pNalLengthInByte.add(j) as usize;
+                }
+            }
+        }
+        if layer_size > 0 && !layer.pBsBuf.is_null() {
+            unsafe {
+                let slice = std::slice::from_raw_parts(layer.pBsBuf, layer_size);
+                hasher.update(slice);
+            }
+        }
+    }
+}
+
+fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
+    let mut start_indices = Vec::new();
+    let mut i = 0;
+    while i + 3 < bitstream.len() {
+        if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 0 && bitstream[i + 3] == 1 {
+            start_indices.push(i);
+            i += 4;
+        } else if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 1 {
+            start_indices.push(i);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+
+    let mut units = Vec::new();
+    for idx in 0..start_indices.len() {
+        let start = start_indices[idx];
+        let end = if idx + 1 < start_indices.len() {
+            start_indices[idx + 1]
+        } else {
+            bitstream.len()
+        };
+        units.push(&bitstream[start..end]);
+    }
+    units
+}
 
 #[test]
 fn test_loopback_encode_and_decode_pipeline() {
@@ -44,7 +91,6 @@ fn test_loopback_encode_and_decode_pipeline() {
 
             let frame_size = (width * height * 3 / 2) as usize;
             let mut yuv_input = vec![128u8; frame_size];
-            // Pattern generator
             for y in 0..height as usize {
                 for x in 0..width as usize {
                     yuv_input[y * width as usize + x] = ((x * 4 + y * 4) % 256) as u8;
@@ -96,6 +142,130 @@ fn test_loopback_encode_and_decode_pipeline() {
             assert_eq!((*p_decoder).Uninitialize(), CM_RESULT_SUCCESS as i64);
 
             WelsDestroySVCEncoder(p_encoder);
+            WelsDestroyDecoder(p_decoder);
+        }
+    }
+}
+
+struct DecodeEncodeFileParam {
+    file_name: &'static str,
+    hash_str: &'static str,
+    width: i32,
+    height: i32,
+    frame_rate: f32,
+}
+
+static K_DECODE_ENCODE_FILE_ARRAY: &[DecodeEncodeFileParam] = &[
+    DecodeEncodeFileParam {
+        file_name: "res/test_vd_1d.264",
+        hash_str: "34fc3aee85cc0b0223c2701d810a536fe3818a00",
+        width: 320,
+        height: 192,
+        frame_rate: 12.0,
+    },
+    DecodeEncodeFileParam {
+        file_name: "res/test_vd_rc.264",
+        hash_str: "9f15b0677b5f7daa922079ec4fa49e3f457fc998",
+        width: 320,
+        height: 192,
+        frame_rate: 12.0,
+    },
+];
+
+#[test]
+fn test_decode_encode_full_cycle_sha1_parity() {
+    let repo_root = std::path::Path::new("../../");
+    for param in K_DECODE_ENCODE_FILE_ARRAY {
+        let file_path = repo_root.join(param.file_name);
+        if !file_path.exists() {
+            continue;
+        }
+        let data = std::fs::read(&file_path).expect("Failed to read bitstream asset");
+        if data.is_empty() {
+            continue;
+        }
+
+        unsafe {
+            // 1. Create decoder
+            let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
+            if WelsCreateDecoder(&mut p_decoder) != CM_RESULT_SUCCESS as i64 || p_decoder.is_null() {
+                continue;
+            }
+            let mut dec_param = SDecodingParam::default();
+            dec_param.uiTargetDqLayer = u8::MAX;
+            if (*p_decoder).Initialize(&dec_param as *const SDecodingParam) != CM_RESULT_SUCCESS as i64 {
+                WelsDestroyDecoder(p_decoder);
+                continue;
+            }
+
+            // 2. Create encoder
+            let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
+            if WelsCreateSVCEncoder(&mut p_encoder) != CM_RESULT_SUCCESS || p_encoder.is_null() {
+                WelsDestroyDecoder(p_decoder);
+                continue;
+            }
+            let mut enc_param = SEncParamExt::default();
+            enc_param.iPicWidth = param.width;
+            enc_param.iPicHeight = param.height;
+            enc_param.fMaxFrameRate = param.frame_rate;
+            enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+            enc_param.iSpatialLayerNum = 1;
+            enc_param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+
+            if (*p_encoder).InitializeExt(&enc_param as *const SEncParamExt) != CM_RESULT_SUCCESS {
+                WelsDestroySVCEncoder(p_encoder);
+                WelsDestroyDecoder(p_decoder);
+                continue;
+            }
+
+            let mut hasher = Sha1Hasher::new();
+            let units = split_annexb_units(&data);
+
+            for unit in units {
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                let dec_ret = (*p_decoder).DecodeFrame2(
+                    unit.as_ptr(),
+                    unit.len() as i32,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                );
+
+                if dec_ret == DECODING_STATE::dsErrorFree && buf_info.iBufferStatus == 1 {
+                    let w = buf_info.UsrData.sSystemBuffer.iWidth;
+                    let h = buf_info.UsrData.sSystemBuffer.iHeight;
+                    let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0];
+                    let stride_uv = buf_info.UsrData.sSystemBuffer.iStride[1];
+
+                    let mut src_pic = SSourcePicture::default();
+                    src_pic.iPicWidth = w;
+                    src_pic.iPicHeight = h;
+                    src_pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+                    src_pic.iStride[0] = stride_y;
+                    src_pic.iStride[1] = stride_uv;
+                    src_pic.iStride[2] = stride_uv;
+                    src_pic.pData[0] = p_dst[0];
+                    src_pic.pData[1] = p_dst[1];
+                    src_pic.pData[2] = p_dst[2];
+
+                    let mut bs_info = SFrameBSInfo::default();
+                    let enc_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
+                    if enc_ret == CM_RESULT_SUCCESS {
+                        update_hash_from_encoded_frame(&mut hasher, &bs_info);
+                    }
+                }
+            }
+
+            let calculated_hash = hasher.digest();
+            assert_eq!(
+                calculated_hash, param.hash_str,
+                "SHA-1 hash mismatch in full decode-encode cycle for {}",
+                param.file_name
+            );
+
+            (*p_encoder).Uninitialize();
+            WelsDestroySVCEncoder(p_encoder);
+            (*p_decoder).Uninitialize();
             WelsDestroyDecoder(p_decoder);
         }
     }
