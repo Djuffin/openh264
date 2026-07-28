@@ -2733,7 +2733,7 @@ mod tests {
 
     #[test]
     fn test_wels_preprocess_init_and_uninit() {
-        let mut align = CMemoryAlign::new(16);
+        let _align = CMemoryAlign::new(16);
         let mut preprocess = CWelsPreProcess::default();
         unsafe {
             let mut param = SEncParamExt::default();
@@ -2744,6 +2744,7 @@ mod tests {
             param.sSpatialLayers[0].iVideoWidth = 128;
             param.sSpatialLayers[0].iVideoHeight = 128;
             param.sSpatialLayers[0].fFrameRate = 30.0;
+            assert_eq!(param.iPicWidth, 128);
 
             let ret = preprocess.WelsPreprocessCreate();
             assert_eq!(ret, ENC_RETURN_SUCCESS);
@@ -2754,7 +2755,7 @@ mod tests {
 
     #[test]
     fn test_downsample_buffer_geometry() {
-        let mut scaled_pic = Scaled_Picture::default();
+        let scaled_pic = Scaled_Picture::default();
         assert_eq!(scaled_pic.iScaledWidth[0], 0);
         assert_eq!(scaled_pic.iScaledHeight[0], 0);
         assert!(scaled_pic.pScaledInputPicture.is_null());

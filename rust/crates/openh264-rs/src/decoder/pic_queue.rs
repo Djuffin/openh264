@@ -86,152 +86,7 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 
-/// Macroblock row synchronization event for multi-threaded decoding.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsDecEvent {
-    pub manualReset: i32,
-    pub isSignaled: i32,
-    pub handle: usize,
-}
-
-/// Reconstructed picture data structure.
-///
-/// Matches [`SPicture`](file:///usr/local/google/home/ezemtsov/projects/openh264/codec/decoder/core/inc/picture.h#L51-L106).
-#[repr(C)]
-#[derive(Debug)]
-pub struct SPicture {
-    /// Base pointers to the first allocated byte of each color plane buffer.
-    pub pBuffer: [*mut u8; 4],
-    /// Pointers to active video origin (0, 0) of each color plane buffer.
-    pub pData: [*mut u8; 4],
-    /// Linesize / stride of picture planes in bytes (aligned to 32 bytes).
-    pub iLinesize: [i32; 4],
-    /// Number of color planes (3 for YUV 4:2:0 planar).
-    pub iPlanes: i32,
-
-    /// True if current picture is an IDR keyframe.
-    pub bIdrFlag: bool,
-
-    /// Active frame width in luma pixels.
-    pub iWidthInPixel: i32,
-    /// Active frame height in luma pixels.
-    pub iHeightInPixel: i32,
-    /// Picture Order Count (POC).
-    pub iFramePoc: i32,
-
-    /// True if picture is currently retained as a DPB reference frame.
-    pub bUsedAsRef: bool,
-    /// True if picture is a Long-Term Reference (LTR).
-    pub bIsLongRef: bool,
-    /// Reference counter for external display or downstream thread locks.
-    pub iRefCount: i8,
-    /// Unreference callback function pointer.
-    pub pSetUnRef: Option<unsafe extern "C" fn(pPic: *mut SPicture)>,
-
-    /// Indicates whether current picture decoding finished completely.
-    pub bIsComplete: bool,
-    /// SVC temporal layer ID.
-    pub uiTemporalId: u8,
-    /// SVC spatial dependency layer ID.
-    pub uiSpatialId: u8,
-    /// SVC quality layer ID.
-    pub uiQualityId: u8,
-
-    /// Slice header frame_num syntax element.
-    pub iFrameNum: i32,
-    /// Wrapped frame number for reference list reordering.
-    pub iFrameWrapNum: i32,
-    /// Long-term reference frame index.
-    pub iLongTermFrameIdx: i32,
-    /// Long-term picture number.
-    pub uiLongTermPicNum: u32,
-
-    /// Active SPS ID used to decode this picture.
-    pub iSpsId: i32,
-    /// Active PPS ID used to decode this picture.
-    pub iPpsId: i32,
-    /// Presentation timestamp (PTS).
-    pub uiTimeStamp: u64,
-    /// Relative decoding timestamp (DTS).
-    pub uiDecodingTimeStamp: u32,
-    /// Index of this picture slot in parent [`SPicBuff`].
-    pub iPicBuffIdx: i32,
-    /// Primary slice type.
-    pub eSliceType: EWelsSliceType,
-    /// Multi-slice picture flag.
-    pub bIsUngroupedMultiSlice: bool,
-    /// Sequence boundary start flag.
-    pub bNewSeqBegin: bool,
-    /// Number of error-concealed macroblocks.
-    pub iMbEcedNum: i32,
-    /// Number of propagated error-concealed macroblocks.
-    pub iMbEcedPropNum: i32,
-    /// Total macroblock count.
-    pub iMbNum: i32,
-
-    /// Per-macroblock decoding success mask (size: `uiMbCount`).
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    /// Per-macroblock non-zero transform coefficient count grid (size: `uiMbCount * 24`).
-    pub pNzc: *mut [i8; 24],
-    /// Per-macroblock prediction mode type array (size: `uiMbCount`).
-    pub pMbType: *mut u32,
-    /// Motion vector grids for List 0 and List 1 (`[LIST_A]`, 16 4x4 blocks per MB).
-    pub pMv: [*mut [[i16; 2]; 16]; 2],
-    /// Reference picture index grids for List 0 and List 1 (`[LIST_A]`, 16 4x4 blocks per MB).
-    pub pRefIndex: [*mut [i8; 16]; 2],
-    /// Cached reference picture pointers for direct mode.
-    pub pRefPic: [[*mut SPicture; 17]; 2],
-    /// Per-macroblock-row synchronization events for multi-threaded decoding.
-    pub pReadyEvent: *mut SWelsDecEvent,
-}
-
-pub type PPicture = *mut SPicture;
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pBuffer: [std::ptr::null_mut(); 4],
-            pData: [std::ptr::null_mut(); 4],
-            iLinesize: [0; 4],
-            iPlanes: 0,
-            bIdrFlag: false,
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iFramePoc: 0,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            iRefCount: 0,
-            pSetUnRef: None,
-            bIsComplete: false,
-            uiTemporalId: 0,
-            uiSpatialId: 0,
-            uiQualityId: 0,
-            iFrameNum: -1,
-            iFrameWrapNum: 0,
-            iLongTermFrameIdx: 0,
-            uiLongTermPicNum: 0,
-            iSpsId: 0,
-            iPpsId: 0,
-            uiTimeStamp: 0,
-            uiDecodingTimeStamp: 0,
-            iPicBuffIdx: 0,
-            eSliceType: EWelsSliceType::P_SLICE,
-            bIsUngroupedMultiSlice: false,
-            bNewSeqBegin: false,
-            iMbEcedNum: 0,
-            iMbEcedPropNum: 0,
-            iMbNum: 0,
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pNzc: std::ptr::null_mut(),
-            pMbType: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); 2],
-            pRefIndex: [std::ptr::null_mut(); 2],
-            pRefPic: [[std::ptr::null_mut(); 17]; 2],
-            pReadyEvent: std::ptr::null_mut(),
-        }
-    }
-}
+pub use crate::decoder::picture::{SPicture, PPicture, SWelsDecEvent};
 
 /// Recycled picture buffer queue container.
 ///
@@ -292,7 +147,6 @@ pub unsafe fn EventCreate(e: *mut SWelsDecEvent, manualReset: i32, initialState:
     unsafe {
         (*e).manualReset = manualReset;
         (*e).isSignaled = initialState;
-        (*e).handle = 0;
     }
     0
 }
@@ -303,7 +157,6 @@ pub unsafe fn EventDestroy(e: *mut SWelsDecEvent) {
     if !e.is_null() {
         unsafe {
             (*e).isSignaled = 0;
-            (*e).handle = 0;
         }
     }
 }

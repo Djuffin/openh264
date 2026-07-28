@@ -390,58 +390,9 @@ impl Default for SWelsDecoderSpsPpsCTX {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Picture {
-    pub pBuffer: [*mut u8; 4],
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iPlanes: i32,
-    pub bIdrFlag: bool,
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iFramePoc: i32,
-    pub iPoc: i32,
+pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
 
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub iRefCount: i8,
-    pub pSetUnRef: Option<unsafe extern "C" fn(*mut Picture)>,
-    pub bIsComplete: bool,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub uiQualityId: u8,
-    pub iFrameNum: i32,
-    pub iFrameWrapNum: i32,
-    pub iLongTermFrameIdx: i32,
-    pub uiLongTermPicNum: u32,
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiTimeStamp: u64,
-    pub uiDecodingTimeStamp: u64,
-    pub iPicBuffIdx: i32,
-    pub eSliceType: EWelsSliceType,
-    pub bIsUngroupedMultiSlice: bool,
-    pub bNewSeqBegin: bool,
-    pub iMbEcedNum: i32,
-    pub iMbEcedPropNum: i32,
-    pub iMbNum: i32,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pNzc: *mut [i8; 24],
-    pub pMbType: *mut u32,
-    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pRefPic: [[*mut Picture; 17]; LIST_A],
-    pub pReadyEvent: *mut c_void,
-}
-pub type PPicture = *mut Picture;
-pub type SPicture = Picture;
 
-impl Default for Picture {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 pub use crate::decoder::pic_queue::{TagPicBuff, SPicBuff, PPicBuff};
 
@@ -501,23 +452,7 @@ impl Default for SWelsLastDecPicInfo {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBufferInfo {
-    pub iBufferStatus: i32,
-    pub uiInBsTimeStamp: u64,
-    pub uiOutYuvTimeStamp: u64,
-    pub pDst: [*mut u8; 3],
-    pub iStride: [i32; 2],
-    pub iWidth: i32,
-    pub iHeight: i32,
-}
-
-impl Default for SBufferInfo {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+pub use crate::api::codec_api::{SBufferInfo, SSysMEMBuffer};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
