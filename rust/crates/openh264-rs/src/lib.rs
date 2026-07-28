@@ -337,25 +337,33 @@ pub use crate::api::codec_api::*;
 pub fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
     let mut start_indices = Vec::new();
     let mut i = 0;
-    while i + 3 < bitstream.len() {
-        if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 0 && bitstream[i + 3] == 1 {
-            start_indices.push(i);
-            i += 4;
-        } else if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 1 {
-            start_indices.push(i);
-            i += 3;
+    let len = bitstream.len();
+    while i + 2 < len {
+        if bitstream[i] == 0 && bitstream[i + 1] == 0 {
+            if bitstream[i + 2] == 1 {
+                start_indices.push(i);
+                i += 3;
+                continue;
+            } else if i + 3 < len && bitstream[i + 2] == 0 && bitstream[i + 3] == 1 {
+                start_indices.push(i);
+                i += 4;
+                continue;
+            }
+        }
+        if let Some(pos) = bitstream[i + 1..].iter().position(|&b| b == 0) {
+            i += 1 + pos;
         } else {
-            i += 1;
+            break;
         }
     }
 
-    let mut units = Vec::new();
+    let mut units = Vec::with_capacity(start_indices.len());
     for idx in 0..start_indices.len() {
         let start = start_indices[idx];
         let end = if idx + 1 < start_indices.len() {
             start_indices[idx + 1]
         } else {
-            bitstream.len()
+            len
         };
         units.push(&bitstream[start..end]);
     }

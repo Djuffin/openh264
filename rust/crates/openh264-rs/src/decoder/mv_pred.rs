@@ -314,23 +314,8 @@ impl Default for SPicture {
 
 pub type PPicture = *mut SPicture;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceHeader {
-    pub uiRefCount: [i32; 2],
-}
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
-impl Default for SSliceHeader {
-    fn default() -> Self {
-        Self { uiRefCount: [0; 2] }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

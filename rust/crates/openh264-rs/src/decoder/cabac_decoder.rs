@@ -594,43 +594,13 @@ impl Default for SWelsCabacDecEngine {
 
 pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub iBits: i32,
-    pub iIndex: isize,
-    pub pCurBuf: *mut u8,
-    pub uiCurBits: u32,
-    pub iLeftBits: i32,
-}
+pub use crate::decoder::bit_stream::SBitStringAux;
 
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iBits: 0,
-            iIndex: 0,
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 0,
-        }
-    }
-}
 
 pub type PBitStringAux = *mut SBitStringAux;
 
-#[repr(C)]
-pub struct SWelsDecoderContext {
-    pub eSliceType: u8,
-    pub bCabacInited: bool,
-    pub sWelsCabacContexts: [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX as usize) + 1]; 4],
-    pub pCabacCtx: [SWelsCabacCtx; WELS_CONTEXT_COUNT],
-}
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
 // 1. CABAC context initialization
 pub unsafe fn WelsCabacGlobalInit(pCtx: PWelsDecoderContext) {
@@ -672,9 +642,11 @@ pub unsafe fn WelsCabacContextInit(
         return;
     }
     unsafe {
-        let iIdx = if (*pCtx).eSliceType == I_SLICE || eSliceType == I_SLICE {
+        let iIdx = if eSliceType as i32 == I_SLICE as i32 {
             0
         } else {
+
+
             (iCabacInitIdc + 1) as usize
         };
         if !(*pCtx).bCabacInited {
@@ -1201,16 +1173,13 @@ mod tests {
 
     #[test]
     fn test_cabac_global_init() {
-        let mut ctx = Box::new(SWelsDecoderContext {
-            eSliceType: I_SLICE,
-            bCabacInited: false,
-            sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; (WELS_QP_MAX as usize) + 1]; 4],
-            pCabacCtx: [SWelsCabacCtx::default(); WELS_CONTEXT_COUNT],
-        });
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.eSliceType = crate::decoder::slice::EWelsSliceType::I_SLICE;
+        ctx.bCabacInited = false;
         unsafe {
             WelsCabacGlobalInit(&mut *ctx);
             assert!(ctx.bCabacInited);
-            WelsCabacContextInit(&mut *ctx, I_SLICE, 0, 26);
+            WelsCabacContextInit(&mut *ctx, crate::decoder::slice::EWelsSliceType::I_SLICE as u8, 0, 26);
         }
     }
 }

@@ -154,6 +154,9 @@ pub struct TagPredWeightTabSyntax {
 
 pub type SPredWeightTabSyn = TagPredWeightTabSyntax;
 pub type PPredWeightTabSyn = *mut SPredWeightTabSyn;
+pub type SPredWeightTable = SPredWeightTabSyn;
+pub type SPredList = SPredWeightList;
+
 
 impl Default for TagPredWeightTabSyntax {
     fn default() -> Self {

@@ -130,8 +130,8 @@ pub fn WELS_MIN<T: Ord>(x: T, y: T) -> T {
 // Function Pointer Types & Helper Structs
 // ============================================================================
 
-pub type PCopyLumaFunc = unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32);
-pub type PCopyChromaFunc = unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32);
+pub type PCopyLumaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
+pub type PCopyChromaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
 pub type PExpandPictureFunc = unsafe extern "C" fn(pDst: *mut u8, iLinesize: i32, iPicWidth: i32, iPicHeight: i32);
 
 #[repr(C)]
@@ -144,27 +144,13 @@ pub struct SCopyFunc {
 impl Default for SCopyFunc {
     fn default() -> Self {
         Self {
-            pCopyLumaFunc: WelsCopy16x16_c,
-            pCopyChromaFunc: WelsCopy8x8_c,
+            pCopyLumaFunc: Some(WelsCopy16x16_c),
+            pCopyChromaFunc: Some(WelsCopy8x8_c),
         }
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<PExpandPictureFunc>,
-    pub pfExpandChromaPicture: [Option<PExpandPictureFunc>; 2],
-}
-
-impl Default for SExpandPicFunc {
-    fn default() -> Self {
-        Self {
-            pfExpandLumaPicture: None,
-            pfExpandChromaPicture: [None, None],
-        }
-    }
-}
+pub use crate::decoder::decoder_core::SExpandPicFunc;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -220,134 +206,14 @@ impl Default for TagMCRefMember {
 // Core Decoder Context Structs
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecoderParam {
-    pub eEcActiveIdc: ERROR_CON_IDC,
-}
+pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
 
-#[repr(C)]
-pub struct SPicture {
-    pub pBuffer: [*mut u8; 4],
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iPlanes: i32,
 
-    pub bIdrFlag: bool,
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iFramePoc: i32,
 
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub iRefCount: i8,
-    pub pSetUnRef: Option<unsafe extern "C" fn(*mut SPicture)>,
+pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
+pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SRefPic};
 
-    pub bIsComplete: bool,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub uiQualityId: u8,
-
-    pub iFrameNum: i32,
-    pub iFrameWrapNum: i32,
-    pub iLongTermFrameIdx: i32,
-    pub uiLongTermPicNum: u32,
-
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiTimeStamp: u64,
-    pub uiDecodingTimeStamp: u32,
-    pub iPicBuffIdx: i32,
-    pub eSliceType: i32,
-    pub bIsUngroupedMultiSlice: bool,
-    pub bNewSeqBegin: bool,
-    pub iMbEcedNum: i32,
-    pub iMbEcedPropNum: i32,
-    pub iMbNum: i32,
-
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pNzc: *mut [i8; 24],
-    pub pMbType: *mut u32,
-    pub pRefIndex: [*mut *mut i8; 2],
-    pub pMv: [*mut *mut [i16; 2]; 2],
-}
-
-pub type PPicture = *mut SPicture;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSps {
-    pub iSpsId: i32,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub bFrameCroppingFlag: bool,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SFrameCrop {
-    pub iLeftOffset: i32,
-    pub iRightOffset: i32,
-    pub iTopOffset: i32,
-    pub iBottomOffset: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub bIdrFlag: bool,
-    pub uiDependencyId: u8,
-    pub uiTemporalId: u8,
-    pub uiQualityId: u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLayerInfo {
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-}
-
-#[repr(C)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pDec: *mut SPicture,
-    pub pSubMbType: *mut [u32; 4],
-}
-
-pub type PDqLayer = *mut SDqLayer;
-
-#[repr(C)]
-pub struct SLspPicInfo {
-    pub pPreviousDecodedPictureInDpb: *mut SPicture,
-}
-
-#[repr(C)]
-pub struct SRefPic {
-    pub pRefList: [[*mut SPicture; MAX_REF_PIC_COUNT]; 2],
-    pub uiRefCount: [u8; 2],
-}
-
-#[repr(C)]
-pub struct SWelsDecoderContext {
-    pub pParam: *mut SDecoderParam,
-    pub pDec: *mut SPicture,
-    pub pLastDecPicInfo: *mut SLspPicInfo,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pSps: *mut SSps,
-    pub sRefPic: SRefPic,
-    pub sCopyFunc: SCopyFunc,
-    pub sMcFunc: SMcFunc,
-    pub sExpandPicFunc: SExpandPicFunc,
-    pub sFrameCrop: SFrameCrop,
-    pub bFreezeOutput: bool,
-    pub iECMVs: [[i32; 2]; 16],
-    pub pECRefPic: [*mut SPicture; 16],
-    pub iErrorCode: i32,
-    pub uiCpuFlag: u32,
-}
-
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
 // ============================================================================
 // Memory Block Copy Functions (C Reference & SIMD Implementations)
@@ -433,40 +299,40 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
             (*pCtx).bFreezeOutput = false;
         }
 
-        (*pCtx).sCopyFunc.pCopyLumaFunc = WelsCopy16x16_c;
-        (*pCtx).sCopyFunc.pCopyChromaFunc = WelsCopy8x8_c;
+        (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_c);
+        (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_c);
 
         let cpu_flag = (*pCtx).uiCpuFlag;
 
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if (cpu_flag & WELS_CPU_MMXEXT) != 0 {
-                (*pCtx).sCopyFunc.pCopyChromaFunc = WelsCopy8x8_mmx;
+                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_mmx);
             }
             if (cpu_flag & WELS_CPU_SSE2) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = WelsCopy16x16_sse2;
+                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_sse2);
             }
         }
 
         #[cfg(target_arch = "arm")]
         {
             if (cpu_flag & WELS_CPU_NEON) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = WelsCopy16x16_neon;
-                (*pCtx).sCopyFunc.pCopyChromaFunc = WelsCopy8x8_neon;
+                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_neon);
+                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_neon);
             }
         }
 
         #[cfg(target_arch = "aarch64")]
         {
             if (cpu_flag & WELS_CPU_NEON) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = WelsCopy16x16_AArch64_neon;
-                (*pCtx).sCopyFunc.pCopyChromaFunc = WelsCopy8x8_AArch64_neon;
+                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_AArch64_neon);
+                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_AArch64_neon);
             }
         }
 
         if (cpu_flag & WELS_CPU_LSX) != 0 {
-            (*pCtx).sCopyFunc.pCopyChromaFunc = WelsCopy8x8_lsx;
-            (*pCtx).sCopyFunc.pCopyLumaFunc = WelsCopy16x16_lsx;
+            (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_lsx);
+            (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_lsx);
         }
     }
 }
@@ -507,7 +373,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
     let uiHeightInPixelY = ((*(*pCtx).pSps).iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).iLinesize[0];
     let iStrideUV = (*pDstPic).iLinesize[1];
-    (*pDstPic).iMbEcedNum = (*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight;
+    (*pDstPic).iMbEcedNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
 
     if !(*pCtx).pParam.is_null() && !(*pCtx).pCurDqLayer.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
@@ -569,8 +435,8 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iMbWidth = (*(*pCtx).pSps).iMbWidth;
-    let iMbHeight = (*(*pCtx).pSps).iMbHeight;
+    let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
+    let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
     let pDstPic = (*pCtx).pDec;
     let mut pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
@@ -591,7 +457,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iDstStride = (*pDstPic).iLinesize[0] as u32;
+    let iDstStride = (*pDstPic).iLinesize[0] as usize;
 
     if !pSrcPic.is_null() && pSrcPic == pDstPic {
         return;
@@ -599,60 +465,60 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
-            let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
+            let iMbXyIndex = iMbY * iMbWidth + iMbX;
             if !*pMbCorrectlyDecodedFlag.add(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
-                    let iSrcStride = (*pSrcPic).iLinesize[0] as u32;
+                    let iSrcStride = (*pSrcPic).iLinesize[0] as usize;
 
                     // Y Component
-                    let pDstData = (*pDstPic).pData[0].add((iMbY * 16 * (iDstStride as i32) + iMbX * 16) as usize);
-                    let pSrcData = (*pSrcPic).pData[0].add((iMbY * 16 * (iSrcStride as i32) + iMbX * 16) as usize);
-                    ((*pCtx).sCopyFunc.pCopyLumaFunc)(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
+                    let pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
+                    let pSrcData = (*pSrcPic).pData[0].add(iMbY * 16 * iSrcStride + iMbX * 16);
+                    if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
+                        f(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
+                    }
 
                     // U Component
-                    let pDstDataU = (*pDstPic).pData[1]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
-                    let pSrcDataU = (*pSrcPic).pData[1]
-                        .add((iMbY * 8 * ((iSrcStride / 2) as i32) + iMbX * 8) as usize);
-                    ((*pCtx).sCopyFunc.pCopyChromaFunc)(
-                        pDstDataU,
-                        (iDstStride / 2) as i32,
-                        pSrcDataU,
-                        (iSrcStride / 2) as i32,
-                    );
+                    let pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataU = (*pSrcPic).pData[1].add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+                        f(
+                            pDstDataU,
+                            (iDstStride / 2) as i32,
+                            pSrcDataU,
+                            (iSrcStride / 2) as i32,
+                        );
+                    }
 
                     // V Component
-                    let pDstDataV = (*pDstPic).pData[2]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
-                    let pSrcDataV = (*pSrcPic).pData[2]
-                        .add((iMbY * 8 * ((iSrcStride / 2) as i32) + iMbX * 8) as usize);
-                    ((*pCtx).sCopyFunc.pCopyChromaFunc)(
-                        pDstDataV,
-                        (iDstStride / 2) as i32,
-                        pSrcDataV,
-                        (iSrcStride / 2) as i32,
-                    );
+                    let pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataV = (*pSrcPic).pData[2].add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+                        f(
+                            pDstDataV,
+                            (iDstStride / 2) as i32,
+                            pSrcDataV,
+                            (iSrcStride / 2) as i32,
+                        );
+                    }
                 } else {
                     // Fill lost MB with neutral gray (128)
-                    let mut pDstData = (*pDstPic).pData[0].add((iMbY * 16 * (iDstStride as i32) + iMbX * 16) as usize);
+                    let mut pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
                         ptr::write_bytes(pDstData, 128, 16);
-                        pDstData = pDstData.add(iDstStride as usize);
+                        pDstData = pDstData.add(iDstStride);
                     }
 
-                    let mut pDstDataU = (*pDstPic).pData[1]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
+                    let mut pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataU, 128, 8);
-                        pDstDataU = pDstDataU.add((iDstStride / 2) as usize);
+                        pDstDataU = pDstDataU.add(iDstStride / 2);
                     }
 
-                    let mut pDstDataV = (*pDstPic).pData[2]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
+                    let mut pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataV, 128, 8);
-                        pDstDataV = pDstDataV.add((iDstStride / 2) as usize);
+                        pDstDataV = pDstDataV.add(iDstStride / 2);
                     }
                 }
             }
@@ -688,17 +554,23 @@ pub unsafe extern "C" fn BaseMC(
     if !(*pMCRefMem).pDstY.is_null() && !(*pMCRefMem).pSrcY.is_null() {
         let pSrc = (*pMCRefMem).pSrcY.offset(iSrcPixOffsetLuma as isize);
         let pDst = (*pMCRefMem).pDstY;
-        ((*pCtx).sCopyFunc.pCopyLumaFunc)(pDst, (*pMCRefMem).iDstLineLuma, pSrc, (*pMCRefMem).iSrcLineLuma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
+            f(pDst, (*pMCRefMem).iDstLineLuma, pSrc, (*pMCRefMem).iSrcLineLuma);
+        }
     }
     if !(*pMCRefMem).pDstU.is_null() && !(*pMCRefMem).pSrcU.is_null() {
         let pSrc = (*pMCRefMem).pSrcU.offset(iSrcPixOffsetChroma as isize);
         let pDst = (*pMCRefMem).pDstU;
-        ((*pCtx).sCopyFunc.pCopyChromaFunc)(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+            f(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        }
     }
     if !(*pMCRefMem).pDstV.is_null() && !(*pMCRefMem).pSrcV.is_null() {
         let pSrc = (*pMCRefMem).pSrcV.offset(iSrcPixOffsetChroma as isize);
         let pDst = (*pMCRefMem).pDstV;
-        ((*pCtx).sCopyFunc.pCopyChromaFunc)(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+            f(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        }
     }
 }
 
@@ -727,13 +599,19 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 
     if (*pDec).bIdrFlag || (*pCtx).pECRefPic[0].is_null() {
         let pSrcY = (*pMCRefMem).pSrcY.add((iMbY * 16 * (*pMCRefMem).iSrcLineLuma + iMbX * 16) as usize);
-        ((*pCtx).sCopyFunc.pCopyLumaFunc)(pDst0, (*pMCRefMem).iDstLineLuma, pSrcY, (*pMCRefMem).iSrcLineLuma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
+            f(pDst0, (*pMCRefMem).iDstLineLuma, pSrcY, (*pMCRefMem).iSrcLineLuma);
+        }
 
         let pSrcU = (*pMCRefMem).pSrcU.add((iMbY * 8 * (*pMCRefMem).iSrcLineChroma + iMbX * 8) as usize);
-        ((*pCtx).sCopyFunc.pCopyChromaFunc)(pDst1, (*pMCRefMem).iDstLineChroma, pSrcU, (*pMCRefMem).iSrcLineChroma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+            f(pDst1, (*pMCRefMem).iDstLineChroma, pSrcU, (*pMCRefMem).iSrcLineChroma);
+        }
 
         let pSrcV = (*pMCRefMem).pSrcV.add((iMbY * 8 * (*pMCRefMem).iSrcLineChroma + iMbX * 8) as usize);
-        ((*pCtx).sCopyFunc.pCopyChromaFunc)(pDst2, (*pMCRefMem).iDstLineChroma, pSrcV, (*pMCRefMem).iSrcLineChroma);
+        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
+            f(pDst2, (*pMCRefMem).iDstLineChroma, pSrcV, (*pMCRefMem).iSrcLineChroma);
+        }
         return;
     }
 
@@ -849,9 +727,9 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             if !(*pDec).pRefIndex[0].is_null() && !(*pDec).pMv[0].is_null() {
                                 let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
                                 let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
-                                let iRefIdx = *ref_row.add(0) as usize;
+                                let iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
-                                    let mv = *mv_row.add(0);
+                                    let mv = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
                                     (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
@@ -864,18 +742,18 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                 let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
                                 let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
                                 // Partition 0
-                                let mut iRefIdx = *ref_row.add(0) as usize;
+                                let mut iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
-                                    let mv0 = *mv_row.add(0);
+                                    let mv0 = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
                                     (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
-                                iRefIdx = *ref_row.add(8) as usize;
+                                iRefIdx = ref_row[8] as usize;
                                 if iRefIdx < 16 {
-                                    let mv8 = *mv_row.add(8);
+                                    let mv8 = mv_row[8];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv8[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv8[1] as i32;
                                     (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
@@ -887,25 +765,23 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             if !(*pDec).pRefIndex[0].is_null() && !(*pDec).pMv[0].is_null() {
                                 let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
                                 let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
-                                if !ref_row.is_null() && !mv_row.is_null() {
-                                    // Partition 0
-                                    let mut iRefIdx = *ref_row.add(0) as usize;
-                                    if iRefIdx < 16 {
-                                        let mv0 = *mv_row.add(0);
-                                        (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
-                                        (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
-                                        iInterMbCorrectNum[iRefIdx] += 1;
-                                    }
-                                    // Partition 1
-                                    iRefIdx = *ref_row.add(2) as usize;
-                                    if iRefIdx < 16 {
-                                        let mv2 = *mv_row.add(2);
-                                        (*pCtx).iECMVs[iRefIdx][0] += mv2[0] as i32;
-                                        (*pCtx).iECMVs[iRefIdx][1] += mv2[1] as i32;
-                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
-                                        iInterMbCorrectNum[iRefIdx] += 1;
-                                    }
+                                // Partition 0
+                                let mut iRefIdx = ref_row[0] as usize;
+                                if iRefIdx < 16 {
+                                    let mv0 = mv_row[0];
+                                    (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
+                                    (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    iInterMbCorrectNum[iRefIdx] += 1;
+                                }
+                                // Partition 1
+                                iRefIdx = ref_row[2] as usize;
+                                if iRefIdx < 16 {
+                                    let mv2 = mv_row[2];
+                                    (*pCtx).iECMVs[iRefIdx][0] += mv2[0] as i32;
+                                    (*pCtx).iECMVs[iRefIdx][1] += mv2[1] as i32;
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
@@ -917,45 +793,43 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                 let sub_types = *(*pCurDqLayer).pSubMbType.add(iMbXyIndex);
                                 let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
                                 let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
-                                if !ref_row.is_null() && !mv_row.is_null() {
-                                    for i in 0..4 {
-                                        let iSubMBType = sub_types[i];
-                                        let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
-                                        let iRefIdx = *ref_row.add(iIIdx) as usize;
-                                        if iRefIdx < 16 {
-                                            (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
-                                            match iSubMBType {
-                                                SUB_MB_TYPE_8x8 => {
-                                                    let mv = *mv_row.add(iIIdx);
+                                for i in 0..4 {
+                                    let iSubMBType = sub_types[i];
+                                    let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
+                                    let iRefIdx = ref_row[iIIdx] as usize;
+                                    if iRefIdx < 16 {
+                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                        match iSubMBType {
+                                            SUB_MB_TYPE_8x8 => {
+                                                let mv = mv_row[iIIdx];
+                                                (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
+                                                (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
+                                                iInterMbCorrectNum[iRefIdx] += 1;
+                                            }
+                                            SUB_MB_TYPE_8x4 => {
+                                                let mv0 = mv_row[iIIdx];
+                                                let mv4 = mv_row[iIIdx + 4];
+                                                (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv4[0] as i32);
+                                                (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv4[1] as i32);
+                                                iInterMbCorrectNum[iRefIdx] += 2;
+                                            }
+                                            SUB_MB_TYPE_4x8 => {
+                                                let mv0 = mv_row[iIIdx];
+                                                let mv1 = mv_row[iIIdx + 1];
+                                                (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv1[0] as i32);
+                                                (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv1[1] as i32);
+                                                iInterMbCorrectNum[iRefIdx] += 2;
+                                            }
+                                            SUB_MB_TYPE_4x4 => {
+                                                for j in 0..4 {
+                                                    let iJIdx = ((j >> 1) << 2) + (j & 1);
+                                                    let mv = mv_row[iIIdx + iJIdx];
                                                     (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
                                                     (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
-                                                    iInterMbCorrectNum[iRefIdx] += 1;
                                                 }
-                                                SUB_MB_TYPE_8x4 => {
-                                                    let mv0 = *mv_row.add(iIIdx);
-                                                    let mv4 = *mv_row.add(iIIdx + 4);
-                                                    (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv4[0] as i32);
-                                                    (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv4[1] as i32);
-                                                    iInterMbCorrectNum[iRefIdx] += 2;
-                                                }
-                                                SUB_MB_TYPE_4x8 => {
-                                                    let mv0 = *mv_row.add(iIIdx);
-                                                    let mv1 = *mv_row.add(iIIdx + 1);
-                                                    (*pCtx).iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv1[0] as i32);
-                                                    (*pCtx).iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv1[1] as i32);
-                                                    iInterMbCorrectNum[iRefIdx] += 2;
-                                                }
-                                                SUB_MB_TYPE_4x4 => {
-                                                    for j in 0..4 {
-                                                        let iJIdx = ((j >> 1) << 2) + (j & 1);
-                                                        let mv = *mv_row.add(iIIdx + iJIdx);
-                                                        (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
-                                                        (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
-                                                    }
-                                                    iInterMbCorrectNum[iRefIdx] += 4;
-                                                }
-                                                _ => {}
+                                                iInterMbCorrectNum[iRefIdx] += 4;
                                             }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -982,8 +856,8 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iMbWidth = (*(*pCtx).pSps).iMbWidth;
-    let iMbHeight = (*(*pCtx).pSps).iMbHeight;
+    let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
+    let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
     let pDstPic = (*pCtx).pDec;
     let pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
@@ -996,7 +870,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iDstStride = (*pDstPic).iLinesize[0] as u32;
+    let iDstStride = (*pDstPic).iLinesize[0] as usize;
     let mut sMCRefMem = TagMCRefMember::default();
 
     if !pSrcPic.is_null() {
@@ -1017,30 +891,28 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
-            let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
+            let iMbXyIndex = iMbY * iMbWidth + iMbX;
             if !*pMbCorrectlyDecodedFlag.add(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
-                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iMbXyIndex as i32, iMbX, iMbY, &mut sMCRefMem);
+                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
                 } else {
-                    let mut pDstData = (*pDstPic).pData[0].add((iMbY * 16 * (iDstStride as i32) + iMbX * 16) as usize);
+                    let mut pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
                         ptr::write_bytes(pDstData, 128, 16);
-                        pDstData = pDstData.add(iDstStride as usize);
+                        pDstData = pDstData.add(iDstStride);
                     }
 
-                    let mut pDstDataU = (*pDstPic).pData[1]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
+                    let mut pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataU, 128, 8);
-                        pDstDataU = pDstDataU.add((iDstStride / 2) as usize);
+                        pDstDataU = pDstDataU.add(iDstStride / 2);
                     }
 
-                    let mut pDstDataV = (*pDstPic).pData[2]
-                        .add((iMbY * 8 * ((iDstStride / 2) as i32) + iMbX * 8) as usize);
+                    let mut pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataV, 128, 8);
-                        pDstDataV = pDstDataV.add((iDstStride / 2) as usize);
+                        pDstDataV = pDstDataV.add(iDstStride / 2);
                     }
                 }
             }
@@ -1164,68 +1036,32 @@ mod tests {
             ..Default::default()
         };
         let mut dq_layer = SDqLayer {
-            sLayerInfo: SLayerInfo::default(),
             pMbCorrectlyDecodedFlag: mb_flags.as_mut_ptr(),
-            pDec: ptr::null_mut(),
-            pSubMbType: ptr::null_mut(),
+            ..Default::default()
         };
-        let mut ctx = SWelsDecoderContext {
-            pParam: ptr::null_mut(),
-            pDec: ptr::null_mut(),
-            pLastDecPicInfo: ptr::null_mut(),
-            pCurDqLayer: &mut dq_layer,
-            pSps: &mut sps,
-            sRefPic: SRefPic {
-                pRefList: [[ptr::null_mut(); 16]; 2],
-                uiRefCount: [0; 2],
-            },
-            sCopyFunc: SCopyFunc::default(),
-            sMcFunc: SMcFunc::default(),
-            sExpandPicFunc: SExpandPicFunc::default(),
-            sFrameCrop: SFrameCrop::default(),
-            bFreezeOutput: false,
-            iECMVs: [[0; 2]; 16],
-            pECRefPic: [ptr::null_mut(); 16],
-            iErrorCode: 0,
-            uiCpuFlag: 0,
-        };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.pCurDqLayer = &mut dq_layer as *mut _;
+        ctx.pSps = &mut sps as *mut _;
 
         unsafe {
-            assert_eq!(NeedErrorCon(&mut ctx), false);
+            assert_eq!(NeedErrorCon(&mut *ctx), false);
             mb_flags[2] = false;
             let _ = mb_flags;
-            assert_eq!(NeedErrorCon(&mut ctx), true);
+            assert_eq!(NeedErrorCon(&mut *ctx), true);
         }
     }
 
     #[test]
     fn test_implement_error_con_disable() {
-        let mut param = SDecoderParam {
+        let mut param = SDecodingParam {
             eEcActiveIdc: ERROR_CON_IDC::ERROR_CON_DISABLE,
+            ..Default::default()
         };
-        let mut ctx = SWelsDecoderContext {
-            pParam: &mut param,
-            pDec: ptr::null_mut(),
-            pLastDecPicInfo: ptr::null_mut(),
-            pCurDqLayer: ptr::null_mut(),
-            pSps: ptr::null_mut(),
-            sRefPic: SRefPic {
-                pRefList: [[ptr::null_mut(); 16]; 2],
-                uiRefCount: [0; 2],
-            },
-            sCopyFunc: SCopyFunc::default(),
-            sMcFunc: SMcFunc::default(),
-            sExpandPicFunc: SExpandPicFunc::default(),
-            sFrameCrop: SFrameCrop::default(),
-            bFreezeOutput: false,
-            iECMVs: [[0; 2]; 16],
-            pECRefPic: [ptr::null_mut(); 16],
-            iErrorCode: 0,
-            uiCpuFlag: 0,
-        };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.pParam = &mut param as *mut _;
 
         unsafe {
-            ImplementErrorCon(&mut ctx);
+            ImplementErrorCon(&mut *ctx);
             assert_eq!(ctx.iErrorCode & dsBitstreamError, dsBitstreamError);
         }
     }

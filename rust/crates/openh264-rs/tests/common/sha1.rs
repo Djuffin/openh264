@@ -21,13 +21,18 @@ impl Sha1Hasher {
     pub fn update(&mut self, data: &[u8]) {
         self.count += data.len() as u64;
         self.buffer.extend_from_slice(data);
-        while self.buffer.len() >= 64 {
-            let block: [u8; 64] = self.buffer.drain(..64).collect::<Vec<_>>().try_into().unwrap();
-            self.process_block(&block);
+        let mut offset = 0;
+        while self.buffer.len() - offset >= 64 {
+            let block: &[u8; 64] = self.buffer[offset..offset + 64].try_into().unwrap();
+            Self::process_block(&mut self.state, block);
+            offset += 64;
+        }
+        if offset > 0 {
+            self.buffer.drain(..offset);
         }
     }
 
-    fn process_block(&mut self, block: &[u8; 64]) {
+    fn process_block(state: &mut [u32; 5], block: &[u8; 64]) {
         let mut w = [0u32; 80];
         for i in 0..16 {
             w[i] = u32::from_be_bytes(block[i * 4..(i + 1) * 4].try_into().unwrap());
@@ -36,11 +41,11 @@ impl Sha1Hasher {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
         }
 
-        let mut a = self.state[0];
-        let mut b = self.state[1];
-        let mut c = self.state[2];
-        let mut d = self.state[3];
-        let mut e = self.state[4];
+        let mut a = state[0];
+        let mut b = state[1];
+        let mut c = state[2];
+        let mut d = state[3];
+        let mut e = state[4];
 
         for i in 0..80 {
             let (f, k) = match i {
@@ -62,11 +67,11 @@ impl Sha1Hasher {
             a = temp;
         }
 
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
     }
 
     pub fn digest(mut self) -> String {
@@ -76,9 +81,11 @@ impl Sha1Hasher {
             self.buffer.push(0x00);
         }
         self.buffer.extend_from_slice(&bit_len.to_be_bytes());
-        while self.buffer.len() >= 64 {
-            let block: [u8; 64] = self.buffer.drain(..64).collect::<Vec<_>>().try_into().unwrap();
-            self.process_block(&block);
+        let mut offset = 0;
+        while self.buffer.len() - offset >= 64 {
+            let block: &[u8; 64] = self.buffer[offset..offset + 64].try_into().unwrap();
+            Self::process_block(&mut self.state, block);
+            offset += 64;
         }
 
         format!(

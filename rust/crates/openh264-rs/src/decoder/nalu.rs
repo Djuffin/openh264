@@ -1,5 +1,3 @@
-use crate::decoder::decoder_context::*;
-use crate::decoder::dec_golomb::*;
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -27,7 +25,35 @@ use crate::decoder::dec_golomb::*;
 
 use std::ffi::c_void;
 
-// Import types from decoder and common modules
+use crate::decoder::bit_stream::*;
+use crate::decoder::cabac_decoder::*;
+use crate::decoder::dec_golomb::*;
+use crate::decoder::decode_mb_aux::*;
+use crate::decoder::decode_slice::*;
+use crate::decoder::decoder_context::*;
+use crate::decoder::decoder_core::*;
+use crate::decoder::error_concealment::*;
+use crate::decoder::fmo::*;
+use crate::decoder::get_intra_predictor::*;
+use crate::decoder::manage_dec_ref::*;
+use crate::decoder::mv_pred::*;
+use crate::decoder::parameter_sets::*;
+use crate::decoder::parse_mb_syn_cabac::*;
+use crate::decoder::parse_mb_syn_cavlc::*;
+use crate::decoder::pic_queue::*;
+use crate::decoder::picture::*;
+use crate::decoder::slice::*;
+use crate::common::memory_align::*;
+
+// Explicit imports to resolve glob ambiguities
+use crate::decoder::bit_stream::{SBitStringAux, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};
+
+use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
+use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, MAX_LAYER_NUM, SPosOffset};
+use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps, SLevelLimits, MAX_SPS_COUNT, MAX_PPS_COUNT, MAX_MB_SIZE, MAX_SLICEGROUP_IDS};
+use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SRefBasePicMarking, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MAX_MMCO_COUNT, MAX_REF_PIC_COUNT};
+
+
 
 // ============================================================================
 // Constants and Syntax Limits
@@ -529,6 +555,7 @@ pub unsafe fn ParseNalHeader(
         20 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
         other => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
     };
+    (*pCtx).sCurNalHead = *pNalUnitHeader;
 
     pNal = pNal.add(1);
     iNalSize -= 1;
@@ -708,7 +735,7 @@ pub unsafe fn CheckAccessUnitBoundaryExt(
     pLastSliceHeader: *const SSliceHeader,
     pCurSliceHeader: *const SSliceHeader,
 ) -> bool {
-    let kpSps = (*pCurSliceHeader).pSps;
+    let kpSps = (*pCurSliceHeader).pSps as *const SSps;
 
     // Subclause 7.1.4.1.1 temporal_id
     if (*pLastNalHdrExt).uiTemporalId != (*pCurNalHeaderExt).uiTemporalId {
@@ -733,7 +760,7 @@ pub unsafe fn CheckAccessUnitBoundaryExt(
         return true;
     }
     if !(*pLastSliceHeader).pSps.is_null() && !(*pCurSliceHeader).pSps.is_null() {
-        if (*(*pLastSliceHeader).pSps).iSpsId != (*(*pCurSliceHeader).pSps).iSpsId {
+        if (*((*pLastSliceHeader).pSps as *mut SSps)).iSpsId != (*((*pCurSliceHeader).pSps as *mut SSps)).iSpsId {
             return true;
         }
     }
@@ -791,7 +818,7 @@ pub unsafe fn CheckAccessUnitBoundary(
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
         let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
-        if !active_sps.is_null() && active_sps != kpSps {
+        if !active_sps.is_null() && active_sps as *const _ != kpSps {
             return true;
         }
     }
@@ -863,7 +890,7 @@ pub unsafe fn CheckNextAuNewSeq(
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
         let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
-        if !active_sps.is_null() && active_sps != kpSps {
+        if !active_sps.is_null() && active_sps as *const _ != kpSps {
             return true;
         }
     }
@@ -1129,7 +1156,7 @@ pub unsafe fn CheckSpsActive(
     bUseSubsetFlag: bool,
 ) -> bool {
     for i in 0..MAX_LAYER_NUM {
-        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] == pSps {
+        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] as *const _ == pSps {
             return true;
         }
     }
@@ -1152,7 +1179,7 @@ pub unsafe fn CheckSpsActive(
                 for i in 0..iNum {
                     let pNalUnit = *(*pCurAu).pNalUnitsList.add(i);
                     if !pNalUnit.is_null() && (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps;
+                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
                             return true;
                         }
@@ -1171,7 +1198,7 @@ pub unsafe fn CheckSpsActive(
                 for i in 0..iNum {
                     let pNalUnit = *(*pCurAu).pNalUnitsList.add(i);
                     if !pNalUnit.is_null() && !(*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps;
+                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
                             return true;
                         }
@@ -1193,8 +1220,8 @@ pub unsafe fn ParseSps(
     kSrcNalLen: i32,
 ) -> i32 {
     let mut sTempSubsetSps = SSubsetSps::default();
-    let pSubsetSps = &mut sTempSubsetSps;
-    let pSps = &mut sTempSubsetSps.sSps;
+    let pSubsetSps = &mut sTempSubsetSps as *mut SSubsetSps;
+    let pSps = unsafe { &mut (*pSubsetSps).sSps };
 
     let kbUseSubsetFlag = IS_SUBSET_SPS_NAL((*pCtx).sCurNalHead.eNalUnitType);
 
@@ -1252,7 +1279,7 @@ pub unsafe fn ParseSps(
         || uiProfileIdc == 44
     {
         if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.uiChromaFormatIdc = uiCode;
+        pSps.uiChromaFormatIdc = uiCode as u8;
         if pSps.uiChromaFormatIdc > 1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
@@ -1322,7 +1349,7 @@ pub unsafe fn ParseSps(
 
         for i in 0..pSps.iNumRefFramesInPocCycle as usize {
             if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-            pSps.iOffsetForRefFrame[i] = iCode;
+            pSps.iOffsetForRefFrame[i] = iCode as i8;
         }
     }
 
@@ -1337,14 +1364,14 @@ pub unsafe fn ParseSps(
     pSps.bGapsInFrameNumValueAllowedFlag = uiCode != 0;
 
     if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.iMbWidth = PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32;
-    if pSps.iMbWidth > MAX_MB_SIZE as i32 || pSps.iMbWidth == 0 {
+    pSps.iMbWidth = (PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32) as u32;
+    if pSps.iMbWidth > MAX_MB_SIZE as u32 || pSps.iMbWidth == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
     if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.iMbHeight = PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32;
-    if pSps.iMbHeight > MAX_MB_SIZE as i32 || pSps.iMbHeight == 0 {
+    pSps.iMbHeight = (PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32) as u32;
+    if pSps.iMbHeight > MAX_MB_SIZE as u32 || pSps.iMbHeight == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
@@ -1372,7 +1399,7 @@ pub unsafe fn ParseSps(
         pSps.sFrameCrop.iLeftOffset = uiCode as i32;
         if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iRightOffset = uiCode as i32;
-        if (pSps.sFrameCrop.iLeftOffset + pSps.sFrameCrop.iRightOffset) > (pSps.iMbWidth * 16 / 2) {
+        if (pSps.sFrameCrop.iLeftOffset + pSps.sFrameCrop.iRightOffset) > (pSps.iMbWidth as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
 
@@ -1380,7 +1407,7 @@ pub unsafe fn ParseSps(
         pSps.sFrameCrop.iTopOffset = uiCode as i32;
         if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iBottomOffset = uiCode as i32;
-        if (pSps.sFrameCrop.iTopOffset + pSps.sFrameCrop.iBottomOffset) > (pSps.iMbHeight * 16 / 2) {
+        if (pSps.sFrameCrop.iTopOffset + pSps.sFrameCrop.iBottomOffset) > (pSps.iMbHeight as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
     }
@@ -1402,11 +1429,11 @@ pub unsafe fn ParseSps(
             return iRet;
         }
         if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSubsetSps.bSvcVuiParamPresentFlag = uiCode != 0;
+        (*pSubsetSps).bSvcVuiParamPresentFlag = uiCode != 0;
     }
 
-    *pPicWidth = pSps.iMbWidth << 4;
-    *pPicHeight = pSps.iMbHeight << 4;
+    *pPicWidth = (pSps.iMbWidth << 4) as i32;
+    *pPicHeight = (pSps.iMbHeight << 4) as i32;
 
     let idx = iSpsId as usize;
     if kbUseSubsetFlag {
@@ -1623,11 +1650,11 @@ pub unsafe fn ParseVui(
     pVui.bAspectRatioInfoPresentFlag = uiCode != 0;
     if pVui.bAspectRatioInfoPresentFlag {
         if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-        pVui.uiAspectRatioIdc = uiCode as u8;
+        pVui.uiAspectRatioIdc = uiCode;
         if (pVui.uiAspectRatioIdc as usize) < 17 {
             pVui.uiSarWidth = g_ksVuiSampleAspectRatio[pVui.uiAspectRatioIdc as usize].uiWidth;
             pVui.uiSarHeight = g_ksVuiSampleAspectRatio[pVui.uiAspectRatioIdc as usize].uiHeight;
-        } else if pVui.uiAspectRatioIdc == EXTENDED_SAR {
+        } else if pVui.uiAspectRatioIdc as u8 == EXTENDED_SAR {
             if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiSarWidth = uiCode;
             if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
@@ -1669,10 +1696,10 @@ pub unsafe fn ParseVui(
     pVui.bChromaLocInfoPresentFlag = uiCode != 0;
     if pVui.bChromaLocInfoPresentFlag {
         if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pVui.uiChromaSampleLocTypeTopField = uiCode as u8;
+        pVui.uiChromaSampleLocTypeTopField = uiCode;
 
         if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pVui.uiChromaSampleLocTypeBottomField = uiCode as u8;
+        pVui.uiChromaSampleLocTypeBottomField = uiCode;
     }
 
     if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
@@ -1938,7 +1965,7 @@ pub unsafe fn ResetFmoList(pCtx: *mut SWelsDecoderContext) -> i32 {
 pub unsafe fn MemInitNalList(
     ppAu: *mut *mut SAccessUnit,
     kuiSize: u32,
-    _pMa: *mut c_void,
+    _pMa: *mut CMemoryAlign,
 ) -> i32 {
     if kuiSize == 0 {
         return ERR_INVALID_PARAMETERS;
@@ -1980,7 +2007,7 @@ pub unsafe fn MemInitNalList(
 }
 
 /// Frees the contiguous memory buffer allocated for an [`SAccessUnit`].
-pub unsafe fn MemFreeNalList(ppAu: *mut *mut SAccessUnit, _pMa: *mut c_void) -> i32 {
+pub unsafe fn MemFreeNalList(ppAu: *mut *mut SAccessUnit, _pMa: *mut CMemoryAlign) -> i32 {
     if !ppAu.is_null() {
         let pAu = *ppAu;
         if !pAu.is_null() {
@@ -2004,7 +2031,7 @@ pub unsafe fn ExpandNalUnitList(
     ppAu: *mut *mut SAccessUnit,
     kiOrgSize: i32,
     kiExpSize: i32,
-    pMa: *mut c_void,
+    pMa: *mut CMemoryAlign,
 ) -> i32 {
     if kiExpSize <= kiOrgSize {
         return ERR_INVALID_PARAMETERS;
@@ -2037,7 +2064,7 @@ pub unsafe fn ExpandNalUnitList(
 /// Retrieves the next available [`SNalUnit`] node from the AU list, expanding capacity if needed.
 pub unsafe fn MemGetNextNal(
     ppAu: *mut *mut SAccessUnit,
-    pMa: *mut c_void,
+    pMa: *mut CMemoryAlign,
 ) -> *mut SNalUnit {
     let mut pAu = *ppAu;
 

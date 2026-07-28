@@ -12,11 +12,10 @@
 //! Translated from `codec/decoder/core/inc/manage_dec_ref.h` and `codec/decoder/core/src/manage_dec_ref.cpp`.
 
 use std::ffi::c_void;
-
-// ============================================================================
-// Constants & Bounds
-// ============================================================================
-
+use crate::decoder::parameter_sets::SSps;
+pub use crate::decoder::nalu::{EWelsNalUnitType, EWelsNalUnitType::*};
+pub use crate::decoder::slice::{EWelsSliceType, EWelsSliceType::*, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MMCO_SHORT2LONG, MMCO_SET_MAX_LONG, MMCO_RESET, MMCO_LONG};
+pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_DPB_COUNT: usize = MAX_REF_PIC_COUNT + 1; // 17
 pub const MAX_MMCO_COUNT: usize = 66;
@@ -24,33 +23,6 @@ pub const MAX_MMCO_COUNT: usize = 66;
 pub const LIST_0: usize = 0;
 pub const LIST_1: usize = 1;
 pub const LIST_A: usize = 2;
-
-// Slice Types matching `EWelsSliceType`
-pub const P_SLICE: i32 = 0;
-pub const B_SLICE: i32 = 1;
-pub const I_SLICE: i32 = 2;
-pub const SP_SLICE: i32 = 3;
-pub const SI_SLICE: i32 = 4;
-
-// MMCO Opcodes matching `EMmcoCode`
-pub const MMCO_END: u32 = 0;
-pub const MMCO_SHORT2UNUSED: u32 = 1;
-pub const MMCO_LONG2UNUSED: u32 = 2;
-pub const MMCO_SHORT2LONG: u32 = 3;
-pub const MMCO_SET_MAX_LONG: u32 = 4;
-pub const MMCO_RESET: u32 = 5;
-pub const MMCO_LONG: u32 = 6;
-
-// NAL Unit Types
-pub const NAL_UNIT_CODED_SLICE_IDR: i32 = 5;
-
-// Error Concealment Active IDCs
-pub const ERROR_CON_DISABLE: i32 = 0;
-pub const ERROR_CON_FRAME_COPY_CROSS_IDR: i32 = 1;
-pub const ERROR_CON_SLICE_COPY_CROSS_IDR: i32 = 2;
-pub const ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE: i32 = 3;
-pub const ERROR_CON_SLICE_MV_COPY_CROSS_IDR: i32 = 4;
-pub const ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE: i32 = 5;
 
 // Error Codes matching `codec/decoder/core/inc/error_code.h`
 pub const ERR_NONE: i32 = 0;
@@ -94,217 +66,15 @@ pub type PExpandPictureFunc = unsafe extern "C" fn(
     kiPicHeight: i32,
 );
 
-/// Function pointer callback for unreferencing.
-pub type PSetUnRefFunc = unsafe extern "C" fn(pRef: *mut SPicture);
+pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
 
-/// Reconstructed Picture structure (`SPicture` / `PPicture`).
-#[repr(C)]
-pub struct SPicture {
-    pub pBuffer: [*mut u8; 4],
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iPlanes: i32,
 
-    pub bIdrFlag: bool,
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iFramePoc: i32,
+pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
 
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub iRefCount: i8,
-    pub pSetUnRef: Option<PSetUnRefFunc>,
-
-    pub bIsComplete: bool,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub uiQualityId: u8,
-
-    pub iFrameNum: i32,
-    pub iFrameWrapNum: i32,
-    pub iLongTermFrameIdx: i32,
-    pub uiLongTermPicNum: u32,
-
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiTimeStamp: u64,
-    pub uiDecodingTimeStamp: u32,
-    pub iPicBuffIdx: i32,
-    pub eSliceType: i32,
-    pub bIsUngroupedMultiSlice: bool,
-    pub bNewSeqBegin: bool,
-    pub iMbEcedNum: i32,
-    pub iMbEcedPropNum: i32,
-    pub iMbNum: i32,
-
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pNzc: *mut [i8; 24],
-    pub pMbType: *mut u32,
-    pub pMv: [*mut c_void; LIST_A],
-    pub pRefIndex: [*mut c_void; LIST_A],
-    pub pRefPic: [[*mut SPicture; MAX_DPB_COUNT]; LIST_A],
-    pub pReadyEvent: *mut c_void,
-}
-
-pub type PPicture = *mut SPicture;
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pBuffer: [std::ptr::null_mut(); 4],
-            pData: [std::ptr::null_mut(); 4],
-            iLinesize: [0; 4],
-            iPlanes: 0,
-            bIdrFlag: false,
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iFramePoc: 0,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            iRefCount: 0,
-            pSetUnRef: None,
-            bIsComplete: false,
-            uiTemporalId: 0,
-            uiSpatialId: 0,
-            uiQualityId: 0,
-            iFrameNum: -1,
-            iFrameWrapNum: -1,
-            iLongTermFrameIdx: -1,
-            uiLongTermPicNum: 0,
-            iSpsId: -1,
-            iPpsId: -1,
-            uiTimeStamp: 0,
-            uiDecodingTimeStamp: 0,
-            iPicBuffIdx: 0,
-            eSliceType: I_SLICE,
-            bIsUngroupedMultiSlice: false,
-            bNewSeqBegin: false,
-            iMbEcedNum: 0,
-            iMbEcedPropNum: 0,
-            iMbNum: 0,
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pNzc: std::ptr::null_mut(),
-            pMbType: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); LIST_A],
-            pRefIndex: [std::ptr::null_mut(); LIST_A],
-            pRefPic: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            pReadyEvent: std::ptr::null_mut(),
-        }
-    }
-}
-
-/// Reference Picture Buffer structure (`SRefPic` / `PRefPic`).
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SRefPic {
-    pub pRefList: [[*mut SPicture; MAX_DPB_COUNT]; LIST_A],
-    pub pShortRefList: [[*mut SPicture; MAX_DPB_COUNT]; LIST_A],
-    pub pLongRefList: [[*mut SPicture; MAX_DPB_COUNT]; LIST_A],
-    pub uiRefCount: [u8; LIST_A],
-    pub uiShortRefCount: [u8; LIST_A],
-    pub uiLongRefCount: [u8; LIST_A],
-    pub iMaxLongTermFrameIdx: i32,
-}
-
-pub type PRefPic = *mut SRefPic;
-
-impl Default for SRefPic {
-    fn default() -> Self {
-        Self {
-            pRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            pShortRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            pLongRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            uiRefCount: [0; LIST_A],
-            uiShortRefCount: [0; LIST_A],
-            uiLongRefCount: [0; LIST_A],
-            iMaxLongTermFrameIdx: -1,
-        }
-    }
-}
-
-/// Reference picture list reordering syntax entry.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SReorderingSynEntry {
-    pub uiAbsDiffPicNumMinus1: u32,
-    pub uiLongTermPicNum: u16,
-    pub uiReorderingOfPicNumsIdc: u16,
-}
-
-/// Reference Picture List Reordering Syntax (`SRefPicListReorderSyn` / `PRefPicListReorderSyn`).
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SRefPicListReorderSyn {
-    pub sReorderingSyn: [[SReorderingSynEntry; MAX_REF_PIC_COUNT + 1]; LIST_A],
-    pub bRefPicListReorderingFlag: [bool; LIST_A],
-}
-
-pub type PRefPicListReorderSyn = *mut SRefPicListReorderSyn;
-
-impl Default for SRefPicListReorderSyn {
-    fn default() -> Self {
-        Self {
-            sReorderingSyn: [[SReorderingSynEntry::default(); MAX_REF_PIC_COUNT + 1]; LIST_A],
-            bRefPicListReorderingFlag: [false; LIST_A],
-        }
-    }
-}
-
-/// MMCO Command Entry.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMmcoRefEntry {
-    pub uiMmcoType: u32,
-    pub iShortFrameNum: i32,
-    pub iDiffOfPicNum: i32,
-    pub uiLongTermPicNum: u32,
-    pub iLongTermFrameIdx: i32,
-    pub iMaxLongTermFrameIdx: i32,
-}
-
-/// Reference Picture Marking Syntax (`SRefPicMarking` / `PRefPicMarking`).
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SRefPicMarking {
-    pub sMmcoRef: [SMmcoRefEntry; MAX_MMCO_COUNT],
-    pub bNoOutputOfPriorPicsFlag: bool,
-    pub bLongTermRefFlag: bool,
-    pub bAdaptiveRefPicMarkingModeFlag: bool,
-}
-
-pub type PRefPicMarking = *mut SRefPicMarking;
-
-impl Default for SRefPicMarking {
-    fn default() -> Self {
-        Self {
-            sMmcoRef: [SMmcoRefEntry::default(); MAX_MMCO_COUNT],
-            bNoOutputOfPriorPicsFlag: false,
-            bLongTermRefFlag: false,
-            bAdaptiveRefPicMarkingModeFlag: false,
-        }
-    }
-}
-
-/// Sequence Parameter Set representation (`SSps` / `PSps`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSps {
-    pub iSpsId: i32,
-    pub uiLog2MaxFrameNum: u32,
-    pub iNumRefFrames: i32,
-}
 
 pub type PSps = *mut SSps;
 
-impl Default for SSps {
-    fn default() -> Self {
-        Self {
-            iSpsId: 0,
-            uiLog2MaxFrameNum: 4,
-            iNumRefFrames: 1,
-        }
-    }
-}
 
 /// Picture Parameter Set representation (`SPps` / `PPps`).
 #[repr(C)]
@@ -325,39 +95,8 @@ impl Default for SPps {
     }
 }
 
-/// Slice Header (`SSliceHeader` / `PSliceHeader`).
-#[repr(C)]
-pub struct SSliceHeader {
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-    pub iFrameNum: i32,
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiRefCount: [u8; LIST_A],
-    pub eSliceType: i32,
-}
+pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt};
 
-pub type PSliceHeader = *mut SSliceHeader;
-
-impl Default for SSliceHeader {
-    fn default() -> Self {
-        Self {
-            pSps: std::ptr::null_mut(),
-            pPps: std::ptr::null_mut(),
-            iFrameNum: 0,
-            iSpsId: 0,
-            iPpsId: 0,
-            uiRefCount: [0; LIST_A],
-            eSliceType: I_SLICE,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 #[repr(C)]
 #[derive(Default)]
@@ -424,59 +163,21 @@ pub struct SLastDecPicInfo {
     pub bLastHasMmco5: bool,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<PExpandPictureFunc>,
-    pub pfExpandChromaPicture: [Option<PExpandPictureFunc>; 2],
-}
+pub use crate::decoder::decoder_core::SExpandPicFunc;
 
-impl Default for SExpandPicFunc {
-    fn default() -> Self {
-        Self {
-            pfExpandLumaPicture: None,
-            pfExpandChromaPicture: [None, None],
-        }
-    }
-}
+pub use crate::decoder::decoder_context::SLogContext;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLogContext {
-    pub pLogCtx: *mut c_void,
-}
 
-/// Core Decoder Runtime Context (`SWelsDecoderContext` / `PWelsDecoderContext`).
-#[repr(C)]
-pub struct SWelsDecoderContext {
-    pub sRefPic: SRefPic,
-    pub sTmpRefPic: SRefPic,
-    pub pDec: *mut SPicture,
-    pub eSliceType: i32,
-    pub pParam: *mut SDecoderParam,
-    pub pPicBuff: *mut c_void,
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-    pub iErrorCode: i32,
-    pub pLastDecPicInfo: *mut SLastDecPicInfo,
-    pub sExpandPicFunc: SExpandPicFunc,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pAccessUnitList: *mut SAccessUnit,
-    pub iPicQueueNumber: i32,
-    pub iFrameNum: i32,
-    pub bCurAuContainLtrMarkSeFlag: bool,
-    pub iFrameNumOfAuMarkedLtr: i32,
-    pub sLogCtx: SLogContext,
-}
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
 // ============================================================================
 // Internal Logging & Picture Helpers
 // ============================================================================
 
 #[inline(always)]
-pub unsafe fn WelsLog(_pLogCtx: *const SLogContext, _iLevel: i32, _msg: &str) {
+pub unsafe fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
+
     // Logging stub for no-std / embedded compatibility
 }
 
@@ -544,10 +245,10 @@ pub unsafe extern "C" fn SetUnRef(pRef: *mut SPicture) {
         ref_pic.iRefCount = 0;
         ref_pic.pSetUnRef = None;
 
-        if ref_pic.eSliceType == I_SLICE {
+        if ref_pic.eSliceType == EWelsSliceType::I_SLICE {
             return;
         }
-        let lists = if ref_pic.eSliceType == P_SLICE { 1 } else { 2 };
+        let lists = if ref_pic.eSliceType == EWelsSliceType::P_SLICE { 1 } else { 2 };
         for i in 0..MAX_DPB_COUNT {
             for list in 0..lists {
                 ref_pic.pRefPic[list][i] = std::ptr::null_mut();
@@ -853,7 +554,8 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext) {
     if pSliceHeader.pSps.is_null() {
         return;
     }
-    let pSps = &*pSliceHeader.pSps;
+    let pSps = &*(pSliceHeader.pSps as *mut SSps);
+
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = ctx.sRefPic.uiShortRefCount[LIST_0] as usize;
 
@@ -974,15 +676,15 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
     let ctx = &mut *pCtx;
 
     if (ctx.sRefPic.uiShortRefCount[LIST_0] + ctx.sRefPic.uiLongRefCount[LIST_0] <= 0)
-        && (ctx.eSliceType != I_SLICE && ctx.eSliceType != SI_SLICE)
+        && (ctx.eSliceType != EWelsSliceType::I_SLICE && ctx.eSliceType != EWelsSliceType::SI_SLICE)
     {
         let ec_mode = if !ctx.pParam.is_null() {
             (*ctx.pParam).eEcActiveIdc
         } else {
-            ERROR_CON_DISABLE
+            crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
         };
 
-        if ec_mode != ERROR_CON_DISABLE {
+        if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
             let pRef = ctx.pDec;
             if !pRef.is_null() {
                 let ref_pic = &mut *pRef;
@@ -993,7 +695,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                 if !ctx.pPps.is_null() {
                     ref_pic.iPpsId = (*ctx.pPps).iPpsId;
                 }
-                if ctx.eSliceType == B_SLICE {
+                if ctx.eSliceType == EWelsSliceType::B_SLICE {
                     for list in 0..LIST_A {
                         for i in 0..MAX_DPB_COUNT {
                             ref_pic.pRefPic[list][i] = std::ptr::null_mut();
@@ -1459,7 +1161,7 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext) -> i32 {
     if pSliceHeader.pSps.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pSps = &*pSliceHeader.pSps;
+    let pSps = &*(pSliceHeader.pSps as *mut SSps);
 
     let list_count = if ctx.eSliceType == B_SLICE { 2 } else { 1 };
 
@@ -1604,7 +1306,7 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext) -> i32 {
     if pSliceHeader.pSps.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pSps = &*pSliceHeader.pSps;
+    let pSps = &*(pSliceHeader.pSps as *mut SSps);
 
     let iShortRefCount = ctx.sRefPic.uiShortRefCount[LIST_0] as usize;
     let iLongRefCount = ctx.sRefPic.uiLongRefCount[LIST_0] as usize;
@@ -1757,7 +1459,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
     if !ctx.pAccessUnitList.is_null() {
         let au = &*ctx.pAccessUnitList;
         for j in au.uiStartPos..=au.uiEndPos {
-            let pNal = au.pNalUnitsList[j as usize];
+            let pNal = *au.pNalUnitsList.add(j as usize);
             if !pNal.is_null() {
                 let nal = &*pNal;
                 if nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
@@ -1920,26 +1622,7 @@ mod tests {
 
     #[test]
     fn test_wels_reset_ref_pic() {
-        let mut ctx = SWelsDecoderContext {
-            sRefPic: SRefPic::default(),
-            sTmpRefPic: SRefPic::default(),
-            pDec: std::ptr::null_mut(),
-            eSliceType: I_SLICE,
-            pParam: std::ptr::null_mut(),
-            pPicBuff: std::ptr::null_mut(),
-            pSps: std::ptr::null_mut(),
-            pPps: std::ptr::null_mut(),
-            iErrorCode: 0,
-            pLastDecPicInfo: std::ptr::null_mut(),
-            sExpandPicFunc: SExpandPicFunc::default(),
-            pCurDqLayer: std::ptr::null_mut(),
-            pAccessUnitList: std::ptr::null_mut(),
-            iPicQueueNumber: 0,
-            iFrameNum: 0,
-            bCurAuContainLtrMarkSeFlag: false,
-            iFrameNumOfAuMarkedLtr: 0,
-            sLogCtx: SLogContext::default(),
-        };
+        let mut ctx = SWelsDecoderContext::default();
 
         let mut pic = SPicture::default();
         pic.iFrameNum = 1;

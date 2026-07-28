@@ -526,113 +526,15 @@ pub struct SWelsNeighAvail {
     pub iRightTopType: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub pCurBuf: *mut u8,
-    pub uiBits: u32,
-    pub iBits: i32,
-    pub iLeftBits: i32,
-}
+pub use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::decoder::parameter_sets::{SSps, SPps};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSliceType};
 
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            pCurBuf: std::ptr::null_mut(),
-            uiBits: 0,
-            iBits: 0,
-            iLeftBits: 0,
-        }
-    }
-}
+pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSps {
-    pub iSpsId: i32,
-    pub uiProfileIdc: u32,
-    pub uiLevelIdc: u32,
-    pub uiChromaFormatIdc: u32,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub uiTotalMbCount: i32,
-    pub bSeqScalingMatrixPresentFlag: bool,
-    pub iScalingList4x4: [[i32; 16]; 6],
-    pub iScalingList8x8: [[i32; 64]; 6],
-}
 
-impl Default for SSps {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPps {
-    pub iPpsId: i32,
-    pub iSpsId: i32,
-    pub bEntropyCodingModeFlag: bool,
-    pub uiNumSliceGroups: u32,
-    pub bConstainedIntraPredFlag: bool,
-    pub bTransform8x8ModeFlag: bool,
-    pub bPicScalingMatrixPresentFlag: bool,
-    pub iChromaQpIndexOffset: [i32; 2],
-    pub iScalingList4x4: [[i32; 16]; 6],
-    pub iScalingList8x8: [[i32; 64]; 6],
-}
-
-impl Default for SPps {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeader {
-    pub eSliceType: i32,
-    pub iFirstMbInSlice: i32,
-    pub iSliceQp: i32,
-    pub iCabacInitIdc: i32,
-    pub uiDisableDeblockingFilterIdc: u32,
-    pub iSliceAlphaC0Offset: i32,
-    pub iSliceBetaOffset: i32,
-    pub iDirectSpatialMvPredFlag: i32,
-    pub uiRefCount: [u32; 2],
-    pub iPicOrderCntLsb: i32,
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-    pub bAdaptiveMotionPredFlag: bool,
-    pub bAdaptiveBaseModeFlag: bool,
-    pub bDefaultBaseModeFlag: i32,
-    pub bAdaptiveResidualPredFlag: bool,
-    pub bDefaultResidualPredFlag: bool,
-    pub uiScanIdxStart: i32,
-    pub uiScanIdxEnd: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub eSliceType: i32,
-    pub iTotalMbInCurSlice: i32,
-    pub iMbSkipRun: i32,
-    pub iLastMbQp: i32,
-    pub iLastDeltaQp: i32,
-    pub iMvScale: [[i32; 32]; 2],
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -640,13 +542,7 @@ pub struct SNalUnitHeaderExt {
     pub uiQualityId: u8,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLayerInfo {
-    pub sSliceInLayer: SSlice,
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-    pub pPps: *mut SPps,
-}
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -690,73 +586,7 @@ impl Default for SPicture {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub pBitStringAux: *mut SBitStringAux,
-    pub pDec: *mut SPicture,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub iMbX: i32,
-    pub iMbY: i32,
-    pub iMbXyIndex: i32,
-    pub uiLayerDqId: i32,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pMbRefConcealedFlag: *mut bool,
-    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
-    pub pTransformSize8x8Flag: *mut bool,
-    pub pInterPredictionDoneFlag: *mut i8,
-    pub pResidualPredFlag: *mut bool,
-    pub pIntra4x4FinalMode: *mut [i32; 16],
-    pub pIntraPredMode: *mut [i8; 8],
-    pub pChromaPredMode: *mut i32,
-    pub pCbp: *mut u32,
-    pub pCbfDc: *mut u32,
-    pub pLumaQp: *mut i8,
-    pub pChromaQp: *mut [u8; 2],
-    pub pScaledTCoeff: *mut [i16; 384],
-    pub pNzc: *mut [i8; 24],
-    pub pSliceIdc: *mut i32,
-    pub pDirect: *mut [i8; 16],
-    pub pMvd: [*mut [[i16; 2]; 16]; 2],
-    pub pIntraNxNAvailFlag: *mut u8,
-}
 
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            sLayerInfo: SLayerInfo::default(),
-            pBitStringAux: std::ptr::null_mut(),
-            pDec: std::ptr::null_mut(),
-            iMbWidth: 0,
-            iMbHeight: 0,
-            iMbX: 0,
-            iMbY: 0,
-            iMbXyIndex: 0,
-            uiLayerDqId: 0,
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pMbRefConcealedFlag: std::ptr::null_mut(),
-            pNoSubMbPartSizeLessThan8x8Flag: std::ptr::null_mut(),
-            pTransformSize8x8Flag: std::ptr::null_mut(),
-            pInterPredictionDoneFlag: std::ptr::null_mut(),
-            pResidualPredFlag: std::ptr::null_mut(),
-            pIntra4x4FinalMode: std::ptr::null_mut(),
-            pIntraPredMode: std::ptr::null_mut(),
-            pChromaPredMode: std::ptr::null_mut(),
-            pCbp: std::ptr::null_mut(),
-            pCbfDc: std::ptr::null_mut(),
-            pLumaQp: std::ptr::null_mut(),
-            pChromaQp: std::ptr::null_mut(),
-            pScaledTCoeff: std::ptr::null_mut(),
-            pNzc: std::ptr::null_mut(),
-            pSliceIdc: std::ptr::null_mut(),
-            pDirect: std::ptr::null_mut(),
-            pMvd: [std::ptr::null_mut(); 2],
-            pIntraNxNAvailFlag: std::ptr::null_mut(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -798,49 +628,10 @@ pub struct SLogContext {
     pub pLogCtx: *mut c_void,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnit {
-    pub uiNalRefIdc: u32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsDecoderContext {
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pDec: *mut SPicture,
-    pub pTempDec: *mut SPicture,
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-    pub sSpsPpsCtx: SSpsPpsCtx,
-    pub sRefPic: SRefPic,
-    pub pParam: *mut SParam,
-    pub sLogCtx: SLogContext,
-    pub pFmo: *mut c_void,
-    pub pVlcTable: *mut c_void,
-    pub pCabacDecEngine: *mut c_void,
-    pub sBlockFunc: SBlockFunc,
-    pub eSliceType: i32,
-    pub iCurSeqIntervalMaxPicWidth: i32,
-    pub iTotalNumMbRec: i32,
-    pub iErrorCode: i32,
-    pub uiNalRefIdc: u32,
-    pub bMbRefConcealed: bool,
-    pub bRPLRError: bool,
-    pub bUseScalingList: bool,
-    pub bDequantCoeff4x4Init: bool,
-    pub iDequantCoeffPpsid: i32,
-    pub pDequant_coeff4x4: [*mut [[i32; 16]; 51]; 6],
-    pub pDequant_coeff8x8: [*mut [[i32; 64]; 51]; 6],
-    pub pDequant_coeff_buffer4x4: [*mut [[i32; 16]; 51]; 6],
-    pub pDequant_coeff_buffer8x8: [*mut [[i32; 64]; 51]; 6],
-    pub pFillInfoCacheIntraNxNFunc: Option<PFillInfoCacheIntraNxNFunc>,
-    pub pMapNxNNeighToSampleFunc: Option<PMapNxNNeighToSampleFunc>,
-    pub pMap16x16NeighToSampleFunc: Option<PMap16x16NeighToSampleFunc>,
-    pub pIdctFourResAddPredFunc: Option<PIdctResAddPredFunc>,
-    pub pIdctResAddPredFunc8x8: Option<PIdctResAddPredFunc8x8>,
-    pub pNalCur: *mut SNalUnit,
-}
+
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+
 
 // ============================================================================
 // Core Utility & Scaling Functions
@@ -852,26 +643,23 @@ pub unsafe fn CheckRefPics(pCtx: *const SWelsDecoderContext) -> bool {
     }
     let ctx = &*pCtx;
     let mut listCount = 1;
-    if ctx.eSliceType == B_SLICE {
+    if ctx.eSliceType == EWelsSliceType::B_SLICE {
         listCount += 1;
     }
+
     for list in 0..listCount {
         let shortRefCount = ctx.sRefPic.uiShortRefCount[list];
-        let pShortList = ctx.sRefPic.pShortRefList[list];
-        if !pShortList.is_null() {
-            for refIdx in 0..shortRefCount {
-                if (*pShortList.add(refIdx as usize)).is_null() {
-                    return false;
-                }
+        let pShortList = &ctx.sRefPic.pShortRefList[list];
+        for refIdx in 0..shortRefCount {
+            if pShortList[refIdx as usize].is_null() {
+                return false;
             }
         }
         let longRefCount = ctx.sRefPic.uiLongRefCount[list];
-        let pLongList = ctx.sRefPic.pLongRefList[list];
-        if !pLongList.is_null() {
-            for refIdx in 0..longRefCount {
-                if (*pLongList.add(refIdx as usize)).is_null() {
-                    return false;
-                }
+        let pLongList = &ctx.sRefPic.pLongRefList[list];
+        for refIdx in 0..longRefCount {
+            if pLongList[refIdx as usize].is_null() {
+                return false;
             }
         }
     }
@@ -892,13 +680,13 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
 
     if pSliceHeader.iDirectSpatialMvPredFlag == 0 {
         let uiRefCount = pSliceHeader.uiRefCount[LIST_0];
-        let pRefList1 = ctx.sRefPic.pRefList[LIST_1];
-        let pRefList0 = ctx.sRefPic.pRefList[LIST_0];
-        if !pRefList1.is_null() && !(*pRefList1.add(0)).is_null() {
+        let pRefList1 = &ctx.sRefPic.pRefList[LIST_1];
+        let pRefList0 = &ctx.sRefPic.pRefList[LIST_0];
+        if !pRefList1[0].is_null() {
             for i in 0..uiRefCount {
-                if !pRefList0.is_null() && !(*pRefList0.add(i as usize)).is_null() {
-                    let poc0 = (*(*pRefList0.add(i as usize))).iFramePoc;
-                    let poc1 = (*(*pRefList1.add(0))).iFramePoc;
+                if !pRefList0[i as usize].is_null() {
+                    let poc0 = (*pRefList0[i as usize]).iPoc;
+                    let poc1 = (*pRefList1[0]).iPoc;
                     let poc = pSliceHeader.iPicOrderCntLsb;
                     let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                     if td == 0 {
@@ -907,7 +695,7 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
                         let tb = WELS_CLIP3(poc - poc0, -128, 127);
                         let tx = (16384 + (td.abs() >> 1)) / td;
                         pCurSlice.iMvScale[LIST_0][i as usize] =
-                            WELS_CLIP3((tb * tx + 32) >> 6, -1024, 1023);
+                            WELS_CLIP3((tb * tx + 32) >> 6, -1024, 1023) as i16;
                     }
                 }
             }
@@ -1178,7 +966,8 @@ pub unsafe fn WelsMbInterSampleConstruction(
 
     let pTransformSize8x8 = *dq.pTransformSize8x8Flag.add(iMbXy);
     let pNzc = *dq.pNzc.add(iMbXy);
-    let pScaledTCoeff = (*dq.pScaledTCoeff.add(iMbXy)).as_mut_ptr();
+    let pScaledTCoeff = dq.pScaledTCoeff.add(iMbXy) as *mut i16;
+
 
     if pTransformSize8x8 {
         if let Some(idct8x8) = ctx.pIdctResAddPredFunc8x8 {
@@ -1321,7 +1110,9 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     if pSliceHeader.pSps.is_null() {
         return ERR_NONE;
     }
-    let iTotalMbTargetLayer = (*pSliceHeader.pSps).uiTotalMbCount;
+    let iTotalMbTargetLayer = (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32;
+
+
     let iCurLayerWidth = dq.iMbWidth << 4;
     let iCurLayerHeight = dq.iMbHeight << 4;
 
@@ -1521,17 +1312,17 @@ pub unsafe fn WelsDecodeSlice(
     pSlice.iTotalMbInCurSlice = 0;
 
     let pDecMbFunc: PWelsDecMbFunc = if !ctx.pPps.is_null() && (*ctx.pPps).bEntropyCodingModeFlag {
-        if pSliceHeader.eSliceType == P_SLICE {
+        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if pSliceHeader.eSliceType == B_SLICE {
+        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if pSliceHeader.eSliceType == P_SLICE {
+        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if pSliceHeader.eSliceType == B_SLICE {
+        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -1539,11 +1330,11 @@ pub unsafe fn WelsDecodeSlice(
     };
 
     if !ctx.pPps.is_null() && (*ctx.pPps).bConstainedIntraPredFlag {
-        ctx.pMapNxNNeighToSampleFunc = Some(WelsMapNxNNeighToSampleConstrain1);
-        ctx.pMap16x16NeighToSampleFunc = Some(WelsMap16x16NeighToSampleConstrain1);
+        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
+        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
     } else {
-        ctx.pMapNxNNeighToSampleFunc = Some(WelsMapNxNNeighToSampleNormal);
-        ctx.pMap16x16NeighToSampleFunc = Some(WelsMap16x16NeighToSampleNormal);
+        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
+        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
     }
 
     ctx.eSliceType = pSliceHeader.eSliceType;
@@ -1557,7 +1348,7 @@ pub unsafe fn WelsDecodeSlice(
     dq.iMbXyIndex = iNextMbXyIndex;
 
     let kiCountNumMb = if !pSliceHeader.pSps.is_null() {
-        (*pSliceHeader.pSps).uiTotalMbCount
+        (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32
     } else {
         0
     };
@@ -1611,17 +1402,17 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     pSlice.iTotalMbInCurSlice = 0;
 
     let pDecMbFunc: PWelsDecMbFunc = if !ctx.pPps.is_null() && (*ctx.pPps).bEntropyCodingModeFlag {
-        if pSliceHeader.eSliceType == P_SLICE {
+        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if pSliceHeader.eSliceType == B_SLICE {
+        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if pSliceHeader.eSliceType == P_SLICE {
+        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if pSliceHeader.eSliceType == B_SLICE {
+        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -1629,11 +1420,11 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     };
 
     if !ctx.pPps.is_null() && (*ctx.pPps).bConstainedIntraPredFlag {
-        ctx.pMapNxNNeighToSampleFunc = Some(WelsMapNxNNeighToSampleConstrain1);
-        ctx.pMap16x16NeighToSampleFunc = Some(WelsMap16x16NeighToSampleConstrain1);
+        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
+        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
     } else {
-        ctx.pMapNxNNeighToSampleFunc = Some(WelsMapNxNNeighToSampleNormal);
-        ctx.pMap16x16NeighToSampleFunc = Some(WelsMap16x16NeighToSampleNormal);
+        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
+        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
     }
 
     ctx.eSliceType = pSliceHeader.eSliceType;
@@ -1647,7 +1438,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     dq.iMbXyIndex = iNextMbXyIndex;
 
     let kiCountNumMb = if !pSliceHeader.pSps.is_null() {
-        (*pSliceHeader.pSps).uiTotalMbCount
+        (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32
     } else {
         0
     };
