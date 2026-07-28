@@ -344,6 +344,7 @@ pub struct TagPps {
     pub bSliceGroupChangeDirectionFlag: bool,
     pub bDeblockingFilterControlPresentFlag: bool,
 
+    pub bConstrainedIntraPredFlag: bool,
     pub bConstainedIntraPredFlag: bool,
     pub bRedundantPicCntPresentFlag: bool,
     pub bWeightedPredFlag: bool,
@@ -383,6 +384,7 @@ impl Default for TagPps {
             bPicOrderPresentFlag: false,
             bSliceGroupChangeDirectionFlag: false,
             bDeblockingFilterControlPresentFlag: false,
+            bConstrainedIntraPredFlag: false,
             bConstainedIntraPredFlag: false,
             bRedundantPicCntPresentFlag: false,
             bWeightedPredFlag: false,

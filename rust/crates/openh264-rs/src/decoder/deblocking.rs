@@ -257,35 +257,9 @@ pub struct SPicture {
 }
 pub type PPicture = *mut SPicture;
 
-#[repr(C)]
-pub struct SSps {
-    pub uiTotalMbCount: i32,
-}
-pub type PSps = *mut SSps;
+pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
+pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
 
-#[repr(C)]
-pub struct SPps {
-    pub uiNumSliceGroups: u32,
-}
-pub type PPps = *mut SPps;
-
-#[repr(C)]
-pub struct SSliceHeader {
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-    pub eSliceType: EWelsSliceType,
-    pub iFirstMbInSlice: i32,
-    pub uiDisableDeblockingFilterIdc: i32,
-    pub iSliceAlphaC0Offset: i8,
-    pub iSliceBetaOffset: i8,
-}
-pub type PSliceHeader = *mut SSliceHeader;
-
-#[repr(C)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
-pub type PSliceHeaderExt = *mut SSliceHeaderExt;
 
 #[repr(C)]
 pub struct SSlice {
@@ -482,15 +456,8 @@ impl Default for SDeblockingFilter {
 }
 pub type PDeblockingFilter = *mut SDeblockingFilter;
 
-#[repr(C)]
-pub struct SWelsDecoderContext {
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pDec: *mut SPicture,
-    pub pFmo: *mut std::ffi::c_void,
-    pub sDeblockingFunc: SDeblockingFunc,
-    pub sRefPic: SRefPic,
-}
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+
 
 // ============================================================================
 // Boundary Strength Evaluation Macros & Helper Primitives

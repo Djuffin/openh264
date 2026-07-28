@@ -45,7 +45,7 @@
 
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
-use crate::api::codec_api::SDecodingParam;
+use crate::decoder::decoder_context::SDecodingParam;
 
 // ============================================================================
 // Constants & Geometry Macro Definitions
@@ -260,17 +260,7 @@ impl Default for TagPicBuff {
     }
 }
 
-/// Minimal decoder context header used for memory allocation in [`AllocPicture`].
-#[repr(C)]
-#[derive(Debug)]
-pub struct SWelsDecoderContext {
-    pub pMemAlign: *mut CMemoryAlign,
-    pub pParam: *mut SDecodingParam,
-    pub pThreadCtx: *mut c_void,
-    pub iThreadCount: i32,
-}
-
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
 // ============================================================================
 // Helper Macros / Inline Functions
@@ -283,21 +273,13 @@ pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
 }
 
 /// Retrieves the active thread count from decoder context.
-#[inline]
 pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
+    if pCtx.is_null() || (*pCtx).pParam.is_null() {
         return 1;
     }
     unsafe {
-        if !(*pCtx).pThreadCtx.is_null() {
-            if (*pCtx).iThreadCount > 0 {
-                (*pCtx).iThreadCount
-            } else {
-                1
-            }
-        } else {
-            1
-        }
+        let threads = (*(*pCtx).pParam).iMultipleThreadIdc as i32;
+        if threads > 0 { threads } else { 1 }
     }
 }
 
@@ -826,15 +808,12 @@ mod tests {
     fn test_alloc_and_free_picture() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = SWelsDecoderContext {
-            pMemAlign: &mut ma as *mut CMemoryAlign,
-            pParam: &mut param as *mut SDecodingParam,
-            pThreadCtx: std::ptr::null_mut(),
-            iThreadCount: 1,
-        };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
 
         unsafe {
-            let p_pic = AllocPicture(&mut ctx as *mut SWelsDecoderContext, 160, 120);
+            let p_pic = AllocPicture(&mut *ctx as *mut SWelsDecoderContext, 160, 120);
             assert!(!p_pic.is_null());
             assert_eq!((*p_pic).iWidthInPixel, 160);
             assert_eq!((*p_pic).iHeightInPixel, 120);
@@ -850,17 +829,14 @@ mod tests {
     fn test_prefetch_pic_circular_scan() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = SWelsDecoderContext {
-            pMemAlign: &mut ma as *mut CMemoryAlign,
-            pParam: &mut param as *mut SDecodingParam,
-            pThreadCtx: std::ptr::null_mut(),
-            iThreadCount: 1,
-        };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
 
         let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
             let ret = CreatePicBuff(
-                &mut ctx as *mut SWelsDecoderContext,
+                &mut *ctx as *mut SWelsDecoderContext,
                 &mut p_pic_buf as *mut PPicBuff,
                 4,
                 64,
@@ -882,7 +858,7 @@ mod tests {
             assert!(!pic2.is_null());
             assert_eq!((*p_pic_buf).iCurrentIdx, 2);
 
-            DestroyPicBuff(&mut ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -891,17 +867,14 @@ mod tests {
     fn test_prefetch_pic_for_thread() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = SWelsDecoderContext {
-            pMemAlign: &mut ma as *mut CMemoryAlign,
-            pParam: &mut param as *mut SDecodingParam,
-            pThreadCtx: std::ptr::null_mut(),
-            iThreadCount: 1,
-        };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
 
         let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
             CreatePicBuff(
-                &mut ctx as *mut SWelsDecoderContext,
+                &mut *ctx as *mut SWelsDecoderContext,
                 &mut p_pic_buf as *mut PPicBuff,
                 3,
                 64,
@@ -923,7 +896,7 @@ mod tests {
             let pic_lookup = PrefetchLastPicForThread(p_pic_buf, 1);
             assert_eq!(pic_lookup, pic1);
 
-            DestroyPicBuff(&mut ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }

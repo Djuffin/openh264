@@ -22,33 +22,7 @@ fn update_hash_from_encoded_frame(hasher: &mut Sha1Hasher, bs_info: &SFrameBSInf
     }
 }
 
-fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
-    let mut start_indices = Vec::new();
-    let mut i = 0;
-    while i + 3 < bitstream.len() {
-        if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 0 && bitstream[i + 3] == 1 {
-            start_indices.push(i);
-            i += 4;
-        } else if bitstream[i] == 0 && bitstream[i + 1] == 0 && bitstream[i + 2] == 1 {
-            start_indices.push(i);
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-
-    let mut units = Vec::new();
-    for idx in 0..start_indices.len() {
-        let start = start_indices[idx];
-        let end = if idx + 1 < start_indices.len() {
-            start_indices[idx + 1]
-        } else {
-            bitstream.len()
-        };
-        units.push(&bitstream[start..end]);
-    }
-    units
-}
+use openh264_rs::split_annexb_units;
 
 #[test]
 fn test_loopback_encode_and_decode_pipeline() {

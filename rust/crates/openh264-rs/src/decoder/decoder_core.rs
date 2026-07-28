@@ -158,12 +158,8 @@ pub const OVERWRITE_PPS: i32 = 1;
 pub const OVERWRITE_SPS: i32 = 2;
 pub const OVERWRITE_SUBSETSPS: i32 = 4;
 
-// Error Concealment IDCs
-pub const ERROR_CON_DISABLE: i32 = 0;
-pub const ERROR_CON_FRAME_COPY: i32 = 1;
-pub const ERROR_CON_SLICE_COPY: i32 = 2;
-pub const ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE: i32 = 3;
-pub const ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE: i32 = 4;
+pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
+
 
 // Logging Levels
 pub const WELS_LOG_ERROR: i32 = 1;
@@ -217,74 +213,19 @@ pub fn IS_VCL_NAL(eNalType: EWelsNalUnitType, _unused: i32) -> bool {
     )
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-}
+pub use crate::decoder::slice::EWelsSliceType;
+pub use crate::decoder::slice::EWelsSliceType::*;
 
-pub const P_SLICE: EWelsSliceType = EWelsSliceType::P_SLICE;
-pub const B_SLICE: EWelsSliceType = EWelsSliceType::B_SLICE;
-pub const I_SLICE: EWelsSliceType = EWelsSliceType::I_SLICE;
-pub const SP_SLICE: EWelsSliceType = EWelsSliceType::SP_SLICE;
-pub const SI_SLICE: EWelsSliceType = EWelsSliceType::SI_SLICE;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsNalUnitType {
-    #[default]
-    NAL_UNIT_UNSPEC_0 = 0,
-    NAL_UNIT_CODED_SLICE = 1,
-    NAL_UNIT_CODED_SLICE_DPA = 2,
-    NAL_UNIT_CODED_SLICE_DPB = 3,
-    NAL_UNIT_CODED_SLICE_DPC = 4,
-    NAL_UNIT_CODED_SLICE_IDR = 5,
-    NAL_UNIT_SEI = 6,
-    NAL_UNIT_SPS = 7,
-    NAL_UNIT_PPS = 8,
-    NAL_UNIT_AU_DELIMITER = 9,
-    NAL_UNIT_END_OF_SEQ = 10,
-    NAL_UNIT_END_OF_STR = 11,
-    NAL_UNIT_FILER_DATA = 12,
-    NAL_UNIT_SPS_EXT = 13,
-    NAL_UNIT_PREFIX = 14,
-    NAL_UNIT_SUBSET_SPS = 15,
-    NAL_UNIT_RESV_16 = 16,
-    NAL_UNIT_RESV_17 = 17,
-    NAL_UNIT_RESV_18 = 18,
-    NAL_UNIT_AUX_CODED_SLICE = 19,
-    NAL_UNIT_CODED_SLICE_EXT = 20,
-    NAL_UNIT_RESV_21 = 21,
-    NAL_UNIT_RESV_22 = 22,
-    NAL_UNIT_RESV_23 = 23,
-    NAL_UNIT_UNSPEC_24 = 24,
-}
 
-pub const NAL_UNIT_CODED_SLICE: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
-pub const NAL_UNIT_CODED_SLICE_IDR: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
-pub const NAL_UNIT_SEI: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_SEI;
-pub const NAL_UNIT_SPS: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_SPS;
-pub const NAL_UNIT_PPS: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_PPS;
-pub const NAL_UNIT_AU_DELIMITER: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_AU_DELIMITER;
-pub const NAL_UNIT_PREFIX: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_PREFIX;
-pub const NAL_UNIT_SUBSET_SPS: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_SUBSET_SPS;
-pub const NAL_UNIT_CODED_SLICE_EXT: EWelsNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+pub use crate::decoder::nalu::EWelsNalUnitType;
+pub use crate::decoder::nalu::EWelsNalUnitType::*;
+
 
 // Data Structures Matching C/C++ Layout
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SPosOffset {
-    pub iLeftOffset: i32,
-    pub iTopOffset: i32,
-    pub iRightOffset: i32,
-    pub iBottomOffset: i32,
-}
+pub use crate::decoder::decoder_context::SPosOffset;
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -306,29 +247,8 @@ impl Default for SDataBuffer {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SParserBsInfo {
-    pub pDstBuff: *mut u8,
-    pub iNalNum: i32,
-    pub pNalLenInByte: *mut i32,
-    pub uiOutBsTimeStamp: u64,
-    pub iSpsWidthInPixel: i32,
-    pub iSpsHeightInPixel: i32,
-}
+pub use crate::decoder::decoder_context::SParserBsInfo;
 
-impl Default for SParserBsInfo {
-    fn default() -> Self {
-        Self {
-            pDstBuff: std::ptr::null_mut(),
-            iNalNum: 0,
-            pNalLenInByte: std::ptr::null_mut(),
-            uiOutBsTimeStamp: 0,
-            iSpsWidthInPixel: 0,
-            iSpsHeightInPixel: 0,
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -400,533 +320,25 @@ pub struct SVui {
     pub uiMaxDecFrameBuffering: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLevelLimits {
-    pub uiMaxMBPS: u32,
-    pub uiMaxFS: u32,
-    pub uiMaxDPBMbs: u32,
-    pub uiMaxBR: u32,
-    pub uiMaxCPB: u32,
-    pub iMinVmv: i16,
-    pub iMaxVmv: i16,
-    pub uiMinCR: u32,
-    pub uiMaxMvsPer2Mb: u32,
-}
+pub use crate::decoder::parameter_sets::SLevelLimits;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSps {
-    pub iSpsId: i32,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub uiTotalMbCount: u32,
-    pub uiLog2MaxFrameNum: u32,
-    pub uiPocType: u32,
-    pub iLog2MaxPocLsb: i32,
-    pub iOffsetForNonRefPic: i32,
-    pub iOffsetForTopToBottomField: i32,
-    pub iNumRefFramesInPocCycle: i32,
-    pub iOffsetForRefFrame: [i32; 256],
-    pub iNumRefFrames: i32,
-    pub sFrameCrop: SPosOffset,
-    pub uiProfileIdc: u8,
-    pub uiLevelIdc: u32,
-    pub uiChromaFormatIdc: u32,
-    pub uiChromaArrayType: u8,
-    pub uiBitDepthLuma: u8,
-    pub uiBitDepthChroma: u8,
-    pub bDeltaPicOrderAlwaysZeroFlag: bool,
-    pub bGapsInFrameNumValueAllowedFlag: bool,
-    pub bFrameMbsOnlyFlag: bool,
-    pub bMbaffFlag: bool,
-    pub bDirect8x8InferenceFlag: bool,
-    pub bFrameCroppingFlag: bool,
-    pub bVuiParamPresentFlag: bool,
-    pub bConstraintSet0Flag: bool,
-    pub bConstraintSet1Flag: bool,
-    pub bConstraintSet2Flag: bool,
-    pub bConstraintSet3Flag: bool,
-    pub bSeparateColorPlaneFlag: bool,
-    pub bQpPrimeYZeroTransfBypassFlag: bool,
-    pub bSeqScalingMatrixPresentFlag: bool,
-    pub bSeqScalingListPresentFlag: [bool; 12],
-    pub iScalingList4x4: [[u8; 16]; 6],
-    pub iScalingList8x8: [[u8; 64]; 6],
-    pub sVui: SVui,
-    pub pSLevelLimits: *const SLevelLimits,
-}
 
-impl Default for SSps {
-    fn default() -> Self {
-        Self {
-            iSpsId: 0,
-            iMbWidth: 0,
-            iMbHeight: 0,
-            uiTotalMbCount: 0,
-            uiLog2MaxFrameNum: 0,
-            uiPocType: 0,
-            iLog2MaxPocLsb: 0,
-            iOffsetForNonRefPic: 0,
-            iOffsetForTopToBottomField: 0,
-            iNumRefFramesInPocCycle: 0,
-            iOffsetForRefFrame: [0; 256],
-            iNumRefFrames: 0,
-            sFrameCrop: SPosOffset::default(),
-            uiProfileIdc: 0,
-            uiLevelIdc: 0,
-            uiChromaFormatIdc: 0,
-            uiChromaArrayType: 0,
-            uiBitDepthLuma: 8,
-            uiBitDepthChroma: 8,
-            bDeltaPicOrderAlwaysZeroFlag: false,
-            bGapsInFrameNumValueAllowedFlag: false,
-            bFrameMbsOnlyFlag: true,
-            bMbaffFlag: false,
-            bDirect8x8InferenceFlag: false,
-            bFrameCroppingFlag: false,
-            bVuiParamPresentFlag: false,
-            bConstraintSet0Flag: false,
-            bConstraintSet1Flag: false,
-            bConstraintSet2Flag: false,
-            bConstraintSet3Flag: false,
-            bSeparateColorPlaneFlag: false,
-            bQpPrimeYZeroTransfBypassFlag: false,
-            bSeqScalingMatrixPresentFlag: false,
-            bSeqScalingListPresentFlag: [false; 12],
-            iScalingList4x4: [[0; 16]; 6],
-            iScalingList8x8: [[0; 64]; 6],
-            sVui: SVui::default(),
-            pSLevelLimits: std::ptr::null(),
-        }
-    }
-}
+pub use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps, SSpsSvcExt};
+pub use crate::decoder::decoder_context::{SWelsDecoderSpsPpsCTX as SSpsPpsCtx};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpsSvcExt {
-    pub sSeqScaledRefLayer: SPosOffset,
-    pub uiExtendedSpatialScalability: u8,
-    pub uiChromaPhaseXPlus1Flag: u8,
-    pub uiChromaPhaseYPlus1: u8,
-    pub uiSeqRefLayerChromaPhaseXPlus1Flag: u8,
-    pub uiSeqRefLayerChromaPhaseYPlus1: u8,
-    pub bInterLayerDeblockingFilterCtrlPresentFlag: bool,
-    pub bSeqTCoeffLevelPredFlag: bool,
-    pub bAdaptiveTCoeffLevelPredFlag: bool,
-    pub bSliceHeaderRestrictionFlag: bool,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSubsetSps {
-    pub sSps: SSps,
-    pub sSpsSvcExt: SSpsSvcExt,
-    pub bSvcExtFlag: bool,
-    pub bSvcVuiParamPresentFlag: bool,
-    pub bAdditionalExtension2Flag: bool,
-    pub bAdditionalExtension2DataFlag: bool,
-}
+pub use crate::decoder::slice::{SPredWeightTable, SPredList};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPps {
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiNumSliceGroups: u32,
-    pub uiSliceGroupMapType: u32,
-    pub uiRunLength: [u32; MAX_SLICEGROUP_IDS],
-    pub uiTopLeft: [u32; MAX_SLICEGROUP_IDS],
-    pub uiBottomRight: [u32; MAX_SLICEGROUP_IDS],
-    pub uiSliceGroupChangeRate: u32,
-    pub uiPicSizeInMapUnits: u32,
-    pub uiSliceGroupId: [u32; MAX_SLICEGROUP_IDS],
-    pub uiNumRefIdxL0Active: u32,
-    pub uiNumRefIdxL1Active: u32,
-    pub iPicInitQp: i32,
-    pub iPicInitQs: i32,
-    pub iChromaQpIndexOffset: [i32; 2],
-    pub bEntropyCodingModeFlag: bool,
-    pub bPicOrderPresentFlag: bool,
-    pub bSliceGroupChangeDirectionFlag: bool,
-    pub bDeblockingFilterControlPresentFlag: bool,
-    pub bConstrainedIntraPredFlag: bool,
-    pub bConstainedIntraPredFlag: bool,
-    pub bRedundantPicCntPresentFlag: bool,
-    pub bWeightedPredFlag: bool,
-    pub uiWeightedBipredIdc: u8,
-    pub bTransform8x8ModeFlag: bool,
-    pub bPicScalingMatrixPresentFlag: bool,
-    pub bPicScalingListPresentFlag: [bool; 12],
-    pub iScalingList4x4: [[u8; 16]; 6],
-    pub iScalingList8x8: [[u8; 64]; 6],
-}
 
-impl Default for SPps {
-    fn default() -> Self {
-        Self {
-            iSpsId: 0,
-            iPpsId: 0,
-            uiNumSliceGroups: 1,
-            uiSliceGroupMapType: 0,
-            uiRunLength: [0; MAX_SLICEGROUP_IDS],
-            uiTopLeft: [0; MAX_SLICEGROUP_IDS],
-            uiBottomRight: [0; MAX_SLICEGROUP_IDS],
-            uiSliceGroupChangeRate: 0,
-            uiPicSizeInMapUnits: 0,
-            uiSliceGroupId: [0; MAX_SLICEGROUP_IDS],
-            uiNumRefIdxL0Active: 1,
-            uiNumRefIdxL1Active: 1,
-            iPicInitQp: 26,
-            iPicInitQs: 26,
-            iChromaQpIndexOffset: [0; 2],
-            bEntropyCodingModeFlag: false,
-            bPicOrderPresentFlag: false,
-            bSliceGroupChangeDirectionFlag: false,
-            bDeblockingFilterControlPresentFlag: false,
-            bConstrainedIntraPredFlag: false,
-            bConstainedIntraPredFlag: false,
-            bRedundantPicCntPresentFlag: false,
-            bWeightedPredFlag: false,
-            uiWeightedBipredIdc: 0,
-            bTransform8x8ModeFlag: false,
-            bPicScalingMatrixPresentFlag: false,
-            bPicScalingListPresentFlag: [false; 12],
-            iScalingList4x4: [[0; 16]; 6],
-            iScalingList8x8: [[0; 64]; 6],
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSpsPpsCtx {
-    pub sSpsBuffer: [SSps; MAX_SPS_COUNT + 1],
-    pub sSubsetSpsBuffer: [SSubsetSps; MAX_SPS_COUNT + 1],
-    pub sPpsBuffer: [SPps; MAX_PPS_COUNT + 1],
-    pub bSpsAvailFlags: [bool; MAX_SPS_COUNT],
-    pub bSubspsAvailFlags: [bool; MAX_SPS_COUNT],
-    pub bPpsAvailFlags: [bool; MAX_PPS_COUNT],
-    pub pActiveLayerSps: [*mut SSps; MAX_LAYER_NUM],
-    pub iPPSLastInvalidId: i32,
-    pub iPPSInvalidNum: i32,
-    pub iSPSLastInvalidId: i32,
-    pub iSPSInvalidNum: i32,
-    pub iSubSPSLastInvalidId: i32,
-    pub iSubSPSInvalidNum: i32,
-    pub iOverwriteFlags: i32,
-    pub bSpsExistAheadFlag: bool,
-    pub bSubspsExistAheadFlag: bool,
-    pub bPpsExistAheadFlag: bool,
-    pub bAvcBasedFlag: bool,
-    pub iSeqId: i32,
-}
+pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking, SReorderingSyntax, SRefBasePicMarking};
 
-impl Default for SSpsPpsCtx {
-    fn default() -> Self {
-        Self {
-            sSpsBuffer: [SSps::default(); MAX_SPS_COUNT + 1],
-            sSubsetSpsBuffer: [SSubsetSps::default(); MAX_SPS_COUNT + 1],
-            sPpsBuffer: [SPps::default(); MAX_PPS_COUNT + 1],
-            bSpsAvailFlags: [false; MAX_SPS_COUNT],
-            bSubspsAvailFlags: [false; MAX_SPS_COUNT],
-            bPpsAvailFlags: [false; MAX_PPS_COUNT],
-            pActiveLayerSps: [std::ptr::null_mut(); MAX_LAYER_NUM],
-            iPPSLastInvalidId: -1,
-            iPPSInvalidNum: 0,
-            iSPSLastInvalidId: -1,
-            iSPSInvalidNum: 0,
-            iSubSPSLastInvalidId: -1,
-            iSubSPSInvalidNum: 0,
-            iOverwriteFlags: OVERWRITE_NONE,
-            bSpsExistAheadFlag: false,
-            bSubspsExistAheadFlag: false,
-            bPpsExistAheadFlag: false,
-            bAvcBasedFlag: false,
-            iSeqId: 0,
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPredList {
-    pub iLumaWeight: [i32; MAX_REF_PIC_COUNT],
-    pub iLumaOffset: [i32; MAX_REF_PIC_COUNT],
-    pub iChromaWeight: [[i32; 2]; MAX_REF_PIC_COUNT],
-    pub iChromaOffset: [[i32; 2]; MAX_REF_PIC_COUNT],
-}
+pub use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPredWeightTable {
-    pub uiLumaLog2WeightDenom: u32,
-    pub uiChromaLog2WeightDenom: u32,
-    pub sPredList: [SPredList; LIST_A],
-    pub iImplicitWeight: [[i32; MAX_REF_PIC_COUNT]; MAX_REF_PIC_COUNT],
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SReorderingSyn {
-    pub uiReorderingOfPicNumsIdc: u32,
-    pub uiAbsDiffPicNumMinus1: u32,
-    pub uiLongTermPicNum: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SRefPicListReorderSyn {
-    pub bRefPicListReorderingFlag: [bool; LIST_A],
-    pub sReorderingSyn: [[SReorderingSyn; MAX_REF_PIC_COUNT]; LIST_A],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMmcoRef {
-    pub uiMmcoType: u32,
-    pub iDiffOfPicNum: i32,
-    pub iShortFrameNum: i32,
-    pub uiLongTermPicNum: u32,
-    pub iLongTermFrameIdx: i32,
-    pub iMaxLongTermFrameIdx: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefPicMarking {
-    pub bNoOutputOfPriorPicsFlag: bool,
-    pub bLongTermRefFlag: bool,
-    pub bAdaptiveRefPicMarkingModeFlag: bool,
-    pub sMmcoRef: [SMmcoRef; MAX_MMCO_COUNT],
-}
-
-impl Default for SRefPicMarking {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMmcoBase {
-    pub uiMmcoType: u32,
-    pub uiDiffOfPicNums: u32,
-    pub iShortFrameNum: i32,
-    pub uiLongTermPicNum: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefBasePicMarking {
-    pub bAdaptiveRefBasePicMarkingModeFlag: bool,
-    pub mmco_base: [SMmcoBase; MAX_MMCO_COUNT],
-}
-
-impl Default for SRefBasePicMarking {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceHeader {
-    pub iFirstMbInSlice: i32,
-    pub eSliceType: EWelsSliceType,
-    pub iPpsId: i32,
-    pub iSpsId: i32,
-    pub pPps: *mut SPps,
-    pub pSps: *mut SSps,
-    pub bIdrFlag: bool,
-    pub iFrameNum: i32,
-    pub bFieldPicFlag: bool,
-    pub bBottomFiledFlag: bool,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub uiIdrPicId: u32,
-    pub iPicOrderCntLsb: i32,
-    pub iDeltaPicOrderCntBottom: i32,
-    pub iDeltaPicOrderCnt: [i32; 2],
-    pub iRedundantPicCnt: i32,
-    pub iDirectSpatialMvPredFlag: u32,
-    pub uiRefCount: [i32; LIST_A],
-    pub bNumRefIdxActiveOverrideFlag: bool,
-    pub pRefPicListReordering: SRefPicListReorderSyn,
-    pub sPredWeightTable: SPredWeightTable,
-    pub sRefMarking: SRefPicMarking,
-    pub iCabacInitIdc: u32,
-    pub iSliceQpDelta: i32,
-    pub iSliceQp: i32,
-    pub uiDisableDeblockingFilterIdc: u32,
-    pub iSliceAlphaC0Offset: i32,
-    pub iSliceBetaOffset: i32,
-    pub iSliceGroupChangeCycle: i32,
-}
-
-impl Default for SSliceHeader {
-    fn default() -> Self {
-        Self {
-            iFirstMbInSlice: 0,
-            eSliceType: EWelsSliceType::P_SLICE,
-            iPpsId: 0,
-            iSpsId: 0,
-            pPps: std::ptr::null_mut(),
-            pSps: std::ptr::null_mut(),
-            bIdrFlag: false,
-            iFrameNum: 0,
-            bFieldPicFlag: false,
-            bBottomFiledFlag: false,
-            iMbWidth: 0,
-            iMbHeight: 0,
-            uiIdrPicId: 0,
-            iPicOrderCntLsb: 0,
-            iDeltaPicOrderCntBottom: 0,
-            iDeltaPicOrderCnt: [0; 2],
-            iRedundantPicCnt: 0,
-            iDirectSpatialMvPredFlag: 0,
-            uiRefCount: [1, 1],
-            bNumRefIdxActiveOverrideFlag: false,
-            pRefPicListReordering: SRefPicListReorderSyn::default(),
-            sPredWeightTable: SPredWeightTable::default(),
-            sRefMarking: SRefPicMarking::default(),
-            iCabacInitIdc: 0,
-            iSliceQpDelta: 0,
-            iSliceQp: 26,
-            uiDisableDeblockingFilterIdc: 0,
-            iSliceAlphaC0Offset: 0,
-            iSliceBetaOffset: 0,
-            iSliceGroupChangeCycle: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-    pub pSubsetSps: *mut SSubsetSps,
-    pub bBasePredWeightTableFlag: bool,
-    pub uiRefLayerDqId: u8,
-    pub uiDisableInterLayerDeblockingFilterIdc: u8,
-    pub iInterLayerSliceAlphaC0Offset: i32,
-    pub iInterLayerSliceBetaOffset: i32,
-    pub bConstrainedIntraResamplingFlag: bool,
-    pub uiRefLayerChromaPhaseXPlus1Flag: u8,
-    pub uiRefLayerChromaPhaseYPlus1: u8,
-    pub iScaledRefLayerPicWidthInSampleLuma: i32,
-    pub iScaledRefLayerPicHeightInSampleLuma: i32,
-    pub bSliceSkipFlag: bool,
-    pub bAdaptiveBaseModeFlag: bool,
-    pub bDefaultBaseModeFlag: bool,
-    pub bAdaptiveMotionPredFlag: bool,
-    pub bDefaultMotionPredFlag: bool,
-    pub bAdaptiveResidualPredFlag: bool,
-    pub bDefaultResidualPredFlag: bool,
-    pub bTCoeffLevelPredFlag: bool,
-    pub uiScanIdxStart: u32,
-    pub uiScanIdxEnd: u32,
-    pub bStoreRefBasePicFlag: bool,
-    pub sRefBasePicMarking: SRefBasePicMarking,
-}
-
-impl Default for SSliceHeaderExt {
-    fn default() -> Self {
-        Self {
-            sSliceHeader: SSliceHeader::default(),
-            pSubsetSps: std::ptr::null_mut(),
-            bBasePredWeightTableFlag: false,
-            uiRefLayerDqId: 255,
-            uiDisableInterLayerDeblockingFilterIdc: 0,
-            iInterLayerSliceAlphaC0Offset: 0,
-            iInterLayerSliceBetaOffset: 0,
-            bConstrainedIntraResamplingFlag: false,
-            uiRefLayerChromaPhaseXPlus1Flag: 0,
-            uiRefLayerChromaPhaseYPlus1: 1,
-            iScaledRefLayerPicWidthInSampleLuma: 0,
-            iScaledRefLayerPicHeightInSampleLuma: 0,
-            bSliceSkipFlag: false,
-            bAdaptiveBaseModeFlag: false,
-            bDefaultBaseModeFlag: false,
-            bAdaptiveMotionPredFlag: false,
-            bDefaultMotionPredFlag: false,
-            bAdaptiveResidualPredFlag: false,
-            bDefaultResidualPredFlag: false,
-            bTCoeffLevelPredFlag: false,
-            uiScanIdxStart: 0,
-            uiScanIdxEnd: 15,
-            bStoreRefBasePicFlag: false,
-            sRefBasePicMarking: SRefBasePicMarking::default(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub bSliceHeaderExtFlag: bool,
-    pub eSliceType: EWelsSliceType,
-    pub iLastMbQp: i32,
-    pub iTotalMbInCurSlice: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SNalUnitHeader {
-    pub eNalUnitType: EWelsNalUnitType,
-    pub uiNalRefIdc: u8,
-    pub uiForbiddenZeroBit: u8,
-}
-
-impl Default for SNalUnitHeader {
-    fn default() -> Self {
-        Self {
-            eNalUnitType: EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
-            uiNalRefIdc: 0,
-            uiForbiddenZeroBit: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub sNalUnitHeader: SNalUnitHeader,
-    pub bIdrFlag: bool,
-    pub uiPriorityId: u8,
-    pub iNoInterLayerPredFlag: u8,
-    pub uiDependencyId: u8,
-    pub uiQualityId: u8,
-    pub uiTemporalId: u8,
-    pub bUseRefBasePicFlag: bool,
-    pub bDiscardableFlag: bool,
-    pub bOutputFlag: bool,
-    pub uiReservedThree2Bits: u8,
-    pub uiLayerDqId: u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub iBits: i32,
-    pub pCurBuf: *mut u8,
-    pub uiCurBits: u32,
-}
-
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iBits: 0,
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -960,37 +372,10 @@ impl Default for SNalData {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct SNalUnit {
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-    pub sNalData: SNalData,
-    pub uiTimeStamp: u64,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SAccessUnit {
-    pub pNalUnitsList: [*mut SNalUnit; MAX_NAL_UNIT_NUM_IN_AU],
-    pub uiAvailUnitsNum: u32,
-    pub uiActualUnitsNum: u32,
-    pub uiStartPos: u32,
-    pub uiEndPos: u32,
-    pub bCompletedAuFlag: bool,
-}
 
-impl Default for SAccessUnit {
-    fn default() -> Self {
-        Self {
-            pNalUnitsList: [std::ptr::null_mut(); MAX_NAL_UNIT_NUM_IN_AU],
-            uiAvailUnitsNum: 0,
-            uiActualUnitsNum: 0,
-            uiStartPos: 0,
-            uiEndPos: 0,
-            bCompletedAuFlag: false,
-        }
-    }
-}
+pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1014,71 +399,7 @@ impl Default for SLayerInfo {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iFrameNum: i32,
-    pub iFramePoc: i32,
-    pub uiTimeStamp: u64,
-    pub uiDecodingTimeStamp: u64,
-    pub bIsComplete: bool,
-    pub bNewSeqBegin: bool,
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub bIdrFlag: bool,
-    pub eSliceType: EWelsSliceType,
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub iPicBuffIdx: i32,
-    pub iRefCount: i32,
-    pub iMbNum: i32,
-    pub iMbEcedNum: i32,
-    pub iMbEcedPropNum: i32,
-    pub pRefPic: [[*mut SPicture; MAX_REF_PIC_COUNT]; LIST_A],
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pMbRefConcealedFlag: *mut bool,
-    pub pMbType: *mut u32,
-    pub pRefIndex: [*mut i8; LIST_A],
-    pub pReadyEvent: [u32; 128],
-}
 
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pData: [std::ptr::null_mut(); 4],
-            iLinesize: [0; 4],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iFrameNum: 0,
-            iFramePoc: 0,
-            uiTimeStamp: 0,
-            uiDecodingTimeStamp: 0,
-            bIsComplete: true,
-            bNewSeqBegin: false,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            bIdrFlag: false,
-            eSliceType: EWelsSliceType::P_SLICE,
-            iSpsId: 0,
-            iPpsId: 0,
-            iPicBuffIdx: 0,
-            iRefCount: 0,
-            iMbNum: 0,
-            iMbEcedNum: 0,
-            iMbEcedPropNum: 0,
-            pRefPic: [[std::ptr::null_mut(); MAX_REF_PIC_COUNT]; LIST_A],
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pMbRefConcealedFlag: std::ptr::null_mut(),
-            pMbType: std::ptr::null_mut(),
-            pRefIndex: [std::ptr::null_mut(); LIST_A],
-            pReadyEvent: [0; 128],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1116,18 +437,24 @@ pub struct SDqLayer {
     pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
     pub pTransformSize8x8Flag: *mut bool,
     pub pLumaQp: *mut i8,
-    pub pChromaQp: *mut i8,
-    pub pMvd: [*mut i16; LIST_A],
+    pub pChromaQp: *mut [i8; 2],
+    pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
+
     pub pCbfDc: *mut u16,
-    pub pNzc: *mut i8,
-    pub pNzcRs: *mut i8,
-    pub pScaledTCoeff: *mut i16,
+    pub iMbX: i32,
+    pub iMbY: i32,
+    pub iMbXyIndex: i32,
+    pub pNzc: *mut [i8; 24],
+    pub pNzcRs: *mut [i8; 24],
+    pub pScaledTCoeff: *mut [i16; 384],
+
     pub pIntraPredMode: *mut i8,
     pub pIntra4x4FinalMode: *mut i8,
     pub pIntraNxNAvailFlag: *mut u8,
     pub pChromaPredMode: *mut i8,
     pub pCbp: *mut i8,
-    pub pSubMbType: *mut u32,
+    pub pSubMbType: *mut [u32; 4],
+
     pub pInterPredictionDoneFlag: *mut i8,
     pub pResidualPredFlag: *mut i8,
     pub pMbCorrectlyDecodedFlag: *mut bool,
@@ -1173,9 +500,13 @@ impl Default for SDqLayer {
             pChromaQp: std::ptr::null_mut(),
             pMvd: [std::ptr::null_mut(); LIST_A],
             pCbfDc: std::ptr::null_mut(),
+            iMbX: 0,
+            iMbY: 0,
+            iMbXyIndex: 0,
             pNzc: std::ptr::null_mut(),
             pNzcRs: std::ptr::null_mut(),
             pScaledTCoeff: std::ptr::null_mut(),
+
             pIntraPredMode: std::ptr::null_mut(),
             pIntra4x4FinalMode: std::ptr::null_mut(),
             pIntraNxNAvailFlag: std::ptr::null_mut(),
@@ -1313,65 +644,14 @@ pub struct SBufferInfo {
     pub pDst: [*mut u8; 3],
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecoderStatistics {
-    pub uiWidth: u32,
-    pub uiHeight: u32,
-    pub fAverageFrameRate: f32,
-    pub fLatestFrameRate: f32,
-    pub uiBitRate: u32,
-    pub uiAverageFrameQP: u32,
-    pub uiInputFrameCount: u32,
-    pub uiSkippedFrameCount: u32,
-    pub uiResolutionChangeTimes: u32,
-    pub uiIDRSentNum: u32,
-    pub uiIDRLostNum: u32,
-    pub uiFreezingIDRNum: u32,
-    pub uiFreezingNonIDRNum: u32,
-    pub iCurrentActiveSpsId: i32,
-    pub iCurrentActivePpsId: i32,
-    pub uiProfile: u32,
-    pub uiLevel: u8,
-    pub iPpsReportErrorNum: i32,
-    pub iSpsReportErrorNum: i32,
-    pub iSubSpsReportErrorNum: i32,
-}
+pub use crate::decoder::decoder_context::SDecoderStatistics;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecodingParam {
-    pub pFileNameRestructed: *mut c_char,
-    pub uiCpuLoad: u32,
-    pub eEcActiveIdc: i32,
-    pub bParseOnly: bool,
-    pub sVideoProperty: [u8; 16],
-    pub uiTargetDqLayer: u8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pOption: *mut c_void,
-}
+pub use crate::decoder::decoder_context::{SDecodingParam, SLogContext};
 
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pOption: std::ptr::null_mut(),
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsCabacDecEngine {
-    pub uiRange: u32,
-    pub uiOffset: u32,
-    pub iBitsLeft: i32,
-    pub pBuffCurr: *mut u8,
-    pub pBuffEnd: *mut u8,
-}
+pub use crate::decoder::decoder_context::SWelsCabacDecEngine;
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -1396,15 +676,15 @@ pub struct SFmo {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32, i32, i32)>,
-    pub pfExpandChromaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32, i32, i32)>,
+    pub pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+    pub pfExpandChromaPicture: [Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>; 2],
 }
 
 impl Default for SExpandPicFunc {
     fn default() -> Self {
         Self {
             pfExpandLumaPicture: None,
-            pfExpandChromaPicture: None,
+            pfExpandChromaPicture: [None, None],
         }
     }
 }
@@ -1433,15 +713,16 @@ pub struct SWelsDecoderThreadCTX {
     pub sImageReady: u32,
 }
 
-pub use crate::decoder::decoder_context::SWelsDecoderContext;
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
-pub type PNalUnit = *mut SNalUnit;
-pub type PAccessUnit = *mut SAccessUnit;
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+
+pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
+
 pub type PDqLayer = *mut SDqLayer;
-pub type PPicture = *mut SPicture;
-pub type PSps = *mut SSps;
-pub type PPps = *mut SPps;
-pub type PSubsetSps = *mut SSubsetSps;
+
+pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SPicBuff};
+
+pub use crate::decoder::parameter_sets::{PSps, PPps, PSubsetSps};
+
 pub type PSliceHeader = *mut SSliceHeader;
 pub type PSliceHeaderExt = *mut SSliceHeaderExt;
 pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
@@ -1622,8 +903,8 @@ pub unsafe fn ExpandReferencingPicture(
     iWidth: i32,
     iHeight: i32,
     iStride: [i32; 4],
-    pfExpandLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32, i32, i32)>,
-    pfExpandChroma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32, i32, i32)>,
+    pfExpandLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+    pfExpandChroma: [Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>; 2],
 ) {}
 
 #[inline]
@@ -1632,23 +913,27 @@ pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, i
 #[inline]
 pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {}
 
-#[inline]
 pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
+    if pCtx.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let iPicWidth = (iWidth << 4) as i32;
+    let iPicHeight = (iHeight << 4) as i32;
+    let iPicBufSize = 16;
+
+    if (*pCtx).pPicBuff.is_null() {
+        let iErr = crate::decoder::pic_queue::CreatePicBuff(pCtx, &mut (*pCtx).pPicBuff, iPicBufSize, iPicWidth, iPicHeight);
+        if iErr != 0 {
+            return iErr;
+        }
+    }
     ERR_NONE
 }
 
 #[inline]
 pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {}
 
-#[inline]
-pub unsafe fn PrefetchPic(pPicBuff: *mut c_void) -> PPicture {
-    std::ptr::null_mut()
-}
-
-#[inline]
-pub unsafe fn PrefetchLastPicForThread(pPicBuff: *mut c_void, idx: i32) -> PPicture {
-    std::ptr::null_mut()
-}
+pub use crate::decoder::pic_queue::{PrefetchPic, PrefetchLastPicForThread};
 
 #[inline]
 pub unsafe fn MemInitNalList(
@@ -1663,13 +948,20 @@ pub unsafe fn MemInitNalList(
     if pAu.is_null() {
         return ERR_INFO_OUT_OF_MEMORY;
     }
+    (*pAu).pNalUnitsList = WelsMalloczHelper(pMa, std::mem::size_of::<PNalUnit>() * MAX_NAL_UNIT_NUM_IN_AU) as *mut PNalUnit;
+    if (*pAu).pNalUnitsList.is_null() {
+        WelsFreeHelper(pMa, pAu as *mut u8, std::mem::size_of::<SAccessUnit>());
+        return ERR_INFO_OUT_OF_MEMORY;
+    }
     for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
         let pNal = WelsMalloczHelper(pMa, std::mem::size_of::<SNalUnit>()) as PNalUnit;
         if pNal.is_null() {
             return ERR_INFO_OUT_OF_MEMORY;
         }
-        (*pAu).pNalUnitsList[i] = pNal;
+        *(*pAu).pNalUnitsList.add(i) = pNal;
     }
+    (*pAu).uiCountUnitsNum = MAX_NAL_UNIT_NUM_IN_AU as u32;
+    (*pAu).uiAvailUnitsNum = 0;
     *ppNalList = pAu;
     ERR_NONE
 }
@@ -1680,12 +972,14 @@ pub unsafe fn MemFreeNalList(ppNalList: *mut PAccessUnit, pMa: *mut CMemoryAlign
         return;
     }
     let pAu = *ppNalList;
-    for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
-        let pNal = (*pAu).pNalUnitsList[i];
-        if !pNal.is_null() {
-            WelsFreeHelper(pMa, pNal as *mut u8, std::mem::size_of::<SNalUnit>());
-            (*pAu).pNalUnitsList[i] = std::ptr::null_mut();
+    if !(*pAu).pNalUnitsList.is_null() {
+        for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
+            let pNal = *(*pAu).pNalUnitsList.add(i);
+            if !pNal.is_null() {
+                WelsFreeHelper(pMa, pNal as *mut u8, std::mem::size_of::<SNalUnit>());
+            }
         }
+        WelsFreeHelper(pMa, (*pAu).pNalUnitsList as *mut u8, std::mem::size_of::<PNalUnit>() * MAX_NAL_UNIT_NUM_IN_AU);
     }
     WelsFreeHelper(pMa, pAu as *mut u8, std::mem::size_of::<SAccessUnit>());
     *ppNalList = std::ptr::null_mut();
@@ -1765,8 +1059,8 @@ pub unsafe fn DecodeFrameConstruction(
     let kiTotalNumMbInCurLayer = (*pCurDq).iMbWidth * (*pCurDq).iMbHeight;
     let mut bFrameCompleteFlag = true;
 
-    if (*pPic).bNewSeqBegin {
-        let pSps = (*pCurDq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pSps;
+    if (*pCtx).bNewSeqBegin {
+        let pSps = (*pCurDq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
         if !pSps.is_null() {
             (*pCtx).sFrameCrop = (*pSps).sFrameCrop;
         }
@@ -1807,22 +1101,23 @@ pub unsafe fn DecodeFrameConstruction(
                 let mut pDstBuf = (*pParser).pDstBuff.add(iTotalNalLen as usize);
                 let mut iIdx = (*pCurAu).uiStartPos as i32;
                 let iEndIdx = (*pCurAu).uiEndPos as i32;
-                if !(*pCurAu).pNalUnitsList[iIdx as usize].is_null() {
-                    (*pParser).uiOutBsTimeStamp = (*(*pCurAu).pNalUnitsList[iIdx as usize]).uiTimeStamp;
+                if !(*(*pCurAu).pNalUnitsList.add(iIdx as usize)).is_null() {
+                    (*pParser).uiOutBsTimeStamp = (*(*(*pCurAu).pNalUnitsList.add(iIdx as usize))).uiTimeStamp;
                 }
                 if !(*pCtx).pSps.is_null() {
-                    (*pParser).iSpsWidthInPixel = ((*pCtx).pSps.as_ref().unwrap().iMbWidth as i32) * 16
-                        - (((*pCtx).pSps.as_ref().unwrap().sFrameCrop.iLeftOffset
-                            + (*pCtx).pSps.as_ref().unwrap().sFrameCrop.iRightOffset)
+                    let pSps = (*pCtx).pSps as *mut SSps;
+                    (*pParser).iSpsWidthInPixel = ((*pSps).iMbWidth as i32) * 16
+                        - (((*pSps).sFrameCrop.iLeftOffset
+                            + (*pSps).sFrameCrop.iRightOffset)
                             << 1);
-                    (*pParser).iSpsHeightInPixel = ((*pCtx).pSps.as_ref().unwrap().iMbHeight as i32) * 16
-                        - (((*pCtx).pSps.as_ref().unwrap().sFrameCrop.iTopOffset
-                            + (*pCtx).pSps.as_ref().unwrap().sFrameCrop.iBottomOffset)
+                    (*pParser).iSpsHeightInPixel = ((*pSps).iMbHeight as i32) * 16
+                        - (((*pSps).sFrameCrop.iTopOffset
+                            + (*pSps).sFrameCrop.iBottomOffset)
                             << 1);
                 }
 
                 while iIdx <= iEndIdx {
-                    let pCurNal = (*pCurAu).pNalUnitsList[iIdx as usize];
+                    let pCurNal = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
                     if !pCurNal.is_null() {
                         let iNalLen = (*pCurNal).sNalData.sVclNal.iNalLength;
                         let pNalBs = (*pCurNal).sNalData.sVclNal.pNalPos;
@@ -2002,7 +1297,8 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
     }
     (*pSh).sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
 
-    let pSps = (*pSh).pSps;
+    let pSps = (*pSh).pSps as *mut SSps;
+
     if !pSps.is_null() && (*pSps).uiChromaArrayType != 0 {
         if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
@@ -2095,7 +1391,7 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
     }
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSliceHeader = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
-    let pPps = (*pSliceHeader).pPps;
+    let pPps = (*pSliceHeader).pPps as *mut SPps;
     if pPps.is_null() {
         return;
     }
@@ -2107,7 +1403,7 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
         if !ref0.is_null() && !ref1.is_null() {
             if (*pSliceHeader).uiRefCount[0] == 1
                 && (*pSliceHeader).uiRefCount[1] == 1
-                && ((*ref0).iFramePoc as i64 + (*ref1).iFramePoc as i64 == 2 * (iPoc as i64))
+                && ((*ref0).iPoc as i64 + (*ref1).iPoc as i64 == 2 * (iPoc as i64))
             {
                 (*pCurDqLayer).bUseWeightedBiPredIdc = false;
                 return;
@@ -2120,12 +1416,12 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
             for iRef0 in 0..((*pSliceHeader).uiRefCount[0] as usize) {
                 let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][iRef0];
                 if !pRef0.is_null() {
-                    let iPoc0 = (*pRef0).iFramePoc;
+                    let iPoc0 = (*pRef0).iPoc;
                     let bIsLongRef0 = (*pRef0).bIsLongRef;
                     for iRef1 in 0..((*pSliceHeader).uiRefCount[1] as usize) {
                         let pRef1 = (*pCtx).sRefPic.pRefList[LIST_1][iRef1];
                         if !pRef1.is_null() {
-                            let iPoc1 = (*pRef1).iFramePoc;
+                            let iPoc1 = (*pRef1).iPoc;
                             let bIsLongRef1 = (*pRef1).bIsLongRef;
                             (*(*pCurDqLayer).pPredWeightTable).iImplicitWeight[iRef0][iRef1] = 32;
                             if !bIsLongRef0 && !bIsLongRef1 {
@@ -2180,7 +1476,8 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
                 if (iIdx >= MAX_REF_PIC_COUNT && kuiIdc != 3) || kuiIdc > 3 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
                 }
-                pRefPicListReordering.sReorderingSyn[iList][iIdx].uiReorderingOfPicNumsIdc = kuiIdc;
+                pRefPicListReordering.sReorderingSyn[iList][iIdx].uiReorderingOfPicNumsIdc = kuiIdc as _;
+
                 if kuiIdc == 3 {
                     break;
                 }
@@ -2191,7 +1488,7 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
                     if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    if uiCode >= (1u32 << (*pSps).uiLog2MaxFrameNum) {
+                    if uiCode >= (1u32 << (*(pSps as *mut SSps)).uiLog2MaxFrameNum) {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
                     }
                     pRefPicListReordering.sReorderingSyn[iList][iIdx].uiAbsDiffPicNumMinus1 = uiCode;
@@ -2199,7 +1496,8 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
                     if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    pRefPicListReordering.sReorderingSyn[iList][iIdx].uiLongTermPicNum = uiCode;
+                    pRefPicListReordering.sReorderingSyn[iList][iIdx].uiLongTermPicNum = uiCode as u16;
+
                 }
                 iIdx += 1;
             }
@@ -2326,7 +1624,8 @@ pub unsafe fn FillDefaultSliceHeaderExt(
     if pShExt.is_null() || pNalExt.is_null() {
         return false;
     }
-    if (*pNalExt).iNoInterLayerPredFlag != 0 || (*pNalExt).uiQualityId > 0 {
+    if (*pNalExt).bNoInterLayerPredFlag || (*pNalExt).uiQualityId > 0 {
+
         (*pShExt).bBasePredWeightTableFlag = false;
     } else {
         (*pShExt).bBasePredWeightTableFlag = true;
@@ -2416,9 +1715,11 @@ pub unsafe fn ExpandBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
     }
 
     if !(*pCtx).pAccessUnitList.is_null() {
-        for i in 0..=(*(*pCtx).pAccessUnitList).uiActualUnitsNum as usize {
-            if i < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCtx).pAccessUnitList).pNalUnitsList[i].is_null() {
-                let pSliceBitsRead = &mut (*(*(*pCtx).pAccessUnitList).pNalUnitsList[i]).sNalData.sVclNal.sSliceBitsRead;
+        for i in 0..=(*(*pCtx).pAccessUnitList).uiAvailUnitsNum as usize {
+            let pNal = *(*(*pCtx).pAccessUnitList).pNalUnitsList.add(i);
+            if i < MAX_NAL_UNIT_NUM_IN_AU && !pNal.is_null() {
+                let pSliceBitsRead = &mut (*pNal).sNalData.sVclNal.sSliceBitsRead;
+
                 if !pSliceBitsRead.pStartBuf.is_null() && !(*pCtx).sRawData.pHead.is_null() {
                     let offset = pSliceBitsRead.pStartBuf.offset_from((*pCtx).sRawData.pHead);
                     pSliceBitsRead.pStartBuf = pNewBsBuff.offset(offset);
@@ -2584,7 +1885,7 @@ pub unsafe fn DecodeNalHeaderExt(pNal: PNalUnit, mut pSrc: *mut u8) {
 
     pSrc = pSrc.add(1);
     uiCurByte = *pSrc;
-    pHeaderExt.iNoInterLayerPredFlag = uiCurByte >> 7;
+    pHeaderExt.bNoInterLayerPredFlag = (uiCurByte >> 7) != 0;
     pHeaderExt.uiDependencyId = (uiCurByte & 0x70) >> 4;
     pHeaderExt.uiQualityId = uiCurByte & 0x0F;
 
@@ -2606,10 +1907,12 @@ pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
     if pDecoderStatistics.is_null() || pSps.is_null() || pPps.is_null() {
         return;
     }
+    let pSps = pSps as *mut SSps;
+    let pPps = pPps as *mut SPps;
     (*pDecoderStatistics).iCurrentActiveSpsId = (*pSps).iSpsId;
     (*pDecoderStatistics).iCurrentActivePpsId = (*pPps).iPpsId;
-    (*pDecoderStatistics).uiProfile = (*pSps).uiProfileIdc;
-    (*pDecoderStatistics).uiLevel = (*pSps).uiLevelIdc;
+    (*pDecoderStatistics).uiProfile = (*pSps).uiProfileIdc as u32;
+    (*pDecoderStatistics).uiLevel = (*pSps).uiLevelIdc as u32;
 }
 
 pub unsafe fn ParseSliceHeaderSyntaxs(
@@ -2624,7 +1927,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     if (*pCurAu).uiAvailUnitsNum == 0 {
         return ERR_INFO_OUT_OF_MEMORY;
     }
-    let kpCurNal = (*pCurAu).pNalUnitsList[((*pCurAu).uiAvailUnitsNum - 1) as usize];
+    let kpCurNal = *(*pCurAu).pNalUnitsList.add(((*pCurAu).uiAvailUnitsNum - 1) as usize);
     if kpCurNal.is_null() {
         return ERR_INFO_OUT_OF_MEMORY;
     }
@@ -2698,8 +2001,9 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     (*pSliceHead).iPpsId = iPpsId;
     (*pSliceHead).iSpsId = (*pPps).iSpsId;
-    (*pSliceHead).pPps = pPps;
-    (*pSliceHead).pSps = pSps;
+    (*pSliceHead).pPps = pPps as *mut SPps as *mut c_void;
+    (*pSliceHead).pSps = pSps as *mut SSps as *mut c_void;
+
 
     let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
         || (kbExtensionFlag && pNalHeaderExt.bIdrFlag);
@@ -2722,7 +2026,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
         }
-        (*pSliceHead).uiIdrPicId = uiCode;
+        (*pSliceHead).uiIdrPicId = uiCode as u16;
     }
 
     if (*pSps).uiPocType == 0 {
@@ -2789,7 +2093,7 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
     pNalHdrExtD.uiTemporalId = pNalHdrExtS.uiTemporalId;
     pNalHdrExtD.uiPriorityId = pNalHdrExtS.uiPriorityId;
     pNalHdrExtD.bIdrFlag = pNalHdrExtS.bIdrFlag;
-    pNalHdrExtD.iNoInterLayerPredFlag = pNalHdrExtS.iNoInterLayerPredFlag;
+    pNalHdrExtD.bNoInterLayerPredFlag = pNalHdrExtS.bNoInterLayerPredFlag;
     pNalHdrExtD.bDiscardableFlag = pNalHdrExtS.bDiscardableFlag;
     pNalHdrExtD.bOutputFlag = pNalHdrExtS.bOutputFlag;
     pNalHdrExtD.bUseRefBasePicFlag = pNalHdrExtS.bUseRefBasePicFlag;
@@ -2806,8 +2110,8 @@ pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
     }
     let pCurAu = (*pCtx).pAccessUnitList;
     let iIdx = (*pCurAu).uiEndPos as usize;
-    if iIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*pCurAu).pNalUnitsList[iIdx].is_null() {
-        (*pCtx).uiTargetDqId = (*(*pCurAu).pNalUnitsList[iIdx]).sNalHeaderExt.uiLayerDqId;
+    if iIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(iIdx)).is_null() {
+        (*pCtx).uiTargetDqId = (*(*(*pCurAu).pNalUnitsList.add(iIdx))).sNalHeaderExt.uiLayerDqId;
     }
     (*pCurAu).uiActualUnitsNum = (*pCurAu).uiEndPos + 1;
     (*pCurAu).bCompletedAuFlag = true;
@@ -2822,8 +2126,8 @@ pub unsafe fn InitialDqLayersContext(
     if pCtx.is_null() || kiMaxWidth <= 0 || kiMaxHeight <= 0 {
         return ERR_INFO_INVALID_PARAM;
     }
-    (*pCtx).sMb.iMbWidth = (kiMaxWidth + 15) >> 4;
-    (*pCtx).sMb.iMbHeight = (kiMaxHeight + 15) >> 4;
+    (*pCtx).sMb.iMbWidth = ((kiMaxWidth + 15) >> 4) as u32;
+    (*pCtx).sMb.iMbHeight = ((kiMaxHeight + 15) >> 4) as u32;
 
     if (*pCtx).bInitialDqLayersMem
         && kiMaxWidth <= (*pCtx).iPicWidthReq
@@ -2844,31 +2148,31 @@ pub unsafe fn InitialDqLayersContext(
         }
         (*pCtx).pDqLayersList[i] = pDq;
 
-        (*pCtx).sMb.pMbType[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut u32;
-        (*pCtx).sMb.pMv[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut i16;
-        (*pCtx).sMb.pMv[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut i16;
-        (*pCtx).sMb.pRefIndex[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pRefIndex[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pDirect[i] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pLumaQp[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pChromaQp[i] = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pMvd[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut i16;
-        (*pCtx).sMb.pMvd[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut i16;
-        (*pCtx).sMb.pCbfDc[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u16>()) as *mut u16;
-        (*pCtx).sMb.pNzc[i] = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pNzcRs[i] = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pScaledTCoeff[i] = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut i16;
-        (*pCtx).sMb.pIntraPredMode[i] = WelsMalloczHelper(pMa, numMb * 8 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pIntra4x4FinalMode[i] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pIntraNxNAvailFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u8>()) as *mut u8;
-        (*pCtx).sMb.pChromaPredMode[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pCbp[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pSubMbType[i] = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut u32;
-        (*pCtx).sMb.pSliceIdc[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut i32;
-        (*pCtx).sMb.pResidualPredFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pInterPredictionDoneFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut i8;
-        (*pCtx).sMb.pMbCorrectlyDecodedFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut bool;
-        (*pCtx).sMb.pMbRefConcealedFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut bool;
+        (*pCtx).sMb.pMbType[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut _;
+        (*pCtx).sMb.pMv[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
+        (*pCtx).sMb.pMv[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
+        (*pCtx).sMb.pRefIndex[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pRefIndex[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pDirect[i] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pLumaQp[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pChromaQp[i] = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pMvd[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
+        (*pCtx).sMb.pMvd[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
+        (*pCtx).sMb.pCbfDc[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u16>()) as *mut _;
+        (*pCtx).sMb.pNzc[i] = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pNzcRs[i] = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pScaledTCoeff[i] = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
+        (*pCtx).sMb.pIntraPredMode[i] = WelsMalloczHelper(pMa, numMb * 8 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pIntra4x4FinalMode[i] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pIntraNxNAvailFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u8>()) as *mut _;
+        (*pCtx).sMb.pChromaPredMode[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pCbp[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pSubMbType[i] = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
+        (*pCtx).sMb.pSliceIdc[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
+        (*pCtx).sMb.pResidualPredFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pInterPredictionDoneFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pMbCorrectlyDecodedFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
+        (*pCtx).sMb.pMbRefConcealedFlag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
 
     (*pCtx).bInitialDqLayersMem = true;
@@ -2928,9 +2232,9 @@ pub unsafe fn ResetCurrentAccessUnit(pCtx: PWelsDecoderContext) {
         let kuiAvailNum = (*pCurAu).uiAvailUnitsNum;
         let kuiLeftNum = if kuiAvailNum > kuiActualNum { kuiAvailNum - kuiActualNum } else { 0 };
         for iIdx in 0..kuiLeftNum as usize {
-            let t = (*pCurAu).pNalUnitsList[kuiActualNum as usize + iIdx];
-            (*pCurAu).pNalUnitsList[kuiActualNum as usize + iIdx] = (*pCurAu).pNalUnitsList[iIdx];
-            (*pCurAu).pNalUnitsList[iIdx] = t;
+            let t = *(*pCurAu).pNalUnitsList.add(kuiActualNum as usize + iIdx);
+            *(*pCurAu).pNalUnitsList.add(kuiActualNum as usize + iIdx) = *(*pCurAu).pNalUnitsList.add(iIdx);
+            *(*pCurAu).pNalUnitsList.add(iIdx) = t;
         }
         (*pCurAu).uiActualUnitsNum = kuiLeftNum;
         (*pCurAu).uiAvailUnitsNum = kuiLeftNum;
@@ -2944,9 +2248,9 @@ pub unsafe fn ForceResetCurrentAccessUnit(pAu: PAccessUnit) {
     let mut uiSucAuIdx = (*pAu).uiEndPos + 1;
     let mut uiCurAuIdx = 0;
     while uiSucAuIdx < (*pAu).uiAvailUnitsNum {
-        let t = (*pAu).pNalUnitsList[uiSucAuIdx as usize];
-        (*pAu).pNalUnitsList[uiSucAuIdx as usize] = (*pAu).pNalUnitsList[uiCurAuIdx as usize];
-        (*pAu).pNalUnitsList[uiCurAuIdx as usize] = t;
+        let t = *(*pAu).pNalUnitsList.add(uiSucAuIdx as usize);
+        *(*pAu).pNalUnitsList.add(uiSucAuIdx as usize) = *(*pAu).pNalUnitsList.add(uiCurAuIdx as usize);
+        *(*pAu).pNalUnitsList.add(uiCurAuIdx as usize) = t;
         uiSucAuIdx += 1;
         uiCurAuIdx += 1;
     }
@@ -2994,12 +2298,12 @@ pub unsafe fn CheckAvailNalUnitsListContinuity(
         return;
     }
     let pCurAu = (*pCtx).pAccessUnitList;
-    let mut uiLastNuDependencyId = (*(*pCurAu).pNalUnitsList[iStartIdx as usize]).sNalHeaderExt.uiDependencyId;
-    let mut uiLastNuLayerDqId = (*(*pCurAu).pNalUnitsList[iStartIdx as usize]).sNalHeaderExt.uiLayerDqId;
+    let mut uiLastNuDependencyId = (*(*(*pCurAu).pNalUnitsList.add(iStartIdx as usize))).sNalHeaderExt.uiDependencyId;
+    let mut uiLastNuLayerDqId = (*(*(*pCurAu).pNalUnitsList.add(iStartIdx as usize))).sNalHeaderExt.uiLayerDqId;
     let mut iCurNalUnitIdx = iStartIdx + 1;
 
     while iCurNalUnitIdx <= iEndIdx {
-        let pNal = (*pCurAu).pNalUnitsList[iCurNalUnitIdx as usize];
+        let pNal = *(*pCurAu).pNalUnitsList.add(iCurNalUnitIdx as usize);
         let uiCurNuDependencyId = (*pNal).sNalHeaderExt.uiDependencyId;
         let uiCurNuQualityId = (*pNal).sNalHeaderExt.uiQualityId;
         let uiCurNuLayerDqId = (*pNal).sNalHeaderExt.uiLayerDqId;
@@ -3024,7 +2328,7 @@ pub unsafe fn CheckAvailNalUnitsListContinuity(
     }
     iCurNalUnitIdx -= 1;
     (*pCurAu).uiEndPos = iCurNalUnitIdx as u32;
-    (*pCtx).uiTargetDqId = (*(*pCurAu).pNalUnitsList[iCurNalUnitIdx as usize]).sNalHeaderExt.uiLayerDqId;
+    (*pCtx).uiTargetDqId = (*(*(*pCurAu).pNalUnitsList.add(iCurNalUnitIdx as usize))).sNalHeaderExt.uiLayerDqId;
 }
 
 pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPred: *mut i32) {
@@ -3032,7 +2336,7 @@ pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPre
         return;
     }
     let idx = *pIdxNoInterLayerPred as usize;
-    let pNal = (*pCurAu).pNalUnitsList[idx];
+    let pNal = *(*pCurAu).pNalUnitsList.add(idx);
     if pNal.is_null() {
         return;
     }
@@ -3048,8 +2352,8 @@ pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPre
     let mut iCurIdx = (*pIdxNoInterLayerPred) - 1;
 
     while iCurIdx >= 0 {
-        let pCurNal = (*pCurAu).pNalUnitsList[iCurIdx as usize];
-        if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.iNoInterLayerPredFlag != 0 {
+        let pCurNal = *(*pCurAu).pNalUnitsList.add(iCurIdx as usize);
+        if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag {
             let iCurNalDependId = (*pCurNal).sNalHeaderExt.uiDependencyId;
             let iCurNalQualityId = (*pCurNal).sNalHeaderExt.uiQualityId;
             let iCurNalTId = (*pCurNal).sNalHeaderExt.uiTemporalId;
@@ -3085,7 +2389,7 @@ pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: PAccessUnit, pIdxNoInterLayerPr
         return false;
     }
     let iEndIdx = (*pCurAu).uiEndPos as i32;
-    let iCurAuPoc = (*(*pCurAu).pNalUnitsList[pIdxNoInterLayerPred as usize])
+    let iCurAuPoc = (*(*(*pCurAu).pNalUnitsList.add(pIdxNoInterLayerPred as usize)))
         .sNalData
         .sVclNal
         .sSliceHeaderExt
@@ -3093,7 +2397,7 @@ pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: PAccessUnit, pIdxNoInterLayerPr
         .iPicOrderCntLsb;
 
     for i in (pIdxNoInterLayerPred + 1)..iEndIdx {
-        let iTmpPoc = (*(*pCurAu).pNalUnitsList[i as usize])
+        let iTmpPoc = (*(*(*pCurAu).pNalUnitsList.add(i as usize)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
@@ -3122,7 +2426,7 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
         (*pCurAu).uiStartPos = 0;
         iIdxNoInterLayerPred = kiEndPos;
         while iIdxNoInterLayerPred >= 0 {
-            if (*(*pCurAu).pNalUnitsList[iIdxNoInterLayerPred as usize]).sNalHeaderExt.iNoInterLayerPredFlag != 0 {
+            if (*(*(*pCurAu).pNalUnitsList.add(iIdxNoInterLayerPred as usize))).sNalHeaderExt.bNoInterLayerPredFlag {
                 break;
             }
             iIdxNoInterLayerPred -= 1;
@@ -3137,15 +2441,15 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
             return false;
         }
         let endIdx = (*pCurAu).uiEndPos as usize;
-        (*pCtx).iCurSeqIntervalTargetDependId = (*(*pCurAu).pNalUnitsList[endIdx]).sNalHeaderExt.uiDependencyId;
-        (*pCtx).iCurSeqIntervalMaxPicWidth = (*(*pCurAu).pNalUnitsList[endIdx])
+        (*pCtx).iCurSeqIntervalTargetDependId = (*(*(*pCurAu).pNalUnitsList.add(endIdx))).sNalHeaderExt.uiDependencyId as i32;
+        (*pCtx).iCurSeqIntervalMaxPicWidth = (*(*(*pCurAu).pNalUnitsList.add(endIdx)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
             .sSliceHeader
             .iMbWidth
             << 4;
-        (*pCtx).iCurSeqIntervalMaxPicHeight = (*(*pCurAu).pNalUnitsList[endIdx])
+        (*pCtx).iCurSeqIntervalMaxPicHeight = (*(*(*pCurAu).pNalUnitsList.add(endIdx)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
@@ -3163,9 +2467,9 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
     let pCurAu = (*pCtx).pAccessUnitList;
     let iEndIdx = (*pCurAu).uiEndPos as usize;
     let mut iCurIdx = (*pCurAu).uiStartPos as usize;
-    let uiDId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiDependencyId;
-    let uiQId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiQualityId;
-    let uiTId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiTemporalId;
+    let uiDId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiDependencyId;
+    let uiQId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiQualityId;
+    let uiTId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiTemporalId;
 
     (*pCtx).bOnlyOneLayerInCurAuFlag = true;
     if iEndIdx == iCurIdx {
@@ -3173,9 +2477,9 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
     }
     iCurIdx += 1;
     while iCurIdx <= iEndIdx {
-        let uiCurDId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiDependencyId;
-        let uiCurQId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiQualityId;
-        let uiCurTId = (*(*pCurAu).pNalUnitsList[iCurIdx]).sNalHeaderExt.uiTemporalId;
+        let uiCurDId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiDependencyId;
+        let uiCurQId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiQualityId;
+        let uiCurTId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiTemporalId;
         if uiDId != uiCurDId || uiQId != uiCurQId || uiTId != uiCurTId {
             (*pCtx).bOnlyOneLayerInCurAuFlag = false;
             return;
@@ -3206,8 +2510,8 @@ pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: PWelsDecoderContext) {
     }
     let pCurAu = (*pCtx).pAccessUnitList;
     let endIdx = (*pCurAu).uiEndPos as usize;
-    if endIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*pCurAu).pNalUnitsList[endIdx].is_null() {
-        let pCurNal = (*pCurAu).pNalUnitsList[endIdx];
+    if endIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(endIdx)).is_null() {
+        let pCurNal = *(*pCurAu).pNalUnitsList.add(endIdx);
         if !(*pCtx).pLastDecPicInfo.is_null() {
             (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt = (*pCurNal).sNalHeaderExt;
             (*(*pCtx).pLastDecPicInfo).sLastSliceHeader =
@@ -3225,11 +2529,11 @@ pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: PWelsDecoderContext)
     let start = (*pCurAu).uiStartPos as usize;
     let end = (*pCurAu).uiEndPos as usize;
     for i in start..=end {
-        if i < MAX_NAL_UNIT_NUM_IN_AU && !(*pCurAu).pNalUnitsList[i].is_null() {
-            let pNal = (*pCurAu).pNalUnitsList[i];
+        if i < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(i)).is_null() {
+            let pNal = *(*pCurAu).pNalUnitsList.add(i);
             let uiDid = (*pNal).sNalHeaderExt.uiDependencyId as usize;
             if uiDid < MAX_LAYER_NUM {
-                pTmpLayerSps[uiDid] = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps;
+                pTmpLayerSps[uiDid] = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
             }
             if (*pNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
                 || (*pNal).sNalHeaderExt.bIdrFlag
@@ -3351,22 +2655,41 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     }
 
     let startPos = (*pCurAu).uiStartPos as usize;
-    if startPos < MAX_NAL_UNIT_NUM_IN_AU && !(*pCurAu).pNalUnitsList[startPos].is_null() {
-        let pNal = (*pCurAu).pNalUnitsList[startPos];
-        (*pCtx).pSps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps;
-        (*pCtx).pPps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pPps;
+    if startPos < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(startPos)).is_null() {
+        let pNal = *(*pCurAu).pNalUnitsList.add(startPos);
+        (*pCtx).pSps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+        (*pCtx).pPps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pPps as *mut SPps;
     }
     iErr
 }
 
 pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() {
+    if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
+    let pSps = if !(*pCtx).pSps.is_null() {
+        (*pCtx).pSps
+    } else {
+        let mut found_sps: *mut SSps = std::ptr::null_mut();
+        for sps in (*pCtx).sSpsPpsCtx.sSpsBuffer.iter_mut() {
+            if sps.uiTotalMbCount > 0 {
+                found_sps = sps as *mut SSps;
+                break;
+            }
+        }
+        found_sps
+    };
+
+    if pSps.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    (*pCtx).pSps = pSps;
+
     if GetThreadCount(pCtx) <= 1 {
         WelsResetRefPic(pCtx);
     }
-    let iErr = SyncPictureResolutionExt(pCtx, (*(*pCtx).pSps).iMbWidth, (*(*pCtx).pSps).iMbHeight);
+    let iErr = SyncPictureResolutionExt(pCtx, (*pSps).iMbWidth as u32, (*pSps).iMbHeight as u32);
+
     iErr
 }
 
@@ -3437,7 +2760,7 @@ pub unsafe fn InitDqLayerInfo(
     if !(*pLayerInfo).pPps.is_null() {
         (*pDqLayer).uiPpsId = (*(*pLayerInfo).pPps).iPpsId;
     }
-    (*pDqLayer).uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc;
+    (*pDqLayer).uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc as u8;
     (*pDqLayer).iInterLayerSliceAlphaC0Offset = (*pShExt).iInterLayerSliceAlphaC0Offset;
     (*pDqLayer).iInterLayerSliceBetaOffset = (*pShExt).iInterLayerSliceBetaOffset;
     (*pDqLayer).iSliceGroupChangeCycle = (*pSh).iSliceGroupChangeCycle;
@@ -3454,9 +2777,10 @@ pub unsafe fn InitDqLayerInfo(
         (*pDqLayer).pRefPicListReordering = &mut (*pSh).pRefPicListReordering;
         (*pDqLayer).pRefPicMarking = &mut (*pSh).sRefMarking;
         if !(*pSh).pPps.is_null() {
-            (*pDqLayer).bUseWeightPredictionFlag = (*(*pSh).pPps).bWeightedPredFlag;
-            (*pDqLayer).bUseWeightedBiPredIdc = (*(*pSh).pPps).uiWeightedBipredIdc != 0;
-            if (*(*pSh).pPps).bWeightedPredFlag || (*(*pSh).pPps).uiWeightedBipredIdc != 0 {
+            let pPps = (*pSh).pPps as *mut SPps;
+            (*pDqLayer).bUseWeightPredictionFlag = (*pPps).bWeightedPredFlag;
+            (*pDqLayer).bUseWeightedBiPredIdc = (*pPps).uiWeightedBipredIdc != 0;
+            if (*pPps).bWeightedPredFlag || (*pPps).uiWeightedBipredIdc != 0 {
                 (*pDqLayer).pPredWeightTable = &mut (*pSh).sPredWeightTable;
             }
         }
@@ -3509,31 +2833,31 @@ pub unsafe fn InitCurDqLayerData(pCtx: PWelsDecoderContext, pCurDq: PDqLayer) {
     if !pCtx.is_null() && !pCurDq.is_null() {
         (*pCurDq).pMbType = (*pCtx).sMb.pMbType[0];
         (*pCurDq).pSliceIdc = (*pCtx).sMb.pSliceIdc[0];
-        (*pCurDq).pMv[LIST_0] = (*pCtx).sMb.pMv[0][LIST_0];
-        (*pCurDq).pMv[LIST_1] = (*pCtx).sMb.pMv[0][LIST_1];
-        (*pCurDq).pRefIndex[LIST_0] = (*pCtx).sMb.pRefIndex[0][LIST_0];
-        (*pCurDq).pRefIndex[LIST_1] = (*pCtx).sMb.pRefIndex[0][LIST_1];
-        (*pCurDq).pDirect = (*pCtx).sMb.pDirect[0];
+        (*pCurDq).pMv[LIST_0] = (*pCtx).sMb.pMv[0][LIST_0] as *mut _;
+        (*pCurDq).pMv[LIST_1] = (*pCtx).sMb.pMv[0][LIST_1] as *mut _;
+        (*pCurDq).pRefIndex[LIST_0] = (*pCtx).sMb.pRefIndex[0][LIST_0] as *mut _;
+        (*pCurDq).pRefIndex[LIST_1] = (*pCtx).sMb.pRefIndex[0][LIST_1] as *mut _;
+        (*pCurDq).pDirect = (*pCtx).sMb.pDirect[0] as *mut _;
         (*pCurDq).pNoSubMbPartSizeLessThan8x8Flag = (*pCtx).sMb.pNoSubMbPartSizeLessThan8x8Flag[0];
         (*pCurDq).pTransformSize8x8Flag = (*pCtx).sMb.pTransformSize8x8Flag[0];
-        (*pCurDq).pLumaQp = (*pCtx).sMb.pLumaQp[0];
-        (*pCurDq).pChromaQp = (*pCtx).sMb.pChromaQp[0];
-        (*pCurDq).pMvd[LIST_0] = (*pCtx).sMb.pMvd[0][LIST_0];
-        (*pCurDq).pMvd[LIST_1] = (*pCtx).sMb.pMvd[0][LIST_1];
-        (*pCurDq).pCbfDc = (*pCtx).sMb.pCbfDc[0];
-        (*pCurDq).pNzc = (*pCtx).sMb.pNzc[0];
-        (*pCurDq).pNzcRs = (*pCtx).sMb.pNzcRs[0];
-        (*pCurDq).pScaledTCoeff = (*pCtx).sMb.pScaledTCoeff[0];
-        (*pCurDq).pIntraPredMode = (*pCtx).sMb.pIntraPredMode[0];
-        (*pCurDq).pIntra4x4FinalMode = (*pCtx).sMb.pIntra4x4FinalMode[0];
-        (*pCurDq).pIntraNxNAvailFlag = (*pCtx).sMb.pIntraNxNAvailFlag[0];
-        (*pCurDq).pChromaPredMode = (*pCtx).sMb.pChromaPredMode[0];
-        (*pCurDq).pCbp = (*pCtx).sMb.pCbp[0];
-        (*pCurDq).pSubMbType = (*pCtx).sMb.pSubMbType[0];
-        (*pCurDq).pInterPredictionDoneFlag = (*pCtx).sMb.pInterPredictionDoneFlag[0];
-        (*pCurDq).pResidualPredFlag = (*pCtx).sMb.pResidualPredFlag[0];
-        (*pCurDq).pMbCorrectlyDecodedFlag = (*pCtx).sMb.pMbCorrectlyDecodedFlag[0];
-        (*pCurDq).pMbRefConcealedFlag = (*pCtx).sMb.pMbRefConcealedFlag[0];
+        (*pCurDq).pLumaQp = (*pCtx).sMb.pLumaQp[0] as *mut _;
+        (*pCurDq).pChromaQp = (*pCtx).sMb.pChromaQp[0] as *mut _;
+        (*pCurDq).pMvd[LIST_0] = (*pCtx).sMb.pMvd[0][LIST_0] as *mut _;
+        (*pCurDq).pMvd[LIST_1] = (*pCtx).sMb.pMvd[0][LIST_1] as *mut _;
+        (*pCurDq).pCbfDc = (*pCtx).sMb.pCbfDc[0] as *mut _;
+        (*pCurDq).pNzc = (*pCtx).sMb.pNzc[0] as *mut _;
+        (*pCurDq).pNzcRs = (*pCtx).sMb.pNzcRs[0] as *mut _;
+        (*pCurDq).pScaledTCoeff = (*pCtx).sMb.pScaledTCoeff[0] as *mut _;
+        (*pCurDq).pIntraPredMode = (*pCtx).sMb.pIntraPredMode[0] as *mut _;
+        (*pCurDq).pIntra4x4FinalMode = (*pCtx).sMb.pIntra4x4FinalMode[0] as *mut _;
+        (*pCurDq).pIntraNxNAvailFlag = (*pCtx).sMb.pIntraNxNAvailFlag[0] as *mut _;
+        (*pCurDq).pChromaPredMode = (*pCtx).sMb.pChromaPredMode[0] as *mut _;
+        (*pCurDq).pCbp = (*pCtx).sMb.pCbp[0] as *mut _;
+        (*pCurDq).pSubMbType = (*pCtx).sMb.pSubMbType[0] as *mut _;
+        (*pCurDq).pInterPredictionDoneFlag = (*pCtx).sMb.pInterPredictionDoneFlag[0] as *mut _;
+        (*pCurDq).pResidualPredFlag = (*pCtx).sMb.pResidualPredFlag[0] as *mut _;
+        (*pCurDq).pMbCorrectlyDecodedFlag = (*pCtx).sMb.pMbCorrectlyDecodedFlag[0] as *mut _;
+        (*pCurDq).pMbRefConcealedFlag = (*pCtx).sMb.pMbRefConcealedFlag[0] as *mut _;
     }
 }
 
@@ -3564,7 +2888,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     }
     InitCurDqLayerData(pCtx, (*pCtx).pCurDqLayer);
 
-    let mut pNalCur = (*pCurAu).pNalUnitsList[iIdx as usize];
+    let mut pNalCur = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
     (*pCtx).pNalCur = pNalCur;
 
     while iIdx <= iEndIdx {
@@ -3573,7 +2897,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
         let isNewFrame = (*pCtx).pDec.is_null();
 
         if (*pCtx).pDec.is_null() {
-            (*pCtx).pDec = PrefetchPic((*pCtx).pPicBuff);
+            (*pCtx).pDec = PrefetchPic((*pCtx).pPicBuff) as PPicture;
             if (*pCtx).pDec.is_null() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return ERR_INFO_REF_COUNT_OVERFLOW;
@@ -3584,7 +2908,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
         if !pNalCur.is_null() {
             (*(*pCtx).pDec).uiTimeStamp = (*pNalCur).uiTimeStamp;
         }
-        (*(*pCtx).pDec).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
+        (*(*pCtx).pDec).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u64;
+
 
         if (*pCtx).iTotalNumMbRec == 0 {
             if !(*pCtx).pSps.is_null() {
@@ -3608,7 +2933,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
         }
 
         while iIdx <= iEndIdx {
-            if pNalCur.is_null() {
+            if pNalCur.is_null() || dq_cur.is_null() {
                 break;
             }
             let iCurrIdQ = (*pNalCur).sNalHeaderExt.uiQualityId as i16;
@@ -3628,15 +2953,17 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
             pLayerInfo.sSliceInLayer.sSliceHeaderExt = *pShExt;
             pLayerInfo.sSliceInLayer.bSliceHeaderExtFlag = (*pNalCur).sNalData.sVclNal.bSliceHeaderExtFlag;
-            pLayerInfo.sSliceInLayer.eSliceType = (*pSh).eSliceType;
+            pLayerInfo.sSliceInLayer.eSliceType = (*pSh).eSliceType as u8;
+
             pLayerInfo.sSliceInLayer.iLastMbQp = (*pSh).iSliceQp;
             (*dq_cur).pBitStringAux = &mut (*pNalCur).sNalData.sVclNal.sSliceBitsRead;
 
             (*pCtx).uiNalRefIdc = (*pNalCur).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc;
             let iPpsId = (*pSh).iPpsId;
-            pLayerInfo.pPps = (*pSh).pPps;
-            pLayerInfo.pSps = (*pSh).pSps;
-            pLayerInfo.pSubsetSps = (*pShExt).pSubsetSps;
+            pLayerInfo.pPps = (*pSh).pPps as *mut SPps;
+            pLayerInfo.pSps = (*pSh).pSps as *mut SSps;
+            pLayerInfo.pSubsetSps = (*pShExt).pSubsetSps as *mut SSubsetSps;
+
 
             bFreshSliceAvailable = iCurrIdD != iLastIdD || iCurrIdQ != iLastIdQ;
             WelsDqLayerDecodeStart(pCtx, pNalCur, pLayerInfo.pSps, pLayerInfo.pPps);
@@ -3706,7 +3033,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
             iIdx += 1;
             if iIdx <= iEndIdx {
-                pNalCur = (*pCurAu).pNalUnitsList[iIdx as usize];
+                pNalCur = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
             } else {
                 pNalCur = std::ptr::null_mut();
             }
@@ -3726,7 +3053,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
         }
 
-        if (*dq_cur).uiLayerDqId == kuiTargetLayerDqId {
+        if !dq_cur.is_null() && (*dq_cur).uiLayerDqId == kuiTargetLayerDqId {
             if !(*pCtx).bInstantDecFlag {
                 if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly {
                     if NeedErrorCon(pCtx) && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
@@ -3795,7 +3122,7 @@ pub unsafe fn CheckAndFinishLastPic(
     let mut bAuBoundaryFlag = false;
 
     if IS_VCL_NAL((*pCtx).sCurNalHead.eNalUnitType, 1) {
-        let pCurNal = (*pAu).pNalUnitsList[(*pAu).uiEndPos as usize];
+        let pCurNal = *(*pAu).pNalUnitsList.add((*pAu).uiEndPos as usize);
         if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && CheckAccessUnitBoundaryExt(
@@ -3935,7 +3262,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
             break;
         }
         iRealMbIdx = if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).uiNumSliceGroups > 1 {
-            FmoNextMb((*pCtx).pFmo, iRealMbIdx)
+            FmoNextMb((*pCtx).pFmo as *mut SFmo, iRealMbIdx)
         } else {
             (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice + iMbIdx + 1
         };

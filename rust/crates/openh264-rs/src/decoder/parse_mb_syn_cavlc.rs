@@ -325,33 +325,10 @@ pub struct SPicture {
 
 pub type PPicture = *mut SPicture;
 
-#[repr(C)]
-pub struct SLevelLimits {
-    pub iMinVmv: i16,
-    pub iMaxVmv: i16,
-}
+pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
-#[repr(C)]
-pub struct SSps {
-    pub pSLevelLimits: *mut SLevelLimits,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-}
 
-#[repr(C)]
-pub struct SSliceHeader {
-    pub eSliceType: i32,
-    pub uiRefCount: [i32; 2],
-    pub pSps: *mut SSps,
-    pub iDirectSpatialMvPredFlag: i32,
-}
-
-#[repr(C)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-    pub bDefaultMotionPredFlag: bool,
-    pub bAdaptiveMotionPredFlag: bool,
-}
 
 #[repr(C)]
 pub struct SSlice {

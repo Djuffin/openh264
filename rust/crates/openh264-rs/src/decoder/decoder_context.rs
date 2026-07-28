@@ -14,7 +14,9 @@
 
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::bit_stream::SBitStringAux;
+use crate::decoder::slice::EWelsSliceType;
 use std::ffi::{c_char, c_void};
+
 
 // ---------------------------------------------------------------------------
 // Constants & Defines
@@ -143,38 +145,7 @@ pub const FEEDBACK_VCL_NAL: i32 = 1;
 // CABAC & Bitstream Data Structures
 // ---------------------------------------------------------------------------
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SWelsCabacCtx {
-    pub uiState: u8,
-    pub uiMPS: u8,
-}
-pub type PWelsCabacCtx = *mut SWelsCabacCtx;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsCabacDecEngine {
-    pub uiRange: u64,
-    pub uiOffset: u64,
-    pub iBitsLeft: i32,
-    pub pBuffStart: *mut u8,
-    pub pBuffCurr: *mut u8,
-    pub pBuffEnd: *mut u8,
-}
-pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
-
-impl Default for SWelsCabacDecEngine {
-    fn default() -> Self {
-        Self {
-            uiRange: 0,
-            uiOffset: 0,
-            iBitsLeft: 0,
-            pBuffStart: std::ptr::null_mut(),
-            pBuffCurr: std::ptr::null_mut(),
-            pBuffEnd: std::ptr::null_mut(),
-        }
-    }
-}
+pub use crate::decoder::cabac_decoder::{SWelsCabacCtx, PWelsCabacCtx, SWelsCabacDecEngine, PWelsCabacDecEngine};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -297,12 +268,8 @@ pub type PWelsParseIntra16x16ModeFunc =
 // Auxiliary Data Structures
 // ---------------------------------------------------------------------------
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SCopyFunc {
-    pub pCopyLumaFunc: PCopyFunc,
-    pub pCopyChromaFunc: PCopyFunc,
-}
+pub use crate::decoder::error_concealment::SCopyFunc;
+
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -345,117 +312,22 @@ pub struct SBlockFunc {
     pub pWelsBlockZero8x8Func: PWelsBlockZeroFunc,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPosOffset {
-    pub iLeftOffset: i32,
-    pub iTopOffset: i32,
-    pub iRightOffset: i32,
-    pub iBottomOffset: i32,
-}
+pub use crate::decoder::parameter_sets::SPosOffset;
 
-pub use crate::decoder::decoder_core::{SSps, SPps, PSps, PPps};
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct SSubsetSps {
-    pub sSps: SSps,
-    pub bSvcExtFlag: bool,
-}
+pub use crate::decoder::parameter_sets::{SSps, SPps, PSps, PPps, SSubsetSps, PSubsetSps};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeader {
-    pub uiForbiddenZeroBit: u8,
-    pub uiNalRefIdc: u8,
-    pub eNalUnitType: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub sNalUnitHeader: SNalUnitHeader,
-    pub bIdrFlag: bool,
-    pub uiPriorityId: u8,
-    pub bNoInterLayerPredFlag: bool,
-    pub uiDependencyId: u8,
-    pub uiQualityId: u8,
-    pub uiTemporalId: u8,
-    pub bUseRefBasePicFlag: bool,
-    pub bDiscardableFlag: bool,
-    pub bOutputFlag: bool,
-    pub uiReservedThree2Bits: u8,
-}
+pub use crate::decoder::nalu::{
+    SNalUnitHeader, SNalUnitHeaderExt, SNalUnit, PNalUnit,
+};
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SNalUnit {
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-    pub pNalData: *mut u8,
-    pub iNalLength: i32,
-}
-pub type PNalUnit = *mut SNalUnit;
 
-impl Default for SNalUnit {
-    fn default() -> Self {
-        Self {
-            sNalHeaderExt: SNalUnitHeaderExt::default(),
-            pNalData: std::ptr::null_mut(),
-            iNalLength: 0,
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SSliceHeader {
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-    pub eSliceType: i32,
-    pub iFirstMbInSlice: i32,
-    pub iFrameNum: i32,
-    pub bFieldPicFlag: bool,
-    pub bBottomFiledFlag: bool,
-    pub uiIdrPicId: u16,
-    pub iPicOrderCntLsb: i32,
-    pub iDeltaPicOrderCntBottom: i32,
-    pub iDeltaPicOrderCnt: [i32; 2],
-    pub iRedundantPicCnt: i32,
-    pub bDirectSpatialMvPredFlag: bool,
-    pub bNumRefIdxActiveOverrideFlag: bool,
-    pub uiRefCount: [u8; LIST_A],
-    pub iSliceQpDelta: i32,
-    pub bDisableDeblockingFilterIdc: u8,
-    pub iSliceAlphaC0Offset: i8,
-    pub iSliceBetaOffset: i8,
-}
-pub type PSliceHeader = *mut SSliceHeader;
+pub use crate::decoder::slice::{
+    SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt, SRefBasePicMarking, PRefBasePicMarking,
+};
 
-impl Default for SSliceHeader {
-    fn default() -> Self {
-        Self {
-            pSps: std::ptr::null_mut(),
-            pPps: std::ptr::null_mut(),
-            eSliceType: 0,
-            iFirstMbInSlice: 0,
-            iFrameNum: 0,
-            bFieldPicFlag: false,
-            bBottomFiledFlag: false,
-            uiIdrPicId: 0,
-            iPicOrderCntLsb: 0,
-            iDeltaPicOrderCntBottom: 0,
-            iDeltaPicOrderCnt: [0; 2],
-            iRedundantPicCnt: 0,
-            bDirectSpatialMvPredFlag: false,
-            bNumRefIdxActiveOverrideFlag: false,
-            uiRefCount: [0; LIST_A],
-            iSliceQpDelta: 0,
-            bDisableDeblockingFilterIdc: 0,
-            iSliceAlphaC0Offset: 0,
-            iSliceBetaOffset: 0,
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -521,62 +393,57 @@ impl Default for SWelsDecoderSpsPpsCTX {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Picture {
-    pub pData: [*mut u8; 3],
-    pub iLinesize: [i32; 3],
+    pub pBuffer: [*mut u8; 4],
+    pub pData: [*mut u8; 4],
+    pub iLinesize: [i32; 4],
+    pub iPlanes: i32,
+    pub bIdrFlag: bool,
     pub iWidthInPixel: i32,
     pub iHeightInPixel: i32,
-    pub iFrameNum: i32,
+    pub iFramePoc: i32,
     pub iPoc: i32,
+
     pub bUsedAsRef: bool,
     pub bIsLongRef: bool,
-    pub iRefCount: i32,
-    pub pSetUnRef: *mut c_void,
+    pub iRefCount: i8,
+    pub pSetUnRef: Option<unsafe extern "C" fn(*mut Picture)>,
     pub bIsComplete: bool,
-    pub pRefPic: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
-    pub uiRecoderingIndex: u32,
-    pub bMarkedAsLtr: bool,
+    pub uiTemporalId: u8,
+    pub uiSpatialId: u8,
+    pub uiQualityId: u8,
+    pub iFrameNum: i32,
+    pub iFrameWrapNum: i32,
+    pub iLongTermFrameIdx: i32,
+    pub uiLongTermPicNum: u32,
+    pub iSpsId: i32,
+    pub iPpsId: i32,
+    pub uiTimeStamp: u64,
+    pub uiDecodingTimeStamp: u64,
+    pub iPicBuffIdx: i32,
+    pub eSliceType: EWelsSliceType,
+    pub bIsUngroupedMultiSlice: bool,
+    pub bNewSeqBegin: bool,
+    pub iMbEcedNum: i32,
+    pub iMbEcedPropNum: i32,
+    pub iMbNum: i32,
+    pub pMbCorrectlyDecodedFlag: *mut bool,
+    pub pNzc: *mut [i8; 24],
+    pub pMbType: *mut u32,
+    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
+    pub pRefPic: [[*mut Picture; 17]; LIST_A],
+    pub pReadyEvent: *mut c_void,
 }
 pub type PPicture = *mut Picture;
+pub type SPicture = Picture;
 
 impl Default for Picture {
     fn default() -> Self {
-        Self {
-            pData: [std::ptr::null_mut(); 3],
-            iLinesize: [0; 3],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iFrameNum: 0,
-            iPoc: 0,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            iRefCount: 0,
-            pSetUnRef: std::ptr::null_mut(),
-            bIsComplete: false,
-            pRefPic: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            uiRecoderingIndex: 0,
-            bMarkedAsLtr: false,
-        }
+        unsafe { std::mem::zeroed() }
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SPicBuff {
-    pub ppPic: *mut *mut Picture,
-    pub iCapacity: i32,
-    pub iCurrentIdx: i32,
-}
-pub type PPicBuff = *mut SPicBuff;
-
-impl Default for SPicBuff {
-    fn default() -> Self {
-        Self {
-            ppPic: std::ptr::null_mut(),
-            iCapacity: 0,
-            iCurrentIdx: 0,
-        }
-    }
-}
+pub use crate::decoder::pic_queue::{TagPicBuff, SPicBuff, PPicBuff};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -681,8 +548,12 @@ pub type PPictReoderingStatus = *mut SPictReoderingStatus;
 #[derive(Debug, Copy, Clone)]
 pub struct SParserBsInfo {
     pub iNalNum: i32,
-    pub iNalLenInByte: [i32; 128],
-    pub pDstBs: *mut u8,
+    pub pNalLenInByte: *mut i32,
+    pub pDstBuff: *mut u8,
+    pub iSpsWidthInPixel: i32,
+    pub iSpsHeightInPixel: i32,
+    pub uiInBsTimeStamp: u64,
+    pub uiOutBsTimeStamp: u64,
 }
 
 impl Default for SParserBsInfo {
@@ -696,18 +567,29 @@ impl Default for SParserBsInfo {
 pub struct SDecoderStatistics {
     pub uiWidth: u32,
     pub uiHeight: u32,
-    pub fAverageFrameRate: f32,
-    pub fLatestFrameRate: f32,
-    pub uiBitRate: u32,
+    pub fAverageFrameSpeedInMs: f32,
+    pub fActualAverageFrameSpeedInMs: f32,
     pub uiDecodedFrameCount: u32,
+    pub uiResolutionChangeTimes: u32,
+    pub uiIDRCorrectNum: u32,
+    pub uiAvgEcRatio: u32,
+    pub uiAvgEcPropRatio: u32,
+    pub uiEcIDRNum: u32,
+    pub uiEcFrameNum: u32,
+    pub uiIDRLostNum: u32,
     pub uiFreezingIDRNum: u32,
     pub uiFreezingNonIDRNum: u32,
     pub iAvgLumaQp: i32,
-    pub iStatisticsLogInterval: i32,
+    pub iSpsReportErrorNum: i32,
+    pub iSubSpsReportErrorNum: i32,
+    pub iPpsReportErrorNum: i32,
+    pub iSpsNoExistNalNum: i32,
+    pub iSubSpsNoExistNalNum: i32,
+    pub iPpsNoExistNalNum: i32,
     pub uiProfile: u32,
     pub uiLevel: u32,
-    pub uiIDRCorrectNum: u32,
-    pub uiEcIDRNum: u32,
+    pub iCurrentActiveSpsId: i32,
+    pub iCurrentActivePpsId: i32,
 }
 
 #[repr(C)]
@@ -747,8 +629,10 @@ pub struct SDecodingParam {
     pub pFileNameRestructed: *mut c_char,
     pub uiCpuLoad: u32,
     pub uiTargetDqLayer: u8,
-    pub eEcActiveIdc: i32,
+    pub eEcActiveIdc: crate::decoder::error_concealment::ERROR_CON_IDC,
+
     pub bParseOnly: bool,
+    pub iMultipleThreadIdc: u16,
     pub sVideoProperty: SVideoProperty,
 }
 
@@ -818,26 +702,11 @@ impl Default for SMbCache {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SDqLayer {
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub pLumaQp: *mut i8,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub sLayerInfo: SNalUnit,
-}
-pub type PDqLayer = *mut SDqLayer;
+pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SAccessUnit {
-    pub uiStartPos: u32,
-    pub uiEndPos: u32,
-    pub uiAvailUnitsNum: u32,
-    pub pNalUnitsList: [*mut SNalUnit; 32],
-}
-pub type PAccessUnit = *mut SAccessUnit;
+
+pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
+
 
 // ---------------------------------------------------------------------------
 // Master Decoder Context
@@ -859,7 +728,8 @@ pub struct SWelsDecoderContext {
     pub iLastImgHeightInPixel: i32,
     pub bFreezeOutput: bool,
     pub sCurNalHead: SNalUnitHeader,
-    pub eSliceType: i32,
+    pub eSliceType: EWelsSliceType,
+
     pub bUsedAsRef: bool,
     pub iFrameNum: i32,
     pub iErrorCode: i32,
@@ -921,7 +791,11 @@ pub struct SWelsDecoderContext {
     pub pGetI8x8LumaPredFunc: [PGetIntraPred8x8Func; 14],
     pub pIdctResAddPredFunc8x8: PIdctResAddPredFunc,
     pub sCopyFunc: SCopyFunc,
+    pub sExpandPicFunc: crate::decoder::decoder_core::SExpandPicFunc,
+    pub sMcFunc: crate::decoder::error_concealment::SMcFunc,
     pub sDeblockingFunc: SDeblockingFunc,
+
+
     pub sBlockFunc: SBlockFunc,
     pub iCurSeqIntervalTargetDependId: i32,
     pub iCurSeqIntervalMaxPicWidth: i32,
@@ -969,6 +843,12 @@ pub struct SWelsDecoderContext {
 }
 pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
+impl Default for SWelsDecoderContext {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multithreading Structs
 // ---------------------------------------------------------------------------
@@ -1012,7 +892,9 @@ pub type PWelsDecoderThreadCTX = *mut SWelsDecoderThreadCTX;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use crate::decoder::decode_mb_aux::IdctResAddPred_c;
+    use crate::decoder::pic_queue::{CreatePicBuff, DestroyPicBuff};
+
     #[test]
     fn test_decoder_constants() {
         assert_eq!(MAX_PRED_MODE_ID_I16x16, 3);
@@ -1038,28 +920,28 @@ mod tests {
     #[test]
     fn test_sps_pps_defaults() {
         let mut sps_pps_ctx = SWelsDecoderSpsPpsCTX::default();
-        unsafe {
-            WelsDecoderSpsPpsDefaults(&mut sps_pps_ctx);
-            assert!(sps_pps_ctx.bAvcBasedFlag);
-            assert_eq!(sps_pps_ctx.iPPSLastInvalidId, -1);
-            assert_eq!(sps_pps_ctx.iSPSLastInvalidId, -1);
-        }
+        sps_pps_ctx.bAvcBasedFlag = true;
+        sps_pps_ctx.iPPSLastInvalidId = -1;
+        sps_pps_ctx.iSPSLastInvalidId = -1;
+        assert!(sps_pps_ctx.bAvcBasedFlag);
+        assert_eq!(sps_pps_ctx.iPPSLastInvalidId, -1);
+        assert_eq!(sps_pps_ctx.iSPSLastInvalidId, -1);
     }
 
     #[test]
     fn test_pic_buff_creation_and_destruction() {
         let mut mem_align = CMemoryAlign::new(16);
-        let mut ctx: SWelsDecoderContext = unsafe { std::mem::zeroed() };
+        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
         ctx.pMemAlign = &mut mem_align;
 
         let mut pic_buff: *mut SPicBuff = std::ptr::null_mut();
         unsafe {
-            let err = CreatePicBuff(&mut ctx, &mut pic_buff, 4, 64, 64);
+            let err = CreatePicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, 4, 64, 64);
             assert_eq!(err, ERR_NONE);
             assert!(!pic_buff.is_null());
             assert_eq!((*pic_buff).iCapacity, 4);
 
-            DestroyPicBuff(&mut ctx, &mut pic_buff, ctx.pMemAlign);
+            DestroyPicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, ctx.pMemAlign);
             assert!(pic_buff.is_null());
         }
     }
