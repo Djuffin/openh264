@@ -78,17 +78,7 @@ pub const PADDING_LENGTH: i32 = 32;
 pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 
 /// Base H.264 slice types matching `EWelsSliceType` in `wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
+pub use crate::decoder::slice::EWelsSliceType;
 
 /// Decoder synchronization event representation matching `SWelsDecEvent` in `wels_decoder_thread.h`.
 #[repr(C)]

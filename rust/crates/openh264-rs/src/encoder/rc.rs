@@ -1018,7 +1018,7 @@ pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
 
 /// Calculates the quantization parameter for IDR keyframes.
 pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
-    let mut dBpp: f64 = 0.0;
+    let dBpp: f64;
     let dBppArray: [[f64; 4]; 4] = [
         [0.25, 0.5, 0.75, 1.0],
         [0.1, 0.2, 0.3, 0.4],
@@ -2429,7 +2429,7 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
             pRcf.pfWelsUpdateMaxBrWindowStatus = None;
             pRcf.pfWelsRcPostFrameSkipping = None;
         }
-        RCMode::RcQualityMode | _ => {
+        RCMode::RcQualityMode => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
             pRcf.pfWelsRcPicDelayJudge = None;
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGom);

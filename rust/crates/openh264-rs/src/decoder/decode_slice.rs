@@ -544,47 +544,9 @@ pub struct SNalUnitHeaderExt {
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiQualityId: u8,
-    pub iMbEcedPropNum: i32,
-    pub pMbType: *mut u32,
-    pub pMv: [*mut [[i16; 2]; 16]; 2],
-    pub pRefIndex: [*mut [i8; 16]; 2],
-    pub pNzc: *mut [i8; 24],
-    pub bIsComplete: bool,
-    pub iFramePoc: i32,
-    pub pReadyEvent: *mut *mut c_void,
-}
+pub use crate::decoder::picture::{SPicture, PPicture};
 
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pData: [std::ptr::null_mut(); 4],
-            iLinesize: [0; 4],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iSpsId: 0,
-            iPpsId: 0,
-            uiQualityId: 0,
-            iMbEcedPropNum: 0,
-            pMbType: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); 2],
-            pRefIndex: [std::ptr::null_mut(); 2],
-            pNzc: std::ptr::null_mut(),
-            bIsComplete: false,
-            iFramePoc: 0,
-            pReadyEvent: std::ptr::null_mut(),
-        }
-    }
-}
+
 
 
 
@@ -685,8 +647,8 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
         if !pRefList1[0].is_null() {
             for i in 0..uiRefCount {
                 if !pRefList0[i as usize].is_null() {
-                    let poc0 = (*pRefList0[i as usize]).iPoc;
-                    let poc1 = (*pRefList1[0]).iPoc;
+                    let poc0 = (*pRefList0[i as usize]).iFramePoc;
+                    let poc1 = (*pRefList1[0]).iFramePoc;
                     let poc = pSliceHeader.iPicOrderCntLsb;
                     let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                     if td == 0 {

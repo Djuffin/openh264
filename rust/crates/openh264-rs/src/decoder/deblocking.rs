@@ -216,46 +216,7 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 
-#[repr(C)]
-pub struct SPicture {
-    pub pBuffer: [*mut u8; 4],
-    pub pData: [*mut u8; 4],
-    pub iLinesize: [i32; 4],
-    pub iPlanes: i32,
-    pub bIdrFlag: bool,
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iFramePoc: i32,
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub iRefCount: i8,
-    pub pSetUnRef: Option<unsafe extern "C" fn(*mut SPicture)>,
-    pub bIsComplete: bool,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub uiQualityId: u8,
-    pub iFrameNum: i32,
-    pub iFrameWrapNum: i32,
-    pub iLongTermFrameIdx: i32,
-    pub uiLongTermPicNum: u32,
-    pub iSpsId: i32,
-    pub iPpsId: i32,
-    pub uiTimeStamp: u64,
-    pub uiDecodingTimeStamp: u32,
-    pub iPicBuffIdx: i32,
-    pub eSliceType: EWelsSliceType,
-    pub bIsUngroupedMultiSlice: bool,
-    pub bNewSeqBegin: bool,
-    pub iMbEcedNum: i32,
-    pub iMbEcedPropNum: i32,
-    pub iMbNum: i32,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pNzc: *mut [i8; 24],
-    pub pMbType: *mut u32,
-    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
-}
-pub type PPicture = *mut SPicture;
+pub use crate::decoder::picture::{SPicture, PPicture};
 
 pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};

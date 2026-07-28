@@ -51,7 +51,7 @@ pub const MAX_BUFFERED_NUM: usize = 8;
 pub const MAX_NAL_UNIT_NUM_IN_AU: usize = 1024;
 pub const MAX_NAL_UNITS_IN_LAYER: usize = 128;
 pub const MAX_MB_SIZE: i32 = 36864;
-pub const LAYER_NUM_EXCHANGEABLE: usize = 4;
+pub const LAYER_NUM_EXCHANGEABLE: usize = 1;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_DPB_COUNT: usize = 17;
 pub const MB_BLOCK4x4_NUM: usize = 16;
@@ -635,14 +635,7 @@ impl Default for SUsrData {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct SBufferInfo {
-    pub iBufferStatus: i32,
-    pub uiOutYuvTimeStamp: u64,
-    pub UsrData: SUsrData,
-    pub pDst: [*mut u8; 3],
-}
+pub use crate::api::codec_api::SBufferInfo;
 
 pub use crate::decoder::decoder_context::SDecoderStatistics;
 
@@ -740,79 +733,22 @@ pub unsafe fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
 
 #[inline]
 pub unsafe fn BsGetBits(pBs: *mut SBitStringAux, n: u32, pOut: *mut u32) -> i32 {
-    if pBs.is_null() || pOut.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let bs = &mut *pBs;
-    if n == 0 {
-        *pOut = 0;
-        return ERR_NONE;
-    }
-    let mut val: u32 = 0;
-    for _ in 0..n {
-        if bs.iBits == 0 {
-            if bs.pCurBuf >= bs.pEndBuf {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            bs.uiCurBits = (*bs.pCurBuf) as u32;
-            bs.pCurBuf = bs.pCurBuf.add(1);
-            bs.iBits = 8;
-        }
-        bs.iBits -= 1;
-        let bit = (bs.uiCurBits >> bs.iBits) & 1;
-        val = (val << 1) | bit;
-    }
-    *pOut = val;
-    ERR_NONE
+    crate::decoder::dec_golomb::BsGetBits(pBs, n as i32, pOut)
 }
 
 #[inline]
 pub unsafe fn BsGetOneBit(pBs: *mut SBitStringAux, pOut: *mut u32) -> i32 {
-    BsGetBits(pBs, 1, pOut)
+    crate::decoder::dec_golomb::BsGetBits(pBs, 1, pOut)
 }
 
 #[inline]
 pub unsafe fn BsGetUe(pBs: *mut SBitStringAux, pOut: *mut u32) -> i32 {
-    if pBs.is_null() || pOut.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let mut leading_zeros = 0;
-    let mut bit = 0u32;
-    loop {
-        if BsGetOneBit(pBs, &mut bit) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        if bit == 1 {
-            break;
-        }
-        leading_zeros += 1;
-        if leading_zeros > 31 {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-    }
-    if leading_zeros == 0 {
-        *pOut = 0;
-        return ERR_NONE;
-    }
-    let mut suffix = 0u32;
-    if BsGetBits(pBs, leading_zeros, &mut suffix) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    *pOut = (1u32 << leading_zeros) - 1 + suffix;
-    ERR_NONE
+    crate::decoder::dec_golomb::BsGetUe(pBs, pOut) as i32
 }
 
 #[inline]
 pub unsafe fn BsGetSe(pBs: *mut SBitStringAux, pOut: *mut i32) -> i32 {
-    let mut ue = 0u32;
-    let ret = BsGetUe(pBs, &mut ue);
-    if ret != ERR_NONE {
-        return ret;
-    }
-    let sign = (ue & 1) == 0;
-    let val = ((ue + 1) >> 1) as i32;
-    *pOut = if sign { -val } else { val };
-    ERR_NONE
+    crate::decoder::dec_golomb::BsGetSe(pBs, pOut)
 }
 
 // Memory Allocation Helper Wrappers
@@ -926,6 +862,10 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
         if iErr != 0 {
             return iErr;
         }
+    }
+    let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
+    if iErr != ERR_NONE {
+        return iErr;
     }
     ERR_NONE
 }
@@ -1403,7 +1343,7 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
         if !ref0.is_null() && !ref1.is_null() {
             if (*pSliceHeader).uiRefCount[0] == 1
                 && (*pSliceHeader).uiRefCount[1] == 1
-                && ((*ref0).iPoc as i64 + (*ref1).iPoc as i64 == 2 * (iPoc as i64))
+                && ((*ref0).iFramePoc as i64 + (*ref1).iFramePoc as i64 == 2 * (iPoc as i64))
             {
                 (*pCurDqLayer).bUseWeightedBiPredIdc = false;
                 return;
@@ -1416,12 +1356,12 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
             for iRef0 in 0..((*pSliceHeader).uiRefCount[0] as usize) {
                 let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][iRef0];
                 if !pRef0.is_null() {
-                    let iPoc0 = (*pRef0).iPoc;
+                    let iPoc0 = (*pRef0).iFramePoc;
                     let bIsLongRef0 = (*pRef0).bIsLongRef;
                     for iRef1 in 0..((*pSliceHeader).uiRefCount[1] as usize) {
                         let pRef1 = (*pCtx).sRefPic.pRefList[LIST_1][iRef1];
                         if !pRef1.is_null() {
-                            let iPoc1 = (*pRef1).iPoc;
+                            let iPoc1 = (*pRef1).iFramePoc;
                             let bIsLongRef1 = (*pRef1).bIsLongRef;
                             (*(*pCurDqLayer).pPredWeightTable).iImplicitWeight[iRef0][iRef1] = 32;
                             if !bIsLongRef0 && !bIsLongRef1 {
@@ -2416,7 +2356,6 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
     }
     let pCurAu = (*pCtx).pAccessUnitList;
     let kiEndPos = (*pCurAu).uiEndPos as i32;
-    let mut iIdxNoInterLayerPred: i32 = 0;
 
     if !(*pCurAu).bCompletedAuFlag {
         return false;
@@ -2424,7 +2363,7 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
 
     if (*pCtx).bNewSeqBegin {
         (*pCurAu).uiStartPos = 0;
-        iIdxNoInterLayerPred = kiEndPos;
+        let mut iIdxNoInterLayerPred = kiEndPos;
         while iIdxNoInterLayerPred >= 0 {
             if (*(*(*pCurAu).pNalUnitsList.add(iIdxNoInterLayerPred as usize))).sNalHeaderExt.bNoInterLayerPredFlag {
                 break;
@@ -2689,7 +2628,6 @@ pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: PWelsDecoderContext) -> i32 {
         WelsResetRefPic(pCtx);
     }
     let iErr = SyncPictureResolutionExt(pCtx, (*pSps).iMbWidth as u32, (*pSps).iMbHeight as u32);
-
     iErr
 }
 
@@ -2715,9 +2653,8 @@ pub unsafe fn ConstructAccessUnit(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
-    let mut iErr = ERR_NONE;
     if GetThreadCount(pCtx) <= 1 {
-        iErr = InitConstructAccessUnit(pCtx, pDstInfo);
+        let iErr = InitConstructAccessUnit(pCtx, pDstInfo);
         if iErr != ERR_NONE {
             return iErr;
         }
@@ -2730,7 +2667,7 @@ pub unsafe fn ConstructAccessUnit(
         }
     }
 
-    iErr = DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo);
+    let iErr = DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo);
     WelsDecodeAccessUnitEnd(pCtx);
     iErr
 }
@@ -2808,13 +2745,13 @@ pub unsafe fn WelsDqLayerDecodeStart(
 }
 
 pub unsafe fn InitRefPicList(pCtx: PWelsDecoderContext, _kuiNRi: u8, iPoc: i32) -> i32 {
-    let mut iRet = ERR_NONE;
-    if (*pCtx).eSliceType == B_SLICE {
-        iRet = WelsInitBSliceRefList(pCtx, iPoc);
+    let mut iRet = if (*pCtx).eSliceType == B_SLICE {
+        let ret = WelsInitBSliceRefList(pCtx, iPoc);
         CreateImplicitWeightTable(pCtx);
+        ret
     } else {
-        iRet = WelsInitRefList(pCtx, iPoc);
-    }
+        WelsInitRefList(pCtx, iPoc)
+    };
     if (*pCtx).eSliceType != I_SLICE && (*pCtx).eSliceType != SI_SLICE {
         if !(*pCtx).pSps.is_null()
             && (*(*pCtx).pSps).uiProfileIdc != 66
@@ -2873,7 +2810,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     let mut iIdx = (*pCurAu).uiStartPos as i32;
     let iEndIdx = (*pCurAu).uiEndPos as i32;
     let iThreadCount = GetThreadCount(pCtx);
-    let mut iRet = ERR_NONE;
+    let mut iRet;
     let mut bAllRefComplete = true;
 
     let kuiTargetLayerDqId = GetTargetDqId((*pCtx).uiTargetDqId, (*pCtx).pParam);
@@ -2881,7 +2818,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     let mut iLastIdD: i16 = -1;
     let mut iLastIdQ: i16 = -1;
     (*pCtx).uiNalRefIdc = 0;
-    let mut bFreshSliceAvailable = true;
+    let mut bFreshSliceAvailable;
 
     if (*pCtx).bInitialDqLayersMem || (*pCtx).pCurDqLayer.is_null() {
         (*pCtx).pCurDqLayer = (*pCtx).pDqLayersList[0];
@@ -2908,7 +2845,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
         if !pNalCur.is_null() {
             (*(*pCtx).pDec).uiTimeStamp = (*pNalCur).uiTimeStamp;
         }
-        (*(*pCtx).pDec).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u64;
+        (*(*pCtx).pDec).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u32;
 
 
         if (*pCtx).iTotalNumMbRec == 0 {
@@ -3044,6 +2981,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
             {
                 break;
             }
+        }
+
+        if pNalCur.is_null() || dq_cur.is_null() {
+            break;
         }
 
         if !(*pCtx).pDec.is_null() {

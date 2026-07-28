@@ -508,10 +508,9 @@ pub unsafe fn ParseNalHeader(
     iSrcNalLen: i32,
     pConsumedBytes: *mut i32,
 ) -> *mut u8 {
-    let mut pCurNal: *mut SNalUnit = std::ptr::null_mut();
+    let pCurNal: *mut SNalUnit;
     let mut pNal = pSrcRbsp;
     let mut iNalSize = iSrcRbspLen;
-    let mut bExtensionFlag = false;
 
     (*pNalUnitHeader).eNalUnitType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
 
@@ -658,7 +657,6 @@ pub unsafe fn ParseNalHeader(
         }
 
         EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT => {
-            bExtensionFlag = true;
             pCurNal = MemGetNextNal(&mut (*pCtx).pAccessUnitList, (*pCtx).pMemAlign);
             if pCurNal.is_null() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
@@ -695,7 +693,6 @@ pub unsafe fn ParseNalHeader(
                 return std::ptr::null_mut();
             }
             pNal = pNal.add(NAL_UNIT_HEADER_EXT_SIZE);
-            iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
             *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
         }
 
@@ -720,6 +717,60 @@ pub unsafe fn ParseNalHeader(
 
             (*pCurNal).sNalHeaderExt.bIdrFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
             (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag = true;
+
+            let pCurAu = (*pCtx).pAccessUnitList;
+            let uiAvailNalNum = (*pCurAu).uiAvailUnitsNum;
+            let bExtensionFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+
+            let pBs = &mut (*(*(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize)))
+                .sNalData
+                .sVclNal
+                .sSliceBitsRead;
+            let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
+            let iBitSize = (iNalSize << 3) - trailing_bits;
+            let mut iErr = crate::decoder::bit_stream::DecInitBits(pBs, pNal, iBitSize);
+            if iErr != ERR_NONE {
+                ForceClearCurrentNal(pCurAu);
+                if uiAvailNalNum > 1 {
+                    (*pCurAu).uiEndPos = uiAvailNalNum - 2;
+                    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE {
+                        (*pCtx).bAuReadyFlag = true;
+                    }
+                }
+                (*pCtx).iErrorCode |= dsBitstreamError;
+                return std::ptr::null_mut();
+            }
+
+            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(pCtx, pBs, bExtensionFlag);
+            if iErr != ERR_NONE {
+                if uiAvailNalNum == 1 && (*pCurNal).sNalHeaderExt.bIdrFlag {
+                    crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
+                }
+                ForceClearCurrentNal(pCurAu);
+                if uiAvailNalNum > 1 {
+                    (*pCurAu).uiEndPos = uiAvailNalNum - 2;
+                    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE {
+                        (*pCtx).bAuReadyFlag = true;
+                    }
+                }
+                (*pCtx).iErrorCode |= dsBitstreamError;
+                return std::ptr::null_mut();
+            }
+
+            let p_last_nal = *(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize);
+            let p_last_sps = (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+
+            if uiAvailNalNum == 1 && CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps) {
+                crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
+            }
+            if uiAvailNalNum > 1 {
+                let p_prev_nal = *(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 2) as usize);
+                if CheckAccessUnitBoundary(pCtx, p_last_nal, p_prev_nal, p_last_sps) {
+                    (*pCurAu).uiEndPos = uiAvailNalNum - 2;
+                    (*pCtx).bAuReadyFlag = true;
+                    (*pCtx).bNextNewSeqBegin = CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps);
+                }
+            }
         }
 
         _ => {}

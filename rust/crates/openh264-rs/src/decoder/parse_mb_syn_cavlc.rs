@@ -312,18 +312,7 @@ pub struct SVlcTable {
 }
 
 // Forward definitions matching OpenH264 decoder C ABI structs
-#[repr(C)]
-pub struct SPicture {
-    pub pData: [*mut u8; 3],
-    pub iLinesize: [i32; 3],
-    pub pMbType: *mut u32,
-    pub pMv: [*mut [[i16; 2]; 16]; 2],
-    pub pRefIndex: [*mut [i8; 16]; 2],
-    pub bIsComplete: bool,
-    pub bIsLongRef: bool,
-}
-
-pub type PPicture = *mut SPicture;
+pub use crate::decoder::picture::{SPicture, PPicture};
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};

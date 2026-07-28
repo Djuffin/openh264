@@ -835,9 +835,15 @@ pub union SBufferInfoUsrData {
     pub sSystemBuffer: SSysMEMBuffer,
 }
 
+impl std::fmt::Debug for SBufferInfoUsrData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unsafe { write!(f, "SBufferInfoUsrData({:?})", self.sSystemBuffer) }
+    }
+}
+
 /// Decoded frame destination buffer metadata (`SBufferInfo`).
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct SBufferInfo {
     pub iBufferStatus: i32,
     pub uiInBsTimeStamp: u64,
@@ -1459,11 +1465,12 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
             let input_slice = std::slice::from_raw_parts(kpSrc, kiSrcLen as usize);
-            let units = crate::split_annexb_units(input_slice);
+            let input_buf = input_slice.to_vec();
+            let units = crate::split_annexb_units(&input_buf);
 
             crate::decoder::decoder_core::WelsDecodeAccessUnitStart(p_ctx as *mut _);
 
-            for unit in &units {
+            for (u_i, unit) in units.iter().enumerate() {
                 let mut payload_slice = *unit;
                 if payload_slice.starts_with(&[0, 0, 0, 1]) {
                     payload_slice = &payload_slice[4..];
@@ -1474,16 +1481,19 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                     continue;
                 }
 
+                let offset = payload_slice.as_ptr() as usize - input_buf.as_ptr() as usize;
+                let payload_len = payload_slice.len();
+                let payload_ptr = (input_buf.as_ptr() as *mut u8).add(offset);
+
                 let mut consumed_bytes = 0i32;
                 let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
-                let mut unit_vec = payload_slice.to_vec();
                 let p_payload = crate::decoder::nalu::ParseNalHeader(
                     p_ctx as *mut _,
                     &mut nal_header,
-                    unit_vec.as_mut_ptr(),
-                    unit_vec.len() as i32,
-                    unit_vec.as_mut_ptr(),
-                    unit_vec.len() as i32,
+                    payload_ptr,
+                    payload_len as i32,
+                    payload_ptr,
+                    payload_len as i32,
                     &mut consumed_bytes,
                 );
 
@@ -1493,9 +1503,9 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                         crate::decoder::nalu::ParseNonVclNal(
                             p_ctx as *mut _,
                             p_payload,
-                            (unit_vec.len() as i32) - consumed_bytes,
-                            unit_vec.as_mut_ptr(),
-                            unit_vec.len() as i32,
+                            (payload_len as i32) - consumed_bytes,
+                            payload_ptr,
+                            payload_len as i32,
                         );
                     }
                 }
