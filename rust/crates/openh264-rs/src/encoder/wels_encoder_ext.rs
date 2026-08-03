@@ -174,6 +174,10 @@ impl welsCodecTrace {
         self.m_iTraceLevel = kiLevel as i32;
     }
 
+    pub fn GetTraceLevel(&self) -> i32 {
+        self.m_iTraceLevel
+    }
+
     pub fn SetTraceCallback(&mut self, func: WelsTraceCallback) {
         self.m_fpTrace = func;
     }
@@ -1460,23 +1464,23 @@ impl CWelsH264SVCEncoder {
             return cmInitParaError;
         }
         if (self.m_pEncContext.is_null() || !self.m_bInitialFlag)
-            && eOptionId != EncoderOption::EncoderOptionTraceLevel
-            && eOptionId != EncoderOption::EncoderOptionTraceCallback
-            && eOptionId != EncoderOption::EncoderOptionTraceCallbackContext
+            && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_LEVEL
+            && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK
+            && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT
         {
             return cmInitExpected;
         }
 
         unsafe {
             match eOptionId {
-                EncoderOption::EncoderOptionDatFormat => {
+                EncoderOption::ENCODER_OPTION_DATAFORMAT => {
                     let iValue = *(pOption as *const i32);
                     if iValue == 0 {
                         return cmInitParaError;
                     }
                     self.m_iCspInternal = iValue;
                 }
-                EncoderOption::EncoderOptionIdrInterval => {
+                EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     let mut iValue = *(pOption as *const i32);
                     if iValue <= -1 {
                         iValue = 0;
@@ -1486,7 +1490,7 @@ impl CWelsH264SVCEncoder {
                     }
                     (*(*self.m_pEncContext).pSvcParam).uiIntraPeriod = iValue as u32;
                 }
-                EncoderOption::EncoderOptionSvcEncodeParamBase => {
+                EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     let sEncodingParam = *(pOption as *const SEncParamBase);
                     let mut sConfig = SWelsSvcCodingParam::default();
                     if sConfig.ParamBaseTranscode(sEncodingParam) != 0 {
@@ -1507,7 +1511,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionSvcEncodeParamExt => {
+                EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let sEncodingParam = *(pOption as *const SEncParamExt);
                     if sEncodingParam.iSpatialLayerNum < 1
                         || sEncodingParam.iSpatialLayerNum > MAX_DEPENDENCY_LAYER
@@ -1533,7 +1537,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionFrameRate => {
+                EncoderOption::ENCODER_OPTION_FRAME_RATE => {
                     let iValue = *(pOption as *const f32);
                     if iValue <= 0.0 {
                         return cmInitParaError;
@@ -1542,7 +1546,7 @@ impl CWelsH264SVCEncoder {
                         WELS_CLIP3(iValue, MIN_FRAME_RATE, MAX_FRAME_RATE);
                     WelsEncoderApplyFrameRate((*self.m_pEncContext).pSvcParam);
                 }
-                EncoderOption::EncoderOptionBitrate => {
+                EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &*(pOption as *const SBitrateInfo);
                     let mut iBitrate = pInfo.iBitrate;
                     if iBitrate <= 0 {
@@ -1570,7 +1574,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionMaxBitrate => {
+                EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &*(pOption as *const SBitrateInfo);
                     let mut iBitrate = pInfo.iBitrate;
                     if iBitrate <= 0 {
@@ -1598,7 +1602,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionComplexity => {
+                EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     let iValue = *(pOption as *const i32);
                     (*(*self.m_pEncContext).pSvcParam).iComplexityMode = match iValue {
                         0 => EComplexityMode::LowComplexity,
@@ -1606,27 +1610,28 @@ impl CWelsH264SVCEncoder {
                         _ => EComplexityMode::HighComplexity,
                     };
                 }
-                EncoderOption::EncoderOptionGetStatistics => {
+                EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     // Get only option
                 }
-                EncoderOption::EncoderOptionTraceLevel => {
+                EncoderOption::ENCODER_OPTION_TRACE_LEVEL => {
                     if !self.m_pWelsTrace.is_null() {
                         let level = *(pOption as *const u32);
                         (*self.m_pWelsTrace).SetTraceLevel(level);
                     }
                 }
-                EncoderOption::EncoderOptionTraceCallback => {
+                EncoderOption::ENCODER_OPTION_TRACE_CALLBACK => {
                     if !self.m_pWelsTrace.is_null() {
                         let callback = *(pOption as *const WelsTraceCallback);
                         (*self.m_pWelsTrace).SetTraceCallback(callback);
                     }
                 }
-                EncoderOption::EncoderOptionTraceCallbackContext => {
+                EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT => {
                     if !self.m_pWelsTrace.is_null() {
                         let ctx = *(pOption as *const *mut c_void);
                         (*self.m_pWelsTrace).SetTraceCallbackContext(ctx);
                     }
                 }
+                _ => {}
             }
         }
         0
@@ -1642,25 +1647,25 @@ impl CWelsH264SVCEncoder {
 
         unsafe {
             match eOptionId {
-                EncoderOption::EncoderOptionDatFormat => {
+                EncoderOption::ENCODER_OPTION_DATAFORMAT => {
                     *(pOption as *mut i32) = self.m_iCspInternal;
                 }
-                EncoderOption::EncoderOptionIdrInterval => {
+                EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
                     *(pOption as *mut i32) =
                         (*(*self.m_pEncContext).pSvcParam).uiIntraPeriod as i32;
                 }
-                EncoderOption::EncoderOptionSvcEncodeParamExt => {
+                EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let param_ext = (*(*self.m_pEncContext).pSvcParam).to_param_ext();
                     *(pOption as *mut SEncParamExt) = param_ext;
                 }
-                EncoderOption::EncoderOptionSvcEncodeParamBase => {
+                EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_BASE => {
                     (*(*self.m_pEncContext).pSvcParam)
                         .GetBaseParams(&mut *(pOption as *mut SEncParamBase));
                 }
-                EncoderOption::EncoderOptionFrameRate => {
+                EncoderOption::ENCODER_OPTION_FRAME_RATE => {
                     *(pOption as *mut f32) = (*(*self.m_pEncContext).pSvcParam).fMaxFrameRate;
                 }
-                EncoderOption::EncoderOptionBitrate => {
+                EncoderOption::ENCODER_OPTION_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
                         pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).iTargetBitrate;
@@ -1672,7 +1677,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionMaxBitrate => {
+                EncoderOption::ENCODER_OPTION_MAX_BITRATE => {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
                         pInfo.iBitrate = (*(*self.m_pEncContext).pSvcParam).iMaxBitrate;
@@ -1684,7 +1689,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitParaError;
                     }
                 }
-                EncoderOption::EncoderOptionGetStatistics => {
+                EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
                     let iLayerIdx =
                         ((*(*self.m_pEncContext).pSvcParam).iSpatialLayerNum - 1) as usize;
@@ -1701,9 +1706,14 @@ impl CWelsH264SVCEncoder {
                     pStatistics.uiResolutionChangeTimes = pEncStats.uiResolutionChangeTimes;
                     pStatistics.uiIDRSentNum = pEncStats.uiIDRSentNum;
                 }
-                EncoderOption::EncoderOptionComplexity => {
+                EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) =
                         (*(*self.m_pEncContext).pSvcParam).iComplexityMode as i32;
+                }
+                EncoderOption::ENCODER_OPTION_TRACE_LEVEL => {
+                    if !self.m_pWelsTrace.is_null() {
+                        *(pOption as *mut i32) = (*self.m_pWelsTrace).GetTraceLevel();
+                    }
                 }
                 _ => return cmInitParaError,
             }

@@ -87,23 +87,7 @@ pub enum VideoFormat {
     VideoFormatVFlip = -0x80000000i32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EncoderOption {
-    #[default]
-    EncoderOptionDatFormat = 0,
-    EncoderOptionIdrInterval = 1,
-    EncoderOptionSvcEncodeParamBase = 2,
-    EncoderOptionSvcEncodeParamExt = 3,
-    EncoderOptionFrameRate = 4,
-    EncoderOptionBitrate = 5,
-    EncoderOptionMaxBitrate = 6,
-    EncoderOptionComplexity = 7,
-    EncoderOptionGetStatistics = 8,
-    EncoderOptionTraceCallback = 9,
-    EncoderOptionTraceCallbackContext = 10,
-    EncoderOptionTraceLevel = 11,
-}
+pub use crate::api::codec_api::ENCODER_OPTION as EncoderOption;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
