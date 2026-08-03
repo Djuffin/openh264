@@ -1758,10 +1758,84 @@ pub unsafe fn CheckBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
     ERR_NONE
 }
 
+pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null() {
+        return;
+    }
+    let cpu_flag = (*pCtx).uiCpuFlag;
+
+    // 1. Deblocking Filter
+    crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc as *mut _ as *mut _, cpu_flag as i32);
+
+    // 2. Motion Compensation
+    crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc as *mut _ as *mut _, cpu_flag);
+
+    // 3. IDCT Inverse Transform
+    (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctResAddPred_c);
+    (*pCtx).pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::IdctResAddPred8x8_c);
+    (*pCtx).pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctFourResAddPred_c);
+
+    // 4. Intra Prediction
+    (*pCtx).pGetI4x4LumaPredFunc = [
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredV_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredH_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDc_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDL_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDR_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVR_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredHD_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVL_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredHU_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcLeft_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcNA_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDLTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVLTop_c),
+    ];
+
+    (*pCtx).pGetI16x16LumaPredFunc = [
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredV_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredH_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDc_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredPlane_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcLeft_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcNA_c),
+    ];
+
+    (*pCtx).pGetIChromaPredFunc = [
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDc_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredH_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredV_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredPlane_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcLeft_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcNA_c),
+    ];
+
+    (*pCtx).pGetI8x8LumaPredFunc = [
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredV_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredH_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDc_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDL_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDR_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVR_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredHD_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVL_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredHU_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcLeft_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcNA_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDLTop_c),
+        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVLTop_c),
+    ];
+}
+
 pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
+    WelsInitDecoderFuncs(pCtx);
     if MemInitNalList(&mut (*pCtx).pAccessUnitList, MAX_NAL_UNIT_NUM_IN_AU, (*pCtx).pMemAlign) != 0 {
         return ERR_INFO_OUT_OF_MEMORY;
     }

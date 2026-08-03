@@ -1368,16 +1368,34 @@ unsafe extern "C" fn encoder_encode_param_c(this: *mut ISVCEncoder, pBsInfo: *mu
     }
 }
 
-unsafe extern "C" fn encoder_force_intra_c(_this: *mut ISVCEncoder, _bIDR: bool) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_force_intra_c(this: *mut ISVCEncoder, bIDR: bool) -> i32 {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.ForceIntraFrame(bIDR, -1)
+    }
 }
 
-unsafe extern "C" fn encoder_set_opt_c(_this: *mut ISVCEncoder, _eOptionId: ENCODER_OPTION, _pOption: *mut c_void) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_set_opt_c(this: *mut ISVCEncoder, eOptionId: ENCODER_OPTION, pOption: *mut c_void) -> i32 {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.SetOption(eOptionId, pOption)
+    }
 }
 
-unsafe extern "C" fn encoder_get_opt_c(_this: *mut ISVCEncoder, _eOptionId: ENCODER_OPTION, _pOption: *mut c_void) -> i32 {
-    CM_RESULT_SUCCESS
+unsafe extern "C" fn encoder_get_opt_c(this: *mut ISVCEncoder, eOptionId: ENCODER_OPTION, pOption: *mut c_void) -> i32 {
+    if this.is_null() {
+        return CM_INIT_PARA_ERROR;
+    }
+    unsafe {
+        let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
+        (*impl_ptr).inner.GetOption(eOptionId, pOption)
+    }
 }
 
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
@@ -1389,7 +1407,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
         (*dec_impl).param = *pParam;
 
         if (*dec_impl).pCtx.is_null() {
-            let mut ctx_box: Box<crate::decoder::decoder_context::SWelsDecoderContext> = Box::new(std::mem::zeroed());
+            let mut ctx_box: Box<crate::decoder::decoder_context::SWelsDecoderContext> = Box::default();
             ctx_box.pMemAlign = &mut (*dec_impl).align;
             ctx_box.pParam = &mut (*dec_impl).param as *mut _ as *mut _;
             let p_ctx = Box::into_raw(ctx_box);
@@ -1420,15 +1438,31 @@ unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
 }
 
 unsafe extern "C" fn decoder_decode_frame_c(
-    _this: *mut ISVCDecoder,
-    _pSrc: *const u8,
-    _iSrcLen: i32,
-    _ppDst: *mut *mut u8,
-    _pStride: *mut i32,
-    _iWidth: *mut i32,
-    _iHeight: *mut i32,
+    this: *mut ISVCDecoder,
+    pSrc: *const u8,
+    iSrcLen: i32,
+    ppDst: *mut *mut u8,
+    pStride: *mut i32,
+    iWidth: *mut i32,
+    iHeight: *mut i32,
 ) -> DECODING_STATE {
-    DECODING_STATE::dsErrorFree
+    let mut buf_info = SBufferInfo::default();
+    let state = decoder_decode_frame2_c(this, pSrc, iSrcLen, ppDst, &mut buf_info);
+    if buf_info.iBufferStatus == 1 {
+        unsafe {
+            if !pStride.is_null() {
+                *pStride.offset(0) = buf_info.UsrData.sSystemBuffer.iStride[0];
+                *pStride.offset(1) = buf_info.UsrData.sSystemBuffer.iStride[1];
+            }
+            if !iWidth.is_null() {
+                *iWidth = buf_info.UsrData.sSystemBuffer.iWidth;
+            }
+            if !iHeight.is_null() {
+                *iHeight = buf_info.UsrData.sSystemBuffer.iHeight;
+            }
+        }
+    }
+    state
 }
 
 unsafe extern "C" fn decoder_decode_frame_nodelay_c(
@@ -1465,12 +1499,11 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
             let input_slice = std::slice::from_raw_parts(kpSrc, kiSrcLen as usize);
-            let input_buf = input_slice.to_vec();
-            let units = crate::split_annexb_units(&input_buf);
+            let units = crate::split_annexb_units(input_slice);
 
             crate::decoder::decoder_core::WelsDecodeAccessUnitStart(p_ctx as *mut _);
 
-            for (u_i, unit) in units.iter().enumerate() {
+            for (_u_i, unit) in units.iter().enumerate() {
                 let mut payload_slice = *unit;
                 if payload_slice.starts_with(&[0, 0, 0, 1]) {
                     payload_slice = &payload_slice[4..];
@@ -1481,9 +1514,8 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                     continue;
                 }
 
-                let offset = payload_slice.as_ptr() as usize - input_buf.as_ptr() as usize;
                 let payload_len = payload_slice.len();
-                let payload_ptr = (input_buf.as_ptr() as *mut u8).add(offset);
+                let payload_ptr = payload_slice.as_ptr() as *mut u8;
 
                 let mut consumed_bytes = 0i32;
                 let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
