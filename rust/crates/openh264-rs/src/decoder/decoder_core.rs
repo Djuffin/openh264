@@ -546,21 +546,7 @@ impl Default for SMbCache {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefPic {
-    pub pRefList: [[*mut SPicture; MAX_REF_PIC_COUNT]; LIST_A],
-    pub uiRefCount: [u32; LIST_A],
-}
-
-impl Default for SRefPic {
-    fn default() -> Self {
-        Self {
-            pRefList: [[std::ptr::null_mut(); MAX_REF_PIC_COUNT]; LIST_A],
-            uiRefCount: [0; LIST_A],
-        }
-    }
-}
+pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

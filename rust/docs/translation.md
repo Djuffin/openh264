@@ -152,11 +152,11 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: `TagPps` previously contained both `bConstrainedIntraPredFlag` and `bConstainedIntraPredFlag`, inserting an unintended extra byte into `SPps` struct layout under `#[repr(C)]` and breaking intra-pred parsing checks in `decode_slice.rs`.
 * **Fix**: Removed duplicate `bConstrainedIntraPredFlag` from `TagPps` and `TagPps::default()` in [`parameter_sets.rs:347`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347) and updated `nalu.rs` PPS parsing. Unit tests pass.
 
-#### Bug 4.1.5: Duplicate Conflicting `SRefPic` Struct Definition
+#### Bug 4.1.5: Duplicate Conflicting `SRefPic` Struct Definition — [RESOLVED]
 * **C++ Declaration**: [`decoder_context.h:149-157`](codec/decoder/core/inc/decoder_context.h#L149-L157)
-* **Rust Modules**: [`decoder_context.rs:401-409`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L401-L409) & [`decoder_core.rs:590-593`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L590-L593)
-* **Impact**: `decoder_core.rs` redefines a conflicting local `SRefPic` with array size 16 instead of `MAX_DPB_COUNT` (17) and `uiRefCount: [u32; LIST_A]` instead of `u8`.
-* **Fix**: Delete the duplicate struct definition in `decoder_core.rs` and re-export `decoder_context::SRefPic`.
+* **Rust Modules**: [`decoder_context.rs:401-409`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L401-L409) & [`decoder_core.rs:549`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L549)
+* **Impact**: `decoder_core.rs` previously redefined a conflicting local `SRefPic` with array size 16 instead of `MAX_DPB_COUNT` (17) and `uiRefCount: [u32; LIST_A]` instead of `u8`.
+* **Fix**: Removed local duplicate `SRefPic` definitions in `decoder_core.rs` and `mv_pred.rs`, replaced with `pub use crate::decoder::decoder_context::{SRefPic, PRefPic};`, and added `Debug` derive to `SRefPic`. Unit tests pass.
 
 #### Bug 4.1.6: NAL Demuxing Error Code Constant Mismatches
 * **C++ Definition**: [`decoder_context.h:88`](codec/decoder/core/inc/decoder_context.h#L88)

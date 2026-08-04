@@ -303,31 +303,7 @@ impl Default for SDqLayer {
 
 pub type PDqLayer = *mut SDqLayer;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefPic {
-    pub pRefList: [[*mut SPicture; 17]; 2],
-    pub pShortRefList: [[*mut SPicture; 17]; 2],
-    pub pLongRefList: [[*mut SPicture; 17]; 2],
-    pub uiRefCount: [u8; 2],
-    pub uiShortRefCount: [u8; 2],
-    pub uiLongRefCount: [u8; 2],
-    pub iMaxLongTermFrameIdx: i32,
-}
-
-impl Default for SRefPic {
-    fn default() -> Self {
-        Self {
-            pRefList: [[std::ptr::null_mut(); 17]; 2],
-            pShortRefList: [[std::ptr::null_mut(); 17]; 2],
-            pLongRefList: [[std::ptr::null_mut(); 17]; 2],
-            uiRefCount: [0; 2],
-            uiShortRefCount: [0; 2],
-            uiLongRefCount: [0; 2],
-            iMaxLongTermFrameIdx: 0,
-        }
-    }
-}
+pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
