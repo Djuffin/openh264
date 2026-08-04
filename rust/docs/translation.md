@@ -123,7 +123,7 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: Under `#[repr(C)]`, Rust previously allocated 2,048 bytes instead of 6,144 bytes for `sFmoList`, introducing a **4,096-byte memory layout shift** for every struct field declared after `sFmoList` in `SWelsDecoderContext`.
 * **Fix**: Changed `pub sFmoList: [*mut c_void; MAX_PPS_COUNT]` to `pub sFmoList: [SFmo; MAX_PPS_COUNT]` and `pub pFmo` to `PFmo` in [`decoder_context.rs:672-673`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L672-L673). Alignment verified via unit tests.
 
-#### Bug 4.1.2: `SWelsDecoderContext` Function Pointer Table Field Reordering
+#### Bug 4.1.2: `SWelsDecoderContext` Function Pointer Table Field Reordering — [RESOLVED]
 * **C++ Declaration**: [`decoder_context.h:454-463`](codec/decoder/core/inc/decoder_context.h#L454-L463)
   ```cpp
   SMcFunc sMcFunc;
@@ -134,16 +134,8 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
   SExpandPicFunc sExpandPicFunc;
   ```
 * **Rust Translation**: [`decoder_context.rs:726-731`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L726-L731)
-  ```rust
-  pub pGetI8x8LumaPredFunc: [PGetI8x8LumaPredFunc; 4],
-  pub pIdctResAddPredFunc8x8: PIdctResAddPredFunc,
-  pub sCopyFunc: SCopyFunc,
-  pub sExpandPicFunc: SExpandPicFunc,
-  pub sMcFunc: SMcFunc,
-  pub sDeblockingFunc: SDeblockingFunc,
-  ```
-* **Impact**: Field reordering causes C++ FFI calls through decoder context function pointers to dispatch to wrong function signatures, leading to invalid memory access or segmentation faults during decoding.
-* **Fix**: Reorder function pointer fields in `decoder_context.rs` to match C++ field declaration order.
+* **Impact**: Field reordering previously caused C++ FFI calls through decoder context function pointers to dispatch to wrong function signatures.
+* **Fix**: Reordered function pointer fields in [`decoder_context.rs:726-731`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L726-L731) (`sMcFunc` before `pGetI8x8LumaPredFunc`, `sDeblockingFunc` before `sExpandPicFunc`) to match C++ field declaration order. All unit tests pass.
 
 #### Bug 4.1.3: `SDqLayer` (`TagDqLayer`) Missing Fields and Type Mismatches
 * **C++ Declaration**: [`dec_frame.h:61-132`](codec/decoder/core/inc/dec_frame.h#L61-L132)
