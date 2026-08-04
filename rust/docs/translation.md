@@ -158,19 +158,16 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: `decoder_core.rs` previously redefined a conflicting local `SRefPic` with array size 16 instead of `MAX_DPB_COUNT` (17) and `uiRefCount: [u32; LIST_A]` instead of `u8`.
 * **Fix**: Removed local duplicate `SRefPic` definitions in `decoder_core.rs` and `mv_pred.rs`, replaced with `pub use crate::decoder::decoder_context::{SRefPic, PRefPic};`, and added `Debug` derive to `SRefPic`. Unit tests pass.
 
-#### Bug 4.1.6: NAL Demuxing Error Code Constant Mismatches
-* **C++ Definition**: [`decoder_context.h:88`](codec/decoder/core/inc/decoder_context.h#L88)
+#### Bug 4.1.6: NAL Demuxing Error Code Constant Mismatches — [RESOLVED]
+* **C++ Definition**: [`codec_app_def.h:84-86`](codec/api/wels/codec_app_def.h#L84-L86)
   ```cpp
-  dsBitstreamError = 0x01,
-  dsNoParamSets     = 0x02,
+  dsRefLost = 0x02,
+  dsBitstreamError = 0x04,
+  dsNoParamSets = 0x10,
   ```
-* **Rust Translation**: [`nalu.rs:123-124`](rust/crates/openh264-rs/src/decoder/nalu.rs#L123-L124)
-  ```rust
-  pub const dsBitstreamError: i32 = 0x02; // ❌ Should be 0x01
-  pub const dsNoParamSets: i32 = 0x04;     // ❌ Should be 0x02
-  ```
-* **Impact**: Bitmask operations evaluating decoder error status report incorrect error flags back to API callers.
-* **Fix**: Update constants in `nalu.rs` to `dsBitstreamError = 0x01` and `dsNoParamSets = 0x02`.
+* **Rust Translation**: [`nalu.rs:123-125`](rust/crates/openh264-rs/src/decoder/nalu.rs#L123-L125) & [`decoder_context.rs:89-92`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L89-L92)
+* **Impact**: Bitmask operations evaluating decoder error status previously reported incorrect error flags back to API callers due to inconsistent internal constant definitions across modules.
+* **Fix**: Corrected error bitmask constants across `decoder_context.rs`, `nalu.rs`, `decode_slice.rs`, `error_concealment.rs`, `parse_mb_syn_cabac.rs`, and `parse_mb_syn_cavlc.rs` to match C++ `DECODING_STATE` values (`dsBitstreamError = 0x04`, `dsNoParamSets = 0x10`, `dsOutOfMemory = 0x4000`, `dsDataErrorConcealed = 0x20`). Unit tests pass.
 
 #### Bug 4.1.7: Missing CAVLC Residual Decoding Functions
 * **C++ Implementation**: [`parse_mb_syn_cavlc.cpp`](codec/decoder/core/src/parse_mb_syn_cavlc.cpp)

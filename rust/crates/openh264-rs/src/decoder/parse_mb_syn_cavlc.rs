@@ -76,7 +76,7 @@ pub const ERR_INFO_INVALID_I_CHROMA_PRED_MODE: i32 = 1052;
 pub const ERR_INFO_UNSUPPORTED_ILP: i32 = 1064;
 pub const ERR_INFO_REFERENCE_PIC_LOST: i32 = 1075;
 
-pub const dsBitstreamError: i32 = 0x02;
+pub const dsBitstreamError: i32 = 0x04;
 pub const ERROR_CON_DISABLE: i32 = 0;
 
 #[inline(always)]
