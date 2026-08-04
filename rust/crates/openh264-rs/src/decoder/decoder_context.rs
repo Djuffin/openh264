@@ -14,6 +14,7 @@
 
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::bit_stream::SBitStringAux;
+use crate::decoder::fmo::{PFmo, SFmo};
 use crate::decoder::slice::EWelsSliceType;
 use std::ffi::{c_char, c_void};
 
@@ -668,8 +669,8 @@ pub struct SWelsDecoderContext {
     pub bUsedAsRef: bool,
     pub iFrameNum: i32,
     pub iErrorCode: i32,
-    pub sFmoList: [*mut c_void; MAX_PPS_COUNT],
-    pub pFmo: *mut c_void,
+    pub sFmoList: [SFmo; MAX_PPS_COUNT],
+    pub pFmo: PFmo,
     pub iActiveFmoNum: i32,
     pub iDecBlockOffsetArray: [i32; 24],
     pub sMb: SMbCache,

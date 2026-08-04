@@ -114,17 +114,14 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 
 ### 4.1 Decoder Translation Issues
 
-#### Bug 4.1.1: `SWelsDecoderContext` Memory Layout Offset Shift (4,096 Bytes)
+#### Bug 4.1.1: `SWelsDecoderContext` Memory Layout Offset Shift (4,096 Bytes) — [RESOLVED]
 * **C++ Declaration**: [`decoder_context.h:337`](file:///usr/local/google/home/ezemtsov/projects/openh264/codec/decoder/core/inc/decoder_context.h#L337)
   ```cpp
   SFmo sFmoList[MAX_PPS_COUNT]; // Array of 256 SFmo structs (256 * 24 bytes = 6,144 bytes)
   ```
-* **Rust Translation**: [`decoder_context.rs:671`](file:///usr/local/google/home/ezemtsov/projects/openh264/rust/crates/openh264-rs/src/decoder/decoder_context.rs#L671)
-  ```rust
-  pub sFmoList: [*mut c_void; MAX_PPS_COUNT], // 256 raw pointers = 2,048 bytes
-  ```
-* **Impact**: Under `#[repr(C)]`, Rust allocates 2,048 bytes instead of 6,144 bytes for `sFmoList`. This introduces a **4,096-byte memory layout shift** for every struct field declared after `sFmoList` in `SWelsDecoderContext`. Reading or writing fields like `sSpsPpsCtx`, `pPicBuff`, or function pointer tables from C++ FFI corrupts decoder memory.
-* **Fix**: Change `pub sFmoList: [*mut c_void; MAX_PPS_COUNT]` to `pub sFmoList: [SFmo; MAX_PPS_COUNT]`.
+* **Rust Translation**: [`decoder_context.rs:672`](file:///usr/local/google/home/ezemtsov/projects/openh264/rust/crates/openh264-rs/src/decoder/decoder_context.rs#L672)
+* **Impact**: Under `#[repr(C)]`, Rust previously allocated 2,048 bytes instead of 6,144 bytes for `sFmoList`, introducing a **4,096-byte memory layout shift** for every struct field declared after `sFmoList` in `SWelsDecoderContext`.
+* **Fix**: Changed `pub sFmoList: [*mut c_void; MAX_PPS_COUNT]` to `pub sFmoList: [SFmo; MAX_PPS_COUNT]` and `pub pFmo` to `PFmo` in [`decoder_context.rs:672-673`](file:///usr/local/google/home/ezemtsov/projects/openh264/rust/crates/openh264-rs/src/decoder/decoder_context.rs#L672-L673). Alignment verified via unit tests.
 
 #### Bug 4.1.2: `SWelsDecoderContext` Function Pointer Table Field Reordering
 * **C++ Declaration**: [`decoder_context.h:454-463`](file:///usr/local/google/home/ezemtsov/projects/openh264/codec/decoder/core/inc/decoder_context.h#L454-L463)
