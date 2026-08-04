@@ -169,11 +169,11 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: Bitmask operations evaluating decoder error status previously reported incorrect error flags back to API callers due to inconsistent internal constant definitions across modules.
 * **Fix**: Corrected error bitmask constants across `decoder_context.rs`, `nalu.rs`, `decode_slice.rs`, `error_concealment.rs`, `parse_mb_syn_cabac.rs`, and `parse_mb_syn_cavlc.rs` to match C++ `DECODING_STATE` values (`dsBitstreamError = 0x04`, `dsNoParamSets = 0x10`, `dsOutOfMemory = 0x4000`, `dsDataErrorConcealed = 0x20`). Unit tests pass.
 
-#### Bug 4.1.7: Missing CAVLC Residual Decoding Functions
+#### Bug 4.1.7: Missing CAVLC Residual Decoding Functions — [RESOLVED]
 * **C++ Implementation**: [`parse_mb_syn_cavlc.cpp`](codec/decoder/core/src/parse_mb_syn_cavlc.cpp)
-* **Rust Translation**: [`parse_mb_syn_cavlc.rs`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs)
-* **Impact**: `WelsParseMbCavlcResidual`, `ParseCoeffToken`, `ParseTotalZeros`, and `ParseRunBefore` listed in `translation.md` (Section 2.2) are missing from `parse_mb_syn_cavlc.rs`, preventing pure Rust CAVLC residual decoding.
-* **Fix**: Translate CAVLC coefficient token and residual block parsing functions from C++ to Rust.
+* **Rust Translation**: [`parse_mb_syn_cavlc.rs:1152-1490`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1152-L1490)
+* **Impact**: CAVLC residual parsing and block decoding functions were previously missing from `parse_mb_syn_cavlc.rs`.
+* **Fix**: Translated CAVLC block residual decoding (`WelsResidualBlockCavlc`, `WelsParseMbCavlcResidual`), coefficient token parsing (`CavlcGetTrailingOnesAndTotalCoeff`, `ParseCoeffToken`), level decoding (`CavlcGetLevelVal`), total zeros parsing (`CavlcGetTotalZeros`, `ParseTotalZeros`), and run-before decoding (`CavlcGetRunBefore`, `ParseRunBefore`) into [`parse_mb_syn_cavlc.rs:1152-1490`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1152-L1490). Added unit tests. All tests pass.
 
 #### Bug 4.1.8: Unimplemented Intra Prediction Reconstruction Function
 * **C++ Implementation**: [`rec_mb.cpp:50-200`](codec/decoder/core/src/rec_mb.cpp#L50-L200)

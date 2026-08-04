@@ -1148,6 +1148,415 @@ pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: *mut SWels
     }
 }
 
+// // ============================================================================
+// CAVLC Residual Parsing & Decoding Implementation
+// ============================================================================
+
+pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
+    uiTotalCoeff: &mut u8,
+    uiTrailingOnes: &mut u8,
+    pBitsCache: *mut SReadBitsCache,
+    pVlcTable: *mut SVlcTable,
+    bChromaDc: bool,
+    nC: i8,
+) -> i32 {
+    let kpVlcTableMoreBitsCountList: [*const u8; 3] = [
+        g_kuiVlcTableMoreBitsCount0.as_ptr(),
+        g_kuiVlcTableMoreBitsCount1.as_ptr(),
+        g_kuiVlcTableMoreBitsCount2.as_ptr(),
+    ];
+    let mut iUsedBits: i32 = 0;
+
+    if bChromaDc {
+        let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
+        let vlc_entry = *(*pVlcTable).kpChromaCoeffTokenVlcTable.add(uiValue);
+        let iIndexVlc = vlc_entry[0] as usize;
+        let uiCount = vlc_entry[1] as u32;
+        POP_BUFFER(pBitsCache, uiCount);
+        iUsedBits += uiCount as i32;
+        *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
+        *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
+    } else {
+        let nC_idx = (nC.max(0) as usize).min(16);
+        let iNcMapIdx = g_kuiNcMapTable[nC_idx] as usize;
+        if iNcMapIdx <= 2 {
+            let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
+            if uiValue < g_kuiVlcTableNeedMoreBitsThread[iNcMapIdx] as usize {
+                POP_BUFFER(pBitsCache, 8);
+                iUsedBits += 8;
+                let more_bits_shift = 32 - *kpVlcTableMoreBitsCountList[iNcMapIdx].add(uiValue) as usize;
+                let iIndexValue = ((*pBitsCache).uiCache32Bit >> more_bits_shift) as usize;
+                let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1];
+                let entry_ptr = (table_ptr as *const [u8; 2]).add((uiValue << 8) | iIndexValue);
+                let iIndexVlc = (*entry_ptr)[0] as usize;
+                let uiCount = (*entry_ptr)[1] as u32;
+                POP_BUFFER(pBitsCache, uiCount);
+                iUsedBits += uiCount as i32;
+                *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
+                *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
+            } else {
+                let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0];
+                let entry_ptr = (table_ptr as *const [u8; 2]).add((iNcMapIdx << 8) | uiValue);
+                let iIndexVlc = (*entry_ptr)[0] as usize;
+                let uiCount = (*entry_ptr)[1] as u32;
+                POP_BUFFER(pBitsCache, uiCount);
+                iUsedBits += uiCount as i32;
+                *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
+                *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
+            }
+        } else {
+            let uiValue = ((*pBitsCache).uiCache32Bit >> 26) as usize;
+            POP_BUFFER(pBitsCache, 6);
+            iUsedBits += 6;
+            let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0];
+            let entry_ptr = (table_ptr as *const [u8; 2]).add((3 << 8) | uiValue);
+            let iIndexVlc = (*entry_ptr)[0] as usize;
+            *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
+            *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
+        }
+    }
+    iUsedBits
+}
+
+pub unsafe fn ParseCoeffToken(
+    uiTotalCoeff: &mut u8,
+    uiTrailingOnes: &mut u8,
+    pBitsCache: *mut SReadBitsCache,
+    pVlcTable: *mut SVlcTable,
+    bChromaDc: bool,
+    nC: i8,
+) -> i32 {
+    CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC)
+}
+
+pub unsafe fn CavlcGetLevelVal(
+    iLevel: &mut [i32; 16],
+    pBitsCache: *mut SReadBitsCache,
+    uiTotalCoeff: u8,
+    uiTrailingOnes: u8,
+) -> i32 {
+    let mut iUsedBits: i32 = 0;
+    for i in 0..(uiTrailingOnes as usize) {
+        iLevel[i] = 1 - (((*pBitsCache).uiCache32Bit >> (30 - i)) & 0x02) as i32;
+    }
+    POP_BUFFER(pBitsCache, uiTrailingOnes as u32);
+    iUsedBits += uiTrailingOnes as i32;
+
+    let mut iSuffixLength: i32 = if uiTotalCoeff > 10 && uiTrailingOnes < 3 { 1 } else { 0 };
+
+    for i in (uiTrailingOnes as usize)..(uiTotalCoeff as usize) {
+        if (*pBitsCache).uiRemainBits <= 16 {
+            SHIFT_BUFFER(pBitsCache);
+        }
+        let iPrefixBits = ((*pBitsCache).uiCache32Bit.leading_zeros() + 1) as i32;
+        if iPrefixBits > MAX_LEVEL_PREFIX + 1 {
+            return -1;
+        }
+        POP_BUFFER(pBitsCache, iPrefixBits as u32);
+        iUsedBits += iPrefixBits;
+        let iLevelPrefix = iPrefixBits - 1;
+        let mut iLevelCode = iLevelPrefix << iSuffixLength;
+        let mut iSuffixLengthSize = iSuffixLength;
+
+        if iLevelPrefix >= 14 {
+            if 14 == iLevelPrefix && 0 == iSuffixLength {
+                iSuffixLengthSize = 4;
+            } else if 15 == iLevelPrefix {
+                iSuffixLengthSize = 12;
+                if iSuffixLength == 0 {
+                    iLevelCode += 15;
+                }
+            }
+        }
+
+        if iSuffixLengthSize > 0 {
+            if (*pBitsCache).uiRemainBits <= iSuffixLengthSize as u8 {
+                SHIFT_BUFFER(pBitsCache);
+            }
+            iLevelCode += ((*pBitsCache).uiCache32Bit >> (32 - iSuffixLengthSize)) as i32;
+            POP_BUFFER(pBitsCache, iSuffixLengthSize as u32);
+            iUsedBits += iSuffixLengthSize;
+        }
+
+        if i == (uiTrailingOnes as usize) && uiTrailingOnes < 3 {
+            iLevelCode += 2;
+        }
+        let mut lev = (iLevelCode + 2) >> 1;
+        if (iLevelCode & 0x01) != 0 {
+            lev = -lev;
+        }
+        iLevel[i] = lev;
+
+        if iSuffixLength == 0 {
+            iSuffixLength = 1;
+        }
+        let iThreshold = 3 << (iSuffixLength - 1);
+        if (iLevel[i] > iThreshold || iLevel[i] < -iThreshold) && iSuffixLength < 6 {
+            iSuffixLength += 1;
+        }
+    }
+    iUsedBits
+}
+
+pub unsafe fn CavlcGetTotalZeros(
+    iZerosLeft: &mut i32,
+    pBitsCache: *mut SReadBitsCache,
+    uiTotalCoeff: u8,
+    pVlcTable: *mut SVlcTable,
+    bChromaDc: bool,
+) -> i32 {
+    let mut iUsedBits: i32 = 0;
+    let iTotalZeroVlcIdx = uiTotalCoeff as usize;
+    let uiTableType: usize = if bChromaDc { 1 } else { 0 };
+
+    let iCount = if bChromaDc {
+        g_kuiTotalZerosBitNumChromaMap[iTotalZeroVlcIdx - 1] as usize
+    } else {
+        g_kuiTotalZerosBitNumMap[iTotalZeroVlcIdx - 1] as usize
+    };
+
+    if (*pBitsCache).uiRemainBits < iCount as u8 {
+        SHIFT_BUFFER(pBitsCache);
+    }
+    let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - iCount)) as usize;
+    let table_ptr = (*pVlcTable).kpTotalZerosTable[uiTableType][iTotalZeroVlcIdx - 1];
+    let entry = *table_ptr.add(uiValue);
+    let consumed_bits = entry[1] as u32;
+    POP_BUFFER(pBitsCache, consumed_bits);
+    iUsedBits += consumed_bits as i32;
+    *iZerosLeft = entry[0] as i32;
+    iUsedBits
+}
+
+pub unsafe fn ParseTotalZeros(
+    iZerosLeft: &mut i32,
+    pBitsCache: *mut SReadBitsCache,
+    uiTotalCoeff: u8,
+    pVlcTable: *mut SVlcTable,
+    bChromaDc: bool,
+) -> i32 {
+    CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc)
+}
+
+pub unsafe fn CavlcGetRunBefore(
+    iRun: &mut [i32; 16],
+    pBitsCache: *mut SReadBitsCache,
+    uiTotalCoeff: u8,
+    pVlcTable: *mut SVlcTable,
+    mut iZerosLeft: i32,
+) -> i32 {
+    let mut iUsedBits: i32 = 0;
+    let total = uiTotalCoeff as usize;
+
+    for i in 0..(total - 1) {
+        if iZerosLeft > 0 {
+            let uiCount = g_kuiZeroLeftBitNumMap[iZerosLeft as usize] as u32;
+            if (*pBitsCache).uiRemainBits < uiCount as u8 {
+                SHIFT_BUFFER(pBitsCache);
+            }
+            let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - uiCount)) as usize;
+            if iZerosLeft < 7 {
+                let table_ptr = (*pVlcTable).kpZeroTable[(iZerosLeft - 1) as usize];
+                let entry = *table_ptr.add(uiValue);
+                let consumed = entry[1] as u32;
+                POP_BUFFER(pBitsCache, consumed);
+                iUsedBits += consumed as i32;
+                iRun[i] = entry[0] as i32;
+            } else {
+                POP_BUFFER(pBitsCache, uiCount);
+                iUsedBits += uiCount as i32;
+                let table_ptr = (*pVlcTable).kpZeroTable[6];
+                let entry = *table_ptr.add(uiValue);
+                if entry[0] < 7 {
+                    iRun[i] = entry[0] as i32;
+                } else {
+                    if (*pBitsCache).uiRemainBits < 16 {
+                        SHIFT_BUFFER(pBitsCache);
+                    }
+                    let iPrefixBits = ((*pBitsCache).uiCache32Bit.leading_zeros() + 1) as i32;
+                    iRun[i] = iPrefixBits + 6;
+                    if iRun[i] > iZerosLeft {
+                        return -1;
+                    }
+                    POP_BUFFER(pBitsCache, iPrefixBits as u32);
+                    iUsedBits += iPrefixBits;
+                }
+            }
+        } else {
+            for j in i..total {
+                iRun[j] = 0;
+            }
+            return iUsedBits;
+        }
+        iZerosLeft -= iRun[i];
+    }
+    iRun[total - 1] = iZerosLeft;
+    iUsedBits
+}
+
+pub unsafe fn ParseRunBefore(
+    iRun: &mut [i32; 16],
+    pBitsCache: *mut SReadBitsCache,
+    uiTotalCoeff: u8,
+    pVlcTable: *mut SVlcTable,
+    iZerosLeft: i32,
+) -> i32 {
+    CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft)
+}
+
+pub unsafe fn WelsResidualBlockCavlc(
+    pVlcTable: *mut SVlcTable,
+    pNonZeroCountCache: *mut u8,
+    pBs: *mut SBitStringAux,
+    iIndex: i32,
+    iMaxNumCoeff: i32,
+    kpZigzagTable: *const u8,
+    mut iResidualProperty: i32,
+    pTCoeff: *mut i16,
+    uiQp: u8,
+    pCtx: *mut SWelsDecoderContext,
+) -> i32 {
+    let mut iLevel = [0i32; 16];
+    let mut iRun = [0i32; 16];
+    let mut iMbResProperty: i32 = 0;
+    GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
+
+    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].is_null() {
+        (*(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].add(uiQp as usize)).as_ptr()
+    } else {
+        g_kuiDequantCoeff[uiQp as usize].as_ptr()
+    };
+
+    let mut uiTotalCoeff: u8 = 0;
+    let mut uiTrailingOnes: u8 = 0;
+    let mut iUsedBits: i32 = 0;
+    let iCurIdx = (*pBs).iIndex as usize;
+    let pBuf = ((*pBs).pStartBuf as *mut u8).add(iCurIdx >> 3);
+    let bChromaDc = CHROMA_DC == iResidualProperty;
+    let bChroma = bChromaDc || CHROMA_AC == iResidualProperty;
+
+    let uiCache32Bit = (((*pBuf.add(0) as u32) << 24)
+        | ((*pBuf.add(1) as u32) << 16)
+        | ((*pBuf.add(2) as u32) << 8)
+        | (*pBuf.add(3) as u32));
+
+    let mut sReadBitsCache = SReadBitsCache {
+        uiCache32Bit: uiCache32Bit << (iCurIdx & 0x07),
+        uiRemainBits: 32 - (iCurIdx & 0x07) as u8,
+        pBuf,
+    };
+
+    let iCurNonZeroCacheIdx = g_kuiCache48CountScan4Idx[iIndex as usize] as usize;
+    let nA = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 1) as i8;
+    let nB = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 8) as i8;
+    let nC = wels_non_zero_count_average(nA, nB);
+
+    iUsedBits += CavlcGetTrailingOnesAndTotalCoeff(
+        &mut uiTotalCoeff,
+        &mut uiTrailingOnes,
+        &mut sReadBitsCache,
+        pVlcTable,
+        bChromaDc,
+        nC,
+    );
+
+    if iResidualProperty != CHROMA_DC && iResidualProperty != I16_LUMA_DC {
+        *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
+    }
+    if 0 == uiTotalCoeff {
+        (*pBs).iIndex += iUsedBits as isize;
+        return ERR_NONE;
+    }
+    if uiTrailingOnes > 3 || uiTotalCoeff > 16 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_TOTAL_COEFF_OR_TRAILING_ONES);
+    }
+    let res = CavlcGetLevelVal(&mut iLevel, &mut sReadBitsCache, uiTotalCoeff, uiTrailingOnes);
+    if res == -1 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_LEVEL);
+    }
+    iUsedBits += res;
+
+    let mut iZerosLeft: i32 = 0;
+    if (uiTotalCoeff as i32) < iMaxNumCoeff {
+        iUsedBits += CavlcGetTotalZeros(&mut iZerosLeft, &mut sReadBitsCache, uiTotalCoeff, pVlcTable, bChromaDc);
+    }
+
+    if iZerosLeft < 0 || (iZerosLeft + uiTotalCoeff as i32) > iMaxNumCoeff {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_ZERO_LEFT);
+    }
+    let res = CavlcGetRunBefore(&mut iRun, &mut sReadBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft);
+    if res == -1 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_RUN_BEFORE);
+    }
+    iUsedBits += res;
+    (*pBs).iIndex += iUsedBits as isize;
+    let mut iCoeffNum: i32 = -1;
+
+    if iResidualProperty == CHROMA_DC {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            *pTCoeff.add(j) = iLevel[i] as i16;
+        }
+        WelsChromaDcIdct(pTCoeff);
+        if pCtx.is_null() || !(*pCtx).bUseScalingList {
+            for j in 0..4 {
+                let idx = *kpZigzagTable.add(j) as usize;
+                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * *kpDequantCoeff as i32) >> 1) as i16;
+            }
+        } else {
+            for j in 0..4 {
+                let idx = *kpZigzagTable.add(j) as usize;
+                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (*kpDequantCoeff as i64)) >> 5) as i16;
+            }
+        }
+    } else if iResidualProperty == I16_LUMA_DC {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            *pTCoeff.add(j) = iLevel[i] as i16;
+        }
+        WelsLumaDcDequantIdct(pTCoeff, uiQp, pCtx);
+    } else {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            if pCtx.is_null() || !(*pCtx).bUseScalingList {
+                *pTCoeff.add(j) = (iLevel[i] * (*kpDequantCoeff.add(j & 0x07)) as i32) as i16;
+            } else {
+                *pTCoeff.add(j) = ((iLevel[i] * (*kpDequantCoeff.add(j)) as i32 + 8) >> 4) as i16;
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn WelsParseMbCavlcResidual(
+    pVlcTable: *mut SVlcTable,
+    pNonZeroCountCache: *mut u8,
+    pBs: *mut SBitStringAux,
+    iIndex: i32,
+    iMaxNumCoeff: i32,
+    kpZigzagTable: *const u8,
+    iResidualProperty: i32,
+    pTCoeff: *mut i16,
+    uiQp: u8,
+    pCtx: *mut SWelsDecoderContext,
+) -> i32 {
+    WelsResidualBlockCavlc(
+        pVlcTable,
+        pNonZeroCountCache,
+        pBs,
+        iIndex,
+        iMaxNumCoeff,
+        kpZigzagTable,
+        iResidualProperty,
+        pTCoeff,
+        uiQp,
+        pCtx,
+    )
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -1207,5 +1616,47 @@ mod tests {
         assert_eq!(blk[16], 11);
         assert_eq!(blk[32], 7);
         assert_eq!(blk[48], 5);
+    }
+
+    #[test]
+    fn test_cavlc_zero_coeff_block_decoding() {
+        let mut buf = [0u8; 16];
+        let mut bs = SBitStringAux {
+            pStartBuf: buf.as_mut_ptr(),
+            pEndBuf: unsafe { buf.as_mut_ptr().add(16) },
+            iBits: 128,
+            iIndex: 0,
+            pCurBuf: buf.as_mut_ptr(),
+            uiCurBits: 0,
+            iLeftBits: 0,
+        };
+        let mut non_zero_cache = [0u8; 48];
+        let mut coeffs = [0i16; 16];
+        let zigzag = [0u8; 16];
+        let mock_coeff_table = [[0u8, 1u8]; 256]; // [0] = vlc_idx 0 (0 total coeff, 0 trailing ones), count = 1 bit
+        let mock_coeff_table_ptr = &mock_coeff_table as *const [[u8; 2]; 256];
+        let mut vlc_table = SVlcTable {
+            kpCoeffTokenVlcTable: [mock_coeff_table_ptr; 4],
+            kpChromaCoeffTokenVlcTable: mock_coeff_table_ptr as *const [u8; 2],
+            kpZeroTable: [std::ptr::null(); 7],
+            kpTotalZerosTable: [[std::ptr::null(); 15]; 2],
+        };
+
+        unsafe {
+            let res = WelsParseMbCavlcResidual(
+                &mut vlc_table,
+                non_zero_cache.as_mut_ptr(),
+                &mut bs,
+                0,
+                16,
+                zigzag.as_ptr(),
+                0,
+                coeffs.as_mut_ptr(),
+                26,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(res, ERR_NONE);
+            assert_eq!(non_zero_cache[g_kuiCache48CountScan4Idx[0] as usize], 0);
+        }
     }
 }
