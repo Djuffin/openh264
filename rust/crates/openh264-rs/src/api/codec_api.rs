@@ -1492,64 +1492,15 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             return DECODING_STATE::dsInitialOptExpected;
         }
 
-        if !pDstInfo.is_null() {
-            (*pDstInfo).iBufferStatus = 0;
-        }
-
         if !kpSrc.is_null() && kiSrcLen > 0 {
-            (*p_ctx).bEndOfStreamFlag = false;
-            let input_slice = std::slice::from_raw_parts(kpSrc, kiSrcLen as usize);
-            let units = crate::split_annexb_units(input_slice);
-
-            crate::decoder::decoder_core::WelsDecodeAccessUnitStart(p_ctx as *mut _);
-
-            for (_u_i, unit) in units.iter().enumerate() {
-                let mut payload_slice = *unit;
-                if payload_slice.starts_with(&[0, 0, 0, 1]) {
-                    payload_slice = &payload_slice[4..];
-                } else if payload_slice.starts_with(&[0, 0, 1]) {
-                    payload_slice = &payload_slice[3..];
-                }
-                if payload_slice.is_empty() {
-                    continue;
-                }
-
-                let payload_len = payload_slice.len();
-                let payload_ptr = payload_slice.as_ptr() as *mut u8;
-
-                let mut consumed_bytes = 0i32;
-                let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
-                let p_payload = crate::decoder::nalu::ParseNalHeader(
-                    p_ctx as *mut _,
-                    &mut nal_header,
-                    payload_ptr,
-                    payload_len as i32,
-                    payload_ptr,
-                    payload_len as i32,
-                    &mut consumed_bytes,
-                );
-
-                if !p_payload.is_null() {
-                    let nal_type = nal_header.eNalUnitType;
-                    if crate::decoder::nalu::IS_PARAM_SETS_NALS(nal_type) {
-                        crate::decoder::nalu::ParseNonVclNal(
-                            p_ctx as *mut _,
-                            p_payload,
-                            (payload_len as i32) - consumed_bytes,
-                            payload_ptr,
-                            payload_len as i32,
-                        );
-                    }
-                }
-            }
-
-            let p_au = (*p_ctx).pAccessUnitList;
-            if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
-                (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
-            }
-
-            crate::decoder::decoder_core::ConstructAccessUnit(p_ctx as *mut _, ppDst, pDstInfo as *mut _);
-            crate::decoder::decoder_core::DecodeFrameConstruction(p_ctx as *mut _, ppDst, pDstInfo as *mut _);
+            crate::decoder::decoder_core::WelsDecodeBs(
+                p_ctx as *mut _,
+                kpSrc,
+                kiSrcLen,
+                ppDst,
+                pDstInfo,
+                ptr::null_mut(),
+            );
         } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag {
             (*p_ctx).bEndOfStreamFlag = true;
             if !(*p_ctx).pDec.is_null() {

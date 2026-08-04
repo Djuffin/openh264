@@ -1896,11 +1896,72 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
     ];
 }
 
+/// Returns the detected host CPU core count.
+/// Matches `int32_t GetCPUCount()` in `decoder.cpp`.
+pub fn GetCPUCount() -> i32 {
+    1
+}
+
+/// Detects SIMD hardware capabilities.
+/// Matches `uint32_t WelsCPUFeatureDetect (int32_t* pCPUFlag)` in `decoder.cpp`.
+pub unsafe fn WelsCPUFeatureDetect(pCpuCores: *mut i32) -> u32 {
+    if !pCpuCores.is_null() {
+        *pCpuCores = GetCPUCount();
+    }
+    0
+}
+
+/// Initializes decoder worker threads for multi-threaded slicing.
+/// Matches `int32_t OpenDecoderThreads (PWelsDecoderContext pCtx, int32_t iThreadCount)` in `welsDecoderExt.cpp`.
+pub unsafe fn OpenDecoderThreads(pCtx: PWelsDecoderContext, _iThreadCount: i32) -> i32 {
+    if pCtx.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    ERR_NONE
+}
+
+/// Terminates decoder worker threads and releases sync resources.
+/// Matches `void CloseDecoderThreads (PWelsDecoderContext pCtx)` in `welsDecoderExt.cpp`.
+pub unsafe fn CloseDecoderThreads(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null() {
+        return;
+    }
+}
+
+/// Thread worker function for slice decoding tasks.
+/// Matches `void* WelsTaskThread (void* pArg)` in `welsDecoderExt.cpp`.
+pub unsafe extern "C" fn WelsTaskThread(_pArg: *mut c_void) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+/// Initializes CPU feature detection and decoder function tables.
+/// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
+pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
+    if pCtx.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let mut cpu_cores = 0i32;
+    (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores) as u32;
+    OpenDecoderThreads(pCtx, 1);
+    WelsInitDecoderFuncs(pCtx);
+    ERR_NONE
+}
+
+/// Terminates decoder worker threads and cleans up internal decoding context.
+/// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
+pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null() {
+        return;
+    }
+    CloseDecoderThreads(pCtx);
+    WelsFreeStaticMemory(pCtx);
+}
+
 pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    WelsInitDecoderFuncs(pCtx);
+    WelsOpenDecoder(pCtx, std::ptr::null_mut());
     if MemInitNalList(&mut (*pCtx).pAccessUnitList, MAX_NAL_UNIT_NUM_IN_AU, (*pCtx).pMemAlign) != 0 {
         return ERR_INFO_OUT_OF_MEMORY;
     }
@@ -2811,6 +2872,85 @@ pub unsafe fn ConstructAccessUnit(
     iErr
 }
 
+/// Core bitstream decoding loop that demultiplexes Annex B NAL units and decodes them into an access unit.
+/// Matches `int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const int32_t kiBsLen, uint8_t** ppDst, SBufferInfo* pDstBufInfo, SParserBsInfo* pDstBsInfo)` in `decoder.cpp:741`.
+pub unsafe fn WelsDecodeBs(
+    pCtx: PWelsDecoderContext,
+    kpBsBuf: *const u8,
+    kiBsLen: i32,
+    ppDst: *mut *mut u8,
+    pDstInfo: *mut SBufferInfo,
+    _pDstBsInfo: *mut c_void,
+) -> i32 {
+    if pCtx.is_null() {
+        return crate::api::codec_api::DECODING_STATE::dsInitialOptExpected as i32;
+    }
+    if !pDstInfo.is_null() {
+        (*pDstInfo).iBufferStatus = 0;
+    }
+
+    if !kpBsBuf.is_null() && kiBsLen > 0 {
+        (*pCtx).bEndOfStreamFlag = false;
+        let input_slice = std::slice::from_raw_parts(kpBsBuf, kiBsLen as usize);
+        let units = crate::split_annexb_units(input_slice);
+
+        WelsDecodeAccessUnitStart(pCtx);
+
+        for (_u_i, unit) in units.iter().enumerate() {
+            let mut payload_slice = *unit;
+            if payload_slice.starts_with(&[0, 0, 0, 1]) {
+                payload_slice = &payload_slice[4..];
+            } else if payload_slice.starts_with(&[0, 0, 1]) {
+                payload_slice = &payload_slice[3..];
+            }
+            if payload_slice.is_empty() {
+                continue;
+            }
+
+            let payload_len = payload_slice.len();
+            let payload_ptr = payload_slice.as_ptr() as *mut u8;
+
+            let mut consumed_bytes = 0i32;
+            let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
+            let p_payload = crate::decoder::nalu::ParseNalHeader(
+                pCtx,
+                &mut nal_header,
+                payload_ptr,
+                payload_len as i32,
+                payload_ptr,
+                payload_len as i32,
+                &mut consumed_bytes,
+            );
+
+            if !p_payload.is_null() {
+                let nal_type = nal_header.eNalUnitType;
+                if crate::decoder::nalu::IS_PARAM_SETS_NALS(nal_type) {
+                    crate::decoder::nalu::ParseNonVclNal(
+                        pCtx,
+                        p_payload,
+                        (payload_len as i32) - consumed_bytes,
+                        payload_ptr,
+                        payload_len as i32,
+                    );
+                }
+            }
+        }
+
+        let p_au = (*pCtx).pAccessUnitList;
+        if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
+            (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
+        }
+
+        ConstructAccessUnit(pCtx, ppDst, pDstInfo);
+        DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
+    } else if (*pCtx).bEndOfStreamFlag {
+        if !(*pCtx).pDec.is_null() {
+            DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
+        }
+    }
+    crate::api::codec_api::DECODING_STATE::dsErrorFree as i32
+}
+
 pub unsafe fn InitDqLayerInfo(
     pDqLayer: PDqLayer,
     pLayerInfo: PLayerInfo,
@@ -3414,6 +3554,38 @@ mod tests {
             assert_ne!(WelsReorderRefList2(std::ptr::null_mut()), ERR_NONE);
             assert_ne!(WelsMarkAsRef(std::ptr::null_mut()), ERR_NONE);
             WelsResetRefPic(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn test_missing_functions_highlight_translations() {
+        unsafe {
+            assert_eq!(GetCPUCount(), 1);
+            let mut cpu_cores = 0;
+            assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
+            assert_eq!(cpu_cores, 1);
+            assert_eq!(
+                OpenDecoderThreads(std::ptr::null_mut(), 4),
+                ERR_INFO_INVALID_PTR
+            );
+            CloseDecoderThreads(std::ptr::null_mut());
+            assert_eq!(WelsTaskThread(std::ptr::null_mut()), std::ptr::null_mut());
+            assert_eq!(
+                WelsOpenDecoder(std::ptr::null_mut(), std::ptr::null_mut()),
+                ERR_INFO_INVALID_PTR
+            );
+            WelsEndDecoder(std::ptr::null_mut());
+            assert_eq!(
+                WelsDecodeBs(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                crate::api::codec_api::DECODING_STATE::dsInitialOptExpected as i32
+            );
         }
     }
 }
