@@ -724,14 +724,12 @@ pub struct SWelsDecoderContext {
     pub pGetIChromaPredFunc: [PGetIntraPredFunc; 7],
     pub pIdctResAddPredFunc: PIdctResAddPredFunc,
     pub pIdctFourResAddPredFunc: PIdctFourResAddPredFunc,
+    pub sMcFunc: crate::decoder::error_concealment::SMcFunc,
     pub pGetI8x8LumaPredFunc: [PGetIntraPred8x8Func; 14],
     pub pIdctResAddPredFunc8x8: PIdctResAddPredFunc,
     pub sCopyFunc: SCopyFunc,
-    pub sExpandPicFunc: crate::decoder::decoder_core::SExpandPicFunc,
-    pub sMcFunc: crate::decoder::error_concealment::SMcFunc,
     pub sDeblockingFunc: SDeblockingFunc,
-
-
+    pub sExpandPicFunc: crate::decoder::decoder_core::SExpandPicFunc,
     pub sBlockFunc: SBlockFunc,
     pub iCurSeqIntervalTargetDependId: i32,
     pub iCurSeqIntervalMaxPicWidth: i32,
