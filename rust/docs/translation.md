@@ -17,224 +17,129 @@ The C++ OpenH264 codebase (`codec/`) is translated into modular Rust under `rust
 
 ---
 
-## 2. H.264 Video Decoder
+## 2. Literate Walkthrough Mapping: C++ Baseline Decoder to Rust (`openh264-rs`)
 
-### 2.1 Core Decoder Data Structures
+This section maps every C++ function described in the baseline decoding literate walkthrough ([`decoding_process.md`](decoding_process.md)) to its translated Rust counterpart in `rust/crates/openh264-rs/src/`.
 
-The following table maps each C++ decoder data structure from `overview.md` to its translated Rust counterpart:
+### 2.1 Missing Rust Functions Highlight
 
-| C++ Data Structure | C++ Header File | Rust Type / Struct Name | Rust File Location |
-| :--- | :--- | :--- | :--- |
-| `SWelsDecoderContext` | `decoder_context.h` | [`SWelsDecoderContext`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L651) | [`src/decoder/decoder_context.rs:651`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L651) |
-| `SPicture` | `picture.h` | [`SPicture`](rust/crates/openh264-rs/src/decoder/picture.rs#L112) / [`Picture`](rust/crates/openh264-rs/src/decoder/picture.rs#L40) | [`src/decoder/picture.rs:112`](rust/crates/openh264-rs/src/decoder/picture.rs#L112) |
-| `SDqLayer` | `decoder_core.h` | [`SDqLayer`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406) | [`src/decoder/decoder_core.rs:406`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406) |
-| `SSps` / `TagSps` | `parameter_sets.h` | [`SSps`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L181) / `TagSps` | [`src/decoder/parameter_sets.rs:181`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L181) |
-| `SPps` / `TagPps` | `parameter_sets.h` | [`SPps`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L317) / `TagPps` | [`src/decoder/parameter_sets.rs:317`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L317) |
-| `SSubsetSps` | `parameter_sets.h` | [`SSubsetSps`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L303) | [`src/decoder/parameter_sets.rs:303`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L303) |
-| `SBitStringAux` | `bit_stream.h` | [`BitStringAux`](rust/crates/openh264-rs/src/decoder/bit_stream.rs#L44) / `SBitStringAux` | [`src/decoder/bit_stream.rs:44`](rust/crates/openh264-rs/src/decoder/bit_stream.rs#L44) |
-| `SAccessUnit` | `asymmetric_mul.h` | [`SAccessUnit`](rust/crates/openh264-rs/src/decoder/nalu.rs#L42) | [`src/decoder/nalu.rs:42`](rust/crates/openh264-rs/src/decoder/nalu.rs#L42) |
-| `SWelsCabacDecEngine` | `cabac_decoder.h` | [`SWelsCabacDecEngine`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L40) | [`src/decoder/cabac_decoder.rs:40`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L40) |
-| `SWelsCabacCtx` | `decoder_context.h` | [`SWelsCabacCtx`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L62) | [`src/decoder/cabac_decoder.rs:62`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L62) |
-| `SFmo` / `PMbaMap` | `fmo.h` | [`SFmo`](rust/crates/openh264-rs/src/decoder/fmo.rs#L45) | [`src/decoder/fmo.rs:45`](rust/crates/openh264-rs/src/decoder/fmo.rs#L45) |
-| `SRefList` | `manage_dec_ref.h` | [`SRefList`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L280) | [`src/decoder/decoder_context.rs:280`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L280) |
-| `SDeblockingFunc` | `deblocking_common.h` | [`SDeblockingFunc`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L291) | [`src/decoder/decoder_context.rs:291`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L291) |
+The following C++ functions from `decoding_process.md` do not have a standalone 1-to-1 Rust function counterpart in `openh264-rs`:
 
----
-
-### 2.2 Decoder Core Algorithms
-
-The following table maps each C++ decoder algorithm from `overview.md` to its translated Rust function implementation:
-
-| Algorithmic Subsystem | Primary C++ File | Rust Function / Implementation | Rust File Location |
-| :--- | :--- | :--- | :--- |
-| **Annex B Start Code & NAL Demuxing** | `au_parser.cpp` | [`split_annexb_units`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85), [`strip_emulation_prevention_bytes`](rust/crates/openh264-rs/src/decoder/nalu.rs#L140) | [`src/decoder/nalu.rs:85`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85) |
-| **Exp-Golomb Parsing (`ue`, `se`, `te`)** | `dec_golomb.h` | [`bs_get_ue`](rust/crates/openh264-rs/src/decoder/dec_golomb.rs#L42), [`bs_get_se`](rust/crates/openh264-rs/src/decoder/dec_golomb.rs#L80), [`bs_get_te`](rust/crates/openh264-rs/src/decoder/dec_golomb.rs#L105) | [`src/decoder/dec_golomb.rs:42`](rust/crates/openh264-rs/src/decoder/dec_golomb.rs#L42) |
-| **CAVLC Entropy Decoding** | `parse_mb_syn_cavlc.cpp` | [`WelsParseMbCavlcResidual`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L450), `ParseCoeffToken`, `ParseTotalZeros`, `ParseRunBefore` | [`src/decoder/parse_mb_syn_cavlc.rs:450`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L450) |
-| **CABAC Entropy Decoding** | `parse_mb_syn_cabac.cpp` | [`WelsDecodeCabacBit`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L120), `WelsDecodeCabacFinalBit` | [`src/decoder/cabac_decoder.rs:120`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs#L120) |
-| **Intra Prediction (4x4, 16x16, Chroma 8x8)** | `get_intra_predictor.cpp` | [`WelsI4x4LumaPredV_c`](rust/crates/openh264-rs/src/decoder/get_intra_predictor.rs#L40), `WelsI4x4LumaPredH_c`, `WelsI4x4LumaPredDc_c`, `WelsI16x16LumaPredPlane_c`, `WelsIChromaPredDc_c` | [`src/decoder/get_intra_predictor.rs:40`](rust/crates/openh264-rs/src/decoder/get_intra_predictor.rs#L40) |
-| **Motion Vector Prediction (MVP)** | `mv_pred.cpp` | [`PredMv`](rust/crates/openh264-rs/src/decoder/mv_pred.rs#L80), `PredMv4x4`, `PredMv16x8`, `PredMv8x16` | [`src/decoder/mv_pred.rs:80`](rust/crates/openh264-rs/src/decoder/mv_pred.rs#L80) |
-| **Motion Compensation (6-tap & Sub-pel)** | `mc.cpp` | [`McHorizLuma_c`](rust/crates/openh264-rs/src/common/mc.rs#L40), [`McVertLuma_c`](rust/crates/openh264-rs/src/common/mc.rs#L80), [`InitMcFunc`](rust/crates/openh264-rs/src/common/mc.rs#L772) | [`src/common/mc.rs:40`](rust/crates/openh264-rs/src/common/mc.rs#L40) |
-| **IQ & IDCT Integer Transforms** | `decode_mb_aux.cpp` | [`IdctResAddPred_c`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs#L40), `IdctResAddPred8x8_c`, `IdctFourResAddPred_c`, `WelsIHadamard4x44x4_c` | [`src/decoder/decode_mb_aux.rs:40`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs#L40) |
-| **Macroblock Reconstruction Loop** | `rec_mb.cpp` | [`WelsReconstructMb`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L920) | [`src/decoder/decode_slice.rs:920`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L920) |
-| **In-Loop Deblocking Filter** | `deblocking.cpp` | [`DeblockingInit`](rust/crates/openh264-rs/src/common/deblocking_common.rs#L528), `DeblockLumaLt4V_c`, `DeblockLumaEq4V_c`, `DeblockLumaLt4H_c`, `DeblockLumaEq4H_c` | [`src/common/deblocking_common.rs:528`](rust/crates/openh264-rs/src/common/deblocking_common.rs#L528) |
-| **DPB Reference Management & MMCO** | `manage_dec_ref.cpp` | [`WelsMarkAsRef`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L60), [`WelsSlidingWindow`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L120), `WelsMmcoProcess` | [`src/decoder/manage_dec_ref.rs:60`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L60) |
-| **Error Concealment** | `error_concealment.cpp` | [`DoErrorConcealment`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L45), `WelsMarkPicError` | [`src/decoder/error_concealment.rs:45`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L45) |
-| **Flexible Macroblock Ordering (FMO)** | `fmo.cpp` | [`FmoInit`](rust/crates/openh264-rs/src/decoder/fmo.rs#L40), `FmoGenerateMap`, `FmoGetNextMbOfSliceGroup` | [`src/decoder/fmo.rs:40`](rust/crates/openh264-rs/src/decoder/fmo.rs#L40) |
+1. ⚠️ **`WelsDecodeBs`** (C++ [`decoder.cpp:741`](codec/decoder/core/src/decoder.cpp#L741)):
+   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
+   - **Explanation**: In `openh264-rs`, the Annex B start-code scanner and NAL unit demuxing loop are implemented directly inline within `decoder_decode_frame2_c` ([`src/api/codec_api.rs:1506-1570`](rust/crates/openh264-rs/src/api/codec_api.rs#L1506-L1570)) using `crate::split_annexb_units` ([`src/decoder/nalu.rs:85`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85)), rather than being encapsulated in a separate `WelsDecodeBs` function.
+2. ⚠️ **`WelsOpenDecoder`** (C++ [`decoder.cpp:52`](codec/decoder/core/src/decoder.cpp#L52)):
+   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
+   - **Explanation**: In `openh264-rs`, function table initialization and CPU feature selection are folded into `WelsInitDecoderFuncs` ([`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826)) and invoked during static memory initialization.
+3. ⚠️ **`WelsEndDecoder`** (C++ [`decoder.cpp:711`](codec/decoder/core/src/decoder.cpp#L711)):
+   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
+   - **Explanation**: Decoder teardown is executed inline within `decoder_uninit_c` ([`src/api/codec_api.rs:1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1425)) via `WelsFreeStaticMemory` and `drop()`.
+4. ⚠️ **`CWelsDecoder::OpenDecoderThreads` / `CloseDecoderThreads` / `WelsTaskThread`** (C++ [`welsDecoderExt.cpp`](codec/decoder/plus/src/welsDecoderExt.cpp)):
+   - **Status**: **MISSING IN RUST**
+   - **Explanation**: The Rust decoder runs in single-threaded synchronous mode; multi-threaded slice worker threads and task management pools are not translated.
+5. ⚠️ **`WelsCPUFeatureDetect` / `GetCPUCount`** (C++ [`decoder.cpp`](codec/decoder/core/src/decoder.cpp)):
+   - **Status**: **MISSING IN RUST**
+   - **Explanation**: Hardware SIMD feature detection is omitted; `openh264-rs` uses scalar C-translation routines (`uiCpuFlag = 0`).
 
 ---
 
-## 3. H.264 Video Encoder
+### 2.2 Complete Chapter-by-Chapter C++ to Rust Walkthrough Table
 
-### 3.1 Core Encoder Data Structures
+#### Chapter 1: Decoder Instantiation & Initialization
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `WelsCreateDecoder(ISVCDecoder**)` | `pub unsafe extern "C" fn WelsCreateDecoder` | [`src/api/codec_api.rs:1668`](rust/crates/openh264-rs/src/api/codec_api.rs#L1668) |
+| `CWelsDecoder::CWelsDecoder()` | `CWelsDecoderImpl` struct initialization | [`src/api/codec_api.rs:1684`](rust/crates/openh264-rs/src/api/codec_api.rs#L1684) |
+| `CWelsDecoder::Initialize(SDecodingParam*)` | `decoder_initialize_c` | [`src/api/codec_api.rs:1403`](rust/crates/openh264-rs/src/api/codec_api.rs#L1403) |
+| `CWelsDecoder::InitDecoder(SDecodingParam*)` | `decoder_initialize_c` | [`src/api/codec_api.rs:1403`](rust/crates/openh264-rs/src/api/codec_api.rs#L1403) |
+| `CWelsDecoder::InitDecoderCtx(...)` / `WelsInitDecoder` | `WelsInitStaticMemory` + `WelsInitDecoderFuncs` | [`src/decoder/decoder_core.rs:1826, 1899`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826) |
+| `WelsOpenDecoder(PWelsDecoderContext, ...)` | ⚠️ **MISSING AS SEPARATE FUNCTION** (Folded into `WelsInitDecoderFuncs`) | [`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826) |
+| `WelsInitStaticMemory(PWelsDecoderContext)` | `pub unsafe fn WelsInitStaticMemory` | [`src/decoder/decoder_core.rs:1899`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1899) |
+| `InitDecFuncs` / `InitPredFunc` | `WelsInitDecoderFuncs`, `DeblockingInit`, `InitMcFunc` | [`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826), [`src/common/deblocking_common.rs:528`](rust/crates/openh264-rs/src/common/deblocking_common.rs#L528), [`src/common/mc.rs:772`](rust/crates/openh264-rs/src/common/mc.rs#L772) |
+| `WelsBlockFuncInit(TagBlockFunc*, int32_t)` | `pub unsafe fn WelsBlockFuncInit` | [`src/decoder/decode_slice.rs:900`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L900) |
 
-The following table maps each C++ encoder data structure from `overview.md` to its translated Rust counterpart:
+#### Chapter 2: Bitstream Ingestion & NAL Unit Demuxing
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `CWelsDecoder::DecodeFrame2(...)` | `decoder_decode_frame2_c` | [`src/api/codec_api.rs:1478`](rust/crates/openh264-rs/src/api/codec_api.rs#L1478) |
+| `WelsDecodeBs(PWelsDecoderContext, ...)` | ⚠️ **MISSING AS SEPARATE FUNCTION** (Inline Annex B demux loop inside `decoder_decode_frame2_c`) | [`src/api/codec_api.rs:1506-1570`](rust/crates/openh264-rs/src/api/codec_api.rs#L1506-L1570), [`src/decoder/nalu.rs:85`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85) |
+| `ParseNalHeader(...)` | `pub unsafe fn ParseNalHeader` | [`src/decoder/nalu.rs:260`](rust/crates/openh264-rs/src/decoder/nalu.rs#L260) |
+| `ParseNonVclNal(...)` | `pub unsafe fn ParseNonVclNal` | [`src/decoder/nalu.rs:955`](rust/crates/openh264-rs/src/decoder/nalu.rs#L955) |
+| `ParseSps(...)` | `pub unsafe fn ParseSps` | [`src/decoder/nalu.rs:1265`](rust/crates/openh264-rs/src/decoder/nalu.rs#L1265) |
+| `ParsePps(...)` | `pub unsafe fn ParsePps` | [`src/decoder/nalu.rs:1542`](rust/crates/openh264-rs/src/decoder/nalu.rs#L1542) |
+| `DecInitBits` / `InitReadBits` | `pub unsafe fn DecInitBits`, `pub unsafe fn InitReadBits` | [`src/decoder/bit_stream.rs:102, 129`](rust/crates/openh264-rs/src/decoder/bit_stream.rs#L102) |
+| `BsGetBits`, `BsGetUe`, `BsGetSe` | `BsGetBits`, `BsGetUe`, `BsGetSe` | [`src/decoder/dec_golomb.rs:157, 233, 275`](rust/crates/openh264-rs/src/decoder/dec_golomb.rs#L157) |
 
-| C++ Data Structure | C++ Header File | Rust Type / Struct Name | Rust File Location |
-| :--- | :--- | :--- | :--- |
-| `sWelsEncCtx` | `encoder_context.h` | [`sWelsEncCtx`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L150) | [`src/encoder/encoder_context.rs:150`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L150) |
-| `SWelsSvcCodingParam` | `param_svc.h` | [`SWelsSvcCodingParam`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L220) | [`src/encoder/param_svc.rs:220`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L220) |
-| `SEncParamExt` | `param_svc.h` | [`SEncParamExt`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L120) | [`src/encoder/param_svc.rs:120`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L120) |
-| `SEncParamBase` | `param_svc.h` | [`SEncParamBase`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L60) | [`src/encoder/param_svc.rs:60`](rust/crates/openh264-rs/src/encoder/param_svc.rs#L60) |
-| `SWelsME` | `svc_motion_estimate.h` | [`SWelsME`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L45) | [`src/encoder/svc_motion_estimate.rs:45`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L45) |
-| `SSliceCtx` | `slice_multi_threading.h` | [`SSliceCtx`](rust/crates/openh264-rs/src/encoder/slice_multi_threading.rs#L40) | [`src/encoder/slice_multi_threading.rs:40`](rust/crates/openh264-rs/src/encoder/slice_multi_threading.rs#L40) |
-| `SSlice` | `slice.h` | [`SSlice`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L80) | [`src/encoder/encoder_context.rs:80`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L80) |
-| `SVAAFrameInfo` | `wels_preprocess.h` | [`SVAAFrameInfo`](rust/crates/openh264-rs/src/encoder/wels_preprocess.rs#L50) | [`src/encoder/wels_preprocess.rs:50`](rust/crates/openh264-rs/src/encoder/wels_preprocess.rs#L50) |
-| `SWelsSvcRc` | `rc.h` | [`SWelsSvcRc`](rust/crates/openh264-rs/src/encoder/rc.rs#L60) | [`src/encoder/rc.rs:60`](rust/crates/openh264-rs/src/encoder/rc.rs#L60) |
-| `SRcGom` | `rc.h` | [`SRcGom`](rust/crates/openh264-rs/src/encoder/rc.rs#L120) | [`src/encoder/rc.rs:120`](rust/crates/openh264-rs/src/encoder/rc.rs#L120) |
-| `SLTRState` | `encoder_context.h` | [`SLTRState`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L110) | [`src/encoder/encoder_context.rs:110`](rust/crates/openh264-rs/src/encoder/encoder_context.rs#L110) |
-| `SWelsCabacCtx` | `set_mb_syn_cabac.h` | [`SWelsCabacCtx`](rust/crates/openh264-rs/src/encoder/set_mb_syn_cabac.rs#L40) | [`src/encoder/set_mb_syn_cabac.rs:40`](rust/crates/openh264-rs/src/encoder/set_mb_syn_cabac.rs#L40) |
-| `CWelsTaskManage` | `wels_task_management.h` | [`CWelsTaskManage`](rust/crates/openh264-rs/src/encoder/wels_task_management.rs#L50) | [`src/encoder/wels_task_management.rs:50`](rust/crates/openh264-rs/src/encoder/wels_task_management.rs#L50) |
-| `WelsThreadPool` | `WelsThreadPool.h` | [`WelsThreadPool`](rust/crates/openh264-rs/src/common/wels_thread_pool.rs#L40) | [`src/common/wels_thread_pool.rs:40`](rust/crates/openh264-rs/src/common/wels_thread_pool.rs#L40) |
+#### Chapter 3: Slice Header Parsing & DPB Reference Management
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `ParseSliceHeaderSyntaxs(...)` | `pub unsafe fn ParseSliceHeaderSyntaxs` | [`src/decoder/decoder_core.rs:1997`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1997) |
+| `FillDefaultSliceHeaderExt(...)` | `pub unsafe fn FillDefaultSliceHeaderExt` | [`src/decoder/decoder_core.rs:1625`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1625) |
+| `ParseRefPicListReordering(...)` | `pub unsafe fn ParseRefPicListReordering` | [`src/decoder/decoder_core.rs:1452`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1452) |
+| `ParseDecRefPicMarking(...)` | `pub unsafe fn ParseDecRefPicMarking` | [`src/decoder/decoder_core.rs:1521`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1521) |
+| `DecodeCurrentAccessUnit(...)` | `pub unsafe fn DecodeCurrentAccessUnit` | [`src/decoder/decoder_core.rs:2940`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2940) |
+| `WelsDecodeAccessUnitStart(PWelsDecoderContext)` | `pub unsafe fn WelsDecodeAccessUnitStart` | [`src/decoder/decoder_core.rs:2569`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2569) |
+| `AllocPicBuffOnNewSeqBegin(PWelsDecoderContext)` | `pub unsafe fn AllocPicBuffOnNewSeqBegin` | [`src/decoder/decoder_core.rs:2744`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2744) |
+| `PrefetchPic(TagPicBuff*)` | `pub unsafe fn PrefetchPic` | [`src/decoder/pic_queue.rs:429`](rust/crates/openh264-rs/src/decoder/pic_queue.rs#L429) |
+| `InitRefPicList(...)` / `WelsInitRefList(...)` | `pub unsafe fn WelsInitRefList` | [`src/decoder/manage_dec_ref.rs:966`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L966) |
+| `WelsReorderRefList(PWelsDecoderContext)` | `pub unsafe fn WelsReorderRefList` | [`src/decoder/manage_dec_ref.rs:1140`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L1140) |
+| `WelsDqLayerDecodeStart(...)` | `pub unsafe fn WelsDqLayerDecodeStart` | [`src/decoder/decoder_core.rs:2869`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2869) |
 
----
+#### Chapter 4: Macroblock Entropy Decoding (CAVLC)
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `WelsDecodeSlice(...)` | `pub unsafe fn WelsDecodeSlice` | [`src/decoder/decode_slice.rs:2705`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L2705) |
+| `WelsDecodeMbCavlcISlice(...)` | `WelsDecodeMbCavlcISlice`, `WelsActualDecodeMbCavlcISlice` | [`src/decoder/decode_slice.rs:1378, 1382`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1378) |
+| `ParseIntra4x4Mode(...)` | `pub unsafe fn ParseIntra4x4Mode` | [`src/decoder/decode_slice.rs:1435`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1435) |
+| `ParseIntra16x16Mode(...)` | `pub unsafe fn ParseIntra16x16Mode` | [`src/decoder/decode_slice.rs:1688`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1688) |
+| `WelsDecodeMbCavlcPSlice(...)` | `WelsDecodeMbCavlcPSlice`, `WelsActualDecodeMbCavlcPSlice` | [`src/decoder/decode_slice.rs:1397, 1401`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1397) |
+| `PredPSkipMvFromNeighbor(...)` | `pub unsafe fn PredPSkipMvFromNeighbor` | [`src/decoder/mv_pred.rs:564`](rust/crates/openh264-rs/src/decoder/mv_pred.rs#L564) |
+| `WelsResidualBlockCavlc(...)` | `pub unsafe fn WelsResidualBlockCavlc` | [`src/decoder/parse_mb_syn_cavlc.rs:1617`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1617) |
+| `WelsCalcDeqCoeffScalingList(PWelsDecoderContext)` | `pub unsafe fn WelsCalcDeqCoeffScalingList` | [`src/decoder/decode_slice.rs:669`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L669) |
 
-### 3.2 Encoder Core Algorithms
+#### Chapter 5: Macroblock Reconstruction
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `WelsTargetMbConstruction(PWelsDecoderContext)` | `pub unsafe fn WelsTargetMbConstruction` | [`src/decoder/decode_slice.rs:1254`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1254) |
+| `WelsFillRecNeededMbInfo(...)` | `pub unsafe fn WelsFillRecNeededMbInfo` | [`src/decoder/decode_slice.rs:1015`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015) |
+| `WelsMbIntraPredictionConstruction(...)` | `pub unsafe fn WelsMbIntraPredictionConstruction` | [`src/decoder/decode_slice.rs:1225`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1225) |
+| `RecI16x16Mb(...)` | `pub unsafe fn RecI16x16Mb` | [`src/decoder/decode_slice.rs:1190`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1190) |
+| `RecI4x4Mb(...)` / `RecI4x4Luma()` | `pub unsafe fn RecI4x4Mb` | [`src/decoder/decode_slice.rs:1117`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1117) |
+| `RecChroma(...)` | `pub unsafe fn RecChroma` | [`src/decoder/decode_slice.rs:1042`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1042) |
+| `WelsLumaDcDequantIdct` / `WelsChromaDcIdct` | `WelsLumaDcDequantIdct`, `WelsChromaDcIdct` | [`src/decoder/decode_slice.rs:689, 738`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L689), [`src/decoder/parse_mb_syn_cavlc.rs:1240, 1314`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1240) |
+| `WelsMbInterPrediction` / `WelsMbInterConstruction` | `pub unsafe fn WelsMbInterPrediction`, `pub unsafe fn WelsMbInterConstruction` | [`src/decoder/decode_slice.rs:976, 1008`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L976) |
+| `PredMv(...)` | `pub unsafe fn PredMv` | [`src/decoder/mv_pred.rs:729`](rust/crates/openh264-rs/src/decoder/mv_pred.rs#L729) |
+| `UpdateP16x16MotionInfo`, `UpdateP16x8MotionInfo`, `UpdateP8x16MotionInfo` | `UpdateP16x16MotionInfo`, `UpdateP16x8MotionInfo`, `UpdateP8x16MotionInfo` | [`src/decoder/mv_pred.rs:1348, 1439, 1500`](rust/crates/openh264-rs/src/decoder/mv_pred.rs#L1348) |
+| `WelsMbInterSampleConstruction(...)` / `WelsDec::GetInterPred` | `pub unsafe fn WelsMbInterSampleConstruction` | [`src/decoder/decode_slice.rs:913`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L913) |
+| `mc_luma` / `mc_chroma` / `mb_copy` | `McHorizLuma_c`, `McVertLuma_c`, `McChroma_c`, `McCopy_c` | [`src/common/mc.rs:40-250`](rust/crates/openh264-rs/src/common/mc.rs#L40-L250) |
+| `IdctResAddPred_c(...)` | `pub unsafe extern "C" fn IdctResAddPred_c` | [`src/decoder/decode_mb_aux.rs:133`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs#L133) |
+| `WelsTargetSliceConstruction(PWelsDecoderContext)` | `pub unsafe fn WelsTargetSliceConstruction` | [`src/decoder/decode_slice.rs:1290`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1290) |
 
-The following table maps each C++ encoder algorithm from `overview.md` to its translated Rust function implementation:
+#### Chapter 6: Deblocking Filter (In-Loop Filter)
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `WelsDeblockingFilterSlice(...)` | `pub unsafe fn WelsDeblockingFilterSlice` | [`src/decoder/deblocking.rs:2315`](rust/crates/openh264-rs/src/decoder/deblocking.rs#L2315) |
+| `WelsDeblockingMb(...)` / `DeblockingInterMb(...)` | `WelsDeblockingMb`, `DeblockingInterMb` | [`src/decoder/deblocking.rs:1805, 2212`](rust/crates/openh264-rs/src/decoder/deblocking.rs#L1805) |
+| `DeblockingBsMarginalMBAvcbase(...)` / `DeblockingBSInsideMBNormal(...)` | `DeblockingBsMarginalMBAvcbase`, `DeblockingBSInsideMBNormal` | [`src/decoder/deblocking.rs:716, 997`](rust/crates/openh264-rs/src/decoder/deblocking.rs#L716) |
+| `FilteringEdgeLumaHV(...)` / `FilteringEdgeChromaHV(...)` | `FilteringEdgeLumaHV`, `FilteringEdgeChromaHV` | [`src/decoder/deblocking.rs:1946, 2055`](rust/crates/openh264-rs/src/decoder/deblocking.rs#L1946) |
+| Low-level edge routines (`FilteringEdgeLumaIntraV`, `FilteringEdgeLumaV`, etc.) | `FilteringEdgeLumaIntraV`, `FilteringEdgeLumaV`, `FilteringEdgeChromaV`, etc. | [`src/decoder/deblocking.rs:1040-1800`](rust/crates/openh264-rs/src/decoder/deblocking.rs#L1040-L1800) |
 
-| Algorithmic Subsystem | Primary C++ File | Rust Function / Implementation | Rust File Location |
-| :--- | :--- | :--- | :--- |
-| **VAA Pre-processing & Scene Change** | `wels_preprocess.cpp` | [`WelsPreprocess`](rust/crates/openh264-rs/src/encoder/wels_preprocess.rs#L80), `WelsInitVaa`, `WelsVaaCalculation`, `BilinearDownsampling` | [`src/encoder/wels_preprocess.rs:80`](rust/crates/openh264-rs/src/encoder/wels_preprocess.rs#L80) |
-| **Rate Control Engine (RC)** | `ratectl.cpp` | [`WelsRcInitModule`](rust/crates/openh264-rs/src/encoder/rc.rs#L100), `WelsRcCalculateGopBits`, `WelsRcUpdateFrameComplexity`, `WelsRcCalculateTargetQp` | [`src/encoder/rc.rs:100`](rust/crates/openh264-rs/src/encoder/rc.rs#L100) |
-| **Motion Estimation (ME)** | `svc_motion_estimate.cpp` | [`WelsMotionEstimate`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L80), `WelsMeDiamondSearch`, `WelsMeCrossSearch`, `WelsMeSubPelSearch` | [`src/encoder/svc_motion_estimate.rs:80`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L80) |
-| **Mode Decision (MD) & RDO** | `svc_mode_decision.cpp` | [`WelsMdDecision`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L100), `WelsMdI16x16`, `WelsMdI4x4`, `WelsMdInter16x16`, `WelsMdCalculateSatd` | [`src/encoder/svc_mode_decision.rs:100`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L100) |
-| **Forward DCT & Dead-Zone Quantization** | `encode_mb_aux.cpp` | [`WelsFdct4x4_c`](rust/crates/openh264-rs/src/encoder/encode_mb_aux.rs#L40), [`WelsQuant4x4_c`](rust/crates/openh264-rs/src/encoder/encode_mb_aux.rs#L80), `WelsHadamardQuant2x2_c` | [`src/encoder/encode_mb_aux.rs:40`](rust/crates/openh264-rs/src/encoder/encode_mb_aux.rs#L40) |
-| **Macroblock & Slice Encoding Loop** | `svc_encode_slice.cpp` | [`WelsCodeSlice`](rust/crates/openh264-rs/src/encoder/svc_encode_slice.cpp#L60), `WelsCodeOneMb` | [`src/encoder/svc_encode_slice.cpp:60`](rust/crates/openh264-rs/src/encoder/svc_encode_slice.cpp#L60) |
-| **Deblocking Filter (Encoder Reconstruction)** | `deblocking.cpp` | [`WelsDeblockingFilterFrame`](rust/crates/openh264-rs/src/encoder/deblocking.rs#L50), `WelsDeblockingFilterMb` | [`src/encoder/deblocking.rs:50`](rust/crates/openh264-rs/src/encoder/deblocking.rs#L50) |
-| **Entropy Encoding (CAVLC / CABAC)** | `vlc_encoder.cpp` / `set_mb_syn_cabac.cpp` | [`WelsWriteMbSyntaxCavlc`](rust/crates/openh264-rs/src/encoder/vlc_encoder.rs#L80), `WelsWriteMbSyntaxCabac` | [`src/encoder/vlc_encoder.rs:80`](rust/crates/openh264-rs/src/encoder/vlc_encoder.rs#L80) |
-| **NAL Encapsulation & RBSP Emulation** | `nal_encap.cpp` | [`WelsEncodeNal`](rust/crates/openh264-rs/src/encoder/nal_encap.rs#L50), `WelsAddEmulationPreventionBytes` | [`src/encoder/nal_encap.rs:50`](rust/crates/openh264-rs/src/encoder/nal_encap.rs#L50) |
-| **Multi-threaded Slicing & Task Dispatch** | `slice_multi_threading.cpp` | [`WelsInitSliceThreadCtx`](rust/crates/openh264-rs/src/encoder/slice_multi_threading.rs#L60), `WelsDynamicSliceSlicing`, `WelsTaskManageCreate` | [`src/encoder/slice_multi_threading.rs:60`](rust/crates/openh264-rs/src/encoder/slice_multi_threading.rs#L60) |
-| **LTR Feedback & Scalability Management** | `ref_list_mgr_svc.cpp` | [`WelsInitRefList`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L60), `WelsMarkLtrFrame`, `WelsUpdateLtrStatus` | [`src/encoder/ref_list_mgr_svc.rs:60`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L60) |
+#### Chapter 7: Frame Finalization, DPB Management & Output Export
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `WelsDecodeAccessUnitEnd(PWelsDecoderContext)` | `pub unsafe fn WelsDecodeAccessUnitEnd` | [`src/decoder/decoder_core.rs:2585`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2585) |
+| `WelsMarkAsRef(PWelsDecoderContext, PPicture)` | `pub unsafe fn WelsMarkAsRef` | [`src/decoder/manage_dec_ref.rs:1415`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L1415) |
+| `SlidingWindow(PWelsDecoderContext, TagRefPic*)` | `pub unsafe fn SlidingWindow` | [`src/decoder/manage_dec_ref.rs:578`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs#L578) |
+| `CheckAndFinishLastPic(...)` | `pub unsafe fn CheckAndFinishLastPic` | [`src/decoder/decoder_core.rs:3193`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L3193) |
+| `DecodeFrameConstruction(...)` | `pub unsafe fn DecodeFrameConstruction` | [`src/decoder/decoder_core.rs:1048`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1048) |
+| `UpdateDecoderStatisticsForActiveParaset(...)` / `UpdateDecStat(...)` | `UpdateDecoderStatisticsForActiveParaset`, `UpdateDecStat` | [`src/decoder/decoder_core.rs:830, 1981`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L830) |
 
----
-
-## 4. Audit Findings & Detailed Translation Discrepancies
-
-An exhaustive multi-agent line-by-line audit comparing the original C++ codebase (`codec/decoder/`, `codec/encoder/`, `codec/common/`) against the Rust translation (`rust/crates/openh264-rs/src/`) uncovered the following critical memory layout shifts, type mismatches, missing algorithmic implementations, and constant discrepancies.
-
-### 4.1 Decoder Translation Issues
-
-#### Bug 4.1.1: `SWelsDecoderContext` Memory Layout Offset Shift (4,096 Bytes) — [RESOLVED]
-* **C++ Declaration**: [`decoder_context.h:337`](codec/decoder/core/inc/decoder_context.h#L337)
-  ```cpp
-  SFmo sFmoList[MAX_PPS_COUNT]; // Array of 256 SFmo structs (256 * 24 bytes = 6,144 bytes)
-  ```
-* **Rust Translation**: [`decoder_context.rs:672`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L672)
-* **Impact**: Under `#[repr(C)]`, Rust previously allocated 2,048 bytes instead of 6,144 bytes for `sFmoList`, introducing a **4,096-byte memory layout shift** for every struct field declared after `sFmoList` in `SWelsDecoderContext`.
-* **Fix**: Changed `pub sFmoList: [*mut c_void; MAX_PPS_COUNT]` to `pub sFmoList: [SFmo; MAX_PPS_COUNT]` and `pub pFmo` to `PFmo` in [`decoder_context.rs:672-673`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L672-L673). Alignment verified via unit tests.
-
-#### Bug 4.1.2: `SWelsDecoderContext` Function Pointer Table Field Reordering — [RESOLVED]
-* **C++ Declaration**: [`decoder_context.h:454-463`](codec/decoder/core/inc/decoder_context.h#L454-L463)
-  ```cpp
-  SMcFunc sMcFunc;
-  PGetI8x8LumaPredFunc pGetI8x8LumaPredFunc[NO_OPTION_OF_I8x8];
-  PIdctResAddPredFunc pIdctResAddPredFunc8x8;
-  SCopyFunc sCopyFunc;
-  SDeblockingFunc sDeblockingFunc;
-  SExpandPicFunc sExpandPicFunc;
-  ```
-* **Rust Translation**: [`decoder_context.rs:726-731`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L726-L731)
-* **Impact**: Field reordering previously caused C++ FFI calls through decoder context function pointers to dispatch to wrong function signatures.
-* **Fix**: Reordered function pointer fields in [`decoder_context.rs:726-731`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L726-L731) (`sMcFunc` before `pGetI8x8LumaPredFunc`, `sDeblockingFunc` before `sExpandPicFunc`) to match C++ field declaration order. All unit tests pass.
-
-#### Bug 4.1.3: `SDqLayer` (`TagDqLayer`) Missing Fields and Type Mismatches — [RESOLVED]
-* **C++ Declaration**: [`dec_frame.h:61-132`](codec/decoder/core/inc/dec_frame.h#L61-L132)
-* **Rust Translation**: [`decoder_core.rs:406-462`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406-L462)
-* **Impact**: `SDqLayer` previously omitted 9 fields (`pFmo`, `uiSpsId`, `pRef`, `iLumaStride`, `iChromaStride`, `pPred`, `iColocMv`, `iColocRefIndex`, `iColocIntra`) and used `u8` instead of `u32` for `uiDisableInterLayerDeblockingFilterIdc`.
-* **Fix**: Re-added all 9 missing fields, aligned field declaration order, and updated `uiDisableInterLayerDeblockingFilterIdc: u32` in [`decoder_core.rs:406-462`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406-L462) to match C++ `TagDqLayer`. Unit tests pass.
-
-#### Bug 4.1.4: `SPps` (`TagPps`) Duplicate Field Bug — [RESOLVED]
-* **C++ Declaration**: [`parameter_sets.h:199`](codec/decoder/core/inc/parameter_sets.h#L199)
-  ```cpp
-  bool bConstainedIntraPredFlag; // Single bool field
-  ```
-* **Rust Translation**: [`parameter_sets.rs:347`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347)
-* **Impact**: `TagPps` previously contained both `bConstrainedIntraPredFlag` and `bConstainedIntraPredFlag`, inserting an unintended extra byte into `SPps` struct layout under `#[repr(C)]` and breaking intra-pred parsing checks in `decode_slice.rs`.
-* **Fix**: Removed duplicate `bConstrainedIntraPredFlag` from `TagPps` and `TagPps::default()` in [`parameter_sets.rs:347`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347) and updated `nalu.rs` PPS parsing. Unit tests pass.
-
-#### Bug 4.1.5: Duplicate Conflicting `SRefPic` Struct Definition — [RESOLVED]
-* **C++ Declaration**: [`decoder_context.h:149-157`](codec/decoder/core/inc/decoder_context.h#L149-L157)
-* **Rust Modules**: [`decoder_context.rs:401-409`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L401-L409) & [`decoder_core.rs:549`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L549)
-* **Impact**: `decoder_core.rs` previously redefined a conflicting local `SRefPic` with array size 16 instead of `MAX_DPB_COUNT` (17) and `uiRefCount: [u32; LIST_A]` instead of `u8`.
-* **Fix**: Removed local duplicate `SRefPic` definitions in `decoder_core.rs` and `mv_pred.rs`, replaced with `pub use crate::decoder::decoder_context::{SRefPic, PRefPic};`, and added `Debug` derive to `SRefPic`. Unit tests pass.
-
-#### Bug 4.1.6: NAL Demuxing Error Code Constant Mismatches — [RESOLVED]
-* **C++ Definition**: [`codec_app_def.h:84-86`](codec/api/wels/codec_app_def.h#L84-L86)
-  ```cpp
-  dsRefLost = 0x02,
-  dsBitstreamError = 0x04,
-  dsNoParamSets = 0x10,
-  ```
-* **Rust Translation**: [`nalu.rs:123-125`](rust/crates/openh264-rs/src/decoder/nalu.rs#L123-L125) & [`decoder_context.rs:89-92`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L89-L92)
-* **Impact**: Bitmask operations evaluating decoder error status previously reported incorrect error flags back to API callers due to inconsistent internal constant definitions across modules.
-* **Fix**: Corrected error bitmask constants across `decoder_context.rs`, `nalu.rs`, `decode_slice.rs`, `error_concealment.rs`, `parse_mb_syn_cabac.rs`, and `parse_mb_syn_cavlc.rs` to match C++ `DECODING_STATE` values (`dsBitstreamError = 0x04`, `dsNoParamSets = 0x10`, `dsOutOfMemory = 0x4000`, `dsDataErrorConcealed = 0x20`). Unit tests pass.
-
-#### Bug 4.1.7: Missing CAVLC Residual Decoding Functions — [RESOLVED]
-* **C++ Implementation**: [`parse_mb_syn_cavlc.cpp`](codec/decoder/core/src/parse_mb_syn_cavlc.cpp)
-* **Rust Translation**: [`parse_mb_syn_cavlc.rs:1152-1490`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1152-L1490)
-* **Impact**: CAVLC residual parsing and block decoding functions were previously missing from `parse_mb_syn_cavlc.rs`.
-* **Fix**: Translated CAVLC block residual decoding (`WelsResidualBlockCavlc`, `WelsParseMbCavlcResidual`), coefficient token parsing (`CavlcGetTrailingOnesAndTotalCoeff`, `ParseCoeffToken`), level decoding (`CavlcGetLevelVal`), total zeros parsing (`CavlcGetTotalZeros`, `ParseTotalZeros`), and run-before decoding (`CavlcGetRunBefore`, `ParseRunBefore`) into [`parse_mb_syn_cavlc.rs:1152-1490`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1152-L1490). Added unit tests. All tests pass.
-
-#### Bug 4.1.8: Unimplemented Intra Prediction Reconstruction Function — [RESOLVED]
-* **C++ Implementation**: [`rec_mb.cpp:50-213`](codec/decoder/core/src/rec_mb.cpp#L50-L213) & [`decode_slice.cpp:288-302`](codec/decoder/core/src/decode_slice.cpp#L288-L302)
-* **Rust Translation**: [`decode_slice.rs:1015-1225`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015-L1225)
-* **Impact**: Intra frame decoding previously bypassed spatial intra prediction, inverse transform, and residual reconstruction loops when executing in pure Rust mode.
-* **Fix**: Implemented `WelsMbIntraPredictionConstruction`, `WelsFillRecNeededMbInfo`, `RecI16x16Mb`, `RecI8x8Mb`, `RecI8x8Luma`, `RecI4x4Mb`, `RecI4x4Luma`, `RecI4x4Chroma`, and `RecChroma` in [`decode_slice.rs:1015-1225`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015-L1225). Added unit tests. All tests pass.
-
----
-
-### 4.2 Encoder Translation Issues
-
-#### Bug 4.2.1: `SWelsSvcRc` Field Type Mismatch (`bEnableGomQp`) causing Memory Misalignment — [RESOLVED]
-* **C++ Declaration**: [`rc.h:193`](codec/encoder/core/inc/rc.h#L193)
-  ```cpp
-  int32_t bEnableGomQp; // 4 bytes (int32_t)
-  ```
-* **Rust Translation**: [`rc.rs:292`](rust/crates/openh264-rs/src/encoder/rc.rs#L292)
-* **Impact**: In C++, `bEnableGomQp` is declared as `int32_t` (4 bytes). In Rust `SWelsSvcRc`, `bEnableGomQp` was previously declared as `bool` (1 byte under `#[repr(C)]`). This 3-byte layout contraction shifted all 38+ subsequent fields in `SWelsSvcRc` (`iAverageFrameQp`, `iMinFrameQp`, `iMaxFrameQp`, `iNumberMbFrame`, `iNumberMbGom`, `iGopSize`, `iSkipFrameNum`, `iQStep`, `iBufferFullnessSkip`, etc.) by 3 bytes when accessed via C-FFI or rate control routines.
-* **Fix**: Changed `pub bEnableGomQp: bool` in [`rc.rs:292`](rust/crates/openh264-rs/src/encoder/rc.rs#L292) to `pub bEnableGomQp: i32` and updated rate control assignments/checks in `rc.rs`. All tests pass.
-
----
-
-## 5. Audit of Unimplemented Functions and Stubs in Rust Codebase
-
-A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimplemented functions, fallback stubs, and intentional no-op callbacks in the Rust translation:
-
-### 5.1 CABAC Slice & Macroblock Decoding Loops `[RESOLVED]`
-* **C++ Implementation**: [`decode_slice.cpp:646-1485`](codec/decoder/core/src/decode_slice.cpp#L646-L1485)
-* **Rust Translation**: [`decode_slice.rs:1435-2690`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1435-L2690) and [`parse_mb_syn_cavlc.rs:804-1010`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L804-L1010)
-* **Functions**:
-  - `WelsDecodeMbCabacISliceBaseMode0`, `WelsDecodeMbCabacISlice`
-  - `WelsDecodeMbCabacPSliceBaseMode0`, `WelsDecodeMbCabacPSlice`
-  - `WelsDecodeMbCabacBSliceBaseMode0`, `WelsDecodeMbCabacBSlice`
-  - `ParseIntra4x4Mode`, `ParseIntra8x8Mode`, `ParseIntra16x16Mode`, `WelsDecodeMbCabacIntraModeHelper`, `WelsDecodeMbCabacResidualHelper`
-  - `WelsFillCacheInterCabac`, `WelsFillDirectCacheCabac`
-* **Fix**: Replaced the empty `ERR_NONE` stubs with full translations of CABAC I/P/B macroblock slice decoding loops, Intra NxN mode parsing, residual block reconstruction helpers, and Inter/Direct cache filling functions. All syntax checks and 136/136 unit tests pass.
-
-### 5.2 Decoder Statistics & Colocated Temporal Scaling Helpers `[RESOLVED]`
-* **C++ Implementation**: [`decoder.cpp:1209-1257`](codec/decoder/core/src/decoder.cpp#L1209-L1257) and [`decode_slice.cpp:3041-3066`](codec/decoder/core/src/decode_slice.cpp#L3041-L3066)
-* **Rust Translation**: [`decoder_core.rs:738-900`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738-L900), [`error_concealment.rs:924`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L924), and [`decode_slice.rs:631`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L631)
-* **Functions**:
-  - `UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:738`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738))
-  - `UpdateDecStat(pCtx: PWelsDecoderContext, bFlag: bool)` ([`decoder_core.rs:741`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L741))
-  - `ExpandReferencingPicture(pData, iWidth, iHeight, iStride, pfExpandLuma, pfExpandChroma)` ([`decoder_core.rs:784`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L784))
-  - `ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L797))
-* **Fix**: Translated C++ `UpdateDecStatNoFreezingInfo`, `UpdateDecStatFreezingInfo`, `ResetDecStatNums`, and `UpdateDecStat` into `decoder_core.rs`. Connected empty inline helper stubs (`ExpandReferencingPicture`, `GetI4LumaIChromaAddrTable`, and `ComputeColocatedTemporalScaling`) to their functional implementations in `error_concealment.rs`, `decode_mb_aux.rs`, and `decode_slice.rs`. Added unit tests verifying statistics reset and freeze behavior. All 139/139 unit tests pass.
-
-### 5.3 Placeholder Inline Stubs with Real Implementations in Other Modules `[RESOLVED]`
-* **Location**: [`decoder_core.rs:845-940`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L845-L940) and [`error_concealment.rs:948`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L948)
-* **Functions**:
-  - `WelsTargetSliceConstruction`, `WelsDecodeSlice`, `WelsDecodeAndConstructSlice` ([`decode_slice.rs`](rust/crates/openh264-rs/src/decoder/decode_slice.rs))
-  - `WelsInitRefList`, `WelsInitBSliceRefList`, `WelsReorderRefList`, `WelsReorderRefList2`, `WelsMarkAsRef`, `WelsResetRefPic` ([`manage_dec_ref.rs`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs))
-  - `GetI4LumaIChromaAddrTable` ([`decode_mb_aux.rs`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs))
-* **Fix**: Replaced all empty fallback stubs returning `ERR_NONE` or `()` in `decoder_core.rs` and `error_concealment.rs` with delegation wrappers that invoke their real functional implementations in `decode_slice.rs`, `manage_dec_ref.rs`, and `decode_mb_aux.rs`. Added `test_inline_delegation_stubs_null` unit test in `decoder_core.rs` to verify safe null-pointer handling across all delegation wrappers. All 140/140 unit tests pass.
-
-### 5.4 Intentional No-Op Callbacks (Architectural Design) `[RESOLVED]`
-* **C++ Implementation**: [`ratectl.cpp:1020-1319`](codec/encoder/core/src/ratectl.cpp#L1020-L1319), [`ref_list_mgr_svc.cpp:996`](codec/encoder/core/src/ref_list_mgr_svc.cpp#L996), [`svc_mode_decision.cpp:689`](codec/encoder/core/src/svc_mode_decision.cpp#L689), and [`svc_motion_estimate.cpp:1059`](codec/encoder/core/src/svc_motion_estimate.cpp#L1059)
-* **Rust Translation**: Rate control and mode decision modules in `encoder/`
-* **Functions**:
-  - `WelsRcPostFrameSkippedUpdate`, `WelsRcPictureInfoUpdateDisable`, `WelsRcMbInfoUpdateDisable` ([`rc.rs`](rust/crates/openh264-rs/src/encoder/rc.rs))
-  - `DoNothing` ([`ref_list_mgr_svc.rs:1761`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L1761)), `SetScrollingMvToMdNull` ([`svc_mode_decision.rs:1802`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L1802)), `UpdateFMESwitchNull` ([`svc_motion_estimate.rs:1732`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L1732))
-* **Fix**: Audited and documented these 6 callbacks as intentional architectural no-op functions matching C++ design (used when rate control is disabled or certain mode decisions/reference list management features are inactive). Added explicit unit tests (`test_rc_intentional_noop_callbacks`, `test_ref_list_mgr_noop_callback`, `test_svc_mode_decision_noop_callback`, `test_fme_noop_callback`) in `rc.rs`, `ref_list_mgr_svc.rs`, `svc_mode_decision.rs`, and `svc_motion_estimate.rs` to verify safe invocation and function-pointer table compatibility. All 143/143 unit tests pass.
+#### Chapter 8: Teardown & Destruction
+| C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
+| :--- | :--- | :--- |
+| `CWelsDecoder::Uninitialize()` / `UninitDecoder()` | `decoder_uninitialize_c`, `decoder_uninit_c` | [`src/api/codec_api.rs:1419, 1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1419) |
+| `CWelsDecoder::CloseDecoderThreads()` / `WelsEndDecoder(...)` | ⚠️ **MISSING AS SEPARATE FUNCTIONS** (Teardown inlined in `decoder_uninit_c` without thread worker shutdown) | [`src/api/codec_api.rs:1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1425) |
+| `CWelsDecoder::UninitDecoderCtx(...)` / `WelsFreeStaticMemory(...)` | `pub unsafe fn WelsFreeStaticMemory` | [`src/decoder/decoder_core.rs:1924`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1924) |
+| `WelsDestroyDecoder(ISVCDecoder*)` | `pub unsafe extern "C" fn WelsDestroyDecoder` | [`src/api/codec_api.rs:1718`](rust/crates/openh264-rs/src/api/codec_api.rs#L1718) |
 
 
