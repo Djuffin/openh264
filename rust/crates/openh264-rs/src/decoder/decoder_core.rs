@@ -734,11 +734,114 @@ pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
     1
 }
 
-#[inline]
-pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {}
+unsafe fn ResetDecStatNums(pDecStat: *mut SDecoderStatistics) {
+    if pDecStat.is_null() {
+        return;
+    }
+    let width = (*pDecStat).uiWidth;
+    let height = (*pDecStat).uiHeight;
+    let avg_luma_qp = (*pDecStat).iAvgLumaQp;
+    let profile = (*pDecStat).uiProfile;
+    let level = (*pDecStat).uiLevel;
+    *pDecStat = SDecoderStatistics::default();
+    (*pDecStat).uiWidth = width;
+    (*pDecStat).uiHeight = height;
+    (*pDecStat).iAvgLumaQp = avg_luma_qp;
+    (*pDecStat).uiProfile = profile;
+    (*pDecStat).uiLevel = level;
+}
+
+unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStatistics) {
+    if pDecStat.is_null() {
+        return;
+    }
+    if idr_flag {
+        (*pDecStat).uiFreezingIDRNum += 1;
+    } else {
+        (*pDecStat).uiFreezingNonIDRNum += 1;
+    }
+}
 
 #[inline]
-pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, bFlag: bool) {}
+pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null()
+        || (*pCtx).pCurDqLayer.is_null()
+        || (*pCtx).pDec.is_null()
+        || (*pCtx).pDecoderStatistics.is_null()
+    {
+        return;
+    }
+    let pCurDq = (*pCtx).pCurDqLayer;
+    let pPic = (*pCtx).pDec;
+    let pDecStat = (*pCtx).pDecoderStatistics;
+
+    if (*pDecStat).iAvgLumaQp == -1 {
+        (*pDecStat).iAvgLumaQp = 0;
+    }
+
+    let mut iTotalQp = 0i64;
+    let kiMbNum = ((*pCurDq).iMbWidth * (*pCurDq).iMbHeight) as usize;
+    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+        for iMb in 0..kiMbNum {
+            iTotalQp += *(*pCurDq).pLumaQp.add(iMb) as i64;
+        }
+        if kiMbNum > 0 {
+            iTotalQp /= kiMbNum as i64;
+        }
+    } else {
+        let mut iCorrectMbNum = 0i64;
+        for iMb in 0..kiMbNum {
+            let correct = if !(*pCurDq).pMbCorrectlyDecodedFlag.is_null()
+                && *(*pCurDq).pMbCorrectlyDecodedFlag.add(iMb)
+            {
+                1i64
+            } else {
+                0i64
+            };
+            iCorrectMbNum += correct;
+            iTotalQp += (*(*pCurDq).pLumaQp.add(iMb) as i64) * correct;
+        }
+        if iCorrectMbNum == 0 {
+            iTotalQp = (*pDecStat).iAvgLumaQp as i64;
+        } else {
+            iTotalQp /= iCorrectMbNum;
+        }
+    }
+
+    if (*pDecStat).uiDecodedFrameCount == u32::MAX {
+        ResetDecStatNums(pDecStat);
+        (*pDecStat).iAvgLumaQp = iTotalQp as i32;
+    } else {
+        let count = (*pDecStat).uiDecodedFrameCount as i64;
+        (*pDecStat).iAvgLumaQp =
+            (((*pDecStat).iAvgLumaQp as i64 * count + iTotalQp) / (count + 1)) as i32;
+    }
+
+    if (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag {
+        if (*pPic).bIsComplete {
+            (*pDecStat).uiIDRCorrectNum += 1;
+        } else if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+            (*pDecStat).uiEcIDRNum += 1;
+        }
+    }
+}
+
+#[inline]
+pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, bOutput: bool) {
+    if pCtx.is_null() {
+        return;
+    }
+    if (*pCtx).bFreezeOutput {
+        if !(*pCtx).pCurDqLayer.is_null() {
+            UpdateDecStatFreezingInfo(
+                (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag,
+                (*pCtx).pDecoderStatistics,
+            );
+        }
+    } else if bOutput {
+        UpdateDecStatNoFreezingInfo(pCtx);
+    }
+}
 
 #[inline]
 pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext) -> i32 {
@@ -788,13 +891,26 @@ pub unsafe fn ExpandReferencingPicture(
     iStride: [i32; 4],
     pfExpandLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
     pfExpandChroma: [Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>; 2],
-) {}
+) {
+    crate::decoder::error_concealment::ExpandReferencingPicture(
+        pData,
+        iWidth,
+        iHeight,
+        iStride,
+        std::mem::transmute(pfExpandLuma),
+        std::mem::transmute(pfExpandChroma),
+    );
+}
 
 #[inline]
-pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, iStrideUV: i32) {}
+pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, iStrideUV: i32) {
+    crate::decoder::decode_mb_aux::GetI4LumaIChromaAddrTable(pBlockOffset, iStrideY, iStrideUV);
+}
 
 #[inline]
-pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {}
+pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {
+    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(pCtx);
+}
 
 pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
     if pCtx.is_null() {
@@ -3233,4 +3349,51 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
         }
     }
     bAllRefComplete
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_dec_stat_null() {
+        unsafe {
+            UpdateDecStatNoFreezingInfo(std::ptr::null_mut());
+            UpdateDecStat(std::ptr::null_mut(), true);
+        }
+    }
+
+    #[test]
+    fn test_update_dec_stat_freezing() {
+        unsafe {
+            let mut stat = SDecoderStatistics::default();
+            UpdateDecStatFreezingInfo(true, &mut stat);
+            assert_eq!(stat.uiFreezingIDRNum, 1);
+            assert_eq!(stat.uiFreezingNonIDRNum, 0);
+            UpdateDecStatFreezingInfo(false, &mut stat);
+            assert_eq!(stat.uiFreezingNonIDRNum, 1);
+        }
+    }
+
+    #[test]
+    fn test_reset_dec_stat_nums() {
+        unsafe {
+            let mut stat = SDecoderStatistics::default();
+            stat.uiWidth = 1920;
+            stat.uiHeight = 1080;
+            stat.iAvgLumaQp = 26;
+            stat.uiProfile = 66;
+            stat.uiLevel = 31;
+            stat.uiDecodedFrameCount = 100;
+            stat.uiIDRCorrectNum = 5;
+            ResetDecStatNums(&mut stat);
+            assert_eq!(stat.uiWidth, 1920);
+            assert_eq!(stat.uiHeight, 1080);
+            assert_eq!(stat.iAvgLumaQp, 26);
+            assert_eq!(stat.uiProfile, 66);
+            assert_eq!(stat.uiLevel, 31);
+            assert_eq!(stat.uiDecodedFrameCount, 0);
+            assert_eq!(stat.uiIDRCorrectNum, 0);
+        }
+    }
 }

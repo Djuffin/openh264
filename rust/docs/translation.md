@@ -211,13 +211,15 @@ A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimpleme
   - `WelsFillCacheInterCabac`, `WelsFillDirectCacheCabac`
 * **Fix**: Replaced the empty `ERR_NONE` stubs with full translations of CABAC I/P/B macroblock slice decoding loops, Intra NxN mode parsing, residual block reconstruction helpers, and Inter/Direct cache filling functions. All syntax checks and 136/136 unit tests pass.
 
-### 5.2 Decoder Statistics & Colocated Temporal Scaling Helpers (Unimplemented Stubs)
-* **Location**: [`decoder_core.rs:738-797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738-L797)
+### 5.2 Decoder Statistics & Colocated Temporal Scaling Helpers `[RESOLVED]`
+* **C++ Implementation**: [`decoder.cpp:1209-1257`](codec/decoder/core/src/decoder.cpp#L1209-L1257) and [`decode_slice.cpp:3041-3066`](codec/decoder/core/src/decode_slice.cpp#L3041-L3066)
+* **Rust Translation**: [`decoder_core.rs:738-900`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738-L900), [`error_concealment.rs:924`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L924), and [`decode_slice.rs:631`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L631)
 * **Functions**:
-  - `UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:738`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738)) — Frame statistics tracking without freezing info (empty stub).
-  - `UpdateDecStat(pCtx: PWelsDecoderContext, bFlag: bool)` ([`decoder_core.rs:741`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L741)) — General decoder error/frame statistics updating (empty stub).
-  - `ExpandReferencingPicture(pData, iWidth, iHeight, iStride, pfExpandLuma, pfExpandChroma)` ([`decoder_core.rs:784-791`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L784-L791)) — Border expansion helper stub in `decoder_core.rs` (a functional version is implemented in [`error_concealment.rs:924`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L924)).
-  - `ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L797)) — Temporal scaling factor computation for colocated motion vectors in B-slice direct mode (empty stub).
+  - `UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:738`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738))
+  - `UpdateDecStat(pCtx: PWelsDecoderContext, bFlag: bool)` ([`decoder_core.rs:741`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L741))
+  - `ExpandReferencingPicture(pData, iWidth, iHeight, iStride, pfExpandLuma, pfExpandChroma)` ([`decoder_core.rs:784`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L784))
+  - `ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L797))
+* **Fix**: Translated C++ `UpdateDecStatNoFreezingInfo`, `UpdateDecStatFreezingInfo`, `ResetDecStatNums`, and `UpdateDecStat` into `decoder_core.rs`. Connected empty inline helper stubs (`ExpandReferencingPicture`, `GetI4LumaIChromaAddrTable`, and `ComputeColocatedTemporalScaling`) to their functional implementations in `error_concealment.rs`, `decode_mb_aux.rs`, and `decode_slice.rs`. Added unit tests verifying statistics reset and freeze behavior. All 139/139 unit tests pass.
 
 ### 5.3 Placeholder Inline Stubs with Real Implementations in Other Modules
 * **Location**: [`decoder_core.rs:744-821`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L744-L821) and [`error_concealment.rs:948`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L948)
