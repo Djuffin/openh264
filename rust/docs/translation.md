@@ -221,12 +221,13 @@ A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimpleme
   - `ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L797))
 * **Fix**: Translated C++ `UpdateDecStatNoFreezingInfo`, `UpdateDecStatFreezingInfo`, `ResetDecStatNums`, and `UpdateDecStat` into `decoder_core.rs`. Connected empty inline helper stubs (`ExpandReferencingPicture`, `GetI4LumaIChromaAddrTable`, and `ComputeColocatedTemporalScaling`) to their functional implementations in `error_concealment.rs`, `decode_mb_aux.rs`, and `decode_slice.rs`. Added unit tests verifying statistics reset and freeze behavior. All 139/139 unit tests pass.
 
-### 5.3 Placeholder Inline Stubs with Real Implementations in Other Modules
-* **Location**: [`decoder_core.rs:744-821`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L744-L821) and [`error_concealment.rs:948`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L948)
+### 5.3 Placeholder Inline Stubs with Real Implementations in Other Modules `[RESOLVED]`
+* **Location**: [`decoder_core.rs:845-940`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L845-L940) and [`error_concealment.rs:948`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L948)
 * **Functions**:
-  - `WelsTargetSliceConstruction`, `WelsDecodeSlice`, `WelsDecodeAndConstructSlice` — Inline fallback stubs in `decoder_core.rs` (functional implementations exist in [`decode_slice.rs`](rust/crates/openh264-rs/src/decoder/decode_slice.rs)).
-  - `WelsInitRefList`, `WelsInitBSliceRefList`, `WelsReorderRefList`, `WelsReorderRefList2`, `WelsMarkAsRef`, `WelsResetRefPic` — Inline fallback stubs in `decoder_core.rs` and `error_concealment.rs` (functional DPB list management implementations exist in [`manage_dec_ref.rs`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs)).
-  - `GetI4LumaIChromaAddrTable` — Inline fallback stub in `decoder_core.rs` (functional implementation exists in [`decode_mb_aux.rs`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs)).
+  - `WelsTargetSliceConstruction`, `WelsDecodeSlice`, `WelsDecodeAndConstructSlice` ([`decode_slice.rs`](rust/crates/openh264-rs/src/decoder/decode_slice.rs))
+  - `WelsInitRefList`, `WelsInitBSliceRefList`, `WelsReorderRefList`, `WelsReorderRefList2`, `WelsMarkAsRef`, `WelsResetRefPic` ([`manage_dec_ref.rs`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs))
+  - `GetI4LumaIChromaAddrTable` ([`decode_mb_aux.rs`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs))
+* **Fix**: Replaced all empty fallback stubs returning `ERR_NONE` or `()` in `decoder_core.rs` and `error_concealment.rs` with delegation wrappers that invoke their real functional implementations in `decode_slice.rs`, `manage_dec_ref.rs`, and `decode_mb_aux.rs`. Added `test_inline_delegation_stubs_null` unit test in `decoder_core.rs` to verify safe null-pointer handling across all delegation wrappers. All 140/140 unit tests pass.
 
 ### 5.4 Intentional No-Op Callbacks (Architectural Design)
 * **Location**: Rate control and mode decision modules in `encoder/`
