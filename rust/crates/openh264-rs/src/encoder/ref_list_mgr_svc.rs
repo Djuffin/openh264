@@ -1,4 +1,3 @@
-use crate::*;
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -12,6 +11,8 @@ use crate::*;
 //!
 //! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
 //! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
+
+use crate::*;
 
 
 // ============================================================================
@@ -1758,6 +1759,8 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     );
 }
 
+/// Intentional no-op reference list manager callback.
+/// Matches `void DoNothing (sWelsEncCtx* pointer)` in `ref_list_mgr_svc.cpp:996`.
 pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
 
 // ============================================================================
@@ -1897,4 +1900,16 @@ pub unsafe fn CreateReferenceStrategy(
     };
     strategy.Init(pCtx);
     Box::into_raw(strategy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ref_list_mgr_noop_callback() {
+        unsafe {
+            DoNothing(std::ptr::null_mut());
+        }
+    }
 }
