@@ -137,13 +137,11 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: Field reordering previously caused C++ FFI calls through decoder context function pointers to dispatch to wrong function signatures.
 * **Fix**: Reordered function pointer fields in [`decoder_context.rs:726-731`](rust/crates/openh264-rs/src/decoder/decoder_context.rs#L726-L731) (`sMcFunc` before `pGetI8x8LumaPredFunc`, `sDeblockingFunc` before `sExpandPicFunc`) to match C++ field declaration order. All unit tests pass.
 
-#### Bug 4.1.3: `SDqLayer` (`TagDqLayer`) Missing Fields and Type Mismatches
+#### Bug 4.1.3: `SDqLayer` (`TagDqLayer`) Missing Fields and Type Mismatches — [RESOLVED]
 * **C++ Declaration**: [`dec_frame.h:61-132`](codec/decoder/core/inc/dec_frame.h#L61-L132)
 * **Rust Translation**: [`decoder_core.rs:406-462`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406-L462)
-* **Impact**:
-  1. **Missing 9 Fields**: Rust omits `pFmo` (`PFmo`), `uiSpsId` (`uint32_t`), `pRef` (`PPicture`), `iLumaStride` (`int32_t`), `iChromaStride` (`int32_t`), `pPred[3]` (`uint8_t* [3]`), `iColocMv[2][16][2]`, `iColocRefIndex[2][16]`, `iColocIntra[16]`.
-  2. **Type Mismatch**: `uiDisableInterLayerDeblockingFilterIdc` is `uint32_t` (4 bytes) in C++ but `u8` (1 byte) in Rust.
-* **Fix**: Re-add all 9 missing fields and restore `uiDisableInterLayerDeblockingFilterIdc: u32` in `SDqLayer`.
+* **Impact**: `SDqLayer` previously omitted 9 fields (`pFmo`, `uiSpsId`, `pRef`, `iLumaStride`, `iChromaStride`, `pPred`, `iColocMv`, `iColocRefIndex`, `iColocIntra`) and used `u8` instead of `u32` for `uiDisableInterLayerDeblockingFilterIdc`.
+* **Fix**: Re-added all 9 missing fields, aligned field declaration order, and updated `uiDisableInterLayerDeblockingFilterIdc: u32` in [`decoder_core.rs:406-462`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406-L462) to match C++ `TagDqLayer`. Unit tests pass.
 
 #### Bug 4.1.4: `SPps` (`TagPps`) Duplicate Field Bug
 * **C++ Declaration**: [`parameter_sets.h:199`](codec/decoder/core/inc/parameter_sets.h#L199)
