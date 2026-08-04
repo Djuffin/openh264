@@ -185,39 +185,12 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 
 ### 4.2 Encoder Translation Issues
 
-#### Bug 4.2.1: `SWelsSvcRc` Field Type Mismatch (`bEnableGomQp`) causing Memory Misalignment
+#### Bug 4.2.1: `SWelsSvcRc` Field Type Mismatch (`bEnableGomQp`) causing Memory Misalignment — [RESOLVED]
 * **C++ Declaration**: [`rc.h:193`](codec/encoder/core/inc/rc.h#L193)
   ```cpp
-  typedef struct TagWelsRc {
-    ...
-    bool       bGomRC;                        // 1 byte
-    double*    pGomComplexity;               // 8 bytes
-    int32_t*   pGomForegroundBlockNum;       // 8 bytes
-    int32_t*   pCurrentFrameGomSad;          // 8 bytes
-    int32_t*   pGomCost;                     // 8 bytes
-
-    int32_t   bEnableGomQp;                  // 4 bytes (int32_t)
-    int32_t   iAverageFrameQp;               // 4 bytes
-    ...
-  } SWelsSvcRc;
+  int32_t bEnableGomQp; // 4 bytes (int32_t)
   ```
 * **Rust Translation**: [`rc.rs:292`](rust/crates/openh264-rs/src/encoder/rc.rs#L292)
-  ```rust
-  #[repr(C)]
-  #[derive(Debug, Copy, Clone)]
-  pub struct SWelsSvcRc {
-      ...
-      pub bGomRC: bool,
-      pub pGomComplexity: *mut f64,
-      pub pGomForegroundBlockNum: *mut i32,
-      pub pCurrentFrameGomSad: *mut i32,
-      pub pGomCost: *mut i32,
-
-      pub bEnableGomQp: bool, // ❌ 1-byte bool instead of 4-byte int32_t / i32!
-      pub iAverageFrameQp: i32,
-      ...
-  }
-  ```
-* **Impact**: In C++, `bEnableGomQp` is declared as `int32_t` (4 bytes). In Rust `SWelsSvcRc`, `bEnableGomQp` is declared as `bool` (1 byte under `#[repr(C)]`). This 3-byte layout contraction shifts all 38+ subsequent fields in `SWelsSvcRc` (`iAverageFrameQp`, `iMinFrameQp`, `iMaxFrameQp`, `iNumberMbFrame`, `iNumberMbGom`, `iGopSize`, `iSkipFrameNum`, `iQStep`, `iBufferFullnessSkip`, `iPaddingSize`, `pTemporalOverRc`, etc.) by 3 bytes when accessed via C-FFI.
-* **Fix**: Change `pub bEnableGomQp: bool` in `rc.rs:292` to `pub bEnableGomQp: i32`.
+* **Impact**: In C++, `bEnableGomQp` is declared as `int32_t` (4 bytes). In Rust `SWelsSvcRc`, `bEnableGomQp` was previously declared as `bool` (1 byte under `#[repr(C)]`). This 3-byte layout contraction shifted all 38+ subsequent fields in `SWelsSvcRc` (`iAverageFrameQp`, `iMinFrameQp`, `iMaxFrameQp`, `iNumberMbFrame`, `iNumberMbGom`, `iGopSize`, `iSkipFrameNum`, `iQStep`, `iBufferFullnessSkip`, etc.) by 3 bytes when accessed via C-FFI or rate control routines.
+* **Fix**: Changed `pub bEnableGomQp: bool` in [`rc.rs:292`](rust/crates/openh264-rs/src/encoder/rc.rs#L292) to `pub bEnableGomQp: i32` and updated rate control assignments/checks in `rc.rs`. All tests pass.
 

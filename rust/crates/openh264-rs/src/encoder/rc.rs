@@ -289,7 +289,7 @@ pub struct SWelsSvcRc {
     pub pCurrentFrameGomSad: *mut i32,
     pub pGomCost: *mut i32,
 
-    pub bEnableGomQp: bool,
+    pub bEnableGomQp: i32,
     pub iAverageFrameQp: i32,
     pub iMinFrameQp: i32,
     pub iMaxFrameQp: i32,
@@ -367,7 +367,7 @@ impl Default for SWelsSvcRc {
             pGomForegroundBlockNum: std::ptr::null_mut(),
             pCurrentFrameGomSad: std::ptr::null_mut(),
             pGomCost: std::ptr::null_mut(),
-            bEnableGomQp: true,
+            bEnableGomQp: 1,
             iAverageFrameQp: 0,
             iMinFrameQp: 0,
             iMaxFrameQp: 0,
@@ -772,7 +772,7 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
         (*pWelsSvcRc).iSkipFrameNum = 0;
         (*pWelsSvcRc).iGomSize = ((*pWelsSvcRc).iNumberMbFrame + (*pWelsSvcRc).iNumberMbGom - 1)
             / (*pWelsSvcRc).iNumberMbGom;
-        (*pWelsSvcRc).bEnableGomQp = true;
+        (*pWelsSvcRc).bEnableGomQp = 1;
 
         RcInitLayerMemory(
             pWelsSvcRc,
@@ -1993,9 +1993,9 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
         || ((*(*pEncCtx).pSvcParam).iRCMode == RCMode::RcBitrateMode
             && (*pEncCtx).eSliceType == I_SLICE)
     {
-        (*pWelsSvcRc).bEnableGomQp = false;
+        (*pWelsSvcRc).bEnableGomQp = 0;
     } else {
-        (*pWelsSvcRc).bEnableGomQp = true;
+        (*pWelsSvcRc).bEnableGomQp = 1;
     }
 
     if (*pEncCtx).eSliceType == I_SLICE {
@@ -2045,7 +2045,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
         pSOverRc.iBsPosSlice = get_bs(pSlice);
     }
 
-    if (*pWelsSvcRc).bEnableGomQp {
+    if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
             && ((*pCurMb).iMbXY % (*pWelsSvcRc).iNumberMbGom == 0)
         {
