@@ -143,18 +143,14 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: `SDqLayer` previously omitted 9 fields (`pFmo`, `uiSpsId`, `pRef`, `iLumaStride`, `iChromaStride`, `pPred`, `iColocMv`, `iColocRefIndex`, `iColocIntra`) and used `u8` instead of `u32` for `uiDisableInterLayerDeblockingFilterIdc`.
 * **Fix**: Re-added all 9 missing fields, aligned field declaration order, and updated `uiDisableInterLayerDeblockingFilterIdc: u32` in [`decoder_core.rs:406-462`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L406-L462) to match C++ `TagDqLayer`. Unit tests pass.
 
-#### Bug 4.1.4: `SPps` (`TagPps`) Duplicate Field Bug
+#### Bug 4.1.4: `SPps` (`TagPps`) Duplicate Field Bug — [RESOLVED]
 * **C++ Declaration**: [`parameter_sets.h:199`](codec/decoder/core/inc/parameter_sets.h#L199)
   ```cpp
   bool bConstainedIntraPredFlag; // Single bool field
   ```
-* **Rust Translation**: [`parameter_sets.rs:347-348`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347-L348)
-  ```rust
-  pub bConstrainedIntraPredFlag: bool,
-  pub bConstainedIntraPredFlag: bool, // ❌ Duplicate field!
-  ```
-* **Impact**: Rust contains both correctly spelled `bConstrainedIntraPredFlag` and misspelled `bConstainedIntraPredFlag`, inserting an unintended extra byte into `SPps` layout under `#[repr(C)]`.
-* **Fix**: Remove `pub bConstainedIntraPredFlag: bool` from `parameter_sets.rs`.
+* **Rust Translation**: [`parameter_sets.rs:347`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347)
+* **Impact**: `TagPps` previously contained both `bConstrainedIntraPredFlag` and `bConstainedIntraPredFlag`, inserting an unintended extra byte into `SPps` struct layout under `#[repr(C)]` and breaking intra-pred parsing checks in `decode_slice.rs`.
+* **Fix**: Removed duplicate `bConstrainedIntraPredFlag` from `TagPps` and `TagPps::default()` in [`parameter_sets.rs:347`](rust/crates/openh264-rs/src/decoder/parameter_sets.rs#L347) and updated `nalu.rs` PPS parsing. Unit tests pass.
 
 #### Bug 4.1.5: Duplicate Conflicting `SRefPic` Struct Definition
 * **C++ Declaration**: [`decoder_context.h:149-157`](codec/decoder/core/inc/decoder_context.h#L149-L157)
