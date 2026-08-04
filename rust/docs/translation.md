@@ -175,19 +175,11 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: CAVLC residual parsing and block decoding functions were previously missing from `parse_mb_syn_cavlc.rs`.
 * **Fix**: Translated CAVLC block residual decoding (`WelsResidualBlockCavlc`, `WelsParseMbCavlcResidual`), coefficient token parsing (`CavlcGetTrailingOnesAndTotalCoeff`, `ParseCoeffToken`), level decoding (`CavlcGetLevelVal`), total zeros parsing (`CavlcGetTotalZeros`, `ParseTotalZeros`), and run-before decoding (`CavlcGetRunBefore`, `ParseRunBefore`) into [`parse_mb_syn_cavlc.rs:1152-1490`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L1152-L1490). Added unit tests. All tests pass.
 
-#### Bug 4.1.8: Unimplemented Intra Prediction Reconstruction Function
-* **C++ Implementation**: [`rec_mb.cpp:50-200`](codec/decoder/core/src/rec_mb.cpp#L50-L200)
-* **Rust Translation**: [`decode_slice.rs:1015-1021`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015-L1021)
-  ```rust
-  pub unsafe fn WelsMbIntraPredictionConstruction(
-      _pCtx: PWelsDecoderContext,
-      _pCurDqLayer: *mut SDqLayer,
-  ) -> i32 {
-      ERR_NONE // ❌ Empty stub! Bypasses spatial intra prediction and IDCT reconstruction.
-  }
-  ```
-* **Impact**: Intra frame decoding returns blank/un-reconstructed macroblocks when called in pure Rust mode.
-* **Fix**: Port macroblock Intra reconstruction loop connecting predictors, IQ, and IDCT.
+#### Bug 4.1.8: Unimplemented Intra Prediction Reconstruction Function — [RESOLVED]
+* **C++ Implementation**: [`rec_mb.cpp:50-213`](codec/decoder/core/src/rec_mb.cpp#L50-L213) & [`decode_slice.cpp:288-302`](codec/decoder/core/src/decode_slice.cpp#L288-L302)
+* **Rust Translation**: [`decode_slice.rs:1015-1225`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015-L1225)
+* **Impact**: Intra frame decoding previously bypassed spatial intra prediction, inverse transform, and residual reconstruction loops when executing in pure Rust mode.
+* **Fix**: Implemented `WelsMbIntraPredictionConstruction`, `WelsFillRecNeededMbInfo`, `RecI16x16Mb`, `RecI8x8Mb`, `RecI8x8Luma`, `RecI4x4Mb`, `RecI4x4Luma`, `RecI4x4Chroma`, and `RecChroma` in [`decode_slice.rs:1015-1225`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1015-L1225). Added unit tests. All tests pass.
 
 ---
 

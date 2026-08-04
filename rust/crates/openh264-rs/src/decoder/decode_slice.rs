@@ -1012,11 +1012,242 @@ pub unsafe fn WelsMbInterPrediction(
     ERR_NONE
 }
 
+pub unsafe fn WelsFillRecNeededMbInfo(
+    pCtx: *mut SWelsDecoderContext,
+    bOutput: bool,
+    pCurDqLayer: *mut SDqLayer,
+) {
+    if pCtx.is_null() || pCurDqLayer.is_null() {
+        return;
+    }
+    let pCurPic = (*pCtx).pDec;
+    if pCurPic.is_null() {
+        return;
+    }
+    let iLumaStride = (*pCurPic).iLinesize[0];
+    let iChromaStride = (*pCurPic).iLinesize[1];
+    let iMbX = (*pCurDqLayer).iMbX;
+    let iMbY = (*pCurDqLayer).iMbY;
+
+    (*pCurDqLayer).iLumaStride = iLumaStride;
+    (*pCurDqLayer).iChromaStride = iChromaStride;
+
+    if bOutput && !(*pCurPic).pData[0].is_null() {
+        (*pCurDqLayer).pPred[0] = (*pCurPic).pData[0].add(((iMbY * iLumaStride + iMbX) << 4) as usize);
+        (*pCurDqLayer).pPred[1] = (*pCurPic).pData[1].add(((iMbY * iChromaStride + iMbX) << 3) as usize);
+        (*pCurDqLayer).pPred[2] = (*pCurPic).pData[2].add(((iMbY * iChromaStride + iMbX) << 3) as usize);
+    }
+}
+
+pub unsafe fn RecChroma(
+    iMBXY: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    let iChromaStride = (*(*pCtx).pCurDqLayer).iChromaStride;
+    let pIdctFourResAddPredFunc = (*pCtx).pIdctFourResAddPredFunc;
+
+    let uiCbpC = ((*(*pDqLayer).pCbp.add(iMBXY as usize)) as u8) >> 4;
+
+    if uiCbpC == 1 || uiCbpC == 2 {
+        if let Some(func) = pIdctFourResAddPredFunc {
+            for i in 0..2 {
+                let pRS = pScoeffLevel.add(256 + (i << 6));
+                let pPred = (*pDqLayer).pPred[i + 1];
+                let pNzc = (*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr().add(16 + 2 * i) as *const i8;
+                func(pPred, iChromaStride, pRS, pNzc);
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn RecI4x4Luma(
+    iMBXY: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    let pPred = (*pDqLayer).pPred[0];
+    let iLumaStride = (*pDqLayer).iLumaStride;
+    let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
+    let pIntra4x4PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMBXY as usize * 16);
+    let pRS = pScoeffLevel;
+    let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc;
+
+    for i in 0..16 {
+        let pPredI4x4 = pPred.add(*pBlockOffset.add(i) as usize);
+        let uiMode = *pIntra4x4PredMode.add(g_kuiMbCountScan4Idx[i] as usize) as usize;
+
+        if let Some(func) = (*pCtx).pGetI4x4LumaPredFunc[uiMode] {
+            func(pPredI4x4, iLumaStride);
+        }
+
+        let nzc_idx = g_kuiMbCountScan4Idx[i] as usize;
+        if *((*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr().add(nzc_idx)) != 0 {
+            if let Some(idct_func) = pIdctResAddPredFunc {
+                let pRSI4x4 = pRS.add(i << 4);
+                idct_func(pPredI4x4, iLumaStride, pRSI4x4);
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn RecI4x4Chroma(
+    iMBXY: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    let iChromaStride = (*(*pCtx).pCurDqLayer).iChromaStride;
+    let iChromaPredMode = *(*pDqLayer).pChromaPredMode.add(iMBXY as usize) as usize;
+
+    if let Some(func) = (*pCtx).pGetIChromaPredFunc[iChromaPredMode] {
+        let pPred1 = (*pDqLayer).pPred[1];
+        func(pPred1, iChromaStride);
+        let pPred2 = (*pDqLayer).pPred[2];
+        func(pPred2, iChromaStride);
+    }
+
+    RecChroma(iMBXY, pCtx, pScoeffLevel, pDqLayer)
+}
+
+pub unsafe fn RecI4x4Mb(
+    iMBXY: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    RecI4x4Luma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
+    RecI4x4Chroma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
+    ERR_NONE
+}
+
+pub unsafe fn RecI8x8Luma(
+    iMbXy: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    let pPred = (*pDqLayer).pPred[0];
+    let iLumaStride = (*pDqLayer).iLumaStride;
+    let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
+    let pIntra8x8PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMbXy as usize * 16);
+    let pRS = pScoeffLevel;
+    let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc8x8;
+
+    let avail = *(*pDqLayer).pIntraNxNAvailFlag.add(iMbXy as usize);
+    let bTLAvail: [bool; 4] = [
+        (avail & 0x02) != 0,
+        (avail & 0x01) != 0,
+        (avail & 0x04) != 0,
+        true,
+    ];
+    let bTRAvail: [bool; 4] = [
+        (avail & 0x01) != 0,
+        (avail & 0x08) != 0,
+        true,
+        false,
+    ];
+
+    for i in 0..4 {
+        let pPredI8x8 = pPred.add(*pBlockOffset.add(i << 2) as usize);
+        let uiMode = *pIntra8x8PredMode.add(g_kuiMbCountScan4Idx[i << 2] as usize) as usize;
+
+        if let Some(func) = (*pCtx).pGetI8x8LumaPredFunc[uiMode] {
+            func(pPredI8x8, iLumaStride, bTLAvail[i], bTRAvail[i]);
+        }
+
+        let iIndex = g_kuiMbCountScan4Idx[i << 2] as usize;
+        let nzc_ptr = (*(*pDqLayer).pNzc.add(iMbXy as usize)).as_ptr();
+        if *nzc_ptr.add(iIndex) != 0
+            || *nzc_ptr.add(iIndex + 1) != 0
+            || *nzc_ptr.add(iIndex + 4) != 0
+            || *nzc_ptr.add(iIndex + 5) != 0
+        {
+            if let Some(idct_func) = pIdctResAddPredFunc {
+                let pRSI8x8 = pRS.add(i << 6);
+                idct_func(pPredI8x8, iLumaStride, pRSI8x8);
+            }
+        }
+    }
+    ERR_NONE
+}
+
+pub unsafe fn RecI8x8Mb(
+    iMbXy: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    RecI8x8Luma(iMbXy, pCtx, pScoeffLevel, pDqLayer);
+    RecI4x4Chroma(iMbXy, pCtx, pScoeffLevel, pDqLayer);
+    ERR_NONE
+}
+
+pub unsafe fn RecI16x16Mb(
+    iMBXY: i32,
+    pCtx: *mut SWelsDecoderContext,
+    pScoeffLevel: *mut i16,
+    pDqLayer: *mut SDqLayer,
+) -> i32 {
+    let iI16x16PredMode = *(*pDqLayer).pIntraPredMode.add(iMBXY as usize * 16 + 7) as usize;
+    let iChromaPredMode = *(*pDqLayer).pChromaPredMode.add(iMBXY as usize) as usize;
+    let iUVStride = (*(*pCtx).pCurDqLayer).iChromaStride;
+    let iYStride = (*pDqLayer).iLumaStride;
+    let pRS = pScoeffLevel;
+    let pPredY = (*pDqLayer).pPred[0];
+    let pIdctFourResAddPredFunc = (*pCtx).pIdctFourResAddPredFunc;
+
+    if let Some(func) = (*pCtx).pGetI16x16LumaPredFunc[iI16x16PredMode] {
+        func(pPredY, iYStride);
+    }
+
+    if let Some(idct_func) = pIdctFourResAddPredFunc {
+        let pNzc = (*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr() as *const i8;
+        idct_func(pPredY.add(0 * iYStride as usize + 0), iYStride, pRS.add(0 * 64), pNzc.add(0));
+        idct_func(pPredY.add(0 * iYStride as usize + 8), iYStride, pRS.add(1 * 64), pNzc.add(2));
+        idct_func(pPredY.add(8 * iYStride as usize + 0), iYStride, pRS.add(2 * 64), pNzc.add(8));
+        idct_func(pPredY.add(8 * iYStride as usize + 8), iYStride, pRS.add(3 * 64), pNzc.add(10));
+    }
+
+    if let Some(chroma_func) = (*pCtx).pGetIChromaPredFunc[iChromaPredMode] {
+        chroma_func((*pDqLayer).pPred[1], iUVStride);
+        chroma_func((*pDqLayer).pPred[2], iUVStride);
+    }
+
+    RecChroma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
+    ERR_NONE
+}
+
 pub unsafe fn WelsMbIntraPredictionConstruction(
     pCtx: *mut SWelsDecoderContext,
     pCurDqLayer: *mut SDqLayer,
     bOutput: bool,
 ) -> i32 {
+    if pCtx.is_null() || pCurDqLayer.is_null() {
+        return ERR_NONE;
+    }
+    let iMbXy = (*pCurDqLayer).iMbXyIndex;
+
+    WelsFillRecNeededMbInfo(pCtx, bOutput, pCurDqLayer);
+
+    let pDec = (*pCurDqLayer).pDec;
+    if pDec.is_null() || (*pDec).pMbType.is_null() {
+        return ERR_NONE;
+    }
+    let mb_type = *(*pDec).pMbType.add(iMbXy as usize);
+    let pScoeffLevel = (*pCurDqLayer).pScaledTCoeff.add(iMbXy as usize) as *mut i16;
+
+    if IS_INTRA16x16(mb_type) {
+        RecI16x16Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+    } else if IS_INTRA8x8(mb_type) {
+        RecI8x8Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+    } else if IS_INTRA4x4(mb_type) {
+        RecI4x4Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+    }
     ERR_NONE
 }
 
@@ -1451,4 +1682,17 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     }
 
     ERR_NONE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wels_mb_intra_prediction_construction_null_ptrs() {
+        unsafe {
+            let res = WelsMbIntraPredictionConstruction(std::ptr::null_mut(), std::ptr::null_mut(), true);
+            assert_eq!(res, ERR_NONE);
+        }
+    }
 }
