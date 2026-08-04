@@ -16,13 +16,13 @@ This document provides a comprehensive technical breakdown of the OpenH264 codeb
    - [2.7 Macroblock Reconstruction Loop](#27-macroblock-reconstruction-loop)
    - [2.8 In-Loop Deblocking Filter](#28-in-loop-deblocking-filter)
    - [2.9 Decoded Picture Buffer (DPB) & Reference Management](#29-decoded-picture-buffer-dpb--reference-management)
-   - [2.10 Error Concealment & Resiliency](#210-error-concealment--resiliency)
+   - [2.10 Error Concealment & Flexible Macroblock Ordering (FMO)](#210-error-concealment--flexible-macroblock-ordering-fmo)
 3. [H.264 Video Encoder](#3-h264-video-encoder)
    - [3.1 Encoder Core Data Structures](#31-encoder-core-data-structures)
    - [3.2 Video Pre-Processing & Assessment (VAA)](#32-video-pre-processing--assessment-vaa)
    - [3.3 Rate Control Engine](#33-rate-control-engine)
    - [3.4 Motion Estimation (ME)](#34-motion-estimation-me)
-   - [3.5 Mode Decision (MD)](#35-mode-decision-md)
+   - [3.5 Mode Decision (MD) & Rate-Distortion Optimization](#35-mode-decision-md--rate-distortion-optimization)
    - [3.6 Forward Transform & Quantization](#36-forward-transform--quantization)
    - [3.7 Macroblock & Slice Encoding Loop](#37-macroblock--slice-encoding-loop)
    - [3.8 Entropy Encoding & NAL Encapsulation](#38-entropy-encoding--nal-encapsulation)
@@ -72,73 +72,74 @@ flowchart TB
 
 ### 2.1 Decoder Core Data Structures
 
-The decoder's runtime state is centralized in [SWelsDecoderContext](openh264/codec/decoder/core/inc/decoder_context.h#L306-L455):
+The decoder's runtime state is heavily centralized to avoid re-allocations and simplify state-passing across modules.
 
-* **[SWelsDecoderContext](openh264/codec/decoder/core/inc/decoder_context.h#L306-L455)** (`pCtx`):
+* **[SWelsDecoderContext](openh264/codec/decoder/core/inc/decoder_context.h)** (`pCtx`):
   * `sRawData`, `sSavedData`: Input bitstream data buffers.
   * `sBs`: Auxiliary bitstream reader ([SBitStringAux](openh264/codec/decoder/core/inc/bit_stream.h)).
   * `sSpsPpsCtx`: Global storage for active and buffered Sequence Parameter Sets (`SSps`) and Picture Parameter Sets (`SPps`).
-  * `pPicBuff`: Reconstructed picture buffer pool ([PPicBuff](openh264/codec/decoder/core/inc/pic_queue.h)).
+  * `pPicBuff`: Reconstructed picture buffer pool managed dynamically.
   * `sRefPic`: Active reference picture lists (`pRefList`, `pShortRefList`, `pLongRefList`).
   * `sMb`: Multi-layer macroblock level parameters (types, motion vectors, reference indices, transform coefficients, intra prediction modes).
-  * `pCurDqLayer`: Pointer to the active spatial dependency layer representation ([SDqLayer](openh264/codec/decoder/core/inc/decoder_core.h)).
-  * `pDec`: Pointer to the current target picture being reconstructed ([PPicture](openh264/codec/decoder/core/inc/picture.h)).
 
-* **[SSps](openh264/codec/decoder/core/inc/parameter_sets.h)** & **[SPps](openh264/codec/decoder/core/inc/parameter_sets.h)**:
-  * Sequence/Picture parameter sets defining profile IDC, level IDC, PicOrderCnt type, log2 max frame num, picture dimensions in macroblocks (`iMbWidth`, `iMbHeight`), frame cropping offsets (`SPosOffset`), entropy coding mode flag (`bEntropyCodingModeFlag` for CAVLC vs CABAC), and deblocking filter override flags.
+* **[SPicture](openh264/codec/decoder/core/inc/picture.h)**:
+  * Central entity representing a reconstructed or reference picture.
+  * `pData[4]` and `iLinesize[4]`: Pointers to allocated cache-aligned Y, U, and V planar buffers and their corresponding strides.
+  * `bUsedAsRef`, `bIsLongRef`: Boolean flags used by the DPB to determine lifecycle state.
+  * `iFrameNum`, `iFramePoc`: Identifiers for frame ordering and motion vector scaling.
 
-* **[SSliceHeader](openh264/codec/decoder/core/inc/slice.h)**:
-  * Slice parameters including `eSliceType` (`I_SLICE`, `P_SLICE`, `B_SLICE`), `iFirstMbInSlice`, `iSliceQpDelta`, reference picture list reordering syntax elements, and Memory Management Control Operations (`sMmcoRefBase`).
+* **[SDqLayer](openh264/codec/decoder/core/inc/decoder_core.h)**:
+  * Spatial layer representation. Contains slice configurations and active parameter sets parsed for the current Dependency/Quality layer slice.
 
 ---
 
 ### 2.2 Bitstream Parsing & NAL Unit Extraction
 
-Bitstream processing in [au_parser.cpp](openh264/codec/decoder/core/src/au_parser.cpp) follows the Annex B byte stream standard:
+Bitstream processing in [au_parser.cpp](openh264/codec/decoder/core/src/au_parser.cpp) follows the Annex B byte stream standard. Algorithm workflow:
 
-1. **Start Code Prefix Detection**: Scans the input stream for `0x000001` (3-byte) or `0x00000001` (4-byte) start codes.
-2. **Emulation Prevention Stripping**: H.264 inserts `0x03` bytes after two consecutive `0x00` bytes to prevent false start code generation (`0x000003`). The decoder strips these emulation prevention bytes into a contiguous Raw Byte Sequence Payload (RBSP) buffer.
+1. **Start Code Prefix Detection**: Scans the input stream for `0x000001` (3-byte) or `0x00000001` (4-byte) start codes to delineate NAL boundaries.
+2. **Emulation Prevention Stripping**: H.264 inserts `0x03` bytes after two consecutive `0x00` bytes to prevent false start code generation (`0x000003`). The decoder strips these out in-place or into a contiguous Raw Byte Sequence Payload (RBSP) buffer.
 3. **NAL Unit Header Parsing**:
-   * Evaluates `forbidden_zero_bit`, `nal_ref_idc` (reference priority), and `nal_unit_type` (e.g. SPS: 7, PPS: 8, IDR Slice: 5, Non-IDR Slice: 1, Prefix NAL: 14, Subset SPS: 15).
-   * For SVC NAL units, parses `SNalUnitHeaderExt` to extract `dependency_id` ($D$), `temporal_id` ($T$), and `quality_id` ($Q$).
+   * Evaluates `forbidden_zero_bit`, `nal_ref_idc` (reference priority), and `nal_unit_type` (e.g., SPS: 7, PPS: 8, IDR Slice: 5, Non-IDR Slice: 1).
+4. **Parameter Sets (SPS/PPS) Caching**: SPS and PPS NALs are intercepted, parsed, and cached globally in `sSpsPpsCtx`. When a slice references a specific `pic_parameter_set_id`, the active sets are retrieved from this cache.
 
 ---
 
 ### 2.3 Entropy Decoding (CAVLC and CABAC)
 
-OpenH264 supports both standard H.264 entropy decoding schemes:
+OpenH264 supports both standard H.264 entropy decoding schemes, selected via the `entropy_coding_mode_flag` in the PPS:
 
 #### A. CAVLC (Context-Adaptive Variable-Length Coding)
-* Implemented in [parse_mb_syn_cavlc.cpp](openh264/codec/decoder/core/src/parse_mb_syn_cavlc.cpp) and [dec_golomb.h](openh264/codec/decoder/core/inc/dec_golomb.h).
-* **Exp-Golomb Codes**: Parses unsigned (`ue(v)`), signed (`se(v)`), and truncated (`te(v)`) syntax elements.
-* **Residual Coefficient Parsing**:
-  1. `coeff_token`: Decodes total non-zero coefficients (`TotalCoeff`) and trailing $\pm 1$ coefficients (`TrailingOnes`) using context determined by neighboring blocks' non-zero coefficient counts $nC = (nA + nB + 1) >> 1$.
-  2. Sign of trailing ones.
-  3. Levels (magnitudes & signs) of remaining non-zero coefficients.
-  4. `total_zeros`: Total zero coefficients before the last non-zero coefficient.
-  5. `run_before`: Consecutive zero runs preceding each non-zero coefficient.
+* Implemented in [parse_mb_syn_cavlc.cpp](openh264/codec/decoder/core/src/parse_mb_syn_cavlc.cpp).
+* **Algorithm Workflow for Residuals**:
+  1. `coeff_token`: Decodes total non-zero coefficients (`TotalCoeff`) and trailing $\pm 1$ coefficients (`TrailingOnes`). Context is determined adaptively by neighboring blocks' non-zero coefficient counts $nC = (nA + nB + 1) \gg 1$.
+  2. Sign of trailing ones are read as single bits.
+  3. Levels (magnitudes & signs) of remaining non-zero coefficients are parsed via Exp-Golomb.
+  4. `total_zeros`: Total zero coefficients before the last non-zero coefficient are decoded.
+  5. `run_before`: Consecutive zero runs preceding each non-zero coefficient are mapped.
 
 #### B. CABAC (Context-Based Adaptive Binary Arithmetic Coding)
 * Implemented in [parse_mb_syn_cabac.cpp](openh264/codec/decoder/core/src/parse_mb_syn_cabac.cpp) and [cabac_decoder.h](openh264/codec/decoder/core/inc/cabac_decoder.h).
-* **Arithmetic Engine** ([SWelsCabacDecEngine](openh264/codec/decoder/core/inc/decoder_context.h#L74-L81)):
-  * Maintains state registers: `uiRange` ($R$) and `uiOffset` ($V$), refilling bit buffers when range drops below 8 bits.
-* **Context State Modeling**:
+* **Arithmetic Engine** ([SWelsCabacDecEngine](openh264/codec/decoder/core/inc/decoder_context.h)):
+  * Maintains state registers: `uiRange` ($R$) and `uiOffset` ($V$). Interval subdivision occurs iteratively, and bit buffers are refilled when `uiRange` drops below 8 bits (renormalization step).
+* **Context State Modeling** ([SWelsCabacCtx](openh264/codec/decoder/core/inc/decoder_context.h)):
   * Context models maintain a 6-bit probability state index (`uiState`) and Most Probable Symbol (`uiMPS`).
-  * Decodes syntax elements (macroblock types, sub-MB partitions, MVDs, reference indices, transform coefficient flags, and significant coefficient maps) with adaptive context transitions.
+  * As symbols are decoded, the engine updates `uiState` using standard H.264 transition tables to adapt to local data probability variations.
 
 ---
 
 ### 2.4 Intra-Frame Prediction
 
-Intra reconstruction operates in spatial pixel domain before deblocking:
+Intra reconstruction operates in the spatial pixel domain before deblocking, interpolating missing pixels from adjacent previously decoded blocks. Implemented in [get_intra_predictor.cpp](openh264/codec/decoder/core/src/get_intra_predictor.cpp):
 
-* **Intra 4x4 Luma** (9 prediction modes implemented in [get_intra_predictor.cpp](openh264/codec/decoder/core/src/get_intra_predictor.cpp)):
-  * Mode 0: Vertical, Mode 1: Horizontal, Mode 2: DC (averaging available neighbors), Mode 3: Diagonal Down-Left, Mode 4: Diagonal Down-Right, Mode 5: Vertical-Right, Mode 6: Horizontal-Down, Mode 7: Vertical-Left, Mode 8: Horizontal-Up.
-  * Neighbor availability masks (`Top`, `Left`, `Top-Left`, `Top-Right`) prevent reading across slice boundaries.
+* **Intra 4x4 Luma** (9 prediction modes):
+  * **Mode 0**: Vertical (`WelsI4x4LumaPredV_c`)
+  * **Mode 1**: Horizontal (`WelsI4x4LumaPredH_c`)
+  * **Mode 2**: DC (`WelsI4x4LumaPredDc_c`) - averages available neighbors.
+  * **Modes 3-8**: Directional modes like Diagonal Down-Left (`WelsI4x4LumaPredDDL_c`).
 * **Intra 16x16 Luma** (4 prediction modes):
-  * Mode 0: Vertical, Mode 1: Horizontal, Mode 2: DC, Mode 3: Plane (linear spatial gradient interpolation).
-* **Intra 8x8 Chroma** (4 prediction modes):
-  * DC, Horizontal, Vertical, and Plane prediction applied independently to Cb and Cr planes.
+  * Vertical, Horizontal, DC, and Plane (linear spatial gradient interpolation `WelsI16x16LumaPredPlane_c`).
+* **Neighbor Availability**: Masks are heavily utilized to check `Top`, `Left`, `Top-Left`, `Top-Right` boundary constraints, preventing reads across slice borders.
 
 ---
 
@@ -146,16 +147,12 @@ Intra reconstruction operates in spatial pixel domain before deblocking:
 
 Inter prediction derives pixel blocks from previously decoded reference frames stored in the DPB:
 
-1. **Motion Vector Prediction (MVP)**:
-   * Calculated in [mv_pred.cpp](openh264/codec/decoder/core/src/mv_pred.cpp).
+1. **Motion Vector Prediction (MVP)** ([mv_pred.cpp](openh264/codec/decoder/core/src/mv_pred.cpp)):
    * Generates predicted motion vectors ($\text{MVP}_x, \text{MVP}_y$) via component-wise median of Left ($A$), Top ($B$), and Top-Right ($C$) neighbor blocks:
      $$\text{MVP} = \text{median}(MV_A, MV_B, MV_C)$$
-   * Final motion vector: $MV = \text{MVP} + MVD$.
-2. **Sub-Pixel Luma Motion Compensation**:
-   * **Half-Pixel Interpolation**: 6-tap symmetric FIR Wiener filter with weights $\frac{1}{32}(1, -5, 20, 20, -5, 1)$ applied horizontally and vertically via SIMD assembly / [mc.cpp](openh264/codec/common/src/mc.cpp).
-   * **Quarter-Pixel Interpolation**: Bilinear averaging between integer-pel and half-pel samples.
-3. **Chroma Motion Compensation**:
-   * Scaled to $\frac{1}{8}$-pixel accuracy using bilinear interpolation with fractional offsets $(dx_c, dy_c)$.
+2. **Sub-Pixel Luma Motion Compensation** ([mc.cpp](openh264/codec/common/src/mc.cpp)):
+   * **Half-Pixel Interpolation**: Applied using a 6-tap symmetric FIR Wiener filter horizontally and vertically. The H.264 standard filter weights are $\frac{1}{32}(1, -5, 20, 20, -5, 1)$, reflected exactly in the OpenH264 codebase (e.g., via operations like `iPix05 - iPix14*5 + iPix23*20`).
+   * **Quarter-Pixel Interpolation**: Achieved by bilinear averaging between integer-pel and half-pel samples.
 
 ---
 
@@ -164,59 +161,60 @@ Inter prediction derives pixel blocks from previously decoded reference frames s
 Implemented in [decode_mb_aux.cpp](openh264/codec/decoder/core/src/decode_mb_aux.cpp):
 
 1. **Inverse Quantization**:
+   Scales parsed coefficient levels back to transform levels. 
    $$W'_{ij} = (W_{ij} \cdot V_{ij}(QP \pmod 6)) \ll (QP / 6)$$
-   where $V_{ij}$ is the dequantization scaling matrix entry.
 2. **4x4 Core Inverse Integer DCT**:
-   * Computes 2D transform via separable 1D horizontal and vertical butterflies:
-     $$X = C_i^T \cdot W' \cdot C_i$$
+   Computes the 2D transform via separable 1D horizontal and vertical butterflies in a highly SIMD-friendly layout.
 3. **Hadamard Transforms**:
-   * Applied for DC coefficients in Intra 16x16 luma blocks (4x4 Hadamard) and chroma blocks (2x2 Hadamard).
+   Applied specifically for DC coefficients in Intra 16x16 luma blocks (4x4 Hadamard) and chroma blocks (2x2 Hadamard) to extract remaining redundancy across blocks.
 
 ---
 
 ### 2.7 Macroblock Reconstruction Loop
 
-Implemented in [rec_mb.cpp](openh264/codec/decoder/core/src/rec_mb.cpp) and [decode_slice.cpp](openh264/codec/decoder/core/src/decode_slice.cpp):
-* Combines spatial intra predictors or motion-compensated inter predictors with the IDCT residual coefficients.
-* Clamps pixel results to $[0, 255]$ and writes the reconstructed luma and chroma samples directly into the frame destination buffer.
+Implemented in [rec_mb.cpp](openh264/codec/decoder/core/src/rec_mb.cpp):
+* Functions combine the chosen spatial intra predictor or motion-compensated inter predictor blocks with the IDCT residual coefficients (e.g., `IdctResAddPred_c`).
+* The final sums are clamped to the $[0, 255]$ pixel range to prevent overflow and written to the `SPicture` frame destination buffers.
 
 ---
 
 ### 2.8 In-Loop Deblocking Filter
 
-Implemented in [deblocking.cpp](openh264/codec/decoder/core/src/deblocking.cpp) and [deblocking_common.h](openh264/codec/common/inc/deblocking_common.h):
+Implemented in [deblocking.cpp](openh264/codec/decoder/core/src/deblocking.cpp):
 
 * **Boundary Strength ($bS$) Calculation**:
+  Determines the intensity of the filter per edge:
   * $bS = 4$: Macroblock boundary where either block is Intra-coded.
   * $bS = 3$: Non-macroblock boundary where either block is Intra-coded.
-  * $bS = 2$: Inter-coded block containing non-zero transform coefficients.
-  * $bS = 1$: Inter-coded block with different reference frames or $|MV_{x1}-MV_{x2}| \ge 4$ or $|MV_{y1}-MV_{y2}| \ge 4$.
+  * $bS = 2$: Inter-coded block containing non-zero transform coefficients (Calculated rapidly via bitwise OR on the NNZ map and evaluated via `SMB_EDGE_MV`).
+  * $bS = 1$: Inter-coded block with different reference frames or $|MV_{x1}-MV_{x2}| \ge 4$ quarter-pels.
   * $bS = 0$: No filtering required.
-* **Edge Filtering**:
-  * Modifies boundary pixel samples ($p_1, p_0 | q_0, q_1$) only if:
-    $$|p_0 - q_0| < \alpha(\text{IndexA}) \quad \text{and} \quad |p_1 - p_0| < \beta(\text{IndexB}) \quad \text{and} \quad |q_1 - q_0| < \beta(\text{IndexB})$$
-  * Thresholds $\alpha$ and $\beta$ are derived from the average slice/block quantization parameters plus user offsets (`slice_alpha_c0_offset_div2`, `slice_beta_offset_div2`).
+* **Edge Filtering & Thresholds**:
+  Filters boundary pixels ($p_1, p_0 | q_0, q_1$) only if signal activity indicates blockiness rather than natural edges:
+  $$|p_0 - q_0| < \alpha \quad \text{and} \quad |p_1 - p_0| < \beta \quad \text{and} \quad |q_1 - q_0| < \beta$$
+  The $\alpha$ and $\beta$ values are fetched via `GET_ALPHA_BETA_FROM_QP` using the slice QP.
 
 ---
 
 ### 2.9 Decoded Picture Buffer (DPB) & Reference Management
 
-Reference frame management in [manage_dec_ref.cpp](openh264/codec/decoder/core/src/manage_dec_ref.cpp) and [pic_queue.cpp](openh264/codec/decoder/core/src/pic_queue.cpp):
+Reference frame management in [manage_dec_ref.cpp](openh264/codec/decoder/core/src/manage_dec_ref.cpp) handles memory lifecycle:
 
-* **Short-Term Reference List**: Organized by descending Picture Order Count (POC) or Frame Number (`pShortRefList`).
-* **Long-Term Reference List**: Indexed by `LongTermFrameIdx` (`pLongRefList`) for error recovery resilience.
-* **Marking Schemes**:
-  * **Sliding Window**: Default FIFO replacement when DPB capacity (`max_num_ref_frames`) is reached.
-  * **MMCO (Memory Management Control Operations)**: Explicit commands in slice headers to mark short-term frames as long-term, unmark references, or reset DPB state (`MMCO = 5`).
+* **Short-Term Reference List**: Frames retained by default, organized by descending Picture Order Count (POC) or Frame Number.
+* **Long-Term Reference List**: Indexed by `LongTermFrameIdx` to ensure immunity from sliding-window eviction, providing deep error recovery resilience.
+* **Marking Operations**:
+  * **Sliding Window**: Default FIFO replacement when `max_num_ref_frames` limit is hit.
+  * **MMCO (Memory Management Control Operations)**: Interprets slice header commands to explicitly mark short-term frames as long-term, unmark references, or completely reset DPB state (`MMCO = 5`).
 
 ---
 
-### 2.10 Error Concealment & Resiliency
+### 2.10 Error Concealment & Flexible Macroblock Ordering (FMO)
 
-Implemented in [error_concealment.cpp](openh264/codec/decoder/core/src/error_concealment.cpp):
-* Detects missing NAL units, frame number gaps, or corrupted slice payloads.
-* **Spatial Concealment**: Boundary pixel extrapolation for Intra frames.
-* **Temporal Concealment**: Copies collocated macroblocks and motion vectors from the most recent valid reference frame in the DPB to prevent visual tearing during packet loss.
+* **Error Concealment** ([error_concealment.cpp](openh264/codec/decoder/core/src/error_concealment.cpp)):
+  Detects gaps in `frame_num` or missing slices. 
+  * **Temporal Concealment**: Copies collocated macroblocks and motion vectors from the most recent valid reference frame in the DPB to prevent visual tearing during packet loss.
+* **FMO** ([fmo.cpp](openh264/codec/decoder/core/src/fmo.cpp)):
+  Resolves Flexible Macroblock Ordering where slices do not follow raster scan order. Populates `SFmo` contexts and evaluates the MBAmap (Macroblock Allocation Map) to map block coordinates to specific slice groups based on FMO Types (e.g., Type 1 Scattered, Type 2 Foreground/Background).
 
 ---
 
@@ -224,37 +222,35 @@ Implemented in [error_concealment.cpp](openh264/codec/decoder/core/src/error_con
 
 ### 3.1 Encoder Core Data Structures
 
-The encoder state is encapsulated in [sWelsEncCtx](openh264/codec/encoder/core/inc/encoder_context.h#L116-L238):
+The encoder state is encapsulated heavily in [sWelsEncCtx](openh264/codec/encoder/core/inc/encoder_context.h):
 
-* **[sWelsEncCtx](openh264/codec/encoder/core/inc/encoder_context.h#L116-L238)** (`pEncCtx`):
-  * `pSvcParam`: User encoding configuration parameters ([SWelsSvcCodingParam](openh264/codec/encoder/core/inc/param_svc.h)).
-  * `pEncPic`, `pDecPic`, `pRefPic`: Source input frame, current local reconstruction frame, and reference frame buffer pointers.
-  * `ppDqLayerList`: Array of spatial dependency layer contexts (`SDqLayer`).
-  * `pWelsSvcRc`: Rate control state machine ([SWelsSvcRc](openh264/codec/encoder/core/inc/rc.h)).
-  * `pVpp`, `pVaa`: Video pre-processing and frame analysis objects.
-  * `pSliceThreading`, `pTaskManage`: Multi-threading slice task manager and thread pool.
-  * `pLtr`: Long-Term Reference state machine ([SLTRState](openh264/codec/encoder/core/inc/encoder_context.h#L80-L102)).
+* **[sWelsEncCtx](openh264/codec/encoder/core/inc/encoder_context.h)** (`pEncCtx`):
+  * `pSvcParam`: Global user configuration mapping ([SWelsSvcCodingParam](openh264/codec/encoder/core/inc/param_svc.h)).
+  * `pEncPic`, `pDecPic`, `pRefPic`: Source input frame, current local reconstruction, and reference DPB buffers.
+  * `pWelsSvcRc`: Rate control state machine context.
+  * `pVaa`: Video pre-processing and complexity analysis objects.
+  * `pLtr`: Long-Term Reference state machine ([SLTRState](openh264/codec/encoder/core/inc/encoder_context.h)), which tracks LTR marking feedback and delays.
 
-* **[SWelsME](openh264/codec/encoder/core/inc/svc_motion_estimate.h#L72-L97)** (Motion Estimation Structure):
-  * Contains search window parameters, predicted motion vector `sMvp`, base reference MV `sMvBase`, best calculated integer/sub-pixel motion vector `sMv`, cost accumulator `uiSadCost`, and MVD bit-cost tables `pMvdCost`.
+* **[SWelsME](openh264/codec/encoder/core/inc/svc_motion_estimate.h)** (Motion Estimation Structure):
+  * Contains localized tracking variables for the current macroblock's search: predicted motion vector `sMvp`, best current search position `sMv`, cost accumulators `uiSadCost`, `uiSatdCost`, and penalty lookup tables `pMvdCost`.
 
 ---
 
 ### 3.2 Video Pre-Processing & Assessment (VAA)
 
-Handled by [wels_preprocess.cpp](openh264/codec/encoder/core/src/wels_preprocess.cpp) and [codec/processing/](openh264/codec/processing):
+Handled by [wels_preprocess.cpp](openh264/codec/encoder/core/src/wels_preprocess.cpp):
 
-* **Color Space Conversion**: Converts RGB24, BGR24, RGBA, BGRA, NV12, or YUY2 input formats to standard planar YUV 4:2:0.
-* **Spatial Downsampling**: High-quality polyphase or bilinear downsampling filters to generate lower-resolution spatial layers for simulcast/SVC.
+* **Color Space Conversion**: Converts raw incoming RGB24, BGR24, RGBA, NV12, or YUY2 payloads to planar YUV 4:2:0 format for compression.
+* **Spatial Downsampling**: High-quality polyphase or bilinear downsampling filters generate lower-resolution layers dynamically for simulcast or Spatial SVC.
 * **Frame Complexity Analysis (VAA)**:
-  * Computes frame-level Sum of Absolute Differences (SAD) and frame variances.
-  * Detects scene changes and static backgrounds to assist Rate Control and Mode Decision.
+  * Pre-computes frame-level Sum of Absolute Differences (SAD) and frame variances on downsampled pixels.
+  * Detects scene changes and static backgrounds to assist Rate Control (allocating more bits to active scenes) and Mode Decision (early skip classification).
 
 ---
 
 ### 3.3 Rate Control Engine
 
-Implemented in [ratectl.cpp](openh264/codec/encoder/core/src/ratectl.cpp) and [rc.h](openh264/codec/encoder/core/inc/rc.h):
+Implemented in [ratectl.cpp](openh264/codec/encoder/core/src/ratectl.cpp), the Rate Control ensures bits don't exceed network constraints while minimizing visual fluctuation.
 
 ```mermaid
 flowchart LR
@@ -266,45 +262,53 @@ flowchart LR
     UpdateRC -. Feedback .-> FrameRC
 ```
 
+**Algorithm Details**:
 1. **Virtual GOP (VGOP) Allocation**:
-   * Distributes bit budgets across hierarchical temporal layers ($T_0, T_1, T_2, T_3$). Lower temporal layers (base references) are assigned higher bit budgets and lower QPs.
-2. **Frame-Level Bit Rate Estimation**:
-   * Uses a quadratic / linear rate-distortion model relating bit consumption ($R$) to quantization step ($Q_{\text{step}}$) and frame complexity ($SAD$):
-     $$R = \frac{X_1 \cdot SAD}{Q_{\text{step}}} + \frac{X_2 \cdot SAD}{Q_{\text{step}}^2}$$
+   Distributes the bit budget across hierarchical temporal layers ($T_0, T_1, T_2, T_3$). $T_0$ base frames are assigned higher bit budgets and lower QPs to serve as high-quality persistent references.
+2. **Linear Complexity Bit Rate Model**:
+   * While generalized mathematical rate control literature often cites quadratic $R-D$ models, **OpenH264 actively prioritizes CPU efficiency by utilizing a highly responsive Linear Complexity Model**.
+   * It asserts that complexity is a linear product of consumed bits and step size:
+     $$\text{iLinearCmplx} = \text{iFrameDqBits} \times Q_{\text{step}}$$
+   * For subsequent frames, the engine estimates the necessary Target $Q_{\text{step}}$ linearly proportional to the complexity of prior similar frames divided by the target budget:
+     $$Q_{\text{step}} = \frac{\text{iLinearCmplx} \times \text{ComplexityRatio}}{\text{TargetBits}}$$
 3. **Group of Macroblocks (GOM) Rate Control**:
-   * Adjusts macroblock QP dynamically within a frame across GOM rows to avoid buffer overflow/underflow while maintaining uniform perceptual quality.
-4. **Frame Skipping Logic**:
-   * Drops frames dynamically when virtual buffer fullness exceeds maximum threshold limits.
+   Adjusts macroblock QPs dynamically within a frame (across GOM rows) to avoid buffer overflow/underflow on heavily active sections of a frame.
+4. **Frame Skipping**:
+   Drops frames implicitly via buffer thresholds when the channel cannot sustain the configured target bitrate, safeguarding latency.
 
 ---
 
 ### 3.4 Motion Estimation (ME)
 
-Implemented in [svc_motion_estimate.cpp](openh264/codec/encoder/core/src/svc_motion_estimate.cpp):
+Implemented in [svc_motion_estimate.cpp](openh264/codec/encoder/core/src/svc_motion_estimate.cpp), ME finds the best matching block in a reference frame to reduce residual energy.
 
 * **Cost Function**:
-  $$\text{Cost}_{\text{ME}} = \text{SAD/SATD}(MV) + \lambda_{\text{MOTION}} \cdot R(MV - \text{MVP})$$
-  where $\lambda_{\text{MOTION}}$ is derived from the slice QP.
-* **Search Hierarchy**:
-  1. **Predictor Candidate Checking**: Evaluates $(0,0)$, spatial MVP, and collocated temporal reference MV.
+  Evaluates matches minimizing:
+  $$\text{Cost} = \text{SAD}(MV) + \lambda_{\text{MOTION}} \cdot R(MV - \text{MVP})$$
+  where $R$ estimates bit penalty for encoding the Motion Vector Difference, scaled by $\lambda$ tied to QP.
+* **Search Algorithm**:
+  1. **Predictor Checking**: Initially evaluates cost at $(0,0)$, the spatial MVP, and collocated temporal reference MV.
   2. **Fast Integer Search**:
-     * **Little Diamond Search** (`ME_DIA`): 4-point cross pattern for small motion.
-     * **Cross / Large Diamond Search** (`ME_CROSS`): Iterative expansion for larger motion ranges.
+     * **Little Diamond Search** (`ME_DIA` = `0x01`): A small 4-point cross pattern tested. If the center yields the best cost, search halts (assuming minor motion).
+     * **Cross / Large Diamond Search** (`ME_CROSS`): Iterative, expansive search pattern for handling high-motion scenarios.
   3. **Sub-Pixel Fractional Refinement (`ME_FME`)**:
-     * Half-pel evaluation around the best integer position using 6-tap filtered samples.
-     * Quarter-pel refinement around the best half-pel position.
+     * Performs Half-pel SAD evaluations immediately adjacent to the best integer-pel candidate using interpolated samples.
+     * Completes with Quarter-pel refinements to maximize match precision.
 
 ---
 
-### 3.5 Mode Decision (MD)
+### 3.5 Mode Decision (MD) & Rate-Distortion Optimization
 
-Implemented in [svc_mode_decision.cpp](openh264/codec/encoder/core/src/svc_mode_decision.cpp) and [md.cpp](openh264/codec/encoder/core/src/md.cpp):
+Implemented in [svc_mode_decision.cpp](openh264/codec/encoder/core/src/svc_mode_decision.cpp):
 
-* **Partition & Mode Evaluation**:
-  * **Inter Modes**: Evaluates `SKIP` (0-cost residual flag), `Inter_16x16`, `Inter_16x8`, `Inter_8x16`, and `Inter_8x8` sub-partitions.
-  * **Intra Modes**: Evaluates `Intra_4x4` (9 spatial modes) and `Intra_16x16` (4 spatial modes).
+* **Rate-Distortion Evaluation ($J$)**:
+  Selects the final block partition type by minimizing the Lagrangian cost equation:
+  $$J = D + \lambda_{\text{MODE}} \cdot R$$
+  where $D$ represents block distortion (often utilizing SATD: Sum of Absolute Transformed Differences to better correlate with perceptual quality post-transform).
+* **Inter Modes**: Evaluates combinations of `Inter_16x16`, `Inter_16x8`, `Inter_8x16`, and `Inter_8x8` partitions.
+* **Intra Modes**: Evaluates spatial predictors `Intra_4x4` (9 modes) and `Intra_16x16` (4 modes).
 * **Fast Early Termination**:
-  * If `SKIP` mode or `Inter_16x16` yields a cost lower than an adaptive SAD threshold, intra-mode evaluation is bypassed, reducing CPU cycles significantly.
+  If a `SKIP` mode or `Inter_16x16` match yields an SATD/SAD cost lower than an adaptive dynamic threshold, the encoder instantly bypasses all Intra-mode and sub-partition evaluations, drastically improving encoding speed.
 
 ---
 
@@ -313,51 +317,50 @@ Implemented in [svc_mode_decision.cpp](openh264/codec/encoder/core/src/svc_mode_
 Implemented in [encode_mb_aux.cpp](openh264/codec/encoder/core/src/encode_mb_aux.cpp):
 
 1. **4x4 Forward Core Transform**:
+   Computes the H.264 integer approximation of the DCT:
    $$W = C_f \cdot (X_{\text{orig}} - X_{\text{pred}}) \cdot C_f^T$$
-   where $C_f$ is the H.264 integer approximation matrix:
    $$C_f = \begin{pmatrix} 1 & 1 & 1 & 1 \\ 2 & 1 & -1 & -2 \\ 1 & -1 & -1 & 1 \\ 1 & -2 & 2 & -1 \end{pmatrix}$$
 2. **Quantization with Dead-Zone Rounding**:
+   The `WELS_NEW_QUANT` macro executes the standard formulation incorporating dynamic rounding offset $f$:
    $$Z_{ij} = \text{sign}(W_{ij}) \cdot \left( (|W_{ij}| \cdot M_{ij}(QP \pmod 6) + f) \gg (15 + QP/6) \right)$$
-   where $f$ is the rounding offset parameter ($\approx \frac{1}{3}$ for Intra, $\frac{1}{6}$ for Inter).
+   Where $f$ effectively creates a larger "dead-zone" near zero for Inter blocks ($\approx \frac{1}{6}$) to aggressively suppress noise, and a smaller one for Intra blocks ($\approx \frac{1}{3}$) to preserve detail.
 
 ---
 
 ### 3.7 Macroblock & Slice Encoding Loop
 
-Implemented in [svc_encode_slice.cpp](openh264/codec/encoder/core/src/svc_encode_slice.cpp) and [svc_encode_mb.cpp](openh264/codec/encoder/core/src/svc_encode_mb.cpp):
-* Coordinates the top-level macroblock raster traversal across slices.
-* Integrates mode decision, forward DCT, quantization, bitstream entropy encoding, and local macroblock reconstruction.
+Coordinated in [svc_encode_slice.cpp](openh264/codec/encoder/core/src/svc_encode_slice.cpp) and [svc_encode_mb.cpp](openh264/codec/encoder/core/src/svc_encode_mb.cpp).
+This sequence drives the core raster-scan processing loop: it aggregates MD, forward DCT, Quantization, constructs the final syntax variables, initiates entropy encoding, and ultimately performs local frame reconstruction (IDCT) so that the encoder DPB accurately mirrors the decoder's reality.
 
 ---
 
 ### 3.8 Entropy Encoding & NAL Encapsulation
 
-* **CAVLC Encoding** ([vlc_encoder.cpp](openh264/codec/encoder/core/src/vlc_encoder.cpp), [svc_set_mb_syn_cavlc.cpp](openh264/codec/encoder/core/src/svc_set_mb_syn_cavlc.cpp)):
-  * Encodes macroblock header syntax, prediction modes, MVDs, `coeff_token`, signs, level codes, `total_zeros`, and `run_before` into bit buffers.
-* **CABAC Encoding** ([set_mb_syn_cabac.cpp](openh264/codec/encoder/core/src/set_mb_syn_cabac.cpp), [svc_set_mb_syn_cabac.cpp](openh264/codec/encoder/core/src/svc_set_mb_syn_cabac.cpp)):
-  * Binary arithmetic coding engine for macroblock symbols and transform coefficient maps.
+* **CAVLC Encoding** ([vlc_encoder.cpp](openh264/codec/encoder/core/src/vlc_encoder.cpp)):
+  Encodes macroblock headers, MVDs, and packs residual coefficients using structured VLC tables.
+* **CABAC Encoding** ([set_mb_syn_cabac.cpp](openh264/codec/encoder/core/src/set_mb_syn_cabac.cpp)):
+  Feeds syntax elements into a binary arithmetic coding engine maintaining active probability contexts.
 * **NAL Encapsulation** ([nal_encap.cpp](openh264/codec/encoder/core/src/nal_encap.cpp)):
-  * Converts Raw Byte Sequence Payload (RBSP) to SODB/EBSP by injecting emulation prevention bytes (`0x03`) and prepending Annex-B start codes (`0x00000001`).
+  Converts the Raw Byte Sequence Payload (RBSP) from the slice encoders into a safe byte-stream by injecting emulation prevention bytes (`0x03`) everywhere `0x000000` to `0x000003` sequences natively form, and appending Annex-B start codes.
 
 ---
 
 ### 3.9 Slice Multithreading & Scalability Management (SVC / LTR)
 
-* **Slicing Modes**:
-  * `SM_SINGLE_SLICE`: 1 slice per frame.
-  * `SM_FIXEDSLCNUM_SLICE`: Fixed $N$ slices per frame (assigned across worker threads in parallel via [slice_multi_threading.cpp](openh264/codec/encoder/core/src/slice_multi_threading.cpp) and [wels_task_management.cpp](openh264/codec/encoder/core/src/wels_task_management.cpp)).
+* **Slicing Modes** (configured via `codec_app_def.h`):
+  * `SM_SINGLE_SLICE`: Standard solitary slice per frame.
+  * `SM_FIXEDSLCNUM_SLICE`: Fixed $N$ slices mapped concurrently to thread pools.
   * `SM_RASTER_SLICE`: Fixed macroblock count per slice.
-  * `SM_SIZELIMITED_SLICE`: Dynamic slice boundary splitting based on maximum MTU byte size constraints (ideal for real-time UDP transmission).
+  * `SM_SIZELIMITED_SLICE`: Dynamic slice boundary splitting evaluating accumulating bit totals against maximum MTU thresholds, preventing UDP fragmentation.
 * **Long-Term Reference (LTR) & Temporal Scalability**:
-  * Reference list management handled by [ref_list_mgr_svc.cpp](openh264/codec/encoder/core/src/ref_list_mgr_svc.cpp).
-  * Encodes hierarchical temporal layers ($T_0 \to T_1 \to T_2$).
-  * Supports LTR marking feedback: When packet loss occurs at the receiver, the encoder can reference a verified LTR frame ($T_0$) to recover stream decodability without requiring a full IDR keyframe intra-refresh.
+  * Regulated by [ref_list_mgr_svc.cpp](openh264/codec/encoder/core/src/ref_list_mgr_svc.cpp).
+  * If the transmitter receives feedback that a packet carrying $T_1$ data was lost, it can issue an explicit MMCO instruction to the decoder referencing the last safely received LTR base frame ($T_0$), bypassing the heavy bandwidth cost of generating a full IDR keyframe to recover stream decodability.
 
 ---
 
 ## 4. Shared Subsystems & SIMD Optimization
 
-OpenH264 achieves real-time performance through comprehensive assembly optimization across multiple ISAs:
+OpenH264 achieves real-time performance through comprehensive assembly optimization across multiple architectures. Runtime detection (`uiCpuFlag`) dynamically patches `SWelsFuncPtrList` matrices.
 
 ```
 codec/common/
@@ -374,10 +377,9 @@ codec/common/
 ```
 
 ### SIMD Acceleration Targets
-1. **Motion Compensation**: 16x16, 16x8, 8x16, 8x8 block half-pel filtering and bilinear quarter-pel blending using SSE2/NEON vector instructions.
-2. **SAD / SATD Kernels**: Parallel vector difference, accumulation, and 4x4 Hadamard transform butterfly SIMD operations.
-3. **DCT & IDCT Transforms**: 16-bit integer matrix multiplications processing four 4x4 blocks concurrently in 128-bit vector registers.
-4. **Deblocking Filter**: Parallel edge sample boundary comparisons and conditional pixel clamping.
+1. **Motion Compensation**: 16x16, 16x8, 8x16, 8x8 block half-pel filtering utilizing shuffle and pack/unpack SSE2/NEON vector instructions.
+2. **SAD / SATD Kernels**: Parallel vector difference and accumulation combined with 4x4 Hadamard transform butterflies executed natively in 128-bit vector lanes.
+3. **DCT & IDCT Transforms**: 16-bit integer matrix multiplications processing four 4x4 blocks concurrently.
 
 ---
 
