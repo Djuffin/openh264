@@ -229,10 +229,12 @@ A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimpleme
   - `GetI4LumaIChromaAddrTable` ([`decode_mb_aux.rs`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs))
 * **Fix**: Replaced all empty fallback stubs returning `ERR_NONE` or `()` in `decoder_core.rs` and `error_concealment.rs` with delegation wrappers that invoke their real functional implementations in `decode_slice.rs`, `manage_dec_ref.rs`, and `decode_mb_aux.rs`. Added `test_inline_delegation_stubs_null` unit test in `decoder_core.rs` to verify safe null-pointer handling across all delegation wrappers. All 140/140 unit tests pass.
 
-### 5.4 Intentional No-Op Callbacks (Architectural Design)
-* **Location**: Rate control and mode decision modules in `encoder/`
+### 5.4 Intentional No-Op Callbacks (Architectural Design) `[RESOLVED]`
+* **C++ Implementation**: [`ratectl.cpp:1020-1319`](codec/encoder/core/src/ratectl.cpp#L1020-L1319), [`ref_list_mgr_svc.cpp:996`](codec/encoder/core/src/ref_list_mgr_svc.cpp#L996), [`svc_mode_decision.cpp:689`](codec/encoder/core/src/svc_mode_decision.cpp#L689), and [`svc_motion_estimate.cpp:1059`](codec/encoder/core/src/svc_motion_estimate.cpp#L1059)
+* **Rust Translation**: Rate control and mode decision modules in `encoder/`
 * **Functions**:
-  - `WelsRcPostFrameSkippedUpdate`, `WelsRcPictureInfoUpdateDisable`, `WelsRcMbInfoUpdateDisable` ([`rc.rs`](rust/crates/openh264-rs/src/encoder/rc.rs)) — No-op callbacks invoked when rate control is disabled or frames are skipped.
-  - `DoNothing` ([`ref_list_mgr_svc.rs:1761`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L1761)), `SetScrollingMvToMdNull` ([`svc_mode_decision.rs:1802`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L1802)), `UpdateFMESwitchNull` ([`svc_motion_estimate.rs:1732`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L1732)) — Null callbacks for inactive encoder mode decisions and reference management.
+  - `WelsRcPostFrameSkippedUpdate`, `WelsRcPictureInfoUpdateDisable`, `WelsRcMbInfoUpdateDisable` ([`rc.rs`](rust/crates/openh264-rs/src/encoder/rc.rs))
+  - `DoNothing` ([`ref_list_mgr_svc.rs:1761`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L1761)), `SetScrollingMvToMdNull` ([`svc_mode_decision.rs:1802`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L1802)), `UpdateFMESwitchNull` ([`svc_motion_estimate.rs:1732`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L1732))
+* **Fix**: Audited and documented these 6 callbacks as intentional architectural no-op functions matching C++ design (used when rate control is disabled or certain mode decisions/reference list management features are inactive). Added explicit unit tests (`test_rc_intentional_noop_callbacks`, `test_ref_list_mgr_noop_callback`, `test_svc_mode_decision_noop_callback`, `test_fme_noop_callback`) in `rc.rs`, `ref_list_mgr_svc.rs`, `svc_mode_decision.rs`, and `svc_motion_estimate.rs` to verify safe invocation and function-pointer table compatibility. All 143/143 unit tests pass.
 
 

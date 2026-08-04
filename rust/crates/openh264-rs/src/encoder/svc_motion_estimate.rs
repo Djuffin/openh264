@@ -1729,6 +1729,8 @@ pub unsafe extern "C" fn UpdateFMESwitch(pCurLayer: *mut SDqLayer) {
     }
 }
 
+/// Intentional no-op motion estimation FME switch callback.
+/// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
 pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 
 // ============================================================================
@@ -1984,5 +1986,12 @@ mod tests {
         assert!(CalcFMESwitchFlag(2, 0, 40, false));
         assert!(!CalcFMESwitchFlag(0, 0, 40, false));
         assert!(CalcFMESwitchFlag(0, 0, 10, true));
+    }
+
+    #[test]
+    fn test_fme_noop_callback() {
+        unsafe {
+            UpdateFMESwitchNull(std::ptr::null_mut());
+        }
     }
 }

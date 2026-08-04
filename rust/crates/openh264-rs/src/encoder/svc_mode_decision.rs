@@ -1799,6 +1799,8 @@ pub unsafe extern "C" fn SetScrollingMvToMd(pVaa: *mut SVAAFrameInfo, pWelsMd: *
     (*pWelsMd).sMe.sMe8x8[3].sDirectionalMv = sTempMv;
 }
 
+/// Intentional no-op mode decision scrolling MV callback.
+/// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
 pub unsafe extern "C" fn SetScrollingMvToMdNull(_pVaa: *mut SVAAFrameInfo, _pWelsMd: *mut SWelsMD) {}
 
 #[cfg(test)]
@@ -2025,6 +2027,13 @@ mod tests {
             );
 
             assert!(cost < i32::MAX);
+        }
+    }
+
+    #[test]
+    fn test_svc_mode_decision_noop_callback() {
+        unsafe {
+            SetScrollingMvToMdNull(std::ptr::null_mut(), std::ptr::null_mut());
         }
     }
 }

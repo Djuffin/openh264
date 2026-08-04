@@ -13,6 +13,7 @@ pub mod svc_motion_estimate;
 pub mod svc_set_mb_syn_cabac;
 pub mod svc_set_mb_syn_cavlc;
 pub mod vlc_encoder;
+pub mod ref_list_mgr_svc;
 pub mod rc;
 pub mod wels_encoder_ext;
 pub mod wels_preprocess;

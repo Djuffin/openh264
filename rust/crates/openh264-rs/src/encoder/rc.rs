@@ -1793,6 +1793,8 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
     }
 }
 
+/// Intentional no-op callback invoked after frame skipping.
+/// Matches `WelsRcPostFrameSkipping` in `ratectl.cpp`.
 pub unsafe extern "C" fn WelsRcPostFrameSkipping(
     _pCtx: *mut sWelsEncCtx,
     _iDid: i32,
@@ -1801,6 +1803,8 @@ pub unsafe extern "C" fn WelsRcPostFrameSkipping(
     false
 }
 
+/// Intentional no-op callback invoked after frame skipped update.
+/// Matches `WelsRcPostFrameSkippedUpdate` in `ratectl.cpp`.
 pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) {}
 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
@@ -2116,6 +2120,8 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _ui
     (*pWelsSvcRc).iAverageFrameQp = (*pEncCtx).iGlobalQp;
 }
 
+/// Intentional no-op picture-level RC update callback when rate control is disabled.
+/// Matches `WelsRcPictureInfoUpdateDisable` in `ratectl.cpp:1298`.
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateDisable(_pEncCtx: *mut sWelsEncCtx, _iLayerSize: i32) {}
 
 pub unsafe extern "C" fn WelsRcMbInitDisable(
@@ -2147,6 +2153,8 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     (*pCurMb).uiLumaQp = iLumaQp as u8;
 }
 
+/// Intentional no-op macroblock-level RC update callback when rate control is disabled.
+/// Matches `WelsRcMbInfoUpdateDisable` in `ratectl.cpp:1319`.
 pub unsafe extern "C" fn WelsRcMbInfoUpdateDisable(
     _pEncCtx: *mut sWelsEncCtx,
     _pCurMb: *mut SMB,
@@ -2510,6 +2518,21 @@ mod tests {
         assert_eq!(WELS_CLIP3(-5, 0, 51), 0);
         assert_eq!(WELS_CLIP3(25, 0, 51), 25);
         assert_eq!(WELS_DIV_ROUND(100, 10), 10);
+    }
+
+    #[test]
+    fn test_rc_intentional_noop_callbacks() {
+        unsafe {
+            assert!(!WelsRcPostFrameSkipping(std::ptr::null_mut(), 0, 0));
+            WelsRcPostFrameSkippedUpdate(std::ptr::null_mut(), 0);
+            WelsRcPictureInfoUpdateDisable(std::ptr::null_mut(), 0);
+            WelsRcMbInfoUpdateDisable(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+            );
+        }
     }
 }
 
