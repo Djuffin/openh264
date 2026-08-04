@@ -406,118 +406,79 @@ impl Default for SLayerInfo {
 pub struct SDqLayer {
     pub sLayerInfo: SLayerInfo,
     pub pBitStringAux: *mut SBitStringAux,
-    pub pDec: *mut SPicture,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub iSliceIdcBackup: i32,
-    pub uiPpsId: i32,
-    pub uiDisableInterLayerDeblockingFilterIdc: u8,
-    pub iInterLayerSliceAlphaC0Offset: i32,
-    pub iInterLayerSliceBetaOffset: i32,
-    pub iSliceGroupChangeCycle: i32,
-    pub bStoreRefBasePicFlag: bool,
-    pub bTCoeffLevelPredFlag: bool,
-    pub bConstrainedIntraResamplingFlag: bool,
-    pub uiRefLayerDqId: u8,
-    pub uiRefLayerChromaPhaseXPlus1Flag: u8,
-    pub uiRefLayerChromaPhaseYPlus1: u8,
-    pub bUseWeightPredictionFlag: bool,
-    pub bUseWeightedBiPredIdc: bool,
-    pub pPredWeightTable: *mut SPredWeightTable,
-    pub pRefPicListReordering: *mut SRefPicListReorderSyn,
-    pub pRefPicMarking: *mut SRefPicMarking,
-    pub pRefPicBaseMarking: *mut SRefBasePicMarking,
-    pub uiLayerDqId: u8,
-    pub bUseRefBasePicFlag: bool,
+    pub pFmo: *mut crate::decoder::fmo::TagFmo,
     pub pMbType: *mut u32,
     pub pSliceIdc: *mut i32,
     pub pMv: [*mut i16; LIST_A],
+    pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pRefIndex: [*mut i8; LIST_A],
     pub pDirect: *mut i8,
     pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
     pub pTransformSize8x8Flag: *mut bool,
     pub pLumaQp: *mut i8,
     pub pChromaQp: *mut [i8; 2],
-    pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
-
+    pub pCbp: *mut i8,
     pub pCbfDc: *mut u16,
-    pub iMbX: i32,
-    pub iMbY: i32,
-    pub iMbXyIndex: i32,
     pub pNzc: *mut [i8; 24],
     pub pNzcRs: *mut [i8; 24],
+    pub pResidualPredFlag: *mut i8,
+    pub pInterPredictionDoneFlag: *mut i8,
+    pub pMbCorrectlyDecodedFlag: *mut bool,
+    pub pMbRefConcealedFlag: *mut bool,
     pub pScaledTCoeff: *mut [i16; 384],
-
     pub pIntraPredMode: *mut i8,
     pub pIntra4x4FinalMode: *mut i8,
     pub pIntraNxNAvailFlag: *mut u8,
     pub pChromaPredMode: *mut i8,
-    pub pCbp: *mut i8,
     pub pSubMbType: *mut [u32; 4],
+    pub iLumaStride: i32,
+    pub iChromaStride: i32,
+    pub pPred: [*mut u8; 3],
+    pub iMbX: i32,
+    pub iMbY: i32,
+    pub iMbXyIndex: i32,
+    pub iMbWidth: i32,
+    pub iMbHeight: i32,
 
-    pub pInterPredictionDoneFlag: *mut i8,
-    pub pResidualPredFlag: *mut i8,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pMbRefConcealedFlag: *mut bool,
+    /* Common syntax elements across all slices of a DQLayer */
+    pub iSliceIdcBackup: i32,
+    pub uiSpsId: u32,
+    pub uiPpsId: u32,
+    pub uiDisableInterLayerDeblockingFilterIdc: u32,
+    pub iInterLayerSliceAlphaC0Offset: i32,
+    pub iInterLayerSliceBetaOffset: i32,
+    pub iSliceGroupChangeCycle: i32,
+
+    pub pRefPicListReordering: *mut SRefPicListReorderSyn,
+    pub pPredWeightTable: *mut SPredWeightTable,
+    pub pRefPicMarking: *mut SRefPicMarking,
+    pub pRefPicBaseMarking: *mut SRefBasePicMarking,
+
+    pub pRef: *mut Picture,
+    pub pDec: *mut Picture,
+
+    pub iColocMv: [[[i16; 2]; 16]; 2],
+    pub iColocRefIndex: [[i8; 16]; 2],
+    pub iColocIntra: [i8; 16],
+
+    pub bUseWeightPredictionFlag: bool,
+    pub bUseWeightedBiPredIdc: bool,
+    pub bStoreRefBasePicFlag: bool,
+    pub bTCoeffLevelPredFlag: bool,
+    pub bConstrainedIntraResamplingFlag: bool,
+    pub uiRefLayerDqId: u8,
+    pub uiRefLayerChromaPhaseXPlus1Flag: u8,
+    pub uiRefLayerChromaPhaseYPlus1: u8,
+    pub uiLayerDqId: u8,
+    pub bUseRefBasePicFlag: bool,
 }
 
 impl Default for SDqLayer {
     fn default() -> Self {
-        Self {
-            sLayerInfo: SLayerInfo::default(),
-            pBitStringAux: std::ptr::null_mut(),
-            pDec: std::ptr::null_mut(),
-            iMbWidth: 0,
-            iMbHeight: 0,
-            iSliceIdcBackup: 0,
-            uiPpsId: 0,
-            uiDisableInterLayerDeblockingFilterIdc: 0,
-            iInterLayerSliceAlphaC0Offset: 0,
-            iInterLayerSliceBetaOffset: 0,
-            iSliceGroupChangeCycle: 0,
-            bStoreRefBasePicFlag: false,
-            bTCoeffLevelPredFlag: false,
-            bConstrainedIntraResamplingFlag: false,
-            uiRefLayerDqId: 255,
-            uiRefLayerChromaPhaseXPlus1Flag: 0,
-            uiRefLayerChromaPhaseYPlus1: 1,
-            bUseWeightPredictionFlag: false,
-            bUseWeightedBiPredIdc: false,
-            pPredWeightTable: std::ptr::null_mut(),
-            pRefPicListReordering: std::ptr::null_mut(),
-            pRefPicMarking: std::ptr::null_mut(),
-            pRefPicBaseMarking: std::ptr::null_mut(),
-            uiLayerDqId: 0,
-            bUseRefBasePicFlag: false,
-            pMbType: std::ptr::null_mut(),
-            pSliceIdc: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); LIST_A],
-            pRefIndex: [std::ptr::null_mut(); LIST_A],
-            pDirect: std::ptr::null_mut(),
-            pNoSubMbPartSizeLessThan8x8Flag: std::ptr::null_mut(),
-            pTransformSize8x8Flag: std::ptr::null_mut(),
-            pLumaQp: std::ptr::null_mut(),
-            pChromaQp: std::ptr::null_mut(),
-            pMvd: [std::ptr::null_mut(); LIST_A],
-            pCbfDc: std::ptr::null_mut(),
-            iMbX: 0,
-            iMbY: 0,
-            iMbXyIndex: 0,
-            pNzc: std::ptr::null_mut(),
-            pNzcRs: std::ptr::null_mut(),
-            pScaledTCoeff: std::ptr::null_mut(),
-
-            pIntraPredMode: std::ptr::null_mut(),
-            pIntra4x4FinalMode: std::ptr::null_mut(),
-            pIntraNxNAvailFlag: std::ptr::null_mut(),
-            pChromaPredMode: std::ptr::null_mut(),
-            pCbp: std::ptr::null_mut(),
-            pSubMbType: std::ptr::null_mut(),
-            pInterPredictionDoneFlag: std::ptr::null_mut(),
-            pResidualPredFlag: std::ptr::null_mut(),
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pMbRefConcealedFlag: std::ptr::null_mut(),
-        }
+        let mut layer: Self = unsafe { std::mem::zeroed() };
+        layer.uiRefLayerDqId = 255;
+        layer.uiRefLayerChromaPhaseYPlus1 = 1;
+        layer
     }
 }
 
@@ -2769,9 +2730,9 @@ pub unsafe fn InitDqLayerInfo(
         | (pNalHdrExt.uiQualityId as i32);
 
     if !(*pLayerInfo).pPps.is_null() {
-        (*pDqLayer).uiPpsId = (*(*pLayerInfo).pPps).iPpsId;
+        (*pDqLayer).uiPpsId = (*(*pLayerInfo).pPps).iPpsId as u32;
     }
-    (*pDqLayer).uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc as u8;
+    (*pDqLayer).uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc;
     (*pDqLayer).iInterLayerSliceAlphaC0Offset = (*pShExt).iInterLayerSliceAlphaC0Offset;
     (*pDqLayer).iInterLayerSliceBetaOffset = (*pShExt).iInterLayerSliceBetaOffset;
     (*pDqLayer).iSliceGroupChangeCycle = (*pSh).iSliceGroupChangeCycle;
