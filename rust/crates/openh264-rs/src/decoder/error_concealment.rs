@@ -67,9 +67,9 @@ pub enum ERROR_CON_IDC {
 
 // Error status bitmask flags
 pub const ERR_NONE: i32 = 0;
-pub const dsBitstreamError: i32 = 0x02;
-pub const dsDataErrorConcealed: i32 = 0x04;
-pub const dsRefLost: i32 = 0x08;
+pub const dsRefLost: i32 = 0x02;
+pub const dsBitstreamError: i32 = 0x04;
+pub const dsDataErrorConcealed: i32 = 0x20;
 
 // CPU Feature Flags
 pub const WELS_CPU_MMXEXT: u32 = 0x00000002;

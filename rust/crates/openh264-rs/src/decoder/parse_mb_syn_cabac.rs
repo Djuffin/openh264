@@ -101,8 +101,8 @@ pub const ERR_INFO_INVALID_REF_INDEX: i32 = 1040;
 pub const ERR_INFO_REFERENCE_PIC_LOST: i32 = 1075;
 pub const ERR_CABAC_NO_BS_TO_READ: i32 = 201;
 
-pub const dsBitstreamError: i32 = 0x02;
-pub const dsRefLost: i32 = 0x04;
+pub const dsRefLost: i32 = 0x02;
+pub const dsBitstreamError: i32 = 0x04;
 pub const ERROR_CON_DISABLE: crate::decoder::error_concealment::ERROR_CON_IDC = crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
 
 #[inline(always)]

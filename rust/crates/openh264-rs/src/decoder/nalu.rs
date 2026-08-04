@@ -120,9 +120,9 @@ pub const ERR_INFO_INVALID_CHROMA_QP_INDEX_OFFSET: i32 = 20;
 pub const ERR_INFO_INVALID_SPS_ID: i32 = 21;
 pub const ERR_SCALING_LIST_DELTA_SCALE: i32 = 22;
 
-pub const dsBitstreamError: i32 = 0x02;
-pub const dsNoParamSets: i32 = 0x04;
-pub const dsOutOfMemory: i32 = 0x08;
+pub const dsBitstreamError: i32 = 0x04;
+pub const dsNoParamSets: i32 = 0x10;
+pub const dsOutOfMemory: i32 = 0x4000;
 
 pub const OVERWRITE_SPS: i32 = 0x01;
 pub const OVERWRITE_PPS: i32 = 0x02;

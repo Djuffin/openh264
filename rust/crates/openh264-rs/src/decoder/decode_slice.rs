@@ -47,7 +47,7 @@ pub const ERR_INFO_MB_RECON_FAIL: i32 = ERR_INFO_LOGIC_BASE + 7;
 pub const ERR_INFO_MB_NUM_EXCEED_FAIL: i32 = ERR_INFO_LOGIC_BASE + 8;
 pub const ERR_INFO_BS_INCOMPLETE: i32 = ERR_INFO_LOGIC_BASE + 9;
 
-pub const dsBitstreamError: i32 = 0x02;
+pub const dsBitstreamError: i32 = 0x04;
 
 pub const WELS_LOG_ERROR: i32 = 1;
 pub const WELS_LOG_WARNING: i32 = 2;

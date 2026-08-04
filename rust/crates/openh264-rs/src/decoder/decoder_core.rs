@@ -141,7 +141,7 @@ pub const dsDepLayerLost: i32 = 0x08;
 pub const dsNoParamSets: i32 = 0x10;
 pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsRefListNullPtrs: i32 = 0x40;
-pub const dsOutOfMemory: i32 = 0x80;
+pub const dsOutOfMemory: i32 = 0x4000;
 
 // MMCO Types
 pub const MMCO_END: u32 = 0;

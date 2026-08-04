@@ -86,10 +86,18 @@ pub const ERR_INFO_INVALID_PARAM: i32 = 1;
 pub const ERR_INFO_OUT_OF_MEMORY: i32 = 2;
 pub const ERR_INFO_INVALID_PTR: i32 = 3;
 
-pub const dsBitstreamError: i32 = 0x01;
-pub const dsNoParamSets: i32 = 0x02;
-pub const dsDataErrorConcealed: i32 = 0x04;
-pub const dsOutOfMemory: i32 = 0x08;
+pub const dsErrorFree: i32 = 0x00;
+pub const dsFramePending: i32 = 0x01;
+pub const dsRefLost: i32 = 0x02;
+pub const dsBitstreamError: i32 = 0x04;
+pub const dsDepLayerLost: i32 = 0x08;
+pub const dsNoParamSets: i32 = 0x10;
+pub const dsDataErrorConcealed: i32 = 0x20;
+pub const dsRefListNullPtrs: i32 = 0x40;
+pub const dsInvalidArgument: i32 = 0x1000;
+pub const dsInitialOptExpected: i32 = 0x2000;
+pub const dsOutOfMemory: i32 = 0x4000;
+pub const dsDstBufNeedExpan: i32 = 0x8000;
 
 // Error Concealment Modes
 pub const ERROR_CON_DISABLE: i32 = 0;
