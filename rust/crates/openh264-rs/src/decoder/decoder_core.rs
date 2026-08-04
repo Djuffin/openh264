@@ -845,42 +845,42 @@ pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, bOutput: bool) {
 
 #[inline]
 pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx)
 }
 
 #[inline]
 pub unsafe fn WelsDecodeSlice(pCtx: PWelsDecoderContext, bFreshSlice: bool, pCurNal: PNalUnit) -> i32 {
-    ERR_NONE
+    crate::decoder::decode_slice::WelsDecodeSlice(pCtx, bFreshSlice, pCurNal)
 }
 
 #[inline]
 pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx)
 }
 
 #[inline]
 pub unsafe fn WelsInitRefList(pCtx: PWelsDecoderContext, iPoc: i32) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, iPoc)
 }
 
 #[inline]
 pub unsafe fn WelsInitBSliceRefList(pCtx: PWelsDecoderContext, iPoc: i32) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsInitBSliceRefList(pCtx, iPoc)
 }
 
 #[inline]
 pub unsafe fn WelsReorderRefList(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx)
 }
 
 #[inline]
 pub unsafe fn WelsReorderRefList2(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx)
 }
 
 #[inline]
 pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, std::ptr::null_mut())
 }
 
 #[inline]
@@ -934,7 +934,9 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
 }
 
 #[inline]
-pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {}
+pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {
+    crate::decoder::manage_dec_ref::WelsResetRefPic(pCtx)
+}
 
 pub use crate::decoder::pic_queue::{PrefetchPic, PrefetchLastPicForThread};
 
@@ -3394,6 +3396,24 @@ mod tests {
             assert_eq!(stat.uiLevel, 31);
             assert_eq!(stat.uiDecodedFrameCount, 0);
             assert_eq!(stat.uiIDRCorrectNum, 0);
+        }
+    }
+
+    #[test]
+    fn test_inline_delegation_stubs_null() {
+        unsafe {
+            assert_eq!(WelsTargetSliceConstruction(std::ptr::null_mut()), ERR_NONE);
+            assert_eq!(
+                WelsDecodeSlice(std::ptr::null_mut(), true, std::ptr::null_mut()),
+                ERR_NONE
+            );
+            assert_eq!(WelsDecodeAndConstructSlice(std::ptr::null_mut()), ERR_NONE);
+            assert_ne!(WelsInitRefList(std::ptr::null_mut(), 0), ERR_NONE);
+            assert_ne!(WelsInitBSliceRefList(std::ptr::null_mut(), 0), ERR_NONE);
+            assert_ne!(WelsReorderRefList(std::ptr::null_mut()), ERR_NONE);
+            assert_ne!(WelsReorderRefList2(std::ptr::null_mut()), ERR_NONE);
+            assert_ne!(WelsMarkAsRef(std::ptr::null_mut()), ERR_NONE);
+            WelsResetRefPic(std::ptr::null_mut());
         }
     }
 }

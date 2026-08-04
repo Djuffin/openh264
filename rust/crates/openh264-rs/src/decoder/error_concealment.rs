@@ -944,9 +944,8 @@ pub unsafe fn ExpandReferencingPicture(
 }
 
 /// Fallback DPB reference marking routine.
-#[inline]
 pub unsafe extern "C" fn WelsMarkAsRef(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
+    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, std::ptr::null_mut())
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
