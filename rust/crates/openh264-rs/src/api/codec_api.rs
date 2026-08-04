@@ -1429,7 +1429,7 @@ unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
     let dec_impl = this as *mut CWelsDecoderImpl;
     unsafe {
         if !(*dec_impl).pCtx.is_null() {
-            crate::decoder::decoder_core::WelsFreeStaticMemory((*dec_impl).pCtx as *mut _);
+            crate::decoder::decoder_core::WelsEndDecoder((*dec_impl).pCtx as *mut _);
             drop(Box::from_raw((*dec_impl).pCtx as *mut crate::decoder::decoder_context::SWelsDecoderContext));
             (*dec_impl).pCtx = ptr::null_mut();
         }
@@ -1493,6 +1493,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         }
 
         if !kpSrc.is_null() && kiSrcLen > 0 {
+            (*p_ctx).bEndOfStreamFlag = false;
             crate::decoder::decoder_core::WelsDecodeBs(
                 p_ctx as *mut _,
                 kpSrc,
@@ -1501,11 +1502,16 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                 pDstInfo,
                 ptr::null_mut(),
             );
-        } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag {
+        } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag || kpSrc.is_null() || kiSrcLen == 0 {
             (*p_ctx).bEndOfStreamFlag = true;
-            if !(*p_ctx).pDec.is_null() {
-                crate::decoder::decoder_core::DecodeFrameConstruction(p_ctx as *mut _, ppDst, pDstInfo as *mut _);
-            }
+            crate::decoder::decoder_core::WelsDecodeBs(
+                p_ctx as *mut _,
+                kpSrc,
+                0,
+                ppDst,
+                pDstInfo,
+                ptr::null_mut(),
+            );
         }
     }
     DECODING_STATE::dsErrorFree
@@ -1670,7 +1676,7 @@ pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
         unsafe {
             let dec_impl = pDecoder as *mut CWelsDecoderImpl;
             if !(*dec_impl).pCtx.is_null() {
-                crate::decoder::decoder_core::WelsFreeStaticMemory((*dec_impl).pCtx);
+                crate::decoder::decoder_core::WelsEndDecoder((*dec_impl).pCtx);
                 drop(Box::from_raw((*dec_impl).pCtx));
                 (*dec_impl).pCtx = ptr::null_mut();
             }

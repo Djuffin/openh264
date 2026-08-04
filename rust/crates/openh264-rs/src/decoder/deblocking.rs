@@ -222,200 +222,18 @@ pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
 
 
-#[repr(C)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub eSliceType: EWelsSliceType,
-    pub iTotalMbInCurSlice: i32,
-}
-pub type PSlice = *mut SSlice;
+pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, SDqLayer, PDqLayer};
+pub use crate::decoder::decoder_context::{
+    SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter,
+    PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
+    PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
+};
 
-#[repr(C)]
-pub struct SLayerInfo {
-    pub sSliceInLayer: SSlice,
-}
-
-#[repr(C)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub pBitStringAux: *mut std::ffi::c_void,
-    pub pFmo: *mut std::ffi::c_void,
-    pub pMbType: *mut u32,
-    pub pSliceIdc: *mut i32,
-    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pMvd: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
-    pub pDirect: *mut [i8; MB_BLOCK4x4_NUM],
-    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
-    pub pTransformSize8x8Flag: *mut bool,
-    pub pLumaQp: *mut i8,
-    pub pChromaQp: *mut [i8; 2],
-    pub pCbp: *mut i8,
-    pub pCbfDc: *mut u16,
-    pub pNzc: *mut [i8; 24],
-    pub pNzcRs: *mut [i8; 24],
-    pub pResidualPredFlag: *mut i8,
-    pub pInterPredictionDoneFlag: *mut i8,
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pMbRefConcealedFlag: *mut bool,
-    pub pScaledTCoeff: *mut std::ffi::c_void,
-    pub pIntraPredMode: *mut [i8; 8],
-    pub pIntra4x4FinalMode: *mut [i8; MB_BLOCK4x4_NUM],
-    pub pIntraNxNAvailFlag: *mut u8,
-    pub pChromaPredMode: *mut i8,
-    pub pSubMbType: *mut [u32; 4],
-    pub iLumaStride: i32,
-    pub iChromaStride: i32,
-    pub pPred: [*mut u8; 3],
-    pub iMbX: i32,
-    pub iMbY: i32,
-    pub iMbXyIndex: i32,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub iSliceIdcBackup: i32,
-    pub uiSpsId: u32,
-    pub uiPpsId: u32,
-    pub uiDisableInterLayerDeblockingFilterIdc: u32,
-    pub iInterLayerSliceAlphaC0Offset: i32,
-    pub iInterLayerSliceBetaOffset: i32,
-    pub iSliceGroupChangeCycle: i32,
-    pub pRefPicListReordering: *mut std::ffi::c_void,
-    pub pPredWeightTable: *mut std::ffi::c_void,
-    pub pRefPicMarking: *mut std::ffi::c_void,
-    pub pRefPicBaseMarking: *mut std::ffi::c_void,
-    pub pRef: *mut SPicture,
-    pub pDec: *mut SPicture,
-}
-pub type PDqLayer = *mut SDqLayer;
-
-#[repr(C)]
-pub struct SRefPic {
-    pub pRefList: [*mut *mut SPicture; LIST_A],
-}
-
-// Function Pointer Typedefs
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
     pCurDqLayer: *mut SDqLayer,
     filter: *mut SDeblockingFilter,
     boundry_flag: i32,
 );
-
-pub type PLumaDeblockingLT4Func = unsafe extern "C" fn(
-    iSampleY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    iTc: *mut i8,
-);
-
-pub type PLumaDeblockingEQ4Func = unsafe extern "C" fn(
-    iSampleY: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-);
-
-pub type PChromaDeblockingLT4Func = unsafe extern "C" fn(
-    iSampleCb: *mut u8,
-    iSampleCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    iTc: *mut i8,
-);
-
-pub type PChromaDeblockingEQ4Func = unsafe extern "C" fn(
-    iSampleCb: *mut u8,
-    iSampleCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-);
-
-pub type PChromaDeblockingLT4Func2 = unsafe extern "C" fn(
-    iSampleCbr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    iTc: *mut i8,
-);
-
-pub type PChromaDeblockingEQ4Func2 = unsafe extern "C" fn(
-    iSampleCbr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-);
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SDeblockingFunc {
-    pub pfLumaDeblockingLT4Ver: Option<PLumaDeblockingLT4Func>,
-    pub pfLumaDeblockingEQ4Ver: Option<PLumaDeblockingEQ4Func>,
-    pub pfLumaDeblockingLT4Hor: Option<PLumaDeblockingLT4Func>,
-    pub pfLumaDeblockingEQ4Hor: Option<PLumaDeblockingEQ4Func>,
-
-    pub pfChromaDeblockingLT4Ver: Option<PChromaDeblockingLT4Func>,
-    pub pfChromaDeblockingEQ4Ver: Option<PChromaDeblockingEQ4Func>,
-    pub pfChromaDeblockingLT4Hor: Option<PChromaDeblockingLT4Func>,
-    pub pfChromaDeblockingEQ4Hor: Option<PChromaDeblockingEQ4Func>,
-
-    pub pfChromaDeblockingLT4Ver2: Option<PChromaDeblockingLT4Func2>,
-    pub pfChromaDeblockingEQ4Ver2: Option<PChromaDeblockingEQ4Func2>,
-    pub pfChromaDeblockingLT4Hor2: Option<PChromaDeblockingLT4Func2>,
-    pub pfChromaDeblockingEQ4Hor2: Option<PChromaDeblockingEQ4Func2>,
-}
-
-impl Default for SDeblockingFunc {
-    fn default() -> Self {
-        Self {
-            pfLumaDeblockingLT4Ver: None,
-            pfLumaDeblockingEQ4Ver: None,
-            pfLumaDeblockingLT4Hor: None,
-            pfLumaDeblockingEQ4Hor: None,
-            pfChromaDeblockingLT4Ver: None,
-            pfChromaDeblockingEQ4Ver: None,
-            pfChromaDeblockingLT4Hor: None,
-            pfChromaDeblockingEQ4Hor: None,
-            pfChromaDeblockingLT4Ver2: None,
-            pfChromaDeblockingEQ4Ver2: None,
-            pfChromaDeblockingLT4Hor2: None,
-            pfChromaDeblockingEQ4Hor2: None,
-        }
-    }
-}
-pub type PDeblockingFunc = *mut SDeblockingFunc;
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SDeblockingFilter {
-    pub pCsData: [*mut u8; 3],
-    pub iCsStride: [i32; 2],
-    pub eSliceType: EWelsSliceType,
-    pub iSliceAlphaC0Offset: i8,
-    pub iSliceBetaOffset: i8,
-    pub iChromaQP: [i8; 2],
-    pub iLumaQP: i8,
-    pub pLoopf: *mut SDeblockingFunc,
-    pub pRefPics: [*mut *mut SPicture; LIST_A],
-}
-
-impl Default for SDeblockingFilter {
-    fn default() -> Self {
-        Self {
-            pCsData: [std::ptr::null_mut(); 3],
-            iCsStride: [0; 2],
-            eSliceType: EWelsSliceType::P_SLICE,
-            iSliceAlphaC0Offset: 0,
-            iSliceBetaOffset: 0,
-            iChromaQP: [0; 2],
-            iLumaQP: 0,
-            pLoopf: std::ptr::null_mut(),
-            pRefPics: [std::ptr::null_mut(); LIST_A],
-        }
-    }
-}
-pub type PDeblockingFilter = *mut SDeblockingFilter;
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
@@ -2367,7 +2185,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
             if (*pSliceHeaderExt.sSliceHeader.pPps).uiNumSliceGroups > 1 {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex += 1;
+                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);
             } else {
                 iNextMbXyIndex += 1;
             }
@@ -2444,4 +2262,29 @@ pub unsafe fn DeblockingInit(pFunc: *mut SDeblockingFunc, iCpu: i32) {
     (*pFunc).pfChromaDeblockingEQ4Ver2 = Some(DeblockChromaEq4V2_c);
     (*pFunc).pfChromaDeblockingLT4Hor2 = Some(DeblockChromaLt4H2_c);
     (*pFunc).pfChromaDeblockingEQ4Hor2 = Some(DeblockChromaEq4H2_c);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deblocking_init() {
+        unsafe {
+            let mut func = SDeblockingFunc::default();
+            DeblockingInit(&mut func, 0);
+            assert!(func.pfLumaDeblockingLT4Ver.is_some());
+            assert!(func.pfLumaDeblockingEQ4Ver.is_some());
+            assert!(func.pfLumaDeblockingLT4Hor.is_some());
+            assert!(func.pfLumaDeblockingEQ4Hor.is_some());
+            assert!(func.pfChromaDeblockingLT4Ver.is_some());
+            assert!(func.pfChromaDeblockingEQ4Ver.is_some());
+            assert!(func.pfChromaDeblockingLT4Hor.is_some());
+            assert!(func.pfChromaDeblockingEQ4Hor.is_some());
+            assert!(func.pfChromaDeblockingLT4Ver2.is_some());
+            assert!(func.pfChromaDeblockingEQ4Ver2.is_some());
+            assert!(func.pfChromaDeblockingLT4Hor2.is_some());
+            assert!(func.pfChromaDeblockingEQ4Hor2.is_some());
+        }
+    }
 }

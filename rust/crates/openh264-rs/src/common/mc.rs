@@ -378,6 +378,32 @@ pub unsafe extern "C" fn McHorVer02_c(
     }
 }
 
+/// Horizontal luma half-pel motion compensation (`McHorizLuma_c`, alias for `McHorVer20_c`).
+#[inline(always)]
+pub unsafe extern "C" fn McHorizLuma_c(
+    pSrc: *const u8,
+    iSrcStride: i32,
+    pDst: *mut u8,
+    iDstStride: i32,
+    iWidth: i32,
+    iHeight: i32,
+) {
+    McHorVer20_c(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
+}
+
+/// Vertical luma half-pel motion compensation (`McVertLuma_c`, alias for `McHorVer02_c`).
+#[inline(always)]
+pub unsafe extern "C" fn McVertLuma_c(
+    pSrc: *const u8,
+    iSrcStride: i32,
+    pDst: *mut u8,
+    iDstStride: i32,
+    iWidth: i32,
+    iHeight: i32,
+) {
+    McHorVer02_c(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
+}
+
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer22_c(
     mut pSrc: *const u8,
@@ -854,3 +880,27 @@ unsafe extern "C" {
     pub fn PixelAvgWidthEq8_lsx(pDst: *mut u8, iDstStride: i32, pSrcA: *const u8, iSrcAStride: i32, pSrcB: *const u8, iSrcBStride: i32, iHeight: i32);
     pub fn PixelAvgWidthEq16_lsx(pDst: *mut u8, iDstStride: i32, pSrcA: *const u8, iSrcAStride: i32, pSrcB: *const u8, iSrcBStride: i32, iHeight: i32);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mc_horiz_and_vert_luma_aliases() {
+        unsafe {
+            let mut src = [0u8; 64];
+            for i in 0..64 {
+                src[i] = i as u8;
+            }
+            let mut dst_hor = [0u8; 64];
+            let mut dst_vert = [0u8; 64];
+
+            McHorizLuma_c(src.as_ptr(), 8, dst_hor.as_mut_ptr(), 8, 4, 4);
+            McVertLuma_c(src.as_ptr(), 8, dst_vert.as_mut_ptr(), 8, 4, 4);
+
+            assert!(dst_hor.iter().any(|&x| x != 0));
+            assert!(dst_vert.iter().any(|&x| x != 0));
+        }
+    }
+}
+
