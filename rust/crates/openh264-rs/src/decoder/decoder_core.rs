@@ -1207,11 +1207,22 @@ pub unsafe fn DecodeFrameConstruction(
     }
     (*pDstInfo).iBufferStatus = 1;
 
+    let bOutResChange = (*pCtx).iLastImgWidthInPixel != (*pDstInfo).UsrData.sSystemBuffer.iWidth
+        || (*pCtx).iLastImgHeightInPixel != (*pDstInfo).UsrData.sSystemBuffer.iHeight;
     (*pCtx).iLastImgWidthInPixel = (*pDstInfo).UsrData.sSystemBuffer.iWidth;
     (*pCtx).iLastImgHeightInPixel = (*pDstInfo).UsrData.sSystemBuffer.iHeight;
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
         (*pDstInfo).iBufferStatus = (bFrameCompleteFlag && (*pPic).bIsComplete) as i32;
+    } else if !(*pCtx).pParam.is_null()
+        && ((*(*pCtx).pParam).eEcActiveIdc
+            == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
+            || (*(*pCtx).pParam).eEcActiveIdc
+                == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)
+        && (*pCtx).iErrorCode != dsErrorFree
+        && bOutResChange
+    {
+        (*pCtx).bFreezeOutput = true;
     }
 
     if (*pDstInfo).iBufferStatus == 0 {
@@ -1944,6 +1955,12 @@ pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) 
     (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores) as u32;
     OpenDecoderThreads(pCtx, 1);
     WelsInitDecoderFuncs(pCtx);
+    (*pCtx).bParamSetsLostFlag = true;
+    (*pCtx).bNewSeqBegin = true;
+    (*pCtx).bPrintFrameErrorTraceFlag = true;
+    (*pCtx).iIgnoredErrorInfoPacketCount = 0;
+    (*pCtx).bFrameFinish = true;
+    (*pCtx).iSeqNum = 0;
     ERR_NONE
 }
 
@@ -1955,6 +1972,11 @@ pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
     }
     CloseDecoderThreads(pCtx);
     WelsFreeStaticMemory(pCtx);
+    (*pCtx).bParamSetsLostFlag = false;
+    (*pCtx).bNewSeqBegin = false;
+    (*pCtx).bPrintFrameErrorTraceFlag = false;
+    (*pCtx).iIgnoredErrorInfoPacketCount = 0;
+    (*pCtx).bFrameFinish = false;
 }
 
 pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
@@ -1963,9 +1985,11 @@ pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
     }
     WelsOpenDecoder(pCtx, std::ptr::null_mut());
     if MemInitNalList(&mut (*pCtx).pAccessUnitList, MAX_NAL_UNIT_NUM_IN_AU, (*pCtx).pMemAlign) != 0 {
+        (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
     if InitBsBuffer(pCtx) != 0 {
+        (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
     (*pCtx).uiTargetDqId = 255;
@@ -2132,6 +2156,11 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
 
     let pPps = &mut (*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize];
+    if (*pPps).uiNumSliceGroups == 0 {
+        (*pCtx).iErrorCode |= dsNoParamSets;
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
+    }
+
     let pSps = if kbExtensionFlag {
         let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
         &mut (*pSubsetSps).sSps
@@ -2139,20 +2168,42 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[(*pPps).iSpsId as usize]
     };
 
+    if (*pSps).iNumRefFrames == 0
+        && (*pSliceHead).eSliceType != I_SLICE
+        && (*pSliceHead).eSliceType != SI_SLICE
+    {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
+    }
+
     (*pSliceHead).iPpsId = iPpsId;
     (*pSliceHead).iSpsId = (*pPps).iSpsId;
     (*pSliceHead).pPps = pPps as *mut SPps as *mut c_void;
     (*pSliceHead).pSps = pSps as *mut SSps as *mut c_void;
-
+    if kbExtensionFlag {
+        let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
+        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut _ as *mut c_void;
+    }
 
     let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
         || (kbExtensionFlag && pNalHeaderExt.bIdrFlag);
     (*pSliceHead).bIdrFlag = bIdrFlag;
 
+    if (*pSps).uiLog2MaxFrameNum == 0 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
+    }
+    if ((*pSliceHead).iFirstMbInSlice as u32) > (*pSps).uiTotalMbCount - 1 {
+        return GENERATE_ERROR_NO(
+            ERR_LEVEL_SLICE_HEADER,
+            ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
+        );
+    }
     if BsGetBits(pBs, (*pSps).uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     (*pSliceHead).iFrameNum = uiCode as i32;
+    if !(*pSps).bFrameMbsOnlyFlag {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MBAFF);
+    }
     (*pSliceHead).iMbWidth = (*pSps).iMbWidth as i32;
     (*pSliceHead).iMbHeight = (*pSps).iMbHeight as i32;
 
@@ -2169,12 +2220,22 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         (*pSliceHead).uiIdrPicId = uiCode as u16;
     }
 
+    (*pSliceHead).iDeltaPicOrderCntBottom = 0;
+    (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
+    (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
     if (*pSps).uiPocType == 0 {
         if BsGetBits(pBs, (*pSps).iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         let iMaxPocLsb = 1 << (*pSps).iLog2MaxPocLsb;
         let pocLsb = uiCode as i32;
+        (*pSliceHead).iPicOrderCntLsb = pocLsb;
+        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
+        }
         let prevLsb = if !(*pCtx).pLastDecPicInfo.is_null() {
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb
         } else {
@@ -2193,9 +2254,140 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             prevMsb
         };
         (*pSliceHead).iPicOrderCntLsb = pocMsb + pocLsb;
+        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+            (*pSliceHead).iPicOrderCntLsb += (*pSliceHead).iDeltaPicOrderCntBottom;
+        }
         if !(*pCtx).pLastDecPicInfo.is_null() && pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
+        }
+    } else if (*pSps).uiPocType == 1 && !(*pSps).bDeltaPicOrderAlwaysZeroFlag {
+        if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
+        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
+        }
+    }
+
+    (*pSliceHead).iRedundantPicCnt = 0;
+    if (*pPps).bRedundantPicCntPresentFlag {
+        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        if uiCode > SLICE_HEADER_REDUNDANT_PIC_CNT_MAX {
+            return GENERATE_ERROR_NO(
+                ERR_LEVEL_SLICE_HEADER,
+                ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
+            );
+        }
+        (*pSliceHead).iRedundantPicCnt = uiCode as i32;
+        if (*pSliceHead).iRedundantPicCnt > 0 {
+            return GENERATE_ERROR_NO(
+                ERR_LEVEL_SLICE_HEADER,
+                ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
+            );
+        }
+    }
+
+    if (*pSliceHead).eSliceType == B_SLICE {
+        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
+    }
+
+    (*pSliceHead).uiRefCount[0] = (*pPps).uiNumRefIdxL0Active as i32;
+    (*pSliceHead).uiRefCount[1] = (*pPps).uiNumRefIdxL1Active as i32;
+
+    let mut bReadNumRefFlag = (*pSliceHead).eSliceType == P_SLICE
+        || (*pSliceHead).eSliceType == B_SLICE;
+    if kbExtensionFlag {
+        bReadNumRefFlag &= pNalHeaderExt.uiQualityId == BASE_QUALITY_ID;
+    }
+    if bReadNumRefFlag {
+        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
+        if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
+            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            if uiCode > MAX_NUM_REF_IDX_L0_ACTIVE_MINUS1 {
+                return GENERATE_ERROR_NO(
+                    ERR_LEVEL_SLICE_HEADER,
+                    ERR_INFO_INVALID_NUM_REF_IDX_L0_ACTIVE_MINUS1,
+                );
+            }
+            (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
+            if (*pSliceHead).eSliceType == B_SLICE {
+                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                if uiCode > MAX_NUM_REF_IDX_L1_ACTIVE_MINUS1 {
+                    return GENERATE_ERROR_NO(
+                        ERR_LEVEL_SLICE_HEADER,
+                        ERR_INFO_INVALID_NUM_REF_IDX_L1_ACTIVE_MINUS1,
+                    );
+                }
+                (*pSliceHead).uiRefCount[1] = (1 + uiCode) as i32;
+            }
+        }
+    }
+    if ((*pSliceHead).uiRefCount[0] as usize) > MAX_REF_PIC_COUNT
+        || ((*pSliceHead).uiRefCount[1] as usize) > MAX_REF_PIC_COUNT
+    {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_REF_COUNT_OVERFLOW);
+    }
+
+    if pNalHeaderExt.uiQualityId == BASE_QUALITY_ID {
+        let iRet = ParseRefPicListReordering(pBs, pSliceHead);
+        if iRet != ERR_NONE {
+            return iRet;
+        }
+        if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
+            let iRet = ParseDecRefPicMarking(pCtx, pBs, pSliceHead, pSps, bIdrFlag);
+            if iRet != ERR_NONE {
+                return iRet;
+            }
+            if kbExtensionFlag {
+                let pSubsetSps =
+                    &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
+                if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
+                    if (pNalHeaderExt.bUseRefBasePicFlag
+                        || (*pSliceHeadExt).bStoreRefBasePicFlag)
+                        && !bIdrFlag
+                    {
+                        return GENERATE_ERROR_NO(
+                            ERR_LEVEL_SLICE_HEADER,
+                            ERR_INFO_UNSUPPORTED_ILP,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if (*pPps).bEntropyCodingModeFlag {
+        if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
+            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
+                return ERR_INFO_INVALID_CABAC_INIT_IDC;
+            }
+            (*pSliceHead).iCabacInitIdc = uiCode as i32;
+        } else {
+            (*pSliceHead).iCabacInitIdc = 0;
         }
     }
 
@@ -2206,6 +2398,66 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     (*pSliceHead).iSliceQp = (*pPps).iPicInitQp + (*pSliceHead).iSliceQpDelta;
     if (*pSliceHead).iSliceQp < 0 || (*pSliceHead).iSliceQp > 51 {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_QP);
+    }
+
+    (*pSliceHead).uiDisableDeblockingFilterIdc = 0;
+    (*pSliceHead).iSliceAlphaC0Offset = 0;
+    (*pSliceHead).iSliceBetaOffset = 0;
+    if (*pPps).bDeblockingFilterControlPresentFlag {
+        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
+        if (*pSliceHead).uiDisableDeblockingFilterIdc > 6 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
+        }
+        if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
+            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
+            if (*pSliceHead).iSliceAlphaC0Offset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                || (*pSliceHead).iSliceAlphaC0Offset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+            {
+                return GENERATE_ERROR_NO(
+                    ERR_LEVEL_SLICE_HEADER,
+                    ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
+                );
+            }
+            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iSliceBetaOffset = iCode * 2;
+            if (*pSliceHead).iSliceBetaOffset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                || (*pSliceHead).iSliceBetaOffset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+            {
+                return GENERATE_ERROR_NO(
+                    ERR_LEVEL_SLICE_HEADER,
+                    ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
+                );
+            }
+        }
+    }
+
+    let mut bSgChangeCycleInvolved = (*pPps).uiNumSliceGroups > 1
+        && (*pPps).uiSliceGroupMapType >= 3
+        && (*pPps).uiSliceGroupMapType <= 5;
+    if kbExtensionFlag && bSgChangeCycleInvolved {
+        bSgChangeCycleInvolved = bSgChangeCycleInvolved && (pNalHeaderExt.uiQualityId == BASE_QUALITY_ID);
+    }
+    if bSgChangeCycleInvolved {
+        if (*pPps).uiSliceGroupChangeRate > 0 {
+            let kiNumBits = ((1 + (*pPps).uiPicSizeInMapUnits / (*pPps).uiSliceGroupChangeRate)
+                as f64)
+                .log2()
+                .ceil() as u32;
+            if BsGetBits(pBs, kiNumBits, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
+        } else {
+            (*pSliceHead).iSliceGroupChangeCycle = 0;
+        }
     }
 
     if !kbExtensionFlag {
@@ -2944,11 +3196,16 @@ pub unsafe fn WelsDecodeBs(
         ConstructAccessUnit(pCtx, ppDst, pDstInfo);
         DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
     } else if (*pCtx).bEndOfStreamFlag {
-        if !(*pCtx).pDec.is_null() {
+        let p_au = (*pCtx).pAccessUnitList;
+        if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
+            (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
+            ConstructAccessUnit(pCtx, ppDst, pDstInfo);
+            DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
+        } else if !(*pCtx).pDec.is_null() {
             DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
         }
     }
-    crate::api::codec_api::DECODING_STATE::dsErrorFree as i32
+    (*pCtx).iErrorCode
 }
 
 pub unsafe fn InitDqLayerInfo(
@@ -3398,11 +3655,32 @@ pub unsafe fn CheckAndFinishLastPic(
             (*pCtx).bFrameFinish = true;
         } else {
             if DecodeFrameConstruction(pCtx, ppDst, pDstInfo) != ERR_NONE {
+                if !(*pCtx).pLastDecPicInfo.is_null()
+                    && (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
+                    && (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.uiTemporalId == 0
+                {
+                    (*pCtx).iErrorCode |= dsNoParamSets;
+                } else {
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                }
                 (*pCtx).pDec = std::ptr::null_mut();
                 return false;
             }
         }
         (*pCtx).pDec = std::ptr::null_mut();
+        let start_idx = (*pAu).uiStartPos as usize;
+        if start_idx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pAu).pNalUnitsList.add(start_idx)).is_null() {
+            let pStartNal = *(*pAu).pNalUnitsList.add(start_idx);
+            if (*pStartNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0
+                && !(*pCtx).pLastDecPicInfo.is_null()
+            {
+                (*(*pCtx).pLastDecPicInfo).iPrevFrameNum =
+                    (*(*pCtx).pLastDecPicInfo).sLastSliceHeader.iFrameNum;
+            }
+        }
+        if !(*pCtx).pLastDecPicInfo.is_null() && (*(*pCtx).pLastDecPicInfo).bLastHasMmco5 {
+            (*(*pCtx).pLastDecPicInfo).iPrevFrameNum = 0;
+        }
     }
     true
 }
@@ -3586,6 +3864,71 @@ mod tests {
                 ),
                 crate::api::codec_api::DECODING_STATE::dsInitialOptExpected as i32
             );
+        }
+    }
+
+    #[test]
+    fn test_decoder_open_end_and_init_static_memory_state_flags() {
+        unsafe {
+            let mut ctx = SWelsDecoderContext::default();
+            assert_eq!(WelsOpenDecoder(&mut ctx as *mut _, std::ptr::null_mut()), ERR_NONE);
+            assert!(ctx.bParamSetsLostFlag);
+            assert!(ctx.bNewSeqBegin);
+            assert!(ctx.bPrintFrameErrorTraceFlag);
+            assert_eq!(ctx.iIgnoredErrorInfoPacketCount, 0);
+            assert!(ctx.bFrameFinish);
+            assert_eq!(ctx.iSeqNum, 0);
+
+            WelsEndDecoder(&mut ctx as *mut _);
+            assert!(!ctx.bParamSetsLostFlag);
+            assert!(!ctx.bNewSeqBegin);
+            assert!(!ctx.bPrintFrameErrorTraceFlag);
+            assert!(!ctx.bFrameFinish);
+        }
+    }
+
+    #[test]
+    fn test_chapter_7_frame_finalization() {
+        unsafe {
+            assert_eq!(
+                CheckAndFinishLastPic(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()),
+                false
+            );
+            assert_eq!(
+                DecodeFrameConstruction(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()),
+                ERR_INFO_INVALID_PTR
+            );
+            WelsDecodeAccessUnitEnd(std::ptr::null_mut());
+
+            let mut stat = SDecoderStatistics::default();
+            let mut sps = SSps::default();
+            sps.iSpsId = 3;
+            sps.uiProfileIdc = 66;
+            sps.uiLevelIdc = 31;
+            let mut pps = SPps::default();
+            pps.iPpsId = 5;
+
+            UpdateDecoderStatisticsForActiveParaset(
+                &mut stat,
+                &mut sps as *mut SSps as PSps,
+                &mut pps as *mut SPps as PPps,
+            );
+            assert_eq!(stat.iCurrentActiveSpsId, 3);
+            assert_eq!(stat.iCurrentActivePpsId, 5);
+            assert_eq!(stat.uiProfile, 66);
+            assert_eq!(stat.uiLevel, 31);
+        }
+    }
+
+    #[test]
+    fn test_parse_slice_header_syntaxs_null() {
+        unsafe {
+            let res = ParseSliceHeaderSyntaxs(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                false,
+            );
+            assert_eq!(res, ERR_INFO_INVALID_PTR);
         }
     }
 }

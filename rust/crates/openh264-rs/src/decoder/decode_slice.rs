@@ -530,7 +530,9 @@ pub use crate::decoder::bit_stream::SBitStringAux;
 pub use crate::decoder::parameter_sets::{SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSliceType};
 
-pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{
+    SDqLayer, PDqLayer, SLayerInfo, ERR_INFO_INVALID_PTR, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM,
+};
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
 
@@ -676,6 +678,35 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
     }
     if (*ctx.pSps).bSeqScalingMatrixPresentFlag || (*ctx.pPps).bPicScalingMatrixPresentFlag {
         ctx.bUseScalingList = true;
+
+        if !ctx.bDequantCoeff4x4Init || ctx.iDequantCoeffPpsid != (*ctx.pPps).iPpsId {
+            for i in 0..6 {
+                ctx.pDequant_coeff4x4[i] = ctx.pDequant_coeff_buffer4x4[i].as_mut_ptr();
+                ctx.pDequant_coeff8x8[i] = ctx.pDequant_coeff_buffer8x8[i].as_mut_ptr();
+                for q in 0..51 {
+                    for x in 0..16 {
+                        let scale4 = if (*ctx.pPps).bPicScalingMatrixPresentFlag {
+                            (*ctx.pPps).iScalingList4x4[i][x] as u32
+                        } else {
+                            (*ctx.pSps).iScalingList4x4[i][x] as u32
+                        };
+                        ctx.pDequant_coeff_buffer4x4[i][q][x] =
+                            (scale4 * (g_kuiDequantCoeff[q][x & 0x07] as u32)) as u16;
+                    }
+                    for y in 0..64 {
+                        let scale8 = if (*ctx.pPps).bPicScalingMatrixPresentFlag {
+                            (*ctx.pPps).iScalingList8x8[i][y] as u32
+                        } else {
+                            (*ctx.pSps).iScalingList8x8[i][y] as u32
+                        };
+                        ctx.pDequant_coeff_buffer8x8[i][q][y] =
+                            (scale8 * (g_kuiMatrixV[q % 6][y / 8][y % 8] as u32)) as u16;
+                    }
+                }
+            }
+            ctx.bDequantCoeff4x4Init = true;
+            ctx.iDequantCoeffPpsid = (*ctx.pPps).iPpsId;
+        }
     } else {
         ctx.bUseScalingList = false;
     }
@@ -1271,8 +1302,12 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
     if mb_type == MB_TYPE_INTRA_PCM {
         ERR_NONE
     } else if IS_INTRA(mb_type) {
-        WelsMbIntraPredictionConstruction(pCtx, pCurDqLayer, true)
+        WelsMbIntraPredictionConstruction(pCtx, pCurDqLayer, true);
+        ERR_NONE
     } else if IS_INTER(mb_type) {
+        if dq.pCbp.is_null() {
+            return ERR_INFO_MB_RECON_FAIL;
+        }
         let cbp = *dq.pCbp.add(iMbXy);
         if cbp == 0 {
             if !CheckRefPics(pCtx) {
@@ -1280,7 +1315,8 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
             }
             WelsMbInterPrediction(pCtx, pCurDqLayer)
         } else {
-            WelsMbInterConstruction(pCtx, pCurDqLayer)
+            WelsMbInterConstruction(pCtx, pCurDqLayer);
+            ERR_NONE
         }
     } else {
         ERR_INFO_MB_RECON_FAIL
@@ -1323,6 +1359,16 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     }
     dq.iMbXyIndex = iNextMbXyIndex;
 
+    if iNextMbXyIndex == 0 && !dq.pDec.is_null() {
+        if !ctx.pSps.is_null() {
+            (*dq.pDec).iSpsId = (*ctx.pSps).iSpsId;
+        }
+        if !ctx.pPps.is_null() {
+            (*dq.pDec).iPpsId = (*ctx.pPps).iPpsId;
+        }
+        (*dq.pDec).uiQualityId = dq.sLayerInfo.sNalHeaderExt.uiQualityId;
+    }
+
     loop {
         if iCountNumMb >= iTotalNumMb {
             break;
@@ -1352,8 +1398,12 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
             return ERR_INFO_MB_NUM_EXCEED_FAIL;
         }
 
-        iNextMbXyIndex += 1;
-        if iNextMbXyIndex < 0 || iNextMbXyIndex >= iTotalMbTargetLayer {
+        if !pSliceHeader.pPps.is_null() && (*(pSliceHeader.pPps as *mut crate::decoder::parameter_sets::SPps)).uiNumSliceGroups > 1 {
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(ctx.pFmo, iNextMbXyIndex);
+        } else {
+            iNextMbXyIndex += 1;
+        }
+        if iNextMbXyIndex == -1 || iNextMbXyIndex >= iTotalMbTargetLayer {
             break;
         }
         if dq.iMbWidth > 0 {
@@ -1366,6 +1416,22 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     if !dq.pDec.is_null() {
         (*dq.pDec).iWidthInPixel = iCurLayerWidth;
         (*dq.pDec).iHeightInPixel = iCurLayerHeight;
+    }
+
+    if pCurSlice.eSliceType != EWelsSliceType::I_SLICE as u8
+        && pCurSlice.eSliceType != EWelsSliceType::P_SLICE as u8
+        && pCurSlice.eSliceType != EWelsSliceType::B_SLICE as u8
+    {
+        return ERR_NONE;
+    }
+
+    let bParseOnly = if !ctx.pParam.is_null() { (*ctx.pParam).bParseOnly } else { false };
+    if bParseOnly {
+        return ERR_NONE;
+    }
+
+    if pSliceHeader.uiDisableDeblockingFilterIdc == 1 || pCurSlice.iTotalMbInCurSlice <= 0 {
+        return ERR_NONE;
     }
 
     ERR_NONE
@@ -1387,9 +1453,41 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if pCtx.is_null() {
         return ERR_NONE;
     }
+    let dq = (*pCtx).pCurDqLayer;
+    if dq.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let pBs = (*dq).pBitStringAux;
+    if pBs.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let pSliceHeaderExt = &mut (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let mut uiCode = 0u32;
+    let iBaseModeFlag;
+    if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
+        if crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode) != 0 {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        iBaseModeFlag = uiCode != 0;
+    } else {
+        iBaseModeFlag = (*pSliceHeaderExt).bDefaultBaseModeFlag;
+    }
+    if iBaseModeFlag {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
+    }
     let ret = WelsActualDecodeMbCavlcISlice(pCtx);
     if ret != ERR_NONE {
         return ret;
+    }
+    let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
+        - (16 - (*pBs).iLeftBits as i32);
+    if iUsedBits == ((*pBs).iBits - 1) && (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun <= 0 {
+        if !uiEosFlag.is_null() {
+            *uiEosFlag = 1;
+        }
+    }
+    if iUsedBits > ((*pBs).iBits - 1) {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
     }
     ERR_NONE
 }
@@ -1406,9 +1504,97 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ret = WelsActualDecodeMbCavlcPSlice(pCtx);
-    if ret != ERR_NONE {
-        return ret;
+    let dq = (*pCtx).pCurDqLayer;
+    if dq.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let pBs = (*dq).pBitStringAux;
+    if pBs.is_null() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
+    let pSliceHeaderExt = &mut (*pSlice).sSliceHeaderExt;
+    let iMbXy = (*dq).iMbXyIndex as usize;
+    let mut uiCode = 0u32;
+
+    if (*pSlice).iMbSkipRun == -1 {
+        if crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode) != 0 {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSlice).iMbSkipRun = uiCode as i32;
+        if (*pSlice).iMbSkipRun == -1 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_PARAM);
+        }
+    }
+
+    if (*pSlice).iMbSkipRun > 0 {
+        (*pSlice).iMbSkipRun -= 1;
+        let mut iMv = [0i16; 2];
+
+        if !(*dq).pDec.is_null() {
+            *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
+        }
+        for j in 0..24 {
+            *(*(*dq).pNzc.add(iMbXy)).as_mut_ptr().add(j) = 0;
+        }
+        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
+        if !(*dq).pDec.is_null() {
+            for j in 0..16 {
+                *(*(*(*dq).pDec).pRefIndex[0].add(iMbXy)).as_mut_ptr().add(j) = 0;
+            }
+        }
+        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq as *mut _ as *mut _, &mut iMv);
+        if !(*dq).pDec.is_null() {
+            for j in 0..16 {
+                *(*(*(*dq).pDec).pMv[0].add(iMbXy)).as_mut_ptr().add(j) = iMv;
+            }
+        }
+
+        let iLastMbQp = (*pSlice).iLastMbQp;
+        *(*dq).pLumaQp.add(iMbXy) = iLastMbQp as i8;
+        let pps_ptr = (*pSliceHeaderExt).sSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
+        for i in 0..2 {
+            let offset = if !pps_ptr.is_null() {
+                (*pps_ptr).iChromaQpIndexOffset[i]
+            } else {
+                0
+            };
+            let qp_idx = WELS_CLIP3(iLastMbQp as i32 + offset as i32, 0, 51) as usize;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[qp_idx] as i8;
+        }
+
+        let ret = WelsMbInterConstruction(pCtx, dq);
+        if ret != ERR_NONE {
+            return ret;
+        }
+    } else {
+        let iBaseModeFlag;
+        if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
+            if crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode) != 0 {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            iBaseModeFlag = uiCode != 0;
+        } else {
+            iBaseModeFlag = (*pSliceHeaderExt).bDefaultBaseModeFlag;
+        }
+        if iBaseModeFlag {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
+        }
+        let ret = WelsActualDecodeMbCavlcPSlice(pCtx);
+        if ret != ERR_NONE {
+            return ret;
+        }
+    }
+
+    let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
+        - (16 - (*pBs).iLeftBits as i32);
+    if iUsedBits == ((*pBs).iBits - 1) && (*pSlice).iMbSkipRun <= 0 {
+        if !uiEosFlag.is_null() {
+            *uiEosFlag = 1;
+        }
+    }
+    if iUsedBits > ((*pBs).iBits - 1) {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
     }
     ERR_NONE
 }
@@ -1512,6 +1698,9 @@ pub unsafe fn ParseIntra4x4Mode(
 
     let dst_modes = (*dq).pIntraPredMode.add(iMbXy * 8);
     *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
+    *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
+    *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
+    *dst_modes.add(3) = *pIntraPredMode.add(4 + 8 * 4);
     *dst_modes.add(4) = *pIntraPredMode.add(4 + 8 * 1);
     *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
     *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);
@@ -2910,6 +3099,59 @@ mod tests {
         unsafe {
             let res = WelsMbIntraPredictionConstruction(std::ptr::null_mut(), std::ptr::null_mut(), true);
             assert_eq!(res, ERR_NONE);
+        }
+    }
+
+    #[test]
+    fn test_wels_target_mb_construction_null_ptrs() {
+        unsafe {
+            let res = WelsTargetMbConstruction(std::ptr::null_mut());
+            assert_eq!(res, ERR_NONE);
+        }
+    }
+
+    #[test]
+    fn test_wels_target_slice_construction_null_ptrs() {
+        unsafe {
+            let res = WelsTargetSliceConstruction(std::ptr::null_mut());
+            assert_eq!(res, ERR_NONE);
+        }
+    }
+
+    #[test]
+    fn test_wels_calc_deq_coeff_scaling_list() {
+        unsafe {
+            let mut ctx = SWelsDecoderContext::default();
+            let mut sps = SSps::default();
+            let mut pps = SPps::default();
+            sps.bSeqScalingMatrixPresentFlag = true;
+            sps.iScalingList4x4[0][0] = 16;
+            pps.iPpsId = 1;
+            ctx.pSps = &mut sps;
+            ctx.pPps = &mut pps;
+            let res = WelsCalcDeqCoeffScalingList(&mut ctx);
+            assert_eq!(res, ERR_NONE);
+            assert!(ctx.bUseScalingList);
+            assert!(ctx.bDequantCoeff4x4Init);
+            assert_eq!(ctx.iDequantCoeffPpsid, 1);
+        }
+    }
+
+    #[test]
+    fn test_wels_decode_mb_cavlc_slices_null() {
+        unsafe {
+            let res_i = WelsDecodeMbCavlcISlice(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(res_i, ERR_NONE);
+            let res_p = WelsDecodeMbCavlcPSlice(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(res_p, ERR_NONE);
         }
     }
 }

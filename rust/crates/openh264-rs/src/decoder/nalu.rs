@@ -567,7 +567,10 @@ pub unsafe fn ParseNalHeader(
         || IS_AU_DELIMITER_NAL(eType)
         || (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag)
     {
-        (*pCtx).iErrorCode = dsNoParamSets;
+        if !(*pCtx).pDecoderStatistics.is_null() {
+            (*(*pCtx).pDecoderStatistics).iSpsNoExistNalNum += 1;
+        }
+        (*pCtx).iErrorCode |= dsNoParamSets;
         return std::ptr::null_mut();
     }
 
@@ -576,7 +579,10 @@ pub unsafe fn ParseNalHeader(
         || IS_AU_DELIMITER_NAL(eType)
         || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag)
     {
-        (*pCtx).iErrorCode = dsNoParamSets;
+        if !(*pCtx).pDecoderStatistics.is_null() {
+            (*(*pCtx).pDecoderStatistics).iPpsNoExistNalNum += 1;
+        }
+        (*pCtx).iErrorCode |= dsNoParamSets;
         return std::ptr::null_mut();
     }
 
@@ -587,6 +593,9 @@ pub unsafe fn ParseNalHeader(
                 || (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag
                 || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag))
     {
+        if !(*pCtx).pDecoderStatistics.is_null() {
+            (*(*pCtx).pDecoderStatistics).iSubSpsNoExistNalNum += 1;
+        }
         (*pCtx).iErrorCode |= dsNoParamSets;
         return std::ptr::null_mut();
     }
@@ -975,13 +984,25 @@ pub unsafe fn ParseNonVclNal(
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, pRbsp, iBitSize);
                 if iErr != ERR_NONE {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    if !(*pCtx).pParam.is_null()
+                        && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    {
+                        (*pCtx).iErrorCode |= dsNoParamSets;
+                    } else {
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    }
                     return iErr;
                 }
             }
             iErr = ParseSps(pCtx, pBs, &mut iPicWidth, &mut iPicHeight, pSrcNal, kSrcNalLen);
             if iErr != ERR_NONE {
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                if !(*pCtx).pParam.is_null()
+                    && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                {
+                    (*pCtx).iErrorCode |= dsNoParamSets;
+                } else {
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                }
                 return iErr;
             }
             (*pCtx).bHasNewSps = true;
@@ -991,7 +1012,13 @@ pub unsafe fn ParseNonVclNal(
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, pRbsp, iBitSize);
                 if iErr != ERR_NONE {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    if !(*pCtx).pParam.is_null()
+                        && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    {
+                        (*pCtx).iErrorCode |= dsNoParamSets;
+                    } else {
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    }
                     return iErr;
                 }
             }
@@ -1003,7 +1030,13 @@ pub unsafe fn ParseNonVclNal(
                 kSrcNalLen,
             );
             if iErr != ERR_NONE {
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                if !(*pCtx).pParam.is_null()
+                    && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                {
+                    (*pCtx).iErrorCode |= dsNoParamSets;
+                } else {
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                }
                 (*pCtx).bHasNewSps = false;
                 return iErr;
             }
