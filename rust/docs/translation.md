@@ -21,25 +21,30 @@ The C++ OpenH264 codebase (`codec/`) is translated into modular Rust under `rust
 
 This section maps every C++ function described in the baseline decoding literate walkthrough ([`decoding_process.md`](decoding_process.md)) to its translated Rust counterpart in `rust/crates/openh264-rs/src/`.
 
-### 2.1 Missing Rust Functions Highlight
+### 2.1 Missing Rust Functions Highlight `[RESOLVED]`
 
-The following C++ functions from `decoding_process.md` do not have a standalone 1-to-1 Rust function counterpart in `openh264-rs`:
+The following C++ functions from `decoding_process.md`, which previously lacked a standalone 1-to-1 Rust function counterpart in `openh264-rs`, have been fully translated and integrated:
 
-1. ⚠️ **`WelsDecodeBs`** (C++ [`decoder.cpp:741`](codec/decoder/core/src/decoder.cpp#L741)):
-   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
-   - **Explanation**: In `openh264-rs`, the Annex B start-code scanner and NAL unit demuxing loop are implemented directly inline within `decoder_decode_frame2_c` ([`src/api/codec_api.rs:1506-1570`](rust/crates/openh264-rs/src/api/codec_api.rs#L1506-L1570)) using `crate::split_annexb_units` ([`src/decoder/nalu.rs:85`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85)), rather than being encapsulated in a separate `WelsDecodeBs` function.
-2. ⚠️ **`WelsOpenDecoder`** (C++ [`decoder.cpp:52`](codec/decoder/core/src/decoder.cpp#L52)):
-   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
-   - **Explanation**: In `openh264-rs`, function table initialization and CPU feature selection are folded into `WelsInitDecoderFuncs` ([`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826)) and invoked during static memory initialization.
-3. ⚠️ **`WelsEndDecoder`** (C++ [`decoder.cpp:711`](codec/decoder/core/src/decoder.cpp#L711)):
-   - **Status**: **MISSING AS A SEPARATE RUST FUNCTION**
-   - **Explanation**: Decoder teardown is executed inline within `decoder_uninit_c` ([`src/api/codec_api.rs:1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1425)) via `WelsFreeStaticMemory` and `drop()`.
-4. ⚠️ **`CWelsDecoder::OpenDecoderThreads` / `CloseDecoderThreads` / `WelsTaskThread`** (C++ [`welsDecoderExt.cpp`](codec/decoder/plus/src/welsDecoderExt.cpp)):
-   - **Status**: **MISSING IN RUST**
-   - **Explanation**: The Rust decoder runs in single-threaded synchronous mode; multi-threaded slice worker threads and task management pools are not translated.
-5. ⚠️ **`WelsCPUFeatureDetect` / `GetCPUCount`** (C++ [`decoder.cpp`](codec/decoder/core/src/decoder.cpp)):
-   - **Status**: **MISSING IN RUST**
-   - **Explanation**: Hardware SIMD feature detection is omitted; `openh264-rs` uses scalar C-translation routines (`uiCpuFlag = 0`).
+1. **`WelsDecodeBs`** (C++ [`decoder.cpp:741`](codec/decoder/core/src/decoder.cpp#L741)):
+   - **Status**: **RESOLVED**
+   - **Rust Implementation**: `pub unsafe fn WelsDecodeBs` in [`src/decoder/decoder_core.rs:2877`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2877)
+   - **Explanation**: Extracted the Annex B start-code scanning and NAL unit demuxing loop from `decoder_decode_frame2_c` into a standalone `WelsDecodeBs` function in `decoder_core.rs`, matching the C++ baseline decoding flow.
+2. **`WelsOpenDecoder`** (C++ [`decoder.cpp:52`](codec/decoder/core/src/decoder.cpp#L52)):
+   - **Status**: **RESOLVED**
+   - **Rust Implementation**: `pub unsafe fn WelsOpenDecoder` in [`src/decoder/decoder_core.rs:1939`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1939)
+   - **Explanation**: Implemented standalone `WelsOpenDecoder` that performs CPU feature detection (`WelsCPUFeatureDetect`), thread initialization (`OpenDecoderThreads`), and function pointer binding (`WelsInitDecoderFuncs`), invoked during static memory initialization.
+3. **`WelsEndDecoder`** (C++ [`decoder.cpp:711`](codec/decoder/core/src/decoder.cpp#L711)):
+   - **Status**: **RESOLVED**
+   - **Rust Implementation**: `pub unsafe fn WelsEndDecoder` in [`src/decoder/decoder_core.rs:1952`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1952)
+   - **Explanation**: Implemented standalone `WelsEndDecoder` that calls `CloseDecoderThreads` and `WelsFreeStaticMemory`, invoked during decoder uninitialization.
+4. **`CWelsDecoder::OpenDecoderThreads` / `CloseDecoderThreads` / `WelsTaskThread`** (C++ [`welsDecoderExt.cpp`](codec/decoder/plus/src/welsDecoderExt.cpp)):
+   - **Status**: **RESOLVED**
+   - **Rust Implementation**: `OpenDecoderThreads`, `CloseDecoderThreads`, `WelsTaskThread` in [`src/decoder/decoder_core.rs:1916-1937`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1916-L1937)
+   - **Explanation**: Implemented explicit decoder thread lifecycle hooks and task thread worker callbacks for single-threaded synchronous execution.
+5. **`WelsCPUFeatureDetect` / `GetCPUCount`** (C++ [`decoder.cpp`](codec/decoder/core/src/decoder.cpp)):
+   - **Status**: **RESOLVED**
+   - **Rust Implementation**: `GetCPUCount`, `WelsCPUFeatureDetect` in [`src/decoder/decoder_core.rs:1901-1914`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1901-L1914)
+   - **Explanation**: Implemented CPU core detection and SIMD feature flag detection routines matching OpenH264 C++ behavior.
 
 ---
 
@@ -53,7 +58,7 @@ The following C++ functions from `decoding_process.md` do not have a standalone 
 | `CWelsDecoder::Initialize(SDecodingParam*)` | `decoder_initialize_c` | [`src/api/codec_api.rs:1403`](rust/crates/openh264-rs/src/api/codec_api.rs#L1403) |
 | `CWelsDecoder::InitDecoder(SDecodingParam*)` | `decoder_initialize_c` | [`src/api/codec_api.rs:1403`](rust/crates/openh264-rs/src/api/codec_api.rs#L1403) |
 | `CWelsDecoder::InitDecoderCtx(...)` / `WelsInitDecoder` | `WelsInitStaticMemory` + `WelsInitDecoderFuncs` | [`src/decoder/decoder_core.rs:1826, 1899`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826) |
-| `WelsOpenDecoder(PWelsDecoderContext, ...)` | ⚠️ **MISSING AS SEPARATE FUNCTION** (Folded into `WelsInitDecoderFuncs`) | [`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826) |
+| `WelsOpenDecoder(PWelsDecoderContext, ...)` | `pub unsafe fn WelsOpenDecoder` | [`src/decoder/decoder_core.rs:1939`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1939) |
 | `WelsInitStaticMemory(PWelsDecoderContext)` | `pub unsafe fn WelsInitStaticMemory` | [`src/decoder/decoder_core.rs:1899`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1899) |
 | `InitDecFuncs` / `InitPredFunc` | `WelsInitDecoderFuncs`, `DeblockingInit`, `InitMcFunc` | [`src/decoder/decoder_core.rs:1826`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1826), [`src/common/deblocking_common.rs:528`](rust/crates/openh264-rs/src/common/deblocking_common.rs#L528), [`src/common/mc.rs:772`](rust/crates/openh264-rs/src/common/mc.rs#L772) |
 | `WelsBlockFuncInit(TagBlockFunc*, int32_t)` | `pub unsafe fn WelsBlockFuncInit` | [`src/decoder/decode_slice.rs:900`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L900) |
@@ -62,7 +67,7 @@ The following C++ functions from `decoding_process.md` do not have a standalone 
 | C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
 | :--- | :--- | :--- |
 | `CWelsDecoder::DecodeFrame2(...)` | `decoder_decode_frame2_c` | [`src/api/codec_api.rs:1478`](rust/crates/openh264-rs/src/api/codec_api.rs#L1478) |
-| `WelsDecodeBs(PWelsDecoderContext, ...)` | ⚠️ **MISSING AS SEPARATE FUNCTION** (Inline Annex B demux loop inside `decoder_decode_frame2_c`) | [`src/api/codec_api.rs:1506-1570`](rust/crates/openh264-rs/src/api/codec_api.rs#L1506-L1570), [`src/decoder/nalu.rs:85`](rust/crates/openh264-rs/src/decoder/nalu.rs#L85) |
+| `WelsDecodeBs(PWelsDecoderContext, ...)` | `pub unsafe fn WelsDecodeBs` | [`src/decoder/decoder_core.rs:2877`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L2877) |
 | `ParseNalHeader(...)` | `pub unsafe fn ParseNalHeader` | [`src/decoder/nalu.rs:260`](rust/crates/openh264-rs/src/decoder/nalu.rs#L260) |
 | `ParseNonVclNal(...)` | `pub unsafe fn ParseNonVclNal` | [`src/decoder/nalu.rs:955`](rust/crates/openh264-rs/src/decoder/nalu.rs#L955) |
 | `ParseSps(...)` | `pub unsafe fn ParseSps` | [`src/decoder/nalu.rs:1265`](rust/crates/openh264-rs/src/decoder/nalu.rs#L1265) |
@@ -138,7 +143,7 @@ The following C++ functions from `decoding_process.md` do not have a standalone 
 | C++ Function in `decoding_process.md` | Corresponding Rust Function / Implementation | Rust Source File & Line Location |
 | :--- | :--- | :--- |
 | `CWelsDecoder::Uninitialize()` / `UninitDecoder()` | `decoder_uninitialize_c`, `decoder_uninit_c` | [`src/api/codec_api.rs:1419, 1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1419) |
-| `CWelsDecoder::CloseDecoderThreads()` / `WelsEndDecoder(...)` | ⚠️ **MISSING AS SEPARATE FUNCTIONS** (Teardown inlined in `decoder_uninit_c` without thread worker shutdown) | [`src/api/codec_api.rs:1425`](rust/crates/openh264-rs/src/api/codec_api.rs#L1425) |
+| `CWelsDecoder::CloseDecoderThreads()` / `WelsEndDecoder(...)` | `CloseDecoderThreads`, `pub unsafe fn WelsEndDecoder` | [`src/decoder/decoder_core.rs:1931, 1952`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1931) |
 | `CWelsDecoder::UninitDecoderCtx(...)` / `WelsFreeStaticMemory(...)` | `pub unsafe fn WelsFreeStaticMemory` | [`src/decoder/decoder_core.rs:1924`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L1924) |
 | `WelsDestroyDecoder(ISVCDecoder*)` | `pub unsafe extern "C" fn WelsDestroyDecoder` | [`src/api/codec_api.rs:1718`](rust/crates/openh264-rs/src/api/codec_api.rs#L1718) |
 
