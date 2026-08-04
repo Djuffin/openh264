@@ -398,7 +398,7 @@ pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
 pub use crate::decoder::pic_queue::{TagPicBuff, SPicBuff, PPicBuff};
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct SRefPic {
     pub pRefList: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
     pub pShortRefList: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
