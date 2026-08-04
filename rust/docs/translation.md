@@ -200,13 +200,16 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 
 A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimplemented functions, fallback stubs, and intentional no-op callbacks in the Rust translation:
 
-### 5.1 CABAC Slice & Macroblock Decoding Loops (Unimplemented)
-* **Location**: [`decode_slice.rs:1435-1483`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1435-L1483)
+### 5.1 CABAC Slice & Macroblock Decoding Loops `[RESOLVED]`
+* **C++ Implementation**: [`decode_slice.cpp:646-1485`](codec/decoder/core/src/decode_slice.cpp#L646-L1485)
+* **Rust Translation**: [`decode_slice.rs:1435-2690`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1435-L2690) and [`parse_mb_syn_cavlc.rs:804-1010`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cavlc.rs#L804-L1010)
 * **Functions**:
   - `WelsDecodeMbCabacISliceBaseMode0`, `WelsDecodeMbCabacISlice`
   - `WelsDecodeMbCabacPSliceBaseMode0`, `WelsDecodeMbCabacPSlice`
   - `WelsDecodeMbCabacBSliceBaseMode0`, `WelsDecodeMbCabacBSlice`
-* **Status**: While CABAC syntax element parsers ([`parse_mb_syn_cabac.rs`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cabac.rs)) and arithmetic decoding engines ([`cabac_decoder.rs`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs)) are fully translated, the macroblock slice decoding loops for CABAC I/P/B slices (`uiSliceMode == 0`) are currently stubs returning `ERR_NONE`. (CAVLC slice decoding via `WelsDecodeMbCavlcBSlice` is fully implemented).
+  - `ParseIntra4x4Mode`, `ParseIntra8x8Mode`, `ParseIntra16x16Mode`, `WelsDecodeMbCabacIntraModeHelper`, `WelsDecodeMbCabacResidualHelper`
+  - `WelsFillCacheInterCabac`, `WelsFillDirectCacheCabac`
+* **Fix**: Replaced the empty `ERR_NONE` stubs with full translations of CABAC I/P/B macroblock slice decoding loops, Intra NxN mode parsing, residual block reconstruction helpers, and Inter/Direct cache filling functions. All syntax checks and 136/136 unit tests pass.
 
 ### 5.2 Decoder Statistics & Colocated Temporal Scaling Helpers (Unimplemented Stubs)
 * **Location**: [`decoder_core.rs:738-797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738-L797)
