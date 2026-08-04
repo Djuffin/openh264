@@ -194,3 +194,39 @@ An exhaustive multi-agent line-by-line audit comparing the original C++ codebase
 * **Impact**: In C++, `bEnableGomQp` is declared as `int32_t` (4 bytes). In Rust `SWelsSvcRc`, `bEnableGomQp` was previously declared as `bool` (1 byte under `#[repr(C)]`). This 3-byte layout contraction shifted all 38+ subsequent fields in `SWelsSvcRc` (`iAverageFrameQp`, `iMinFrameQp`, `iMaxFrameQp`, `iNumberMbFrame`, `iNumberMbGom`, `iGopSize`, `iSkipFrameNum`, `iQStep`, `iBufferFullnessSkip`, etc.) by 3 bytes when accessed via C-FFI or rate control routines.
 * **Fix**: Changed `pub bEnableGomQp: bool` in [`rc.rs:292`](rust/crates/openh264-rs/src/encoder/rc.rs#L292) to `pub bEnableGomQp: i32` and updated rate control assignments/checks in `rc.rs`. All tests pass.
 
+---
+
+## 5. Audit of Unimplemented Functions and Stubs in Rust Codebase
+
+A comprehensive audit of `rust/crates/openh264-rs/src/` identified all unimplemented functions, fallback stubs, and intentional no-op callbacks in the Rust translation:
+
+### 5.1 CABAC Slice & Macroblock Decoding Loops (Unimplemented)
+* **Location**: [`decode_slice.rs:1435-1483`](rust/crates/openh264-rs/src/decoder/decode_slice.rs#L1435-L1483)
+* **Functions**:
+  - `WelsDecodeMbCabacISliceBaseMode0`, `WelsDecodeMbCabacISlice`
+  - `WelsDecodeMbCabacPSliceBaseMode0`, `WelsDecodeMbCabacPSlice`
+  - `WelsDecodeMbCabacBSliceBaseMode0`, `WelsDecodeMbCabacBSlice`
+* **Status**: While CABAC syntax element parsers ([`parse_mb_syn_cabac.rs`](rust/crates/openh264-rs/src/decoder/parse_mb_syn_cabac.rs)) and arithmetic decoding engines ([`cabac_decoder.rs`](rust/crates/openh264-rs/src/decoder/cabac_decoder.rs)) are fully translated, the macroblock slice decoding loops for CABAC I/P/B slices (`uiSliceMode == 0`) are currently stubs returning `ERR_NONE`. (CAVLC slice decoding via `WelsDecodeMbCavlcBSlice` is fully implemented).
+
+### 5.2 Decoder Statistics & Colocated Temporal Scaling Helpers (Unimplemented Stubs)
+* **Location**: [`decoder_core.rs:738-797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738-L797)
+* **Functions**:
+  - `UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:738`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L738)) — Frame statistics tracking without freezing info (empty stub).
+  - `UpdateDecStat(pCtx: PWelsDecoderContext, bFlag: bool)` ([`decoder_core.rs:741`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L741)) — General decoder error/frame statistics updating (empty stub).
+  - `ExpandReferencingPicture(pData, iWidth, iHeight, iStride, pfExpandLuma, pfExpandChroma)` ([`decoder_core.rs:784-791`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L784-L791)) — Border expansion helper stub in `decoder_core.rs` (a functional version is implemented in [`error_concealment.rs:924`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L924)).
+  - `ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext)` ([`decoder_core.rs:797`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L797)) — Temporal scaling factor computation for colocated motion vectors in B-slice direct mode (empty stub).
+
+### 5.3 Placeholder Inline Stubs with Real Implementations in Other Modules
+* **Location**: [`decoder_core.rs:744-821`](rust/crates/openh264-rs/src/decoder/decoder_core.rs#L744-L821) and [`error_concealment.rs:948`](rust/crates/openh264-rs/src/decoder/error_concealment.rs#L948)
+* **Functions**:
+  - `WelsTargetSliceConstruction`, `WelsDecodeSlice`, `WelsDecodeAndConstructSlice` — Inline fallback stubs in `decoder_core.rs` (functional implementations exist in [`decode_slice.rs`](rust/crates/openh264-rs/src/decoder/decode_slice.rs)).
+  - `WelsInitRefList`, `WelsInitBSliceRefList`, `WelsReorderRefList`, `WelsReorderRefList2`, `WelsMarkAsRef`, `WelsResetRefPic` — Inline fallback stubs in `decoder_core.rs` and `error_concealment.rs` (functional DPB list management implementations exist in [`manage_dec_ref.rs`](rust/crates/openh264-rs/src/decoder/manage_dec_ref.rs)).
+  - `GetI4LumaIChromaAddrTable` — Inline fallback stub in `decoder_core.rs` (functional implementation exists in [`decode_mb_aux.rs`](rust/crates/openh264-rs/src/decoder/decode_mb_aux.rs)).
+
+### 5.4 Intentional No-Op Callbacks (Architectural Design)
+* **Location**: Rate control and mode decision modules in `encoder/`
+* **Functions**:
+  - `WelsRcPostFrameSkippedUpdate`, `WelsRcPictureInfoUpdateDisable`, `WelsRcMbInfoUpdateDisable` ([`rc.rs`](rust/crates/openh264-rs/src/encoder/rc.rs)) — No-op callbacks invoked when rate control is disabled or frames are skipped.
+  - `DoNothing` ([`ref_list_mgr_svc.rs:1761`](rust/crates/openh264-rs/src/encoder/ref_list_mgr_svc.rs#L1761)), `SetScrollingMvToMdNull` ([`svc_mode_decision.rs:1802`](rust/crates/openh264-rs/src/encoder/svc_mode_decision.rs#L1802)), `UpdateFMESwitchNull` ([`svc_motion_estimate.rs:1732`](rust/crates/openh264-rs/src/encoder/svc_motion_estimate.rs#L1732)) — Null callbacks for inactive encoder mode decisions and reference management.
+
+
