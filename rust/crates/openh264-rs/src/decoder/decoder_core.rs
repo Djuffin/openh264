@@ -774,9 +774,16 @@ unsafe fn WelsFreeHelper(pMa: *mut CMemoryAlign, ptr: *mut u8, size: usize) {
 
 // External and Internal Helper Stubs
 
+/// Number of decoding threads, derived from the thread context (0 when the
+/// decoder runs single-threaded).
+/// Matches `GetThreadCount` in `decoder_context.h`.
 #[inline]
 pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
-    1
+    if pCtx.is_null() || (*pCtx).pThreadCtx.is_null() {
+        return 0;
+    }
+    let pThreadCtx = (*pCtx).pThreadCtx as *const crate::decoder::decoder_context::SWelsDecoderThreadCTX;
+    (*pThreadCtx).sThreadInfo.uiThrMaxNum as i32
 }
 
 unsafe fn ResetDecStatNums(pDecStat: *mut SDecoderStatistics) {
@@ -957,19 +964,45 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {
     let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(pCtx);
 }
 
+/// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
+/// the EC MV copy exchange buffers).
+/// Matches `GetTargetRefListSize` in `decoder.cpp`.
+pub unsafe fn GetTargetRefListSize(pCtx: PWelsDecoderContext) -> i32 {
+    let mut iNumRefFrames = if pCtx.is_null() || (*pCtx).pSps.is_null() {
+        MAX_REF_PIC_COUNT as i32 + 2
+    } else {
+        let iThreadCount = GetThreadCount(pCtx);
+        if iThreadCount > 1 {
+            // Thread and reordering buffering need more DPB space.
+            MAX_DPB_COUNT as i32 + iThreadCount
+        } else {
+            (*(*pCtx).pSps).iNumRefFrames + 2
+        }
+    };
+    // LONG_TERM_REF: picture queue size is at least 2.
+    if iNumRefFrames < 2 {
+        iNumRefFrames = 2;
+    }
+    iNumRefFrames
+}
+
 pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let iPicWidth = (iWidth << 4) as i32;
     let iPicHeight = (iHeight << 4) as i32;
-    let iPicBufSize = 16;
+    let iPicBufSize = GetTargetRefListSize(pCtx);
+    (*pCtx).iPicQueueNumber = iPicBufSize;
 
     if (*pCtx).pPicBuff.is_null() {
         let iErr = crate::decoder::pic_queue::CreatePicBuff(pCtx, &mut (*pCtx).pPicBuff, iPicBufSize, iPicWidth, iPicHeight);
         if iErr != 0 {
             return iErr;
         }
+    } else {
+        // The buffer is not reallocated here, so report its real capacity.
+        (*pCtx).iPicQueueNumber = (*(*pCtx).pPicBuff).iCapacity;
     }
     let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
     if iErr != ERR_NONE {
@@ -1894,6 +1927,12 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
         return;
     }
     let cpu_flag = (*pCtx).uiCpuFlag;
+
+    // 0. Block helpers. `pWelsSetNonZeroCountFunc` clamps every non-zero
+    // coefficient count to 1 after inter reconstruction; deblocking derives
+    // boundary strengths from those counts, so leaving it unset corrupts the
+    // filter (`InitDecFuncs` in `decoder.cpp`).
+    crate::decoder::decode_slice::WelsBlockFuncInit(&mut (*pCtx).sBlockFunc as *mut _ as *mut _, cpu_flag as i32);
 
     // 1. Deblocking Filter
     crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc as *mut _ as *mut _, cpu_flag as i32);

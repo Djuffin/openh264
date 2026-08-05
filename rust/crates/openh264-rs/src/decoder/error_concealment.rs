@@ -51,19 +51,8 @@ use std::ptr;
 // ============================================================================
 
 /// Error concealment method selector enumeration (`ERROR_CON_IDC`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum ERROR_CON_IDC {
-    #[default]
-    ERROR_CON_DISABLE = 0,
-    ERROR_CON_FRAME_COPY = 1,
-    ERROR_CON_SLICE_COPY = 2,
-    ERROR_CON_FRAME_COPY_CROSS_IDR = 3,
-    ERROR_CON_SLICE_COPY_CROSS_IDR = 4,
-    ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE = 5,
-    ERROR_CON_SLICE_MV_COPY_CROSS_IDR = 6,
-    ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE = 7,
-}
+// Same enum as the public API's; the decoder context stores the caller's value.
+pub use crate::api::codec_api::ERROR_CON_IDC;
 
 // Error status bitmask flags
 pub const ERR_NONE: i32 = 0;
