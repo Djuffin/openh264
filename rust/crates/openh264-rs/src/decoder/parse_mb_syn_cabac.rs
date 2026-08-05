@@ -618,7 +618,7 @@ pub unsafe fn UpdateP8x8RefIdxCabac(
 pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy * 16);
+    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
     *pDirect.add(iScan4Idx) = 1;
     *pDirect.add(iScan4Idx + 1) = 1;
     *pDirect.add(iScan4Idx + 4) = 1;
@@ -627,7 +627,7 @@ pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
 
 pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy * 16);
+    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
         let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;

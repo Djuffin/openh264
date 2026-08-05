@@ -409,10 +409,10 @@ pub struct SDqLayer {
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
     pub pMbType: *mut u32,
     pub pSliceIdc: *mut i32,
-    pub pMv: [*mut i16; LIST_A],
+    pub pMv: [*mut [[i16; 2]; 16]; LIST_A],
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
-    pub pRefIndex: [*mut i8; LIST_A],
-    pub pDirect: *mut i8,
+    pub pRefIndex: [*mut [i8; 16]; LIST_A],
+    pub pDirect: *mut [i8; 16],
     pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
     pub pTransformSize8x8Flag: *mut bool,
     pub pLumaQp: *mut i8,
@@ -627,6 +627,51 @@ impl Default for SExpandPicFunc {
             pfExpandChromaPicture: [None, None],
         }
     }
+}
+
+/// Reference-picture border expansion length (`PADDING_LENGTH` in
+/// `codec/common/inc/expand_pic.h`).
+pub const PADDING_LENGTH: usize = 32;
+
+unsafe fn ExpandPictureCommon(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32, kiPaddingLen: usize) {
+    let stride = kiStride as isize;
+    let w = kiPicW as usize;
+    let mut pTmp = pDst;
+    let pDstLastLine = pDst.offset((kiPicH as isize - 1) * stride);
+    let kuiTL = *pTmp;
+    let kuiTR = *pTmp.add(w - 1);
+    let kuiBL = *pDstLastLine;
+    let kuiBR = *pDstLastLine.add(w - 1);
+
+    for i in 0..kiPaddingLen {
+        let kiStrides = (1 + i as isize) * stride;
+        let pTop = pTmp.offset(-kiStrides);
+        let pBottom = pDstLastLine.offset(kiStrides);
+
+        std::ptr::copy_nonoverlapping(pTmp, pTop, w);
+        std::ptr::copy_nonoverlapping(pDstLastLine, pBottom, w);
+
+        std::ptr::write_bytes(pTop.sub(kiPaddingLen), kuiTL, kiPaddingLen);
+        std::ptr::write_bytes(pTop.add(w), kuiTR, kiPaddingLen);
+        std::ptr::write_bytes(pBottom.sub(kiPaddingLen), kuiBL, kiPaddingLen);
+        std::ptr::write_bytes(pBottom.add(w), kuiBR, kiPaddingLen);
+    }
+
+    for _ in 0..kiPicH {
+        std::ptr::write_bytes(pTmp.sub(kiPaddingLen), *pTmp, kiPaddingLen);
+        std::ptr::write_bytes(pTmp.add(w), *pTmp.add(w - 1), kiPaddingLen);
+        pTmp = pTmp.offset(stride);
+    }
+}
+
+/// Matches `ExpandPictureLuma_c` in `codec/common/src/expand_pic.cpp`.
+pub unsafe extern "C" fn ExpandPictureLuma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
+    ExpandPictureCommon(pDst, kiStride, kiPicW, kiPicH, PADDING_LENGTH);
+}
+
+/// Matches `ExpandPictureChroma_c` in `codec/common/src/expand_pic.cpp`.
+pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
+    ExpandPictureCommon(pDst, kiStride, kiPicW, kiPicH, PADDING_LENGTH >> 1);
 }
 
 #[repr(C)]
@@ -1004,7 +1049,17 @@ pub unsafe fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
 }
 
 #[inline]
-pub unsafe fn ResetActiveSPSForEachLayer(pCtx: PWelsDecoderContext) {}
+/// Matches `ResetActiveSPSForEachLayer` in `decoder_context.h`.
+pub unsafe fn ResetActiveSPSForEachLayer(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null() {
+        return;
+    }
+    if (*pCtx).iTotalNumMbRec == 0 {
+        for i in 0..MAX_LAYER_NUM {
+            (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = std::ptr::null_mut();
+        }
+    }
+}
 
 #[inline]
 pub unsafe fn GetVclNalTemporalId(pCtx: PWelsDecoderContext) {}
@@ -1163,10 +1218,6 @@ pub unsafe fn DecodeFrameConstruction(
         return ERR_NONE;
     }
 
-    if std::env::var("DBG_MB").is_ok() {
-        eprintln!("DBG DFC rec={} total={} idr={} complete={}", (*pCtx).iTotalNumMbRec, kiTotalNumMbInCurLayer,
-            (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag, (*(*pCtx).pDec).bIsComplete);
-    }
     if (*pCtx).iTotalNumMbRec != kiTotalNumMbInCurLayer {
         bFrameCompleteFlag = false;
         if (*pCtx).bInstantDecFlag {
@@ -1231,7 +1282,7 @@ pub unsafe fn DecodeFrameConstruction(
 
     if (*pDstInfo).iBufferStatus == 0 {
         if !bFrameCompleteFlag {
-            { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+            (*pCtx).iErrorCode |= dsBitstreamError;
         }
         return ERR_INFO_MB_NUM_INADEQUATE;
     }
@@ -1280,7 +1331,7 @@ pub unsafe fn HandleReferenceLostL0(pCtx: PWelsDecoderContext, pCurNal: PNalUnit
     if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
         (*pCtx).bReferenceLostAtT0Flag = true;
     }
-    { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+    (*pCtx).iErrorCode |= dsBitstreamError;
 }
 
 #[inline]
@@ -1827,7 +1878,7 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
 
 pub unsafe fn CheckBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
     if kiSrcLen > MAX_ACCESS_UNIT_CAPACITY as i32 {
-        { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+        (*pCtx).iErrorCode |= dsBitstreamError;
         return ERR_INFO_INVALID_ACCESS;
     } else if kiSrcLen > (*pCtx).iMaxBsBufferSizeInByte / (MAX_BUFFERED_NUM as i32) {
         let ret = ExpandBsBuffer(pCtx, kiSrcLen);
@@ -1849,6 +1900,10 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
 
     // 2. Motion Compensation
     crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc as *mut _ as *mut _, cpu_flag);
+
+    // 2b. Reference picture border expansion (`InitExpandPictureFunc`).
+    (*pCtx).sExpandPicFunc.pfExpandLumaPicture = Some(ExpandPictureLuma_c);
+    (*pCtx).sExpandPicFunc.pfExpandChromaPicture = [Some(ExpandPictureChroma_c), Some(ExpandPictureChroma_c)];
 
     // 3. IDCT Inverse Transform
     (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctResAddPred_c);
@@ -3109,7 +3164,7 @@ pub unsafe fn WelsDecodeAccessUnitStart(pCtx: PWelsDecoderContext) -> i32 {
     }
     (*(*pCtx).pAccessUnitList).uiStartPos = 0;
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !CheckIntegrityNalUnitsList(pCtx) {
-        { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+        (*pCtx).iErrorCode |= dsBitstreamError;
         { return dsBitstreamError; }
     }
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag {
@@ -3369,7 +3424,11 @@ pub unsafe fn WelsDecodeBs(
         let input_slice = std::slice::from_raw_parts(kpBsBuf, kiBsLen as usize);
         let units = crate::split_annexb_units(input_slice);
 
-        WelsDecodeAccessUnitStart(pCtx);
+        // The raw-data buffer can be rewound once no pending NAL units
+        // reference it (slices stay queued until their access unit completes).
+        if (*pCtx).pAccessUnitList.is_null() || (*(*pCtx).pAccessUnitList).uiAvailUnitsNum == 0 {
+            (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
+        }
 
         for (_u_i, unit) in units.iter().enumerate() {
             let mut payload_slice = *unit;
@@ -3382,8 +3441,44 @@ pub unsafe fn WelsDecodeBs(
                 continue;
             }
 
-            let payload_len = payload_slice.len();
-            let payload_ptr = payload_slice.as_ptr() as *mut u8;
+            // Copy the NAL into the persistent raw-data buffer, stripping
+            // emulation-prevention bytes (00 00 03 -> 00 00), as the C++
+            // WelsDecodeBs start-code scanner does.
+            if ((*pCtx).sRawData.pEnd.offset_from((*pCtx).sRawData.pCurPos) as usize)
+                < payload_slice.len() + 4
+            {
+                // Wrap to the buffer head like the C++ scanner; the buffer is
+                // sized for several access units, so pending NAL data (near
+                // the current write position) is not overwritten.
+                (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
+                if ((*pCtx).iMaxBsBufferSizeInByte as usize) < payload_slice.len() + 4 {
+                    if ExpandBsBuffer(pCtx, payload_slice.len() as i32) != ERR_NONE {
+                        (*pCtx).iErrorCode |= dsOutOfMemory;
+                        return (*pCtx).iErrorCode;
+                    }
+                    (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
+                }
+            }
+            let dst_start = (*pCtx).sRawData.pCurPos;
+            let mut dst_len = 0usize;
+            let mut zero_run = 0u32;
+            for &b in payload_slice {
+                if zero_run >= 2 && b == 0x03 {
+                    zero_run = 0;
+                    continue;
+                }
+                if b == 0 {
+                    zero_run += 1;
+                } else {
+                    zero_run = 0;
+                }
+                *dst_start.add(dst_len) = b;
+                dst_len += 1;
+            }
+            (*pCtx).sRawData.pCurPos = dst_start.add(dst_len);
+
+            let payload_len = dst_len;
+            let payload_ptr = dst_start;
 
             let mut consumed_bytes = 0i32;
             let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
@@ -3408,28 +3503,27 @@ pub unsafe fn WelsDecodeBs(
                         payload_len as i32,
                     );
                 }
+                CheckAndFinishLastPic(pCtx, ppDst, pDstInfo);
+                // Decode a completed access unit as soon as the parser marks
+                // the boundary, matching `WelsDecodeBs` in `decoder_core.cpp`.
+                // (`ConstructAccessUnit` runs frame construction internally.)
+                if (*pCtx).bAuReadyFlag
+                    && !(*pCtx).pAccessUnitList.is_null()
+                    && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum != 0
+                {
+                    ConstructAccessUnit(pCtx, ppDst, pDstInfo);
+                }
             }
+            DecodeFinishUpdate(pCtx);
         }
-
-        let p_au = (*pCtx).pAccessUnitList;
-        if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
-            (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
-        }
-
-        ConstructAccessUnit(pCtx, ppDst, pDstInfo);
-        DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
     } else if (*pCtx).bEndOfStreamFlag {
-        // Unlike the C++ decoder, this port constructs every access unit as
-        // soon as its data arrives, so at end-of-stream there is only work to
-        // do when un-decoded units are still queued. Re-running frame
-        // construction for the already-output last picture would emit a
-        // duplicate frame.
+        // End of stream: flush the pending (final) access unit.
         let p_au = (*pCtx).pAccessUnitList;
         if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
             (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
             ConstructAccessUnit(pCtx, ppDst, pDstInfo);
-            DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
         }
+        DecodeFinishUpdate(pCtx);
     }
     (*pCtx).iErrorCode
 }
@@ -3764,7 +3858,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
         }
 
-        if pNalCur.is_null() || dq_cur.is_null() {
+        // The C++ code runs the completion/frame-construction block below even
+        // when all NAL units are consumed (pNalCur == NULL); only a missing DQ
+        // layer aborts here.
+        if dq_cur.is_null() {
             break;
         }
 
@@ -3807,7 +3904,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     iRet = WelsMarkAsRef(pCtx);
                     if iRet != ERR_NONE {
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
-                            { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+                            (*pCtx).iErrorCode |= dsBitstreamError;
                         }
                         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
                             (*pCtx).pDec = std::ptr::null_mut();
@@ -3827,6 +3924,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
             }
             (*pCtx).pDec = std::ptr::null_mut();
+        }
+
+        if pNalCur.is_null() {
+            break;
         }
     }
     ERR_NONE
@@ -3906,7 +4007,7 @@ pub unsafe fn CheckAndFinishLastPic(
                 {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                 } else {
-                    { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+                    (*pCtx).iErrorCode |= dsBitstreamError;
                 }
                 (*pCtx).pDec = std::ptr::null_mut();
                 return false;
@@ -3947,7 +4048,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
         let mbType = *(*pDec).pMbType.add(iRealMbIdx as usize);
         match mbType {
             MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                let refIdx = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16) as usize;
+                let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
                 if refIdx < MAX_REF_PIC_COUNT {
                     let pRef = (*pCtx).sRefPic.pRefList[LIST_0][refIdx];
                     if !pRef.is_null() {
@@ -3956,8 +4057,8 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 }
             }
             MB_TYPE_16x8 => {
-                let refIdx0 = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16) as usize;
-                let refIdx1 = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16 + 8) as usize;
+                let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
+                let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[8] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
                     let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx0];
                     if !pRef0.is_null() {
@@ -3972,8 +4073,8 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 }
             }
             MB_TYPE_8x16 => {
-                let refIdx0 = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16) as usize;
-                let refIdx1 = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16 + 2) as usize;
+                let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
+                let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[2] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
                     let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx0];
                     if !pRef0.is_null() {
@@ -3990,7 +4091,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
             MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
                 let indices = [0, 2, 8, 10];
                 for &sub in &indices {
-                    let refIdx = *(*pCurDqLayer).pRefIndex[0].add(iRealMbIdx as usize * 16 + sub) as usize;
+                    let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[sub] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
                         let pRef = (*pCtx).sRefPic.pRefList[LIST_0][refIdx];
                         if !pRef.is_null() {

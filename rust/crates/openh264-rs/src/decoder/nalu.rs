@@ -124,9 +124,9 @@ pub const dsBitstreamError: i32 = 0x04;
 pub const dsNoParamSets: i32 = 0x10;
 pub const dsOutOfMemory: i32 = 0x4000;
 
-pub const OVERWRITE_SPS: i32 = 0x01;
-pub const OVERWRITE_PPS: i32 = 0x02;
-pub const OVERWRITE_SUBSETSPS: i32 = 0x04;
+// Re-exported so the parser and `WriteBackActiveParameters` agree on the bits
+// (`decoder_context.h`: PPS = 1, SPS = 2, SUBSETSPS = 4).
+pub use crate::decoder::decoder_core::{OVERWRITE_NONE, OVERWRITE_PPS, OVERWRITE_SPS, OVERWRITE_SUBSETSPS};
 
 pub const EXTENDED_SAR: u8 = 255;
 pub const NRI_PRI_LOWEST: u8 = 0;
@@ -442,6 +442,14 @@ pub const g_kuiDequantScaling8x8Default: [[u8; 64]; 2] = [
 ///
 /// Returns a pointer to the byte immediately following `0x01` (the NAL header byte),
 /// or null if no valid start code prefix is found.
+
+/// Byte-wise equality of two POD parameter-set structs, matching the `memcmp`
+/// guards in `ParseSps` / `ParsePps` (`au_parser.cpp`).
+unsafe fn bytes_equal<T>(a: *const T, b: *const T) -> bool {
+    std::slice::from_raw_parts(a as *const u8, std::mem::size_of::<T>())
+        == std::slice::from_raw_parts(b as *const u8, std::mem::size_of::<T>())
+}
+
 pub unsafe fn DetectStartCodePrefix(
     kpBuf: *const u8,
     pOffset: *mut i32,
@@ -1523,17 +1531,31 @@ pub unsafe fn ParseSps(
     if kbUseSubsetFlag {
         let pTmpSps = &(*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx].sSps;
         if CheckSpsActive(pCtx, pTmpSps, true) {
-            if (*pCtx).pAccessUnitList.is_null() || (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
-                std::ptr::copy_nonoverlapping(
-                    pSubsetSps,
-                    &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT],
-                    1,
-                );
-                (*pCtx).bAuReadyFlag = true;
+            // Overwriting the active subset SPS: only act when it actually changed.
+            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx], pSubsetSps) {
                 if !(*pCtx).pAccessUnitList.is_null() && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
+                    std::ptr::copy_nonoverlapping(
+                        pSubsetSps,
+                        &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT],
+                        1,
+                    );
+                    (*pCtx).bAuReadyFlag = true;
                     (*(*pCtx).pAccessUnitList).uiEndPos = (*(*pCtx).pAccessUnitList).uiAvailUnitsNum - 1;
+                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
+                } else if !(*pCtx).pSps.is_null() && (*(*pCtx).pSps).iSpsId == (*pSubsetSps).sSps.iSpsId {
+                    std::ptr::copy_nonoverlapping(
+                        pSubsetSps,
+                        &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT],
+                        1,
+                    );
+                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
+                } else {
+                    std::ptr::copy_nonoverlapping(
+                        pSubsetSps,
+                        &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx],
+                        1,
+                    );
                 }
-                (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
             }
         } else {
             std::ptr::copy_nonoverlapping(
@@ -1547,15 +1569,27 @@ pub unsafe fn ParseSps(
     } else {
         let pTmpSps = &(*pCtx).sSpsPpsCtx.sSpsBuffer[idx];
         if CheckSpsActive(pCtx, pTmpSps, false) {
-            if !(*pCtx).pAccessUnitList.is_null() && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
-                std::ptr::copy_nonoverlapping(
-                    pSps,
-                    &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT],
-                    1,
-                );
-                (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
-                (*pCtx).bAuReadyFlag = true;
-                (*(*pCtx).pAccessUnitList).uiEndPos = (*(*pCtx).pAccessUnitList).uiAvailUnitsNum - 1;
+            // Overwriting the active SPS: only act when it actually changed.
+            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], pSps) {
+                if !(*pCtx).pAccessUnitList.is_null() && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
+                    std::ptr::copy_nonoverlapping(
+                        pSps,
+                        &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT],
+                        1,
+                    );
+                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
+                    (*pCtx).bAuReadyFlag = true;
+                    (*(*pCtx).pAccessUnitList).uiEndPos = (*(*pCtx).pAccessUnitList).uiAvailUnitsNum - 1;
+                } else if !(*pCtx).pSps.is_null() && (*(*pCtx).pSps).iSpsId == (*pSps).iSpsId {
+                    std::ptr::copy_nonoverlapping(
+                        pSps,
+                        &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT],
+                        1,
+                    );
+                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
+                } else {
+                    std::ptr::copy_nonoverlapping(pSps, &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], 1);
+                }
             }
         } else {
             std::ptr::copy_nonoverlapping(
@@ -1707,11 +1741,14 @@ pub unsafe fn ParsePps(
 
     let pps_idx = uiPpsId as usize;
     if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).iPpsId == pPps.iPpsId {
-        std::ptr::copy_nonoverlapping(pPps, &mut (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], 1);
-        (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
-        if !(*pCtx).pAccessUnitList.is_null() && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
-            (*pCtx).bAuReadyFlag = true;
-            (*(*pCtx).pAccessUnitList).uiEndPos = (*(*pCtx).pAccessUnitList).uiAvailUnitsNum - 1;
+        // Re-sent PPS for the active id: only flag an overwrite when it changed.
+        if !bytes_equal((*pCtx).pPps as *const SPps, pPps) {
+            std::ptr::copy_nonoverlapping(pPps, &mut (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], 1);
+            (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
+            if !(*pCtx).pAccessUnitList.is_null() && (*(*pCtx).pAccessUnitList).uiAvailUnitsNum > 0 {
+                (*pCtx).bAuReadyFlag = true;
+                (*(*pCtx).pAccessUnitList).uiEndPos = (*(*pCtx).pAccessUnitList).uiAvailUnitsNum - 1;
+            }
         }
     } else {
         std::ptr::copy_nonoverlapping(pPps, &mut (*pCtx).sSpsPpsCtx.sPpsBuffer[pps_idx], 1);
