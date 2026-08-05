@@ -4002,10 +4002,18 @@ pub unsafe fn WelsDecodeSlice(
         }
     };
 
-    if !ctx.pPps.is_null() && (*ctx.pPps).bConstainedIntraPredFlag {
+    // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
+    let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
+    if !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag {
+        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
+            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain1IntraNxN as *const (),
+        );
         ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
         ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
     } else {
+        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
+            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
+        );
         ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
         ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
     }
@@ -4114,10 +4122,18 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
         }
     };
 
-    if !ctx.pPps.is_null() && (*ctx.pPps).bConstainedIntraPredFlag {
+    // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
+    let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
+    if !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag {
+        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
+            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain1IntraNxN as *const (),
+        );
         ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
         ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
     } else {
+        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
+            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
+        );
         ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
         ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
     }
