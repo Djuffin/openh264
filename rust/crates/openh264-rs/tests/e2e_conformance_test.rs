@@ -61,7 +61,7 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        if ret != CM_RESULT_SUCCESS as i64 || p_decoder.is_null() {
+        if i64::from(ret) != CM_RESULT_SUCCESS as i64 || p_decoder.is_null() {
             return Err("Failed to create decoder".into());
         }
 
@@ -70,7 +70,7 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
-        if (*p_decoder).Initialize(&dec_param as *const SDecodingParam) != CM_RESULT_SUCCESS as i64 {
+        if i64::from((*p_decoder).Initialize(&dec_param as *const SDecodingParam)) != CM_RESULT_SUCCESS as i64 {
             WelsDestroyDecoder(p_decoder);
             return Err("Failed to initialize decoder".into());
         }

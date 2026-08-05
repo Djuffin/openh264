@@ -21,7 +21,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(ret, CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64);
         assert!(!p_decoder.is_null());
 
         let mut param = SDecodingParam::default();
@@ -29,7 +29,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
 
         // 1. Initialize
         let init_ret = (*p_decoder).Initialize(&param as *const SDecodingParam);
-        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
 
         // 2. DecodeFrame
         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
@@ -95,17 +95,17 @@ fn test_decoder_create_and_destroy_lifecycle() {
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(set_opt_ret, CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(set_opt_ret), CM_RESULT_SUCCESS as i64);
 
         let get_opt_ret = (*p_decoder).GetOption(
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(get_opt_ret, CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(get_opt_ret), CM_RESULT_SUCCESS as i64);
 
         // 9. Uninitialize
         let uninit_ret = (*p_decoder).Uninitialize();
-        assert_eq!(uninit_ret, CM_RESULT_SUCCESS as i64);
+        assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
 
         WelsDestroyDecoder(p_decoder);
     }

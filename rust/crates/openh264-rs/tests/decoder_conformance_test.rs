@@ -79,7 +79,7 @@ fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(ret, CM_RESULT_SUCCESS as i64, "Failed to create decoder for {}", file_name);
+        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64, "Failed to create decoder for {}", file_name);
         assert!(!p_decoder.is_null());
 
         let mut dec_param = SDecodingParam::default();
@@ -88,7 +88,7 @@ fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
         let init_ret = (*p_decoder).Initialize(&dec_param as *const SDecodingParam);
-        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64, "Failed to initialize decoder for {}", file_name);
+        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64, "Failed to initialize decoder for {}", file_name);
 
         let mut hasher = Sha1Hasher::new();
         let units = split_annexb_units(&data);
