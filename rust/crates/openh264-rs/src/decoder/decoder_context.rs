@@ -568,18 +568,10 @@ pub struct SVideoProperty {
     pub eVideoBsType: VIDEO_BITSTREAM_TYPE,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecodingParam {
-    pub pFileNameRestructed: *mut c_char,
-    pub uiCpuLoad: u32,
-    pub uiTargetDqLayer: u8,
-    pub eEcActiveIdc: crate::decoder::error_concealment::ERROR_CON_IDC,
+// The decoder context points at the caller's `SDecodingParam`, so it must be
+// the very same type as the public API struct (`codec_app_def.h`).
+pub use crate::api::codec_api::SDecodingParam;
 
-    pub bParseOnly: bool,
-    pub iMultipleThreadIdc: u16,
-    pub sVideoProperty: SVideoProperty,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

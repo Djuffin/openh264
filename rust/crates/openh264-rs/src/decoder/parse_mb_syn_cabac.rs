@@ -373,14 +373,7 @@ pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
     (a as i32 + b as i32 + c as i32 - min as i32 - max as i32) as i16
 }
 
-#[inline(always)]
-pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() || (*pCtx).pParam.is_null() {
-        1
-    } else {
-        (*(*pCtx).pParam).iMultipleThreadIdc as i32
-    }
-}
+pub use crate::decoder::decoder_core::GetThreadCount;
 
 #[inline(always)]
 pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCavlc: bool) {

@@ -127,16 +127,7 @@ pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
     (x + (n - 1)) & !(n - 1)
 }
 
-/// Retrieves the active thread count from decoder context.
-pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() || (*pCtx).pParam.is_null() {
-        return 1;
-    }
-    unsafe {
-        let threads = (*(*pCtx).pParam).iMultipleThreadIdc as i32;
-        if threads > 0 { threads } else { 1 }
-    }
-}
+pub use crate::decoder::decoder_core::GetThreadCount;
 
 /// Initializes an event object.
 #[inline]
