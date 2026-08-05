@@ -1306,6 +1306,14 @@ pub struct CWelsDecoderImpl {
     pub align: crate::common::CMemoryAlign,
     pub param: crate::SDecodingParam,
     pub bEndOfStream: bool,
+    // Members owned by CWelsDecoder in C++ (welsDecoderExt.h) and wired into the
+    // decoder context by InitDecoderCtx.
+    pub sLastDecPicInfo: crate::decoder::decoder_context::SWelsLastDecPicInfo,
+    pub sDecoderStatistics: crate::decoder::decoder_context::SDecoderStatistics,
+    pub sPictInfoList: [crate::decoder::decoder_context::SPictInfo; 16],
+    pub sReoderingStatus: crate::decoder::decoder_context::SPictReoderingStatus,
+    pub iStreamSeqNum: i32,
+    pub sVlcTable: crate::decoder::parse_mb_syn_cavlc::SVlcTable,
 }
 
 unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncParamBase) -> i32 {
@@ -1410,7 +1418,17 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             let mut ctx_box: Box<crate::decoder::decoder_context::SWelsDecoderContext> = Box::default();
             ctx_box.pMemAlign = &mut (*dec_impl).align;
             ctx_box.pParam = &mut (*dec_impl).param as *mut _ as *mut _;
+            // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
+            // decoder-owned members into the context, then fill in defaults.
+            ctx_box.pLastDecPicInfo = &mut (*dec_impl).sLastDecPicInfo;
+            ctx_box.pDecoderStatistics = &mut (*dec_impl).sDecoderStatistics;
+            ctx_box.pVlcTable = &mut (*dec_impl).sVlcTable as *mut _ as *mut std::ffi::c_void;
+            ctx_box.pPictInfoList = (*dec_impl).sPictInfoList.as_mut_ptr();
+            ctx_box.pPictReoderingStatus = &mut (*dec_impl).sReoderingStatus;
+            ctx_box.pStreamSeqNum = &mut (*dec_impl).iStreamSeqNum;
             let p_ctx = Box::into_raw(ctx_box);
+            crate::decoder::decoder_core::WelsDecoderDefaults(p_ctx as *mut _, ptr::null_mut());
+            crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
             let ret = crate::decoder::decoder_core::WelsInitStaticMemory(p_ctx as *mut _);
             if ret != 0 {
                 drop(Box::from_raw(p_ctx));
@@ -1475,6 +1493,31 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo)
 }
 
+/// Map an internal `iErrorCode` bitmask to a representative `DECODING_STATE`
+/// variant (the enum cannot hold OR-ed combinations).
+fn decoding_state_from_bits(bits: i32) -> DECODING_STATE {
+    if bits == 0 {
+        return DECODING_STATE::dsErrorFree;
+    }
+    for state in [
+        DECODING_STATE::dsOutOfMemory,
+        DECODING_STATE::dsInitialOptExpected,
+        DECODING_STATE::dsInvalidArgument,
+        DECODING_STATE::dsNoParamSets,
+        DECODING_STATE::dsRefListNullPtrs,
+        DECODING_STATE::dsBitstreamError,
+        DECODING_STATE::dsDepLayerLost,
+        DECODING_STATE::dsRefLost,
+        DECODING_STATE::dsDataErrorConcealed,
+        DECODING_STATE::dsFramePending,
+    ] {
+        if bits & (state as i32) != 0 {
+            return state;
+        }
+    }
+    DECODING_STATE::dsBitstreamError
+}
+
 unsafe extern "C" fn decoder_decode_frame2_c(
     this: *mut ISVCDecoder,
     kpSrc: *const u8,
@@ -1492,6 +1535,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             return DECODING_STATE::dsInitialOptExpected;
         }
 
+        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree as i32;
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
             crate::decoder::decoder_core::WelsDecodeBs(
@@ -1513,8 +1557,8 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                 ptr::null_mut(),
             );
         }
+        decoding_state_from_bits((*p_ctx).iErrorCode)
     }
-    DECODING_STATE::dsErrorFree
 }
 
 unsafe extern "C" fn decoder_decode_frame_ex_c(
@@ -1645,7 +1689,22 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         align: crate::common::CMemoryAlign::new(16),
         param: crate::SDecodingParam::default(),
         bEndOfStream: false,
+        sLastDecPicInfo: Default::default(),
+        sDecoderStatistics: unsafe { std::mem::zeroed() },
+        sPictInfoList: unsafe { std::mem::zeroed() },
+        sReoderingStatus: Default::default(),
+        iStreamSeqNum: 0,
+        sVlcTable: unsafe { std::mem::zeroed() },
     });
+    crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut dec.sVlcTable);
+    crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(&mut dec.sLastDecPicInfo);
+    unsafe {
+        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+            &mut dec.sReoderingStatus,
+            dec.sPictInfoList.as_mut_ptr(),
+            true,
+        );
+    }
     dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
     *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
     CM_RESULT_SUCCESS as c_long

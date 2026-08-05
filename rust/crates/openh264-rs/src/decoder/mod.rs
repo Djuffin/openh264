@@ -18,3 +18,4 @@ pub mod pic_queue;
 pub mod picture;
 pub mod slice;
 pub mod deblocking;
+pub mod vlc_tables;

@@ -335,21 +335,7 @@ pub const g_kuiDequantCoeff8x8: [[u16; 64]; 52] = {
 // Core Context Structures & Type Definitions
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsNeighAvail {
-    pub iLeftAvail: i32,
-    pub iTopAvail: i32,
-    pub iLeftTopAvail: i32,
-    pub iRightTopAvail: i32,
-    pub iLeftType: i32,
-    pub iTopType: i32,
-    pub iLeftTopType: i32,
-    pub iRightTopType: i32,
-    pub iLeftCbp: u8,
-    pub iTopCbp: u8,
-}
-pub type PWelsNeighAvail = *mut SWelsNeighAvail;
+pub use crate::decoder::parse_mb_syn_cavlc::{SWelsNeighAvail, PWelsNeighAvail};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1284,10 +1270,10 @@ pub unsafe fn ParseRefIdxCabac(
 
     if iZOrderIdx == 0 {
         iIdxB = ((*pNeighAvail).iTopAvail != 0
-            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM
             && (*ref_idx)[iListIdx as usize][scan_cache - 6] > 0) as i32;
         iIdxA = ((*pNeighAvail).iLeftAvail != 0
-            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
             && (*ref_idx)[iListIdx as usize][scan_cache - 1] > 0) as i32;
         if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && !direct.is_null() && *direct.add(scan_cache - 6) == 0 {
@@ -1299,7 +1285,7 @@ pub unsafe fn ParseRefIdxCabac(
         }
     } else if iZOrderIdx == 4 {
         iIdxB = ((*pNeighAvail).iTopAvail != 0
-            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+            && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM
             && (*ref_idx)[iListIdx as usize][scan_cache - 6] > 0) as i32;
         iIdxA = (pRefIdxInMB[g_kuiScan4[iZOrderIdx as usize] as usize - 1] > 0) as i32;
         if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
@@ -1313,7 +1299,7 @@ pub unsafe fn ParseRefIdxCabac(
     } else if iZOrderIdx == 8 {
         iIdxB = (pRefIdxInMB[g_kuiScan4[iZOrderIdx as usize] as usize - 4] > 0) as i32;
         iIdxA = ((*pNeighAvail).iLeftAvail != 0
-            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+            && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
             && (*ref_idx)[iListIdx as usize][scan_cache - 1] > 0) as i32;
         if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) == 0 {
@@ -2027,16 +2013,16 @@ pub unsafe fn ParseCbpInfoCabac(
     let mut iCtxInc: i32;
 
     pBTopMb[0] = ((*pNeighAvail).iTopAvail != 0
-        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM
         && (((*pNeighAvail).iTopCbp & (1 << 2)) == 0)) as i32;
     pBTopMb[1] = ((*pNeighAvail).iTopAvail != 0
-        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM as i32
+        && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM
         && (((*pNeighAvail).iTopCbp & (1 << 3)) == 0)) as i32;
     pALeftMb[0] = ((*pNeighAvail).iLeftAvail != 0
-        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
         && (((*pNeighAvail).iLeftCbp & (1 << 1)) == 0)) as i32;
     pALeftMb[1] = ((*pNeighAvail).iLeftAvail != 0
-        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM as i32
+        && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
         && (((*pNeighAvail).iLeftCbp & (1 << 3)) == 0)) as i32;
 
     // left_top 8x8 block
@@ -2105,10 +2091,10 @@ pub unsafe fn ParseCbpInfoCabac(
 
     // Chroma
     iIdxB = ((*pNeighAvail).iTopAvail != 0
-        && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM as i32
+        && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM
             || (((*pNeighAvail).iTopCbp >> 4) != 0))) as i32;
     iIdxA = ((*pNeighAvail).iLeftAvail != 0
-        && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM as i32
+        && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM
             || (((*pNeighAvail).iLeftCbp >> 4) != 0))) as i32;
 
     iCtxInc = iIdxA + (iIdxB << 1);
@@ -2123,10 +2109,10 @@ pub unsafe fn ParseCbpInfoCabac(
 
     if pCbpBit[4] != 0 {
         iIdxB = ((*pNeighAvail).iTopAvail != 0
-            && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM as i32
+            && ((*pNeighAvail).iTopType == MB_TYPE_INTRA_PCM
                 || (((*pNeighAvail).iTopCbp >> 4) == 2))) as i32;
         iIdxA = ((*pNeighAvail).iLeftAvail != 0
-            && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM as i32
+            && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM
                 || (((*pNeighAvail).iLeftCbp >> 4) == 2))) as i32;
         iCtxInc = iIdxA + (iIdxB << 1);
         err = DecodeBinCabac(
