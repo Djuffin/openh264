@@ -1761,6 +1761,15 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
             *pMBproperty = 5;
             *pResidualProperty = if bCavlc { CHROMA_AC } else { CHROMA_AC_V };
         }
+        // Reference to Table 7-2
+        LUMA_DC_AC_INTRA_8 => {
+            *pMBproperty = 6;
+            *pResidualProperty = LUMA_DC_AC_8;
+        }
+        LUMA_DC_AC_INTER_8 => {
+            *pMBproperty = 7;
+            *pResidualProperty = LUMA_DC_AC_8;
+        }
         _ => {}
     }
 }
@@ -2081,8 +2090,11 @@ pub unsafe fn WelsResidualBlockCavlc(
     let mut iMbResProperty: i32 = 0;
     GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
 
-    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[(iMbResProperty - 6) as usize].is_null() {
-        (*(*pCtx).pDequant_coeff4x4[(iMbResProperty - 6) as usize].add(uiQp as usize)).as_ptr()
+    // `pCtx->pDequant_coeff4x4[iMbResProperty][uiQp]` in parse_mb_syn_cavlc.cpp: the 4x4
+    // table is indexed directly by the MB residual property (0..5); only the 8x8 table
+    // is biased by 6.
+    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].is_null() {
+        (*(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].add(uiQp as usize)).as_ptr()
     } else {
         g_kuiDequantCoeff[uiQp as usize].as_ptr()
     };
