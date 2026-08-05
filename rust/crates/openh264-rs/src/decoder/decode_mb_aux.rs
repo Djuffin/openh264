@@ -236,16 +236,19 @@ pub unsafe extern "C" fn IdctFourResAddPred_c(
     pNzc: *const i8,
 ) {
     unsafe {
-        if *pNzc.add(0) != 0 {
+        // A block also needs the IDCT when only its DC coefficient (pRs[k*16])
+        // is non-zero (I16x16 luma DC), matching `IdctFourResAddPred_c` in
+        // `decode_mb_aux.cpp`.
+        if *pNzc.add(0) != 0 || *pRs.add(0) != 0 {
             IdctResAddPred_c(pPred.offset(0), iStride, pRs.add(0));
         }
-        if *pNzc.add(1) != 0 {
+        if *pNzc.add(1) != 0 || *pRs.add(16) != 0 {
             IdctResAddPred_c(pPred.offset(4), iStride, pRs.add(16));
         }
-        if *pNzc.add(4) != 0 {
+        if *pNzc.add(4) != 0 || *pRs.add(32) != 0 {
             IdctResAddPred_c(pPred.offset((4 * iStride) as isize), iStride, pRs.add(32));
         }
-        if *pNzc.add(5) != 0 {
+        if *pNzc.add(5) != 0 || *pRs.add(48) != 0 {
             IdctResAddPred_c(pPred.offset((4 * iStride + 4) as isize), iStride, pRs.add(48));
         }
     }

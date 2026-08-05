@@ -534,6 +534,7 @@ pub struct SDecoderStatistics {
     pub uiLevel: u32,
     pub iCurrentActiveSpsId: i32,
     pub iCurrentActivePpsId: i32,
+    pub iStatisticsLogInterval: u32,
 }
 
 #[repr(C)]

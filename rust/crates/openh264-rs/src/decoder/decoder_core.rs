@@ -1163,6 +1163,10 @@ pub unsafe fn DecodeFrameConstruction(
         return ERR_NONE;
     }
 
+    if std::env::var("DBG_MB").is_ok() {
+        eprintln!("DBG DFC rec={} total={} idr={} complete={}", (*pCtx).iTotalNumMbRec, kiTotalNumMbInCurLayer,
+            (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag, (*(*pCtx).pDec).bIsComplete);
+    }
     if (*pCtx).iTotalNumMbRec != kiTotalNumMbInCurLayer {
         bFrameCompleteFlag = false;
         if (*pCtx).bInstantDecFlag {
@@ -1227,7 +1231,7 @@ pub unsafe fn DecodeFrameConstruction(
 
     if (*pDstInfo).iBufferStatus == 0 {
         if !bFrameCompleteFlag {
-            (*pCtx).iErrorCode |= dsBitstreamError;
+            { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
         }
         return ERR_INFO_MB_NUM_INADEQUATE;
     }
@@ -1276,7 +1280,7 @@ pub unsafe fn HandleReferenceLostL0(pCtx: PWelsDecoderContext, pCurNal: PNalUnit
     if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
         (*pCtx).bReferenceLostAtT0Flag = true;
     }
-    (*pCtx).iErrorCode |= dsBitstreamError;
+    { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
 }
 
 #[inline]
@@ -1823,7 +1827,7 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
 
 pub unsafe fn CheckBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
     if kiSrcLen > MAX_ACCESS_UNIT_CAPACITY as i32 {
-        (*pCtx).iErrorCode |= dsBitstreamError;
+        { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
         return ERR_INFO_INVALID_ACCESS;
     } else if kiSrcLen > (*pCtx).iMaxBsBufferSizeInByte / (MAX_BUFFERED_NUM as i32) {
         let ret = ExpandBsBuffer(pCtx, kiSrcLen);
@@ -1947,6 +1951,107 @@ pub unsafe extern "C" fn WelsTaskThread(_pArg: *mut c_void) -> *mut c_void {
 
 /// Initializes CPU feature detection and decoder function tables.
 /// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
+/// Fill data fields in default for decoder context.
+/// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
+pub unsafe fn WelsDecoderDefaults(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) {
+    if pCtx.is_null() {
+        return;
+    }
+    let mut iCpuCores = 1i32;
+    (*pCtx).pArgDec = std::ptr::null_mut();
+    (*pCtx).bHaveGotMemory = false;
+    (*pCtx).uiCpuFlag = 0;
+    (*pCtx).bAuReadyFlag = false;
+    (*pCtx).bCabacInited = false;
+    (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut iCpuCores) as u32;
+    (*pCtx).iImgWidthInPixel = 0;
+    (*pCtx).iImgHeightInPixel = 0;
+    (*pCtx).iLastImgWidthInPixel = 0;
+    (*pCtx).iLastImgHeightInPixel = 0;
+    (*pCtx).bFreezeOutput = true;
+    (*pCtx).iFrameNum = -1;
+    if !(*pCtx).pLastDecPicInfo.is_null() {
+        (*(*pCtx).pLastDecPicInfo).iPrevFrameNum = -1;
+    }
+    (*pCtx).iErrorCode = ERR_NONE;
+    (*pCtx).pDec = std::ptr::null_mut();
+    (*pCtx).pTempDec = std::ptr::null_mut();
+    WelsResetRefPic(pCtx);
+    (*pCtx).iActiveFmoNum = 0;
+    (*pCtx).pPicBuff = std::ptr::null_mut();
+    if !(*pCtx).pLastDecPicInfo.is_null() {
+        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = std::ptr::null_mut();
+    }
+    if !(*pCtx).pDecoderStatistics.is_null() {
+        (*(*pCtx).pDecoderStatistics).iAvgLumaQp = -1;
+        (*(*pCtx).pDecoderStatistics).iStatisticsLogInterval = 1000;
+    }
+    (*pCtx).bUseScalingList = false;
+    (*pCtx).iFeedbackNalRefIdc = -1;
+    if !(*pCtx).pLastDecPicInfo.is_null() {
+        (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = 0;
+        (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = 0;
+    }
+}
+
+/// Fill data fields in SPS and PPS default for decoder context.
+/// Matches `void WelsDecoderSpsPpsDefaults (SWelsDecoderSpsPpsCTX& sSpsPpsCtx)` in `decoder.cpp`.
+pub fn WelsDecoderSpsPpsDefaults(sSpsPpsCtx: &mut crate::decoder::decoder_context::SWelsDecoderSpsPpsCTX) {
+    sSpsPpsCtx.bSpsExistAheadFlag = false;
+    sSpsPpsCtx.bSubspsExistAheadFlag = false;
+    sSpsPpsCtx.bPpsExistAheadFlag = false;
+    sSpsPpsCtx.bAvcBasedFlag = true;
+    sSpsPpsCtx.iSpsErrorIgnored = 0;
+    sSpsPpsCtx.iSubSpsErrorIgnored = 0;
+    sSpsPpsCtx.iPpsErrorIgnored = 0;
+    sSpsPpsCtx.iPPSInvalidNum = 0;
+    sSpsPpsCtx.iPPSLastInvalidId = -1;
+    sSpsPpsCtx.iSPSInvalidNum = 0;
+    sSpsPpsCtx.iSPSLastInvalidId = -1;
+    sSpsPpsCtx.iSubSPSInvalidNum = 0;
+    sSpsPpsCtx.iSubSPSLastInvalidId = -1;
+    sSpsPpsCtx.iSeqId = -1;
+}
+
+/// Fill last decoded picture info defaults.
+/// Matches `void WelsDecoderLastDecPicInfoDefaults (SWelsLastDecPicInfo& sLastDecPicInfo)` in `decoder.cpp`.
+pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::decoder_context::SWelsLastDecPicInfo) {
+    sLastDecPicInfo.iPrevPicOrderCntMsb = 0;
+    sLastDecPicInfo.iPrevPicOrderCntLsb = 0;
+    sLastDecPicInfo.pPreviousDecodedPictureInDpb = std::ptr::null_mut();
+    sLastDecPicInfo.iPrevFrameNum = -1;
+    sLastDecPicInfo.bLastHasMmco5 = false;
+    sLastDecPicInfo.uiDecodingTimeStamp = 0;
+}
+
+/// Reset picture reordering buffer list.
+/// Matches `void ResetReorderingPictureBuffers (...)` in `decoder.cpp`.
+pub unsafe fn ResetReorderingPictureBuffers(
+    pPictReoderingStatus: *mut crate::decoder::decoder_context::SPictReoderingStatus,
+    pPictInfo: *mut crate::decoder::decoder_context::SPictInfo,
+    fullReset: bool,
+) {
+    if pPictReoderingStatus.is_null() || pPictInfo.is_null() {
+        return;
+    }
+    let pictInfoListCount = if fullReset {
+        16
+    } else {
+        (*pPictReoderingStatus).iLargestBufferedPicIndex + 1
+    };
+    (*pPictReoderingStatus).iPictInfoIndex = 0;
+    (*pPictReoderingStatus).iMinPOC = crate::decoder::decoder_context::IMinInt32;
+    (*pPictReoderingStatus).iNumOfPicts = 0;
+    (*pPictReoderingStatus).iLastWrittenPOC = crate::decoder::decoder_context::IMinInt32;
+    (*pPictReoderingStatus).iLargestBufferedPicIndex = 0;
+    for i in 0..pictInfoListCount {
+        (*pPictInfo.add(i as usize)).iPOC = crate::decoder::decoder_context::IMinInt32;
+        (*pPictInfo.add(i as usize)).iPicBuffIdx = -1;
+    }
+    (*pPictInfo).sBufferInfo.iBufferStatus = 0;
+    (*pPictReoderingStatus).bHasBSlice = false;
+}
+
 pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1964,6 +2069,41 @@ pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) 
     ERR_NONE
 }
 
+/// Frees dynamically-grown decoder memory (DQ layers, FMO, reference
+/// pictures, picture buffer, CABAC engine).
+/// Matches `void WelsFreeDynamicMemory (PWelsDecoderContext pCtx)` in `decoder.cpp`.
+pub unsafe fn WelsFreeDynamicMemory(pCtx: PWelsDecoderContext) {
+    if pCtx.is_null() {
+        return;
+    }
+    let pMa = (*pCtx).pMemAlign;
+
+    UninitialDqLayersContext(pCtx);
+    crate::decoder::nalu::ResetFmoList(pCtx);
+    WelsResetRefPic(pCtx);
+
+    if !(*pCtx).pPicBuff.is_null() {
+        crate::decoder::pic_queue::DestroyPicBuff(pCtx, &mut (*pCtx).pPicBuff, pMa);
+    }
+
+    if !(*pCtx).pTempDec.is_null() {
+        crate::decoder::pic_queue::FreePicture((*pCtx).pTempDec as *mut _, pMa);
+        (*pCtx).pTempDec = std::ptr::null_mut();
+    }
+
+    if !(*pCtx).pCabacDecEngine.is_null() {
+        WelsFreeHelper(pMa, (*pCtx).pCabacDecEngine as *mut u8, std::mem::size_of::<SWelsCabacDecEngine>());
+        (*pCtx).pCabacDecEngine = std::ptr::null_mut();
+    }
+
+    (*pCtx).iImgWidthInPixel = 0;
+    (*pCtx).iImgHeightInPixel = 0;
+    (*pCtx).iLastImgWidthInPixel = 0;
+    (*pCtx).iLastImgHeightInPixel = 0;
+    (*pCtx).bFreezeOutput = true;
+    (*pCtx).bHaveGotMemory = false;
+}
+
 /// Terminates decoder worker threads and cleans up internal decoding context.
 /// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
 pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
@@ -1971,6 +2111,7 @@ pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
         return;
     }
     CloseDecoderThreads(pCtx);
+    WelsFreeDynamicMemory(pCtx);
     WelsFreeStaticMemory(pCtx);
     (*pCtx).bParamSetsLostFlag = false;
     (*pCtx).bNewSeqBegin = false;
@@ -2968,8 +3109,8 @@ pub unsafe fn WelsDecodeAccessUnitStart(pCtx: PWelsDecoderContext) -> i32 {
     }
     (*(*pCtx).pAccessUnitList).uiStartPos = 0;
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !CheckIntegrityNalUnitsList(pCtx) {
-        (*pCtx).iErrorCode |= dsBitstreamError;
-        return dsBitstreamError;
+        { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
+        { return dsBitstreamError; }
     }
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag {
         CheckOnlyOneLayerInAu(pCtx);
@@ -3278,12 +3419,15 @@ pub unsafe fn WelsDecodeBs(
         ConstructAccessUnit(pCtx, ppDst, pDstInfo);
         DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
     } else if (*pCtx).bEndOfStreamFlag {
+        // Unlike the C++ decoder, this port constructs every access unit as
+        // soon as its data arrives, so at end-of-stream there is only work to
+        // do when un-decoded units are still queued. Re-running frame
+        // construction for the already-output last picture would emit a
+        // duplicate frame.
         let p_au = (*pCtx).pAccessUnitList;
         if !p_au.is_null() && (*p_au).uiAvailUnitsNum > 0 {
             (*p_au).uiEndPos = (*p_au).uiAvailUnitsNum - 1;
             ConstructAccessUnit(pCtx, ppDst, pDstInfo);
-            DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
-        } else if !(*pCtx).pDec.is_null() {
             DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
         }
     }
@@ -3467,9 +3611,28 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
 
         if (*pCtx).iTotalNumMbRec == 0 {
-            if !(*pCtx).pSps.is_null() {
-                (*(*pCtx).pDec).iMbNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
+            // Picture starts to decode: reset per-picture MB state, matching
+            // `DecodeCurrentAccessUnit` in `decoder_core.cpp`.
+            let iMbCacheNum = ((*pCtx).sMb.iMbWidth * (*pCtx).sMb.iMbHeight) as usize;
+            for i in 0..LAYER_NUM_EXCHANGEABLE {
+                if !(*pCtx).sMb.pSliceIdc[i].is_null() {
+                    std::ptr::write_bytes((*pCtx).sMb.pSliceIdc[i], 0xff, iMbCacheNum);
+                }
             }
+            if !(*pCtx).pSps.is_null() {
+                let iMbNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as usize;
+                if !(*pCtx).pCurDqLayer.is_null() {
+                    if !(*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag.is_null() {
+                        std::ptr::write_bytes((*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag, 0, iMbNum);
+                    }
+                    if !(*(*pCtx).pCurDqLayer).pMbRefConcealedFlag.is_null() {
+                        std::ptr::write_bytes((*(*pCtx).pCurDqLayer).pMbRefConcealedFlag, 0, iMbNum);
+                    }
+                }
+                (*(*pCtx).pDec).iMbNum = iMbNum as i32;
+            }
+            (*(*pCtx).pDec).pRefPic[LIST_0] = [std::ptr::null_mut(); MAX_DPB_COUNT];
+            (*(*pCtx).pDec).pRefPic[LIST_1] = [std::ptr::null_mut(); MAX_DPB_COUNT];
             (*(*pCtx).pDec).iMbEcedNum = 0;
             (*(*pCtx).pDec).iMbEcedPropNum = 0;
         }
@@ -3644,7 +3807,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     iRet = WelsMarkAsRef(pCtx);
                     if iRet != ERR_NONE {
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
-                            (*pCtx).iErrorCode |= dsBitstreamError;
+                            { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
                         }
                         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
                             (*pCtx).pDec = std::ptr::null_mut();
@@ -3743,7 +3906,7 @@ pub unsafe fn CheckAndFinishLastPic(
                 {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                 } else {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    { (*pCtx).iErrorCode |= dsBitstreamError; if std::env::var("DBG_MB").is_ok() { eprintln!("EBSERR {}:{}", file!(), line!()); } }
                 }
                 (*pCtx).pDec = std::ptr::null_mut();
                 return false;

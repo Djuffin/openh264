@@ -262,18 +262,22 @@ impl Default for TagReadBitsCache {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsNeighAvail {
+    // Field order matches `SWelsNeighAvail` in
+    // `codec/decoder/core/inc/mb_cache.h` — this struct is shared (via raw
+    // pointer casts) between the CAVLC, CABAC and slice-decode modules.
     pub iTopAvail: i32,
     pub iLeftAvail: i32,
     pub iRightTopAvail: i32,
     pub iLeftTopAvail: i32,
 
-    pub iLeftCbp: i32,
-    pub iTopCbp: i32,
-
     pub iLeftType: u32,
     pub iTopType: u32,
-    pub iRightTopType: u32,
     pub iLeftTopType: u32,
+    pub iRightTopType: u32,
+
+    pub iTopCbp: u8,
+    pub iLeftCbp: u8,
+    pub iDummy: [u8; 2],
 }
 pub type PWelsNeighAvail = *mut SWelsNeighAvail;
 
@@ -303,12 +307,74 @@ pub struct SPartMbInfo {
     pub iPartWidth: i8,
 }
 
+/// VLC lookup table pointers.
+/// Matches `SVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`:
+/// `const uint8_t (*kpCoeffTokenVlcTable[4][8])[2];` etc. Each pointer refers
+/// to a table of `[value, bit-count]` pairs of varying length.
 #[repr(C)]
 pub struct SVlcTable {
-    pub kpCoeffTokenVlcTable: [*const [[u8; 2]; 256]; 4],
+    pub kpCoeffTokenVlcTable: [[*const [u8; 2]; 8]; 4],
     pub kpChromaCoeffTokenVlcTable: *const [u8; 2],
     pub kpZeroTable: [*const [u8; 2]; 7],
     pub kpTotalZerosTable: [[*const [u8; 2]; 15]; 2],
+}
+
+/// Matches `InitVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`.
+pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
+    use crate::decoder::vlc_tables::*;
+    pVlcTable.kpChromaCoeffTokenVlcTable = g_kuiVlcChromaTable.as_ptr();
+
+    pVlcTable.kpCoeffTokenVlcTable = [[std::ptr::null(); 8]; 4];
+    pVlcTable.kpCoeffTokenVlcTable[0][0] = g_kuiVlcTable_0.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[0][1] = g_kuiVlcTable_1.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[0][2] = g_kuiVlcTable_2.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[0][3] = g_kuiVlcTable_3.as_ptr();
+
+    pVlcTable.kpCoeffTokenVlcTable[1][0] = g_kuiVlcTable_0_0.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[1][1] = g_kuiVlcTable_0_1.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[1][2] = g_kuiVlcTable_0_2.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[1][3] = g_kuiVlcTable_0_3.as_ptr();
+
+    pVlcTable.kpCoeffTokenVlcTable[2][0] = g_kuiVlcTable_1_0.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[2][1] = g_kuiVlcTable_1_1.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[2][2] = g_kuiVlcTable_1_2.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[2][3] = g_kuiVlcTable_1_3.as_ptr();
+
+    pVlcTable.kpCoeffTokenVlcTable[3][0] = g_kuiVlcTable_2_0.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][1] = g_kuiVlcTable_2_1.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][2] = g_kuiVlcTable_2_2.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][3] = g_kuiVlcTable_2_3.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][4] = g_kuiVlcTable_2_4.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][5] = g_kuiVlcTable_2_5.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][6] = g_kuiVlcTable_2_6.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][7] = g_kuiVlcTable_2_7.as_ptr();
+
+    pVlcTable.kpZeroTable[0] = g_kuiZeroLeftTable0.as_ptr();
+    pVlcTable.kpZeroTable[1] = g_kuiZeroLeftTable1.as_ptr();
+    pVlcTable.kpZeroTable[2] = g_kuiZeroLeftTable2.as_ptr();
+    pVlcTable.kpZeroTable[3] = g_kuiZeroLeftTable3.as_ptr();
+    pVlcTable.kpZeroTable[4] = g_kuiZeroLeftTable4.as_ptr();
+    pVlcTable.kpZeroTable[5] = g_kuiZeroLeftTable5.as_ptr();
+    pVlcTable.kpZeroTable[6] = g_kuiZeroLeftTable6.as_ptr();
+
+    pVlcTable.kpTotalZerosTable[0][0] = g_kuiTotalZerosTable0.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][1] = g_kuiTotalZerosTable1.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][2] = g_kuiTotalZerosTable2.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][3] = g_kuiTotalZerosTable3.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][4] = g_kuiTotalZerosTable4.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][5] = g_kuiTotalZerosTable5.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][6] = g_kuiTotalZerosTable6.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][7] = g_kuiTotalZerosTable7.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][8] = g_kuiTotalZerosTable8.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][9] = g_kuiTotalZerosTable9.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][10] = g_kuiTotalZerosTable10.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][11] = g_kuiTotalZerosTable11.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][12] = g_kuiTotalZerosTable12.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][13] = g_kuiTotalZerosTable13.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][14] = g_kuiTotalZerosTable14.as_ptr();
+    pVlcTable.kpTotalZerosTable[1][0] = g_kuiTotalZerosChromaTable0.as_ptr();
+    pVlcTable.kpTotalZerosTable[1][1] = g_kuiTotalZerosChromaTable1.as_ptr();
+    pVlcTable.kpTotalZerosTable[1][2] = g_kuiTotalZerosChromaTable2.as_ptr();
 }
 
 // Forward definitions matching OpenH264 decoder C ABI structs
@@ -369,10 +435,12 @@ pub unsafe fn POP_BUFFER(pBitsCache: *mut SReadBitsCache, iCount: u32) {
 #[inline(always)]
 pub unsafe fn SHIFT_BUFFER(pBitsCache: *mut SReadBitsCache) {
     unsafe {
+        // Matches the C++ macro: pBuf is advanced FIRST, so the two bytes
+        // shifted in are the original pBuf[4] and pBuf[5].
+        (*pBitsCache).pBuf = (*pBitsCache).pBuf.add(2);
         let pBuf = (*pBitsCache).pBuf;
         let b2 = *pBuf.add(2) as u32;
         let b3 = *pBuf.add(3) as u32;
-        (*pBitsCache).pBuf = pBuf.add(2);
         (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_add(16);
         let shift = 32u32.wrapping_sub((*pBitsCache).uiRemainBits as u32);
         (*pBitsCache).uiCache32Bit |= ((b2 << 8) | b3).wrapping_shl(shift);
@@ -439,13 +507,13 @@ pub static g_kuiScan8: [u8; 24] = [
 
 pub static g_kuiNcMapTable: [u8; 17] = [0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3];
 
-pub static g_kuiVlcTableNeedMoreBitsThread: [u8; 3] = [0, 0, 0];
-pub static g_kuiVlcTableMoreBitsCount0: [u8; 4] = [0, 0, 0, 0];
+pub static g_kuiVlcTableNeedMoreBitsThread: [u8; 3] = [4, 4, 8];
+pub static g_kuiVlcTableMoreBitsCount0: [u8; 4] = [8, 2, 1, 1];
 pub static g_kuiVlcTableMoreBitsCount1: [u8; 4] = [6, 3, 1, 1];
 pub static g_kuiVlcTableMoreBitsCount2: [u8; 8] = [2, 2, 2, 2, 1, 1, 1, 1];
 
-pub static g_kuiTotalZerosBitNumMap: [u8; 15] = [1, 2, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9];
-pub static g_kuiTotalZerosBitNumChromaMap: [u8; 3] = [1, 2, 3];
+pub static g_kuiTotalZerosBitNumMap: [u8; 15] = [9, 6, 6, 5, 5, 6, 6, 6, 6, 5, 4, 4, 3, 2, 1];
+pub static g_kuiTotalZerosBitNumChromaMap: [u8; 3] = [3, 2, 1];
 pub static g_kuiZeroLeftBitNumMap: [u8; 16] = [0, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3];
 
 pub static g_ksI16PredInfo: [SI16PredInfo; 4] = [
@@ -564,7 +632,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iLeftXy = iCurXy - 1;
             let iLeftSliceIdc = *dq.pSliceIdc.add(iLeftXy as usize);
             na.iLeftAvail = if iLeftSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.pCbp.add(iLeftXy as usize) as i32 } else { 0 };
+            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.pCbp.add(iLeftXy as usize) as u8 } else { 0 };
         } else {
             na.iLeftAvail = 0;
             na.iLeftTopAvail = 0;
@@ -575,7 +643,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iTopXy = iCurXy - dq.iMbWidth;
             let iTopSliceIdc = *dq.pSliceIdc.add(iTopXy as usize);
             na.iTopAvail = if iTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iTopCbp = if na.iTopAvail != 0 { *dq.pCbp.add(iTopXy as usize) as i32 } else { 0 };
+            na.iTopCbp = if na.iTopAvail != 0 { *dq.pCbp.add(iTopXy as usize) as u8 } else { 0 };
 
             if iCurX != 0 {
                 iLeftTopXy = iTopXy - 1;
@@ -893,6 +961,457 @@ pub unsafe fn WelsFillCacheInterCabac(
         (*iRefIdxArray)[listIdx][17] = REF_NOT_AVAIL;
         (*iRefIdxArray)[listIdx][23] = REF_NOT_AVAIL;
     }
+}
+
+/// Matches `WelsFillCacheInter` in `parse_mb_syn_cavlc.cpp` (CAVLC variant,
+/// same as the CABAC variant but without the mvd cache).
+pub unsafe fn WelsFillCacheInter(
+    pNeighAvail: *const SWelsNeighAvail,
+    pNonZeroCount: *mut u8,
+    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    pCurDqLayer: PDqLayer,
+) {
+    let na = &*pNeighAvail;
+    let dq = &*pCurDqLayer;
+    let iCurXy = dq.iMbXyIndex as usize;
+    let mut iTopXy = 0usize;
+    let mut iLeftXy = 0usize;
+    let mut iLeftTopXy = 0usize;
+    let mut iRightTopXy = 0usize;
+
+    let pSlice = &dq.sLayerInfo.sSliceInLayer;
+    let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
+    let listCount = if pSliceHeader.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE {
+        2
+    } else {
+        1
+    };
+
+    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, pCurDqLayer);
+
+    if na.iTopAvail != 0 {
+        iTopXy = iCurXy - dq.iMbWidth as usize;
+    }
+    if na.iLeftAvail != 0 {
+        iLeftXy = iCurXy - 1;
+    }
+    if na.iLeftTopAvail != 0 {
+        iLeftTopXy = iCurXy - 1 - dq.iMbWidth as usize;
+    }
+    if na.iRightTopAvail != 0 {
+        iRightTopXy = iCurXy + 1 - dq.iMbWidth as usize;
+    }
+
+    for listIdx in 0..listCount {
+        if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
+            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
+            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
+            (*iMvArray)[listIdx][6] = pMv[3];
+            (*iMvArray)[listIdx][12] = pMv[7];
+            (*iMvArray)[listIdx][18] = pMv[11];
+            (*iMvArray)[listIdx][24] = pMv[15];
+            (*iRefIdxArray)[listIdx][6] = pRef[3];
+            (*iRefIdxArray)[listIdx][12] = pRef[7];
+            (*iRefIdxArray)[listIdx][18] = pRef[11];
+            (*iRefIdxArray)[listIdx][24] = pRef[15];
+        } else {
+            (*iMvArray)[listIdx][6] = [0, 0];
+            (*iMvArray)[listIdx][12] = [0, 0];
+            (*iMvArray)[listIdx][18] = [0, 0];
+            (*iMvArray)[listIdx][24] = [0, 0];
+            let val = if na.iLeftAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            (*iRefIdxArray)[listIdx][6] = val;
+            (*iRefIdxArray)[listIdx][12] = val;
+            (*iRefIdxArray)[listIdx][18] = val;
+            (*iRefIdxArray)[listIdx][24] = val;
+        }
+
+        if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
+            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
+            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
+            (*iMvArray)[listIdx][0] = pMv[15];
+            (*iRefIdxArray)[listIdx][0] = pRef[15];
+        } else {
+            (*iMvArray)[listIdx][0] = [0, 0];
+            let val = if na.iLeftTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            (*iRefIdxArray)[listIdx][0] = val;
+        }
+
+        if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
+            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
+            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
+            (*iMvArray)[listIdx][1] = pMv[12];
+            (*iMvArray)[listIdx][2] = pMv[13];
+            (*iMvArray)[listIdx][3] = pMv[14];
+            (*iMvArray)[listIdx][4] = pMv[15];
+            (*iRefIdxArray)[listIdx][1] = pRef[12];
+            (*iRefIdxArray)[listIdx][2] = pRef[13];
+            (*iRefIdxArray)[listIdx][3] = pRef[14];
+            (*iRefIdxArray)[listIdx][4] = pRef[15];
+        } else {
+            (*iMvArray)[listIdx][1] = [0, 0];
+            (*iMvArray)[listIdx][2] = [0, 0];
+            (*iMvArray)[listIdx][3] = [0, 0];
+            (*iMvArray)[listIdx][4] = [0, 0];
+            let val = if na.iTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            (*iRefIdxArray)[listIdx][1] = val;
+            (*iRefIdxArray)[listIdx][2] = val;
+            (*iRefIdxArray)[listIdx][3] = val;
+            (*iRefIdxArray)[listIdx][4] = val;
+        }
+
+        if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
+            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
+            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
+            (*iMvArray)[listIdx][5] = pMv[12];
+            (*iRefIdxArray)[listIdx][5] = pRef[12];
+        } else {
+            (*iMvArray)[listIdx][5] = [0, 0];
+            let val = if na.iRightTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            (*iRefIdxArray)[listIdx][5] = val;
+        }
+
+        // right-top 4x4 block unavailable positions
+        (*iMvArray)[listIdx][9] = [0, 0];
+        (*iMvArray)[listIdx][21] = [0, 0];
+        (*iMvArray)[listIdx][11] = [0, 0];
+        (*iMvArray)[listIdx][17] = [0, 0];
+        (*iMvArray)[listIdx][23] = [0, 0];
+        (*iRefIdxArray)[listIdx][9] = REF_NOT_AVAIL;
+        (*iRefIdxArray)[listIdx][21] = REF_NOT_AVAIL;
+        (*iRefIdxArray)[listIdx][11] = REF_NOT_AVAIL;
+        (*iRefIdxArray)[listIdx][17] = REF_NOT_AVAIL;
+        (*iRefIdxArray)[listIdx][23] = REF_NOT_AVAIL;
+    }
+}
+
+/// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
+pub unsafe fn ParseInterInfo(
+    pCtx: *mut SWelsDecoderContext,
+    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    pBs: *mut SBitStringAux,
+) -> i32 {
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
+    let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
+    let ppRefPic = (*pCtx).sRefPic.pRefList[0];
+    let mut iRefCount = [0i32; 2];
+    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let mut iMotionPredFlag = [if pSlice.sSliceHeaderExt.bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
+    let mut uiCode = 0u32;
+    let mut iCode = 0i32;
+    iRefCount[0] = pSliceHeader.uiRefCount[0];
+    iRefCount[1] = pSliceHeader.uiRefCount[1];
+
+    let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
+    let ec_active = (*pCtx).pParam.is_null()
+        || (*(*pCtx).pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
+
+    let mb_type = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+    match mb_type {
+        MB_TYPE_16x16 => {
+            let mut iRefIdx = 0i32;
+            if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                if ret != 0 {
+                    return ret as i32;
+                }
+                iMotionPredFlag[0] = uiCode;
+            }
+            if iMotionPredFlag[0] == 0 {
+                let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iRefIdx = uiCode as i32;
+                if iRefIdx < 0 || iRefIdx >= iRefCount[0] || ppRefPic[iRefIdx as usize].is_null() {
+                    (*pCtx).bMbRefConcealed = true;
+                    if ec_active {
+                        iRefIdx = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+                let ref_pic = ppRefPic[iRefIdx as usize];
+                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                    || (*pCtx).bMbRefConcealed
+                    || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+            } else {
+                return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
+            }
+            let mut iMv = [0i16; 2];
+            crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, 0, 4, iRefIdx as i8, &mut iMv);
+
+            let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+            if ret != 0 {
+                return ret;
+            }
+            iMv[0] = iMv[0].wrapping_add(iCode as i16);
+            let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+            if ret != 0 {
+                return ret;
+            }
+            iMv[1] = iMv[1].wrapping_add(iCode as i16);
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(pCurDqLayer as *mut _, 0, iRefIdx as i8, iMv.as_ptr());
+        }
+        MB_TYPE_16x8 => {
+            let mut iRefIdx = [0i32; 2];
+            for i in 0..2 {
+                if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    if ret != 0 {
+                        return ret as i32;
+                    }
+                    iMotionPredFlag[i] = uiCode;
+                }
+            }
+            for i in 0..2 {
+                if iMotionPredFlag[i] != 0 {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
+                }
+                let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iRefIdx[i] = uiCode as i32;
+                if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                    (*pCtx).bMbRefConcealed = true;
+                    if ec_active {
+                        iRefIdx[i] = 0;
+                        (*pCtx).iErrorCode |= dsBitstreamError;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                    }
+                }
+                let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                    || (*pCtx).bMbRefConcealed
+                    || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+            }
+            for i in 0..2 {
+                let mut iMv = [0i16; 2];
+                crate::decoder::mv_pred::PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 3, iRefIdx[i] as i8, &mut iMv);
+
+                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iMv[0] = iMv[0].wrapping_add(iCode as i16);
+                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iMv[1] = iMv[1].wrapping_add(iCode as i16);
+                crate::decoder::mv_pred::UpdateP16x8MotionInfo(
+                    pCurDqLayer as *mut _,
+                    (*iMvArray).as_mut_ptr(),
+                    (*iRefIdxArray).as_mut_ptr(),
+                    0,
+                    (i as i32) << 3,
+                    iRefIdx[i] as i8,
+                    iMv.as_ptr(),
+                );
+            }
+        }
+        MB_TYPE_8x16 => {
+            let mut iRefIdx = [0i32; 2];
+            for i in 0..2 {
+                if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    if ret != 0 {
+                        return ret as i32;
+                    }
+                    iMotionPredFlag[i] = uiCode;
+                }
+            }
+            for i in 0..2 {
+                if iMotionPredFlag[i] == 0 {
+                    let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                    if ret != 0 {
+                        return ret;
+                    }
+                    iRefIdx[i] = uiCode as i32;
+                    if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                        (*pCtx).bMbRefConcealed = true;
+                        if ec_active {
+                            iRefIdx[i] = 0;
+                            (*pCtx).iErrorCode |= dsBitstreamError;
+                        } else {
+                            return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                        }
+                    }
+                    let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                    (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                        || (*pCtx).bMbRefConcealed
+                        || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+                } else {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
+                }
+            }
+            for i in 0..2 {
+                let mut iMv = [0i16; 2];
+                crate::decoder::mv_pred::PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 2, iRefIdx[i] as i8, &mut iMv);
+
+                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iMv[0] = iMv[0].wrapping_add(iCode as i16);
+                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                if ret != 0 {
+                    return ret;
+                }
+                iMv[1] = iMv[1].wrapping_add(iCode as i16);
+                crate::decoder::mv_pred::UpdateP8x16MotionInfo(
+                    pCurDqLayer as *mut _,
+                    (*iMvArray).as_mut_ptr(),
+                    (*iRefIdxArray).as_mut_ptr(),
+                    0,
+                    (i as i32) << 2,
+                    iRefIdx[i] as i8,
+                    iMv.as_ptr(),
+                );
+            }
+        }
+        MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
+            let mut iRefIdx = [0i32; 4];
+            let mut iSubPartCount = [0i32; 4];
+            let mut iPartWidth = [0i32; 4];
+
+            if MB_TYPE_8x8_REF0 == mb_type {
+                iRefCount[0] = 1;
+                iRefCount[1] = 1;
+            }
+
+            for i in 0..4 {
+                let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+                if ret != 0 {
+                    return ret as i32;
+                }
+                let uiSubMbType = uiCode;
+                if uiSubMbType >= 4 {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
+                }
+                (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                iSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount as i32;
+                iPartWidth[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth as i32;
+                let flag = *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy);
+                *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = flag && (uiSubMbType == 0);
+            }
+
+            if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                for i in 0..4 {
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    if ret != 0 {
+                        return ret as i32;
+                    }
+                    iMotionPredFlag[i] = uiCode;
+                }
+            }
+
+            if MB_TYPE_8x8_REF0 == mb_type {
+                let ref_idx_mb = &mut *(*(*pCurDqLayer).pDec).pRefIndex[0].add(iMbXy);
+                ref_idx_mb.fill(0);
+            } else {
+                for i in 0..4 {
+                    let iIndex8 = (i as i32) << 2;
+                    let uiScan4Idx = g_kuiScan4[iIndex8 as usize] as usize;
+
+                    if iMotionPredFlag[i] == 0 {
+                        let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                        if ret != 0 {
+                            return ret;
+                        }
+                        iRefIdx[i] = uiCode as i32;
+                        if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                            (*pCtx).bMbRefConcealed = true;
+                            if ec_active {
+                                iRefIdx[i] = 0;
+                                (*pCtx).iErrorCode |= dsBitstreamError;
+                            } else {
+                                return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
+                            }
+                        }
+                        let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                        (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
+                            || (*pCtx).bMbRefConcealed
+                            || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+
+                        let ref_idx_mb = &mut *(*(*pCurDqLayer).pDec).pRefIndex[0].add(iMbXy);
+                        ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
+                        ref_idx_mb[uiScan4Idx + 1] = iRefIdx[i] as i8;
+                        ref_idx_mb[uiScan4Idx + 4] = iRefIdx[i] as i8;
+                        ref_idx_mb[uiScan4Idx + 5] = iRefIdx[i] as i8;
+                    } else {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
+                    }
+                }
+            }
+
+            for i in 0..4 {
+                let iPartCount = iSubPartCount[i];
+                let uiSubMbType = (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i];
+                let iBlockWidth = iPartWidth[i];
+                let iIdx = (i as i32) << 2;
+                let uiIdx4Cache = g_kuiCache30ScanIdx[iIdx as usize] as usize;
+
+                (*iRefIdxArray)[0][uiIdx4Cache] = iRefIdx[i] as i8;
+                (*iRefIdxArray)[0][uiIdx4Cache + 1] = iRefIdx[i] as i8;
+                (*iRefIdxArray)[0][uiIdx4Cache + 6] = iRefIdx[i] as i8;
+                (*iRefIdxArray)[0][uiIdx4Cache + 7] = iRefIdx[i] as i8;
+
+                for j in 0..iPartCount {
+                    let iPartIdx = iIdx + j * iBlockWidth;
+                    let uiScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+                    let uiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
+                    let mut iMv = [0i16; 2];
+                    crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx, iBlockWidth, iRefIdx[i] as i8, &mut iMv);
+
+                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    if ret != 0 {
+                        return ret;
+                    }
+                    iMv[0] = iMv[0].wrapping_add(iCode as i16);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    if ret != 0 {
+                        return ret;
+                    }
+                    iMv[1] = iMv[1].wrapping_add(iCode as i16);
+
+                    let mv_mb = &mut *(*(*pCurDqLayer).pDec).pMv[0].add(iMbXy);
+                    if SUB_MB_TYPE_8x8 == uiSubMbType {
+                        mv_mb[uiScan4Idx] = iMv;
+                        mv_mb[uiScan4Idx + 1] = iMv;
+                        mv_mb[uiScan4Idx + 4] = iMv;
+                        mv_mb[uiScan4Idx + 5] = iMv;
+                        (*iMvArray)[0][uiCacheIdx] = iMv;
+                        (*iMvArray)[0][uiCacheIdx + 1] = iMv;
+                        (*iMvArray)[0][uiCacheIdx + 6] = iMv;
+                        (*iMvArray)[0][uiCacheIdx + 7] = iMv;
+                    } else if SUB_MB_TYPE_8x4 == uiSubMbType {
+                        mv_mb[uiScan4Idx] = iMv;
+                        mv_mb[uiScan4Idx + 1] = iMv;
+                        (*iMvArray)[0][uiCacheIdx] = iMv;
+                        (*iMvArray)[0][uiCacheIdx + 1] = iMv;
+                    } else if SUB_MB_TYPE_4x8 == uiSubMbType {
+                        mv_mb[uiScan4Idx] = iMv;
+                        mv_mb[uiScan4Idx + 4] = iMv;
+                        (*iMvArray)[0][uiCacheIdx] = iMv;
+                        (*iMvArray)[0][uiCacheIdx + 6] = iMv;
+                    } else {
+                        // SUB_MB_TYPE_4x4
+                        mv_mb[uiScan4Idx] = iMv;
+                        (*iMvArray)[0][uiCacheIdx] = iMv;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    ERR_NONE
 }
 
 pub unsafe fn WelsFillDirectCacheCabac(
@@ -1322,8 +1841,7 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
         *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
         *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
     } else {
-        let nC_idx = (nC.max(0) as usize).min(16);
-        let iNcMapIdx = g_kuiNcMapTable[nC_idx] as usize;
+        let iNcMapIdx = g_kuiNcMapTable[nC as usize] as usize;
         if iNcMapIdx <= 2 {
             let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
             if uiValue < g_kuiVlcTableNeedMoreBitsThread[iNcMapIdx] as usize {
@@ -1331,8 +1849,7 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
                 iUsedBits += 8;
                 let more_bits_shift = 32 - *kpVlcTableMoreBitsCountList[iNcMapIdx].add(uiValue) as usize;
                 let iIndexValue = ((*pBitsCache).uiCache32Bit >> more_bits_shift) as usize;
-                let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1];
-                let entry_ptr = (table_ptr as *const [u8; 2]).add((uiValue << 8) | iIndexValue);
+                let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1][uiValue].add(iIndexValue);
                 let iIndexVlc = (*entry_ptr)[0] as usize;
                 let uiCount = (*entry_ptr)[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
@@ -1340,8 +1857,7 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
                 *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
                 *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
             } else {
-                let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0];
-                let entry_ptr = (table_ptr as *const [u8; 2]).add((iNcMapIdx << 8) | uiValue);
+                let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0][iNcMapIdx].add(uiValue);
                 let iIndexVlc = (*entry_ptr)[0] as usize;
                 let uiCount = (*entry_ptr)[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
@@ -1350,11 +1866,10 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
                 *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
             }
         } else {
-            let uiValue = ((*pBitsCache).uiCache32Bit >> 26) as usize;
+            let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - 6)) as usize;
             POP_BUFFER(pBitsCache, 6);
             iUsedBits += 6;
-            let table_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0];
-            let entry_ptr = (table_ptr as *const [u8; 2]).add((3 << 8) | uiValue);
+            let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0][3].add(uiValue);
             let iIndexVlc = (*entry_ptr)[0] as usize;
             *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
             *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
@@ -1566,8 +2081,8 @@ pub unsafe fn WelsResidualBlockCavlc(
     let mut iMbResProperty: i32 = 0;
     GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
 
-    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].is_null() {
-        (*(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].add(uiQp as usize)).as_ptr()
+    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[(iMbResProperty - 6) as usize].is_null() {
+        (*(*pCtx).pDequant_coeff4x4[(iMbResProperty - 6) as usize].add(uiQp as usize)).as_ptr()
     } else {
         g_kuiDequantCoeff[uiQp as usize].as_ptr()
     };
@@ -1579,6 +2094,142 @@ pub unsafe fn WelsResidualBlockCavlc(
     let pBuf = ((*pBs).pStartBuf as *mut u8).add(iCurIdx >> 3);
     let bChromaDc = CHROMA_DC == iResidualProperty;
     let bChroma = bChromaDc || CHROMA_AC == iResidualProperty;
+
+    let uiCache32Bit = ((*pBuf.add(0) as u32) << 24)
+        | ((*pBuf.add(1) as u32) << 16)
+        | ((*pBuf.add(2) as u32) << 8)
+        | (*pBuf.add(3) as u32);
+
+    let mut sReadBitsCache = SReadBitsCache {
+        uiCache32Bit: uiCache32Bit << (iCurIdx & 0x07),
+        uiRemainBits: 32 - (iCurIdx & 0x07) as u8,
+        pBuf,
+    };
+
+    let iCurNonZeroCacheIdx = g_kuiCache48CountScan4Idx[iIndex as usize] as usize;
+    let nA = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 1) as i8;
+    let nB = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 8) as i8;
+    let nC = wels_non_zero_count_average(nA, nB);
+
+    iUsedBits += CavlcGetTrailingOnesAndTotalCoeff(
+        &mut uiTotalCoeff,
+        &mut uiTrailingOnes,
+        &mut sReadBitsCache,
+        pVlcTable,
+        bChromaDc,
+        nC,
+    );
+
+    let dbg = std::env::var("DBG_MB").is_ok();
+    if dbg {
+        eprintln!("DBG res idx={} prop={} nC={} tc={} t1={} used={} bsIdx={}",
+            iIndex, iResidualProperty, nC, uiTotalCoeff, uiTrailingOnes, iUsedBits, (*pBs).iIndex);
+    }
+    if iResidualProperty != CHROMA_DC && iResidualProperty != I16_LUMA_DC {
+        *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
+    }
+    if 0 == uiTotalCoeff {
+        (*pBs).iIndex += iUsedBits as isize;
+        return ERR_NONE;
+    }
+    if uiTrailingOnes > 3 || uiTotalCoeff > 16 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_TOTAL_COEFF_OR_TRAILING_ONES);
+    }
+    let res = CavlcGetLevelVal(&mut iLevel, &mut sReadBitsCache, uiTotalCoeff, uiTrailingOnes);
+    if res == -1 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_LEVEL);
+    }
+    iUsedBits += res;
+
+    let mut iZerosLeft: i32 = 0;
+    if (uiTotalCoeff as i32) < iMaxNumCoeff {
+        iUsedBits += CavlcGetTotalZeros(&mut iZerosLeft, &mut sReadBitsCache, uiTotalCoeff, pVlcTable, bChromaDc);
+    }
+
+    if dbg {
+        eprintln!("DBG res zerosLeft={} maxCoeff={} levels={:?}", iZerosLeft, iMaxNumCoeff, &iLevel[..uiTotalCoeff as usize]);
+    }
+    if iZerosLeft < 0 || (iZerosLeft + uiTotalCoeff as i32) > iMaxNumCoeff {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_ZERO_LEFT);
+    }
+    let res = CavlcGetRunBefore(&mut iRun, &mut sReadBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft);
+    if res == -1 {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_RUN_BEFORE);
+    }
+    iUsedBits += res;
+    (*pBs).iIndex += iUsedBits as isize;
+    let mut iCoeffNum: i32 = -1;
+
+    if iResidualProperty == CHROMA_DC {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            *pTCoeff.add(j) = iLevel[i] as i16;
+        }
+        WelsChromaDcIdct(pTCoeff);
+        if pCtx.is_null() || !(*pCtx).bUseScalingList {
+            for j in 0..4 {
+                let idx = *kpZigzagTable.add(j) as usize;
+                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * *kpDequantCoeff as i32) >> 1) as i16;
+            }
+        } else {
+            for j in 0..4 {
+                let idx = *kpZigzagTable.add(j) as usize;
+                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (*kpDequantCoeff as i64)) >> 5) as i16;
+            }
+        }
+    } else if iResidualProperty == I16_LUMA_DC {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            *pTCoeff.add(j) = iLevel[i] as i16;
+        }
+        WelsLumaDcDequantIdct(pTCoeff, uiQp, pCtx);
+    } else {
+        for i in (0..(uiTotalCoeff as usize)).rev() {
+            iCoeffNum += iRun[i] + 1;
+            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            if pCtx.is_null() || !(*pCtx).bUseScalingList {
+                *pTCoeff.add(j) = (iLevel[i] * (*kpDequantCoeff.add(j & 0x07)) as i32) as i16;
+            } else {
+                *pTCoeff.add(j) = ((iLevel[i] * (*kpDequantCoeff.add(j)) as i32 + 8) >> 4) as i16;
+            }
+        }
+    }
+    ERR_NONE
+}
+
+/// Matches `WelsResidualBlockCavlc8x8` in `parse_mb_syn_cavlc.cpp`.
+pub unsafe fn WelsResidualBlockCavlc8x8(
+    pVlcTable: *mut SVlcTable,
+    pNonZeroCountCache: *mut u8,
+    pBs: *mut SBitStringAux,
+    iIndex: i32,
+    iMaxNumCoeff: i32,
+    kpZigzagTable: *const u8,
+    mut iResidualProperty: i32,
+    pTCoeff: *mut i16,
+    iIdx4x4: i32,
+    uiQp: u8,
+    pCtx: *mut SWelsDecoderContext,
+) -> i32 {
+    let mut iLevel = [0i32; 16];
+    let mut iRun = [0i32; 16];
+    let mut iMbResProperty: i32 = 0;
+    GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
+
+    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize].is_null() {
+        (*(*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize].add(uiQp as usize)).as_ptr()
+    } else {
+        crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8[uiQp as usize].as_ptr()
+    };
+
+    let mut uiTotalCoeff: u8 = 0;
+    let mut uiTrailingOnes: u8 = 0;
+    let mut iUsedBits: i32 = 0;
+    let iCurIdx = (*pBs).iIndex as usize;
+    let pBuf = ((*pBs).pStartBuf as *mut u8).add(iCurIdx >> 3);
+    let bChromaDc = CHROMA_DC == iResidualProperty;
 
     let uiCache32Bit = ((*pBuf.add(0) as u32) << 24)
         | ((*pBuf.add(1) as u32) << 16)
@@ -1637,42 +2288,18 @@ pub unsafe fn WelsResidualBlockCavlc(
     (*pBs).iIndex += iUsedBits as isize;
     let mut iCoeffNum: i32 = -1;
 
-    if iResidualProperty == CHROMA_DC {
-        for i in (0..(uiTotalCoeff as usize)).rev() {
-            iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
-            *pTCoeff.add(j) = iLevel[i] as i16;
-        }
-        WelsChromaDcIdct(pTCoeff);
-        if pCtx.is_null() || !(*pCtx).bUseScalingList {
-            for j in 0..4 {
-                let idx = *kpZigzagTable.add(j) as usize;
-                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * *kpDequantCoeff as i32) >> 1) as i16;
-            }
+    for i in (0..(uiTotalCoeff as usize)).rev() {
+        iCoeffNum += iRun[i] + 1;
+        let j = (iCoeffNum << 2) + iIdx4x4;
+        let j = *kpZigzagTable.add(j as usize) as usize;
+        let coeff = if uiQp >= 36 {
+            (iLevel[i] * *kpDequantCoeff.add(j) as i32) * (1 << (uiQp as i32 / 6 - 6))
         } else {
-            for j in 0..4 {
-                let idx = *kpZigzagTable.add(j) as usize;
-                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (*kpDequantCoeff as i64)) >> 5) as i16;
-            }
-        }
-    } else if iResidualProperty == I16_LUMA_DC {
-        for i in (0..(uiTotalCoeff as usize)).rev() {
-            iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
-            *pTCoeff.add(j) = iLevel[i] as i16;
-        }
-        WelsLumaDcDequantIdct(pTCoeff, uiQp, pCtx);
-    } else {
-        for i in (0..(uiTotalCoeff as usize)).rev() {
-            iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
-            if pCtx.is_null() || !(*pCtx).bUseScalingList {
-                *pTCoeff.add(j) = (iLevel[i] * (*kpDequantCoeff.add(j & 0x07)) as i32) as i16;
-            } else {
-                *pTCoeff.add(j) = ((iLevel[i] * (*kpDequantCoeff.add(j)) as i32 + 8) >> 4) as i16;
-            }
-        }
+            (iLevel[i] * *kpDequantCoeff.add(j) as i32 + (1 << (5 - uiQp as i32 / 6))) >> (6 - uiQp as i32 / 6)
+        };
+        *pTCoeff.add(j) = coeff as i16;
     }
+
     ERR_NONE
 }
 
@@ -1778,14 +2405,13 @@ mod tests {
         let mut non_zero_cache = [0u8; 48];
         let mut coeffs = [0i16; 16];
         let zigzag = [0u8; 16];
-        let mock_coeff_table = [[0u8, 1u8]; 256]; // [0] = vlc_idx 0 (0 total coeff, 0 trailing ones), count = 1 bit
-        let mock_coeff_table_ptr = &mock_coeff_table as *const [[u8; 2]; 256];
         let mut vlc_table = SVlcTable {
-            kpCoeffTokenVlcTable: [mock_coeff_table_ptr; 4],
-            kpChromaCoeffTokenVlcTable: mock_coeff_table_ptr as *const [u8; 2],
+            kpCoeffTokenVlcTable: [[std::ptr::null(); 8]; 4],
+            kpChromaCoeffTokenVlcTable: std::ptr::null(),
             kpZeroTable: [std::ptr::null(); 7],
             kpTotalZerosTable: [[std::ptr::null(); 15]; 2],
         };
+        InitVlcTable(&mut vlc_table);
 
         unsafe {
             let res = WelsParseMbCavlcResidual(
