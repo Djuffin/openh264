@@ -233,36 +233,11 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, SDqLayer, PDqLayer};
 
 
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+// The real decoder context and SPS, not local stand-ins: these are reached through
+// raw pointers from decode_slice, so the layouts must be the genuine ones.
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::parameter_sets::SSps;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSps {
-    pub bDirect8x8InferenceFlag: bool,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsDecoderContext {
-    pub pCurDqLayer: *mut SDqLayer,
-    pub sRefPic: SRefPic,
-    pub pSps: *mut SSps,
-    pub iErrorCode: i32,
-    pub lastReadyHeightOffset: [[i32; 1]; 2],
-}
-
-impl Default for SWelsDecoderContext {
-    fn default() -> Self {
-        Self {
-            pCurDqLayer: std::ptr::null_mut(),
-            sRefPic: SRefPic::default(),
-            pSps: std::ptr::null_mut(),
-            iErrorCode: 0,
-            lastReadyHeightOffset: [[0; 1]; 2],
-        }
-    }
-}
-
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
 // ============================================================================
 // Low-Level Packed Load/Store Primitives
