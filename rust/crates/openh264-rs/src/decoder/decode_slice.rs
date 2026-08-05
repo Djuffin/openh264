@@ -3863,7 +3863,10 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         return ret;
     }
 
-    std::ptr::write_bytes((*dq).pDirect.add(iMbXy * 16), 0, 16);
+    // `memset (pCurDqLayer->pDirect[iMbXy], 0, sizeof (int8_t) * 16)`: pDirect is
+    // `*mut [i8; 16]`, so the row index is iMbXy — scaling it by 16 walks 16 rows
+    // per macroblock and writes past the allocation into the neighbouring buffers.
+    std::ptr::write_bytes((*dq).pDirect.add(iMbXy) as *mut i8, 0, 16);
 
     let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
 

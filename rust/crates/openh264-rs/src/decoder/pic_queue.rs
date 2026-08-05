@@ -449,9 +449,13 @@ pub unsafe fn PrefetchPic(pPicBuf: PPicBuff) -> PPicture {
             return pPic;
         }
 
-        // Pass 2: Wrap around and scan from index 0 to iCurrentIdx
+        // Pass 2: Wrap around and scan from index 0 to iCurrentIdx.
+        // `iPicIdx < iCapacity` guards a read past `ppPic` that the C++ loop
+        // (`iPicIdx <= pPicBuf->iCurrentIdx`) does not: each failed prefetch leaves
+        // iCurrentIdx one higher, so once the DPB is exhausted it exceeds iCapacity
+        // and the next call loads a wild pointer. C++ never reaches that state.
         iPicIdx = 0;
-        while iPicIdx <= (*pPicBuf).iCurrentIdx {
+        while iPicIdx <= (*pPicBuf).iCurrentIdx && iPicIdx < (*pPicBuf).iCapacity {
             let pCandidate = *(*pPicBuf).ppPic.add(iPicIdx as usize);
             if !pCandidate.is_null()
                 && !(*pCandidate).bUsedAsRef
