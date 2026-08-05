@@ -189,7 +189,6 @@ pub const fn IS_DIR(a: u32, part: usize, list: usize) -> bool {
     (a & (MB_TYPE_P0L0 << (part + 2 * list))) != 0
 }
 
-// Residual Properties
 pub const I16_LUMA_DC: i32 = 1;
 pub const I16_LUMA_AC: i32 = 2;
 pub const LUMA_DC_AC: i32 = 3;
@@ -201,6 +200,13 @@ pub const CHROMA_DC_V: i32 = 8;
 pub const CHROMA_AC_U: i32 = 9;
 pub const CHROMA_AC_V: i32 = 10;
 pub const LUMA_DC_AC_INTRA: i32 = 11;
+pub const LUMA_DC_AC_INTER: i32 = 12;
+pub const CHROMA_DC_U_INTER: i32 = 13;
+pub const CHROMA_DC_V_INTER: i32 = 14;
+pub const CHROMA_AC_U_INTER: i32 = 15;
+pub const CHROMA_AC_V_INTER: i32 = 16;
+pub const LUMA_DC_AC_INTRA_8: i32 = 17;
+pub const LUMA_DC_AC_INTER_8: i32 = 18;
 
 // ============================================================================
 // Global Lookup Tables
@@ -404,6 +410,48 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
         LUMA_DC_AC_INTRA => {
             *pMBproperty = 0;
             *pResidualProperty = LUMA_DC_AC;
+        }
+        CHROMA_DC_U => {
+            *pMBproperty = 1;
+            *pResidualProperty = if bCavlc { CHROMA_DC } else { CHROMA_DC_U };
+        }
+        CHROMA_DC_V => {
+            *pMBproperty = 2;
+            *pResidualProperty = if bCavlc { CHROMA_DC } else { CHROMA_DC_V };
+        }
+        I16_LUMA_AC => {
+            *pMBproperty = 0;
+        }
+        I16_LUMA_DC => {
+            *pMBproperty = 0;
+        }
+        LUMA_DC_AC_INTER => {
+            *pMBproperty = 3;
+            *pResidualProperty = LUMA_DC_AC;
+        }
+        CHROMA_DC_U_INTER => {
+            *pMBproperty = 4;
+            *pResidualProperty = if bCavlc { CHROMA_DC } else { CHROMA_DC_U };
+        }
+        CHROMA_DC_V_INTER => {
+            *pMBproperty = 5;
+            *pResidualProperty = if bCavlc { CHROMA_DC } else { CHROMA_DC_V };
+        }
+        CHROMA_AC_U_INTER => {
+            *pMBproperty = 4;
+            *pResidualProperty = if bCavlc { CHROMA_AC } else { CHROMA_AC_U };
+        }
+        CHROMA_AC_V_INTER => {
+            *pMBproperty = 5;
+            *pResidualProperty = if bCavlc { CHROMA_AC } else { CHROMA_AC_V };
+        }
+        LUMA_DC_AC_INTRA_8 => {
+            *pMBproperty = 6;
+            *pResidualProperty = LUMA_DC_AC_8;
+        }
+        LUMA_DC_AC_INTER_8 => {
+            *pMBproperty = 7;
+            *pResidualProperty = LUMA_DC_AC_8;
         }
         _ => {
             *pMBproperty = *pResidualProperty;
@@ -2126,23 +2174,23 @@ pub unsafe fn ParseCbfInfoCabac(
     iResProperty: i32,
     uiCbfBit: &mut u32,
 ) -> i32 {
-    let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex as usize;
-    let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth as usize;
+    let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex;
+    let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
     let pCbfDc = (*(*pCtx).pCurDqLayer).pCbfDc;
     let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
     *uiCbfBit = 0;
-    let mut nA: i8 = IS_INTRA(*pMbType.add(iCurrBlkXy)) as i8;
+    let mut nA: i8 = IS_INTRA(*pMbType.add(iCurrBlkXy as usize)) as i8;
     let mut nB: i8 = nA;
 
     if iResProperty == I16_LUMA_DC || iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
         if (*pNeighAvail).iTopAvail != 0 {
-            nB = (*pMbType.add(iTopBlkXy) == MB_TYPE_INTRA_PCM
-                || ((*pCbfDc.add(iTopBlkXy) >> iResProperty) & 1) != 0) as i8;
+            nB = (*pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM
+                || ((*pCbfDc.add(iTopBlkXy as usize) >> iResProperty) & 1) != 0) as i8;
         }
         if (*pNeighAvail).iLeftAvail != 0 {
-            nA = (*pMbType.add(iLeftBlkXy) == MB_TYPE_INTRA_PCM
-                || ((*pCbfDc.add(iLeftBlkXy) >> iResProperty) & 1) != 0) as i8;
+            nA = (*pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM
+                || ((*pCbfDc.add(iLeftBlkXy as usize) >> iResProperty) & 1) != 0) as i8;
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
@@ -2155,7 +2203,7 @@ pub unsafe fn ParseCbfInfoCabac(
             return err;
         }
         if *uiCbfBit != 0 {
-            *pCbfDc.add(iCurrBlkXy) |= 1 << iResProperty;
+            *pCbfDc.add(iCurrBlkXy as usize) |= 1 << iResProperty;
         }
     } else {
         let top_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 8) as usize;
@@ -2163,14 +2211,14 @@ pub unsafe fn ParseCbfInfoCabac(
             if g_kTopBlkInsideMb[iZIndex as usize] != 0 {
                 iTopBlkXy = iCurrBlkXy;
             }
-            nB = (*pNzcCache.add(top_nzc_idx) != 0 || *pMbType.add(iTopBlkXy) == MB_TYPE_INTRA_PCM) as i8;
+            nB = (*pNzcCache.add(top_nzc_idx) != 0 || *pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
         }
         let left_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 1) as usize;
         if *pNzcCache.add(left_nzc_idx) != 0xff {
             if g_kLeftBlkInsideMb[iZIndex as usize] != 0 {
                 iLeftBlkXy = iCurrBlkXy;
             }
-            nA = (*pNzcCache.add(left_nzc_idx) != 0 || *pMbType.add(iLeftBlkXy) == MB_TYPE_INTRA_PCM) as i8;
+            nA = (*pNzcCache.add(left_nzc_idx) != 0 || *pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
@@ -2353,11 +2401,11 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         g_kuiDequantCoeff8x8[uiQp as usize].as_ptr()
     };
 
-    let mut err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx, &mut uiTotalCoeffNum);
+    let mut err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx, &mut uiTotalCoeffNum);
     if err != ERR_NONE {
         return err;
     }
-    err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx);
+    err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx);
     if err != ERR_NONE {
         return err;
     }
@@ -2371,7 +2419,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         return ERR_NONE;
     }
 
-    if iResProperty == LUMA_DC_AC_8 {
+    if iResProp == LUMA_DC_AC_8 {
         let qp_shift = uiQp / 6;
         for j in 0..64 {
             if pSignificantMap[j] != 0 {
@@ -2419,16 +2467,16 @@ pub unsafe fn ParseResidualBlockCabac(
 
     let pCbfDc = (*(*pCtx).pCurDqLayer).pCbfDc;
     let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
-    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCbfDc, pMbType, pCtx, iIndex, iResProperty, &mut uiCbpBit);
+    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCbfDc, pMbType, pCtx, iIndex, iResProp, &mut uiCbpBit);
     if err != ERR_NONE {
         return err;
     }
     if uiCbpBit != 0 {
-        err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx, &mut uiTotalCoeffNum);
+        err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx, &mut uiTotalCoeffNum);
         if err != ERR_NONE {
             return err;
         }
-        err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProperty, pCtx);
+        err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx);
         if err != ERR_NONE {
             return err;
         }
@@ -2440,13 +2488,13 @@ pub unsafe fn ParseResidualBlockCabac(
         return ERR_NONE;
     }
 
-    if iResProperty == I16_LUMA_DC {
+    if iResProp == I16_LUMA_DC {
         for j in 0..16 {
             let scan_idx = *pScanTable.add(j) as usize;
             *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
         }
         WelsLumaDcDequantIdct(sTCoeff, uiQp as i32, pCtx);
-    } else if iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
+    } else if iResProp == CHROMA_DC_U || iResProp == CHROMA_DC_V {
         for j in 0..4 {
             let scan_idx = *pScanTable.add(j) as usize;
             *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;

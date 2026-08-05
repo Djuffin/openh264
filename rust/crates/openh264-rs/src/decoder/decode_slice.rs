@@ -1432,6 +1432,11 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 
     if pSliceHeader.uiDisableDeblockingFilterIdc == 1 || pCurSlice.iTotalMbInCurSlice <= 0 {
         return ERR_NONE;
+    } else {
+        crate::decoder::deblocking::WelsDeblockingFilterSlice(
+            pCtx,
+            Some(crate::decoder::deblocking::WelsDeblockingMb),
+        );
     }
 
     ERR_NONE
@@ -2937,6 +2942,19 @@ pub unsafe fn WelsDecodeSlice(
     }
 
     ctx.eSliceType = pSliceHeader.eSliceType;
+    if !dq.sLayerInfo.pPps.is_null() && (*dq.sLayerInfo.pPps).bEntropyCodingModeFlag {
+        let iQp = pSliceHeader.iSliceQp;
+        let iCabacInitIdc = pSliceHeader.iCabacInitIdc;
+        crate::decoder::cabac_decoder::WelsCabacContextInit(pCtx, pSlice.eSliceType, iCabacInitIdc, iQp);
+        pSlice.iLastDeltaQp = 0;
+        let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
+            (*pCtx).pCabacDecEngine,
+            (*(*pCtx).pCurDqLayer).pBitStringAux,
+        );
+        if err != ERR_NONE {
+            return err;
+        }
+    }
     WelsCalcDeqCoeffScalingList(pCtx);
 
     let mut iNextMbXyIndex = pSliceHeader.iFirstMbInSlice;
@@ -2945,6 +2963,8 @@ pub unsafe fn WelsDecodeSlice(
         dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
     }
     dq.iMbXyIndex = iNextMbXyIndex;
+    pSlice.iMbSkipRun = -1;
+    let iSliceIdc = (pSliceHeader.iFirstMbInSlice << 7) + dq.uiLayerDqId as i32;
 
     let kiCountNumMb = if !pSliceHeader.pSps.is_null() {
         (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32
@@ -2959,6 +2979,9 @@ pub unsafe fn WelsDecodeSlice(
             break;
         }
 
+        if !dq.pSliceIdc.is_null() {
+            *dq.pSliceIdc.add(iNextMbXyIndex as usize) = iSliceIdc;
+        }
         ctx.bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
         if !dq.pMbRefConcealedFlag.is_null() {
@@ -2973,7 +2996,11 @@ pub unsafe fn WelsDecodeSlice(
             break;
         }
 
-        iNextMbXyIndex += 1;
+        if !ctx.pPps.is_null() && (*ctx.pPps).uiNumSliceGroups > 1 {
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(ctx.pFmo, iNextMbXyIndex);
+        } else {
+            iNextMbXyIndex += 1;
+        }
         if dq.iMbWidth > 0 {
             dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
             dq.iMbY = iNextMbXyIndex / dq.iMbWidth;

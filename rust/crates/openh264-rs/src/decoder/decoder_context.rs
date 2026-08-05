@@ -281,7 +281,7 @@ pub use crate::decoder::error_concealment::SCopyFunc;
 
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct SDeblockingFilter {
     pub pCsData: [*mut u8; 3],
     pub iCsStride: [i32; 2],

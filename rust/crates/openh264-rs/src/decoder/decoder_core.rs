@@ -2546,6 +2546,8 @@ pub unsafe fn InitialDqLayersContext(
         (*pCtx).sMb.pRefIndex[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pCtx).sMb.pRefIndex[i][LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pCtx).sMb.pDirect[i] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pCtx).sMb.pNoSubMbPartSizeLessThan8x8Flag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
+        (*pCtx).sMb.pTransformSize8x8Flag[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pCtx).sMb.pLumaQp[i] = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pCtx).sMb.pChromaQp[i] = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pCtx).sMb.pMvd[i][LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2602,6 +2604,86 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
                 WelsFreeHelper(pMa, (*pCtx).sMb.pMvd[i][list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
                 (*pCtx).sMb.pMvd[i][list] = std::ptr::null_mut();
             }
+        }
+        if !(*pCtx).sMb.pDirect[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pDirect[i] as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pDirect[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pNoSubMbPartSizeLessThan8x8Flag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pNoSubMbPartSizeLessThan8x8Flag[i] as *mut u8, numMb * std::mem::size_of::<bool>());
+            (*pCtx).sMb.pNoSubMbPartSizeLessThan8x8Flag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pTransformSize8x8Flag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pTransformSize8x8Flag[i] as *mut u8, numMb * std::mem::size_of::<bool>());
+            (*pCtx).sMb.pTransformSize8x8Flag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pLumaQp[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pLumaQp[i] as *mut u8, numMb * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pLumaQp[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pChromaQp[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pChromaQp[i] as *mut u8, numMb * 2 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pChromaQp[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pCbfDc[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pCbfDc[i] as *mut u8, numMb * std::mem::size_of::<u16>());
+            (*pCtx).sMb.pCbfDc[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pNzc[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pNzc[i] as *mut u8, numMb * 24 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pNzc[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pNzcRs[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pNzcRs[i] as *mut u8, numMb * 24 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pNzcRs[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pScaledTCoeff[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pScaledTCoeff[i] as *mut u8, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>());
+            (*pCtx).sMb.pScaledTCoeff[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pIntraPredMode[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pIntraPredMode[i] as *mut u8, numMb * 8 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pIntraPredMode[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pIntra4x4FinalMode[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pIntra4x4FinalMode[i] as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pIntra4x4FinalMode[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pIntraNxNAvailFlag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pIntraNxNAvailFlag[i] as *mut u8, numMb * std::mem::size_of::<u8>());
+            (*pCtx).sMb.pIntraNxNAvailFlag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pChromaPredMode[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pChromaPredMode[i] as *mut u8, numMb * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pChromaPredMode[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pCbp[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pCbp[i] as *mut u8, numMb * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pCbp[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pSubMbType[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pSubMbType[i] as *mut u8, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>());
+            (*pCtx).sMb.pSubMbType[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pSliceIdc[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pSliceIdc[i] as *mut u8, numMb * std::mem::size_of::<i32>());
+            (*pCtx).sMb.pSliceIdc[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pResidualPredFlag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pResidualPredFlag[i] as *mut u8, numMb * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pResidualPredFlag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pInterPredictionDoneFlag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pInterPredictionDoneFlag[i] as *mut u8, numMb * std::mem::size_of::<i8>());
+            (*pCtx).sMb.pInterPredictionDoneFlag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pMbCorrectlyDecodedFlag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pMbCorrectlyDecodedFlag[i] as *mut u8, numMb * std::mem::size_of::<bool>());
+            (*pCtx).sMb.pMbCorrectlyDecodedFlag[i] = std::ptr::null_mut();
+        }
+        if !(*pCtx).sMb.pMbRefConcealedFlag[i].is_null() {
+            WelsFreeHelper(pMa, (*pCtx).sMb.pMbRefConcealedFlag[i] as *mut u8, numMb * std::mem::size_of::<bool>());
+            (*pCtx).sMb.pMbRefConcealedFlag[i] = std::ptr::null_mut();
         }
         WelsFreeHelper(pMa, pDq as *mut u8, std::mem::size_of::<SDqLayer>());
         (*pCtx).pDqLayersList[i] = std::ptr::null_mut();

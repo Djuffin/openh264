@@ -200,28 +200,11 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
     }
 }
 
-// ============================================================================
-// Core Type Definitions & C Layout Structs
-// ============================================================================
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
-
+pub use crate::common::deblocking_common::*;
+pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
-
 pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
-
-
 pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, SDqLayer, PDqLayer};
 pub use crate::decoder::decoder_context::{
     SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter,
@@ -830,7 +813,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pRefIdxArr = if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pRefIndex[LIST_0]
     } else {
-        (*pCurDqLayer).pRefIndex[LIST_0]
+        (*pCurDqLayer).pRefIndex[LIST_0] as *mut _
     };
 
     let is_8x8_curr = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
@@ -839,7 +822,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pMvArr = if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pMv[LIST_0]
     } else {
-        (*pCurDqLayer).pMv[LIST_0]
+        (*pCurDqLayer).pMv[LIST_0] as *mut _
     };
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
@@ -2027,7 +2010,7 @@ unsafe fn DeblockingIntraMb(
 // Macroblock-Level Top-Level Deblocking Dispatcher
 // ============================================================================
 
-pub unsafe fn WelsDeblockingMb(
+pub unsafe extern "C" fn WelsDeblockingMb(
     pCurDqLayer: *mut SDqLayer,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
@@ -2137,7 +2120,8 @@ pub unsafe fn WelsDeblockingFilterSlice(
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let iTotalMbCount = (*pSliceHeaderExt.sSliceHeader.pSps).uiTotalMbCount;
+    let pSps = pSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+    let iTotalMbCount = if !pSps.is_null() { (*pSps).uiTotalMbCount as i32 } else { 0 };
 
     let mut pFilter = SDeblockingFilter::default();
     let pFmo = (*pCtx).pFmo;
@@ -2145,7 +2129,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
     let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;
     let mut iBoundryFlag: i32;
-    let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc;
+    let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
     // Step 1: Initialize filter parameters
     pFilter.pCsData[0] = (*(*pCtx).pDec).pData[0];
@@ -2155,14 +2139,14 @@ pub unsafe fn WelsDeblockingFilterSlice(
     pFilter.iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
     pFilter.iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
 
-    pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType;
+    pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
-    pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
-    pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
+    pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
+    pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     pFilter.pLoopf = &mut (*pCtx).sDeblockingFunc;
-    pFilter.pRefPics[0] = (*pCtx).sRefPic.pRefList[0];
-    pFilter.pRefPics[1] = (*pCtx).sRefPic.pRefList[1];
+    pFilter.pRefPics[0] = (*pCtx).sRefPic.pRefList[0].as_mut_ptr() as *mut _;
+    pFilter.pRefPics[1] = (*pCtx).sRefPic.pRefList[1].as_mut_ptr() as *mut _;
 
     // Step 2: Macroblock deblocking loop
     if iFilterIdc == 0 || iFilterIdc == 2 {
@@ -2183,7 +2167,8 @@ pub unsafe fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            if (*pSliceHeaderExt.sSliceHeader.pPps).uiNumSliceGroups > 1 {
+            let pPps = pSliceHeaderExt.sSliceHeader.pPps as *mut SPps;
+            if !pPps.is_null() && (*pPps).uiNumSliceGroups > 1 {
                 // Flexible Macroblock Ordering slice group transition
                 iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);
             } else {
@@ -2210,7 +2195,7 @@ pub unsafe fn WelsDeblockingInitFilter(
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
 
     *pFilter = SDeblockingFilter::default();
-    *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc;
+    *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
     (*pFilter).pCsData[0] = (*(*pCtx).pDec).pData[0];
     (*pFilter).pCsData[1] = (*(*pCtx).pDec).pData[1];
@@ -2219,14 +2204,14 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
     (*pFilter).iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
 
-    (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType;
+    (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
-    (*pFilter).iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset;
-    (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
+    (*pFilter).iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
+    (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     (*pFilter).pLoopf = &mut (*pCtx).sDeblockingFunc;
-    (*pFilter).pRefPics[0] = (*pCtx).sRefPic.pRefList[0];
-    (*pFilter).pRefPics[1] = (*pCtx).sRefPic.pRefList[1];
+    (*pFilter).pRefPics[0] = (*pCtx).sRefPic.pRefList[0].as_mut_ptr() as *mut _;
+    (*pFilter).pRefPics[1] = (*pCtx).sRefPic.pRefList[1].as_mut_ptr() as *mut _;
 }
 
 pub unsafe fn WelsDeblockingFilterMB(
