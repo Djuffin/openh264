@@ -1311,7 +1311,12 @@ pub unsafe fn ParseSps(
     pSrcNal: *mut u8,
     kSrcNalLen: i32,
 ) -> i32 {
-    let mut sTempSubsetSps = SSubsetSps::default();
+    // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in au_parser.cpp. Zeroing the
+    // raw bytes (rather than using Default) also clears the struct's padding, which
+    // the byte-wise comparison against the stored SPS below relies on: leftover
+    // padding would otherwise read as a changed SPS and force a spurious new
+    // sequence, resetting the DPB mid-stream.
+    let mut sTempSubsetSps: SSubsetSps = std::mem::zeroed();
     let pSubsetSps = &mut sTempSubsetSps as *mut SSubsetSps;
     let pSps = unsafe { &mut (*pSubsetSps).sSps };
 
@@ -1613,7 +1618,9 @@ pub unsafe fn ParsePps(
     pSrcNal: *mut u8,
     kSrcNalLen: i32,
 ) -> i32 {
-    let mut sTempPps = SPps::default();
+    // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp; zeroing the raw bytes also
+    // clears padding, which the byte-wise comparison against the active PPS relies on.
+    let mut sTempPps: SPps = std::mem::zeroed();
     let pPps = &mut sTempPps;
 
     let mut uiCode: u32 = 0;

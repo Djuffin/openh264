@@ -685,7 +685,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
         };
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
-            let pRef = ctx.pDec;
+            let pRef = crate::decoder::pic_queue::PrefetchPic(ctx.pPicBuff);
             if !pRef.is_null() {
                 let ref_pic = &mut *pRef;
                 ref_pic.bIsComplete = false;
