@@ -229,79 +229,8 @@ pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub iMvScale: [[i16; 17]; 2],
-}
+pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, SDqLayer, PDqLayer};
 
-impl Default for SSlice {
-    fn default() -> Self {
-        Self {
-            sSliceHeaderExt: SSliceHeaderExt::default(),
-            iMvScale: [[0; 17]; 2],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLayerInfo {
-    pub sSliceInLayer: SSlice,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub pBitStringAux: *mut c_void,
-    pub pFmo: *mut c_void,
-    pub pMbType: *mut u32,
-    pub pSliceIdc: *mut i32,
-    pub pMv: [*mut [[i16; 2]; 16]; 2],
-    pub pMvd: [*mut [[i16; 2]; 16]; 2],
-    pub pRefIndex: [*mut [i8; 16]; 2],
-    pub pDirect: *mut [i8; 16],
-    pub pSubMbType: *mut [u32; 4],
-    pub iMbX: i32,
-    pub iMbY: i32,
-    pub iMbXyIndex: i32,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub pDec: *mut SPicture,
-    pub iColocMv: [[[i16; 2]; 16]; 2],
-    pub iColocRefIndex: [[i8; 16]; 2],
-    pub iColocIntra: [i8; 16],
-}
-
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            sLayerInfo: SLayerInfo::default(),
-            pBitStringAux: std::ptr::null_mut(),
-            pFmo: std::ptr::null_mut(),
-            pMbType: std::ptr::null_mut(),
-            pSliceIdc: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); 2],
-            pMvd: [std::ptr::null_mut(); 2],
-            pRefIndex: [std::ptr::null_mut(); 2],
-            pDirect: std::ptr::null_mut(),
-            pSubMbType: std::ptr::null_mut(),
-            iMbX: 0,
-            iMbY: 0,
-            iMbXyIndex: 0,
-            iMbWidth: 0,
-            iMbHeight: 0,
-            pDec: std::ptr::null_mut(),
-            iColocMv: [[[0; 2]; 16]; 2],
-            iColocRefIndex: [[0; 16]; 2],
-            iColocIntra: [0; 16],
-        }
-    }
-}
-
-pub type PDqLayer = *mut SDqLayer;
 
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 

@@ -152,12 +152,7 @@ impl Default for SCopyFunc {
 
 pub use crate::decoder::decoder_core::SExpandPicFunc;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMcFunc {
-    pub pMcFuncLuma: [Option<unsafe extern "C" fn()>; 4],
-    pub pMcFuncChroma: [Option<unsafe extern "C" fn()>; 4],
-}
+pub use crate::common::mc::SMcFunc;
 
 /// Motion compensation reference frame descriptor (`sMCRefMember`).
 #[repr(C)]

@@ -1442,25 +1442,25 @@ pub unsafe fn WelsFillDirectCacheCabac(
 
     (*iDirect).fill(0);
     if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-        let pDir = dq.pDirect.add(iLeftXy * 16);
+        let pDir = dq.pDirect.add(iLeftXy) as *const i8;
         (*iDirect)[6] = *pDir.add(3);
         (*iDirect)[12] = *pDir.add(7);
         (*iDirect)[18] = *pDir.add(11);
         (*iDirect)[24] = *pDir.add(15);
     }
     if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-        let pDir = dq.pDirect.add(iLeftTopXy * 16);
+        let pDir = dq.pDirect.add(iLeftTopXy) as *const i8;
         (*iDirect)[0] = *pDir.add(15);
     }
     if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-        let pDir = dq.pDirect.add(iTopXy * 16);
+        let pDir = dq.pDirect.add(iTopXy) as *const i8;
         (*iDirect)[1] = *pDir.add(12);
         (*iDirect)[2] = *pDir.add(13);
         (*iDirect)[3] = *pDir.add(14);
         (*iDirect)[4] = *pDir.add(15);
     }
     if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-        let pDir = dq.pDirect.add(iRightTopXy * 16);
+        let pDir = dq.pDirect.add(iRightTopXy) as *const i8;
         (*iDirect)[5] = *pDir.add(12);
     }
 }
@@ -2120,11 +2120,6 @@ pub unsafe fn WelsResidualBlockCavlc(
         nC,
     );
 
-    let dbg = std::env::var("DBG_MB").is_ok();
-    if dbg {
-        eprintln!("DBG res idx={} prop={} nC={} tc={} t1={} used={} bsIdx={}",
-            iIndex, iResidualProperty, nC, uiTotalCoeff, uiTrailingOnes, iUsedBits, (*pBs).iIndex);
-    }
     if iResidualProperty != CHROMA_DC && iResidualProperty != I16_LUMA_DC {
         *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
     }
@@ -2146,9 +2141,6 @@ pub unsafe fn WelsResidualBlockCavlc(
         iUsedBits += CavlcGetTotalZeros(&mut iZerosLeft, &mut sReadBitsCache, uiTotalCoeff, pVlcTable, bChromaDc);
     }
 
-    if dbg {
-        eprintln!("DBG res zerosLeft={} maxCoeff={} levels={:?}", iZerosLeft, iMaxNumCoeff, &iLevel[..uiTotalCoeff as usize]);
-    }
     if iZerosLeft < 0 || (iZerosLeft + uiTotalCoeff as i32) > iMaxNumCoeff {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_ZERO_LEFT);
     }
