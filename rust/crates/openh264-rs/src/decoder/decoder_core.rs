@@ -2585,6 +2585,24 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if iRet != ERR_NONE {
             return iRet;
         }
+
+        // pred_weight_table(): present for weighted P slices and for B slices when
+        // weighted_bipred_idc == 1. Skipping it desynchronises the rest of the
+        // slice header (`decoder_core.cpp`).
+        if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
+            || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
+        {
+            let iRet = ParsePredWeightedTable(pBs, pSliceHead);
+            if iRet != ERR_NONE {
+                return iRet;
+            }
+        }
+
+        if kbExtensionFlag {
+            (*pSliceHeadExt).bBasePredWeightTableFlag =
+                !(pNalHeaderExt.bNoInterLayerPredFlag || pNalHeaderExt.uiQualityId > 0);
+        }
+
         if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
             let iRet = ParseDecRefPicMarking(pCtx, pBs, pSliceHead, pSps, bIdrFlag);
             if iRet != ERR_NONE {
