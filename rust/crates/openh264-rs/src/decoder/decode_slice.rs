@@ -3086,6 +3086,13 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     let uiCbpLuma;
     let uiCbpChroma;
 
+    let copy4 = |dst: *mut i8, src: *const u8| {
+        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 4);
+    };
+    let copy2 = |dst: *mut i8, src: *const u8| {
+        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 2);
+    };
+
     if mb_type != MB_TYPE_INTRA16x16 {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseCbpInfoCabac(
             pCtx as *mut _ as *mut _,
@@ -3200,17 +3207,17 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         return ret;
                     }
                 }
+                // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
+                // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-                nzc_mb[0] = *pNonZeroCount.add(1 + 8 * 1) as i8;
-                nzc_mb[4] = *pNonZeroCount.add(1 + 8 * 2) as i8;
-                nzc_mb[8] = *pNonZeroCount.add(1 + 8 * 3) as i8;
-                nzc_mb[12] = *pNonZeroCount.add(1 + 8 * 4) as i8;
+                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
+                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
+                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
+                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
             } else {
+                // `ST32 (&pNzc[iMbXy][n], 0)` clears four counts per store.
                 let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-                nzc_mb[0] = 0;
-                nzc_mb[4] = 0;
-                nzc_mb[8] = 0;
-                nzc_mb[12] = 0;
+                nzc_mb[0..16].fill(0);
             }
         } else {
             let is_intra = IS_INTRA(mb_type);
@@ -3247,11 +3254,13 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             .add(g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize) = 0;
                     }
                 }
+                // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
+                // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-                nzc_mb[0] = *pNonZeroCount.add(1 + 8 * 1) as i8;
-                nzc_mb[4] = *pNonZeroCount.add(1 + 8 * 2) as i8;
-                nzc_mb[8] = *pNonZeroCount.add(1 + 8 * 3) as i8;
-                nzc_mb[12] = *pNonZeroCount.add(1 + 8 * 4) as i8;
+                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
+                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
+                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
+                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
             } else {
                 let res_prop = if is_intra {
                     LUMA_DC_AC_INTRA
@@ -3288,11 +3297,13 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             .add(g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize) = 0;
                     }
                 }
+                // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
+                // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-                nzc_mb[0] = *pNonZeroCount.add(1 + 8 * 1) as i8;
-                nzc_mb[4] = *pNonZeroCount.add(1 + 8 * 2) as i8;
-                nzc_mb[8] = *pNonZeroCount.add(1 + 8 * 3) as i8;
-                nzc_mb[12] = *pNonZeroCount.add(1 + 8 * 4) as i8;
+                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
+                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
+                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
+                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
             }
         }
 
@@ -3369,17 +3380,16 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     index += 1;
                 }
             }
+            // `ST16 (&pNzc[iMbXy][n], LD16 (&pNonZeroCount[6 + 8 * k]))`: two counts each.
             let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-            nzc_mb[16] = *pNonZeroCount.add(6 + 8 * 1) as i8;
-            nzc_mb[20] = *pNonZeroCount.add(6 + 8 * 2) as i8;
-            nzc_mb[18] = *pNonZeroCount.add(6 + 8 * 4) as i8;
-            nzc_mb[22] = *pNonZeroCount.add(6 + 8 * 5) as i8;
+            copy2(nzc_mb.as_mut_ptr().add(16), pNonZeroCount.add(6 + 8));
+            copy2(nzc_mb.as_mut_ptr().add(20), pNonZeroCount.add(6 + 8 * 2));
+            copy2(nzc_mb.as_mut_ptr().add(18), pNonZeroCount.add(6 + 8 * 4));
+            copy2(nzc_mb.as_mut_ptr().add(22), pNonZeroCount.add(6 + 8 * 5));
         } else {
+            // `ST16 (&pNzc[iMbXy][n], 0)` clears two counts per store.
             let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
-            nzc_mb[16] = 0;
-            nzc_mb[20] = 0;
-            nzc_mb[18] = 0;
-            nzc_mb[22] = 0;
+            nzc_mb[16..24].fill(0);
         }
     } else {
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
