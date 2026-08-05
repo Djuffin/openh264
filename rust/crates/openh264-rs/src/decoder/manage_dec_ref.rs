@@ -129,15 +129,6 @@ pub struct SLayerInfo {
 }
 
 #[repr(C)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub pRefPicListReordering: *mut SRefPicListReorderSyn,
-    pub pRefPicMarking: *mut SRefPicMarking,
-}
-
-pub type PDqLayer = *mut SDqLayer;
-
-#[repr(C)]
 pub struct SNalUnit {
     pub sNalHeaderExt: SNalUnitHeaderExt,
 }

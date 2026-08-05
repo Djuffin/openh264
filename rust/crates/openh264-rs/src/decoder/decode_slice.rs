@@ -542,28 +542,6 @@ pub use crate::decoder::picture::{SPicture, PPicture};
 
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefPic {
-    pub uiShortRefCount: [i32; 2],
-    pub uiLongRefCount: [i32; 2],
-    pub pShortRefList: [*mut *mut SPicture; 2],
-    pub pLongRefList: [*mut *mut SPicture; 2],
-    pub pRefList: [*mut *mut SPicture; 2],
-}
-
-impl Default for SRefPic {
-    fn default() -> Self {
-        Self {
-            uiShortRefCount: [0; 2],
-            uiLongRefCount: [0; 2],
-            pShortRefList: [std::ptr::null_mut(); 2],
-            pLongRefList: [std::ptr::null_mut(); 2],
-            pRefList: [std::ptr::null_mut(); 2],
-        }
-    }
-}
-
-#[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SParam {
     pub bParseOnly: bool,
@@ -2620,7 +2598,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
                 *(*(*(*dq).pDec).pRefIndex[0].add(iMbXy)).as_mut_ptr().add(j) = 0;
             }
         }
-        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq as *mut _ as *mut _, &mut iMv);
+        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq, &mut iMv);
         if !(*dq).pDec.is_null() {
             for j in 0..16 {
                 *(*(*(*dq).pDec).pMv[0].add(iMbXy)).as_mut_ptr().add(j) = iMv;
@@ -3691,10 +3669,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
         (*pCtx).bMbRefConcealed =
             (*pCtx).bRPLRError || (*pCtx).bMbRefConcealed || !is_complete0;
 
-        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(
-            dq as *mut _ as *mut _,
-            &mut pMv,
-        );
+        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq, &mut pMv);
         let mv_slice = &mut *(*(*dq).pDec).pMv[LIST_0].add(iMbXy);
         let mvd_slice = &mut *(*dq).pMvd[LIST_0].add(iMbXy);
         for i in 0..16 {
@@ -3927,7 +3902,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag != 0 {
             ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                pCtx as *mut _ as *mut _,
+                pCtx,
                 &mut pMv,
                 &mut ref_idx,
                 &mut subMbType,
@@ -3937,7 +3912,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
             }
         } else {
             ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                pCtx as *mut _ as *mut _,
+                pCtx,
                 &mut pMv,
                 &mut ref_idx,
                 &mut subMbType,
