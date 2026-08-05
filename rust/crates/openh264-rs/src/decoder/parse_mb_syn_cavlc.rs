@@ -319,75 +319,10 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
 
-#[repr(C)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-}
-
-#[repr(C)]
-pub struct SLayerInfo {
-    pub sSliceInLayer: SSlice,
-}
-
-#[repr(C)]
-pub struct SDqLayer {
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub iMbX: i32,
-    pub iMbY: i32,
-    pub iMbXyIndex: i32,
-    pub pSliceIdc: *mut i32,
-    pub pMbType: *mut u32,
-    pub pCbp: *mut i32,
-    pub pNzc: *mut [u8; 24],
-    pub pIntraPredMode: *mut [i8; 8],
-    pub pDec: PPicture,
-    pub pMvd: [*mut [[i16; 2]; 16]; 2],
-    pub pDirect: *mut [i8; 16],
-    pub pSubMbType: *mut [u32; 4],
-    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
-    pub sLayerInfo: SLayerInfo,
-    pub iColocMv: [*mut [i16; 2]; 2],
-    pub iColocIntra: *mut bool,
-    pub iColocRefIndex: [*mut i8; 2],
-    pub pScaledTCoeff: *mut [i16; 256],
-}
-pub type PDqLayer = *mut SDqLayer;
-
-#[repr(C)]
-pub struct SRefPic {
-    pub pRefList: [*mut PPicture; 2],
-    pub uiRefCount: [i32; 2],
-}
-
-#[repr(C)]
-pub struct SParam {
-    pub eEcActiveIdc: i32,
-}
-
-#[repr(C)]
-pub struct SLogContext {
-    pub pLogCtx: *mut std::ffi::c_void,
-}
-
-#[repr(C)]
-pub struct SWelsDecoderContext {
-    pub sRefPic: SRefPic,
-    pub pCurDqLayer: PDqLayer,
-    pub pParam: *mut SParam,
-    pub sLogCtx: SLogContext,
-    pub bMbRefConcealed: bool,
-    pub bRPLRError: bool,
-    pub iErrorCode: i32,
-    pub bUseScalingList: bool,
-    pub pDequant_coeff4x4: [*const [u16; 8]; 6],
-    pub pDequant_coeff8x8: [*const [u16; 64]; 6],
-    pub pDec: PPicture,
-    pub pTempDec: PPicture,
-    pub pSps: *mut SSps,
-    pub eSliceType: i32,
-}
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+pub use crate::decoder::decoder_core::{
+    SDqLayer, PDqLayer, SWelsDecoderContext, PWelsDecoderContext,
+    SSlice, PSlice, SLayerInfo, PLayerInfo,
+};
 
 // ============================================================================
 // Raw Memory Access Helpers
@@ -629,7 +564,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iLeftXy = iCurXy - 1;
             let iLeftSliceIdc = *dq.pSliceIdc.add(iLeftXy as usize);
             na.iLeftAvail = if iLeftSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.pCbp.add(iLeftXy as usize) } else { 0 };
+            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.pCbp.add(iLeftXy as usize) as i32 } else { 0 };
         } else {
             na.iLeftAvail = 0;
             na.iLeftTopAvail = 0;
@@ -640,7 +575,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iTopXy = iCurXy - dq.iMbWidth;
             let iTopSliceIdc = *dq.pSliceIdc.add(iTopXy as usize);
             na.iTopAvail = if iTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iTopCbp = if na.iTopAvail != 0 { *dq.pCbp.add(iTopXy as usize) } else { 0 };
+            na.iTopCbp = if na.iTopAvail != 0 { *dq.pCbp.add(iTopXy as usize) as i32 } else { 0 };
 
             if iCurX != 0 {
                 iLeftTopXy = iTopXy - 1;
@@ -706,12 +641,12 @@ pub unsafe fn WelsFillCacheNonZeroCount(
         if na.iTopAvail != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
             let pTopNzc = (*dq.pNzc.add(iTopXy as usize)).as_ptr();
-            ST32(pNonZeroCount.add(1), LD32(pTopNzc.add(12)));
+            ST32(pNonZeroCount.add(1), LD32(pTopNzc.add(12) as *const u8));
             *pNonZeroCount.add(0) = 0;
             *pNonZeroCount.add(5) = 0;
             *pNonZeroCount.add(29) = 0;
-            ST16(pNonZeroCount.add(6), LD16(pTopNzc.add(20)));
-            ST16(pNonZeroCount.add(30), LD16(pTopNzc.add(22)));
+            ST16(pNonZeroCount.add(6), LD16(pTopNzc.add(20) as *const u8));
+            ST16(pNonZeroCount.add(30), LD16(pTopNzc.add(22) as *const u8));
         } else {
             ST32(pNonZeroCount.add(1), 0xFFFFFFFF);
             *pNonZeroCount.add(0) = 0xFF;
@@ -724,15 +659,15 @@ pub unsafe fn WelsFillCacheNonZeroCount(
         if na.iLeftAvail != 0 {
             iLeftXy = iCurXy - 1;
             let pLeftNzc = (*dq.pNzc.add(iLeftXy as usize)).as_ptr();
-            *pNonZeroCount.add(8 * 1) = *pLeftNzc.add(3);
-            *pNonZeroCount.add(8 * 2) = *pLeftNzc.add(7);
-            *pNonZeroCount.add(8 * 3) = *pLeftNzc.add(11);
-            *pNonZeroCount.add(8 * 4) = *pLeftNzc.add(15);
+            *pNonZeroCount.add(8 * 1) = *pLeftNzc.add(3) as u8;
+            *pNonZeroCount.add(8 * 2) = *pLeftNzc.add(7) as u8;
+            *pNonZeroCount.add(8 * 3) = *pLeftNzc.add(11) as u8;
+            *pNonZeroCount.add(8 * 4) = *pLeftNzc.add(15) as u8;
 
-            *pNonZeroCount.add(5 + 8 * 1) = *pLeftNzc.add(17);
-            *pNonZeroCount.add(5 + 8 * 2) = *pLeftNzc.add(21);
-            *pNonZeroCount.add(5 + 8 * 4) = *pLeftNzc.add(19);
-            *pNonZeroCount.add(5 + 8 * 5) = *pLeftNzc.add(23);
+            *pNonZeroCount.add(5 + 8 * 1) = *pLeftNzc.add(17) as u8;
+            *pNonZeroCount.add(5 + 8 * 2) = *pLeftNzc.add(21) as u8;
+            *pNonZeroCount.add(5 + 8 * 4) = *pLeftNzc.add(19) as u8;
+            *pNonZeroCount.add(5 + 8 * 5) = *pLeftNzc.add(23) as u8;
         } else {
             *pNonZeroCount.add(8 * 1) = 0xFF;
             *pNonZeroCount.add(8 * 2) = 0xFF;
@@ -770,7 +705,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            let pTopMode = (*dq.pIntraPredMode.add(iTopXy as usize)).as_ptr();
+            let pTopMode = dq.pIntraPredMode.add(iTopXy as usize * 8);
             ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
         } else {
             let iPred: u32 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
@@ -782,7 +717,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = (*dq.pIntraPredMode.add(iLeftXy as usize)).as_ptr();
+            let pLeftMode = dq.pIntraPredMode.add(iLeftXy as usize * 8);
             *pIntraPredMode.add(0 + 8) = *pLeftMode.add(4);
             *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
             *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);
@@ -988,26 +923,26 @@ pub unsafe fn WelsFillDirectCacheCabac(
 
     (*iDirect).fill(0);
     if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-        let pDir = &(*dq.pDirect.add(iLeftXy));
-        (*iDirect)[6] = pDir[3];
-        (*iDirect)[12] = pDir[7];
-        (*iDirect)[18] = pDir[11];
-        (*iDirect)[24] = pDir[15];
+        let pDir = dq.pDirect.add(iLeftXy * 16);
+        (*iDirect)[6] = *pDir.add(3);
+        (*iDirect)[12] = *pDir.add(7);
+        (*iDirect)[18] = *pDir.add(11);
+        (*iDirect)[24] = *pDir.add(15);
     }
     if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-        let pDir = &(*dq.pDirect.add(iLeftTopXy));
-        (*iDirect)[0] = pDir[15];
+        let pDir = dq.pDirect.add(iLeftTopXy * 16);
+        (*iDirect)[0] = *pDir.add(15);
     }
     if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-        let pDir = &(*dq.pDirect.add(iTopXy));
-        (*iDirect)[1] = pDir[12];
-        (*iDirect)[2] = pDir[13];
-        (*iDirect)[3] = pDir[14];
-        (*iDirect)[4] = pDir[15];
+        let pDir = dq.pDirect.add(iTopXy * 16);
+        (*iDirect)[1] = *pDir.add(12);
+        (*iDirect)[2] = *pDir.add(13);
+        (*iDirect)[3] = *pDir.add(14);
+        (*iDirect)[4] = *pDir.add(15);
     }
     if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-        let pDir = &(*dq.pDirect.add(iRightTopXy));
-        (*iDirect)[5] = pDir[12];
+        let pDir = dq.pDirect.add(iRightTopXy * 16);
+        (*iDirect)[5] = *pDir.add(12);
     }
 }
 
@@ -1034,7 +969,7 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            let pTopMode = (*dq.pIntraPredMode.add(iTopXy as usize)).as_ptr();
+            let pTopMode = dq.pIntraPredMode.add(iTopXy as usize * 8);
             ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
         } else {
             let iPred: u32 = if na.iTopAvail != 0 { 0x02020202 } else { 0xffffffff };
@@ -1042,7 +977,7 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = (*dq.pIntraPredMode.add(iLeftXy as usize)).as_ptr();
+            let pLeftMode = dq.pIntraPredMode.add(iLeftXy as usize * 8);
             *pIntraPredMode.add(0 + 8 * 1) = *pLeftMode.add(4);
             *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
             *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);

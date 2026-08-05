@@ -17,3 +17,4 @@ pub mod parse_mb_syn_cavlc;
 pub mod pic_queue;
 pub mod picture;
 pub mod slice;
+pub mod deblocking;
