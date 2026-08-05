@@ -1183,19 +1183,24 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     let pMbType = (*(*pCurDqLayer).pDec).pMbType;
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
-
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let iMbXyTop = iMbXy - (*pCurDqLayer).iMbWidth as usize;
-    let iMbXyLeft = iMbXy - 1;
+    let iMbXy = (*pCurDqLayer).iMbXyIndex;
 
     *iBinVal = 0;
 
-    let iIdxB = (iTopAvail != 0
-        && (*pChromaPredMode.add(iMbXyTop) > 0 && *pChromaPredMode.add(iMbXyTop) <= 3)
-        && *pMbType.add(iMbXyTop) != MB_TYPE_INTRA_PCM) as i32;
-    let iIdxA = (iLeftAvail != 0
-        && (*pChromaPredMode.add(iMbXyLeft) > 0 && *pChromaPredMode.add(iMbXyLeft) <= 3)
-        && *pMbType.add(iMbXyLeft) != MB_TYPE_INTRA_PCM) as i32;
+    let iIdxB = if iTopAvail != 0 {
+        let top_idx = (iMbXy - (*pCurDqLayer).iMbWidth) as usize;
+        let mode = *pChromaPredMode.add(top_idx);
+        (mode > 0 && mode <= 3 && *pMbType.add(top_idx) != MB_TYPE_INTRA_PCM) as i32
+    } else {
+        0
+    };
+    let iIdxA = if iLeftAvail != 0 {
+        let left_idx = (iMbXy - 1) as usize;
+        let mode = *pChromaPredMode.add(left_idx);
+        (mode > 0 && mode <= 3 && *pMbType.add(left_idx) != MB_TYPE_INTRA_PCM) as i32
+    } else {
+        0
+    };
     let iCtxInc = iIdxA + iIdxB;
 
     let mut err = DecodeBinCabac(
