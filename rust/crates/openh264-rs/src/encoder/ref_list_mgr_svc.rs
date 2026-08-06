@@ -89,6 +89,8 @@ pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
+pub use crate::encoder::svc_encode_slice::SSliceHeader;
+pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 
 // ============================================================================
 // Core Data Structures
@@ -192,19 +194,7 @@ pub struct SRefPicMarking {
     pub bAdaptiveRefPicMarkingModeFlag: bool,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeader {
-    pub sRefReordering: SRefPicListReorderSyntax,
-    pub sRefMarking: SRefPicMarking,
-    pub uiRefCount: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -1262,7 +1252,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
         let pRefReorder = &mut pSliceHdr.sRefReordering;
         let pRefPicMark = &mut pSliceHdr.sRefMarking;
 
-        pSliceHdr.uiRefCount = (*pCtx).iNumRef0;
+        pSliceHdr.uiRefCount = (*pCtx).iNumRef0 as u8;
         if (*pCtx).iNumRef0 > 0 {
             let pRef0 = (*pCtx).pRefList0[0];
             let isLongRef = !pRef0.is_null() && (*pRef0).bIsLongRef;

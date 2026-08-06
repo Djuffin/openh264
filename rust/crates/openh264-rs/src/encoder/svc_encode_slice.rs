@@ -266,38 +266,9 @@ impl Default for SMB {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SReorderingSyntax {
-    pub uiReorderingOfPicNumsIdc: u16,
-    pub uiAbsDiffPicNumMinus1: u32,
-    pub iLongTermPicNum: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SRefPicListReorderSyntax {
-    pub SReorderingSyntax: [SReorderingSyntax; 32],
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMmcoRef {
-    pub iMmcoType: i32,
-    pub iDiffOfPicNum: i32,
-    pub iLongTermPicNum: i32,
-    pub iLongTermFrameIdx: i32,
-    pub iMaxLongTermFrameIdx: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SRefPicMarking {
-    pub bNoOutputOfPriorPicsFlag: bool,
-    pub bLongTermRefFlag: bool,
-    pub bAdaptiveRefPicMarkingModeFlag: bool,
-    pub SMmcoRef: [SMmcoRef; 32],
-}
 
 
 
@@ -317,7 +288,6 @@ pub struct SSliceHeader {
     pub uiDisableDeblockingFilterIdc: u8,
     pub iSliceAlphaC0Offset: i8,
     pub iSliceBetaOffset: i8,
-    pub iSliceGroupChangeCycle: i32,
     pub pSps: *mut SWelsSPS,
     pub pPps: *mut SWelsPPS,
     pub iSpsId: i32,
@@ -590,6 +560,10 @@ pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
 pub use crate::encoder::param_svc::SSpsSvcExt;
+pub use crate::encoder::ref_list_mgr_svc::SMmcoRef;
+pub use crate::encoder::ref_list_mgr_svc::SReorderingSyntax;
+pub use crate::encoder::ref_list_mgr_svc::SRefPicMarking;
+pub use crate::encoder::ref_list_mgr_svc::SRefPicListReorderSyntax;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
