@@ -827,3 +827,194 @@ pub unsafe fn WelsInitPps(
 
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::codec_api::EProfileIdc;
+    use crate::encoder::vlc_encoder::InitBits;
+
+    /// The 160x96 / 6fps / baseline case the differential harness drives.
+    fn gate_layer() -> (SSpatialLayerConfig, SSpatialLayerInternal) {
+        let mut lp = SSpatialLayerConfig::default();
+        lp.iVideoWidth = 160;
+        lp.iVideoHeight = 96;
+        lp.iSpatialBitrate = 500_000;
+        lp.uiProfileIdc = EProfileIdc::PRO_BASELINE;
+        lp.uiLevelIdc = LEVEL_UNKNOWN;
+
+        let mut li = SSpatialLayerInternal::default();
+        li.iActualWidth = 160;
+        li.iActualHeight = 96;
+        li.fOutputFrameRate = 6.0;
+        (lp, li)
+    }
+
+    /// Field-for-field against the C++ `WelsInitSps` linked from `libopenh264.a` for
+    /// the same input:
+    ///
+    /// ```text
+    /// mbW=10 mbH=6 log2mfn=15 poc=2 log2poc=16 nref=1 prof=66 level=13
+    /// gaps=0 crop=0 cs0=1 cs1=1 cs2=0 cs3=0
+    /// ```
+    #[test]
+    fn init_sps_matches_cxx_for_the_gate_configuration() {
+        let (mut lp, mut li) = gate_layer();
+        let mut sps = SWelsSPS::default();
+        unsafe {
+            assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0);
+        }
+
+        assert_eq!(sps.iMbWidth, 10);
+        assert_eq!(sps.iMbHeight, 6);
+        assert_eq!(sps.uiLog2MaxFrameNum, 15);
+        assert_eq!(sps.uiPocType, 2);
+        assert_eq!(sps.iLog2MaxPocLsb, 16);
+        assert_eq!(sps.iNumRefFrames, 1);
+        assert_eq!(sps.uiProfileIdc, EProfileIdc::PRO_BASELINE as u8);
+        // WelsGetLevelIdc picks LEVEL_1_3 for 60 MBs at 6fps and 500 kbit/s, and
+        // writes it back into the layer config.
+        assert_eq!(sps.iLevelIdc, 13);
+        assert_eq!(lp.uiLevelIdc, ELevelIdc::LEVEL_1_3);
+        // one dependency layer with one reference frame
+        assert!(!sps.bGapsInFrameNumValueAllowedFlag);
+        // coded size equals actual size, so nothing to crop
+        assert!(!sps.bFrameCroppingFlag);
+        assert!(sps.bConstraintSet0Flag);
+        assert!(sps.bConstraintSet1Flag);
+        assert!(!sps.bConstraintSet2Flag);
+        assert!(!sps.bConstraintSet3Flag);
+    }
+
+    /// Byte-exact against the C++ `WelsWriteSpsNal` for the same SPS. This is the
+    /// check that would have caught the missing VUI: the ad-hoc writer this replaced
+    /// stopped after `vui_parameters_present_flag = 0` and emitted 8 bytes.
+    #[test]
+    fn write_sps_nal_is_byte_exact_with_cxx() {
+        let (mut lp, mut li) = gate_layer();
+        let mut sps = SWelsSPS::default();
+        let mut buf = [0u8; 512];
+        let mut bs = SBitStringAux::default();
+        let mut delta = [0i32; 32];
+
+        let written = unsafe {
+            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+            InitBits(&mut bs, buf.as_ptr(), buf.len() as i32);
+            WelsWriteSpsNal(&mut sps, &mut bs, delta.as_mut_ptr());
+            bs.pCurBuf.offset_from(bs.pStartBuf) as usize
+        };
+
+        assert_eq!(
+            &buf[..written],
+            &[0x42, 0xc0, 0x0d, 0x8c, 0x68, 0x28, 0xd2, 0x01, 0xe1, 0x10, 0x8d, 0x40],
+            "SPS RBSP diverged from the C++ reference"
+        );
+    }
+
+    /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
+    #[test]
+    fn init_pps_matches_cxx() {
+        let (mut lp, mut li) = gate_layer();
+        let mut sps = SWelsSPS::default();
+        let mut pps = SWelsPPS::default();
+        unsafe {
+            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+            assert_eq!(
+                WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false),
+                0
+            );
+        }
+        assert_eq!(pps.iPpsId, 0);
+        assert_eq!(pps.iSpsId, 0);
+        assert_eq!(pps.iPicInitQp, 26);
+        assert_eq!(pps.iPicInitQs, 26);
+        assert_eq!(pps.uiChromaQpIndexOffset, 0);
+        assert!(!pps.bEntropyCodingModeFlag);
+        assert!(pps.bDeblockingFilterControlPresentFlag);
+    }
+
+    /// Byte-exact against the C++ `WelsWritePpsSyntax` driven with a real
+    /// `CWelsParametersetIdConstant`, which is what makes this a test of the id
+    /// offsets too rather than only of the fixed syntax elements.
+    #[test]
+    fn write_pps_syntax_is_byte_exact_with_cxx() {
+        use crate::api::codec_api::EParameterSetStrategy;
+        use crate::encoder::paraset_strategy::{
+            CreateParametersetStrategy, DestroyParametersetStrategy,
+        };
+
+        let (mut lp, mut li) = gate_layer();
+        let mut sps = SWelsSPS::default();
+        let mut pps = SWelsPPS::default();
+        let mut buf = [0u8; 256];
+        let mut bs = SBitStringAux::default();
+
+        let written = unsafe {
+            WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+            WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false);
+
+            let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
+            assert!(!st.is_null());
+            InitBits(&mut bs, buf.as_ptr(), buf.len() as i32);
+            WelsWritePpsSyntax(&mut pps, &mut bs, st);
+            let n = bs.pCurBuf.offset_from(bs.pStartBuf) as usize;
+            DestroyParametersetStrategy(st);
+            n
+        };
+
+        assert_eq!(
+            &buf[..written],
+            &[0xce, 0x3c, 0x80],
+            "PPS RBSP diverged from the C++ reference"
+        );
+    }
+
+    /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
+    #[test]
+    fn init_pps_rejects_missing_sps() {
+        let mut pps = SWelsPPS::default();
+        unsafe {
+            assert_eq!(
+                WelsInitPps(
+                    &mut pps,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0,
+                    true,
+                    false,
+                    false
+                ),
+                1
+            );
+        }
+    }
+
+    /// `WelsGetPaddingOffset` — au_set.cpp:476. A 1920x1080 coded frame carrying
+    /// 1920x1080 actual content needs 1088 coded height, i.e. 4 cropped chroma rows.
+    #[test]
+    fn padding_offset_crops_the_coded_height() {
+        let mut off = SCropOffset::default();
+        assert!(WelsGetPaddingOffset(1920, 1080, 1920, 1088, &mut off));
+        assert_eq!(off.iCropLeft, 0);
+        assert_eq!(off.iCropRight, 0);
+        assert_eq!(off.iCropTop, 0);
+        assert_eq!(off.iCropBottom, 4);
+    }
+
+    /// Equal sizes need no cropping, and the actual size is made even first.
+    #[test]
+    fn padding_offset_reports_no_crop_when_sizes_match() {
+        let mut off = SCropOffset::default();
+        assert!(!WelsGetPaddingOffset(160, 96, 160, 96, &mut off));
+        // An odd actual size rounds down, which does then require cropping.
+        assert!(WelsGetPaddingOffset(161, 96, 161, 96, &mut off));
+        assert_eq!(off.iCropRight, 0);
+    }
+
+    /// A coded size smaller than the actual size is rejected outright.
+    #[test]
+    fn padding_offset_rejects_undersized_coded_frame() {
+        let mut off = SCropOffset::default();
+        assert!(!WelsGetPaddingOffset(1920, 1080, 1280, 720, &mut off));
+    }
+}

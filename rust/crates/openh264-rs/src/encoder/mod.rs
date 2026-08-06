@@ -10,6 +10,7 @@ pub mod paraset_strategy;
 pub mod picture;
 pub mod set_mb_syn_cabac;
 pub mod slice_multi_threading;
+pub mod svc_enc_slice_segment;
 pub mod svc_encode_mb;
 pub mod svc_encode_slice;
 pub mod svc_mode_decision;
