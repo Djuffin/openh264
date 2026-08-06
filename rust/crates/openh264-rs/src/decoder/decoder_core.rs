@@ -3958,6 +3958,22 @@ pub unsafe fn DecodeCurrentAccessUnit(
             (*pCtx).bUsedAsRef = (*pCtx).uiNalRefIdc > 0;
             if iThreadCount <= 1 {
                 if (*pCtx).bUsedAsRef {
+                    // Snapshot this picture's own reference lists onto the picture.
+                    // MapColToList0 reads them back off the colocated picture when a
+                    // later B slice uses temporal direct mode; without this the lookup
+                    // always misses and every mapped ref index collapses to 0.
+                    if !(*pCtx).pDec.is_null() {
+                        for listIdx in LIST_0..LIST_A {
+                            let mut i = 0usize;
+                            while i < MAX_DPB_COUNT
+                                && !(*pCtx).sRefPic.pRefList[listIdx][i].is_null()
+                            {
+                                (*(*pCtx).pDec).pRefPic[listIdx][i] =
+                                    (*pCtx).sRefPic.pRefList[listIdx][i];
+                                i += 1;
+                            }
+                        }
+                    }
                     iRet = WelsMarkAsRef(pCtx);
                     if iRet != ERR_NONE {
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
