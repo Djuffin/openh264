@@ -1390,11 +1390,11 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
             }
         }
 
-        if uiFrameType == EVideoFrameType::VideoFrameTypeIDR as i32 {
+        if uiFrameType == EVideoFrameType::videoFrameTypeIDR as i32 {
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
             pRefPicMark.bLongTermRefFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
         } else {
-            if (*(*pCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+            if (*(*pCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference;
             } else {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = (*(*pCtx).pSvcParam).bEnableLongTermReference && pLtr.bLTRMarkingFlag;
@@ -1887,14 +1887,14 @@ pub unsafe fn CreateReferenceStrategy(
     kbLtrEnabled: bool,
 ) -> *mut (dyn IWelsReferenceStrategy + 'static) {
     let mut strategy: Box<dyn IWelsReferenceStrategy> = match keUsageType {
-        EUsageType::ScreenContentRealTime => {
+        EUsageType::SCREEN_CONTENT_REAL_TIME => {
             if kbLtrEnabled {
                 Box::new(CWelsReference_LosslessWithLtr::new())
             } else {
                 Box::new(CWelsReference_Screen::new())
             }
         }
-        EUsageType::CameraVideoRealTime | EUsageType::CameraVideoNonRealTime | _ => {
+        EUsageType::CAMERA_VIDEO_REAL_TIME | EUsageType::CAMERA_VIDEO_NON_REAL_TIME | _ => {
             Box::new(CWelsReference_TemporalLayer::new())
         }
     };

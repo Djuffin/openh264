@@ -6,6 +6,7 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
+use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::{
     EUsageType, RCMode, SEncParamExt, SEncoderStatistics, SSliceArgument,
     SSpatialLayerConfig, SSourcePicture, VideoFormat,
@@ -44,10 +45,7 @@ pub const WELS_CPU_FMA: u32 = 0x00000200;
 pub const WELS_CPU_AVX2: u32 = 0x00000400;
 pub const WELS_CPU_NEON: u32 = 0x00000800;
 
-// Complexity Mode Constants
-pub const LOW_COMPLEXITY: i32 = 0;
-pub const MEDIUM_COMPLEXITY: i32 = 1;
-pub const HIGH_COMPLEXITY: i32 = 2;
+// Complexity modes come from api::codec_api::ECOMPLEXITY_MODE.
 
 // Intra Prediction Mode Count Constants
 pub const I16_PRED_DC_A: usize = 7;
@@ -605,20 +603,20 @@ pub unsafe fn InitPic(
         return 1;
     }
 
-    let vflip_mask = VideoFormat::VideoFormatVFlip as i32;
+    let vflip_mask = VideoFormat::videoFormatVFlip as i32;
     let base_colorspace = kiColorspace & !vflip_mask;
 
     (*pSrcPic).iColorFormat = kiColorspace;
     (*pSrcPic).iPicWidth = kiWidth;
     (*pSrcPic).iPicHeight = kiHeight;
 
-    if base_colorspace != VideoFormat::VideoFormatI420 as i32 {
+    if base_colorspace != VideoFormat::videoFormatI420 as i32 {
         return 2;
     }
 
     match base_colorspace {
-        cs if cs == VideoFormat::VideoFormatI420 as i32
-            || cs == VideoFormat::VideoFormatYv12 as i32 =>
+        cs if cs == VideoFormat::videoFormatI420 as i32
+            || cs == VideoFormat::videoFormatYV12 as i32 =>
         {
             (*pSrcPic).pData[0] = std::ptr::null_mut();
             (*pSrcPic).pData[1] = std::ptr::null_mut();
@@ -629,9 +627,9 @@ pub unsafe fn InitPic(
             (*pSrcPic).iStride[2] = kiWidth >> 1;
             (*pSrcPic).iStride[3] = 0;
         }
-        cs if cs == VideoFormat::VideoFormatYuy2 as i32
-            || cs == VideoFormat::VideoFormatYvyu as i32
-            || cs == VideoFormat::VideoFormatUyvy as i32 =>
+        cs if cs == VideoFormat::videoFormatYUY2 as i32
+            || cs == VideoFormat::videoFormatYVYU as i32
+            || cs == VideoFormat::videoFormatUYVY as i32 =>
         {
             (*pSrcPic).pData[0] = std::ptr::null_mut();
             (*pSrcPic).pData[1] = std::ptr::null_mut();
@@ -642,8 +640,8 @@ pub unsafe fn InitPic(
             (*pSrcPic).iStride[2] = 0;
             (*pSrcPic).iStride[3] = 0;
         }
-        cs if cs == VideoFormat::VideoFormatRgb as i32
-            || cs == VideoFormat::VideoFormatBgr as i32 =>
+        cs if cs == VideoFormat::videoFormatRGB as i32
+            || cs == VideoFormat::videoFormatBGR as i32 =>
         {
             (*pSrcPic).pData[0] = std::ptr::null_mut();
             (*pSrcPic).pData[1] = std::ptr::null_mut();
@@ -659,10 +657,10 @@ pub unsafe fn InitPic(
                 (*pSrcPic).iColorFormat = kiColorspace | vflip_mask;
             }
         }
-        cs if cs == VideoFormat::VideoFormatBgra as i32
-            || cs == VideoFormat::VideoFormatRgba as i32
-            || cs == VideoFormat::VideoFormatArgb as i32
-            || cs == VideoFormat::VideoFormatAbgr as i32 =>
+        cs if cs == VideoFormat::videoFormatBGRA as i32
+            || cs == VideoFormat::videoFormatRGBA as i32
+            || cs == VideoFormat::videoFormatARGB as i32
+            || cs == VideoFormat::videoFormatABGR as i32 =>
         {
             (*pSrcPic).pData[0] = std::ptr::null_mut();
             (*pSrcPic).pData[1] = std::ptr::null_mut();
@@ -859,7 +857,7 @@ pub unsafe fn InitFrameCoding(
     }
     let pParamInternal = &mut (*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize];
 
-    if keFrameType == EVideoFrameType::VideoFrameTypeP {
+    if keFrameType == EVideoFrameType::videoFrameTypeP {
         pParamInternal.iFrameIndex += 1;
 
         let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
@@ -874,7 +872,7 @@ pub unsafe fn InitFrameCoding(
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
-    } else if keFrameType == EVideoFrameType::VideoFrameTypeIDR {
+    } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
         pParamInternal.iFrameNum = 0;
         pParamInternal.iPOC = 0;
         pParamInternal.bEncCurFrmAsIdrFlag = false;
@@ -885,7 +883,7 @@ pub unsafe fn InitFrameCoding(
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
 
         pParamInternal.iCodingIndex = 0;
-    } else if keFrameType == EVideoFrameType::VideoFrameTypeI {
+    } else if keFrameType == EVideoFrameType::videoFrameTypeI {
         let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
         if pParamInternal.iPOC < max_poc_boundary {
             pParamInternal.iPOC += 2;
@@ -912,14 +910,14 @@ pub unsafe fn DecideFrameType(
     bSkipFrameFlag: bool,
 ) -> EVideoFrameType {
     if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() {
-        return EVideoFrameType::VideoFrameTypeInvalid;
+        return EVideoFrameType::videoFrameTypeInvalid;
     }
     let pSvcParam = (*pEncCtx).pSvcParam;
     let pParamInternal = &mut (*pSvcParam).sDependencyLayers[kiDidx as usize];
     let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
 
-    if (*pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+    if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = (*pEncCtx).pVaa;
         let vaa_idr = !pVaa.is_null() && (*pVaa).bIdrPeriodFlag;
 
@@ -936,7 +934,7 @@ pub unsafe fn DecideFrameType(
             || pParamInternal.bEncCurFrmAsIdrFlag
             || (!(*pSvcParam).bEnableLongTermReference && bSceneChangeFlag && !bSkipFrameFlag)
         {
-            iFrameType = EVideoFrameType::VideoFrameTypeIDR;
+            iFrameType = EVideoFrameType::videoFrameTypeIDR;
         } else if (*pSvcParam).bEnableLongTermReference
             && (bSceneChangeFlag
                 || (!pVaa.is_null() && (*pVaa).eSceneChangeIdc == ESceneChangeIdc::LARGE_CHANGED_SCENE))
@@ -959,18 +957,18 @@ pub unsafe fn DecideFrameType(
                 }
             }
             if iActualLtrcount == (*pSvcParam).iLTRRefNum && bSceneChangeFlag {
-                iFrameType = EVideoFrameType::VideoFrameTypeIDR;
+                iFrameType = EVideoFrameType::videoFrameTypeIDR;
             } else {
-                iFrameType = EVideoFrameType::VideoFrameTypeP;
+                iFrameType = EVideoFrameType::videoFrameTypeP;
                 (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
             }
         } else {
-            iFrameType = EVideoFrameType::VideoFrameTypeP;
+            iFrameType = EVideoFrameType::videoFrameTypeP;
         }
 
-        if iFrameType == EVideoFrameType::VideoFrameTypeP && bSkipFrameFlag {
-            iFrameType = EVideoFrameType::VideoFrameTypeSkip;
-        } else if iFrameType == EVideoFrameType::VideoFrameTypeIDR {
+        if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
+            iFrameType = EVideoFrameType::videoFrameTypeSkip;
+        } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
             pParamInternal.iCodingIndex = 0;
             (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
         }
@@ -989,14 +987,14 @@ pub unsafe fn DecideFrameType(
         }
 
         iFrameType = if vaa_idr || bSceneChangeFlag || pParamInternal.bEncCurFrmAsIdrFlag {
-            EVideoFrameType::VideoFrameTypeIDR
+            EVideoFrameType::videoFrameTypeIDR
         } else {
-            EVideoFrameType::VideoFrameTypeP
+            EVideoFrameType::videoFrameTypeP
         };
 
-        if iFrameType == EVideoFrameType::VideoFrameTypeP && bSkipFrameFlag {
-            iFrameType = EVideoFrameType::VideoFrameTypeSkip;
-        } else if iFrameType == EVideoFrameType::VideoFrameTypeIDR {
+        if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
+            iFrameType = EVideoFrameType::videoFrameTypeSkip;
+        } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
             pParamInternal.iCodingIndex = 0;
         }
     }
@@ -1039,7 +1037,7 @@ mod tests {
         let ret = unsafe {
             InitPic(
                 &mut src_pic as *mut SSourcePicture as *mut c_void,
-                VideoFormat::VideoFormatI420 as i32,
+                VideoFormat::videoFormatI420 as i32,
                 640,
                 480,
             )
@@ -1088,7 +1086,7 @@ mod tests {
 
         unsafe {
             let ft = DecideFrameType(&mut ctx, 1, 0, false);
-            assert_eq!(ft, EVideoFrameType::VideoFrameTypeIDR);
+            assert_eq!(ft, EVideoFrameType::videoFrameTypeIDR);
         }
     }
 

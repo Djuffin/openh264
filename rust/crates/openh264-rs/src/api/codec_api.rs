@@ -1332,7 +1332,7 @@ unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncP
     }
     unsafe {
         let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-        (*impl_ptr).inner.Initialize(pParam as *const crate::SEncParamBase)
+        (*impl_ptr).inner.Initialize(pParam)
     }
 }
 
@@ -1342,7 +1342,7 @@ unsafe extern "C" fn encoder_init_ext_c(this: *mut ISVCEncoder, pParam: *const S
     }
     unsafe {
         let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-        (*impl_ptr).inner.InitializeExt(pParam as *const crate::SEncParamExt)
+        (*impl_ptr).inner.InitializeExt(pParam)
     }
 }
 
@@ -1352,7 +1352,7 @@ unsafe extern "C" fn encoder_get_default_c(this: *mut ISVCEncoder, pParam: *mut 
     }
     unsafe {
         let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-        (*impl_ptr).inner.GetDefaultParams(pParam as *mut crate::SEncParamExt)
+        (*impl_ptr).inner.GetDefaultParams(pParam)
     }
 }
 
@@ -1372,7 +1372,7 @@ unsafe extern "C" fn encoder_encode_frame_c(this: *mut ISVCEncoder, kpSrcPic: *c
     }
     unsafe {
         let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-        (*impl_ptr).inner.EncodeFrame(kpSrcPic as *const crate::SSourcePicture, pBsInfo as *mut crate::SFrameBSInfo)
+        (*impl_ptr).inner.EncodeFrame(kpSrcPic, pBsInfo)
     }
 }
 
@@ -1382,7 +1382,7 @@ unsafe extern "C" fn encoder_encode_param_c(this: *mut ISVCEncoder, pBsInfo: *mu
     }
     unsafe {
         let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-        (*impl_ptr).inner.EncodeParameterSets(pBsInfo as *mut crate::SFrameBSInfo)
+        (*impl_ptr).inner.EncodeParameterSets(pBsInfo)
     }
 }
 
