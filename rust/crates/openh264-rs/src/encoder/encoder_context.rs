@@ -222,26 +222,8 @@ impl Default for SMVComponentUnit {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSPS {
-    pub uiLog2MaxFrameNum: u32,
-    pub iLog2MaxPocLsb: i32,
-    pub bFrameCroppingFlag: bool,
-    pub sFrameCrop: SCropOffset,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsPPS {
-    pub iPicInitQp: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSubsetSps {
-    pub pSps: SWelsSPS,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -335,6 +317,9 @@ pub use crate::encoder::rc::SWelsRcFunc;
 pub use crate::encoder::nal_encap::EWelsNalUnitType;
 pub use crate::encoder::nal_encap::EWelsNalRefIdc;
 pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::param_svc::SWelsSPS;
+pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::param_svc::SSubsetSps;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -1051,11 +1036,15 @@ mod tests {
     #[test]
     fn test_update_and_loadback_framenum() {
         let mut param = SWelsSvcCodingParam::default();
+        // Only the fields this test exercises; SWelsSPS is now the full
+        // parameter_sets.h:43 struct rather than the four-field copy that used to
+        // live in this module.
         let mut sps = SWelsSPS {
             uiLog2MaxFrameNum: 4,
             iLog2MaxPocLsb: 4,
             bFrameCroppingFlag: false,
             sFrameCrop: SCropOffset::default(),
+            ..Default::default()
         };
         let mut ctx = unsafe { std::mem::zeroed::<sWelsEncCtx>() };
         ctx.pSvcParam = &mut param;

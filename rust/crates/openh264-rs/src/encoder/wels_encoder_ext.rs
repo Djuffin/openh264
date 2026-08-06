@@ -478,7 +478,8 @@ pub unsafe fn WelsWritePpsSyntax(
     crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.iSpsId);
     crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if pps.bEntropyCodingModeFlag { 1 } else { 0 });
     crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.uiNumSliceGroups.saturating_sub(1));
+    // au_set.cpp:417, DISABLE_FMO_FEATURE branch: `BsWriteUE (pBs, 0/*uiNumSliceGroups - 1*/)`.
+    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
     crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
     crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
     crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);

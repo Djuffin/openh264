@@ -299,41 +299,9 @@ pub struct SRefPicMarking {
     pub SMmcoRef: [SMmcoRef; 32],
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSPS {
-    pub uiLog2MaxFrameNum: u32,
-    pub uiPocType: u32,
-    pub iLog2MaxPocLsb: i32,
-    pub iNumRefFrames: u8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsPPS {
-    pub iPpsId: i32,
-    pub iPicInitQp: i32,
-    pub uiChromaQpIndexOffset: u8,
-    pub bEntropyCodingModeFlag: bool,
-    pub bDeblockingFilterControlPresentFlag: bool,
-    pub uiNumSliceGroups: u32,
-    pub uiSliceGroupMapType: u32,
-    pub uiSliceGroupChangeRate: u32,
-    pub uiPicSizeInMapUnits: u32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpsSvcExt {
-    pub bSliceHeaderRestrictionFlag: bool,
-    pub bAdaptiveTcoeffLevelPredFlag: u8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSubsetSps {
-    pub sSpsSvcExt: SSpsSvcExt,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -618,6 +586,10 @@ pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::nal_encap::SNalUnitHeaderExt;
 pub use crate::encoder::nal_encap::SNalUnitHeader;
 pub use crate::encoder::nal_encap::SWelsSliceBs;
+pub use crate::encoder::param_svc::SWelsSPS;
+pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::param_svc::SSubsetSps;
+pub use crate::encoder::param_svc::SSpsSvcExt;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
@@ -863,7 +835,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
         } else {
             1
         };
-        if pCurSliceHeader.uiRefCount > 0 && pCurSliceHeader.uiRefCount <= num_ref {
+        if pCurSliceHeader.uiRefCount > 0 && (pCurSliceHeader.uiRefCount as i32) <= num_ref as i32 {
             pCurSliceHeader.bNumRefIdxActiveOverrideFlag = true;
             pCurSliceHeader.uiNumRefIdxL0Active = pCurSliceHeader.uiRefCount;
         } else {
@@ -876,7 +848,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     } else {
         26
     };
-    pCurSliceHeader.iSliceQpDelta = ((*pEncCtx).iGlobalQp - pic_init_qp) as i8;
+    pCurSliceHeader.iSliceQpDelta = ((*pEncCtx).iGlobalQp - pic_init_qp as i32) as i8;
 
     pCurSliceHeader.uiDisableDeblockingFilterIdc = (*pCurLayer).iLoopFilterDisableIdc;
     pCurSliceHeader.iSliceAlphaC0Offset = (*pCurLayer).iLoopFilterAlphaC0Offset;
@@ -1850,7 +1822,8 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     } else {
         26
     };
-    (*pCurSlice).uiLastMbQp = (pic_init_qp + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
+    (*pCurSlice).uiLastMbQp =
+        (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
     let idr_idx = pNalHeadExt.bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];

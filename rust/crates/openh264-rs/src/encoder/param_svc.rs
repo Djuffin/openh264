@@ -909,21 +909,21 @@ pub struct SSubsetSps {
     pub sSpsSvcExt: SSpsSvcExt,
 }
 
-/// Picture Parameter Set (PPS) syntax structure
+/// Picture Parameter Set (PPS) syntax structure.
+///
+/// `TagWelsPPS` — `codec/encoder/core/inc/parameter_sets.h:136`. **16 bytes**, with
+/// `iPicInitQp` at offset 8.
+///
+/// The nine FMO fields (`uiNumSliceGroups` … `uiSliceGroupId`) that this port used to
+/// declare here sit inside `#if !defined(DISABLE_FMO_FEATURE)`, and
+/// `codec/encoder/core/inc/as264_common.h:53` defines `DISABLE_FMO_FEATURE`
+/// unconditionally — so they are **not** part of the struct the C++ encoder compiles.
+/// Including them made this struct roughly nine times too large.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsPPS {
     pub iSpsId: u32,
     pub iPpsId: u32,
-    pub uiNumSliceGroups: u32,
-    pub uiSliceGroupMapType: u32,
-    pub uiRunLength: [u32; MAX_SLICEGROUP_IDS],
-    pub uiTopLeft: [u32; MAX_SLICEGROUP_IDS],
-    pub uiBottomRight: [u32; MAX_SLICEGROUP_IDS],
-    pub bSliceGroupChangeDirectionFlag: bool,
-    pub uiSliceGroupChangeRate: u32,
-    pub uiPicSizeInMapUnits: u32,
-    pub uiSliceGroupId: [u32; MAX_SLICEGROUP_IDS],
     pub iPicInitQp: i8,
     pub iPicInitQs: i8,
     pub uiChromaQpIndexOffset: u8,
@@ -936,15 +936,6 @@ impl Default for SWelsPPS {
         Self {
             iSpsId: 0,
             iPpsId: 0,
-            uiNumSliceGroups: 0,
-            uiSliceGroupMapType: 0,
-            uiRunLength: [0; MAX_SLICEGROUP_IDS],
-            uiTopLeft: [0; MAX_SLICEGROUP_IDS],
-            uiBottomRight: [0; MAX_SLICEGROUP_IDS],
-            bSliceGroupChangeDirectionFlag: false,
-            uiSliceGroupChangeRate: 0,
-            uiPicSizeInMapUnits: 0,
-            uiSliceGroupId: [0; MAX_SLICEGROUP_IDS],
             iPicInitQp: 0,
             iPicInitQs: 0,
             uiChromaQpIndexOffset: 0,
