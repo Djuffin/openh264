@@ -1545,24 +1545,13 @@ pub unsafe fn WelsInitEncoderExt(
     }
     crate::encoder::rc::WelsRcInitModule(pCtx, (*(*pCtx).pSvcParam).iRCMode);
 
-    // NOTE: `wels_preprocess.rs` declares its *own* `SWelsEncCtx` (line 575) — a
-    // 20-field struct that is not the canonical `sWelsEncCtx` — and aliases the
-    // lowercase name to it inside that module. Every field access in the
-    // preprocessor therefore reads the wrong offsets when handed a real context.
-    // The cast here is where that lands; see the status doc, "The preprocessor
-    // operates on a different context struct".
-    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(
-        pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx,
-    );
+    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(pCtx);
     if (*pCtx).pVpp.is_null() {
         let mut p = pCtx;
         WelsUninitEncoderExt(&mut p);
         return 1;
     }
-    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(
-        pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx,
-        (*pCtx).pSvcParam,
-    );
+    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(pCtx, (*pCtx).pSvcParam);
     if iRet != 0 {
         let mut p = pCtx;
         WelsUninitEncoderExt(&mut p);
@@ -1843,8 +1832,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
     let pCtx = *ppCtx;
 
     if !(*pCtx).pVpp.is_null() {
-        (*(*pCtx).pVpp)
-            .FreeSpatialPictures(pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx);
+        (*(*pCtx).pVpp).FreeSpatialPictures(pCtx);
         drop(Box::from_raw((*pCtx).pVpp));
         (*pCtx).pVpp = null_mut();
     }
