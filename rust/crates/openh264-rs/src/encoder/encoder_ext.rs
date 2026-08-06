@@ -1446,3 +1446,597 @@ pub unsafe fn GetMultipleThreadIdc(
     }
     0
 }
+
+/// `WelsInitEncoderExt` — encoder_ext.cpp:2290.
+///
+/// Replaces the `WelsInitEncoderExtRust` sketch, which allocated a fixed 4 MB
+/// bitstream buffer, a 64-entry NAL list and nothing else — no `CMemoryAlign`, no
+/// `RequestMemorySvc`, no DQ layers, no parameter-set arrays.
+///
+/// `MEMORY_MONITOR` and the `WelsLog` calls have no counterpart here.
+///
+/// # Safety
+/// `ppCtx` and `pCodingParam` must be non-null; the context returned in `*ppCtx` is
+/// owned by the caller and must be released with [`WelsUninitEncoderExt`].
+pub unsafe fn WelsInitEncoderExt(
+    ppCtx: *mut *mut sWelsEncCtx,
+    pCodingParam: *mut SWelsSvcCodingParam,
+    pLogCtx: *mut SLogContext,
+    pExistingParasetList: *mut SExistingParasetList,
+) -> i32 {
+    let mut iSliceNum: i16 = 1; // number of slices used
+    let mut iCacheLineSize: i32 = 16; // on-chip cache line size in bytes
+    let mut uiCpuFeatureFlags: u32 = 0;
+    if ppCtx.is_null() || pCodingParam.is_null() {
+        return 1;
+    }
+
+    let mut iRet = crate::encoder::wels_encoder_ext::ParamValidationExt(pLogCtx, pCodingParam);
+    if iRet != 0 {
+        return iRet;
+    }
+    iRet = (*pCodingParam).DetermineTemporalSettings();
+    if iRet != ENC_RETURN_SUCCESS {
+        return iRet;
+    }
+    iRet = GetMultipleThreadIdc(
+        pLogCtx,
+        pCodingParam,
+        &mut iSliceNum,
+        &mut iCacheLineSize,
+        &mut uiCpuFeatureFlags,
+    );
+    if iRet != 0 {
+        return iRet;
+    }
+
+    *ppCtx = null_mut();
+
+    // C++ mallocs and memsets sWelsEncCtx; Box::new of a Default context is the
+    // equivalent, and Default is the all-zero/null state for every member.
+    let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
+
+    if !pLogCtx.is_null() {
+        (*pCtx).sLogCtx = *pLogCtx;
+    }
+
+    (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
+
+    iRet = crate::encoder::param_svc::AllocCodingParam(&mut (*pCtx).pSvcParam, (*pCtx).pMemAlign);
+    if iRet != 0 {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return iRet;
+    }
+    *(*pCtx).pSvcParam = *pCodingParam;
+
+    (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
+        std::mem::size_of::<crate::encoder::wels_func_ptr_def::SWelsFuncPtrList>() as u32,
+        tag!("SWelsFuncPtrList"),
+    ) as *mut crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+    if (*pCtx).pFuncList.is_null() {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return 1;
+    }
+    iRet = crate::encoder::encoder_context::InitFunctionPointers(
+        pCtx,
+        (*pCtx).pSvcParam,
+        uiCpuFeatureFlags,
+    );
+    if iRet != ENC_RETURN_SUCCESS {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return iRet;
+    }
+
+    (*pCtx).iActiveThreadsNum = (*pCodingParam).iMultipleThreadIdc as i16;
+    (*pCtx).iMaxSliceCount = iSliceNum as i32;
+    let mut pCtxTmp = pCtx;
+    iRet = RequestMemorySvc(&mut pCtxTmp, pExistingParasetList);
+    if iRet != 0 {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return iRet;
+    }
+
+    if (*pCodingParam).iEntropyCodingModeFlag != 0 {
+        crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx as *mut c_void);
+    }
+    crate::encoder::rc::WelsRcInitModule(pCtx, (*(*pCtx).pSvcParam).iRCMode);
+
+    // NOTE: `wels_preprocess.rs` declares its *own* `SWelsEncCtx` (line 575) — a
+    // 20-field struct that is not the canonical `sWelsEncCtx` — and aliases the
+    // lowercase name to it inside that module. Every field access in the
+    // preprocessor therefore reads the wrong offsets when handed a real context.
+    // The cast here is where that lands; see the status doc, "The preprocessor
+    // operates on a different context struct".
+    (*pCtx).pVpp = crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess(
+        pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx,
+    );
+    if (*pCtx).pVpp.is_null() {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return 1;
+    }
+    iRet = (*(*pCtx).pVpp).AllocSpatialPictures(
+        pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx,
+        (*pCtx).pSvcParam,
+    );
+    if iRet != 0 {
+        let mut p = pCtx;
+        WelsUninitEncoderExt(&mut p);
+        return iRet;
+    }
+
+    (*pCtx).iStatisticsLogInterval = STATISTICS_LOG_INTERVAL_MS;
+    (*pCtx).uiLastTimestamp = -1;
+    (*pCtx).bDeliveryFlag = true;
+    *ppCtx = pCtx;
+
+    0
+}
+
+/// `STATISTICS_LOG_INTERVAL_MS` — `wels_const.h`.
+pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
+
+/// `FreeSliceInLayer` — encoder_ext.cpp:942.
+///
+/// # Safety
+/// `pDq` and `pMa` must be non-null.
+pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+    for iIdx in 0..MAX_THREADS_NUM {
+        crate::encoder::svc_encode_slice::FreeSliceBuffer(
+            &mut (*pDq).sSliceBufferInfo[iIdx].pSliceBuffer,
+            (*pDq).sSliceBufferInfo[iIdx].iMaxSliceNum,
+            pMa,
+            tag!("pSliceBuffer"),
+        );
+    }
+}
+
+/// `FreeDqLayer` — encoder_ext.cpp:951.
+///
+/// # Safety
+/// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
+pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
+    if (*pDq).is_null() {
+        return;
+    }
+    let p = *pDq;
+
+    FreeSliceInLayer(p, pMa);
+
+    if !(*p).ppSliceInLayer.is_null() {
+        (*pMa).WelsFree((*p).ppSliceInLayer as *mut c_void, tag!("ppSliceInLayer"));
+        (*p).ppSliceInLayer = null_mut();
+    }
+    if !(*p).pFirstMbIdxOfSlice.is_null() {
+        (*pMa).WelsFree(
+            (*p).pFirstMbIdxOfSlice as *mut c_void,
+            tag!("pFirstMbIdxOfSlice"),
+        );
+        (*p).pFirstMbIdxOfSlice = null_mut();
+    }
+    if !(*p).pCountMbNumInSlice.is_null() {
+        (*pMa).WelsFree(
+            (*p).pCountMbNumInSlice as *mut c_void,
+            tag!("pCountMbNumInSlice"),
+        );
+        (*p).pCountMbNumInSlice = null_mut();
+    }
+    // pFeatureSearchPreparation is only allocated for screen content, which
+    // InitDqLayers rejects; nothing to release.
+
+    crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
+    (*p).iMaxSliceNum = 0;
+
+    (*pMa).WelsFree(p as *mut c_void, tag!("pDqLayer"));
+    *pDq = null_mut();
+}
+
+/// `FreeRefList` — encoder_ext.cpp:986.
+///
+/// # Safety
+/// `pRefList` must have come from `InitDqLayers` and must not be used afterwards.
+pub unsafe fn FreeRefList(
+    pRefList: *mut *mut SRefList,
+    pMa: *mut CMemoryAlign,
+    iMaxNumRefFrame: i32,
+) {
+    if (*pRefList).is_null() {
+        return;
+    }
+    let p = *pRefList;
+
+    let mut iRef: i32 = 0;
+    loop {
+        if !(*p).pRef[iRef as usize].is_null() {
+            crate::encoder::wels_preprocess::FreePicture(pMa, &mut (*p).pRef[iRef as usize]);
+        }
+        iRef += 1;
+        if iRef >= 1 + iMaxNumRefFrame {
+            break;
+        }
+    }
+
+    (*pMa).WelsFree(p as *mut c_void, tag!("pRefList"));
+    *pRefList = null_mut();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::codec_api::EProfileIdc;
+    use crate::encoder::encoder_context::InitFunctionPointers;
+    use crate::encoder::param_svc::AllocCodingParam;
+    use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
+    /// Builds the context up to and including `RequestMemorySvc`, which is everything
+    /// `WelsInitEncoderExt` does before the preprocessor. This is the direct test of
+    /// baseline blocker C: before this phase `pSpsArray`/`pPPSArray` were never
+    /// allocated, `iSpsNum`/`iPpsNum` never assigned and `ppDqLayerList` never filled.
+    unsafe fn build_gate_context() -> *mut sWelsEncCtx {
+        // Drive the same path the public API does: build an SEncParamExt and let
+        // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
+        // Setting SWelsSvcCodingParam's fields directly leaves the internal
+        // dependency-layer frame rates at their FillDefault values and is rejected.
+        let mut ext = crate::api::codec_api::SEncParamExt::default();
+        ext.iUsageType = CAMERA_VIDEO_REAL_TIME;
+        ext.iPicWidth = 160;
+        ext.iPicHeight = 96;
+        ext.fMaxFrameRate = 6.0;
+        ext.iTargetBitrate = 500_000;
+        ext.iRCMode = RC_OFF_MODE;
+        ext.iTemporalLayerNum = 1;
+        ext.iSpatialLayerNum = 1;
+        ext.uiIntraPeriod = 0;
+        ext.iMultipleThreadIdc = 1;
+        ext.iEntropyCodingModeFlag = 0;
+        ext.iLoopFilterDisableIdc = 0;
+        ext.bEnableDenoise = false;
+        ext.bEnableLongTermReference = false;
+        ext.eSpsPpsIdStrategy = crate::api::codec_api::EParameterSetStrategy::CONSTANT_ID;
+        ext.sSpatialLayers[0].iVideoWidth = 160;
+        ext.sSpatialLayers[0].iVideoHeight = 96;
+        ext.sSpatialLayers[0].fFrameRate = 6.0;
+        ext.sSpatialLayers[0].iSpatialBitrate = 500_000;
+        ext.sSpatialLayers[0].uiProfileIdc = EProfileIdc::PRO_BASELINE;
+        ext.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+        ext.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+
+        let mut param = SWelsSvcCodingParam::default();
+        param.FillDefault();
+        assert_eq!(param.ParamTranscode(&ext), ENC_RETURN_SUCCESS);
+
+        let mut iSliceNum: i16 = 1;
+        let mut iCacheLineSize: i32 = 16;
+        let mut uiCpuFeatureFlags: u32 = 0;
+        assert_eq!(
+            crate::encoder::wels_encoder_ext::ParamValidationExt(null_mut(), &mut param),
+            ENC_RETURN_SUCCESS
+        );
+        assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
+        assert_eq!(
+            GetMultipleThreadIdc(
+                null_mut(),
+                &mut param,
+                &mut iSliceNum,
+                &mut iCacheLineSize,
+                &mut uiCpuFeatureFlags
+            ),
+            0
+        );
+
+        let pCtx = Box::into_raw(Box::new(sWelsEncCtx::default()));
+        (*pCtx).pMemAlign = Box::into_raw(Box::new(CMemoryAlign::new(iCacheLineSize as u32)));
+        assert_eq!(
+            AllocCodingParam(&mut (*pCtx).pSvcParam, (*pCtx).pMemAlign),
+            0
+        );
+        *(*pCtx).pSvcParam = param;
+        (*pCtx).pFuncList = (*(*pCtx).pMemAlign).WelsMallocz(
+            std::mem::size_of::<SWelsFuncPtrList>() as u32,
+            tag!("SWelsFuncPtrList"),
+        ) as *mut SWelsFuncPtrList;
+        assert!(!(*pCtx).pFuncList.is_null());
+        assert_eq!(
+            InitFunctionPointers(pCtx, (*pCtx).pSvcParam, uiCpuFeatureFlags),
+            ENC_RETURN_SUCCESS
+        );
+        (*pCtx).iActiveThreadsNum = param.iMultipleThreadIdc as i16;
+        (*pCtx).iMaxSliceCount = iSliceNum as i32;
+
+        let mut p = pCtx;
+        assert_eq!(RequestMemorySvc(&mut p, null_mut()), 0, "RequestMemorySvc");
+        pCtx
+    }
+
+    /// Blocker C: the parameter-set arrays are allocated and populated.
+    #[test]
+    fn request_memory_svc_builds_the_parameter_sets() {
+        unsafe {
+            let pCtx = build_gate_context();
+
+            assert!(!(*pCtx).pSpsArray.is_null(), "pSpsArray still null");
+            assert!(!(*pCtx).pPPSArray.is_null(), "pPPSArray still null");
+            assert_eq!((*pCtx).iSpsNum, 1);
+            assert_eq!((*pCtx).iPpsNum, 1);
+            assert_eq!((*pCtx).iSubsetSpsNum, 0);
+            assert_eq!((*pCtx).pSps, (*pCtx).pSpsArray);
+            assert_eq!((*pCtx).pPps, (*pCtx).pPPSArray);
+
+            // The SPS the strategy generated must be the one Phase 3 proved
+            // byte-exact against the C++ reference for this configuration.
+            let sps = &*(*pCtx).pSpsArray;
+            assert_eq!(sps.iMbWidth, 10);
+            assert_eq!(sps.iMbHeight, 6);
+            assert_eq!(sps.uiLog2MaxFrameNum, 15);
+            assert_eq!(sps.uiPocType, 2);
+            assert_eq!(sps.iLevelIdc, 13);
+
+            let pps = &*(*pCtx).pPPSArray;
+            assert_eq!(pps.iPicInitQp, 26);
+            assert!(pps.bDeblockingFilterControlPresentFlag);
+
+            let mut p = pCtx;
+            WelsUninitEncoderExt(&mut p);
+        }
+    }
+
+    /// Blocker C, second half: the DQ layers, reference lists and macroblock list
+    /// exist, which is what `pCurDqLayer` is selected from.
+    #[test]
+    fn request_memory_svc_builds_the_dq_layers() {
+        unsafe {
+            let pCtx = build_gate_context();
+
+            assert!(!(*pCtx).ppDqLayerList.is_null());
+            let pDq = *(*pCtx).ppDqLayerList;
+            assert!(!pDq.is_null());
+            assert_eq!((*pDq).iMbWidth, 10);
+            assert_eq!((*pDq).iMbHeight, 6);
+            assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
+            assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame, 1);
+            assert!(!(*pDq).sSliceEncCtx.pOverallMbMap.is_null());
+            assert!(!(*pDq).sMbDataP.is_null());
+
+            // InitMbInfo wired every macroblock to its slot in the context arrays.
+            let pMb = (*pDq).sMbDataP;
+            assert_eq!((*pMb).iMbXY, 0);
+            assert_eq!((*pMb).iMbX, 0);
+            assert_eq!((*pMb).iMbY, 0);
+            // MB 0 has no left/top neighbour.
+            assert_eq!((*pMb).uiNeighborAvail, 0);
+            let pMb11 = pMb.add(11); // row 1, column 1: all four neighbours present
+            assert_eq!((*pMb11).iMbX, 1);
+            assert_eq!((*pMb11).iMbY, 1);
+            assert_eq!(
+                (*pMb11).uiNeighborAvail,
+                LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
+            );
+
+            assert!(!(*pCtx).ppRefPicListExt.is_null());
+            assert!(!(**(*pCtx).ppRefPicListExt).pRef[0].is_null());
+            assert_eq!((*pCtx).pDecPic, (**(*pCtx).ppRefPicListExt).pRef[0]);
+
+            assert!(!(*pCtx).pStrideTab.is_null());
+            assert!(!(*pCtx).pMvdCostTable.is_null());
+            assert!(!(*pCtx).pReferenceStrategy.is_null());
+
+            let mut p = pCtx;
+            WelsUninitEncoderExt(&mut p);
+        }
+    }
+}
+
+/// `WelsUninitEncoderExt` — encoder_ext.cpp:2246, with `FreeMemorySvc`
+/// (encoder_ext.cpp:1804) folded in.
+///
+/// # Safety
+/// `ppCtx` must point to a context from [`WelsInitEncoderExt`], or be null/point to
+/// null.
+pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
+    if ppCtx.is_null() || (*ppCtx).is_null() {
+        return;
+    }
+    let pCtx = *ppCtx;
+
+    if !(*pCtx).pVpp.is_null() {
+        (*(*pCtx).pVpp)
+            .FreeSpatialPictures(pCtx as *mut crate::encoder::wels_preprocess::SWelsEncCtx);
+        drop(Box::from_raw((*pCtx).pVpp));
+        (*pCtx).pVpp = null_mut();
+    }
+
+    let pMa = (*pCtx).pMemAlign;
+    if !pMa.is_null() {
+        if !(*pCtx).pStrideTab.is_null() {
+            if !(*(*pCtx).pStrideTab).pStrideDecBlockOffset[0][1].is_null() {
+                (*pMa).WelsFree(
+                    (*(*pCtx).pStrideTab).pStrideDecBlockOffset[0][1] as *mut c_void,
+                    tag!("pBase"),
+                );
+            }
+            (*pMa).WelsFree((*pCtx).pStrideTab as *mut c_void, tag!("SStrideTables"));
+            (*pCtx).pStrideTab = null_mut();
+        }
+        if !(*pCtx).pDqIdcMap.is_null() {
+            (*pMa).WelsFree((*pCtx).pDqIdcMap as *mut c_void, tag!("pDqIdcMap"));
+            (*pCtx).pDqIdcMap = null_mut();
+        }
+        if !(*pCtx).pOut.is_null() {
+            let pOut = (*pCtx).pOut;
+            if !(*pOut).pBsBuffer.is_null() {
+                (*pMa).WelsFree((*pOut).pBsBuffer as *mut c_void, tag!("pOut->pBsBuffer"));
+            }
+            if !(*pOut).sNalList.is_null() {
+                (*pMa).WelsFree((*pOut).sNalList as *mut c_void, tag!("pOut->sNalList"));
+            }
+            if !(*pOut).pNalLen.is_null() {
+                (*pMa).WelsFree((*pOut).pNalLen as *mut c_void, tag!("pOut->pNalLen"));
+            }
+            (*pMa).WelsFree(pOut as *mut c_void, tag!("SWelsEncoderOutput"));
+            (*pCtx).pOut = null_mut();
+        }
+        if !(*pCtx).pReferenceStrategy.is_null() {
+            crate::encoder::ref_list_mgr_svc::DestroyReferenceStrategy(
+                (*pCtx).pReferenceStrategy as *mut crate::encoder::ref_list_mgr_svc::IWelsReferenceStrategy,
+            );
+            (*pCtx).pReferenceStrategy = null_mut();
+        }
+        if !(*pCtx).pFrameBs.is_null() {
+            (*pMa).WelsFree((*pCtx).pFrameBs as *mut c_void, tag!("pFrameBs"));
+            (*pCtx).pFrameBs = null_mut();
+        }
+        for pBuf in (*pCtx).pDynamicBsBuffer.iter_mut() {
+            if !pBuf.is_null() {
+                (*pMa).WelsFree(*pBuf as *mut c_void, tag!("DynamicSliceBs"));
+                *pBuf = null_mut();
+            }
+        }
+        if !(*pCtx).pSpsArray.is_null() {
+            (*pMa).WelsFree((*pCtx).pSpsArray as *mut c_void, tag!("pSpsArray"));
+            (*pCtx).pSpsArray = null_mut();
+        }
+        if !(*pCtx).pPPSArray.is_null() {
+            (*pMa).WelsFree((*pCtx).pPPSArray as *mut c_void, tag!("pPPSArray"));
+            (*pCtx).pPPSArray = null_mut();
+        }
+        if !(*pCtx).pSubsetArray.is_null() {
+            (*pMa).WelsFree((*pCtx).pSubsetArray as *mut c_void, tag!("pSubsetArray"));
+            (*pCtx).pSubsetArray = null_mut();
+        }
+        if !(*pCtx).pIntra4x4PredModeBlocks.is_null() {
+            (*pMa).WelsFree(
+                (*pCtx).pIntra4x4PredModeBlocks as *mut c_void,
+                tag!("pIntra4x4PredModeBlocks"),
+            );
+            (*pCtx).pIntra4x4PredModeBlocks = null_mut();
+        }
+        if !(*pCtx).pNonZeroCountBlocks.is_null() {
+            (*pMa).WelsFree(
+                (*pCtx).pNonZeroCountBlocks as *mut c_void,
+                tag!("pNonZeroCountBlocks"),
+            );
+            (*pCtx).pNonZeroCountBlocks = null_mut();
+        }
+        if !(*pCtx).pMvUnitBlock4x4.is_null() {
+            (*pMa).WelsFree((*pCtx).pMvUnitBlock4x4 as *mut c_void, tag!("pMvUnitBlock4x4"));
+            (*pCtx).pMvUnitBlock4x4 = null_mut();
+        }
+        if !(*pCtx).pRefIndexBlock4x4.is_null() {
+            (*pMa).WelsFree(
+                (*pCtx).pRefIndexBlock4x4 as *mut c_void,
+                tag!("pRefIndexBlock4x4"),
+            );
+            (*pCtx).pRefIndexBlock4x4 = null_mut();
+        }
+        if !(*pCtx).ppMbListD.is_null() {
+            if !(*(*pCtx).ppMbListD).is_null() {
+                (*pMa).WelsFree(*(*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD[0]"));
+            }
+            (*pMa).WelsFree((*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD"));
+            (*pCtx).ppMbListD = null_mut();
+        }
+        if !(*pCtx).pSadCostMb.is_null() {
+            (*pMa).WelsFree((*pCtx).pSadCostMb as *mut c_void, tag!("pSadCostMb"));
+            (*pCtx).pSadCostMb = null_mut();
+        }
+        if !(*pCtx).pMvdCostTable.is_null() {
+            (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));
+            (*pCtx).pMvdCostTable = null_mut();
+        }
+        if !(*pCtx).pWelsSvcRc.is_null() {
+            (*pMa).WelsFree((*pCtx).pWelsSvcRc as *mut c_void, tag!("pWelsSvcRc"));
+            (*pCtx).pWelsSvcRc = null_mut();
+        }
+        if !(*pCtx).pLtr.is_null() {
+            (*pMa).WelsFree((*pCtx).pLtr as *mut c_void, tag!("SLTRState"));
+            (*pCtx).pLtr = null_mut();
+        }
+        // DQ layers list
+        if !(*pCtx).ppDqLayerList.is_null() && !(*pCtx).pSvcParam.is_null() {
+            for ilayer in 0..(*(*pCtx).pSvcParam).iSpatialLayerNum as usize {
+                if !(*(*pCtx).ppDqLayerList.add(ilayer)).is_null() {
+                    FreeDqLayer((*pCtx).ppDqLayerList.add(ilayer), pMa);
+                }
+            }
+            (*pMa).WelsFree((*pCtx).ppDqLayerList as *mut c_void, tag!("ppDqLayerList"));
+            (*pCtx).ppDqLayerList = null_mut();
+        }
+        // reference picture list extension
+        if !(*pCtx).ppRefPicListExt.is_null() && !(*pCtx).pSvcParam.is_null() {
+            for ilayer in 0..(*(*pCtx).pSvcParam).iSpatialLayerNum as usize {
+                FreeRefList(
+                    (*pCtx).ppRefPicListExt.add(ilayer),
+                    pMa,
+                    (*(*pCtx).pSvcParam).iMaxNumRefFrame,
+                );
+            }
+            (*pMa).WelsFree((*pCtx).ppRefPicListExt as *mut c_void, tag!("ppRefPicListExt"));
+            (*pCtx).ppRefPicListExt = null_mut();
+        }
+        if !(*pCtx).pVaa.is_null() {
+            let pVaa = (*pCtx).pVaa;
+            if !(*pVaa).pVaaBackgroundMbFlag.is_null() {
+                (*pMa).WelsFree(
+                    (*pVaa).pVaaBackgroundMbFlag as *mut c_void,
+                    tag!("pVaa->pVaaBackgroundMbFlag"),
+                );
+            }
+            if !(*pVaa).sVaaCalcInfo.pSad8x8.is_null() {
+                (*pMa).WelsFree(
+                    (*pVaa).sVaaCalcInfo.pSad8x8 as *mut c_void,
+                    tag!("pVaa->sVaaCalcInfo.sad8x8"),
+                );
+            }
+            if !(*pVaa).sVaaCalcInfo.pSsd16x16.is_null() {
+                (*pMa).WelsFree(
+                    (*pVaa).sVaaCalcInfo.pSsd16x16 as *mut c_void,
+                    tag!("pVaa->sVaaCalcInfo.pSsd16x16"),
+                );
+            }
+            if !(*pVaa).sVaaCalcInfo.pSum16x16.is_null() {
+                (*pMa).WelsFree(
+                    (*pVaa).sVaaCalcInfo.pSum16x16 as *mut c_void,
+                    tag!("pVaa->sVaaCalcInfo.pSum16x16"),
+                );
+            }
+            if !(*pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null() {
+                (*pMa).WelsFree(
+                    (*pVaa).sVaaCalcInfo.pSumOfSquare16x16 as *mut c_void,
+                    tag!("pVaa->sVaaCalcInfo.pSumOfSquare16x16"),
+                );
+            }
+            if !(*pCtx).pSvcParam.is_null() && (*(*pCtx).pSvcParam).bEnableBackgroundDetection {
+                if !(*pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_null() {
+                    (*pMa).WelsFree(
+                        (*pVaa).sVaaCalcInfo.pSumOfDiff8x8 as *mut c_void,
+                        tag!("pVaa->sVaaCalcInfo.pSumOfDiff8x8"),
+                    );
+                }
+                if !(*pVaa).sVaaCalcInfo.pMad8x8.is_null() {
+                    (*pMa).WelsFree(
+                        (*pVaa).sVaaCalcInfo.pMad8x8 as *mut c_void,
+                        tag!("pVaa->sVaaCalcInfo.pMad8x8"),
+                    );
+                }
+            }
+            (*pMa).WelsFree(pVaa as *mut c_void, tag!("pVaa"));
+            (*pCtx).pVaa = null_mut();
+        }
+        if !(*pCtx).pSvcParam.is_null() {
+            let _ = crate::encoder::param_svc::FreeCodingParam(&mut (*pCtx).pSvcParam, pMa);
+        }
+        if !(*pCtx).pFuncList.is_null() {
+            (*pMa).WelsFree((*pCtx).pFuncList as *mut c_void, tag!("SWelsFuncPtrList"));
+            (*pCtx).pFuncList = null_mut();
+        }
+        drop(Box::from_raw(pMa));
+        (*pCtx).pMemAlign = null_mut();
+    }
+
+    drop(Box::from_raw(pCtx));
+    *ppCtx = null_mut();
+}
