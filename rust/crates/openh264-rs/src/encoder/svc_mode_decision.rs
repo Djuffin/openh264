@@ -22,6 +22,12 @@ pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
+pub use crate::encoder::md::SMcFunc;
+pub use crate::encoder::wels_preprocess::SVAACalcResult;
+pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
+pub use crate::encoder::svc_motion_estimate::SWelsME;
+pub use crate::encoder::md::SWelsMD;
 
 // ============================================================================
 // Constants and Thresholds
@@ -125,14 +131,6 @@ pub enum ESkipModes {
     SCROLLED = 1,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum EStaticBlockIdc {
-    NO_STATIC = 0,
-    COLLOCATED_STATIC = 1,
-    SCROLLED_STATIC = 2,
-    BLOCK_STATIC_IDC_ALL = 3,
-}
 
 pub type pJudgeSkipFun = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
@@ -145,33 +143,7 @@ pub type pJudgeSkipFun = unsafe extern "C" fn(
 // Core Structures Matching C/C++ Layout
 // ============================================================================
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsME {
-    pub sMv: SMVUnitXY,
-    pub sMvp: SMVUnitXY,
-    pub sMvBase: SMVUnitXY,
-    pub sDirectionalMv: SMVUnitXY,
-    pub uiSadCost: u32,
-    pub uiSatdCost: u32,
-    pub iRefIdx: i8,
-    pub pMvdCost: *mut u16,
-}
 
-impl Default for SWelsME {
-    fn default() -> Self {
-        Self {
-            sMv: SMVUnitXY::default(),
-            sMvp: SMVUnitXY::default(),
-            sMvBase: SMVUnitXY::default(),
-            sDirectionalMv: SMVUnitXY::default(),
-            uiSadCost: 0,
-            uiSatdCost: 0,
-            iRefIdx: 0,
-            pMvdCost: std::ptr::null_mut(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -185,45 +157,7 @@ pub struct SWelsMeContainers {
     pub sMe4x8: [[SWelsME; 2]; 4],
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsMD {
-    pub iLambda: i32,
-    pub pMvdCost: *mut u16,
-    pub iCostLuma: i32,
-    pub iCostChroma: i32,
-    pub iSadPredMb: i32,
-    pub uiRef: u8,
-    pub bMdUsingSad: bool,
-    pub uiReserved: u16,
-    pub iCostSkipMb: i32,
-    pub iSadPredSkip: i32,
-    pub iMbPixX: i32,
-    pub iMbPixY: i32,
-    pub iBlock8x8StaticIdc: [i32; 4],
-    pub sMe: SWelsMeContainers,
-}
 
-impl Default for SWelsMD {
-    fn default() -> Self {
-        Self {
-            iLambda: 0,
-            pMvdCost: std::ptr::null_mut(),
-            iCostLuma: 0,
-            iCostChroma: 0,
-            iSadPredMb: 0,
-            uiRef: 0,
-            bMdUsingSad: false,
-            uiReserved: 0,
-            iCostSkipMb: 0,
-            iSadPredSkip: 0,
-            iMbPixX: 0,
-            iMbPixY: 0,
-            iBlock8x8StaticIdc: [0; 4],
-            sMe: SWelsMeContainers::default(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -319,19 +253,7 @@ pub struct SSlice {
     pub uiLastMbQp: u8,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct SScrollDetectionParam {
-    pub iScrollMvX: i32,
-    pub iScrollMvY: i32,
-    pub bScrollDetectFlag: bool,
-}
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SVAACalcResult {
-    pub pSad8x8: *mut [i32; 4],
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -358,34 +280,6 @@ pub struct SSampleDealingFuncs {
     pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; 7],
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMcFunc {
-    pub pMcLumaFunc: Option<
-        unsafe extern "C" fn(
-            pSrc: *const u8,
-            iSrcStride: i32,
-            pDst: *mut u8,
-            iDstStride: i32,
-            iMvX: i16,
-            iMvY: i16,
-            iWidth: i32,
-            iHeight: i32,
-        ),
-    >,
-    pub pMcChromaFunc: Option<
-        unsafe extern "C" fn(
-            pSrc: *const u8,
-            iSrcStride: i32,
-            pDst: *mut u8,
-            iDstStride: i32,
-            iMvX: i16,
-            iMvY: i16,
-            iWidth: i32,
-            iHeight: i32,
-        ),
-    >,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -2146,9 +2040,12 @@ mod tests {
                     pfSampleSad: [None, None, None, None, None, None, None],
                     pfSampleSatd: [None, None, None, None, None, None, None],
                 },
+                // SMcFunc is now the full common/mc.rs struct (codec/common/inc/mc.h:46);
+                // this test only exercises the two MC entries.
                 sMcFuncs: SMcFunc {
                     pMcLumaFunc: None,
                     pMcChromaFunc: None,
+                    ..Default::default()
                 },
                 pfInterMdBackgroundDecision: None,
                 pfSCDPSkipDecision: None,

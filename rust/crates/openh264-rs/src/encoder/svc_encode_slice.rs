@@ -332,18 +332,6 @@ impl Default for SSliceHeaderExt {
 
 pub use crate::common::wels_common_defs::{EWelsNalUnitType, SBitStringAux};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SRCSlicing {
-    pub iComplexityIndexSlice: i32,
-    pub iCalculatedQpSlice: i32,
-    pub iTotalQpSlice: i32,
-    pub iTotalMbSlice: i32,
-    pub iTargetBitsSlice: i32,
-    pub iFrameBitsSlice: i32,
-    pub iGomBitsSlice: i32,
-    pub iGomTargetBits: i32,
-}
 
 #[repr(C)]
 pub struct SSlice {
@@ -428,25 +416,7 @@ impl Default for SDynamicSlicingStack {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsMD {
-    pub iLambda: i32,
-    pub iCostLuma: i32,
-    pub pMvdCost: *mut u16,
-    pub iMbPixX: i32,
-    pub iMbPixY: i32,
-    pub uiRef: u8,
-    pub bMdUsingSad: bool,
-    pub iBlock8x8StaticIdc: [i32; 4],
-    pub sMe: [u8; 128],
-}
 
-impl Default for SWelsMD {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 #[repr(C)]
 pub struct SSliceBufferInfo {
@@ -536,17 +506,7 @@ pub use crate::encoder::encoder_context::{SWelsFuncPtrList, SWelsRcFunc};
 pub use crate::encoder::rc::SWelsSvcRc;
 pub use crate::encoder::wels_encoder_ext::SSpatialLayerInternal;
 
-#[repr(C)]
-pub struct SSliceThreading {
-    pub mutexSliceNumUpdate: *mut c_void,
-    pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
-}
 
-impl Default for SSliceThreading {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -564,6 +524,9 @@ pub use crate::encoder::ref_list_mgr_svc::SMmcoRef;
 pub use crate::encoder::ref_list_mgr_svc::SReorderingSyntax;
 pub use crate::encoder::ref_list_mgr_svc::SRefPicMarking;
 pub use crate::encoder::ref_list_mgr_svc::SRefPicListReorderSyntax;
+pub use crate::encoder::rc::SRCSlicing;
+pub use crate::encoder::md::SWelsMD;
+pub use crate::encoder::slice_multi_threading::SSliceThreading;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;

@@ -1,4 +1,5 @@
 pub mod deblocking_common;
+pub mod expand_pic;
 pub mod intra_pred_common;
 pub mod mc;
 pub mod memory_align;

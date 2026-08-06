@@ -107,9 +107,15 @@ impl SStateCtx {
     }
 
     /// Packs and updates the 6-bit state index and 1-bit MPS symbol.
+    ///
+    /// `set_mb_syn_cabac.h:62` is `m_uiStateMps = uiState * 2 + uiMps`, evaluated in
+    /// `int` after integer promotion and narrowed on assignment. Written that way
+    /// rather than as `(uiState << 1) | (uiMps & 1)`: the two agree only while
+    /// `uiMps` is 0 or 1, and the shift form would also overflow-panic in debug for
+    /// `uiState >= 128`.
     #[inline(always)]
     pub fn Set(&mut self, uiState: u8, uiMps: u8) {
-        self.m_uiStateMps = (uiState << 1) | (uiMps & 1);
+        self.m_uiStateMps = (uiState as u32 * 2 + uiMps as u32) as u8;
     }
 }
 

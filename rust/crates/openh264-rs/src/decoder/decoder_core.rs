@@ -613,21 +613,7 @@ pub struct SFmo {
     pub iSliceGroupCount: i32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-    pub pfExpandChromaPicture: [Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>; 2],
-}
-
-impl Default for SExpandPicFunc {
-    fn default() -> Self {
-        Self {
-            pfExpandLumaPicture: None,
-            pfExpandChromaPicture: [None, None],
-        }
-    }
-}
+pub use crate::common::expand_pic::SExpandPicFunc;
 
 /// Reference-picture border expansion length (`PADDING_LENGTH` in
 /// `codec/common/inc/expand_pic.h`).

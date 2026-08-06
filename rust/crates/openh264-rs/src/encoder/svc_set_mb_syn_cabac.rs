@@ -104,27 +104,7 @@ pub fn CLIP3_QP_0_51(qp: i32) -> usize {
 // Block Category Enumeration
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ECtxBlockCat {
-    LUMA_DC = 0,
-    LUMA_AC = 1,
-    LUMA_4x4 = 2,
-    CHROMA_DC = 3,
-    CHROMA_AC = 4,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
 
 // ============================================================================
 // Context Offset Tables
@@ -207,56 +187,9 @@ pub const g_kuiStateTransTable: [[u8; 2]; 64] = [
 pub type cabac_low_t = u64;
 pub const CABAC_LOW_WIDTH: usize = 64;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct SStateCtx {
-    pub m_uiStateMps: u8,
-}
 
-impl SStateCtx {
-    #[inline(always)]
-    pub fn Mps(&self) -> u8 {
-        self.m_uiStateMps & 1
-    }
 
-    #[inline(always)]
-    pub fn State(&self) -> u8 {
-        self.m_uiStateMps >> 1
-    }
 
-    #[inline(always)]
-    pub fn Set(&mut self, uiState: u8, uiMps: u8) {
-        self.m_uiStateMps = (uiState << 1) | (uiMps & 1);
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SCabacCtx {
-    pub m_uiLow: cabac_low_t,
-    pub m_iLowBitCnt: i32,
-    pub m_iRenormCnt: i32,
-    pub m_uiRange: u32,
-    pub m_sStateCtx: [SStateCtx; WELS_CONTEXT_COUNT],
-    pub m_pBufStart: *mut u8,
-    pub m_pBufEnd: *mut u8,
-    pub m_pBufCur: *mut u8,
-}
-
-impl Default for SCabacCtx {
-    fn default() -> Self {
-        Self {
-            m_uiLow: 0,
-            m_iLowBitCnt: 0,
-            m_iRenormCnt: 0,
-            m_uiRange: 0,
-            m_sStateCtx: [SStateCtx::default(); WELS_CONTEXT_COUNT],
-            m_pBufStart: std::ptr::null_mut(),
-            m_pBufEnd: std::ptr::null_mut(),
-            m_pBufCur: std::ptr::null_mut(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -348,6 +281,10 @@ impl Default for SMB {
 pub use crate::common::wels_common_defs::SBitStringAux;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
+pub use crate::encoder::encoder_context::EWelsSliceType;
+pub use crate::encoder::vlc_encoder::ECtxBlockCat;
+pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
+pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
