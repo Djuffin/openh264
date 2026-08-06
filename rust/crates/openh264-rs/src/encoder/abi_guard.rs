@@ -27,7 +27,9 @@ use crate::common::mc::SMcFunc;
 use crate::encoder::encoder_context::{SLTRState, SSpatialPicIndex, SStrideTables};
 use crate::encoder::md::{SSampleDealingFunc, SWelsMD};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
-use crate::encoder::rc::SRCSlicing;
+use crate::encoder::param_svc::{SSpatialLayerInternal, SWelsSvcCodingParam};
+use crate::encoder::rc::{SRCSlicing, SWelsSvcRc};
+use crate::encoder::slice_multi_threading::SSliceCtx;
 use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
 use crate::encoder::set_mb_syn_cabac::{SCabacCtx, SStateCtx};
 use crate::encoder::svc_motion_estimate::SWelsME;
@@ -109,3 +111,12 @@ assert_size!(SScrollDetectionParam, 32);
 assert_size!(SAdaptiveQuantizationParam, 40);
 assert_size!(SComplexityAnalysisParam, 64);
 assert_size!(SComplexityAnalysisScreenParam, 72);
+
+// Mid-tier types.
+assert_size!(SSpatialLayerInternal, 68);
+assert_size!(SWelsSvcCodingParam, 1240);
+
+
+assert_size!(SWelsSvcRc, 360);
+assert_size!(SSliceCtx, 32);
+

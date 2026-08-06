@@ -53,6 +53,10 @@ pub use crate::encoder::wels_preprocess::SAdaptiveQuantizationParam;
 pub use crate::encoder::wels_preprocess::SComplexityAnalysisParam;
 pub use crate::encoder::wels_preprocess::SComplexityAnalysisScreenParam;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
+pub use crate::encoder::param_svc::SSpatialLayerInternal;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
+pub use crate::encoder::param_svc::SWelsSvcCodingParam;
+pub use crate::encoder::slice_multi_threading::SSliceCtx;
 
 // ============================================================================
 // Constants and Macros
@@ -462,28 +466,10 @@ pub struct SMB {
 }
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpatialLayerInternal {
-    pub fOutputFrameRate: f32,
-    pub iHighestTemporalId: i32,
-    pub iDecompositionStages: i32,
-    pub iFrameIndex: i32,
-}
 
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVAAFrameInfo {
-    pub sAdaptiveQuantParam: SAdaptiveQuantizationParam,
-    pub sComplexityAnalysisParam: SComplexityAnalysisParam,
-    pub iPicWidth: i32,
-    pub iPicHeight: i32,
-    pub eSceneChangeIdc: i32,
-    pub bSceneChangeFlag: bool,
-}
 
 
 #[repr(C)]
@@ -498,11 +484,6 @@ pub struct SLayerInfo {
     pub pPpsP: *mut SPps,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceCtx {
-    pub iSliceNumInFrame: i32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -513,25 +494,6 @@ pub struct SDqLayer {
     pub sLayerInfo: SLayerInfo,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSvcCodingParam {
-    pub iUsageType: EUsageType,
-    pub iSpatialLayerNum: i32,
-    pub sSpatialLayers: [SSpatialLayerConfig; 4],
-    pub sDependencyLayers: [SSpatialLayerInternal; 4],
-    pub iBitsVaryPercentage: i32,
-    pub iMinQp: i32,
-    pub iMaxQp: i32,
-    pub bFixRCOverShoot: bool,
-    pub bEnableAdaptiveQuant: bool,
-    pub iRCMode: RCMode,
-    pub bEnableFrameSkip: bool,
-    pub bSimulcastAVC: bool,
-    pub iPaddingFlag: i32,
-    pub iDecompStages: i32,
-    pub iIdrBitrateRatio: i32,
-}
 
 // Function pointer callbacks
 pub type PWelsRCPictureInitFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>;
@@ -745,7 +707,7 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
         RcInitLayerMemory(
             pWelsSvcRc,
             (*pEncCtx).pMemAlign,
-            1 + (*pSvcParam).sDependencyLayers[j].iHighestTemporalId,
+            1 + (*pSvcParam).sDependencyLayers[j].iHighestTemporalId as i32,
         );
 
         let slice_mode = pDLayerParam.sSliceArgument.uiSliceMode as i32;
@@ -774,8 +736,8 @@ pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
     ];
     let kiGopSize = 1 << kiDecompositionStages;
 
-    let mut n = 0;
-    while n <= kiHighestTid {
+    let mut n: i32 = 0;
+    while n <= kiHighestTid as i32 {
         let t_rc = &mut *pTOverRc.add(n as usize);
         t_rc.iTlayerWeight = iWeightArray[kiDecompositionStages][n as usize];
         t_rc.iMinQp = (*pWelsSvcRc).iMinQp + (n << 1);
@@ -1924,9 +1886,9 @@ pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32
     if decomp != 0 {
         let tid = (*pEncCtx).uiTemporalId as i32;
         let mut iTemporalQp = if tid == 0 {
-            iQp - 3 - (decomp - 1)
+            iQp - 3 - (decomp as i32 - 1)
         } else {
-            iQp - (decomp - tid)
+            iQp - (decomp as i32 - tid)
         };
         iTemporalQp = WELS_CLIP3(iTemporalQp, 1, 51);
         iTemporalQp
@@ -2139,9 +2101,9 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
     let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
 
     let mut iMinQp = (*(*pEncCtx).pSvcParam).iMinQp;
-    if (*pVaa).eSceneChangeIdc == LARGE_CHANGED_SCENE {
+    if (*pVaa).eSceneChangeIdc as i32 == LARGE_CHANGED_SCENE {
         iMinQp += 2;
-    } else if (*pVaa).eSceneChangeIdc == MEDIUM_CHANGED_SCENE {
+    } else if (*pVaa).eSceneChangeIdc as i32 == MEDIUM_CHANGED_SCENE {
         iMinQp += 1;
     }
 
@@ -2213,7 +2175,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
 
         if iDeltaQp > 5 {
             let scene_change = (*(*pEncCtx).pVaa).eSceneChangeIdc;
-            if scene_change == LARGE_CHANGED_SCENE
+            if scene_change as i32 == LARGE_CHANGED_SCENE
                 || (*pWelsSvcRc).iBufferFullnessSkip > 2 * iBitRate as i64
                 || iDeltaQp > 10
             {
@@ -2222,7 +2184,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
                     (*pWelsSvcRc).iMinQp,
                     (*pWelsSvcRc).iMaxQp,
                 );
-            } else if scene_change == MEDIUM_CHANGED_SCENE
+            } else if scene_change as i32 == MEDIUM_CHANGED_SCENE
                 || (*pWelsSvcRc).iBufferFullnessSkip > iBitRate as i64
             {
                 (*pEncCtx).iGlobalQp = WELS_CLIP3(

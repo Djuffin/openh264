@@ -28,6 +28,7 @@ pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
 pub use crate::encoder::md::SWelsMD;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 
 // ============================================================================
 // Constants and Thresholds
@@ -255,12 +256,6 @@ pub struct SSlice {
 
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SVAAFrameInfo {
-    pub sVaaCalcInfo: SVAACalcResult,
-    pub pVaaBackgroundMbFlag: *mut i8,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

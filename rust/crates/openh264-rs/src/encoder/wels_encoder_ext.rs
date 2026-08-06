@@ -264,39 +264,7 @@ pub struct SDumpLayer {
     pub pFileName: *mut c_char,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSpatialLayerInternal {
-    pub iActualWidth: i32,
-    pub iActualHeight: i32,
-    pub sRecFileName: [u8; 256],
-    pub iCodingIndex: i32,
-    pub iPOC: i32,
-    pub uiIdrPicId: u32,
-    pub iFrameNum: i32,
-    pub bEncCurFrmAsIdrFlag: bool,
-    pub iDecompositionStages: i32,
-    pub iHighestTemporalId: i32,
-    pub iFrameIndex: i32,
-}
 
-impl Default for SSpatialLayerInternal {
-    fn default() -> Self {
-        Self {
-            iActualWidth: 0,
-            iActualHeight: 0,
-            sRecFileName: [0; 256],
-            iCodingIndex: 0,
-            iPOC: 0,
-            uiIdrPicId: 0,
-            iFrameNum: 0,
-            bEncCurFrmAsIdrFlag: false,
-            iDecompositionStages: 0,
-            iHighestTemporalId: 0,
-            iFrameIndex: 0,
-        }
-    }
-}
 
 // SWelsSvcCodingParam is declared once, in param_svc.rs (mirroring
 // codec/encoder/core/inc/param_svc.h). The copy that used to live here was a
@@ -304,13 +272,6 @@ impl Default for SSpatialLayerInternal {
 // and a DetermineTemporalSettings that ignored the temporal-id table.
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSvcRc {
-    pub iAverageFrameQp: u32,
-    pub fLatestFrameRate: f32,
-    pub iActualBitRate: u32,
-}
 
 pub use crate::encoder::encoder_context::SLTRState;
 
@@ -364,6 +325,8 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 pub use crate::encoder::ref_list_mgr_svc::SLTRMarkingFeedback;
 pub use crate::encoder::ref_list_mgr_svc::SLTRRecoverRequest;
 pub use crate::encoder::encoder_context::SLogContext;
+pub use crate::encoder::param_svc::SSpatialLayerInternal;
+pub use crate::encoder::rc::SWelsSvcRc;
 
 // Core encoder functions implementations / fallbacks
 pub unsafe fn WelsWriteSpsSyntax(

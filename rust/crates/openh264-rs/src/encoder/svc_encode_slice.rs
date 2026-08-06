@@ -367,24 +367,7 @@ impl Default for SSlice {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceCtx {
-    pub uiSliceMode: SliceMode,
-    pub iMbWidth: i16,
-    pub iMbHeight: i16,
-    pub iSliceNumInFrame: i32,
-    pub iMbNumInFrame: i32,
-    pub pOverallMbMap: *mut u16,
-    pub uiSliceSizeConstraint: u32,
-    pub iMaxSliceNumConstraint: i32,
-}
 
-impl Default for SSliceCtx {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -527,6 +510,7 @@ pub use crate::encoder::ref_list_mgr_svc::SRefPicListReorderSyntax;
 pub use crate::encoder::rc::SRCSlicing;
 pub use crate::encoder::md::SWelsMD;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
+pub use crate::encoder::slice_multi_threading::SSliceCtx;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
