@@ -40,7 +40,14 @@ for f in sorted(glob.glob(os.path.join(SRC, '*.rs'))):
         # terminating semicolon rather than to the first newline -- otherwise the
         # insertion lands *inside* a braced group and the file no longer parses.
         uses = list(re.finditer(r'^(?:pub )?use [^;]*;\n', s, re.M | re.S))
-        at = uses[-1].end() if uses else 0
+        if uses:
+            at = uses[-1].end()
+        else:
+            # No top-level `use` in this module. Position 0 would land above the
+            # inner attributes and `//!` docs, which must come first in a file, so
+            # insert after the last of those instead.
+            heads = list(re.finditer(r'^(?:#!\[[^\]]*\]|//!.*)\n', s, re.M))
+            at = heads[-1].end() if heads else 0
         s = s[:at] + use_line + s[at:]
 
     open(f, 'w').write(s)

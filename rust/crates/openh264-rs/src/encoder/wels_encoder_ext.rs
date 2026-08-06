@@ -1898,15 +1898,15 @@ unsafe extern "C" fn ext_GetOption(
 }
 
 pub static G_ISVCENCODER_VTBL: ISVCEncoderVtbl = ISVCEncoderVtbl {
-    Initialize: unsafe { std::mem::transmute(ext_Initialize as *const ()) },
-    InitializeExt: unsafe { std::mem::transmute(ext_InitializeExt as *const ()) },
-    GetDefaultParams: unsafe { std::mem::transmute(ext_GetDefaultParams as *const ()) },
-    Uninitialize: unsafe { std::mem::transmute(ext_Uninitialize as *const ()) },
-    EncodeFrame: unsafe { std::mem::transmute(ext_EncodeFrame as *const ()) },
-    EncodeParameterSets: unsafe { std::mem::transmute(ext_EncodeParameterSets as *const ()) },
-    ForceIntraFrame: unsafe { std::mem::transmute(ext_ForceIntraFrame as *const ()) },
-    SetOption: unsafe { std::mem::transmute(ext_SetOption as *const ()) },
-    GetOption: unsafe { std::mem::transmute(ext_GetOption as *const ()) },
+    Initialize: ext_Initialize,
+    InitializeExt: ext_InitializeExt,
+    GetDefaultParams: ext_GetDefaultParams,
+    Uninitialize: ext_Uninitialize,
+    EncodeFrame: ext_EncodeFrame,
+    EncodeParameterSets: ext_EncodeParameterSets,
+    ForceIntraFrame: ext_ForceIntraFrame,
+    SetOption: ext_SetOption,
+    GetOption: ext_GetOption,
 };
 
 pub unsafe extern "C" fn WelsCreateSVCEncoderExt(ppEncoder: *mut *mut ISVCEncoderHandle) -> i32 {

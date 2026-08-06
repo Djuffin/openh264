@@ -35,6 +35,8 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Constants and Thresholds
@@ -201,8 +203,10 @@ pub struct SVAAFrameInfoExt_t {
     pub pVaaBestBlockStaticIdc: *mut u8,
 }
 
-pub type PSampleSadSatdCostFunc =
-    unsafe extern "C" fn(pSample1: *const u8, iStride1: i32, pSample2: *const u8, iStride2: i32) -> i32;
+// wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*; this module's own
+// alias had it const, which made it a distinct function type from the one the
+// SSampleDealingFunc tables actually hold.
+pub use crate::encoder::md::PSampleSadSatdCostFunc;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -212,56 +216,7 @@ pub struct SSampleDealingFuncs {
 }
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsFuncPtrList {
-    pub sSampleDealingFuncs: SSampleDealingFuncs,
-    pub sMcFuncs: SMcFunc,
-    pub pfInterMdBackgroundDecision: Option<
-        unsafe extern "C" fn(
-            pEncCtx: *mut sWelsEncCtx,
-            pWelsMd: *mut SWelsMD,
-            pSlice: *mut SSlice,
-            pCurMb: *mut SMB,
-            pMbCache: *mut SMbCache,
-            bKeepSkip: *mut bool,
-        ) -> bool,
-    >,
-    pub pfSCDPSkipDecision: Option<
-        unsafe extern "C" fn(
-            pEncCtx: *mut sWelsEncCtx,
-            pWelsMd: *mut SWelsMD,
-            pSlice: *mut SSlice,
-            pCurMb: *mut SMB,
-            pMbCache: *mut SMbCache,
-        ) -> bool,
-    >,
-    pub pfUpdateMbMv: Option<unsafe extern "C" fn(pMvBuffer: *mut SMVUnitXY, ksMv: SMVUnitXY)>,
-    pub pfCopy16x16Aligned:
-        Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *const u8, iSrcStride: i32)>,
-    pub pfCopy8x8Aligned:
-        Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *const u8, iSrcStride: i32)>,
-    pub pfGetMbSignFromInterVaa: Option<unsafe extern "C" fn(pSad8x8: *const i32) -> u8>,
-    pub pfMotionSearch: [Option<
-        unsafe extern "C" fn(
-            pFunc: *mut SWelsFuncPtrList,
-            pCurDqLayer: *mut SDqLayer,
-            pMe: *mut SWelsME,
-            pSlice: *mut SSlice,
-        ),
-    >; 2],
-    pub pfGetLumaI16x16Pred: [Option<unsafe extern "C" fn(pDst: *mut u8, pDec: *const u8, iLineSizeDec: i32)>; 7],
-    pub pfDctFourT4: Option<unsafe extern "C" fn(pRes: *mut i16, pEncMb: *const u8, iEncStride: i32, pBestPred: *const u8, iStride: i32)>,
-}
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct sWelsEncCtx {
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pVaa: *mut SVAAFrameInfo,
-    pub iMvRange: i32,
-}
 
 // ============================================================================
 // Macro / Inline Condition Helpers
@@ -1099,11 +1054,12 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
 // ============================================================================
 
 #[inline(always)]
+/// `svc_mode_decision.cpp:161`. Every pointer is non-const in C++.
 pub unsafe fn GetChromaCost(
-    pCalculateFunc: *const Option<PSampleSadSatdCostFunc>,
-    pSrcChroma: *const u8,
+    pCalculateFunc: *mut Option<PSampleSadSatdCostFunc>,
+    pSrcChroma: *mut u8,
     iSrcStride: i32,
-    pRefChroma: *const u8,
+    pRefChroma: *mut u8,
     iRefStride: i32,
 ) -> i32 {
     let func = *pCalculateFunc.add(BLOCK_8x8);
@@ -1136,7 +1092,7 @@ pub unsafe fn CheckChromaCost(
     pMbCache: *mut SMbCache,
     iCurMbXy: i32,
 ) -> bool {
-    let pSad = (*(*pEncCtx).pFuncList).sSampleDealingFuncs.pfSampleSad.as_ptr();
+    let pSad = (*(*pEncCtx).pFuncList).sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
     let pCbEnc = (*pMbCache).SPicData.pEncMb[1];
@@ -1762,7 +1718,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
     let pSad8x8_ptr =
-        (*(*(*pEncCtx).pVaa).sVaaCalcInfo.pSad8x8.offset((*pCurMb).iMbXY as isize)).as_ptr();
+        (*(*(*pEncCtx).pVaa).sVaaCalcInfo.pSad8x8.offset((*pCurMb).iMbXY as isize)).as_mut_ptr();
     let get_sign = (*(*pEncCtx).pFuncList).pfGetMbSignFromInterVaa.unwrap();
     let uiMbSign = get_sign(pSad8x8_ptr);
 
@@ -1954,28 +1910,10 @@ mod tests {
     #[test]
     fn test_wels_md_i16x16_cost() {
         unsafe {
-            let mut func_list = SWelsFuncPtrList {
-                sSampleDealingFuncs: SSampleDealingFuncs {
-                    pfSampleSad: [None, None, None, None, None, None, None],
-                    pfSampleSatd: [None, None, None, None, None, None, None],
-                },
-                // SMcFunc is now the full common/mc.rs struct (codec/common/inc/mc.h:46);
-                // this test only exercises the two MC entries.
-                sMcFuncs: SMcFunc {
-                    pMcLumaFunc: None,
-                    pMcChromaFunc: None,
-                    ..Default::default()
-                },
-                pfInterMdBackgroundDecision: None,
-                pfSCDPSkipDecision: None,
-                pfUpdateMbMv: None,
-                pfCopy16x16Aligned: None,
-                pfCopy8x8Aligned: None,
-                pfGetMbSignFromInterVaa: None,
-                pfMotionSearch: [None, None],
-                pfGetLumaI16x16Pred: [None; 7],
-                pfDctFourT4: None,
-            };
+            // SWelsFuncPtrList is now the full 70-member table
+            // (wels_func_ptr_def.h:198); this test leaves every entry unset, which is
+            // what the hand-written subset amounted to.
+            let mut func_list = SWelsFuncPtrList::default();
 
             let mut pred_buf = [128u8; 512];
             let mut cs_mb = [128u8; 256];

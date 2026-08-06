@@ -54,6 +54,7 @@ pub use crate::encoder::md::SSampleDealingFunc;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -401,40 +402,7 @@ pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
 
 
 
-#[repr(C)]
-pub struct SWelsFuncPtrList {
-    pub sSampleDealingFuncs: SSampleDealingFunc,
-    pub pfSampleSadHor8: [Option<PSampleSadHor8Func>; 2],
-    pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
-    pub pfCalculateSatd: Option<PCalculateSatdFunc>,
-    pub pfCheckDirectionalMv: Option<PCheckDirectionalMv>,
-    pub pfInitializeHashforFeature: Option<PInitializeHashforFeatureFunc>,
-    pub pfFillQpelLocationByFeatureValue: Option<PFillQpelLocationByFeatureValueFunc>,
-    pub pfCalculateBlockFeatureOfFrame: [Option<PCalculateBlockFeatureOfFrame>; 2],
-    pub pfCalculateSingleBlockFeature: [Option<PCalculateSingleBlockFeature>; 2],
-    pub pfVerticalFullSearch: Option<PLineFullSearchFunc>,
-    pub pfHorizontalFullSearch: Option<PLineFullSearchFunc>,
-    pub pfUpdateFMESwitch: Option<PUpdateFMESwitch>,
-}
 
-impl Default for SWelsFuncPtrList {
-    fn default() -> Self {
-        Self {
-            sSampleDealingFuncs: SSampleDealingFunc::default(),
-            pfSampleSadHor8: [None; 2],
-            pfSearchMethod: [None; BLOCK_SIZE_ALL],
-            pfCalculateSatd: None,
-            pfCheckDirectionalMv: None,
-            pfInitializeHashforFeature: None,
-            pfFillQpelLocationByFeatureValue: None,
-            pfCalculateBlockFeatureOfFrame: [None; 2],
-            pfCalculateSingleBlockFeature: [None; 2],
-            pfVerticalFullSearch: None,
-            pfHorizontalFullSearch: None,
-            pfUpdateFMESwitch: None,
-        }
-    }
-}
 
 // ============================================================================
 // Helper Macros and Inline Functions

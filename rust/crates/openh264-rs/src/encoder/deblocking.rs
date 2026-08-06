@@ -570,7 +570,8 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
     if uiCurMbType != MB_TYPE_SKIP {
         if !pFunc.is_null() {
             if let Some(set_nzc) = (*pFunc).pfSetNZCZero {
-                set_nzc((*pCurMb).pNonZeroCount, 24);
+                // deblocking.cpp:615 — one argument.
+                set_nzc((*pCurMb).pNonZeroCount);
             }
         }
         if uiCurMbType == MB_TYPE_16x16 {

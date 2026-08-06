@@ -18,6 +18,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
@@ -90,29 +91,7 @@ pub struct SSpatialLayerConfig {
 
 
 /// Top-level encoder context state (`sWelsEncCtx`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct sWelsEncCtx {
-    pub sLogCtx: SLogContext,
-    pub pSvcParam: *mut SWelsSvcCodingParam,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub iActiveThreadsNum: i32,
-    pub iMaxSliceCount: i32,
-    pub pTaskManage: *mut c_void,
-}
 
-impl Default for sWelsEncCtx {
-    fn default() -> Self {
-        Self {
-            sLogCtx: SLogContext::default(),
-            pSvcParam: null_mut(),
-            pCurDqLayer: null_mut(),
-            iActiveThreadsNum: 1,
-            iMaxSliceCount: 1,
-            pTaskManage: null_mut(),
-        }
-    }
-}
 
 /// Task sink callback interface (`IWelsTaskSink`).
 pub trait IWelsTaskSink {
@@ -558,7 +537,7 @@ impl CWelsTaskManageBase {
                         pParam.sSpatialLayers[did].sSliceArgument.uiSliceNum as i32;
                     self.m_iTaskNum[did] = kiTaskCount;
                 } else {
-                    kiTaskCount = (*pEncCtx).iActiveThreadsNum;
+                    kiTaskCount = (*pEncCtx).iActiveThreadsNum as i32;
                     self.m_iTaskNum[did] = kiTaskCount;
                 }
             }

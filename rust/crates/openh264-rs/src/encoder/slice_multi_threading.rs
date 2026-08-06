@@ -56,6 +56,7 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Constants and Thresholds
@@ -180,45 +181,7 @@ pub type SlicepEncCtx_s = SSliceCtx;
 pub type TagDqLayer = SDqLayer;
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct sWelsEncCtx {
-    pub pMemAlign: *mut c_void,
-    pub pSvcParam: *mut SEncParamExt,
-    pub ppDqLayerList: *mut *mut SDqLayer,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pWelsSvcRc: *mut SWelsSvcRc,
-    pub pSliceThreading: *mut SSliceThreading,
-    pub pTaskManage: *mut c_void,
-    pub mutexEncoderError: *mut c_void,
-    pub iEncoderError: i32,
-    pub iPosBsBuffer: i32,
-    pub iFrameBsSize: i32,
-    pub pFrameBs: *mut u8,
-    pub iCodingIndex: i32,
-    pub iMaxSliceCount: i32,
-}
 
-impl Default for sWelsEncCtx {
-    fn default() -> Self {
-        Self {
-            pMemAlign: std::ptr::null_mut(),
-            pSvcParam: std::ptr::null_mut(),
-            ppDqLayerList: std::ptr::null_mut(),
-            pCurDqLayer: std::ptr::null_mut(),
-            pWelsSvcRc: std::ptr::null_mut(),
-            pSliceThreading: std::ptr::null_mut(),
-            pTaskManage: std::ptr::null_mut(),
-            mutexEncoderError: std::ptr::null_mut(),
-            iEncoderError: 0,
-            iPosBsBuffer: 0,
-            iFrameBsSize: 0,
-            pFrameBs: std::ptr::null_mut(),
-            iCodingIndex: 0,
-            iMaxSliceCount: 0,
-        }
-    }
-}
 pub type SWelsEncCtx = sWelsEncCtx;
 
 // ============================================================================
