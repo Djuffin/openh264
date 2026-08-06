@@ -101,8 +101,14 @@ pub const DEBLOCKING_IDC_2: i32 = 2;
 pub const DEBLOCKING_OFFSET: i32 = 6;
 pub const DEBLOCKING_OFFSET_MINUS: i32 = -6;
 
-pub const VIDEO_CODING_LAYER: u8 = 0;
-pub const NON_VIDEO_CODING_LAYER: u8 = 1;
+// `LAYER_TYPE` -- `codec_app_def.h:200` says NON_VIDEO_CODING_LAYER = 0 and
+// VIDEO_CODING_LAYER = 1. This module previously declared the two as bare `u8`
+// constants with the values **swapped**, so every `SLayerBSInfo::uiLayerType` this
+// encoder wrote was mislabelled: parameter-set layers were tagged VCL and slice
+// layers non-VCL. Re-exported from the canonical enum in `api/codec_api.rs` instead.
+pub const VIDEO_CODING_LAYER: u8 = crate::api::codec_api::LAYER_TYPE::VIDEO_CODING_LAYER as u8;
+pub const NON_VIDEO_CODING_LAYER: u8 =
+    crate::api::codec_api::LAYER_TYPE::NON_VIDEO_CODING_LAYER as u8;
 
 // SPATIAL_LAYER_* are LAYER_NUM variants in api::codec_api.
 
@@ -348,6 +354,15 @@ pub use crate::encoder::rc::SWelsSvcRc;
 // in NAL units.
 
 /// `WelsWriteOneSPS` — encoder_ext.cpp:2831.
+// The three `*Rust` sketch entry points that used to live here -- WelsInitEncoderExtRust,
+// WelsUninitEncoderExtRust and WelsEncoderEncodeExtRust -- are deleted. The real
+// `encoder_ext.rs` implementations replace them at both C-ABI call sites.
+//
+// They were not merely redundant: the sketch teardown freed CMemoryAlign allocations
+// with Rust's `Box`/`Vec::from_raw_parts`. Once Initialize switched to the real
+// WelsInitEncoderExt, that mismatch corrupted the heap at Uninitialize (SIGTRAP in
+// libsystem_malloc), which is how it was found.
+
 pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
     let pOut = (*pCtx).pOut;
     let iNal = (*pOut).iNalIndex;
@@ -543,160 +558,8 @@ pub unsafe fn WelsWriteParameterSets(
     ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn WelsInitEncoderExtRust(
-    ppCtx: *mut *mut sWelsEncCtx,
-    pCfg: *const SWelsSvcCodingParam,
-    _pLogCtx: *mut SLogContext,
-    _pReserved: *mut c_void,
-) -> i32 {
-    if ppCtx.is_null() || pCfg.is_null() {
-        return 1;
-    }
-    // encoder_ext.cpp:WelsInitEncoderExt validates before allocating anything.
-    // ParamValidationExt mutates the config (slice args, profile fallbacks), so it
-    // runs on the caller's struct exactly as in C++.
-    let iRet = ParamValidationExt(_pLogCtx, pCfg as *mut SWelsSvcCodingParam);
-    if iRet != ENC_RETURN_SUCCESS {
-        return iRet;
-    }
-    let mut ctx = Box::new(sWelsEncCtx::default());
-    let cfg_clone = Box::new(*pCfg);
-    ctx.pSvcParam = Box::into_raw(cfg_clone);
-    let ltr = Box::new(SLTRState::default());
-    ctx.pLtr = Box::into_raw(ltr);
 
-    let buf_size = 1024 * 1024 * 4;
-    ctx.iFrameBsSize = buf_size as i32;
-    ctx.pFrameBs = vec![0u8; buf_size].leak().as_mut_ptr();
 
-    let mut out = Box::new(crate::encoder::encoder_context::SWelsEncoderOutput::default());
-    out.pBsBuffer = vec![0u8; buf_size].leak().as_mut_ptr();
-    let max_nals = 64usize;
-    let nal_list = vec![crate::encoder::svc_encode_slice::SWelsNalRaw::default(); max_nals].leak().as_mut_ptr();
-    let nal_len = vec![0i32; max_nals].leak().as_mut_ptr();
-    out.sNalList = nal_list;
-    out.pNalLen = nal_len;
-    out.iCountNals = max_nals as i32;
-
-    let out_ptr = Box::into_raw(out);
-    ctx.pOut = out_ptr;
-
-    let func_list = Box::new(crate::encoder::encoder_context::SWelsFuncPtrList::default());
-    ctx.pFuncList = Box::into_raw(func_list);
-
-    let ctx_ptr = Box::into_raw(ctx);
-    let _ = crate::encoder::encoder_context::InitFunctionPointers(
-        ctx_ptr,
-        (*ctx_ptr).pSvcParam,
-        0,
-    );
-
-    *ppCtx = ctx_ptr;
-    0
-}
-
-pub unsafe fn WelsUninitEncoderExtRust(ppCtx: *mut *mut sWelsEncCtx) {
-    if ppCtx.is_null() || (*ppCtx).is_null() {
-        return;
-    }
-    let ctx = Box::from_raw(*ppCtx);
-    if !ctx.pSvcParam.is_null() {
-        let _ = Box::from_raw(ctx.pSvcParam);
-    }
-    if !ctx.pLtr.is_null() {
-        let _ = Box::from_raw(ctx.pLtr);
-    }
-    if !ctx.pOut.is_null() {
-        let out = Box::from_raw(ctx.pOut);
-        if !out.pBsBuffer.is_null() {
-            let _ = Vec::from_raw_parts(out.pBsBuffer, out.uiSize as usize, out.uiSize as usize);
-        }
-    }
-    if !ctx.pFrameBs.is_null() {
-        let _ = Vec::from_raw_parts(ctx.pFrameBs, ctx.iFrameBsSize as usize, ctx.iFrameBsSize as usize);
-    }
-    if !ctx.pSpsArray.is_null() {
-        let _ = Box::from_raw(ctx.pSpsArray as *mut crate::encoder::param_svc::SWelsSPS);
-    }
-    if !ctx.pPPSArray.is_null() {
-        let _ = Box::from_raw(ctx.pPPSArray as *mut crate::encoder::param_svc::SWelsPPS);
-    }
-    *ppCtx = null_mut();
-}
-
-pub unsafe fn WelsEncoderEncodeExtRust(
-    pCtx: *mut sWelsEncCtx,
-    pFbi: *mut SFrameBSInfo,
-    pSrcPic: *const SSourcePicture,
-) -> i32 {
-    if pCtx.is_null() || pFbi.is_null() || pSrcPic.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
-    }
-
-    let pLayerBsInfo = &mut (*pFbi).sLayerInfo[0];
-    (*pFbi).eFrameType = EVideoFrameType::videoFrameTypeIDR;
-    (*pFbi).iLayerNum = 0;
-    (*pFbi).uiTimeStamp = (*pSrcPic).uiTimeStamp;
-
-    pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
-    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
-    crate::encoder::vlc_encoder::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as i32);
-    (*pCtx).iPosBsBuffer = 0;
-
-    let mut iCountNal = 0;
-    let mut iTotalLength = 0;
-    let ret = WelsWriteParameterSets(pCtx, pLayerBsInfo.pNalLengthInByte, &mut iCountNal, &mut iTotalLength);
-    if ret != ENC_RETURN_SUCCESS {
-        return ret;
-    }
-
-    pLayerBsInfo.uiSpatialId = 0;
-    pLayerBsInfo.uiTemporalId = 0;
-    pLayerBsInfo.uiQualityId = 0;
-    pLayerBsInfo.uiLayerType = NON_VIDEO_CODING_LAYER;
-    pLayerBsInfo.iNalCount = iCountNal;
-    (*pFbi).iLayerNum = 1;
-
-    let eNalType = crate::encoder::encoder_context::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
-    let eNalRefIdc = crate::encoder::encoder_context::EWelsNalRefIdc::NRI_PRI_HIGHEST;
-    (*pCtx).eNalType = eNalType;
-    (*pCtx).eNalPriority = eNalRefIdc;
-
-    if !(*pCtx).pCurDqLayer.is_null() {
-        crate::encoder::nal_encap::WelsLoadNal((*pCtx).pOut, eNalType as i32, eNalRefIdc as i32);
-        let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0].pSliceBuffer;
-        crate::encoder::svc_encode_slice::SetSliceBoundaryInfo((*pCtx).pCurDqLayer, pCurSlice, 0);
-
-        let slice_ret = crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, pCurSlice, eNalType as i32);
-        if slice_ret == ENC_RETURN_SUCCESS {
-            crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
-            let mut iSliceSize = 0i32;
-            let pRawNal = (*(*pCtx).pOut).sNalList.add((*(*pCtx).pOut).iNalIndex as usize - 1);
-            let pNalHeaderExt = null_mut();
-            let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
-            let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
-
-            let enc_nal_ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, pNalHeaderExt, avail_len, pDst, &mut iSliceSize);
-            if enc_nal_ret == ENC_RETURN_SUCCESS && iSliceSize > 0 {
-                let vcl_layer = &mut (*pFbi).sLayerInfo[1];
-                vcl_layer.pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
-                vcl_layer.pNalLengthInByte = (*(*pCtx).pOut).pNalLen.add(iCountNal as usize);
-                *vcl_layer.pNalLengthInByte = iSliceSize;
-                vcl_layer.uiSpatialId = 0;
-                vcl_layer.uiTemporalId = 0;
-                vcl_layer.uiQualityId = 0;
-                vcl_layer.uiLayerType = VIDEO_CODING_LAYER;
-                vcl_layer.iNalCount = 1;
-                (*pFbi).iLayerNum = 2;
-                (*pCtx).iPosBsBuffer += iSliceSize;
-            }
-        }
-    }
-
-    crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
-
-    ENC_RETURN_SUCCESS
-}
 
 pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     pCtx: *mut sWelsEncCtx,
@@ -1421,7 +1284,13 @@ impl CWelsH264SVCEncoder {
                 null_mut()
             };
 
-            if WelsInitEncoderExtRust(&mut self.m_pEncContext, pCfg, log_ctx, null_mut()) != 0 {
+            if crate::encoder::encoder_ext::WelsInitEncoderExt(
+                &mut self.m_pEncContext,
+                pCfg,
+                log_ctx,
+                null_mut(),
+            ) != 0
+            {
                 self.Uninitialize();
                 return cmInitParaError;
             }
@@ -1438,7 +1307,7 @@ impl CWelsH264SVCEncoder {
         }
         unsafe {
             if !self.m_pEncContext.is_null() {
-                WelsUninitEncoderExtRust(&mut self.m_pEncContext);
+                crate::encoder::encoder_ext::WelsUninitEncoderExt(&mut self.m_pEncContext);
                 self.m_pEncContext = null_mut();
             }
         }
@@ -1477,14 +1346,15 @@ impl CWelsH264SVCEncoder {
             }
 
             let kiBeforeFrameUs = WelsTime();
-            let kiEncoderReturn = WelsEncoderEncodeExtRust(self.m_pEncContext, pBsInfo, pSrcPic);
+            let kiEncoderReturn =
+                crate::encoder::encoder_ext::WelsEncoderEncodeExt(self.m_pEncContext, pBsInfo, pSrcPic);
             let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
             if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
                 || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
                 || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
             {
-                WelsUninitEncoderExtRust(&mut self.m_pEncContext);
+                crate::encoder::encoder_ext::WelsUninitEncoderExt(&mut self.m_pEncContext);
                 return cmMallocMemeError;
             } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
                 return cmUnsupportedData;

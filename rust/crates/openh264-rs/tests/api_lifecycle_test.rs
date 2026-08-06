@@ -151,8 +151,13 @@ fn test_encoder_create_and_destroy_lifecycle() {
         src_pic.iPicHeight = 120;
         src_pic.iColorFormat = 23;
         let mut bs_info = SFrameBSInfo::default();
+        // This source picture is 160x120 against a 320x240 encoder and leaves `pData`
+        // null, which upstream rejects. Verified by running the identical call sequence
+        // against libopenh264.a: EncodeFrame returns 5 (cmUnsupportedData). This
+        // previously asserted CM_RESULT_SUCCESS, which passed only because
+        // WelsEncoderEncodeExtRust was a sketch that validated nothing.
         let enc_frame_ret = (*p_encoder).EncodeFrame(&src_pic, &mut bs_info);
-        assert_eq!(enc_frame_ret, CM_RESULT_SUCCESS);
+        assert_eq!(enc_frame_ret, CM_UNSUPPORTED_DATA);
 
         // 5. EncodeParameterSets
         let enc_ps_ret = (*p_encoder).EncodeParameterSets(&mut bs_info);
