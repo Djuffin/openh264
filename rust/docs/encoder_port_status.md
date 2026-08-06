@@ -55,9 +55,31 @@ field-by-field setting.
 | `libopenh264.a`, `h264enc`, `h264dec` | `make -j8 libraries binaries` | builds clean |
 | `codec_unittest` | `make gtest-bootstrap && make -j8 test` | builds; 534 tests, see below |
 
-`codec_unittest` baseline on this machine (darwin/arm64): **533 pass, 1 fail**.
-The failure is `DecoderDeblocking.DeblockingInit`, pre-existing and unrelated to the
-encoder port. `EncUT_*` suites all pass and are the per-function oracles for Phase 3.
+`codec_unittest` baseline on this machine (darwin/arm64): **533 pass, 1 fail**
+(re-measured at Gate 3). The failure is `DecoderDeblocking.DeblockingInit`,
+pre-existing and unrelated to the encoder port.
+
+### Linking the C++ function directly is a better oracle than `codec_unittest`
+
+`codec_unittest` exercises the C++, not the port, so it can only tell you what the
+reference *should* do — you still have to transcribe the expectation by hand. For any
+non-static encoder function you can do better: **link `libopenh264.a` into a throwaway
+probe, call the C++ function, and paste its output into a Rust test.** That turns a
+reading exercise into a measurement.
+
+```bash
+c++ -std=c++11 -I codec/api/wels -I codec/common/inc -I codec/encoder/core/inc \
+    -I codec/processing/interface probe.cpp libopenh264.a -o probe && ./probe
+```
+
+with `probe.cpp` redeclaring the function inside `namespace WelsEnc { ... }` — the
+headers are not always self-contained, and a forward declaration links fine. Static
+functions are not reachable this way; everything in `au_set.cpp` and
+`svc_enc_slice_segment.cpp` that Phase 3 needed was.
+
+This validated every Phase 3 expectation, and proved the parameter-set writers are
+already byte-exact — a Phase 5 result reached during Phase 3. **Use it in Phase 4/5
+before hand-deriving any expected value.**
 
 ### ABI ground truth
 
@@ -115,7 +137,10 @@ Root causes, all confirmed against the code:
   with divergent field sets (`SDqLayer` ×11, `SWelsFuncPtrList` ×10,
   `sWelsEncCtx` ×9, …), making each module a compile-clean island.
 - **C.** *(open — Phase 4)* The context is never built — `pSpsArray`/`pPPSArray`/
-  `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` stays null.
+  `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` stays null. Phase 3 stopped
+  `WelsWriteParameterSets` from *hiding* this (it used to fake a count of 1 and
+  swallow errors) and wired up `pParametersetStrategy`, but the arrays themselves
+  are still unallocated.
 - **D.** *(open — Phase 4)* `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR,
   one slice buffer, no frame-type/GOP decision, RC, ref lists, preprocessing, or
   padding.
@@ -379,7 +404,7 @@ surrounding types were right.
 
 | tool | purpose |
 |---|---|
-| `rust/tools/find_dup_types.sh` | the Gate 2 check — silence means met |
+| `rust/tools/find_dup_types.sh` | the Gate 2 check — silence means met (types only; see Phase 6) |
 | `rust/tools/show_type.sh <T> [CppTag]` | dumps the C++ original beside every Rust copy |
 | `src/encoder/abi_guard.rs` | 55 compile-time size assertions |
 
@@ -396,50 +421,116 @@ still emits zero bytes, which is the Phase 4 gate. The 53 decoder conformance
 tests all still pass. `compare.sh` still reports C++ 8034 bytes vs Rust 0, which
 is expected: Phase 4 is what wires the pipeline.
 
-### Phase 3 — port the remaining per-function modules — **NOT STARTED**
+### Phase 3 — port the remaining per-function modules — **3.7 and 3.9 DONE**
 
-Per-function work, verified against `codec_unittest` rather than against the
-differential harness (which cannot say anything useful until Phase 4 produces
-bytes):
+**Gate 3 met.** Everything measured, not asserted:
 
-```bash
-make gtest-bootstrap && make -j8 test
+| check | result |
+|---|---|
+| `cargo build` | clean, 10 warnings, all pre-existing `dead_code`/`unused` |
+| `cargo test` | **260 passed, 1 failed, 20 ignored** (was 235/1/21) |
+| decoder conformance | 53/53 |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `find_dup_types.sh` | silent |
+| `todo!()` in `src/` | 4 → **2** |
+| `compare.sh` | C++ 8034, Rust 0 — unchanged; Phase 4 wires the pipeline |
+
+The one failure is still
+`loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`, the Phase 4 gate.
+
+#### 3.7 — `au_set.rs` complete — **DONE**
+
+Added `WelsCheckLevelLimitation`, `WelsGetLevelIdc`, `WelsGetPaddingOffset`,
+`WelsInitSps`, `WelsInitSubsetSps`, `WelsInitPps`, `WelsWriteVUI`,
+`WelsWriteSpsSyntax`, `WelsWriteSpsNal`, `WelsWriteSubsetSpsSyntax` and
+`WelsWritePpsSyntax`. The ad-hoc writers in `wels_encoder_ext.rs` are deleted.
+
+**The writers are byte-exact with C++**, verified by the linking technique above.
+For the harness configuration (160x96, 6fps, baseline, one layer, one ref frame):
+
+```
+SPS NAL  42 c0 0d 8c 68 28 d2 01 e1 10 8d 40   (12 bytes)
+PPS RBSP ce 3c 80                              (3 bytes)
 ```
 
-Baseline on this machine is **533/534**; the single failure,
-`DecoderDeblocking.DeblockingInit`, is pre-existing and unrelated. The `EncUT_*`
-suites are the per-function oracles.
+Both are pinned in `au_set.rs`'s test module. The deleted writer produced 8 bytes for
+the same SPS — audit defect 1.5.3, the missing VUI. It also dropped both parameter-set
+id offsets and had no `WelsWriteSubsetSpsSyntax` at all.
 
-**3.7 — extend `au_set.rs`.** It already holds `WelsBitRateVerification`,
-`WelsAdjustLevel`, `WelsCheckNumRefSetting` and both
-`WelsCheckRefFrameLimitation*` (created in Phase 1). It needs `WelsInitSps`,
-`WelsInitPps`, `WelsInitSubsetSps`, the SPS/PPS/VUI writers, `WelsGetLevelIdc`
-and `WelsCheckLevelLimitation`. This must also **move the ad-hoc parameter-set
-writers out of `wels_encoder_ext.rs`**, which is where audit defect 1.5.3 lives:
-VUI is not written at all. Note the PPS writer's `DISABLE_FMO_FEATURE` branch is
-already correct (`au_set.cpp:417` writes a literal 0).
+#### 3.8 — `paraset_strategy.rs` — **NEW, pulled in by 3.7**
 
-**3.9 — `svc_enc_slice_segment.cpp`.** On the critical path earlier than the
-original plan assumed. Needs `SliceArgumentValidationFixedSliceMode`,
-`CheckRowMbMultiSliceSetting`, `CheckRasterMultiSliceSetting`,
-`GomValidCheckSliceNum`, `GomValidCheckSliceMbNum` and
-`CheckFixedSliceNumMultiSliceSetting`. Landing it clears the two `todo!()`s in
-`ParamValidationExt` (`SM_FIXEDSLCNUM_SLICE`, `SM_RASTER_SLICE`) and lets
-`api_param_bounds_test::test_encoder_very_large_slices` be un-`#[ignore]`d — its
-assertion also needs flipping to `CM_INIT_PARA_ERROR`, per the comment above it.
+`WelsWritePpsSyntax` takes an `IWelsParametersetStrategy*`, so the class had to exist.
+It is modelled as a **C-style vtable**: a thin pointer to an object whose first word
+points at a static `IWelsParametersetStrategyVtbl`, listing the 20 methods in
+`paraset_strategy.h` declaration order. A Rust `*mut dyn` would be a 16-byte fat
+pointer and mis-size `SWelsFuncPtrList` — the same defect Phase 2 found in
+`IWelsReferenceStrategy`. **This is the pattern to reuse for the two remaining
+`todo!()`s.**
 
-Also in scope, carried from Phase 2:
+Two of five strategies are ported: `CWelsParametersetIdConstant` (the Phase-5 gate
+configuration) and `CWelsParametersetIdIncreasing` (the `FillDefault` value, so the
+default API path depends on it). Because Rust has no implementation inheritance,
+`ID_INCREASING_VTBL` reuses the `ConstId_*` thunks for the members the subclass does
+not override — which is exactly what the C++ vtable does.
+
+`CreateParametersetStrategy` returns **null** for the three listing strategies rather
+than following C++'s `default:` fall-through to `CONSTANT_ID`, which would silently
+encode the wrong parameter-set ids. `InitFunctionPointers` (encoder.cpp:227) turns
+null into `ENC_RETURN_MEMALLOCERR`.
+
+#### 3.9 — `svc_enc_slice_segment.rs` — **DONE**
+
+`CheckFixedSliceNumMultiSliceSetting`, `CheckRowMbMultiSliceSetting`,
+`CheckRasterMultiSliceSetting`, `GomValidCheckSliceNum`, `GomValidCheckSliceMbNum` and
+`SliceArgumentValidationFixedSliceMode`. All nine unit-test expectations were taken
+from the linked C++ functions, not derived by hand.
+
+One correction to the earlier plan: `SliceArgumentValidationFixedSliceMode` is **not**
+in `svc_enc_slice_segment.cpp`. It is defined at `encoder_ext.cpp:174` and only
+declared in `svc_enc_slice_segment.h`.
+
+The rest of `svc_enc_slice_segment.cpp` — `InitSliceSegment`, `AssignMbMap*`,
+`GetInitialSliceNum`, `InitSlicePEncCtx`, `WelsGetFirstMbOfSlice`,
+`WelsGetPrevMbOfSlice`, `WelsGetNumMbInSlice`, `DynamicMaxSliceNumConstraint` — drives
+`SSliceCtx::pOverallMbMap` and belongs with Phase 4's context construction.
+
+`api_param_bounds_test::test_encoder_very_large_slices` is un-`#[ignore]`d and asserts
+`CM_INIT_PARA_ERROR`. Re-verified against `libopenh264.a` rather than taken on trust:
+that configuration leaves `iTargetBitrate` at 0 under `RC_QUALITY_MODE` and upstream
+returns `cmInitParaError` (1).
+
+#### Defects found during Phase 3
+
+- **`g_ksLevelLimits` had three columns from the wrong source.** The table in
+  `decoder/nalu.rs` transcribed the H.264 spec's Table A-1 instead of
+  `common/src/common_tables.cpp:345`: `uiMaxDPBMbs` held `MaxDPB` in 1024-byte units
+  rather than `MaxDpbMbs` in macroblocks (891 vs 2376 at level 1.2), `iMinVmv`/`iMaxVmv`
+  held luma samples rather than quarter-pel (−64/63 vs −256/255 at level 1.0), and
+  `iMaxMvsPer2Mb` was −1 for all 17 rows rather than `0x7fff`/32/16. Every wrong value
+  was *narrower* than the real limit, so both the decoder's MV-range check and the
+  encoder's `WelsCheckRefFrameLimitationLevelIdcFirst` were over-strict. This table is
+  shared with the decoder; conformance re-verified at 53/53 after the fix.
+- **The slice-header writers dropped the PPS id offset.** `WelsSliceHeaderWrite` and
+  `WelsSliceHeaderExtWrite` wrote `pic_parameter_set_id` as the bare `iPpsId`, where
+  `svc_encode_slice.cpp:285/:361` add `pParametersetStrategy->GetPpsIdOffset(...)`.
+  Zero under `CONSTANT_ID`, wrong under the default `INCREASING_ID`.
+- **`WelsWriteParameterSets` masked blocker C.** It substituted a count of 1 when
+  `iSpsNum`/`iPpsNum` were zero and discarded each writer's return value, so an
+  unbuilt context returned success. It is now the real `encoder_ext.cpp:2874` flow —
+  three loops bounded by the real counts, plus the subset-SPS pass that was missing
+  entirely — and returns `ENC_RETURN_UNEXPECTED` when the strategy is null.
+
+#### Still open, carried into Phase 4
 
 - **`WelsMdInterMb`** is unported. C++ assigns it (or
   `WelsMdInterMbEnhancelayer`, which *is* ported) to `pfInterMd` per-slice at
   `svc_encode_slice.cpp:733/736`.
-- **`IWelsReferenceStrategy` dispatch** — the two `todo!()`s at the
-  `EndofUpdateRefList` call sites in `ref_list_mgr_svc.rs`. `sWelsEncCtx` holds a
-  plain 8-byte `IWelsReferenceStrategy*`, so this needs a C-style vtable on the
-  three concrete strategies rather than a Rust `*mut dyn`, which is 16 bytes and
-  would mis-size the context.
+- **`IWelsReferenceStrategy` dispatch** — the two remaining `todo!()`s, at the
+  `EndofUpdateRefList` call sites in `ref_list_mgr_svc.rs`. Use the C-style vtable
+  from `paraset_strategy.rs`; the shape is now established.
 - `param_svc.rs::ParamBaseTranscode` writes `sSpatialLayers[idx]` where C++
   writes `sSpatialLayers[0]`. Harmless at one spatial layer, wrong beyond it.
+- The three unported listing strategies in `paraset_strategy.rs`.
 
 ### Phase 4 — wire the pipeline — **NOT STARTED**
 
@@ -448,6 +539,18 @@ blockers **C** and **D** describe. Build the context (`pSpsArray`, `pPPSArray`,
 `iSpsNum`, `iPpsNum`, `pCurDqLayer`), then replace the `WelsEncoderEncodeExtRust`
 sketch with the real `WelsEncoderEncodeExt` flow: frame-type/GOP decision, RC,
 reference lists, preprocessing, slice encoding, padding.
+
+Phase 3 left three things ready to use here:
+
+- `WelsWriteParameterSets`, `WelsWriteOneSPS` and `WelsWriteOnePPS` are the real
+  `encoder_ext.cpp` flow and are **byte-exact once the arrays are populated**; the
+  remaining work on that path is `InitDqLayers`/`WelsGenerateNewSps` filling
+  `pSpsArray`/`pPPSArray` and setting `iSpsNum`/`iPpsNum`.
+- `paraset_strategy.rs` already provides `WelsGenerateNewSps`, `FindExistingSps`,
+  `CheckMatchedSps`/`CheckMatchedSubsetSps`, and the strategy's `GenerateNewSps` /
+  `InitPps` / `UpdateParaSetNum` / `GetSpsIdx` entries.
+- `pFuncList->pParametersetStrategy` is created in `InitFunctionPointers`, as in
+  `encoder.cpp:227`, so it is non-null by the time encoding starts.
 
 **Gate 4:** `compare.sh` reports a non-zero Rust byte count and `./h264dec`
 decodes the Rust stream. `loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`
@@ -462,13 +565,18 @@ single-threaded, deblocking on, `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-chang
 
 **Gate 5:** `compare.sh` exits 0.
 
-Two things from Phase 2 to keep in mind when a stream diverges:
+The parameter sets are **already byte-exact** as of Phase 3.7 (see the SPS/PPS hex
+above), so a first divergence is most likely in the slice layer, not the headers.
+
+Three things to keep in mind when a stream diverges:
 
 - Size assertions cannot catch **field order**; three structs were correctly
   sized and wrongly ordered.
 - `#if`/`#ifdef` around a field is a live hazard — four macros in this codebase
   exclude fields the port had transcribed. See *Conditional compilation is a
   defect class*.
+- Before hand-deriving an expected value, **link the C++ function and measure it**.
+  See *Linking the C++ function directly is a better oracle than `codec_unittest`*.
 
 ### Phase 6 — cleanup — **NOT STARTED**
 
@@ -476,3 +584,26 @@ Collapse the remaining **82** duplicated constant names (values are now believed
 correct, but one definition each is still the goal), fold the module-level
 `#![allow(dead_code, unused_variables, …)]` blankets back to the narrowest scope
 that still compiles, and reconcile this document with the final state.
+
+#### `find_dup_types.sh` has a third blind spot: functions
+
+Phase 2 recorded two blind spots in any struct-only scan (type aliases, and
+`src/common/`). Phase 3 found a third — the tool checks *types*, so **duplicated
+function definitions pass silently**. Measured during Phase 3:
+
+| function | copies | modules |
+|---|---|---|
+| `BsWriteBits` | 4 | `nal_encap`, `svc_encode_slice`, `vlc_encoder`, `svc_set_mb_syn_cavlc` |
+| `BsWriteUE`, `BsWriteSE`, `BsWriteOneBit` | 3–4 | same set |
+| `BsRbspTrailingBits` | 2 | `nal_encap`, `vlc_encoder` |
+| `GetCurrentSliceNum` | 3 | `svc_encode_slice`, `deblocking`, `svc_motion_estimate` |
+| `WelsGetNextMbOfSlice` | 2 | `svc_encode_slice`, `deblocking` |
+
+All the `Bs*` copies were compared line by line against `bit_stream.h` /
+`svc_enc_golomb.h` and are **behaviourally equivalent for well-formed calls**, so this
+is a tidiness problem rather than a live bug — but it is the same shape as the defect
+class Phase 2 spent its time on, and the same scan will not catch the next one. Extend
+`find_dup_types.sh` to cover `pub fn`/`pub unsafe fn` before relying on it again.
+
+`au_set.rs` uses `vlc_encoder`'s copies, which are the closest transcription of the
+C++ (they call `WRITE_BE_32` exactly as `bit_stream.h` does).
