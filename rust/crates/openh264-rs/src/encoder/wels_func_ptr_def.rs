@@ -254,9 +254,9 @@ pub struct SWelsFuncPtrList {
     pub pfStashMBStatus: Option<PStashMBStatus>,
     pub pfStashPopMBStatus: Option<PStashPopMBStatus>,
 
-    /// `IWelsParametersetStrategy*` — that class is not ported yet, so it is an
-    /// opaque pointer.
-    pub pParametersetStrategy: *mut c_void,
+    /// `IWelsParametersetStrategy*` — a thin pointer to the C-style vtable object in
+    /// `paraset_strategy.rs`, matching the 8-byte member C++ declares here.
+    pub pParametersetStrategy: *mut crate::encoder::paraset_strategy::IWelsParametersetStrategy,
 }
 
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;

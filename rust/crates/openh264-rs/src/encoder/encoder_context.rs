@@ -704,6 +704,19 @@ pub unsafe fn InitFunctionPointers(
         (*pParam).iRCMode,
     );
 
+    // encoder.cpp:227. Only CONSTANT_ID is ported, so this returns null — and hence
+    // ENC_RETURN_MEMALLOCERR — for the other four strategies rather than quietly
+    // substituting one; see `paraset_strategy::CreateParametersetStrategy`.
+    (*pFuncList).pParametersetStrategy =
+        crate::encoder::paraset_strategy::CreateParametersetStrategy(
+            (*pParam).eSpsPpsIdStrategy,
+            (*pParam).bSimulcastAVC,
+            (*pParam).iSpatialLayerNum,
+        );
+    if (*pFuncList).pParametersetStrategy.is_null() {
+        return ENC_RETURN_MEMALLOCERR;
+    }
+
     ENC_RETURN_SUCCESS
 }
 

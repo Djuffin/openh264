@@ -15,6 +15,14 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::encoder::au_set::{
+    WelsWritePpsSyntax, WelsWriteSpsNal, WelsWriteSubsetSpsSyntax,
+};
+use crate::encoder::nal_encap::EWelsNalRefIdc::NRI_PRI_HIGHEST;
+use crate::encoder::paraset_strategy::{
+    IWelsParametersetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS, PARA_SET_TYPE_SUBSETSPS,
+};
+
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, EVideoFrameType, EncoderOption,
     ISVCEncoderVtbl, OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
@@ -328,163 +336,89 @@ pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::param_svc::SSpatialLayerInternal;
 pub use crate::encoder::rc::SWelsSvcRc;
 
-// Core encoder functions implementations / fallbacks
-pub unsafe fn WelsWriteSpsSyntax(
-    pSps: *const crate::encoder::param_svc::SWelsSPS,
-    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
-    _bBaseLayer: bool,
-) -> i32 {
-    if pSps.is_null() || pBs.is_null() {
-        return 1;
-    }
-    let sps = &*pSps;
-    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 8, sps.uiProfileIdc as u32);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet0Flag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet1Flag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet2Flag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bConstraintSet3Flag { 1 } else { 0 });
-    if sps.uiProfileIdc == 77 || sps.uiProfileIdc == 88 || sps.uiProfileIdc == 100 {
-        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
-        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
-        crate::encoder::svc_encode_slice::BsWriteBits(pBs, 2, 0);
-    } else {
-        crate::encoder::svc_encode_slice::BsWriteBits(pBs, 4, 0);
-    }
-    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 8, sps.iLevelIdc as u32);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiSpsId);
+// Core encoder functions implementations
+//
+// The parameter-set writers themselves live in `au_set.rs`, next to the rest of the
+// au_set.cpp port; what remains here are the encoder_ext.cpp functions that wrap them
+// in NAL units.
 
-    if sps.uiProfileIdc == 83
-        || sps.uiProfileIdc == 86
-        || sps.uiProfileIdc == 100
-        || sps.uiProfileIdc == 110
-        || sps.uiProfileIdc == 122
-        || sps.uiProfileIdc == 244
-        || sps.uiProfileIdc == 44
-    {
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 1);
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
-        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-        crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    }
-
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiLog2MaxFrameNum.saturating_sub(4));
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.uiPocType);
-    if sps.uiPocType == 0 {
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iLog2MaxPocLsb - 4).max(0) as u32);
-    }
-
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.iNumRefFrames as u32);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bGapsInFrameNumValueAllowedFlag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iMbWidth - 1).max(0) as u32);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, (sps.iMbHeight - 1).max(0) as u32);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 1);
-
-    let d8x8 = if sps.iLevelIdc >= 30 { 1 } else { 0 };
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, d8x8);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if sps.bFrameCroppingFlag { 1 } else { 0 });
-    if sps.bFrameCroppingFlag {
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropLeft as u32);
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropRight as u32);
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropTop as u32);
-        crate::encoder::svc_encode_slice::BsWriteUE(pBs, sps.sFrameCrop.iCropBottom as u32);
-    }
-
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    0
-}
-
-pub unsafe fn WelsWriteSpsNal(
-    pSps: *const crate::encoder::param_svc::SWelsSPS,
-    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
-) -> i32 {
-    WelsWriteSpsSyntax(pSps, pBs, true);
-    crate::encoder::nal_encap::BsRbspTrailingBits(pBs);
-    0
-}
-
-pub unsafe fn WelsWritePpsSyntax(
-    pPps: *const crate::encoder::param_svc::SWelsPPS,
-    pBs: *mut crate::encoder::svc_encode_slice::SBitStringAux,
-) -> i32 {
-    if pPps.is_null() || pBs.is_null() {
-        return 1;
-    }
-    let pps = &*pPps;
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.iPpsId);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, pps.iSpsId);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if pps.bEntropyCodingModeFlag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    // au_set.cpp:417, DISABLE_FMO_FEATURE branch: `BsWriteUE (pBs, 0/*uiNumSliceGroups - 1*/)`.
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteUE(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteBits(pBs, 2, 0);
-    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.iPicInitQp as i32 - 26);
-    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.iPicInitQs as i32 - 26);
-    crate::encoder::svc_encode_slice::BsWriteSE(pBs, pps.uiChromaQpIndexOffset as i32);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, if pps.bDeblockingFilterControlPresentFlag { 1 } else { 0 });
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    crate::encoder::svc_encode_slice::BsWriteOneBit(pBs, 0);
-    crate::encoder::nal_encap::BsRbspTrailingBits(pBs);
-    0
-}
-
-pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: usize, pNalSize: *mut i32) -> i32 {
+/// `WelsWriteOneSPS` — encoder_ext.cpp:2831.
+pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *mut i32) -> i32 {
     let pOut = (*pCtx).pOut;
-    if pOut.is_null() {
-        return 1;
-    }
     let iNal = (*pOut).iNalIndex;
-    crate::encoder::nal_encap::WelsLoadNal(pOut, crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32, 3);
+    crate::encoder::nal_encap::WelsLoadNal(
+        pOut,
+        crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32,
+        NRI_PRI_HIGHEST as i32,
+    );
 
-    let pSps = if !(*pCtx).pSpsArray.is_null() {
-        (*pCtx).pSpsArray.add(kiSpsIdx) as *const crate::encoder::param_svc::SWelsSPS
-    } else {
-        return 1;
-    };
-    WelsWriteSpsNal(pSps, &mut (*pOut).sBsWrite);
+    WelsWriteSpsNal(
+        (*pCtx).pSpsArray.add(kiSpsIdx as usize),
+        &mut (*pOut).sBsWrite,
+        IWelsParametersetStrategy::GetSpsIdOffsetList(
+            (*(*pCtx).pFuncList).pParametersetStrategy,
+            PARA_SET_TYPE_AVCSPS as i32,
+        ),
+    );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
-    let pRawNal = (*pOut).sNalList.add(iNal as usize);
-    let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
-    let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
-
-    let ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, null_mut(), avail_len, pDst, pNalSize);
-    if ret == ENC_RETURN_SUCCESS {
-        (*pCtx).iPosBsBuffer += *pNalSize;
+    let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+        (*pOut).sNalList.add(iNal as usize),
+        null_mut(),
+        // available buffer to be written, so need to subtract the used length
+        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+        iNalSize,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
     }
-    ret
+
+    (*pCtx).iPosBsBuffer += *iNalSize;
+    ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: usize, pNalSize: *mut i32) -> i32 {
+/// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
+pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *mut i32) -> i32 {
     let pOut = (*pCtx).pOut;
-    if pOut.is_null() {
-        return 1;
-    }
     let iNal = (*pOut).iNalIndex;
-    crate::encoder::nal_encap::WelsLoadNal(pOut, crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32, 3);
+    /* generate picture parameter set */
+    crate::encoder::nal_encap::WelsLoadNal(
+        pOut,
+        crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32,
+        NRI_PRI_HIGHEST as i32,
+    );
 
-    let pPps = if !(*pCtx).pPPSArray.is_null() {
-        (*pCtx).pPPSArray.add(kiPpsIdx) as *const crate::encoder::param_svc::SWelsPPS
-    } else {
-        return 1;
-    };
-    WelsWritePpsSyntax(pPps, &mut (*pOut).sBsWrite);
+    WelsWritePpsSyntax(
+        (*pCtx).pPPSArray.add(kiPpsIdx as usize),
+        &mut (*pOut).sBsWrite,
+        (*(*pCtx).pFuncList).pParametersetStrategy,
+    );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
-    let pRawNal = (*pOut).sNalList.add(iNal as usize);
-    let avail_len = (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer;
-    let pDst = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void;
-
-    let ret = crate::encoder::nal_encap::WelsEncodeNal(pRawNal, null_mut(), avail_len, pDst, pNalSize);
-    if ret == ENC_RETURN_SUCCESS {
-        (*pCtx).iPosBsBuffer += *pNalSize;
+    let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+        (*pOut).sNalList.add(iNal as usize),
+        null_mut(),
+        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+        iNalSize,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
     }
-    ret
+
+    (*pCtx).iPosBsBuffer += *iNalSize;
+    ENC_RETURN_SUCCESS
 }
 
+/// `WelsWriteParameterSets` — encoder_ext.cpp:2874. Writes every SPS, subset SPS and
+/// PPS the context holds.
+///
+/// Note the loops are bounded by `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`, so an
+/// unpopulated context writes **nothing** — which is what happens until Phase 4 builds
+/// the parameter-set arrays. The previous version of this function substituted a count
+/// of 1 when those were zero and swallowed each writer's return value; that turned
+/// blocker C into a silent success.
 pub unsafe fn WelsWriteParameterSets(
     pCtx: *mut sWelsEncCtx,
     pNalLen: *mut i32,
@@ -492,29 +426,115 @@ pub unsafe fn WelsWriteParameterSets(
     pTotalLength: *mut i32,
 ) -> i32 {
     let mut iSize = 0i32;
+    let mut iNal: i32;
+    let mut iIdx: i32;
+    let mut iId: i32;
     let mut iCountNal = 0i32;
     let mut iNalLength = 0i32;
+    let mut iReturn;
 
-    let sps_count = if (*pCtx).iSpsNum > 0 { (*pCtx).iSpsNum as usize } else { 1 };
-    for iIdx in 0..sps_count {
-        if WelsWriteOneSPS(pCtx, iIdx, &mut iNalLength) == ENC_RETURN_SUCCESS {
-            *pNalLen.add(iCountNal as usize) = iNalLength;
-            iSize += iNalLength;
-            iCountNal += 1;
-        }
+    if pCtx.is_null()
+        || pNalLen.is_null()
+        || pNumNal.is_null()
+        || (*(*pCtx).pFuncList).pParametersetStrategy.is_null()
+    {
+        return ENC_RETURN_UNEXPECTED;
+    }
+    let pParametersetStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
+    let pVtbl = (*pParametersetStrategy).pVtbl;
+
+    *pTotalLength = 0;
+    /* write all SPS */
+    iIdx = 0;
+    while iIdx < (*pCtx).iSpsNum {
+        ((*pVtbl).Update)(
+            pParametersetStrategy,
+            (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
+            PARA_SET_TYPE_AVCSPS as i32,
+        );
+        /* generate sequence parameters set */
+        iId = ((*pVtbl).GetSpsIdx)(pParametersetStrategy, iIdx);
+
+        WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
+
+        *pNalLen.add(iCountNal as usize) = iNalLength;
+        iSize += iNalLength;
+
+        iIdx += 1;
+        iCountNal += 1;
     }
 
-    let pps_count = if (*pCtx).iPpsNum > 0 { (*pCtx).iPpsNum as usize } else { 1 };
-    for iIdx in 0..pps_count {
-        if WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength) == ENC_RETURN_SUCCESS {
-            *pNalLen.add(iCountNal as usize) = iNalLength;
-            iSize += iNalLength;
-            iCountNal += 1;
+    /* write all Subset SPS */
+    iIdx = 0;
+    while iIdx < (*pCtx).iSubsetSpsNum {
+        iNal = (*(*pCtx).pOut).iNalIndex;
+
+        ((*pVtbl).Update)(
+            pParametersetStrategy,
+            (*(*pCtx).pSubsetArray.add(iIdx as usize)).pSps.uiSpsId,
+            PARA_SET_TYPE_SUBSETSPS as i32,
+        );
+
+        iId = iIdx;
+
+        /* generate Subset SPS */
+        crate::encoder::nal_encap::WelsLoadNal(
+            (*pCtx).pOut,
+            crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
+            NRI_PRI_HIGHEST as i32,
+        );
+
+        WelsWriteSubsetSpsSyntax(
+            (*pCtx).pSubsetArray.add(iId as usize),
+            &mut (*(*pCtx).pOut).sBsWrite,
+            IWelsParametersetStrategy::GetSpsIdOffsetList(
+                pParametersetStrategy,
+                PARA_SET_TYPE_SUBSETSPS as i32,
+            ),
+        );
+        crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+
+        iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+            (*(*pCtx).pOut).sNalList.add(iNal as usize),
+            null_mut(),
+            (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+            &mut iNalLength,
+        );
+        if iReturn != ENC_RETURN_SUCCESS {
+            return iReturn;
         }
+        *pNalLen.add(iCountNal as usize) = iNalLength;
+
+        (*pCtx).iPosBsBuffer += iNalLength;
+        iSize += iNalLength;
+
+        iIdx += 1;
+        iCountNal += 1;
+    }
+
+    ((*pVtbl).UpdatePpsList)(pParametersetStrategy, pCtx);
+
+    iIdx = 0;
+    while iIdx < (*pCtx).iPpsNum {
+        ((*pVtbl).Update)(
+            pParametersetStrategy,
+            (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
+            PARA_SET_TYPE_PPS as i32,
+        );
+
+        WelsWriteOnePPS(pCtx, iIdx, &mut iNalLength);
+
+        *pNalLen.add(iCountNal as usize) = iNalLength;
+        iSize += iNalLength;
+
+        iIdx += 1;
+        iCountNal += 1;
     }
 
     *pNumNal = iCountNal;
     *pTotalLength = iSize;
+
     ENC_RETURN_SUCCESS
 }
 
