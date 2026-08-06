@@ -231,6 +231,12 @@ impl Drop for RustDecoder {
 
 type CppCreateDecoderFn = unsafe extern "C" fn(ppDecoder: *mut *mut c_void) -> c_long;
 type CppDestroyDecoderFn = unsafe extern "C" fn(pDecoder: *mut c_void);
+type CppCpuFeatureDetectFn = unsafe extern "C" fn(pNumberOfLogicProcessors: *mut i32) -> u32;
+
+/// `WELS_CPU_NEON` from `codec/common/inc/cpu_core.h`.
+const WELS_CPU_NEON: u32 = 0x000004;
+/// `WELS_CPU_SSE2` from the same header, for the x86 side of the story.
+const WELS_CPU_SSE2: u32 = 0x000080;
 type CppInitializeFn = unsafe extern "C" fn(*mut c_void, *const SDecodingParam) -> c_long;
 type CppUninitializeFn = unsafe extern "C" fn(*mut c_void) -> c_long;
 type CppDecodeFrame2Fn = unsafe extern "C" fn(*mut c_void, *const u8, i32, *mut *mut u8, *mut SBufferInfo) -> i32;
@@ -252,6 +258,11 @@ struct CppLibrary {
     path: PathBuf,
     create_fn: CppCreateDecoderFn,
     destroy_fn: CppDestroyDecoderFn,
+    /// What `WelsCPUFeatureDetect` reports for this build. A library whose
+    /// hand-written SIMD kernels are linked in but never dispatched decodes
+    /// entirely in scalar C, which is a very different thing to benchmark
+    /// against -- so the run prints this rather than leaving it to be assumed.
+    cpu_flags: Option<u32>,
 }
 
 impl CppLibrary {
@@ -283,11 +294,19 @@ impl CppLibrary {
                 if create.is_null() || destroy.is_null() {
                     continue;
                 }
+                let detect = libc::dlsym(handle, c"WelsCPUFeatureDetect".as_ptr());
+                let cpu_flags = (!detect.is_null()).then(|| {
+                    let detect =
+                        std::mem::transmute::<*mut c_void, CppCpuFeatureDetectFn>(detect);
+                    let mut cores = 0i32;
+                    detect(&mut cores)
+                });
                 return Some(Self {
                     _handle: handle,
                     path: path.canonicalize().unwrap_or_else(|_| path.clone()),
                     create_fn: std::mem::transmute::<*mut c_void, CppCreateDecoderFn>(create),
                     destroy_fn: std::mem::transmute::<*mut c_void, CppDestroyDecoderFn>(destroy),
+                    cpu_flags,
                 });
             }
         }
@@ -480,31 +499,62 @@ impl Measurement {
     }
 }
 
-/// One verification pass (which also warms the caches), then `iters` timed
-/// passes on a fresh decoder each time. Reports the fastest: the slow passes
-/// are the ones that picked up scheduler noise.
-fn measure<D: Decoder, F: FnMut() -> D>(mut make: F, units: &[&[u8]], iters: usize) -> Measurement {
-    let verified = {
-        let mut dec = make();
+/// Verifies each implementation once (which also warms the caches), then runs
+/// the timed passes *interleaved*, on a fresh decoder every time.
+///
+/// Interleaving is the point: running all of one implementation's passes before
+/// the other lets CPU frequency drift over the run show up as a difference
+/// between the two, and on a laptop that drift is the same order as the effect
+/// being measured. Each pass reports its best time, since the slow passes are
+/// the ones that picked up scheduler noise.
+fn measure_pair(
+    units: &[&[u8]],
+    iters: usize,
+    cpp_lib: Option<&CppLibrary>,
+) -> (Measurement, Option<Measurement>) {
+    let rust_verified = {
+        let mut dec = RustDecoder::new();
         run_pass(&mut dec, units, true)
     };
+    let cpp_verified = cpp_lib.map(|lib| {
+        let mut dec = CppDecoder::new(lib);
+        run_pass(&mut dec, units, true)
+    });
 
-    let mut best = Duration::MAX;
+    let mut rust_best = Duration::MAX;
+    let mut cpp_best = Duration::MAX;
     for _ in 0..iters {
-        let mut dec = make();
-        let timed = run_pass(&mut dec, units, false);
-        assert_eq!(
-            timed.frames, verified.frames,
-            "decoder returned a different frame count across passes"
-        );
-        best = best.min(timed.elapsed);
+        {
+            let mut dec = RustDecoder::new();
+            let timed = run_pass(&mut dec, units, false);
+            assert_eq!(
+                timed.frames, rust_verified.frames,
+                "Rust decoder returned a different frame count across passes"
+            );
+            rust_best = rust_best.min(timed.elapsed);
+        }
+        if let (Some(lib), Some(verified)) = (cpp_lib, cpp_verified.as_ref()) {
+            let mut dec = CppDecoder::new(lib);
+            let timed = run_pass(&mut dec, units, false);
+            assert_eq!(
+                timed.frames, verified.frames,
+                "C++ decoder returned a different frame count across passes"
+            );
+            cpp_best = cpp_best.min(timed.elapsed);
+        }
     }
 
-    Measurement {
-        frames: verified.frames,
-        hash: verified.hash.unwrap_or_default(),
-        best,
-    }
+    let rust = Measurement {
+        frames: rust_verified.frames,
+        hash: rust_verified.hash.unwrap_or_default(),
+        best: rust_best,
+    };
+    let cpp = cpp_verified.map(|v| Measurement {
+        frames: v.frames,
+        hash: v.hash.unwrap_or_default(),
+        best: cpp_best,
+    });
+    (rust, cpp)
 }
 
 // ---------------------------------------------------------------------------
@@ -540,10 +590,27 @@ fn main() {
             .unwrap_or_else(|| "NOT FOUND (falling back to cached streams)".into())
     );
     match &cpp_lib {
-        Some(lib) => println!(" C++ library: {}", lib.path.display()),
+        Some(lib) => {
+            println!(" C++ library: {}", lib.path.display());
+            match lib.cpu_flags {
+                Some(flags) if flags & (WELS_CPU_NEON | WELS_CPU_SSE2) != 0 => println!(
+                    " C++ SIMD   : ACTIVE (WelsCPUFeatureDetect = 0x{flags:06x})"
+                ),
+                Some(flags) => {
+                    println!(" C++ SIMD   : INACTIVE (WelsCPUFeatureDetect = 0x{flags:06x})");
+                    println!(
+                        "              This build dispatches only scalar C, so the numbers below"
+                    );
+                    println!(
+                        "              compare scalar against scalar -- not against tuned SIMD."
+                    );
+                }
+                None => println!(" C++ SIMD   : UNKNOWN (WelsCPUFeatureDetect not exported)"),
+            }
+        }
         None => println!(" C++ library: NOT FOUND -- build it with `make` in the repo root (Rust-only run)"),
     }
-    println!(" timing     : best of {iters} passes, decode calls only (hashing excluded)");
+    println!(" timing     : best of {iters} interleaved passes, decode calls only (no hashing)");
 
     let mut any_stream = false;
     let mut mismatches = 0;
@@ -565,7 +632,7 @@ fn main() {
             units.len()
         );
 
-        let rust = measure(RustDecoder::new, &units, iters);
+        let (rust, cpp) = measure_pair(&units, iters, cpp_lib.as_ref());
         println!(
             "   Rust : {:8.2} fps   {:8.3} ms/frame   {} frames",
             rust.fps(),
@@ -573,8 +640,7 @@ fn main() {
             rust.frames
         );
 
-        let Some(lib) = &cpp_lib else { continue };
-        let cpp = measure(|| CppDecoder::new(lib), &units, iters);
+        let Some(cpp) = cpp else { continue };
         println!(
             "   C++  : {:8.2} fps   {:8.3} ms/frame   {} frames",
             cpp.fps(),
