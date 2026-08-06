@@ -271,6 +271,7 @@ impl Default for SSliceHeaderExt {
 
 pub use crate::common::wels_common_defs::{EWelsNalUnitType, SBitStringAux};
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
+use crate::encoder::paraset_strategy::IWelsParametersetStrategy;
 use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 
@@ -493,7 +494,7 @@ pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
     pBs: *mut SBitStringAux,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut c_void,
+    pParametersetStrategy: *mut IWelsParametersetStrategy,
 );
 
 // ============================================================================
@@ -830,7 +831,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     pBs: *mut SBitStringAux,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut c_void,
+    pParametersetStrategy: *mut IWelsParametersetStrategy,
 ) {
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
@@ -843,8 +844,17 @@ pub unsafe fn WelsSliceHeaderWrite(
     BsWriteUE(pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(pBs, (*pSliceHeader).eSliceType as u32);
 
+    // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
+    // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
+    // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
+    // unconditionally; the null guards here follow the surrounding style in this port.
     let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
-    BsWriteUE(pBs, pps_id as u32);
+    let iPpsIdOffset = if !pParametersetStrategy.is_null() {
+        IWelsParametersetStrategy::GetPpsIdOffset(pParametersetStrategy, pps_id as i32)
+    } else {
+        0
+    };
+    BsWriteUE(pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
     BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
@@ -906,7 +916,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     pBs: *mut SBitStringAux,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut c_void,
+    pParametersetStrategy: *mut IWelsParametersetStrategy,
 ) {
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
@@ -921,8 +931,17 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     BsWriteUE(pBs, (*pSliceHeader).iFirstMbInSlice as u32);
     BsWriteUE(pBs, (*pSliceHeader).eSliceType as u32);
 
+    // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
+    // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
+    // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
+    // unconditionally; the null guards here follow the surrounding style in this port.
     let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
-    BsWriteUE(pBs, pps_id as u32);
+    let iPpsIdOffset = if !pParametersetStrategy.is_null() {
+        IWelsParametersetStrategy::GetPpsIdOffset(pParametersetStrategy, pps_id as i32)
+    } else {
+        0
+    };
+    BsWriteUE(pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
     BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
@@ -1648,7 +1667,7 @@ pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     pBs: *mut SBitStringAux,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut c_void,
+    pParametersetStrategy: *mut IWelsParametersetStrategy,
 ) {
     WelsSliceHeaderWrite(pCtx, pBs, pCurLayer, pSlice, pParametersetStrategy);
 }
@@ -1658,7 +1677,7 @@ pub unsafe extern "C" fn WelsSliceHeaderExtWrite_c(
     pBs: *mut SBitStringAux,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut c_void,
+    pParametersetStrategy: *mut IWelsParametersetStrategy,
 ) {
     WelsSliceHeaderExtWrite(pCtx, pBs, pCurLayer, pSlice, pParametersetStrategy);
 }

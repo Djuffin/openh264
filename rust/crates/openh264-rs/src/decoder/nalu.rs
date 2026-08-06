@@ -392,24 +392,34 @@ pub const g_kuiZigzagScan8x8: [u8; 64] = [
 ];
 
 /// Global level limits table for H.264 validation.
+///
+/// Transcribed field-for-field from `g_ksLevelLimits` in
+/// `codec/common/src/common_tables.cpp:345`. Note that openh264 does **not** use the
+/// H.264 spec's Table A-1 units for three of these columns: `uiMaxDPBMbs` is
+/// `MaxDpbMbs` (macroblocks), not the spec's `MaxDPB` in units of 1024 bytes;
+/// `iMinVmv`/`iMaxVmv` are `MaxVmvR` in quarter-pel units, not luma samples; and
+/// `iMaxMvsPer2Mb` is `0x7fff` (i.e. unlimited) below level 3.0 rather than a
+/// sentinel. Taking the spec's columns instead — which an earlier revision of this
+/// file did — makes both the decoder MV-range check and the encoder's
+/// `WelsCheckRefFrameLimitationLevelIdcFirst` reject conforming input.
 pub const g_ksLevelLimits: [SLevelLimits; 17] = [
-    SLevelLimits { uiLevelIdc: 10, uiMaxMBPS: 1485, uiMaxFS: 99, uiMaxDPBMbs: 396, uiMaxBR: 64, uiMaxCPB: 175, iMinVmv: -64, iMaxVmv: 63, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 9, uiMaxMBPS: 1485, uiMaxFS: 99, uiMaxDPBMbs: 396, uiMaxBR: 128, uiMaxCPB: 350, iMinVmv: -64, iMaxVmv: 63, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 11, uiMaxMBPS: 3000, uiMaxFS: 396, uiMaxDPBMbs: 900, uiMaxBR: 192, uiMaxCPB: 500, iMinVmv: -128, iMaxVmv: 127, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 12, uiMaxMBPS: 6000, uiMaxFS: 396, uiMaxDPBMbs: 891, uiMaxBR: 384, uiMaxCPB: 1000, iMinVmv: -128, iMaxVmv: 127, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 13, uiMaxMBPS: 11880, uiMaxFS: 396, uiMaxDPBMbs: 891, uiMaxBR: 768, uiMaxCPB: 2000, iMinVmv: -128, iMaxVmv: 127, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 20, uiMaxMBPS: 11880, uiMaxFS: 396, uiMaxDPBMbs: 891, uiMaxBR: 2000, uiMaxCPB: 2000, iMinVmv: -128, iMaxVmv: 127, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 21, uiMaxMBPS: 19800, uiMaxFS: 792, uiMaxDPBMbs: 1782, uiMaxBR: 4000, uiMaxCPB: 4000, iMinVmv: -256, iMaxVmv: 255, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 22, uiMaxMBPS: 20250, uiMaxFS: 1620, uiMaxDPBMbs: 3037, uiMaxBR: 4000, uiMaxCPB: 4000, iMinVmv: -256, iMaxVmv: 255, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 30, uiMaxMBPS: 40500, uiMaxFS: 1620, uiMaxDPBMbs: 3037, uiMaxBR: 10000, uiMaxCPB: 10000, iMinVmv: -256, iMaxVmv: 255, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 31, uiMaxMBPS: 108000, uiMaxFS: 3600, uiMaxDPBMbs: 6750, uiMaxBR: 14000, uiMaxCPB: 14000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 4, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 32, uiMaxMBPS: 216000, uiMaxFS: 5120, uiMaxDPBMbs: 7680, uiMaxBR: 20000, uiMaxCPB: 20000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 4, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 40, uiMaxMBPS: 245760, uiMaxFS: 8192, uiMaxDPBMbs: 12288, uiMaxBR: 20000, uiMaxCPB: 25000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 4, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 41, uiMaxMBPS: 245760, uiMaxFS: 8192, uiMaxDPBMbs: 12288, uiMaxBR: 50000, uiMaxCPB: 62500, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 42, uiMaxMBPS: 522240, uiMaxFS: 8704, uiMaxDPBMbs: 13056, uiMaxBR: 50000, uiMaxCPB: 62500, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 50, uiMaxMBPS: 589824, uiMaxFS: 22080, uiMaxDPBMbs: 41400, uiMaxBR: 135000, uiMaxCPB: 135000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 51, uiMaxMBPS: 983040, uiMaxFS: 36864, uiMaxDPBMbs: 69120, uiMaxBR: 240000, uiMaxCPB: 240000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
-    SLevelLimits { uiLevelIdc: 52, uiMaxMBPS: 2073600, uiMaxFS: 36864, uiMaxDPBMbs: 69120, uiMaxBR: 240000, uiMaxCPB: 240000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: -1 },
+    SLevelLimits { uiLevelIdc: 10, uiMaxMBPS: 1485, uiMaxFS: 99, uiMaxDPBMbs: 396, uiMaxBR: 64, uiMaxCPB: 175, iMinVmv: -256, iMaxVmv: 255, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 9, uiMaxMBPS: 1485, uiMaxFS: 99, uiMaxDPBMbs: 396, uiMaxBR: 128, uiMaxCPB: 350, iMinVmv: -256, iMaxVmv: 255, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 11, uiMaxMBPS: 3000, uiMaxFS: 396, uiMaxDPBMbs: 900, uiMaxBR: 192, uiMaxCPB: 500, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 12, uiMaxMBPS: 6000, uiMaxFS: 396, uiMaxDPBMbs: 2376, uiMaxBR: 384, uiMaxCPB: 1000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 13, uiMaxMBPS: 11880, uiMaxFS: 396, uiMaxDPBMbs: 2376, uiMaxBR: 768, uiMaxCPB: 2000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 20, uiMaxMBPS: 11880, uiMaxFS: 396, uiMaxDPBMbs: 2376, uiMaxBR: 2000, uiMaxCPB: 2000, iMinVmv: -512, iMaxVmv: 511, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 21, uiMaxMBPS: 19800, uiMaxFS: 792, uiMaxDPBMbs: 4752, uiMaxBR: 4000, uiMaxCPB: 4000, iMinVmv: -1024, iMaxVmv: 1023, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 22, uiMaxMBPS: 20250, uiMaxFS: 1620, uiMaxDPBMbs: 8100, uiMaxBR: 4000, uiMaxCPB: 4000, iMinVmv: -1024, iMaxVmv: 1023, uiMinCR: 2, iMaxMvsPer2Mb: 0x7fff },
+    SLevelLimits { uiLevelIdc: 30, uiMaxMBPS: 40500, uiMaxFS: 1620, uiMaxDPBMbs: 8100, uiMaxBR: 10000, uiMaxCPB: 10000, iMinVmv: -1024, iMaxVmv: 1023, uiMinCR: 2, iMaxMvsPer2Mb: 32 },
+    SLevelLimits { uiLevelIdc: 31, uiMaxMBPS: 108000, uiMaxFS: 3600, uiMaxDPBMbs: 18000, uiMaxBR: 14000, uiMaxCPB: 14000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 4, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 32, uiMaxMBPS: 216000, uiMaxFS: 5120, uiMaxDPBMbs: 20480, uiMaxBR: 20000, uiMaxCPB: 20000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 4, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 40, uiMaxMBPS: 245760, uiMaxFS: 8192, uiMaxDPBMbs: 32768, uiMaxBR: 20000, uiMaxCPB: 25000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 4, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 41, uiMaxMBPS: 245760, uiMaxFS: 8192, uiMaxDPBMbs: 32768, uiMaxBR: 50000, uiMaxCPB: 62500, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 2, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 42, uiMaxMBPS: 522240, uiMaxFS: 8704, uiMaxDPBMbs: 34816, uiMaxBR: 50000, uiMaxCPB: 62500, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 2, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 50, uiMaxMBPS: 589824, uiMaxFS: 22080, uiMaxDPBMbs: 110400, uiMaxBR: 135000, uiMaxCPB: 135000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 2, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 51, uiMaxMBPS: 983040, uiMaxFS: 36864, uiMaxDPBMbs: 184320, uiMaxBR: 240000, uiMaxCPB: 240000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 2, iMaxMvsPer2Mb: 16 },
+    SLevelLimits { uiLevelIdc: 52, uiMaxMBPS: 2073600, uiMaxFS: 36864, uiMaxDPBMbs: 184320, uiMaxBR: 240000, uiMaxCPB: 240000, iMinVmv: -2048, iMaxVmv: 2047, uiMinCR: 2, iMaxMvsPer2Mb: 16 },
 ];
 
 /// Default dequantization scaling list matrix for 4x4 blocks.
