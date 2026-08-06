@@ -230,3 +230,20 @@ impl Default for SNalUnitHeaderExt {
         }
     }
 }
+
+/// `EWelsSliceType` — `codec/common/inc/wels_common_defs.h:163`.
+///
+/// Note `P_SLICE` is **0** and `I_SLICE` is **2**. `svc_set_mb_syn_cavlc.rs` used to
+/// shadow these with `I_SLICE: i32 = 0` / `P_SLICE: i32 = 1`, which inverted the
+/// mb-type offset switch at `svc_set_mb_syn_cavlc.cpp:76`.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum EWelsSliceType {
+    #[default]
+    P_SLICE = 0,
+    B_SLICE = 1,
+    I_SLICE = 2,
+    SP_SLICE = 3,
+    SI_SLICE = 4,
+    UNKNOWN_SLICE = 5,
+}

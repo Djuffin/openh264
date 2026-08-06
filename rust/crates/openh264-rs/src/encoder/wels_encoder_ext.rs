@@ -173,19 +173,7 @@ pub fn WelsTime() -> i64 {
 pub type WelsTraceCallback =
     Option<unsafe extern "C" fn(pCtx: *mut c_void, iLevel: i32, pStr: *const c_char)>;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pLogCtx: *mut c_void,
-}
 
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pLogCtx: null_mut(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -240,24 +228,7 @@ pub fn WelsLog(pLogCtx: *mut SLogContext, iLevel: i32, msg: &str) {
     let _ = (pLogCtx, iLevel, msg);
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLTRRecoverRequest {
-    pub uiFeedbackType: u32,
-    pub uiIDRPicId: u32,
-    pub iLastCorrectFrameNum: i32,
-    pub iCurrentFrameNum: i32,
-    pub iLayerId: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLTRMarkingFeedback {
-    pub uiFeedbackType: u32,
-    pub uiIDRPicId: u32,
-    pub iLTRFrameNum: i32,
-    pub iLayerId: i32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -390,6 +361,9 @@ impl Default for TagVideoEncoderStatistics {
 }
 
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+pub use crate::encoder::ref_list_mgr_svc::SLTRMarkingFeedback;
+pub use crate::encoder::ref_list_mgr_svc::SLTRRecoverRequest;
+pub use crate::encoder::encoder_context::SLogContext;
 
 // Core encoder functions implementations / fallbacks
 pub unsafe fn WelsWriteSpsSyntax(

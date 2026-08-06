@@ -45,6 +45,7 @@ use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::svc_motion_estimate::SWelsME;
 
 // Sub-pixel refinement buffer geometry constants
 pub const ME_REFINE_BUF_STRIDE: i32 = 32;
@@ -165,51 +166,7 @@ impl Default for SadPredISatdUnit {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsME {
-    pub pMvdCost: *mut u16,
-    pub uSadPredISatd: SadPredISatdUnit,
-    pub uiSadCost: u32,
-    pub uiSatdCost: u32,
-    pub uiSadCostThreshold: u32,
-    pub iCurMeBlockPixX: i32,
-    pub iCurMeBlockPixY: i32,
-    pub uiBlockSize: u8,
-    pub uiReserved: u8,
-    pub pEncMb: *mut u8,
-    pub pRefMb: *mut u8,
-    pub pColoRefMb: *mut u8,
-    pub sMvp: SMVUnitXY,
-    pub sMvBase: SMVUnitXY,
-    pub sDirectionalMv: SMVUnitXY,
-    pub pRefFeatureStorage: *mut c_void,
-    pub sMv: SMVUnitXY,
-}
 
-impl Default for SWelsME {
-    fn default() -> Self {
-        Self {
-            pMvdCost: std::ptr::null_mut(),
-            uSadPredISatd: SadPredISatdUnit::default(),
-            uiSadCost: 0,
-            uiSatdCost: 0,
-            uiSadCostThreshold: 0,
-            iCurMeBlockPixX: 0,
-            iCurMeBlockPixY: 0,
-            uiBlockSize: 0,
-            uiReserved: 0,
-            pEncMb: std::ptr::null_mut(),
-            pRefMb: std::ptr::null_mut(),
-            pColoRefMb: std::ptr::null_mut(),
-            sMvp: SMVUnitXY::default(),
-            sMvBase: SMVUnitXY::default(),
-            sDirectionalMv: SMVUnitXY::default(),
-            pRefFeatureStorage: std::ptr::null_mut(),
-            sMv: SMVUnitXY::default(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -396,23 +353,20 @@ pub type PGetVarianceFromIntraVaaFunc = unsafe extern "C" fn(pDataY: *mut u8, ki
 pub type PGetMbSignFromInterVaaFunc = unsafe extern "C" fn(pSad8x8: *mut i32) -> u8;
 pub type PUpdateMbMvFunc = unsafe extern "C" fn(pMvBuffer: *mut SMVUnitXY, ksMv: SMVUnitXY);
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMcFunc {
-    pub pfLumaHalfpelHor: Option<PWelsLumaHalfpelMcFunc>,
-    pub pfLumaHalfpelVer: Option<PWelsLumaHalfpelMcFunc>,
-    pub pfLumaHalfpelCen: Option<PWelsLumaHalfpelMcFunc>,
-    pub pMcChromaFunc: *mut c_void,
-    pub pMcLumaFunc: *mut c_void,
-    pub pfSampleAveraging: Option<PWelsSampleAveragingFunc>,
-}
+// SMcFunc is a common-layer type (codec/common/inc/mc.h:46); common/mc.rs already
+// had it with correctly typed pointers where this copy used *mut c_void.
+pub use crate::common::mc::SMcFunc;
+pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
+pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SSampleDealingFunc {
-    pub pfSampleSad: [*mut c_void; 8],
-    pub pfSampleSatd: [*mut c_void; 8],
-    pub pfSample4Sad: [*mut c_void; 8],
+    // wels_func_ptr_def.h:163 — these are [MAX_BLOCK_TYPE], and MAX_BLOCK_TYPE is
+    // BLOCK_SIZE_ALL = 7 (wels_func_ptr_def.h:161, wels_const.h:147). They were [_; 8].
+    pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
+    pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
+    pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
     pub pfIntra4x4Combined3Satd: *mut c_void,
     pub pfIntra16x16Combined3Satd: *mut c_void,
     pub pfIntra16x16Combined3Sad: *mut c_void,
@@ -423,6 +377,26 @@ pub struct SSampleDealingFunc {
     pub pfIntra16x16Combined3: *mut c_void,
     pub pfIntra8x8Combined3: *mut c_void,
     pub pfIntra4x4Combined3: *mut c_void,
+}
+
+impl Default for SSampleDealingFunc {
+    fn default() -> Self {
+        Self {
+            pfSampleSad: [None; BLOCK_SIZE_ALL],
+            pfSampleSatd: [None; BLOCK_SIZE_ALL],
+            pfSample4Sad: [None; BLOCK_SIZE_ALL],
+            pfIntra4x4Combined3Satd: std::ptr::null_mut(),
+            pfIntra16x16Combined3Satd: std::ptr::null_mut(),
+            pfIntra16x16Combined3Sad: std::ptr::null_mut(),
+            pfIntra8x8Combined3Satd: std::ptr::null_mut(),
+            pfIntra8x8Combined3Sad: std::ptr::null_mut(),
+            pfMdCost: std::ptr::null_mut(),
+            pfMeCost: std::ptr::null_mut(),
+            pfIntra16x16Combined3: std::ptr::null_mut(),
+            pfIntra8x8Combined3: std::ptr::null_mut(),
+            pfIntra4x4Combined3: std::ptr::null_mut(),
+        }
+    }
 }
 
 #[repr(C)]

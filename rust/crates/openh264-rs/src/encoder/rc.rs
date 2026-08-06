@@ -48,6 +48,11 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
+pub use crate::encoder::encoder_context::SSpatialPicIndex;
+pub use crate::encoder::wels_preprocess::SAdaptiveQuantizationParam;
+pub use crate::encoder::wels_preprocess::SComplexityAnalysisParam;
+pub use crate::encoder::wels_preprocess::SComplexityAnalysisScreenParam;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 
 // ============================================================================
 // Constants and Macros
@@ -456,11 +461,6 @@ pub struct SMB {
     pub uiSliceIdc: u16,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpatialPicIndex {
-    pub iDid: i32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -471,24 +471,8 @@ pub struct SSpatialLayerInternal {
     pub iFrameIndex: i32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SAdaptiveQuantizationParam {
-    pub iAverMotionTextureIndexToDeltaQp: i32,
-    pub pMotionTextureIndexToDeltaQp: *mut i8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SComplexityAnalysisParam {
-    pub iFrameComplexity: i64,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SComplexityAnalysisScreenParam {
-    pub iFrameComplexity: i64,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -501,12 +485,6 @@ pub struct SVAAFrameInfo {
     pub bSceneChangeFlag: bool,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVAAFrameInfoExt {
-    pub sBase: SVAAFrameInfo,
-    pub sComplexityScreenParam: SComplexityAnalysisScreenParam,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

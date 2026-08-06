@@ -15,6 +15,7 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
+pub use crate::encoder::encoder_context::SLogContext;
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
@@ -106,19 +107,7 @@ pub struct SDqLayer {
 }
 
 /// Logger context (`SLogContext`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pLogCtx: *mut c_void,
-}
 
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pLogCtx: null_mut(),
-        }
-    }
-}
 
 /// Top-level encoder context state (`sWelsEncCtx`).
 #[repr(C)]

@@ -74,16 +74,6 @@ pub enum COMPARE_FRAME_NUM {
 }
 pub use COMPARE_FRAME_NUM::*;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum EWelsSliceType {
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
 pub use EWelsSliceType::*;
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
@@ -91,65 +81,22 @@ pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
+pub use crate::encoder::encoder_context::EWelsSliceType;
+pub use crate::encoder::encoder_context::SLTRState;
+pub use crate::encoder::encoder_context::SExpandPicFunc;
+// ExpandPictureChroma_c is the shared common-layer routine
+// (codec/common/src/expand_pic.cpp); the decoder module already holds the port.
+use crate::decoder::decoder_core::ExpandPictureChroma_c;
+use crate::common::expand_pic::PExpandPictureFunc;
+pub use crate::encoder::encoder_context::SLogContext;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 
 // ============================================================================
 // Core Data Structures
 // ============================================================================
 
 /// Long-Term Reference (LTR) state machine.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLTRState {
-    /// LTR mark feedback status
-    pub uiLtrMarkState: u32,
-    /// Unsolved LTR mark feedback frame number from decoder
-    pub iLtrMarkFbFrameNum: i32,
-    /// Last LTR or IDR recover frame number
-    pub iLastRecoverFrameNum: i32,
-    /// Last correct frame number on decoder side
-    pub iLastCorFrameNumDec: i32,
-    /// Current frame number on decoder side
-    pub iCurFrameNumInDec: i32,
-    /// Direct mark or delay mark mode
-    pub iLTRMarkMode: i32,
-    /// Successfully marked LTR count
-    pub iLTRMarkSuccessNum: i32,
-    /// Current long-term reference index to mark
-    pub iCurLtrIdx: i32,
-    /// Active LTR index per temporal layer
-    pub iLastLtrIdx: [i32; MAX_TEMPORAL_LAYER_NUM],
-    /// Screen content Scene LTR index
-    pub iSceneLtrIdx: i32,
-    /// Frame interval since last LTR mark
-    pub uiLtrMarkInterval: u32,
-    /// Whether current frame is marked as LTR
-    pub bLTRMarkingFlag: bool,
-    /// Whether LTR marking is enabled
-    pub bLTRMarkEnable: bool,
-    /// Whether a T0 lost feedback was received
-    pub bReceivedT0LostFlag: bool,
-}
 
-impl Default for SLTRState {
-    fn default() -> Self {
-        Self {
-            uiLtrMarkState: NO_LTR_MARKING_FEEDBACK,
-            iLtrMarkFbFrameNum: -1,
-            iLastRecoverFrameNum: 0,
-            iLastCorFrameNumDec: -1,
-            iCurFrameNumInDec: -1,
-            iLTRMarkMode: LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32,
-            iLTRMarkSuccessNum: 0,
-            iCurLtrIdx: 0,
-            iLastLtrIdx: [0; MAX_TEMPORAL_LAYER_NUM],
-            iSceneLtrIdx: 0,
-            uiLtrMarkInterval: 0,
-            bLTRMarkingFlag: false,
-            bLTRMarkEnable: false,
-            bReceivedT0LostFlag: false,
-        }
-    }
-}
 
 /// Feature storage for screen content reference pictures.
 
@@ -251,21 +198,7 @@ pub struct SVAAFrameInfo {
     pub uiMarkLongTermPicIdx: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVAAFrameInfoExt {
-    pub sVaaInfo: SVAAFrameInfo,
-    pub iNumOfAvailableRef: i32,
-    pub iVaaBestRefFrameNum: i32,
-    pub pVaaBestBlockStaticIdc: *mut u8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-    pub pfExpandChromaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -273,11 +206,6 @@ pub struct SWelsFuncPtrList {
     pub sExpandPicFunc: SExpandPicFunc,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLogContext {
-    pub pLogCtx: *mut std::ffi::c_void,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -300,7 +228,11 @@ pub struct SLTRMarkingFeedback {
 
 #[repr(C)]
 pub struct CWelsPreProcessVtbl {
-    pub UpdateSrcListLosslessScreenRefSelectionWithLtr: unsafe extern "C" fn(*mut CWelsPreProcess, *mut SPicture, i32, u32, *mut *mut SPicture),
+    // wels_preprocess.h:142 — (SPicture*, const int32_t kiCurDid,
+    // const int32_t kuiMarkLongTermPicIdx, SPicture**). The LTR index parameter is
+    // int32_t, not uint32_t as this vtable had it.
+    pub UpdateSrcListLosslessScreenRefSelectionWithLtr:
+        unsafe extern "C" fn(*mut CWelsPreProcess, *mut SPicture, i32, i32, *mut *mut SPicture),
     pub UpdateSrcList: unsafe extern "C" fn(*mut CWelsPreProcess, *mut SPicture, i32, *mut *mut SPicture, u8),
     pub UpdateBlockIdcForScreen: unsafe extern "C" fn(*mut CWelsPreProcess, *mut u8, *mut SPicture, *mut SPicture),
     pub GetRefFrameInfo: unsafe extern "C" fn(*mut CWelsPreProcess, i32, bool, *mut *mut SPicture) -> i32,
@@ -340,28 +272,43 @@ pub struct sWelsEncCtx {
 // ============================================================================
 
 #[inline]
+/// Expand the borders of a reference picture.
+///
+/// Matches `ExpandReferencingPicture` in `codec/common/src/expand_pic.cpp:388`.
+/// `pExpChrom` is a two-entry table indexed by whether the chroma width is
+/// 16-aligned, not a single function: the port previously took one scalar and used
+/// it for both planes, which ignored the alignment-specialised variant and the
+/// sub-16 fallback below.
 pub unsafe fn ExpandReferencingPicture(
     pData: [*mut u8; 3],
     iWidth: i32,
     iHeight: i32,
-    iLineSize: [i32; 3],
-    pfExpandLumaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-    pfExpandChromaPicture: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
+    iStride: [i32; 3],
+    pExpLuma: Option<PExpandPictureFunc>,
+    pExpChrom: [Option<PExpandPictureFunc>; 2],
 ) {
-    if let Some(fLuma) = pfExpandLumaPicture {
-        if !pData[0].is_null() {
-            fLuma(pData[0], iLineSize[0], iWidth, iHeight);
-        }
+    let pPicY = pData[0];
+    let pPicCb = pData[1];
+    let pPicCr = pData[2];
+    let kiWidthY = iWidth;
+    let kiHeightY = iHeight;
+    let kiWidthUV = kiWidthY >> 1;
+    let kiHeightUV = kiHeightY >> 1;
+
+    if let Some(fLuma) = pExpLuma {
+        fLuma(pPicY, iStride[0], kiWidthY, kiHeightY);
     }
-    if let Some(fChroma) = pfExpandChromaPicture {
-        let iChromaWidth = iWidth >> 1;
-        let iChromaHeight = iHeight >> 1;
-        if !pData[1].is_null() {
-            fChroma(pData[1], iLineSize[1], iChromaWidth, iChromaHeight);
+    if kiWidthUV >= 16 {
+        // fix coding picture size as 16x16
+        let kbChrAligned = (kiWidthUV & 0x0F) == 0; // chroma planes: (16+iWidthUV) & 15
+        if let Some(fChroma) = pExpChrom[kbChrAligned as usize] {
+            fChroma(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
+            fChroma(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
         }
-        if !pData[2].is_null() {
-            fChroma(pData[2], iLineSize[2], iChromaWidth, iChromaHeight);
-        }
+    } else {
+        // fix coding picture size as 16x16
+        ExpandPictureChroma_c(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
+        ExpandPictureChroma_c(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
     }
 }
 
@@ -614,7 +561,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
             {
                 (*pPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
                 if !(*pCtx).pVaa.is_null() {
-                    (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = (*pPic).iLongTermPicNum as u32;
+                    (*(*pCtx).pVaa).sVaaFrameInfo.uiValidLongTermPicIdx = (*pPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
                 pLtr.iLastRecoverFrameNum = pLtr.iLtrMarkFbFrameNum;
@@ -691,7 +638,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         }
     } else if pLtr.bLTRMarkingFlag {
         if !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u32;
+            (*(*pCtx).pVaa).sVaaFrameInfo.uiMarkLongTermPicIdx = pLtr.iCurLtrIdx as u8;
         }
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
@@ -777,7 +724,7 @@ pub unsafe fn LTRMarkProcessScreen(pCtx: *mut sWelsEncCtx) {
     }
     let iLtrIdx = (*(*pCtx).pDecPic).iLongTermPicNum;
     if !(*pCtx).pVaa.is_null() {
-        (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = (*(*pCtx).pDecPic).iLongTermPicNum as u32;
+        (*(*pCtx).pVaa).sVaaFrameInfo.uiMarkLongTermPicIdx = (*(*pCtx).pDecPic).iLongTermPicNum as u8;
     }
 
     if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
@@ -913,8 +860,8 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             pLtr.uiLtrMarkInterval = 0;
 
             if !(*pCtx).pVaa.is_null() {
-                (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = 0;
-                (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx = 0;
+                (*(*pCtx).pVaa).sVaaFrameInfo.uiValidLongTermPicIdx = 0;
+                (*(*pCtx).pVaa).sVaaFrameInfo.uiMarkLongTermPicIdx = 0;
             }
         }
     }
@@ -1348,7 +1295,8 @@ pub unsafe fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: *mut sWels
             (*pCtx).pVpp,
             (*pCtx).pEncPic,
             iDIdx,
-            (*(*pCtx).pVaa).sVaaInfo.uiMarkLongTermPicIdx,
+            // wels_preprocess.h:143 takes const int32_t; the uint8_t field promotes.
+            (*(*pCtx).pVaa).sVaaFrameInfo.uiMarkLongTermPicIdx as i32,
             pLongRefList,
         );
     }
@@ -1427,7 +1375,7 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         pLtr.iSceneLtrIdx = 1;
         pLtr.uiLtrMarkInterval = 0;
         if !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).sVaaInfo.uiValidLongTermPicIdx = 0;
+            (*(*pCtx).pVaa).sVaaFrameInfo.uiValidLongTermPicIdx = 0;
         }
     }
 

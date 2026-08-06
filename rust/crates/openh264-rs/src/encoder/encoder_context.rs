@@ -76,26 +76,8 @@ pub fn CALC_BI_STRIDE(width: i32, bitcount: i32) -> i32 {
 // Enums
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
+pub use crate::common::wels_common_defs::EWelsSliceType;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum ESceneChangeIdc {
-    #[default]
-    NO_SCENE_CHANGE = 0,
-    SIMILAR_SCENE = 1,
-    LARGE_CHANGED_SCENE = 2,
-}
 
 // Re-export EVideoFrameType from crate root
 pub use crate::EVideoFrameType;
@@ -257,12 +239,6 @@ pub use crate::common::wels_common_defs::SBitStringAux;
 
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SStateCtx {
-    pub uiState: u8,
-    pub uiMPS: u8,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -280,36 +256,12 @@ pub struct SDqIdc {
 
 pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceThreading {
-    pub uiSliceNum: i32,
-    pub mutexSliceNumUpdate: *mut c_void,
-    pub pThreadBsBuffer: [*mut u8; MAX_THREADS_NUM],
-}
 
-impl Default for SSliceThreading {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SExpandPicFunc {
-    pub pfExpandPicLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-    pub pfExpandPicChroma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-}
+pub use crate::common::expand_pic::SExpandPicFunc;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMcFunc {
-    pub pfLumaHalfPelHoriz: Option<unsafe extern "C" fn(*mut u8, i32, *const u8, i32, i32, i32)>,
-    pub pfLumaHalfPelVert: Option<unsafe extern "C" fn(*mut u8, i32, *const u8, i32, i32, i32)>,
-    pub pfChromaInterpolation: Option<unsafe extern "C" fn(*mut u8, i32, *const u8, i32, i32, i32, i32, i32)>,
-}
 
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
 
@@ -320,6 +272,10 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
+pub use crate::encoder::wels_preprocess::ESceneChangeIdc;
+pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
+pub use crate::encoder::md::SMcFunc;
+pub use crate::encoder::slice_multi_threading::SSliceThreading;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

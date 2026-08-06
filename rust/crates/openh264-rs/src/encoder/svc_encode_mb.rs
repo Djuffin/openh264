@@ -50,6 +50,7 @@ pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::encoder_context::SStrideTables;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -336,13 +337,6 @@ pub struct SDqLayer {
     pub iCsStride: [i32; 3],
 }
 
-#[repr(C)]
-pub struct SStrideTables {
-    pub pStrideDecBlockOffset: [[*mut i32; 2]; MAX_DEPENDENCY_LAYER],
-    pub pStrideEncBlockOffset: [*mut i32; MAX_DEPENDENCY_LAYER],
-    pub pMbIndexX: [*mut i16; MAX_DEPENDENCY_LAYER],
-    pub pMbIndexY: [*mut i16; MAX_DEPENDENCY_LAYER],
-}
 
 // Function pointer signatures for SWelsFuncPtrList
 pub type PDctFunc = unsafe extern "C" fn(*mut i16, *mut u8, i32, *mut u8, i32);

@@ -50,6 +50,7 @@ use std::ffi::c_char;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
+pub use crate::encoder::md::SSampleDealingFunc;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -465,23 +466,7 @@ pub type PCalculateSingleBlockFeature =
 
 pub type PUpdateFMESwitch = unsafe extern "C" fn(pCurLayer: *mut SDqLayer);
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SSampleDealingFunc {
-    pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
-    pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
-    pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
-}
 
-impl Default for SSampleDealingFunc {
-    fn default() -> Self {
-        Self {
-            pfSampleSad: [None; BLOCK_SIZE_ALL],
-            pfSampleSatd: [None; BLOCK_SIZE_ALL],
-            pfSample4Sad: [None; BLOCK_SIZE_ALL],
-        }
-    }
-}
 
 #[repr(C)]
 pub struct SWelsFuncPtrList {

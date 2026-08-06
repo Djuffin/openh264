@@ -22,7 +22,19 @@ use crate::common::wels_common_defs::{SBitStringAux, SNalUnitHeader, SNalUnitHea
 use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
 use crate::encoder::nal_encap::{SWelsEncoderOutput, SWelsNalRaw, SWelsSliceBs};
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
+use crate::common::expand_pic::SExpandPicFunc;
+use crate::common::mc::SMcFunc;
+use crate::encoder::encoder_context::{SLTRState, SSpatialPicIndex, SStrideTables};
+use crate::encoder::md::{SSampleDealingFunc, SWelsMD};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
+use crate::encoder::rc::SRCSlicing;
+use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
+use crate::encoder::set_mb_syn_cabac::{SCabacCtx, SStateCtx};
+use crate::encoder::svc_motion_estimate::SWelsME;
+use crate::encoder::wels_preprocess::{
+    SAdaptiveQuantizationParam, SComplexityAnalysisParam, SComplexityAnalysisScreenParam,
+    SScrollDetectionParam, SVAACalcResult, SVAAFrameInfo, SVAAFrameInfoExt,
+};
 use crate::encoder::ref_list_mgr_svc::{SRefPicListReorderSyntax, SRefPicMarking};
 use crate::encoder::svc_encode_slice::{SSliceHeader, SSliceHeaderExt};
 
@@ -67,3 +79,33 @@ assert_size!(SMVUnitXY, 4);
 assert_size!(SCropOffset, 8);
 assert_size!(SDCTCoeff, 816);
 assert_size!(SMVComponentUnit, 146);
+
+// Leaf types unified in the same pass. SStateCtx is a single packed byte
+// (set_mb_syn_cabac.h:55) — the encoder_context.rs copy had it as two u8 fields,
+// which would have doubled sWelsCabacContexts[4][52][460].
+assert_size!(SStateCtx, 1);
+assert_size!(SCabacCtx, 504);
+assert_size!(SLTRState, 60);
+assert_size!(SLTRMarkingFeedback, 16);
+assert_size!(SLTRRecoverRequest, 20);
+assert_size!(SExpandPicFunc, 24);
+assert_size!(SMcFunc, 48);
+assert_size!(SSampleDealingFunc, 248);
+assert_size!(SRCSlicing, 44);
+assert_size!(SSpatialPicIndex, 16);
+assert_size!(SStrideTables, 160);
+assert_size!(SWelsME, 96);
+assert_size!(SWelsMD, 4000);
+assert_size!(SVAAFrameInfo, 264);
+assert_size!(SVAAFrameInfoExt, 1280);
+// SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
+// WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
+// value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
+// port models the primitives as opaque handles. Nothing crosses a C ABI here, so
+// the field-for-field size correspondence that holds for the codec's own structs
+// does not apply. Revisit if the threading types are ever given real bodies.
+assert_size!(SVAACalcResult, 72);
+assert_size!(SScrollDetectionParam, 32);
+assert_size!(SAdaptiveQuantizationParam, 40);
+assert_size!(SComplexityAnalysisParam, 64);
+assert_size!(SComplexityAnalysisScreenParam, 72);

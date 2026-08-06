@@ -65,6 +65,8 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::encoder_context::SLTRState;
+pub use crate::encoder::encoder_context::SLogContext;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
@@ -647,12 +649,6 @@ impl Default for SWelsSvcRc {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLTRState {
-    pub bReceivedT0LostFlag: bool,
-    pub iLastLtrIdx: [i32; MAX_TEMPORAL_LEVEL],
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -670,19 +666,7 @@ impl Default for SSpatialIndexMap {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLogContext {
-    pub pLogCtx: *mut c_void,
-}
 
-impl Default for SLogContext {
-    fn default() -> Self {
-        Self {
-            pLogCtx: std::ptr::null_mut(),
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
