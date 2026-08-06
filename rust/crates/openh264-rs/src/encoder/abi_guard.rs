@@ -148,3 +148,42 @@ assert_size!(crate::encoder::encoder_context::SParaSetOffset, 1180);
 assert_size!(crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics, 88);
 assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 assert_size!(sWelsEncCtx, 98008 - 64 + 8);
+
+// The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
+// offsets. `wels_preprocess.rs` used to declare its own 15-field `SWelsEncCtx` and
+// alias `sWelsEncCtx` to it, so every one of these reads landed at the wrong offset
+// the moment a real context was passed in -- which is exactly what
+// `WelsEncoderEncodeExt` does when it calls `BuildSpatialPicList` / `AnalyzeSpatialPic`
+// / `UpdateSpatialPictures`. A size assertion could not catch that (the fake struct
+// was simply a different type), so the offsets are asserted directly.
+//
+// All fifteen are declared before `WELS_MUTEX mutexEncoderError` (encoder_context.h:230),
+// the one member this port models differently, so each number below is the unmodified
+// C++ `offsetof`, measured on darwin/arm64.
+macro_rules! assert_ctx_offset {
+    ($field:ident, $off:expr) => {
+        const _: () = assert!(std::mem::offset_of!(sWelsEncCtx, $field) == $off);
+    };
+}
+assert_ctx_offset!(sLogCtx, 0);
+assert_ctx_offset!(pSvcParam, 24);
+assert_ctx_offset!(iMvRange, 40);
+assert_ctx_offset!(ppRefPicListExt, 184);
+assert_ctx_offset!(pLtr, 320);
+assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 328);
+assert_ctx_offset!(eSliceType, 332);
+assert_ctx_offset!(uiDependencyId, 361);
+assert_ctx_offset!(uiTemporalId, 362);
+assert_ctx_offset!(pWelsSvcRc, 368);
+assert_ctx_offset!(pVaa, 416);
+assert_ctx_offset!(pVpp, 424);
+assert_ctx_offset!(sSpatialIndexMap, 520);
+assert_ctx_offset!(bRefOfCurTidIsLtr, 600);
+assert_ctx_offset!(pMemAlign, 1824);
+
+// encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
+// carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
+// a scan that compares identifiers cannot catch a rename, so the layout is pinned here.
+assert_size!(SSpatialPicIndex, 16);
+const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
+const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);

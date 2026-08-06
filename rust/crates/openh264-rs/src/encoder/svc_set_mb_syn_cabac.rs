@@ -214,13 +214,11 @@ pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 
 
-// Function pointer list matching OpenH264
-
-#[repr(C)]
-pub struct SWelsPps {
-    pub uiChromaQpIndexOffset: u32,
-}
-
+// `SWelsPps` used to be declared here: a one-field struct holding
+// `uiChromaQpIndexOffset: u32`. C++ has no such type -- the real one is
+// `param_svc.h`'s `SWelsPPS`, where `uiChromaQpIndexOffset` is a `uint8_t` at offset 10,
+// behind `iSpsId`/`iPpsId`/`iPicInitQp`/`iPicInitQs`. Reading it through the fake would
+// have returned `iSpsId`. It was dead code, and it is deleted rather than fixed.
 
 
 // ============================================================================
