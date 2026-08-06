@@ -24,7 +24,7 @@ use crate::encoder::nal_encap::{SWelsEncoderOutput, SWelsNalRaw, SWelsSliceBs};
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::expand_pic::SExpandPicFunc;
 use crate::common::mc::SMcFunc;
-use crate::encoder::encoder_context::{SLTRState, SSpatialPicIndex, SStrideTables};
+use crate::encoder::encoder_context::{sWelsEncCtx, SLTRState, SSpatialPicIndex, SStrideTables};
 use crate::encoder::md::{SMB, SMbCache, SSampleDealingFunc, SWelsMD};
 use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSlice, SSliceBufferInfo};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
@@ -34,6 +34,7 @@ use crate::encoder::slice_multi_threading::SSliceCtx;
 use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
 use crate::encoder::set_mb_syn_cabac::{SCabacCtx, SStateCtx};
 use crate::encoder::svc_motion_estimate::SWelsME;
+use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::encoder::wels_preprocess::{
     SAdaptiveQuantizationParam, SComplexityAnalysisParam, SComplexityAnalysisScreenParam,
     SScrollDetectionParam, SVAACalcResult, SVAAFrameInfo, SVAAFrameInfoExt,
@@ -133,3 +134,17 @@ assert_size!(SSlice, 1584);
 // codec/encoder/core/inc/svc_enc_frame.h
 assert_size!(SSliceBufferInfo, 16);
 assert_size!(SDqLayer, 512);
+
+// codec/encoder/core/inc/wels_func_ptr_def.h
+assert_size!(SWelsFuncPtrList, 1280);
+
+// codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
+// embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models
+// the mutex as an opaque 8-byte handle, exactly as it does in SSliceThreading. So the
+// expected size here is 98008 - 64 + 8; alignment is 8 either way, so no padding
+// changes. Everything else -- including sWelsCabacContexts[4][52][460] at 95,680
+// bytes -- is a faithful match, which is what makes this assertion worth having.
+assert_size!(crate::encoder::encoder_context::SParaSetOffset, 1180);
+assert_size!(crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics, 88);
+assert_size!(crate::encoder::encoder_context::SLogContext, 24);
+assert_size!(sWelsEncCtx, 98008 - 64 + 8);

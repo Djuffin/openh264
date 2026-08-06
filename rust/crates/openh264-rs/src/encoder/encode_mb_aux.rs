@@ -47,6 +47,8 @@
     unused_unsafe
 )]
 
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
 // ============================================================================
 // CPU Feature Flag Bitmasks (matching cpu_core.h)
 // ============================================================================
@@ -225,64 +227,7 @@ pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(pLevel: *mut i16) -> i32;
 // Encoder Function Pointer Table (SWelsFuncPtrList)
 // ============================================================================
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsFuncPtrList {
-    pub pfCopy16x16Aligned: Option<PCopyFunc>,
-    pub pfCopy16x16NotAligned: Option<PCopyFunc>,
-    pub pfCopy8x8Aligned: Option<PCopyFunc>,
-    pub pfCopy16x8NotAligned: Option<PCopyFunc>,
-    pub pfCopy8x16Aligned: Option<PCopyFunc>,
-    pub pfCopy4x4: Option<PCopyFunc>,
-    pub pfCopy8x4: Option<PCopyFunc>,
-    pub pfCopy4x8: Option<PCopyFunc>,
 
-    pub pfDctT4: Option<PDctFunc>,
-    pub pfDctFourT4: Option<PDctFunc>,
-
-    pub pfCalculateSingleCtr4x4: Option<PCalculateSingleCtrFunc>,
-    pub pfScan4x4: Option<PScanFunc>,
-    pub pfScan4x4Ac: Option<PScanFunc>,
-
-    pub pfQuantization4x4: Option<PQuantizationFunc>,
-    pub pfQuantizationFour4x4: Option<PQuantizationFunc>,
-    pub pfQuantizationDc4x4: Option<PQuantizationDcFunc>,
-    pub pfQuantizationFour4x4Max: Option<PQuantizationMaxFunc>,
-    pub pfQuantizationHadamard2x2: Option<PQuantizationHadamardFunc>,
-    pub pfQuantizationHadamard2x2Skip: Option<PQuantizationSkipFunc>,
-
-    pub pfTransformHadamard4x4Dc: Option<PTransformHadamard4x4Func>,
-
-    pub pfGetNoneZeroCount: Option<PGetNoneZeroCountFunc>,
-}
-
-impl Default for SWelsFuncPtrList {
-    fn default() -> Self {
-        Self {
-            pfCopy16x16Aligned: None,
-            pfCopy16x16NotAligned: None,
-            pfCopy8x8Aligned: None,
-            pfCopy16x8NotAligned: None,
-            pfCopy8x16Aligned: None,
-            pfCopy4x4: None,
-            pfCopy8x4: None,
-            pfCopy4x8: None,
-            pfDctT4: None,
-            pfDctFourT4: None,
-            pfCalculateSingleCtr4x4: None,
-            pfScan4x4: None,
-            pfScan4x4Ac: None,
-            pfQuantization4x4: None,
-            pfQuantizationFour4x4: None,
-            pfQuantizationDc4x4: None,
-            pfQuantizationFour4x4Max: None,
-            pfQuantizationHadamard2x2: None,
-            pfQuantizationHadamard2x2Skip: None,
-            pfTransformHadamard4x4Dc: None,
-            pfGetNoneZeroCount: None,
-        }
-    }
-}
 
 // ============================================================================
 // Forward Discrete Cosine Transform (FDCT)

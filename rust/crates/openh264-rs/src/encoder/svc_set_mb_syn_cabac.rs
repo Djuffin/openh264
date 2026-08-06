@@ -210,14 +210,11 @@ pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 
 
 // Function pointer list matching OpenH264
-#[repr(C)]
-pub struct SWelsFuncPtrList {
-    pub pfGetNoneZeroCount: Option<unsafe extern "C" fn(*mut i16) -> i32>,
-}
 
 #[repr(C)]
 pub struct SWelsPps {
@@ -1317,13 +1314,13 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
             (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
             let qp_idx = CLIP3_QP_0_51(((*pCurMb).uiLumaQp as i32) + (uiChromaQpIndexOffset as i32));
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[qp_idx];
-            WelsMbSkipCabac(pCabacCtx, pCurMb, iMbWidth, std::mem::transmute((*pEncCtx).eSliceType as i32), 1);
+            WelsMbSkipCabac(pCabacCtx, pCurMb, iMbWidth, (*pEncCtx).eSliceType, 1);
         } else {
-            if (*pEncCtx).eSliceType as i32 != EWelsSliceType::I_SLICE as i32 {
-                WelsMbSkipCabac(pCabacCtx, pCurMb, iMbWidth, std::mem::transmute((*pEncCtx).eSliceType as i32), 0);
+            if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
+                WelsMbSkipCabac(pCabacCtx, pCurMb, iMbWidth, (*pEncCtx).eSliceType, 0);
             }
 
-            WelsCabacMbType(pCabacCtx, pCurMb, pMbCache, iMbWidth, std::mem::transmute((*pEncCtx).eSliceType as i32));
+            WelsCabacMbType(pCabacCtx, pCurMb, pMbCache, iMbWidth, (*pEncCtx).eSliceType);
 
             if IS_INTRA(uiMbType) {
                 if uiMbType == MB_TYPE_INTRA4x4 {

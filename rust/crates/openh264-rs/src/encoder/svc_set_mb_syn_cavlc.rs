@@ -22,6 +22,8 @@ pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Macroblock Type & Sub-MB Type Constants
@@ -259,30 +261,8 @@ impl Default for TagMVComponentUnit {
 
 
 
-#[repr(C)]
-pub struct SWelsFuncPtrList {
-    pub pfCavlcParamCal:
-        Option<unsafe extern "C" fn(*mut i16, *mut u8, *mut i16, *mut i32, i32) -> i32>,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPps {
-    pub uiChromaQpIndexOffset: u8,
-}
-
-#[repr(C)]
-pub struct SDqLayerInfo {
-    pub pPpsP: *mut SPps,
-}
 
 
-#[repr(C)]
-pub struct sWelsEncCtx {
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub eSliceType: i32,
-}
 
 // ============================================================================
 // CAVLC Parameter Calculation and Residual Writing
@@ -782,7 +762,7 @@ pub unsafe fn CheckBitstreamBuffer(
 /// Top-level macroblock CAVLC bitstream serialization function.
 ///
 /// Matches `int32_t WelsSpatialWriteMbSyn (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-pub unsafe fn WelsSpatialWriteMbSyn(
+pub unsafe extern "C" fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
@@ -799,7 +779,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         (*pSlice).iMbSkipRun += 1;
         ENC_RETURN_SUCCESS
     } else {
-        if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE as i32 {
+        if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
             BsWriteUE(pBs, (*pSlice).iMbSkipRun as u32);
             (*pSlice).iMbSkipRun = 0;
         }

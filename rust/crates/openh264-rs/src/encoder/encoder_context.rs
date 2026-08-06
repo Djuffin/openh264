@@ -56,11 +56,20 @@ pub const WELS_CPU_NEON: u32 = 0x00000800;
 pub const I16_PRED_DC_A: usize = 7;
 pub const I4_PRED_A: usize = 14;
 pub const C_PRED_A: usize = 7;
-pub const BLOCK_STATIC_IDC_ALL: usize = 5;
+/// Last variant of `EStaticBlockIdc` (`IWelsVP.h:148`) — value **3**, matching the
+/// `EStaticBlockIdc` enum in `wels_preprocess.rs`. This was 5 here, which over-sized
+/// `SWelsFuncPtrList::pfMotionSearch[BLOCK_STATIC_IDC_ALL]`.
+pub const BLOCK_STATIC_IDC_ALL: usize = 3;
 /// `wels_const.h:147` — last variant of the block-size enum, value 7. This was 8 here,
 /// which would have over-sized `SScreenBlockFeatureStorage::uiSadCostThreshold` and the
 /// `SSampleDealingFunc` / `SWelsFuncPtrList` function-pointer tables.
 pub const BLOCK_SIZE_ALL: usize = 7;
+/// `wels_const.h:131` — `MAX_DEPENDENCY_LAYER`.
+pub const MAX_DQ_LAYER_NUM: usize = MAX_DEPENDENCY_LAYER;
+/// `wels_const.h:51-52` — `MAX_PPS_COUNT_LIMITED`.
+pub const MAX_PPS_COUNT: usize = 57;
+/// `wels_const.h:54` — SPS+PPS.
+pub const PARA_SET_TYPE: usize = 3;
 
 // ============================================================================
 // Bit Arithmetic Macros & Helpers
@@ -219,10 +228,65 @@ pub use crate::common::wels_common_defs::SBitStringAux;
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 
 
+/// `TagParaSetOffsetVariable` — `codec/encoder/core/inc/wels_common_basis.h:72`.
+/// 80 bytes. Note `iParaSetIdDelta` is `[MAX_DQ_LAYER_NUM]`; the `+1` in the header
+/// is commented out.
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
+pub struct SParaSetOffsetVariable {
+    /// delta between SPS_ID_in_bs and sps_id_in_encoder, per dq-layer; may be negative
+    pub iParaSetIdDelta: [i32; MAX_DQ_LAYER_NUM],
+    /// marks the used SPS_ID with 1
+    pub bUsedParaSetIdInBs: [bool; MAX_PPS_COUNT],
+    /// the next SPS_ID_in_bs, for all layers
+    pub uiNextParaSetIdToUseInBs: u32,
+}
+
+impl Default for SParaSetOffsetVariable {
+    fn default() -> Self {
+        Self {
+            iParaSetIdDelta: [0; MAX_DQ_LAYER_NUM],
+            bUsedParaSetIdInBs: [false; MAX_PPS_COUNT],
+            uiNextParaSetIdToUseInBs: 0,
+        }
+    }
+}
+
+/// `TagParaSetOffset` — `codec/encoder/core/inc/wels_common_basis.h:79`. 1180 bytes.
+///
+/// This was a `[i32; 32]` placeholder (128 bytes). `eSpsPpsIdStrategy` is **not** a
+/// member: `wels_common_basis.h:89` guards it with `#if _DEBUG`, which this build
+/// does not set — the C++ `sizeof` of 1180 confirms it is absent.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct SParaSetOffset {
-    pub sParaSetOffsetArray: [i32; 32],
+    pub sParaSetOffsetVariable: [SParaSetOffsetVariable; PARA_SET_TYPE],
+    pub bPpsIdMappingIntoSubsetsps: [bool; MAX_DQ_LAYER_NUM],
+    pub iPpsIdList: [[i32; MAX_PPS_COUNT]; MAX_DQ_LAYER_NUM],
+
+    pub uiNeededSpsNum: u32,
+    pub uiNeededSubsetSpsNum: u32,
+    pub uiNeededPpsNum: u32,
+
+    pub uiInUseSpsNum: u32,
+    pub uiInUseSubsetSpsNum: u32,
+    pub uiInUsePpsNum: u32,
+}
+
+impl Default for SParaSetOffset {
+    fn default() -> Self {
+        Self {
+            sParaSetOffsetVariable: [SParaSetOffsetVariable::default(); PARA_SET_TYPE],
+            bPpsIdMappingIntoSubsetsps: [false; MAX_DQ_LAYER_NUM],
+            iPpsIdList: [[0; MAX_PPS_COUNT]; MAX_DQ_LAYER_NUM],
+            uiNeededSpsNum: 0,
+            uiNeededSubsetSpsNum: 0,
+            uiNeededPpsNum: 0,
+            uiInUseSpsNum: 0,
+            uiInUseSubsetSpsNum: 0,
+            uiInUsePpsNum: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -240,6 +304,9 @@ pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
 pub use crate::common::expand_pic::SExpandPicFunc;
+// The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs;
+// this module used to carry stubs that took *mut c_void and returned false.
+use crate::encoder::svc_mode_decision::{WelsMdInterJudgeBGDPskip, WelsMdInterJudgeBGDPskipFalse};
 
 
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
@@ -257,33 +324,8 @@ pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsFuncPtrList {
-    pub sExpandPicFunc: SExpandPicFunc,
-    pub sMcFuncs: SMcFunc,
-    pub pfDeblocking: SDeblockingFunc,
-    pub pfSetMemZeroSize8: Option<unsafe extern "C" fn(*mut c_void, i32)>,
-    pub pfSetMemZeroSize64Aligned16: Option<unsafe extern "C" fn(*mut c_void, i32)>,
-    pub pfSetMemZeroSize64: Option<unsafe extern "C" fn(*mut c_void, i32)>,
-    pub pfInterMdBackgroundDecision: Option<
-        unsafe extern "C" fn(*mut sWelsEncCtx, *mut c_void, *mut c_void, *mut SMB, *mut c_void, *mut bool) -> bool,
-    >,
-    pub pfMdBackgroundInfoUpdate: Option<
-        unsafe extern "C" fn(*mut SDqLayer, *mut SMB, bool, i32),
-    >,
-    pub pfDctFourT4: Option<unsafe extern "C" fn(pDct: *mut i16, pSample1: *mut u8, iStride1: i32, pSample2: *mut u8, iStride2: i32)>,
-    pub pfIDctFourT4: Option<unsafe extern "C" fn(pRec: *mut u8, iStride: i32, pPred: *mut u8, iPredStride: i32, pRes: *mut i16)>,
-    pub pfInterMd: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pMd: *mut crate::encoder::svc_encode_slice::SWelsMD, pSlice: *mut SSlice, pCurMb: *mut SMB, pMbCache: *mut crate::encoder::svc_encode_slice::SMbCache)>,
-    pub pfWelsSpatialWriteMbSyn: Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) -> i32>,
-    pub pfStashMBStatus: Option<unsafe extern "C" fn(pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack, pSlice: *mut SSlice, iMbSkipRun: i32)>,
-    pub pfStashPopMBStatus: Option<unsafe extern "C" fn(pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack, pSlice: *mut SSlice) -> i32>,
-    pub pfGetBsPosition: Option<unsafe extern "C" fn(pSlice: *mut SSlice) -> i32>,
-    pub pfSetNZCZero: Option<unsafe extern "C" fn(*mut i8, i32)>,
-    pub pfRc: SWelsRcFunc,
-    pub pParametersetStrategy: *mut c_void,
-}
 
 // ============================================================================
 // Primary Encoder Context Data Structures (encoder_context.h)
@@ -439,7 +481,7 @@ pub struct sWelsEncCtx {
     pub bCheckWindowShiftResetFlag: bool,
     pub iGlobalQp: i32,
     pub pVaa: *mut SVAAFrameInfo,
-    pub pVpp: *mut c_void,
+    pub pVpp: *mut crate::encoder::wels_preprocess::CWelsPreProcess,
     pub pSpsArray: *mut SWelsSPS,
     pub pSps: *mut SWelsSPS,
     pub pPPSArray: *mut SWelsPPS,
@@ -484,34 +526,12 @@ impl Default for sWelsEncCtx {
 // Background Detection Fallback Callbacks
 // ============================================================================
 
-pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
-    _pEncCtx: *mut sWelsEncCtx,
-    _pWelsMd: *mut c_void,
-    _slice: *mut c_void,
-    _pCurMb: *mut SMB,
-    _pMbCache: *mut c_void,
-    _pKeepPskip: *mut bool,
-) -> bool {
-    false
-}
-
 pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
     _pCurLayer: *mut SDqLayer,
     _pCurMb: *mut SMB,
     _bFlag: bool,
     _kiRefPictureType: i32,
 ) {}
-
-pub unsafe extern "C" fn WelsMdInterJudgeBGDPskipFalse(
-    _pEncCtx: *mut sWelsEncCtx,
-    _pWelsMd: *mut c_void,
-    _slice: *mut c_void,
-    _pCurMb: *mut SMB,
-    _pMbCache: *mut c_void,
-    _pKeepPskip: *mut bool,
-) -> bool {
-    false
-}
 
 pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
     _pCurLayer: *mut SDqLayer,
@@ -662,21 +682,17 @@ pub unsafe fn InitFunctionPointers(
     (*pFuncList).pfDctFourT4 = Some(crate::encoder::encode_mb_aux::WelsDctFourT4_c);
     (*pFuncList).pfIDctFourT4 = Some(crate::encoder::svc_encode_mb::WelsIDctFourT4_c);
 
-    (*pFuncList).pfInterMd = Some(std::mem::transmute(
-        crate::encoder::svc_mode_decision::WelsMdSpatialelInterMbIlfmdNoilp as *const ()
-    ));
-    (*pFuncList).pfWelsSpatialWriteMbSyn = Some(std::mem::transmute(
-        crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn as *const ()
-    ));
-    (*pFuncList).pfStashMBStatus = Some(std::mem::transmute(
-        crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc as *const ()
-    ));
-    (*pFuncList).pfStashPopMBStatus = Some(std::mem::transmute(
-        crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc as *const ()
-    ));
-    (*pFuncList).pfGetBsPosition = Some(std::mem::transmute(
-        crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc as *const ()
-    ));
+    // C++ does NOT set pfInterMd here. It is assigned per-slice in
+    // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
+    // depending on kbBaseAvail && kbHighestSpatial. This line used to assign
+    // WelsMdSpatialelInterMbIlfmdNoilp, which is a different function with a
+    // different signature (its last parameter is Mb_Type, not SMbCache*) -- the
+    // mem::transmute around it was what let that through. WelsMdInterMb is not
+    // ported yet, so the assignment belongs with that work, not here.
+    (*pFuncList).pfWelsSpatialWriteMbSyn = Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn);
+    (*pFuncList).pfStashMBStatus = Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc);
+    (*pFuncList).pfStashPopMBStatus = Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc);
+    (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc);
 
     crate::encoder::deblocking::DeblockingInit(
         &mut (*pFuncList).pfDeblocking as *mut _,
@@ -1032,7 +1048,10 @@ mod tests {
 
             assert!(func_list.pfDctFourT4.is_some());
             assert!(func_list.pfIDctFourT4.is_some());
-            assert!(func_list.pfInterMd.is_some());
+            // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
+            // (encoder.cpp) never sets it. It is assigned per-slice in
+            // svc_encode_slice.cpp:733/736. This assertion passed only because the
+            // port assigned the wrong function here behind a mem::transmute.
             assert!(func_list.pfWelsSpatialWriteMbSyn.is_some());
             assert!(func_list.pfStashMBStatus.is_some());
             assert!(func_list.pfStashPopMBStatus.is_some());

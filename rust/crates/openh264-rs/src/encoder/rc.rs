@@ -61,6 +61,8 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Constants and Macros
@@ -455,12 +457,6 @@ pub struct SRCSlicing {
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPps {
-    pub uiChromaQpIndexOffset: u8,
-}
-
 
 
 
@@ -491,40 +487,8 @@ pub struct SWelsRcFunc {
     pub pfWelsRcPostFrameSkipping: PWelsRCPostFrameSkippingFunc,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsFuncPtrList {
-    pub pfRc: SWelsRcFunc,
-    pub pfGetBsPosition: PGetBsPositionFunc,
-}
 
 /// Central encoder context required by rate control (`TagWelsEncCtx`).
-#[repr(C)]
-#[derive(Debug)]
-pub struct sWelsEncCtx {
-    pub pSvcParam: *mut SWelsSvcCodingParam,
-    pub pWelsSvcRc: *mut SWelsSvcRc,
-    pub pMemAlign: *mut CMemoryAlign,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pVaa: *mut SVAAFrameInfo,
-    pub pPps: *mut SPps,
-
-    pub eSliceType: i32,
-    pub uiDependencyId: u8,
-    pub uiTemporalId: u8,
-    pub iGlobalQp: i32,
-
-    pub bCheckWindowStatusRefreshFlag: bool,
-    pub iCheckWindowStartTs: i64,
-    pub iCheckWindowCurrentTs: i64,
-    pub iCheckWindowInterval: i32,
-    pub iCheckWindowIntervalShift: i32,
-    pub bCheckWindowShiftResetFlag: bool,
-
-    pub sSpatialIndexMap: [SSpatialPicIndex; 4],
-    pub bDeliveryFlag: bool,
-}
 
 // ============================================================================
 // Core Rate Control Functions
@@ -909,7 +873,7 @@ pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
         RcInitTlWeight(pEncCtx);
         RcInitVGop(pEncCtx);
     } else if (*pWelsSvcRc).iGopIndexInVGop == (*pWelsSvcRc).iGopNumberInVGop
-        || (*pEncCtx).eSliceType == I_SLICE
+        || (*pEncCtx).eSliceType as i32 == I_SLICE
     {
         RcInitVGop(pEncCtx);
     }
@@ -1155,7 +1119,7 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
     let fix_rc_overshoot = (*(*pEncCtx).pSvcParam).bFixRCOverShoot;
 
-    if (*pEncCtx).eSliceType == I_SLICE {
+    if (*pEncCtx).eSliceType as i32 == I_SLICE {
         if (*pWelsSvcRc).iIdrNum != 0 {
             (*pWelsSvcRc).iTargetBits = (*pWelsSvcRc).iBitsPerFrame
                 * (*(*pEncCtx).pSvcParam).iIdrBitrateRatio
@@ -1201,7 +1165,7 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
 
     let iBufferTh = ((*pWelsSvcRc).iBufferSizeSkip as i64 - (*pWelsSvcRc).iBufferFullnessSkip) as i32;
 
-    if (*pEncCtx).eSliceType == I_SLICE {
+    if (*pEncCtx).eSliceType as i32 == I_SLICE {
         if iBufferTh <= 0 {
             (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
             (*pWelsSvcRc).iTargetBits = (*pTOverRc).iMinBitsTl;
@@ -1751,7 +1715,7 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) 
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
 
-    if (*pEncCtx).eSliceType == P_SLICE {
+    if (*pEncCtx).eSliceType as i32 == P_SLICE {
         for i in 0..pCurSliceCtx.iSliceNumInFrame as usize {
             let pSlice = *ppSliceInLayer.add(i);
             let pSOverRc = &(*pSlice).sSlicingOverRc;
@@ -1877,7 +1841,7 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
     let kiSliceNum = (*(*pEncCtx).pCurDqLayer).iMaxSliceNum;
     (*pWelsSvcRc).iContinualSkipFrames = 0;
 
-    if (*pEncCtx).eSliceType == I_SLICE && (*pWelsSvcRc).iIdrNum == 0 {
+    if (*pEncCtx).eSliceType as i32 == I_SLICE && (*pWelsSvcRc).iIdrNum == 0 {
         RcInitRefreshParameter(pEncCtx);
     }
     if RcJudgeBitrateFpsUpdate(pEncCtx) {
@@ -1895,14 +1859,14 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
 
     if kiSliceNum > 1
         || ((*(*pEncCtx).pSvcParam).iRCMode == RCMode::RC_BITRATE_MODE
-            && (*pEncCtx).eSliceType == I_SLICE)
+            && (*pEncCtx).eSliceType as i32 == I_SLICE)
     {
         (*pWelsSvcRc).bEnableGomQp = 0;
     } else {
         (*pWelsSvcRc).bEnableGomQp = 1;
     }
 
-    if (*pEncCtx).eSliceType == I_SLICE {
+    if (*pEncCtx).eSliceType as i32 == I_SLICE {
         RcCalculateIdrQp(pEncCtx);
     } else {
         RcCalculatePictureQp(pEncCtx);
@@ -1918,7 +1882,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
 
-    if (*pEncCtx).eSliceType == P_SLICE {
+    if (*pEncCtx).eSliceType as i32 == P_SLICE {
         RcUpdateFrameComplexity(pEncCtx);
     } else {
         RcUpdateIntraComplexity(pEncCtx);
@@ -2004,7 +1968,7 @@ pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _ui
 
     (*pEncCtx).iGlobalQp = RcCalculateCascadingQp(pEncCtx, kiQp);
 
-    if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType == P_SLICE {
+    if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let delta_offset = (*(*pEncCtx).pVaa)
             .sAdaptiveQuantParam
             .iAverMotionTextureIndexToDeltaQp;
@@ -2035,7 +1999,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
-    if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType == P_SLICE {
+    if (*(*pEncCtx).pSvcParam).bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let pVaa = (*pEncCtx).pVaa;
         let delta_qp_ptr = (*pVaa).sAdaptiveQuantParam.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
@@ -2101,7 +2065,7 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
     let mut iBaseQp = (*pWelsSvcRc).iBaseQp;
     (*pEncCtx).iGlobalQp = iBaseQp;
 
-    if (*pEncCtx).eSliceType == I_SLICE {
+    if (*pEncCtx).eSliceType as i32 == I_SLICE {
         let mut iTargetBits = (iBitRate as i64 * 2) - (*pWelsSvcRc).iBufferFullnessSkip;
         iTargetBits = WELS_MAX(1, iTargetBits);
         let iQstep = WELS_DIV_ROUND64(iFrameCplx * (*pWelsSvcRc).iCost2BitsIntra, iTargetBits) as i32;
@@ -2191,7 +2155,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, i
         0
     };
 
-    if (*pEncCtx).eSliceType == P_SLICE {
+    if (*pEncCtx).eSliceType as i32 == P_SLICE {
         (*pWelsSvcRc).iAvgCost2Bits = WELS_DIV_ROUND64(
             95 * (*pWelsSvcRc).iAvgCost2Bits + 5 * iCost2Bits,
             INT_MULTIPLY as i64,
@@ -2275,7 +2239,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
     let iCodedBits = iLayerSize << 3;
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
-    if (*pEncCtx).eSliceType == P_SLICE {
+    if (*pEncCtx).eSliceType as i32 == P_SLICE {
         RcUpdateFrameComplexity(pEncCtx);
     } else {
         RcUpdateIntraComplexity(pEncCtx);

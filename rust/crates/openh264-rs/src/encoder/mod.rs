@@ -19,5 +19,6 @@ pub mod vlc_encoder;
 pub mod ref_list_mgr_svc;
 pub mod rc;
 pub mod wels_encoder_ext;
+pub mod wels_func_ptr_def;
 pub mod wels_preprocess;
 pub mod wels_task_management;

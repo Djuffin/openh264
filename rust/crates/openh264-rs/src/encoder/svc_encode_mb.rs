@@ -55,6 +55,8 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -369,43 +371,7 @@ pub unsafe extern "C" fn WelsIDctFourT4_c(
     WelsIDctT4Rec_c(pRec.add(iDstStridex4 + 4), iStride, pPred.add(iPredStridex4 + 4), iPredStride, pDct.add(48));
 }
 
-#[repr(C)]
-pub struct SWelsFuncPtrList {
-    pub pfCopy16x16Aligned: Option<PCopyAlignedFunc>,
-    pub pfCopy16x16NotAligned: Option<PCopyAlignedFunc>,
-    pub pfCopy8x8Aligned: Option<PCopyAlignedFunc>,
-    pub pfCopy4x4: Option<PCopyAlignedFunc>,
-    pub pfQuantizationHadamard2x2: Option<PQuantizationHadamardFunc>,
-    pub pfQuantizationHadamard2x2Skip: Option<PQuantizationHadamardSkipFunc>,
-    pub pfTransformHadamard4x4Dc: Option<PTransformHadamard4x4Func>,
-    pub pfDctT4: Option<PDctFunc>,
-    pub pfDctFourT4: Option<PDctFunc>,
-    pub pfScan4x4: Option<PScanFunc>,
-    pub pfScan4x4Ac: Option<PScanFunc>,
-    pub pfCalculateSingleCtr4x4: Option<PCalculateSingleCtrFunc>,
-    pub pfGetNoneZeroCount: Option<PGetNoneZeroCountFunc>,
-    pub pfQuantization4x4: Option<PQuantizationFunc>,
-    pub pfQuantizationDc4x4: Option<PQuantizationDcFunc>,
-    pub pfQuantizationFour4x4: Option<PQuantizationFour4x4Func>,
-    pub pfQuantizationFour4x4Max: Option<PQuantizationMaxFunc>,
-    pub pfDequantization4x4: Option<PDeQuantizationFunc>,
-    pub pfDequantizationFour4x4: Option<PDeQuantizationFunc>,
-    pub pfDequantizationIHadamard4x4: Option<PDeQuantizationIHadamard4x4Func>,
-    pub pfIDctFourT4: Option<PIDctFunc>,
-    pub pfIDctT4: Option<PIDctFunc>,
-    pub pfIDctI16x16Dc: Option<PIDctI16x16DcFunc>,
-    pub pfSetMemZeroSize8: Option<PSetMemoryZero>,
-    pub pfSetMemZeroSize64: Option<PSetMemoryZero>,
-}
 
-#[repr(C)]
-pub struct sWelsEncCtx {
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pStrideTab: *mut SStrideTables,
-    pub uiDependencyId: u8,
-    pub uiTemporalId: u8,
-}
 
 // ============================================================================
 // Math & Transform Helpers (C reference fallbacks)

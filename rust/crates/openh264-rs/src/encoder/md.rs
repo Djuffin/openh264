@@ -153,18 +153,7 @@ pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
 
 // Data Structures
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union SadPredISatdUnit {
-    pub uiSadPred: u32,
-    pub uiSatd: u32,
-}
-
-impl Default for SadPredISatdUnit {
-    fn default() -> Self {
-        Self { uiSadPred: 0 }
-    }
-}
+pub use crate::encoder::svc_motion_estimate::SadPredISatdUnit;
 
 
 
@@ -430,6 +419,8 @@ pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -471,25 +462,8 @@ impl Default for SSampleDealingFunc {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsFuncPtrList {
-    pub sExpandPicFunc: [usize; 4],
-    pub pfFillInterNeighborCache: Option<PFillInterNeighborCacheFunc>,
-    pub pfGetVarianceFromIntraVaa: Option<PGetVarianceFromIntraVaaFunc>,
-    pub pfGetMbSignFromInterVaa: Option<PGetMbSignFromInterVaaFunc>,
-    pub pfUpdateMbMv: Option<PUpdateMbMvFunc>,
-    pub sMcFuncs: SMcFunc,
-    pub sSampleDealingFuncs: SSampleDealingFunc,
-}
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct sWelsEncCtx {
-    pub pFuncList: *mut SWelsFuncPtrList,
-    pub pCurDqLayer: *mut SDqLayer,
-}
 
 // Mathematical Helper Functions & Macros
 #[inline(always)]
