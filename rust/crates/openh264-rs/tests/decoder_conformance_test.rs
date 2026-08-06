@@ -206,7 +206,15 @@ asset_test!(test_asset_test_cif_i_cabac_pcm, "test_cif_I_CABAC_PCM.264", "95fdf2
 asset_test!(test_asset_test_cif_i_cabac_slice, "test_cif_I_CABAC_slice.264", "19121bc67f2b13fb8f030504fc0827e1ac6d0fdb");
 asset_test!(test_asset_test_cif_p_cabac_slice, "test_cif_P_CABAC_slice.264", "521bbd0ba2422369b724c7054545cf107a56f959");
 asset_test!(test_asset_test_qcif_cabac, "test_qcif_cabac.264", "587d1d05943f3cd416bf69469975fdee05361e69");
-asset_test!(test_asset_test_scalinglist_jm, "test_scalinglist_jm.264", "992a25b4ec98db4a16d61c097e614eb16afe3478");
+// Hash intentionally differs from the C++ decoder's output (992a25b4...). This stream
+// keeps two pictures buffered at end of stream, and upstream's DecodeFrame2 flush path
+// gives them the same uiDecodingTimeStamp, so ReleaseBufferedReadyPictureNoReorder falls
+// back to slot order and emits POC 8 before POC 6. Both are iSeqNum 1, so POC order is
+// display order and 6 must come first; the port breaks the tie by POC instead (see
+// ReleaseBufferedReadyPictureNoReorder in src/api/codec_api.rs). The direction of that
+// tiebreak is confirmed independently by the JVT gold for CABA2_SVA_B, which upstream
+// also fails on the same tie.
+asset_test!(test_asset_test_scalinglist_jm, "test_scalinglist_jm.264", "f690a3af2896a53360215fb5d35016bfd41499b3");
 asset_test!(test_asset_test_vd_1d, "test_vd_1d.264", "5827d2338b79ff82cd091c707823e466197281d3");
 asset_test!(test_asset_test_vd_rc, "test_vd_rc.264", "eea02e97bfec89d0418593a8abaaf55d02eaa1ca");
 asset_test!(test_asset_cisco_men_whisper_640x320_cabac_bframe_9, "Cisco_Men_whisper_640x320_CABAC_Bframe_9.264", "931ba1caf075e7b47445c1f4410ade77a46048f6");
