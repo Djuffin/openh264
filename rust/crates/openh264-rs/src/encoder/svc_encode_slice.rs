@@ -199,72 +199,9 @@ pub fn WELS_CEILLOG2(v: u32) -> i32 {
 // Core Macroblock, Cache, and Slice Data Structures
 // ============================================================================
 
-#[repr(C, align(16))]
-pub struct SMbCache {
-    pub sMvComponents: SMVComponentUnit,
-    pub iNonZeroCoeffCount: [i8; 48],
-    pub iIntraPredMode: [i8; 48],
-    pub iSadCost: [i32; 4],
-    pub sMbMvp: [SMVUnitXY; 16],
-    pub pCoeffLevel: *mut i16,
-    pub pSkipMb: *mut u8,
-    pub pMemPredMb: *mut u8,
-    pub pMemPredLuma: *mut u8,
-    pub pMemPredChroma: *mut u8,
-    pub pBestPredIntraChroma: *mut u8,
-    pub pMemPredBlk4: *mut u8,
-    pub pBestPredI4x4Blk4: *mut u8,
-    pub pBufferInterPredMe: *mut u8,
-    pub pPrevIntra4x4PredModeFlag: *mut bool,
-    pub pRemIntra4x4PredModeFlag: *mut i8,
-    pub iSadCostSkip: [i32; 4],
-    pub bMbTypeSkip: [bool; 4],
-    pub pEncSad: *mut i32,
-    pub pDct: *mut SDCTCoeff,
-    pub uiNeighborIntra: u8,
-    pub uiLumaI16x16Mode: u8,
-    pub uiChmaI8x8Mode: u8,
-    pub bCollocatedPredFlag: bool,
-    pub uiRefMbType: u32,
-    pub SPicData: SPicData,
-}
 
-impl Default for SMbCache {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMB {
-    pub uiMbType: u32,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub sMv: *mut SMVUnitXY,
-    pub pRefIndex: *mut i8,
-    pub pSadCost: *mut i32,
-    pub pIntra4x4PredMode: *mut i8,
-    pub pNonZeroCount: *mut i8,
-    pub sP16x16Mv: SMVUnitXY,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-    pub uiChromPredMode: u32,
-    pub iLumaDQp: i32,
-    pub sMvd: [SMVUnitXY; 16],
-    pub iCbpDc: i32,
-}
 
-impl Default for SMB {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
 
 
 
@@ -419,11 +356,14 @@ impl Default for SSliceBufferInfo {
 }
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
+/// `TagLayerInfo` — `codec/encoder/core/inc/svc_enc_frame.h:77`. 48 bytes.
+/// Field order follows C++: pSubsetSpsP precedes pSpsP and pPpsP.
 pub struct SLayerInfo {
     pub sNalHeaderExt: SNalUnitHeaderExt,
+    pub pSubsetSpsP: *mut SSubsetSps,
     pub pSpsP: *mut SWelsSPS,
     pub pPpsP: *mut SWelsPPS,
-    pub pSubsetSpsP: *mut SSubsetSps,
 }
 
 impl Default for SLayerInfo {
@@ -511,6 +451,8 @@ pub use crate::encoder::rc::SRCSlicing;
 pub use crate::encoder::md::SWelsMD;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::md::SMB;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;

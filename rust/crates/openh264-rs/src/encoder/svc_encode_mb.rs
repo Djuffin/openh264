@@ -51,6 +51,9 @@ pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::md::SMB;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -267,67 +270,9 @@ pub static g_kuiDequantCoeff: [[u16; 8]; 52] = [
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMB {
-    pub uiMbType: u32,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub sMv: *mut SMVUnitXY,
-    pub pRefIndex: *mut i8,
-    pub pSadCost: *mut i32,
-    pub pIntra4x4PredMode: *mut i8,
-    pub pNonZeroCount: *mut i8,
-    pub sP16x16Mv: SMVUnitXY,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-    pub uiChromPredMode: u32,
-    pub iLumaDQp: i32,
-    pub sMvd: [SMVUnitXY; 16],
-    pub iCbpDc: i32,
-}
-
-#[repr(C)]
-pub struct SMbCache {
-    pub sMvComponents: [i16; 2],
-    pub iNonZeroCoeffCount: [i8; 48],
-    pub iIntraPredMode: [i8; 48],
-    pub iSadCost: [i32; 4],
-    pub sMbMvp: [SMVUnitXY; 16],
-    pub pCoeffLevel: *mut i16,
-    pub pSkipMb: *mut u8,
-    pub pMemPredMb: *mut u8,
-    pub pMemPredLuma: *mut u8,
-    pub pMemPredChroma: *mut u8,
-    pub pBestPredIntraChroma: *mut u8,
-    pub pMemPredBlk4: *mut u8,
-    pub pBestPredI4x4Blk4: *mut u8,
-    pub pBufferInterPredMe: *mut u8,
-    pub pPrevIntra4x4PredModeFlag: *mut bool,
-    pub pRemIntra4x4PredModeFlag: *mut i8,
-    pub iSadCostSkip: [i32; 4],
-    pub bMbTypeSkip: [bool; 4],
-    pub pEncSad: *mut i32,
-    pub pDct: *mut SDCTCoeff,
-    pub uiNeighborIntra: u8,
-    pub uiLumaI16x16Mode: u8,
-    pub uiChmaI8x8Mode: u8,
-    pub bCollocatedPredFlag: bool,
-    pub uiRefMbType: u32,
-    pub SPicData: SPicData,
-}
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLayerInfo {
-    pub pPpsP: *mut SWelsPPS,
-}
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

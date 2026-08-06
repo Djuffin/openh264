@@ -25,7 +25,8 @@ use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::expand_pic::SExpandPicFunc;
 use crate::common::mc::SMcFunc;
 use crate::encoder::encoder_context::{SLTRState, SSpatialPicIndex, SStrideTables};
-use crate::encoder::md::{SSampleDealingFunc, SWelsMD};
+use crate::encoder::md::{SMB, SMbCache, SSampleDealingFunc, SWelsMD};
+use crate::encoder::svc_encode_slice::SLayerInfo;
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
 use crate::encoder::param_svc::{SSpatialLayerInternal, SWelsSvcCodingParam};
 use crate::encoder::rc::{SRCSlicing, SWelsSvcRc};
@@ -120,3 +121,8 @@ assert_size!(SWelsSvcCodingParam, 1240);
 assert_size!(SWelsSvcRc, 360);
 assert_size!(SSliceCtx, 32);
 
+
+// codec/encoder/core/inc/mb_cache.h, svc_enc_macroblock.h, svc_enc_frame.h
+assert_size!(SMbCache, 576);
+assert_size!(SMB, 152);
+assert_size!(SLayerInfo, 48);
