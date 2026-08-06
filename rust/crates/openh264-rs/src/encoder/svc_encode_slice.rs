@@ -92,14 +92,17 @@ pub const ENC_RETURN_MEMOVERFLOWFOUND: i32 = 0x20;
 pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
 pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
 
+// `wels_common_defs.h:275-285`. MB_TYPE_INTRA_BL and MB_TYPE_SKIP were both wrong
+// here: 0x04 is MB_TYPE_INTRA8x8 and 0x80 is MB_TYPE_8x8_REF0. Both are live, in
+// IS_SVC_INTER and IS_SKIP below.
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
 pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
-pub const MB_TYPE_INTRA_BL: u32 = 0x00000004;
 pub const MB_TYPE_16x16: u32 = 0x00000008;
 pub const MB_TYPE_16x8: u32 = 0x00000010;
 pub const MB_TYPE_8x16: u32 = 0x00000020;
 pub const MB_TYPE_8x8: u32 = 0x00000040;
-pub const MB_TYPE_SKIP: u32 = 0x00000080;
+pub const MB_TYPE_SKIP: u32 = 0x00000100;
+pub const MB_TYPE_INTRA_BL: u32 = 0x00000400;
 
 pub const g_kuiChromaQpTable: [u8; 52] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
@@ -720,6 +723,15 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     pCurSliceHeader.eSliceType = (*pEncCtx).eSliceType;
     pCurSliceExt.bStoreRefBasePicFlag = false;
 
+    // svc_encode_slice.cpp:97-98. Both of these were missing: `iFrameNum` stayed 0 for
+    // every frame, and `uiIdrPicId` stayed 0 where WriteSsvcParaset has already
+    // incremented the layer's counter to 1, so the IDR slice header wrote ue(0) (1 bit)
+    // where the C++ writes ue(1) (3 bits) -- the 2-bit offset that shifted the whole
+    // slice payload.
+    let pParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[uiDid];
+    pCurSliceHeader.iFrameNum = pParamInternal.iFrameNum;
+    pCurSliceHeader.uiIdrPicId = pParamInternal.uiIdrPicId;
+
     if !(*pEncCtx).pEncPic.is_null() {
         pCurSliceHeader.iPicOrderCntLsb = (*(*pEncCtx).pEncPic).iFramePoc;
     }
@@ -1030,16 +1042,30 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, p
     let pCsCb = (*pMbCache).SPicData.pCsMb[1];
     let pCsCr = (*pMbCache).SPicData.pCsMb[2];
 
-    if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        if let Some(dct) = func_list.pfDctFourT4 {
-            dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-            dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
-        }
-        if let Some(idct) = func_list.pfIDctFourT4 {
-            idct(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
-            idct(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
-        }
-    }
+    // This previously ran both DCTs and then both IDCTs, omitting the two
+    // `WelsEncRecUV` calls between them. That is the quantise / zigzag /
+    // non-zero-count / chroma-CBP step: without it `pCurRS` reached the IDCT holding
+    // raw DCT coefficients, `pCurMb->uiCbp` never got its chroma bits and
+    // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
+    let pFunc = (*pEncCtx).pFuncList;
+    let pfDctFourT4 = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
+    let pfIDctFourT4 = (*pFunc).pfIDctFourT4.expect("pfIDctFourT4 unset");
+
+    //cb
+    pfDctFourT4(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
+    pfIDctFourT4(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
+
+    //cr
+    pfDctFourT4(
+        pCurRS.add(64),
+        (*pMbCache).SPicData.pEncMb[2],
+        kiEncStride,
+        pBestPred.add(64),
+        8,
+    );
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
+    pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
 }
 
 pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
@@ -1170,10 +1196,20 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
 
+    let kbCabac = (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0;
+    if kbCabac {
+        crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
+        sDss.pRestoreBuffer = std::ptr::null_mut();
+        sDss.iStartPos = 0;
+        sDss.iCurrentPos = 0;
+    }
+
     loop {
-        if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfStashMBStatus {
-                func(&mut sDss, pSlice, 0);
+        if !kbCabac {
+            if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
+                if let Some(func) = func_list.pfStashMBStatus {
+                    func(&mut sDss, pSlice, 0);
+                }
             }
         }
         iCurMbIdx = iNextMbIdx;
@@ -1184,9 +1220,17 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
                 func(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
             }
         }
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            pEncCtx,
+            pCurMb,
+            pMbCache,
+            kiSliceFirstMbXY,
+        );
 
+        // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pCurMb, pMbCache);
             UpdateNonZeroCountCache(pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
@@ -1196,7 +1240,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
                 }
             }
 
-            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
                         func(&mut sDss, pSlice);
@@ -1746,7 +1790,35 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         return iEncReturn;
     }
 
+    WelsWriteSliceEndSyn(pCurSlice, (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0);
+
     ENC_RETURN_SUCCESS
+}
+
+/// `set_mb_syn_cavlc.cpp:279`. Terminates the slice bitstream.
+///
+/// This was missing entirely, and with it the `BsRbspTrailingBits` + `BsFlush` pair
+/// that pushes the last partial 32-bit accumulator word out to the buffer -- so every
+/// slice lost its final byte.
+///
+/// **Incomplete for CABAC**: `WelsCabacEncodeFlush` / `WelsCabacEncodeGetPtr` are
+/// unported. The caller rejects `iEntropyCodingModeFlag` before reaching here (see
+/// `encoder_context::InitFunctionPointers`), so the branch panics rather than
+/// silently emitting a truncated slice.
+///
+/// # Safety
+/// `pSlice` must be valid and have `pSliceBsa` installed.
+pub unsafe fn WelsWriteSliceEndSyn(pSlice: *mut SSlice, bEntropyCodingModeFlag: bool) {
+    let pBs = (*pSlice).pSliceBsa;
+    if bEntropyCodingModeFlag {
+        unimplemented!(
+            "WelsWriteSliceEndSyn: the CABAC tail needs WelsCabacEncodeFlush / \
+             WelsCabacEncodeGetPtr, which are unported"
+        );
+    } else {
+        crate::encoder::vlc_encoder::BsRbspTrailingBits(pBs);
+        crate::encoder::vlc_encoder::BsFlush(pBs);
+    }
 }
 
 // ============================================================================

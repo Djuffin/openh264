@@ -2393,14 +2393,9 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
 }
 
 /// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
-///
-/// **Incomplete**: C++ also assigns `pfIntraFineMd = WelsMdIntraFinePartitionVaa`.
-/// That function lives in `svc_base_layer_md.cpp`, of which 22 of 32 functions -- the
-/// whole mode-decision layer -- are unported. See the status doc, "The mode-decision
-/// layer is missing". The `pfIntraFineMd` slot is therefore left as it was rather than
-/// being pointed at a substitute, which would be worse than leaving it unset.
 unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
-    // pFuncList->pfIntraFineMd = WelsMdIntraFinePartitionVaa;   // UNPORTED
+    (*pFuncList).pfIntraFineMd =
+        Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
     sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr();
     sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Sad;
@@ -2408,11 +2403,8 @@ unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
-///
-/// **Incomplete** for the same reason as [`SetFastCodingFunc`]: C++ also assigns
-/// `pfIntraFineMd = WelsMdIntraFinePartition`, which is unported.
 unsafe fn SetNormalCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
-    // pFuncList->pfIntraFineMd = WelsMdIntraFinePartition;      // UNPORTED
+    (*pFuncList).pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
     sdf.pfMdCost = sdf.pfSampleSatd.as_mut_ptr();
     sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Satd;
@@ -2455,10 +2447,11 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 /// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
 ///
-/// **Incomplete**: the `pfIntraFineMd`, `pfInterFineMd` and `pfFirstIntraMode` slots
-/// are left unset because their targets (`WelsMdIntraFinePartition[Vaa]`,
-/// `WelsMdInterFinePartition[Vaa]`, `WelsMdFirstIntraMode`) are part of the unported
-/// mode-decision layer. Every other assignment here is a faithful translation.
+/// **Incomplete**: the `pfInterFineMd` and `pfFirstIntraMode` slots are left unset
+/// because their targets (`WelsMdInterFinePartition[Vaa]`, `WelsMdFirstIntraMode`) are
+/// part of the still-unported inter half of `svc_base_layer_md.cpp`. `pfIntraFineMd`
+/// is assigned by `SetFastCodingFunc`/`SetNormalCodingFunc` above. Every other
+/// assignment here is a faithful translation.
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = (*pCtx).pCurDqLayer;
     let bFastMode = (*(*pCtx).pSvcParam).iComplexityMode == LOW_COMPLEXITY;

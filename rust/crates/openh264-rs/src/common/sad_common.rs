@@ -11,18 +11,15 @@
 //!
 //! Translated from `codec/common/inc/sad_common.h` and `codec/common/src/sad_common.cpp`.
 
-/// Function pointer signature for single-candidate SAD / SATD distortion calculation.
-pub type PSampleSadSatdCostFunc =
-    unsafe extern "C" fn(pSample1: *const u8, iStride1: i32, pSample2: *const u8, iStride2: i32) -> i32;
-
-/// Function pointer signature for 4-directional diamond search SAD calculation.
-pub type PSample4SadCostFunc = unsafe extern "C" fn(
-    iSample1: *const u8,
-    iStride1: i32,
-    iSample2: *const u8,
-    iStride2: i32,
-    pSad: *mut i32,
-);
+// `PSampleSadSatdCostFunc` and `PSample4SadCostFunc` were declared here too, the
+// former with `*const u8` parameters where `wels_func_ptr_def.h:127` says `uint8_t*`
+// -- a fifth identity for that alias, and a distinct function type from the one the
+// SSampleDealingFunc tables hold. The canonical declarations are
+// `encoder::md::PSampleSadSatdCostFunc` and
+// `encoder::svc_motion_estimate::PSample4SadCostFunc`; re-exported rather than
+// redeclared so there stays one definition each.
+pub use crate::encoder::md::PSampleSadSatdCostFunc;
+pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 
 /// Block partition types matching OpenH264's `Sub_Block_Multiple_T`.
 #[repr(C)]
@@ -56,9 +53,9 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 /// the specified strides.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x4_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -89,9 +86,9 @@ pub unsafe extern "C" fn WelsSampleSad4x4_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x4_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -111,9 +108,9 @@ pub unsafe extern "C" fn WelsSampleSad8x4_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x8_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -138,9 +135,9 @@ pub unsafe extern "C" fn WelsSampleSad4x8_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x8_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -175,9 +172,9 @@ pub unsafe extern "C" fn WelsSampleSad8x8_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x8_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -197,9 +194,9 @@ pub unsafe extern "C" fn WelsSampleSad16x8_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x16_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -224,9 +221,9 @@ pub unsafe extern "C" fn WelsSampleSad8x16_c(
 /// Requires valid readable pointers for `pSample1` and `pSample2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x16_c(
-    pSample1: *const u8,
+    pSample1: *mut u8,
     iStride1: i32,
-    pSample2: *const u8,
+    pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
     let mut iSadSum: i32 = 0;
@@ -260,9 +257,9 @@ pub unsafe extern "C" fn WelsSampleSad16x16_c(
 /// `iSample1`, `iSample2`, and `pSad` (must have at least 4 elements) must be valid pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -283,9 +280,9 @@ pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -306,9 +303,9 @@ pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -329,9 +326,9 @@ pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -352,9 +349,9 @@ pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -375,9 +372,9 @@ pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -398,9 +395,9 @@ pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
 /// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
-    iSample1: *const u8,
+    iSample1: *mut u8,
     iStride1: i32,
-    iSample2: *const u8,
+    iSample2: *mut u8,
     iStride2: i32,
     pSad: *mut i32,
 ) {
@@ -466,61 +463,61 @@ mod tests {
 
     #[test]
     fn test_sample_sad_4x4_identical() {
-        let buf = [42u8; 64];
+        let mut buf = [42u8; 64];
         unsafe {
-            let sad = WelsSampleSad4x4_c(buf.as_ptr(), 8, buf.as_ptr(), 8);
+            let sad = WelsSampleSad4x4_c(buf.as_mut_ptr(), 8, buf.as_mut_ptr(), 8);
             assert_eq!(sad, 0);
         }
     }
 
     #[test]
     fn test_sample_sad_4x4_diff() {
-        let buf1 = [10u8; 16];
-        let buf2 = [20u8; 16];
+        let mut buf1 = [10u8; 16];
+        let mut buf2 = [20u8; 16];
         unsafe {
-            let sad = WelsSampleSad4x4_c(buf1.as_ptr(), 4, buf2.as_ptr(), 4);
+            let sad = WelsSampleSad4x4_c(buf1.as_mut_ptr(), 4, buf2.as_mut_ptr(), 4);
             assert_eq!(sad, 16 * 10);
         }
     }
 
     #[test]
     fn test_sample_sad_8x8_diff() {
-        let buf1 = [5u8; 64];
-        let buf2 = [15u8; 64];
+        let mut buf1 = [5u8; 64];
+        let mut buf2 = [15u8; 64];
         unsafe {
-            let sad = WelsSampleSad8x8_c(buf1.as_ptr(), 8, buf2.as_ptr(), 8);
+            let sad = WelsSampleSad8x8_c(buf1.as_mut_ptr(), 8, buf2.as_mut_ptr(), 8);
             assert_eq!(sad, 64 * 10);
         }
     }
 
     #[test]
     fn test_sample_sad_16x16_diff() {
-        let buf1 = [0u8; 256];
-        let buf2 = [2u8; 256];
+        let mut buf1 = [0u8; 256];
+        let mut buf2 = [2u8; 256];
         unsafe {
-            let sad = WelsSampleSad16x16_c(buf1.as_ptr(), 16, buf2.as_ptr(), 16);
+            let sad = WelsSampleSad16x16_c(buf1.as_mut_ptr(), 16, buf2.as_mut_ptr(), 16);
             assert_eq!(sad, 256 * 2);
         }
     }
 
     #[test]
     fn test_sample_sad_partitions() {
-        let buf1: Vec<u8> = (0..512).map(|x| (x % 255) as u8).collect();
-        let buf2: Vec<u8> = (0..512).map(|x| ((x + 5) % 255) as u8).collect();
+        let mut buf1: Vec<u8> = (0..512).map(|x| (x % 255) as u8).collect();
+        let mut buf2: Vec<u8> = (0..512).map(|x| ((x + 5) % 255) as u8).collect();
 
         unsafe {
-            let s8x4 = WelsSampleSad8x4_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32);
-            let s4x8 = WelsSampleSad4x8_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32);
-            let s16x8 = WelsSampleSad16x8_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32);
-            let s8x16 = WelsSampleSad8x16_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32);
-            let s16x16 = WelsSampleSad16x16_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32);
+            let s8x4 = WelsSampleSad8x4_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
+            let s4x8 = WelsSampleSad4x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
+            let s16x8 = WelsSampleSad16x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
+            let s8x16 = WelsSampleSad8x16_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
+            let s16x16 = WelsSampleSad16x16_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);
 
             assert!(s8x4 > 0);
             assert!(s4x8 > 0);
             assert_eq!(
                 s16x8,
-                WelsSampleSad8x8_c(buf1.as_ptr(), 32, buf2.as_ptr(), 32)
-                    + WelsSampleSad8x8_c(buf1.as_ptr().add(8), 32, buf2.as_ptr().add(8), 32)
+                WelsSampleSad8x8_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32)
+                    + WelsSampleSad8x8_c(buf1.as_mut_ptr().add(8), 32, buf2.as_mut_ptr().add(8), 32)
             );
         }
     }
@@ -528,15 +525,15 @@ mod tests {
     #[test]
     fn test_sample_sad_four_16x16() {
         let stride = 64;
-        let buf1 = vec![100u8; stride * 32];
-        let buf2 = vec![100u8; stride * 32];
+        let mut buf1 = vec![100u8; stride * 32];
+        let mut buf2 = vec![100u8; stride * 32];
 
         let center_offset = stride * 10 + 10;
-        let p_center = unsafe { buf2.as_ptr().add(center_offset) };
+        let p_center = unsafe { buf2.as_mut_ptr().add(center_offset) };
 
         let mut sad_results = [0i32; 4];
         unsafe {
-            WelsSampleSadFour16x16_c(buf1.as_ptr(), stride as i32, p_center, stride as i32, sad_results.as_mut_ptr());
+            WelsSampleSadFour16x16_c(buf1.as_mut_ptr(), stride as i32, p_center, stride as i32, sad_results.as_mut_ptr());
         }
         assert_eq!(sad_results, [0, 0, 0, 0]);
     }
