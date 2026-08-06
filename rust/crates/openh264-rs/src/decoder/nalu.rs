@@ -673,71 +673,77 @@ pub unsafe fn ParseNalHeader(
             (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
         }
 
-        EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT => {
-            pCurNal = MemGetNextNal(&mut (*pCtx).pAccessUnitList, (*pCtx).pMemAlign);
-            if pCurNal.is_null() {
-                (*pCtx).iErrorCode |= dsOutOfMemory;
-                return std::ptr::null_mut();
-            }
-            (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = (*pNalUnitHeader).uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
-
-            let pCurAu = (*pCtx).pAccessUnitList;
-            let uiAvailNalNum = (*pCurAu).uiAvailUnitsNum;
-
-            if iNalSize < NAL_UNIT_HEADER_EXT_SIZE as i32 {
-                ForceClearCurrentNal(pCurAu);
-                if uiAvailNalNum > 1 {
-                    (*pCurAu).uiEndPos = uiAvailNalNum - 2;
-                    (*pCtx).bAuReadyFlag = true;
-                }
-                (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
-            }
-
-            DecodeNalHeaderExt(pCurNal, pNal);
-            if (*pCurNal).sNalHeaderExt.uiQualityId != 0
-                || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
-            {
-                ForceClearCurrentNal(pCurAu);
-                if uiAvailNalNum > 1 {
-                    (*pCurAu).uiEndPos = uiAvailNalNum - 2;
-                    (*pCtx).bAuReadyFlag = true;
-                }
-                (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
-            }
-            pNal = pNal.add(NAL_UNIT_HEADER_EXT_SIZE);
-            *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
-        }
-
-        EWelsNalUnitType::NAL_UNIT_CODED_SLICE | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR => {
-            pCurNal = MemGetNextNal(&mut (*pCtx).pAccessUnitList, (*pCtx).pMemAlign);
-            if pCurNal.is_null() {
-                (*pCtx).iErrorCode |= dsOutOfMemory;
-                return std::ptr::null_mut();
-            }
-            (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = (*pNalUnitHeader).uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
-
-            if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
-                == EWelsNalUnitType::NAL_UNIT_PREFIX
-            {
-                if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalData.sPrefixNal.bPrefixNalCorrectFlag {
-                    PrefetchNalHeaderExtSyntax(pCtx, pCurNal, &mut (*pCtx).sSpsPpsCtx.sPrefixNal);
-                }
-            }
-
-            (*pCurNal).sNalHeaderExt.bIdrFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
-            (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag = true;
-
-            let pCurAu = (*pCtx).pAccessUnitList;
-            let uiAvailNalNum = (*pCurAu).uiAvailUnitsNum;
+        // `case NAL_UNIT_CODED_SLICE_EXT: bExtensionFlag = true;` falls through into
+        // the shared slice body in C, so all three NAL types run the same code and an
+        // SVC slice-extension NAL reaches ParseSliceHeaderSyntaxs with the flag set.
+        // Splitting this into separate match arms leaves type-20 slices unparsed.
+        EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT
+        | EWelsNalUnitType::NAL_UNIT_CODED_SLICE
+        | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR => {
             let bExtensionFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+
+            pCurNal = MemGetNextNal(&mut (*pCtx).pAccessUnitList, (*pCtx).pMemAlign);
+            if pCurNal.is_null() {
+                (*pCtx).iErrorCode |= dsOutOfMemory;
+                return std::ptr::null_mut();
+            }
+            (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = (*pNalUnitHeader).uiNalRefIdc;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
+
+            let pCurAu = (*pCtx).pAccessUnitList;
+            let uiAvailNalNum = (*pCurAu).uiAvailUnitsNum;
+
+            if bExtensionFlag {
+                if iNalSize < NAL_UNIT_HEADER_EXT_SIZE as i32 {
+                    ForceClearCurrentNal(pCurAu);
+                    if uiAvailNalNum > 1 {
+                        (*pCurAu).uiEndPos = uiAvailNalNum - 2;
+                        if !(*pCtx).pParam.is_null()
+                            && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
+                        {
+                            (*pCtx).bAuReadyFlag = true;
+                        }
+                    }
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    return std::ptr::null_mut();
+                }
+
+                DecodeNalHeaderExt(pCurNal, pNal);
+                if (*pCurNal).sNalHeaderExt.uiQualityId != 0
+                    || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
+                {
+                    // MGS not supported.
+                    ForceClearCurrentNal(pCurAu);
+                    if uiAvailNalNum > 1 {
+                        (*pCurAu).uiEndPos = uiAvailNalNum - 2;
+                        if !(*pCtx).pParam.is_null()
+                            && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
+                        {
+                            (*pCtx).bAuReadyFlag = true;
+                        }
+                    }
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    return std::ptr::null_mut();
+                }
+                pNal = pNal.add(NAL_UNIT_HEADER_EXT_SIZE);
+                iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
+                *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
+            } else {
+                if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
+                    == EWelsNalUnitType::NAL_UNIT_PREFIX
+                {
+                    if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalData.sPrefixNal.bPrefixNalCorrectFlag {
+                        PrefetchNalHeaderExtSyntax(pCtx, pCurNal, &mut (*pCtx).sSpsPpsCtx.sPrefixNal);
+                    }
+                }
+
+                // SHOULD update this flag for AVC if no prefix NAL.
+                (*pCurNal).sNalHeaderExt.bIdrFlag =
+                    eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+                (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag = true;
+            }
 
             let pBs = &mut (*(*(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize)))
                 .sNalData

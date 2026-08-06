@@ -2715,6 +2715,176 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     if !kbExtensionFlag {
         FillDefaultSliceHeaderExt(pSliceHeadExt, pNalHeaderExt);
+    } else {
+        // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
+        // the slice header, so skipping them desynchronises the slice-data parse.
+        let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
+        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut _ as *mut c_void;
+
+        if !pNalHeaderExt.bNoInterLayerPredFlag && BASE_QUALITY_ID == pNalHeaderExt.uiQualityId {
+            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
+            if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
+                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                //disable_inter_layer_deblocking_filter_idc
+                (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc = uiCode;
+                if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc > 6 {
+                    return GENERATE_ERROR_NO(
+                        ERR_LEVEL_SLICE_HEADER,
+                        ERR_INFO_INVALID_DBLOCKING_IDC,
+                    );
+                }
+                if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
+                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //inter_layer_slice_alpha_c0_offset_div2
+                    (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset = iCode * 2;
+                    if (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                        < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
+                        || (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                            > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
+                    {
+                        return GENERATE_ERROR_NO(
+                            ERR_LEVEL_SLICE_HEADER,
+                            ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
+                        );
+                    }
+                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //inter_layer_slice_beta_offset_div2
+                    (*pSliceHeadExt).iInterLayerSliceBetaOffset = iCode * 2;
+                    if (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                        < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
+                        || (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                            > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
+                    {
+                        return GENERATE_ERROR_NO(
+                            ERR_LEVEL_SLICE_HEADER,
+                            ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
+                        );
+                    }
+                }
+            }
+
+            (*pSliceHeadExt).uiRefLayerChromaPhaseXPlus1Flag =
+                (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseXPlus1Flag;
+            (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
+                (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
+
+            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
+
+            {
+                let scaled = &(*pSubsetSps).sSpsSvcExt.sSeqScaledRefLayer;
+                let iLeftOffset = scaled.iLeftOffset;
+                let iTopOffset = scaled.iTopOffset * (2 - (*pSps).bFrameMbsOnlyFlag as i32);
+                let iRightOffset = scaled.iRightOffset;
+                let iBottomOffset = scaled.iBottomOffset * (2 - (*pSps).bFrameMbsOnlyFlag as i32);
+                (*pSliceHeadExt).iScaledRefLayerPicWidthInSampleLuma =
+                    ((*pSliceHead).iMbWidth << 4) - (iLeftOffset + iRightOffset);
+                (*pSliceHeadExt).iScaledRefLayerPicHeightInSampleLuma =
+                    ((*pSliceHead).iMbHeight << 4)
+                        - (iTopOffset + iBottomOffset) / (1 + (*pSliceHead).bFieldPicFlag as i32);
+            }
+        } else if pNalHeaderExt.uiQualityId > BASE_QUALITY_ID {
+            // MGS not supported.
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
+        } else {
+            (*pSliceHeadExt).uiRefLayerDqId = u8::MAX;
+        }
+
+        (*pSliceHeadExt).bSliceSkipFlag = false;
+        (*pSliceHeadExt).bAdaptiveBaseModeFlag = false;
+        (*pSliceHeadExt).bDefaultBaseModeFlag = false;
+        (*pSliceHeadExt).bAdaptiveMotionPredFlag = false;
+        (*pSliceHeadExt).bDefaultMotionPredFlag = false;
+        (*pSliceHeadExt).bAdaptiveResidualPredFlag = false;
+        (*pSliceHeadExt).bDefaultResidualPredFlag = false;
+        (*pSliceHeadExt).bTCoeffLevelPredFlag = if pNalHeaderExt.bNoInterLayerPredFlag {
+            false
+        } else {
+            (*pSubsetSps).sSpsSvcExt.bSeqTCoeffLevelPredFlag
+        };
+
+        if !pNalHeaderExt.bNoInterLayerPredFlag {
+            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
+            if (*pSliceHeadExt).bSliceSkipFlag {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
+            } else {
+                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
+                if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
+                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
+                }
+                if !(*pSliceHeadExt).bDefaultBaseModeFlag {
+                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //adaptive_motion_prediction_flag
+                    (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
+                    if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
+                        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        //default_motion_prediction_flag
+                        (*pSliceHeadExt).bDefaultMotionPredFlag = uiCode != 0;
+                    }
+                }
+
+                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                //adaptive_residual_prediction_flag
+                (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
+                if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
+                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //default_residual_prediction_flag
+                    (*pSliceHeadExt).bDefaultResidualPredFlag = uiCode != 0;
+                }
+            }
+            if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
+                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                //tcoeff_level_prediction_flag
+                (*pSliceHeadExt).bTCoeffLevelPredFlag = uiCode != 0;
+            }
+        }
+
+        if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+            if BsGetBits(pBs, 4, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
+            if BsGetBits(pBs, 4, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
+            if (*pSliceHeadExt).uiScanIdxStart != 0 || (*pSliceHeadExt).uiScanIdxEnd != 15 {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
+            }
+        } else {
+            (*pSliceHeadExt).uiScanIdxStart = 0;
+            (*pSliceHeadExt).uiScanIdxEnd = 15;
+        }
     }
 
     ERR_NONE
