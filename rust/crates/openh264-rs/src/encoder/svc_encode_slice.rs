@@ -1323,14 +1323,14 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
     if kiMbXY < 0 || kiMbXY >= pSliceSeg.iMbNumInFrame {
         return -1;
     }
-    if pSliceSeg.uiSliceMode == SliceMode::SmSingleSlice {
+    if pSliceSeg.uiSliceMode == SliceMode::SM_SINGLE_SLICE {
         let iNextMbIdx = kiMbXY + 1;
         if iNextMbIdx >= pSliceSeg.iMbNumInFrame {
             -1
         } else {
             iNextMbIdx
         }
-    } else if pSliceSeg.uiSliceMode != SliceMode::SmReserved {
+    } else if pSliceSeg.uiSliceMode != SliceMode::SM_RESERVED {
         let iNextMbIdx = kiMbXY + 1;
         if iNextMbIdx < pSliceSeg.iMbNumInFrame
             && !pSliceSeg.pOverallMbMap.is_null()
@@ -1923,7 +1923,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 
     let kiDynamicSliceFlag = if !(*pEncCtx).pSvcParam.is_null() {
         let did = (*pEncCtx).uiDependencyId as usize;
-        if (*(*pEncCtx).pSvcParam).sSpatialLayers[did].sSliceArgument.uiSliceMode == SliceMode::SmSizeSlice {
+        if (*(*pEncCtx).pSvcParam).sSpatialLayers[did].sSliceArgument.uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
             1
         } else {
             0
@@ -2163,15 +2163,15 @@ pub unsafe fn InitSliceBoundaryInfo(
         let mut iMbNumInSlice: i32;
 
         match (*pSliceArgument).uiSliceMode {
-            SliceMode::SmSingleSlice => {
+            SliceMode::SM_SINGLE_SLICE => {
                 iFirstMBInSlice = 0;
                 iMbNumInSlice = kiCountNumMbInFrame;
             }
-            SliceMode::SmRasterSlice if (*pSliceArgument).uiSliceMbNum[0] == 0 => {
+            SliceMode::SM_RASTER_SLICE if (*pSliceArgument).uiSliceMbNum[0] == 0 => {
                 iFirstMBInSlice = iSliceIdx * kiMBWidth;
                 iMbNumInSlice = kiMBWidth;
             }
-            SliceMode::SmRasterSlice | SliceMode::SmFixedSliceNum => {
+            SliceMode::SM_RASTER_SLICE | SliceMode::SM_FIXEDSLCNUM_SLICE => {
                 let mut iMbIdx = 0;
                 for i in 0..iSliceIdx {
                     iMbIdx += (*pSliceArgument).uiSliceMbNum[i as usize] as i32;
@@ -2182,7 +2182,7 @@ pub unsafe fn InitSliceBoundaryInfo(
                 iFirstMBInSlice = iMbIdx;
                 iMbNumInSlice = (*pSliceArgument).uiSliceMbNum[iSliceIdx as usize] as i32;
             }
-            SliceMode::SmSizeSlice => {
+            SliceMode::SM_SIZELIMITED_SLICE => {
                 iFirstMBInSlice = 0;
                 iMbNumInSlice = kiCountNumMbInFrame;
             }
@@ -2410,10 +2410,10 @@ pub unsafe fn InitSliceInLayer(
     let pSliceArgument = &mut (*(*pCtx).pSvcParam).sSpatialLayers[kiDlayerIndex as usize].sSliceArgument;
 
     (*pDqLayer).bSliceBsBufferFlag = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
-        && pSliceArgument.uiSliceMode != SliceMode::SmSingleSlice;
+        && pSliceArgument.uiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
     (*pDqLayer).bThreadSlcBufferFlag = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
-        && pSliceArgument.uiSliceMode == SliceMode::SmSizeSlice;
+        && pSliceArgument.uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
 
     let iRet = InitSliceThreadInfo(pCtx, pDqLayer, kiDlayerIndex, pMa);
     if iRet != ENC_RETURN_SUCCESS {
@@ -2517,7 +2517,7 @@ pub unsafe fn ReallocateSliceList(
     let kiCurDid = (*pCtx).uiDependencyId as usize;
     let iMaxSliceBufferSize = (*pCtx).iSliceBufferSize[kiCurDid];
     let bIndependenceBsBuffer = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
-        && (*pSliceArgument).uiSliceMode != SliceMode::SmSingleSlice;
+        && (*pSliceArgument).uiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
     let pNewSliceList = (*pMA).WelsMallocz(
         (std::mem::size_of::<SSlice>() * kiMaxSliceNumNew as usize) as u32,
@@ -2735,10 +2735,10 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMod
     let mut iNonUsedBufferNum = 0;
     let mut aiPartitionOffset = [0i32; MAX_THREADS_NUM];
 
-    let iPartitionNum = if kuiSliceMode == SliceMode::SmSizeSlice { kiThreadNum } else { 1 };
+    let iPartitionNum = if kuiSliceMode == SliceMode::SM_SIZELIMITED_SLICE { kiThreadNum } else { 1 };
     for iPartitionIdx in 0..iPartitionNum {
         aiPartitionOffset[iPartitionIdx as usize] = iEncodeSliceNum;
-        if kuiSliceMode == SliceMode::SmSizeSlice {
+        if kuiSliceMode == SliceMode::SM_SIZELIMITED_SLICE {
             iEncodeSliceNum += (*pCurLayer).NumSliceCodedOfPartition[iPartitionIdx as usize];
         } else {
             iEncodeSliceNum = (*pCurLayer).sSliceEncCtx.iSliceNumInFrame;

@@ -127,3 +127,94 @@ Root causes, all confirmed against the code:
 
 Gate 0 met: `h264enc`/`h264dec`/`codec_unittest` build and run; `compare.sh` is a
 reproducible byte-comparison; baseline recorded above.
+
+### Phase 1 — unify the public API structs — **DONE**
+
+Deleted all 26 items `lib.rs` re-declared on top of `api/codec_api.rs` (8 structs,
+7 enums, 11 constants); `api/codec_api.rs` is now the single source of truth and
+`lib.rs` is 57 lines. Removed the 5 pointer casts in the C-ABI shims. Fixed the
+`eFrameType`-as-`i32` assignments.
+
+Enum variants were renamed to the verbatim C++ spellings that `codec_api.rs`
+already used (`RCMode::RcQualityMode` → `RC_MODES::RC_QUALITY_MODE`, etc.),
+121 sites across 8 modules.
+
+**Gate 1 met.** `cargo build` clean; ABI guards pass; the encoder probe went from
+
+```
+frame 0: type=videoFrameTypeInvalid layers=0 bytes=0
+```
+
+to
+
+```
+frame 0: type=videoFrameTypeIDR layers=1 bytes=0
+```
+
+i.e. the encoder's writes now land in the caller's struct. Still 0 bytes — Phase 4.
+
+#### Defects found beyond the audit
+
+- `lib.rs` had two `CM_*` constants with **wrong values**: `CM_UNSUPPORTED_DATA` = 4
+  (C: 5) and `CM_UNKNOW_REASON` = 5 (C: 2). It also invented `CM_UNINITIALIZED_ERROR`
+  = 2, which is not in `CM_RETURN`; C++ returns `cmInitExpected` (4) when
+  uninitialized. All now resolve to `api/codec_api.rs`'s correct values.
+- `ENC_RETURN_*` in `wels_encoder_ext.rs` ran 0..5 densely; they are a **bit field**
+  in `wels_const.h` (`MEMALLOCERR` 0x01, `UNSUPPORTED_PARA` 0x02, `UNEXPECTED` 0x04,
+  `CORRECTED` 0x08, `INVALIDINPUT` 0x10, `MEMOVERFLOWFOUND` 0x20,
+  `VLCOVERFLOWFOUND` 0x40, `KNOWN_ISSUE` 0x80). Corrected.
+- `MAX_SHORT_REF_COUNT` was 16; `wels_const.h:115` defines it as `MAX_GOP_SIZE >> 1`
+  = 4. `LONG_TERM_REF_NUM` was 1 (C: 2) and `LONG_TERM_REF_NUM_SCREEN` 2 (C: 4), so
+  `MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA` was 16 instead of 6. Corrected.
+- `MAX_GOP_SIZE` = 64 fixed to `1 << (MAX_TEMPORAL_LEVEL - 1)` = 8 (audit 1.5.4).
+
+#### Work pulled forward from later phases
+
+`SWelsSvcCodingParam` had to be unified early: `wels_encoder_ext.rs`'s copy was a
+strict subset of `param_svc.rs`'s with truncated bodies (`FillDefault` 16 lines vs
+83, `ParamTranscode` 52 vs 187, and a `DetermineTemporalSettings` that ignored the
+temporal-id table entirely). Deleted it; `param_svc.rs` is now the only definition.
+
+That exposed a second issue: the deleted copy's `ParamBaseTranscode` carried an
+ad-hoc `iPicWidth <= 0` check that **does not exist in C++** — upstream validates in
+`ParamValidationExt`, which the port had never implemented. So `ParamValidation`
+and `ParamValidationExt` (encoder_ext.cpp:264 and :403, Phase 4 step 2) were ported
+now, along with a new `au_set.rs` holding `WelsBitRateVerification`,
+`WelsAdjustLevel`, `WelsCheckNumRefSetting`, `WelsCheckRefFrameLimitationNumRefFirst`
+and `WelsCheckRefFrameLimitationLevelIdcFirst`. `CheckProfileSetting` and
+`CheckLevelSetting` were replaced with the real bodies (they previously just
+assigned the field).
+
+Two branches of `ParamValidationExt` are **explicit `todo!()`**, not silent
+fall-throughs: `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` need
+`SliceArgumentValidationFixedSliceMode` / `CheckRowMbMultiSliceSetting` /
+`CheckRasterMultiSliceSetting` from `svc_enc_slice_segment.cpp`, which is a whole
+module still to port (Phase 3.9). `SM_SINGLE_SLICE` and `SM_SIZELIMITED_SLICE` are
+complete.
+
+#### Test expectations corrected
+
+Two Rust tests asserted `cmResultSuccess` for configurations the **C++ reference
+rejects** (verified by running libopenh264.a with the identical parameters):
+
+- `api_param_bounds_test::test_encoder_screen_content_scroll_motion_vector_bounds`
+  uses height 1800, not a multiple of 16 → now asserts `CM_INIT_PARA_ERROR`.
+- `api_param_bounds_test::test_encoder_very_large_slices` leaves `iTargetBitrate`
+  at 0 under the default `RC_QUALITY_MODE` → upstream returns `cmInitParaError`.
+  `#[ignore]`d with the reason, because the port reaches the Phase-3.9 `todo!()`
+  before it reaches the bitrate check.
+- `loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity` likewise never set
+  a bitrate or per-layer resolution; those are now filled in as a real caller must.
+
+#### Test status at Gate 1
+
+`cargo test`: 233 passed, 1 failed, 21 ignored. The single failure is
+`test_decode_encode_full_cycle_sha1_parity`, unchanged from the baseline and still
+for the same reason — the encoder emits zero bytes. That is the Phase 4 gate.
+The 53 decoder conformance tests all still pass.
+
+### Phase 2 — unify the encoder-internal types — **NOT STARTED**
+
+63 duplicated type names remain (the Gate 2 script still lists all of them;
+`SWelsSvcCodingParam` dropped from 6 copies to 5). This is the next task and it
+blocks everything downstream.

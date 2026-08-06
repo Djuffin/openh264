@@ -17,6 +17,13 @@ use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
     SSliceArgument, SSpatialLayerConfig, SliceMode, VideoFormat,
 };
+// Profile/level/complexity/SPS-id enumerators live in api::codec_api (one definition
+// per type); glob-import the variants so the C++ spellings stay bare, as in the C++.
+use crate::api::codec_api::{EProfileIdc, ELevelIdc as _ELevelIdc};
+use crate::api::codec_api::ECOMPLEXITY_MODE::*;
+use crate::api::codec_api::EProfileIdc::*;
+use crate::api::codec_api::ELevelIdc::*;
+use crate::api::codec_api::EParameterSetStrategy::*;
 
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 
@@ -34,9 +41,6 @@ pub const MAX_SLICES_NUM_TMP: usize = 32;
 pub const MAX_FRAME_RATE: f32 = 30.0;
 pub const MIN_FRAME_RATE: f32 = 1.0;
 
-pub const LOW_COMPLEXITY: i32 = 0;
-pub const MEDIUM_COMPLEXITY: i32 = 1;
-pub const HIGH_COMPLEXITY: i32 = 2;
 
 pub const UNSPECIFIED_BIT_RATE: i32 = 0;
 pub const AUTO_REF_PIC_COUNT: i32 = -1;
@@ -55,30 +59,13 @@ pub const MB_HEIGHT_LUMA: i32 = 16;
 pub const ENC_RETURN_SUCCESS: i32 = 0;
 pub const ENC_RETURN_INVALIDINPUT: i32 = 0x10;
 
-pub const PRO_UNKNOWN: i32 = 0;
-pub const PRO_BASELINE: i32 = 66;
-pub const PRO_MAIN: i32 = 77;
-pub const PRO_EXTENDED: i32 = 88;
-pub const PRO_HIGH: i32 = 100;
-pub const PRO_HIGH10: i32 = 110;
-pub const PRO_HIGH422: i32 = 122;
-pub const PRO_HIGH444: i32 = 144;
-pub const PRO_CAVLC444: i32 = 244;
-pub const PRO_SCALABLE_BASELINE: i32 = 83;
-pub const PRO_SCALABLE_HIGH: i32 = 86;
 
-pub const LEVEL_UNKNOWN: i32 = 0;
 pub const ASP_UNSPECIFIED: i32 = 0;
 pub const VF_UNDEF: u8 = 5;
 pub const CP_UNDEF: u8 = 2;
 pub const TRC_UNDEF: u8 = 2;
 pub const CM_UNDEF: u8 = 2;
 
-pub const CONSTANT_ID: i32 = 0;
-pub const INCREASING_ID: i32 = 1;
-pub const SPS_LISTING: i32 = 2;
-pub const SPS_LISTING_AND_PPS_INCREASING: i32 = 3;
-pub const SPS_PPS_LISTING: i32 = 6;
 
 pub const g_kuiTemporalIdListTable: [[u8; MAX_GOP_SIZE + 1]; MAX_TEMPORAL_LEVEL] = [
     [0, 0, 0, 0, 0, 0, 0, 0, 0], // uiGopSize = 1
@@ -196,10 +183,10 @@ pub struct SWelsSvcCodingParam {
     pub iTemporalLayerNum: i32,
     pub iSpatialLayerNum: i32,
     pub sSpatialLayers: [SSpatialLayerConfig; MAX_SPATIAL_LAYER_NUM],
-    pub iComplexityMode: i32,
+    pub iComplexityMode: EComplexityMode,
     pub uiIntraPeriod: u32,
     pub iNumRefFrame: i32,
-    pub eSpsPpsIdStrategy: i32,
+    pub eSpsPpsIdStrategy: EParameterSetStrategy,
     pub bPrefixNalAddingCtrl: bool,
     pub bEnableSSEI: bool,
     pub bSimulcastAVC: bool,
@@ -215,7 +202,7 @@ pub struct SWelsSvcCodingParam {
     pub bEnableAdaptiveQuant: bool,
     pub bEnableFrameSkip: bool,
     pub bEnableLongTermReference: bool,
-    pub iLtrMarkPeriod: i32,
+    pub iLtrMarkPeriod: u32,
     pub iMultipleThreadIdc: u16,
     pub bUseLoadBalancing: bool,
     pub iMaxBitrate: i32,
@@ -246,11 +233,11 @@ pub type TagWelsSvcCodingParam = SWelsSvcCodingParam;
 impl Default for SWelsSvcCodingParam {
     fn default() -> Self {
         let mut param = Self {
-            iUsageType: EUsageType::CameraVideoRealTime,
+            iUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
             iPicWidth: 0,
             iPicHeight: 0,
             iTargetBitrate: UNSPECIFIED_BIT_RATE,
-            iRCMode: RCMode::RcQualityMode,
+            iRCMode: RCMode::RC_QUALITY_MODE,
             fMaxFrameRate: MAX_FRAME_RATE,
             iTemporalLayerNum: 1,
             iSpatialLayerNum: 1,
@@ -328,7 +315,7 @@ impl SWelsSvcCodingParam {
         param.iLoopFilterAlphaC0Offset = 0;
         param.iLoopFilterBetaOffset = 0;
 
-        param.iRCMode = RCMode::RcQualityMode;
+        param.iRCMode = RCMode::RC_QUALITY_MODE;
         param.iPaddingFlag = 0;
         param.iEntropyCodingModeFlag = 0;
         param.bEnableDenoise = false;
@@ -345,7 +332,7 @@ impl SWelsSvcCodingParam {
 
         param.iMaxQp = QP_MAX_VALUE;
         param.iMinQp = QP_MIN_VALUE;
-        param.iUsageType = EUsageType::CameraVideoRealTime;
+        param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
         param.uiMaxNalSize = 0;
         param.bIsLosslessLink = false;
 
@@ -360,7 +347,7 @@ impl SWelsSvcCodingParam {
             layer.iVideoWidth = 0;
             layer.iVideoHeight = 0;
 
-            layer.sSliceArgument.uiSliceMode = SliceMode::SmSingleSlice;
+            layer.sSliceArgument.uiSliceMode = SliceMode::SM_SINGLE_SLICE;
             layer.sSliceArgument.uiSliceNum = 0;
             layer.sSliceArgument.uiSliceSizeConstraint = 1500;
 
@@ -398,7 +385,7 @@ impl SWelsSvcCodingParam {
         self.iLoopFilterAlphaC0Offset = 0;
         self.iLoopFilterBetaOffset = 0;
 
-        self.iRCMode = RCMode::RcQualityMode;
+        self.iRCMode = RCMode::RC_QUALITY_MODE;
         self.iPaddingFlag = 0;
         self.iEntropyCodingModeFlag = 0;
         self.bEnableDenoise = false;
@@ -414,7 +401,7 @@ impl SWelsSvcCodingParam {
 
         self.iMaxQp = QP_MAX_VALUE;
         self.iMinQp = QP_MIN_VALUE;
-        self.iUsageType = EUsageType::CameraVideoRealTime;
+        self.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
         self.uiMaxNalSize = 0;
         self.bIsLosslessLink = false;
         self.bFixRCOverShoot = true;
@@ -434,7 +421,7 @@ impl SWelsSvcCodingParam {
             layer.iVideoWidth = 0;
             layer.iVideoHeight = 0;
 
-            layer.sSliceArgument.uiSliceMode = SliceMode::SmSingleSlice;
+            layer.sSliceArgument.uiSliceMode = SliceMode::SM_SINGLE_SLICE;
             layer.sSliceArgument.uiSliceNum = 0;
             layer.sSliceArgument.uiSliceSizeConstraint = 1500;
 
@@ -472,7 +459,7 @@ impl SWelsSvcCodingParam {
         self.iRCMode = pCodingParam.iRCMode;
 
         let mut iIdxSpatial: i32 = 0;
-        let mut uiProfileIdc: i32 = if self.iEntropyCodingModeFlag != 0 {
+        let mut uiProfileIdc: EProfileIdc = if self.iEntropyCodingModeFlag != 0 {
             PRO_MAIN
         } else {
             PRO_UNKNOWN
@@ -581,7 +568,7 @@ impl SWelsSvcCodingParam {
         self.bPsnrU = false;
         self.bPsnrV = false;
 
-        if self.iUsageType == EUsageType::ScreenContentRealTime
+        if self.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME
             && !self.bIsLosslessLink
             && self.bEnableLongTermReference
         {
@@ -641,7 +628,7 @@ impl SWelsSvcCodingParam {
             self.eSpsPpsIdStrategy = pCodingParam.eSpsPpsIdStrategy;
         }
 
-        let mut uiProfileIdc: i32 = if self.iEntropyCodingModeFlag != 0 {
+        let mut uiProfileIdc: EProfileIdc = if self.iEntropyCodingModeFlag != 0 {
             PRO_HIGH
         } else {
             PRO_BASELINE
@@ -727,6 +714,55 @@ impl SWelsSvcCodingParam {
             self.sSpatialLayers[idx].iVideoHeight =
                 WELS_ALIGN(self.sDependencyLayers[idx].iActualHeight, MB_HEIGHT_LUMA);
             iSpatialIdx -= 1;
+        }
+    }
+
+    /// Base-class slice of the C++ `TagWelsSvcCodingParam : SEncParamExt`
+    /// inheritance, which the flattened Rust struct has to spell out.
+    pub fn to_param_ext(&self) -> SEncParamExt {
+        SEncParamExt {
+            iUsageType: self.iUsageType,
+            iPicWidth: self.iPicWidth,
+            iPicHeight: self.iPicHeight,
+            iTargetBitrate: self.iTargetBitrate,
+            iRCMode: self.iRCMode,
+            fMaxFrameRate: self.fMaxFrameRate,
+            iTemporalLayerNum: self.iTemporalLayerNum,
+            iSpatialLayerNum: self.iSpatialLayerNum,
+            sSpatialLayers: self.sSpatialLayers,
+            iComplexityMode: self.iComplexityMode,
+            uiIntraPeriod: self.uiIntraPeriod,
+            iNumRefFrame: self.iNumRefFrame,
+            eSpsPpsIdStrategy: self.eSpsPpsIdStrategy,
+            bPrefixNalAddingCtrl: self.bPrefixNalAddingCtrl,
+            bEnableSSEI: self.bEnableSSEI,
+            bSimulcastAVC: self.bSimulcastAVC,
+            iPaddingFlag: self.iPaddingFlag,
+            iEntropyCodingModeFlag: self.iEntropyCodingModeFlag,
+            bEnableFrameCroppingFlag: self.bEnableFrameCroppingFlag,
+            iLoopFilterDisableIdc: self.iLoopFilterDisableIdc,
+            iLoopFilterAlphaC0Offset: self.iLoopFilterAlphaC0Offset,
+            iLoopFilterBetaOffset: self.iLoopFilterBetaOffset,
+            bEnableDenoise: self.bEnableDenoise,
+            bEnableSceneChangeDetect: self.bEnableSceneChangeDetect,
+            bEnableBackgroundDetection: self.bEnableBackgroundDetection,
+            bEnableAdaptiveQuant: self.bEnableAdaptiveQuant,
+            bEnableFrameSkip: self.bEnableFrameSkip,
+            bEnableLongTermReference: self.bEnableLongTermReference,
+            iLtrMarkPeriod: self.iLtrMarkPeriod,
+            iMultipleThreadIdc: self.iMultipleThreadIdc,
+            bUseLoadBalancing: self.bUseLoadBalancing,
+            iMaxBitrate: self.iMaxBitrate,
+            iMinQp: self.iMinQp,
+            iMaxQp: self.iMaxQp,
+            uiMaxNalSize: self.uiMaxNalSize,
+            bIsLosslessLink: self.bIsLosslessLink,
+            iLTRRefNum: self.iLTRRefNum,
+            bFixRCOverShoot: self.bFixRCOverShoot,
+            iIdrBitrateRatio: self.iIdrBitrateRatio,
+            bPsnrY: self.bPsnrY,
+            bPsnrU: self.bPsnrU,
+            bPsnrV: self.bPsnrV,
         }
     }
 

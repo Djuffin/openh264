@@ -1035,7 +1035,7 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
 
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
     let fix_rc_overshoot = (*(*pEncCtx).pSvcParam).bFixRCOverShoot;
-    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
@@ -1128,7 +1128,7 @@ pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
     let mut iLumaQp: i32;
     let mut iDeltaQpTemporal: i32 = 0;
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
-    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
@@ -1230,7 +1230,7 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
     ) as i32;
 
     let rc_mode = (*(*pEncCtx).pSvcParam).iRCMode;
-    (*pWelsSvcRc).bGomRC = !(rc_mode == RCMode::RcOffMode || rc_mode == RCMode::RcBufferBasedMode);
+    (*pWelsSvcRc).bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
 
     for i in 0..kiSliceNum as usize {
         let pSlice = *ppSliceInLayer.add(i);
@@ -1276,7 +1276,7 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
         }
 
         if (*pWelsSvcRc).iTargetBits <= 0
-            && (*(*pEncCtx).pSvcParam).iRCMode == RCMode::RcBitrateMode
+            && (*(*pEncCtx).pSvcParam).iRCMode == RCMode::RC_BITRATE_MODE
             && !(*(*pEncCtx).pSvcParam).bEnableFrameSkip
         {
             (*pWelsSvcRc).iCurrentBitsLevel = BITS_EXCEEDED;
@@ -1884,7 +1884,7 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
     let iIntraCmplx = iQStep as i64 * (*pWelsSvcRc).iFrameDqBits as i64;
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
-    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
@@ -1920,7 +1920,7 @@ pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
     let pTOverRc = (*pWelsSvcRc).pTemporalOverRc.add(kiTl);
 
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
-    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+    if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
         iFrameComplexity = (*pVaa).sComplexityScreenParam.iFrameComplexity;
     }
@@ -1986,7 +1986,7 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
     if (*pEncCtx).uiTemporalId == 0 {
         RcUpdateTemporalZero(pEncCtx);
     }
-    if (*(*pEncCtx).pSvcParam).iRCMode == RCMode::RcTimestampMode {
+    if (*(*pEncCtx).pSvcParam).iRCMode == RCMode::RC_TIMESTAMP_MODE {
         RcDecideTargetBitsTimestamp(pEncCtx);
         (*pWelsSvcRc).uiLastTimeStamp = uiTimeStamp;
     } else {
@@ -1994,7 +1994,7 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
     }
 
     if kiSliceNum > 1
-        || ((*(*pEncCtx).pSvcParam).iRCMode == RCMode::RcBitrateMode
+        || ((*(*pEncCtx).pSvcParam).iRCMode == RCMode::RC_BITRATE_MODE
             && (*pEncCtx).eSliceType == I_SLICE)
     {
         (*pWelsSvcRc).bEnableGomQp = 0;
@@ -2393,7 +2393,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 /// Populates the rate control function dispatch table.
 pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     match iRcMode {
-        RCMode::RcOffMode => {
+        RCMode::RC_OFF_MODE => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitDisable);
             pRcf.pfWelsRcPicDelayJudge = None;
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateDisable);
@@ -2404,7 +2404,7 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
             pRcf.pfWelsUpdateMaxBrWindowStatus = None;
             pRcf.pfWelsRcPostFrameSkipping = None;
         }
-        RCMode::RcBufferBasedMode => {
+        RCMode::RC_BUFFERBASED_MODE => {
             pRcf.pfWelsRcPictureInit = Some(WelRcPictureInitBufferBasedQp);
             pRcf.pfWelsRcPicDelayJudge = None;
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateDisable);
@@ -2415,7 +2415,7 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
             pRcf.pfWelsUpdateMaxBrWindowStatus = None;
             pRcf.pfWelsRcPostFrameSkipping = None;
         }
-        RCMode::RcBitrateMode => {
+        RCMode::RC_BITRATE_MODE | RCMode::RC_BITRATE_MODE_POST_SKIP => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
             pRcf.pfWelsRcPicDelayJudge = None;
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGom);
@@ -2426,7 +2426,7 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
             pRcf.pfWelsUpdateMaxBrWindowStatus = Some(UpdateMaxBrCheckWindowStatus);
             pRcf.pfWelsRcPostFrameSkipping = Some(WelsRcPostFrameSkipping);
         }
-        RCMode::RcTimestampMode => {
+        RCMode::RC_TIMESTAMP_MODE => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGomTimeStamp);
             pRcf.pfWelsRcMbInit = Some(WelsRcMbInitGom);
@@ -2437,7 +2437,7 @@ pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
             pRcf.pfWelsUpdateMaxBrWindowStatus = None;
             pRcf.pfWelsRcPostFrameSkipping = None;
         }
-        RCMode::RcQualityMode => {
+        RCMode::RC_QUALITY_MODE => {
             pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
             pRcf.pfWelsRcPicDelayJudge = None;
             pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGom);

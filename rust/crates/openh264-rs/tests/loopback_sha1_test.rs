@@ -187,6 +187,17 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             enc_param.fMaxFrameRate = param.frame_rate;
             enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
             enc_param.iSpatialLayerNum = 1;
+            // ParamValidation rejects iTargetBitrate <= 0 for every RC mode but
+            // RC_OFF, and the default is RC_QUALITY_MODE — so the per-layer
+            // resolution/bitrate have to be filled in, exactly as a C++ caller
+            // must. Without these the reference encoder returns cmInitParaError
+            // too; the test only used to get past here because the port did no
+            // parameter validation at all.
+            enc_param.iTargetBitrate = 500_000;
+            enc_param.sSpatialLayers[0].iVideoWidth = param.width;
+            enc_param.sSpatialLayers[0].iVideoHeight = param.height;
+            enc_param.sSpatialLayers[0].fFrameRate = param.frame_rate;
+            enc_param.sSpatialLayers[0].iSpatialBitrate = 500_000;
             enc_param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
 
             let enc_init = (*p_encoder).InitializeExt(&enc_param as *const SEncParamExt);

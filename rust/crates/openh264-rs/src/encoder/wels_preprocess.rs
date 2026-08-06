@@ -250,7 +250,7 @@ impl Default for SPixMap {
             iSizeInBits: g_kiPixMapSizeInBits,
             iStride: [0; 3],
             sRect: SRect::default(),
-            eFormat: VideoFormat::VideoFormatI420,
+            eFormat: VideoFormat::videoFormatI420,
             eProperty: EPixMapBufferProperty::BUFFER_HOSTMEM,
         }
     }
@@ -690,7 +690,7 @@ impl Default for SWelsSvcCodingParam {
             iDecompStages: 0,
             iNumRefFrame: 1,
             iLTRRefNum: 0,
-            iUsageType: EUsageType::CameraVideoRealTime,
+            iUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
             bEnableDenoise: false,
             bEnableSceneChangeDetect: false,
             bEnableBackgroundDetection: false,
@@ -1222,7 +1222,7 @@ impl CWelsPreProcess {
                 i += 1;
             }
 
-            if (*pParam).iUsageType == EUsageType::ScreenContentRealTime {
+            if (*pParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 self.m_uiSpatialLayersInTemporal[idx] = 1;
             } else {
                 self.m_uiSpatialLayersInTemporal[idx] = kuiLayerInTemporal;
@@ -1361,7 +1361,7 @@ impl CWelsPreProcess {
         );
 
         if (*pSvcParam).bEnableSceneChangeDetect && !(*pCtx).pVaa.is_null() && !(*(*pCtx).pVaa).bIdrPeriodFlag {
-            if (*pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+            if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if pDlayerParamInternal.bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
@@ -1470,7 +1470,7 @@ impl CWelsPreProcess {
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
         let bCalculateVar = ((*pSvcParam).iRCMode >= RC_BITRATE_MODE) && ((*pCtx).eSliceType == I_SLICE);
 
-        if (*pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+        if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pRefPic = self.GetBestRefPicScreen(
                 (*pSvcParam).iUsageType,
                 (*pCtx).bCurFrameMarkedAsSceneLtr,
@@ -1520,7 +1520,7 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn GetCurrentOrigFrame(&mut self, iDIdx: i32) -> *mut SPicture {
-        if self.m_eUsageType == EUsageType::ScreenContentRealTime {
+        if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.m_pSpatialPic[iDIdx as usize][0]
         } else {
             let pos = self.GetCurPicPosition(iDIdx) as usize;
@@ -1556,7 +1556,7 @@ impl CWelsPreProcess {
         iCurTid: i8,
         kiDidx: i32,
     ) -> i32 {
-        if (*pCtx).pSvcParam.is_null() || (*(*pCtx).pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+        if (*pCtx).pSvcParam.is_null() || (*(*pCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             return 0;
         }
 
@@ -1604,7 +1604,7 @@ impl CWelsPreProcess {
         sSrcPixMap.iStride[0] = (*pSrc).iLineSize[0];
         sSrcPixMap.iStride[1] = (*pSrc).iLineSize[1];
         sSrcPixMap.iStride[2] = (*pSrc).iLineSize[2];
-        sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
         (*self.m_pInterfaceVp).Process(EMethods::METHOD_DENOISE as i32, &mut sSrcPixMap, std::ptr::null_mut());
     }
@@ -1634,7 +1634,7 @@ impl CWelsPreProcess {
         sSrcPixMap.iStride[0] = (*pSrc).iLineSize[0];
         sSrcPixMap.iStride[1] = (*pSrc).iLineSize[1];
         sSrcPixMap.iStride[2] = (*pSrc).iLineSize[2];
-        sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
         if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy {
             sDstPicMap.pPixel[0] = (*pDstPic).pData[0] as *mut c_void;
@@ -1646,7 +1646,7 @@ impl CWelsPreProcess {
             sDstPicMap.iStride[0] = (*pDstPic).iLineSize[0];
             sDstPicMap.iStride[1] = (*pDstPic).iLineSize[1];
             sDstPicMap.iStride[2] = (*pDstPic).iLineSize[2];
-            sDstPicMap.eFormat = VideoFormat::VideoFormatI420;
+            sDstPicMap.eFormat = VideoFormat::videoFormatI420;
 
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
                 if !self.m_pInterfaceVp.is_null() {
@@ -1719,14 +1719,14 @@ impl CWelsPreProcess {
         sCurPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         sCurPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
         sCurPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
-        sCurPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sCurPixMap.eFormat = VideoFormat::videoFormatI420;
 
         sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
         sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
-        sRefPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         calc_param.iCalcVar = bCalculateVar;
         calc_param.iCalcBgd = bCalculateBGD;
@@ -1773,7 +1773,7 @@ impl CWelsPreProcess {
             sSrcPixMap.iStride[2] = (*pCurPicture).iLineSize[2];
             sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
             sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-            sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+            sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
             sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
             sRefPixMap.pPixel[1] = (*pRefPicture).pData[1] as *mut c_void;
@@ -1784,7 +1784,7 @@ impl CWelsPreProcess {
             sRefPixMap.iStride[2] = (*pRefPicture).iLineSize[2];
             sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
             sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-            sRefPixMap.eFormat = VideoFormat::VideoFormatI420;
+            sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
             BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
             BGDParam.pCalcRes = &mut (*pVaaInfo).sVaaCalcInfo;
@@ -1824,14 +1824,14 @@ impl CWelsPreProcess {
         pSrc.iStride[0] = (*pCurPicture).iLineSize[0];
         pSrc.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         pSrc.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-        pSrc.eFormat = VideoFormat::VideoFormatI420;
+        pSrc.eFormat = VideoFormat::videoFormatI420;
 
         pRef.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
         pRef.iSizeInBits = g_kiPixMapSizeInBits;
         pRef.iStride[0] = (*pRefPicture).iLineSize[0];
         pRef.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         pRef.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-        pRef.eFormat = VideoFormat::VideoFormatI420;
+        pRef.eFormat = VideoFormat::videoFormatI420;
 
         (*self.m_pInterfaceVp).Set(method, &mut (*pVaaInfo).sAdaptiveQuantParam as *mut _ as *mut c_void);
         let iRet = (*self.m_pInterfaceVp).Process(method, &mut pSrc, &mut pRef);
@@ -1911,7 +1911,7 @@ impl CWelsPreProcess {
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
 
-        if (*pParam).iUsageType == EUsageType::ScreenContentRealTime {
+        if (*pParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             while iDlayerIndex < MAX_DEPENDENCY_LAYER {
                 self.m_pLastSpatialPicture[iDlayerIndex][0] = std::ptr::null_mut();
                 self.m_pLastSpatialPicture[iDlayerIndex][1] = std::ptr::null_mut();
@@ -1943,7 +1943,7 @@ impl CWelsPreProcess {
         kiTargetWidth: i32,
         kiTargetHeight: i32,
     ) -> i32 {
-        if (VideoFormat::VideoFormatI420 as i32) != ((*kpSrc).iColorFormat & !(-0x80000000i32)) {
+        if (VideoFormat::videoFormatI420 as i32) != ((*kpSrc).iColorFormat & !(-0x80000000i32)) {
             return ENC_RETURN_INVALIDINPUT;
         }
 
@@ -2083,7 +2083,7 @@ impl CWelsPreProcess {
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
     ) -> ESceneChangeIdc {
-        if self.m_eUsageType == EUsageType::ScreenContentRealTime {
+        if self.m_eUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             self.DetectSceneChangeScreen(pCurPicture, pRefPicture)
         } else {
             self.DetectSceneChangeVideo(pCurPicture, pRefPicture)
@@ -2109,14 +2109,14 @@ impl CWelsPreProcess {
         sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
         sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-        sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
         sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
         sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-        sRefPixMap.eFormat = VideoFormat::VideoFormatI420;
+        sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
         let iRet = (*self.m_pInterfaceVp).Process(iMethodIdx, &mut sSrcPixMap, &mut sRefPixMap);
         if iRet == 0 {
@@ -2307,7 +2307,7 @@ impl CWelsPreProcess {
             (*pPixMap).iStride[1] = (*pPicture).iLineSize[1];
             (*pPixMap).sRect.iRectWidth = (*pPicture).iWidthInPixel;
             (*pPixMap).sRect.iRectHeight = (*pPicture).iHeightInPixel;
-            (*pPixMap).eFormat = VideoFormat::VideoFormatI420;
+            (*pPixMap).eFormat = VideoFormat::videoFormatI420;
         }
     }
 
@@ -2491,7 +2491,7 @@ impl CWelsPreProcess {
         }
 
         let pSvcParam = (*pCtx).pSvcParam;
-        if (*pSvcParam).iUsageType == EUsageType::ScreenContentRealTime {
+        if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
             let pWelsSvcRc = &mut *(*pCtx).pWelsSvcRc.offset(kiDependencyId as isize);
@@ -2537,7 +2537,7 @@ impl CWelsPreProcess {
             sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
             sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
             sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-            sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+            sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
             if !pRefPicture.is_null() {
                 sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
@@ -2545,7 +2545,7 @@ impl CWelsPreProcess {
                 sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
                 sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
                 sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-                sRefPixMap.eFormat = VideoFormat::VideoFormatI420;
+                sRefPixMap.eFormat = VideoFormat::videoFormatI420;
             }
 
             (*self.m_pInterfaceVp).Set(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
@@ -2606,7 +2606,7 @@ impl CWelsPreProcess {
             sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
             sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
             sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-            sSrcPixMap.eFormat = VideoFormat::VideoFormatI420;
+            sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
             if !pRefPicture.is_null() {
                 sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
@@ -2614,7 +2614,7 @@ impl CWelsPreProcess {
                 sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
                 sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
                 sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-                sRefPixMap.eFormat = VideoFormat::VideoFormatI420;
+                sRefPixMap.eFormat = VideoFormat::videoFormatI420;
             }
 
             (*self.m_pInterfaceVp).Set(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);

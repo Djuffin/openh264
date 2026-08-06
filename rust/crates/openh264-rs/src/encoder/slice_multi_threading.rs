@@ -228,7 +228,7 @@ pub struct SSliceCtx {
 impl Default for SSliceCtx {
     fn default() -> Self {
         Self {
-            uiSliceMode: SliceMode::SmSingleSlice,
+            uiSliceMode: SliceMode::SM_SINGLE_SLICE,
             iMbWidth: 0,
             iMbHeight: 0,
             iSliceNumInFrame: 0,
@@ -582,7 +582,7 @@ pub unsafe fn DynamicAdjustSlicing(
 
     let rc_mode = (*pSvcParam).iRCMode;
     let mut iNumMbInEachGom = 0i32;
-    if rc_mode != RCMode::RcOffMode {
+    if rc_mode != RCMode::RC_OFF_MODE {
         if (*pCtx).pWelsSvcRc.is_null() {
             return;
         }
@@ -622,7 +622,7 @@ pub unsafe fn DynamicAdjustSlicing(
             INT_MULTIPLY,
         );
 
-        if rc_mode != RCMode::RcOffMode {
+        if rc_mode != RCMode::RC_OFF_MODE {
             iNumMbAssigning = iNumMbAssigning / iNumMbInEachGom * iNumMbInEachGom;
         }
 
@@ -952,7 +952,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         && iCurDid > 0
         && (iCurDid as usize - 1 < MAX_SPATIAL_LAYER_NUM)
         && ((*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceMode
-            == SliceMode::SmFixedSliceNum)
+            == SliceMode::SM_FIXEDSLCNUM_SLICE)
         && ((*pSvcParam).iMultipleThreadIdc as u32
             >= (*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceNum);
 
