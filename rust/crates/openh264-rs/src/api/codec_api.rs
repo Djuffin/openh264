@@ -1614,6 +1614,20 @@ unsafe fn EmitBufferedPicture(
 /// Picks the buffered picture with the smallest decoding timestamp, i.e. plain
 /// decode order. Used when the stream has no B slices, where POC ordering is
 /// unreliable in practice.
+///
+/// DELIBERATE DEVIATION from the C++ reference: on a decoding-timestamp *tie*
+/// this emits the lower POC first, where C++ falls back to slot order.
+///
+/// `uiDecodingTimeStamp` is only bumped by `DecodeFrame2` calls that carry data
+/// (`if (kiSrcLen > 0 && kpSrc != NULL)`), so the picture that completes during
+/// the `DecodeFrame2 (NULL, 0, ...)` end-of-stream flush inherits the previous
+/// call's timestamp and ties with the picture already buffered. C++ then emits
+/// them in slot order, which can invert the last two pictures of a stream --
+/// visible on res/CABA2_SVA_B.264, where upstream emits POC 32 before POC 30
+/// and disagrees with the JVT gold. (`h264dec` avoids it only because
+/// `DecodeFrameNoDelay` never produces the tie.) POC is the actual display
+/// order key, so it is the correct tiebreaker; this engages on an exact tie
+/// only, and non-tied ordering is bit-identical to C++.
 unsafe fn ReleaseBufferedReadyPictureNoReorder(
     dec_impl: *mut CWelsDecoderImpl,
     pCtx: *mut crate::decoder::decoder_core::SWelsDecoderContext,
@@ -1622,10 +1636,12 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
 ) {
     let mut firstValidIdx: i32 = -1;
     let mut uiDecodingTimeStamp: u32 = 0;
+    let mut iChosenPOC: i32 = 0;
     let largest = (*dec_impl).sReoderingStatus.iLargestBufferedPicIndex;
     for i in 0..=largest {
         if (*dec_impl).sPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
             uiDecodingTimeStamp = (*dec_impl).sPictInfoList[i as usize].uiDecodingTimeStamp;
+            iChosenPOC = (*dec_impl).sPictInfoList[i as usize].iPOC;
             (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
             firstValidIdx = i;
             break;
@@ -1637,9 +1653,11 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         }
         let info = (*dec_impl).sPictInfoList[i as usize];
         if info.iPOC != crate::decoder::decoder_context::IMinInt32
-            && info.uiDecodingTimeStamp < uiDecodingTimeStamp
+            && (info.uiDecodingTimeStamp < uiDecodingTimeStamp
+                || (info.uiDecodingTimeStamp == uiDecodingTimeStamp && info.iPOC < iChosenPOC))
         {
             uiDecodingTimeStamp = info.uiDecodingTimeStamp;
+            iChosenPOC = info.iPOC;
             (*dec_impl).sReoderingStatus.iPictInfoIndex = i;
         }
     }
