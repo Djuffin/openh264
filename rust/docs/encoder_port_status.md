@@ -106,18 +106,22 @@ C++ reference for the same input: 8034 bytes (IDR 3295 + 4 P-frames).
 
 Root causes, all confirmed against the code:
 
-- **A.** Public API structs declared twice — in `lib.rs` *and* `api/codec_api.rs` — with
-  incompatible layouts. A local item beats a glob re-export, so `crate::SFrameBSInfo`
-  resolved to the 3104-byte `lib.rs` version while callers passed the correct
-  7192-byte one. The C-ABI shims cast between them, so every encoder write landed at
-  the wrong offset.
-- **B.** 63 encoder-internal types declared in multiple modules with divergent field
-  sets (`SDqLayer` ×11, `SWelsFuncPtrList` ×10, `sWelsEncCtx` ×9, …), making each
-  module a compile-clean island.
-- **C.** The context is never built — `pSpsArray`/`pPPSArray`/`iSpsNum`/`iPpsNum` never
-  assigned, `pCurDqLayer` stays null.
-- **D.** `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR, one slice buffer, no
-  frame-type/GOP decision, RC, ref lists, preprocessing, or padding.
+- **A.** *(fixed, Phase 1)* Public API structs declared twice — in `lib.rs` *and*
+  `api/codec_api.rs` — with incompatible layouts. A local item beats a glob
+  re-export, so `crate::SFrameBSInfo` resolved to the 3104-byte `lib.rs` version
+  while callers passed the correct 7192-byte one. The C-ABI shims cast between
+  them, so every encoder write landed at the wrong offset.
+- **B.** *(fixed, Phase 2)* 63 encoder-internal types declared in multiple modules
+  with divergent field sets (`SDqLayer` ×11, `SWelsFuncPtrList` ×10,
+  `sWelsEncCtx` ×9, …), making each module a compile-clean island.
+- **C.** *(open — Phase 4)* The context is never built — `pSpsArray`/`pPPSArray`/
+  `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` stays null.
+- **D.** *(open — Phase 4)* `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR,
+  one slice buffer, no frame-type/GOP decision, RC, ref lists, preprocessing, or
+  padding.
+
+**C and D are why the encoder still emits zero bytes.** Nothing in Phases 1–2 was
+expected to change that; they removed the reasons it could not be fixed.
 
 ---
 
@@ -165,8 +169,16 @@ i.e. the encoder's writes now land in the caller's struct. Still 0 bytes — Pha
   `VLCOVERFLOWFOUND` 0x40, `KNOWN_ISSUE` 0x80). Corrected.
 - `MAX_SHORT_REF_COUNT` was 16; `wels_const.h:115` defines it as `MAX_GOP_SIZE >> 1`
   = 4. `LONG_TERM_REF_NUM` was 1 (C: 2) and `LONG_TERM_REF_NUM_SCREEN` 2 (C: 4), so
-  `MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA` was 16 instead of 6. Corrected.
+  `MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA` was 16 instead of 6. Corrected
+  **in `wels_encoder_ext.rs` only** — see the correction below.
 - `MAX_GOP_SIZE` = 64 fixed to `1 << (MAX_TEMPORAL_LEVEL - 1)` = 8 (audit 1.5.4).
+
+> **Correction (Phase 2).** "Corrected" above held for exactly one of four copies
+> of `MAX_SHORT_REF_COUNT`. `encoder_context.rs`, `ref_list_mgr_svc.rs` and
+> `wels_preprocess.rs` each kept their own `= 16` until Phase 2. The lesson
+> generalises: a constant fixed in the module you were reading is not fixed while
+> the same name is declared in seven others. Check with the `grep` under *Five
+> constants had wrong values* before trusting any such claim in this file.
 
 #### Work pulled forward from later phases
 
@@ -325,7 +337,7 @@ element past `pShortRefList`. Note the **decoder** legitimately defines its own
 `MAX_SHORT_REF_COUNT = 16` (`codec/decoder/core/inc/wels_const.h:47`) — encoder
 and decoder really do disagree. Do not "unify" them.
 
-Constants remain a second duplication axis: **79** names are still declared in
+Constants remain a second duplication axis: **82** names are still declared in
 more than one encoder module. The values are now believed correct, but one
 definition each is still the goal:
 
@@ -384,4 +396,83 @@ still emits zero bytes, which is the Phase 4 gate. The 53 decoder conformance
 tests all still pass. `compare.sh` still reports C++ 8034 bytes vs Rust 0, which
 is expected: Phase 4 is what wires the pipeline.
 
-### Phase 3 onward — **NOT STARTED**
+### Phase 3 — port the remaining per-function modules — **NOT STARTED**
+
+Per-function work, verified against `codec_unittest` rather than against the
+differential harness (which cannot say anything useful until Phase 4 produces
+bytes):
+
+```bash
+make gtest-bootstrap && make -j8 test
+```
+
+Baseline on this machine is **533/534**; the single failure,
+`DecoderDeblocking.DeblockingInit`, is pre-existing and unrelated. The `EncUT_*`
+suites are the per-function oracles.
+
+**3.7 — extend `au_set.rs`.** It already holds `WelsBitRateVerification`,
+`WelsAdjustLevel`, `WelsCheckNumRefSetting` and both
+`WelsCheckRefFrameLimitation*` (created in Phase 1). It needs `WelsInitSps`,
+`WelsInitPps`, `WelsInitSubsetSps`, the SPS/PPS/VUI writers, `WelsGetLevelIdc`
+and `WelsCheckLevelLimitation`. This must also **move the ad-hoc parameter-set
+writers out of `wels_encoder_ext.rs`**, which is where audit defect 1.5.3 lives:
+VUI is not written at all. Note the PPS writer's `DISABLE_FMO_FEATURE` branch is
+already correct (`au_set.cpp:417` writes a literal 0).
+
+**3.9 — `svc_enc_slice_segment.cpp`.** On the critical path earlier than the
+original plan assumed. Needs `SliceArgumentValidationFixedSliceMode`,
+`CheckRowMbMultiSliceSetting`, `CheckRasterMultiSliceSetting`,
+`GomValidCheckSliceNum`, `GomValidCheckSliceMbNum` and
+`CheckFixedSliceNumMultiSliceSetting`. Landing it clears the two `todo!()`s in
+`ParamValidationExt` (`SM_FIXEDSLCNUM_SLICE`, `SM_RASTER_SLICE`) and lets
+`api_param_bounds_test::test_encoder_very_large_slices` be un-`#[ignore]`d — its
+assertion also needs flipping to `CM_INIT_PARA_ERROR`, per the comment above it.
+
+Also in scope, carried from Phase 2:
+
+- **`WelsMdInterMb`** is unported. C++ assigns it (or
+  `WelsMdInterMbEnhancelayer`, which *is* ported) to `pfInterMd` per-slice at
+  `svc_encode_slice.cpp:733/736`.
+- **`IWelsReferenceStrategy` dispatch** — the two `todo!()`s at the
+  `EndofUpdateRefList` call sites in `ref_list_mgr_svc.rs`. `sWelsEncCtx` holds a
+  plain 8-byte `IWelsReferenceStrategy*`, so this needs a C-style vtable on the
+  three concrete strategies rather than a Rust `*mut dyn`, which is 16 bytes and
+  would mis-size the context.
+- `param_svc.rs::ParamBaseTranscode` writes `sSpatialLayers[idx]` where C++
+  writes `sSpatialLayers[0]`. Harmless at one spatial layer, wrong beyond it.
+
+### Phase 4 — wire the pipeline — **NOT STARTED**
+
+**This is the phase that finally produces bytes**, and it is what baseline
+blockers **C** and **D** describe. Build the context (`pSpsArray`, `pPPSArray`,
+`iSpsNum`, `iPpsNum`, `pCurDqLayer`), then replace the `WelsEncoderEncodeExtRust`
+sketch with the real `WelsEncoderEncodeExt` flow: frame-type/GOP decision, RC,
+reference lists, preprocessing, slice encoding, padding.
+
+**Gate 4:** `compare.sh` reports a non-zero Rust byte count and `./h264dec`
+decodes the Rust stream. `loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`
+stops returning `da39a3ee…` (the SHA-1 of the empty string).
+
+### Phase 5 — byte-exactness — **NOT STARTED**
+
+Drive `compare.sh` until the Annex-B streams are identical, then widen beyond the
+gate configuration (single spatial layer, single slice, CAVLC, RC off,
+single-threaded, deblocking on, `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-change
+— see `cxx_enc.cpp`).
+
+**Gate 5:** `compare.sh` exits 0.
+
+Two things from Phase 2 to keep in mind when a stream diverges:
+
+- Size assertions cannot catch **field order**; three structs were correctly
+  sized and wrongly ordered.
+- `#if`/`#ifdef` around a field is a live hazard — four macros in this codebase
+  exclude fields the port had transcribed. See *Conditional compilation is a
+  defect class*.
+
+### Phase 6 — cleanup — **NOT STARTED**
+
+Collapse the remaining **82** duplicated constant names (values are now believed
+correct, but one definition each is still the goal), fold the module-level
+`#![allow(dead_code, unused_variables, …)]` blankets back to the narrowest scope
+that still compiles, and reconcile this document with the final state.
