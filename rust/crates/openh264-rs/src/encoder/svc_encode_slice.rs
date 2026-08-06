@@ -201,59 +201,11 @@ pub fn WELS_CEILLOG2(v: u32) -> i32 {
 // Core Macroblock, Cache, and Slice Data Structures
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
-#[repr(C, align(16))]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMVComponentUnit {
-    pub sMotionVector: [SMVUnitXY; 16],
-    pub iRefIndex: [i8; 16],
-}
 
-#[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
-pub struct SDCTCoeff {
-    pub iLumaBlock: [[i16; 16]; 16],
-    pub iLumaI16x16Dc: [i16; 16],
-    pub iChromaBlock: [[i16; 16]; 8],
-    pub iChromaDc: [[i16; 4]; 2],
-}
 
-impl Default for SDCTCoeff {
-    fn default() -> Self {
-        Self {
-            iLumaBlock: [[0; 16]; 16],
-            iLumaI16x16Dc: [0; 16],
-            iChromaBlock: [[0; 16]; 8],
-            iChromaDc: [[0; 4]; 2],
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicData {
-    pub pEncMb: [*mut u8; 3],
-    pub pDecMb: [*mut u8; 3],
-    pub pRefMb: [*mut u8; 3],
-    pub pCsMb: [*mut u8; 3],
-}
 
-impl Default for SPicData {
-    fn default() -> Self {
-        Self {
-            pEncMb: [std::ptr::null_mut(); 3],
-            pDecMb: [std::ptr::null_mut(); 3],
-            pRefMb: [std::ptr::null_mut(); 3],
-            pCsMb: [std::ptr::null_mut(); 3],
-        }
-    }
-}
 
 #[repr(C, align(16))]
 pub struct SMbCache {
@@ -725,6 +677,10 @@ impl Default for SSliceThreading {
 }
 
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SDCTCoeff;
+pub use crate::encoder::encoder_context::SPicData;
+pub use crate::encoder::encoder_context::SMVComponentUnit;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;

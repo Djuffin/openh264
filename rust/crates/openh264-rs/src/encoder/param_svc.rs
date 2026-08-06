@@ -24,6 +24,7 @@ use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::api::codec_api::EProfileIdc::*;
 use crate::api::codec_api::ELevelIdc::*;
 use crate::api::codec_api::EParameterSetStrategy::*;
+pub use crate::encoder::encoder_context::SCropOffset;
 
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 
@@ -823,14 +824,6 @@ impl SWelsSvcCodingParam {
 }
 
 /// Frame crop offset syntax element in SPS
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SCropOffset {
-    pub iCropLeft: i16,
-    pub iCropRight: i16,
-    pub iCropTop: i16,
-    pub iCropBottom: i16,
-}
 
 /// Sequence Parameter Set (SPS) syntax structure
 #[repr(C)]

@@ -151,20 +151,104 @@ impl Default for SLogContext {
     }
 }
 
+/// `SMVUnitXY` — codec/encoder/core/inc/wels_common_basis.h:50. 4 bytes.
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SMVUnitXY {
     pub iMvX: i16,
     pub iMvY: i16,
 }
 
+impl SMVUnitXY {
+    #[inline(always)]
+    pub fn new(x: i16, y: i16) -> Self {
+        Self { iMvX: x, iMvY: y }
+    }
+
+    #[inline(always)]
+    pub fn sDeltaMv(&mut self, v0: SMVUnitXY, v1: SMVUnitXY) -> &mut Self {
+        self.iMvX = v0.iMvX.wrapping_sub(v1.iMvX);
+        self.iMvY = v0.iMvY.wrapping_sub(v1.iMvY);
+        self
+    }
+
+    #[inline(always)]
+    pub fn sAssignMv(&mut self, v0: SMVUnitXY) -> &mut Self {
+        self.iMvX = v0.iMvX;
+        self.iMvY = v0.iMvY;
+        self
+    }
+}
+
+/// `SCropOffset` — codec/encoder/core/inc/wels_common_basis.h:105.
+/// The fields are `int16_t` in C++; this copy had them as i32.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SCropOffset {
-    pub iCropLeft: i32,
-    pub iCropRight: i32,
-    pub iCropTop: i32,
-    pub iCropBottom: i32,
+    pub iCropLeft: i16,
+    pub iCropRight: i16,
+    pub iCropTop: i16,
+    pub iCropBottom: i16,
+}
+
+/// `SDCTCoeff` — codec/encoder/core/inc/mb_cache.h:62.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SDCTCoeff {
+    pub iLumaBlock: [[i16; 16]; 16],
+    pub iLumaI16x16Dc: [i16; 16],
+    pub iChromaBlock: [[i16; 16]; 8],
+    pub iChromaDc: [[i16; 4]; 2],
+}
+
+impl Default for SDCTCoeff {
+    fn default() -> Self {
+        Self {
+            iLumaBlock: [[0; 16]; 16],
+            iLumaI16x16Dc: [0; 16],
+            iChromaBlock: [[0; 16]; 8],
+            iChromaDc: [[0; 4]; 2],
+        }
+    }
+}
+
+/// `SPicData` — codec/encoder/core/inc/mb_cache.h:130.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SPicData {
+    pub pEncMb: [*mut u8; 3],
+    pub pDecMb: [*mut u8; 3],
+    pub pRefMb: [*mut u8; 3],
+    pub pCsMb: [*mut u8; 3],
+}
+
+impl Default for SPicData {
+    fn default() -> Self {
+        Self {
+            pEncMb: [std::ptr::null_mut(); 3],
+            pDecMb: [std::ptr::null_mut(); 3],
+            pRefMb: [std::ptr::null_mut(); 3],
+            pCsMb: [std::ptr::null_mut(); 3],
+        }
+    }
+}
+
+/// `SMVComponentUnit` — codec/encoder/core/inc/wels_common_basis.h:66.
+/// Luma only: the MV cache is 5x6-1 = 29 entries, the ref-index cache 5x6 = 30.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SMVComponentUnit {
+    pub sMotionVectorCache: [SMVUnitXY; 29],
+    pub iRefIndexCache: [i8; 30],
+}
+
+impl Default for SMVComponentUnit {
+    fn default() -> Self {
+        Self {
+            sMotionVectorCache: [SMVUnitXY::default(); 29],
+            iRefIndexCache: [0; 30],
+        }
+    }
 }
 
 #[repr(C)]

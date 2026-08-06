@@ -42,6 +42,9 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
 use std::ffi::c_void;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SDCTCoeff;
+pub use crate::encoder::encoder_context::SMVComponentUnit;
 
 // ============================================================================
 // Constants & Configuration Limits
@@ -255,69 +258,11 @@ impl Default for SCabacCtx {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
-impl SMVUnitXY {
-    #[inline(always)]
-    pub fn new(x: i16, y: i16) -> Self {
-        Self { iMvX: x, iMvY: y }
-    }
 
-    #[inline(always)]
-    pub fn sDeltaMv(&mut self, v0: SMVUnitXY, v1: SMVUnitXY) -> &mut Self {
-        self.iMvX = v0.iMvX.wrapping_sub(v1.iMvX);
-        self.iMvY = v0.iMvY.wrapping_sub(v1.iMvY);
-        self
-    }
 
-    #[inline(always)]
-    pub fn sAssignMv(&mut self, v0: SMVUnitXY) -> &mut Self {
-        self.iMvX = v0.iMvX;
-        self.iMvY = v0.iMvY;
-        self
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMVComponentUnit {
-    pub sMotionVectorCache: [SMVUnitXY; 29],
-    pub iRefIndexCache: [i8; 30],
-}
 
-impl Default for SMVComponentUnit {
-    fn default() -> Self {
-        Self {
-            sMotionVectorCache: [SMVUnitXY::default(); 29],
-            iRefIndexCache: [0; 30],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDCTCoeff {
-    pub iLumaBlock: [[i16; 16]; 16],
-    pub iLumaI16x16Dc: [i16; 16],
-    pub iChromaBlock: [[i16; 16]; 8],
-    pub iChromaDc: [[i16; 4]; 2],
-}
-
-impl Default for SDCTCoeff {
-    fn default() -> Self {
-        Self {
-            iLumaBlock: [[0; 16]; 16],
-            iLumaI16x16Dc: [0; 16],
-            iChromaBlock: [[0; 16]; 8],
-            iChromaDc: [[0; 4]; 2],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
