@@ -22,6 +22,11 @@ use crate::encoder::nal_encap::EWelsNalRefIdc::NRI_PRI_HIGHEST;
 use crate::encoder::paraset_strategy::{
     IWelsParametersetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS, PARA_SET_TYPE_SUBSETSPS,
 };
+use crate::encoder::svc_enc_slice_segment::{
+    CheckRasterMultiSliceSetting, CheckRowMbMultiSliceSetting,
+    SliceArgumentValidationFixedSliceMode,
+};
+use crate::api::codec_api::SSliceArgument;
 
 use crate::{
     EComplexityMode, EParameterSetStrategy, EUsageType, EVideoFrameType, EncoderOption,
@@ -1052,13 +1057,70 @@ pub unsafe fn ParamValidationExt(
                     pSliceArgument.uiSliceMbNum[iIdx] = 0;
                 }
             }
-            SM_FIXEDSLCNUM_SLICE => todo!(
-                "SliceArgumentValidationFixedSliceMode (svc_enc_slice_segment.cpp) — Phase 3.9"
-            ),
-            SM_RASTER_SLICE => todo!(
-                "CheckRowMbMultiSliceSetting / CheckRasterMultiSliceSetting \
-                 (svc_enc_slice_segment.cpp) — Phase 3.9"
-            ),
+            // encoder_ext.cpp:553
+            SM_FIXEDSLCNUM_SLICE => {
+                let iReturn = SliceArgumentValidationFixedSliceMode(
+                    pLogCtx,
+                    &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument,
+                    (*pCodingParam).iRCMode,
+                    kiPicWidth,
+                    kiPicHeight,
+                );
+                if iReturn != 0 {
+                    return ENC_RETURN_UNSUPPORTED_PARA;
+                }
+            }
+            // encoder_ext.cpp:560
+            SM_RASTER_SLICE => {
+                (*pCodingParam).sSpatialLayers[idx]
+                    .sSliceArgument
+                    .uiSliceSizeConstraint = 0;
+
+                let iMbWidth = (kiPicWidth + 15) >> 4;
+                let iMbHeight = (kiPicHeight + 15) >> 4;
+                let iMbNumInFrame = iMbWidth * iMbHeight;
+                let iMaxSliceNum = MAX_SLICES_NUM as i32;
+                let pSliceArgument =
+                    &mut (*pCodingParam).sSpatialLayers[idx].sSliceArgument as *mut SSliceArgument;
+
+                if (*pSliceArgument).uiSliceMbNum[0] == 0 {
+                    if iMbHeight > iMaxSliceNum {
+                        return ENC_RETURN_UNSUPPORTED_PARA;
+                    }
+                    (*pSliceArgument).uiSliceNum = iMbHeight as u32;
+                    for j in 0..iMbHeight as usize {
+                        (*pSliceArgument).uiSliceMbNum[j] = iMbWidth as u32;
+                    }
+                    // verify interleave mode settings
+                    if !CheckRowMbMultiSliceSetting(iMbWidth, pSliceArgument) {
+                        return ENC_RETURN_UNSUPPORTED_PARA;
+                    }
+                } else {
+                    // verify interleave mode settings
+                    if !CheckRasterMultiSliceSetting(iMbNumInFrame, pSliceArgument) {
+                        return ENC_RETURN_UNSUPPORTED_PARA;
+                    }
+                    if (*pSliceArgument).uiSliceNum == 0
+                        || (*pSliceArgument).uiSliceNum > iMaxSliceNum as u32
+                    {
+                        return ENC_RETURN_UNSUPPORTED_PARA;
+                    }
+                    if (*pSliceArgument).uiSliceNum == 1 {
+                        // SM_RASTER_SLICE with one slice is just SM_SINGLE_SLICE
+                        (*pSliceArgument).uiSliceMode = SM_SINGLE_SLICE;
+                    } else {
+                        // C++ logs "GOM based RC do not support SM_RASTER_SLICE" when
+                        // iRCMode != RC_OFF_MODE here, but does not fail.
+                        //
+                        // considering coding efficiency and performance, iCountMbNum is
+                        // constrained by MIN_NUM_MB_PER_SLICE for multi-slice mode
+                        if iMbNumInFrame <= MIN_NUM_MB_PER_SLICE {
+                            (*pSliceArgument).uiSliceMode = SM_SINGLE_SLICE;
+                            (*pSliceArgument).uiSliceNum = 1;
+                        }
+                    }
+                }
+            }
             SM_SIZELIMITED_SLICE => {
                 // encoder_ext.cpp:614-644. iMbWidth/iMbHeight are computed but
                 // unused in this arm in the C++ too.
