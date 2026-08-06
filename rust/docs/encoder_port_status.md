@@ -56,7 +56,7 @@ field-by-field setting.
 | `codec_unittest` | `make gtest-bootstrap && make -j8 test` | builds; 534 tests, see below |
 
 `codec_unittest` baseline on this machine (darwin/arm64): **533 pass, 1 fail**
-(re-measured at Gate 3). The failure is `DecoderDeblocking.DeblockingInit`,
+(re-measured at Gate 4). The failure is `DecoderDeblocking.DeblockingInit`,
 pre-existing and unrelated to the encoder port.
 
 ### Linking the C++ function directly is a better oracle than `codec_unittest`
@@ -140,12 +140,17 @@ Root causes, all confirmed against the code:
   `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` null. Phase 3 stopped
   `WelsWriteParameterSets` from *hiding* this; Phase 4's `RequestMemorySvc` /
   `InitDqLayers` build it, pinned by two tests.
-- **D.** *(open — blocked)* `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR,
+- **D.** *(fixed, Phase 4)* `WelsEncoderEncodeExtRust` was a sketch: hardcoded IDR,
   one slice buffer, no frame-type/GOP decision, RC, ref lists, preprocessing, or
-  padding. Phase 4 identified the specific obstacle — the duplicate
-  `SWelsEncCtx` in `wels_preprocess.rs`; see Phase 4 below.
+  padding. It is replaced by the real `encoder_ext.cpp:3448` flow, and the
+  duplicate `SWelsEncCtx` in `wels_preprocess.rs` that blocked it is unified.
+- **E.** *(open)* The **mode-decision layer is unported** — 22 of the 32 functions
+  in `svc_base_layer_md.cpp`. `WelsISliceMdEnc` writes macroblock syntax for
+  macroblocks whose mode was never decided. See *The mode-decision layer is
+  missing* under Phase 4.
 
-**D is why the encoder still emits zero bytes.**
+**The encoder now emits 136 bytes where C++ emits 8034: correct parameter sets and
+slice headers, no macroblock data. E is what closes the gap.**
 
 ---
 
@@ -524,6 +529,10 @@ returns `cmInitParaError` (1).
 - **`WelsMdInterMb`** is unported. C++ assigns it (or
   `WelsMdInterMbEnhancelayer`, which *is* ported) to `pfInterMd` per-slice at
   `svc_encode_slice.cpp:733/736`.
+  > **Correction (Phase 4).** This entry understated the problem by a wide margin.
+  > `WelsMdInterMb` is one of **22** unported functions in `svc_base_layer_md.cpp`;
+  > the whole mode-decision layer is absent, intra as well as inter. See *The
+  > mode-decision layer is missing* under Phase 4.
 - **`IWelsReferenceStrategy` dispatch** — the two remaining `todo!()`s, at the
   `EndofUpdateRefList` call sites in `ref_list_mgr_svc.rs`. Use the C-style vtable
   from `paraset_strategy.rs`; the shape is now established.
@@ -531,112 +540,198 @@ returns `cmInitParaError` (1).
   writes `sSpatialLayers[0]`. Harmless at one spatial layer, wrong beyond it.
 - The three unported listing strategies in `paraset_strategy.rs`.
 
-### Phase 4 — wire the pipeline — **blocker C DONE, blocker D BLOCKED**
+### Phase 4 — wire the pipeline — **DONE, with the mode-decision layer carried**
 
-**Gate 4 is NOT met.** `compare.sh` still reports Rust 0 bytes. What changed is
-that blocker **C** is cleared and blocker **D** now has one identified, specific
-obstacle rather than being open-ended.
+**Gate 4 is partly met.** Two of its three criteria hold; the third does not.
+
+| Gate 4 criterion | result |
+|---|---|
+| `compare.sh` reports a non-zero Rust byte count | **met** — 136 bytes, was 0 |
+| the SHA-1 test stops returning `da39a3ee…` | **met** — now `96a32e4b…` |
+| `./h264dec` decodes the Rust stream | **not met** — decodes to 0 bytes YUV |
 
 | check | result |
 |---|---|
-| `cargo build` | clean, 12 warnings, all pre-existing |
-| `cargo test` | **262 passed, 1 failed, 20 ignored** (was 260/1/20) |
+| `cargo build` | clean, 16 warnings, all `dead_code`/`unused` |
+| `cargo test` | **262 passed, 1 failed, 20 ignored** |
 | decoder conformance | 53/53 |
-| `find_dup_types.sh` | silent |
-| `todo!()` in `src/` | 2 → **0** |
-| `compare.sh` | C++ 8034, **Rust 0** — Gate 4 not met |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `find_dup_types.sh` | silent on both passes |
+| `todo!()` in `src/` | **0** |
+| `compare.sh` | C++ 8034, **Rust 136**, 32-byte common prefix |
 
-#### Blocker C — **DONE**
+#### Blocker C — **DONE** (Phase 4, earlier session)
 
-New `encoder_ext.rs` ports the allocation half of `encoder_ext.cpp`:
+`encoder_ext.rs` ports the allocation half of `encoder_ext.cpp`:
 `WelsGetEncBlockStrideOffset`, `AcquireLayersNals`, `AllocStrideTables`,
 `GetMvMvdRange`, `InitMbInfo`, `InitMbListD`, `InitDqLayers`, `RequestMemorySvc`,
 `InitSliceSettings`, `GetMultipleThreadIdc`, `WelsInitEncoderExt`,
 `WelsUninitEncoderExt`, `FreeSliceInLayer`, `FreeDqLayer`, `FreeRefList`.
-`svc_enc_slice_segment.rs` gains the segment-allocation group
-(`AssignMbMap*`, `GetInitialSliceNum`, `InitSliceSegment`, `InitSlicePEncCtx`, …).
-
-Two tests in `encoder_ext.rs` measure it for the harness configuration: the
-parameter-set arrays are allocated and populated (`iSpsNum` 1, `iPpsNum` 1, SPS
-matching the Phase-3 byte-exact values), and the DQ layers, MB map, `InitMbInfo`
-neighbour masks, reference lists, stride tables, MVD cost table and reference
-strategy all exist.
 
 **`CMemoryAlign`'s `Drop` asserts a zero allocation balance, and that is a good
-oracle** — it caught an 11181-byte leak the moment the teardown was incomplete.
-Keep using it: any new allocation in this module gets checked for free.
+oracle** — it caught an 11181-byte leak in that session and a 375-byte one in this
+one. Any test that builds a context and tears it down is also a leak test.
 
-#### `IWelsReferenceStrategy` — **DONE**
+#### The preprocessor context — **DONE**
 
-Converted from a Rust `trait` + `*mut dyn` to the same C-style vtable
-`paraset_strategy.rs` uses. `CreateReferenceStrategy` had been returning a
-16-byte fat pointer for an 8-byte `sWelsEncCtx::pReferenceStrategy`. Both
-`EndofUpdateRefList` call sites now dispatch through the vtable, so **the tree
-has zero `todo!()`**.
+`wels_preprocess.rs` declared its own 15-field `SWelsEncCtx` and then
+`pub type sWelsEncCtx = SWelsEncCtx;`, so inside that module the lowercase name
+resolved to the fake struct and everything compiled. Every field access in the
+2592-line preprocessor read the wrong offsets when handed a real context — which is
+exactly what `WelsEncoderEncodeExt` passes to `BuildSpatialPicList`,
+`AnalyzeSpatialPic` and `UpdateSpatialPictures`.
 
-#### Blocker D — **BLOCKED on a duplicate context struct**
+All 15 field names existed on the canonical struct; four differed in type. `pLtr`
+and `ppRefPicListExt` are pointers in C++, not inline arrays, so the three `pLtr[i]`
+sites became `pLtr.add(i)`. `eSliceType` is `EWelsSliceType`, not `i32`.
+`SSpatialIndexMap` was a byte-identical copy of `encoder_context::SSpatialPicIndex`,
+the name C++ uses. The three boundary casts in `WelsInitEncoderExt` /
+`WelsUninitEncoderExt` are gone.
 
-`WelsEncoderEncodeExt` is unported. It cannot be wired yet because:
+**Pinned rather than assumed.** A `sizeof`/`offsetof` probe against
+`encoder_context.h` supplied all 15 offsets, now asserted in `abi_guard.rs` and
+verified to fire by perturbing one. All 15 fields precede
+`WELS_MUTEX mutexEncoderError` (`encoder_context.h:230`), the one member this port
+models differently, so each is the unmodified C++ offset:
 
-> **`wels_preprocess.rs:575` declares its own `SWelsEncCtx`** — a 20-field struct
-> that is *not* the canonical ~90-field `sWelsEncCtx` — and then does
-> `pub type sWelsEncCtx = SWelsEncCtx;` inside that module, so the lowercase name
-> resolves to the fake one there. Field types differ too: `pLtr` and
-> `ppRefPicListExt` are inline arrays here and pointers in the real context.
+```
+sLogCtx 0   pSvcParam 24   iMvRange 40   ppRefPicListExt 184   pLtr 320
+bCurFrameMarkedAsSceneLtr 328   eSliceType 332   uiDependencyId 361
+uiTemporalId 362   pWelsSvcRc 368   pVaa 416   pVpp 424
+sSpatialIndexMap 520   bRefOfCurTidIsLtr 600   pMemAlign 1824
+```
 
-`find_dup_types.sh` missed this because the canonical name is `sWelsEncCtx` and
-this one is `SWelsEncCtx` — **different identifiers, differing only in the case of
-the leading letter**. This is a fourth blind spot to add to the three already
-recorded (type aliases, `src/common/`, functions).
+`SetRefMbType` (`wels_preprocess.cpp:811`) and its call site at `:916` were also
+ported; the port had silently dropped them, leaving
+`SComplexityAnalysisParam::uiRefMbType` unset. Off the gate path (RC is off there,
+so the enclosing branch returns early) but wrong beyond it.
 
-Every field access in the 2592-line preprocessor therefore reads the wrong
-offsets when handed a real context, and `WelsEncoderEncodeExt` calls
-`BuildSpatialPicList`, `AnalyzeSpatialPic` and `UpdateSpatialPictures` with
-exactly that. `WelsInitEncoderExt` casts at the boundary with a comment marking
-where this lands, which is enough to build and to run the init tests, but it is
-**not sound to call through**.
+#### Blocker D — **DONE**
 
-**Do this first in the next session:** delete `wels_preprocess::SWelsEncCtx` and
-its `sWelsEncCtx` alias, import the canonical type, and fix the field accesses
-the layout change breaks. Verify with a `sizeof` probe on the C++ `sWelsEncCtx`
-and the existing `abi_guard.rs` assertion.
+`WelsEncoderEncodeExt` is the real `encoder_ext.cpp:3448` flow. New in
+`encoder_ext.rs`: `GetTemporalLevel`, `GetSubSequenceId`, `WelsSwapDqLayers`,
+`PrefetchReferencePicture`, `ClearFrameBsInfo`, `StackBackEncoderStatus`,
+`WelsInitCurrentLayer`, `AddPrefixNal`, `WritePadding`, `SetFastCodingFunc`,
+`SetNormalCodingFunc`, `SetMeMethod`, `PreprocessSliceCoding`,
+`PicPartitionNumDecision`, `WriteSsvcParaset`, `WriteSavcParaset`,
+`PrepareEncodeFrame`, `WelsEncoderEncodeExt`. Both C-ABI call sites now use
+`WelsInitEncoderExt` / `WelsEncoderEncodeExt` / `WelsUninitEncoderExt`.
 
-#### Then the rest of blocker D
+What the harness measures on the gate configuration:
 
-Replace the `WelsEncoderEncodeExtRust` sketch with `encoder_ext.cpp:3448`. Still
-unported and needed by it: `PrepareEncodeFrame`, `WelsInitCurrentLayer`,
-`PreprocessSliceCoding`, `PrefetchReferencePicture`, `GetSubSequenceId`,
-`AddPrefixNal`, `WritePadding`, `WelsSwapDqLayers`, `ClearFrameBsInfo`,
-`StackBackEncoderStatus`, `GetTemporalLevel`. `WelsUpdateRefSyntax`,
-`InitFrameCoding`, `InitBitStream`, `GetTimestampForRc`, `SetSliceBoundaryInfo`,
-`WelsCodeOneSlice`, `WelsLoadNal`/`WelsUnloadNal`/`WelsEncodeNal` and
-`PerformDeblockingFilter` already exist.
+```
+C++  8034 bytes
+Rust  136 bytes
+common prefix 32 bytes
+```
 
-The C-ABI shim still calls `WelsInitEncoderExtRust`/`WelsEncoderEncodeExtRust`;
-switching it to `WelsInitEncoderExt` is safe only once the preprocessor context
-is unified.
+```
+0000  0000 0001 6742 c00d 8c68 28d2 01e1 108d   <- SPS, byte-identical
+0010  4000 0000 0168 ce3c 8000 0000 0165 b800   <- PPS + IDR slice NAL header
+0020  04 ...  (C++)   vs   09 ...  (Rust)       <- divergence
+```
 
-**Gate 4:** `compare.sh` reports a non-zero Rust byte count and `./h264dec`
-decodes the Rust stream. `loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`
-stops returning `da39a3ee…` (the SHA-1 of the empty string).
+The SPS and PPS NALs are byte-identical **through the real pipeline**, which
+confirms Phase 3.7 end to end rather than only in a unit test. The encoder reports
+the correct frame types — IDR + 4 P over 5 frames — so the frame-type/GOP decision,
+rate control, reference lists and preprocessing all run. Divergence begins three
+bytes into the IDR slice NAL, in the macroblock layer.
+
+#### Branches that return an explicit error rather than falling through
+
+* `iMultipleThreadIdc > 1` — every multi-threaded slice path needs `pTaskManage`,
+  `InitAllSlicesInThread` and `SliceLayerInfoUpdate`, none ported.
+* `SM_SIZELIMITED_SLICE` — needs `WelsCodeOnePicPartition` and
+  `WelsInitCurrentDlayerMltslc`.
+* The three `SPS_LISTING` strategies in `PrepareEncodeFrame` — `WriteSavcParaset_Listing`
+  is unported and `CreateParametersetStrategy` already returns null for them.
+
+All three are `ENC_RETURN_UNSUPPORTED_PARA`, and each is named in the doc comment on
+`WelsEncoderEncodeExt`.
+
+### The mode-decision layer is missing — this is what Gate 4 now needs
+
+**The previous status doc understated this.** It recorded only "`WelsMdInterMb` is
+unported". In fact **22 of the 32 functions in `svc_base_layer_md.cpp` (2041 lines)
+are unported**, and there is no `svc_base_layer_md.rs` at all:
+
+`WelsMdIntraInit`, `WelsMdInterInit`, `WelsMdI4x4`, `WelsMdI4x4Fast`,
+`WelsMdIntraChroma`, `WelsMdIntraFinePartition`, `WelsMdIntraFinePartitionVaa`,
+`WelsMdIntraMb`, `WelsMdP16x8`, `WelsMdP8x16`, `WelsMdP4x4`, `WelsMdP8x4`,
+`WelsMdP4x8`, `WelsMdInterFinePartition`, `WelsMdInterFinePartitionVaa`,
+`WelsMdPSkipEnc`, `WelsMdInterMbRefinement`, `WelsMdFirstIntraMode`,
+`WelsMdInterMb`, `WelsMdInterDoubleCheckPskip`, `WelsMdInterEncode`,
+`WelsMdInterSaveSadAndRefMbType`.
+
+The consequence is concrete and visible in the Rust source: `WelsISliceMdEnc`
+(`svc_encode_slice.rs:1147`) goes straight from `pfWelsRcMbInit` to
+`pfWelsSpatialWriteMbSyn`, **omitting `WelsMdIntraInit` and `WelsMdIntraMb`**, which
+C++ calls at `svc_encode_slice.cpp:562` and `:566`. It writes macroblock syntax for
+macroblocks whose mode was never decided and whose residual was never computed.
+That is why the stream diverges exactly where it does, and why `h264dec` gets
+nothing out of it.
+
+`PreprocessSliceCoding`, `SetFastCodingFunc` and `SetNormalCodingFunc` therefore
+cannot assign `pfIntraFineMd`, `pfInterFineMd` or `pfFirstIntraMode`. Those three
+lines are commented `// UNPORTED` at the exact point C++ assigns them, rather than
+being pointed at a substitute.
+
+#### Sizes, for planning
+
+| function | lines | note |
+|---|---|---|
+| `WelsMdIntraInit` | 61 | I-slice entry, `svc_base_layer_md.cpp:259` |
+| `WelsMdIntraMb` | 7 | :956, calls `WelsMdI16x16` + `WelsMdIntraSecondaryModesEnc` |
+| `WelsMdI16x16` | 53 | :365 |
+| `WelsMdI4x4` | 129 | :418 |
+| `WelsMdI4x4Fast` | 318 | :548 — the `LOW_COMPLEXITY` path the gate config takes |
+| `WelsMdIntraChroma` | 65 | :867 |
+| `WelsMdIntraFinePartition` / `…Vaa` | 9 / 13 | :932 / :942 |
+| `WelsMdInterMb` | 42 | `svc_base_layer_md.cpp:1858` |
+
+Already ported and reusable: `WelsMdIntraSecondaryModesEnc`, `MdIntraAnalysisVaaInfo`,
+`WelsIMbChromaEncode`, `WelsEncRecI16x16Y`, `WelsMdInterJudgePskip`,
+`WelsMdInterDecidedPskip`, `WelsMdInterSecondaryModesEnc`, `WelsMdP16x16`,
+`WelsRecPskip`, `PredictSad`, `PredictSadSkip`.
+
+**Start with the I-slice path** (`WelsMdIntraInit` → `WelsMdIntraMb` → `WelsMdI16x16`
+→ `WelsMdIntraChroma`, plus `WelsMdI4x4Fast` for `LOW_COMPLEXITY`). That alone should
+make the IDR frame decodable and is the shortest route to the third Gate 4 criterion.
 
 #### Defects found during Phase 4
 
-All the same disease — a constant or struct corrected in one copy while others
-kept the wrong value:
-
 | item | was | C++ | why it matters |
 |---|---|---|---|
-| `INTRA_4x4_MODE_NUM` | 16 | **8** (`wels_const.h:48`) | per-MB stride of `pIntra4x4PredModeBlocks`; `md.rs:563` stepped back two MBs |
-| `SDqIdc` | `{uiDId,uiQId,uiTId}` | `{u16 iPpsId, u8 iSpsId, i8 uiSpatialId}` (`dq_map.h:50`) | `InitDqLayers` writes the C++ fields |
-| `ENC_RETURN_MEMALLOCERR` | 0x02 / 2 in three modules | **0x01** | it is a **bit field**, so wrong values alias other codes |
-| `ENC_RETURN_INVALIDINPUT` | 1 | **0x10** | same |
-| `ENC_RETURN_UNEXPECTED` | −1 | **0x04** | same |
-| `ENC_RETURN_VLCOVERFLOWFOUND` | −1 | **0x40** | same |
-| `ENC_RETURN_CORRECTING` | 1 | *not in the C++ enum* | invented; removed |
-| `deblocking.rs` `LEFT_MB_POS`/`TOP_MB_POS` | 0x02/0x01 | **0x01/0x02** | dead in both languages, but wrong |
+| `INTRA_4x4_MODE_NUM` | 16 | **8** (`wels_const.h:48`) | per-MB stride of `pIntra4x4PredModeBlocks` |
+| `SDqIdc` | `{uiDId,uiQId,uiTId}` | `{u16 iPpsId, u8 iSpsId, i8 uiSpatialId}` | `InitDqLayers` writes the C++ fields |
+| `ENC_RETURN_*` (4 of them) | dense 0..5 / −1 | a **bit field** | wrong values alias other codes |
+| `deblocking.rs` `LEFT_MB_POS`/`TOP_MB_POS` | 0x02/0x01 | **0x01/0x02** | dead in both, but wrong |
+| `VIDEO_CODING_LAYER` / `NON_VIDEO_CODING_LAYER` | 0 / 1 | **1 / 0** (`codec_app_def.h:200`) | the two were **swapped**, so every `SLayerBSInfo::uiLayerType` was mislabelled — parameter-set layers tagged VCL and slice layers non-VCL |
+| `SWelsPps` in `svc_set_mb_syn_cabac.rs` | 1 field, `uiChromaQpIndexOffset: u32` | C++ has no such type | reading it would have returned `SWelsPPS::iSpsId`; dead, deleted |
+| `WelsUninitEncoderExt` | never called `WelsRcFreeMemory` | `encoder_ext.cpp:1982` calls it **before** freeing `pWelsSvcRc` | leaked the per-layer `pTemporalOverRc` blocks, 375 bytes |
+| the three `*Rust` sketch entry points | freed `CMemoryAlign` memory with `Box`/`Vec::from_raw_parts` | — | heap corruption (SIGTRAP in `libsystem_malloc`) the moment `Initialize` used the real init; all three deleted |
 
-### Phase 5 — byte-exactness — **NOT STARTED**
+#### A test expectation corrected
+
+`api_lifecycle_test::test_encoder_create_and_destroy_lifecycle` asserted
+`CM_RESULT_SUCCESS` from `EncodeFrame` for a 160x120 source picture with **null
+`pData`** against a 320x240 encoder. Verified against `libopenh264.a` with the
+identical call sequence: upstream returns **5** (`cmUnsupportedData`). The old
+expectation passed only because `WelsEncoderEncodeExtRust` validated nothing.
+
+#### `find_dup_types.sh` gained a case-insensitive pass
+
+The fourth blind spot — `SWelsEncCtx` vs `sWelsEncCtx` — is now covered by a second
+pass, self-tested by planting a colliding pair and confirming it is reported. It
+immediately found a second live instance, the invented `SWelsPps` above.
+
+Remaining blind spots, each of which has hidden a real bug: **type aliases**,
+**`src/common/`** (and the decoder tree — the scan only reads `src/encoder/`; there
+are currently two `EWelsSliceType` declarations in `src/decoder/`), **functions**, and
+**renames of the same layout to a different identifier** (`SSpatialIndexMap` vs
+`SSpatialPicIndex`), which no identifier comparison can catch.
+
+### Phase 5 — byte-exactness — **BLOCKED on the mode-decision layer**
 
 Drive `compare.sh` until the Annex-B streams are identical, then widen beyond the
 gate configuration (single spatial layer, single slice, CAVLC, RC off,
@@ -645,32 +740,51 @@ single-threaded, deblocking on, `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-chang
 
 **Gate 5:** `compare.sh` exits 0.
 
-The parameter sets are **already byte-exact** as of Phase 3.7 (see the SPS/PPS hex
-above), so a first divergence is most likely in the slice layer, not the headers.
+Current state: **32-byte common prefix, C++ 8034 vs Rust 136.** The parameter sets
+are byte-exact through the real pipeline and the IDR slice NAL header matches for
+three bytes. The first divergence is in the macroblock layer, exactly as predicted
+— but it is not a subtle transcription bug to hunt down, it is the missing
+mode-decision layer. **Port that first (Phase 4, *The mode-decision layer is
+missing*); only then is a byte-level hunt meaningful.**
 
 Three things to keep in mind when a stream diverges:
 
 - Size assertions cannot catch **field order**; three structs were correctly
-  sized and wrongly ordered.
+  sized and wrongly ordered. Offsets can be asserted directly —
+  `abi_guard.rs` now does this for the fifteen `sWelsEncCtx` fields the
+  preprocessor touches.
 - `#if`/`#ifdef` around a field is a live hazard — four macros in this codebase
   exclude fields the port had transcribed. See *Conditional compilation is a
   defect class*.
 - Before hand-deriving an expected value, **link the C++ function and measure it**.
-  See *Linking the C++ function directly is a better oracle than `codec_unittest`*.
+  This session used it twice more: for the fifteen `offsetof` values above, and to
+  establish that upstream's `EncodeFrame` returns 5 for a null-`pData` source
+  picture where a Rust test had asserted success.
 
-### Phase 6 — cleanup — **NOT STARTED**
+### Phase 6 — cleanup — **case-insensitive scan DONE, rest NOT STARTED**
 
 Collapse the remaining **82** duplicated constant names (values are now believed
 correct, but one definition each is still the goal), fold the module-level
 `#![allow(dead_code, unused_variables, …)]` blankets back to the narrowest scope
 that still compiles, and reconcile this document with the final state.
 
-#### `find_dup_types.sh` has a fourth blind spot: case
+#### `find_dup_types.sh`'s fourth blind spot — case — is **CLOSED**
 
 Phase 4 found `wels_preprocess::SWelsEncCtx` shadowing the canonical
-`sWelsEncCtx` — see *Blocker D*. The scan compares identifiers exactly, so two
-names differing only in the case of one letter read as unrelated types. Fold a
-case-insensitive pass in alongside the `pub fn` pass below.
+`sWelsEncCtx`. The scan compared identifiers exactly, so two names differing only in
+the case of one letter read as unrelated types. A second, case-insensitive pass is
+now in the script, self-tested by planting a colliding pair and confirming it is
+reported. It immediately found a second live instance: an invented, dead `SWelsPps`
+in `svc_set_mb_syn_cabac.rs` whose sole field would have read `SWelsPPS::iSpsId`.
+
+A **fifth** blind spot remains and no identifier comparison can close it: the same
+layout **renamed**. `wels_preprocess::SSpatialIndexMap` was a byte-identical copy of
+`encoder_context::SSpatialPicIndex`, the name C++ uses. Only reading the header
+catches that.
+
+A **sixth**: the scan reads `src/encoder/` only. `src/common/` was already recorded;
+`src/decoder/` is not scanned either, and currently declares `EWelsSliceType` twice
+(`pic_queue.rs:79` and `slice.rs:46`).
 
 #### `find_dup_types.sh` has a third blind spot: functions
 
