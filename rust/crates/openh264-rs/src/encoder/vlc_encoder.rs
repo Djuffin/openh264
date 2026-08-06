@@ -14,7 +14,7 @@
 
 pub const CHROMA_DC_NC_OFFSET: usize = 17;
 pub const ENC_RETURN_SUCCESS: i32 = 0;
-pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = -1;
+pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
 
 /// Residual transform block category.
 /// Matches `ECtxBlockCat` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.

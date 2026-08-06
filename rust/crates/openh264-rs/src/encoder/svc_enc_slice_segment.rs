@@ -27,10 +27,19 @@
 //! `svc_enc_slice_segment.h`. It is kept here, with the functions it calls.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-use crate::api::codec_api::SliceModeEnum::SM_SINGLE_SLICE;
+use std::ffi::{c_char, c_void};
+
+use crate::api::codec_api::SliceModeEnum::{
+    SM_FIXEDSLCNUM_SLICE, SM_RASTER_SLICE, SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE,
+};
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
+use crate::common::memory_align::CMemoryAlign;
 use crate::encoder::encoder_context::SLogContext;
+use crate::encoder::slice_multi_threading::{
+    SSliceCtx, WelsSetMemMultiplebytes_c, DEFAULT_MAXPACKETSIZE_CONSTRAINT,
+};
+use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::rc::{
     WELS_DIV_ROUND, GOM_ROW_MODE0_180P, GOM_ROW_MODE0_360P, GOM_ROW_MODE0_720P, GOM_ROW_MODE0_90P,
     MB_WIDTH_THRESHOLD_180P, MB_WIDTH_THRESHOLD_360P, MB_WIDTH_THRESHOLD_90P,
@@ -358,6 +367,301 @@ pub unsafe fn SliceArgumentValidationFixedSliceMode(
     }
 
     ENC_RETURN_SUCCESS
+}
+
+/// `AssignMbMapSingleSlice` — svc_enc_slice_segment.cpp:53.
+///
+/// # Safety
+/// `pMbMap` must point to at least `kiCountMbNum * kiMapUnitSize` writable bytes.
+pub unsafe fn AssignMbMapSingleSlice(
+    pMbMap: *mut c_void,
+    kiCountMbNum: i32,
+    kiMapUnitSize: i32,
+) -> i32 {
+    if pMbMap.is_null() || kiCountMbNum <= 0 {
+        return 1;
+    }
+
+    std::ptr::write_bytes(pMbMap as *mut u8, 0, (kiCountMbNum * kiMapUnitSize) as usize);
+
+    0
+}
+
+/// `AssignMbMapMultipleSlices` — svc_enc_slice_segment.cpp:70.
+///
+/// Note the C++ returns **1** on the normal `SM_RASTER_SLICE`/`SM_FIXEDSLCNUM_SLICE`
+/// path — the `return 0` is only in the `uiSliceMbNum[0] == 0` raster special case, and
+/// the shared tail falls through to `return 1` with the comment "extention for other
+/// multiple slice type in the future". `InitSliceSegment` returns that value directly,
+/// so multi-slice `InitSlicePEncCtx` reports failure while still having filled the map.
+/// Reproduced verbatim.
+///
+/// # Safety
+/// `pCurDq` must be non-null with `sSliceEncCtx.pOverallMbMap` allocated.
+pub unsafe fn AssignMbMapMultipleSlices(
+    pCurDq: *mut SDqLayer,
+    kpSliceArgument: *const SSliceArgument,
+) -> i32 {
+    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+    let mut iSliceIdx: i32;
+    if (*pSliceSeg).uiSliceMode == SM_SINGLE_SLICE {
+        return 1;
+    }
+
+    if (*pSliceSeg).uiSliceMode == SM_RASTER_SLICE && 0 == (*kpSliceArgument).uiSliceMbNum[0] {
+        let kiMbWidth = (*pSliceSeg).iMbWidth as i32;
+        let iSliceNum = (*pSliceSeg).iSliceNumInFrame;
+
+        iSliceIdx = 0;
+        while iSliceIdx < iSliceNum {
+            let kiFirstMb = iSliceIdx * kiMbWidth;
+            WelsSetMemMultiplebytes_c(
+                (*pSliceSeg).pOverallMbMap.add(kiFirstMb as usize) as *mut c_void,
+                iSliceIdx as u32,
+                kiMbWidth,
+                2,
+            );
+            iSliceIdx += 1;
+        }
+
+        return 0;
+    } else if (*pSliceSeg).uiSliceMode == SM_RASTER_SLICE
+        || (*pSliceSeg).uiSliceMode == SM_FIXEDSLCNUM_SLICE
+    {
+        let kpSlicesAssignList = (*kpSliceArgument).uiSliceMbNum.as_ptr() as *const i32;
+        let kiCountNumMbInFrame = (*pSliceSeg).iMbNumInFrame;
+        let kiCountSliceNumInFrame = (*pSliceSeg).iSliceNumInFrame;
+        let mut iMbIdx: i32 = 0;
+
+        iSliceIdx = 0;
+        loop {
+            let kiCurRunLength = *kpSlicesAssignList.add(iSliceIdx as usize);
+            let mut iRunIdx: i32 = 0;
+
+            // the mb_assign_map has to be validated against the input data here, so
+            // this cannot be a memset
+            loop {
+                *(*pSliceSeg).pOverallMbMap.add((iMbIdx + iRunIdx) as usize) = iSliceIdx as u16;
+                iRunIdx += 1;
+                if !(iRunIdx < kiCurRunLength && iMbIdx + iRunIdx < kiCountNumMbInFrame) {
+                    break;
+                }
+            }
+
+            iMbIdx += kiCurRunLength;
+            iSliceIdx += 1;
+            if !(iSliceIdx < kiCountSliceNumInFrame && iMbIdx < kiCountNumMbInFrame) {
+                break;
+            }
+        }
+    } else if (*pSliceSeg).uiSliceMode == SM_SIZELIMITED_SLICE {
+        // do nothing, pSliceSeg->pOverallMbMap will be initialised later
+    } else {
+        // any else uiSliceMode? C++ asserts here.
+        debug_assert!(false, "AssignMbMapMultipleSlices: unexpected uiSliceMode");
+    }
+
+    // extention for other multiple slice type in the future
+    1
+}
+
+/// `GetInitialSliceNum` — svc_enc_slice_segment.cpp:325.
+///
+/// # Safety
+/// `pSliceArgument` may be null, which returns -1 as in C++.
+pub unsafe fn GetInitialSliceNum(pSliceArgument: *const SSliceArgument) -> i32 {
+    if pSliceArgument.is_null() {
+        return -1;
+    }
+
+    match (*pSliceArgument).uiSliceMode {
+        SM_SINGLE_SLICE | SM_FIXEDSLCNUM_SLICE | SM_RASTER_SLICE => {
+            (*pSliceArgument).uiSliceNum as i32
+        }
+        // at the beginning of dynamic slicing, set the uiSliceNum to be 1
+        SM_SIZELIMITED_SLICE => AVERSLICENUM_CONSTRAINT as i32,
+        _ => -1,
+    }
+}
+
+/// `InitSliceSegment` — svc_enc_slice_segment.cpp:358.
+///
+/// # Safety
+/// `pCurDq`, `pMa` and `pSliceArgument` must be non-null.
+pub unsafe fn InitSliceSegment(
+    pCurDq: *mut SDqLayer,
+    pMa: *mut CMemoryAlign,
+    pSliceArgument: *mut SSliceArgument,
+    kiMbWidth: i32,
+    kiMbHeight: i32,
+) -> i32 {
+    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+    let kiCountMbNum = kiMbWidth * kiMbHeight;
+
+    if pSliceArgument.is_null() || kiMbWidth == 0 || kiMbHeight == 0 {
+        return 1;
+    }
+
+    let uiSliceMode = (*pSliceArgument).uiSliceMode;
+    if (*pSliceSeg).iMbNumInFrame == kiCountMbNum
+        && (*pSliceSeg).iMbWidth as i32 == kiMbWidth
+        && (*pSliceSeg).iMbHeight as i32 == kiMbHeight
+        && (*pSliceSeg).uiSliceMode == uiSliceMode
+        && !(*pSliceSeg).pOverallMbMap.is_null()
+    {
+        return 0;
+    } else if (*pSliceSeg).iMbNumInFrame != kiCountMbNum {
+        if !(*pSliceSeg).pOverallMbMap.is_null() {
+            (*pMa).WelsFree(
+                (*pSliceSeg).pOverallMbMap as *mut c_void,
+                b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
+            );
+            (*pSliceSeg).pOverallMbMap = std::ptr::null_mut();
+        }
+
+        // just for safe
+        (*pSliceSeg).iSliceNumInFrame = 0;
+        (*pSliceSeg).iMbNumInFrame = 0;
+        (*pSliceSeg).iMbWidth = 0;
+        (*pSliceSeg).iMbHeight = 0;
+        (*pSliceSeg).uiSliceMode = SM_SINGLE_SLICE; // single in default
+    }
+
+    if SM_SINGLE_SLICE == uiSliceMode {
+        (*pSliceSeg).pOverallMbMap = (*pMa).WelsMallocz(
+            (kiCountMbNum as u32) * 2,
+            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
+        ) as *mut u16;
+        if (*pSliceSeg).pOverallMbMap.is_null() {
+            return 1;
+        }
+        (*pSliceSeg).iSliceNumInFrame = 1;
+
+        (*pSliceSeg).uiSliceMode = uiSliceMode;
+        (*pSliceSeg).iMbWidth = kiMbWidth as i16;
+        (*pSliceSeg).iMbHeight = kiMbHeight as i16;
+        (*pSliceSeg).iMbNumInFrame = kiCountMbNum;
+
+        AssignMbMapSingleSlice((*pSliceSeg).pOverallMbMap as *mut c_void, kiCountMbNum, 2)
+    } else {
+        if uiSliceMode != SM_FIXEDSLCNUM_SLICE
+            && uiSliceMode != SM_RASTER_SLICE
+            && uiSliceMode != SM_SIZELIMITED_SLICE
+        {
+            return 1;
+        }
+
+        (*pSliceSeg).pOverallMbMap = (*pMa).WelsMallocz(
+            (kiCountMbNum as u32) * 2,
+            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
+        ) as *mut u16;
+        if (*pSliceSeg).pOverallMbMap.is_null() {
+            return 1;
+        }
+
+        WelsSetMemMultiplebytes_c(
+            (*pSliceSeg).pOverallMbMap as *mut c_void,
+            0,
+            kiCountMbNum,
+            2,
+        );
+
+        // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame = 1
+        (*pSliceSeg).iSliceNumInFrame = GetInitialSliceNum(pSliceArgument);
+        if -1 == (*pSliceSeg).iSliceNumInFrame {
+            return 1;
+        }
+
+        (*pSliceSeg).uiSliceMode = (*pSliceArgument).uiSliceMode;
+
+        (*pSliceSeg).iMbWidth = kiMbWidth as i16;
+        (*pSliceSeg).iMbHeight = kiMbHeight as i16;
+        (*pSliceSeg).iMbNumInFrame = kiCountMbNum;
+        if SM_SIZELIMITED_SLICE == (*pSliceArgument).uiSliceMode {
+            if 0 < (*pSliceArgument).uiSliceSizeConstraint {
+                (*pSliceSeg).uiSliceSizeConstraint = (*pSliceArgument).uiSliceSizeConstraint;
+            } else {
+                return 1;
+            }
+        } else {
+            (*pSliceSeg).uiSliceSizeConstraint = DEFAULT_MAXPACKETSIZE_CONSTRAINT;
+        }
+        // "iMaxSliceNumConstraint" is only used in SM_SIZELIMITED_SLICE mode so far and
+        // follows NAL_UNIT_CONSTRAINT; it will be adjusted under MT if there is a
+        // limitation on iLayerNum.
+        (*pSliceSeg).iMaxSliceNumConstraint = MAX_SLICES_NUM as i32;
+
+        AssignMbMapMultipleSlices(pCurDq, pSliceArgument)
+    }
+}
+
+/// `UninitSliceSegment` — svc_enc_slice_segment.cpp:449.
+///
+/// # Safety
+/// `pCurDq` and `pMa` must be non-null.
+pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+    let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
+    if !(*pSliceSeg).pOverallMbMap.is_null() {
+        (*pMa).WelsFree(
+            (*pSliceSeg).pOverallMbMap as *mut c_void,
+            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
+        );
+        (*pSliceSeg).pOverallMbMap = std::ptr::null_mut();
+    }
+
+    (*pSliceSeg).uiSliceMode = SM_SINGLE_SLICE; // single in default
+    (*pSliceSeg).iMbWidth = 0;
+    (*pSliceSeg).iMbHeight = 0;
+    (*pSliceSeg).iSliceNumInFrame = 0;
+    (*pSliceSeg).iMbNumInFrame = 0;
+    (*pSliceSeg).uiSliceSizeConstraint = 0;
+    (*pSliceSeg).iMaxSliceNumConstraint = 0;
+}
+
+/// `InitSlicePEncCtx` — svc_enc_slice_segment.cpp:482.
+///
+/// `bFmoUseFlag` and `pPpsArg` are accepted and unused, as in C++, and the return
+/// value of `InitSliceSegment` is discarded — C++ returns a literal 0 here.
+///
+/// # Safety
+/// `pCurDq` may be null, which returns 1 as in C++.
+pub unsafe fn InitSlicePEncCtx(
+    pCurDq: *mut SDqLayer,
+    pMa: *mut CMemoryAlign,
+    _bFmoUseFlag: bool,
+    iMbWidth: i32,
+    iMbHeight: i32,
+    pSliceArgument: *mut SSliceArgument,
+    _pPpsArg: *mut c_void,
+) -> i32 {
+    if pCurDq.is_null() {
+        return 1;
+    }
+
+    InitSliceSegment(pCurDq, pMa, pSliceArgument, iMbWidth, iMbHeight);
+    0
+}
+
+/// `UninitSlicePEncCtx` — svc_enc_slice_segment.cpp:508.
+///
+/// # Safety
+/// `pMa` must be non-null when `pCurDq` is.
+pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
+    if !pCurDq.is_null() {
+        UninitSliceSegment(pCurDq, pMa);
+    }
+}
+
+/// `WelsGetFirstMbOfSlice` — svc_enc_slice_segment.cpp:540.
+///
+/// # Safety
+/// `pCurLayer` may be null, which returns -1.
+pub unsafe fn WelsGetFirstMbOfSlice(pCurLayer: *mut SDqLayer, kuiSliceIdc: i32) -> i32 {
+    if pCurLayer.is_null() || (*pCurLayer).pFirstMbIdxOfSlice.is_null() {
+        return -1;
+    }
+
+    *(*pCurLayer).pFirstMbIdxOfSlice.add(kuiSliceIdc as usize)
 }
 
 #[cfg(test)]

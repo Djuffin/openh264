@@ -88,8 +88,8 @@ pub const RC_TIMESTAMP_MODE: i32 = 3;
 pub const RC_OFF_MODE: i32 = -1;
 
 pub const ENC_RETURN_SUCCESS: i32 = 0;
-pub const ENC_RETURN_INVALIDINPUT: i32 = 1;
-pub const ENC_RETURN_MEMALLOCERR: i32 = 2;
+pub const ENC_RETURN_INVALIDINPUT: i32 = 0x10;
+pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
 
 pub const WELSVP_MAJOR_VERSION: i32 = 1;
 pub const WELSVP_MINOR_VERSION: i32 = 1;

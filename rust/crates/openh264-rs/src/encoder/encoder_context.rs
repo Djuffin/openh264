@@ -289,12 +289,17 @@ impl Default for SParaSetOffset {
     }
 }
 
+/// `TagDqIdc` — `codec/encoder/core/inc/dq_map.h:50`. 4 bytes.
+///
+/// This port previously declared `{ uiDId, uiQId, uiTId }`, which is neither the
+/// field set nor the size of the C++ struct; `InitDqLayers` writes `iPpsId`,
+/// `iSpsId` and `uiSpatialId`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SDqIdc {
-    pub uiDId: u8,
-    pub uiQId: u8,
-    pub uiTId: u8,
+    pub iPpsId: u16,
+    pub iSpsId: u8,
+    pub uiSpatialId: i8,
 }
 
 pub use crate::encoder::svc_encode_slice::{SMB, SSlice};

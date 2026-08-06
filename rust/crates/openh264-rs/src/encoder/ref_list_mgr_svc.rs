@@ -786,14 +786,11 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     if !(*pCtx).pReferenceStrategy.is_null() {
         // C++ dispatches virtually here (ref_list_mgr_svc.cpp:1041/1057/1073 —
         // PrefetchNextBuffer / UpdateSrcPicList /
-        // UpdateSrcPicListLosslessScreenRefSelectionWithLtr). sWelsEncCtx holds a
-        // plain 8-byte IWelsReferenceStrategy* (encoder_context.h:152); the copy that
-        // used to live in this module made it a Rust `*mut dyn` fat pointer, which is
-        // 16 bytes and mis-sized the struct. Restoring the correct width leaves the
-        // port with no dispatch mechanism for this call, so it is an explicit gap
-        // rather than a silent no-op. Needs a C-style vtable on the three concrete
-        // strategies, or for pReferenceStrategy to be set up in Phase 4.
-        todo!("IWelsReferenceStrategy dispatch: EndofUpdateRefList");
+        // UpdateSrcPicListLosslessScreenRefSelectionWithLtr), through the C-style
+        // vtable above.
+        IWelsReferenceStrategy::EndofUpdateRefList(
+            (*pCtx).pReferenceStrategy as *mut IWelsReferenceStrategy,
+        );
     }
     true
 }
@@ -1306,14 +1303,11 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     if !(*pCtx).pReferenceStrategy.is_null() {
         // C++ dispatches virtually here (ref_list_mgr_svc.cpp:1041/1057/1073 —
         // PrefetchNextBuffer / UpdateSrcPicList /
-        // UpdateSrcPicListLosslessScreenRefSelectionWithLtr). sWelsEncCtx holds a
-        // plain 8-byte IWelsReferenceStrategy* (encoder_context.h:152); the copy that
-        // used to live in this module made it a Rust `*mut dyn` fat pointer, which is
-        // 16 bytes and mis-sized the struct. Restoring the correct width leaves the
-        // port with no dispatch mechanism for this call, so it is an explicit gap
-        // rather than a silent no-op. Needs a C-style vtable on the three concrete
-        // strategies, or for pReferenceStrategy to be set up in Phase 4.
-        todo!("IWelsReferenceStrategy dispatch: EndofUpdateRefList");
+        // UpdateSrcPicListLosslessScreenRefSelectionWithLtr), through the C-style
+        // vtable above.
+        IWelsReferenceStrategy::EndofUpdateRefList(
+            (*pCtx).pReferenceStrategy as *mut IWelsReferenceStrategy,
+        );
     }
     true
 }
@@ -1536,139 +1530,203 @@ pub unsafe fn DoNothing(_pCtx: *mut sWelsEncCtx) {}
 // Polymorphic Reference Strategy Hierarchy
 // ============================================================================
 
-pub trait IWelsReferenceStrategy {
-    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool;
-    unsafe fn MarkPic(&mut self);
-    unsafe fn UpdateRefList(&mut self) -> bool;
-    unsafe fn EndofUpdateRefList(&mut self);
-    unsafe fn AfterBuildRefList(&mut self);
-    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx);
+/// Virtual-function table for `IWelsReferenceStrategy`
+/// (`codec/encoder/core/inc/ref_list_mgr_svc.h`). Entries are in C++ declaration
+/// order, and every entry takes the object pointer as its first argument, standing in
+/// for the implicit `this`.
+///
+/// This replaces a Rust `trait` + `*mut dyn`: `sWelsEncCtx::pReferenceStrategy` is a
+/// plain 8-byte `IWelsReferenceStrategy*` in C++, and a `*mut dyn` is a 16-byte fat
+/// pointer, which mis-sized the context. Same mechanism as
+/// `paraset_strategy::IWelsParametersetStrategyVtbl`.
+#[repr(C)]
+pub struct IWelsReferenceStrategyVtbl {
+    pub Destroy: unsafe extern "C" fn(*mut IWelsReferenceStrategy),
+    pub BuildRefList: unsafe extern "C" fn(*mut IWelsReferenceStrategy, i32, i32) -> bool,
+    pub MarkPic: unsafe extern "C" fn(*mut IWelsReferenceStrategy),
+    pub UpdateRefList: unsafe extern "C" fn(*mut IWelsReferenceStrategy) -> bool,
+    pub EndofUpdateRefList: unsafe extern "C" fn(*mut IWelsReferenceStrategy),
+    pub AfterBuildRefList: unsafe extern "C" fn(*mut IWelsReferenceStrategy),
+    pub Init: unsafe extern "C" fn(*mut IWelsReferenceStrategy, *mut sWelsEncCtx),
 }
 
+/// `IWelsReferenceStrategy` — the abstract base; one pointer wide.
 #[repr(C)]
-#[derive(Debug)]
-pub struct CWelsReference_TemporalLayer {
+pub struct IWelsReferenceStrategy {
+    pub pVtbl: *const IWelsReferenceStrategyVtbl,
+}
+
+impl IWelsReferenceStrategy {
+    /// # Safety
+    /// `pThis` must be a live strategy from [`CreateReferenceStrategy`].
+    pub unsafe fn BuildRefList(
+        pThis: *mut IWelsReferenceStrategy,
+        iPOC: i32,
+        iBestLtrRefIdx: i32,
+    ) -> bool {
+        ((*(*pThis).pVtbl).BuildRefList)(pThis, iPOC, iBestLtrRefIdx)
+    }
+    /// # Safety
+    /// `pThis` must be a live strategy from [`CreateReferenceStrategy`].
+    pub unsafe fn MarkPic(pThis: *mut IWelsReferenceStrategy) {
+        ((*(*pThis).pVtbl).MarkPic)(pThis)
+    }
+    /// # Safety
+    /// `pThis` must be a live strategy from [`CreateReferenceStrategy`].
+    pub unsafe fn UpdateRefList(pThis: *mut IWelsReferenceStrategy) -> bool {
+        ((*(*pThis).pVtbl).UpdateRefList)(pThis)
+    }
+    /// # Safety
+    /// `pThis` must be a live strategy from [`CreateReferenceStrategy`].
+    pub unsafe fn EndofUpdateRefList(pThis: *mut IWelsReferenceStrategy) {
+        ((*(*pThis).pVtbl).EndofUpdateRefList)(pThis)
+    }
+    /// # Safety
+    /// `pThis` must be a live strategy from [`CreateReferenceStrategy`].
+    pub unsafe fn AfterBuildRefList(pThis: *mut IWelsReferenceStrategy) {
+        ((*(*pThis).pVtbl).AfterBuildRefList)(pThis)
+    }
+}
+
+/// `CWelsReference_TemporalLayer`, `CWelsReference_Screen` and
+/// `CWelsReference_LosslessWithLtr` all carry exactly one data member,
+/// `m_pEncoderCtx`, inherited from the first; only their vtables differ.
+#[repr(C)]
+pub struct CWelsReferenceStrategyObj {
+    pub base: IWelsReferenceStrategy,
     pub m_pEncoderCtx: *mut sWelsEncCtx,
 }
 
-impl CWelsReference_TemporalLayer {
-    pub fn new() -> Self {
-        Self {
-            m_pEncoderCtx: std::ptr::null_mut(),
-        }
-    }
+#[inline]
+unsafe fn as_ref_obj(pThis: *mut IWelsReferenceStrategy) -> *mut CWelsReferenceStrategyObj {
+    pThis as *mut CWelsReferenceStrategyObj
 }
 
-impl IWelsReferenceStrategy for CWelsReference_TemporalLayer {
-    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
-        self.m_pEncoderCtx = pCtx;
-    }
-    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
-        WelsBuildRefList(self.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
-    }
-    unsafe fn MarkPic(&mut self) {
-        WelsMarkPic(self.m_pEncoderCtx);
-    }
-    unsafe fn UpdateRefList(&mut self) -> bool {
-        WelsUpdateRefList(self.m_pEncoderCtx)
-    }
-    unsafe fn EndofUpdateRefList(&mut self) {
-        PrefetchNextBuffer(self.m_pEncoderCtx);
-    }
-    unsafe fn AfterBuildRefList(&mut self) {
-        DoNothing(self.m_pEncoderCtx);
-    }
+unsafe extern "C" fn Ref_Destroy(pThis: *mut IWelsReferenceStrategy) {
+    drop(Box::from_raw(as_ref_obj(pThis)));
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct CWelsReference_Screen {
-    pub base: CWelsReference_TemporalLayer,
+unsafe extern "C" fn Ref_Init(pThis: *mut IWelsReferenceStrategy, pCtx: *mut sWelsEncCtx) {
+    (*as_ref_obj(pThis)).m_pEncoderCtx = pCtx;
 }
 
-impl CWelsReference_Screen {
-    pub fn new() -> Self {
-        Self {
-            base: CWelsReference_TemporalLayer::new(),
-        }
-    }
+// --- CWelsReference_TemporalLayer ---
+unsafe extern "C" fn TL_BuildRefList(
+    pThis: *mut IWelsReferenceStrategy,
+    iPOC: i32,
+    iBestLtrRefIdx: i32,
+) -> bool {
+    WelsBuildRefList((*as_ref_obj(pThis)).m_pEncoderCtx, iPOC, iBestLtrRefIdx)
+}
+unsafe extern "C" fn TL_MarkPic(pThis: *mut IWelsReferenceStrategy) {
+    WelsMarkPic((*as_ref_obj(pThis)).m_pEncoderCtx);
+}
+unsafe extern "C" fn TL_UpdateRefList(pThis: *mut IWelsReferenceStrategy) -> bool {
+    WelsUpdateRefList((*as_ref_obj(pThis)).m_pEncoderCtx)
+}
+unsafe extern "C" fn TL_EndofUpdateRefList(pThis: *mut IWelsReferenceStrategy) {
+    PrefetchNextBuffer((*as_ref_obj(pThis)).m_pEncoderCtx);
+}
+unsafe extern "C" fn TL_AfterBuildRefList(pThis: *mut IWelsReferenceStrategy) {
+    DoNothing((*as_ref_obj(pThis)).m_pEncoderCtx);
 }
 
-impl IWelsReferenceStrategy for CWelsReference_Screen {
-    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
-        self.base.Init(pCtx);
-    }
-    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
-        WelsBuildRefList(self.base.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
-    }
-    unsafe fn MarkPic(&mut self) {
-        WelsMarkPic(self.base.m_pEncoderCtx);
-    }
-    unsafe fn UpdateRefList(&mut self) -> bool {
-        WelsUpdateRefList(self.base.m_pEncoderCtx)
-    }
-    unsafe fn EndofUpdateRefList(&mut self) {
-        UpdateSrcPicList(self.base.m_pEncoderCtx);
-    }
-    unsafe fn AfterBuildRefList(&mut self) {
-        UpdateBlockStatic(self.base.m_pEncoderCtx);
-    }
+pub static TEMPORAL_LAYER_VTBL: IWelsReferenceStrategyVtbl = IWelsReferenceStrategyVtbl {
+    Destroy: Ref_Destroy,
+    BuildRefList: TL_BuildRefList,
+    MarkPic: TL_MarkPic,
+    UpdateRefList: TL_UpdateRefList,
+    EndofUpdateRefList: TL_EndofUpdateRefList,
+    AfterBuildRefList: TL_AfterBuildRefList,
+    Init: Ref_Init,
+};
+
+// --- CWelsReference_Screen: same build/mark/update as the base, different tail ---
+unsafe extern "C" fn SC_EndofUpdateRefList(pThis: *mut IWelsReferenceStrategy) {
+    UpdateSrcPicList((*as_ref_obj(pThis)).m_pEncoderCtx);
+}
+unsafe extern "C" fn SC_AfterBuildRefList(pThis: *mut IWelsReferenceStrategy) {
+    UpdateBlockStatic((*as_ref_obj(pThis)).m_pEncoderCtx);
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct CWelsReference_LosslessWithLtr {
-    pub base: CWelsReference_Screen,
+pub static SCREEN_VTBL: IWelsReferenceStrategyVtbl = IWelsReferenceStrategyVtbl {
+    Destroy: Ref_Destroy,
+    BuildRefList: TL_BuildRefList,
+    MarkPic: TL_MarkPic,
+    UpdateRefList: TL_UpdateRefList,
+    EndofUpdateRefList: SC_EndofUpdateRefList,
+    AfterBuildRefList: SC_AfterBuildRefList,
+    Init: Ref_Init,
+};
+
+// --- CWelsReference_LosslessWithLtr ---
+unsafe extern "C" fn LL_BuildRefList(
+    pThis: *mut IWelsReferenceStrategy,
+    iPOC: i32,
+    iBestLtrRefIdx: i32,
+) -> bool {
+    WelsBuildRefListScreen((*as_ref_obj(pThis)).m_pEncoderCtx, iPOC, iBestLtrRefIdx)
+}
+unsafe extern "C" fn LL_MarkPic(pThis: *mut IWelsReferenceStrategy) {
+    WelsMarkPicScreen((*as_ref_obj(pThis)).m_pEncoderCtx);
+}
+unsafe extern "C" fn LL_UpdateRefList(pThis: *mut IWelsReferenceStrategy) -> bool {
+    WelsUpdateRefListScreen((*as_ref_obj(pThis)).m_pEncoderCtx)
+}
+unsafe extern "C" fn LL_EndofUpdateRefList(pThis: *mut IWelsReferenceStrategy) {
+    UpdateSrcPicListLosslessScreenRefSelectionWithLtr((*as_ref_obj(pThis)).m_pEncoderCtx);
 }
 
-impl CWelsReference_LosslessWithLtr {
-    pub fn new() -> Self {
-        Self {
-            base: CWelsReference_Screen::new(),
-        }
-    }
-}
+pub static LOSSLESS_WITH_LTR_VTBL: IWelsReferenceStrategyVtbl = IWelsReferenceStrategyVtbl {
+    Destroy: Ref_Destroy,
+    BuildRefList: LL_BuildRefList,
+    MarkPic: LL_MarkPic,
+    UpdateRefList: LL_UpdateRefList,
+    EndofUpdateRefList: LL_EndofUpdateRefList,
+    AfterBuildRefList: SC_AfterBuildRefList,
+    Init: Ref_Init,
+};
 
-impl IWelsReferenceStrategy for CWelsReference_LosslessWithLtr {
-    unsafe fn Init(&mut self, pCtx: *mut sWelsEncCtx) {
-        self.base.Init(pCtx);
-    }
-    unsafe fn BuildRefList(&mut self, iPOC: i32, iBestLtrRefIdx: i32) -> bool {
-        WelsBuildRefListScreen(self.base.base.m_pEncoderCtx, iPOC, iBestLtrRefIdx)
-    }
-    unsafe fn MarkPic(&mut self) {
-        WelsMarkPicScreen(self.base.base.m_pEncoderCtx);
-    }
-    unsafe fn UpdateRefList(&mut self) -> bool {
-        WelsUpdateRefListScreen(self.base.base.m_pEncoderCtx)
-    }
-    unsafe fn EndofUpdateRefList(&mut self) {
-        UpdateSrcPicListLosslessScreenRefSelectionWithLtr(self.base.base.m_pEncoderCtx);
-    }
-    unsafe fn AfterBuildRefList(&mut self) {
-        UpdateBlockStatic(self.base.base.m_pEncoderCtx);
-    }
-}
-
+/// `IWelsReferenceStrategy::CreateReferenceStrategy`.
+///
+/// Returns a raw pointer the caller owns; release it with
+/// [`DestroyReferenceStrategy`].
+///
+/// # Safety
+/// `pCtx` must outlive the returned strategy.
 pub unsafe fn CreateReferenceStrategy(
     pCtx: *mut sWelsEncCtx,
     keUsageType: EUsageType,
     kbLtrEnabled: bool,
-) -> *mut (dyn IWelsReferenceStrategy + 'static) {
-    let mut strategy: Box<dyn IWelsReferenceStrategy> = match keUsageType {
+) -> *mut IWelsReferenceStrategy {
+    let pVtbl: *const IWelsReferenceStrategyVtbl = match keUsageType {
         EUsageType::SCREEN_CONTENT_REAL_TIME => {
             if kbLtrEnabled {
-                Box::new(CWelsReference_LosslessWithLtr::new())
+                &LOSSLESS_WITH_LTR_VTBL
             } else {
-                Box::new(CWelsReference_Screen::new())
+                &SCREEN_VTBL
             }
         }
-        EUsageType::CAMERA_VIDEO_REAL_TIME | EUsageType::CAMERA_VIDEO_NON_REAL_TIME | _ => {
-            Box::new(CWelsReference_TemporalLayer::new())
-        }
+        _ => &TEMPORAL_LAYER_VTBL,
     };
-    strategy.Init(pCtx);
-    Box::into_raw(strategy)
+    let obj = Box::new(CWelsReferenceStrategyObj {
+        base: IWelsReferenceStrategy { pVtbl },
+        m_pEncoderCtx: std::ptr::null_mut(),
+    });
+    let p = Box::into_raw(obj) as *mut IWelsReferenceStrategy;
+    ((*pVtbl).Init)(p, pCtx);
+    p
+}
+
+/// Counterpart to [`CreateReferenceStrategy`].
+///
+/// # Safety
+/// `pStrategy` must have come from [`CreateReferenceStrategy`] and must not be used
+/// afterwards.
+pub unsafe fn DestroyReferenceStrategy(pStrategy: *mut IWelsReferenceStrategy) {
+    if !pStrategy.is_null() {
+        ((*(*pStrategy).pVtbl).Destroy)(pStrategy);
+    }
 }
 
 #[cfg(test)]
