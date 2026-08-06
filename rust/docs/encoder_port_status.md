@@ -213,234 +213,175 @@ rejects** (verified by running libopenh264.a with the identical parameters):
 for the same reason — the encoder emits zero bytes. That is the Phase 4 gate.
 The 53 decoder conformance tests all still pass.
 
-### Phase 2 — unify the encoder-internal types — **IN PROGRESS**
+### Phase 2 — unify the encoder-internal types — **DONE**
 
-Gate 2 is **not** met. 63 → 6 duplicated type names; 36 redundant declarations
-still to remove. This is the next task and it blocks everything downstream.
-Run `rust/tools/find_dup_types.sh` for the current list — silence means the gate
-is met. See **Session log — Phase 2 continued** below for what has been done and
-for the traps found along the way.
-
-`rust/tools/unify_type.py <TypeName> <canonical-module>` automates the mechanical
-part: it deletes the struct/enum and its `impl` blocks from every other encoder
-module and inserts a `pub use`, printing what it removed so divergent impls get
-reviewed rather than silently dropped. Always diff the canonical definition
-against the C++ header first — several copies are wrong, not merely truncated.
-
-Done so far, all canonical in `encoder_context.rs`:
-
-| type | copies | notes |
-|---|---|---|
-| `SMVUnitXY` | 8 → 1 | all identical; kept the `sDeltaMv`/`sAssignMv` impl from `svc_set_mb_syn_cabac.rs`, the only complete one. Call sites in `svc_set_mb_syn_cavlc.rs` passed `&SMVUnitXY`; C++ takes const-ref, ported as by-value |
-| `SDCTCoeff` | 4 → 1 | identical |
-| `SPicData` | 2 → 1 | identical |
-| `SCropOffset` | 2 → 1 | the `encoder_context.rs` copy had `i32` fields; `wels_common_basis.h:105` says `int16_t`. Kept i16 |
-| `SMVComponentUnit` | 4 → 1 | three variants. Correct is `sMotionVectorCache[29]` / `iRefIndexCache[30]` (5×6−1 and 5×6). `svc_mode_decision.rs` had `[30]` for the MV cache; `svc_encode_slice.rs` had an invented `sMotionVector[16]`/`iRefIndex[16]` with no C++ counterpart |
-
-#### What is left of Phase 2
-
-Gate 2 is still **not** met. `rust/tools/find_dup_types.sh` reports **6 names /
-36 redundant declarations**, down from 59 / 146 at the start of this work:
-
-| type | copies | C++ size | fullest Rust copy |
-|---|---|---|---|
-| `SDqLayer` | 11 | 512 | `slice_multi_threading.rs`, 33 fields |
-| `SWelsFuncPtrList` | 10 | 1280 | `encoder_context.rs`, 13 fields |
-| `sWelsEncCtx` | 9 | 98008 | `encoder_context.rs`, 71 fields |
-| `SSlice` | 8 | 1584 | `svc_encode_slice.rs`, 23 fields |
-| `SPps` | 2 | — | both one field |
-| `SadPredISatdUnit` | 2 | — | small |
-
-**These four are not merely duplicated — every copy is an incomplete port.**
-That was measured, not guessed: adding a size assertion for the fullest copy of
-each against its C++ size fails for all four. Merging them onto the least-truncated
-copy would leave a struct that is still wrong, so they need a real field-by-field
-port against the header, with the size assertion as the completion criterion.
-Do them leaves-first (`SSlice` → `SDqLayer` → `SWelsFuncPtrList` → `sWelsEncCtx`);
-they reference each other, so expect one connected change.
-
-Three traps already identified in that work:
-
-- `slice_multi_threading.rs::SSlice` substitutes `[u8; 128]` for `sMbCacheInfo`
-  and `[u8; 64]` for `sCabacCtx` — opaque blobs, and both the wrong size. A copy
-  that does this is a placeholder, not a translation.
-- `sWelsEncCtx` carries `bDependencyRecFlag` (`encoder_context.h:234`), which is
-  inside `#ifdef ENABLE_FRAME_DUMP` and therefore **not** a member — the same
-  defect class as `SWelsPPS`/`SSliceHeader`/`SSpatialLayerInternal` below.
-- `svc_set_mb_syn_cavlc.rs` compares `(*pEncCtx).eSliceType` against
-  `EWelsSliceType::I_SLICE as i32` because that module's `sWelsEncCtx` is still a
-  local stub whose `eSliceType` is `i32`. The cast is a marker that disappears
-  when `sWelsEncCtx` is unified; do not "fix" it by changing the enum.
-
-Also still open, unrelated to the cluster: the 17 `transmute`s in `src/encoder/`
-(untouched — they should fall out with the four types above), and
-`param_svc.rs::ParamBaseTranscode` writing `sSpatialLayers[idx]` where C++ writes
-`sSpatialLayers[0]`.
-
----
-
-## Session log — Phase 2 continued
-
-### Counts
+**Gate 2 met.** `rust/tools/find_dup_types.sh` prints nothing; `src/encoder/`
+contains zero `mem::transmute`; build and tests pass.
 
 | metric | before | after |
 |---|---|---|
-| duplicated type names | 59 | 6 |
-| redundant declarations | 146 | 36 |
-| encoder size assertions | 0 | 47 |
-| `transmute` in `src/encoder/` | 17 | 17 |
+| duplicated type names | 59 | **0** |
+| redundant declarations | 146 | **0** |
+| `transmute` in `src/encoder/` | 17 | **0** |
+| encoder size assertions | 0 | **55** |
 
-The audit's figures were 58/145; `rust/tools/find_dup_types.sh` also counts
-non-`pub` declarations. It is the Gate 2 check: **silence means the gate is met.**
+The audit's figures were 58/145; `find_dup_types.sh` also counts non-`pub`
+declarations. Two blind spots that any struct-only scan shares, both of which hid
+a *wrong* definition: **type aliases** (`SBitStringAux` had four identities, not
+two) and **`src/common/`** (`SMcFunc`'s fifth copy there was the correct one).
 
-Two blind spots in any struct-only scan, both of which hid a wrong definition:
+#### How to verify a type
 
-- **Type aliases.** `SBitStringAux` had *four* identities, not two — `decoder/
-  bit_stream.rs` and `encoder/vlc_encoder.rs` each declared `TagBitStringAux`
-  with an alias.
-- **`src/common/`.** `SMcFunc` had a fifth identity in `common/mc.rs`, and that
-  was the *correct* one.
-
-### Verifying a unified type
-
-Compile a `sizeof` dump against the real headers. This is how every layout defect
-below was found, and it is faster than reading:
+Compile a `sizeof` dump against the real headers — this found every layout defect
+below, and it is faster than reading:
 
 ```bash
 c++ -std=c++11 -I codec/encoder/core/inc -I codec/common/inc -I codec/api/wels -I codec/processing/interface probe.cpp -o probe && ./probe
 ```
 
 with `probe.cpp` including the header, `using namespace WelsEnc;` and
-`printf("%zu", sizeof(T))`. Record the number in `src/encoder/abi_guard.rs`, the
-internal counterpart to `api/abi_guard.rs`, which now pins 47 encoder structs at
-compile time. Verified to fire by perturbing an entry.
+`printf("%zu", sizeof(T))`. Record the number in `src/encoder/abi_guard.rs` (the
+internal counterpart to `api/abi_guard.rs`), which now pins 55 structs at compile
+time. Verified to fire by perturbing an entry.
 
 Two limits worth knowing:
 
-- **Size assertions cannot catch field *order*.** `SLayerInfo` and
-  `SBitStringAux` were both correctly sized and wrongly ordered. Read the header.
-- **Not every struct should be pinned.** `SSliceThreading` embeds `pthread_cond_t`
+- **Size assertions cannot catch field order.** `SBitStringAux`, `SLayerInfo` and
+  `SSliceBufferInfo` were all correctly sized and wrongly ordered. Read the header.
+- **Not every struct can be pinned.** `SSliceThreading` embeds `pthread_cond_t`
   and `pthread_mutex_t` by value, so its 1256 bytes are libc-specific; this port
-  models those as opaque handles and nothing crosses a C ABI. It is excluded with
-  a comment.
+  models those as opaque handles. It is excluded with a comment. `sWelsEncCtx`
+  has one such member, so it is asserted at `98008 - 64 + 8` with the derivation
+  written out.
 
-### Conditional compilation is a defect class, not a one-off
+#### Conditional compilation is a defect class
 
-Three encoder headers declare fields the build never compiles, and the port had
-transcribed all of them:
+Fields the build never compiles, which the port had transcribed anyway:
 
 | macro | defined? | fields wrongly included |
 |---|---|---|
-| `DISABLE_FMO_FEATURE` | **yes**, `as264_common.h:53`, unconditional | `SWelsPPS`'s nine FMO fields (made it ~9x too large); `SSliceHeader::iSliceGroupChangeCycle` |
-| `ENABLE_FRAME_DUMP` | **no** — only under `WELS_TESTBED` / `__UNITTEST__`, neither set by this build | `SSpatialLayerInternal::sRecFileName`; `sWelsEncCtx::bDependencyRecFlag` (still to fix) |
+| `DISABLE_FMO_FEATURE` | **yes**, `as264_common.h:53`, unconditional | `SWelsPPS`'s nine FMO fields (~9x too large); `SSliceHeader::iSliceGroupChangeCycle` |
+| `ENABLE_FRAME_DUMP` | **no** — only under `WELS_TESTBED` / `__UNITTEST__` | `SSpatialLayerInternal::sRecFileName` |
+| `_DEBUG` | **no** | `SParaSetOffset::eSpsPpsIdStrategy` |
+| `STAT_OUTPUT` | **no** (commented out) | `sWelsEncCtx::sStatData`, `::sPerInfo` |
 
-**Check for `#if`/`#ifdef` around every field before porting a struct**, and be
-careful reading the guard: `wels_const.h:41-42` defines
+**Check for `#if`/`#ifdef` around every field before porting a struct**, and read
+the guard carefully: `wels_const.h:41-42` defines
 `NUM_SPATIAL_LAYERS_CONSTRAINT` and `NUM_QUALITY_LAYERS_CONSTRAINT` a few lines
 *above* their use, so a grep that excludes the defining file makes
-`MAX_DEPENDENCY_LAYER` and `MAX_QUALITY_LEVEL` look wrong when they are correct
-at 4.
+`MAX_DEPENDENCY_LAYER` and `MAX_QUALITY_LEVEL` look wrong when they are correct.
 
-### Wrong definitions found and fixed
+#### Definitions that were wrong, not merely duplicated
 
-Beyond simple duplication, these copies were *wrong*:
+- **`SWelsSvcCodingParam`** — C++ derives it from `SEncParamExt`
+  (`param_svc.h:106`), so the 924-byte base must be a byte-identical prefix. All
+  42 fields were present and correctly typed but **out of order** from
+  `bEnableFrameCroppingFlag` on, changing the padding. Now 1240 bytes.
+- **`SStateCtx`** — one packed byte in C++ (`set_mb_syn_cabac.h:55`); the port had
+  two `u8` fields, doubling every entry of `sWelsCabacContexts[4][52][460]`.
+- **`SWelsFuncPtrList`** — 13 of 70 members. Ported in full into the new
+  `wels_func_ptr_def.rs` with the fifteen missing function-pointer typedefs.
+- **`SParaSetOffset`** — a `[i32; 32]` placeholder for a 1180-byte struct.
+- **`SPicture`** — `[_; 4]` arrays where C++ says 3, an invented `iPOC`, ten
+  fields missing.
+- **`SExpandPicFunc`** — C++ has a two-entry chroma table indexed by 16-alignment,
+  not a scalar. The decoder's copy was right, so the canonical is now
+  `common/expand_pic.rs`; `ExpandReferencingPicture` was rewritten to match
+  `expand_pic.cpp:388`.
+- **`SMbCache`** — C++ ends with an anonymous member named `SPicData`, and its
+  first three members use `ALIGNED_DECLARE(..., 16)`, expressed here as
+  `#[repr(C, align(16))]` plus the 14 bytes the C++ compiler inserts.
+- **`ESceneChangeIdc`** — the port invented `NO_SCENE_CHANGE=0`, shifting
+  `SIMILAR_SCENE` to 1 and dropping `MEDIUM_CHANGED_SCENE`.
+- **`SSampleDealingFunc`** — `[_; 8]` where C++ says `[MAX_BLOCK_TYPE]` = 7.
+- **`CWelsPreProcess`** was modelled twice, once as a hand-rolled vtable whose
+  `GetRefFrameInfo` entry had no implementation behind it at all.
+- **`SPps`** was an invented encoder type (C++ has `SWelsPPS`); it and its sole
+  consumer `SDqLayerInfo` were dead code.
 
-- **`SWelsSvcCodingParam`** — C++ derives it (`TagWelsSvcCodingParam: SEncParamExt`,
-  `param_svc.h:106`), so the 924-byte base must be a byte-identical prefix. The
-  port flattens the base inline, which is fine, but had `bEnableFrameCroppingFlag`
-  and everything after it in a different order from `SEncParamExt`, changing the
-  padding and the size. All 42 fields were present and correctly typed; purely an
-  ordering defect. Now 1240 bytes.
-- **`SStateCtx`** — a single packed byte in C++ (`set_mb_syn_cabac.h:55`,
-  `state<<1|mps`). `encoder_context.rs` had two `u8` fields, which doubles every
-  entry of `sWelsCabacContexts[4][52][460]`.
-- **`SPicture`** — `pData`/`iLineSize` as `[_; 4]` where C++ says 3, an invented
-  `iPOC`, ten fields missing.
-- **`SExpandPicFunc`** — neither encoder copy matched `expand_pic.h:88`; C++ has a
-  two-entry chroma table indexed by 16-alignment, not a scalar. The decoder's copy
-  was already right, so the canonical is now `common/expand_pic.rs`.
-  `ExpandReferencingPicture` was rewritten against `expand_pic.cpp:388`.
-- **`SMbCache`** — C++ ends with an anonymous member literally named `SPicData`;
-  the port had flattened it. Also needs `ALIGNED_DECLARE(..., 16)` on its first
-  three members, expressed here as `#[repr(C, align(16))]` plus the 14 bytes of
-  padding the C++ compiler inserts after `sMvComponents`.
-- **`ESceneChangeIdc`** — C++ (`IWelsVP.h:142`) is `{SIMILAR_SCENE=0,
-  MEDIUM_CHANGED_SCENE=1, LARGE_CHANGED_SCENE=2}`; `encoder_context.rs` invented
-  `NO_SCENE_CHANGE=0`, shifting `SIMILAR_SCENE` to 1.
-- **`SSampleDealingFunc`** — `[_; 8]` arrays where `wels_func_ptr_def.h:163` says
-  `[MAX_BLOCK_TYPE]` = `BLOCK_SIZE_ALL` = 7.
-- **`CWelsPreProcess`** was modelled twice: as a real Rust struct with inherent
-  methods, and as a hand-rolled `CWelsPreProcessVtbl`. The vtable was a stand-in —
-  one entry, `GetRefFrameInfo`, had no implementation at all. Ported from
-  `wels_preprocess.cpp:1262`; the vtable is gone.
+#### `pub const` shadowing an enum variant hides logic bugs
 
-### `pub const` shadowing an enum variant hides logic bugs
-
-`svc_set_mb_syn_cavlc.rs` declared `I_SLICE: i32 = 0` and `P_SLICE: i32 = 1`,
+`svc_set_mb_syn_cavlc.rs` declared `I_SLICE: i32 = 0` / `P_SLICE: i32 = 1`,
 shadowing `EWelsSliceType`. C++ (`wels_common_defs.h:163`) has `P_SLICE = 0`,
-`B_SLICE = 1`, `I_SLICE = 2`, so the mb-type offset switch at
-`svc_set_mb_syn_cavlc.cpp:76` was selecting the I-slice offset for P slices and
-taking `default: return` for real I slices. `svc_encode_slice.rs` had the same
-pattern with `NAL_UNIT_CODED_SLICE_EXT: i32 = 20`. **Grep for `pub const` names
-that duplicate an enum variant.**
+`I_SLICE = 2`, so the mb-type offset switch at `svc_set_mb_syn_cavlc.cpp:76` was
+selecting the I-slice offset for P slices and returning early for real I slices.
+`svc_encode_slice.rs` had the same pattern with `NAL_UNIT_CODED_SLICE_EXT`.
+The same disease exists at the **type-alias** level: three different
+`PSampleSadSatdCostFunc` aliases, one of which took `*const u8` where
+`wels_func_ptr_def.h:127` says `uint8_t*`, making it a distinct function type.
 
-### Constants are a second duplication axis
+#### Five constants had wrong values
 
-**79** constant names are declared in more than one encoder module
-(`ENC_RETURN_SUCCESS` x11, `MAX_DEPENDENCY_LAYER` x8, …):
+| constant | was | C++ | source |
+|---|---|---|---|
+| `MAX_SHORT_REF_COUNT` | 16, in three modules | `MAX_GOP_SIZE>>1` = **4** | `wels_const.h:115` |
+| `MAX_TEMPORAL_LEVEL` | 8, in `ref_list_mgr_svc.rs` | **4** | `wels_const.h:102` |
+| `BLOCK_SIZE_ALL` | 8 | **7** | `wels_const.h:147` |
+| `MAX_THREADS_NUM` | 8, in `svc_encode_slice.rs` | **4** | `wels_const.h:69` |
+| `BLOCK_STATIC_IDC_ALL` | 5 | **3** | `IWelsVP.h:148` |
+
+The stale `MAX_SHORT_REF_COUNT` also let the `WelsPreprocess` unref loop read one
+element past `pShortRefList`. Note the **decoder** legitimately defines its own
+`MAX_SHORT_REF_COUNT = 16` (`codec/decoder/core/inc/wels_const.h:47`) — encoder
+and decoder really do disagree. Do not "unify" them.
+
+Constants remain a second duplication axis: **79** names are still declared in
+more than one encoder module. The values are now believed correct, but one
+definition each is still the goal:
 
 ```bash
 grep -h "^pub const [A-Z_0-9]*:" rust/crates/openh264-rs/src/encoder/*.rs | sed -E 's/.*const ([A-Z_0-9]+):.*/\1/' | sort | uniq -c | awk '$1>1'
 ```
 
-Three had wrong values and are fixed: `MAX_SHORT_REF_COUNT` (16 in three modules;
-C++ derives `MAX_GOP_SIZE>>1` = **4**), `MAX_TEMPORAL_LEVEL` (8 in
-`ref_list_mgr_svc.rs`; C++ **4**), `BLOCK_SIZE_ALL` (8; `wels_const.h:147` says
-**7**). The stale `MAX_SHORT_REF_COUNT` also let the `WelsPreprocess` unref loop
-read one element past `pShortRefList`.
+#### Removing the transmutes surfaced three hidden defects
 
-The **decoder** legitimately defines its own `MAX_SHORT_REF_COUNT = 16`
-(`codec/decoder/core/inc/wels_const.h:47`). Encoder and decoder really do
-disagree. Do not "unify" them.
+- `pfInterMd` was assigned `WelsMdSpatialelInterMbIlfmdNoilp`, whose last
+  parameter is `Mb_Type`, not `SMbCache*`. C++ never sets `pfInterMd` in
+  `InitFunctionPointers`; it assigns `WelsMdInterMb` /
+  `WelsMdInterMbEnhancelayer` per-slice at `svc_encode_slice.cpp:733/736`.
+  `WelsMdInterMb` is **not ported** — that is Phase 3 work. The unit test that
+  asserted `pfInterMd.is_some()` was corrected; it asserted something the C++
+  reference does not do.
+- `WelsSpatialWriteMbSyn` was a plain Rust `fn`, not `extern "C"`.
+- The third `PSampleSadSatdCostFunc` alias above.
 
-### Integer promotion
+The nine `ISVCEncoderVtbl` transmutes turned out to be unnecessary once the
+surrounding types were right.
 
-Roughly twenty sites needed correcting once fields had their real C++ widths.
-Most are mechanical (C++ promotes to `int`, narrows on assignment), but two were
-semantic:
+#### Open items carried into Phase 3/4
 
-- `ref_list_mgr_svc.cpp:499` compares `uiLtrMarkInterval` (`uint32_t`) against
-  `iLtrMarkPeriod` (`int32_t`); the usual arithmetic conversions make this an
-  **unsigned** comparison, and the port cast the `u32` down to `i32` — the
-  opposite conversion.
-- `wels_preprocess.cpp:180` computes `kuiRefNumInTemporal` in `int` and narrows
-  to `uint8_t`.
+- **`IWelsReferenceStrategy` dispatch.** `sWelsEncCtx` holds a plain 8-byte
+  `IWelsReferenceStrategy*`; the copy in `ref_list_mgr_svc.rs` had a Rust
+  `*mut dyn` fat pointer (16 bytes), which mis-sized the struct. Restoring the
+  correct width leaves no dispatch mechanism for the two `EndofUpdateRefList`
+  call sites, which are now explicit `todo!()`s rather than silent no-ops. Needs
+  a C-style vtable on the three concrete strategies, or for `pReferenceStrategy`
+  to be wired in Phase 4.
+- **`WelsMdInterMb`** is unported (see `pfInterMd` above).
+- `param_svc.rs::ParamBaseTranscode` writes `sSpatialLayers[idx]` where C++
+  writes `sSpatialLayers[0]`.
+- The two Phase-3.9 `todo!()`s in `ParamValidationExt`
+  (`SM_FIXEDSLCNUM_SLICE`, `SM_RASTER_SLICE`).
 
-### Audit defect 1.5.1 — fixed
-
-`encoder_context.rs::InitBits` omitted `iLeftBits = 32` and `uiCurBits = 0`, which
-`golomb_common.h:67` sets, and assigned a `uiBufSize` field with no C++
-counterpart. `vlc_encoder.rs::InitBits` was already faithful but nothing called
-it. The broken copy is deleted; all three call sites use the faithful one.
-
-### Tooling added
+#### Tooling
 
 | tool | purpose |
 |---|---|
-| `rust/tools/find_dup_types.sh` | the Gate 2 check |
+| `rust/tools/find_dup_types.sh` | the Gate 2 check — silence means met |
 | `rust/tools/show_type.sh <T> [CppTag]` | dumps the C++ original beside every Rust copy |
-| `src/encoder/abi_guard.rs` | 47 compile-time size assertions |
+| `src/encoder/abi_guard.rs` | 55 compile-time size assertions |
 
-`unify_type.py` placed its `pub use` after the last line matching
-`^use [^\n]*\n`, which for a multi-line `use crate::{…};` is the *first* line of
-the group, so the insertion landed inside the braces. It now matches to the
-semicolon.
+`unify_type.py` had two insertion bugs, both fixed: it matched `use` only to the
+first newline (landing inside a braced `use crate::{...}` group), and it fell
+back to position 0 in modules with no top-level `use`, landing above the inner
+attributes.
 
-### Test status
+#### Test status at Gate 2
 
-`cargo test`: 235 passed, 1 failed, 21 ignored. The failure is
-`loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`, unchanged — the
-encoder still emits zero bytes, which is the Phase 4 gate. The 53 decoder
-conformance tests all still pass. `compare.sh` still reports C++ 8034 bytes vs
-Rust 0; nothing in this session was expected to change that, and it was re-run to
-confirm rather than assumed.
+`cargo test`: **235 passed, 1 failed, 21 ignored**. The failure is
+`loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity` — the encoder
+still emits zero bytes, which is the Phase 4 gate. The 53 decoder conformance
+tests all still pass. `compare.sh` still reports C++ 8034 bytes vs Rust 0, which
+is expected: Phase 4 is what wires the pipeline.
+
+### Phase 3 onward — **NOT STARTED**
