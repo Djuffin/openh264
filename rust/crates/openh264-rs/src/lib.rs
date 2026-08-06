@@ -15,6 +15,7 @@ use std::ffi::c_void;
 pub mod common;
 pub mod decoder;
 pub mod encoder;
+pub mod processing;
 pub mod api;
 
 pub use crate::api::codec_api::*;

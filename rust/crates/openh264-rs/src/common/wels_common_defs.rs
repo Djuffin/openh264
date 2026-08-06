@@ -247,3 +247,32 @@ pub enum EWelsSliceType {
     SI_SLICE = 4,
     UNKNOWN_SLICE = 5,
 }
+
+/// `g_kuiGolombUELength` — `codec/common/src/common_tables.cpp:886`, declared at
+/// `codec/common/inc/wels_common_defs.h:79`. The number of bits `ue(v)` needs for
+/// each value 0..255.
+///
+/// This is the canonical copy. Three encoder modules each carried their own, and
+/// **two of them were wrong**: `svc_set_mb_syn_cavlc.rs` had 253 entries and
+/// `vlc_encoder.rs` had 274, both diverging from the real table at index 125. The
+/// short one is the copy the macroblock-layer writer indexes, so any `ue(v)` of 253
+/// or more indexed out of bounds — which is how a 320x192 encode aborted at frame 7
+/// — and every value from 125 up was written with the wrong bit count.
+pub const g_kuiGolombUELength: [u32; 256] = [
+    1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 11,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 17,
+];

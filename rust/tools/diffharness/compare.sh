@@ -1,7 +1,7 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop>
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode]
 #   e.g.   rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
 #
 # Both drivers set a fully explicit, identical SEncParamExt, so the only
@@ -17,12 +17,12 @@ ROOT=$(cd "$HERE/../../.." && pwd)
 OUT=$HERE/out
 mkdir -p "$OUT"
 
-YUV=$1; W=$2; H=$3; N=$4; QP=$5; CABAC=$6; GOP=$7
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}
+YUV=$1; W=$2; H=$3; N=$4; QP=$5; CABAC=$6; GOP=$7; RC=${8:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  2>"$OUT/c_$TAG.log"
-"$HERE/rust_enc/target/debug/rust_enc" "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" 2>"$OUT/r_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC 2>"$OUT/c_$TAG.log"
+"$HERE/rust_enc/target/debug/rust_enc" "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC 2>"$OUT/r_$TAG.log"
 
 cs=$(stat -f%z "$OUT/c_$TAG.264" 2>/dev/null || echo -1)
 rs=$(stat -f%z "$OUT/r_$TAG.264" 2>/dev/null || echo -1)

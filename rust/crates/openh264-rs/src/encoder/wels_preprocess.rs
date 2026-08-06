@@ -1006,10 +1006,15 @@ impl CWelsPreProcess {
         }
     }
 
+    /// `CWelsPreProcess::WelsPreprocessCreate` — `wels_preprocess.cpp:198`.
+    ///
+    /// This used to `alloc_zeroed` the `IWelsVP` and stop there, leaving every
+    /// method `None`. `IWelsVP::Process`/`Set`/`Get` then returned 0 (success)
+    /// without writing anything, so the whole video-analysis stage silently
+    /// produced zeros — see `crate::processing`.
     pub unsafe fn WelsPreprocessCreate(&mut self) -> i32 {
         if self.m_pInterfaceVp.is_null() {
-            let layout = std::alloc::Layout::new::<IWelsVP>();
-            let pVp = std::alloc::alloc_zeroed(layout) as *mut IWelsVP;
+            let pVp = crate::processing::WelsCreateVpInterface();
             if pVp.is_null() {
                 self.WelsPreprocessDestroy();
                 return 1;
@@ -1021,8 +1026,7 @@ impl CWelsPreProcess {
 
     pub unsafe fn WelsPreprocessDestroy(&mut self) -> i32 {
         if !self.m_pInterfaceVp.is_null() {
-            let layout = std::alloc::Layout::new::<IWelsVP>();
-            std::alloc::dealloc(self.m_pInterfaceVp as *mut u8, layout);
+            crate::processing::WelsDestroyVpInterface(self.m_pInterfaceVp);
             self.m_pInterfaceVp = std::ptr::null_mut();
         }
         0

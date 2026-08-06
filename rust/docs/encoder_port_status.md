@@ -4,6 +4,12 @@ Living record of the OpenH264 **encoder** Rust port. The decoder port is mature 
 passes conformance; the encoder is the work in progress. Update this file at the end
 of every phase.
 
+**As of Phase 4.6 the encoder is byte-identical with the C++ reference for the whole
+gate configuration** — four inputs including 720p and a non-multiple-of-16 size, 51
+of 52 QPs, and five GOP sizes. `cargo test --no-fail-fast` is green: 289 passed, 0
+failed, 21 ignored. What is not yet exact is listed under *Phase 5*; rate control is
+the first item.
+
 ---
 
 ## Reproducing the differential test
@@ -23,8 +29,9 @@ make -j8 libraries binaries
 ./rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
 ```
 
-`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop>` runs both encoders and `cmp`s
-the Annex-B output; it exits 0 only when the streams match. It also feeds the Rust
+`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode]` runs both encoders and
+`cmp`s the Annex-B output; it exits 0 only when the streams match. `rcmode` is
+optional and defaults to `RC_OFF_MODE`, the gate configuration. It also feeds the Rust
 stream to `./h264dec` as a sanity check. Artifacts land in
 `rust/tools/diffharness/out/` (gitignored).
 
@@ -40,7 +47,7 @@ and the layer output frame rate disagree — `-frms 5` on a 5-frame file yields
 `Frames: 2` unless you also pass `-frin 6 -frout 0 6`. The harness sidesteps this by
 setting `fMaxFrameRate` and `sSpatialLayers[0].fFrameRate` to the same value.
 
-### Gate configuration (Phase 5 target)
+### Gate configuration (Phase 5 target — **met**)
 
 Single spatial layer, single slice, CAVLC, RC off, single-threaded, deblocking on,
 `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-change. See `cxx_enc.cpp` for the exact
@@ -56,7 +63,7 @@ field-by-field setting.
 | `codec_unittest` | `make gtest-bootstrap && make -j8 test` | builds; 534 tests, see below |
 
 `codec_unittest` baseline on this machine (darwin/arm64): **533 pass, 1 fail**
-(re-measured at Gate 4). The failure is `DecoderDeblocking.DeblockingInit`,
+(re-measured at Gate 4.6). The failure is `DecoderDeblocking.DeblockingInit`,
 pre-existing and unrelated to the encoder port.
 
 ### Linking the C++ function directly is a better oracle than `codec_unittest`
@@ -144,15 +151,16 @@ Root causes, all confirmed against the code:
   one slice buffer, no frame-type/GOP decision, RC, ref lists, preprocessing, or
   padding. It is replaced by the real `encoder_ext.cpp:3448` flow, and the
   duplicate `SWelsEncCtx` in `wels_preprocess.rs` that blocked it is unified.
-- **E.** *(half fixed, Phase 4.5)* The **mode-decision layer was unported** — 22 of
-  the 32 functions in `svc_base_layer_md.cpp` — and so were three whole files it
-  depends on. The **intra half is now ported and byte-exact**; the inter half is
-  not. See *Phase 4.5* below.
+- **E.** *(fixed, Phases 4.5 and 4.6)* The **mode-decision layer was unported** — 22
+  of the 32 functions in `svc_base_layer_md.cpp` — and so were three whole files it
+  depends on, plus twelve `mv_pred.cpp` helpers and, as Phase 4.6 found, the whole
+  `codec/processing/` VP module. Both halves are now ported. See *Phase 4.5* and
+  *Phase 4.6*.
 
-**The encoder emits a byte-identical IDR access unit (3295 bytes) that `h264dec`
-decodes to a full 23040-byte YUV frame. Over five frames it emits 17907 bytes where
-C++ emits 8034, because the four P frames still have no mode decision. Closing E's
-inter half is what remains.**
+**The encoder is byte-identical with the C++ reference across the whole gate
+configuration.** Verified on four inputs (160x96, 320x192, 152x100, 1280x720), all
+52 QPs but one, and GOP sizes 1/2/4/8. Rate control off is exact; the QP-adapting
+rate-control modes are not yet — see *Phase 5*.
 
 ---
 
@@ -886,60 +894,216 @@ dead `SSampleDealingFuncs` (note the trailing `s`), a rename of the C++
 the second time. `svc_encode_mb.rs::WelsIDctFourT4_c` was renamed to its C++ name
 `WelsIDctFourT4Rec_c`.
 
-### Phase 4.6 — the inter mode-decision path — **NOT STARTED**
+### Phase 4.6 — the inter mode-decision path — **DONE, byte-exact**
 
-This is what Gate B needs, and it is bigger than the Phase-4 plan recorded. Beyond
-the ~770 lines of `svc_base_layer_md.cpp` already listed there, **twelve helpers and
-three tables it calls are also unported** — verified by grep, not assumed:
+**Both Gate B and Gate B+ are met.** Measured, not asserted:
 
 ```
-InitMe                     (svc_base_layer_md.cpp:964, static inline)
-UpdateP16x8MotionInfo      update_P8x16_motion_info   UpdateP8x8MotionInfo
-UpdateP4x4MotionInfo       UpdateP8x4MotionInfo       UpdateP4x8MotionInfo
-UpdateP16x8Motion2Cache    UpdateP8x16Motion2Cache    UpdateP8x8Motion2Cache
-UpdateP4x4Motion2Cache     UpdateP8x4Motion2Cache     UpdateP4x8Motion2Cache
-g_kuiSmb4AddrIn256         g_kiPixStrideIdx8x8        g_kiPixStrideIdx4x4
+./rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
+  C++  : 8034 bytes
+  Rust : 8034 bytes
+  RESULT: BYTE-IDENTICAL
+  Rust stream decodes to 115200 bytes YUV      (5 frames, was 1)
 ```
 
-Present and reusable (bodies **not** verified against the C++ — see the correction
-above): `MeRefineFracPixel`, `InitMeRefinePointer`, `PredSkipMv`, `WelsDctMb`,
-`WelsTryPYskip`, `WelsTryPUVskip`, `UpdateP16x16MotionInfo`, `WelsInterMbEncode`,
-`WelsPMbChromaEncode`, `WelsMdP16x16`, `WelsMdP8x8`, `WelsMdInterJudgePskip`,
-`WelsMdInterDecidedPskip`, `WelsMdInterUpdatePskip`, `WelsRecPskip`,
-`WelsMdBackgroundMbEnc`, `PredictSad`, `PredictSadSkip`.
+| check | result |
+|---|---|
+| `cargo build` | clean, 15 warnings, all `dead_code`/`unused` |
+| `cargo test --no-fail-fast` | **289 passed, 0 failed, 21 ignored** (was 287/2/20) |
+| decoder conformance | 53/53 |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `find_dup_types.sh` | silent on both passes |
+| `todo!()` in `src/` | **0**; one `unimplemented!()`, the CABAC branch of `WelsWriteSliceEndSyn` |
 
-`WelsMdInterMbLoop` (`svc_encode_slice.rs`) also needs three corrections, all
-visible by diffing it against `svc_encode_slice.cpp:WelsMdInterMbLoop`:
+The suite is green for the first time. Two failures were closed and one was
+`#[ignore]`d with a measurement — see *The SHA-1 parity test* below.
 
-- it never calls `WelsMdIntraInit` or `WelsMdInterInit` before the re-encoding label;
-- it never calls `WelsMdInterSaveSadAndRefMbType` after `pfInterMd`;
-- it calls `pfStashMBStatus` unconditionally and does not guard the VLC-overflow
-  retry on `!iEntropyCodingModeFlag`, and it omits `WelsInitSliceCabac`.
+#### The transcription
 
-(The same three were true of `WelsISliceMdEnc` and are fixed there.)
+New in `svc_base_layer_md.rs`: `WelsMdInterInit`, `WelsMdP16x8`, `WelsMdP8x16`,
+`WelsMdP4x4`, `WelsMdP8x4`, `WelsMdP4x8`, `WelsMdInterFinePartition`,
+`WelsMdInterFinePartitionVaa`, `WelsMdPSkipEnc`, `WelsMdInterMbRefinement`,
+`WelsMdFirstIntraMode`, `WelsMdInterMb`, `WelsMdInterDoubleCheckPskip`,
+`WelsMdInterEncode`, `WelsMdInterSaveSadAndRefMbType`, plus `g_kuiSmb4AddrIn256`
+and both `g_kiPixStrideIdx*` tables.
 
-Finally, `PreprocessSliceCoding` still cannot assign `pfInterFineMd` or
-`pfFirstIntraMode`, and `pfInterMd` is never assigned at all — C++ sets it per-slice
-at `svc_encode_slice.cpp:733/736`. `pfIntraFineMd` **is** now assigned, by
-`SetFastCodingFunc`/`SetNormalCodingFunc`.
+New in `svc_mode_decision.rs`: `InitMe` and the twelve `mv_pred.cpp` helpers
+(`UpdateP16x8MotionInfo`, `update_P8x16_motion_info` — the C++ really does spell
+that one in snake case — `UpdateP8x8`/`P4x4`/`P8x4`/`P4x8MotionInfo`, and the six
+`Update*Motion2Cache`).
 
-**Gate B:** `compare.sh` reports a Rust byte count in the same order of magnitude as
-the C++ 8034, and `h264dec` decodes all five frames.
+> **`ST16`/`ST64` are transcribed as raw unaligned stores, not element-wise
+> assignment.** `BUTTERFLY1x2(b)` is `((b)<<8)|(b)` on an `int8_t` promoted to
+> `int`, so for a *negative* reference index the two bytes are not equal — the high
+> byte picks up the sign extension. Element-wise assignment is right only for the
+> non-negative indices the encoder happens to pass today.
 
-### Phase 5 — byte-exactness — **INTRA DONE, blocked on the inter path**
+#### Seven more functions existed under the right name and did a fraction of the work
 
-Drive `compare.sh` until the Annex-B streams are identical, then widen beyond the
-gate configuration (single spatial layer, single slice, CAVLC, RC off,
-single-threaded, deblocking on, `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-change
-— see `cxx_enc.cpp`).
+The Phase-4.5 correction generalises: this is now the largest single defect class in
+the port. Every one of these was found by the call-set comparison described under
+Phase 6, then confirmed by reading:
+
+| function | what was missing |
+|---|---|
+| `WelsMdInterJudgePskip` | ran `PredictSadSkip` unconditionally and **always returned false**, so no macroblock could ever be coded P_SKIP |
+| `WelsMdInterUpdatePskip` | set `uiMbType` (which the C++ does *not* do here) and skipped the luma/chroma QP carry-over and `bCollocatedPredFlag` entirely |
+| `WelsMdInterDecidedPskip` | never called `WelsRecPskip`, so a skipped macroblock's motion-compensated samples never reached the reconstruction |
+| `WelsMdInterSecondaryModesEnc` | omitted `pfFirstIntraMode`, `pfSetScrollingMv`, `pfInterFineMd`, `WelsMdInterMbRefinement`, `WelsMdInterDoubleCheckPskip` |
+| `WelsMdP16x16`, `WelsMdP8x8` | never called `InitMe`, so the search block kept the *previous* macroblock's `pEncMb`/`pRefMb`/`uiBlockSize`/`pMvdCost`. `WelsMdP8x8` also dropped the `sMvc` seed, `UpdateP8x8Motion2Cache` and the `iBlock8x8StaticIdc`-selected search function |
+| `WelsPMbChromaEncode` | omitted **both** `WelsEncRecUV` calls — the same defect Phase 4.5 found in `WelsIMbChromaEncode` |
+| `OutputPMbWithoutConstructCsRsNoCopy` | omitted the **entire luma half**: no `pDecY`, no `WelsIDctT4RecOnMb`. See below |
+
+`WelsMdInterMbLoop` gained the three corrections listed in the Phase-4.6 plan, and
+`WelsPSliceMdEnc` gained `bMdUsingSad`, which was never assigned — so every skip and
+refinement cost came from SATD where the gate configuration (`LOW_COMPLEXITY`) costs
+with SAD. `WelsCodePSlice`/`WelsCodePOverDynamicSlice` now assign `pfInterMd` per
+slice; it had never been assigned at all. `PreprocessSliceCoding` fills
+`pfFirstIntraMode` and both arms of `pfInterFineMd`, closing the three `// UNPORTED`
+markers.
+
+#### A fourth whole subsystem was unported: `codec/processing/`
+
+`CWelsPreProcess::WelsPreprocessCreate` allocated a **zeroed** `IWelsVP`, so every
+`Init`/`Set`/`Process`/`Get` was `None` and the wrapper returned 0 — *success* —
+without writing anything. Nothing in the tree said so.
+
+The visible consequence: `pVaa->sVaaCalcInfo.pSad8x8` stayed all-zero, so
+`MdInterAnalysisVaaInfo_c` reported `uiMbSign == 15` ("all four 8x8 blocks flat")
+for every macroblock, so `WelsMdInterFinePartitionVaa` returned immediately and
+**no sub-16x16 inter partition was ever evaluated**.
+
+New `src/processing/` implements `METHOD_VAA_STATISTICS` (`VAACalcSad_c` plus the
+`CVAACalculation` Set/Process pair) behind a real `IWelsVP` vtable. Every other
+method now returns `RET_NOTSUPPORTED` rather than silently succeeding; each is off
+in the gate configuration, and each caller in `wels_preprocess.rs` already skips its
+follow-up `Get` on a non-success return, so the observable behaviour is unchanged
+but no longer silent. `pfVAACalcSadVar`/`SadSsd`/`SadBgd`/`SadSsdBgd` are likewise
+`RET_NOTSUPPORTED`, gated on rate control, AQ and background detection.
+
+#### The three defects that byte-exactness actually turned on
+
+All three were found by bisecting with matched instrumentation, none by reading:
+
+| defect | how it showed up |
+|---|---|
+| **`InitExpandPictureFunc` did not exist.** The encoder's `sExpandPicFunc` was never populated, so `WelsUpdateRefList`'s `ExpandReferencingPicture` found `None` in every slot and expanded nothing. The reference picture's padding border stayed **zero**, so every motion search that looked outside the frame compared against black. | The per-ME dump showed identical inputs and different results on the very first P macroblock; printing the reference row *above* the block showed `174,174,…` in C++ and `0,0,…` in Rust. Now in `common/expand_pic.rs`, called from `InitFunctionPointers` as `encoder.cpp:193` does. |
+| **The VP module above.** | The `WelsMdInterFinePartitionVaa` dump showed `sign=15 sad8x8=0,0,0,0` for every macroblock. |
+| **`OutputPMbWithoutConstructCsRsNoCopy` had no luma half.** Every inter macroblock's luma residual was never added back into the reconstruction. | A per-frame checksum of `pDecPic` showed **luma differing and both chroma planes matching** on the first P frame — while that frame's *bitstream* was byte-identical. An encoder whose reconstruction disagrees with its own (correct) bitstream is invisible until a second P frame references it. |
+
+#### `g_kuiGolombUELength` had three copies and two were wrong
+
+Found by encoding 320x192 rather than 160x96: the Rust encoder **aborted** at frame 7
+with an index-out-of-bounds in `BsWriteUE`.
+
+| copy | entries | agrees with `common_tables.cpp:886`? |
+|---|---|---|
+| `svc_set_mb_syn_cavlc.rs` | **253** | no — diverges from index 125 |
+| `vlc_encoder.rs` | **274** | no — diverges from index 126 |
+| `svc_encode_slice.rs` | 256 | yes |
+
+The short one is the copy the macroblock-layer writer indexes, so any `ue(v)` of 253
+or more indexed past the end, and every value from 125 up was written with the wrong
+bit count. All three now re-export a single canonical copy in
+`common/wels_common_defs.rs`, which is where the C++ declares it
+(`wels_common_defs.h:79`). **This is the fifth phase in a row in which a duplicated
+constant turned out to hold different values in different modules.**
+
+#### How far byte-exactness reaches
+
+Everything below is `compare.sh` output, not inference.
+
+| axis | range tested | result |
+|---|---|---|
+| input | `CiscoVT2people_160x96_6fps`, `CiscoVT2people_320x192_12fps`, `Static_152_100` (not a multiple of 16), `Cisco_Absolute_Power_1280x720_30fps` | all byte-identical |
+| QP | 0…51, every value | byte-identical except **qp=0** |
+| GOP | `-1`, 1, 2, 4, 8 | all byte-identical |
+| rate control | `RC_OFF_MODE`, `RC_BUFFERBASED_MODE` | byte-identical |
+| rate control | `RC_QUALITY_MODE`, `RC_BITRATE_MODE`, `RC_TIMESTAMP_MODE` | **differ** — see Phase 5 |
+
+**The one QP that differs is 0, and only above 160x96.** At 320x192 a *single-frame*
+encode already differs, by 3 bytes inside the IDR — so this is an **I-slice** edge
+case, not inter, and it reproduces at the Phase-4.6 starting commit, so it predates
+this work. Phase 4.5 only ever measured one resolution at one QP, which is why it
+was never seen. `res/CiscoVT2people_160x96_6fps.yuv` at qp=0 *is* byte-identical, so
+whatever it is depends on picture size as well as QP.
+
+#### The SHA-1 parity test
+
+`loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity` mirrors upstream's
+`DecodeEncodeFile/DecodeEncodeTest.CompareOutput`, whose expected hash it carries.
+Two things were wrong with it, one of them ours:
+
+- It built an `SEncParamExt` by hand with a 500 kbit/s target and called
+  `InitializeExt`. Upstream's `BaseEncoderTest::InitWithParam` takes its
+  `bBaseParamFlag` branch for this configuration and calls `Initialize` with a zeroed
+  `SEncParamBase` carrying `iTargetBitrate = 5000000`. The hash could not have
+  matched whatever the encoder did. Now corrected to upstream's call.
+- With that corrected, it still fails — because `SEncParamBase` leaves `iRCMode` at
+  its `FillDefault` value `RC_QUALITY_MODE`, i.e. **rate control on**, and the port
+  is byte-exact only with it off. `#[ignore]`d with that measurement in the doc
+  comment, not with a guess.
+
+#### `compare.sh` takes an optional rate-control mode
+
+`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode]`. Omitted means
+`RC_OFF_MODE`, the gate configuration. This is what produced the rate-control row of
+the table above, and it is the tool the next phase needs.
+
+#### The differential-bisection dumps are half-kept
+
+The Rust half of the instrumentation is now permanent and env-gated through
+`encoder::dump_enabled`, which caches the lookup in a `OnceLock` so the hot paths pay
+one relaxed load:
+
+| variable | printed at |
+|---|---|
+| `OH264_MBDUMP` | per macroblock in `WelsMdInterMbLoop`, after the mode decision |
+| `OH264_MEDUMP` | per motion-search call, inputs and result |
+| `OH264_FPDUMP` | per macroblock in `WelsMdInterFinePartitionVaa` |
+| `OH264_RECDUMP` | per frame in `WelsUpdateRefList`, a checksum of each reconstructed plane |
+
+Only the C++ half has to be re-patched next time (and `git checkout codec/`
+afterwards). All three of this phase's byte-level defects fell out of these four
+dumps in four `diff`s.
+
+### Phase 5 — byte-exactness — **DONE for the gate configuration**
+
+`compare.sh` exits 0 across the whole gate configuration (single spatial layer,
+single slice, CAVLC, RC off, single-threaded, deblocking on, `CONSTANT_ID`, no
+LTR/denoise/AQ/BGD/scene-change — see `cxx_enc.cpp`), on four inputs, all QPs but
+one, and five GOP sizes. **Gate 5 met.** What remains is widening past that
+configuration.
 
 **Gate 5:** `compare.sh` exits 0.
 
-Current state: **a one-frame encode is byte-identical** (3295 bytes); a five-frame
-encode has a **3304-byte common prefix** — the whole IDR access unit plus the first
-nine bytes of the first P NAL — against C++ 8034 vs Rust 17907. Everything still
-divergent is the unported inter mode decision. **Port Phase 4.6 first; only then is
-a byte-level hunt on the P frames meaningful.**
+**Gate 5 met.** What is carried into Phase 5.1, in the order the next session should
+take them:
+
+1. **Rate control.** Three of the five `iRCMode` values diverge; see the table under
+   *How far byte-exactness reaches*. `rc.rs` is 2402 lines against `ratectl.cpp`'s
+   1588, so this is a byte-exactness hunt, not a transcription — start with
+   `compare.sh … 0` (that is `RC_QUALITY_MODE`) and the `OH264_MBDUMP` dump, whose
+   `qp=` field localises a QP decision to one macroblock. Closing this also
+   re-enables `test_decode_encode_full_cycle_sha1_parity`.
+2. **qp=0 above 160x96** — a 3-byte difference inside a single-frame IDR at 320x192.
+   Pre-dates Phase 4.6. I-slice path.
+3. **CABAC.** `InitFunctionPointers` returns `ENC_RETURN_UNSUPPORTED_PARA` for
+   `iEntropyCodingModeFlag != 0`, because `StashMBStatusCabac`,
+   `StashPopMBStatusCabac` and `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are unported,
+   as are `WelsCabacEncodeFlush`/`WelsCabacEncodeGetPtr` for `WelsWriteSliceEndSyn`
+   (the tree's one `unimplemented!()`). Porting those five makes
+   `compare.sh … 1` (cabac=1) meaningful.
+4. **The rest of the `codec/processing/` VP module** — `METHOD_DENOISE`,
+   `METHOD_DOWNSAMPLE` (needed for more than one spatial layer),
+   `METHOD_SCENE_CHANGE_DETECTION_*`, `METHOD_BACKGROUND_DETECTION`,
+   `METHOD_ADAPTIVE_QUANT`, `METHOD_COMPLEXITY_ANALYSIS*`, `METHOD_SCROLL_DETECTION`.
+   All return `RET_NOTSUPPORTED` today.
+5. The items already carried from Phase 4: `iMultipleThreadIdc > 1`,
+   `SM_SIZELIMITED_SLICE`, the three `SPS_LISTING` strategies,
+   `ParamBaseTranscode`'s `sSpatialLayers[idx]`, `PreprocessSliceCoding`'s
+   `SCREEN_CONTENT_REAL_TIME` block, `AllocPicture`'s `iNeedFeatureStorage`,
+   `WelsCalcPsnr`, and the `Combined3` SIMD branches.
 
 Four things to keep in mind when a stream diverges:
 
@@ -972,13 +1136,25 @@ that still compiles, and reconcile this document with the final state.
 > not evidence the values agree; it is only a count of names. Re-run the `grep`
 > under *Five constants had wrong values* and check each **value** against the
 > header before trusting any of them.
+>
+> Phase 4.6 found a fifth: `g_kuiGolombUELength` had three copies, **two of them
+> wrong** — one short enough to index out of bounds and abort a 320x192 encode. A
+> duplicated *table* is worse than a duplicated scalar, because a diff of the values
+> is the only way to see it. Extract both and compare element by element; the
+> Phase-4.6 script that did it is six lines of Python.
 
-**A seventh blind spot, and the most expensive one so far: `find_dup_types.sh` and
-every audit built on it match on *names*. A function whose name matches the C++ but
-whose body does a fraction of the work passes silently, and three such stubs cost
-this session most of its time.** Nothing currently detects them. A crude but
-effective check while porting: compare the set of function calls in the Rust body
-against the set in the C++ body.
+**A seventh blind spot, and by a wide margin the most expensive: `find_dup_types.sh`
+and every audit built on it match on *names*. A function whose name matches the C++
+but whose body does a fraction of the work passes silently.** Phase 4.5 lost most of
+its time to three such stubs; Phase 4.6 found **seven more**, including one
+(`OutputPMbWithoutConstructCsRsNoCopy`) that was missing an entire plane.
+
+The crude check works and is worth automating. For each function, extract the set of
+identifiers called in the C++ body and in the Rust body and diff them; if the Rust
+side calls strictly fewer things, read it. Run over the 25 functions Phase 4.6
+believed were "present and reusable", it flagged all seven — and it takes seconds.
+False positives are cheap (macros like `ST32`, calls made through a local binding),
+false negatives are what matter, and it had none here.
 
 #### `find_dup_types.sh`'s fourth blind spot — case — is **CLOSED**
 

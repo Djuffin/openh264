@@ -721,6 +721,23 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             }
         }
 
+        if crate::encoder::dump_enabled(&REC_DUMP, "OH264_RECDUMP") {
+            for pl in 0..3usize {
+                let w = if pl != 0 { (*pDecPic).iWidthInPixel >> 1 } else { (*pDecPic).iWidthInPixel };
+                let h = if pl != 0 { (*pDecPic).iHeightInPixel >> 1 } else { (*pDecPic).iHeightInPixel };
+                let (mut sum, mut x) = (0u32, 1u32);
+                for y in 0..h {
+                    for i in 0..w {
+                        x = x
+                            .wrapping_mul(31)
+                            .wrapping_add(*(*pDecPic).pData[pl].offset((y * (*pDecPic).iLineSize[pl] + i) as isize) as u32);
+                        sum = sum.wrapping_add(x);
+                    }
+                }
+                eprintln!("REC plane={} poc={} sum={}", pl, pParamD.iPOC, sum);
+            }
+        }
+
         (*pDecPic).uiTemporalId = kuiTid;
         (*pDecPic).uiSpatialId = kuiDid;
         (*pDecPic).iFrameNum = pParamD.iFrameNum;
@@ -1740,3 +1757,6 @@ mod tests {
         }
     }
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static REC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
