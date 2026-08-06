@@ -15,7 +15,7 @@
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264>\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -26,6 +26,8 @@ int main (int argc, char** argv) {
   const int   kiCabac  = atoi (argv[6]);
   const int   kiGop    = atoi (argv[7]);
   const char* kpOut    = argv[8];
+  // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
+  const int   kiRcMode = (argc > 9) ? atoi (argv[9]) : (int) RC_OFF_MODE;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -43,7 +45,7 @@ int main (int argc, char** argv) {
   sParam.iPicHeight                 = kiHeight;
   sParam.iTargetBitrate             = 500000;
   sParam.iMaxBitrate                = UNSPECIFIED_BIT_RATE;
-  sParam.iRCMode                    = RC_OFF_MODE;
+  sParam.iRCMode                    = (RC_MODES) kiRcMode;
   sParam.fMaxFrameRate              = 30.0f;
   sParam.iTemporalLayerNum          = 1;
   sParam.iSpatialLayerNum           = 1;

@@ -540,6 +540,47 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
         let kiStrideEnc = (*pCurDqLayer).iEncStride[0];
         let kiStrideRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
 
+        if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
+            let mut mvc = String::new();
+            for di in 0..(*pSlice).uiMvcNum as usize {
+                mvc.push_str(&format!(
+                    "{}/{},",
+                    (*pSlice).sMvc[di].iMvX,
+                    (*pSlice).sMvc[di].iMvY
+                ));
+            }
+            let mut enc = String::new();
+            let mut rf = String::new();
+            let mut rfup = String::new();
+            for di in 0..8isize {
+                enc.push_str(&format!("{},", *(*pMe).pEncMb.offset(di)));
+                rf.push_str(&format!("{},", *(*pMe).pRefMb.offset(di)));
+                rfup.push_str(&format!("{},", *(*pMe).pRefMb.offset(di - kiStrideRef as isize)));
+            }
+            eprintln!(
+                "ME bs={} px={},{} mvp={},{} base={},{} sadpred={} mvcn={} min={},{} max={},{} mvc={} enc={} ref={} refup={} mvdc={},{}",
+                (*pMe).uiBlockSize,
+                (*pMe).iCurMeBlockPixX,
+                (*pMe).iCurMeBlockPixY,
+                (*pMe).sMvp.iMvX,
+                (*pMe).sMvp.iMvY,
+                (*pMe).sMvBase.iMvX,
+                (*pMe).sMvBase.iMvY,
+                (*pMe).uSadPredISatd.uiSadPred,
+                (*pSlice).uiMvcNum,
+                (*pSlice).sMvStartMin.iMvX,
+                (*pSlice).sMvStartMin.iMvY,
+                (*pSlice).sMvStartMax.iMvX,
+                (*pSlice).sMvStartMax.iMvY,
+                mvc,
+                enc,
+                rf,
+                rfup,
+                *(*pMe).pMvdCost.offset(0),
+                *(*pMe).pMvdCost.offset(4),
+            );
+        }
+
         // Step 1: Initial point prediction
         if !WelsMotionEstimateInitialPoint(pFuncList, pMe, pSlice, kiStrideEnc, kiStrideRef) {
             let block_size = (*pMe).uiBlockSize as usize;
@@ -556,6 +597,15 @@ pub unsafe extern "C" fn WelsMotionEstimateSearch(
                 pMe,
                 kiStrideEnc,
                 kiStrideRef,
+            );
+        }
+        if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
+            eprintln!(
+                "ME> mv={},{} sad={} satd={}",
+                (*pMe).sMv.iMvX,
+                (*pMe).sMv.iMvY,
+                (*pMe).uiSadCost,
+                (*pMe).uiSatdCost
             );
         }
     }
@@ -1784,3 +1834,6 @@ mod tests {
         }
     }
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

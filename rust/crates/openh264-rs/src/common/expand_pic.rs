@@ -20,3 +20,27 @@ pub struct SExpandPicFunc {
     pub pfExpandLumaPicture: Option<PExpandPictureFunc>,
     pub pfExpandChromaPicture: [Option<PExpandPictureFunc>; 2],
 }
+
+/// `InitExpandPictureFunc` — `codec/common/src/expand_pic.cpp:351`.
+///
+/// The SIMD branches (`X86_ASM`, `HAVE_NEON`, `HAVE_NEON_AARCH64`) select faster
+/// kernels for the same result; this port has none, so it assigns the `_c` scalar
+/// kernels unconditionally — which is what the C++ does on this target too, since
+/// `WelsCPUFeatureDetect` measures `0x00000000` here.
+///
+/// This function was **missing entirely**, and with it the encoder's
+/// `sExpandPicFunc` was never populated. `ExpandReferencingPicture` then found
+/// `None` in every slot and expanded nothing, so the reference picture's padding
+/// border stayed zero and every motion search that looked outside the frame
+/// compared against black.
+///
+/// # Safety
+/// `pExpandPicFunc` must point to a valid `SExpandPicFunc`.
+pub unsafe fn InitExpandPictureFunc(pExpandPicFunc: *mut SExpandPicFunc, _kuiCPUFlag: u32) {
+    (*pExpandPicFunc).pfExpandLumaPicture =
+        Some(crate::decoder::decoder_core::ExpandPictureLuma_c);
+    (*pExpandPicFunc).pfExpandChromaPicture[0] =
+        Some(crate::decoder::decoder_core::ExpandPictureChroma_c);
+    (*pExpandPicFunc).pfExpandChromaPicture[1] =
+        Some(crate::decoder::decoder_core::ExpandPictureChroma_c);
+}

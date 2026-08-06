@@ -1,4 +1,4 @@
-/*!
+/*
  * \copy
  *     Copyright (c)  2013, Cisco Systems
  *     All rights reserved.

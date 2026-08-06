@@ -121,24 +121,10 @@ pub const g_kiQpCostTable: [i32; 52] = [
     40, 45, 51, 57, 64, 72, 81, 91,
 ];
 
-pub const g_kuiGolombUELength: [u8; 256] = [
-    1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 11,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 17,
-];
+// `g_kuiGolombUELength` is a common-layer table (`common_tables.cpp:886`).
+// This module used to declare its own copy; see the canonical definition for
+// what the divergent copies got wrong.
+pub use crate::common::wels_common_defs::g_kuiGolombUELength;
 
 #[inline]
 pub fn CLIP3_QP_0_51(x: i32) -> usize {
@@ -1096,19 +1082,32 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
         return;
     }
     let mb_type = (*pMb).uiMbType;
+    //intra have been reconstructed, NO COPY from CS to pDecPic--
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
         let pMbCache = &mut (*pSlice).sMbCacheInfo;
+        let pDecY = (*pMbCache).SPicData.pDecMb[0];
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
         let pScaledTcoeff = (*pMbCache).pCoeffLevel;
+        let kiDecStrideLuma = (*(*pDq).pDecPic).iLineSize[0];
         let kiDecStrideChroma = (*(*pDq).pDecPic).iLineSize[1];
+        let pfIdctFour4x4 = (*(*pCtx).pFuncList).pfIDctFourT4.expect("pfIDctFourT4 unset");
 
-        if let Some(func_list) = (*pCtx).pFuncList.as_ref() {
-            if let Some(idct) = func_list.pfIDctFourT4 {
-                idct(pDecU, kiDecStrideChroma, pDecU, kiDecStrideChroma, pScaledTcoeff.add(256));
-                idct(pDecV, kiDecStrideChroma, pDecV, kiDecStrideChroma, pScaledTcoeff.add(320));
-            }
-        }
+        // The luma half of this function was missing: no `pDecY`, no
+        // `WelsIDctT4RecOnMb`. Every inter macroblock's luma residual was therefore
+        // never added back into the reconstruction, so the encoder's reference frame
+        // diverged from what a decoder produces from its own (correct) bitstream —
+        // invisible until a second P frame referenced it.
+        crate::encoder::decode_mb_aux::WelsIDctT4RecOnMb(
+            pDecY,
+            kiDecStrideLuma,
+            pDecY,
+            kiDecStrideLuma,
+            pScaledTcoeff,
+            pfIdctFour4x4,
+        );
+        pfIdctFour4x4(pDecU, kiDecStrideChroma, pDecU, kiDecStrideChroma, pScaledTcoeff.add(256));
+        pfIdctFour4x4(pDecV, kiDecStrideChroma, pDecV, kiDecStrideChroma, pScaledTcoeff.add(320));
     }
 }
 
@@ -1406,7 +1405,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 /// # Safety
 /// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
 unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) {
-    if std::env::var_os("OH264_MBDUMP").is_none() {
+    if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
     }
     let mut nzc = String::new();
@@ -2841,3 +2840,6 @@ pub unsafe fn SliceLayerInfoUpdate(
 pub unsafe fn WelsInitSliceEncodingFuncs(uiCpuFlag: u32) {
     // Dynamically wires CPU architecture flags if SIMD variants are enabled
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

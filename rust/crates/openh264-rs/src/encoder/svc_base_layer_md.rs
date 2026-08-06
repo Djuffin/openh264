@@ -1290,6 +1290,23 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaa(
             .offset((*pCurMb).iMbXY as isize) as *mut i32,
     );
 
+    if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
+        let sad = *(*(*pEncCtx).pVaa)
+            .sVaaCalcInfo
+            .pSad8x8
+            .offset((*pCurMb).iMbXY as isize);
+        eprintln!(
+            "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
+            (*pCurMb).iMbXY,
+            uiMbSign,
+            iBestCost,
+            sad[0],
+            sad[1],
+            sad[2],
+            sad[3]
+        );
+    }
+
     if uiMbSign == 15 {
         return;
     }
@@ -2358,3 +2375,6 @@ mod tests {
         }
     }
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static FP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

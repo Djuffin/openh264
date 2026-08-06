@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264>");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -20,6 +20,8 @@ fn main() {
     let cabac: i32 = a[6].parse().unwrap();
     let gop: i32 = a[7].parse().unwrap();
     let out = &a[8];
+    // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
+    let rcmode: i32 = if a.len() > 9 { a[9].parse().unwrap() } else { RC_MODES::RC_OFF_MODE as i32 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -34,7 +36,7 @@ fn main() {
         p.iPicHeight = h;
         p.iTargetBitrate = 500000;
         p.iMaxBitrate = UNSPECIFIED_BIT_RATE;
-        p.iRCMode = RC_MODES::RC_OFF_MODE;
+        p.iRCMode = std::mem::transmute::<i32, RC_MODES>(rcmode);
         p.fMaxFrameRate = 30.0;
         p.iTemporalLayerNum = 1;
         p.iSpatialLayerNum = 1;

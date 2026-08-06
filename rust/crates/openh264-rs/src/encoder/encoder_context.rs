@@ -684,6 +684,13 @@ pub unsafe fn InitFunctionPointers(
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
+    // `encoder.cpp:193`. This call was missing, so `sExpandPicFunc` stayed all-`None`
+    // and `WelsUpdateRefList`'s `ExpandReferencingPicture` expanded nothing.
+    crate::common::expand_pic::InitExpandPictureFunc(
+        &mut (*pFuncList).sExpandPicFunc as *mut _,
+        _uiCpuFlag,
+    );
+
     /* Intra_Prediction_fn */
     crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(pFuncList, _uiCpuFlag);
 
