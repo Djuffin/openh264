@@ -2447,11 +2447,8 @@ pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchM
 /// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
 ///
-/// **Incomplete**: the `pfInterFineMd` and `pfFirstIntraMode` slots are left unset
-/// because their targets (`WelsMdInterFinePartition[Vaa]`, `WelsMdFirstIntraMode`) are
-/// part of the still-unported inter half of `svc_base_layer_md.cpp`. `pfIntraFineMd`
-/// is assigned by `SetFastCodingFunc`/`SetNormalCodingFunc` above. Every other
-/// assignment here is a faithful translation.
+/// The `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`) is the only part
+/// not translated; see the comment at its position below.
 pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
     let pCurLayer = (*pCtx).pCurDqLayer;
     let bFastMode = (*(*pCtx).pSvcParam).iComplexityMode == LOW_COMPLEXITY;
@@ -2479,7 +2476,8 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
             (*pFuncList).pfSearchMethod[b] =
                 Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
         }
-        // pFuncList->pfFirstIntraMode = WelsMdFirstIntraMode;   // UNPORTED
+        (*pFuncList).pfFirstIntraMode =
+            Some(crate::encoder::svc_base_layer_md::WelsMdFirstIntraMode);
         let sdf = &mut (*pFuncList).sSampleDealingFuncs;
         sdf.pfMeCost = sdf.pfSampleSatd.as_mut_ptr();
         (*pFuncList).pfSetScrollingMv =
@@ -2488,11 +2486,13 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
         if bFastMode {
             (*pFuncList).pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::NotCalculateSatdCost);
-            // pFuncList->pfInterFineMd = WelsMdInterFinePartitionVaa;   // UNPORTED
+            (*pFuncList).pfInterFineMd =
+                Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartitionVaa);
         } else {
             (*pFuncList).pfCalculateSatd =
                 Some(crate::encoder::svc_motion_estimate::CalculateSatdCost);
-            // pFuncList->pfInterFineMd = WelsMdInterFinePartition;      // UNPORTED
+            (*pFuncList).pfInterFineMd =
+                Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartition);
         }
     } else {
         (*pFuncList).sSampleDealingFuncs.pfMeCost = null_mut();
