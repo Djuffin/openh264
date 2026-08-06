@@ -9,3 +9,7 @@ libc = "0.2"
 [[bench]]
 name = "c_vs_rust_bench"
 harness = false
+
+[[bench]]
+name = "decode_1080p_bench"
+harness = false

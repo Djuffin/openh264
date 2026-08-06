@@ -963,10 +963,11 @@ pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodi
 
 /// `ParamValidationExt` — codec/encoder/core/src/encoder_ext.cpp:403.
 ///
-/// Partial port. Complete for `SM_SINGLE_SLICE`; the three multi-slice arms need
+/// Partial port. Complete for `SM_SINGLE_SLICE` and `SM_SIZELIMITED_SLICE`; the
+/// `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` arms need
 /// `SliceArgumentValidationFixedSliceMode` / `CheckRowMbMultiSliceSetting` /
 /// `CheckRasterMultiSliceSetting` from svc_enc_slice_segment.cpp (Phase 3.9), so
-/// they are `todo!()`. The tail call to `ParamValidation` is likewise partial.
+/// they are `todo!()`. The tail call to `ParamValidation` is a complete port.
 pub unsafe fn ParamValidationExt(
     pLogCtx: *mut SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
