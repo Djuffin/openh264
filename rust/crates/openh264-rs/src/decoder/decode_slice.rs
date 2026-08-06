@@ -3862,8 +3862,14 @@ pub unsafe fn ParseIntra8x8Mode(
         }
     }
 
+    // `ST32 (&pIntraPredMode[iMbXy][0], LD32 (&pIntraPredMode[1 + 8 * 4]))` copies
+    // four modes, not one; entries 1..3 feed the left-neighbour cache of the next
+    // macroblock (WelsFillCacheConstrain0IntraNxN reads [3]).
     let dst_modes = (*dq).pIntraPredMode.add(iMbXy * 8);
     *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
+    *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
+    *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
+    *dst_modes.add(3) = *pIntraPredMode.add(4 + 8 * 4);
     *dst_modes.add(4) = *pIntraPredMode.add(4 + 8 * 1);
     *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
     *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);

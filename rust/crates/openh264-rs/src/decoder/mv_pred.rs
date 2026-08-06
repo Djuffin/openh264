@@ -315,7 +315,9 @@ pub unsafe fn SetRectBlock(
     let v16 = if size == 4 {
         val as u16
     } else {
-        (val * 0x0101) as u16
+        // C computes this in uint32_t and truncates; callers may pass a
+        // sign-extended int8_t, so the multiply has to wrap rather than panic.
+        val.wrapping_mul(0x0101) as u16
     };
     let v32 = if size == 4 {
         val
@@ -845,11 +847,17 @@ pub unsafe fn GetColocatedMb(
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][8].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[12].as_ptr()), 4);
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][10].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[15].as_ptr()), 4);
 
+                // C passes the raw `int8_t` into SetRectBlock's `uint32_t val`, so a
+                // negative ref index sign-extends (-1 -> 0xFFFFFFFF) and the `val *
+                // 0x0101` fill then writes {-1, -2} rather than {-1, -1}. Zero-extending
+                // here would silently disagree with the reference decoder, so keep the
+                // sign extension. (Contrast the two `(uint8_t)REF_NOT_IN_LIST` sites,
+                // where C casts to unsigned itself.)
                 let colocRefPtr = *(*colocPic).pRefIndex[listIdx].add(iMbXy);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(0) as *mut u8, 2, 2, 4, colocRefPtr[0] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(2) as *mut u8, 2, 2, 4, colocRefPtr[3] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(8) as *mut u8, 2, 2, 4, colocRefPtr[12] as u8 as u32, 1);
-                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(10) as *mut u8, 2, 2, 4, colocRefPtr[15] as u8 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(0) as *mut u8, 2, 2, 4, colocRefPtr[0] as i32 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(2) as *mut u8, 2, 2, 4, colocRefPtr[3] as i32 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(8) as *mut u8, 2, 2, 4, colocRefPtr[12] as i32 as u32, 1);
+                SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(10) as *mut u8, 2, 2, 4, colocRefPtr[15] as i32 as u32, 1);
             }
             if (coloc_mbType & MB_TYPE_L1) == 0 {
                 SetRectBlock((*pCurDqLayer).iColocRefIndex[1].as_mut_ptr() as *mut u8, 4, 4, 4, REF_NOT_IN_LIST as u8 as u32, 1);
@@ -1128,7 +1136,6 @@ pub unsafe fn PredBDirectTemporal(
     }
 
     *GetMbType(pCurDqLayer).add(iMbXy) = mbType;
-
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let pMvd = [0i16; 4];
