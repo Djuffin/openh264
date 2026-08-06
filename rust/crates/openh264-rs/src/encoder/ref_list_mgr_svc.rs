@@ -88,6 +88,7 @@ pub use EWelsSliceType::*;
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
+pub use crate::encoder::param_svc::SWelsSPS;
 
 // ============================================================================
 // Core Data Structures
@@ -234,11 +235,6 @@ pub struct SWelsSvcCodingParam {
     pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSPS {
-    pub uiLog2MaxFrameNum: u32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

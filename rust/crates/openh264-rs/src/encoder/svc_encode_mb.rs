@@ -49,6 +49,7 @@ use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
+pub use crate::encoder::param_svc::SWelsPPS;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -320,15 +321,6 @@ pub struct SMbCache {
     pub SPicData: SPicData,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsPPS {
-    pub iPpsId: i32,
-    pub iSpsId: i32,
-    pub uiChromaQpIndexOffset: u8,
-    pub bEntropyCodingModeFlag: bool,
-    pub iPicInitQp: i32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

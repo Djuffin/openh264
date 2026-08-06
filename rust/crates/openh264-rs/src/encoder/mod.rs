@@ -1,3 +1,4 @@
+pub mod abi_guard;
 pub mod au_set;
 pub mod deblocking;
 pub mod encode_mb_aux;

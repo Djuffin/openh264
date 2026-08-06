@@ -21,6 +21,7 @@ use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::param_svc::SWelsPPS;
 
 // ============================================================================
 // Constants and Thresholds
@@ -286,11 +287,6 @@ pub struct SMbCache {
     pub bCollocatedPredFlag: bool,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsPPS {
-    pub uiChromaQpIndexOffset: u8,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
