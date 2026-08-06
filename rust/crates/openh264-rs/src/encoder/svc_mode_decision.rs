@@ -17,6 +17,7 @@ use std::ffi::c_void;
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
 use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
+use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
@@ -324,21 +325,48 @@ pub unsafe extern "C" fn WelsMdInterSecondaryModesEnc(
     }
 }
 
+/// `svc_base_layer_md.cpp:2023`. Runs the fine intra partition search through
+/// `pfIntraFineMd`, reconstructs the luma if I16x16 survived, then decides and
+/// reconstructs chroma.
+///
+/// Previously this was a stub that only zeroed `uiCbp` and `pSadCost[0]`: it never
+/// called `pfIntraFineMd`, `WelsEncRecI16x16Y`, `WelsMdIntraChroma` or
+/// `WelsIMbChromaEncode`, so no residual was ever produced for an intra macroblock.
+///
+/// # Safety
+/// All four pointers must be valid, `pEncCtx->pFuncList->pfIntraFineMd` must be
+/// assigned (`PreprocessSliceCoding` does this), and `WelsMdIntraInit` must have run
+/// for this macroblock.
 pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
-    _pEncCtx: *mut sWelsEncCtx,
-    _pWelsMd: *mut SWelsMD,
+    pEncCtx: *mut sWelsEncCtx,
+    pWelsMd: *mut SWelsMD,
     pCurMb: *mut SMB,
-    _pMbCache: *mut SMbCache,
+    pMbCache: *mut SMbCache,
 ) {
-    if pCurMb.is_null() {
-        return;
-    }
-    if (*pCurMb).uiMbType == MB_TYPE_INTRA16x16 {
+    let pFunc = (*pEncCtx).pFuncList;
+    //initial prediction memory for I_4x4
+    (*pFunc).pfIntraFineMd.expect(
+        "pfIntraFineMd is unset; PreprocessSliceCoding must assign \
+         WelsMdIntraFinePartition[Vaa] before any macroblock is coded",
+    )(pEncCtx, pWelsMd, pCurMb, pMbCache);
+
+    //add pEnc&rec to MD--2010.3.15
+    if IS_INTRA16x16((*pCurMb).uiMbType) {
         (*pCurMb).uiCbp = 0;
+        crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
     }
-    if !(*pCurMb).pSadCost.is_null() {
-        *(*pCurMb).pSadCost.offset(0) = 0;
-    }
+
+    //chroma
+    (*pWelsMd).iCostChroma = crate::encoder::svc_base_layer_md::WelsMdIntraChroma(
+        pFunc,
+        (*pEncCtx).pCurDqLayer,
+        pMbCache,
+        (*pWelsMd).iLambda,
+    );
+    //add pEnc&rec to MD--2010.3.15
+    crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
+    (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
+    *(*pCurMb).pSadCost.add(0) = 0;
 }
 
 /// Reconstructs a **P_SKIP** macroblock by copying motion-compensated samples directly
@@ -706,10 +734,12 @@ pub unsafe extern "C" fn WelsMdI16x16(
     if pFunc.is_null() || pCurDqLayer.is_null() || pMbCache.is_null() {
         return i32::MAX;
     }
-    let pPredI16x16: [*mut u8; 2] = [
-        (*pMbCache).pMemPredLuma,
-        if !(*pMbCache).pMemPredLuma.is_null() { (*pMbCache).pMemPredLuma.add(256) } else { std::ptr::null_mut() },
-    ];
+    // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
+    // equal on entry only because WelsMdIntraInit re-points pMemPredLuma at
+    // pMemPredMb; this function then *moves* pMemPredLuma to the losing ping-pong
+    // half before returning, so reading pMemPredLuma here would follow the previous
+    // macroblock's pointer whenever WelsMdIntraInit had not just run.
+    let pPredI16x16: [*mut u8; 2] = [(*pMbCache).pMemPredMb, (*pMbCache).pMemPredMb.add(256)];
     let mut pDst = pPredI16x16[0];
     let pDec = (*pMbCache).SPicData.pCsMb[0];
     let pEnc = (*pMbCache).SPicData.pEncMb[0];
@@ -723,25 +753,32 @@ pub unsafe extern "C" fn WelsMdI16x16(
     let iAvailCount = g_kiIntra16AvaliMode[iOffset][4] as usize;
     let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
 
+    // The `pfIntra16x16Combined3` fast path is not translated; see the module docs on
+    // `svc_base_layer_md.rs`. It is NULL in the C++ on every target this port builds
+    // for, and this port never assigns it.
+    crate::encoder::svc_base_layer_md::assert_no_combined3(
+        (*pFunc).sSampleDealingFuncs.pfIntra16x16Combined3,
+        "pfIntra16x16Combined3",
+    );
+    // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
+    // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
+    // here silently forced the fast-mode choice in normal mode.
+    let pfMdCost16x16 = (*(*pFunc).sSampleDealingFuncs.pfMdCost.add(BLOCK_16x16)).unwrap();
+
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
         let iCurMode = kpAvailMode[i] as i32;
-        if iCurMode >= 0 && iCurMode < 7 {
-            if let Some(pred_fn) = (*pFunc).pfGetLumaI16x16Pred[iCurMode as usize] {
-                pred_fn(pDst, pDec, iLineSizeDec);
-            }
-            let mut iCurCost = 0;
-            if let Some(cost_fn) = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16] {
-                iCurCost = cost_fn(pDst, 16, pEnc, iLineSizeEnc);
-            }
-            let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
-            iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
-            if iCurCost < iBestCost {
-                iBestMode = iCurMode;
-                iBestCost = iCurCost;
-                iIdx ^= 0x01;
-                pDst = pPredI16x16[iIdx];
-            }
+        debug_assert!((0..7).contains(&iCurMode));
+
+        (*pFunc).pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(pDst, pDec, iLineSizeDec);
+        let mut iCurCost = pfMdCost16x16(pDst, 16, pEnc, iLineSizeEnc);
+        let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
+        iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
+        if iCurCost < iBestCost {
+            iBestMode = iCurMode;
+            iBestCost = iCurCost;
+            iIdx ^= 0x01;
+            pDst = pPredI16x16[iIdx];
         }
     }
     (*pMbCache).pMemPredChroma = pPredI16x16[iIdx];
@@ -1910,52 +1947,81 @@ mod tests {
     #[test]
     fn test_wels_md_i16x16_cost() {
         unsafe {
-            // SWelsFuncPtrList is now the full 70-member table
-            // (wels_func_ptr_def.h:198); this test leaves every entry unset, which is
-            // what the hand-written subset amounted to.
+            // The function-pointer tables must be populated the way the real caller
+            // does it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
+            // WelsInitSampleSadFunc installs pfSampleSad, which SetFastCodingFunc then
+            // aliases to pfMdCost. This test previously left every entry unset, so it
+            // asserted only that a function which silently did nothing returned
+            // something below i32::MAX.
             let mut func_list = SWelsFuncPtrList::default();
+            crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut func_list, 0);
+            crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
+            func_list.sSampleDealingFuncs.pfMdCost =
+                func_list.sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
 
-            let mut pred_buf = [128u8; 512];
-            let mut cs_mb = [128u8; 256];
-            let mut enc_mb = [128u8; 256];
+            // Reconstruction and source planes need a real border: the V/H/DC
+            // predictors read pRef[-stride] and pRef[-1].
+            const STRIDE: usize = 48;
+            let mut cs_plane = vec![128u8; STRIDE * 40];
+            let mut enc_plane = vec![128u8; STRIDE * 40];
+            // Give the source a constant offset from the reconstruction so the SAD is
+            // a known non-zero number: 16*16 pixels differing by 10.
+            for y in 0..16 {
+                for x in 0..16 {
+                    enc_plane[(y + 16) * STRIDE + (x + 16)] = 138;
+                }
+            }
+            let mut pred_buf = [0u8; 512];
 
             let mut mb_cache = SMbCache {
-                uiRefMbType: 0,
-                sMvComponents: SMVComponentUnit::default(),
                 SPicData: SPicData {
-                    pEncMb: [enc_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
+                    pEncMb: [
+                        enc_plane.as_mut_ptr().add(16 * STRIDE + 16),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    ],
                     pDecMb: [std::ptr::null_mut(); 3],
                     pRefMb: [std::ptr::null_mut(); 3],
-                    pCsMb: [cs_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
+                    pCsMb: [
+                        cs_plane.as_mut_ptr().add(16 * STRIDE + 16),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    ],
                 },
-                pMemPredLuma: pred_buf.as_mut_ptr(),
-                sMbMvp: [SMVUnitXY::default(); 16],
-                uiNeighborIntra: 0x07, // All neighbors available
-                uiLumaI16x16Mode: 0,
-                bCollocatedPredFlag: false,
+                pMemPredMb: pred_buf.as_mut_ptr(),
+                uiNeighborIntra: 0x07, // left + top + top-left available
                 ..Default::default()
             };
 
-            // iEncStride/iCsStride are [3] and pRefOri is [MAX_REF_PIC_COUNT] in C++
-            // (svc_enc_frame.h:88-94); the copy this test was written against had
-            // [4], [4] and [2].
             let mut dq_layer = SDqLayer {
                 iMbWidth: 10,
                 iMbHeight: 10,
-                iEncStride: [16; 3],
-                iCsStride: [16; 3],
+                iEncStride: [STRIDE as i32; 3],
+                iCsStride: [STRIDE as i32; 3],
                 sLayerInfo: SLayerInfo::default(),
                 ..Default::default()
             };
 
+            let iLambda = 10;
             let cost = WelsMdI16x16(
                 &mut func_list as *mut SWelsFuncPtrList,
                 &mut dq_layer as *mut SDqLayer,
                 &mut mb_cache as *mut SMbCache,
-                10,
+                iLambda,
             );
 
-            assert!(cost < i32::MAX);
+            // Every neighbour sample is 128 and every source sample is 138, so V, H and
+            // DC all predict 128 and all score SAD = 256 * 10 = 2560. The tie is broken
+            // by the first candidate, g_kiIntra16AvaliMode[7][0] = I16_PRED_V, whose
+            // mode-signalling cost is iLambda * BsSizeUE(g_kiMapModeI16x16[V]=0) = 10.
+            assert_eq!(mb_cache.uiLumaI16x16Mode, I16_PRED_V as u8);
+            assert_eq!(cost, 2560 + iLambda);
+
+            // The winning prediction lands in pMemPredLuma and the scratch half is
+            // handed to the chroma search as pMemPredChroma.
+            assert_eq!(mb_cache.pMemPredLuma, pred_buf.as_mut_ptr());
+            assert_eq!(mb_cache.pMemPredChroma, pred_buf.as_mut_ptr().add(256));
+            assert!(std::slice::from_raw_parts(mb_cache.pMemPredLuma, 256).iter().all(|&b| b == 128));
         }
     }
 

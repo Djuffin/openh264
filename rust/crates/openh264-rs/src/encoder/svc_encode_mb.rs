@@ -353,7 +353,7 @@ pub unsafe extern "C" fn WelsIDctT4Rec_c(
     }
 }
 
-pub unsafe extern "C" fn WelsIDctFourT4_c(
+pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
     pRec: *mut u8,
     iStride: i32,
     pPred: *mut u8,

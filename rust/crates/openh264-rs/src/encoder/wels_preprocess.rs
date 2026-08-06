@@ -48,11 +48,22 @@ pub const GOM_VAR: i32 = 2;
     unused_unsafe
 )]
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
+use std::mem::size_of;
 use crate::{
     EUsageType, SEncParamExt, SSourcePicture, SSpatialLayerConfig, VideoFormat,
 };
 use crate::common::memory_align::CMemoryAlign;
+use crate::encoder::encoder_ext::{PADDING_LENGTH, WELS_ALIGN};
+use crate::encoder::param_svc::{MB_HEIGHT_LUMA, MB_WIDTH_LUMA};
+use crate::encoder::encoder_context::SMVUnitXY;
+
+/// Allocation tag for `CMemoryAlign`; the C++ tags are diagnostic strings only.
+macro_rules! tag {
+    ($s:literal) => {
+        concat!($s, "\0").as_ptr() as *const c_char
+    };
+}
 
 // ============================================================================
 // Constants
@@ -727,69 +738,159 @@ pub unsafe fn JudgeNeedOfScaling(
     bNeedDownsampling
 }
 
-/// Allocates an `SPicture` instance with 32-byte aligned planar pixel buffers.
+/// `picture_handle.cpp:51`. Allocates an `SPicture` with the padded, aligned plane
+/// layout the rest of the encoder assumes.
+///
+/// The previous body here was hand-rolled and wrong in three ways that all mattered:
+/// it dropped the `PADDING_LENGTH` border entirely (so `pData[0] == pBuffer` and every
+/// intra predictor reading `pRef[-iLineSize]` on the top macroblock row ran off the
+/// front of the allocation), it computed `iLineSize[0]` as `WELS_ALIGN(width, 32)`
+/// instead of `WELS_ALIGN(WELS_ALIGN(width, 16) + 2 * PADDING_LENGTH, 32)` (160 rather
+/// than 224 at the harness resolution, which disagreed with the stride the
+/// `pStrideDecBlockOffset` table was built from, so 4x4 reconstructions landed in the
+/// wrong rows), and it never allocated `uiRefMbType` / `pRefMbQp` / `sMvList` /
+/// `pMbSkipSad`. It also used Rust's global allocator where the caller frees through
+/// `CMemoryAlign`.
+///
+/// # Safety
+/// `pMa` must be a valid `CMemoryAlign`. The returned picture must be released with
+/// [`FreePicture`] against the same allocator.
 pub unsafe fn AllocPicture(
-    _pMa: *mut CMemoryAlign,
-    iWidth: i32,
-    iHeight: i32,
-    _bNeedMbInfo: bool,
-    _iNeedExpandBorders: i32,
+    pMa: *mut CMemoryAlign,
+    kiWidth: i32,
+    kiHeight: i32,
+    bNeedMbInfo: bool,
+    iNeedFeatureStorage: i32,
 ) -> *mut SPicture {
-    let pic_layout = std::alloc::Layout::new::<SPicture>();
-    let pPic = std::alloc::alloc_zeroed(pic_layout) as *mut SPicture;
+    let pPic = (*pMa).WelsMallocz(size_of::<SPicture>() as u32, tag!("pPic")) as *mut SPicture;
     if pPic.is_null() {
         return std::ptr::null_mut();
     }
 
-    let iStrideY = (iWidth + 31) & !31;
-    let iStrideUV = iStrideY >> 1;
-    let iHeightUV = iHeight >> 1;
+    // with width of horizon / height of vertical
+    let mut iPicWidth = WELS_ALIGN(kiWidth, MB_WIDTH_LUMA) + (PADDING_LENGTH << 1);
+    let iPicHeight = WELS_ALIGN(kiHeight, MB_HEIGHT_LUMA) + (PADDING_LENGTH << 1);
+    let mut iPicChromaWidth = iPicWidth >> 1;
+    let iPicChromaHeight = iPicHeight >> 1;
+    // 32 (or 16 for chroma below) to match original imp. here instead of cache_line_size
+    iPicWidth = WELS_ALIGN(iPicWidth, 32);
+    iPicChromaWidth = WELS_ALIGN(iPicChromaWidth, 16);
+    let iLumaSize = iPicWidth * iPicHeight;
+    let iChromaSize = iPicChromaWidth * iPicChromaHeight;
 
-    let y_size = (iStrideY * iHeight) as usize;
-    let uv_size = (iStrideUV * iHeightUV) as usize;
-    let total_size = y_size + uv_size * 2 + 128;
-
-    let buf_layout = std::alloc::Layout::from_size_align_unchecked(total_size, 32);
-    let pBuffer = std::alloc::alloc_zeroed(buf_layout);
-    if pBuffer.is_null() {
-        std::alloc::dealloc(pPic as *mut u8, pic_layout);
+    (*pPic).pBuffer =
+        (*pMa).WelsMalloc((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
+    if (*pPic).pBuffer.is_null() {
+        let mut p = pPic;
+        FreePicture(pMa, &mut p);
         return std::ptr::null_mut();
     }
+    (*pPic).iLineSize[0] = iPicWidth;
+    (*pPic).iLineSize[1] = iPicChromaWidth;
+    (*pPic).iLineSize[2] = iPicChromaWidth;
+    (*pPic).pData[0] = (*pPic)
+        .pBuffer
+        .add(((1 + (*pPic).iLineSize[0]) * PADDING_LENGTH) as usize);
+    (*pPic).pData[1] = (*pPic)
+        .pBuffer
+        .add(iLumaSize as usize + ((((1 + (*pPic).iLineSize[1]) * PADDING_LENGTH) >> 1) as usize));
+    (*pPic).pData[2] = (*pPic).pBuffer.add(
+        (iLumaSize + iChromaSize) as usize
+            + ((((1 + (*pPic).iLineSize[2]) * PADDING_LENGTH) >> 1) as usize),
+    );
 
-    (*pPic).pBuffer = pBuffer;
-    (*pPic).pData[0] = pBuffer;
-    (*pPic).pData[1] = pBuffer.add(y_size);
-    (*pPic).pData[2] = pBuffer.add(y_size + uv_size);
-    (*pPic).iLineSize[0] = iStrideY;
-    (*pPic).iLineSize[1] = iStrideUV;
-    (*pPic).iLineSize[2] = iStrideUV;
-    (*pPic).iWidthInPixel = iWidth;
-    (*pPic).iHeightInPixel = iHeight;
-    (*pPic).SetUnref();
+    (*pPic).iWidthInPixel = kiWidth;
+    (*pPic).iHeightInPixel = kiHeight;
+    (*pPic).iFrameNum = -1;
+
+    (*pPic).bIsLongRef = false;
+    (*pPic).iLongTermPicNum = -1;
+    (*pPic).uiRecieveConfirmed = 0;
+    (*pPic).iMarkFrameNum = -1;
+
+    if bNeedMbInfo {
+        let kuiCountMbNum = (((15 + kiWidth) >> 4) * ((15 + kiHeight) >> 4)) as u32;
+
+        (*pPic).uiRefMbType =
+            (*pMa).WelsMallocz(kuiCountMbNum * 4, tag!("pPic->uiRefMbType")) as *mut u32;
+        (*pPic).pRefMbQp = (*pMa).WelsMallocz(kuiCountMbNum, tag!("pPic->pRefMbQp")) as *mut u8;
+        (*pPic).sMvList = (*pMa).WelsMallocz(
+            kuiCountMbNum * size_of::<SMVUnitXY>() as u32,
+            tag!("pPic->sMvList"),
+        ) as *mut SMVUnitXY;
+        (*pPic).pMbSkipSad =
+            (*pMa).WelsMallocz(kuiCountMbNum * 4, tag!("pPic->pMbSkipSad")) as *mut i32;
+
+        if (*pPic).uiRefMbType.is_null()
+            || (*pPic).pRefMbQp.is_null()
+            || (*pPic).sMvList.is_null()
+            || (*pPic).pMbSkipSad.is_null()
+        {
+            let mut p = pPic;
+            FreePicture(pMa, &mut p);
+            return std::ptr::null_mut();
+        }
+    }
+
+    // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
+    // outside the gate configuration and unported; refuse rather than hand back a
+    // picture whose storage the caller believes exists.
+    if iNeedFeatureStorage != 0 {
+        let mut p = pPic;
+        FreePicture(pMa, &mut p);
+        return std::ptr::null_mut();
+    }
+    (*pPic).pScreenBlockFeatureStorage = std::ptr::null_mut();
 
     pPic
 }
 
-/// Frees an `SPicture` instance and its allocated pixel memory.
-pub unsafe fn FreePicture(_pMa: *mut CMemoryAlign, ppPic: *mut *mut SPicture) {
-    if !ppPic.is_null() && !(*ppPic).is_null() {
-        let pPic = *ppPic;
-        if !(*pPic).pBuffer.is_null() {
-            let iStrideY = (*pPic).iLineSize[0];
-            let iHeight = (*pPic).iHeightInPixel;
-            let iStrideUV = (*pPic).iLineSize[1];
-            let iHeightUV = iHeight >> 1;
-            let y_size = (iStrideY * iHeight) as usize;
-            let uv_size = (iStrideUV * iHeightUV) as usize;
-            let total_size = y_size + uv_size * 2 + 128;
-            let buf_layout = std::alloc::Layout::from_size_align_unchecked(total_size, 32);
-            std::alloc::dealloc((*pPic).pBuffer, buf_layout);
-            (*pPic).pBuffer = std::ptr::null_mut();
-        }
-        let pic_layout = std::alloc::Layout::new::<SPicture>();
-        std::alloc::dealloc(pPic as *mut u8, pic_layout);
-        *ppPic = std::ptr::null_mut();
+/// `picture_handle.cpp:129`. Releases a picture and every block `AllocPicture` took
+/// from `pMa`.
+///
+/// # Safety
+/// `pMa` must be the allocator the picture was built with.
+pub unsafe fn FreePicture(pMa: *mut CMemoryAlign, ppPic: *mut *mut SPicture) {
+    if ppPic.is_null() || (*ppPic).is_null() {
+        return;
     }
+    let pPic = *ppPic;
+
+    if !(*pPic).pBuffer.is_null() {
+        (*pMa).WelsFree((*pPic).pBuffer as *mut c_void, tag!("pPic->pBuffer"));
+        (*pPic).pBuffer = std::ptr::null_mut();
+    }
+    (*pPic).pData = [std::ptr::null_mut(); 3];
+    (*pPic).iLineSize = [0; 3];
+
+    (*pPic).iWidthInPixel = 0;
+    (*pPic).iHeightInPixel = 0;
+    (*pPic).iFrameNum = -1;
+
+    (*pPic).bIsLongRef = false;
+    (*pPic).uiRecieveConfirmed = 0;
+    (*pPic).iLongTermPicNum = -1;
+    (*pPic).iMarkFrameNum = -1;
+
+    if !(*pPic).uiRefMbType.is_null() {
+        (*pMa).WelsFree((*pPic).uiRefMbType as *mut c_void, tag!("pPic->uiRefMbType"));
+        (*pPic).uiRefMbType = std::ptr::null_mut();
+    }
+    if !(*pPic).pRefMbQp.is_null() {
+        (*pMa).WelsFree((*pPic).pRefMbQp as *mut c_void, tag!("pPic->pRefMbQp"));
+        (*pPic).pRefMbQp = std::ptr::null_mut();
+    }
+    if !(*pPic).sMvList.is_null() {
+        (*pMa).WelsFree((*pPic).sMvList as *mut c_void, tag!("pPic->sMvList"));
+        (*pPic).sMvList = std::ptr::null_mut();
+    }
+    if !(*pPic).pMbSkipSad.is_null() {
+        (*pMa).WelsFree((*pPic).pMbSkipSad as *mut c_void, tag!("pPic->pMbSkipSad"));
+        (*pPic).pMbSkipSad = std::ptr::null_mut();
+    }
+
+    (*pMa).WelsFree(pPic as *mut c_void, tag!("pPic"));
+    *ppPic = std::ptr::null_mut();
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.

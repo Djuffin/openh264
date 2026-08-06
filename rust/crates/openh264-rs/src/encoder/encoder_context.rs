@@ -682,10 +682,41 @@ pub unsafe fn InitFunctionPointers(
     (*pFuncList).pfSetMemZeroSize64Aligned16 = Some(WelsSetMemZero_c_extern);
     (*pFuncList).pfSetMemZeroSize64 = Some(WelsSetMemZero_c_extern);
 
-    WelsInitBGDFunc(pFuncList, (*pParam).bEnableBackgroundDetection);
+    let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
-    (*pFuncList).pfDctFourT4 = Some(crate::encoder::encode_mb_aux::WelsDctFourT4_c);
-    (*pFuncList).pfIDctFourT4 = Some(crate::encoder::svc_encode_mb::WelsIDctFourT4_c);
+    /* Intra_Prediction_fn */
+    crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(pFuncList, _uiCpuFlag);
+
+    /* ME func */
+    crate::encoder::svc_motion_estimate::WelsInitMeFunc(pFuncList, _uiCpuFlag, bScreenContent);
+
+    /* sad, satd, average */
+    crate::encoder::sample::WelsInitSampleSadFunc(pFuncList, _uiCpuFlag);
+
+    WelsInitBGDFunc(pFuncList, (*pParam).bEnableBackgroundDetection);
+    crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc(
+        pFuncList,
+        bScreenContent
+            && (*pParam).bEnableSceneChangeDetect
+            && ((*(*pEncCtx).pSvcParam).iComplexityMode as i32)
+                < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
+    );
+
+    // for pfGetVarianceFromIntraVaa function ptr adaptive by CPU features
+    crate::encoder::md::InitIntraAnalysisVaaInfo(pFuncList, _uiCpuFlag);
+
+    /* Motion compensation */
+    crate::common::mc::InitMcFunc(&mut (*pFuncList).sMcFuncs as *mut _, _uiCpuFlag);
+    InitCoeffFunc(pFuncList, _uiCpuFlag, (*pParam).iEntropyCodingModeFlag);
+
+    crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(pFuncList, _uiCpuFlag);
+    crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(pFuncList, _uiCpuFlag);
+
+    // See InitCoeffFunc: the three CABAC bitstream-stashing entry points are
+    // unported, so refuse the configuration outright rather than run with nulls.
+    if (*pParam).iEntropyCodingModeFlag != 0 {
+        return crate::encoder::wels_encoder_ext::ENC_RETURN_UNSUPPORTED_PARA;
+    }
 
     // C++ does NOT set pfInterMd here. It is assigned per-slice in
     // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
@@ -694,10 +725,6 @@ pub unsafe fn InitFunctionPointers(
     // different signature (its last parameter is Mb_Type, not SMbCache*) -- the
     // mem::transmute around it was what let that through. WelsMdInterMb is not
     // ported yet, so the assignment belongs with that work, not here.
-    (*pFuncList).pfWelsSpatialWriteMbSyn = Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn);
-    (*pFuncList).pfStashMBStatus = Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc);
-    (*pFuncList).pfStashPopMBStatus = Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc);
-    (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc);
 
     crate::encoder::deblocking::DeblockingInit(
         &mut (*pFuncList).pfDeblocking as *mut _,
@@ -707,6 +734,16 @@ pub unsafe fn InitFunctionPointers(
     crate::encoder::rc::WelsRcInitFuncPointers(
         &mut (*pFuncList).pfRc,
         (*pParam).iRCMode,
+    );
+
+    crate::encoder::deblocking::WelsBlockFuncInit(
+        &mut (*pFuncList).pfSetNZCZero as *mut _,
+        _uiCpuFlag as i32,
+    );
+
+    crate::encoder::md::InitFillNeighborCacheInterFunc(
+        pFuncList,
+        (*pParam).bEnableBackgroundDetection as i32,
     );
 
     // encoder.cpp:227. Only CONSTANT_ID is ported, so this returns null — and hence
@@ -723,6 +760,37 @@ pub unsafe fn InitFunctionPointers(
     }
 
     ENC_RETURN_SUCCESS
+}
+
+/// `set_mb_syn_cavlc.cpp:290`. Selects the coefficient-writing entry points for the
+/// configured entropy coder.
+///
+/// **Incomplete for CABAC**: `StashMBStatusCabac`, `StashPopMBStatusCabac` and
+/// `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are unported, so the CABAC branch leaves
+/// those three slots as they were and only assigns `pfWelsSpatialWriteMbSyn`. The
+/// caller checks for this and returns `ENC_RETURN_UNSUPPORTED_PARA` rather than
+/// running with three null function pointers.
+unsafe fn InitCoeffFunc(
+    pFuncList: *mut SWelsFuncPtrList,
+    _uiCpuFlag: u32,
+    iEntropyCodingModeFlag: i32,
+) {
+    (*pFuncList).pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
+
+    if iEntropyCodingModeFlag != 0 {
+        // WelsSpatialWriteMbSynCabac is ported but is a plain Rust fn, not the
+        // extern "C" the pfWelsSpatialWriteMbSyn slot holds; the CABAC branch is
+        // unreachable anyway because the caller rejects the configuration.
+        // pfStashMBStatus / pfStashPopMBStatus / pfGetBsPosition: UNPORTED, see above.
+    } else {
+        (*pFuncList).pfStashMBStatus =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc);
+        (*pFuncList).pfStashPopMBStatus =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc);
+        (*pFuncList).pfWelsSpatialWriteMbSyn =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn);
+        (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc);
+    }
 }
 
 /// Increments the H.264 slice header `frame_num` syntax element for spatial layer `kiDidx`.

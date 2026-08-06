@@ -86,8 +86,16 @@ pub const INTER_VARIANCE_SAD_THRESHOLD: i32 = 20;
 // Neighbor availability bitmasks
 pub const LEFT_MB_POS: u32 = 0x01;
 pub const TOP_MB_POS: u32 = 0x02;
-pub const TOPLEFT_MB_POS: u32 = 0x04;
-pub const TOPRIGHT_MB_POS: u32 = 0x08;
+// `wels_common_basis.h:125-126`: TOPRIGHT is C (0x04) and TOPLEFT is D (0x08).
+// These two were swapped here. Both are live: FillNeighborCacheIntra below tests
+// `uiNeighborAvail & TOPLEFT_MB_POS` to set uiNeighborIntra bit 0x04, which indexes
+// g_kiIntra16AvaliMode / g_kiNeighborIntraToI4x4, and FillNeighborCacheInter* test
+// them for the top-left/top-right MV and ref-index caches.
+// The mb_cache.h:118 comment describes the *encoded* uiNeighborIntra bit layout
+// (TOPLEFT 0x04, TOPRIGHT 0x08), which is deliberately the reverse of the
+// uiNeighborAvail layout; do not "reconcile" the two.
+pub const TOPRIGHT_MB_POS: u32 = 0x04;
+pub const TOPLEFT_MB_POS: u32 = 0x08;
 
 pub const MB_LEFT_BIT: u32 = 0;
 pub const MB_TOP_BIT: u32 = 1;
@@ -107,14 +115,21 @@ pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
 pub const INTRA_4x4_MODE_NUM: usize = 8;
 pub const MB_WIDTH_LUMA: i32 = 16;
 
-pub const MB_TYPE_SKIP: u32 = 0x00000001;
-pub const MB_TYPE_16x16: u32 = 0x00000002;
-pub const MB_TYPE_16x8: u32 = 0x00000004;
-pub const MB_TYPE_8x16: u32 = 0x00000008;
-pub const MB_TYPE_8x8: u32 = 0x00000010;
-pub const MB_TYPE_8x8_REF0: u32 = 0x00000020;
-pub const MB_TYPE_INTRA4x4: u32 = 0x00000040;
-pub const MB_TYPE_INTRA16x16: u32 = 0x00000080;
+// `wels_common_defs.h:275-283`. This block was transcribed as a dense 0x01..0x80
+// ladder starting at MB_TYPE_SKIP; every one of the eight was wrong. The live
+// consequence was in FillNeighborCacheIntra/Inter below, which test
+// `uiMbType & MB_TYPE_INTRA4x4` (0x40 here, 0x01 in C++) to decide whether a
+// neighbour contributes its I4x4 prediction modes, and `== MB_TYPE_SKIP`
+// (0x01 here, 0x100 in C++) for the inter neighbour caches.
+pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
+pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
+pub const MB_TYPE_INTRA8x8: u32 = 0x00000004;
+pub const MB_TYPE_16x16: u32 = 0x00000008;
+pub const MB_TYPE_16x8: u32 = 0x00000010;
+pub const MB_TYPE_8x16: u32 = 0x00000020;
+pub const MB_TYPE_8x8: u32 = 0x00000040;
+pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
+pub const MB_TYPE_SKIP: u32 = 0x00000100;
 
 // CPU feature flags
 pub const WELS_CPU_SSE2: u32 = 0x00000004;

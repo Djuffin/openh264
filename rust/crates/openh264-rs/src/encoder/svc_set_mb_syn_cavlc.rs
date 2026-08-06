@@ -435,7 +435,11 @@ pub unsafe fn WriteBlockResidualCavlc(
     let mut i = 0i32;
     while i + 1 < iTotalCoeffs && iZerosLeft > 0 {
         let uirun = uiRun[i as usize] as usize;
-        let iZeroLeft = (iZerosLeft.min(7) - 1).max(0) as usize;
+        // `set_mb_syn_cavlc.cpp:223` — `g_kuiZeroLeftMap[iZerosLeft]`, i.e. saturate at
+        // 7. This was `(iZerosLeft.min(7) - 1).max(0)`, an invented formula one row off:
+        // it selected the run-before VLC for `zeros_left - 1` for every block with a
+        // run to code.
+        let iZeroLeft = crate::encoder::vlc_encoder::g_kuiZeroLeftMap[(iZerosLeft as usize).min(15)] as usize;
         let upRunBefore = crate::encoder::vlc_encoder::g_kuiVlcRunBefore[iZeroLeft][uirun.min(14)];
         n = upRunBefore[1] as i32;
         iValue = upRunBefore[0] as u32;
