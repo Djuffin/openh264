@@ -99,8 +99,6 @@ pub const MB_TYPE_8x16: u32 = 0x00000020;
 pub const MB_TYPE_8x8: u32 = 0x00000040;
 pub const MB_TYPE_SKIP: u32 = 0x00000080;
 
-pub const NAL_UNIT_CODED_SLICE_EXT: i32 = 20;
-
 pub const g_kuiChromaQpTable: [u8; 52] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
     12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
@@ -200,12 +198,6 @@ pub fn WELS_CEILLOG2(v: u32) -> i32 {
 // ============================================================================
 // Core Macroblock, Cache, and Slice Data Structures
 // ============================================================================
-
-
-
-
-
-
 
 #[repr(C, align(16))]
 pub struct SMbCache {
@@ -344,22 +336,6 @@ pub struct SSubsetSps {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeader {
-    pub uiNalRefIdc: u8,
-    pub eNalUnitType: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub sNalUnitHeader: SNalUnitHeader,
-    pub bIdrFlag: u8,
-    pub uiDependencyId: u8,
-    pub uiTemporalId: u8,
-}
-
-#[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SSliceHeader {
     pub iFirstMbInSlice: i32,
@@ -416,49 +392,7 @@ impl Default for SSliceHeaderExt {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub pCurBuf: *mut u8,
-    pub uiCurBits: u32,
-    pub iLeftBits: i32,
-    pub uiBufSize: u32,
-    pub iBits: i32,
-}
-
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 32,
-            uiBufSize: 0,
-            iBits: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSliceBs {
-    pub sBsWrite: SBitStringAux,
-    pub pBs: *mut u8,
-    pub uiBsPos: u32,
-    pub uiBsSize: i32,
-    pub iNalIndex: i32,
-    pub pBsBuffer: *mut u8,
-    pub uiSize: i32,
-}
-
-impl Default for SWelsSliceBs {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
+pub use crate::common::wels_common_defs::{EWelsNalUnitType, SBitStringAux};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -681,6 +615,9 @@ pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::nal_encap::SNalUnitHeaderExt;
+pub use crate::encoder::nal_encap::SNalUnitHeader;
+pub use crate::encoder::nal_encap::SWelsSliceBs;
 
 // Function pointer dispatch table types
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
@@ -991,7 +928,7 @@ pub unsafe fn WriteRefPicMarking(pBs: *mut SBitStringAux, pSliceHeader: *mut SSl
     let sRefMarking = &mut (*pSliceHeader).sRefMarking;
     let mut n: usize = 0;
 
-    if (*pNalHdrExt).bIdrFlag != 0 {
+    if (*pNalHdrExt).bIdrFlag {
         BsWriteOneBit(pBs, if sRefMarking.bNoOutputOfPriorPicsFlag { 1 } else { 0 });
         BsWriteOneBit(pBs, if sRefMarking.bLongTermRefFlag { 1 } else { 0 });
     } else {
@@ -1045,7 +982,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
     BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
-    if (*pNalHead).bIdrFlag != 0 {
+    if (*pNalHead).bIdrFlag {
         BsWriteUE(pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
@@ -1061,7 +998,7 @@ pub unsafe fn WelsSliceHeaderWrite(
         }
     }
 
-    if (*pNalHead).bIdrFlag == 0 {
+    if !(*pNalHead).bIdrFlag {
         WriteReferenceReorder(pBs, pSliceHeader);
     }
 
@@ -1123,7 +1060,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
     BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
-    if (*pNalHead).bIdrFlag != 0 {
+    if (*pNalHead).bIdrFlag {
         BsWriteUE(pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
@@ -1139,7 +1076,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
         }
     }
 
-    if (*pNalHead).bIdrFlag == 0 {
+    if !(*pNalHead).bIdrFlag {
         WriteReferenceReorder(pBs, pSliceHeader);
     }
 
@@ -1889,7 +1826,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     };
 
     if (*pEncCtx).eSliceType == EWelsSliceType::I_SLICE {
-        pNalHeadExt.bIdrFlag = 1;
+        pNalHeadExt.bIdrFlag = true;
         (*pCurSlice).sScaleShift = 0;
     } else {
         let kuiTemporalId = pNalHeadExt.uiTemporalId;
@@ -1958,7 +1895,7 @@ pub unsafe fn AddSliceBoundary(
     };
 
     if !pNextSlice.is_null() {
-        (*pNextSlice).bSliceHeaderExtFlag = (*pCurLayer).sLayerInfo.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_EXT;
+        (*pNextSlice).bSliceHeaderExtFlag = (*pCurLayer).sLayerInfo.sNalHeaderExt.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
         std::ptr::copy_nonoverlapping(&(*pCurSlice).sSliceHeaderExt, &mut (*pNextSlice).sSliceHeaderExt, 1);
         (*pNextSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxOfNextSlice;
 
@@ -2185,7 +2122,7 @@ pub unsafe fn InitSliceBsBuffer(
     iMaxSliceBufferSize: i32,
     pMa: *mut CMemoryAlign,
 ) -> i32 {
-    (*pSlice).sSliceBs.uiSize = iMaxSliceBufferSize;
+    (*pSlice).sSliceBs.uiSize = iMaxSliceBufferSize as u32;
     (*pSlice).sSliceBs.uiBsPos = 0;
 
     if bIndependenceBsBuffer {
@@ -2196,7 +2133,7 @@ pub unsafe fn InitSliceBsBuffer(
             (*pSlice).sSliceBs.uiBsSize = 0;
             return ENC_RETURN_MEMALLOCERR;
         }
-        (*pSlice).sSliceBs.uiBsSize = iMaxSliceBufferSize;
+        (*pSlice).sSliceBs.uiBsSize = iMaxSliceBufferSize as u32;
     } else {
         (*pSlice).pSliceBsa = pBsWrite;
         (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
@@ -2300,7 +2237,7 @@ pub unsafe fn InitOneSliceInThread(
     if !(*pCtx).pSliceThreading.is_null() {
         (*slc_ptr).sSliceBs.pBsBuffer = (*(*pCtx).pSliceThreading).pThreadBsBuffer[kiSlcBuffIdx as usize];
     }
-    (*slc_ptr).sSliceBs.uiSize = (*pCtx).iFrameBsSize;
+    (*slc_ptr).sSliceBs.uiSize = (*pCtx).iFrameBsSize as u32;
 
     ENC_RETURN_SUCCESS
 }

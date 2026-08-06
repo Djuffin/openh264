@@ -230,8 +230,6 @@ pub unsafe fn BsWriteTE(pBitString: *mut SBitStringAux, kiX: i32, kuiValue: u32)
 // Core C-compatible Data Structures
 // ============================================================================
 
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagMVComponentUnit {
@@ -247,8 +245,6 @@ impl Default for TagMVComponentUnit {
         }
     }
 }
-
-
 
 #[repr(C)]
 pub struct SMbCache {

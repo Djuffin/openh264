@@ -14,17 +14,18 @@
 
 use crate::*;
 
-
 // ============================================================================
 // Constants
 // ============================================================================
 
 pub const STR_ROOM: i32 = 1;
-pub const MAX_SHORT_REF_COUNT: usize = 16;
+// `MAX_SHORT_REF_COUNT`, `MAX_TEMPORAL_LEVEL` and `MAX_GOP_SIZE` are defined once in
+// `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
+// with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
+pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const LONG_TERM_REF_NUM: i32 = 2;
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
-pub const MAX_TEMPORAL_LEVEL: usize = 8;
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 pub const MAX_REFERENCE_MMCO_COUNT_NUM: usize = 4;
 pub const MAX_REFERENCE_REORDER_COUNT_NUM: usize = 2;
@@ -84,6 +85,9 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 pub use EWelsSliceType::*;
+pub use crate::encoder::encoder_context::SRefList;
+pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 
 // ============================================================================
 // Core Data Structures
@@ -145,112 +149,10 @@ impl Default for SLTRState {
 }
 
 /// Feature storage for screen content reference pictures.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SScreenBlockFeatureStorage {
-    pub bRefBlockFeatureCalculated: bool,
-}
 
 /// Reconstructed reference picture representation in the DPB.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pBuffer: *mut u8,
-    pub pData: [*mut u8; 3],
-    pub iLineSize: [i32; 3],
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iPictureType: i32,
-    pub iFramePoc: i32,
-    pub fFrameRate: f32,
-    pub iFrameNum: i32,
-    pub uiRefMbType: *mut u32,
-    pub pRefMbQp: *mut u8,
-    pub pMbSkipSad: *mut i32,
-    pub sMvList: *mut std::ffi::c_void,
-    pub iMarkFrameNum: i32,
-    pub iLongTermPicNum: i32,
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub bIsSceneLTR: bool,
-    pub uiRecieveConfirmed: u8,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub iFrameAverageQp: i32,
-    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
-}
-
-impl SPicture {
-    pub unsafe fn SetUnref(&mut self) {
-        self.iFramePoc = -1;
-        self.iFrameNum = -1;
-        self.uiTemporalId = 255;
-        self.uiSpatialId = 255;
-        self.iLongTermPicNum = -1;
-        self.bIsLongRef = false;
-        self.uiRecieveConfirmed = RECIEVE_FAILED;
-        self.iMarkFrameNum = -1;
-        self.bUsedAsRef = false;
-        if !self.pScreenBlockFeatureStorage.is_null() {
-            (*self.pScreenBlockFeatureStorage).bRefBlockFeatureCalculated = false;
-        }
-    }
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pBuffer: std::ptr::null_mut(),
-            pData: [std::ptr::null_mut(); 3],
-            iLineSize: [0; 3],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iPictureType: 0,
-            iFramePoc: -1,
-            fFrameRate: 0.0,
-            iFrameNum: -1,
-            uiRefMbType: std::ptr::null_mut(),
-            pRefMbQp: std::ptr::null_mut(),
-            pMbSkipSad: std::ptr::null_mut(),
-            sMvList: std::ptr::null_mut(),
-            iMarkFrameNum: -1,
-            iLongTermPicNum: -1,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            bIsSceneLTR: false,
-            uiRecieveConfirmed: RECIEVE_FAILED,
-            uiTemporalId: 255,
-            uiSpatialId: 255,
-            iFrameAverageQp: 0,
-            pScreenBlockFeatureStorage: std::ptr::null_mut(),
-        }
-    }
-}
 
 /// Reference picture lists for a spatial dependency layer.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefList {
-    pub pShortRefList: [*mut SPicture; 1 + MAX_SHORT_REF_COUNT],
-    pub pLongRefList: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
-    pub pNextBuffer: *mut SPicture,
-    pub pRef: [*mut SPicture; 1 + MAX_REF_PIC_COUNT],
-    pub uiShortRefCount: u8,
-    pub uiLongRefCount: u8,
-}
-
-impl Default for SRefList {
-    fn default() -> Self {
-        Self {
-            pShortRefList: [std::ptr::null_mut(); 1 + MAX_SHORT_REF_COUNT],
-            pLongRefList: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
-            pNextBuffer: std::ptr::null_mut(),
-            pRef: [std::ptr::null_mut(); 1 + MAX_REF_PIC_COUNT],
-            uiShortRefCount: 0,
-            uiLongRefCount: 0,
-        }
-    }
-}
 
 /// Reference picture list reordering syntax element.
 #[repr(C)]

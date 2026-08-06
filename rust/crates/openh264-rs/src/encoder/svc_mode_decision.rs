@@ -20,6 +20,7 @@ use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::picture::SPicture;
 
 // ============================================================================
 // Constants and Thresholds
@@ -143,7 +144,6 @@ pub type pJudgeSkipFun = unsafe extern "C" fn(
 // Core Structures Matching C/C++ Layout
 // ============================================================================
 
-
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SWelsME {
@@ -249,8 +249,6 @@ pub struct SMB {
     pub iCbpDc: i32,
 }
 
-
-
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SSampleDealingPicData {
@@ -286,17 +284,6 @@ pub struct SMbCache {
     pub uiNeighborIntra: u8,
     pub uiLumaI16x16Mode: i32,
     pub bCollocatedPredFlag: bool,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SPicture {
-    pub pRefMbQp: *mut u8,
-    pub pMbSkipSad: *mut i32,
-    pub iPictureType: i32,
-    pub iLineSize: [i32; 4],
-    pub pData: [*mut u8; 4],
-    pub sMvList: *mut SMVUnitXY,
 }
 
 #[repr(C)]

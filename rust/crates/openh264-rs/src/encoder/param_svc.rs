@@ -42,7 +42,6 @@ pub const MAX_SLICES_NUM_TMP: usize = 32;
 pub const MAX_FRAME_RATE: f32 = 30.0;
 pub const MIN_FRAME_RATE: f32 = 1.0;
 
-
 pub const UNSPECIFIED_BIT_RATE: i32 = 0;
 pub const AUTO_REF_PIC_COUNT: i32 = -1;
 pub const MIN_REF_PIC_COUNT: i32 = 1;
@@ -60,13 +59,11 @@ pub const MB_HEIGHT_LUMA: i32 = 16;
 pub const ENC_RETURN_SUCCESS: i32 = 0;
 pub const ENC_RETURN_INVALIDINPUT: i32 = 0x10;
 
-
 pub const ASP_UNSPECIFIED: i32 = 0;
 pub const VF_UNDEF: u8 = 5;
 pub const CP_UNDEF: u8 = 2;
 pub const TRC_UNDEF: u8 = 2;
 pub const CM_UNDEF: u8 = 2;
-
 
 pub const g_kuiTemporalIdListTable: [[u8; MAX_GOP_SIZE + 1]; MAX_TEMPORAL_LEVEL] = [
     [0, 0, 0, 0, 0, 0, 0, 0, 0], // uiGopSize = 1

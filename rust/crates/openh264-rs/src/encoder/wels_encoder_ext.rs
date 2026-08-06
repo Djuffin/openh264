@@ -333,7 +333,6 @@ impl Default for SSpatialLayerInternal {
 // and a DetermineTemporalSettings that ignored the temporal-id table.
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsSvcRc {
@@ -678,7 +677,7 @@ pub unsafe fn WelsEncoderEncodeExtRust(
 
     pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
     pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
-    crate::encoder::encoder_context::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as u32);
+    crate::encoder::vlc_encoder::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as i32);
     (*pCtx).iPosBsBuffer = 0;
 
     let mut iCountNal = 0;
@@ -746,7 +745,7 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
     pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
     pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
-    crate::encoder::encoder_context::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as u32);
+    crate::encoder::vlc_encoder::InitBits(&mut (*(*pCtx).pOut).sBsWrite, (*(*pCtx).pOut).pBsBuffer, (*(*pCtx).pOut).uiSize as i32);
     (*pCtx).iPosBsBuffer = 0;
 
     let mut iCountNal = 0;

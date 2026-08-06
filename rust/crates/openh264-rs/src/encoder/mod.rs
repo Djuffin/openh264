@@ -5,6 +5,7 @@ pub mod encoder_context;
 pub mod md;
 pub mod nal_encap;
 pub mod param_svc;
+pub mod picture;
 pub mod set_mb_syn_cabac;
 pub mod slice_multi_threading;
 pub mod svc_encode_mb;
