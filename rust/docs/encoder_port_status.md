@@ -136,17 +136,16 @@ Root causes, all confirmed against the code:
 - **B.** *(fixed, Phase 2)* 63 encoder-internal types declared in multiple modules
   with divergent field sets (`SDqLayer` ×11, `SWelsFuncPtrList` ×10,
   `sWelsEncCtx` ×9, …), making each module a compile-clean island.
-- **C.** *(open — Phase 4)* The context is never built — `pSpsArray`/`pPPSArray`/
-  `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` stays null. Phase 3 stopped
-  `WelsWriteParameterSets` from *hiding* this (it used to fake a count of 1 and
-  swallow errors) and wired up `pParametersetStrategy`, but the arrays themselves
-  are still unallocated.
-- **D.** *(open — Phase 4)* `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR,
+- **C.** *(fixed, Phase 4)* The context was never built — `pSpsArray`/`pPPSArray`/
+  `iSpsNum`/`iPpsNum` never assigned, `pCurDqLayer` null. Phase 3 stopped
+  `WelsWriteParameterSets` from *hiding* this; Phase 4's `RequestMemorySvc` /
+  `InitDqLayers` build it, pinned by two tests.
+- **D.** *(open — blocked)* `WelsEncoderEncodeExtRust` is a sketch: hardcoded IDR,
   one slice buffer, no frame-type/GOP decision, RC, ref lists, preprocessing, or
-  padding.
+  padding. Phase 4 identified the specific obstacle — the duplicate
+  `SWelsEncCtx` in `wels_preprocess.rs`; see Phase 4 below.
 
-**C and D are why the encoder still emits zero bytes.** Nothing in Phases 1–2 was
-expected to change that; they removed the reasons it could not be fixed.
+**D is why the encoder still emits zero bytes.**
 
 ---
 
@@ -532,29 +531,110 @@ returns `cmInitParaError` (1).
   writes `sSpatialLayers[0]`. Harmless at one spatial layer, wrong beyond it.
 - The three unported listing strategies in `paraset_strategy.rs`.
 
-### Phase 4 — wire the pipeline — **NOT STARTED**
+### Phase 4 — wire the pipeline — **blocker C DONE, blocker D BLOCKED**
 
-**This is the phase that finally produces bytes**, and it is what baseline
-blockers **C** and **D** describe. Build the context (`pSpsArray`, `pPPSArray`,
-`iSpsNum`, `iPpsNum`, `pCurDqLayer`), then replace the `WelsEncoderEncodeExtRust`
-sketch with the real `WelsEncoderEncodeExt` flow: frame-type/GOP decision, RC,
-reference lists, preprocessing, slice encoding, padding.
+**Gate 4 is NOT met.** `compare.sh` still reports Rust 0 bytes. What changed is
+that blocker **C** is cleared and blocker **D** now has one identified, specific
+obstacle rather than being open-ended.
 
-Phase 3 left three things ready to use here:
+| check | result |
+|---|---|
+| `cargo build` | clean, 12 warnings, all pre-existing |
+| `cargo test` | **262 passed, 1 failed, 20 ignored** (was 260/1/20) |
+| decoder conformance | 53/53 |
+| `find_dup_types.sh` | silent |
+| `todo!()` in `src/` | 2 → **0** |
+| `compare.sh` | C++ 8034, **Rust 0** — Gate 4 not met |
 
-- `WelsWriteParameterSets`, `WelsWriteOneSPS` and `WelsWriteOnePPS` are the real
-  `encoder_ext.cpp` flow and are **byte-exact once the arrays are populated**; the
-  remaining work on that path is `InitDqLayers`/`WelsGenerateNewSps` filling
-  `pSpsArray`/`pPPSArray` and setting `iSpsNum`/`iPpsNum`.
-- `paraset_strategy.rs` already provides `WelsGenerateNewSps`, `FindExistingSps`,
-  `CheckMatchedSps`/`CheckMatchedSubsetSps`, and the strategy's `GenerateNewSps` /
-  `InitPps` / `UpdateParaSetNum` / `GetSpsIdx` entries.
-- `pFuncList->pParametersetStrategy` is created in `InitFunctionPointers`, as in
-  `encoder.cpp:227`, so it is non-null by the time encoding starts.
+#### Blocker C — **DONE**
+
+New `encoder_ext.rs` ports the allocation half of `encoder_ext.cpp`:
+`WelsGetEncBlockStrideOffset`, `AcquireLayersNals`, `AllocStrideTables`,
+`GetMvMvdRange`, `InitMbInfo`, `InitMbListD`, `InitDqLayers`, `RequestMemorySvc`,
+`InitSliceSettings`, `GetMultipleThreadIdc`, `WelsInitEncoderExt`,
+`WelsUninitEncoderExt`, `FreeSliceInLayer`, `FreeDqLayer`, `FreeRefList`.
+`svc_enc_slice_segment.rs` gains the segment-allocation group
+(`AssignMbMap*`, `GetInitialSliceNum`, `InitSliceSegment`, `InitSlicePEncCtx`, …).
+
+Two tests in `encoder_ext.rs` measure it for the harness configuration: the
+parameter-set arrays are allocated and populated (`iSpsNum` 1, `iPpsNum` 1, SPS
+matching the Phase-3 byte-exact values), and the DQ layers, MB map, `InitMbInfo`
+neighbour masks, reference lists, stride tables, MVD cost table and reference
+strategy all exist.
+
+**`CMemoryAlign`'s `Drop` asserts a zero allocation balance, and that is a good
+oracle** — it caught an 11181-byte leak the moment the teardown was incomplete.
+Keep using it: any new allocation in this module gets checked for free.
+
+#### `IWelsReferenceStrategy` — **DONE**
+
+Converted from a Rust `trait` + `*mut dyn` to the same C-style vtable
+`paraset_strategy.rs` uses. `CreateReferenceStrategy` had been returning a
+16-byte fat pointer for an 8-byte `sWelsEncCtx::pReferenceStrategy`. Both
+`EndofUpdateRefList` call sites now dispatch through the vtable, so **the tree
+has zero `todo!()`**.
+
+#### Blocker D — **BLOCKED on a duplicate context struct**
+
+`WelsEncoderEncodeExt` is unported. It cannot be wired yet because:
+
+> **`wels_preprocess.rs:575` declares its own `SWelsEncCtx`** — a 20-field struct
+> that is *not* the canonical ~90-field `sWelsEncCtx` — and then does
+> `pub type sWelsEncCtx = SWelsEncCtx;` inside that module, so the lowercase name
+> resolves to the fake one there. Field types differ too: `pLtr` and
+> `ppRefPicListExt` are inline arrays here and pointers in the real context.
+
+`find_dup_types.sh` missed this because the canonical name is `sWelsEncCtx` and
+this one is `SWelsEncCtx` — **different identifiers, differing only in the case of
+the leading letter**. This is a fourth blind spot to add to the three already
+recorded (type aliases, `src/common/`, functions).
+
+Every field access in the 2592-line preprocessor therefore reads the wrong
+offsets when handed a real context, and `WelsEncoderEncodeExt` calls
+`BuildSpatialPicList`, `AnalyzeSpatialPic` and `UpdateSpatialPictures` with
+exactly that. `WelsInitEncoderExt` casts at the boundary with a comment marking
+where this lands, which is enough to build and to run the init tests, but it is
+**not sound to call through**.
+
+**Do this first in the next session:** delete `wels_preprocess::SWelsEncCtx` and
+its `sWelsEncCtx` alias, import the canonical type, and fix the field accesses
+the layout change breaks. Verify with a `sizeof` probe on the C++ `sWelsEncCtx`
+and the existing `abi_guard.rs` assertion.
+
+#### Then the rest of blocker D
+
+Replace the `WelsEncoderEncodeExtRust` sketch with `encoder_ext.cpp:3448`. Still
+unported and needed by it: `PrepareEncodeFrame`, `WelsInitCurrentLayer`,
+`PreprocessSliceCoding`, `PrefetchReferencePicture`, `GetSubSequenceId`,
+`AddPrefixNal`, `WritePadding`, `WelsSwapDqLayers`, `ClearFrameBsInfo`,
+`StackBackEncoderStatus`, `GetTemporalLevel`. `WelsUpdateRefSyntax`,
+`InitFrameCoding`, `InitBitStream`, `GetTimestampForRc`, `SetSliceBoundaryInfo`,
+`WelsCodeOneSlice`, `WelsLoadNal`/`WelsUnloadNal`/`WelsEncodeNal` and
+`PerformDeblockingFilter` already exist.
+
+The C-ABI shim still calls `WelsInitEncoderExtRust`/`WelsEncoderEncodeExtRust`;
+switching it to `WelsInitEncoderExt` is safe only once the preprocessor context
+is unified.
 
 **Gate 4:** `compare.sh` reports a non-zero Rust byte count and `./h264dec`
 decodes the Rust stream. `loopback_sha1_test::test_decode_encode_full_cycle_sha1_parity`
 stops returning `da39a3ee…` (the SHA-1 of the empty string).
+
+#### Defects found during Phase 4
+
+All the same disease — a constant or struct corrected in one copy while others
+kept the wrong value:
+
+| item | was | C++ | why it matters |
+|---|---|---|---|
+| `INTRA_4x4_MODE_NUM` | 16 | **8** (`wels_const.h:48`) | per-MB stride of `pIntra4x4PredModeBlocks`; `md.rs:563` stepped back two MBs |
+| `SDqIdc` | `{uiDId,uiQId,uiTId}` | `{u16 iPpsId, u8 iSpsId, i8 uiSpatialId}` (`dq_map.h:50`) | `InitDqLayers` writes the C++ fields |
+| `ENC_RETURN_MEMALLOCERR` | 0x02 / 2 in three modules | **0x01** | it is a **bit field**, so wrong values alias other codes |
+| `ENC_RETURN_INVALIDINPUT` | 1 | **0x10** | same |
+| `ENC_RETURN_UNEXPECTED` | −1 | **0x04** | same |
+| `ENC_RETURN_VLCOVERFLOWFOUND` | −1 | **0x40** | same |
+| `ENC_RETURN_CORRECTING` | 1 | *not in the C++ enum* | invented; removed |
+| `deblocking.rs` `LEFT_MB_POS`/`TOP_MB_POS` | 0x02/0x01 | **0x01/0x02** | dead in both languages, but wrong |
 
 ### Phase 5 — byte-exactness — **NOT STARTED**
 
@@ -584,6 +664,13 @@ Collapse the remaining **82** duplicated constant names (values are now believed
 correct, but one definition each is still the goal), fold the module-level
 `#![allow(dead_code, unused_variables, …)]` blankets back to the narrowest scope
 that still compiles, and reconcile this document with the final state.
+
+#### `find_dup_types.sh` has a fourth blind spot: case
+
+Phase 4 found `wels_preprocess::SWelsEncCtx` shadowing the canonical
+`sWelsEncCtx` — see *Blocker D*. The scan compares identifiers exactly, so two
+names differing only in the case of one letter read as unrelated types. Fold a
+case-insensitive pass in alongside the `pub fn` pass below.
 
 #### `find_dup_types.sh` has a third blind spot: functions
 
