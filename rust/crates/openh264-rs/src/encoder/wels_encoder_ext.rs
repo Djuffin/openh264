@@ -925,11 +925,15 @@ pub unsafe fn ParamValidation(pLogCtx: *mut SLogContext, pCfg: *mut SWelsSvcCodi
 
 /// `ParamValidationExt` — codec/encoder/core/src/encoder_ext.cpp:403.
 ///
-/// Partial port. Complete for `SM_SINGLE_SLICE` and `SM_SIZELIMITED_SLICE`; the
-/// `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` arms need
+/// Complete, including the tail call to `ParamValidation`. All four slice modes are
+/// handled: `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` dispatch to
 /// `SliceArgumentValidationFixedSliceMode` / `CheckRowMbMultiSliceSetting` /
-/// `CheckRasterMultiSliceSetting` from svc_enc_slice_segment.cpp (Phase 3.9), so
-/// they are `todo!()`. The tail call to `ParamValidation` is a complete port.
+/// `CheckRasterMultiSliceSetting` in `svc_enc_slice_segment.rs` (Phase 3.9); they were
+/// `todo!()` before that landed.
+///
+/// The `WelsLog` calls that accompany each rejection in C++ have no counterpart here,
+/// as elsewhere in this port — only the control flow and the returned code are
+/// reproduced.
 pub unsafe fn ParamValidationExt(
     pLogCtx: *mut SLogContext,
     pCodingParam: *mut SWelsSvcCodingParam,
