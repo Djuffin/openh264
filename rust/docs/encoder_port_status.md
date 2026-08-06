@@ -287,7 +287,7 @@ Also still open, unrelated to the cluster: the 17 `transmute`s in `src/encoder/`
 |---|---|---|
 | duplicated type names | 59 | 6 |
 | redundant declarations | 146 | 36 |
-| encoder size assertions | 0 | 48 |
+| encoder size assertions | 0 | 47 |
 | `transmute` in `src/encoder/` | 17 | 17 |
 
 The audit's figures were 58/145; `rust/tools/find_dup_types.sh` also counts
@@ -312,7 +312,7 @@ c++ -std=c++11 -I codec/encoder/core/inc -I codec/common/inc -I codec/api/wels -
 
 with `probe.cpp` including the header, `using namespace WelsEnc;` and
 `printf("%zu", sizeof(T))`. Record the number in `src/encoder/abi_guard.rs`, the
-internal counterpart to `api/abi_guard.rs`, which now pins 48 encoder structs at
+internal counterpart to `api/abi_guard.rs`, which now pins 47 encoder structs at
 compile time. Verified to fire by perturbing an entry.
 
 Two limits worth knowing:
@@ -429,7 +429,7 @@ it. The broken copy is deleted; all three call sites use the faithful one.
 |---|---|
 | `rust/tools/find_dup_types.sh` | the Gate 2 check |
 | `rust/tools/show_type.sh <T> [CppTag]` | dumps the C++ original beside every Rust copy |
-| `src/encoder/abi_guard.rs` | 48 compile-time size assertions |
+| `src/encoder/abi_guard.rs` | 47 compile-time size assertions |
 
 `unify_type.py` placed its `pub use` after the last line matching
 `^use [^\n]*\n`, which for a multi-line `use crate::{…};` is the *first* line of
