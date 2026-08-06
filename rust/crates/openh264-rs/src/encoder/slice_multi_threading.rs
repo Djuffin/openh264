@@ -50,6 +50,7 @@ use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
+pub use crate::encoder::nal_encap::SWelsSliceBs;
 
 // ============================================================================
 // Constants and Thresholds
@@ -134,35 +135,6 @@ impl Default for SSliceThreading {
 }
 pub type TagSliceThreading = SSliceThreading;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSliceBs {
-    pub pBs: *mut u8,
-    pub uiBsSize: u32,
-    pub uiBsPos: u32,
-    pub pBsBuffer: *mut u8,
-    pub uiSize: u32,
-    pub sBsWrite: [u8; 64],
-    pub sNalList: [SWelsNalRaw; 2],
-    pub iNalLen: [i32; 2],
-    pub iNalIndex: i32,
-}
-
-impl Default for SWelsSliceBs {
-    fn default() -> Self {
-        Self {
-            pBs: std::ptr::null_mut(),
-            uiBsSize: 0,
-            uiBsPos: 0,
-            pBsBuffer: std::ptr::null_mut(),
-            uiSize: 0,
-            sBsWrite: [0; 64],
-            sNalList: [SWelsNalRaw::default(), SWelsNalRaw::default()],
-            iNalLen: [0; 2],
-            iNalIndex: 0,
-        }
-    }
-}
 pub type TagWelsSliceBs = SWelsSliceBs;
 
 #[repr(C)]

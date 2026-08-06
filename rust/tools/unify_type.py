@@ -35,8 +35,11 @@ for f in sorted(glob.glob(os.path.join(SRC, '*.rs'))):
 
     use_line = 'pub use crate::encoder::%s::%s;\n' % (CANON, T)
     if use_line not in s:
-        # place it after the last top-level `use` so imports stay grouped
-        uses = list(re.finditer(r'^(?:pub )?use [^\n]*\n', s, re.M))
+        # Place it after the last top-level `use` so imports stay grouped. A `use`
+        # may span lines (`use crate::{\n  A, B,\n};`), so match through to the
+        # terminating semicolon rather than to the first newline -- otherwise the
+        # insertion lands *inside* a braced group and the file no longer parses.
+        uses = list(re.finditer(r'^(?:pub )?use [^;]*;\n', s, re.M | re.S))
         at = uses[-1].end() if uses else 0
         s = s[:at] + use_line + s[at:]
 

@@ -44,6 +44,7 @@
 use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::picture::SPicture;
 
 // Sub-pixel refinement buffer geometry constants
 pub const ME_REFINE_BUF_STRIDE: i32 = 32;
@@ -150,8 +151,6 @@ pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
 ];
 
 // Data Structures
-
-
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -436,12 +435,6 @@ pub struct SWelsFuncPtrList {
     pub pfUpdateMbMv: Option<PUpdateMbMvFunc>,
     pub sMcFuncs: SMcFunc,
     pub sSampleDealingFuncs: SSampleDealingFunc,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SPicture {
-    pub iLineSize: [i32; 4],
 }
 
 #[repr(C)]

@@ -258,12 +258,6 @@ impl Default for SCabacCtx {
     }
 }
 
-
-
-
-
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SMbCache {
@@ -388,31 +382,7 @@ pub struct SSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pCurBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub iLeftBits: i32,
-    pub uiCurBits: u32,
-    pub iBits: i32,
-    pub iIndex: isize,
-}
-
-impl Default for SBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pCurBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iLeftBits: 32,
-            uiCurBits: 0,
-            iBits: 0,
-            iIndex: 0,
-        }
-    }
-}
+pub use crate::common::wels_common_defs::SBitStringAux;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

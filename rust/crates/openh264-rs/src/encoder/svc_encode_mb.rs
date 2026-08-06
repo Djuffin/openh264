@@ -265,7 +265,6 @@ pub static g_kuiDequantCoeff: [[u16; 8]; 52] = [
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SMB {
@@ -290,10 +289,6 @@ pub struct SMB {
     pub sMvd: [SMVUnitXY; 16],
     pub iCbpDc: i32,
 }
-
-
-
-
 
 #[repr(C)]
 pub struct SMbCache {

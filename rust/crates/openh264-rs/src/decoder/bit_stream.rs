@@ -26,57 +26,12 @@ pub const ERR_INFO_READ_OVERFLOW: i32 = ERR_INFO_COMMON_BASE + 10;
 
 /// Auxiliary bitstream structure for parsing NAL units / RBSP data.
 ///
-/// Matches `TagBitStringAux` / `SBitStringAux` from `codec/common/inc/wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagBitStringAux {
-    /// Pointer to the start position of the RBSP buffer
-    pub pStartBuf: *mut u8,
-    /// Pointer to the end boundary of the buffer (pStartBuf + buffer_byte_length)
-    pub pEndBuf: *mut u8,
-    /// Total count of bits in the bitstream payload
-    pub iBits: i32,
-
-    /// Auxiliary index tracker (used for CAVLC)
-    pub iIndex: isize,
-    /// Current byte reading/writing position cursor
-    pub pCurBuf: *mut u8,
-    /// 32-bit register accumulator holding unconsumed MSB-aligned bits
-    pub uiCurBits: u32,
-    /// Refill balance / available bit balance in the accumulator window
-    pub iLeftBits: i32,
-}
-
-pub type SBitStringAux = TagBitStringAux;
-pub type PBitStringAux = *mut SBitStringAux;
-
-impl Default for TagBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iBits: 0,
-            iIndex: 0,
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 0,
-        }
-    }
-}
-
-impl TagBitStringAux {
-    pub const fn new() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iBits: 0,
-            iIndex: 0,
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 0,
-        }
-    }
-}
+/// `SBitStringAux` is a common-layer type (`codec/common/inc/wels_common_defs.h:232`)
+/// shared by the encoder and the decoder, so it has a single definition in
+/// [`crate::common::wels_common_defs`]. Re-exported here so the decoder's existing
+/// `decoder::bit_stream::{TagBitStringAux, SBitStringAux, PBitStringAux}` paths are
+/// unchanged.
+pub use crate::common::wels_common_defs::{PBitStringAux, SBitStringAux, TagBitStringAux};
 
 /// Reads 4 consecutive bytes from `pDstNal` and packs them into a big-endian 32-bit integer.
 ///

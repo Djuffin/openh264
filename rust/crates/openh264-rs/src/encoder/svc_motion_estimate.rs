@@ -48,6 +48,8 @@
 use crate::common::memory_align::CMemoryAlign;
 use std::ffi::c_char;
 pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -126,7 +128,6 @@ pub static QStepx16ByQp: [i32; 52] = [
 
 /// 2D Motion Vector displacement in integer or 1/4-pel units.
 
-
 /// Dual-use union storing predicted SAD threshold before search and SATD after search.
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -142,37 +143,6 @@ impl Default for SadPredISatdUnit {
 }
 
 /// Reference frame screen block feature storage and hash lookup index.
-#[repr(C)]
-#[derive(Debug)]
-pub struct SScreenBlockFeatureStorage {
-    pub pFeatureOfBlockPointer: *mut u16,
-    pub iIs16x16: i32,
-    pub uiFeatureStrategyIndex: u8,
-    pub pTimesOfFeatureValue: *mut u32,
-    pub pLocationOfFeature: *mut *mut u16,
-    pub pLocationPointer: *mut u16,
-    pub iActualListSize: i32,
-    pub uiSadCostThreshold: [u32; BLOCK_SIZE_ALL],
-    pub bRefBlockFeatureCalculated: bool,
-    pub pFeatureValuePointerList: *mut *mut u16,
-}
-
-impl Default for SScreenBlockFeatureStorage {
-    fn default() -> Self {
-        Self {
-            pFeatureOfBlockPointer: std::ptr::null_mut(),
-            iIs16x16: 0,
-            uiFeatureStrategyIndex: 0,
-            pTimesOfFeatureValue: std::ptr::null_mut(),
-            pLocationOfFeature: std::ptr::null_mut(),
-            pLocationPointer: std::ptr::null_mut(),
-            iActualListSize: 0,
-            uiSadCostThreshold: [u32::MAX; BLOCK_SIZE_ALL],
-            bRefBlockFeatureCalculated: false,
-            pFeatureValuePointerList: std::ptr::null_mut(),
-        }
-    }
-}
 
 /// Frame-level feature search preparation buffer and FME adaptive switch state.
 #[repr(C)]
@@ -320,62 +290,6 @@ impl Default for SFeatureSearchOut {
 }
 
 /// Reconstructed or reference picture frame buffer descriptor.
-#[repr(C)]
-pub struct SPicture {
-    pub pBuffer: *mut u8,
-    pub pData: [*mut u8; 3],
-    pub iLineSize: [i32; 3],
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iPictureType: i32,
-    pub iFramePoc: i32,
-    pub fFrameRate: f32,
-    pub iFrameNum: i32,
-    pub uiRefMbType: *mut u32,
-    pub pRefMbQp: *mut u8,
-    pub pMbSkipSad: *mut i32,
-    pub sMvList: *mut SMVUnitXY,
-    pub iMarkFrameNum: i32,
-    pub iLongTermPicNum: i32,
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub bIsSceneLTR: bool,
-    pub uiRecieveConfirmed: u8,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub iFrameAverageQp: i32,
-    pub pScreenBlockFeatureStorage: *mut SScreenBlockFeatureStorage,
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pBuffer: std::ptr::null_mut(),
-            pData: [std::ptr::null_mut(); 3],
-            iLineSize: [0; 3],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iPictureType: 0,
-            iFramePoc: 0,
-            fFrameRate: 0.0,
-            iFrameNum: 0,
-            uiRefMbType: std::ptr::null_mut(),
-            pRefMbQp: std::ptr::null_mut(),
-            pMbSkipSad: std::ptr::null_mut(),
-            sMvList: std::ptr::null_mut(),
-            iMarkFrameNum: 0,
-            iLongTermPicNum: 0,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            bIsSceneLTR: false,
-            uiRecieveConfirmed: 0,
-            uiTemporalId: 0,
-            uiSpatialId: 0,
-            iFrameAverageQp: 0,
-            pScreenBlockFeatureStorage: std::ptr::null_mut(),
-        }
-    }
-}
 
 /// Slice context parameters for motion estimation.
 #[repr(C)]

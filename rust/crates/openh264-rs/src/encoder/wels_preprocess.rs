@@ -59,9 +59,12 @@ use crate::common::memory_align::CMemoryAlign;
 // ============================================================================
 
 pub const MAX_REF_PIC_COUNT: usize = 16;
-pub const MAX_TEMPORAL_LEVEL: usize = 4;
-pub const MAX_GOP_SIZE: usize = 8;
-pub const MAX_SHORT_REF_COUNT: usize = 16;
+// Single definition in `encoder_context.rs` from `wels_const.h`; this module's copy of
+// MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
+// let the `WelsPreprocess` unref loop read one past `pShortRefList`.
+pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
+pub use crate::encoder::encoder_context::SRefList;
+pub use crate::encoder::picture::SPicture;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
@@ -530,84 +533,6 @@ impl Default for SVAAFrameInfoExt {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pBuffer: *mut u8,
-    pub pData: [*mut u8; 3],
-    pub iLineSize: [i32; 3],
-
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub iPictureType: i32,
-    pub iFramePoc: i32,
-
-    pub fFrameRate: f32,
-    pub iFrameNum: i32,
-
-    pub uiRefMbType: *mut u32,
-    pub pRefMbQp: *mut u8,
-    pub pMbSkipSad: *mut i32,
-    pub sMvList: *mut c_void,
-
-    pub iMarkFrameNum: i32,
-    pub iLongTermPicNum: i32,
-
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub bIsSceneLTR: bool,
-    pub uiRecieveConfirmed: u8,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub iFrameAverageQp: i32,
-
-    pub pScreenBlockFeatureStorage: *mut c_void,
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pBuffer: std::ptr::null_mut(),
-            pData: [std::ptr::null_mut(); 3],
-            iLineSize: [0; 3],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            iPictureType: 0,
-            iFramePoc: -1,
-            fFrameRate: 0.0,
-            iFrameNum: -1,
-            uiRefMbType: std::ptr::null_mut(),
-            pRefMbQp: std::ptr::null_mut(),
-            pMbSkipSad: std::ptr::null_mut(),
-            sMvList: std::ptr::null_mut(),
-            iMarkFrameNum: -1,
-            iLongTermPicNum: -1,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            bIsSceneLTR: false,
-            uiRecieveConfirmed: RECIEVE_FAILED,
-            uiTemporalId: INVALID_TEMPORAL_ID,
-            uiSpatialId: INVALID_TEMPORAL_ID,
-            iFrameAverageQp: 0,
-            pScreenBlockFeatureStorage: std::ptr::null_mut(),
-        }
-    }
-}
-
-impl SPicture {
-    pub unsafe fn SetUnref(&mut self) {
-        self.iFramePoc = -1;
-        self.iFrameNum = -1;
-        self.uiTemporalId = INVALID_TEMPORAL_ID;
-        self.uiSpatialId = INVALID_TEMPORAL_ID;
-        self.iLongTermPicNum = -1;
-        self.bIsLongRef = false;
-        self.uiRecieveConfirmed = RECIEVE_FAILED;
-        self.iMarkFrameNum = -1;
-        self.bUsedAsRef = false;
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub struct SSpatialLayerInternal {
     pub iActualWidth: i32,
     pub iActualHeight: i32,
@@ -727,26 +652,6 @@ impl Default for SWelsSvcRc {
 pub struct SLTRState {
     pub bReceivedT0LostFlag: bool,
     pub iLastLtrIdx: [i32; MAX_TEMPORAL_LEVEL],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SRefList {
-    pub pShortRefList: [*mut SPicture; MAX_SHORT_REF_COUNT],
-    pub pLongRefList: [*mut SPicture; MAX_REF_PIC_COUNT],
-    pub uiShortRefCount: u8,
-    pub uiLongRefCount: u8,
-}
-
-impl Default for SRefList {
-    fn default() -> Self {
-        Self {
-            pShortRefList: [std::ptr::null_mut(); MAX_SHORT_REF_COUNT],
-            pLongRefList: [std::ptr::null_mut(); MAX_REF_PIC_COUNT],
-            uiShortRefCount: 0,
-            uiLongRefCount: 0,
-        }
-    }
 }
 
 #[repr(C)]

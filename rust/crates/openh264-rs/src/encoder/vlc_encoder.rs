@@ -29,35 +29,10 @@ pub enum ECtxBlockCat {
 }
 
 /// Bitstream auxiliary state for CAVLC/Exp-Golomb serialization.
-/// Matches `TagBitStringAux` in `codec/common/inc/wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagBitStringAux {
-    pub pStartBuf: *mut u8,
-    pub pCurBuf: *mut u8,
-    pub pEndBuf: *mut u8,
-    pub iLeftBits: i32,
-    pub uiCurBits: u32,
-    pub iBits: i32,
-    pub iIndex: isize,
-}
-
-pub type SBitStringAux = TagBitStringAux;
-pub type PBitStringAux = *mut SBitStringAux;
-
-impl Default for TagBitStringAux {
-    fn default() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pCurBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iLeftBits: 32,
-            uiCurBits: 0,
-            iBits: 0,
-            iIndex: 0,
-        }
-    }
-}
+///
+/// Single definition in [`crate::common::wels_common_defs`] — `SBitStringAux` is a
+/// common-layer type (`codec/common/inc/wels_common_defs.h:232`), not an encoder one.
+pub use crate::common::wels_common_defs::{PBitStringAux, SBitStringAux, TagBitStringAux};
 
 /// CAVLC codeword table item.
 /// Matches `TagCavlcTableItem` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.

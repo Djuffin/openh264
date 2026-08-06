@@ -17,9 +17,14 @@ use crate::{
 // Core Constants
 // ============================================================================
 
-pub const MAX_SHORT_REF_COUNT: usize = 16;
-pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_TEMPORAL_LEVEL: usize = MAX_TEMPORAL_LAYER_NUM;
+/// `wels_const.h:113` — `(1<<(MAX_TEMPORAL_LEVEL-1))` = 8.
+pub const MAX_GOP_SIZE: usize = 1 << (MAX_TEMPORAL_LEVEL - 1);
+/// `wels_const.h:115` — `(MAX_GOP_SIZE>>1)` = 4. The trailing C++ comment says
+/// "16 in standard", which is what this port had hard-coded; the encoder's own
+/// limit is 4.
+pub const MAX_SHORT_REF_COUNT: usize = MAX_GOP_SIZE >> 1;
+pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_QUALITY_LEVEL: usize = MAX_QUALITY_LAYER_NUM;
 pub const WELS_QP_MAX: usize = 51;
 pub const WELS_CONTEXT_COUNT: usize = 460;
@@ -52,7 +57,10 @@ pub const I16_PRED_DC_A: usize = 7;
 pub const I4_PRED_A: usize = 14;
 pub const C_PRED_A: usize = 7;
 pub const BLOCK_STATIC_IDC_ALL: usize = 5;
-pub const BLOCK_SIZE_ALL: usize = 8;
+/// `wels_const.h:147` — last variant of the block-size enum, value 7. This was 8 here,
+/// which would have over-sized `SScreenBlockFeatureStorage::uiSadCostThreshold` and the
+/// `SSampleDealingFunc` / `SWelsFuncPtrList` function-pointer tables.
+pub const BLOCK_SIZE_ALL: usize = 7;
 
 // ============================================================================
 // Bit Arithmetic Macros & Helpers
@@ -78,43 +86,6 @@ pub enum EWelsSliceType {
     SP_SLICE = 3,
     SI_SLICE = 4,
     UNKNOWN_SLICE = 5,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsNalUnitType {
-    #[default]
-    NAL_UNIT_UNSPEC_0 = 0,
-    NAL_UNIT_CODED_SLICE = 1,
-    NAL_UNIT_CODED_SLICE_DPA = 2,
-    NAL_UNIT_CODED_SLICE_DPB = 3,
-    NAL_UNIT_CODED_SLICE_DPC = 4,
-    NAL_UNIT_CODED_SLICE_IDR = 5,
-    NAL_UNIT_SEI = 6,
-    NAL_UNIT_SPS = 7,
-    NAL_UNIT_PPS = 8,
-    NAL_UNIT_AU_DELIMITER = 9,
-    NAL_UNIT_END_OF_SEQ = 10,
-    NAL_UNIT_END_OF_STR = 11,
-    NAL_UNIT_FILLER_DATA = 12,
-    NAL_UNIT_SPS_EXT = 13,
-    NAL_UNIT_PREFIX = 14,
-    NAL_UNIT_SUBSET_SPS = 15,
-    NAL_UNIT_RESV_16 = 16,
-    NAL_UNIT_RESV_17 = 17,
-    NAL_UNIT_RESV_18 = 18,
-    NAL_UNIT_AUX_CODED_SLICE = 19,
-    NAL_UNIT_CODED_SLICE_EXT = 20,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsNalRefIdc {
-    #[default]
-    NRI_PRI_LOWEST = 0,
-    NRI_PRI_LOW = 1,
-    NRI_PRI_HIGH = 2,
-    NRI_PRI_HIGHEST = 3,
 }
 
 #[repr(C)]
@@ -252,49 +223,6 @@ impl Default for SMVComponentUnit {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPicture {
-    pub pData: [*mut u8; 4],
-    pub iLineSize: [i32; 4],
-    pub iWidthInPixel: i32,
-    pub iHeightInPixel: i32,
-    pub bUsedAsRef: bool,
-    pub bIsLongRef: bool,
-    pub bIsSceneLTR: bool,
-    pub iFrameNum: i32,
-    pub iPOC: i32,
-    pub iFramePoc: i32,
-    pub iPictureType: i32,
-    pub uiTemporalId: u8,
-    pub uiSpatialId: u8,
-    pub iMarkFrameNum: i32,
-    pub iLongTermPicNum: i32,
-}
-
-impl Default for SPicture {
-    fn default() -> Self {
-        Self {
-            pData: [std::ptr::null_mut(); 4],
-            iLineSize: [0; 4],
-            iWidthInPixel: 0,
-            iHeightInPixel: 0,
-            bUsedAsRef: false,
-            bIsLongRef: false,
-            bIsSceneLTR: false,
-            iFrameNum: 0,
-            iPOC: 0,
-            iFramePoc: 0,
-            iPictureType: 0,
-            uiTemporalId: 0,
-            uiSpatialId: 0,
-            iMarkFrameNum: 0,
-            iLongTermPicNum: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsSPS {
     pub uiLog2MaxFrameNum: u32,
@@ -343,7 +271,7 @@ pub struct SVAAFrameInfo {
     pub eSceneChangeIdc: ESceneChangeIdc,
 }
 
-pub use crate::encoder::svc_encode_slice::SBitStringAux;
+pub use crate::common::wels_common_defs::SBitStringAux;
 
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 
@@ -404,6 +332,9 @@ pub struct SMcFunc {
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
 
 pub use crate::encoder::rc::SWelsRcFunc;
+pub use crate::encoder::nal_encap::EWelsNalUnitType;
+pub use crate::encoder::nal_encap::EWelsNalRefIdc;
+pub use crate::encoder::picture::SPicture;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -889,25 +820,6 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     }
 }
 
-/// Resets the auxiliary bitstream serializer buffer pointers before frame encoding.
-///
-/// # Safety
-/// `pBs` must point to a valid `SBitStringAux`.
-pub unsafe fn InitBits(pBs: *mut SBitStringAux, pBuf: *mut u8, uiSize: u32) {
-    if pBs.is_null() {
-        return;
-    }
-    (*pBs).pStartBuf = pBuf;
-    (*pBs).pCurBuf = pBuf;
-    (*pBs).pEndBuf = if pBuf.is_null() {
-        std::ptr::null_mut()
-    } else {
-        pBuf.add(uiSize as usize)
-    };
-    (*pBs).uiBufSize = uiSize;
-    (*pBs).iBits = 0;
-}
-
 /// Reinitializes bitstream buffer write offsets and NAL indices.
 ///
 /// # Safety
@@ -920,10 +832,12 @@ pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
     (*(*pEncCtx).pOut).iNalIndex = 0;
     (*(*pEncCtx).pOut).iLayerBsIndex = 0;
 
-    InitBits(
+    // `uiSize` is uint32_t in C++ and InitBits takes int32_t; the narrowing conversion
+    // is implicit there, explicit here.
+    crate::encoder::vlc_encoder::InitBits(
         &mut (*(*pEncCtx).pOut).sBsWrite,
         (*(*pEncCtx).pOut).pBsBuffer,
-        (*(*pEncCtx).pOut).uiSize,
+        (*(*pEncCtx).pOut).uiSize as i32,
     );
 }
 
