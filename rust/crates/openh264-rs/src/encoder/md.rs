@@ -42,6 +42,8 @@
 )]
 
 use std::ffi::c_void;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SMVComponentUnit;
 
 // Sub-pixel refinement buffer geometry constants
 pub const ME_REFINE_BUF_STRIDE: i32 = 32;
@@ -148,28 +150,8 @@ pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
 ];
 
 // Data Structures
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMVComponentUnit {
-    pub sMotionVectorCache: [SMVUnitXY; 29],
-    pub iRefIndexCache: [i8; 30],
-}
 
-impl Default for SMVComponentUnit {
-    fn default() -> Self {
-        Self {
-            sMotionVectorCache: [SMVUnitXY::default(); 29],
-            iRefIndexCache: [0; 30],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

@@ -47,6 +47,7 @@
 
 use crate::common::memory_align::CMemoryAlign;
 use std::ffi::c_char;
+pub use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -124,19 +125,7 @@ pub static QStepx16ByQp: [i32; 52] = [
 // ============================================================================
 
 /// 2D Motion Vector displacement in integer or 1/4-pel units.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
-impl SMVUnitXY {
-    #[inline]
-    pub const fn new(x: i16, y: i16) -> Self {
-        Self { iMvX: x, iMvY: y }
-    }
-}
 
 /// Dual-use union storing predicted SAD threshold before search and SATD after search.
 #[repr(C)]

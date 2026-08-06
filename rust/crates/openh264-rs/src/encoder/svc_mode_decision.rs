@@ -18,6 +18,8 @@ use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
 use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
 use crate::encoder::vlc_encoder::BsSizeUE;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SMVComponentUnit;
 
 // ============================================================================
 // Constants and Thresholds
@@ -141,12 +143,6 @@ pub type pJudgeSkipFun = unsafe extern "C" fn(
 // Core Structures Matching C/C++ Layout
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -253,21 +249,7 @@ pub struct SMB {
     pub iCbpDc: i32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMVComponentUnit {
-    pub iRefIndexCache: [i8; 30],
-    pub sMotionVectorCache: [SMVUnitXY; 30],
-}
 
-impl Default for SMVComponentUnit {
-    fn default() -> Self {
-        Self {
-            iRefIndexCache: [0; 30],
-            sMotionVectorCache: [SMVUnitXY::default(); 30],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

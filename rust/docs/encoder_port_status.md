@@ -213,8 +213,39 @@ rejects** (verified by running libopenh264.a with the identical parameters):
 for the same reason — the encoder emits zero bytes. That is the Phase 4 gate.
 The 53 decoder conformance tests all still pass.
 
-### Phase 2 — unify the encoder-internal types — **NOT STARTED**
+### Phase 2 — unify the encoder-internal types — **IN PROGRESS**
 
-63 duplicated type names remain (the Gate 2 script still lists all of them;
-`SWelsSvcCodingParam` dropped from 6 copies to 5). This is the next task and it
-blocks everything downstream.
+Gate 2 is **not** met. 63 → 58 duplicated type names; 145 redundant declarations
+still to remove. This is the next task and it blocks everything downstream.
+
+`rust/tools/unify_type.py <TypeName> <canonical-module>` automates the mechanical
+part: it deletes the struct/enum and its `impl` blocks from every other encoder
+module and inserts a `pub use`, printing what it removed so divergent impls get
+reviewed rather than silently dropped. Always diff the canonical definition
+against the C++ header first — several copies are wrong, not merely truncated.
+
+Done so far, all canonical in `encoder_context.rs`:
+
+| type | copies | notes |
+|---|---|---|
+| `SMVUnitXY` | 8 → 1 | all identical; kept the `sDeltaMv`/`sAssignMv` impl from `svc_set_mb_syn_cabac.rs`, the only complete one. Call sites in `svc_set_mb_syn_cavlc.rs` passed `&SMVUnitXY`; C++ takes const-ref, ported as by-value |
+| `SDCTCoeff` | 4 → 1 | identical |
+| `SPicData` | 2 → 1 | identical |
+| `SCropOffset` | 2 → 1 | the `encoder_context.rs` copy had `i32` fields; `wels_common_basis.h:105` says `int16_t`. Kept i16 |
+| `SMVComponentUnit` | 4 → 1 | three variants. Correct is `sMotionVectorCache[29]` / `iRefIndexCache[30]` (5×6−1 and 5×6). `svc_mode_decision.rs` had `[30]` for the MV cache; `svc_encode_slice.rs` had an invented `sMotionVector[16]`/`iRefIndex[16]` with no C++ counterpart |
+
+#### Next up: `SBitStringAux`
+
+Both copies have the **wrong field order**, and neither matches
+`codec/common/inc/wels_common_defs.h:232`, which is:
+
+```
+pStartBuf, pEndBuf, iBits, iIndex, pCurBuf, uiCurBits, iLeftBits
+```
+
+`svc_encode_slice.rs` orders them `pStartBuf, pEndBuf, pCurBuf, uiCurBits,
+iLeftBits, uiBufSize, iBits` and adds a `uiBufSize` field **that does not exist in
+C++**; `svc_set_mb_syn_cabac.rs` orders them `pStartBuf, pCurBuf, pEndBuf,
+iLeftBits, uiCurBits, iBits, iIndex`. Trace every `uiBufSize` use before removing
+it. This is also where audit defect 1.5.1 lives (`InitBits` not resetting
+`iLeftBits`/`uiCurBits`), so fix both together.

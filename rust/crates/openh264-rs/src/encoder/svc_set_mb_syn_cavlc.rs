@@ -13,6 +13,8 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`.
 
 use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SDCTCoeff;
 
 // ============================================================================
 // Macroblock Type & Sub-MB Type Constants
@@ -228,28 +230,7 @@ pub unsafe fn BsWriteTE(pBitString: *mut SBitStringAux, kiX: i32, kuiValue: u32)
 // Core C-compatible Data Structures
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SMVUnitXY {
-    pub iMvX: i16,
-    pub iMvY: i16,
-}
 
-impl SMVUnitXY {
-    #[inline(always)]
-    pub fn sDeltaMv(&mut self, v0: &SMVUnitXY, v1: &SMVUnitXY) -> &mut Self {
-        self.iMvX = v0.iMvX - v1.iMvX;
-        self.iMvY = v0.iMvY - v1.iMvY;
-        self
-    }
-
-    #[inline(always)]
-    pub fn sAssignMv(&mut self, v0: &SMVUnitXY) -> &mut Self {
-        self.iMvX = v0.iMvX;
-        self.iMvY = v0.iMvY;
-        self
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -267,25 +248,7 @@ impl Default for TagMVComponentUnit {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDCTCoeff {
-    pub iLumaBlock: [[i16; 16]; 16],
-    pub iLumaI16x16Dc: [i16; 16],
-    pub iChromaBlock: [[i16; 16]; 8],
-    pub iChromaDc: [[i16; 4]; 2],
-}
 
-impl Default for SDCTCoeff {
-    fn default() -> Self {
-        Self {
-            iLumaBlock: [[0; 16]; 16],
-            iLumaI16x16Dc: [0; 16],
-            iChromaBlock: [[0; 16]; 8],
-            iChromaDc: [[0; 4]; 2],
-        }
-    }
-}
 
 #[repr(C)]
 pub struct SMbCache {
@@ -718,7 +681,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
 
         MB_TYPE_16x16 => {
             BsWriteUE(pBs, 0);
-            sMvd[0].sDeltaMv(&*(*pCurMb).sMv.add(0), &pMbCache.sMbMvp[0]);
+            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(
@@ -735,8 +698,8 @@ pub unsafe fn WelsSpatialWriteMbPred(
         MB_TYPE_16x8 => {
             BsWriteUE(pBs, 1);
 
-            sMvd[0].sDeltaMv(&*(*pCurMb).sMv.add(0), &pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv(&*(*pCurMb).sMv.add(8), &pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv(*(*pCurMb).sMv.add(8), pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(
@@ -759,8 +722,8 @@ pub unsafe fn WelsSpatialWriteMbPred(
         MB_TYPE_8x16 => {
             BsWriteUE(pBs, 2);
 
-            sMvd[0].sDeltaMv(&*(*pCurMb).sMv.add(0), &pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv(&*(*pCurMb).sMv.add(2), &pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv(*(*pCurMb).sMv.add(2), pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(
