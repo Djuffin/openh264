@@ -429,6 +429,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -482,13 +483,6 @@ pub struct SWelsFuncPtrList {
     pub sSampleDealingFuncs: SSampleDealingFunc,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SDqLayer {
-    pub iEncStride: [i32; 4],
-    pub pRefPic: *mut SPicture,
-    pub bSatdInMdFlag: bool,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

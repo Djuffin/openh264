@@ -33,6 +33,8 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Constants and Thresholds
@@ -186,30 +188,7 @@ impl Default for SSampleDealingPicData {
 
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SDqLayer {
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub pRefLayer: *mut SDqLayer,
-    pub sMbDataP: *mut SMB,
-    pub iEncStride: [i32; 4],
-    pub pRefPic: *mut SPicture,
-    pub pDecPic: *mut SPicture,
-    pub pRefOri: [*mut SPicture; 2],
-    pub iCsStride: [i32; 4],
-    pub sLayerInfo: SLayerInfo,
-}
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SSlice {
-    pub sMbCacheInfo: SMbCache,
-    pub uiMvcNum: u32,
-    pub sMvc: [SMVUnitXY; 5],
-    pub sScaleShift: u8,
-    pub uiLastMbQp: u8,
-}
 
 
 
@@ -829,8 +808,8 @@ pub unsafe extern "C" fn WelsMdP16x16(
     let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
     let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16 as *mut SWelsME;
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbWidth = (*pCurLayer).iMbWidth;
-    let kiMbHeight = (*pCurLayer).iMbHeight;
+    let kiMbWidth: i32 = (*pCurLayer).iMbWidth as i32;
+    let kiMbHeight: i32 = (*pCurLayer).iMbHeight as i32;
 
     (*pSlice).uiMvcNum = 0;
     (*pSlice).sMvc[(*pSlice).uiMvcNum as usize] = (*pMe16x16).sMvBase;
@@ -973,7 +952,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
 pub unsafe extern "C" fn GetRefMb(pCurLayer: *mut SDqLayer, pCurMb: *mut SMB) -> *mut SMB {
     let kpRefLayer = (*pCurLayer).pRefLayer;
     let kiRefMbIdx =
-        (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth) + ((*pCurMb).iMbX as i32 >> 1);
+        (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + ((*pCurMb).iMbX as i32 >> 1);
     (*kpRefLayer).sMbDataP.offset(kiRefMbIdx as isize)
 }
 
@@ -1021,7 +1000,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
 
     let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let kiMbWidth = (*pCurDqLayer).iMbWidth;
+    let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
     let kpTopMb = pCurMb.offset(-(kiMbWidth as isize));
 
     let kbMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS as u32) != 0 {
@@ -1209,7 +1188,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeBGDPskip(
     let kiCurMbQp = (*pCurMb).uiLumaQp as i32;
     let pVaaBgMbFlag = (*(*pEncCtx).pVaa).pVaaBackgroundMbFlag.offset((*pCurMb).iMbXY as isize);
 
-    let kiMbWidth = (*pCurDqLayer).iMbWidth as isize;
+    let kiMbWidth: isize = (*pCurDqLayer).iMbWidth as isize;
 
     *bKeepSkip = *bKeepSkip
         && (*pVaaBgMbFlag.offset(-1) == 0)
@@ -1383,8 +1362,8 @@ pub unsafe extern "C" fn JudgeScrollSkip(
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
-    let kiMbWidth = (*pCurDqLayer).iMbWidth;
-    let kiMbHeight = (*pCurDqLayer).iMbHeight;
+    let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
+    let kiMbHeight: i32 = (*pCurDqLayer).iMbHeight as i32;
     let pVaaExt = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t;
 
     let mut bTryScrollSkip;
@@ -1656,8 +1635,8 @@ pub unsafe extern "C" fn SetBlockStaticIdcToMd(
 
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
-    let kiMbWidth = (*pDqLayer).iMbWidth;
-    let kiWidth = kiMbWidth << 1;
+    let kiMbWidth: i32 = (*pDqLayer).iMbWidth as i32;
+    let kiWidth: i32 = kiMbWidth << 1;
 
     let kiBlockIndexUp = (kiMbY << 1) * kiWidth + (kiMbX << 1);
     let kiBlockIndexLow = ((kiMbY << 1) + 1) * kiWidth + (kiMbX << 1);
@@ -2019,17 +1998,16 @@ mod tests {
                 ..Default::default()
             };
 
+            // iEncStride/iCsStride are [3] and pRefOri is [MAX_REF_PIC_COUNT] in C++
+            // (svc_enc_frame.h:88-94); the copy this test was written against had
+            // [4], [4] and [2].
             let mut dq_layer = SDqLayer {
                 iMbWidth: 10,
                 iMbHeight: 10,
-                pRefLayer: std::ptr::null_mut(),
-                sMbDataP: std::ptr::null_mut(),
-                iEncStride: [16; 4],
-                pRefPic: std::ptr::null_mut(),
-                pDecPic: std::ptr::null_mut(),
-                pRefOri: [std::ptr::null_mut(); 2],
-                iCsStride: [16; 4],
+                iEncStride: [16; 3],
+                iCsStride: [16; 3],
                 sLayerInfo: SLayerInfo::default(),
+                ..Default::default()
             };
 
             let cost = WelsMdI16x16(

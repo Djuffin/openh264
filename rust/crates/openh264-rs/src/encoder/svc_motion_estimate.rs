@@ -52,6 +52,8 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::md::SSampleDealingFunc;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -294,76 +296,12 @@ impl Default for SFeatureSearchOut {
 /// Reconstructed or reference picture frame buffer descriptor.
 
 /// Slice context parameters for motion estimation.
-#[repr(C)]
-pub struct SSlice {
-    pub sMvStartMin: SMVUnitXY,
-    pub sMvStartMax: SMVUnitXY,
-    pub sMvc: [SMVUnitXY; 5],
-    pub uiMvcNum: u8,
-    pub sScaleShift: u8,
-    pub iSliceIdx: i32,
-    pub uiBufferIdx: u32,
-    pub bSliceHeaderExtFlag: bool,
-    pub uiLastMbQp: u8,
-    pub bDynamicSlicingSliceSizeCtrlFlag: bool,
-    pub uiAssumeLog2BytePerMb: u8,
-    pub uiSliceFMECostDown: u32,
-}
 
-impl Default for SSlice {
-    fn default() -> Self {
-        Self {
-            sMvStartMin: SMVUnitXY::default(),
-            sMvStartMax: SMVUnitXY::default(),
-            sMvc: [SMVUnitXY::default(); 5],
-            uiMvcNum: 0,
-            sScaleShift: 0,
-            iSliceIdx: 0,
-            uiBufferIdx: 0,
-            bSliceHeaderExtFlag: false,
-            uiLastMbQp: 0,
-            bDynamicSlicingSliceSizeCtrlFlag: false,
-            uiAssumeLog2BytePerMb: 0,
-            uiSliceFMECostDown: 0,
-        }
-    }
-}
 
 /// Slice context container.
 
 /// Spatial dependency layer representation in Scalable Video Coding.
-#[repr(C)]
-pub struct SDqLayer {
-    pub ppSliceInLayer: *mut *mut SSlice,
-    pub sSliceEncCtx: SSliceCtx,
-    pub pCsData: [*mut u8; 3],
-    pub iCsStride: [i32; 3],
-    pub pEncData: [*mut u8; 3],
-    pub iEncStride: [i32; 3],
-    pub iMbWidth: i16,
-    pub iMbHeight: i16,
-    pub pRefPic: *mut SPicture,
-    pub pDecPic: *mut SPicture,
-    pub pFeatureSearchPreparation: *mut SFeatureSearchPreparation,
-}
 
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            ppSliceInLayer: std::ptr::null_mut(),
-            sSliceEncCtx: SSliceCtx::default(),
-            pCsData: [std::ptr::null_mut(); 3],
-            iCsStride: [0; 3],
-            pEncData: [std::ptr::null_mut(); 3],
-            iEncStride: [0; 3],
-            iMbWidth: 0,
-            iMbHeight: 0,
-            pRefPic: std::ptr::null_mut(),
-            pDecPic: std::ptr::null_mut(),
-            pFeatureSearchPreparation: std::ptr::null_mut(),
-        }
-    }
-}
 
 // ============================================================================
 // Function Pointer Types

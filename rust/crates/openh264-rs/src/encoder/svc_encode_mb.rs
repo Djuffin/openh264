@@ -54,6 +54,7 @@ pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -274,13 +275,6 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub iEncStride: [i32; 3],
-    pub iCsStride: [i32; 3],
-}
 
 
 // Function pointer signatures for SWelsFuncPtrList

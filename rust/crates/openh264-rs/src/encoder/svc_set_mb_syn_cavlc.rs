@@ -20,6 +20,8 @@ pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Macroblock Type & Sub-MB Type Constants
@@ -255,32 +257,7 @@ impl Default for TagMVComponentUnit {
 
 
 
-#[repr(C)]
-pub struct SSlice {
-    pub sMbCacheInfo: SMbCache,
-    pub pSliceBsa: *mut SBitStringAux,
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub iSliceIdx: i32,
-    pub uiBufferIdx: u32,
-    pub bSliceHeaderExtFlag: bool,
-    pub uiLastMbQp: u8,
-    pub iMbSkipRun: i32,
-}
 
-impl Default for SSlice {
-    fn default() -> Self {
-        Self {
-            sMbCacheInfo: SMbCache::default(),
-            pSliceBsa: std::ptr::null_mut(),
-            sSliceHeaderExt: SSliceHeaderExt::default(),
-            iSliceIdx: 0,
-            uiBufferIdx: 0,
-            bSliceHeaderExtFlag: false,
-            uiLastMbQp: 0,
-            iMbSkipRun: 0,
-        }
-    }
-}
 
 #[repr(C)]
 pub struct SWelsFuncPtrList {
@@ -299,10 +276,6 @@ pub struct SDqLayerInfo {
     pub pPpsP: *mut SPps,
 }
 
-#[repr(C)]
-pub struct SDqLayer {
-    pub sLayerInfo: SDqLayerInfo,
-}
 
 #[repr(C)]
 pub struct sWelsEncCtx {

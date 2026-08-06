@@ -74,7 +74,9 @@ pub const DELTA_QP: u8 = 1;
 pub const MB_COEFF_LIST_SIZE: usize = 384;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
-pub const MAX_THREADS_NUM: usize = 8;
+// wels_const.h:69 says 4. This module had 8, which over-sized SDqLayer's
+// sSliceBufferInfo and its four partition arrays by 128 bytes in total.
+pub use crate::encoder::encoder_context::MAX_THREADS_NUM;
 pub const MAX_REF_PIC_COUNT: u32 = 16;
 pub const INT_MULTIPLY: i32 = 100;
 pub const SLICE_NUM_EXPAND_COEF: i32 = 2;
@@ -268,8 +270,11 @@ impl Default for SSliceHeaderExt {
 }
 
 pub use crate::common::wels_common_defs::{EWelsNalUnitType, SBitStringAux};
+pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
+use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 
+/// `TagSlice` — `codec/encoder/core/inc/slice.h:170`. 1584 bytes.
 #[repr(C)]
 pub struct SSlice {
     pub sMbCacheInfo: SMbCache,
@@ -289,7 +294,7 @@ pub struct SSlice {
     pub uiAssumeLog2BytePerMb: u8,
     pub uiSliceFMECostDown: u32,
     pub uiReservedFillByte: u8,
-    pub sCabacCtx: [u8; 64],
+    pub sCabacCtx: SCabacCtx,
     pub iCabacInitIdc: i32,
     pub iMbSkipRun: i32,
     pub iCountMbNumInSlice: i32,
@@ -339,10 +344,11 @@ impl Default for SDynamicSlicingStack {
 
 
 #[repr(C)]
+/// `TagSliceBufferInfo` — `codec/encoder/core/inc/svc_enc_frame.h:71`. 16 bytes.
 pub struct SSliceBufferInfo {
+    pub pSliceBuffer: *mut SSlice,
     pub iMaxSliceNum: i32,
     pub iCodedSliceNum: i32,
-    pub pSliceBuffer: *mut SSlice,
 }
 
 impl Default for SSliceBufferInfo {
@@ -374,32 +380,58 @@ impl Default for SLayerInfo {
 
 pub use crate::encoder::encoder_context::SPicture;
 
+/// `TagDqLayer` — `codec/encoder/core/inc/svc_enc_frame.h:84`. 512 bytes.
+///
+/// This was previously spread over eleven partial copies. The least-truncated one
+/// (`slice_multi_threading.rs`) still stood `sSliceBufferInfo` in for
+/// `[SSliceBufferInfo; MAX_THREADS_NUM]` with `[u8; 64 * MAX_THREADS_NUM]` — four
+/// times the real 64 bytes — and left four pointers as `*mut c_void`.
 #[repr(C)]
 pub struct SDqLayer {
     pub sLayerInfo: SLayerInfo,
-    pub sSliceEncCtx: SSliceCtx,
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub iEncStride: [i32; 3],
-    pub iCsStride: [i32; 3],
-    pub pDecPic: *mut SPicture,
-    pub sMbDataP: *mut SMB,
+    pub sSliceBufferInfo: [SSliceBufferInfo; MAX_THREADS_NUM],
     pub ppSliceInLayer: *mut *mut SSlice,
-    pub pFirstMbIdxOfSlice: *mut i32,
-    pub pCountMbNumInSlice: *mut i32,
-    pub iMaxSliceNum: i32,
-    pub bSliceBsBufferFlag: bool,
-    pub bThreadSlcBufferFlag: bool,
+    pub sSliceEncCtx: SSliceCtx,
+    pub pCsData: [*mut u8; 3],
+    pub iCsStride: [i32; 3],
+
+    pub pEncData: [*mut u8; 3],
+    pub iEncStride: [i32; 3],
+
+    pub sMbDataP: *mut SMB,
+    pub iMbWidth: i16,
+    pub iMbHeight: i16,
+
     pub bBaseLayerAvailableFlag: bool,
+    pub bSatdInMdFlag: bool,
+
     pub iLoopFilterDisableIdc: u8,
     pub iLoopFilterAlphaC0Offset: i8,
     pub iLoopFilterBetaOffset: i8,
     pub uiDisableInterLayerDeblockingFilterIdc: u8,
-    pub sSliceBufferInfo: [SSliceBufferInfo; MAX_THREADS_NUM],
+    pub iInterLayerSliceAlphaC0Offset: i8,
+    pub iInterLayerSliceBetaOffset: i8,
+    pub bDeblockingParallelFlag: bool,
+
+    pub pRefPic: *mut SPicture,
+    pub pDecPic: *mut SPicture,
+    pub pRefOri: [*mut SPicture; MAX_REF_PIC_COUNT as usize],
+
+    pub bThreadSlcBufferFlag: bool,
+    pub bSliceBsBufferFlag: bool,
+    pub iMaxSliceNum: i32,
+    pub NumSliceCodedOfPartition: [i32; MAX_THREADS_NUM],
+    pub LastCodedMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub FirstMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub EndMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub LastCodedMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub NumSliceCodedOfPartition: [i32; MAX_THREADS_NUM],
+    pub pFirstMbIdxOfSlice: *mut i32,
+    pub pCountMbNumInSlice: *mut i32,
+
+    pub bNeedAdjustingSlicing: bool,
+
+    pub pFeatureSearchPreparation: *mut SFeatureSearchPreparation,
+
+    pub pRefLayer: *mut SDqLayer,
 }
 
 impl Default for SDqLayer {
@@ -1106,7 +1138,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     let pMbList = (*pCurLayer).sMbDataP;
     let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
-    let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
+    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
@@ -1194,7 +1226,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let pMbList = (*pCurLayer).sMbDataP;
     let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
-    let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
+    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
     let mut iNumMbCoded = 0;
     let kiSliceIdx = (*pSlice).iSliceIdx;
@@ -1316,7 +1348,7 @@ pub unsafe fn WelsMdInterMbLoop(
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
-    let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
+    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
     let pMvdCostTable = if !(*pEncCtx).pMvdCostTable.is_null() {
         (*pEncCtx).pMvdCostTable.add((*pEncCtx).iMvdCostTableSize as usize)
@@ -1427,7 +1459,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let pMbList = (*pCurLayer).sMbDataP;
     let mut iNumMbCoded = 0;
-    let kiTotalNumMb = (*pCurLayer).iMbWidth * (*pCurLayer).iMbHeight;
+    let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
@@ -1883,9 +1915,9 @@ pub unsafe fn InitSliceBoundaryInfo(
     if pCurLayer.is_null() || pSliceArgument.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
-    let kiMBWidth = (*pCurLayer).iMbWidth;
-    let kiMBHeight = (*pCurLayer).iMbHeight;
-    let kiCountNumMbInFrame = kiMBWidth * kiMBHeight;
+    let kiMBWidth: i32 = (*pCurLayer).iMbWidth as i32;
+    let kiMBHeight: i32 = (*pCurLayer).iMbHeight as i32;
+    let kiCountNumMbInFrame: i32 = kiMBWidth * kiMBHeight;
 
     for iSliceIdx in 0..kiSliceNumInFrame {
         let mut iFirstMBInSlice: i32;

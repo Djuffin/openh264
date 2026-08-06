@@ -59,6 +59,8 @@ pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Constants and Macros
@@ -444,13 +446,6 @@ pub struct SRCSlicing {
 // Slice header subset for rate control
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub iCountMbNumInSlice: i32,
-    pub sSlicingOverRc: SRCSlicing,
-}
 
 
 
@@ -468,14 +463,6 @@ pub struct SPps {
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub ppSliceInLayer: *mut *mut SSlice,
-    pub iMaxSliceNum: i32,
-    pub sSliceEncCtx: SSliceCtx,
-    pub sLayerInfo: SLayerInfo,
-}
 
 
 // Function pointer callbacks
