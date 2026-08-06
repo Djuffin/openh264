@@ -51,6 +51,7 @@ use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
 pub use crate::encoder::nal_encap::SWelsSliceBs;
+pub use crate::encoder::rc::SWelsSvcRc;
 
 // ============================================================================
 // Constants and Thresholds
@@ -310,11 +311,6 @@ impl Default for SDqLayer {
 }
 pub type TagDqLayer = SDqLayer;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SWelsSvcRc {
-    pub iNumberMbGom: i32,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

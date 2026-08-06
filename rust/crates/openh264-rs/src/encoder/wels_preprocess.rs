@@ -67,6 +67,9 @@ pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
 pub use crate::encoder::encoder_context::SLogContext;
+pub use crate::encoder::param_svc::SSpatialLayerInternal;
+pub use crate::encoder::param_svc::SWelsSvcCodingParam;
+pub use crate::encoder::rc::SWelsSvcRc;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
@@ -533,46 +536,7 @@ impl Default for SVAAFrameInfoExt {
 // Core Structures: SPicture, Parameters, Context, and Plugins
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSpatialLayerInternal {
-    pub iActualWidth: i32,
-    pub iActualHeight: i32,
-    pub iTemporalResolution: i32,
-    pub iDecompositionStages: i32,
-    pub uiCodingIdx2TemporalId: [u8; (1 << MAX_TEMPORAL_LEVEL) + 1],
 
-    pub iHighestTemporalId: i8,
-    pub fInputFrameRate: f32,
-    pub fOutputFrameRate: f32,
-    pub uiIdrPicId: u16,
-    pub iCodingIndex: i32,
-    pub iFrameIndex: i32,
-    pub bEncCurFrmAsIdrFlag: bool,
-    pub iFrameNum: i32,
-    pub iPOC: i32,
-}
-
-impl Default for SSpatialLayerInternal {
-    fn default() -> Self {
-        Self {
-            iActualWidth: 0,
-            iActualHeight: 0,
-            iTemporalResolution: 0,
-            iDecompositionStages: 0,
-            uiCodingIdx2TemporalId: [0; (1 << MAX_TEMPORAL_LEVEL) + 1],
-            iHighestTemporalId: 0,
-            fInputFrameRate: 0.0,
-            fOutputFrameRate: 0.0,
-            uiIdrPicId: 0,
-            iCodingIndex: 0,
-            iFrameIndex: 0,
-            bEncCurFrmAsIdrFlag: false,
-            iFrameNum: 0,
-            iPOC: 0,
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -583,71 +547,9 @@ pub struct SPosOffset {
     pub iHeight: i32,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSvcCodingParam {
-    pub sBaseParam: SEncParamExt,
-    pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
-    pub sSpatialLayers: [SSpatialLayerConfig; MAX_DEPENDENCY_LAYER],
-    pub SUsedPicRect: SPosOffset,
-    pub uiGopSize: u32,
-    pub iSpatialLayerNum: i32,
-    pub iDecompStages: i32,
-    pub iNumRefFrame: i32,
-    pub iLTRRefNum: u8,
-    pub iUsageType: EUsageType,
-    pub bEnableDenoise: bool,
-    pub bEnableSceneChangeDetect: bool,
-    pub bEnableBackgroundDetection: bool,
-    pub bEnableAdaptiveQuant: bool,
-    pub bEnableLongTermReference: bool,
-    pub uiIntraPeriod: u32,
-    pub iRCMode: i32,
-}
 
-impl Default for SWelsSvcCodingParam {
-    fn default() -> Self {
-        Self {
-            sBaseParam: SEncParamExt::default(),
-            sDependencyLayers: [SSpatialLayerInternal::default(); MAX_DEPENDENCY_LAYER],
-            sSpatialLayers: [SSpatialLayerConfig::default(); MAX_DEPENDENCY_LAYER],
-            SUsedPicRect: SPosOffset::default(),
-            uiGopSize: 1,
-            iSpatialLayerNum: 1,
-            iDecompStages: 0,
-            iNumRefFrame: 1,
-            iLTRRefNum: 0,
-            iUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
-            bEnableDenoise: false,
-            bEnableSceneChangeDetect: false,
-            bEnableBackgroundDetection: false,
-            bEnableAdaptiveQuant: false,
-            bEnableLongTermReference: false,
-            uiIntraPeriod: 0,
-            iRCMode: RC_QUALITY_MODE,
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSvcRc {
-    pub pGomForegroundBlockNum: *mut i32,
-    pub pCurrentFrameGomSad: *mut i32,
-    pub iGomSize: i32,
-    pub iNumberMbGom: i32,
-}
 
-impl Default for SWelsSvcRc {
-    fn default() -> Self {
-        Self {
-            pGomForegroundBlockNum: std::ptr::null_mut(),
-            pCurrentFrameGomSad: std::ptr::null_mut(),
-            iGomSize: 0,
-            iNumberMbGom: 0,
-        }
-    }
-}
 
 
 #[repr(C)]
@@ -1098,7 +1000,10 @@ impl CWelsPreProcess {
             let kiPicHeight = (*pParam).sSpatialLayers[idx].iVideoHeight;
             let highestTid = (*pParam).sDependencyLayers[idx].iHighestTemporalId as i32;
             let kuiLayerInTemporal = (2 + highestTid.max(1)) as u8;
-            let kuiRefNumInTemporal = kuiLayerInTemporal + (*pParam).iLTRRefNum;
+            // wels_preprocess.cpp:180 — the sum is computed in int and narrowed to
+            // uint8_t, so kuiRefNumInTemporal really is a uint8_t.
+            let kuiRefNumInTemporal: u8 =
+                (kuiLayerInTemporal as i32 + (*pParam).iLTRRefNum) as u8;
 
             self.m_uiSpatialPicNum[idx] = kuiRefNumInTemporal;
             let mut i: u8 = 0;
@@ -1357,7 +1262,7 @@ impl CWelsPreProcess {
         }
 
         let pCurPic = self.m_pSpatialPic[dIdx][iCurTemporalIdx as usize];
-        let bCalculateVar = ((*pSvcParam).iRCMode >= RC_BITRATE_MODE) && ((*pCtx).eSliceType == I_SLICE);
+        let bCalculateVar = ((*pSvcParam).iRCMode as i32 >= RC_BITRATE_MODE) && ((*pCtx).eSliceType as i32 == I_SLICE);
 
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pRefPic = self.GetBestRefPicScreen(
@@ -2447,13 +2352,13 @@ impl CWelsPreProcess {
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
             let pWelsSvcRc = &mut *(*pCtx).pWelsSvcRc.offset(kiDependencyId as isize);
 
-            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode == RC_QUALITY_MODE && (*pCtx).eSliceType == P_SLICE {
+            let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && (*pCtx).eSliceType as i32 == P_SLICE {
                 FRAME_SAD
-            } else if (((*pSvcParam).iRCMode == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode == RC_TIMESTAMP_MODE))
+            } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
                 && (*pCtx).eSliceType == P_SLICE
             {
                 GOM_SAD
-            } else if (((*pSvcParam).iRCMode == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode == RC_TIMESTAMP_MODE))
+            } else if (((*pSvcParam).iRCMode as i32 == RC_BITRATE_MODE) || ((*pSvcParam).iRCMode as i32 == RC_TIMESTAMP_MODE))
                 && (*pCtx).eSliceType == I_SLICE
             {
                 GOM_VAR
@@ -2512,6 +2417,34 @@ impl CWelsPreProcess {
                 (*self.m_pInterfaceVp).Get(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
             }
         }
+    }
+
+    /// Look up the source picture and long-term index for a best-reference candidate.
+    ///
+    /// Matches `CWelsPreProcess::GetRefFrameInfo` (`wels_preprocess.cpp:1262`). The
+    /// port previously declared this only as a vtable entry in `ref_list_mgr_svc.rs`
+    /// with no body behind it.
+    ///
+    /// # Safety
+    /// `m_pEncCtx`, its `pSvcParam`/`pVaa`, and the selected `m_pSpatialPic` entry
+    /// must be valid, as in C++ where all three are dereferenced unconditionally.
+    pub unsafe fn GetRefFrameInfo(
+        &mut self,
+        iRefIdx: i32,
+        bCurrentFrameIsSceneLtr: bool,
+        pRefOri: *mut *mut SPicture,
+    ) -> i32 {
+        let iTargetDid = (*(*self.m_pEncCtx).pSvcParam).iSpatialLayerNum - 1;
+        let pVaaExt = (*self.m_pEncCtx).pVaa as *mut SVAAFrameInfoExt;
+        let pBestRefCandidateParam = if bCurrentFrameIsSceneLtr {
+            &(*pVaaExt).sVaaLtrBestRefCandidate[iRefIdx as usize]
+        } else {
+            &(*pVaaExt).sVaaStrBestRefCandidate[iRefIdx as usize]
+        };
+        let pPic =
+            self.m_pSpatialPic[iTargetDid as usize][pBestRefCandidateParam.iSrcListIdx as usize];
+        *pRefOri = pPic;
+        (*pPic).iLongTermPicNum
     }
 
     pub unsafe fn UpdateBlockIdcForScreen(

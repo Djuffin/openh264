@@ -116,6 +116,11 @@ pub fn GetLogFactor(base: f32, upper: f32) -> u32 {
 /// Dependency Layer Internal Runtime Parameters
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+/// `TagDLayerParam` — `codec/encoder/core/inc/param_svc.h:82`. 68 bytes.
+///
+/// `sRecFileName` is **not** a member: `param_svc.h:98` guards it with
+/// `#ifdef ENABLE_FRAME_DUMP`, and `as264_common.h:61-75` only defines that under
+/// `WELS_TESTBED` or `__UNITTEST__`, neither of which the library build sets.
 pub struct SSpatialLayerInternal {
     pub iActualWidth: i32,
     pub iActualHeight: i32,
@@ -131,7 +136,6 @@ pub struct SSpatialLayerInternal {
     pub bEncCurFrmAsIdrFlag: bool,
     pub iFrameNum: i32,
     pub iPOC: i32,
-    pub sRecFileName: [u8; MAX_FNAME_LEN],
 }
 
 pub type TagDLayerParam = SSpatialLayerInternal;
@@ -153,7 +157,6 @@ impl Default for SSpatialLayerInternal {
             bEncCurFrmAsIdrFlag: false,
             iFrameNum: 0,
             iPOC: 0,
-            sRecFileName: [0; MAX_FNAME_LEN],
         }
     }
 }
@@ -171,7 +174,10 @@ pub struct SUsedPicRect {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsSvcCodingParam {
-    // SEncParamExt fields
+    // SEncParamExt base, in the exact order of api/codec_api.rs. C++ derives
+    // (TagWelsSvcCodingParam: SEncParamExt, param_svc.h:106) so the base must be a
+    // byte-identical 924-byte prefix; this list had bEnableFrameCroppingFlag and the
+    // fields after it out of order, which changed the padding and the total size.
     pub iUsageType: EUsageType,
     pub iPicWidth: i32,
     pub iPicHeight: i32,
@@ -190,32 +196,32 @@ pub struct SWelsSvcCodingParam {
     pub bSimulcastAVC: bool,
     pub iPaddingFlag: i32,
     pub iEntropyCodingModeFlag: i32,
-    pub bEnableFrameCroppingFlag: bool,
+    pub bEnableFrameSkip: bool,
+    pub iMaxBitrate: i32,
+    pub iMaxQp: i32,
+    pub iMinQp: i32,
+    pub uiMaxNalSize: u32,
+    pub bEnableLongTermReference: bool,
+    pub iLTRRefNum: i32,
+    pub iLtrMarkPeriod: u32,
+    pub iMultipleThreadIdc: u16,
+    pub bUseLoadBalancing: bool,
     pub iLoopFilterDisableIdc: i32,
     pub iLoopFilterAlphaC0Offset: i32,
     pub iLoopFilterBetaOffset: i32,
     pub bEnableDenoise: bool,
-    pub bEnableSceneChangeDetect: bool,
     pub bEnableBackgroundDetection: bool,
     pub bEnableAdaptiveQuant: bool,
-    pub bEnableFrameSkip: bool,
-    pub bEnableLongTermReference: bool,
-    pub iLtrMarkPeriod: u32,
-    pub iMultipleThreadIdc: u16,
-    pub bUseLoadBalancing: bool,
-    pub iMaxBitrate: i32,
-    pub iMinQp: i32,
-    pub iMaxQp: i32,
-    pub uiMaxNalSize: u32,
+    pub bEnableFrameCroppingFlag: bool,
+    pub bEnableSceneChangeDetect: bool,
     pub bIsLosslessLink: bool,
-    pub iLTRRefNum: i32,
     pub bFixRCOverShoot: bool,
     pub iIdrBitrateRatio: i32,
     pub bPsnrY: bool,
     pub bPsnrU: bool,
     pub bPsnrV: bool,
 
-    // Internal SVC specific fields
+    // Internal SVC-specific members (param_svc.h:107 onward).
     pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
     pub uiGopSize: u32,
     pub SUsedPicRect: SUsedPicRect,
@@ -480,7 +486,6 @@ impl SWelsSvcCodingParam {
             self.sDependencyLayers[idx].fOutputFrameRate =
                 self.sDependencyLayers[idx].fInputFrameRate;
 
-            self.sDependencyLayers[idx].sRecFileName[0] = 0;
             self.sSpatialLayers[idx].iVideoWidth = self.iPicWidth;
             self.sDependencyLayers[idx].iActualWidth = self.iPicWidth;
             self.sSpatialLayers[idx].iVideoHeight = self.iPicHeight;
@@ -653,7 +658,6 @@ impl SWelsSvcCodingParam {
                 WELS_CLIP3(fLayerFrameRate, MIN_FRAME_RATE, fParamMaxFrameRate);
             self.sDependencyLayers[idx].fOutputFrameRate = self.sSpatialLayers[idx].fFrameRate;
 
-            self.sDependencyLayers[idx].sRecFileName[0] = 0;
             self.sSpatialLayers[idx].iVideoWidth = WELS_CLIP3(
                 pCodingParam.sSpatialLayers[idx].iVideoWidth,
                 0,

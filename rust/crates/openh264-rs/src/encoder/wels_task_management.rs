@@ -16,6 +16,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
+pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
@@ -80,23 +81,7 @@ pub struct SSpatialLayerConfig {
 }
 
 /// SVC coding parameters (`SWelsSvcCodingParam`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsSvcCodingParam {
-    pub iMultipleThreadIdc: u16,
-    pub bUseLoadBalancing: bool,
-    pub sSpatialLayers: [SSpatialLayerConfig; MAX_DEPENDENCY_LAYER],
-}
 
-impl Default for SWelsSvcCodingParam {
-    fn default() -> Self {
-        Self {
-            iMultipleThreadIdc: 1,
-            bUseLoadBalancing: false,
-            sSpatialLayers: [SSpatialLayerConfig::default(); MAX_DEPENDENCY_LAYER],
-        }
-    }
-}
 
 /// Spatial DQ layer context (`SDqLayer`).
 #[repr(C)]
@@ -566,14 +551,14 @@ impl CWelsTaskManageBase {
         }
 
         let did = kiCurDid as usize;
-        let mut uiSliceMode = SM_SINGLE_SLICE;
+        let mut uiSliceMode = crate::SliceMode::SM_SINGLE_SLICE;
         let mut kiTaskCount: i32 = 1;
 
         unsafe {
             if !(*pEncCtx).pSvcParam.is_null() {
                 let pParam = &*(*pEncCtx).pSvcParam;
                 uiSliceMode = pParam.sSpatialLayers[did].sSliceArgument.uiSliceMode;
-                if uiSliceMode != SM_SIZELIMITED_SLICE {
+                if uiSliceMode != crate::SliceMode::SM_SIZELIMITED_SLICE {
                     kiTaskCount =
                         pParam.sSpatialLayers[did].sSliceArgument.uiSliceNum as i32;
                     self.m_iTaskNum[did] = kiTaskCount;
@@ -609,7 +594,7 @@ impl CWelsTaskManageBase {
         };
 
         for idx in 0..kiTaskCount {
-            let base_task: *mut CWelsBaseTask = if uiSliceMode == SM_SIZELIMITED_SLICE {
+            let base_task: *mut CWelsBaseTask = if uiSliceMode == crate::SliceMode::SM_SIZELIMITED_SLICE {
                 let task = Box::into_raw(Box::new(
                     CWelsConstrainedSizeSlicingEncodingTask::new(this_ptr, pEncCtx, idx),
                 ));
@@ -862,7 +847,8 @@ mod tests {
     fn test_task_manage_base_lifecycle() {
         let mut coding_param = SWelsSvcCodingParam::default();
         coding_param.iMultipleThreadIdc = 2;
-        coding_param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+        coding_param.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+            crate::SliceMode::SM_FIXEDSLCNUM_SLICE;
         coding_param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 2;
 
         let mut dq_layer = SDqLayer::default();

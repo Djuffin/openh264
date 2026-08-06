@@ -227,13 +227,6 @@ pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVAAFrameInfo {
-    pub bIdrPeriodFlag: bool,
-    pub bSceneChangeFlag: bool,
-    pub eSceneChangeIdc: ESceneChangeIdc,
-}
 
 pub use crate::common::wels_common_defs::SBitStringAux;
 
@@ -276,6 +269,7 @@ pub use crate::encoder::wels_preprocess::ESceneChangeIdc;
 pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
+pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

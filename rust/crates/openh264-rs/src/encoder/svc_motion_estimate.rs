@@ -51,6 +51,7 @@ pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
 pub use crate::encoder::md::SSampleDealingFunc;
+pub use crate::encoder::slice_multi_threading::SSliceCtx;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -329,12 +330,6 @@ impl Default for SSlice {
 }
 
 /// Slice context container.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceCtx {
-    pub iSliceNumInFrame: i32,
-    pub iMbNumInFrame: i32,
-}
 
 /// Spatial dependency layer representation in Scalable Video Coding.
 #[repr(C)]
