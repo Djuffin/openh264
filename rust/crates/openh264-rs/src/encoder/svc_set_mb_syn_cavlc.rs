@@ -13,8 +13,11 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`.
 
 use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
+pub use crate::encoder::svc_encode_slice::SSliceHeader;
+pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 
 // ============================================================================
 // Macroblock Type & Sub-MB Type Constants
@@ -36,8 +39,6 @@ pub const SUB_MB_TYPE_8x4: u32 = 0x00000002;
 pub const SUB_MB_TYPE_4x8: u32 = 0x00000004;
 pub const SUB_MB_TYPE_4x4: u32 = 0x00000008;
 
-pub const I_SLICE: i32 = 0;
-pub const P_SLICE: i32 = 1;
 
 pub const LUMA_DC: i32 = 0;
 pub const LUMA_AC: i32 = 1;
@@ -358,18 +359,7 @@ impl Default for SMB {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeader {
-    pub eSliceType: i32,
-    pub uiNumRefIdxL0Active: u8,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 #[repr(C)]
 pub struct SSlice {
@@ -631,9 +621,10 @@ pub unsafe fn WelsSpatialWriteMbPred(
     let iCbpChroma = ((*pCurMb).uiCbp >> 4) as i32;
     let iCbpLuma = ((*pCurMb).uiCbp & 15) as i32;
 
+    // svc_set_mb_syn_cavlc.cpp:76
     let iMbOffset = match pSliceHeadExt.sSliceHeader.eSliceType {
-        I_SLICE => 0,
-        P_SLICE => 5,
+        EWelsSliceType::I_SLICE => 0,
+        EWelsSliceType::P_SLICE => 5,
         _ => return,
     };
 
@@ -941,7 +932,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         (*pSlice).iMbSkipRun += 1;
         ENC_RETURN_SUCCESS
     } else {
-        if (*pEncCtx).eSliceType != I_SLICE {
+        if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE as i32 {
             BsWriteUE(pBs, (*pSlice).iMbSkipRun as u32);
             (*pSlice).iMbSkipRun = 0;
         }

@@ -23,6 +23,8 @@ use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, 
 use crate::encoder::nal_encap::{SWelsEncoderOutput, SWelsNalRaw, SWelsSliceBs};
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
+use crate::encoder::ref_list_mgr_svc::{SRefPicListReorderSyntax, SRefPicMarking};
+use crate::encoder::svc_encode_slice::{SSliceHeader, SSliceHeaderExt};
 
 macro_rules! assert_size {
     ($t:ty, $n:expr) => {
@@ -52,6 +54,13 @@ assert_size!(SWelsSPS, 56);
 assert_size!(SWelsPPS, 16);
 assert_size!(SSpsSvcExt, 4);
 assert_size!(SSubsetSps, 60);
+
+// codec/encoder/core/inc/slice.h. SSliceHeader excludes iSliceGroupChangeCycle,
+// which sits inside `#if !defined(DISABLE_FMO_FEATURE)` at slice.h:124.
+assert_size!(SRefPicMarking, 100);
+assert_size!(SRefPicListReorderSyntax, 16);
+assert_size!(SSliceHeader, 168);
+assert_size!(SSliceHeaderExt, 192);
 
 // codec/encoder/core/inc/wels_common_basis.h, mb_cache.h
 assert_size!(SMVUnitXY, 4);

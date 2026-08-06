@@ -46,6 +46,8 @@
 
 use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
+pub use crate::encoder::svc_encode_slice::SSliceHeader;
+pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 
 // ============================================================================
 // Constants and Macros
@@ -429,19 +431,7 @@ pub struct SRCSlicing {
 }
 
 // Slice header subset for rate control
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeader {
-    pub iFirstMbInSlice: i32,
-    pub iFrameNum: i32,
-    pub iPicOrderCntLsb: i32,
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

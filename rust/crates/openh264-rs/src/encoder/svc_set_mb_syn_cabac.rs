@@ -342,47 +342,12 @@ impl Default for SMB {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSliceHeader {
-    pub iFirstMbInSlice: i32,
-    pub iFrameNum: i32,
-    pub iPicOrderCntLsb: i32,
-    pub eSliceType: EWelsSliceType,
-    pub uiNumRefIdxL0Active: u8,
-    pub uiRefCount: u8,
-    pub uiRefIndex: u8,
-    pub iSliceQpDelta: i8,
-    pub uiDisableDeblockingFilterIdc: u8,
-    pub iSliceAlphaC0Offset: i8,
-    pub iSliceBetaOffset: i8,
-}
 
-impl Default for SSliceHeader {
-    fn default() -> Self {
-        Self {
-            iFirstMbInSlice: 0,
-            iFrameNum: 0,
-            iPicOrderCntLsb: 0,
-            eSliceType: EWelsSliceType::P_SLICE,
-            uiNumRefIdxL0Active: 0,
-            uiRefCount: 0,
-            uiRefIndex: 0,
-            iSliceQpDelta: 0,
-            uiDisableDeblockingFilterIdc: 0,
-            iSliceAlphaC0Offset: 0,
-            iSliceBetaOffset: 0,
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSliceHeaderExt {
-    pub sSliceHeader: SSliceHeader,
-}
 
 pub use crate::common::wels_common_defs::SBitStringAux;
+pub use crate::encoder::svc_encode_slice::SSliceHeader;
+pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
