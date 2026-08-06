@@ -2891,7 +2891,6 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     }
     let ret = WelsActualDecodeMbCavlcISlice(pCtx);
     if ret != ERR_NONE {
-        eprintln!("DBG ISlice MB {} err 0x{:x}", (*dq).iMbXyIndex, ret);
         return ret;
     }
     let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
