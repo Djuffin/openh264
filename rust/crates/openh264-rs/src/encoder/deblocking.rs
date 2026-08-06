@@ -49,8 +49,12 @@
 pub const MB_WIDTH_LUMA: usize = 16;
 pub const MB_WIDTH_CHROMA: usize = 8;
 
-pub const LEFT_MB_POS: i32 = 0x02;
-pub const TOP_MB_POS: i32 = 0x01;
+// `wels_common_basis.h:123-124`. These were declared here swapped (LEFT 0x02, TOP
+// 0x01). Nothing in this module reads them — in C++ they appear only inside the
+// `HAVE_NEON && SINGLE_REF_FRAME` boundary-flag argument to DeblockingBSCalcEnc_neon,
+// which this port does not dispatch — but the values were still wrong.
+pub const LEFT_MB_POS: i32 = 0x01;
+pub const TOP_MB_POS: i32 = 0x02;
 
 // Macroblock Coding Types matching `wels_common_defs.h`
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;

@@ -24,9 +24,8 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 // Return & Error Codes
 pub const ENC_RETURN_SUCCESS: i32 = 0;
-pub const ENC_RETURN_CORRECTING: i32 = 1;
-pub const ENC_RETURN_MEMALLOCERR: i32 = 2;
-pub const ENC_RETURN_UNEXPECTED: i32 = -1;
+pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
+pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 
 // ETaskType constants (matching `CWelsBaseTask::ETaskType`)
 pub const WELS_ENC_TASK_ENCODING: usize = 0;

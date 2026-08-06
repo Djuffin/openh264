@@ -73,7 +73,64 @@ pub const MAX_SLICES_NUM: usize = 35;
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 pub const ENC_RETURN_SUCCESS: i32 = 0;
-pub const ENC_RETURN_MEMALLOCERR: i32 = 0x00000002;
+pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
+
+/// `DEFAULT_MAXPACKETSIZE_CONSTRAINT` — `svc_enc_slice_segment.h:67`, in bytes.
+pub const DEFAULT_MAXPACKETSIZE_CONSTRAINT: u32 = 1200;
+
+/// `WelsSetMemUint16_c` — `codec/common/inc/macros.h:306`.
+///
+/// # Safety
+/// `pDst` must point to at least `iSizeOfData` writable `u16`s.
+pub unsafe fn WelsSetMemUint16_c(pDst: *mut u16, iValue: u16, iSizeOfData: i32) {
+    for i in 0..iSizeOfData as usize {
+        *pDst.add(i) = iValue;
+    }
+}
+
+/// `WelsSetMemUint32_c` — `codec/common/inc/macros.h:300`.
+///
+/// # Safety
+/// `pDst` must point to at least `iSizeOfData` writable `u32`s.
+pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) {
+    for i in 0..iSizeOfData as usize {
+        *pDst.add(i) = iValue;
+    }
+}
+
+/// `WelsSetMemMultiplebytes_c` — `codec/common/inc/macros.h:312`.
+///
+/// Note the asymmetry C++ has and this reproduces: the non-zero paths write
+/// `iSizeOfData` *elements*, while the zero path memsets `iSizeOfData *
+/// iDataLengthOfData` *bytes* — the same span, expressed differently.
+///
+/// # Safety
+/// `pDst` must point to at least `iSizeOfData * iDataLengthOfData` writable bytes, and
+/// `iDataLengthOfData` must be 1, 2 or 4.
+pub unsafe fn WelsSetMemMultiplebytes_c(
+    pDst: *mut c_void,
+    iValue: u32,
+    iSizeOfData: i32,
+    iDataLengthOfData: i32,
+) {
+    debug_assert!(iDataLengthOfData == 4 || iDataLengthOfData == 2 || iDataLengthOfData == 1);
+
+    if 0 != iValue {
+        if 4 == iDataLengthOfData {
+            WelsSetMemUint32_c(pDst as *mut u32, iValue, iSizeOfData);
+        } else if 2 == iDataLengthOfData {
+            WelsSetMemUint16_c(pDst as *mut u16, iValue as u16, iSizeOfData);
+        } else {
+            std::ptr::write_bytes(pDst as *mut u8, iValue as u8, iSizeOfData as usize);
+        }
+    } else {
+        std::ptr::write_bytes(
+            pDst as *mut u8,
+            0,
+            (iSizeOfData * iDataLengthOfData) as usize,
+        );
+    }
+}
 
 // ============================================================================
 // Data Structures

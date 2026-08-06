@@ -100,7 +100,11 @@ pub const REF_NOT_AVAIL: i8 = -2;
 // Macroblock sizing & type constants
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
-pub const INTRA_4x4_MODE_NUM: usize = 16;
+/// `INTRA_4x4_MODE_NUM` — `wels_const.h:48`. **8**, not 16; this is the per-macroblock
+/// stride of `sWelsEncCtx::pIntra4x4PredModeBlocks`, so the wrong value made
+/// `pIntra4x4PredMode.offset(-INTRA_4x4_MODE_NUM)` at md.rs:563 step back two
+/// macroblocks instead of one.
+pub const INTRA_4x4_MODE_NUM: usize = 8;
 pub const MB_WIDTH_LUMA: i32 = 16;
 
 pub const MB_TYPE_SKIP: u32 = 0x00000001;
