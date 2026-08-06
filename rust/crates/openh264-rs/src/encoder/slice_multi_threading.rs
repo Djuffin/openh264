@@ -54,6 +54,8 @@ pub use crate::encoder::nal_encap::SWelsSliceBs;
 pub use crate::encoder::rc::SWelsSvcRc;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Constants and Thresholds
@@ -140,51 +142,7 @@ pub type TagSliceThreading = SSliceThreading;
 
 pub type TagWelsSliceBs = SWelsSliceBs;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSlice {
-    pub sMbCacheInfo: [u8; 128],
-    pub pSliceBsa: *mut c_void,
-    pub sSliceBs: SWelsSliceBs,
-    pub iSliceIdx: i32,
-    pub uiBufferIdx: u32,
-    pub bSliceHeaderExtFlag: bool,
-    pub uiLastMbQp: u8,
-    pub bDynamicSlicingSliceSizeCtrlFlag: bool,
-    pub uiAssumeLog2BytePerMb: u8,
-    pub uiSliceFMECostDown: u32,
-    pub uiReservedFillByte: u8,
-    pub sCabacCtx: [u8; 64],
-    pub iCabacInitIdc: i32,
-    pub iMbSkipRun: i32,
-    pub iCountMbNumInSlice: i32,
-    pub uiSliceConsumeTime: u32,
-    pub iSliceComplexRatio: i32,
-}
 
-impl Default for SSlice {
-    fn default() -> Self {
-        Self {
-            sMbCacheInfo: [0; 128],
-            pSliceBsa: std::ptr::null_mut(),
-            sSliceBs: SWelsSliceBs::default(),
-            iSliceIdx: 0,
-            uiBufferIdx: 0,
-            bSliceHeaderExtFlag: false,
-            uiLastMbQp: 0,
-            bDynamicSlicingSliceSizeCtrlFlag: false,
-            uiAssumeLog2BytePerMb: 0,
-            uiSliceFMECostDown: 0,
-            uiReservedFillByte: 0,
-            sCabacCtx: [0; 64],
-            iCabacInitIdc: 0,
-            iMbSkipRun: 0,
-            iCountMbNumInSlice: 0,
-            uiSliceConsumeTime: 0,
-            iSliceComplexRatio: 0,
-        }
-    }
-}
 pub type TagSlice = SSlice;
 
 #[repr(C)]
@@ -218,87 +176,7 @@ pub type SlicepEncCtx_s = SSliceCtx;
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub sLayerInfo: SLayerInfo,
-    pub sSliceBufferInfo: [u8; 64 * MAX_THREADS_NUM],
-    pub ppSliceInLayer: *mut *mut SSlice,
-    pub sSliceEncCtx: SSliceCtx,
-    pub pCsData: [*mut u8; 3],
-    pub iCsStride: [i32; 3],
-    pub pEncData: [*mut u8; 3],
-    pub iEncStride: [i32; 3],
-    pub sMbDataP: *mut SMB,
-    pub iMbWidth: i16,
-    pub iMbHeight: i16,
-    pub bBaseLayerAvailableFlag: bool,
-    pub bSatdInMdFlag: bool,
-    pub iLoopFilterDisableIdc: u8,
-    pub iLoopFilterAlphaC0Offset: i8,
-    pub iLoopFilterBetaOffset: i8,
-    pub uiDisableInterLayerDeblockingFilterIdc: u8,
-    pub iInterLayerSliceAlphaC0Offset: i8,
-    pub iInterLayerSliceBetaOffset: i8,
-    pub bDeblockingParallelFlag: bool,
-    pub pRefPic: *mut c_void,
-    pub pDecPic: *mut c_void,
-    pub pRefOri: [*mut c_void; 16],
-    pub bThreadSlcBufferFlag: bool,
-    pub bSliceBsBufferFlag: bool,
-    pub iMaxSliceNum: i32,
-    pub NumSliceCodedOfPartition: [i32; MAX_THREADS_NUM],
-    pub LastCodedMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub FirstMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub EndMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub pFirstMbIdxOfSlice: *mut i32,
-    pub pCountMbNumInSlice: *mut i32,
-    pub bNeedAdjustingSlicing: bool,
-    pub pFeatureSearchPreparation: *mut c_void,
-    pub pRefLayer: *mut SDqLayer,
-}
 
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            sLayerInfo: SLayerInfo::default(),
-            sSliceBufferInfo: [0; 64 * MAX_THREADS_NUM],
-            ppSliceInLayer: std::ptr::null_mut(),
-            sSliceEncCtx: SSliceCtx::default(),
-            pCsData: [std::ptr::null_mut(); 3],
-            iCsStride: [0; 3],
-            pEncData: [std::ptr::null_mut(); 3],
-            iEncStride: [0; 3],
-            sMbDataP: std::ptr::null_mut(),
-            iMbWidth: 0,
-            iMbHeight: 0,
-            bBaseLayerAvailableFlag: false,
-            bSatdInMdFlag: false,
-            iLoopFilterDisableIdc: 0,
-            iLoopFilterAlphaC0Offset: 0,
-            iLoopFilterBetaOffset: 0,
-            uiDisableInterLayerDeblockingFilterIdc: 0,
-            iInterLayerSliceAlphaC0Offset: 0,
-            iInterLayerSliceBetaOffset: 0,
-            bDeblockingParallelFlag: false,
-            pRefPic: std::ptr::null_mut(),
-            pDecPic: std::ptr::null_mut(),
-            pRefOri: [std::ptr::null_mut(); 16],
-            bThreadSlcBufferFlag: false,
-            bSliceBsBufferFlag: false,
-            iMaxSliceNum: 0,
-            NumSliceCodedOfPartition: [0; MAX_THREADS_NUM],
-            LastCodedMbIdxOfPartition: [0; MAX_THREADS_NUM],
-            FirstMbIdxOfPartition: [0; MAX_THREADS_NUM],
-            EndMbIdxOfPartition: [0; MAX_THREADS_NUM],
-            pFirstMbIdxOfSlice: std::ptr::null_mut(),
-            pCountMbNumInSlice: std::ptr::null_mut(),
-            bNeedAdjustingSlicing: false,
-            pFeatureSearchPreparation: std::ptr::null_mut(),
-            pRefLayer: std::ptr::null_mut(),
-        }
-    }
-}
 pub type TagDqLayer = SDqLayer;
 
 

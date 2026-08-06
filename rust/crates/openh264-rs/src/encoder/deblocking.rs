@@ -1584,9 +1584,9 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
     pFilter.iMbStride = kiMbWidth as i16;
 
     for j in 0..kiMbHeight {
-        pFilter.pCsData[0] = (*pDecPic).pData[0].add(((j * pFilter.iCsStride[0]) << 4) as usize);
-        pFilter.pCsData[1] = (*pDecPic).pData[1].add(((j * pFilter.iCsStride[1]) << 3) as usize);
-        pFilter.pCsData[2] = (*pDecPic).pData[2].add(((j * pFilter.iCsStride[2]) << 3) as usize);
+        pFilter.pCsData[0] = (*pDecPic).pData[0].add(((j as i32 * pFilter.iCsStride[0]) << 4) as usize);
+        pFilter.pCsData[1] = (*pDecPic).pData[1].add(((j as i32 * pFilter.iCsStride[1]) << 3) as usize);
+        pFilter.pCsData[2] = (*pDecPic).pData[2].add(((j as i32 * pFilter.iCsStride[2]) << 3) as usize);
 
         for _ in 0..kiMbWidth {
             DeblockingMbAvcbase(pFunc, pCurrentMbBlock, &mut pFilter);
@@ -1609,7 +1609,7 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
     if pCurDq.is_null() {
         return -1;
     }
-    let total = (*pCurDq).iMbWidth * (*pCurDq).iMbHeight;
+    let total: i32 = (*pCurDq).iMbWidth as i32 * (*pCurDq).iMbHeight as i32;
     let next = kiMbXY + 1;
     if next >= total {
         -1
@@ -1626,9 +1626,9 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     let pMbList = (*pCurDq).sMbDataP;
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
-    let kiMbWidth = (*pCurDq).iMbWidth;
-    let kiMbHeight = (*pCurDq).iMbHeight;
-    let kiTotalNumMb = kiMbWidth * kiMbHeight;
+    let kiMbWidth: i32 = (*pCurDq).iMbWidth as i32;
+    let kiMbHeight: i32 = (*pCurDq).iMbHeight as i32;
+    let kiTotalNumMb: i32 = kiMbWidth * kiMbHeight;
     let mut iNumMbFiltered = 0i32;
 
     if sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 {

@@ -94,6 +94,8 @@ pub use crate::encoder::wels_preprocess::CWelsPreProcess;
 pub use crate::encoder::param_svc::SSpatialLayerInternal;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 // ============================================================================
 // Core Data Structures
@@ -147,32 +149,11 @@ pub struct SRefPicMarking {
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSlice {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-}
 
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDqLayer {
-    pub iMaxSliceNum: i32,
-    pub ppSliceInLayer: *mut *mut SSlice,
-    pub pRefOri: [*mut SPicture; MAX_REF_PIC_COUNT],
-}
 
-impl Default for SDqLayer {
-    fn default() -> Self {
-        Self {
-            iMaxSliceNum: 0,
-            ppSliceInLayer: std::ptr::null_mut(),
-            pRefOri: [std::ptr::null_mut(); MAX_REF_PIC_COUNT],
-        }
-    }
-}
 
 
 

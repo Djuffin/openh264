@@ -208,30 +208,10 @@ pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSlice {
-    pub sMbCacheInfo: SMbCache,
-    pub pSliceBsa: *mut SBitStringAux,
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub uiLastMbQp: u8,
-    pub sCabacCtx: SCabacCtx,
-    pub iCabacInitIdc: i32,
-}
 
-impl Default for SSlice {
-    fn default() -> Self {
-        Self {
-            sMbCacheInfo: SMbCache::default(),
-            pSliceBsa: std::ptr::null_mut(),
-            sSliceHeaderExt: SSliceHeaderExt::default(),
-            uiLastMbQp: 0,
-            sCabacCtx: SCabacCtx::default(),
-            iCabacInitIdc: 0,
-        }
-    }
-}
 
 // Function pointer list matching OpenH264
 #[repr(C)]
@@ -245,12 +225,6 @@ pub struct SWelsPps {
 }
 
 
-#[repr(C)]
-pub struct SDqLayer {
-    pub iMbWidth: i16,
-    pub iMbHeight: i16,
-    pub sLayerInfo: SLayerInfo,
-}
 
 // ============================================================================
 // Low-Level CABAC Bitstream & Arithmetic Routines

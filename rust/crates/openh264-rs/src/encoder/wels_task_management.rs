@@ -17,6 +17,7 @@ use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
+pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
@@ -84,12 +85,6 @@ pub struct SSpatialLayerConfig {
 
 
 /// Spatial DQ layer context (`SDqLayer`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDqLayer {
-    pub bNeedAdjustingSlicing: bool,
-    pub iDLayerQp: i32,
-}
 
 /// Logger context (`SLogContext`).
 
