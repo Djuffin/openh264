@@ -16,6 +16,7 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 
 use crate::api::codec_api::EUsageType::{CAMERA_VIDEO_REAL_TIME, SCREEN_CONTENT_REAL_TIME};
+use crate::api::codec_api::SliceModeEnum;
 use crate::api::codec_api::SliceModeEnum::{SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE};
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
@@ -28,7 +29,8 @@ use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
     SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
 };
-use crate::encoder::paraset_strategy::IWelsParametersetStrategy;
+use crate::encoder::paraset_strategy::{IWelsParametersetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
+use crate::api::codec_api::EParameterSetStrategy;
 use crate::encoder::picture::SPicture;
 use crate::encoder::slice_multi_threading::{
     MAX_DEPENDENCY_LAYER, MAX_SLICES_NUM, MAX_THREADS_NUM,
@@ -48,10 +50,28 @@ use crate::encoder::svc_motion_estimate::{
     EXPANDED_MV_RANGE,
 };
 use crate::encoder::wels_encoder_ext::{
-    ENC_RETURN_MEMALLOCERR, ENC_RETURN_SUCCESS, ENC_RETURN_UNSUPPORTED_PARA, LEVEL_NUMBER,
+    ENC_RETURN_CORRECTED, ENC_RETURN_MEMALLOCERR, ENC_RETURN_SUCCESS, ENC_RETURN_UNEXPECTED,
+    ENC_RETURN_UNSUPPORTED_PARA, LEVEL_NUMBER,
     MAX_MACROBLOCK_SIZE_IN_BYTE, MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
     MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT,
 };
+
+// --- used by the encoding half (WelsEncoderEncodeExt and its helpers) ---
+use crate::api::codec_api::{EVideoFrameType, SFrameBSInfo, SLayerBSInfo, SSourcePicture};
+use crate::encoder::wels_encoder_ext::{NON_VIDEO_CODING_LAYER, VIDEO_CODING_LAYER};
+use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType, EWelsSliceType};
+use crate::encoder::param_svc::{SSpatialLayerInternal, INVALID_TEMPORAL_ID};
+use crate::encoder::encoder_context::MAX_PPS_COUNT;
+use crate::common::wels_common_defs::SNalUnitHeaderExt;
+use crate::encoder::wels_encoder_ext::ENC_RETURN_MEMOVERFLOWFOUND;
+use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+use crate::encoder::svc_motion_estimate::{
+    PSearchMethodFunc, BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4,
+    BLOCK_4x8, ME_DIA, ME_CROSS, ME_FULL,
+};
+use crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
+use crate::encoder::wels_preprocess::EStaticBlockIdc;
+use crate::encoder::ref_list_mgr_svc::{IWelsReferenceStrategy, MAX_TEMPORAL_LAYER_NUM};
 
 /// `SPS_BUFFER_SIZE` — `wels_const.h:82`.
 pub const SPS_BUFFER_SIZE: i32 = 32;
@@ -1935,7 +1955,11 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));
             (*pCtx).pMvdCostTable = null_mut();
         }
+        // rate control module memory free. encoder_ext.cpp:1982 calls WelsRcFreeMemory
+        // *before* releasing pWelsSvcRc itself: the per-layer pTemporalOverRc blocks hang
+        // off the array being freed here, so dropping the array first leaks them.
         if !(*pCtx).pWelsSvcRc.is_null() {
+            crate::encoder::rc::WelsRcFreeMemory(pCtx);
             (*pMa).WelsFree((*pCtx).pWelsSvcRc as *mut c_void, tag!("pWelsSvcRc"));
             (*pCtx).pWelsSvcRc = null_mut();
         }
@@ -2027,4 +2051,1307 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
 
     drop(Box::from_raw(pCtx));
     *ppCtx = null_mut();
+}
+
+// ============================================================================
+// The encoding half of encoder_ext.cpp: WelsEncoderEncodeExt and its helpers.
+//
+// Translated statement for statement from `codec/encoder/core/src/encoder_ext.cpp`.
+// Line references in the doc comments are to that file.
+// ============================================================================
+
+/// `encoder_ext.cpp:2393`.
+pub unsafe fn GetTemporalLevel(
+    fDlp: *mut SSpatialLayerInternal,
+    kiFrameNum: i32,
+    kiGopSize: i32,
+) -> i32 {
+    let kiCodingIdx = kiFrameNum & (kiGopSize - 1);
+    (*fDlp).uiCodingIdx2TemporalId[kiCodingIdx as usize] as i32
+}
+
+/// `encoder_ext.cpp:3114`.
+pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameType) -> i32 {
+    if eFrameType == EVideoFrameType::videoFrameTypeIDR {
+        0
+    } else if eFrameType == EVideoFrameType::videoFrameTypeI {
+        1
+    } else if eFrameType == EVideoFrameType::videoFrameTypeP {
+        if (*pCtx).bCurFrameMarkedAsSceneLtr {
+            2
+        } else {
+            // T0:3 T1:4 T2:5 T3:6
+            3 + (*pCtx).uiTemporalId as i32
+        }
+    } else {
+        3 + MAX_TEMPORAL_LAYER_NUM as i32
+    }
+}
+
+/// `encoder_ext.cpp:2797`. Swap the current DQ layer with the next one and make the
+/// outgoing layer the reference.
+pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
+    let pTmpLayer = *(*pCtx).ppDqLayerList.add(kiNextDqIdx as usize);
+    let pRefLayer = (*pCtx).pCurDqLayer;
+    (*pCtx).pCurDqLayer = pTmpLayer;
+    (*(*pCtx).pCurDqLayer).pRefLayer = pRefLayer;
+}
+
+/// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
+pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
+    let kiSliceCount = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
+    // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
+    let mut uiRefIdx: u8 = 0xff;
+
+    debug_assert!(kiSliceCount > 0);
+    if keFrameType != EVideoFrameType::videoFrameTypeIDR {
+        debug_assert!((*pCtx).iNumRef0 > 0);
+        // always get item 0 due to reordering done
+        (*pCtx).pRefPic = (*pCtx).pRefList0[0];
+        (*(*pCtx).pCurDqLayer).pRefPic = (*pCtx).pRefPic;
+        uiRefIdx = 0; // reordered reference index
+    } else {
+        // safe for IDR coding
+        (*pCtx).pRefPic = null_mut();
+        (*(*pCtx).pCurDqLayer).pRefPic = null_mut();
+    }
+
+    let mut iIdx = 0;
+    while iIdx < kiSliceCount {
+        let pSlice = *(*(*pCtx).pCurDqLayer).ppSliceInLayer.add(iIdx as usize);
+        if !pSlice.is_null() {
+            (*pSlice).sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
+        }
+        iIdx += 1;
+    }
+}
+
+/// `encoder_ext.cpp:3376`.
+pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
+    (*pFbi).sLayerInfo[0].pBsBuf = (*pCtx).pFrameBs;
+    (*pFbi).sLayerInfo[0].pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+
+    for i in 0..(*pFbi).iLayerNum as usize {
+        (*pFbi).sLayerInfo[i].iNalCount = 0;
+        (*pFbi).sLayerInfo[i].eFrameType = EVideoFrameType::videoFrameTypeSkip;
+    }
+    (*pFbi).iLayerNum = 0;
+    (*pFbi).iFrameSizeInBytes = 0;
+}
+
+/// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
+/// controller decides to drop it.
+pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVideoFrameType) {
+    let pParamInternal = (*(*pEncCtx).pSvcParam)
+        .sDependencyLayers
+        .as_mut_ptr()
+        .add((*pEncCtx).uiDependencyId as usize);
+
+    // for bitstream writing
+    (*pEncCtx).iPosBsBuffer = 0; // reset bs buffer position
+    (*(*pEncCtx).pOut).iNalIndex = 0; // reset NAL index
+    (*(*pEncCtx).pOut).iLayerBsIndex = 0; // reset index of Layer Bs
+
+    crate::encoder::vlc_encoder::InitBits(
+        &mut (*(*pEncCtx).pOut).sBsWrite,
+        (*(*pEncCtx).pOut).pBsBuffer,
+        (*(*pEncCtx).pOut).uiSize as i32,
+    );
+
+    if keFrameType == EVideoFrameType::videoFrameTypeP
+        || keFrameType == EVideoFrameType::videoFrameTypeI
+    {
+        (*pParamInternal).iFrameIndex -= 1;
+        if (*pParamInternal).iPOC != 0 {
+            (*pParamInternal).iPOC -= 2;
+        } else {
+            (*pParamInternal).iPOC = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
+        }
+
+        crate::encoder::encoder_context::LoadBackFrameNum(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+
+        (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
+        (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
+        // eNalPriority is not stacked back: it is updated at the start of coding a frame.
+    } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
+        (*pParamInternal).uiIdrPicId -= 1;
+        // set the next frame to be IDR
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(pEncCtx, (*pEncCtx).uiDependencyId as i32);
+    } else {
+        // B pictures are not supported now
+        debug_assert!(false, "StackBackEncoderStatus: unsupported frame type");
+    }
+
+    // No need to stack back RC info -- it is still useful for later RQ model
+    // calculation -- nor MB slicing info for dynamic balancing.
+}
+
+/// `encoder_ext.cpp:2534`. Bind the current DQ layer to this frame's parameter sets,
+/// NAL header and picture buffers.
+pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i32) {
+    let pParam = (*pCtx).pSvcParam;
+    let pEncPic = (*pCtx).pEncPic;
+    let pDecPic = (*pCtx).pDecPic;
+    let pCurDq = (*pCtx).pCurDqLayer;
+    if pCurDq.is_null() {
+        return;
+    }
+    let pBaseSlice = *(*pCurDq).ppSliceInLayer;
+    if pBaseSlice.is_null() {
+        return;
+    }
+    let kiCurDid = (*pCtx).uiDependencyId;
+    let kbUseSubsetSpsFlag = !(*pParam).bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
+    let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
+    let pDqIdc = (*pCtx).pDqIdcMap.add(kiCurDid as usize);
+    let iSliceCount = (*pCurDq).iMaxSliceNum;
+    let pParamInternal = (*pParam).sDependencyLayers.as_mut_ptr().add(kiCurDid as usize);
+
+    (*pCurDq).pDecPic = pDecPic;
+
+    debug_assert!(iSliceCount > 0);
+
+    let mut iCurPpsId = (*pDqIdc).iPpsId as i32;
+    let iCurSpsId = (*pDqIdc).iSpsId as i32;
+
+    let pStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
+    iCurPpsId = ((*(*pStrategy).pVtbl).GetCurrentPpsId)(
+        pStrategy,
+        iCurPpsId,
+        ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
+    );
+
+    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iPpsId = iCurPpsId;
+    (*pCurDq).sLayerInfo.pPpsP = (*pCtx).pPPSArray.add(iCurPpsId as usize);
+    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pPps = (*pCurDq).sLayerInfo.pPpsP;
+
+    (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
+    if kbUseSubsetSpsFlag {
+        (*pCurDq).sLayerInfo.pSubsetSpsP = (*pCtx).pSubsetArray.add(iCurSpsId as usize);
+        (*pCurDq).sLayerInfo.pSpsP = &mut (*(*pCurDq).sLayerInfo.pSubsetSpsP).pSps;
+        (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pSps = (*pCurDq).sLayerInfo.pSpsP;
+    } else {
+        (*pCurDq).sLayerInfo.pSubsetSpsP = null_mut();
+        (*pCurDq).sLayerInfo.pSpsP = (*pCtx).pSpsArray.add(iCurSpsId as usize);
+        (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pSps = (*pCurDq).sLayerInfo.pSpsP;
+    }
+
+    (*pBaseSlice).bSliceHeaderExtFlag =
+        (*pCtx).eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
+
+    let mut iIdx = 1;
+    while iIdx < iSliceCount {
+        let pSlice = *(*pCurDq).ppSliceInLayer.add(iIdx as usize);
+        if !pSlice.is_null() {
+            crate::encoder::svc_encode_slice::InitSliceHeadWithBase(pSlice, pBaseSlice);
+        }
+        iIdx += 1;
+    }
+
+    std::ptr::write_bytes(pNalHdExt as *mut _ as *mut u8, 0, std::mem::size_of::<SNalUnitHeaderExt>());
+    let pNalHd = &mut pNalHdExt.sNalUnitHeader;
+    pNalHd.uiNalRefIdc = (*pCtx).eNalPriority as u8;
+    pNalHd.eNalUnitType = (*pCtx).eNalType;
+
+    pNalHdExt.uiDependencyId = kiCurDid;
+    pNalHdExt.bDiscardableFlag = if (*pCtx).bNeedPrefixNalFlag {
+        pNalHd.uiNalRefIdc == EWelsNalRefIdc::NRI_PRI_LOWEST as u8
+    } else {
+        false
+    };
+    pNalHdExt.bIdrFlag = ((*pParamInternal).iFrameNum == 0)
+        && ((*pCtx).eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+            || (*pCtx).eSliceType == EWelsSliceType::I_SLICE);
+    pNalHdExt.uiTemporalId = (*pCtx).uiTemporalId;
+
+    // pEncPic data
+    (*pCurDq).pEncData[0] = (*pEncPic).pData[0];
+    (*pCurDq).pEncData[1] = (*pEncPic).pData[1];
+    (*pCurDq).pEncData[2] = (*pEncPic).pData[2];
+    (*pCurDq).iEncStride[0] = (*pEncPic).iLineSize[0];
+    (*pCurDq).iEncStride[1] = (*pEncPic).iLineSize[1];
+    (*pCurDq).iEncStride[2] = (*pEncPic).iLineSize[2];
+    // cs data
+    (*pCurDq).pCsData[0] = (*pDecPic).pData[0];
+    (*pCurDq).pCsData[1] = (*pDecPic).pData[1];
+    (*pCurDq).pCsData[2] = (*pDecPic).pData[2];
+    (*pCurDq).iCsStride[0] = (*pDecPic).iLineSize[0];
+    (*pCurDq).iCsStride[1] = (*pDecPic).iLineSize[1];
+    (*pCurDq).iCsStride[2] = (*pDecPic).iLineSize[2];
+
+    (*pCurDq).bBaseLayerAvailableFlag = !(*pCurDq).pRefLayer.is_null();
+
+    // pTaskManage->InitFrame is the multi-threaded path; this port is single-threaded
+    // (GetMultipleThreadIdc clamps iMultipleThreadIdc to 1), so pTaskManage is null.
+}
+
+/// `encoder_ext.cpp:2954`. Emit the SVC prefix NAL that precedes each VCL NAL when
+/// `bNeedPrefixNalFlag` is set.
+pub unsafe fn AddPrefixNal(
+    pCtx: *mut sWelsEncCtx,
+    _pLayerBsInfo: *mut SLayerBSInfo,
+    pNalLen: *mut i32,
+    pNalIdxInLayer: *mut i32,
+    keNalType: EWelsNalUnitType,
+    keNalRefIdc: EWelsNalRefIdc,
+    iPayloadSize: *mut i32,
+) -> i32 {
+    let mut iReturn;
+    *iPayloadSize = 0;
+
+    let pOut = (*pCtx).pOut;
+
+    if keNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
+        crate::encoder::nal_encap::WelsLoadNal(
+            pOut,
+            EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+            keNalRefIdc as i32,
+        );
+
+        crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
+            &mut (*pOut).sBsWrite,
+            keNalRefIdc as i32,
+            keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
+        );
+
+        crate::encoder::nal_encap::WelsUnloadNal(pOut);
+    } else {
+        // No prefix NAL unit RBSP syntax here, but the NAL unit header extension is
+        // still needed.
+        crate::encoder::nal_encap::WelsLoadNal(
+            pOut,
+            EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+            keNalRefIdc as i32,
+        );
+        crate::encoder::nal_encap::WelsUnloadNal(pOut);
+    }
+
+    iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+        (*pOut).sNalList.add((*pOut).iNalIndex as usize - 1),
+        &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+        pNalLen.add(*pNalIdxInLayer as usize),
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
+    }
+    *iPayloadSize = *pNalLen.add(*pNalIdxInLayer as usize);
+
+    (*pCtx).iPosBsBuffer += *iPayloadSize;
+    *pNalIdxInLayer += 1;
+
+    iReturn = ENC_RETURN_SUCCESS;
+    iReturn
+}
+
+/// `encoder_ext.cpp:3003`. Emit a filler-data NAL of `iLen` bytes.
+pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -> i32 {
+    let mut iNalLen = 0i32;
+
+    *iSize = 0;
+    let pOut = (*pCtx).pOut;
+    let iNal = (*pOut).iNalIndex;
+    // SBitStringAux instance for non-VCL NALs
+    let pBs = &mut (*pOut).sBsWrite;
+
+    if ((*pBs).pEndBuf as isize - (*pBs).pCurBuf as isize) < iLen as isize
+        || iNal >= (*pOut).iCountNals
+    {
+        return ENC_RETURN_MEMOVERFLOWFOUND;
+    }
+
+    crate::encoder::nal_encap::WelsLoadNal(
+        pOut,
+        EWelsNalUnitType::NAL_UNIT_FILLER_DATA as i32,
+        EWelsNalRefIdc::NRI_PRI_LOWEST as i32,
+    );
+
+    for _ in 0..iLen {
+        crate::encoder::vlc_encoder::BsWriteBits(pBs, 8, 0xff);
+    }
+
+    crate::encoder::vlc_encoder::BsRbspTrailingBits(pBs);
+
+    crate::encoder::nal_encap::WelsUnloadNal(pOut);
+
+    let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+        (*pOut).sNalList.add(iNal as usize),
+        null_mut(),
+        (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+        &mut iNalLen,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
+    }
+
+    (*pCtx).iPosBsBuffer += iNalLen;
+    *iSize += iNalLen;
+
+    ENC_RETURN_SUCCESS
+}
+
+/// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
+///
+/// **Incomplete**: C++ also assigns `pfIntraFineMd = WelsMdIntraFinePartitionVaa`.
+/// That function lives in `svc_base_layer_md.cpp`, of which 22 of 32 functions -- the
+/// whole mode-decision layer -- are unported. See the status doc, "The mode-decision
+/// layer is missing". The `pfIntraFineMd` slot is therefore left as it was rather than
+/// being pointed at a substitute, which would be worse than leaving it unset.
+unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
+    // pFuncList->pfIntraFineMd = WelsMdIntraFinePartitionVaa;   // UNPORTED
+    let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+    sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr();
+    sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Sad;
+    sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Sad;
+}
+
+/// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
+///
+/// **Incomplete** for the same reason as [`SetFastCodingFunc`]: C++ also assigns
+/// `pfIntraFineMd = WelsMdIntraFinePartition`, which is unported.
+unsafe fn SetNormalCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
+    // pFuncList->pfIntraFineMd = WelsMdIntraFinePartition;      // UNPORTED
+    let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+    sdf.pfMdCost = sdf.pfSampleSatd.as_mut_ptr();
+    sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Satd;
+    sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Satd;
+    sdf.pfIntra4x4Combined3 = sdf.pfIntra4x4Combined3Satd;
+}
+
+/// `encoder_ext.cpp:2643`. Returns false when the requested method has no dedicated
+/// search and the caller falls back to the diamond search.
+pub unsafe fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: *mut Option<PSearchMethodFunc>) -> bool {
+    match uiMethod {
+        ME_DIA => {
+            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
+            true
+        }
+        ME_CROSS => {
+            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsMotionCrossSearch);
+            true
+        }
+        ME_DIA_CROSS => {
+            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondCrossSearch);
+            true
+        }
+        ME_DIA_CROSS_FME => {
+            *pSearchMethodFunc =
+                Some(crate::encoder::svc_motion_estimate::WelsDiamondCrossFeatureSearch);
+            true
+        }
+        ME_FULL => {
+            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
+            false
+        }
+        _ => {
+            *pSearchMethodFunc = Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
+            false
+        }
+    }
+}
+
+/// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
+/// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
+///
+/// **Incomplete**: the `pfIntraFineMd`, `pfInterFineMd` and `pfFirstIntraMode` slots
+/// are left unset because their targets (`WelsMdIntraFinePartition[Vaa]`,
+/// `WelsMdInterFinePartition[Vaa]`, `WelsMdFirstIntraMode`) are part of the unported
+/// mode-decision layer. Every other assignment here is a faithful translation.
+pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
+    let pCurLayer = (*pCtx).pCurDqLayer;
+    let bFastMode = (*(*pCtx).pSvcParam).iComplexityMode == LOW_COMPLEXITY;
+    let pFuncList = (*pCtx).pFuncList;
+
+    // function pointers conditional assignment under sWelsEncCtx
+    if ((*(*pCtx).pSvcParam).iUsageType == CAMERA_VIDEO_REAL_TIME && bFastMode)
+        || ((*(*pCtx).pSvcParam).iUsageType == SCREEN_CONTENT_REAL_TIME
+            && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+            && bFastMode)
+    {
+        SetFastCodingFunc(pFuncList);
+    } else {
+        SetNormalCodingFunc(pFuncList);
+    }
+
+    if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
+        for i in 0..EStaticBlockIdc::BLOCK_STATIC_IDC_ALL as usize {
+            (*pFuncList).pfMotionSearch[i] =
+                Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
+        }
+        for b in [
+            BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8,
+        ] {
+            (*pFuncList).pfSearchMethod[b] =
+                Some(crate::encoder::svc_motion_estimate::WelsDiamondSearch);
+        }
+        // pFuncList->pfFirstIntraMode = WelsMdFirstIntraMode;   // UNPORTED
+        let sdf = &mut (*pFuncList).sSampleDealingFuncs;
+        sdf.pfMeCost = sdf.pfSampleSatd.as_mut_ptr();
+        (*pFuncList).pfSetScrollingMv =
+            Some(crate::encoder::svc_mode_decision::SetScrollingMvToMdNull);
+
+        if bFastMode {
+            (*pFuncList).pfCalculateSatd =
+                Some(crate::encoder::svc_motion_estimate::NotCalculateSatdCost);
+            // pFuncList->pfInterFineMd = WelsMdInterFinePartitionVaa;   // UNPORTED
+        } else {
+            (*pFuncList).pfCalculateSatd =
+                Some(crate::encoder::svc_motion_estimate::CalculateSatdCost);
+            // pFuncList->pfInterFineMd = WelsMdInterFinePartition;      // UNPORTED
+        }
+    } else {
+        (*pFuncList).sSampleDealingFuncs.pfMeCost = null_mut();
+    }
+
+    // The SCREEN_CONTENT_REAL_TIME block of the C++ (encoder_ext.cpp:2708-2771) sets up
+    // feature-based motion search. It is outside the Phase-5 gate configuration
+    // (CAMERA_VIDEO_REAL_TIME) and depends on the unported mode-decision layer for
+    // pfInterFineMd, so it is not translated here.
+
+    // update some layer-dependent variables to save judgements at MB level
+    let sdf = &(*pFuncList).sSampleDealingFuncs;
+    (*pCurLayer).bSatdInMdFlag = std::ptr::eq(sdf.pfMeCost, sdf.pfSampleSatd.as_ptr())
+        && std::ptr::eq(sdf.pfMdCost, sdf.pfSampleSatd.as_ptr());
+
+    let kiCurDid = (*pCtx).uiDependencyId as usize;
+    let kiCurTid = (*pCtx).uiTemporalId as i32;
+    let pDep = &(*(*pCtx).pSvcParam).sDependencyLayers[kiCurDid];
+    if (*pCurLayer).bDeblockingParallelFlag
+        && (*pCurLayer).iLoopFilterDisableIdc != 1
+        // ENABLE_FRAME_DUMP is not defined, so this clause is compiled in.
+        && (*pCtx).eNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
+        && (pDep.iHighestTemporalId == 0 || kiCurTid < pDep.iHighestTemporalId as i32)
+    {
+        (*pFuncList).pfDeblocking.pfDeblockingFilterSlice =
+            Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbase);
+    } else {
+        (*pFuncList).pfDeblocking.pfDeblockingFilterSlice =
+            Some(crate::encoder::deblocking::DeblockingFilterSliceAvcbaseNull);
+    }
+}
+
+/// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
+pub unsafe fn WriteSsvcParaset(
+    pCtx: *mut sWelsEncCtx,
+    kiSpatialNum: i32,
+    ppLayerBsInfo: *mut *mut SLayerBSInfo,
+    iLayerNum: *mut i32,
+    iFrameSize: *mut i32,
+) -> i32 {
+    let mut iNonVclSize = 0i32;
+    let mut iCountNal = 0i32;
+    let pLayerBsInfo = *ppLayerBsInfo;
+
+    let iReturn = crate::encoder::wels_encoder_ext::WelsWriteParameterSets(
+        pCtx,
+        (*pLayerBsInfo).pNalLengthInByte,
+        &mut iCountNal,
+        &mut iNonVclSize,
+    );
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
+    }
+
+    for iSpatialId in 0..kiSpatialNum as usize {
+        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iSpatialId];
+        if pParamInternal.uiIdrPicId < 65535 {
+            pParamInternal.uiIdrPicId += 1;
+        } else {
+            pParamInternal.uiIdrPicId = 0;
+        }
+    }
+
+    (*pLayerBsInfo).uiSpatialId = 0;
+    (*pLayerBsInfo).uiTemporalId = 0;
+    (*pLayerBsInfo).uiQualityId = 0;
+    (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+    (*pLayerBsInfo).iNalCount = iCountNal;
+    (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+
+    // point to next pLayerBsInfo
+    let pNext = pLayerBsInfo.add(1);
+    *ppLayerBsInfo = pNext;
+    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
+
+    // update for external countings
+    *iLayerNum += 1;
+    *iFrameSize += iNonVclSize;
+    iReturn
+}
+
+/// `encoder_ext.cpp:3163`. Write the parameter sets for simulcast AVC.
+pub unsafe fn WriteSavcParaset(
+    pCtx: *mut sWelsEncCtx,
+    iIdx: i32,
+    ppLayerBsInfo: *mut *mut SLayerBSInfo,
+    iLayerNum: *mut i32,
+    iFrameSize: *mut i32,
+) -> i32 {
+    let mut iNonVclSize = 0i32;
+    let mut iNalSize = 0i32;
+    let mut iCountNal;
+    let mut pLayerBsInfo = *ppLayerBsInfo;
+
+    // --- SPS ---
+    let pStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
+    if !pStrategy.is_null() {
+        ((*(*pStrategy).pVtbl).Update)(
+            pStrategy,
+            (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
+            PARA_SET_TYPE_AVCSPS as i32,
+        );
+    }
+
+    let mut iReturn =
+        crate::encoder::wels_encoder_ext::WelsWriteOneSPS(pCtx, iIdx, &mut iNalSize);
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
+    }
+
+    *(*pLayerBsInfo).pNalLengthInByte = iNalSize;
+    iNonVclSize += iNalSize;
+    iCountNal = 1;
+
+    (*pLayerBsInfo).uiSpatialId = iIdx as u8;
+    (*pLayerBsInfo).uiTemporalId = 0;
+    (*pLayerBsInfo).uiQualityId = 0;
+    (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+    (*pLayerBsInfo).iNalCount = iCountNal;
+    (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+
+    let mut pNext = pLayerBsInfo.add(1);
+    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
+    *iLayerNum += 1;
+    pLayerBsInfo = pNext;
+
+    // --- PPS ---
+    iNalSize = 0;
+    if !pStrategy.is_null() {
+        ((*(*pStrategy).pVtbl).Update)(
+            pStrategy,
+            (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
+            PARA_SET_TYPE_PPS as i32,
+        );
+    }
+    iReturn = crate::encoder::wels_encoder_ext::WelsWriteOnePPS(pCtx, iIdx, &mut iNalSize);
+    if iReturn != ENC_RETURN_SUCCESS {
+        return iReturn;
+    }
+    *(*pLayerBsInfo).pNalLengthInByte = iNalSize;
+    iNonVclSize += iNalSize;
+    iCountNal = 1;
+
+    (*pLayerBsInfo).uiSpatialId = iIdx as u8;
+    (*pLayerBsInfo).uiTemporalId = 0;
+    (*pLayerBsInfo).uiQualityId = 0;
+    (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+    (*pLayerBsInfo).iNalCount = iCountNal;
+    (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeIDR;
+    (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+
+    pNext = pLayerBsInfo.add(1);
+    (*(*pCtx).pOut).iLayerBsIndex += 1;
+    (*pNext).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+    (*pNext).pNalLengthInByte = (*pLayerBsInfo).pNalLengthInByte.add(iCountNal as usize);
+    *iLayerNum += 1;
+
+    *ppLayerBsInfo = pNext;
+    *iFrameSize += iNonVclSize;
+    ENC_RETURN_SUCCESS
+}
+
+/// `encoder_ext.cpp:3387`. Decide this frame's type, and for an IDR write the
+/// parameter sets ahead of the slice data.
+pub unsafe fn PrepareEncodeFrame(
+    pCtx: *mut sWelsEncCtx,
+    ppLayerBsInfo: *mut *mut SLayerBSInfo,
+    iSpatialNum: i32,
+    iCurDid: *mut i8,
+    iCurTid: *mut i32,
+    iLayerNum: *mut i32,
+    iFrameSize: *mut i32,
+    uiTimeStamp: i64,
+) -> EVideoFrameType {
+    let pSvcParam = (*pCtx).pSvcParam;
+    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
+
+    let bSkipFrameFlag = crate::encoder::rc::WelsRcCheckFrameStatus(
+        pCtx,
+        uiTimeStamp,
+        iSpatialNum,
+        *iCurDid as i32,
+    );
+    let eFrameType = crate::encoder::encoder_context::DecideFrameType(
+        pCtx,
+        iSpatialNum as i8,
+        *iCurDid as i32,
+        bSkipFrameFlag,
+    );
+
+    if eFrameType == EVideoFrameType::videoFrameTypeSkip {
+        if (*pSvcParam).bSimulcastAVC {
+            if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
+                f(pCtx, *iCurDid as i32);
+            }
+        } else if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
+            for i in 0..iSpatialNum as usize {
+                f(pCtx, (*pSpatialIndexMap.add(i)).iDid);
+            }
+        }
+    } else {
+        let pParamInternal = (*pSvcParam)
+            .sDependencyLayers
+            .as_mut_ptr()
+            .add(*iCurDid as usize);
+
+        *iCurTid = GetTemporalLevel(
+            pParamInternal,
+            (*pParamInternal).iCodingIndex,
+            (*pSvcParam).uiGopSize as i32,
+        );
+        (*pCtx).uiTemporalId = *iCurTid as u8;
+
+        if eFrameType == EVideoFrameType::videoFrameTypeIDR {
+            // write parameter sets bitstream or SEI/SSEI (if any) here
+            if ((*(*pCtx).pSvcParam).eSpsPpsIdStrategy as i32
+                & EParameterSetStrategy::SPS_LISTING as i32)
+                == 0
+            {
+                if (*pSvcParam).bSimulcastAVC {
+                    (*pCtx).iEncoderError = WriteSavcParaset(
+                        pCtx,
+                        *iCurDid as i32,
+                        ppLayerBsInfo,
+                        iLayerNum,
+                        iFrameSize,
+                    );
+                    (*pParamInternal).uiIdrPicId += 1;
+                } else {
+                    (*pCtx).iEncoderError =
+                        WriteSsvcParaset(pCtx, iSpatialNum, ppLayerBsInfo, iLayerNum, iFrameSize);
+                }
+            } else {
+                // WriteSavcParaset_Listing covers the three SPS_LISTING strategies, which
+                // CreateParametersetStrategy deliberately does not construct (it returns
+                // null rather than falling through to CONSTANT_ID). Reaching here means a
+                // listing strategy was configured, which this port does not support.
+                (*pCtx).iEncoderError = ENC_RETURN_UNSUPPORTED_PARA;
+            }
+        }
+    }
+    eFrameType
+}
+
+/// `encoder_ext.cpp:2415`. TUNE back if a picture-partition decision algorithm based
+/// on past behaviour becomes available.
+pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
+    let mut iPartitionNum = 1;
+    if (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1 {
+        iPartitionNum = (*(*pCtx).pSvcParam).iMultipleThreadIdc as i32;
+    }
+    iPartitionNum
+}
+
+/// `encoder_ext.cpp:3448` — the core SVC encoding process.
+///
+/// Replaces the `WelsEncoderEncodeExtRust` sketch, which hardcoded an IDR, wrote one
+/// slice, and skipped the frame-type/GOP decision, rate control, reference lists,
+/// preprocessing and padding entirely.
+///
+/// # Unported branches
+///
+/// Each of these returns an explicit error rather than falling through:
+/// * `iMultipleThreadIdc > 1` — every multi-threaded slice path needs `pTaskManage`,
+///   `InitAllSlicesInThread` and `SliceLayerInfoUpdate`, none of which are ported.
+/// * `SM_SIZELIMITED_SLICE` — needs `WelsCodeOnePicPartition` and
+///   `WelsInitCurrentDlayerMltslc`.
+///
+/// # Safety
+/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+pub unsafe fn WelsEncoderEncodeExt(
+    pCtx: *mut sWelsEncCtx,
+    pFbi: *mut SFrameBSInfo,
+    pSrcPic: *const SSourcePicture,
+) -> i32 {
+    if pCtx.is_null() {
+        return ENC_RETURN_MEMALLOCERR;
+    }
+    let mut pLayerBsInfo: *mut SLayerBSInfo = (*pFbi).sLayerInfo.as_mut_ptr();
+    let pSvcParam = (*pCtx).pSvcParam;
+    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
+    let mut fsnr: *mut SPicture;
+    let mut pEncPic: *mut SPicture;
+    let mut iLayerNum = 0i32;
+    let mut iLayerSize;
+    let mut iSpatialNum = 0i32;
+    let mut iSpatialIdx = 0i32;
+    let mut iFrameSize = 0i32;
+    let mut iNalIdxInLayer;
+    let mut iCountNal;
+    let mut eFrameType = EVideoFrameType::videoFrameTypeInvalid;
+    let mut iCurWidth;
+    let mut iCurHeight;
+    let mut eNalType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
+    let mut eNalRefIdc;
+    let mut iCurDid: i8 = 0;
+    let mut iCurTid: i32 = 0;
+
+    (*pCtx).iEncoderError = ENC_RETURN_SUCCESS;
+    (*pCtx).bCurFrameMarkedAsSceneLtr = false;
+    (*pFbi).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+    (*pFbi).iLayerNum = 0; // for initialization
+    (*pFbi).uiTimeStamp = crate::encoder::rc::GetTimestampForRc(
+        (*pSrcPic).uiTimeStamp,
+        (*pCtx).uiLastTimestamp,
+        (*pSvcParam).sSpatialLayers[(*pSvcParam).iSpatialLayerNum as usize - 1].fFrameRate,
+    );
+    for iNalIdx in 0..MAX_LAYER_NUM_OF_FRAME as usize {
+        (*pFbi).sLayerInfo[iNalIdx].eFrameType = EVideoFrameType::videoFrameTypeSkip;
+        (*pFbi).sLayerInfo[iNalIdx].iNalCount = 0;
+    }
+
+    // perform csc/denoise/downsample/padding, generate spatial layers
+    let iRet = (*(*pCtx).pVpp).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
+    if iRet != ENC_RETURN_SUCCESS {
+        return iRet;
+    }
+
+    if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateMaxBrWindowStatus {
+        f(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
+    }
+
+    if iSpatialNum < 1 {
+        for iDidIdx in 0..(*pSvcParam).iSpatialLayerNum as usize {
+            (*pSvcParam).sDependencyLayers[iDidIdx].iCodingIndex += 1;
+        }
+        (*pFbi).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+        (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+        return ENC_RETURN_SUCCESS;
+    }
+
+    crate::encoder::encoder_context::InitBitStream(pCtx);
+    (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs;
+    (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    iCurDid = (*pSpatialIndexMap).iDid as i8;
+    (*pCtx).pCurDqLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
+    (*(*pCtx).pCurDqLayer).pRefLayer = null_mut();
+
+    if !(*pSvcParam).bSimulcastAVC {
+        eFrameType = PrepareEncodeFrame(
+            pCtx,
+            &mut pLayerBsInfo,
+            iSpatialNum,
+            &mut iCurDid,
+            &mut iCurTid,
+            &mut iLayerNum,
+            &mut iFrameSize,
+            (*pFbi).uiTimeStamp,
+        );
+        if eFrameType == EVideoFrameType::videoFrameTypeSkip {
+            (*pFbi).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+            (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+            return ENC_RETURN_SUCCESS;
+        }
+        if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+            return (*pCtx).iEncoderError;
+        }
+    } else {
+        for iDidIdx in 0..(*pSvcParam).iSpatialLayerNum as usize {
+            let pParamInternal = (*pSvcParam).sDependencyLayers.as_mut_ptr().add(iDidIdx);
+            let iTemporalId = GetTemporalLevel(
+                pParamInternal,
+                (*pParamInternal).iCodingIndex,
+                (*pSvcParam).uiGopSize as i32,
+            );
+            if iTemporalId == INVALID_TEMPORAL_ID as i32 {
+                (*pParamInternal).iCodingIndex += 1;
+            }
+        }
+    }
+
+    while iSpatialIdx < iSpatialNum {
+        iCurDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid as i8;
+        let pParam: *mut SSpatialLayerConfig =
+            (*pSvcParam).sSpatialLayers.as_mut_ptr().add(iCurDid as usize);
+        let pParamInternal = (*pSvcParam)
+            .sDependencyLayers
+            .as_mut_ptr()
+            .add(iCurDid as usize);
+        let iDecompositionStages = (*pParamInternal).iDecompositionStages as i32;
+        (*pCtx).pCurDqLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
+        (*pCtx).uiDependencyId = iCurDid as u8;
+
+        if (*pSvcParam).bSimulcastAVC {
+            eFrameType = PrepareEncodeFrame(
+                pCtx,
+                &mut pLayerBsInfo,
+                iSpatialNum,
+                &mut iCurDid,
+                &mut iCurTid,
+                &mut iLayerNum,
+                &mut iFrameSize,
+                (*pFbi).uiTimeStamp,
+            );
+            if eFrameType == EVideoFrameType::videoFrameTypeSkip {
+                (*pLayerBsInfo).eFrameType = EVideoFrameType::videoFrameTypeSkip;
+                iSpatialIdx += 1;
+                continue;
+            }
+        }
+        crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
+        (*(*pCtx).pVpp).AnalyzeSpatialPic(pCtx, iCurDid as i32);
+
+        pEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize)).pSrc;
+        (*pCtx).pEncPic = pEncPic;
+        (*pEncPic).iPictureType = (*pCtx).eSliceType as i32;
+        (*pEncPic).iFramePoc = (*pParamInternal).iPOC;
+
+        iCurWidth = (*pParam).iVideoWidth;
+        iCurHeight = (*pParam).iVideoHeight;
+
+        match (*pParam).sSliceArgument.uiSliceMode {
+            SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
+                if (*pSvcParam).iMultipleThreadIdc > 1
+                    && (*pSvcParam).bUseLoadBalancing
+                    && (*pSvcParam).iMultipleThreadIdc
+                        >= (*pParam).sSliceArgument.uiSliceNum as u16
+                {
+                    // AdjustEnhanceLayer/AdjustBaseLayer are the multi-threaded
+                    // load-balancing path; unreachable while iMultipleThreadIdc == 1.
+                    return ENC_RETURN_UNSUPPORTED_PARA;
+                }
+            }
+            SliceModeEnum::SM_SIZELIMITED_SLICE => {
+                // Needs WelsInitCurrentDlayerMltslc, which is unported.
+                return ENC_RETURN_UNSUPPORTED_PARA;
+            }
+            _ => {}
+        }
+
+        // coding each spatial layer, only one quality layer within spatial support
+        let mut iSliceCount;
+        if iLayerNum >= MAX_LAYER_NUM_OF_FRAME {
+            return ENC_RETURN_UNSUPPORTED_PARA;
+        }
+
+        iNalIdxInLayer = 0;
+        let bAvcBased = (*pSvcParam).bSimulcastAVC || (iCurDid as i32) == BASE_DEPENDENCY_ID;
+        (*pCtx).bNeedPrefixNalFlag = !(*pSvcParam).bSimulcastAVC
+            && bAvcBased
+            && ((*pSvcParam).bPrefixNalAddingCtrl || (*pSvcParam).iSpatialLayerNum > 1);
+
+        if eFrameType == EVideoFrameType::videoFrameTypeP {
+            eNalType = if bAvcBased {
+                EWelsNalUnitType::NAL_UNIT_CODED_SLICE
+            } else {
+                EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT
+            };
+        } else if eFrameType == EVideoFrameType::videoFrameTypeIDR {
+            eNalType = if bAvcBased {
+                EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+            } else {
+                EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT
+            };
+        }
+        if iCurTid == 0 || (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
+            eNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGHEST;
+        } else if iCurTid == iDecompositionStages {
+            eNalRefIdc = EWelsNalRefIdc::NRI_PRI_LOWEST;
+        } else if 1 + iCurTid == iDecompositionStages {
+            eNalRefIdc = EWelsNalRefIdc::NRI_PRI_LOW;
+        } else if 2 + iCurTid == iDecompositionStages {
+            eNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGH;
+        } else {
+            eNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGHEST;
+        }
+        (*pCtx).eNalType = eNalType;
+        (*pCtx).eNalPriority = eNalRefIdc;
+
+        (*pCtx).pDecPic = (**(*pCtx).ppRefPicListExt.add(iCurDid as usize)).pNextBuffer;
+        fsnr = (*pCtx).pDecPic;
+        (*(*pCtx).pDecPic).iPictureType = (*pCtx).eSliceType as i32;
+        (*(*pCtx).pDecPic).iFramePoc = (*pParamInternal).iPOC;
+
+        WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
+
+        let pRefStrategy = (*pCtx).pReferenceStrategy as *mut IWelsReferenceStrategy;
+        IWelsReferenceStrategy::MarkPic(pRefStrategy);
+        if !IWelsReferenceStrategy::BuildRefList(pRefStrategy, (*pParamInternal).iPOC, 0) {
+            eFrameType = EVideoFrameType::videoFrameTypeIDR;
+            (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
+            break;
+        }
+        if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
+            IWelsReferenceStrategy::AfterBuildRefList(pRefStrategy);
+        }
+
+        if (*pSvcParam).iRCMode != RC_OFF_MODE {
+            let pRef = if (*pCtx).eSliceType == EWelsSliceType::P_SLICE && (*pCtx).iNumRef0 > 0 {
+                (*pCtx).pRefList0[0]
+            } else {
+                null_mut()
+            };
+            (*(*pCtx).pVpp).AnalyzePictureComplexity(
+                pCtx,
+                (*pCtx).pEncPic,
+                pRef,
+                iCurDid as i32,
+                (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+                    && (*pSvcParam).bEnableBackgroundDetection,
+            );
+        }
+        // get reordering syntax used for writing the slice header
+        crate::encoder::ref_list_mgr_svc::WelsUpdateRefSyntax(
+            pCtx,
+            (*pParamInternal).iPOC,
+            eFrameType as i32,
+        );
+        // update reference picture for the current DQ layer
+        PrefetchReferencePicture(pCtx, eFrameType);
+        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPictureInit {
+            f(pCtx, (*pFbi).uiTimeStamp);
+        }
+        // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
+        PreprocessSliceCoding(pCtx);
+
+        iLayerSize = 0;
+        if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
+            // only one slice within a quality layer
+            let mut iPayloadSize = 0i32;
+            let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0].pSliceBuffer;
+
+            if (*pCtx).bNeedPrefixNalFlag {
+                (*pCtx).iEncoderError = AddPrefixNal(
+                    pCtx,
+                    pLayerBsInfo,
+                    (*pLayerBsInfo).pNalLengthInByte,
+                    &mut iNalIdxInLayer,
+                    eNalType,
+                    eNalRefIdc,
+                    &mut iPayloadSize,
+                );
+                if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                    return (*pCtx).iEncoderError;
+                }
+                iLayerSize += iPayloadSize;
+            }
+
+            crate::encoder::nal_encap::WelsLoadNal(
+                (*pCtx).pOut,
+                eNalType as i32,
+                eNalRefIdc as i32,
+            );
+            debug_assert_eq!(0, (*pCurSlice).iSliceIdx);
+            (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
+                (*pCtx).pCurDqLayer,
+                pCurSlice,
+                0,
+            );
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
+
+            (*pCtx).iEncoderError =
+                crate::encoder::svc_encode_slice::WelsCodeOneSlice(pCtx, pCurSlice, eNalType as i32);
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
+
+            crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+
+            (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
+                (*(*pCtx).pOut)
+                    .sNalList
+                    .add((*(*pCtx).pOut).iNalIndex as usize - 1),
+                &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+                (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+                (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+                (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+            );
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
+            let iSliceSize = *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize);
+
+            iLayerSize += iSliceSize;
+            (*pCtx).iPosBsBuffer += iSliceSize;
+            iNalIdxInLayer += 1;
+            (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
+            (*pLayerBsInfo).uiSpatialId = iCurDid as u8;
+            (*pLayerBsInfo).uiTemporalId = iCurTid as u8;
+            (*pLayerBsInfo).uiQualityId = 0;
+            (*pLayerBsInfo).iNalCount = iNalIdxInLayer;
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+        } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
+            && (*pSvcParam).iMultipleThreadIdc <= 1
+        {
+            // Needs WelsCodeOnePicPartition, which is unported.
+            return ENC_RETURN_UNSUPPORTED_PARA;
+        } else if (*pSvcParam).iMultipleThreadIdc > 1 {
+            // Every multi-threaded slice path needs pTaskManage / InitAllSlicesInThread
+            // / SliceLayerInfoUpdate, none of which are ported.
+            return ENC_RETURN_UNSUPPORTED_PARA;
+        } else {
+            // non-dynamic-slicing, single-threaded multi-slice
+            let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+            let mut iSliceIdx = 0i32;
+
+            iSliceCount =
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum((*pCtx).pCurDqLayer);
+            while iSliceIdx < iSliceCount {
+                let mut iPayloadSize = 0i32;
+
+                if bNeedPrefix {
+                    (*pCtx).iEncoderError = AddPrefixNal(
+                        pCtx,
+                        pLayerBsInfo,
+                        (*pLayerBsInfo).pNalLengthInByte,
+                        &mut iNalIdxInLayer,
+                        eNalType,
+                        eNalRefIdc,
+                        &mut iPayloadSize,
+                    );
+                    if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                        return (*pCtx).iEncoderError;
+                    }
+                    iLayerSize += iPayloadSize;
+                }
+
+                crate::encoder::nal_encap::WelsLoadNal(
+                    (*pCtx).pOut,
+                    eNalType as i32,
+                    eNalRefIdc as i32,
+                );
+
+                let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0]
+                    .pSliceBuffer
+                    .add(iSliceIdx as usize);
+                debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
+                (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
+                    (*pCtx).pCurDqLayer,
+                    pCurSlice,
+                    iSliceIdx,
+                );
+
+                (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
+                    pCtx,
+                    pCurSlice,
+                    eNalType as i32,
+                );
+                if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                    return (*pCtx).iEncoderError;
+                }
+
+                crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+
+                (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
+                    (*(*pCtx).pOut)
+                        .sNalList
+                        .add((*(*pCtx).pOut).iNalIndex as usize - 1),
+                    &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+                    (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+                    (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+                    (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+                );
+                if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                    return (*pCtx).iEncoderError;
+                }
+                let iSliceSize = *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize);
+
+                (*pCtx).iPosBsBuffer += iSliceSize;
+                iLayerSize += iSliceSize;
+
+                iNalIdxInLayer += 1;
+                iSliceIdx += 1;
+            }
+
+            (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
+            (*pLayerBsInfo).uiSpatialId = iCurDid as u8;
+            (*pLayerBsInfo).uiTemporalId = iCurTid as u8;
+            (*pLayerBsInfo).uiQualityId = 0;
+            (*pLayerBsInfo).iNalCount = iNalIdxInLayer;
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+        }
+
+        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPostFrameSkipping {
+            if f(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp) {
+                StackBackEncoderStatus(pCtx, eFrameType);
+                ClearFrameBsInfo(pCtx, pFbi);
+
+                iFrameSize = 0;
+                iLayerNum = 0;
+
+                if let Some(g) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
+                    g(pCtx, iSpatialNum);
+                }
+
+                crate::encoder::rc::WelsRcPostFrameSkippedUpdate(pCtx, iCurDid as i32);
+                (*pCtx).iEncoderError = ENC_RETURN_SUCCESS;
+                let _ = iLayerNum;
+                return ENC_RETURN_SUCCESS;
+            }
+        }
+
+        // deblocking filter. ENABLE_FRAME_DUMP is not defined, so the temporal-id
+        // clause is compiled in.
+        if !(*(*pCtx).pCurDqLayer).bDeblockingParallelFlag
+            && eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
+            && ((*pParamInternal).iHighestTemporalId == 0
+                || iCurTid < (*pParamInternal).iHighestTemporalId as i32)
+        {
+            crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
+        }
+
+        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPictureInfoUpdate {
+            f(pCtx, iLayerSize);
+        }
+        iFrameSize += iLayerSize;
+        crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
+        (*(*pCtx).pDecPic).iFrameAverageQp =
+            (*(*pCtx).pWelsSvcRc.add(iCurDid as usize)).iAverageFrameQp;
+
+        // update scc related
+        if let Some(f) = (*(*pCtx).pFuncList).pfUpdateFMESwitch {
+            f((*pCtx).pCurDqLayer);
+        }
+
+        // reference picture list update
+        if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
+            && !IWelsReferenceStrategy::UpdateRefList(pRefStrategy)
+        {
+            // set the next frame to be IDR
+            (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
+            break;
+        }
+
+        // MinCr check is a diagnostic log in C++ with no state change; omitted.
+
+        let _ = fsnr;
+        let _ = pEncPic;
+        (*pLayerBsInfo).rPsnr[0] = 0.0;
+        (*pLayerBsInfo).rPsnr[1] = 0.0;
+        (*pLayerBsInfo).rPsnr[2] = 0.0;
+        // WelsCalcPsnr is only reachable when the caller asks for PSNR; it is unported,
+        // so bPsnrY/U/V are treated as if unset (the harness does not request PSNR).
+
+        iCountNal = (*pLayerBsInfo).iNalCount;
+        iLayerNum += 1;
+        let pPrev = pLayerBsInfo;
+        pLayerBsInfo = pLayerBsInfo.add(1);
+        (*(*pCtx).pOut).iLayerBsIndex += 1;
+        (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+        (*pLayerBsInfo).pNalLengthInByte =
+            (*pPrev).pNalLengthInByte.add(iCountNal as usize);
+
+        if (*pSvcParam).iPaddingFlag != 0
+            && (*(*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize)).iPaddingSize > 0
+        {
+            let mut iPaddingNalSize = 0i32;
+            let iPaddingSize =
+                (*(*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize)).iPaddingSize;
+            (*pCtx).iEncoderError = WritePadding(pCtx, iPaddingSize, &mut iPaddingNalSize);
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
+
+            if iPaddingNalSize <= 0 {
+                return ENC_RETURN_UNEXPECTED;
+            }
+
+            let pRc = (*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize);
+            (*pRc).iPaddingBitrateStat += (*pRc).iPaddingSize;
+            (*pRc).iPaddingSize = 0;
+
+            (*pLayerBsInfo).uiSpatialId = 0;
+            (*pLayerBsInfo).uiTemporalId = 0;
+            (*pLayerBsInfo).uiQualityId = 0;
+            (*pLayerBsInfo).uiLayerType = NON_VIDEO_CODING_LAYER;
+            (*pLayerBsInfo).iNalCount = 1;
+            *(*pLayerBsInfo).pNalLengthInByte = iPaddingNalSize;
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+            let pPrev2 = pLayerBsInfo;
+            pLayerBsInfo = pLayerBsInfo.add(1);
+            (*(*pCtx).pOut).iLayerBsIndex += 1;
+            (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLayerBsInfo).pNalLengthInByte = (*pPrev2).pNalLengthInByte.add(1);
+            iLayerNum += 1;
+
+            iFrameSize += iPaddingNalSize;
+        }
+
+        (*pCtx).eLastNalPriority[iCurDid as usize] = eNalRefIdc;
+        iSpatialIdx += 1;
+
+        if (iCurDid as i32) + 1 < (*pSvcParam).iSpatialLayerNum {
+            // iSpatialIdx has already been incremented, so this points at the next layer
+            WelsSwapDqLayers(pCtx, (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid);
+        }
+
+        if (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iCurDid as i32) != 0 {
+            crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iCurDid as i32);
+            // the above sets the next frame to IDR
+            (*pFbi).eFrameType = eFrameType;
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            return ENC_RETURN_CORRECTED;
+        }
+
+        let pLtr = (*pCtx).pLtr.add((*pCtx).uiDependencyId as usize);
+        if (*pSvcParam).bEnableLongTermReference
+            && (((*pLtr).bLTRMarkingFlag
+                && (*pLtr).iLTRMarkMode == crate::encoder::ref_list_mgr_svc::LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32)
+                || eFrameType == EVideoFrameType::videoFrameTypeIDR)
+        {
+            (*pCtx).bRefOfCurTidIsLtr[iCurDid as usize][iCurTid as usize] = true;
+        }
+        if (*pSvcParam).bSimulcastAVC {
+            (*pParamInternal).iCodingIndex += 1;
+        }
+    } // end of (iSpatialIdx/iSpatialNum)
+
+    if !(*pSvcParam).bSimulcastAVC {
+        for i in 0..(*pSvcParam).iSpatialLayerNum as usize {
+            (*pSvcParam).sDependencyLayers[i].iCodingIndex += 1;
+        }
+    }
+
+    if ENC_RETURN_CORRECTED == (*pCtx).iEncoderError {
+        let iDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid;
+        (*(*pCtx).pVpp).UpdateSpatialPictures(pCtx, pSvcParam, iCurTid as i8, iDid);
+        crate::encoder::wels_encoder_ext::ForceCodingIDR(pCtx, iDid);
+        // the above sets the next frame to IDR
+        (*pFbi).eFrameType = eFrameType;
+        (*pLayerBsInfo).eFrameType = eFrameType;
+        return ENC_RETURN_CORRECTED;
+    }
+
+    // check number of layers / nals / slices dependencies
+    if iLayerNum > MAX_LAYER_NUM_OF_FRAME {
+        return 1;
+    }
+
+    (*pFbi).iLayerNum = iLayerNum;
+
+    crate::encoder::slice_multi_threading::WelsEmms();
+
+    (*pLayerBsInfo).eFrameType = eFrameType;
+    (*pFbi).iFrameSizeInBytes = iFrameSize;
+    (*pFbi).eFrameType = eFrameType;
+    for k in 0..(*pFbi).iLayerNum as usize {
+        if (*pFbi).eFrameType != (*pFbi).sLayerInfo[k].eFrameType {
+            (*pFbi).eFrameType = EVideoFrameType::videoFrameTypeIPMixed;
+        }
+    }
+
+    ENC_RETURN_SUCCESS
 }
