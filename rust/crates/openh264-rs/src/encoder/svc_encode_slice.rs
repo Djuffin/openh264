@@ -1074,16 +1074,21 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
+    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
     let pCurRS = (*pMbCache).pCoeffLevel.add(256);
     let pBestPred = (*pMbCache).pMemPredChroma;
 
-    if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        if let Some(dct) = func_list.pfDctFourT4 {
-            dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-            dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
-        }
-    }
+    let pFunc = (*pEncCtx).pFuncList;
+    let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
+    dct(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
+    dct(pCurRS.add(64), (*pMbCache).SPicData.pEncMb[2], kiEncStride, pBestPred.add(64), 8);
+
+    // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.
+    // Both calls were missing, so a P macroblock's chroma reached the reconstruction
+    // holding raw DCT coefficients and never set its chroma CBP bits — the same
+    // defect Phase 4.5 found in `WelsIMbChromaEncode`.
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
 }
 
 pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: *mut SMB) {
@@ -1394,6 +1399,46 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     ENC_RETURN_SUCCESS
 }
 
+/// Debug hook matching the `OH264_MBDUMP` block the C++ carries at the same point in
+/// `WelsMdInterMbLoop`. Prints the per-macroblock mode-decision state so the two
+/// encoders can be diffed line by line. Off unless `OH264_MBDUMP` is set.
+///
+/// # Safety
+/// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
+unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) {
+    if std::env::var_os("OH264_MBDUMP").is_none() {
+        return;
+    }
+    let mut nzc = String::new();
+    for di in 0..24 {
+        nzc.push_str(&format!("{},", *(*pCurMb).pNonZeroCount.add(di)));
+    }
+    eprintln!(
+        "MB {:3} type={:08x} cbp={:02x} qp={:2} cqp={:2} sub={},{},{},{} \
+         cl={:7} cc={:7} skip={:7} sad={:7} mv={},{} ri={} nzc={} mv0={},{} skiprun={}",
+        (*pCurMb).iMbXY,
+        (*pCurMb).uiMbType,
+        (*pCurMb).uiCbp,
+        (*pCurMb).uiLumaQp,
+        (*pCurMb).uiChromaQp,
+        (*pCurMb).uiSubMbType[0],
+        (*pCurMb).uiSubMbType[1],
+        (*pCurMb).uiSubMbType[2],
+        (*pCurMb).uiSubMbType[3],
+        (*pMd).iCostLuma,
+        (*pMd).iCostChroma,
+        (*pMd).iCostSkipMb,
+        *(*pCurMb).pSadCost.add(0),
+        (*pCurMb).sP16x16Mv.iMvX,
+        (*pCurMb).sP16x16Mv.iMvY,
+        *(*pCurMb).pRefIndex.add(0),
+        nzc,
+        (*(*pCurMb).sMv.add(0)).iMvX,
+        (*(*pCurMb).sMv.add(0)).iMvY,
+        (*pSlice).iMbSkipRun,
+    );
+}
+
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
@@ -1426,22 +1471,47 @@ pub unsafe fn WelsMdInterMbLoop(
     };
 
     let mut sDss = SDynamicSlicingStack::default();
+
+    let kbCabac = (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0;
+    if kbCabac {
+        crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
+        sDss.pRestoreBuffer = std::ptr::null_mut();
+        sDss.iStartPos = 0;
+        sDss.iCurrentPos = 0;
+    }
     (*pSlice).iMbSkipRun = 0;
 
     loop {
-        if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfStashMBStatus {
-                func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+        if !kbCabac {
+            if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
+                if let Some(func) = func_list.pfStashMBStatus {
+                    func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+                }
             }
         }
         iCurMbIdx = iNextMbIdx;
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
+        //step(1): set QP for the current MB
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
                 func(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
             }
         }
+
+        //step (2). save some value for future use, initial pWelsMd
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            pEncCtx,
+            pCurMb,
+            pMbCache,
+            kiSliceFirstMbXY,
+        );
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(
+            pEncCtx,
+            pSlice,
+            pCurMb,
+            kiSliceFirstMbXY,
+        );
 
         loop {
             WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
@@ -1449,6 +1519,17 @@ pub unsafe fn WelsMdInterMbLoop(
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
                 }
+
+                //step (4): save from the MD process for future use
+                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
+                    (*(*pCurLayer).pDecPic).uiRefMbType,
+                    pMbCache,
+                    pCurMb,
+                    pMd,
+                );
+
+                mb_dump(pCurMb, pMd, pSlice);
+
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
@@ -1458,6 +1539,7 @@ pub unsafe fn WelsMdInterMbLoop(
                     );
                 }
             }
+            //step (5): update cache
             UpdateNonZeroCountCache(pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
@@ -1467,7 +1549,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 }
             }
 
-            if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
+            if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
                         (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
@@ -1655,8 +1737,17 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
     let kpShExt = &(*pSlice).sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
+    // C++ leaves `SWelsMD sMd;` uninitialized and only `memset`s `sMd.sMe` when the
+    // base layer is unavailable or this is not the highest spatial layer.
+    // `Default::default()` zeroes the whole struct, which is that memset plus zeroes
+    // for fields every path assigns before reading.
     let mut sMd = SWelsMD::default();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
+    // `svc_encode_slice.cpp:698`. This assignment was missing, so `bMdUsingSad` was
+    // always false and every skip/refinement cost was taken from SATD where the gate
+    // configuration (LOW_COMPLEXITY) costs with SAD.
+    sMd.bMdUsingSad = (*(*pEncCtx).pSvcParam).iComplexityMode
+        == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
     WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd as *mut SWelsMD as *mut c_void, kiSliceFirstMbXY)
 }
@@ -1672,20 +1763,35 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 
 pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
     let kbHighestSpatial = if !(*pEncCtx).pSvcParam.is_null() {
         (*(*pEncCtx).pSvcParam).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
         true
+    };
+    // `svc_encode_slice.cpp:733/736`. C++ picks `pfInterMd` per slice; the port never
+    // assigned it at all, so every P macroblock ran with whatever the slot held.
+    (*(*pEncCtx).pFuncList).pfInterMd = if kbBaseAvail && kbHighestSpatial {
+        Some(crate::encoder::svc_mode_decision::WelsMdInterMbEnhancelayer)
+    } else {
+        Some(crate::encoder::svc_base_layer_md::WelsMdInterMb)
     };
     WelsPSliceMdEnc(pEncCtx, pSlice, kbHighestSpatial)
 }
 
 pub unsafe fn WelsCodePOverDynamicSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
+    let kbBaseAvail = (*pCurLayer).bBaseLayerAvailableFlag;
     let kbHighestSpatial = if !(*pEncCtx).pSvcParam.is_null() {
         (*(*pEncCtx).pSvcParam).iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
         true
+    };
+    // `svc_encode_slice.cpp:750/753`, the dynamic-slicing twin of `WelsCodePSlice`.
+    (*(*pEncCtx).pFuncList).pfInterMd = if kbBaseAvail && kbHighestSpatial {
+        Some(crate::encoder::svc_mode_decision::WelsMdInterMbEnhancelayer)
+    } else {
+        Some(crate::encoder::svc_base_layer_md::WelsMdInterMb)
     };
     WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial)
 }
