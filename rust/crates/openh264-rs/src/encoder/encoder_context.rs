@@ -207,21 +207,7 @@ impl Default for SMVComponentUnit {
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLayerInfo {
-    pub pSpsP: *mut SWelsSPS,
-    pub pSubsetSpsP: *mut SSubsetSps,
-}
 
-impl Default for SLayerInfo {
-    fn default() -> Self {
-        Self {
-            pSpsP: std::ptr::null_mut(),
-            pSubsetSpsP: std::ptr::null_mut(),
-        }
-    }
-}
 
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 
@@ -270,6 +256,7 @@ pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

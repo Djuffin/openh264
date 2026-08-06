@@ -57,6 +57,8 @@ pub use crate::encoder::param_svc::SSpatialLayerInternal;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::md::SMB;
 
 // ============================================================================
 // Constants and Macros
@@ -450,20 +452,6 @@ pub struct SSlice {
     pub sSlicingOverRc: SRCSlicing,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMB {
-    pub uiMbType: u32,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-}
 
 
 
@@ -478,11 +466,6 @@ pub struct SPps {
     pub uiChromaQpIndexOffset: u8,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SLayerInfo {
-    pub pPpsP: *mut SPps,
-}
 
 
 #[repr(C)]

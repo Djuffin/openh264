@@ -191,89 +191,9 @@ pub const CABAC_LOW_WIDTH: usize = 64;
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMbCache {
-    pub sMvComponents: SMVComponentUnit,
-    pub iNonZeroCoeffCount: [i8; 48],
-    pub iIntraPredMode: [i8; 48],
-    pub sMbMvp: [SMVUnitXY; 16],
-    pub pPrevIntra4x4PredModeFlag: *mut bool,
-    pub pRemIntra4x4PredModeFlag: *mut i8,
-    pub bMbTypeSkip: [bool; 4],
-    pub pDct: *mut SDCTCoeff,
-    pub uiLumaI16x16Mode: u8,
-    pub uiChmaI8x8Mode: u8,
-}
 
-impl Default for SMbCache {
-    fn default() -> Self {
-        Self {
-            sMvComponents: SMVComponentUnit::default(),
-            iNonZeroCoeffCount: [0; 48],
-            iIntraPredMode: [0; 48],
-            sMbMvp: [SMVUnitXY::default(); 16],
-            pPrevIntra4x4PredModeFlag: std::ptr::null_mut(),
-            pRemIntra4x4PredModeFlag: std::ptr::null_mut(),
-            bMbTypeSkip: [false; 4],
-            pDct: std::ptr::null_mut(),
-            uiLumaI16x16Mode: 0,
-            uiChmaI8x8Mode: 0,
-        }
-    }
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMB {
-    pub uiMbType: u32,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub sMv: *mut SMVUnitXY,
-    pub pRefIndex: *mut i8,
-    pub pSadCost: *mut i32,
-    pub pIntra4x4PredMode: *mut i8,
-    pub pNonZeroCount: *mut i8,
-    pub sP16x16Mv: SMVUnitXY,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-    pub uiChromPredMode: u32,
-    pub iLumaDQp: i32,
-    pub sMvd: [SMVUnitXY; 16],
-    pub iCbpDc: i32,
-}
 
-impl Default for SMB {
-    fn default() -> Self {
-        Self {
-            uiMbType: 0,
-            uiSubMbType: [0; 4],
-            iMbXY: 0,
-            iMbX: 0,
-            iMbY: 0,
-            uiNeighborAvail: 0,
-            uiCbp: 0,
-            sMv: std::ptr::null_mut(),
-            pRefIndex: std::ptr::null_mut(),
-            pSadCost: std::ptr::null_mut(),
-            pIntra4x4PredMode: std::ptr::null_mut(),
-            pNonZeroCount: std::ptr::null_mut(),
-            sP16x16Mv: SMVUnitXY::default(),
-            uiLumaQp: 0,
-            uiChromaQp: 0,
-            uiSliceIdc: 0,
-            uiChromPredMode: 0,
-            iLumaDQp: 0,
-            sMvd: [SMVUnitXY::default(); 16],
-            iCbpDc: 0,
-        }
-    }
-}
 
 
 
@@ -285,6 +205,9 @@ pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::vlc_encoder::ECtxBlockCat;
 pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::md::SMB;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -321,10 +244,6 @@ pub struct SWelsPps {
     pub uiChromaQpIndexOffset: u32,
 }
 
-#[repr(C)]
-pub struct SLayerInfo {
-    pub pPpsP: *mut SWelsPps,
-}
 
 #[repr(C)]
 pub struct SDqLayer {

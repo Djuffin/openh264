@@ -285,7 +285,7 @@ pub struct SQuarRefineParams {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct SMB {
     pub uiMbType: u32,
     pub uiSubMbType: [u8; 4],
@@ -309,10 +309,46 @@ pub struct SMB {
     pub iCbpDc: i32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
+impl Default for SMB {
+    fn default() -> Self {
+        Self {
+            uiMbType: 0,
+            uiSubMbType: [0; 4],
+            iMbXY: 0,
+            iMbX: 0,
+            iMbY: 0,
+            uiNeighborAvail: 0,
+            uiCbp: 0,
+            sMv: std::ptr::null_mut(),
+            pRefIndex: std::ptr::null_mut(),
+            pSadCost: std::ptr::null_mut(),
+            pIntra4x4PredMode: std::ptr::null_mut(),
+            pNonZeroCount: std::ptr::null_mut(),
+            sP16x16Mv: SMVUnitXY::default(),
+            uiLumaQp: 0,
+            uiChromaQp: 0,
+            uiSliceIdc: 0,
+            uiChromPredMode: 0,
+            iLumaDQp: 0,
+            sMvd: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
+            iCbpDc: 0,
+        }
+    }
+}
+
+/// `TagMbCache` — `codec/encoder/core/inc/mb_cache.h:72`. 576 bytes.
+///
+/// C++ declares the first three members with `ALIGNED_DECLARE (..., 16)`, which
+/// aligns each *variable* to 16 bytes and gives the struct 16-byte alignment. Rust
+/// has no per-field alignment attribute, so that is reproduced here as
+/// `#[repr(C, align(16))]` plus the 14 bytes of padding the C++ compiler inserts
+/// after `sMvComponents` (146 bytes) to bring `iNonZeroCoeffCount` to offset 160.
+/// The two `[i8; 48]` arrays are already 16-multiples and need no further padding.
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
 pub struct SMbCache {
     pub sMvComponents: SMVComponentUnit,
+    pub _pad_after_sMvComponents: [u8; 14],
     pub iNonZeroCoeffCount: [i8; 48],
     pub iIntraPredMode: [i8; 48],
     pub iSadCost: [i32; 4],
@@ -331,16 +367,49 @@ pub struct SMbCache {
     pub iSadCostSkip: [i32; 4],
     pub bMbTypeSkip: [bool; 4],
     pub pEncSad: *mut i32,
-    pub pDct: *mut c_void,
+    pub pDct: *mut SDCTCoeff,
     pub uiNeighborIntra: u8,
     pub uiLumaI16x16Mode: u8,
     pub uiChmaI8x8Mode: u8,
     pub bCollocatedPredFlag: bool,
     pub uiRefMbType: u32,
-    pub pEncMb: [*mut u8; 3],
-    pub pDecMb: [*mut u8; 3],
-    pub pRefMb: [*mut u8; 3],
-    pub pCsMb: [*mut u8; 3],
+    // mb_cache.h:124 — an anonymous struct member literally named SPicData, not four
+    // flattened arrays.
+    pub SPicData: SPicData,
+}
+
+impl Default for SMbCache {
+    fn default() -> Self {
+        Self {
+            sMvComponents: SMVComponentUnit::default(),
+            _pad_after_sMvComponents: [0; 14],
+            iNonZeroCoeffCount: [0; 48],
+            iIntraPredMode: [0; 48],
+            iSadCost: [0; 4],
+            sMbMvp: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
+            pCoeffLevel: std::ptr::null_mut(),
+            pSkipMb: std::ptr::null_mut(),
+            pMemPredMb: std::ptr::null_mut(),
+            pMemPredLuma: std::ptr::null_mut(),
+            pMemPredChroma: std::ptr::null_mut(),
+            pBestPredIntraChroma: std::ptr::null_mut(),
+            pMemPredBlk4: std::ptr::null_mut(),
+            pBestPredI4x4Blk4: std::ptr::null_mut(),
+            pBufferInterPredMe: std::ptr::null_mut(),
+            pPrevIntra4x4PredModeFlag: std::ptr::null_mut(),
+            pRemIntra4x4PredModeFlag: std::ptr::null_mut(),
+            iSadCostSkip: [0; 4],
+            bMbTypeSkip: [false; 4],
+            pEncSad: std::ptr::null_mut(),
+            pDct: std::ptr::null_mut(),
+            uiNeighborIntra: 0,
+            uiLumaI16x16Mode: 0,
+            uiChmaI8x8Mode: 0,
+            bCollocatedPredFlag: false,
+            uiRefMbType: 0,
+            SPicData: SPicData::default(),
+        }
+    }
 }
 
 pub type PFillInterNeighborCacheFunc = unsafe extern "C" fn(
@@ -356,6 +425,8 @@ pub type PUpdateMbMvFunc = unsafe extern "C" fn(pMvBuffer: *mut SMVUnitXY, ksMv:
 // SMcFunc is a common-layer type (codec/common/inc/mc.h:46); common/mc.rs already
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
+pub use crate::encoder::encoder_context::SPicData;
+pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 

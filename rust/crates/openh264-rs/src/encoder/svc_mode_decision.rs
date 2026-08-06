@@ -29,6 +29,10 @@ pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
 pub use crate::encoder::md::SWelsMD;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::encoder_context::SPicData;
+pub use crate::encoder::md::SMB;
 
 // ============================================================================
 // Constants and Thresholds
@@ -160,30 +164,6 @@ pub struct SWelsMeContainers {
 
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMB {
-    pub uiMbType: Mb_Type,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub sMv: *mut SMVUnitXY,
-    pub pRefIndex: *mut i8,
-    pub pSadCost: *mut i32,
-    pub pIntra4x4PredMode: *mut i8,
-    pub pNonZeroCount: *mut i8,
-    pub sP16x16Mv: SMVUnitXY,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-    pub uiChromPredMode: u32,
-    pub iLumaDQp: i32,
-    pub sMvd: [SMVUnitXY; 16],
-    pub iCbpDc: i32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -203,31 +183,8 @@ impl Default for SSampleDealingPicData {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SMbCache {
-    pub uiRefMbType: Mb_Type,
-    pub bMbTypeSkip: *mut bool,
-    pub iSadCost: *mut i32,
-    pub iSadCostSkip: *mut i32,
-    pub sMvComponents: SMVComponentUnit,
-    pub SPicData: SSampleDealingPicData,
-    pub pSkipMb: *mut u8,
-    pub pMemPredLuma: *mut u8,
-    pub pMemPredChroma: *mut u8,
-    pub sMbMvp: [SMVUnitXY; 16],
-    pub pCoeffLevel: *mut i16,
-    pub uiNeighborIntra: u8,
-    pub uiLumaI16x16Mode: i32,
-    pub bCollocatedPredFlag: bool,
-}
 
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SLayerInfo {
-    pub pPpsP: *mut SWelsPPS,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -391,8 +348,8 @@ pub unsafe extern "C" fn WelsMdInterJudgePskip(
     }
     PredictSadSkip(
         (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-        (*pMbCache).bMbTypeSkip,
-        (*pMbCache).iSadCostSkip,
+        (*pMbCache).bMbTypeSkip.as_mut_ptr(),
+        (*pMbCache).iSadCostSkip.as_mut_ptr(),
         0,
         &mut (*pWelsMd).iSadPredSkip,
     );
@@ -855,7 +812,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
     }
     (*pMbCache).pMemPredChroma = pPredI16x16[iIdx];
     (*pMbCache).pMemPredLuma = pPredI16x16[iIdx ^ 0x01];
-    (*pMbCache).uiLumaI16x16Mode = iBestMode;
+    (*pMbCache).uiLumaI16x16Mode = iBestMode as u8;
     iBestCost
 }
 
@@ -1111,7 +1068,7 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
         if !bSkip {
             PredictSad(
                 (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-                (*pMbCache).iSadCost,
+                (*pMbCache).iSadCost.as_mut_ptr(),
                 0,
                 &mut (*pWelsMd).iSadPredMb,
             );
@@ -1220,8 +1177,8 @@ pub unsafe fn CheckChromaCost(
 
     PredictSadSkip(
         (*pMbCache).sMvComponents.iRefIndexCache.as_mut_ptr(),
-        (*pMbCache).bMbTypeSkip,
-        (*pMbCache).iSadCostSkip,
+        (*pMbCache).bMbTypeSkip.as_mut_ptr(),
+        (*pMbCache).iSadCostSkip.as_mut_ptr(),
         0,
         &mut (*pWelsMd).iSadPredSkip,
     );
@@ -1895,21 +1852,17 @@ mod tests {
     #[test]
     fn test_pred_skip_mv_zero_ref() {
         unsafe {
+            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+            // MV cache, so the rest comes from Default.
             let mut mb_cache = SMbCache {
                 uiRefMbType: 0,
-                bMbTypeSkip: std::ptr::null_mut(),
-                iSadCost: std::ptr::null_mut(),
-                iSadCostSkip: std::ptr::null_mut(),
                 sMvComponents: SMVComponentUnit::default(),
-                SPicData: SSampleDealingPicData::default(),
-                pSkipMb: std::ptr::null_mut(),
-                pMemPredLuma: std::ptr::null_mut(),
-                pMemPredChroma: std::ptr::null_mut(),
                 sMbMvp: [SMVUnitXY::default(); 16],
-                pCoeffLevel: std::ptr::null_mut(),
                 uiNeighborIntra: 0,
                 uiLumaI16x16Mode: 0,
                 bCollocatedPredFlag: false,
+                ..Default::default()
             };
 
             // When left & top ref MVs are (0,0) and ref=0, PredSkipMv returns (0,0)
@@ -1929,21 +1882,17 @@ mod tests {
     #[test]
     fn test_pred_inter_16x8_8x16_mv() {
         unsafe {
+            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+            // MV cache, so the rest comes from Default.
             let mut mb_cache = SMbCache {
                 uiRefMbType: 0,
-                bMbTypeSkip: std::ptr::null_mut(),
-                iSadCost: std::ptr::null_mut(),
-                iSadCostSkip: std::ptr::null_mut(),
                 sMvComponents: SMVComponentUnit::default(),
-                SPicData: SSampleDealingPicData::default(),
-                pSkipMb: std::ptr::null_mut(),
-                pMemPredLuma: std::ptr::null_mut(),
-                pMemPredChroma: std::ptr::null_mut(),
                 sMbMvp: [SMVUnitXY::default(); 16],
-                pCoeffLevel: std::ptr::null_mut(),
                 uiNeighborIntra: 0,
                 uiLumaI16x16Mode: 0,
                 bCollocatedPredFlag: false,
+                ..Default::default()
             };
 
             mb_cache.sMvComponents.iRefIndexCache[1] = 0; // Top ref for 16x8 part 0
@@ -1967,21 +1916,17 @@ mod tests {
     #[test]
     fn test_update_p16x16_motion_info() {
         unsafe {
+            // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
+            // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
+            // MV cache, so the rest comes from Default.
             let mut mb_cache = SMbCache {
                 uiRefMbType: 0,
-                bMbTypeSkip: std::ptr::null_mut(),
-                iSadCost: std::ptr::null_mut(),
-                iSadCostSkip: std::ptr::null_mut(),
                 sMvComponents: SMVComponentUnit::default(),
-                SPicData: SSampleDealingPicData::default(),
-                pSkipMb: std::ptr::null_mut(),
-                pMemPredLuma: std::ptr::null_mut(),
-                pMemPredChroma: std::ptr::null_mut(),
                 sMbMvp: [SMVUnitXY::default(); 16],
-                pCoeffLevel: std::ptr::null_mut(),
                 uiNeighborIntra: 0,
                 uiLumaI16x16Mode: 0,
                 bCollocatedPredFlag: false,
+                ..Default::default()
             };
 
             let mut mv_arr = [SMVUnitXY::default(); 16];
@@ -2059,23 +2004,19 @@ mod tests {
 
             let mut mb_cache = SMbCache {
                 uiRefMbType: 0,
-                bMbTypeSkip: std::ptr::null_mut(),
-                iSadCost: std::ptr::null_mut(),
-                iSadCostSkip: std::ptr::null_mut(),
                 sMvComponents: SMVComponentUnit::default(),
-                SPicData: SSampleDealingPicData {
+                SPicData: SPicData {
                     pEncMb: [enc_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
+                    pDecMb: [std::ptr::null_mut(); 3],
                     pRefMb: [std::ptr::null_mut(); 3],
                     pCsMb: [cs_mb.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()],
                 },
-                pSkipMb: std::ptr::null_mut(),
                 pMemPredLuma: pred_buf.as_mut_ptr(),
-                pMemPredChroma: std::ptr::null_mut(),
                 sMbMvp: [SMVUnitXY::default(); 16],
-                pCoeffLevel: std::ptr::null_mut(),
                 uiNeighborIntra: 0x07, // All neighbors available
                 uiLumaI16x16Mode: 0,
                 bCollocatedPredFlag: false,
+                ..Default::default()
             };
 
             let mut dq_layer = SDqLayer {
@@ -2088,9 +2029,7 @@ mod tests {
                 pDecPic: std::ptr::null_mut(),
                 pRefOri: [std::ptr::null_mut(); 2],
                 iCsStride: [16; 4],
-                sLayerInfo: SLayerInfo {
-                    pPpsP: std::ptr::null_mut(),
-                },
+                sLayerInfo: SLayerInfo::default(),
             };
 
             let cost = WelsMdI16x16(

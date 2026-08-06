@@ -52,6 +52,8 @@ use crate::{
 };
 pub use crate::encoder::nal_encap::SWelsSliceBs;
 pub use crate::encoder::rc::SWelsSvcRc;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::md::SMB;
 
 // ============================================================================
 // Constants and Thresholds
@@ -214,19 +216,7 @@ impl Default for SSliceCtx {
 }
 pub type SlicepEncCtx_s = SSliceCtx;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLayerInfo {
-    pub sNalHeaderExt: [u8; 16],
-}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SMB {
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
