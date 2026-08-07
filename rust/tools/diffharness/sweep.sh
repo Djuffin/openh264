@@ -13,6 +13,10 @@
 #                                                                        (11 configs)
 #             all   every preset above
 #
+# st and mt encode SWEEP_FRAMES (default 16, rounded up to 18-20 by looping) frames
+# per configuration; qp stays at 3, since it sweeps quantiser breadth rather than
+# sequence depth. See `loopfile` for why the frame count matters more than it looks.
+#
 # Exits non-zero if any configuration differs. Prints one line per failure.
 #
 # Written as bash on purpose. The interactive shell here is zsh, which does NOT
@@ -61,17 +65,49 @@ check() {  # label, then compare.sh arguments
   fi
 }
 
+# Build (once, cached in out/) a looped copy of $1 holding at least $4 frames, and
+# report it in LOOP_PATH / LOOP_FRAMES.
+#
+# The res/ clips are 5, 9 and 10 frames — shorter than the encoder's own state
+# cycles, so passing a larger frame count on its own changes nothing: both drivers
+# stop at EOF. Rate control works in 8-frame VGOPs, and several defect classes only
+# surface at the second IDR, so a 5-frame comparison exercises far less of the
+# encoder than the config count suggests. The GetDefaultParams divergence fixed in
+# fa67432f sat undetected behind 330 passing 5-frame configurations.
+LOOP_PATH=""; LOOP_FRAMES=0
+loopfile() {
+  local yuv=$1 w=$2 h=$3 want=$4
+  local fsz nsrc reps i
+  fsz=$((w * h * 3 / 2))
+  nsrc=$(($(stat -f%z "$yuv") / fsz))
+  reps=$(((want + nsrc - 1) / nsrc))
+  LOOP_FRAMES=$((nsrc * reps))
+  LOOP_PATH="$HERE/out/$(basename "$yuv" .yuv)_loop${LOOP_FRAMES}.yuv"
+  if [ ! -f "$LOOP_PATH" ]; then
+    mkdir -p "$HERE/out"
+    : > "$LOOP_PATH"
+    i=0
+    while [ "$i" -lt "$reps" ]; do cat "$yuv" >> "$LOOP_PATH"; i=$((i + 1)); done
+  fi
+}
+
+# Frames per configuration for st/mt. 16 clears a full 8-frame VGOP plus the IDR
+# that opens the sequence; looping rounds it up to 18-20 depending on the clip.
+ST_FRAMES=${SWEEP_FRAMES:-16}
+
 sweep_st() {
   echo "-- preset: st"
-  local YUV W H rc base gop cabac SM SN
+  local YUV W H rc base gop cabac SM SN name
   for spec in "${INPUTS[@]}"; do
     read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    loopfile "$YUV" "$W" "$H" "$ST_FRAMES"
     for rc in "${RCMODES[@]}"; do
       for base in 0 1; do
         for gop in -1 2 8; do
           for cabac in 0 1; do
-            check "st $(basename "$YUV" .yuv) rc=$rc base=$base gop=$gop cabac=$cabac" \
-                  "$YUV" "$W" "$H" 5 26 "$cabac" "$gop" "$rc" "$base"
+            check "st $name rc=$rc base=$base gop=$gop cabac=$cabac" \
+                  "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" "$gop" "$rc" "$base"
           done
         done
       done
@@ -79,8 +115,8 @@ sweep_st() {
     for slice in "${SLICES[@]}"; do
       read -r SM SN <<< "$slice"
       for cabac in 0 1; do
-        check "st $(basename "$YUV" .yuv) sm=$SM n=$SN cabac=$cabac" \
-              "$YUV" "$W" "$H" 5 26 "$cabac" -1 0 0 "$SM" "$SN" 1
+        check "st $name sm=$SM n=$SN cabac=$cabac" \
+              "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" -1 0 0 "$SM" "$SN" 1
       done
     done
   done
@@ -88,16 +124,18 @@ sweep_st() {
 
 sweep_mt() {
   echo "-- preset: mt"
-  local YUV W H thr SM SN cabac rc
+  local YUV W H thr SM SN cabac rc name
   for spec in "${INPUTS[@]}"; do
     read -r YUV W H <<< "$spec"
+    name=$(basename "$YUV" .yuv)
+    loopfile "$YUV" "$W" "$H" "$ST_FRAMES"
     for thr in 2 4; do
       for slice in "${SLICES[@]}"; do
         read -r SM SN <<< "$slice"
         for cabac in 0 1; do
           for rc in 0 1; do
-            check "mt $(basename "$YUV" .yuv) t=$thr sm=$SM n=$SN cabac=$cabac rc=$rc" \
-                  "$YUV" "$W" "$H" 5 26 "$cabac" -1 "$rc" 0 "$SM" "$SN" "$thr"
+            check "mt $name t=$thr sm=$SM n=$SN cabac=$cabac rc=$rc" \
+                  "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 "$cabac" -1 "$rc" 0 "$SM" "$SN" "$thr"
           done
         done
       done
@@ -114,32 +152,22 @@ sweep_mt() {
 # inputs are exactly why this axis went untested for so long.
 sweep_def() {
   echo "-- preset: def"
-  mkdir -p "$HERE/out"
-  local YUV W H thr base fsz nsrc reps total loop i
+  local YUV W H thr name want
   for spec in "${INPUTS[@]}" "res/Cisco_Absolute_Power_1280x720_30fps.yuv 1280 720"; do
     read -r YUV W H <<< "$spec"
-    base=$(basename "$YUV" .yuv)
-    fsz=$((W * H * 3 / 2))
-    nsrc=$(($(stat -f%z "$YUV") / fsz))
+    name=$(basename "$YUV" .yuv)
     # 72+ frames for the small clips; 40 is enough at 720p and keeps runtime sane.
-    if [ "$W" -ge 1280 ]; then total=40; else total=72; fi
-    reps=$(((total + nsrc - 1) / nsrc))
-    total=$((nsrc * reps))
-    loop="$HERE/out/${base}_loop${total}.yuv"
-    if [ ! -f "$loop" ]; then
-      : > "$loop"
-      i=0
-      while [ "$i" -lt "$reps" ]; do cat "$YUV" >> "$loop"; i=$((i + 1)); done
-    fi
+    if [ "$W" -ge 1280 ]; then want=40; else want=72; fi
+    loopfile "$YUV" "$W" "$H" "$want"
     # qp/cabac/gop/rcmode/slice arguments are ignored by the drivers in this
     # mode; they are passed only to reach the threads position.
     if [ "$W" -ge 1280 ]; then
       for thr in 1 4; do
-        check "def $base t=$thr" "$loop" "$W" "$H" "$total" 26 0 -1 0 2 0 1 "$thr"
+        check "def $name t=$thr" "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 0 -1 0 2 0 1 "$thr"
       done
     else
       for thr in 1 2 4; do
-        check "def $base t=$thr" "$loop" "$W" "$H" "$total" 26 0 -1 0 2 0 1 "$thr"
+        check "def $name t=$thr" "$LOOP_PATH" "$W" "$H" "$LOOP_FRAMES" 26 0 -1 0 2 0 1 "$thr"
       done
     fi
   done
