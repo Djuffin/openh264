@@ -36,12 +36,14 @@
 //! | [`plane`] | T2 — pixel-plane cursors with stride math and negative offsets | §2.2.1 |
 //! | [`bits`] | T3 — detachable bit cursors (`SBitStringAux` reader *and* writer) | §2.2.2 |
 //! | [`pool`] | T4 — multi-alias object graphs (DPB, ref lists) | §2.2.3 |
+//! | [`mb_grid`] | T5 — per-MB metadata addressing | §2.2.4 |
 //! | [`err`] | — | §10 D6 |
 //!
 //! [`rust/docs/safety_refactor_plan.md`]: ../../../../docs/safety_refactor_plan.md
 
 pub mod bits;
 pub mod err;
+pub mod mb_grid;
 pub mod plane;
 pub mod pool;
 
