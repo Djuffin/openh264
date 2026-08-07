@@ -1988,29 +1988,6 @@ pub unsafe fn WelsCPUFeatureDetect(pCpuCores: *mut i32) -> u32 {
     0
 }
 
-/// Initializes decoder worker threads for multi-threaded slicing.
-/// Matches `int32_t OpenDecoderThreads (PWelsDecoderContext pCtx, int32_t iThreadCount)` in `welsDecoderExt.cpp`.
-pub unsafe fn OpenDecoderThreads(pCtx: PWelsDecoderContext, _iThreadCount: i32) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    ERR_NONE
-}
-
-/// Terminates decoder worker threads and releases sync resources.
-/// Matches `void CloseDecoderThreads (PWelsDecoderContext pCtx)` in `welsDecoderExt.cpp`.
-pub unsafe fn CloseDecoderThreads(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
-}
-
-/// Thread worker function for slice decoding tasks.
-/// Matches `void* WelsTaskThread (void* pArg)` in `welsDecoderExt.cpp`.
-pub unsafe extern "C" fn WelsTaskThread(_pArg: *mut c_void) -> *mut c_void {
-    std::ptr::null_mut()
-}
-
 /// Initializes CPU feature detection and decoder function tables.
 /// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
 /// Fill data fields in default for decoder context.
@@ -2120,7 +2097,6 @@ pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) 
     }
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores) as u32;
-    OpenDecoderThreads(pCtx, 1);
     WelsInitDecoderFuncs(pCtx);
     (*pCtx).bParamSetsLostFlag = true;
     (*pCtx).bNewSeqBegin = true;
@@ -2172,7 +2148,6 @@ pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
     if pCtx.is_null() {
         return;
     }
-    CloseDecoderThreads(pCtx);
     WelsFreeDynamicMemory(pCtx);
     WelsFreeStaticMemory(pCtx);
     (*pCtx).bParamSetsLostFlag = false;
@@ -4399,12 +4374,6 @@ mod tests {
             let mut cpu_cores = 0;
             assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
             assert_eq!(cpu_cores, 1);
-            assert_eq!(
-                OpenDecoderThreads(std::ptr::null_mut(), 4),
-                ERR_INFO_INVALID_PTR
-            );
-            CloseDecoderThreads(std::ptr::null_mut());
-            assert_eq!(WelsTaskThread(std::ptr::null_mut()), std::ptr::null_mut());
             assert_eq!(
                 WelsOpenDecoder(std::ptr::null_mut(), std::ptr::null_mut()),
                 ERR_INFO_INVALID_PTR
