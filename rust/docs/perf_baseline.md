@@ -181,6 +181,17 @@ Encoder side: unmeasured for this family, correctly — `decode_mb_aux.rs` is de
 `c_vs_rust_bench` was run anyway as a correctness gate (all rows bit-identical) and the
 release sweep held its ~21s wall time.
 
+**One caveat, stated rather than smoothed over.** The session-end battery's own bench run
+— taken minutes after a full `cargo test` in both profiles, on a machine that had been
+building all session — read 2.251 / 5.830 / 5.873, i.e. back at the control's level
+rather than the paired medians'. Nothing regressed between them; the difference is
+between-invocation machine state, and it is the same order as the effect being measured.
+**Trust the paired table, not a single run from a battery**: it is the only measurement
+here where both sides were taken back-to-back under identical conditions. The practical
+rule for later families is the one this makes obvious — a budget claim needs its own
+paired run, and `gates.sh`'s bench line is a correctness gate (frame counts and hashes),
+not a budget one.
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
