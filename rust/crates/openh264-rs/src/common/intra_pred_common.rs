@@ -106,205 +106,6 @@ pub unsafe extern "C" fn WelsI16x16LumaPredH_c(pPred: *mut u8, pRef: *mut u8, ki
 }
 
 // ============================================================================
-// x86 / x86_64 SSE2 Vector Implementations
-// ============================================================================
-
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (SSE2)
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_sse2(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-
-    unsafe {
-        let kpSrc = pRef.offset(-(kiStride as isize));
-        let val = _mm_loadu_si128(kpSrc as *const __m128i);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            _mm_storeu_si128(pDst as *mut __m128i, val);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_sse2(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredV_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (SSE2)
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_sse2(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-
-    unsafe {
-        let mut pSrc = pRef.offset(-1);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            let val = _mm_set1_epi8(*pSrc as i8);
-            _mm_storeu_si128(pDst as *mut __m128i, val);
-            pSrc = pSrc.offset(kiStride as isize);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_sse2(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredH_c(pPred, pRef, kiStride);
-    }
-}
-
-// ============================================================================
-// ARM NEON & AArch64 Vector Implementations
-// ============================================================================
-
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (ARM NEON)
-#[cfg(target_arch = "arm")]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    use core::arch::arm::*;
-    unsafe {
-        let kpSrc = pRef.offset(-(kiStride as isize));
-        let val = vld1q_u8(kpSrc);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            vst1q_u8(pDst, val);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "arm"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredV_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (ARM NEON)
-#[cfg(target_arch = "arm")]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    use core::arch::arm::*;
-    unsafe {
-        let mut pSrc = pRef.offset(-1);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            let val = vdupq_n_u8(*pSrc);
-            vst1q_u8(pDst, val);
-            pSrc = pSrc.offset(kiStride as isize);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "arm"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredH_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (AArch64 NEON)
-#[cfg(target_arch = "aarch64")]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_AArch64_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    use core::arch::aarch64::*;
-    unsafe {
-        let kpSrc = pRef.offset(-(kiStride as isize));
-        let val = vld1q_u8(kpSrc);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            vst1q_u8(pDst, val);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_AArch64_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredV_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (AArch64 NEON)
-#[cfg(target_arch = "aarch64")]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_AArch64_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    use core::arch::aarch64::*;
-    unsafe {
-        let mut pSrc = pRef.offset(-1);
-        let mut pDst = pPred;
-        for _ in 0..16 {
-            let val = vdupq_n_u8(*pSrc);
-            vst1q_u8(pDst, val);
-            pSrc = pSrc.offset(kiStride as isize);
-            pDst = pDst.add(16);
-        }
-    }
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_AArch64_neon(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredH_c(pPred, pRef, kiStride);
-    }
-}
-
-// ============================================================================
-// MIPS MMI & LoongArch LSX Accelerated Fallbacks
-// ============================================================================
-
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (MIPS MMI)
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_mmi(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredV_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (MIPS MMI)
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_mmi(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredH_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (LoongArch LSX)
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredV_lsx(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredV_c(pPred, pRef, kiStride);
-    }
-}
-
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (LoongArch LSX)
-#[inline]
-pub unsafe extern "C" fn WelsI16x16LumaPredH_lsx(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
-    unsafe {
-        WelsI16x16LumaPredH_c(pPred, pRef, kiStride);
-    }
-}
-
-// ============================================================================
 // Unit Tests
 // ============================================================================
 
@@ -324,19 +125,16 @@ mod tests {
         }
 
         let mut pred_buf_c = [0u8; 256];
-        let mut pred_buf_sse2 = [0u8; 256];
 
         unsafe {
             let p_ref = ref_buf.as_mut_ptr().add(mb_offset);
             WelsI16x16LumaPredV_c(pred_buf_c.as_mut_ptr(), p_ref, stride);
-            WelsI16x16LumaPredV_sse2(pred_buf_sse2.as_mut_ptr(), p_ref, stride);
         }
 
         for row in 0..16 {
             for col in 0..16 {
                 let expected = (10 + col) as u8;
                 assert_eq!(pred_buf_c[row * 16 + col], expected);
-                assert_eq!(pred_buf_sse2[row * 16 + col], expected);
             }
         }
     }
@@ -353,19 +151,16 @@ mod tests {
         }
 
         let mut pred_buf_c = [0u8; 256];
-        let mut pred_buf_sse2 = [0u8; 256];
 
         unsafe {
             let p_ref = ref_buf.as_mut_ptr().add(mb_offset);
             WelsI16x16LumaPredH_c(pred_buf_c.as_mut_ptr(), p_ref, stride);
-            WelsI16x16LumaPredH_sse2(pred_buf_sse2.as_mut_ptr(), p_ref, stride);
         }
 
         for row in 0..16 {
             for col in 0..16 {
                 let expected = (50 + row) as u8;
                 assert_eq!(pred_buf_c[row * 16 + col], expected);
-                assert_eq!(pred_buf_sse2[row * 16 + col], expected);
             }
         }
     }
