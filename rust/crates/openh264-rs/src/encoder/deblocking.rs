@@ -1509,7 +1509,10 @@ pub unsafe fn DeblockingMbAvcbase(
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
 ) {
-    let mut uiBS: [[u8; 4]; 4] = [[0; 4]; 4];
+    // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
+    // horizontal edges). Every callee reaches the second plane, through
+    // `uiBS.add(1)` or a 32-byte `from_raw_parts`, so both must be here.
+    let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
     let uiCurMbType = (*pCurMb).uiMbType;
     let iMbStride = (*pFilter).iMbStride as isize;
 
@@ -1539,14 +1542,14 @@ pub unsafe fn DeblockingMbAvcbase(
                 bs_calc(
                     pFunc,
                     pCurMb,
-                    &mut uiBS as *mut [[u8; 4]; 4],
+                    uiBS.as_mut_ptr(),
                     uiCurMbType,
                     iMbStride as i32,
                     iLeftFlag,
                     iTopFlag,
                 );
             }
-            DeblockingInterMb(pfDeblocking, pCurMb, pFilter, &uiBS as *const [[u8; 4]; 4]);
+            DeblockingInterMb(pfDeblocking, pCurMb, pFilter, uiBS.as_ptr());
         }
     }
 }
