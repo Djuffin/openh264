@@ -290,8 +290,8 @@ literal `0`, not `1`.
 
 **Goal:** `prompts/phase2.md`'s session-A split — the preconditions (Phase 0's T6,
 optionally T5c/T5e), the control run, and the pilot conversion of
-`decoder/decode_mb_aux.rs` with its retro. T6, T1 and T2 landed with the retro;
-T5c/T5e did not, deliberately (see below).
+`decoder/decode_mb_aux.rs` with its retro. All of it landed, with T5c/T5e taken *after*
+the pilot rather than before (reasoning below). **Phase 0 is complete except T7.**
 
 **Started at** `956a8c07`, **ended at** the commit carrying this entry. Working tree
 clean at both ends.
@@ -304,9 +304,15 @@ clean at both ends.
 | `99f4ab5c` | Phase 0 T6: `unsafe_ratchet.sh` + `gates.sh` + the baseline |
 | `ba13bdbd` | pilot A: the four safe kernels + differential proof, old code untouched |
 | `ee7818fb` | pilot B: swap + shims, tautological differential entries deleted |
+| `725e37fd` | the pilot retro: plan verdicts, `perf_baseline.md` Phase 2 column, this entry |
+| `3e09a814` | T5c 1/4: three dead duplicate declarations of the threading types |
+| `e3ca3e17` | T5c 2/4: the thread context; `GetThreadCount` → literal `0` |
+| `5fe41f17` | T5c 3/4: the row-sync event machinery and its two dead `SPicture` fields |
+| `01ad9ba1` | T5c 4/4: `OpenDecoderThreads`, `CloseDecoderThreads`, `WelsTaskThread` |
+| `4e174285` | T5e: the dead `use std::ffi::c_void` in `lib.rs` |
 
-Plus this entry, `phase2_findings.md` (F8), the plan's §2.2.1/§Phase 2/§7.1/§7.5 and
-Progress updates, and `perf_baseline.md`'s Phase 2 section.
+Plus `phase2_findings.md` (F8), the plan's §2.2.1/§Phase 2/§7.1/§7.5 and Progress
+updates, and `perf_baseline.md`'s Phase 2 section.
 
 ### Gates
 
@@ -319,7 +325,20 @@ Progress updates, and `perf_baseline.md`'s Phase 2 section.
 | `decode_1080p_bench` | 60/60, 3 hashes match | same |
 | `c_vs_rust_bench` | all rows bit-identical | all rows bit-identical |
 | `miri --lib safe::` | 64/64 | 64/64 |
-| `miri --test safe_{plane,bits}_differential` | 3/3 and 15/15 | run at phase exit |
+| `miri --test safe_{plane,bits}_differential` | 3/3 and 15/15 | 3/3 and 15/15 |
+| `miri --test kernels_differential_phase2` | — | 1/1 |
+
+The session-end battery ran at level `exit`: 11 gates pass, 1 SKIP (fuzz). `gates.sh`
+discovers `tests/*differential*.rs` by glob, so the new Phase 2 file joined the Miri set
+without being wired in by hand.
+
+One honest note on the closing bench: its rows read 2.251 / 5.830 / 5.873, back at the
+control's level rather than the paired medians' — the machine had been building all
+session, and that between-invocation drift is the same order as the effect being
+measured. The paired table in `perf_baseline.md` is the budget measurement, because it
+is the only one where both sides ran back-to-back under identical conditions.
+`gates.sh`'s bench line is a correctness gate (frame counts and hashes), not a budget
+one; later families should take their own paired run.
 
 **No F3 hit at all this session**, in six release `mt` sweeps — consistent with the
 rate F3 records for a quiescent machine, and worth noting because the two previous
@@ -418,19 +437,49 @@ the ratchet a ratchet for the other 70 files while this one moves.
   isn't one. It was found instead by a hand-written property test that happened to
   generate full-range coefficients.
 
-### Why T5c/T5e did not land
+### T5c/T5e, landed after the pilot rather than before it
 
 The brief lists them under preconditions as "do first, recommended", with the reason
 that T5c touches `decoder_core.rs`, which Phase 2 also touches. On inspection that
 overlap is with §Phase 2 **T6**'s expand functions — four families and several sessions
-away — so it does not constrain the pilot, and the pilot is what unblocks the idiom
-decision for the other ~120 kernels. Both were therefore deferred rather than dropped;
-nothing about them has changed since the Phase 0 entry, including the correction that
-**`GetThreadCount` must become a literal `0`, not `1`** (`api/codec_api.rs:1831`
-branches on `<= 0`). The inventory greps were re-run this session and still hold:
-`pThreadCtx`/`pLastThreadCtx`/`pCsDecoder` have exactly three declarations
-(`decoder_context.rs:772-774`) and three read sites (`decoder_core.rs:771,774`,
-`pic_queue.rs:310`), and no assignment anywhere.
+away — so it did not constrain the pilot, and the pilot is what unblocks the idiom
+decision for the other ~120 kernels. They were therefore taken second, and they landed:
+
+| commit | what |
+|---|---|
+| `3e09a814` | three dead *duplicate* declarations: `decoder_core`'s `SThreadInfo`/`SWelsDecoderThreadCTX`, `mv_pred`'s `SWelsDecEvent` |
+| `e3ca3e17` | the thread context — `pThreadCtx`/`pLastThreadCtx`/`pCsDecoder`, `SWelsDecThreadInfo`, `SWelsDecoderThreadCTX`; `GetThreadCount` → literal `0` |
+| `5fe41f17` | the row-sync events — `SWelsDecEvent`, the four Event helpers, `Picture::pReadyEvent`, `Picture::pNzc`, `GetPNzc`'s picture branch |
+| `01ad9ba1` | the entry points — `OpenDecoderThreads`, `CloseDecoderThreads`, `WelsTaskThread` and their call sites |
+| `4e174285` | T5e: the dead `use std::ffi::c_void` in `lib.rs` |
+
+Ratchet across the five: `unsafe_fn` 1372 → 1365, `raw_ptr` 5390 → 5352,
+`unsafe_block` 511 → 507 — the first *drops* of the session, and worth contrasting with
+the pilot's flat numbers above: deletion moves the ratchet, strangling does not.
+
+Four things worth carrying forward:
+
+1. **`GetThreadCount` is a literal `0`, and the reason now lives in its docstring**
+   rather than only in this log. Every caller but one tests `> 1` or `<= 1` and cannot
+   tell `0` from `1`; `api/codec_api.rs:1831` branches on `<= 0` to increment
+   `uiDecodeTimeStamp`. A `1` would have silently changed the decoding timestamp.
+2. **The duplicates went first on purpose.** Deleting a type that exists twice is only
+   safe once you know *which* copy the live code names, and `decoder_core`'s
+   `SWelsDecoderThreadCTX` shadowed `decoder_context`'s with a different field list
+   (7 fields against 12) while `GetThreadCount` referred to the latter by fully
+   qualified path. Ordering the deletions duplicates-first made every later grep
+   unambiguous. This is `phase0_findings.md` §F2's defect class showing up decoder-side.
+3. **One fork collapsed, and it is not the fork §2.2.4 says to keep.** `GetPNzc` chose
+   between the decoded picture's NZC array and the dq-layer's; the picture side was
+   allocated only behind a thread-count gate that never opened, so the condition was
+   statically false. The general `pDec` vs `pCurDqLayer` pattern still has two live
+   sources elsewhere and is untouched.
+4. **T5e yielded exactly one line.** `RUSTFLAGS="--force-warn dead_code" cargo build`
+   after the deletions reports only pre-existing, unrelated dead code (`CEnumRepr`,
+   `u16_cast_short`, `u32_cast_long`, `u8_slice_cast_char_slice`, `replace_array_items`),
+   which the phase rule keeps out of scope. Don't re-run it expecting a harvest.
+
+**Phase 0 is now complete except T7 (fuzz), which stays deferred by direction.**
 
 ### Next session's first action
 
@@ -445,5 +494,7 @@ perf worst case, taken early on purpose. Two things to carry in:
 - **Do not unify the same-named 3-arg cousins in `common/intra_pred_common.rs`.**
   Different functions, different arity, T5's job.
 
-Then T4 (`mc.rs`) and so on down §4's list. If Phase 0 is picked up instead, its first
-action is unchanged: **T5c**, with `GetThreadCount` simplifying to a literal `0`.
+Then T4 (`mc.rs`) and so on down §4's list. There is no longer a competing "if Phase 0
+is picked up instead" branch: T5c and T5e landed this session, and T7 (fuzz) is deferred
+by direction — its absence is now printed as a SKIP on every `gates.sh` run so it cannot
+quietly stop being a decision.

@@ -615,17 +615,25 @@ than fixed are in [`phase0_findings.md`](phase0_findings.md).
 - [x] **T5b — SIMD delegating stubs.** 113 definitions across four files, plus the
       CPU-flag branches that installed them, machine-verified to delegate to exactly the
       `_c` already in each slot. `a2a19d3c`, `fbe45f11`
-- [ ] **T5c — decoder threading scaffolding.** Not started. Step 1 of the recipe is
-      already proven and written up in the log: `pThreadCtx`/`pLastThreadCtx`/
-      `pCsDecoder` are never assigned. **`GetThreadCount` must become a literal `0`, not
-      the `1` the brief says** — `api/codec_api.rs:1831` branches on `<= 0`.
+- [x] **T5c — decoder threading scaffolding.** Done in the Phase 2 session A, in four
+      commits, dead duplicates first and entry points last: `3e09a814`, `e3ca3e17`,
+      `5fe41f17`, `01ad9ba1`.
+      `GetThreadCount` is a literal **`0`**, not `1`, with the reason
+      (`api/codec_api.rs:1831` branches on `<= 0`) now in its docstring rather than only
+      in the log. `Picture::pNzc` and `Picture::pReadyEvent` went with it, and
+      `GetPNzc`'s picture-vs-layer fork collapsed to the layer source because the
+      picture side was statically unreachable. Totals: `unsafe_fn` 1372 → 1365,
+      `raw_ptr` 5390 → 5352, `unsafe_block` 511 → 507.
 - [x] **T5d — duplicated bitstream writer.** No deletion: there are four copies, not
       two, and they are not identical. Recorded as `phase0_findings.md` §F2 per the stop
       rule; Phase 3.2 owns the dedupe. `dc8487cb`
-- [ ] **T5e — small stragglers.** Not started; depends on T5c's dead-code harvest.
-- [ ] **T6 — ratchet script + gate runner.** Not started. Note for whoever writes it:
-      the naive `unsafe fn` pattern misses `unsafe extern "C" fn` and reported no change
-      across 113 deleted stubs — count `unsafe (extern "C" )?fn`.
+- [x] **T5e — small stragglers.** `4e174285`. The dead `use std::ffi::c_void` in
+      `lib.rs` was the whole yield: `RUSTFLAGS="--force-warn dead_code" cargo build`
+      turned up nothing belonging to the T5a–T5c families, only pre-existing unrelated
+      dead code that the phase's own rule keeps out of scope.
+- [x] **T6 — ratchet script + gate runner.** `99f4ab5c`, in the Phase 2 session A.
+      Both instruments and their invocations are documented in §7.1/§7.5; the counting
+      traps that motivated the note are encoded in the script.
 - [ ] **T7 — fuzz crate.** Not started, and **deferred by direction** during the Phase 1
       session (2026-08-07): "skip fuzzing, do phase 1". `cargo-fuzz` is still not
       installed; nightly now is (Phase 1 needed it for Miri). Nothing else depends on
@@ -712,6 +720,13 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       forward-reaching kernels) and in §Phase 2 (what the ratchet does and does not
       move during a strangler phase). Numbers in `perf_baseline.md` §Phase 2 T2:
       **1.3–1.8% faster**, not slower.
+- [x] **Phase 0 T5c/T5e — decoder threading scaffolding + stragglers.** `3e09a814`,
+      `e3ca3e17`, `5fe41f17`, `01ad9ba1`, `4e174285`. Taken after the pilot rather than
+      before it (the session log argues the ordering); Phase 0's checklist above now
+      records the outcome. **Phase 0's only remaining open item is T7, the fuzz crate,
+      deferred by direction** — so §7.2 gate 6 stays unavailable and `gates.sh` prints a
+      permanent SKIP for it. F8 is the first recorded case of a finding a fuzzer would
+      plausibly have reached first.
 - [ ] **T3 — `decoder/get_intra_predictor.rs`** (44 kernels, the perf worst case).
       Not started; this is the next action.
 - [ ] **T4 — `common/mc.rs`.** Not started.
@@ -721,12 +736,6 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
 - [ ] **T7 — the four encoder kernel files.** Not started.
 - [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started.
 - [ ] **T9 — phase exit.** Not started.
-
-Still open from Phase 0 and deliberately deferred past the pilot: **T5c/T5e**
-(decoder threading scaffolding + stragglers) and **T7** (fuzz, deferred by direction).
-T5c's ordering is argued in the session log — in short, its stated reason for going
-first was that it touches `decoder_core.rs`, which Phase 2 also touches, but that
-overlap is with §Phase 2 T6's expand functions, several sessions away.
 
 ### Phases 3–9
 
