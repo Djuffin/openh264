@@ -1077,6 +1077,82 @@ pub unsafe extern "C" fn StashPopMBStatusCavlc(
     (*pDss).iMbSkipRunStack
 }
 
+/// `StashMBStatusCabac` — set_mb_syn_cavlc.cpp:250. (The three CABAC entry
+/// points live in *cavlc*.cpp in the reference, next to their CAVLC twins.)
+///
+/// Saves the whole arithmetic-coder state, and — unlike the CAVLC twin, which
+/// only has to remember three bitstream cursor fields — copies out the bytes
+/// already emitted, because CABAC renormalisation can rewrite them via
+/// `PropagateCarry`.
+pub unsafe extern "C" fn StashMBStatusCabac(
+    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pSlice: *mut SSlice,
+    iMbSkipRun: i32,
+) {
+    if pDss.is_null() || pSlice.is_null() {
+        return;
+    }
+    let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
+    (*pDss).sStoredCabac = *pCtx;
+    if !(*pDss).pRestoreBuffer.is_null() {
+        let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
+        let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
+        std::ptr::copy_nonoverlapping((*pCtx).m_pBufStart, (*pDss).pRestoreBuffer, iLen as usize);
+    }
+    (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp;
+    (*pDss).iMbSkipRunStack = iMbSkipRun;
+}
+
+/// `StashPopMBStatusCabac` — set_mb_syn_cavlc.cpp:261.
+///
+/// Note the offset is recomputed from the *restored* context, so
+/// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
+pub unsafe extern "C" fn StashPopMBStatusCabac(
+    pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pSlice: *mut SSlice,
+) -> i32 {
+    if pDss.is_null() || pSlice.is_null() {
+        return 0;
+    }
+    let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
+    *pCtx = (*pDss).sStoredCabac;
+    if !(*pDss).pRestoreBuffer.is_null() {
+        let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
+        let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
+        std::ptr::copy_nonoverlapping((*pDss).pRestoreBuffer, (*pCtx).m_pBufStart, iLen as usize);
+    }
+    (*pSlice).uiLastMbQp = (*pDss).uiLastMbQp;
+    (*pDss).iMbSkipRunStack
+}
+
+/// `GetBsPosCabac` — set_mb_syn_cavlc.cpp:275.
+///
+/// The bit position is derived from the arithmetic coder's own byte cursor, not
+/// from `SBitStringAux`: `((m_pBufCur - m_pBufStart) << 3) + (m_iLowBitCnt - 9)`.
+/// The `- 9` is load-bearing and the result can legitimately be negative before
+/// the first byte is emitted.
+pub unsafe extern "C" fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
+    if pSlice.is_null() {
+        return 0;
+    }
+    let pCtx = &(*pSlice).sCabacCtx;
+    ((pCtx.m_pBufCur as isize - pCtx.m_pBufStart as isize) as i32) * 8
+        + (pCtx.m_iLowBitCnt - 9)
+}
+
+/// `extern "C"` shim for the `pfWelsSpatialWriteMbSyn` slot.
+///
+/// `WelsSpatialWriteMbSynCabac` is a plain Rust `fn`; the slot holds
+/// `PWelsSpatialWriteMbSyn`. C++ assigns the function itself
+/// (`set_mb_syn_cavlc.cpp:308`).
+pub unsafe extern "C" fn WelsSpatialWriteMbSynCabacThunk(
+    pCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
+    pSlice: *mut SSlice,
+    pCurMb: *mut SMB,
+) -> i32 {
+    crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(pCtx, pSlice, pCurMb)
+}
+
 pub unsafe extern "C" fn GetBsPosCavlc(pSlice: *mut SSlice) -> i32 {
     if pSlice.is_null() || (*pSlice).pSliceBsa.is_null() {
         return 0;

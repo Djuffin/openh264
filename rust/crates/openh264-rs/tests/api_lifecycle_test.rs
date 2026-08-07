@@ -175,9 +175,20 @@ fn test_encoder_create_and_destroy_lifecycle() {
         );
         assert_eq!(set_opt_ret, CM_RESULT_SUCCESS);
 
+        // ENCODER_OPTION_TRACE_LEVEL is set-only: `CWelsH264SVCEncoder::GetOption`
+        // has no case for it and falls to `default: return cmInitParaError`.
+        // Measured against libopenh264.a, not derived from reading.
         let get_opt_ret = (*p_encoder).GetOption(
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
+        );
+        assert_eq!(get_opt_ret, CM_INIT_PARA_ERROR);
+
+        // A readable one, to prove GetOption still works at all.
+        let mut idr_interval = 0i32;
+        let get_opt_ret = (*p_encoder).GetOption(
+            ENCODER_OPTION::ENCODER_OPTION_IDR_INTERVAL,
+            &mut idr_interval as *mut i32 as *mut std::ffi::c_void,
         );
         assert_eq!(get_opt_ret, CM_RESULT_SUCCESS);
 
