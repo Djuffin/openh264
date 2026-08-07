@@ -361,7 +361,15 @@ impl CWelsTaskThread {
             };
         }
 
-        self.m_cond.notify_all();
+        // Notify under m_mutex, the lock the worker loop waits with. Its
+        // predicate is m_pTask, guarded by a different lock, so a bare
+        // notify_all() sent between the worker's predicate check and its
+        // Condvar::wait is lost — the worker then parks forever holding a task
+        // it will never run, and the frame never completes.
+        {
+            let _g = self.m_mutex.lock().unwrap_or_else(|e| e.into_inner());
+            self.m_cond.notify_all();
+        }
         WELS_THREAD_ERROR_OK
     }
 
@@ -374,7 +382,13 @@ impl CWelsTaskThread {
             if let Ok(mut e) = this.m_end_flag.lock() {
                 *e = true;
             }
-            this.m_cond.notify_all();
+            // Same pairing as SetTask: the end flag is a second predicate of the
+            // worker's wait loop, so the shutdown notify has to hold m_mutex too
+            // or the join below can hang.
+            {
+                let _g = this.m_mutex.lock().unwrap_or_else(|e| e.into_inner());
+                this.m_cond.notify_all();
+            }
             let handle = this.m_handle.lock().unwrap().take();
             if let Some(h) = handle {
                 let _ = h.join();
@@ -571,6 +585,21 @@ impl CWelsThreadPool {
     }
 
     pub fn SignalThread(&self) {
+        // The dispatcher waits on m_cond under m_mutex, but its predicate
+        // (GetWaitedTaskNum) is guarded by the waited-task list's own lock. Taking
+        // m_mutex here closes the lost-wakeup window: a notify sent while the
+        // dispatcher sits between its predicate check and Condvar::wait would
+        // otherwise be dropped, and with every worker already busy nothing would
+        // ever signal again. That deadlocked any frame with more slices than pool
+        // threads.
+        //
+        // Safe against lock inversion: the dispatcher releases m_mutex before it
+        // touches m_cLockPool/m_cIdleThreads, so no path holds m_mutex and a pool
+        // lock at the same time.
+        let _guard = self
+            .m_mutex
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         self.m_cond.notify_all();
     }
 

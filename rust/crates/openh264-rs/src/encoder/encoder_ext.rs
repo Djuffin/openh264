@@ -1147,10 +1147,17 @@ pub unsafe fn RequestMemorySvc(
             }
         }
     }
-    // for slice bs buffers
-    if (*pParam).iMultipleThreadIdc > 1 {
-        // encoder_ext.cpp:1656, RequestMtResource. Not ported.
-        return ENC_RETURN_UNSUPPORTED_PARA;
+    // for pSlice bs buffers
+    if (*pParam).iMultipleThreadIdc > 1
+        && crate::encoder::slice_multi_threading::RequestMtResource(
+            ppCtx,
+            pParam,
+            iCountBsLen,
+            iMaxSliceBufferSize,
+            bDynamicSlice,
+        ) != 0
+    {
+        return 1;
     }
 
     (**ppCtx).pReferenceStrategy = crate::encoder::ref_list_mgr_svc::CreateReferenceStrategy(
@@ -2289,8 +2296,11 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     (*pCurDq).bBaseLayerAvailableFlag = !(*pCurDq).pRefLayer.is_null();
 
-    // pTaskManage->InitFrame is the multi-threaded path; this port is single-threaded
-    // (GetMultipleThreadIdc clamps iMultipleThreadIdc to 1), so pTaskManage is null.
+    if !(*pCtx).pTaskManage.is_null() {
+        let pTaskManage =
+            (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
+        (*pTaskManage).InitFrame(kiCurDid as i32);
+    }
 }
 
 /// `encoder_ext.cpp:2954`. Emit the SVC prefix NAL that precedes each VCL NAL when
@@ -3227,11 +3237,15 @@ pub unsafe fn WelsEncoderEncodeExt(
                 if (*pSvcParam).iMultipleThreadIdc > 1
                     && (*pSvcParam).bUseLoadBalancing
                     && (*pSvcParam).iMultipleThreadIdc
-                        >= (*pParam).sSliceArgument.uiSliceNum as u16
+                        >= (*pSvcParam).sSpatialLayers[iCurDid as usize]
+                            .sSliceArgument
+                            .uiSliceNum as u16
                 {
-                    // AdjustEnhanceLayer/AdjustBaseLayer are the multi-threaded
-                    // load-balancing path; unreachable while iMultipleThreadIdc == 1.
-                    return ENC_RETURN_UNSUPPORTED_PARA;
+                    if iCurDid > 0 {
+                        crate::encoder::slice_multi_threading::AdjustEnhanceLayer(pCtx, iCurDid as i32);
+                    } else {
+                        crate::encoder::slice_multi_threading::AdjustBaseLayer(pCtx);
+                    }
                 }
             }
             SliceModeEnum::SM_SIZELIMITED_SLICE => {
@@ -3419,10 +3433,105 @@ pub unsafe fn WelsEncoderEncodeExt(
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                 return (*pCtx).iEncoderError;
             }
-        } else if (*pSvcParam).iMultipleThreadIdc > 1 {
-            // Every multi-threaded slice path needs pTaskManage / InitAllSlicesInThread
-            // / SliceLayerInfoUpdate, none of which are ported.
-            return ENC_RETURN_UNSUPPORTED_PARA;
+        } else if (*pParam).sSliceArgument.uiSliceMode != SM_SIZELIMITED_SLICE
+            && (*pSvcParam).iMultipleThreadIdc > 1
+        {
+            // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
+            // non-SM_SIZELIMITED_SLICE
+            iSliceCount =
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum((*pCtx).pCurDqLayer);
+            if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME as i32 {
+                // check available layer_bs_info for further writing as followed
+                return ENC_RETURN_UNSUPPORTED_PARA;
+            }
+            if iSliceCount <= 1 {
+                return ENC_RETURN_UNEXPECTED;
+            }
+            //note: the old codes are removed at commit: 3e0ee69
+            (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
+            (*pLayerBsInfo).uiSpatialId = (*pCtx).uiDependencyId;
+            (*pLayerBsInfo).uiTemporalId = (*pCtx).uiTemporalId;
+            (*pLayerBsInfo).uiQualityId = 0;
+            (*pLayerBsInfo).iNalCount = 0;
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+
+            let pTaskManage = (*pCtx).pTaskManage
+                as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
+            (*pTaskManage)
+                .ExecuteTasks(crate::encoder::wels_task_management::WELS_ENC_TASK_ENCODING);
+            if (*pCtx).iEncoderError != 0 {
+                return (*pCtx).iEncoderError;
+            }
+
+            iLayerSize = crate::encoder::slice_multi_threading::AppendSliceToFrameBs(
+                pCtx,
+                pLayerBsInfo,
+                iSliceCount,
+            );
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
+        } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
+            && (*pSvcParam).iMultipleThreadIdc > 1
+        {
+            // THREAD_FULLY_FIRE_MODE && SM_SIZELIMITED_SLICE
+            let kiPartitionCnt = (*pCtx).iActiveThreadsNum as i32;
+
+            //TODO: use a function to remove duplicate code here and ln3994
+            let iLayerBsIdx = (*(*pCtx).pOut).iLayerBsIndex;
+            let pLbi = &mut (*pFbi).sLayerInfo[iLayerBsIdx as usize] as *mut SLayerBSInfo;
+            (*pLbi).pBsBuf = (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize);
+            (*pLbi).uiLayerType = VIDEO_CODING_LAYER;
+            (*pLbi).uiSpatialId = (*pCtx).uiDependencyId;
+            (*pLbi).uiTemporalId = (*pCtx).uiTemporalId;
+            (*pLbi).uiQualityId = 0;
+            (*pLbi).eFrameType = eFrameType;
+            (*pLbi).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+            (*pLbi).iNalCount = 0;
+
+            let mut iIdx = 0i32;
+            while iIdx < kiPartitionCnt {
+                let pPriv = (*(*pCtx).pSliceThreading).pThreadPEncCtx.add(iIdx as usize);
+                (*pPriv).pFrameBsInfo = pFbi;
+                (*pPriv).iSliceIndex = iIdx;
+                iIdx += 1;
+            }
+
+            let mut iRet = crate::encoder::svc_encode_slice::InitAllSlicesInThread(pCtx);
+            if iRet != 0 {
+                return ENC_RETURN_UNEXPECTED;
+            }
+            let pTaskManage = (*pCtx).pTaskManage
+                as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
+            (*pTaskManage)
+                .ExecuteTasks(crate::encoder::wels_task_management::WELS_ENC_TASK_ENCODING);
+
+            if (*pCtx).iEncoderError != 0 {
+                return (*pCtx).iEncoderError;
+            }
+
+            iRet = crate::encoder::svc_encode_slice::SliceLayerInfoUpdate(
+                pCtx,
+                pFbi,
+                pLayerBsInfo,
+                (*pParam).sSliceArgument.uiSliceMode,
+            );
+            if iRet != 0 {
+                return ENC_RETURN_UNEXPECTED;
+            }
+
+            iSliceCount =
+                crate::encoder::svc_encode_slice::GetCurrentSliceNum((*pCtx).pCurDqLayer);
+            iLayerSize = crate::encoder::slice_multi_threading::AppendSliceToFrameBs(
+                pCtx,
+                pLayerBsInfo,
+                iSliceCount,
+            );
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
         } else {
             // non-dynamic-slicing, single-threaded multi-slice
             let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
