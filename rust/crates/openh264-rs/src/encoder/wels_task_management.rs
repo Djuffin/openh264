@@ -20,6 +20,24 @@ pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 
+use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
+// The shared thread pool. `wels_task_management.cpp` uses the one and only
+// `CWelsThreadPool` from `common/`; so does this module. An earlier port
+// declared a second, inline-executing `CWelsThreadPool` here that shadowed it.
+use crate::common::wels_thread_pool::{CWelsThreadPool, IWelsTask, IWelsTaskSink, TaskPtr};
+use crate::encoder::nal_encap::{
+    SWelsSliceBs, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal,
+};
+use crate::encoder::slice_multi_threading::{
+    with_wels_mutex, SetOneSliceBsBufferUnderMultithread, UpdateMbListNeighborParallel,
+    WriteSliceBs, MAX_THREADS_NUM,
+};
+use crate::encoder::svc_encode_slice::{
+    InitOneSliceInThread, ReallocateSliceInThread, SSlice, SetSliceBoundaryInfo, WelsCodeOneSlice,
+};
+use crate::encoder::vlc_encoder::InitBits;
+use crate::encoder::wels_encoder_ext::WelsTime;
+
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 // Return & Error Codes
@@ -93,25 +111,57 @@ pub struct SSpatialLayerConfig {
 
 
 /// Task sink callback interface (`IWelsTaskSink`).
-pub trait IWelsTaskSink {
-    unsafe fn OnTaskExecuted(&mut self) -> i32;
-    unsafe fn OnTaskCancelled(&mut self) -> i32;
+/// Which `CWelsBaseTask` subclass a task instance stands for.
+///
+/// The C++ hierarchy is
+/// `CWelsBaseTask` <- `CWelsSliceEncodingTask` <- {`CWelsLoadBalancingSlicingEncodingTask`,
+/// `CWelsConstrainedSizeSlicingEncodingTask`}, plus `CWelsUpdateMbMapTask`, and it
+/// dispatches `InitTask`/`ExecuteTask`/`FinishTask` virtually from a single
+/// non-virtual `Execute()`. One struct carrying a discriminant reproduces that
+/// vtable exactly; the previous port cast `*mut Derived` to `*mut CWelsBaseTask`,
+/// which silently resolved every call to the base and encoded nothing.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ETaskKind {
+    /// `CWelsUpdateMbMapTask`
+    UpdateMbMap,
+    /// `CWelsSliceEncodingTask`
+    SliceEncoding,
+    /// `CWelsLoadBalancingSlicingEncodingTask`
+    LoadBalancingSlicing,
+    /// `CWelsConstrainedSizeSlicingEncodingTask`
+    ConstrainedSizeSlicing,
 }
 
-/// Abstract task interface (`IWelsTask`).
-pub trait IWelsTask {
-    unsafe fn Execute(&mut self) -> i32;
-    fn GetTaskType(&self) -> u32;
-}
-
-/// Base task representation (`CWelsBaseTask`).
+/// Base task representation (`CWelsBaseTask` and its encoding subclasses).
 #[repr(C)]
 pub struct CWelsBaseTask {
     pub m_pSink: *mut CWelsTaskManageBase,
     pub m_pCtx: *mut sWelsEncCtx,
     pub m_iSliceIdx: i32,
     pub m_uiTaskType: u32,
+    pub m_eKind: ETaskKind,
+
+    // CWelsSliceEncodingTask members
+    pub m_eTaskResult: i32,
+    pub m_iThreadIdx: i32,
+    pub m_pSlice: *mut SSlice,
+    pub m_pSliceBs: *mut SWelsSliceBs,
+    pub m_eNalType: EWelsNalUnitType,
+    pub m_eNalRefIdc: EWelsNalRefIdc,
+    pub m_bNeedPrefix: bool,
+    pub m_iSliceSize: i32,
+    pub m_iStartMbIdx: i32,
+    pub m_iEndMbIdx: i32,
+
+    // CWelsLoadBalancingSlicingEncodingTask member
+    pub m_iSliceStart: i64,
 }
+
+// The task is handed to a worker thread as a raw pointer, exactly as in C++.
+// Every field it reaches is either thread-private (m_pSlice, the bs buffer
+// selected by QueryEmptyThread) or guarded by one of the SSliceThreading mutexes.
+unsafe impl Send for CWelsBaseTask {}
+unsafe impl Sync for CWelsBaseTask {}
 
 impl CWelsBaseTask {
     pub fn new(
@@ -119,135 +169,401 @@ impl CWelsBaseTask {
         pCtx: *mut sWelsEncCtx,
         iSliceIdx: i32,
         uiTaskType: u32,
+        eKind: ETaskKind,
     ) -> Self {
         Self {
             m_pSink: pSink,
             m_pCtx: pCtx,
             m_iSliceIdx: iSliceIdx,
             m_uiTaskType: uiTaskType,
+            m_eKind: eKind,
+            m_eTaskResult: ENC_RETURN_SUCCESS,
+            m_iThreadIdx: 0,
+            m_pSlice: null_mut(),
+            m_pSliceBs: null_mut(),
+            m_eNalType: EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+            m_eNalRefIdc: EWelsNalRefIdc::NRI_PRI_LOWEST,
+            m_bNeedPrefix: false,
+            m_iSliceSize: 0,
+            m_iStartMbIdx: 0,
+            m_iEndMbIdx: 0,
+            m_iSliceStart: 0,
         }
-    }
-
-    pub unsafe fn Execute(&mut self) -> i32 {
-        if !self.m_pSink.is_null() {
-            unsafe {
-                (*self.m_pSink).OnTaskExecuted();
-            }
-        }
-        ENC_RETURN_SUCCESS
     }
 
     pub fn GetTaskType(&self) -> u32 {
         self.m_uiTaskType
     }
-}
 
-/// Macroblock map update task (`CWelsUpdateMbMapTask`).
-#[repr(C)]
-pub struct CWelsUpdateMbMapTask {
-    pub base: CWelsBaseTask,
-}
+    /// True for the two kinds that resolve `InitTask`/`FinishTask` to
+    /// `CWelsLoadBalancingSlicingEncodingTask`'s overrides.
+    /// `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing
+    /// task, not from `CWelsSliceEncodingTask` directly, so it inherits the
+    /// slice timing as well (`wels_task_encoder.h:110`).
+    fn RecordsSliceTime(&self) -> bool {
+        matches!(
+            self.m_eKind,
+            ETaskKind::LoadBalancingSlicing | ETaskKind::ConstrainedSizeSlicing
+        )
+    }
 
-impl CWelsUpdateMbMapTask {
-    pub fn new(pSink: *mut CWelsTaskManageBase, pCtx: *mut sWelsEncCtx, iSliceIdx: i32) -> Self {
-        Self {
-            base: CWelsBaseTask::new(
-                pSink,
-                pCtx,
-                iSliceIdx,
-                WELS_ENC_TASK_UPDATEMBMAP as u32,
-            ),
+    /// `CWelsSliceEncodingTask::SetBoundary`
+    pub fn SetBoundary(&mut self, iStartIdx: i32, iEndIdx: i32) -> i32 {
+        self.m_iStartMbIdx = iStartIdx;
+        self.m_iEndMbIdx = iEndIdx;
+        ENC_RETURN_SUCCESS
+    }
+
+    /// `CWelsSliceEncodingTask::QueryEmptyThread`
+    pub fn QueryEmptyThread(pThreadBsBufferUsage: &mut [bool; MAX_THREADS_NUM]) -> i32 {
+        for k in 0..MAX_THREADS_NUM {
+            if !pThreadBsBufferUsage[k] {
+                pThreadBsBufferUsage[k] = true;
+                return k as i32;
+            }
+        }
+        -1
+    }
+
+    /// `CWelsSliceEncodingTask::InitTask`
+    pub unsafe fn InitTask(&mut self) -> i32 {
+        let pCtx = self.m_pCtx;
+        self.m_eNalType = (*pCtx).eNalType;
+        self.m_eNalRefIdc = (*pCtx).eNalPriority;
+        self.m_bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+
+        let pSmt = (*pCtx).pSliceThreading;
+        self.m_iThreadIdx = with_wels_mutex((*pSmt).mutexThreadBsBufferUsage, || {
+            CWelsBaseTask::QueryEmptyThread(&mut (*pSmt).bThreadBsBufferUsage)
+        });
+
+        if self.m_iThreadIdx < 0 {
+            return ENC_RETURN_UNEXPECTED;
+        }
+
+        let mut pSlice: *mut SSlice = null_mut();
+        let mut iReturn = InitOneSliceInThread(
+            pCtx,
+            &mut pSlice,
+            self.m_iThreadIdx,
+            (*pCtx).uiDependencyId as i32,
+            self.m_iSliceIdx,
+        );
+        if iReturn != ENC_RETURN_SUCCESS {
+            return iReturn;
+        }
+        self.m_pSlice = pSlice;
+        self.m_pSliceBs = &mut (*self.m_pSlice).sSliceBs;
+
+        iReturn = SetSliceBoundaryInfo((*pCtx).pCurDqLayer, self.m_pSlice, self.m_iSliceIdx);
+        if iReturn != ENC_RETURN_SUCCESS {
+            return iReturn;
+        }
+
+        SetOneSliceBsBufferUnderMultithread(pCtx, self.m_iThreadIdx, self.m_pSlice);
+
+        InitBits(
+            &mut (*self.m_pSliceBs).sBsWrite,
+            (*self.m_pSliceBs).pBsBuffer,
+            (*self.m_pSliceBs).uiSize as i32,
+        );
+
+        // CWelsLoadBalancingSlicingEncodingTask::InitTask runs the base first, then
+        // stamps the start time.
+        if self.RecordsSliceTime() {
+            self.m_iSliceStart = WelsTime();
+        }
+
+        ENC_RETURN_SUCCESS
+    }
+
+    /// `CWelsSliceEncodingTask::FinishTask`
+    pub unsafe fn FinishTask(&mut self) {
+        let pCtx = self.m_pCtx;
+        let pSmt = (*pCtx).pSliceThreading;
+
+        with_wels_mutex((*pSmt).mutexThreadBsBufferUsage, || {
+            (*pSmt).bThreadBsBufferUsage[self.m_iThreadIdx as usize] = false;
+        });
+
+        // sync multi-threading error
+        with_wels_mutex((*pCtx).mutexEncoderError, || {
+            if ENC_RETURN_SUCCESS != self.m_eTaskResult {
+                (*pCtx).iEncoderError |= self.m_eTaskResult;
+            }
+        });
+
+        // CWelsLoadBalancingSlicingEncodingTask::FinishTask runs the base first,
+        // then records the elapsed time the load balancer reads next frame.
+        if self.RecordsSliceTime() && !self.m_pSlice.is_null() {
+            (*self.m_pSlice).uiSliceConsumeTime = (WelsTime() - self.m_iSliceStart) as u32;
         }
     }
 
-    pub unsafe fn Execute(&mut self) -> i32 {
-        self.base.Execute()
+    /// Emits the prefix NAL pair shared by both `ExecuteTask` bodies.
+    unsafe fn WritePrefixNal(&mut self) {
+        if self.m_bNeedPrefix {
+            if self.m_eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST {
+                WelsLoadNalForSlice(
+                    self.m_pSliceBs,
+                    EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+                    self.m_eNalRefIdc as i32,
+                );
+                WelsWriteSVCPrefixNal(
+                    &mut (*self.m_pSliceBs).sBsWrite,
+                    self.m_eNalRefIdc as i32,
+                    EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == self.m_eNalType,
+                );
+                WelsUnloadNalForSlice(self.m_pSliceBs);
+            } else {
+                // No Prefix NAL Unit RBSP syntax here, but need add NAL Unit Header extension
+                WelsLoadNalForSlice(
+                    self.m_pSliceBs,
+                    EWelsNalUnitType::NAL_UNIT_PREFIX as i32,
+                    self.m_eNalRefIdc as i32,
+                );
+                WelsUnloadNalForSlice(self.m_pSliceBs);
+            }
+        }
     }
 
-    pub fn GetTaskType(&self) -> u32 {
-        WELS_ENC_TASK_UPDATEMBMAP as u32
+    /// `CWelsSliceEncodingTask::ExecuteTask`
+    pub unsafe fn ExecuteTask(&mut self) -> i32 {
+        let pCtx = self.m_pCtx;
+
+        self.WritePrefixNal();
+
+        WelsLoadNalForSlice(self.m_pSliceBs, self.m_eNalType as i32, self.m_eNalRefIdc as i32);
+        debug_assert_eq!(self.m_iSliceIdx, (*self.m_pSlice).iSliceIdx);
+        let mut iReturn = WelsCodeOneSlice(pCtx, self.m_pSlice, self.m_eNalType as i32);
+        if ENC_RETURN_SUCCESS != iReturn {
+            return iReturn;
+        }
+        WelsUnloadNalForSlice(self.m_pSliceBs);
+
+        self.m_iSliceSize = 0;
+        iReturn = WriteSliceBs(pCtx, self.m_pSliceBs, self.m_iSliceIdx, &mut self.m_iSliceSize);
+        if ENC_RETURN_SUCCESS != iReturn {
+            return iReturn;
+        }
+
+        let pfDeblockingFilterSlice =
+            (*(*pCtx).pFuncList).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+        pfDeblockingFilterSlice((*pCtx).pCurDqLayer, (*pCtx).pFuncList, self.m_pSlice);
+
+        ENC_RETURN_SUCCESS
+    }
+
+    /// `CWelsConstrainedSizeSlicingEncodingTask::ExecuteTask`
+    pub unsafe fn ExecuteTaskConstrainedSize(&mut self) -> i32 {
+        let pCtx = self.m_pCtx;
+        let pCurDq = (*pCtx).pCurDqLayer;
+        let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
+        let kiPartitionId = self.m_iSliceIdx % kiSliceIdxStep;
+        let kiFirstMbInPartition = (*pCurDq).FirstMbIdxOfPartition[kiPartitionId as usize];
+        let kiEndMbIdxInPartition = (*pCurDq).EndMbIdxOfPartition[kiPartitionId as usize];
+        let kiCodedSliceNumByThread =
+            (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum;
+        self.m_pSlice = (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize]
+            .pSliceBuffer
+            .add(kiCodedSliceNumByThread as usize);
+        (*self.m_pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = kiFirstMbInPartition;
+        let mut iReturn;
+        let mut bNeedReallocate;
+
+        let iDiffMbIdx = kiEndMbIdxInPartition - kiFirstMbInPartition;
+        if 0 == iDiffMbIdx {
+            (*self.m_pSlice).iSliceIdx = -1;
+            return ENC_RETURN_SUCCESS;
+        }
+
+        let mut iAnyMbLeftInPartition = iDiffMbIdx + 1;
+        let mut iLocalSliceIdx = self.m_iSliceIdx;
+        while iAnyMbLeftInPartition > 0 {
+            bNeedReallocate = (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum
+                >= (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize].iMaxSliceNum - 1;
+            if bNeedReallocate {
+                let pSmt = (*pCtx).pSliceThreading;
+                iReturn = with_wels_mutex((*pSmt).mutexThreadSlcBuffReallocate, || {
+                    // for memory statistic variable
+                    ReallocateSliceInThread(
+                        pCtx,
+                        pCurDq,
+                        (*pCtx).uiDependencyId as i32,
+                        self.m_iThreadIdx,
+                    )
+                });
+                if ENC_RETURN_SUCCESS != iReturn {
+                    return iReturn;
+                }
+            }
+
+            let mut pSlice: *mut SSlice = null_mut();
+            iReturn = InitOneSliceInThread(
+                pCtx,
+                &mut pSlice,
+                self.m_iThreadIdx,
+                (*pCtx).uiDependencyId as i32,
+                iLocalSliceIdx,
+            );
+            if iReturn != ENC_RETURN_SUCCESS {
+                return iReturn;
+            }
+            self.m_pSlice = pSlice;
+            self.m_pSliceBs = &mut (*self.m_pSlice).sSliceBs;
+            InitBits(
+                &mut (*self.m_pSliceBs).sBsWrite,
+                (*self.m_pSliceBs).pBsBuffer,
+                (*self.m_pSliceBs).uiSize as i32,
+            );
+
+            self.WritePrefixNal();
+
+            WelsLoadNalForSlice(self.m_pSliceBs, self.m_eNalType as i32, self.m_eNalRefIdc as i32);
+
+            debug_assert_eq!(iLocalSliceIdx, (*self.m_pSlice).iSliceIdx);
+            iReturn = WelsCodeOneSlice(pCtx, self.m_pSlice, self.m_eNalType as i32);
+            if ENC_RETURN_SUCCESS != iReturn {
+                return iReturn;
+            }
+            WelsUnloadNalForSlice(self.m_pSliceBs);
+
+            iReturn = WriteSliceBs(pCtx, self.m_pSliceBs, iLocalSliceIdx, &mut self.m_iSliceSize);
+            if ENC_RETURN_SUCCESS != iReturn {
+                return iReturn;
+            }
+            let pfDeblockingFilterSlice =
+                (*(*pCtx).pFuncList).pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            pfDeblockingFilterSlice(pCurDq, (*pCtx).pFuncList, self.m_pSlice);
+
+            iAnyMbLeftInPartition =
+                kiEndMbIdxInPartition - (*pCurDq).LastCodedMbIdxOfPartition[kiPartitionId as usize];
+            iLocalSliceIdx += kiSliceIdxStep;
+            (*(*pCtx).pCurDqLayer).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum += 1;
+        }
+
+        ENC_RETURN_SUCCESS
+    }
+}
+
+impl IWelsTask for CWelsBaseTask {
+    fn Execute(&mut self) -> i32 {
+        unsafe {
+            match self.m_eKind {
+                // CWelsUpdateMbMapTask::Execute
+                ETaskKind::UpdateMbMap => {
+                    UpdateMbListNeighborParallel(
+                        (*self.m_pCtx).pCurDqLayer,
+                        (*(*self.m_pCtx).pCurDqLayer).sMbDataP,
+                        self.m_iSliceIdx,
+                    );
+                    ENC_RETURN_SUCCESS
+                }
+                // CWelsSliceEncodingTask::Execute, shared by all three encoding
+                // subclasses. Note the early return: a failed InitTask skips
+                // both ExecuteTask and FinishTask.
+                _ => {
+                    self.m_eTaskResult = self.InitTask();
+                    if self.m_eTaskResult != ENC_RETURN_SUCCESS {
+                        return self.m_eTaskResult;
+                    }
+
+                    self.m_eTaskResult = if self.m_eKind == ETaskKind::ConstrainedSizeSlicing {
+                        self.ExecuteTaskConstrainedSize()
+                    } else {
+                        self.ExecuteTask()
+                    };
+
+                    self.FinishTask();
+
+                    self.m_eTaskResult
+                }
+            }
+        }
+    }
+
+    fn GetSink(&mut self) -> Option<&mut (dyn IWelsTaskSink + 'static)> {
+        if self.m_pSink.is_null() {
+            None
+        } else {
+            unsafe { Some(&mut *self.m_pSink) }
+        }
+    }
+}
+
+/// Macroblock map update task (`CWelsUpdateMbMapTask`).
+pub struct CWelsUpdateMbMapTask;
+
+impl CWelsUpdateMbMapTask {
+    pub fn new(
+        pSink: *mut CWelsTaskManageBase,
+        pCtx: *mut sWelsEncCtx,
+        iSliceIdx: i32,
+    ) -> CWelsBaseTask {
+        CWelsBaseTask::new(
+            pSink,
+            pCtx,
+            iSliceIdx,
+            WELS_ENC_TASK_UPDATEMBMAP as u32,
+            ETaskKind::UpdateMbMap,
+        )
     }
 }
 
 /// Standard slice encoding task (`CWelsSliceEncodingTask`).
-#[repr(C)]
-pub struct CWelsSliceEncodingTask {
-    pub base: CWelsBaseTask,
-    pub m_iStartMbIdx: i32,
-    pub m_iEndMbIdx: i32,
-    pub m_iSliceSize: i32,
-}
+pub struct CWelsSliceEncodingTask;
 
 impl CWelsSliceEncodingTask {
-    pub fn new(pSink: *mut CWelsTaskManageBase, pCtx: *mut sWelsEncCtx, iSliceIdx: i32) -> Self {
-        Self {
-            base: CWelsBaseTask::new(
-                pSink,
-                pCtx,
-                iSliceIdx,
-                WELS_ENC_TASK_ENCODE_FIXED_SLICE as u32,
-            ),
-            m_iStartMbIdx: 0,
-            m_iEndMbIdx: 0,
-            m_iSliceSize: 0,
-        }
-    }
-
-    pub unsafe fn Execute(&mut self) -> i32 {
-        self.base.Execute()
-    }
-
-    pub fn GetTaskType(&self) -> u32 {
-        WELS_ENC_TASK_ENCODE_FIXED_SLICE as u32
+    pub fn new(
+        pSink: *mut CWelsTaskManageBase,
+        pCtx: *mut sWelsEncCtx,
+        iSliceIdx: i32,
+    ) -> CWelsBaseTask {
+        CWelsBaseTask::new(
+            pSink,
+            pCtx,
+            iSliceIdx,
+            WELS_ENC_TASK_ENCODE_FIXED_SLICE as u32,
+            ETaskKind::SliceEncoding,
+        )
     }
 }
 
 /// Load-balanced slice encoding task (`CWelsLoadBalancingSlicingEncodingTask`).
-#[repr(C)]
-pub struct CWelsLoadBalancingSlicingEncodingTask {
-    pub slice_task: CWelsSliceEncodingTask,
-    pub m_iSliceStart: i64,
-}
+pub struct CWelsLoadBalancingSlicingEncodingTask;
 
 impl CWelsLoadBalancingSlicingEncodingTask {
-    pub fn new(pSink: *mut CWelsTaskManageBase, pCtx: *mut sWelsEncCtx, iSliceIdx: i32) -> Self {
-        let mut slice_task = CWelsSliceEncodingTask::new(pSink, pCtx, iSliceIdx);
-        slice_task.base.m_uiTaskType = WELS_ENC_TASK_ENCODE_SLICE_LOADBALANCING as u32;
-        Self {
-            slice_task,
-            m_iSliceStart: 0,
-        }
-    }
-
-    pub unsafe fn Execute(&mut self) -> i32 {
-        self.slice_task.Execute()
-    }
-
-    pub fn GetTaskType(&self) -> u32 {
-        WELS_ENC_TASK_ENCODE_SLICE_LOADBALANCING as u32
+    pub fn new(
+        pSink: *mut CWelsTaskManageBase,
+        pCtx: *mut sWelsEncCtx,
+        iSliceIdx: i32,
+    ) -> CWelsBaseTask {
+        CWelsBaseTask::new(
+            pSink,
+            pCtx,
+            iSliceIdx,
+            WELS_ENC_TASK_ENCODE_SLICE_LOADBALANCING as u32,
+            ETaskKind::LoadBalancingSlicing,
+        )
     }
 }
 
 /// Size-constrained slice encoding task (`CWelsConstrainedSizeSlicingEncodingTask`).
-#[repr(C)]
-pub struct CWelsConstrainedSizeSlicingEncodingTask {
-    pub lb_task: CWelsLoadBalancingSlicingEncodingTask,
-}
+pub struct CWelsConstrainedSizeSlicingEncodingTask;
 
 impl CWelsConstrainedSizeSlicingEncodingTask {
-    pub fn new(pSink: *mut CWelsTaskManageBase, pCtx: *mut sWelsEncCtx, iSliceIdx: i32) -> Self {
-        let mut lb_task = CWelsLoadBalancingSlicingEncodingTask::new(pSink, pCtx, iSliceIdx);
-        lb_task.slice_task.base.m_uiTaskType =
-            WELS_ENC_TASK_ENCODE_SLICE_SIZECONSTRAINED as u32;
-        Self { lb_task }
-    }
-
-    pub unsafe fn Execute(&mut self) -> i32 {
-        self.lb_task.Execute()
-    }
-
-    pub fn GetTaskType(&self) -> u32 {
-        WELS_ENC_TASK_ENCODE_SLICE_SIZECONSTRAINED as u32
+    pub fn new(
+        pSink: *mut CWelsTaskManageBase,
+        pCtx: *mut sWelsEncCtx,
+        iSliceIdx: i32,
+    ) -> CWelsBaseTask {
+        CWelsBaseTask::new(
+            pSink,
+            pCtx,
+            iSliceIdx,
+            WELS_ENC_TASK_ENCODE_SLICE_SIZECONSTRAINED as u32,
+            ETaskKind::ConstrainedSizeSlicing,
+        )
     }
 }
 
@@ -307,68 +623,6 @@ impl CWelsTaskList {
 }
 
 pub type TASKLIST_TYPE = CWelsTaskList;
-
-/// Shared thread pool representation (`CWelsThreadPool`).
-pub struct CWelsThreadPool {
-    pub m_iThreadNum: i32,
-    pub m_iRefCount: i32,
-}
-
-static mut G_THREAD_POOL: *mut CWelsThreadPool = null_mut();
-
-impl CWelsThreadPool {
-    pub fn new() -> Self {
-        Self {
-            m_iThreadNum: 4,
-            m_iRefCount: 0,
-        }
-    }
-
-    pub fn SetThreadNum(iMaxThreadNum: i32) -> i32 {
-        unsafe {
-            if G_THREAD_POOL.is_null() {
-                let pool = Box::into_raw(Box::new(CWelsThreadPool::new()));
-                G_THREAD_POOL = pool;
-            }
-            let pool = &mut *G_THREAD_POOL;
-            pool.m_iThreadNum = if iMaxThreadNum > 0 {
-                iMaxThreadNum
-            } else {
-                1
-            };
-            ENC_RETURN_SUCCESS
-        }
-    }
-
-    pub fn AddReference() -> *mut CWelsThreadPool {
-        unsafe {
-            if G_THREAD_POOL.is_null() {
-                let pool = Box::into_raw(Box::new(CWelsThreadPool::new()));
-                G_THREAD_POOL = pool;
-            }
-            let pool = &mut *G_THREAD_POOL;
-            pool.m_iRefCount += 1;
-            G_THREAD_POOL
-        }
-    }
-
-    pub fn RemoveInstance(&mut self) {
-        self.m_iRefCount -= 1;
-    }
-
-    pub fn GetThreadNum(&self) -> i32 {
-        self.m_iThreadNum
-    }
-
-    pub unsafe fn QueueTask(&mut self, pTask: *mut CWelsBaseTask) -> i32 {
-        if !pTask.is_null() {
-            unsafe {
-                (*pTask).Execute();
-            }
-        }
-        ENC_RETURN_SUCCESS
-    }
-}
 
 /// Internal thread barrier synchronization primitive.
 pub struct WelsTaskBarrier {
@@ -496,9 +750,7 @@ impl CWelsTaskManageBase {
             self.DestroyTasks();
         }
         if !self.m_pThreadPool.is_null() {
-            unsafe {
-                (*self.m_pThreadPool).RemoveInstance();
-            }
+            CWelsThreadPool::RemoveInstance();
             self.m_pThreadPool = null_mut();
         }
 
@@ -623,18 +875,10 @@ impl CWelsTaskManageBase {
     }
 
     pub fn OnTaskMinusOne(&mut self) {
-        self.m_iWaitTaskNum -= 1;
+        // WelsEventSignal (&m_hTaskEvent, &m_hEventMutex, &m_iWaitTaskNum) under
+        // m_cWaitTaskNumLock: decrement the outstanding count and wake the
+        // waiter once it reaches zero.
         self.barrier.decrement_and_signal();
-    }
-
-    pub unsafe fn OnTaskExecuted(&mut self) -> i32 {
-        self.OnTaskMinusOne();
-        ENC_RETURN_SUCCESS
-    }
-
-    pub unsafe fn OnTaskCancelled(&mut self) -> i32 {
-        self.OnTaskMinusOne();
-        ENC_RETURN_SUCCESS
     }
 
     pub unsafe fn ExecuteTaskList(&mut self, pTaskList: *const *mut CWelsTaskList) -> i32 {
@@ -652,18 +896,26 @@ impl CWelsTaskManageBase {
             return ENC_RETURN_SUCCESS;
         }
 
+        // if directly use m_iWaitTaskNum in the loop make cause sync problem
         let iCurrentTaskCount = self.m_iWaitTaskNum;
         self.barrier.set_count(iCurrentTaskCount);
         for iIdx in 0..iCurrentTaskCount {
             let task_node = unsafe { (*pTargetTaskList).getNode(iIdx) };
+            if task_node.is_null() {
+                self.barrier.decrement_and_signal();
+                continue;
+            }
             if !self.m_pThreadPool.is_null() {
                 unsafe {
-                    (*self.m_pThreadPool).QueueTask(task_node);
+                    (*self.m_pThreadPool).QueueTask(task_node as *mut (dyn IWelsTask + 'static));
                 }
-            } else if !task_node.is_null() {
+            } else {
+                // No pool: run inline and settle the barrier ourselves, since
+                // nothing will deliver the OnTaskExecuted callback.
                 unsafe {
                     (*task_node).Execute();
                 }
+                self.barrier.decrement_and_signal();
             }
         }
 
@@ -703,6 +955,25 @@ impl CWelsTaskManageBase {
         }
     }
 }
+
+/// `CWelsTaskManageBase` is the `IWelsTaskSink` every task reports to
+/// (`OnTaskExecuted`/`OnTaskCancelled` both funnel into `OnTaskMinusOne`).
+impl IWelsTaskSink for CWelsTaskManageBase {
+    fn OnTaskExecuted(&mut self) -> i32 {
+        self.OnTaskMinusOne();
+        ENC_RETURN_SUCCESS
+    }
+
+    fn OnTaskCancelled(&mut self) -> i32 {
+        self.OnTaskMinusOne();
+        ENC_RETURN_SUCCESS
+    }
+}
+
+// The manager pointer is shared with worker threads only as a sink; the sole
+// mutable state it touches from them is `barrier`, which is itself synchronised.
+unsafe impl Send for CWelsTaskManageBase {}
+unsafe impl Sync for CWelsTaskManageBase {}
 
 impl Default for CWelsTaskManageBase {
     fn default() -> Self {

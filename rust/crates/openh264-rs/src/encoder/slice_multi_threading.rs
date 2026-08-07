@@ -265,6 +265,49 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 }
 
 #[inline]
+// ============================================================================
+// Mutex helpers (`WelsMutexInit` / `WelsMutexLock` / `WelsMutexUnlock` /
+// `WelsMutexDestroy` from `codec/common/inc/WelsThreadLib.h`)
+// ============================================================================
+//
+// `SSliceThreading` stores its mutexes as opaque handles, matching the C++
+// `WELS_MUTEX` fields. A `std::sync::Mutex` cannot be locked and unlocked
+// through two separate calls the way pthreads can — the guard owns the lock —
+// so the lock/unlock pair is expressed as one scoped call. Every C++
+// lock/unlock pair in the encoder brackets a single straight-line region, so
+// the critical sections are identical; only the spelling differs.
+
+/// Allocates a mutex and returns its opaque handle (`WelsMutexInit`).
+pub unsafe fn WelsMutexInit(pMutex: *mut *mut c_void) -> i32 {
+    let m: Box<std::sync::Mutex<()>> = Box::new(std::sync::Mutex::new(()));
+    *pMutex = Box::into_raw(m) as *mut c_void;
+    0 // WELS_THREAD_ERROR_OK
+}
+
+/// Frees a mutex allocated by [`WelsMutexInit`] (`WelsMutexDestroy`).
+pub unsafe fn WelsMutexDestroy(pMutex: *mut *mut c_void) {
+    if !(*pMutex).is_null() {
+        drop(Box::from_raw(*pMutex as *mut std::sync::Mutex<()>));
+        *pMutex = std::ptr::null_mut();
+    }
+}
+
+/// Runs `f` holding `pMutex`, i.e. a `WelsMutexLock`/`WelsMutexUnlock` pair.
+///
+/// A null handle runs `f` unlocked; that mirrors the C++ behaviour on an
+/// uninitialised mutex closely enough for the single-threaded paths, which
+/// never contend.
+pub unsafe fn with_wels_mutex<R>(pMutex: *mut c_void, f: impl FnOnce() -> R) -> R {
+    if pMutex.is_null() {
+        return f();
+    }
+    let m = &*(pMutex as *const std::sync::Mutex<()>);
+    // A worker that panicked mid-slice leaves the mutex poisoned; the encoder
+    // has no recovery path for that, so take the guard either way.
+    let _guard = m.lock().unwrap_or_else(|e| e.into_inner());
+    f()
+}
+
 pub fn WelsEmms() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -549,10 +592,10 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
 /// Allocates and initializes multithreading synchronization resources and thread-local bitstream buffers.
 pub unsafe fn RequestMtResource(
     ppCtx: *mut *mut sWelsEncCtx,
-    pCodingParam: *mut SEncParamExt,
+    pCodingParam: *mut crate::encoder::param_svc::SWelsSvcCodingParam,
     iCountBsLen: i32,
     _iMaxSliceBufferSize: i32,
-    _bDynamicSlice: bool,
+    bDynamicSlice: bool,
 ) -> i32 {
     if ppCtx.is_null() || (*ppCtx).is_null() || pCodingParam.is_null() || iCountBsLen <= 0 {
         return 1;
@@ -586,11 +629,38 @@ pub unsafe fn RequestMtResource(
         (*pPriv).pWelsPEncCtx = pCtx as *mut c_void;
         (*pPriv).iSliceIndex = iIdx;
         (*pPriv).iThreadIndex = iIdx;
+        // The C++ zeroes the handle here and never spawns a thread of its own;
+        // all worker threads come from the shared CWelsThreadPool that
+        // CreateTaskManage acquires below. pThreadHandles is only ever read
+        // back by WelsUninitEncoderExt.
         (*pSmt).pThreadHandles[iIdx as usize] = std::ptr::null_mut();
         iIdx += 1;
     }
 
-    let iThreadBufferNum = (iThreadNum as usize).min(MAX_THREADS_NUM);
+    // The four per-thread event sets (pUpdateMbListEvent, pFinUpdateMbListEvent,
+    // pSliceCodedEvent, pReadySliceCodingEvent), pSliceCodedMasterEvent and
+    // mutexEvent are opened and closed by the C++ but never signalled or waited
+    // on anywhere in codec/ — they are vestiges of the pre-thread-pool design.
+    // They are deliberately not reproduced.
+
+    if WelsMutexInit(&mut (*pSmt).mutexSliceNumUpdate) != 0 {
+        return 1;
+    }
+
+    (*pCtx).pTaskManage = crate::encoder::wels_task_management::CreateTaskManage(
+        pCtx,
+        (*pCodingParam).iSpatialLayerNum,
+        bDynamicSlice,
+    ) as *mut c_void;
+    if (*pCtx).pTaskManage.is_null() {
+        return 1;
+    }
+
+    let pTaskManage =
+        (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase;
+    let iThreadBufferNum =
+        ((*pTaskManage).GetThreadPoolThreadNum() as usize).min(MAX_THREADS_NUM);
+
     for i in 0..iThreadBufferNum {
         let buf_layout = std::alloc::Layout::array::<u8>(iCountBsLen as usize).unwrap();
         let buf = std::alloc::alloc_zeroed(buf_layout);
@@ -598,6 +668,16 @@ pub unsafe fn RequestMtResource(
             return 1;
         }
         (*pSmt).pThreadBsBuffer[i] = buf;
+    }
+
+    if WelsMutexInit(&mut (*pSmt).mutexThreadBsBufferUsage) != 0 {
+        return 1;
+    }
+    if WelsMutexInit(&mut (*pSmt).mutexThreadSlcBuffReallocate) != 0 {
+        return 1;
+    }
+    if WelsMutexInit(&mut (*pCtx).mutexEncoderError) != 0 {
+        return 1;
     }
 
     0
@@ -613,6 +693,11 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
     if pSmt.is_null() {
         return;
     }
+
+    WelsMutexDestroy(&mut (*pSmt).mutexSliceNumUpdate);
+    WelsMutexDestroy(&mut (*pSmt).mutexThreadBsBufferUsage);
+    WelsMutexDestroy(&mut (*pSmt).mutexThreadSlcBuffReallocate);
+    WelsMutexDestroy(&mut (*pCtx).mutexEncoderError);
 
     if !(*pSmt).pThreadPEncCtx.is_null() {
         let pSvcParam = (*pCtx).pSvcParam;
@@ -632,6 +717,16 @@ pub unsafe fn ReleaseMtResource(ppCtx: *mut *mut sWelsEncCtx) {
             (*pSmt).pThreadBsBuffer[i] = std::ptr::null_mut();
         }
         (*pSmt).bThreadBsBufferUsage[i] = false;
+    }
+
+    // WELS_DELETE_OP (pTaskManage). Dropping the manager runs Uninit(), which
+    // releases this encoder's reference to the shared thread pool; the last
+    // reference out stops and joins the worker threads.
+    if !(*pCtx).pTaskManage.is_null() {
+        drop(Box::from_raw(
+            (*pCtx).pTaskManage as *mut crate::encoder::wels_task_management::CWelsTaskManageBase,
+        ));
+        (*pCtx).pTaskManage = std::ptr::null_mut();
     }
 
     let pSmtLayout = std::alloc::Layout::new::<SSliceThreading>();
