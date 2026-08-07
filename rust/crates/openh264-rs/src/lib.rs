@@ -17,6 +17,7 @@ pub mod decoder;
 pub mod encoder;
 pub mod processing;
 pub mod api;
+pub mod safe;
 
 pub use crate::api::codec_api::*;
 
