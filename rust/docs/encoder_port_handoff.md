@@ -45,10 +45,11 @@ the only thing the session after you will read.
 
 ## 1. Verified current state
 
-`HEAD` = `09fa77f3`, 105 commits on top of `master`. Working tree clean.
+`HEAD` = `8492dcf1`, 108 commits on top of `master`. Working tree clean.
 
 ```
-cargo build                 clean, 15 warnings, all dead_code/unused
+cargo build                 clean, 15 warnings (unused_assignments / unused_mut /
+                            unreachable_pattern; no dead_code)
 cargo test --no-fail-fast   294 passed, 0 failed, 20 ignored
 decoder conformance         53/53
 codec_unittest              533/534 (DecoderDeblocking.DeblockingInit, pre-existing)
@@ -100,6 +101,37 @@ Two limits on that claim, both measured, neither a port defect:
   "the result of each run may be different" (`codec_app_def.h:579`). The arm is
   ported and reachable, but no differential test can judge it. Do not add one.
 
+### What Phase 5.4 changed under you
+
+`iMultipleThreadIdc > 1` is done — byte-identical over 120 configurations. All three
+refusal sites this file used to list are gone, plus a fourth nobody had catalogued
+(`pTaskManage->InitFrame`, skipped in `WelsInitCurrentLayer` under a comment
+asserting `pTaskManage` is always null). Full account in `encoder_port_status.md`,
+Phase 5.4. Four things are worth carrying forward:
+
+- **The shared `CWelsThreadPool` in `common/` now actually runs tasks.** It had no
+  caller outside its own tests, because `wels_task_management.rs` declared a second
+  one that executed every task inline. It also deadlocked the first time it was given
+  more tasks than threads: both wait loops test a predicate guarded by one lock while
+  waiting on a condvar paired with another, and notified without holding it. Fixed by
+  taking `m_mutex` around each notify. **If you add another producer of pool tasks,
+  keep that pairing.**
+- **The C++ task classes use real inheritance and the port must reproduce the
+  vtable.** `CWelsBaseTask` carries an `ETaskKind` discriminant for that reason.
+  Casting `*mut Derived` to `*mut Base` — what the previous port did — silently
+  resolves every virtual call to the base, and also makes `Box::from_raw` free the
+  wrong type. Note `CWelsConstrainedSizeSlicingEncodingTask` derives from
+  `CWelsLoadBalancingSlicingEncodingTask`, not from `CWelsSliceEncodingTask`.
+- **`RequestMtResource` is smaller than it looks.** It creates no threads, and the
+  four per-thread event sets, `pSliceCodedMasterEvent` and `mutexEvent` are opened
+  and closed but never signalled or waited on anywhere in `codec/`. Only
+  `mutexSliceNumUpdate`, `mutexThreadBsBufferUsage`, `mutexThreadSlcBuffReallocate`
+  and `mutexEncoderError` are live.
+- **Thread assignment does not affect output for the fixed-slice modes.**
+  `InitOneSliceInThread` uses `kiSlcBuffIdx` only to pick a scratch bs buffer unless
+  `bThreadSlcBufferFlag` is set. That is why a racy `QueryEmptyThread` still yields a
+  deterministic bitstream, and it is the fact to lean on if MT output ever wobbles.
+
 ---
 
 ## 2. The techniques that work
@@ -131,8 +163,20 @@ Inputs live in `res/`: `CiscoVT2people_160x96_6fps.yuv`,
 `Cisco_Absolute_Power_1280x720_30fps.yuv`. **There is no 1280x720 CiscoVT2people
 file** — an older handoff named one and every sweep that used it silently failed.
 
-Sweep scripts are not in the repo; they are six-line bash loops over `compare.sh`.
-Write them fresh.
+**Sweeps: use `rust/tools/diffharness/sweep.sh`, do not write one fresh.**
+
+```bash
+./rust/tools/diffharness/sweep.sh st      # 210 single-threaded configurations
+./rust/tools/diffharness/sweep.sh mt      # 120 multi-threaded
+./rust/tools/diffharness/sweep.sh qp      # 312, all 52 QPs
+./rust/tools/diffharness/sweep.sh all
+```
+
+It exits non-zero and lists every differing configuration. It is `#!/bin/bash` on
+purpose, watchdogs each run (`SWEEP_TIMEOUT`, default 180 s), and already excludes
+`iRCMode = 4`. Earlier sessions rewrote these loops each time and kept re-hitting the
+zsh traps below; this one is checked in so that stops. Add a preset rather than
+starting over.
 
 #### Four traps, each of which has cost real time
 
@@ -285,37 +329,15 @@ A third, about counting:
 
 ## 4. The work, in order
 
-### 4.1 `iMultipleThreadIdc > 1` — **DONE** (Phase 5.4)
+**Where to start.** §4.1 is the big one and the only remaining item that unlocks a
+new configuration axis, so it is the natural next phase — but it needs a harness
+change first (a `layers` argument to `compare.sh` and both drivers), and until that
+exists you have no oracle. If you want a shorter first commit to get oriented, take
+§4.4 (`METHOD_DENOISE`, self-contained) or a slice of §5.1 (the `--dups` audit, which
+has yielded a real defect six times out of ten). Do not start §4.5 — it is
+unreachable in upstream too.
 
-Byte-identical over 120 configurations; all three refusal sites are gone, plus a
-fourth nobody had catalogued (`pTaskManage->InitFrame`, skipped in
-`WelsInitCurrentLayer` under a comment asserting `pTaskManage` is always null).
-Full account in `encoder_port_status.md`, Phase 5.4. What is worth carrying forward:
-
-- **The shared `CWelsThreadPool` in `common/` now actually runs tasks.** It had no
-  caller outside its own tests, because `wels_task_management.rs` declared a second
-  one that executed every task inline. It also deadlocked the first time it was given
-  more tasks than threads: both wait loops test a predicate guarded by one lock while
-  waiting on a condvar paired with another, and notified without holding it. Fixed by
-  taking `m_mutex` around each notify. **If you add another producer of pool tasks,
-  keep that pairing.**
-- **The C++ task classes use real inheritance and the port must reproduce the
-  vtable.** `CWelsBaseTask` carries an `ETaskKind` discriminant for that reason.
-  Casting `*mut Derived` to `*mut Base` — what the previous port did — silently
-  resolves every virtual call to the base, and also makes `Box::from_raw` free the
-  wrong type. Note `CWelsConstrainedSizeSlicingEncodingTask` derives from
-  `CWelsLoadBalancingSlicingEncodingTask`, not from `CWelsSliceEncodingTask`.
-- **`RequestMtResource` is smaller than it looks.** It creates no threads, and the
-  four per-thread event sets, `pSliceCodedMasterEvent` and `mutexEvent` are opened
-  and closed but never signalled or waited on anywhere in `codec/`. Only
-  `mutexSliceNumUpdate`, `mutexThreadBsBufferUsage`, `mutexThreadSlcBuffReallocate`
-  and `mutexEncoderError` are live.
-- **Thread assignment does not affect output for the fixed-slice modes.**
-  `InitOneSliceInThread` uses `kiSlcBuffIdx` only to pick a scratch bs buffer unless
-  `bThreadSlcBufferFlag` is set. That is why a racy `QueryEmptyThread` still yields a
-  deterministic bitstream, and it is the fact to lean on if MT output ever wobbles.
-
-### 4.2 `METHOD_DOWNSAMPLE`, and with it multi-layer SVC
+### 4.1 `METHOD_DOWNSAMPLE`, and with it multi-layer SVC
 
 The largest **untested** area of the encoder: more than one spatial layer.
 `processing/mod.rs` still returns `RET_NOTSUPPORTED` for `METHOD_DOWNSAMPLE`, which
@@ -323,10 +345,10 @@ is what blocks it. `ParamBaseTranscode` was corrected in Phase 5.3 for exactly t
 (it wrote `sSpatialLayers[idx]` where the C++ writes `[0]`), so that pre-requisite is
 out of the way.
 
-Expect the harness to need a `layers` argument, and expect `SPS_LISTING` (§4.4) to
+Expect the harness to need a `layers` argument, and expect `SPS_LISTING` (§4.3) to
 become relevant at the same time.
 
-### 4.3 `SCREEN_CONTENT_REAL_TIME`
+### 4.2 `SCREEN_CONTENT_REAL_TIME`
 
 Interlocking, so treat it as one unit:
 
@@ -340,7 +362,7 @@ Interlocking, so treat it as one unit:
   allocation (`encoder_ext.rs:1239`).
 - `GOM_H_SCC` is corrected (8, not 2) and waiting.
 
-### 4.4 The three `SPS_LISTING` parameter-set strategies
+### 4.3 The three `SPS_LISTING` parameter-set strategies
 
 `CreateParametersetStrategy` returns null for `SPS_LISTING`,
 `SPS_LISTING_AND_PPS_INCREASING` and `SPS_PPS_LISTING`, and
@@ -350,11 +372,11 @@ Interlocking, so treat it as one unit:
 live for the non-`CONSTANT_ID` strategies, so the `SPS_LISTING` overrides of those two
 are what the new strategies need first.
 
-### 4.5 `METHOD_DENOISE`
+### 4.4 `METHOD_DENOISE`
 
 Self-contained; the smallest remaining VP method.
 
-### 4.6 `bEnableAdaptiveQuant` allocation
+### 4.5 `bEnableAdaptiveQuant` allocation
 
 `encoder_ext.rs:1251` refuses the `sAdaptiveQuantParam` buffers. Note
 `ParamValidation` (`encoder_ext.cpp:301`) sets `bEnableAdaptiveQuant = false`
@@ -364,11 +386,11 @@ correct-but-unreachable for the same reason. Low priority; do not "fix" the flag
 
 ---
 
-## 5. Cleanup (Phase 6) — about a third done
+## 5. Cleanup (Phase 6) — roughly a third done
 
 Do these alongside the above, not after.
 
-1. **`find_stub_bodies.py --dups`: 90 names, most unread.** Six of the ten inspected
+1. **`find_stub_bodies.py --dups`: 83 groups, most unread.** Six of the ten inspected
    across Phases 5.2–5.4 were real defects — including the shadowed `CWelsThreadPool`
    that made the whole MT path dead, and `WriteBlockResidualCavlc`, which had a
    caller-less second copy in `vlc_encoder.rs` (removed). **This is still the
@@ -379,8 +401,8 @@ Do these alongside the above, not after.
    and the thread-pool container helpers (methods on distinct types), the `Bs*`
    writers (compared line by line in Phase 3), and the
    `WelsI16x16LumaPred*_sse2`/`_neon` pairs (all unassigned on this target).
-2. **`find_dup_types.sh` reports 130 duplicated names** (23 types, 40 aliases,
-   29 tables, 38 constants) across 269 lines of output. Most are one encoder
+2. **`find_dup_types.sh` reports ~130 duplicated names** (23 types, 40 aliases,
+   29 tables, 38 constants) across 268 lines of output. Most are one encoder
    declaration beside one decoder declaration of a name the codecs genuinely keep
    separate; those want a one-line comment, not a merge. Encoder-vs-encoder pairs can
    be re-exported the way `MAX_PPS_COUNT`, `MAX_FRAME_RATE`, `DELTA_QP`,
@@ -398,13 +420,22 @@ Do these alongside the above, not after.
    Also 19 decoder `ERR_INFO_*`/`ERR_LEVEL_*` codes genuinely disagree across decoder
    modules. All of this is decoder territory — rule 6 — so fix additively and re-run
    conformance.
-4. **67 modules carry a `#![allow(...)]` blanket; 63 silence `dead_code`.** Fold them
-   back to the narrowest scope that still compiles. These hide exactly the warning —
-   `dead_code` on a function that should have a caller — that would have flagged
-   `GomRCInitForOneSlice`, `WelsCabacInitContexts` and
+4. **67 modules carry a `#![allow(...)]` blanket; 60 still silence `dead_code`.**
+   Fold them back to the narrowest scope that still compiles. These hide exactly the
+   warning — `dead_code` on a function that should have a caller — that would have
+   flagged `GomRCInitForOneSlice`, `WelsCabacInitContexts` and
    `WelsCabacContextInitFromContexts`, all faithful bodies nothing called. **This is
    the only automated thing in the tree that can find the no-call-site defect class,
-   which has now bitten five times.** Doing it early pays for itself.
+   which has now bitten six times.** Doing it early pays for itself.
+
+   Phase 5.4 did three (`encoder/wels_task_management.rs`,
+   `encoder/slice_multi_threading.rs`, `common/wels_thread_pool.rs`) for **zero** new
+   warnings, so the blanket was pure cost there. It is worth doing precisely because
+   of the sixth instance: with `dead_code` live on `common/wels_thread_pool.rs`, the
+   compiler would have reported the whole 905-line pool as unused, and the shadowing
+   `CWelsThreadPool` would have been a warning instead of a deadlock. Expect the
+   remaining 60 to be mostly noise and occasionally a real find; go a few modules at
+   a time and keep the tree green.
 
 ---
 
@@ -427,7 +458,8 @@ So you know the failure mode of these documents:
 - The Phase-5.1 session reported the `SetOption` gap as 14 options, then 20. It was
   **20 switch arms plus six stubbed helpers**.
 
-Corrected by Phase 5.4, in the §4.1 text this file carried until then:
+Corrected by Phase 5.4, in the `iMultipleThreadIdc` work item this file
+carried until then (now replaced by the carry-forward notes at the end of §1):
 
 - It said `RequestMtResource` "creates the threads". **It does not** —
   `slice_multi_threading.cpp:327` zeroes `pThreadHandles[iIdx]`, and every worker
