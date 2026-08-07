@@ -154,26 +154,34 @@ fn workspace_root() -> std::path::PathBuf {
 /// Upstream's `DecodeEncodeFile/DecodeEncodeTest.CompareOutput`
 /// (`test/api/decode_encode_test.cpp`), which passes against `libopenh264.a`.
 ///
-/// **Ignored, with a measurement rather than a guess.** That test initialises with a
-/// bare `SEncParamBase`, so `FillDefault` leaves `iRCMode` at its default
-/// `RC_QUALITY_MODE` — rate control **on**. The port is byte-exact with rate control
-/// **off**, which is the Phase-5 gate configuration, and is not yet byte-exact with
-/// it on. Measured with the differential harness, which now takes `iRCMode` as an
-/// optional ninth argument (`compare.sh … <gop> <rcmode>`), on
-/// `res/CiscoVT2people_320x192_12fps.yuv 320 192 9 26 0 -1`:
+/// This calls `Initialize` with a bare `SEncParamBase`, exactly as upstream's
+/// `BaseEncoderTest::InitWithParam` does for this configuration. That leaves
+/// **every** `FillDefault` value in place, not just `iRCMode = RC_QUALITY_MODE`:
+/// `bEnableSceneChangeDetect`, `bEnableBackgroundDetection`, `bEnableAdaptiveQuant`
+/// and `bEnableFrameSkip` are all `true` as well.
 ///
-/// | `iRCMode` | C++ | Rust | |
+/// **Ignored, with a measurement rather than a guess.** Phase 5.0's doc comment
+/// blamed rate control. Phase 5.1 made all five `iRCMode` values byte-exact — and
+/// this test still fails, so that diagnosis was incomplete. `compare.sh` grew a
+/// tenth argument that selects this exact `Initialize(SEncParamBase)` path
+/// (`compare.sh <yuv> <w> <h> <n> <qp> <cabac> <gop> <rcmode> 1`). On
+/// `res/CiscoVT2people_320x192_12fps.yuv 320 192 <n> 26 0 -1 0 1`:
+///
+/// | frames | C++ | Rust | |
 /// |---|---|---|---|
-/// | `RC_OFF_MODE` (-1) | 32959 | 32959 | byte-identical |
-/// | `RC_QUALITY_MODE` (0) | 21714 | 9180 | differ |
-/// | `RC_BITRATE_MODE` (1) | 20690 | 10747 | differ |
-/// | `RC_BUFFERBASED_MODE` (2) | 71981 | 71981 | byte-identical |
-/// | `RC_TIMESTAMP_MODE` (3) | 28942 | 9180 | differ |
+/// | 1 | 13304 | 13304 | byte-identical — the IDR is exact |
+/// | 2 | 20144 | 20214 | differ |
+/// | 3 | 26621 | 29709 | differ |
 ///
-/// Re-enable once `ratectl.cpp`'s QP-adapting modes are byte-exact; nothing else in
-/// this test needs to change.
+/// The IDR is exact and the first **P** frame is not, which is where
+/// `bNeededMbAq` (`bEnableAdaptiveQuant && P_SLICE`) and `bCalculateBGD`
+/// (`bEnableBackgroundDetection && P_SLICE`) first take effect. What this test
+/// needs is the rest of `codec/processing/`: `METHOD_ADAPTIVE_QUANT`,
+/// `METHOD_BACKGROUND_DETECTION` and `METHOD_SCENE_CHANGE_DETECTION_VIDEO`, plus
+/// the `pfVAACalcSadSsd`/`SadBgd`/`SadSsdBgd` kernels they read. All still return
+/// `RET_NOTSUPPORTED`.
 #[test]
-#[ignore = "needs byte-exact RC_QUALITY_MODE rate control; see the doc comment"]
+#[ignore = "needs METHOD_ADAPTIVE_QUANT / METHOD_BACKGROUND_DETECTION; see the doc comment"]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
     for param in K_DECODE_ENCODE_FILE_ARRAY {

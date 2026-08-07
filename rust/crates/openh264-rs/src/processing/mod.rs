@@ -11,13 +11,16 @@
 //! every macroblock, which made `WelsMdInterFinePartitionVaa` return immediately —
 //! so no sub-16x16 inter partition was ever evaluated.
 //!
-//! Only `METHOD_VAA_STATISTICS` is implemented. Every other method returns
+//! `METHOD_VAA_STATISTICS` and `METHOD_COMPLEXITY_ANALYSIS` are implemented.
+//! Every other method returns
 //! `RET_NOTSUPPORTED` instead of the previous silent success; see
 //! [`WelsVpProcess`] for the list and what each one gates.
 
+pub mod complexity_analysis;
 pub mod vaacalc;
 
 use crate::encoder::wels_preprocess::{EMethods, IWelsVP, SPixMap};
+use complexity_analysis::CComplexityAnalysis;
 use core::ffi::c_void;
 use vaacalc::{CVAACalculation, RET_INVALIDPARAM, RET_NOTSUPPORTED, RET_SUCCESS};
 
@@ -25,12 +28,14 @@ use vaacalc::{CVAACalculation, RET_INVALIDPARAM, RET_NOTSUPPORTED, RET_SUCCESS};
 /// `CWelsPreProcessPlus`'s plugin table. One field per implemented method.
 pub struct SWelsVpContext {
     pub sVaaCalc: CVAACalculation,
+    pub sComplexityAnalysis: CComplexityAnalysis,
 }
 
 impl Default for SWelsVpContext {
     fn default() -> Self {
         Self {
             sVaaCalc: CVAACalculation::default(),
+            sComplexityAnalysis: CComplexityAnalysis::default(),
         }
     }
 }
@@ -72,6 +77,9 @@ pub unsafe extern "C" fn WelsVpSet(pCtx: *mut c_void, iType: i32, pParam: *mut c
     if iType == EMethods::METHOD_VAA_STATISTICS as i32 {
         return ctx.sVaaCalc.Set(iType, pParam);
     }
+    if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
+        return ctx.sComplexityAnalysis.Set(iType, pParam);
+    }
     RET_NOTSUPPORTED
 }
 
@@ -79,16 +87,22 @@ pub unsafe extern "C" fn WelsVpSet(pCtx: *mut c_void, iType: i32, pParam: *mut c
 ///
 /// # Safety
 /// As [`WelsVpSet`].
-pub unsafe extern "C" fn WelsVpGet(_pCtx: *mut c_void, _iType: i32, _pParam: *mut c_void) -> i32 {
-    // Only METHOD_VAA_STATISTICS is implemented, and its results are written
-    // straight into the caller's `SVAACalcResult` by Process — the C++ plugin has no
-    // Get for it either.
+pub unsafe extern "C" fn WelsVpGet(pCtx: *mut c_void, iType: i32, pParam: *mut c_void) -> i32 {
+    if pCtx.is_null() {
+        return RET_INVALIDPARAM;
+    }
+    let ctx = &mut *(pCtx as *mut SWelsVpContext);
+    if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
+        return ctx.sComplexityAnalysis.Get(iType, pParam);
+    }
+    // `METHOD_VAA_STATISTICS` results are written straight into the caller's
+    // `SVAACalcResult` by Process — the C++ plugin has no Get for it either.
     RET_NOTSUPPORTED
 }
 
 /// `IWelsVP::Process`.
 ///
-/// Implemented: `METHOD_VAA_STATISTICS`.
+/// Implemented: `METHOD_VAA_STATISTICS`, `METHOD_COMPLEXITY_ANALYSIS`.
 ///
 /// Returns `RET_NOTSUPPORTED` for the rest. Each is off in the gate configuration
 /// and its caller in `wels_preprocess.rs` already skips the follow-up `Get` when
@@ -102,7 +116,7 @@ pub unsafe extern "C" fn WelsVpGet(_pCtx: *mut c_void, _iType: i32, _pParam: *mu
 /// | `METHOD_DOWNSAMPLE` | more than one spatial layer, or a resized layer |
 /// | `METHOD_BACKGROUND_DETECTION` | `bEnableBackgroundDetection` |
 /// | `METHOD_ADAPTIVE_QUANT` | `bEnableAdaptiveQuant` |
-/// | `METHOD_COMPLEXITY_ANALYSIS`/`_SCREEN` | rate control |
+/// | `METHOD_COMPLEXITY_ANALYSIS_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
 /// | `METHOD_SCROLL_DETECTION` | `SCREEN_CONTENT_REAL_TIME` |
 ///
 /// # Safety
@@ -132,6 +146,9 @@ pub unsafe extern "C" fn WelsVpProcess(
             (*pSrc).sRect.iRectHeight,
             (*pSrc).iStride[0],
         );
+    }
+    if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
+        return ctx.sComplexityAnalysis.Process(iType, pSrc, pDst);
     }
     RET_NOTSUPPORTED
 }

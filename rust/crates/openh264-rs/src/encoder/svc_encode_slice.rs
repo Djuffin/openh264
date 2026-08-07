@@ -1871,6 +1871,12 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 
     WelsSliceHeaderExtInit(pEncCtx, pCurLayer, pCurSlice);
 
+    //RomRC init slice by slice
+    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize);
+    if !pWelsSvcRc.is_null() && (*pWelsSvcRc).bGomRC {
+        crate::encoder::rc::GomRCInitForOneSlice(pCurSlice, (*pWelsSvcRc).iBitsPerMb);
+    }
+
     let ext_hdr_idx = if (*pCurSlice).bSliceHeaderExtFlag { 1 } else { 0 };
     (g_pWelsWriteSliceHeader[ext_hdr_idx])(
         pEncCtx,

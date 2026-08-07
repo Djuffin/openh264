@@ -565,11 +565,14 @@ impl SWelsSvcCodingParam {
         self.bEnableLongTermReference = pCodingParam.bEnableLongTermReference;
         self.iLtrMarkPeriod = pCodingParam.iLtrMarkPeriod;
         self.bIsLosslessLink = pCodingParam.bIsLosslessLink;
-        self.bFixRCOverShoot = true;
-        self.iIdrBitrateRatio = IDR_BITRATE_RATIO * 100;
-        self.bPsnrY = false;
-        self.bPsnrU = false;
-        self.bPsnrV = false;
+        // These five are *copied* here (`param_svc.h:349-353`); the constants above
+        // belong to `FillDefault`. Hardcoding them made `bFixRCOverShoot` true for
+        // every caller, which sends `RcInitVGop` down its carry-over arm.
+        self.bFixRCOverShoot = pCodingParam.bFixRCOverShoot;
+        self.iIdrBitrateRatio = pCodingParam.iIdrBitrateRatio;
+        self.bPsnrY = pCodingParam.bPsnrY;
+        self.bPsnrU = pCodingParam.bPsnrU;
+        self.bPsnrV = pCodingParam.bPsnrV;
 
         if self.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME
             && !self.bIsLosslessLink

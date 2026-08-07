@@ -15,7 +15,7 @@
 
 int main (int argc, char** argv) {
   if (argc < 9) {
-    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode]\n", argv[0]);
+    fprintf (stderr, "usage: %s <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit]\n", argv[0]);
     return 1;
   }
   const char* kpSrc    = argv[1];
@@ -28,6 +28,12 @@ int main (int argc, char** argv) {
   const char* kpOut    = argv[8];
   // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
   const int   kiRcMode = (argc > 9) ? atoi (argv[9]) : (int) RC_OFF_MODE;
+  // Optional 10th argument: 1 selects Initialize(SEncParamBase) — the path
+  // upstream's BaseEncoderTest::InitWithParam takes, and the one the SHA-1
+  // parity test exercises. Everything else keeps FillDefault's values, so
+  // scene-change detection, background detection, adaptive quantisation and
+  // frame skip are all ON. 0 (default) is InitializeExt with the gate config.
+  const int   kiBaseInit = (argc > 10) ? atoi (argv[10]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -91,7 +97,20 @@ int main (int argc, char** argv) {
   sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
   sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = 1;
 
-  if (pEnc->InitializeExt (&sParam) != 0) {
+  if (kiBaseInit) {
+    SEncParamBase sBase;
+    memset (&sBase, 0, sizeof (sBase));
+    sBase.iUsageType     = CAMERA_VIDEO_REAL_TIME;
+    sBase.fMaxFrameRate  = 30.0f;
+    sBase.iPicWidth      = kiWidth;
+    sBase.iPicHeight     = kiHeight;
+    sBase.iTargetBitrate = 5000000;
+    if (pEnc->Initialize (&sBase) != 0) {
+      fprintf (stderr, "Initialize failed\n");
+      WelsDestroySVCEncoder (pEnc);
+      return 1;
+    }
+  } else if (pEnc->InitializeExt (&sParam) != 0) {
     fprintf (stderr, "InitializeExt failed\n");
     WelsDestroySVCEncoder (pEnc);
     return 1;
