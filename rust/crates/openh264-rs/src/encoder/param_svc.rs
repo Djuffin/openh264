@@ -41,11 +41,25 @@ pub const MAX_SPS_COUNT: usize = 32;
 /// entries. Re-exported from the one encoder-side definition instead.
 pub use crate::encoder::encoder_context::MAX_PPS_COUNT;
 pub const MAX_SLICEGROUP_IDS: usize = 8;
-pub const MAX_SLICES_NUM: usize = 35;
-pub const MAX_SLICES_NUM_TMP: usize = 32;
+/// `svc_enc_slice_segment.h:62` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM) / 3`
+/// = (128 - 21) / 3 = 35. The literal here matches; re-exported anyway so there is
+/// one definition.
+pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
+/// `codec_app_def.h:56` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM_TMP) / 3`
+/// = (128 - 21) / 3 = **35**, not 32. Both `ParamTranscode` and `FillDefault`
+/// compute `kiLesserSliceNum = min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)`
+/// (param_svc.h:203), so the port capped `uiSliceNum` at 32 where the reference
+/// caps at 35.
+pub use crate::api::codec_api::MAX_SLICES_NUM_TMP;
 
-pub const MAX_FRAME_RATE: f32 = 30.0;
-pub const MIN_FRAME_RATE: f32 = 1.0;
+/// `wels_const.h:60` says **60**, not 30. This module's own copy said 30, and it
+/// is the one `FillDefault` and the two transcoders use -- so `GetDefaultParams`
+/// reported 30 fps where the reference reports 60, and `ParamTranscode`'s
+/// `WELS_CLIP3 (fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE)` silently capped
+/// any caller asking for more than 30. Measured against libopenh264.a: the
+/// reference returns 60.0 from GetDefaultParams and keeps 50.0 through
+/// InitializeExt. Re-exported from the one definition.
+pub use crate::encoder::wels_encoder_ext::{MAX_FRAME_RATE, MIN_FRAME_RATE};
 
 pub const UNSPECIFIED_BIT_RATE: i32 = 0;
 pub const AUTO_REF_PIC_COUNT: i32 = -1;
@@ -1034,7 +1048,11 @@ mod tests {
     fn test_param_defaults() {
         let param = SWelsSvcCodingParam::new();
         assert_eq!(param.uiGopSize, 1);
-        assert_eq!(param.fMaxFrameRate, 30.0);
+        // MAX_FRAME_RATE is 60 (wels_const.h:60). Measured: the reference's
+        // GetDefaultParams returns fMaxFrameRate = 60.0. This assertion used to
+        // say 30.0, which is what this module's own wrong copy of the constant
+        // produced.
+        assert_eq!(param.fMaxFrameRate, 60.0);
         assert_eq!(param.iSpatialLayerNum, 1);
         assert_eq!(param.iTemporalLayerNum, 1);
         assert_eq!(param.iBitsVaryPercentage, 10);

@@ -242,8 +242,6 @@ pub const C_PRED_DC: u8 = 0;
 pub const MAX_PRED_MODE_ID_CHROMA: i32 = 3;
 
 // CPU Flags
-pub const WELS_CPU_SSE2: i32 = 0x00000004;
-pub const WELS_CPU_NEON: i32 = 0x00000080;
 
 // ============================================================================
 // Lookup Tables
@@ -294,18 +292,33 @@ pub static g_kuiCache30ScanIdx: [u8; 16] = [
     21, 22, 27, 28,
 ];
 
-pub static g_kuiCache48CountScan4Idx: [u8; 16] = [
+// `common_tables.cpp:49` declares this `[24]`, not `[16]`: the eight chroma
+// entries were missing from this module's copy. Nothing here indexes past 15, so
+// the truncation was latent -- the same shape as `g_kuiGolombUELength` in Phase
+// 4.6, where a short copy did index out of bounds.
+pub static g_kuiCache48CountScan4Idx: [u8; 24] = [
+    /* Luma */
     9, 10, 17, 18,
     11, 12, 19, 20,
     25, 26, 33, 34,
     27, 28, 35, 36,
+    /* Cb */
+    14, 15,
+    22, 23,
+    /* Cr */
+    38, 39,
+    46, 47,
 ];
 
-pub static g_kuiMbCountScan4Idx: [u8; 16] = [
+// `wels_common_defs.h:64` declares this `[24]`, not `[16]`: the eight chroma
+// entries were missing here. Only indices below 16 are read in this module.
+pub static g_kuiMbCountScan4Idx: [u8; 24] = [
     0, 1, 4, 5,
     2, 3, 6, 7,
     8, 9, 12, 13,
     10, 11, 14, 15,
+    16, 17, 20, 21,
+    18, 19, 22, 23,
 ];
 
 pub static g_kuiZigzagScan: [u8; 16] = [
@@ -5241,3 +5254,8 @@ mod tests {
         }
     }
 }
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};

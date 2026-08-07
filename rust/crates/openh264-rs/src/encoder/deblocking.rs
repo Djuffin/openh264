@@ -79,18 +79,16 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
 }
 
 // CPU Capability Flags
-pub const WELS_CPU_SSE2: i32 = 0x00000004;
-pub const WELS_CPU_SSSE3: i32 = 0x00000010;
-pub const WELS_CPU_NEON: i32 = 0x00000008;
-pub const WELS_CPU_MMI: i32 = 0x00000080;
-pub const WELS_CPU_MSA: i32 = 0x00000100;
-pub const WELS_CPU_LSX: i32 = 0x00000200;
 
 // ============================================================================
 // H.264 Deblocking Lookup Tables
 // ============================================================================
 
 /// Table 8-16 in H.264/AVC standard: Alpha table indexed by clipped QP + offset (0..51 + padding)
+// `g_kuiAlphaTable`/`g_kiBetaTable`/`g_kiTc0Table` are `static const` **file-local**
+// in both codecs and are deliberately different sizes: `codec/encoder/core/src/
+// deblocking.cpp:72-92` declares `[52 + 12]`, `codec/decoder/core/src/deblocking.cpp:
+// 144-166` declares `[52 + 24]`. Two definitions here is correct.
 pub static g_kuiAlphaTable: [u8; 52 + 12] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
     22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
@@ -1603,25 +1601,19 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
     }
 }
 
-pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
-    if pCurDq.is_null() {
-        return 0;
-    }
-    1
-}
+// `GetCurrentSliceNum` — svc_encode_slice.cpp. This module used to declare a copy
+// that returned a hardcoded `1`, and `WelsDeblockingFilterMbAvcbase`'s slice loop
+// below reads it (`deblocking.cpp:754`), so deblocking only ever filtered slice 0.
+// Indistinguishable from correct at one slice per frame; wrong for every other
+// slice mode.
+pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 
-pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
-    if pCurDq.is_null() {
-        return -1;
-    }
-    let total: i32 = (*pCurDq).iMbWidth as i32 * (*pCurDq).iMbHeight as i32;
-    let next = kiMbXY + 1;
-    if next >= total {
-        -1
-    } else {
-        next
-    }
-}
+// `WelsGetNextMbOfSlice` — svc_enc_slice_segment.cpp:556, and `deblocking.cpp:733`
+// calls that one. This module used to declare a truncated copy that returned
+// `kiMbXY + 1` bounded only by the frame, ignoring `sSliceEncCtx` and
+// `pOverallMbMap` entirely. It agrees with the real one for SM_SINGLE_SLICE and
+// walks straight across slice boundaries for every other slice mode.
+pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
 pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pCurDq: *mut SDqLayer,
@@ -1794,3 +1786,8 @@ mod tests {
         }
     }
 }
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};

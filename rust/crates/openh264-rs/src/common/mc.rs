@@ -8,24 +8,6 @@
 )]
 
 // CPU feature flags from cpu_core.h
-pub const WELS_CPU_MMX: u32 = 0x00000001;
-pub const WELS_CPU_MMXEXT: u32 = 0x00000002;
-pub const WELS_CPU_SSE: u32 = 0x00000004;
-pub const WELS_CPU_SSE2: u32 = 0x00000008;
-pub const WELS_CPU_SSE3: u32 = 0x00000010;
-pub const WELS_CPU_SSE41: u32 = 0x00000020;
-pub const WELS_CPU_3DNOW: u32 = 0x00000040;
-pub const WELS_CPU_3DNOWEXT: u32 = 0x00000080;
-pub const WELS_CPU_ALTIVEC: u32 = 0x00000100;
-pub const WELS_CPU_SSSE3: u32 = 0x00000200;
-pub const WELS_CPU_SSE42: u32 = 0x00000400;
-pub const WELS_CPU_AVX: u32 = 0x00000800;
-pub const WELS_CPU_AVX2: u32 = 0x00040000;
-pub const WELS_CPU_ARMv7: u32 = 0x00000001;
-pub const WELS_CPU_VFPv3: u32 = 0x00000002;
-pub const WELS_CPU_NEON: u32 = 0x00000004;
-pub const WELS_CPU_MMI: u32 = 0x00000001;
-pub const WELS_CPU_LSX: u32 = 0x00000003;
 
 // Function pointer signatures matching mc.h
 pub type PWelsMcFunc = unsafe extern "C" fn(
@@ -904,3 +886,7 @@ mod tests {
     }
 }
 
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_3DNOW, WELS_CPU_3DNOWEXT, WELS_CPU_ALTIVEC, WELS_CPU_ARMv7, WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3, WELS_CPU_VFPv3};

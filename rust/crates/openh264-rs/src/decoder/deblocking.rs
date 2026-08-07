@@ -94,17 +94,14 @@ pub fn IS_INTER_16x16(mb_type: u32) -> bool {
 }
 
 // CPU Feature Flags
-pub const WELS_CPU_SSSE3: i32 = 0x00000008;
-pub const WELS_CPU_NEON: i32 = 0x00000010;
-pub const WELS_CPU_MMI: i32 = 0x00000020;
-pub const WELS_CPU_MSA: i32 = 0x00000040;
-pub const WELS_CPU_LSX: i32 = 0x00000080;
 
 // ============================================================================
 // H.264 / AVC Static Deblocking Lookup Tables
 // ============================================================================
 
 /// Table 8-16: Alpha table with +12 index offset padding
+// See the note in `encoder/deblocking.rs`: these three tables are file-local in the
+// C++ and the decoder's are `[52 + 24]` where the encoder's are `[52 + 12]`.
 pub static g_kuiAlphaTable: [u8; 52 + 24] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -2273,3 +2270,8 @@ mod tests {
         }
     }
 }
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};

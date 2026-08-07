@@ -61,10 +61,6 @@ pub const dsBitstreamError: i32 = 0x04;
 pub const dsDataErrorConcealed: i32 = 0x20;
 
 // CPU Feature Flags
-pub const WELS_CPU_MMXEXT: u32 = 0x00000002;
-pub const WELS_CPU_SSE2: u32 = 0x00000004;
-pub const WELS_CPU_NEON: u32 = 0x00000008;
-pub const WELS_CPU_LSX: u32 = 0x00000010;
 
 // Reference picture list index
 pub const LIST_0: usize = 0;
@@ -1049,3 +1045,8 @@ mod tests {
         }
     }
 }
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE2};
