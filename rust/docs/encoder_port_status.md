@@ -1820,3 +1820,17 @@ built — and leave execution to the differential harness, which covers it far b
 Neither is `#[ignore]`d. A third, `test_task_list_operations`, was **missing its
 `#[test]` attribute** and had never run; it passes now, which is why the suite went
 from 293 to 294.
+
+#### Phase 6 progress: three modules de-blanketed
+
+`dead_code` removed from the module-level `#![allow(...)]` in
+`encoder/wels_task_management.rs`, `encoder/slice_multi_threading.rs` and
+`common/wels_thread_pool.rs`. **Zero new warnings** — the blanket was hiding nothing
+in these three, now that the pool has a caller and the tasks have bodies. 3 of 63
+done; the warning total is unchanged at 15, all `unused_assignments`,
+`unused_mut` and `unreachable_pattern` elsewhere.
+
+Worth noting for whoever continues this: had `dead_code` been live on
+`common/wels_thread_pool.rs` earlier, it would have reported the entire 905-line
+pool as unused and the shadowing `CWelsThreadPool` would have been found by a
+compiler warning rather than by a deadlock.
