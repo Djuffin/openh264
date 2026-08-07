@@ -404,19 +404,13 @@ pub unsafe fn WelsCabacEncodeInit(pCbCtx: *mut SCabacCtx, pBuf: *mut u8, pEnd: *
     }
 }
 
-#[inline]
-pub unsafe fn BsAlign(pBs: *mut SBitStringAux) {
-    unsafe {
-        if !pBs.is_null() {
-            let left = (*pBs).iLeftBits & 7;
-            if left != 0 {
-                (*pBs).uiCurBits <<= left;
-                (*pBs).uiCurBits |= (1 << left) - 1;
-                (*pBs).iLeftBits &= !7;
-            }
-        }
-    }
-}
+// `BsAlign` — svc_enc_golomb.h:112. This module used to declare its own copy
+// **without the trailing `BsFlush (pBs)`**, and being a local item it beat the
+// import in `WelsInitSliceCabac`. Without the flush, `pBs->pCurBuf` still points
+// before the pending accumulator word, so `WelsCabacEncodeInit` started the
+// arithmetic coder on top of bytes of the slice header that had already been
+// written. Use the one faithful copy.
+pub use crate::encoder::vlc_encoder::BsAlign;
 
 // ============================================================================
 // Macroblock Header & Mode Serialization
@@ -1275,9 +1269,17 @@ pub unsafe fn WelsInitSliceCabac(
     pSlice: *mut SSlice,
 ) {
     unsafe {
+        /* alignment needed */
         let pBs = (*pSlice).pSliceBsa;
         BsAlign(pBs);
 
+        /* init cabac */
+        let iCabacInitIdc = (*pSlice).iCabacInitIdc;
+        crate::encoder::set_mb_syn_cabac::WelsCabacContextInit(
+            pEncCtx as *mut c_void,
+            &mut (*pSlice).sCabacCtx,
+            iCabacInitIdc,
+        );
         WelsCabacEncodeInit(
             &mut (*pSlice).sCabacCtx,
             (*pBs).pCurBuf,

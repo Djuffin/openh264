@@ -79,7 +79,13 @@ fn main() {
         p.bPsnrU = false;
         p.bPsnrV = false;
 
-        p.sSpatialLayers[0].uiProfileIdc = EProfileIdc::PRO_BASELINE;
+        // See cxx_enc.cpp: a baseline layer forces CAVLC, so the profile has to
+        // follow the cabac flag or `cabac 1` never reaches the CABAC writers.
+        p.sSpatialLayers[0].uiProfileIdc = if cabac != 0 {
+            EProfileIdc::PRO_HIGH
+        } else {
+            EProfileIdc::PRO_BASELINE
+        };
         p.sSpatialLayers[0].uiLevelIdc = ELevelIdc::LEVEL_UNKNOWN;
         p.sSpatialLayers[0].iVideoWidth = w;
         p.sSpatialLayers[0].iVideoHeight = h;

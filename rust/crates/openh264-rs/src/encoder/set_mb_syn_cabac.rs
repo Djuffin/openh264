@@ -726,16 +726,22 @@ pub fn WelsCabacInitContexts(
     }
 }
 
-/// C ABI initialization function for global encoder CABAC context tables.
+/// `WelsCabacInit` — set_mb_syn_cabac.cpp:64. Fills `sWelsCabacContexts[4][52][460]`.
+///
+/// This body used to be `if (pCtx.is_null()) { return; }` and a comment pointing
+/// at `WelsCabacInitContexts`, which had no call site at all. `WelsInitEncoderExt`
+/// calls this on every CABAC configuration, so every context model started from
+/// whatever `SStateCtx::default()` gave.
 ///
 /// # Safety
-/// - `pCtx` must point to valid encoder context memory or context tables if non-null.
+/// - `pCtx` must point to a valid `sWelsEncCtx`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCabacInit(pCtx: *mut c_void) {
     if pCtx.is_null() {
         return;
     }
-    // Typed invocation can be done via WelsCabacInitContexts.
+    let pEncCtx = pCtx as *mut crate::encoder::encoder_context::sWelsEncCtx;
+    WelsCabacInitContexts(&mut (*pEncCtx).sWelsCabacContexts);
 }
 
 /// Initializes the slice's active context models from a precomputed table.
@@ -767,9 +773,15 @@ pub unsafe fn WelsCabacContextInitFromContexts(
     );
 }
 
-/// C ABI initialization function for slice CABAC context models.
+/// `WelsCabacContextInit` — set_mb_syn_cabac.cpp:86. Copies the model row for
+/// this slice type and QP into the slice's own 460 context states.
+///
+/// This body used to be a no-op with the comment "High-level slice loop supplies
+/// initialized contexts", which nothing did: the only caller,
+/// `WelsInitSliceCabac`, did not call it either.
 ///
 /// # Safety
+/// - `pCtx` must point to a valid `sWelsEncCtx`.
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCabacContextInit(
@@ -777,10 +789,17 @@ pub unsafe extern "C" fn WelsCabacContextInit(
     pCbCtx: *mut SCabacCtx,
     iModel: i32,
 ) {
-    if pCbCtx.is_null() {
+    if pCbCtx.is_null() || pCtx.is_null() {
         return;
     }
-    // High-level slice loop supplies initialized contexts.
+    let pEncCtx = pCtx as *mut crate::encoder::encoder_context::sWelsEncCtx;
+    WelsCabacContextInitFromContexts(
+        pCbCtx,
+        &(*pEncCtx).sWelsCabacContexts,
+        (*pEncCtx).eSliceType as i32,
+        (*pEncCtx).iGlobalQp,
+        iModel,
+    );
 }
 
 /// Prepares the CABAC arithmetic encoding engine registers at the beginning of a slice NAL unit.

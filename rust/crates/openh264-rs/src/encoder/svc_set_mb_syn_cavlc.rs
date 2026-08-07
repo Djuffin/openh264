@@ -13,6 +13,7 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`.
 
 use crate::decoder::bit_stream::SBitStringAux;
+use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
