@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit] [slicemode] [slicenum]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -28,6 +28,11 @@ fn main() {
     // detection, background detection, adaptive quantisation and frame skip are all
     // ON. 0 (default) is InitializeExt with the gate configuration.
     let baseinit: i32 = if a.len() > 10 { a[10].parse().unwrap() } else { 0 };
+    // Optional 11th/12th: uiSliceMode and uiSliceNum. See cxx_enc.cpp.
+    //   0 = SM_SINGLE_SLICE, 1 = SM_FIXEDSLCNUM_SLICE, 2 = SM_RASTER_SLICE,
+    //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
+    let slicemode: i32 = if a.len() > 11 { a[11].parse().unwrap() } else { 0 };
+    let slicenum: i32 = if a.len() > 12 { a[12].parse().unwrap() } else { 1 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -93,8 +98,27 @@ fn main() {
         p.sSpatialLayers[0].iSpatialBitrate = 500000;
         p.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
         p.sSpatialLayers[0].iDLayerQp = qp;
-        p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
-        p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+        match slicemode {
+            1 => {
+                p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+                    SliceModeEnum::SM_FIXEDSLCNUM_SLICE;
+                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
+            }
+            2 => {
+                p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_RASTER_SLICE;
+                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
+                p.sSpatialLayers[0].sSliceArgument.uiSliceMbNum[0] = slicenum as u32;
+            }
+            3 => {
+                p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+                    SliceModeEnum::SM_SIZELIMITED_SLICE;
+                p.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = slicenum as u32;
+            }
+            _ => {
+                p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+            }
+        }
 
         if baseinit != 0 {
             let mut b = SEncParamBase::default();
