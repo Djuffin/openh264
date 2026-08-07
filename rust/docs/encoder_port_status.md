@@ -4,14 +4,20 @@ Living record of the OpenH264 **encoder** Rust port. The decoder port is mature 
 passes conformance; the encoder is the work in progress. Update this file at the end
 of every phase.
 
-**As of Phase 5.1 the encoder is byte-identical with the C++ reference for all five
-rate-control modes and for upstream's own `Initialize(SEncParamBase)`
-configuration**, which additionally turns on frame skip, background detection and
-scene-change detection. Verified over 120 mode x input x GOP configurations and 208
-QP x mode configurations. `cargo test --no-fail-fast` is green: 290 passed, 0
-failed, 20 ignored, and `test_decode_encode_full_cycle_sha1_parity` — upstream's
-own hash — passes for the first time. What is not yet exact is listed under
-*Phase 5.2*; CABAC and multi-threading are the largest items.
+**As of Phase 5.2 the encoder is byte-identical with the C++ reference for all five
+rate-control modes, both entropy coders, both init paths and all 52 QPs.** Verified
+over 240 mode x input x GOP x cabac configurations and 1560 QP x mode x cabac x size
+configurations. `SetOption` handles all 32 of upstream's options; `todo!()` and
+`unimplemented!()` are both zero in `src/`. `cargo test --no-fail-fast` is green:
+292 passed, 0 failed, 20 ignored, and `test_decode_encode_full_cycle_sha1_parity` —
+upstream's own hash — passes. What is not yet exact is listed under *Phase 5.3*;
+multi-threading, the multi-slice modes and `METHOD_DOWNSAMPLE` are the largest items.
+
+> **Multi-slice is the biggest unmeasured area.** `SM_FIXEDSLCNUM_SLICE` and
+> `SM_RASTER_SLICE` are accepted by `ParamValidationExt` and have never been
+> encoded end to end, and Phase 5.2 found two helpers (`WelsGetNextMbOfSlice`,
+> `GetCurrentSliceNum`) that are wrong for exactly those modes and indistinguishable
+> from correct at one slice per frame. Every number above is a one-slice number.
 
 ---
 
@@ -32,11 +38,28 @@ make -j8 libraries binaries
 ./rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
 ```
 
-`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode]` runs both encoders and
-`cmp`s the Annex-B output; it exits 0 only when the streams match. `rcmode` is
-optional and defaults to `RC_OFF_MODE`, the gate configuration. It also feeds the Rust
-stream to `./h264dec` as a sanity check. Artifacts land in
+`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit]` runs both
+encoders and `cmp`s the Annex-B output; it exits 0 only when the streams match.
+`rcmode` defaults to `RC_OFF_MODE`; `baseinit=1` selects `Initialize(SEncParamBase)`.
+It also feeds the Rust stream to `./h264dec` as a sanity check. Artifacts land in
 `rust/tools/diffharness/out/` (gitignored).
+
+> **Trap: the drivers take `out.264` BEFORE `rcmode`.** `cxx_enc … -1 0 out.264`
+> silently encodes on `RC_QUALITY_MODE`, because `atoi` of a file path is 0. If a
+> dump looks like the C++ is ignoring a parameter, check the argument order first.
+
+> **Trap: sweep scripts must quote their parameter expansions.** The shell here is
+> zsh, which does *not* word-split unquoted expansions, so `for spec in "a b c"; do
+> set -- $spec` leaves `$2` and `$3` empty and every `compare.sh` invocation runs on
+> garbage arguments. It reads as a uniform failure across the whole sweep.
+
+> **Trap, and the expensive one: `cabac 1` was a no-op for five phases.** Both
+> drivers pinned `uiProfileIdc = PRO_BASELINE`, and `ParamValidationExt`
+> (`encoder_ext.cpp:655`) resets `iEntropyCodingModeFlag` to 0 for a baseline layer.
+> A 120-configuration CABAC sweep passed with 8034 == 8034 and no CABAC symbol was
+> ever written. The drivers now pick `PRO_HIGH` when the flag is set. **Before
+> trusting a sweep over a newly-enabled feature, check that turning the knob changes
+> the C++ output.**
 
 ### Why not drive `h264enc` directly
 
@@ -50,11 +73,13 @@ and the layer output frame rate disagree — `-frms 5` on a 5-frame file yields
 `Frames: 2` unless you also pass `-frin 6 -frout 0 6`. The harness sidesteps this by
 setting `fMaxFrameRate` and `sSpatialLayers[0].fFrameRate` to the same value.
 
-### Gate configuration (Phase 5 target — **met**)
+### Gate configuration (Phase 5 target — **met, and long since exceeded**)
 
 Single spatial layer, single slice, CAVLC, RC off, single-threaded, deblocking on,
 `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-change. See `cxx_enc.cpp` for the exact
-field-by-field setting.
+field-by-field setting. As of Phase 5.2 the measured range is far wider: all five
+`iRCMode` values, both entropy coders, both init paths and all 52 QPs. The two axes
+still pinned are **one slice** and **one thread**.
 
 ---
 
@@ -1247,121 +1272,273 @@ syntax writer will actually see — which is what exposed the shadowed
 > background-skip macroblock, for one — the C++ prints stale bytes and the port
 > prints 0. Neither is read afterwards. Ignore both when diffing.
 
-### Phase 5.2 — what is still not exact — **NOT STARTED**
+### Phase 5.2 — SetOption, CABAC, qp=0, and the duplicate audits — **DONE**
 
-In the order the next session should take them. Every one is an explicit error, an
-explicit `unimplemented!()`, or a measured difference — none is a silent
-fall-through, except the first, which is exactly why it is first.
+**CABAC is byte-identical, `SetOption` handles all 32 of upstream's options, the
+qp=0 difference is closed, and `todo!()`/`unimplemented!()` are both zero in
+`src/`.** Measured, not asserted:
 
-1. **`SetOption` accepts and ignores 14 of upstream's `ENCODER_OPTION_*` values.**
-   See *`SetOption` silently succeeds* under Phase 5.1. This is the only known
-   silent-success stub left in the tree and it is on the public API.
-2. **qp=0 above 160x96** — a 3-byte difference inside a *single-frame* IDR at
-   320x192, so an I-slice edge case, not inter. Pre-dates Phase 4.6.
-   `compare.sh res/CiscoVT2people_320x192_12fps.yuv 320 192 1 0 0 -1` reproduces it;
-   `res/CiscoVT2people_160x96_6fps.yuv` at qp=0 is identical, so it depends on
-   picture size as well as QP.
-3. **CABAC.** `InitFunctionPointers` returns `ENC_RETURN_UNSUPPORTED_PARA` for
-   `iEntropyCodingModeFlag != 0`, because `StashMBStatusCabac`,
-   `StashPopMBStatusCabac` and `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are
-   unported, as are `WelsCabacEncodeFlush`/`WelsCabacEncodeGetPtr` for
-   `WelsWriteSliceEndSyn` — the tree's one `unimplemented!()`. Porting those five
-   makes `compare.sh … 1` (cabac=1) meaningful. The CAVLC twins of the first three
-   are already correct and are a good model.
-4. **`iMultipleThreadIdc > 1`** — needs `pTaskManage`, `InitAllSlicesInThread`,
-   `SliceLayerInfoUpdate`. Note `slice_multi_threading.rs`'s `UpdateMbNeighbor` now
-   calls the real one, so that path is one stub shorter.
-5. **`SM_SIZELIMITED_SLICE`** — needs `WelsCodeOnePicPartition`,
-   `WelsInitCurrentDlayerMltslc`.
-6. **The remaining VP methods** — `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (needed for
-   more than one spatial layer), and the three `SCREEN_CONTENT_REAL_TIME` ones
-   (`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
-   `METHOD_SCROLL_DETECTION`).
-7. The items carried since Phase 4: the three `SPS_LISTING` parameter-set
-   strategies, `ParamBaseTranscode`'s `sSpatialLayers[idx]` where C++ writes
-   `sSpatialLayers[0]`, `PreprocessSliceCoding`'s untranslated
-   `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`), `AllocPicture`'s
-   refusal of `iNeedFeatureStorage != 0`, the unported `WelsCalcPsnr`, and the
-   `Combined3` SIMD branches (measured NULL on this target).
+| axis | range | configurations | result |
+|---|---|---|---|
+| `iRCMode` x input x GOP x init path, **CAVLC** | 5 modes x 4 inputs x GOP −1/2/8 x baseinit 0/1 | 120 | identical |
+| the same, **CABAC** | as above | 120 | identical |
+| QP x `iRCMode` x cabac x size | 52 QPs x 5 modes x cabac 0/1 x 3 inputs | 1560 | identical |
 
-### Phase 6 — cleanup — **case-insensitive scan DONE, rest NOT STARTED**
+| check | result |
+|---|---|
+| `cargo build` | clean, 17 warnings, all `dead_code`/`unused` |
+| `cargo test --no-fail-fast` | **292 passed, 0 failed, 20 ignored** (was 290/0/20) |
+| decoder conformance | 53/53 |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `todo!()` / `unimplemented!()` in `src/` | **0 / 0** |
 
-Collapse the remaining **82** duplicated constant names (values are now believed
-correct, but one definition each is still the goal), fold the module-level
-`#![allow(dead_code, unused_variables, …)]` blankets back to the narrowest scope
-that still compiles, and reconcile this document with the final state.
+#### The harness was measuring nothing for CABAC — read this before trusting a sweep
 
-> Phase 4.5 corrected four more duplicated constants — all live, all in modules
-> other than the one where the name had already been "fixed". The count of 82 is
-> not evidence the values agree; it is only a count of names. Re-run the `grep`
-> under *Five constants had wrong values* and check each **value** against the
-> header before trusting any of them.
->
-> Phase 4.6 found a fifth: `g_kuiGolombUELength` had three copies, **two of them
-> wrong** — one short enough to index out of bounds and abort a 320x192 encode. A
-> duplicated *table* is worse than a duplicated scalar, because a diff of the values
-> is the only way to see it. Extract both and compare element by element; the
-> Phase-4.6 script that did it is six lines of Python.
+Both drivers pinned `sSpatialLayers[0].uiProfileIdc = PRO_BASELINE`, and
+`ParamValidationExt` (`encoder_ext.cpp:655`) resets `iEntropyCodingModeFlag` to 0
+for a baseline layer: *"layerId(%d) Profile is baseline, Change CABAC to CAVLC"*.
+So `cabac 1` produced a **CAVLC** stream in both encoders, byte for byte, and a
+120-configuration "CABAC sweep" passed with 8034 == 8034 without a single CABAC
+symbol being written.
 
-**A seventh blind spot, and by a wide margin the most expensive: `find_dup_types.sh`
-and every audit built on it match on *names*. A function whose name matches the C++
-but whose body does a fraction of the work passes silently.** Phase 4.5 lost most of
-its time to three such stubs; Phase 4.6 found **seven more**, including one
-(`OutputPMbWithoutConstructCsRsNoCopy`) that was missing an entire plane; Phase 5.1
-found four more and two further variants of the same shape — a faithful function
-with **no call site** (`GomRCInitForOneSlice`), and a faithful function **shadowed**
-by an empty same-named one in another module (`WelsMdUpdateBGDInfo`).
+Both drivers now select `PRO_HIGH` when the flag is set. The same configuration
+immediately read 7833 vs 7850 and four defects fell out. **The lesson generalises:
+a sweep that passes on the first run over a newly-enabled feature is evidence the
+feature is not enabled.** Check that turning the knob changes the C++ output before
+believing the port matches it.
 
-> **Phase 5.1 automated both halves.** `rust/tools/find_stub_bodies.py` does the
-> call-set audit, and `--dups` lists duplicated Rust definitions worst-disparity
-> first — which is what finds the shadow case. Neither is a gate; both are reading
-> aids, and both earn their keep in seconds. What neither can see is the
-> *no-call-site* case: only diffing the caller against the C++ catches that.
+> `baseinit=1` still exercises CAVLC whatever `cabac` says: `SEncParamBase` has no
+> entropy field and `FillDefault` leaves `uiProfileIdc` at `PRO_UNKNOWN`, which
+> `ParamValidationExt` resolves to `PRO_BASELINE` because the flag is 0. That is
+> upstream's own path, so it is worth keeping — just do not count those 60
+> configurations as CABAC coverage.
 
-The crude check works and is worth automating. For each function, extract the set of
-identifiers called in the C++ body and in the Rust body and diff them; if the Rust
-side calls strictly fewer things, read it. Run over the 25 functions Phase 4.6
-believed were "present and reusable", it flagged all seven — and it takes seconds.
-False positives are cheap (macros like `ST32`, calls made through a local binding),
-false negatives are what matter, and it had none here.
+#### CABAC — three functions were missing, four more were wrong
 
-#### `find_dup_types.sh`'s fourth blind spot — case — is **CLOSED**
+The Phase-5.2 plan named three unported functions and it was right about all three:
+`StashMBStatusCabac`, `StashPopMBStatusCabac` and `GetBsPosCabac`, all in
+`set_mb_syn_cavlc.cpp` (*cavlc*, next to their CAVLC twins). It was also right that
+`WelsCabacEncodeFlush`/`WelsCabacEncodeGetPtr` were already ported: the CABAC branch
+of `WelsWriteSliceEndSyn` is a two-line call into them, so the tree's last
+`unimplemented!()` retired for free and its stale message with it.
 
-Phase 4 found `wels_preprocess::SWelsEncCtx` shadowing the canonical
-`sWelsEncCtx`. The scan compared identifiers exactly, so two names differing only in
-the case of one letter read as unrelated types. A second, case-insensitive pass is
-now in the script, self-tested by planting a colliding pair and confirming it is
-reported. It immediately found a second live instance: an invented, dead `SWelsPps`
-in `svc_set_mb_syn_cabac.rs` whose sole field would have read `SWelsPPS::iSpsId`.
+What the plan could not see, because nothing in the tree was exercising CABAC:
 
-A **fifth** blind spot remains and no identifier comparison can close it: the same
-layout **renamed**. `wels_preprocess::SSpatialIndexMap` was a byte-identical copy of
-`encoder_context::SSpatialPicIndex`, the name C++ uses. Only reading the header
-catches that.
+| defect | detail |
+|---|---|
+| **`WelsCabacInit` was a no-op.** | Its body was `if pCtx.is_null() { return; }` plus a comment pointing at `WelsCabacInitContexts` — which had **no call site**. `sWelsCabacContexts[4][52][460]` was never filled, so every context model started at `SStateCtx::default()`. `WelsInitEncoderExt` calls this on every CABAC configuration (`encoder_ext.cpp:2358`). |
+| **`WelsCabacContextInit` was a no-op**, with the comment *"High-level slice loop supplies initialized contexts"*. Nothing did. |
+| **`WelsInitSliceCabac` omitted the `WelsCabacContextInit` call** entirely (`svc_set_mb_syn_cabac.cpp:632`). |
+| **`BsAlign` was declared a second time in `svc_set_mb_syn_cabac.rs` without the trailing `BsFlush`** (`svc_enc_golomb.h:120`). A local item beats an import, so `WelsInitSliceCabac` got the flushless one; `pBs->pCurBuf` still pointed before the pending accumulator word, and `WelsCabacEncodeInit` handed the arithmetic coder a buffer overlapping slice-header bytes that had already been written. **That is why the stream diverged at the first byte after the NAL header rather than in the residual** — a symptom that reads like a slice-header bug and is not one. |
 
-A **sixth**: the scan reads `src/encoder/` only. `src/common/` was already recorded;
-`src/decoder/` is not scanned either, and currently declares `EWelsSliceType` twice
-(`pic_queue.rs:79` and `slice.rs:46`).
+Three of the four are shapes this port keeps producing: a stub under the correct
+name, a faithful function with no call site, and a shadowing duplicate.
 
-#### `find_dup_types.sh` has a third blind spot: functions
+#### `SetOption` — 12 of 32, and six of the twelve were lying anyway
 
-Phase 2 recorded two blind spots in any struct-only scan (type aliases, and
-`src/common/`). Phase 3 found a third — the tool checks *types*, so **duplicated
-function definitions pass silently**. Measured during Phase 3:
+`CWelsH264SVCEncoder::SetOption` (`welsEncoderExt.cpp:692`) handles **32**
+`ENCODER_OPTION_*` values and ends `default: return cmInitParaError`. The port
+handled 12 and ended `_ => {}` followed by `return 0`.
 
-| function | copies | modules |
+The switch arms were the smaller half of the problem. Six helpers that the
+**already-ported** options call were stub bodies under the correct name:
+
+| helper | what it did | what the C++ does |
 |---|---|---|
-| `BsWriteBits` | 4 | `nal_encap`, `svc_encode_slice`, `vlc_encoder`, `svc_set_mb_syn_cavlc` |
-| `BsWriteUE`, `BsWriteSE`, `BsWriteOneBit` | 3–4 | same set |
-| `BsRbspTrailingBits` | 2 | `nal_encap`, `vlc_encoder` |
-| `GetCurrentSliceNum` | 3 | `svc_encode_slice`, `deblocking`, `svc_motion_estimate` |
-| `WelsGetNextMbOfSlice` | 2 | `svc_encode_slice`, `deblocking` |
+| `WelsEncoderApplyFrameRate` | clipped `fMaxFrameRate`, which the caller already does | pushes it into every dependency layer keeping each layer's output/input ratio (`encoder_ext.cpp:672`) |
+| `WelsEncoderApplyBitRate` | `return 0` | re-splits `iTargetBitrate` across the layers in their existing ratio and verifies each (`:699`) |
+| `WelsEncoderParamAdjust` | `*pSvcParam = *pCfg` | 296 lines deciding between folding the change in and a full uninit/init cycle (`:4182`) |
+| `WelsEncoderApplyLTR` | set two fields | derives the reference count the LTR setting needs and re-adjusts (`:4479`) |
+| `CheckReferenceNumSetting` | stored the value unchecked | out-of-range falls back to `AUTO_REF_PIC_COUNT`, it does not clamp (`:163`) |
+| `WelsEncoderApplyBitVaryRang` | wrote the caller's own field | lowers each layer's `iMaxSpatialBitrate` and verifies (`:726`) |
 
-All the `Bs*` copies were compared line by line against `bit_stream.h` /
-`svc_enc_golomb.h` and are **behaviourally equivalent for well-formed calls**, so this
-is a tidiness problem rather than a live bug — but it is the same shape as the defect
-class Phase 2 spent its time on, and the same scan will not catch the next one. Extend
-`find_dup_types.sh` to cover `pub fn`/`pub unsafe fn` before relying on it again.
+So `ENCODER_OPTION_FRAME_RATE`, `ENCODER_OPTION_BITRATE` and
+`ENCODER_OPTION_MAX_BITRATE` were *listed as handled* and were wrong. **A switch-arm
+count is not a coverage measure.**
 
-`au_set.rs` uses `vlc_encoder`'s copies, which are the closest transcription of the
-C++ (they call `WRITE_BE_32` exactly as `bit_stream.h` does).
+`GetOption` was closer but not exact: it answered `ENCODER_OPTION_TRACE_LEVEL`,
+which C++ has no case for and rejects; it was missing `INTER_SPATIAL_PRED` and
+`STATISTICS_LOG_INTERVAL`; and `GET_STATISTICS` dropped `fAverageFrameSpeedInMs`,
+`uiIDRReqNum` and `uiLTRSentNum`.
+
+`SetOption`'s match is now **exhaustive with no wildcard arm**, so an option that
+goes unhandled is a compile error rather than a silent success. C++'s
+`default: return cmInitParaError` has no testable counterpart — the Rust signature
+takes a typed `ENCODER_OPTION`, so an out-of-range id is not constructible.
+
+> **One deliberate deviation, in `rc_mode_from_raw`.** C++ casts the caller's
+> `int32_t` straight into `RC_MODES`, so an out-of-range value is stored verbatim
+> and `WelsRcInitFuncPointers`' switch (no `default`) leaves the dispatch table on
+> the previous mode. A Rust enum cannot hold a value outside its variants; an
+> unrecognised mode becomes `RC_QUALITY_MODE` (C++'s 0). Every value the reference
+> accepts round-trips exactly.
+
+`test_set_get_option_matches_cxx_for_every_option` asserts a **measured** table: a
+probe linked against `libopenh264.a` drove the same sequence on the same 160x96
+configuration and printed every return code and every field written. It covers
+`GetOption` for all 32 ids and `SetOption` for all 20 that were missing, including
+the full uninit/init reset `ENCODER_OPTION_LTR` triggers.
+
+#### qp=0 was one wrong constant
+
+`svc_encode_slice.rs:73` declared `DELTA_QP = 1`; `rc.h:77` says **2**.
+`UpdateQpForOverflow` is its only reader, so a macroblock that overflowed the CAVLC
+level suffix was re-encoded one QP step below the reference's choice. That path is
+CAVLC-only (`svc_encode_slice.cpp:571` guards it on `!iEntropyCodingModeFlag`) and
+only fires at very low QP on pictures whose macroblocks actually overflow — which is
+exactly the observed signature: 160x96 and 1280x720 identical at qp=0, 320x192 and
+152x100 not, and CABAC identical everywhere.
+
+The diagnosis came from the size sweep, not from a dump: *CAVLC-only + qp-only +
+size-dependent* names one code path, and there is only one CAVLC-only branch in the
+I-slice loop.
+
+#### Both audits now compare contents, not names
+
+Seven phases running, a duplicated constant has held a wrong value. Names are free;
+values are the evidence.
+
+`find_dup_types.sh` was encoder-only and matched types. It now scans
+`src/{encoder,common,decoder,processing}` and reports **types** (exact and
+case-insensitive), **`pub type` aliases**, **tables**, and **scalar constants
+compared by value** — its four documented blind spots, each of which had already
+hidden a real bug. `pub use` re-exports are not counted, because re-exporting one
+definition is the fix it asks for.
+
+> A table comparison must **strip comments before scraping elements**. Without
+> that it reports ten false positives, because `/* 0 */` row markers scrape as
+> data — `g_kiQuantInterFF` looked like 531 elements against 523 and is identical
+> row for row.
+
+What the value comparison found, beyond `DELTA_QP`:
+
+| constant | wrong copy | header | live? |
+|---|---|---|---|
+| `MAX_FRAME_RATE` | `param_svc.rs` 30.0 | `wels_const.h:60` = **60** | **yes** — that copy is the one `FillDefault` and both transcoders use, so `GetDefaultParams` reported 30 fps and `ParamTranscode`'s `WELS_CLIP3` capped any caller above 30. Measured: the reference returns 60.0 and keeps 50.0 through `InitializeExt`. |
+| `MAX_SLICES_NUM_TMP` | `param_svc.rs` 32 | `codec_app_def.h:56` = **35** | **yes** — both transcoders take `min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)` (`param_svc.h:203`), so `uiSliceNum` was capped three slices low. |
+| `MAX_PPS_COUNT` | `param_svc.rs` 256 (the decoder's) | `wels_const.h:51` = **57** | no — only `SExistingParasetList` used it, whose `sPps` was oversized by 199. |
+| `WELS_CPU_*` | eight modules with disagreeing subsets: `WELS_CPU_NEON` seven distinct values across eight copies, `WELS_CPU_LSX` five across six | `cpu_core.h:46-98` | dead while `WelsCPUFeatureDetect` returns 0; live the moment any SIMD dispatch is. One definition now in `common/cpu_core.rs`, with a test against the header. |
+| `MB_TYPE_*` | `decoder_core.rs`, whole set shifted one bit down (`16x16 = 0x2`, `SKIP = 0x40`) | `wels_common_defs.h:278-283` (`0x8` … `0x100`) | the match in `CheckRefPicturesComplete` reads them; error-free conformance streams never take that path. |
+| `MB_TYPE_DIRECT` | `svc_set_mb_syn_cavlc.rs` 0x200 (that is `MB_TYPE_INTRA_PCM`) | `:286` = **0x800** | no, unread there. |
+| `RECIEVE_FAILED` | `wels_preprocess.rs` 0 | `wels_const.h:153` = **2** | no, unread there. |
+| `GOM_H_SCC` | `wels_preprocess.rs` 2 | `rc.h:57` = **8** | reachable only through the unported screen-content analyser. |
+
+Two truncated **tables**, both in `decoder/decode_slice.rs`: `g_kuiMbCountScan4Idx`
+and `g_kuiCache48CountScan4Idx` are `[24]` in `common_tables.cpp` and were `[16]`
+here — the chroma half missing. Nothing in that module indexes past 15, so both were
+latent; `g_kuiGolombUELength` in Phase 4.6 was the same shape and *did* index out of
+bounds.
+
+Three more shadowing duplicates, all the `WelsMdUpdateBGDInfo` class, all invisible
+at one slice per frame — which is every configuration the harness can currently
+drive:
+
+| name | the shadow | the real one |
+|---|---|---|
+| `WelsInterMbEncode` | 557 chars in `svc_encode_slice.rs`: did the DCT, dropped quantisation and reconstruction. Dead — all three call sites resolved to the real one — but a landmine in the file it sat in. | `svc_mode_decision.rs` |
+| `WelsGetNextMbOfSlice` | `deblocking.rs`: returned `kiMbXY + 1` bounded only by the frame, ignoring `sSliceEncCtx` and `pOverallMbMap`. Agrees for `SM_SINGLE_SLICE`, walks across slice boundaries otherwise. `deblocking.cpp:733` calls the real one. | `svc_encode_slice.rs` |
+| `GetCurrentSliceNum` | `deblocking.rs`: returned a hardcoded `1`, and `WelsDeblockingFilterMbAvcbase`'s slice loop reads it (`deblocking.cpp:754`), so deblocking only ever filtered slice 0. | `svc_encode_slice.rs` |
+
+**`find_stub_bodies.py --dups` reports 87 duplicated function names.** The ones
+inspected and deleted are above; the ones inspected and kept are methods on distinct
+types (`Process`, `Init`, `Set`, `Get`, `Execute`, `QueueTask`, and the thread-pool
+container helpers `begin`/`erase`/`push_back`/`pop_front`), the `Bs*` writers
+(compared line by line in Phase 3), and the `WelsI16x16LumaPred*_sse2`/`_neon` pairs
+(all unassigned on this target). **The rest have not been read.** Work down the list
+worst-disparity first; three of the four inspected this phase were defects.
+
+`find_dup_types.sh` is **not silent** and cannot be made silent without violating the
+"do not unify encoder and decoder" rule: it reports 23 types, 40 aliases, 29 tables
+and 38 constants, and the overwhelming majority are one encoder declaration beside
+one decoder declaration of a name the two codecs genuinely keep separate
+(`SDqLayer`, `SMbCache`, `SLogContext`, `PGetIntraPredFunc`, the deblocking tables,
+`MAX_PPS_COUNT`). Of the encoder-vs-encoder pairs, every constant now agrees by
+value and every table now agrees element for element except the three deblocking
+tables, which are `static const` file-local in C++ and deliberately `[52 + 12]` in
+the encoder against `[52 + 24]` in the decoder — annotated in both sources.
+
+### Phase 5.3 — what is still not exact — **NOT STARTED**
+
+In the order the next session should take them. Every one is an explicit error or a
+documented gap; there is no known silent-success stub left in the tree.
+
+1. **`iMultipleThreadIdc > 1`** — needs `pTaskManage`, `InitAllSlicesInThread`,
+   `SliceLayerInfoUpdate`. Determinism is the risk, not correctness: verify the C++
+   is deterministic first by running `cxx_enc` twice with `iMultipleThreadIdc = 4`
+   and `cmp`ing, or a difference that is upstream's will read as yours.
+2. **The slice modes.** `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` pass
+   `ParamValidationExt` (Phase 3.9) but **have never been exercised end to end**, and
+   this phase found two shadowed helpers (`WelsGetNextMbOfSlice`,
+   `GetCurrentSliceNum`) that are wrong for exactly those modes and invisible at one
+   slice. Add a slice-mode argument to both drivers — the way `rcmode` and `baseinit`
+   were added — before assuming anything about multi-slice. `SM_SIZELIMITED_SLICE`
+   additionally needs `WelsCodeOnePicPartition` and `WelsInitCurrentDlayerMltslc`.
+3. **The remaining VP methods** — `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (this is what
+   blocks more than one spatial layer), and the three `SCREEN_CONTENT_REAL_TIME` ones
+   (`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
+   `METHOD_SCROLL_DETECTION`), which interlock — the screen scene-change detector
+   reads the scroll detector's result.
+4. **The three `SPS_LISTING` parameter-set strategies.** `CreateParametersetStrategy`
+   returns null and `PrepareEncodeFrame` returns `ENC_RETURN_UNSUPPORTED_PARA`.
+   `paraset_strategy.rs`'s C-style vtable is the established pattern, and
+   `WelsEncoderParamAdjust`'s `OutputCurrentStructure`/`LoadPreviousStructure` calls
+   are now live for the non-`CONSTANT_ID` strategies, so the `SPS_LISTING` overrides
+   of those two are the first thing the new strategies need.
+5. **`param_svc.rs::ParamBaseTranscode` writes `sSpatialLayers[idx]` where C++ writes
+   `sSpatialLayers[0]`.** Harmless at one spatial layer, wrong beyond it — fix it
+   *before* `METHOD_DOWNSAMPLE` makes multi-layer testable, not after.
+6. `PreprocessSliceCoding` does not translate the `SCREEN_CONTENT_REAL_TIME` block
+   (`encoder_ext.cpp:2708-2771`); `AllocPicture` refuses `iNeedFeatureStorage != 0`
+   rather than calling the unported `RequestScreenBlockFeatureStorage`;
+   `WelsCalcPsnr` is unported so `bPsnrY/U/V` are skipped.
+7. The `Combined3` SIMD branches of `WelsMdI16x16` / `WelsMdI4x4` /
+   `WelsMdIntraChroma` are not translated; each site calls `assert_no_combined3`,
+   which panics if the slot is ever non-null. Measured NULL on this target. If you
+   add SIMD dispatch, these three become live and must be translated first — and
+   `common/cpu_core.rs` becomes load-bearing the same moment.
+8. **`find_stub_bodies.py --dups`: 87 names, most unread.** See above.
+
+### Phase 6 — cleanup — **duplicated constants and tables DONE, rest NOT STARTED**
+
+Phase 5.2 closed the constant and table halves: every duplicated `pub const` in
+`src/` now holds the same value in every module, every duplicated table is
+element-for-element identical except the three deblocking tables that are
+legitimately different sizes, and `find_dup_types.sh` compares **values**, not names.
+See *Both audits now compare contents, not names* under Phase 5.2 for the seven
+constants and two tables that were wrong.
+
+What is left:
+
+- **Collapse the remaining duplicated *names*.** Agreeing values is not one
+  definition. Most of the 130 remaining duplicates are one encoder declaration
+  beside one decoder declaration of a name the two codecs genuinely keep separate;
+  those need a one-line comment, not a merge. The encoder-vs-encoder pairs can be
+  re-exported the way `MAX_PPS_COUNT`, `MAX_FRAME_RATE`, `DELTA_QP`,
+  `MAX_SLICES_NUM`, `GOM_H_SCC`, `RECIEVE_FAILED` and the whole `WELS_CPU_*` set now
+  are.
+- **`find_stub_bodies.py --dups`: 87 names, most unread.** Three of the four
+  inspected in Phase 5.2 were defects. This is the highest-yield unfinished audit in
+  the tree.
+- **Fold the module-level `#![allow(dead_code, unused_variables, …)]` blankets back
+  to the narrowest scope that still compiles.** These hide exactly the warning —
+  `dead_code` on a function that should have a caller — that would have flagged
+  `GomRCInitForOneSlice`'s missing call site, `WelsCabacInitContexts` and
+  `WelsCabacContextInitFromContexts`, all of which were faithful bodies nothing
+  called.
+
+#### The dominant defect class, restated after seven phases
+
+**A function that exists is not a function that works, and a function that works is
+not a function that runs.** Every phase since 4.5 has found more instances, and by
+now the shapes are enumerable:
+
+| shape | example | what finds it |
+|---|---|---|
+| a body that does a fraction of the work under the correct name | `WelsEncoderApplyFrameRate`, `WelsEncoderParamAdjust`, `WelsCabacInit` | `find_stub_bodies.py`'s call-set audit; reading the C++ beside it |
+| a faithful body with **no call site** | `GomRCInitForOneSlice`, `WelsCabacInitContexts`, `WelsCabacContextInitFromContexts` | nothing automated — only diffing the *caller* against the C++. Narrowing the `dead_code` allows would surface these. |
+| a faithful body **shadowed** by a same-named one in the module that uses it | `WelsMdUpdateBGDInfo`, `BsAlign`, `WelsGetNextMbOfSlice`, `GetCurrentSliceNum`, `WelsInterMbEncode` | `find_stub_bodies.py --dups` |
+| a correct function reached through a **wrong constant** | `GOM_SAD`/`GOM_VAR`, `DELTA_QP`, `MAX_FRAME_RATE`, `g_kuiGolombUELength` | `find_dup_types.sh`'s value comparison |
+| a correct function under a **configuration that never runs** | the whole CABAC path, silently downgraded to CAVLC by `PRO_BASELINE` | checking that the knob changes the *C++* output |
+
+The last row is new in Phase 5.2 and is the one no audit of the Rust can catch.
+
