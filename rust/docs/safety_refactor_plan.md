@@ -125,7 +125,14 @@ pub struct PlaneCursorMut<'a> { buf: &'a mut [u8], center: usize, stride: usize 
 Key points:
 
 - **Same-plane read-while-write is a non-problem** once access goes through one `&mut` view: intra prediction reading `(-1, dy)` and `(dx, -1)` while writing `(0..16, 0..16)`, and in-place deblocking across MB edges, are serial reads/writes through a single cursor — safe Rust is fine with that. The thing that is *actually* illegal today (two live `*mut` paths to one allocation, T5) dies with the aliasing, not with the arithmetic.
-- Kernels take `PlaneCursorMut` (or `(buf: &mut [u8], center: usize, stride: usize)` triples for the hottest ones) instead of `(pPred: *mut u8, kiStride: i32)`.
+- Kernels take `PlaneCursorMut` instead of `(pPred: *mut u8, kiStride: i32)`. **[P2] The `(buf, center, stride)` triple escape hatch is not needed and should not be used** — see the pilot verdicts below.
+
+**Pilot verdicts (Phase 2 T2, `decoder/decode_mb_aux.rs`).** The Phase 1 hand-off asked two questions before the API was adopted by ~120 kernels. Both are answered, and the answers are binding for the rest of Phase 2:
+
+1. **Cursor, not triple — the choice was a false one.** `PlaneCursorMut` *is* the triple: three fields, passed by `&mut`, whose `row_mut` is one add and one slice index. The only per-call cost the triple avoids is the `assert!` in `new`, which runs once per kernel invocation, not once per row. The decode bench came out **1.3–1.8% faster** with the safe kernels live ([`perf_baseline.md`](perf_baseline.md) §Phase 2 T2, 3 runs per side). Use the cursor everywhere; reach for the triple only with a bench number in hand that says otherwise.
+2. **`row_mut` hoists fine — but the C++ loop order is what has to change.** The 4x4 IDCT wrote its output *column*-major (four strided stores per column), which no row-window idiom can help. Transposing it to row-major made each row one bounds check and one `&mut [u8; 4]`. That transposition is bit-exact **only because every sample of the block is read and written exactly once**, which is a per-kernel proof obligation, not a blanket licence. Check it before transposing; when it fails, keep the C++ order.
+3. **`PlaneCursorMut::reborrow(dx, dy)` was added** (`952c8b1d`'s API could not express it). `advance` consumes the cursor, which is right for a walk (`pDstY.add(16)`) and wrong for a composite kernel that hands each sub-block to an inner kernel and carries on — `IdctFourResAddPred_c` calling `IdctResAddPred_c` four times. Expect the same shape in `mc.rs` and `deblocking_common.rs`.
+4. **Shim contracts are short exactly when a kernel reaches forward only.** These four do, so the reachable span is `(bh-1)*stride + bw` — derivable from the signature, needing no knowledge of the plane's padding. The families that read `-1`/`-stride` (`get_intra_predictor`), `-3*stride` (deblocking) or write the padding (`expand_pic`) will need `from_raw_parts_mut(p.sub(k*stride + k), …)` and a contract that names the padding constant. Budget for that; it is where the phase's real documentation value is.
 - The MC clamp (`decode_slice.rs:1072-1091`) stays byte-for-byte: the clamp guarantees the biased index is in range; slice indexing then *proves* it, converting a silent-corruption class into a loud panic if the port ever miscomputes.
 - Cross-plane pairs (MC: read ref picture, write current) are two views of two different `PaddedPlane`s — no conflict. Same-picture src/dst in error concealment goes through a `copy_within`-style method on one plane.
 - Border expansion (`ExpandPictureCommon`) becomes methods on `PaddedPlane` — it is the one place that writes the padding, and owning the padding makes it safe by construction.
@@ -385,6 +392,8 @@ Build `src/safe/`: `PaddedPlane`/`PlaneCursorMut`, `BsCursor`/`BsWriter`, `PicId
 R2 across: `decoder/decode_mb_aux.rs` → `encoder/encode_mb_aux.rs` + `sample.rs` + `encoder/decode_mb_aux.rs` → `common/sad_common.rs` + `intra_pred_common.rs` + `mc.rs` (fold the `[[fn;4];4]` quarter-pel table into a `match` or safe-fn table) → `common/deblocking_common.rs` (mind the stride-swap V/H trick and `-3*stride` reads — cursor handles both) → `common/expand_pic.rs` + `decoder_core.rs` expand functions → `processing/vaacalc.rs` + `adaptive_quantization.rs` kernels → both `get_intra_predictor.rs` (the biggest: 44 decoder kernels + encoder set; scriptable — uniform signature, uniform punning pattern; keep the decoder/encoder same-name-different-signature functions distinct).
 
 Callers keep calling through R7 shims where tables still exist; tables themselves get retyped to safe fn pointers as each family completes. Delete `#[unsafe(no_mangle)]`/`extern "C"` from all kernels (nothing links them; benches compare via dlopen, not symbol interposition).
+
+**[P2] What this phase does and does not move on the ratchet.** Measured on the pilot family and true of every family in it: `no_mangle` falls, `SHIM(` rises, `unsafe_block` **rises**, and `unsafe_fn` and `raw_ptr` do not move at all. That is not a disappointment, it is the strangler pattern's arithmetic — the shim keeps the raw signature, so the pointers and the `unsafe fn` stay until Phase 5 converts the *callers* and deletes the shim; and the explicit `unsafe {}` around each `from_raw_parts` is *counted* unsafe replacing the *uncounted* unguarded derefs that `#![allow(unsafe_op_in_unsafe_fn)]` hides inside an `unsafe fn` body (§1.1). The metric got more honest, not worse. Consequence for the workflow: **commit B of each family regenerates the baseline**, after running `check` and confirming the increases are confined to the file being converted. Phase 2's real deliverable is the safe kernels and their written contracts; the count collapse is Phases 4–5 cashing this in.
 
 *Exit gate: full battery; bench delta budget applies for the first time. Risk: perf regressions from bounds checks in 4×4 loops — see §7.4 idioms; convert `get_intra_predictor` early in the phase to get the worst case measured.*
 
@@ -676,8 +685,49 @@ difference is deliberate — `pool`'s stale-handle tests are `#[cfg(debug_assert
 because the behaviour they check only exists in a debug build. Every *pre-existing* test
 binary keeps its exact control count, and the 20-test `#[ignore]` set is unchanged.
 
-### Phases 2–9
+### Phase 2 — leaf DSP kernels, both codecs
 
-Not started. Phase 2's first action is the pilot conversion of
-`decoder/decode_mb_aux.rs` onto the plane API (plan §Phase 2), deliberately small so
-an API-shape mistake surfaces before mass adoption.
+Sized at 5–7 sessions; session A landed the preconditions, the control and the pilot.
+Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
+
+- [x] **Phase 0 T6 — ratchet script + gate runner.** `99f4ab5c`. Both instruments
+      built and documented in §7.1/§7.5. Two counting traps encoded: the pattern is
+      `unsafe (extern "C" )?fn`, and definitions are counted line-anchored so the ~210
+      `Option<unsafe extern "C" fn(..)>` table entries don't inflate it. Baseline at
+      `956a8c07`: `unsafe_fn` **1372** (not §1.1's naive 922), `unsafe_block` 507,
+      `raw_ptr` 5390, `transmute` 23, `unsafe_impl` 11, `mem_zeroed` 26, `no_mangle` 42,
+      `SHIM(` 0. `check` verified to fail on an increase.
+- [x] **T1 — control run.** Green at `afcdd785` on the full `exit` battery:
+      `cargo test` 375/0/20 and 373/0/20; `sweep.sh st mt def` 341/341 in **both**
+      profiles (no F3 hit this session); both benches bit-identical; all three Miri
+      invocations clean. Perf control in [`perf_baseline.md`](perf_baseline.md)
+      §Phase 2.
+- [x] **T2 — PILOT: `decoder/decode_mb_aux.rs`.** `ba13bdbd` (safe kernels +
+      differential proof), `ee7818fb` (swap + shims, equivalence entries deleted).
+      **Four kernels, not the ~13 the brief expected** — the C++ file has more, the
+      Rust port has `IdctResAddPred_c`, `IdctResAddPred8x8_c`, `IdctFourResAddPred_c`
+      and `GetI4LumaIChromaAddrTable` and nothing else (314 LOC, not 374).
+- [x] **Pilot retro.** Verdicts in §2.2.1 (cursor beats triple; the loop order, not the
+      API, is what has to change; `reborrow` added; shim contracts are short only for
+      forward-reaching kernels) and in §Phase 2 (what the ratchet does and does not
+      move during a strangler phase). Numbers in `perf_baseline.md` §Phase 2 T2:
+      **1.3–1.8% faster**, not slower.
+- [ ] **T3 — `decoder/get_intra_predictor.rs`** (44 kernels, the perf worst case).
+      Not started; this is the next action.
+- [ ] **T4 — `common/mc.rs`.** Not started.
+- [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started.
+- [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
+      Not started.
+- [ ] **T7 — the four encoder kernel files.** Not started.
+- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started.
+- [ ] **T9 — phase exit.** Not started.
+
+Still open from Phase 0 and deliberately deferred past the pilot: **T5c/T5e**
+(decoder threading scaffolding + stragglers) and **T7** (fuzz, deferred by direction).
+T5c's ordering is argued in the session log — in short, its stated reason for going
+first was that it touches `decoder_core.rs`, which Phase 2 also touches, but that
+overlap is with §Phase 2 T6's expand functions, several sessions away.
+
+### Phases 3–9
+
+Not started.

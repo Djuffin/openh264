@@ -283,3 +283,167 @@ types have not yet been asked to prove: whether `PlaneCursorMut::row_mut` hoists
 If Phase 0 is picked up instead, its first action is unchanged from the previous
 entry — **T5c, decoder threading scaffolding**, with `GetThreadCount` simplifying to a
 literal `0`, not `1`.
+
+---
+
+## 2026-08-07 — Phase 2, session A (preconditions, T1, the pilot)
+
+**Goal:** `prompts/phase2.md`'s session-A split — the preconditions (Phase 0's T6,
+optionally T5c/T5e), the control run, and the pilot conversion of
+`decoder/decode_mb_aux.rs` with its retro. T6, T1 and T2 landed with the retro;
+T5c/T5e did not, deliberately (see below).
+
+**Started at** `956a8c07`, **ended at** the commit carrying this entry. Working tree
+clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `afcdd785` | the Phase 2 session brief recorded in-tree |
+| `99f4ab5c` | Phase 0 T6: `unsafe_ratchet.sh` + `gates.sh` + the baseline |
+| `ba13bdbd` | pilot A: the four safe kernels + differential proof, old code untouched |
+| `ee7818fb` | pilot B: swap + shims, tautological differential entries deleted |
+
+Plus this entry, `phase2_findings.md` (F8), the plan's §2.2.1/§Phase 2/§7.1/§7.5 and
+Progress updates, and `perf_baseline.md`'s Phase 2 section.
+
+### Gates
+
+| gate | control (`afcdd785`) | final (`ee7818fb`) |
+|---|---|---|
+| `cargo test` | 375 / 0 / 20 | 377 / 0 / 20 |
+| `cargo test --release` | 373 / 0 / 20 | 375 / 0 / 20 |
+| `sweep.sh st mt def` (debug) | 341/341, 136s | 341/341, 136s |
+| `sweep.sh st mt def` (release) | 341/341, 21s | 341/341, 21s |
+| `decode_1080p_bench` | 60/60, 3 hashes match | same |
+| `c_vs_rust_bench` | all rows bit-identical | all rows bit-identical |
+| `miri --lib safe::` | 64/64 | 64/64 |
+| `miri --test safe_{plane,bits}_differential` | 3/3 and 15/15 | run at phase exit |
+
+**No F3 hit at all this session**, in six release `mt` sweeps — consistent with the
+rate F3 records for a quiescent machine, and worth noting because the two previous
+sessions each saw one. The retry rule stands; nothing about it changed.
+
+The +2 net test count is +1 (`plane::reborrow`'s unit test) and +1 (the surviving
+property test); the five differential entries came and went inside the family, exactly
+as the phase convention intends. Every pre-existing test binary kept its control count
+and the 20-test `#[ignore]` set never moved.
+
+### The pilot retro
+
+This is what the pilot existed to answer, and the verdicts are now in plan §2.2.1.
+
+1. **Cursor vs `(buf, center, stride)` triple: the cursor, and the question was a
+   false dichotomy.** `PlaneCursorMut` *is* the triple — three fields behind a `&mut`,
+   whose `row_mut` is one add and one slice index. The only thing the triple avoids is
+   the `assert!` in `new`, which runs once per kernel call rather than once per row.
+   The measurement settled it: **1.3–1.8% faster** with the safe kernels live, 3 runs
+   per side, per-side spread ≤1% (`perf_baseline.md` §Phase 2 T2). The phase uses the
+   cursor; a triple now needs a bench number to justify it.
+2. **`row_mut` hoists fine; what has to change is the C++ loop order.** The 4x4 IDCT
+   wrote column-major — four strided single-byte stores per column — which no
+   row-window idiom can rescue. Transposed to row-major it became four contiguous
+   stores through a `&mut [u8; 4]`, and that is the most plausible source of the win.
+   **The transposition is bit-exact only because every sample of the block is read and
+   written exactly once**; that is a per-kernel proof obligation, not a blanket licence.
+   Check it, then transpose.
+3. **The Phase 1 API needed exactly one addition: `PlaneCursorMut::reborrow(dx, dy).`**
+   `advance` consumes the cursor, which is right for a walk and wrong for a composite
+   kernel that hands sub-blocks to an inner kernel and then carries on. Made now, before
+   ~120 kernels consume the API, per the brief. Expect the same shape in `mc.rs` and
+   `deblocking_common.rs`.
+4. **Shim ergonomics: short contracts are a property of the kernel, not of the writer.**
+   All four of these reach *forward only* from the block's own (0,0), so the reachable
+   span is `(bh-1)*stride + bw` — computable from the signature, needing nothing about
+   the plane's padding. That is why these `# Safety` blocks are four lines. It will not
+   hold for T3 (`get_intra_predictor` reads the `-1` column and `-stride` row), T6
+   (deblocking reaches `-3*step`, `expand_pic` writes the padding), and those shims will
+   have to name the padding constant. Budget for it; per the brief, those contracts are
+   the phase's real deliverable.
+5. **Differential-test cost: ~40 lines and a few minutes per kernel** — cheap, and it
+   earned its keep immediately by finding F8. The convention that works: generate the
+   surface with *noise* (a constant surface cannot show a write on the wrong row),
+   compare the **whole** buffer, and drive the strides list at the minimum legal value,
+   three non-multiples of 16, and two real picture strides.
+
+### What the ratchet actually does in this phase — read before T3
+
+Measured, and it is the strangler pattern's arithmetic rather than a surprise:
+
+```
+no_mangle    42 -> 38      unsafe_fn   1372 -> 1372
+SHIM(         0 ->  4      raw_ptr     5390 -> 5390
+unsafe_block 507 -> 511
+```
+
+`unsafe_fn` and `raw_ptr` do not move **because the shim keeps the raw signature** —
+they die in Phase 5 when the callers convert and the shims are deleted. `unsafe_block`
+*rises* because each `from_raw_parts` is now an explicit block, where the old bodies'
+derefs were invisible inside an `unsafe fn` under `#![allow(unsafe_op_in_unsafe_fn)]`:
+counted unsafe replacing uncounted unsafe, i.e. the metric getting more honest.
+
+So the brief's expectation that "this phase produces the largest unsafe-count drops of
+the whole plan" is **wrong**, and the plan now says so (§Phase 2). Workflow consequence:
+**commit B of each family regenerates the baseline**, after running `check` and
+confirming every increase is confined to the file being converted. That is what keeps
+the ratchet a ratchet for the other 70 files while this one moves.
+
+### Discrepancies found in the brief
+
+1. **The pilot family is 4 kernels in 314 lines, not "~13 kernels, 374 LOC".** The C++
+   `decode_mb_aux.cpp` has more; the Rust port has `IdctResAddPred_c`,
+   `IdctResAddPred8x8_c`, `IdctFourResAddPred_c` and `GetI4LumaIChromaAddrTable`. There
+   are no dequant kernels in this file — decoder dequant lives elsewhere. Consumers,
+   re-proven by grep: three `pIdctResAddPredFunc*` slots installed at
+   `decoder_core.rs:1937-1939`, plus `GetI4LumaIChromaAddrTable` reached only through
+   the inline wrapper at `decoder_core.rs:947`. No `sBlockFunc`-adjacent slot exists.
+2. **`GetI4LumaIChromaAddrTable` is in no table at all**, so its shim dropped
+   `extern "C"` as well as `#[unsafe(no_mangle)]`. The other three keep the ABI because
+   their typedef demands it.
+3. **§1.1's "~922 `unsafe fn`" is a naive count.** The real figure is 1372 definitions;
+   1582 including function-pointer types. §7.1 now records all three numbers and why
+   they differ.
+
+### Findings — recorded, not fixed
+
+- **F8 — the 8x8 IDCT's `i16` intermediates overflow above ~528**, where a debug build
+  panics with "attempt to add with overflow" and the C++ wraps through signed-overflow
+  UB. Pre-existing, faithful to the C++, unreachable on conformant streams (the spec
+  bounds dequantised coefficients), reachable in principle on malformed ones since
+  nothing between the parser and the kernel clamps. Written up in
+  [`phase2_findings.md`](phase2_findings.md).
+  **This is the moment the brief asked to be recorded as data for reopening T7:** a
+  `decode_annexb` fuzz target is the natural instrument for exactly this, and there
+  isn't one. It was found instead by a hand-written property test that happened to
+  generate full-range coefficients.
+
+### Why T5c/T5e did not land
+
+The brief lists them under preconditions as "do first, recommended", with the reason
+that T5c touches `decoder_core.rs`, which Phase 2 also touches. On inspection that
+overlap is with §Phase 2 **T6**'s expand functions — four families and several sessions
+away — so it does not constrain the pilot, and the pilot is what unblocks the idiom
+decision for the other ~120 kernels. Both were therefore deferred rather than dropped;
+nothing about them has changed since the Phase 0 entry, including the correction that
+**`GetThreadCount` must become a literal `0`, not `1`** (`api/codec_api.rs:1831`
+branches on `<= 0`). The inventory greps were re-run this session and still hold:
+`pThreadCtx`/`pLastThreadCtx`/`pCsDecoder` have exactly three declarations
+(`decoder_context.rs:772-774`) and three read sites (`decoder_core.rs:771,774`,
+`pic_queue.rs:310`), and no assignment anywhere.
+
+### Next session's first action
+
+**Phase 2 T3 — `decoder/get_intra_predictor.rs`**, the 44-kernel family and the phase's
+perf worst case, taken early on purpose. Two things to carry in:
+
+- **Its shims are the first that cannot be derived from the signature.** All 44 read
+  the `-1` column and the `-stride` row, so each shim must build its slice from
+  `pPred.sub(stride + 1)` and its `# Safety` contract must state that the block has at
+  least one valid row above and one valid column left. That contract is identical for
+  the whole file, which is what makes 44 kernels tractable in one family.
+- **Do not unify the same-named 3-arg cousins in `common/intra_pred_common.rs`.**
+  Different functions, different arity, T5's job.
+
+Then T4 (`mc.rs`) and so on down §4's list. If Phase 0 is picked up instead, its first
+action is unchanged: **T5c**, with `GetThreadCount` simplifying to a literal `0`.

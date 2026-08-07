@@ -139,6 +139,48 @@ under `target/tmp/bench-streams/`; the SHA-1s above pin the decoded output, so a
 changed hash means either the streams were regenerated differently or the decoder
 changed.
 
+## Phase 2 — leaf DSP kernels
+
+Added as a column, never overwriting the Phase 0 anchor above. Each family records
+its own paired measurement here as it lands.
+
+**Session control, 2026-08-07 at `afcdd785`** (before any conversion), full battery
+green: `cargo test` 375/0/20 and 373/0/20, sweeps 341/341 in both profiles,
+`decode_1080p_bench` 60/60 with the three anchor SHA-1s unchanged.
+
+The control's decode numbers came in ~2–3% above the Phase 0 anchor (2.257 / 5.834 /
+5.876 against 2.190 / 5.705 / 5.773) with nothing but time between them. That is
+toolchain and machine drift, and it is exactly why **the session control is the truth
+and the anchor is only the long-run trend line**. Compare a family against the control
+measured that same day, on the same tree, with the same binaries warm.
+
+### T2 — `decoder/decode_mb_aux.rs` (the pilot)
+
+Paired measurement, `decode_1080p_bench`, 3 runs per side, medians in ms/frame,
+`ba13bdbd` (safe kernels present but unreachable — behaviourally the control) against
+`ee7818fb` (the same kernels live behind shims). Same machine, quiescent, runs
+interleaved by side.
+
+| stream | control median | Phase 2 median | delta | control runs | Phase 2 runs |
+|---|---|---|---|---|---|
+| Constrained Baseline (CAVLC, no B) | 2.229 | 2.200 | **−1.3%** | 2.229, 2.232, 2.225 | 2.162, 2.201, 2.200 |
+| Main (CABAC, B-frames) | 5.770 | 5.664 | **−1.8%** | 5.753, 5.779, 5.770 | 5.664, 5.664, 5.698 |
+| High (CABAC, B, 8x8) | 5.820 | 5.744 | **−1.3%** | 5.808, 5.836, 5.820 | 5.732, 5.754, 5.744 |
+
+Negative is faster. Every run on both sides decoded 60/60 frames with the three anchor
+SHA-1s, so this is a like-for-like timing comparison and not a shorter workload.
+
+**The conversion is a small win, not a cost**, and the per-side spreads (≤1%) are
+tight enough for that to mean something. The plausible mechanism is the one deliberate
+restructuring: the 4x4 IDCT's write loop was transposed from column-major to row-major,
+turning four strided single-byte stores per column into four contiguous stores per row
+through a `&mut [u8; 4]` window. Bounds checks did not show up at all — one per row,
+against sixteen samples of arithmetic.
+
+Encoder side: unmeasured for this family, correctly — `decode_mb_aux.rs` is decoder-only.
+`c_vs_rust_bench` was run anyway as a correctness gate (all rows bit-identical) and the
+release sweep held its ~21s wall time.
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
