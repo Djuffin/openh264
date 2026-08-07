@@ -4,6 +4,13 @@ Living record of the OpenH264 **encoder** Rust port. The decoder port is mature 
 passes conformance; the encoder is the work in progress. Update this file at the end
 of every phase.
 
+> **Starting a session? Read [`encoder_port_handoff.md`](encoder_port_handoff.md)
+> first.** It is the brief: current state with measured numbers, the three techniques
+> that work, the five defect classes, the remaining work in order, and the traps.
+> This file is the *record* — the per-phase log and every defect found so far, with
+> how it was found. The handoff tells you what to do; this file tells you what
+> happened.
+
 **As of Phase 5.3 the encoder is byte-identical with the C++ reference for all five
 rate-control modes, both entropy coders, both init paths, all 52 QPs, and **all four
 slice modes**.** Verified over 2632 configurations. `SetOption` handles all 32 of
