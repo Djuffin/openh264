@@ -769,9 +769,6 @@ pub struct SWelsDecoderContext {
     pub bDequantCoeff4x4Init: bool,
     pub bUseScalingList: bool,
     pub pMemAlign: *mut CMemoryAlign,
-    pub pThreadCtx: *mut c_void,
-    pub pLastThreadCtx: *mut c_void,
-    pub pCsDecoder: *mut c_void,
     pub lastReadyHeightOffset: [[i16; MAX_REF_PIC_COUNT]; LIST_A],
     pub pPictInfoList: *mut SPictInfo,
     pub pPictReoderingStatus: *mut SPictReoderingStatus,
@@ -783,42 +780,6 @@ impl Default for SWelsDecoderContext {
         unsafe { std::mem::zeroed() }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Multithreading Structs
-// ---------------------------------------------------------------------------
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsDecThreadInfo {
-    pub sIsBusy: *mut c_void,
-    pub sIsActivated: *mut c_void,
-    pub sIsIdle: *mut c_void,
-    pub sThrHandle: *mut c_void,
-    pub uiCommand: u32,
-    pub uiThrNum: u32,
-    pub uiThrMaxNum: u32,
-    pub uiThrStackSize: u32,
-    pub pThrProcMain: Option<unsafe extern "C" fn(pArg: *mut c_void) -> *mut c_void>,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SWelsDecoderThreadCTX {
-    pub sThreadInfo: SWelsDecThreadInfo,
-    pub pCtx: *mut SWelsDecoderContext,
-    pub threadCtxOwner: *mut c_void,
-    pub kpSrc: *mut u8,
-    pub kiSrcLen: i32,
-    pub ppDst: *mut *mut u8,
-    pub sDstInfo: SBufferInfo,
-    pub pDec: *mut Picture,
-    pub sImageReady: *mut c_void,
-    pub sSliceDecodeStart: *mut c_void,
-    pub sSliceDecodeFinish: *mut c_void,
-    pub iPicBuffIdx: i32,
-}
-pub type PWelsDecoderThreadCTX = *mut SWelsDecoderThreadCTX;
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -739,16 +739,19 @@ unsafe fn WelsFreeHelper(pMa: *mut CMemoryAlign, ptr: *mut u8, size: usize) {
 
 // External and Internal Helper Stubs
 
-/// Number of decoding threads, derived from the thread context (0 when the
-/// decoder runs single-threaded).
-/// Matches `GetThreadCount` in `decoder_context.h`.
+/// Number of decoding threads. Always **0**: the C++ decoder's multi-threading was
+/// never ported, and `SWelsDecoderContext::pThreadCtx` — the field this used to read
+/// through — was declared and read but never once assigned (T5c).
+///
+/// Matches `GetThreadCount` in `decoder_context.h`, and the function is kept rather
+/// than inlined away so its ~10 call sites stay honest about the question they are
+/// asking. **The literal must be `0`, not `1`**: every other caller tests `> 1` or
+/// `<= 1` and cannot tell the two apart, but `api/codec_api.rs:1831` branches on
+/// `GetThreadCount(p_ctx) <= 0` to increment `uiDecodeTimeStamp`, so a `1` here would
+/// silently stop that branch running and change the decoding timestamp.
 #[inline]
-pub unsafe fn GetThreadCount(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() || (*pCtx).pThreadCtx.is_null() {
-        return 0;
-    }
-    let pThreadCtx = (*pCtx).pThreadCtx as *const crate::decoder::decoder_context::SWelsDecoderThreadCTX;
-    (*pThreadCtx).sThreadInfo.uiThrMaxNum as i32
+pub unsafe fn GetThreadCount(_pCtx: PWelsDecoderContext) -> i32 {
+    0
 }
 
 unsafe fn ResetDecStatNums(pDecStat: *mut SDecoderStatistics) {
