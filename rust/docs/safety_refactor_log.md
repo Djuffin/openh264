@@ -159,6 +159,9 @@ picks Phase 0 back up:
 | `5b47b1fe` | T4+T5: `BsCursor`, `BsWriter` + differential tests |
 | `e3a09459` | T6a: `Pool<T>`, `Id` handles, `PoolRest` |
 | `066471ea` | T6b: `MbDims`, `MbArray` |
+| `bb465bce` | T8: the differential tests made a usable Miri gate |
+| `ed704c4d` | fix: the test PRNG's own tests were leaking into three pre-existing test binaries |
+| `6c403c9e` | T9: plan updates, `phase1_findings.md`, the F3 re-measurement, this entry |
 
 Plus this entry, `phase1_findings.md`, and the plan's §2.2/§10/Progress updates.
 
