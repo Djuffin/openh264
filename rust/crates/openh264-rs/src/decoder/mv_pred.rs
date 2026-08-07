@@ -212,18 +212,6 @@ pub const g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
 // Data Structures matching C++ Dec Core
 // ============================================================================
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsDecEvent {
-    pub isSignaled: i32,
-}
-
-impl Default for SWelsDecEvent {
-    fn default() -> Self {
-        Self { isSignaled: 0 }
-    }
-}
-
 pub use crate::decoder::picture::{SPicture, PPicture};
 
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
