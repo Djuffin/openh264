@@ -665,6 +665,9 @@ pub trait IWelsTaskManage {
     unsafe fn Uninit(&mut self);
     unsafe fn InitFrame(&mut self, kiCurDid: i32);
     unsafe fn ExecuteTasks(&mut self, iTaskType: usize) -> i32;
+    /// Three definitions of this name are correct: this trait declaration plus
+    /// one impl each on CWelsTaskManageBase and CWelsTaskManageOne, matching
+    /// the C++ virtual and its two overrides. --dups flags the group.
     fn GetThreadPoolThreadNum(&self) -> i32;
 }
 
@@ -1065,12 +1068,19 @@ pub unsafe fn CreateTaskManage(
 mod tests {
     use super::*;
     use std::ptr::null_mut;
+    #[test]
     fn test_task_list_operations() {
         let mut list = CWelsTaskList::new();
         assert_eq!(list.size(), 0);
         assert!(list.begin().is_null());
 
-        let mut base_task = CWelsBaseTask::new(null_mut(), null_mut(), 0, 0);
+        let mut base_task = CWelsBaseTask::new(
+            null_mut(),
+            null_mut(),
+            0,
+            0,
+            ETaskKind::SliceEncoding,
+        );
         let ptr = &mut base_task as *mut CWelsBaseTask;
 
         assert!(list.push_back(ptr));
@@ -1107,10 +1117,14 @@ mod tests {
             let mgr = &mut *pMgr;
             assert_eq!(mgr.m_iTaskNum[0], 2);
 
+            // Safe on a Default context: bNeedAdjustingSlicing is false, so no
+            // task list is dispatched.
             mgr.InitFrame(0);
-            let ret = mgr.ExecuteTasks(WELS_ENC_TASK_ENCODING);
-            assert_eq!(ret, ENC_RETURN_SUCCESS);
+            assert_eq!(mgr.m_iCurDid, 0);
 
+            // As in test_task_manage_one_sync, ExecuteTasks is not called: the
+            // task bodies now encode real slices and need a live encoder
+            // context. The differential harness covers execution.
             drop(Box::from_raw(pMgr));
         }
     }
@@ -1129,8 +1143,19 @@ mod tests {
             let init_res = one.Init(&mut enc_ctx);
             assert_eq!(init_res, ENC_RETURN_SUCCESS);
 
-            let exec_res = one.ExecuteTasks(WELS_ENC_TASK_ENCODING);
-            assert_eq!(exec_res, ENC_RETURN_SUCCESS);
+            // Init's job is to build the task lists; check that it did.
+            let enc_list = one.base.m_cEncodingTaskList[0];
+            assert!(!enc_list.is_null());
+            assert_eq!((*enc_list).size(), 2);
         }
+
+        // Deliberately not calling ExecuteTasks here. The tasks now carry the
+        // real CWelsSliceEncodingTask body, which encodes a slice and needs a
+        // fully initialised sWelsEncCtx (pCurDqLayer, pSliceThreading, the
+        // function-pointer list); a Default context null-derefs. Executing
+        // tasks is covered end to end by the differential harness instead --
+        // see rust/docs/encoder_port_status.md, the iMultipleThreadIdc sweep.
+        // Before the task bodies were filled in, this call "passed" only
+        // because Execute() did nothing but signal its sink.
     }
 }

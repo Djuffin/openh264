@@ -1704,3 +1704,119 @@ now the shapes are enumerable:
 
 The last row is new in Phase 5.2 and is the one no audit of the Rust can catch.
 
+
+---
+
+### Phase 5.4 — `iMultipleThreadIdc > 1`, the last refused axis
+
+**Result: byte-identical to the multi-threaded C++ across 120 configurations** —
+3 inputs x `iMultipleThreadIdc` {2,4} x 5 slice specs (`SM_FIXEDSLCNUM_SLICE` 2 and
+4 slices, `SM_RASTER_SLICE` 3, `SM_SIZELIMITED_SLICE` 1500 and 600 bytes) x CAVLC
+and CABAC x `RC_OFF_MODE` and `RC_QUALITY_MODE`. The single-threaded sweep was
+re-run afterwards and is unchanged.
+
+**No configuration axis the harness can drive is refused any more.**
+
+#### The oracle, re-measured
+
+Three runs each of nine configurations, `cxx_enc` only:
+
+| | threads=1 | threads=2 | threads=4 |
+|---|---|---|---|
+| `SM_FIXEDSLCNUM_SLICE`, 2 slices | 13145 | 13165 | 13165 |
+| `SM_FIXEDSLCNUM_SLICE`, 4 slices | 13163 | 13319 | 13319 |
+| `SM_SIZELIMITED_SLICE`, 1500 B | 13305 | 13372 | 13290 |
+
+Every cell was identical across its three runs, so `compare.sh` is a valid oracle.
+Two things the previous handoff did not record:
+
+- **For `SM_FIXEDSLCNUM_SLICE`, threads=2 and threads=4 produce the same bytes.**
+  Turning MT *on* changes the bitstream; the thread *count* does not. Only
+  `SM_SIZELIMITED_SLICE` varies with it, because `iActiveThreadsNum` sets the
+  partition count.
+- **The C++ is deterministic here only because `cxx_enc.cpp:82` pins
+  `bUseLoadBalancing = false`.** With it on, `DynamicAdjustSlicing` re-slices from
+  `uiSliceConsumeTime` — wall-clock microseconds — and upstream's own API doc says
+  so: "will change slicing of a picture during the run-time of multi-thread
+  encoding, so the result of each run may be different" (`codec_app_def.h:579`).
+  The load-balancing arm is therefore **not byte-verifiable by construction**. It is
+  ported (`AdjustBaseLayer`/`AdjustEnhanceLayer` at `encoder_ext.cpp:3573`) but only
+  reachable by a caller that sets the flag; both C++ call sites gate on it.
+
+#### Why the port refused, and what was actually wrong
+
+`RequestMtResource` is **smaller** than the handoff claimed, not larger. It creates
+no threads — `slice_multi_threading.cpp:327` zeroes `pThreadHandles[iIdx]`, and every
+worker comes from the shared `CWelsThreadPool` that `CreateTaskManage` acquires. And
+the four per-thread event sets (`pUpdateMbListEvent`, `pFinUpdateMbListEvent`,
+`pSliceCodedEvent`, `pReadySliceCodingEvent`), `pSliceCodedMasterEvent` and
+`mutexEvent` are opened and closed but **never signalled or waited on anywhere in
+`codec/`** — vestiges of the pre-thread-pool design. Only `mutexSliceNumUpdate`,
+`mutexThreadBsBufferUsage`, `mutexThreadSlcBuffReallocate` and `mutexEncoderError`
+are live. The port reproduces those four and skips the dead ones.
+
+Four defects, one per shape in the table above:
+
+1. **The whole task hierarchy was hollow** (*a fraction of the work under the correct
+   name*). `CWelsSliceEncodingTask::Execute()` called `self.base.Execute()`, which
+   only signalled the sink. No `InitTask`, no `WelsCodeOneSlice`, no `WriteSliceBs`,
+   no deblocking — not one slice was ever encoded by a task.
+   The cause is that C++ inheritance had been modelled by casting `*mut Derived` to
+   `*mut CWelsBaseTask`. Rust has no vtable there, so **every virtual call resolved
+   to the base**. The same cast also made `DestroyTaskList`'s `Box::from_raw` free
+   the wrong type. Replaced by one struct with an `ETaskKind` discriminant, which
+   reproduces the vtable exactly.
+2. **A second `CWelsThreadPool`** (*shadowed by a same-named one*).
+   `wels_task_management.rs` declared its own, whose `QueueTask` ran the task inline
+   on the calling thread; that is the one `CWelsTaskManageBase::Init` used. The real
+   905-line pool in `common/wels_thread_pool.rs` had **no caller outside its own
+   tests**. `find_stub_bodies.py --dups` lists this pair.
+3. **The real pool deadlocked whenever tasks outnumbered threads** — so it would have
+   failed the moment it was first used regardless. Both wait loops
+   (`CWelsTaskThread::Start` and `CWelsThreadPool::Start`) test a predicate guarded
+   by one lock (`m_pTask`, the waited-task list) while waiting on a condvar paired
+   with a *different* mutex (`m_mutex`), and both `SetTask` and `SignalThread`
+   notified without holding it. A task queued in that window is lost forever: the
+   worker parks holding a task it never runs. Notifications now take `m_mutex`.
+4. **`CWelsConstrainedSizeSlicingEncodingTask` derives from
+   `CWelsLoadBalancingSlicingEncodingTask`**, not from `CWelsSliceEncodingTask`
+   (`wels_task_encoder.h:110`), so it inherits the slice-timing `InitTask`/
+   `FinishTask` overrides too. The first draft of the discriminant dispatch missed
+   this.
+
+Also live again: **`pTaskManage->InitFrame`** (`encoder_ext.cpp:2619`) had been
+skipped in `WelsInitCurrentLayer` under a comment asserting `pTaskManage` is always
+null. True while MT was refused; false now.
+
+#### How defect 3 was found
+
+Not by reading. A sweep run hung at `SM_FIXEDSLCNUM_SLICE`/4 slices/2 threads —
+4 tasks, 2 workers — at 0% CPU. `sample <pid>` showed the shape immediately: main
+thread in `WelsTaskBarrier::wait_for_completion`, **both workers parked idle**, the
+dispatcher asleep, tasks stranded in the queue. Idle workers plus a non-empty queue
+is a lost wakeup and nothing else. Worth remembering: for a hang, one stack sample
+beats any amount of instrumentation.
+
+#### Deviations
+
+- `WelsMutexInit`/`WelsMutexDestroy` are new in `slice_multi_threading.rs`, and
+  lock/unlock is expressed as one scoped `with_wels_mutex(handle, closure)` call
+  rather than two. A `std::sync::Mutex` guard owns the lock, so a bare
+  `lock()`/`unlock()` pair cannot be spelled directly. Every C++ lock/unlock pair in
+  the encoder brackets one straight-line region, so the critical sections are
+  identical.
+- `UpdateMbListNeighborParallel` is a `do`-`while` in C++ and a `while` in the port
+  (pre-existing, not introduced here). They differ only when a slice holds <= 0
+  macroblocks, where the C++ reads one macroblock out of bounds. Left as a `while`
+  rather than reproducing an out-of-bounds read; no valid configuration reaches it.
+
+#### Two tests changed
+
+`test_task_manage_one_sync` and `test_task_manage_base_lifecycle` called
+`ExecuteTasks` on a `Default` `sWelsEncCtx`. That passed only because the tasks were
+hollow; with real bodies it is a null dereference in a pool worker, which aborts the
+process. Both now assert what `Init` is responsible for — that the task lists are
+built — and leave execution to the differential harness, which covers it far better.
+Neither is `#[ignore]`d. A third, `test_task_list_operations`, was **missing its
+`#[test]` attribute** and had never run; it passes now, which is why the suite went
+from 293 to 294.
