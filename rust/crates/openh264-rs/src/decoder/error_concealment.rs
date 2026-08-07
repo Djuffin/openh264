@@ -223,39 +223,6 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
     }
 }
 
-// SIMD Aliases and Accelerated Fallbacks
-pub unsafe extern "C" fn WelsCopy16x16_sse2(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy16x16_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy8x8_mmx(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy8x8_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy16x16_neon(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy16x16_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy8x8_neon(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy8x8_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy16x16_AArch64_neon(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy16x16_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy8x8_AArch64_neon(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy8x8_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy16x16_lsx(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy16x16_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
-pub unsafe extern "C" fn WelsCopy8x8_lsx(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    WelsCopy8x8_c(pDst, iDstStride, pSrc, iSrcStride);
-}
-
 // ============================================================================
 // Core Error Concealment Functions
 // ============================================================================
@@ -281,39 +248,6 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
 
         (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_c);
         (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_c);
-
-        let cpu_flag = (*pCtx).uiCpuFlag;
-
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        {
-            if (cpu_flag & WELS_CPU_MMXEXT) != 0 {
-                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_mmx);
-            }
-            if (cpu_flag & WELS_CPU_SSE2) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_sse2);
-            }
-        }
-
-        #[cfg(target_arch = "arm")]
-        {
-            if (cpu_flag & WELS_CPU_NEON) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_neon);
-                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_neon);
-            }
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            if (cpu_flag & WELS_CPU_NEON) != 0 {
-                (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_AArch64_neon);
-                (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_AArch64_neon);
-            }
-        }
-
-        if (cpu_flag & WELS_CPU_LSX) != 0 {
-            (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_lsx);
-            (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_lsx);
-        }
     }
 }
 

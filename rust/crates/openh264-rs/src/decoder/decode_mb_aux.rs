@@ -254,66 +254,6 @@ pub unsafe extern "C" fn IdctFourResAddPred_c(
     }
 }
 
-// Architecture SIMD fallback aliases
-pub unsafe extern "C" fn IdctResAddPred_mmx(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pPred, kiStride, pRs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_sse2(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pPred, kiStride, pRs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_avx2(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pPred, kiStride, pRs);
-    }
-}
-
-pub unsafe extern "C" fn IdctFourResAddPred_avx2(
-    pPred: *mut u8,
-    iStride: i32,
-    pRs: *mut i16,
-    pNzc: *const i8,
-) {
-    unsafe {
-        IdctFourResAddPred_c(pPred, iStride, pRs, pNzc);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_neon(pred: *mut u8, stride: i32, rs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pred, stride, rs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_AArch64_neon(pred: *mut u8, stride: i32, rs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pred, stride, rs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_mmi(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pPred, kiStride, pRs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred_lsx(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred_c(pPred, kiStride, pRs);
-    }
-}
-
-pub unsafe extern "C" fn IdctResAddPred8x8_lsx(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    unsafe {
-        IdctResAddPred8x8_c(pPred, kiStride, pRs);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
