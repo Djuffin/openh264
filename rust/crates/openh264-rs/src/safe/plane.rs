@@ -381,6 +381,24 @@ impl<'a> PlaneCursorMut<'a> {
         Self::new(self.buf, center, self.stride)
     }
 
+    /// A *borrowed* write cursor rebased by `(dx, dy)` — the safe form of passing
+    /// `pDst + dy*stride + dx` to a sub-kernel while keeping the outer pointer.
+    ///
+    /// [`advance`](Self::advance) consumes the cursor, which is right for a walk
+    /// (`pDstY = pDstY.add(16)`) and wrong for the composite kernels, where an outer
+    /// kernel hands each of its sub-blocks to an inner one and then carries on —
+    /// `IdctFourResAddPred_c` calling `IdctResAddPred_c` four times is the shape.
+    /// Added in Phase 2's pilot for exactly that; the returned cursor borrows `self`,
+    /// so the two can never be live at once.
+    ///
+    /// # Panics
+    /// If the new anchor is outside the buffer, per [`new`](Self::new).
+    #[inline]
+    pub fn reborrow(&mut self, dx: isize, dy: isize) -> PlaneCursorMut<'_> {
+        let center = idx(self.center, dx, dy, self.stride);
+        PlaneCursorMut::new(self.buf, center, self.stride)
+    }
+
     /// A read-only cursor at the same anchor, borrowing this one.
     #[inline]
     pub fn as_ref(&self) -> PlaneCursor<'_> {
@@ -568,6 +586,26 @@ mod tests {
                 assert_eq!(p.at(16 + x, 16 + y), (x + y) as u8);
             }
         }
+    }
+
+    #[test]
+    fn reborrow_addresses_a_sub_block_and_gives_the_cursor_back() {
+        // IdctFourResAddPred_c's shape: four 4x4 sub-blocks of one 8x8 area, each
+        // handed to an inner kernel, with the outer cursor still usable afterwards.
+        let mut p = PaddedPlane::new(32, 32, 16, 64);
+        let mut c = p.cursor_mut(0, 0);
+        for (k, (dx, dy)) in [(0, 0), (4, 0), (0, 4), (4, 4)].into_iter().enumerate() {
+            let mut sub = c.reborrow(dx, dy);
+            for y in 0..4 {
+                sub.row_mut(y, 0, 4).fill(0x10 + k as u8);
+            }
+        }
+        assert_eq!(c.at(0, 0), 0x10);
+        assert_eq!(c.at(7, 0), 0x11);
+        assert_eq!(c.at(0, 7), 0x12);
+        assert_eq!(c.at(7, 7), 0x13);
+        assert_eq!(c.at(-1, -1), 0, "outside the 8x8 area, untouched");
+        assert_eq!(c.at(8, 8), 0);
     }
 
     #[test]
