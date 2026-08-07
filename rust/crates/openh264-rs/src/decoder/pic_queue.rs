@@ -307,19 +307,12 @@ pub unsafe fn AllocPicture(
             b"pCtx->sMb.pRefIndex[]\0".as_ptr() as *const c_char,
         ) as *mut [i8; 16];
 
-        if !(*pCtx).pThreadCtx.is_null() {
-            (*pPic).pReadyEvent = (*pMa).WelsMallocz(
-                uiMbHeight * std::mem::size_of::<SWelsDecEvent>() as u32,
-                b"pPic->pReadyEvent\0".as_ptr() as *const c_char,
-            ) as *mut SWelsDecEvent;
-            if !(*pPic).pReadyEvent.is_null() {
-                for i in 0..uiMbHeight as usize {
-                    CREATE_EVENT((*pPic).pReadyEvent.add(i), 1, 0);
-                }
-            }
-        } else {
-            (*pPic).pReadyEvent = std::ptr::null_mut();
-        }
+        // The per-MB-row event array was allocated only when `pCtx->pThreadCtx` was
+        // non-null, which it never was (T5c) — so this pointer has always been null
+        // for the port's whole life, and `FreePicture` has always taken its null
+        // branch. The allocation and the `CREATE_EVENT` loop are deleted with the
+        // field they gated.
+        (*pPic).pReadyEvent = std::ptr::null_mut();
     }
 
     pPic
