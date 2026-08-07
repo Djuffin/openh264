@@ -1,0 +1,13 @@
+[package]
+name = "rust_enc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+openh264-rs = { path = "../../../crates/openh264-rs" }
+
+[[bin]]
+name = "rust_enc"
+path = "main.rs"
+
+[workspace]
