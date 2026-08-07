@@ -32,6 +32,14 @@ use openh264_rs::encoder::vlc_encoder::{
 use openh264_rs::safe::bits::{size_se, size_ue, trailing_bits, BsCursor, BsWriter};
 use openh264_rs::safe::err::ErrInfo;
 
+/// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
+/// turn a phase-exit gate into an hour. The *shapes* tested are identical — every
+/// truncation, every boundary, every operation kind — only the randomised round counts
+/// shrink, and the full-size run happens on every `cargo test`.
+fn scale(n: usize) -> usize {
+    if cfg!(miri) { (n / 25).max(2) } else { n }
+}
+
 /// The RBSP plus the slack the C++ reader relies on. See `phase1_findings.md` §F4:
 /// `dump_bits_aux` may sit one byte past the logical end and read two bytes there,
 /// so the *allocation* must extend at least 3 bytes beyond it for the old reader to
@@ -75,10 +83,24 @@ fn reader_init_matches_dec_init_bits() {
         let buf = rbsp_with_slack(&payload);
         // Every bit size in and around the payload, including sizes that are not a
         // whole number of bytes and the degenerate non-positive ones.
+        //
+        // Below -7, `(kiSize + 7) >> 3` goes negative and `DecInitBits` evaluates
+        // `pStartBuf.offset(kiSizeBuf)` — a pointer before the start of the
+        // allocation, which is undefined behaviour rather than a wrong value. Miri
+        // catches it; `phase1_findings.md` §F7 records it and the invariant that keeps
+        // it unreachable. The safe side is checked over the whole range regardless.
         for size_bits in -9i32..=(payload_len as i32 * 8 + 9) {
+            let new = BsCursor::init(&buf, size_bits).map(|c| new_state(&c));
+            if size_bits < -7 {
+                assert_eq!(
+                    new,
+                    Err(ErrInfo::INVALID_ACCESS),
+                    "payload {payload_len}, kiSize {size_bits}: F7, new side only"
+                );
+                continue;
+            }
             let (bs, err) = old_init(&buf, size_bits);
             let old = as_result(err, ()).map(|()| old_state(&bs));
-            let new = BsCursor::init(&buf, size_bits).map(|c| new_state(&c));
             assert_eq!(old, new, "payload {payload_len} bytes, kiSize {size_bits}");
         }
     }
@@ -86,17 +108,35 @@ fn reader_init_matches_dec_init_bits() {
 
 #[test]
 fn init_read_bits_matches_at_every_end_offset() {
-    // `InitReadBits` is called with 1 by the CABAC init and 0 by decode_slice.
+    // `InitReadBits` is called with 1 by the CABAC init (`parse_mb_syn_cabac.rs:3312`)
+    // and 0 by `decode_slice.rs:2474`.
+    //
+    // The comparison stops at `end_offset <= payload_len` because past that the *old*
+    // side is undefined behaviour, not merely wrong: it evaluates
+    // `pEndBuf.offset(-iEndOffset)`, which walks the pointer before the start of the
+    // allocation. Miri catches it, and `phase1_findings.md` §F7 records both the
+    // hazard and the invariant that keeps it unreachable in the codec. The safe
+    // cursor does the same comparison in `isize` arithmetic, where there is nothing
+    // to get wrong, so it is exercised over the whole range below.
     let mut rng = Prng::new(0x8B17_0002);
     for payload_len in 1..12usize {
         let payload = rng.bytes(payload_len);
         let buf = rbsp_with_slack(&payload);
         let size_bits = payload_len as i32 * 8;
         for end_offset in 0..4isize {
-            let (mut bs, err) = old_init(&buf, size_bits);
-            assert_eq!(err, ERR_NONE);
             let mut c = BsCursor::init(&buf, size_bits).unwrap();
 
+            if end_offset as usize > payload_len {
+                assert_eq!(
+                    c.init_read_bits(&buf, end_offset),
+                    Err(ErrInfo::INVALID_ACCESS),
+                    "payload {payload_len}, end_offset {end_offset}: F7, new side only"
+                );
+                continue;
+            }
+
+            let (mut bs, err) = old_init(&buf, size_bits);
+            assert_eq!(err, ERR_NONE);
             let old_err = unsafe { InitReadBits(&mut bs, end_offset) };
             let old = as_result(old_err, ()).map(|()| old_state(&bs));
             let new = c.init_read_bits(&buf, end_offset).map(|()| new_state(&c));
@@ -177,12 +217,12 @@ impl ReadOp {
 fn reader_op_sequences_match_bit_for_bit() {
     let mut rng = Prng::new(0x8B17_0003);
 
-    for round in 0..300 {
+    for round in 0..scale(300) {
         // Buffer sizes from "shorter than one refill" up to a few KB.
         let payload_len = match round % 4 {
             0 => rng.below(9) as usize,
             1 => rng.below(64) as usize,
-            2 => 1024 + rng.below(1024) as usize,
+            2 if !cfg!(miri) => 1024 + rng.below(1024) as usize,
             _ => rng.below(24) as usize,
         };
         let payload = rng.bytes(payload_len);
@@ -199,7 +239,7 @@ fn reader_op_sequences_match_bit_for_bit() {
             }
             (Ok(()), Ok(mut c)) => {
                 assert_eq!(old_state(&bs), new_state(&c), "post-init state");
-                for step in 0..64 {
+                for step in 0..scale(64).max(16) {
                     let op = ReadOp::random(&mut rng);
                     let (old, new) = op.apply(&mut bs, &mut c, &buf);
                     assert_eq!(
@@ -317,7 +357,7 @@ fn bit_reads_over_16_reproduce_the_stale_low_bits() {
     // safe cursor reproduces that exactly rather than "fixing" it, which is what
     // makes it a drop-in replacement.
     let mut rng = Prng::new(0x8B17_0005);
-    for _ in 0..200 {
+    for _ in 0..scale(200) {
         let payload = rng.bytes(64);
         let buf = rbsp_with_slack(&payload);
         let size_bits = payload.len() as i32 * 8;
@@ -343,7 +383,7 @@ fn leading_zero_bits_matches_the_table() {
     let mut values: Vec<u32> = vec![0, 1, 2, 3, 0x80, 0xFF, 0x100, 0x8000, 0xFFFF, 0x80_0000];
     values.extend((0..32).map(|i| 1u32 << i));
     values.extend((0..32).map(|i| u32::MAX >> i));
-    values.extend((0..2000).map(|_| rng.next_u32()));
+    values.extend((0..scale(2000)).map(|_| rng.next_u32()));
 
     for v in values {
         let old = GetLeadingZeroBits(v);
@@ -466,7 +506,7 @@ fn assert_writers_agree(ops: &[WriteOp], flush: bool, label: &str) {
 #[test]
 fn writer_op_sequences_are_byte_identical() {
     let mut rng = Prng::new(0x77E1_0001);
-    for round in 0..300 {
+    for round in 0..scale(300) {
         let n_ops = rng.below(48) as usize + 1;
         let ops: Vec<WriteOp> = (0..n_ops).map(|_| WriteOp::random(&mut rng)).collect();
         assert_writers_agree(&ops, round % 2 == 0, &format!("round {round}"));
@@ -541,7 +581,7 @@ fn writer_snapshot_and_rollback_matches_the_cursor_stash() {
     const CAP: usize = 4096;
     let mut rng = Prng::new(0x77E1_0002);
 
-    for round in 0..100 {
+    for round in 0..scale(100) {
         let mut old_buf = vec![0u8; CAP];
         let mut new_buf = vec![0u8; CAP];
         let mut bs = SBitStringAux::default();
@@ -602,7 +642,7 @@ fn writer_snapshot_and_rollback_matches_the_cursor_stash() {
 fn rbsp_trailing_bits_matches() {
     let mut rng = Prng::new(0x77E1_0003);
     const CAP: usize = 1024;
-    for round in 0..100 {
+    for round in 0..scale(100) {
         let mut old_buf = vec![0u8; CAP];
         let mut new_buf = vec![0u8; CAP];
         let mut bs = SBitStringAux::default();
@@ -628,14 +668,14 @@ fn rbsp_trailing_bits_matches() {
 
 #[test]
 fn exp_golomb_sizes_match_the_table_driven_versions() {
-    for v in 0..70000u32 {
+    for v in 0..if cfg!(miri) { 2000 } else { 70000u32 } {
         assert_eq!(BsSizeUE(v), size_ue(v), "BsSizeUE({v})");
     }
-    for v in -35000i32..35000 {
+    for v in if cfg!(miri) { -1000 } else { -35000i32 }..if cfg!(miri) { 1000 } else { 35000 } {
         assert_eq!(BsSizeSE(v), size_se(v), "BsSizeSE({v})");
     }
     let mut rng = Prng::new(0x77E1_0004);
-    for _ in 0..20000 {
+    for _ in 0..scale(20000) {
         // The canonical writer computes `kuiValue + 1`, so u32::MAX is out of contract
         // for both sides.
         let v = rng.next_u32() & 0x7FFF_FFFF;
@@ -648,7 +688,7 @@ fn written_streams_read_back_through_the_old_reader() {
     // Closes the loop: new writer -> old reader, so a shared misunderstanding
     // between the two new types could not hide the error.
     let mut rng = Prng::new(0x77E1_0005);
-    for round in 0..100 {
+    for round in 0..scale(100) {
         let mut out = vec![0u8; 4096];
         let mut w = BsWriter::new();
         let ops: Vec<WriteOp> = (0..rng.below(32) + 1)
