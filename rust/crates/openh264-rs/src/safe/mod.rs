@@ -33,11 +33,13 @@
 //!
 //! | module | replaces | plan |
 //! |---|---|---|
+//! | [`plane`] | T2 — pixel-plane cursors with stride math and negative offsets | §2.2.1 |
 //! | [`err`] | — | §10 D6 |
 //!
 //! [`rust/docs/safety_refactor_plan.md`]: ../../../../docs/safety_refactor_plan.md
 
 pub mod err;
+pub mod plane;
 
 /// Deterministic PRNG for the property-style unit tests in this module.
 ///
