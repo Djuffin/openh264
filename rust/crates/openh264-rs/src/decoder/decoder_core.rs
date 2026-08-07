@@ -663,30 +663,6 @@ pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiP
     ExpandPictureCommon(pDst, kiStride, kiPicW, kiPicH, PADDING_LENGTH >> 1);
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SThreadInfo {
-    pub uiThrNum: i32,
-}
-
-impl Default for SThreadInfo {
-    fn default() -> Self {
-        Self { uiThrNum: 0 }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsDecoderThreadCTX {
-    pub pCtx: *mut SWelsDecoderContext,
-    pub pDec: *mut SPicture,
-    pub iPicBuffIdx: i32,
-    pub sThreadInfo: SThreadInfo,
-    pub sSliceDecodeStart: u32,
-    pub sSliceDecodeFinish: u32,
-    pub sImageReady: u32,
-}
-
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};

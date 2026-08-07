@@ -1,5 +1,5 @@
 {
-  "commit": "ba13bdbd",
+  "commit": "725e37fd",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -22,7 +22,7 @@
     "decoder/decode_mb_aux.rs": { "unsafe_fn": 4, "unsafe_block": 11, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 4 },
     "decoder/decode_slice.rs": { "unsafe_fn": 57, "unsafe_block": 5, "raw_ptr": 445, "transmute": 19, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "decoder/decoder_context.rs": { "unsafe_fn": 0, "unsafe_block": 5, "raw_ptr": 140, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
-    "decoder/decoder_core.rs": { "unsafe_fn": 100, "unsafe_block": 9, "raw_ptr": 275, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
+    "decoder/decoder_core.rs": { "unsafe_fn": 100, "unsafe_block": 9, "raw_ptr": 273, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
     "decoder/error_concealment.rs": { "unsafe_fn": 14, "unsafe_block": 5, "raw_ptr": 23, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/fmo.rs": { "unsafe_fn": 11, "unsafe_block": 4, "raw_ptr": 19, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/get_intra_predictor.rs": { "unsafe_fn": 42, "unsafe_block": 1, "raw_ptr": 184, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
