@@ -4,18 +4,16 @@ Living record of the OpenH264 **encoder** Rust port. The decoder port is mature 
 passes conformance; the encoder is the work in progress. Update this file at the end
 of every phase.
 
-**As of Phase 5.2 the encoder is byte-identical with the C++ reference for all five
-rate-control modes, both entropy coders, both init paths and all 52 QPs.** Verified
-over 240 mode x input x GOP x cabac configurations and 1560 QP x mode x cabac x size
-configurations. `SetOption` handles all 32 of upstream's options; `todo!()` and
-`unimplemented!()` are both zero in `src/`. `cargo test --no-fail-fast` is green:
-292 passed, 0 failed, 20 ignored, and `test_decode_encode_full_cycle_sha1_parity` —
-upstream's own hash — passes. What is not yet exact is listed under *Phase 5.3*;
-multi-threading, the multi-slice modes and `METHOD_DOWNSAMPLE` are the largest items.
+**As of Phase 5.3 the encoder is byte-identical with the C++ reference for all five
+rate-control modes, both entropy coders, both init paths, all 52 QPs, and **all four
+slice modes**.** Verified over 2632 configurations. `SetOption` handles all 32 of
+upstream's options; `todo!()` and `unimplemented!()` are both zero in `src/`.
+`cargo test --no-fail-fast` is green: 293 passed, 0 failed, 20 ignored, and
+`test_decode_encode_full_cycle_sha1_parity` — upstream's own hash — passes.
 
-`SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` are byte-identical too, over 256
-configurations — the first time either has been encoded end to end. The axes still
-pinned are **one thread**, **one spatial layer** and `SM_SIZELIMITED_SLICE`.
+**The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
+layer (which needs `METHOD_DOWNSAMPLE`) and `SCREEN_CONTENT_REAL_TIME`. See
+*Phase 5.4*.
 
 ---
 
@@ -36,9 +34,14 @@ make -j8 libraries binaries
 ./rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
 ```
 
-`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit]` runs both
-encoders and `cmp`s the Annex-B output; it exits 0 only when the streams match.
-`rcmode` defaults to `RC_OFF_MODE`; `baseinit=1` selects `Initialize(SEncParamBase)`.
+`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode]
+[slicenum] [threads]` runs both encoders and `cmp`s the Annex-B output; it exits 0
+only when the streams match.
+`rcmode` defaults to `RC_OFF_MODE`; `baseinit=1` selects `Initialize(SEncParamBase)`;
+`slicemode` is 0 `SM_SINGLE_SLICE` (default), 1 `SM_FIXEDSLCNUM_SLICE`,
+2 `SM_RASTER_SLICE`, 3 `SM_SIZELIMITED_SLICE`, with `slicenum` the slice count for
+1 and 2, the rows-per-slice for 2, and the byte constraint for 3; `threads` is
+`iMultipleThreadIdc`.
 It also feeds the Rust stream to `./h264dec` as a sanity check. Artifacts land in
 `rust/tools/diffharness/out/` (gitignored).
 
@@ -1491,44 +1494,143 @@ sweep, the sweep would have been a debugging session instead of a clean pass.
 > to distinguish "refused" from "produced zero bytes", check the driver's frame
 > count, not its return code.
 
-### Phase 5.3 — what is still not exact — **NOT STARTED**
+### Phase 5.3 — the slice modes, PSNR, and the MT ground truth — **DONE**
 
-In the order the next session should take them. Every one is an explicit error or a
-documented gap; there is no known silent-success stub left in the tree.
+**All four slice modes are byte-identical, CAVLC and CABAC.** `SM_SIZELIMITED_SLICE`
+was the last configuration the encoder refused outright.
 
-1. **`iMultipleThreadIdc > 1`** — needs `pTaskManage`, `InitAllSlicesInThread`,
-   `SliceLayerInfoUpdate`. Determinism is the risk, not correctness: verify the C++
-   is deterministic first by running `cxx_enc` twice with `iMultipleThreadIdc = 4`
-   and `cmp`ing, or a difference that is upstream's will read as yours.
-2. **`SM_SIZELIMITED_SLICE`** — needs `WelsCodeOnePicPartition` and
-   `WelsInitCurrentDlayerMltslc`. `compare.sh … 3 <bytes>` drives it already; the
-   port currently returns `ENC_RETURN_UNSUPPORTED_PARA`, which upstream's own return
-   mapping turns into a success with zero output (see above), so compare **frame
-   counts**, not exit codes, while working on it.
-3. **The remaining VP methods** — `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (this is what
-   blocks more than one spatial layer), and the three `SCREEN_CONTENT_REAL_TIME` ones
-   (`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
-   `METHOD_SCROLL_DETECTION`), which interlock — the screen scene-change detector
-   reads the scroll detector's result.
-4. **The three `SPS_LISTING` parameter-set strategies.** `CreateParametersetStrategy`
-   returns null and `PrepareEncodeFrame` returns `ENC_RETURN_UNSUPPORTED_PARA`.
-   `paraset_strategy.rs`'s C-style vtable is the established pattern, and
-   `WelsEncoderParamAdjust`'s `OutputCurrentStructure`/`LoadPreviousStructure` calls
-   are now live for the non-`CONSTANT_ID` strategies, so the `SPS_LISTING` overrides
-   of those two are the first thing the new strategies need.
-5. **`param_svc.rs::ParamBaseTranscode` writes `sSpatialLayers[idx]` where C++ writes
-   `sSpatialLayers[0]`.** Harmless at one spatial layer, wrong beyond it — fix it
-   *before* `METHOD_DOWNSAMPLE` makes multi-layer testable, not after.
-6. `PreprocessSliceCoding` does not translate the `SCREEN_CONTENT_REAL_TIME` block
-   (`encoder_ext.cpp:2708-2771`); `AllocPicture` refuses `iNeedFeatureStorage != 0`
-   rather than calling the unported `RequestScreenBlockFeatureStorage`;
-   `WelsCalcPsnr` is unported so `bPsnrY/U/V` are skipped.
+| axis | configurations | result |
+|---|---|---|
+| `iRCMode` x input x GOP x init path, CAVLC | 120 | identical |
+| the same, CABAC | 120 | identical |
+| QP x `iRCMode` x cabac x size | 1560 | identical |
+| `SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE` x 2/3/4/6 slices x `iRCMode` x GOP x cabac x input | 256 | identical |
+| `SM_SIZELIMITED_SLICE` x 5 byte constraints x 2 QPs x `iRCMode` x GOP x cabac x input | 320 | identical |
+
+| check | result |
+|---|---|
+| `cargo test --no-fail-fast` | **293 passed, 0 failed, 20 ignored** |
+| decoder conformance | 53/53 |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `todo!()` / `unimplemented!()` in `src/` | 0 / 0 |
+
+#### The machinery was the easy half
+
+Six functions were genuinely missing and are straightforward transcriptions:
+`UpdateSlicepEncCtxWithPartition`, `WelsInitCurrentQBLayerMltslc`,
+`DynslcUpdateMbNeighbourInfoListForAllSlices`, `WelsInitCurrentDlayerMltslc`,
+`DynSliceRealloc`, `WelsCodeOnePicPartition`. `RequestMemorySvc` also refused
+`bDynamicSlice && iEntropyCodingModeFlag`; `pDynamicBsBuffer` is now allocated,
+which is what `sDss.pRestoreBuffer` needs — CABAC renormalisation rewrites bytes
+already emitted, so stepping back over a slice boundary has to restore the *bytes*
+as well as the coder state.
+
+**The expensive half was the two dynamic-slicing macroblock loops, which had been
+ported long ago, were never reachable, and were wrong.** Neither was a stub in the
+"returns early" sense: both were long, plausible and structurally right.
+
+| function | what was missing |
+|---|---|
+| `WelsISliceMdEncDynamic` | `WelsMdIntraInit` **and `WelsMdIntraMb`** — no mode decision at all. The first frame came out 42 bytes against the reference's 3525. |
+| `WelsMdInterMbLoopOverDynamicSlice` | `WelsMdIntraInit`, `WelsMdInterInit`, `WelsMdInterSaveSadAndRefMbType`. `WelsMdInterInit` installs the reference-block pointers in `pMbCache`, so `pfInterMd` read a null `pSample2` and the encoder aborted on the first P frame. |
+| `WelsPSliceMdEncDynamic` | `sMd.bMdUsingSad = (iComplexityMode == LOW_COMPLEXITY)`. **The identical defect was found and fixed in its non-dynamic twin `WelsPSliceMdEnc` in an earlier phase.** The twin kept it because nothing ran it. |
+| `UpdateMbNeighbourInfoForNextSlice` | C++ is a `do`-`while`; the port a `while`, so the first macroblock went unupdated whenever a boundary landed on the last macroblock of a partition. |
+| `AddSliceBoundary` | open-coded `for i in 0..count as usize` where C++ calls `WelsSetMemMultiplebytes_c` with a **signed** count; a negative count became ~2^64 iterations. |
+
+> **The lesson, and it is the same one Phase 5.2 learned about CABAC.** A fix
+> applied to one of a pair of near-identical functions does not reach the other,
+> and nothing in the tree notices while the other is unreachable. When you fix a
+> defect in `Foo`, grep for `FooDynamic`, `FooExt`, `Foo_c` and the enhancement-layer
+> variant **before** moving on. Three of the five defects above are that shape.
+
+#### `WelsCalcPsnr`
+
+Ported into `common/wels_common_defs.rs` with `CONST_FACTOR_PSNR` and `CALC_PSNR`,
+and wired into `WelsEncoderEncodeExt`. Two of its return values are sentinels rather
+than PSNRs: `99.99` for an exact match and `-1.0` for a null plane.
+
+> The reference's PSNR block is asymmetric and it is not a transcription slip: each
+> plane is **computed** when either `pSvcParam->bPsnrX` or `pSrcPic->bPsnrX` is set,
+> but only **reported** when `pSrcPic->bPsnrX` is set. Asking through `SEncParamExt`
+> alone pays for a full-frame scan and reports nothing.
+
+`test_wels_calc_psnr_matches_cxx` asserts six measured values from a probe linked
+against `libopenh264.a`, including both sentinels and a mismatched-stride case.
+
+#### `ParamBaseTranscode`
+
+Carried since Phase 4 and now fixed. Five fields (`uiProfileIdc`, `uiLevelIdc`,
+`iSpatialBitrate`, `iMaxSpatialBitrate`, `iDLayerQp`) are written through
+`sSpatialLayers->`, which is `sSpatialLayers[0]`, on **every** iteration; the port
+wrote `[iIdxSpatial]` as well. Writing both is not a superset: beyond one spatial
+layer the reference leaves `[1..]`'s profile, level, max bitrate and QP at whatever
+`FillDefault` left, and `[0]`'s profile ends at `PRO_SCALABLE_BASELINE` because the
+last iteration rewrites it.
+
+#### Multi-threading: the ground truth, measured
+
+`compare.sh` gained a thirteenth argument, `iMultipleThreadIdc`. The status doc used
+to list "is the C++ even deterministic here?" as the question blocking this work.
+It is answered:
+
+- **The C++ multi-threaded encoder is deterministic.** Three runs each at
+  `iMultipleThreadIdc` 2 and 4 produced identical bytes, for both
+  `SM_FIXEDSLCNUM_SLICE` and `SM_SIZELIMITED_SLICE`. `compare.sh` is a valid oracle.
+- **Multi-threaded output differs from single-threaded** for the same nominal
+  configuration — 8324 bytes against 8322 at `SM_FIXEDSLCNUM_SLICE`/4 slices.
+  Threading is not a scheduling detail here: it changes the slice partitioning and
+  therefore the bitstream. A port must reproduce that difference, not merely add
+  threads.
+
+### Phase 5.4 — what is still not exact — **NOT STARTED**
+
+1. **`iMultipleThreadIdc > 1`.** The last configuration the encoder refuses. More of
+   it exists than the older notes suggested — `slice_multi_threading.rs` (903 lines),
+   `wels_task_management.rs` (865) and `common/wels_thread_pool.rs` (905) are all
+   present, against 948 lines of C++ in the two source files, and
+   `InitAllSlicesInThread`, `SliceLayerInfoUpdate`, `AdjustBaseLayer`,
+   `AdjustEnhanceLayer`, `CreateTaskManage` and `AppendSliceToFrameBs` all have
+   bodies. What is missing:
+   - `RequestMtResource` (`slice_multi_threading.rs:550`) allocates `SSliceThreading`,
+     `pThreadPEncCtx` and `pThreadBsBuffer` and stops. The C++ (111 lines against the
+     port's 55) then opens four event sets per thread — `pUpdateMbListEvent`,
+     `pFinUpdateMbListEvent`, `pSliceCodedEvent`, `pReadySliceCodingEvent` — and
+     creates the threads. **Treat every one of those existing bodies as unverified**:
+     Phase 5.3 found that both dynamic MB loops, ported and plausible, were wrong
+     because nothing had ever run them. The MT bodies are in exactly that state.
+   - `pTaskManage` is never created in `WelsInitEncoderExt`, and the MT branch of
+     `WelsEncoderEncodeExt` (`encoder_ext.cpp:3714`, `pCtx->pTaskManage->ExecuteTasks()`
+     then `AppendSliceToFrameBs`) returns `ENC_RETURN_UNSUPPORTED_PARA` at
+     `encoder_ext.rs`'s two MT sites, plus the `AdjustEnhanceLayer`/`AdjustBaseLayer`
+     load-balancing arm under `SM_FIXEDSLCNUM_SLICE`.
+
+   Drive it with `compare.sh … <slicemode> <slicenum> <threads>`, and compare against
+   the **multi-threaded** C++, not the single-threaded one.
+2. **`METHOD_DOWNSAMPLE`**, which is what blocks more than one spatial layer — the
+   largest untested area of the encoder. `ParamBaseTranscode` is now correct for
+   multi-layer, so that pre-requisite is out of the way.
+3. **`SCREEN_CONTENT_REAL_TIME`**: `METHOD_SCENE_CHANGE_DETECTION_SCREEN`,
+   `METHOD_COMPLEXITY_ANALYSIS_SCREEN` and `METHOD_SCROLL_DETECTION` interlock (the
+   screen scene-change detector reads the scroll detector's result);
+   `PreprocessSliceCoding` does not translate `encoder_ext.cpp:2708-2771`;
+   `AllocPicture` refuses `iNeedFeatureStorage != 0` rather than calling the unported
+   `RequestScreenBlockFeatureStorage`; `RequestMemorySvc` refuses the
+   `SVAAFrameInfoExt`/`RequestMemoryVaaScreen` allocation. `GOM_H_SCC` is corrected
+   and waiting.
+4. **`METHOD_DENOISE`.**
+5. **The three `SPS_LISTING` parameter-set strategies.** `CreateParametersetStrategy`
+   returns null; `paraset_strategy.rs`'s C-style vtable is the established pattern,
+   and `WelsEncoderParamAdjust`'s `OutputCurrentStructure`/`LoadPreviousStructure`
+   calls are live for the non-`CONSTANT_ID` strategies, so the `SPS_LISTING`
+   overrides of those two are what the new strategies need first.
+6. **`find_stub_bodies.py --dups`: 87 names, most unread.** Four of the seven
+   inspected across Phases 5.2 and 5.3 were defects. Still the highest-yield
+   unfinished audit in the tree.
 7. The `Combined3` SIMD branches of `WelsMdI16x16` / `WelsMdI4x4` /
    `WelsMdIntraChroma` are not translated; each site calls `assert_no_combined3`,
-   which panics if the slot is ever non-null. Measured NULL on this target. If you
-   add SIMD dispatch, these three become live and must be translated first — and
-   `common/cpu_core.rs` becomes load-bearing the same moment.
-8. **`find_stub_bodies.py --dups`: 87 names, most unread.** See above.
+   which panics if the slot is ever non-null. Measured NULL on this target. Adding
+   SIMD dispatch makes these three live, and `common/cpu_core.rs` load-bearing, the
+   same moment.
 
 ### Phase 6 — cleanup — **duplicated constants and tables DONE, rest NOT STARTED**
 
