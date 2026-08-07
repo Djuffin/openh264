@@ -11,16 +11,25 @@
 //! every macroblock, which made `WelsMdInterFinePartitionVaa` return immediately —
 //! so no sub-16x16 inter partition was ever evaluated.
 //!
-//! `METHOD_VAA_STATISTICS` and `METHOD_COMPLEXITY_ANALYSIS` are implemented.
+//! Implemented: `METHOD_VAA_STATISTICS` (all five SAD kernels),
+//! `METHOD_COMPLEXITY_ANALYSIS`, `METHOD_ADAPTIVE_QUANT`,
+//! `METHOD_BACKGROUND_DETECTION` and `METHOD_SCENE_CHANGE_DETECTION_VIDEO`.
 //! Every other method returns
 //! `RET_NOTSUPPORTED` instead of the previous silent success; see
 //! [`WelsVpProcess`] for the list and what each one gates.
 
+pub mod adaptive_quantization;
+pub mod background_detection;
 pub mod complexity_analysis;
+pub mod scene_change_detection;
 pub mod vaacalc;
 
-use crate::encoder::wels_preprocess::{EMethods, IWelsVP, SPixMap};
+use adaptive_quantization::CAdaptiveQuantization;
+use background_detection::CBackgroundDetection;
 use complexity_analysis::CComplexityAnalysis;
+use scene_change_detection::CSceneChangeDetection;
+
+use crate::encoder::wels_preprocess::{EMethods, IWelsVP, SPixMap};
 use core::ffi::c_void;
 use vaacalc::{CVAACalculation, RET_INVALIDPARAM, RET_NOTSUPPORTED, RET_SUCCESS};
 
@@ -29,6 +38,9 @@ use vaacalc::{CVAACalculation, RET_INVALIDPARAM, RET_NOTSUPPORTED, RET_SUCCESS};
 pub struct SWelsVpContext {
     pub sVaaCalc: CVAACalculation,
     pub sComplexityAnalysis: CComplexityAnalysis,
+    pub sAdaptiveQuant: CAdaptiveQuantization,
+    pub sBackgroundDetection: CBackgroundDetection,
+    pub sSceneChangeDetection: CSceneChangeDetection,
 }
 
 impl Default for SWelsVpContext {
@@ -36,6 +48,9 @@ impl Default for SWelsVpContext {
         Self {
             sVaaCalc: CVAACalculation::default(),
             sComplexityAnalysis: CComplexityAnalysis::default(),
+            sAdaptiveQuant: CAdaptiveQuantization::default(),
+            sBackgroundDetection: CBackgroundDetection::default(),
+            sSceneChangeDetection: CSceneChangeDetection::default(),
         }
     }
 }
@@ -80,6 +95,15 @@ pub unsafe extern "C" fn WelsVpSet(pCtx: *mut c_void, iType: i32, pParam: *mut c
     if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
         return ctx.sComplexityAnalysis.Set(iType, pParam);
     }
+    if iType == EMethods::METHOD_ADAPTIVE_QUANT as i32 {
+        return ctx.sAdaptiveQuant.Set(iType, pParam);
+    }
+    if iType == EMethods::METHOD_BACKGROUND_DETECTION as i32 {
+        return ctx.sBackgroundDetection.Set(iType, pParam);
+    }
+    if iType == EMethods::METHOD_SCENE_CHANGE_DETECTION_VIDEO as i32 {
+        return ctx.sSceneChangeDetection.Set(iType, pParam);
+    }
     RET_NOTSUPPORTED
 }
 
@@ -95,6 +119,15 @@ pub unsafe extern "C" fn WelsVpGet(pCtx: *mut c_void, iType: i32, pParam: *mut c
     if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
         return ctx.sComplexityAnalysis.Get(iType, pParam);
     }
+    if iType == EMethods::METHOD_ADAPTIVE_QUANT as i32 {
+        return ctx.sAdaptiveQuant.Get(iType, pParam);
+    }
+    if iType == EMethods::METHOD_BACKGROUND_DETECTION as i32 {
+        return ctx.sBackgroundDetection.Get(iType, pParam);
+    }
+    if iType == EMethods::METHOD_SCENE_CHANGE_DETECTION_VIDEO as i32 {
+        return ctx.sSceneChangeDetection.Get(iType, pParam);
+    }
     // `METHOD_VAA_STATISTICS` results are written straight into the caller's
     // `SVAACalcResult` by Process — the C++ plugin has no Get for it either.
     RET_NOTSUPPORTED
@@ -102,7 +135,9 @@ pub unsafe extern "C" fn WelsVpGet(pCtx: *mut c_void, iType: i32, pParam: *mut c
 
 /// `IWelsVP::Process`.
 ///
-/// Implemented: `METHOD_VAA_STATISTICS`, `METHOD_COMPLEXITY_ANALYSIS`.
+/// Implemented: `METHOD_VAA_STATISTICS`, `METHOD_COMPLEXITY_ANALYSIS`,
+/// `METHOD_ADAPTIVE_QUANT`, `METHOD_BACKGROUND_DETECTION`,
+/// `METHOD_SCENE_CHANGE_DETECTION_VIDEO`.
 ///
 /// Returns `RET_NOTSUPPORTED` for the rest. Each is off in the gate configuration
 /// and its caller in `wels_preprocess.rs` already skips the follow-up `Get` when
@@ -112,10 +147,8 @@ pub unsafe extern "C" fn WelsVpGet(pCtx: *mut c_void, iType: i32, pParam: *mut c
 /// | method | gated by |
 /// |---|---|
 /// | `METHOD_DENOISE` | `bEnableDenoise` |
-/// | `METHOD_SCENE_CHANGE_DETECTION_VIDEO`/`_SCREEN` | frame-type decision |
+/// | `METHOD_SCENE_CHANGE_DETECTION_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
 /// | `METHOD_DOWNSAMPLE` | more than one spatial layer, or a resized layer |
-/// | `METHOD_BACKGROUND_DETECTION` | `bEnableBackgroundDetection` |
-/// | `METHOD_ADAPTIVE_QUANT` | `bEnableAdaptiveQuant` |
 /// | `METHOD_COMPLEXITY_ANALYSIS_SCREEN` | `SCREEN_CONTENT_REAL_TIME` |
 /// | `METHOD_SCROLL_DETECTION` | `SCREEN_CONTENT_REAL_TIME` |
 ///
@@ -149,6 +182,15 @@ pub unsafe extern "C" fn WelsVpProcess(
     }
     if iType == EMethods::METHOD_COMPLEXITY_ANALYSIS as i32 {
         return ctx.sComplexityAnalysis.Process(iType, pSrc, pDst);
+    }
+    if iType == EMethods::METHOD_ADAPTIVE_QUANT as i32 {
+        return ctx.sAdaptiveQuant.Process(iType, pSrc, pDst);
+    }
+    if iType == EMethods::METHOD_BACKGROUND_DETECTION as i32 {
+        return ctx.sBackgroundDetection.Process(iType, pSrc, pDst);
+    }
+    if iType == EMethods::METHOD_SCENE_CHANGE_DETECTION_VIDEO as i32 {
+        return ctx.sSceneChangeDetection.Process(iType, pSrc, pDst);
     }
     RET_NOTSUPPORTED
 }

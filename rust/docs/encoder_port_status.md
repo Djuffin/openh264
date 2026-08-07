@@ -4,11 +4,14 @@ Living record of the OpenH264 **encoder** Rust port. The decoder port is mature 
 passes conformance; the encoder is the work in progress. Update this file at the end
 of every phase.
 
-**As of Phase 4.6 the encoder is byte-identical with the C++ reference for the whole
-gate configuration** — four inputs including 720p and a non-multiple-of-16 size, 51
-of 52 QPs, and five GOP sizes. `cargo test --no-fail-fast` is green: 289 passed, 0
-failed, 21 ignored. What is not yet exact is listed under *Phase 5*; rate control is
-the first item.
+**As of Phase 5.1 the encoder is byte-identical with the C++ reference for all five
+rate-control modes and for upstream's own `Initialize(SEncParamBase)`
+configuration**, which additionally turns on frame skip, background detection and
+scene-change detection. Verified over 120 mode x input x GOP configurations and 208
+QP x mode configurations. `cargo test --no-fail-fast` is green: 290 passed, 0
+failed, 20 ignored, and `test_decode_encode_full_cycle_sha1_parity` — upstream's
+own hash — passes for the first time. What is not yet exact is listed under
+*Phase 5.2*; CABAC and multi-threading are the largest items.
 
 ---
 
@@ -420,6 +423,7 @@ surrounding types were right.
 |---|---|
 | `rust/tools/find_dup_types.sh` | the Gate 2 check — silence means met (types only; see Phase 6) |
 | `rust/tools/show_type.sh <T> [CppTag]` | dumps the C++ original beside every Rust copy |
+| `rust/tools/find_stub_bodies.py` | Phase 5.1 — call-set audit against the C++ body; `--dups` lists duplicated Rust definitions worst-disparity-first |
 | `src/encoder/abi_guard.rs` | 55 compile-time size assertions |
 
 `unify_type.py` had two insertion bugs, both fixed: it matched `use` only to the
@@ -1019,7 +1023,7 @@ Everything below is `compare.sh` output, not inference.
 | QP | 0…51, every value | byte-identical except **qp=0** |
 | GOP | `-1`, 1, 2, 4, 8 | all byte-identical |
 | rate control | `RC_OFF_MODE`, `RC_BUFFERBASED_MODE` | byte-identical |
-| rate control | `RC_QUALITY_MODE`, `RC_BITRATE_MODE`, `RC_TIMESTAMP_MODE` | **differ** — see Phase 5 |
+| rate control | `RC_QUALITY_MODE`, `RC_BITRATE_MODE`, `RC_TIMESTAMP_MODE` | differed at the time of Phase 4.6; **closed in Phase 5.1** |
 
 **The one QP that differs is 0, and only above 160x96.** At 320x192 a *single-frame*
 encode already differs, by 3 bytes inside the IDR — so this is an **I-slice** edge
@@ -1077,33 +1081,8 @@ configuration.
 
 **Gate 5:** `compare.sh` exits 0.
 
-**Gate 5 met.** What is carried into Phase 5.1, in the order the next session should
-take them:
-
-1. **Rate control.** Three of the five `iRCMode` values diverge; see the table under
-   *How far byte-exactness reaches*. `rc.rs` is 2402 lines against `ratectl.cpp`'s
-   1588, so this is a byte-exactness hunt, not a transcription — start with
-   `compare.sh … 0` (that is `RC_QUALITY_MODE`) and the `OH264_MBDUMP` dump, whose
-   `qp=` field localises a QP decision to one macroblock. Closing this also
-   re-enables `test_decode_encode_full_cycle_sha1_parity`.
-2. **qp=0 above 160x96** — a 3-byte difference inside a single-frame IDR at 320x192.
-   Pre-dates Phase 4.6. I-slice path.
-3. **CABAC.** `InitFunctionPointers` returns `ENC_RETURN_UNSUPPORTED_PARA` for
-   `iEntropyCodingModeFlag != 0`, because `StashMBStatusCabac`,
-   `StashPopMBStatusCabac` and `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are unported,
-   as are `WelsCabacEncodeFlush`/`WelsCabacEncodeGetPtr` for `WelsWriteSliceEndSyn`
-   (the tree's one `unimplemented!()`). Porting those five makes
-   `compare.sh … 1` (cabac=1) meaningful.
-4. **The rest of the `codec/processing/` VP module** — `METHOD_DENOISE`,
-   `METHOD_DOWNSAMPLE` (needed for more than one spatial layer),
-   `METHOD_SCENE_CHANGE_DETECTION_*`, `METHOD_BACKGROUND_DETECTION`,
-   `METHOD_ADAPTIVE_QUANT`, `METHOD_COMPLEXITY_ANALYSIS*`, `METHOD_SCROLL_DETECTION`.
-   All return `RET_NOTSUPPORTED` today.
-5. The items already carried from Phase 4: `iMultipleThreadIdc > 1`,
-   `SM_SIZELIMITED_SLICE`, the three `SPS_LISTING` strategies,
-   `ParamBaseTranscode`'s `sSpatialLayers[idx]`, `PreprocessSliceCoding`'s
-   `SCREEN_CONTENT_REAL_TIME` block, `AllocPicture`'s `iNeedFeatureStorage`,
-   `WelsCalcPsnr`, and the `Combined3` SIMD branches.
+**Gate 5 met.** Phase 5.1 closed items 1 and part of 4; what remains is listed as
+*Phase 5.2* below.
 
 Four things to keep in mind when a stream diverges:
 
@@ -1123,6 +1102,187 @@ Four things to keep in mind when a stream diverges:
   This session used it twice more: for the fifteen `offsetof` values above, and to
   establish that upstream's `EncodeFrame` returns 5 for a null-`pData` source
   picture where a Rust test had asserted success.
+
+### Phase 5.1 — rate control, and the rest of the VP module — **DONE, byte-exact**
+
+**All five `iRCMode` values are byte-identical with the C++, and so is upstream's
+own `Initialize(SEncParamBase)` configuration** — which turns on frame skip,
+background detection and scene-change detection as well as rate control.
+`test_decode_encode_full_cycle_sha1_parity` passes with upstream's expected hash;
+it had been `#[ignore]`d since Phase 4.5.
+
+Measured, not asserted. `compare.sh` exits 0 for:
+
+| axis | range | configurations |
+|---|---|---|
+| `iRCMode` x input x GOP | 5 modes x 4 inputs (160x96, 320x192, 152x100, 1280x720) x GOP −1/2/8 | 60 |
+| the same, through `Initialize(SEncParamBase)` | as above with the new tenth argument | 60 |
+| QP x `iRCMode` | all 52 QPs x the four RC-on modes, 160x96 | 208 |
+
+| check | result |
+|---|---|
+| `cargo build` | clean, 16 warnings, all `dead_code`/`unused` |
+| `cargo test --no-fail-fast` | **290 passed, 0 failed, 20 ignored** (was 289/0/21) |
+| decoder conformance | 53/53 |
+| `codec_unittest` | 533/534, only `DecoderDeblocking.DeblockingInit` |
+| `find_dup_types.sh` | silent on both passes |
+| `todo!()` in `src/` | **0**; one `unimplemented!()`, the CABAC branch of `WelsWriteSliceEndSyn` |
+
+#### The Phase-5 plan named rate control; four of the eight defects were elsewhere
+
+Every one was found by bisecting the bitstream against an instrumented C++ build.
+None was visible by reading, and the call-set audit over `rc.rs` — which the
+Phase-5 plan reported as clean, correctly — could not have seen any of them.
+
+| defect | detail |
+|---|---|
+| **`GomRCInitForOneSlice` had no call site.** | The function was ported and faithful; `WelsCodeOneSlice` simply never called it (`svc_encode_slice.cpp:1665`), so `iTargetBitsSlice` stayed 0 for every slice and the entire GOM bit-allocation path ran on a zero budget. **This is the stub-under-a-correct-name class one level up: the callee was right and the call was missing.** An audit that compares function *bodies* cannot see it; only diffing the caller against the C++ can. |
+| **`METHOD_COMPLEXITY_ANALYSIS` was unported** (`RET_NOTSUPPORTED`), so `iFrameComplexity` stayed 0 and `pCurrentFrameGomSad` stayed all-zero — `RcGomTargetBits` fell to its even-split arm on every GOM and `RcCalculatePictureQp`'s complexity ratio was meaningless. Now `processing/complexity_analysis.rs`. |
+| **`wels_preprocess.rs` declared `GOM_SAD = 1, GOM_VAR = 2`.** `IWelsVP.h:215` says **−1 and −2**. Both GOM modes fell through `CComplexityAnalysis::Process`'s `default:` arm, so even after the plugin existed it did nothing. Sixth phase running in which a duplicated constant held a wrong value. |
+| **`VAACalcSadVar_c` was unported**, so `pSum16x16`/`pSumOfSquare16x16` were never filled. `AnalyzeSpatialPic` selects that kernel for every I slice once `iRCMode >= RC_BITRATE_MODE` (`wels_preprocess.cpp:283`). |
+| **`RcCalculateGomQp` sorted its thresholds "correctly".** C++ tests `> 10600` *before* `> 11900`, which makes the `-= 2` arm unreachable. Sorting them drops the QP by 2 wherever the reference drops it by 1. The C++'s dead branch is load-bearing precisely because it is dead. |
+| **`ParamTranscode` hardcoded five fields** (`bFixRCOverShoot`, `iIdrBitrateRatio`, `bPsnrY/U/V`) where `param_svc.h:349-353` copies them from the caller — a `FillDefault` block pasted into the transcoder. `bFixRCOverShoot` was true for every caller, which sends `RcInitVGop` down its carry-over arm, so `iRemainingBits` was wrong from the ninth frame on. |
+| **`WelsMdUpdateBGDInfo` was shadowed by an empty stub.** `encoder_context.rs` declared its own two-line no-op with the same name, and `WelsInitBGDFunc` in that module resolved to it rather than to the real one in `svc_mode_decision.rs` — a local item beats an import. No background macroblock was ever converted from `MB_TYPE_BACKGROUND` to `MB_TYPE_SKIP`, so every one was coded in full instead of as a skip run. **`find_dup_types.sh` checks types, so nothing in the tree saw it.** See *A duplicate-function scan* below. |
+| **`iSumSad` in `RcGomTargetBits` overflows.** It is `int32_t` in C++ and really does wrap: under `GOM_VAR` each `pCurrentFrameGomSad[j]` is a whole GOM's luma variance, order 1e9 at 720p, and the sum runs over 20+ GOMs. The debug build trapped on it (720p, `RC_TIMESTAMP_MODE`, GOP 2). Now an explicit `wrapping_add`. |
+
+#### The rest of `codec/processing/`
+
+`METHOD_ADAPTIVE_QUANT`, `METHOD_BACKGROUND_DETECTION` and
+`METHOD_SCENE_CHANGE_DETECTION_VIDEO` are ported, as are the four remaining VAA
+kernels (`VAACalcSadVar_c`, `VAACalcSadSsd_c`, `VAACalcSadBgd_c`,
+`VAACalcSadSsdBgd_c`), so `CVAACalculation::Process`'s full four-way selection
+now works instead of returning `RET_NOTSUPPORTED` for three of its four arms.
+
+> **`bEnableAdaptiveQuant` is dead in upstream.** `ParamValidation`
+> (`encoder_ext.cpp:301`) sets it to `false` unconditionally — "turn off adaptive
+> quant now, algorithms needs to be refactored" — and the port already did the
+> same, so `pMotionTextureIndexToDeltaQp` is never even allocated.
+> `processing/adaptive_quantization.rs` is therefore correct-but-unreachable
+> today. It is kept because the plugin table has to answer the method, and
+> because the flag is a public API field.
+
+Still `RET_NOTSUPPORTED`: `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (needed for more
+than one spatial layer), `METHOD_SCENE_CHANGE_DETECTION_SCREEN`,
+`METHOD_COMPLEXITY_ANALYSIS_SCREEN`, `METHOD_SCROLL_DETECTION` — the last three
+all under `SCREEN_CONTENT_REAL_TIME`.
+
+#### A duplicate-function scan, and what it found immediately
+
+`rust/tools/find_stub_bodies.py` is new and does two things:
+
+```bash
+rust/tools/find_stub_bodies.py                    # call-set audit vs the C++ body
+rust/tools/find_stub_bodies.py --dups             # duplicated Rust definitions
+```
+
+`--dups` lists every function name defined more than once, worst body-size
+disparity first. It is the check that would have caught `WelsMdUpdateBGDInfo` in
+seconds. Run over the tree it reported **93 duplicated function names**, and the
+four worst were all the same shape — an empty or near-empty body shadowing a real
+one:
+
+| name | stub | real |
+|---|---|---|
+| `WelsMdUpdateBGDInfo` | `encoder_context.rs`, empty | `svc_mode_decision.rs` — **was live, see above** |
+| `WelsRcInitFuncPointers` | `wels_encoder_ext.rs`, set `iRCMode` and nothing else | `rc.rs` |
+| `FilterLTRRecoveryRequest`, `FilterLTRMarkingFeedback` | `wels_encoder_ext.rs`, empty | `ref_list_mgr_svc.rs` |
+| `UpdateMbNeighbor` | `slice_multi_threading.rs`, empty | `svc_encode_slice.rs` |
+
+All four stubs are deleted. `UpdateMbNeighbor`'s call site now uses the real one.
+The other three had no reachable caller — see the next section for why that is
+its own problem.
+
+#### `SetOption` silently succeeds for 14 of upstream's options
+
+Found while chasing `WelsRcInitFuncPointers`. `CWelsH264SVCEncoder::SetOption`
+(`welsEncoderExt.cpp:692`) handles about 25 `ENCODER_OPTION_*` values; the port
+handles 11 and ends with `_ => {}` followed by `return 0`. **Every other option
+is accepted and ignored**, including `ENCODER_OPTION_RC_MODE`,
+`ENCODER_OPTION_RC_FRAME_SKIP`, `ENCODER_OPTION_LTR`, `ENCODER_LTR_*`,
+`ENCODER_OPTION_PROFILE`, `ENCODER_OPTION_LEVEL`, `ENCODER_OPTION_NUMBER_REF`
+and `ENCODER_OPTION_PADDING`. That is a silent-success stub on a public API and
+it is the largest single item this phase leaves open; it was not touched here
+because it is a behaviour change on the public surface, well outside rate
+control, and worth doing with its own test pass.
+
+Note in particular that C++'s `ENCODER_OPTION_RC_MODE` sets `iRCMode` **and**
+calls the real `WelsRcInitFuncPointers` to re-point the dispatch table; setting
+the field alone leaves the encoder running the previous mode's callbacks.
+
+#### `compare.sh` grew two things
+
+`compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit]`.
+
+- **`baseinit`** — 1 selects `Initialize(SEncParamBase)`, the path upstream's
+  `BaseEncoderTest::InitWithParam` takes and the one the SHA-1 parity test
+  exercises. It leaves every `FillDefault` value in place, so scene-change
+  detection, background detection, adaptive quantisation and frame skip are all
+  on, `eSpsPpsIdStrategy` is `INCREASING_ID` and `iTargetBitrate` is 5 Mbit/s.
+  This is a materially wider configuration than the `InitializeExt` gate and it
+  is now byte-exact too.
+- A **non-zero driver exit is reported**. A debug-build Rust panic (the
+  `iSumSad` overflow above) previously read as an ordinary byte difference,
+  because the aborted process leaves a short file. Both driver exit codes are
+  now printed with the log path.
+
+> **Trap worth recording: the drivers take `out.264` *before* `rcmode`.** Half an
+> hour of this session went into comparing a C++ run that was silently on
+> `RC_QUALITY_MODE` — `atoi` of a file path is 0 — against a Rust run on the mode
+> actually under test. If a dump looks like the C++ is ignoring a mode, check the
+> argument order first.
+
+#### The dumps
+
+`OH264_RCDUMP` (per-frame `SWelsSvcRc`) and `OH264_RCMBDUMP` (per-macroblock
+`SRCSlicing`) are new and permanent on the Rust side, alongside the four from
+Phase 4.6. `OH264_MBDUMP` moved: it now prints **after**
+`pfMdBackgroundInfoUpdate` rather than before, so `uiMbType` is the value the
+syntax writer will actually see — which is what exposed the shadowed
+`WelsMdUpdateBGDInfo`. Only the C++ half has to be re-patched next time.
+
+> Two fields in `OH264_MBDUMP` are **not comparable**: `cc=` (`iCostChroma`) and
+> `skip=` (`iCostSkipMb`). `SWelsMD` is an uninitialised stack local in C++
+> (`svc_encode_slice.cpp`, `SWelsMD sMd;`) and a zeroed `Default` in Rust, so on
+> any macroblock whose mode decision returns before setting them — every
+> background-skip macroblock, for one — the C++ prints stale bytes and the port
+> prints 0. Neither is read afterwards. Ignore both when diffing.
+
+### Phase 5.2 — what is still not exact — **NOT STARTED**
+
+In the order the next session should take them. Every one is an explicit error, an
+explicit `unimplemented!()`, or a measured difference — none is a silent
+fall-through, except the first, which is exactly why it is first.
+
+1. **`SetOption` accepts and ignores 14 of upstream's `ENCODER_OPTION_*` values.**
+   See *`SetOption` silently succeeds* under Phase 5.1. This is the only known
+   silent-success stub left in the tree and it is on the public API.
+2. **qp=0 above 160x96** — a 3-byte difference inside a *single-frame* IDR at
+   320x192, so an I-slice edge case, not inter. Pre-dates Phase 4.6.
+   `compare.sh res/CiscoVT2people_320x192_12fps.yuv 320 192 1 0 0 -1` reproduces it;
+   `res/CiscoVT2people_160x96_6fps.yuv` at qp=0 is identical, so it depends on
+   picture size as well as QP.
+3. **CABAC.** `InitFunctionPointers` returns `ENC_RETURN_UNSUPPORTED_PARA` for
+   `iEntropyCodingModeFlag != 0`, because `StashMBStatusCabac`,
+   `StashPopMBStatusCabac` and `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are
+   unported, as are `WelsCabacEncodeFlush`/`WelsCabacEncodeGetPtr` for
+   `WelsWriteSliceEndSyn` — the tree's one `unimplemented!()`. Porting those five
+   makes `compare.sh … 1` (cabac=1) meaningful. The CAVLC twins of the first three
+   are already correct and are a good model.
+4. **`iMultipleThreadIdc > 1`** — needs `pTaskManage`, `InitAllSlicesInThread`,
+   `SliceLayerInfoUpdate`. Note `slice_multi_threading.rs`'s `UpdateMbNeighbor` now
+   calls the real one, so that path is one stub shorter.
+5. **`SM_SIZELIMITED_SLICE`** — needs `WelsCodeOnePicPartition`,
+   `WelsInitCurrentDlayerMltslc`.
+6. **The remaining VP methods** — `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (needed for
+   more than one spatial layer), and the three `SCREEN_CONTENT_REAL_TIME` ones
+   (`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
+   `METHOD_SCROLL_DETECTION`).
+7. The items carried since Phase 4: the three `SPS_LISTING` parameter-set
+   strategies, `ParamBaseTranscode`'s `sSpatialLayers[idx]` where C++ writes
+   `sSpatialLayers[0]`, `PreprocessSliceCoding`'s untranslated
+   `SCREEN_CONTENT_REAL_TIME` block (`encoder_ext.cpp:2708-2771`), `AllocPicture`'s
+   refusal of `iNeedFeatureStorage != 0`, the unported `WelsCalcPsnr`, and the
+   `Combined3` SIMD branches (measured NULL on this target).
 
 ### Phase 6 — cleanup — **case-insensitive scan DONE, rest NOT STARTED**
 
@@ -1147,7 +1307,16 @@ that still compiles, and reconcile this document with the final state.
 and every audit built on it match on *names*. A function whose name matches the C++
 but whose body does a fraction of the work passes silently.** Phase 4.5 lost most of
 its time to three such stubs; Phase 4.6 found **seven more**, including one
-(`OutputPMbWithoutConstructCsRsNoCopy`) that was missing an entire plane.
+(`OutputPMbWithoutConstructCsRsNoCopy`) that was missing an entire plane; Phase 5.1
+found four more and two further variants of the same shape — a faithful function
+with **no call site** (`GomRCInitForOneSlice`), and a faithful function **shadowed**
+by an empty same-named one in another module (`WelsMdUpdateBGDInfo`).
+
+> **Phase 5.1 automated both halves.** `rust/tools/find_stub_bodies.py` does the
+> call-set audit, and `--dups` lists duplicated Rust definitions worst-disparity
+> first — which is what finds the shadow case. Neither is a gate; both are reading
+> aids, and both earn their keep in seconds. What neither can see is the
+> *no-call-site* case: only diffing the caller against the C++ catches that.
 
 The crude check works and is worth automating. For each function, extract the set of
 identifiers called in the C++ body and in the Rust body and diff them; if the Rust

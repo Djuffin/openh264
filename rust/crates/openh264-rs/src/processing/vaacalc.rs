@@ -165,6 +165,225 @@ pub unsafe fn VAACalcSadVar_c(
     }
 }
 
+/// `VAACalcSadSsd_c` — `vaacalcfuncs.cpp:225`.
+///
+/// `VAACalcSadVar_c` plus the per-macroblock sum of squared *differences*, which
+/// `CAdaptiveQuantization` reads as the motion index.
+///
+/// # Safety
+/// As [`VAACalcSadVar_c`], plus `psqdiff16x16`.
+pub unsafe fn VAACalcSadSsd_c(
+    pCurData: *const u8,
+    pRefData: *const u8,
+    iPicWidth: i32,
+    iPicHeight: i32,
+    iPicStride: i32,
+    pFrameSad: *mut i32,
+    pSad8x8: *mut i32,
+    pSum16x16: *mut i32,
+    psqsum16x16: *mut i32,
+    psqdiff16x16: *mut i32,
+) {
+    let mut tmp_ref = pRefData;
+    let mut tmp_cur = pCurData;
+    let iMbWidth = iPicWidth >> 4;
+    let mb_height = iPicHeight >> 4;
+    let mut mb_index = 0isize;
+    let pic_stride_x8 = (iPicStride << 3) as isize;
+    let step = ((iPicStride << 4) - iPicWidth) as isize;
+
+    *pFrameSad = 0;
+    for _i in 0..mb_height {
+        for _j in 0..iMbWidth {
+            *pSum16x16.offset(mb_index) = 0;
+            *psqsum16x16.offset(mb_index) = 0;
+            *psqdiff16x16.offset(mb_index) = 0;
+
+            for (n, offset) in QUADRANTS(pic_stride_x8) {
+                let (mut l_sad, mut l_sqdiff, mut l_sum, mut l_sqsum) = (0i32, 0i32, 0i32, 0i32);
+                let mut tmp_cur_row = tmp_cur.offset(offset);
+                let mut tmp_ref_row = tmp_ref.offset(offset);
+                for _k in 0..8 {
+                    for l in 0..8isize {
+                        let cur = *tmp_cur_row.offset(l) as i32;
+                        let diff = (cur - *tmp_ref_row.offset(l) as i32).abs();
+                        l_sad += diff;
+                        l_sqdiff += diff * diff;
+                        l_sum += cur;
+                        l_sqsum += cur * cur;
+                    }
+                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
+                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
+                }
+                *pFrameSad += l_sad;
+                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
+                *pSum16x16.offset(mb_index) += l_sum;
+                *psqsum16x16.offset(mb_index) += l_sqsum;
+                *psqdiff16x16.offset(mb_index) += l_sqdiff;
+            }
+
+            tmp_ref = tmp_ref.offset(16);
+            tmp_cur = tmp_cur.offset(16);
+            mb_index += 1;
+        }
+        tmp_ref = tmp_ref.offset(step);
+        tmp_cur = tmp_cur.offset(step);
+    }
+}
+
+/// `VAACalcSadBgd_c` — `vaacalcfuncs.cpp:462`.
+///
+/// SAD plus, per 8x8 block, the **signed** sum of differences and the maximum
+/// absolute difference. `CBackgroundDetection` reads both.
+///
+/// # Safety
+/// As [`VAACalcSad_c`], plus `pSd8x8` (4 `i32`s per macroblock) and `pMad8x8`
+/// (4 `u8`s per macroblock).
+pub unsafe fn VAACalcSadBgd_c(
+    pCurData: *const u8,
+    pRefData: *const u8,
+    iPicWidth: i32,
+    iPicHeight: i32,
+    iPicStride: i32,
+    pFrameSad: *mut i32,
+    pSad8x8: *mut i32,
+    pSd8x8: *mut i32,
+    pMad8x8: *mut u8,
+) {
+    let mut tmp_ref = pRefData;
+    let mut tmp_cur = pCurData;
+    let iMbWidth = iPicWidth >> 4;
+    let mb_height = iPicHeight >> 4;
+    let mut mb_index = 0isize;
+    let pic_stride_x8 = (iPicStride << 3) as isize;
+    let step = ((iPicStride << 4) - iPicWidth) as isize;
+
+    *pFrameSad = 0;
+    for _i in 0..mb_height {
+        for _j in 0..iMbWidth {
+            for (n, offset) in QUADRANTS(pic_stride_x8) {
+                let (mut l_sad, mut l_sd, mut l_mad) = (0i32, 0i32, 0i32);
+                let mut tmp_cur_row = tmp_cur.offset(offset);
+                let mut tmp_ref_row = tmp_ref.offset(offset);
+                for _k in 0..8 {
+                    for l in 0..8isize {
+                        let diff = *tmp_cur_row.offset(l) as i32 - *tmp_ref_row.offset(l) as i32;
+                        let abs_diff = diff.abs();
+                        l_sd += diff;
+                        l_sad += abs_diff;
+                        if abs_diff > l_mad {
+                            l_mad = abs_diff;
+                        }
+                    }
+                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
+                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
+                }
+                *pFrameSad += l_sad;
+                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
+                *pSd8x8.offset((mb_index << 2) + n) = l_sd;
+                *pMad8x8.offset((mb_index << 2) + n) = l_mad as u8;
+            }
+
+            tmp_ref = tmp_ref.offset(16);
+            tmp_cur = tmp_cur.offset(16);
+            mb_index += 1;
+        }
+        tmp_ref = tmp_ref.offset(step);
+        tmp_cur = tmp_cur.offset(step);
+    }
+}
+
+/// `VAACalcSadSsdBgd_c` — `vaacalcfuncs.cpp:640`. Everything the other four
+/// compute, in one pass.
+///
+/// Note it squares `abs_diff`, not `diff`, where `VAACalcSadSsd_c` squares the
+/// already-absolute `diff`. Same value; kept as written.
+///
+/// # Safety
+/// The union of [`VAACalcSadSsd_c`]'s and [`VAACalcSadBgd_c`]'s requirements.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn VAACalcSadSsdBgd_c(
+    pCurData: *const u8,
+    pRefData: *const u8,
+    iPicWidth: i32,
+    iPicHeight: i32,
+    iPicStride: i32,
+    pFrameSad: *mut i32,
+    pSad8x8: *mut i32,
+    pSum16x16: *mut i32,
+    psqsum16x16: *mut i32,
+    psqdiff16x16: *mut i32,
+    pSd8x8: *mut i32,
+    pMad8x8: *mut u8,
+) {
+    let mut tmp_ref = pRefData;
+    let mut tmp_cur = pCurData;
+    let iMbWidth = iPicWidth >> 4;
+    let mb_height = iPicHeight >> 4;
+    let mut mb_index = 0isize;
+    let pic_stride_x8 = (iPicStride << 3) as isize;
+    let step = ((iPicStride << 4) - iPicWidth) as isize;
+
+    *pFrameSad = 0;
+    for _i in 0..mb_height {
+        for _j in 0..iMbWidth {
+            *pSum16x16.offset(mb_index) = 0;
+            *psqsum16x16.offset(mb_index) = 0;
+            *psqdiff16x16.offset(mb_index) = 0;
+
+            for (n, offset) in QUADRANTS(pic_stride_x8) {
+                let (mut l_sad, mut l_sqdiff, mut l_sum, mut l_sqsum, mut l_sd, mut l_mad) =
+                    (0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
+                let mut tmp_cur_row = tmp_cur.offset(offset);
+                let mut tmp_ref_row = tmp_ref.offset(offset);
+                for _k in 0..8 {
+                    for l in 0..8isize {
+                        let cur = *tmp_cur_row.offset(l) as i32;
+                        let diff = cur - *tmp_ref_row.offset(l) as i32;
+                        let abs_diff = diff.abs();
+                        l_sd += diff;
+                        if abs_diff > l_mad {
+                            l_mad = abs_diff;
+                        }
+                        l_sad += abs_diff;
+                        l_sqdiff += abs_diff * abs_diff;
+                        l_sum += cur;
+                        l_sqsum += cur * cur;
+                    }
+                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
+                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
+                }
+                *pFrameSad += l_sad;
+                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
+                *pSum16x16.offset(mb_index) += l_sum;
+                *psqsum16x16.offset(mb_index) += l_sqsum;
+                *psqdiff16x16.offset(mb_index) += l_sqdiff;
+                *pSd8x8.offset((mb_index << 2) + n) = l_sd;
+                *pMad8x8.offset((mb_index << 2) + n) = l_mad as u8;
+            }
+
+            tmp_ref = tmp_ref.offset(16);
+            tmp_cur = tmp_cur.offset(16);
+            mb_index += 1;
+        }
+        tmp_ref = tmp_ref.offset(step);
+        tmp_cur = tmp_cur.offset(step);
+    }
+}
+
+/// The four 8x8 quadrants of a macroblock in the order every `VAACalc*` kernel
+/// unrolls them: top-left, top-right, bottom-left, bottom-right.
+#[inline]
+#[allow(non_snake_case)]
+fn QUADRANTS(pic_stride_x8: isize) -> [(isize, isize); 4] {
+    [
+        (0, 0),
+        (1, 8),
+        (2, pic_stride_x8),
+        (3, pic_stride_x8 + 8),
+    ]
+}
+
 impl CVAACalculation {
     /// `CVAACalculation::Set` — copies the caller's parameter block.
     ///
@@ -203,13 +422,50 @@ impl CVAACalculation {
         (*pResult).pCurY = pCurData;
         (*pResult).pRefY = pRefData;
 
-        if self.m_sCalcParam.iCalcBgd || self.m_sCalcParam.iCalcSsd {
-            // pfVAACalcSadBgd / pfVAACalcSadSsdBgd / pfVAACalcSadSsd are not
-            // translated; see the module docs.
-            return RET_NOTSUPPORTED;
-        }
-
-        if self.m_sCalcParam.iCalcVar {
+        // `vaacalculation.cpp:135` — the same nesting, in the same order.
+        if self.m_sCalcParam.iCalcBgd {
+            if self.m_sCalcParam.iCalcSsd {
+                VAACalcSadSsdBgd_c(
+                    pCurData,
+                    pRefData,
+                    iPicWidth,
+                    iPicHeight,
+                    iPicStride,
+                    &mut (*pResult).iFrameSad as *mut i32,
+                    (*pResult).pSad8x8 as *mut i32,
+                    (*pResult).pSum16x16,
+                    (*pResult).pSumOfSquare16x16,
+                    (*pResult).pSsd16x16,
+                    (*pResult).pSumOfDiff8x8 as *mut i32,
+                    (*pResult).pMad8x8 as *mut u8,
+                );
+            } else {
+                VAACalcSadBgd_c(
+                    pCurData,
+                    pRefData,
+                    iPicWidth,
+                    iPicHeight,
+                    iPicStride,
+                    &mut (*pResult).iFrameSad as *mut i32,
+                    (*pResult).pSad8x8 as *mut i32,
+                    (*pResult).pSumOfDiff8x8 as *mut i32,
+                    (*pResult).pMad8x8 as *mut u8,
+                );
+            }
+        } else if self.m_sCalcParam.iCalcSsd {
+            VAACalcSadSsd_c(
+                pCurData,
+                pRefData,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                &mut (*pResult).iFrameSad as *mut i32,
+                (*pResult).pSad8x8 as *mut i32,
+                (*pResult).pSum16x16,
+                (*pResult).pSumOfSquare16x16,
+                (*pResult).pSsd16x16,
+            );
+        } else if self.m_sCalcParam.iCalcVar {
             VAACalcSadVar_c(
                 pCurData,
                 pRefData,
@@ -221,18 +477,17 @@ impl CVAACalculation {
                 (*pResult).pSum16x16,
                 (*pResult).pSumOfSquare16x16,
             );
-            return RET_SUCCESS;
+        } else {
+            VAACalcSad_c(
+                pCurData,
+                pRefData,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                &mut (*pResult).iFrameSad as *mut i32,
+                (*pResult).pSad8x8 as *mut i32,
+            );
         }
-
-        VAACalcSad_c(
-            pCurData,
-            pRefData,
-            iPicWidth,
-            iPicHeight,
-            iPicStride,
-            &mut (*pResult).iFrameSad as *mut i32,
-            (*pResult).pSad8x8 as *mut i32,
-        );
         RET_SUCCESS
     }
 }

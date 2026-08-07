@@ -276,14 +276,6 @@ pub fn WelsEmms() {
 // ============================================================================
 
 #[inline]
-pub unsafe fn UpdateMbNeighbor(
-    _pCurDq: *mut SDqLayer,
-    _pMb: *mut SMB,
-    _kiMbWidth: i32,
-    _uiSliceIdc: u16,
-) {
-    // Macroblock neighbor availability bitmask update
-}
 
 /// Updates macroblock spatial neighbor availability bitmasks for all macroblocks
 /// belonging to a specific slice partition in parallel.
@@ -301,7 +293,7 @@ pub unsafe fn UpdateMbListNeighborParallel(
     let kiEndMbInSlice = iIdx + *(*pCurDq).pCountMbNumInSlice.add(kiSliceIdc as usize) - 1;
 
     while iIdx <= kiEndMbInSlice {
-        UpdateMbNeighbor(pCurDq, pMbList.add(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, pMbList.add(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
         iIdx += 1;
     }
 }

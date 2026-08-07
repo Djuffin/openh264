@@ -1986,7 +1986,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     }
     if crate::encoder::dump_enabled(&RC_MB_DUMP, "OH264_RCMBDUMP") {
         eprintln!(
-            "RCMB xy={} lq={} cq={} cqs={} cis={} gtb={} tbs={} fbs={} gbs={} bps={}",
+            "RCMB xy={} lq={} cq={} cqs={} cis={} gtb={} tbs={} fbs={} gbs={} bps={} minfq={} maxfq={}",
             (*pCurMb).iMbXY,
             (*pCurMb).uiLumaQp,
             (*pCurMb).uiChromaQp,
@@ -1996,7 +1996,9 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
             pSOverRc.iTargetBitsSlice,
             pSOverRc.iFrameBitsSlice,
             pSOverRc.iGomBitsSlice,
-            pSOverRc.iBsPosSlice
+            pSOverRc.iBsPosSlice,
+            (*pWelsSvcRc).iMinFrameQp,
+            (*pWelsSvcRc).iMaxFrameQp
         );
     }
 }

@@ -630,20 +630,6 @@ pub unsafe fn WelsEncoderApplyBitRate(
     0
 }
 
-pub unsafe fn WelsRcInitFuncPointers(pCtx: *mut sWelsEncCtx, iRCMode: RCMode) {
-    if !pCtx.is_null() && !(*pCtx).pSvcParam.is_null() {
-        (*(*pCtx).pSvcParam).iRCMode = iRCMode;
-    }
-}
-
-pub unsafe fn FilterLTRRecoveryRequest(pCtx: *mut sWelsEncCtx, _pReq: *mut SLTRRecoverRequest) {
-    let _ = pCtx;
-}
-
-pub unsafe fn FilterLTRMarkingFeedback(pCtx: *mut sWelsEncCtx, _pFb: *mut SLTRMarkingFeedback) {
-    let _ = pCtx;
-}
-
 pub unsafe fn WelsEncoderApplyLTR(
     _pLogCtx: *mut SLogContext,
     ppCtx: *mut *mut sWelsEncCtx,

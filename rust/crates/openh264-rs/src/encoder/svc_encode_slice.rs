@@ -1527,8 +1527,6 @@ pub unsafe fn WelsMdInterMbLoop(
                     pMd,
                 );
 
-                mb_dump(pCurMb, pMd, pSlice);
-
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
@@ -1537,6 +1535,7 @@ pub unsafe fn WelsMdInterMbLoop(
                         if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).iPictureType } else { 0 },
                     );
                 }
+                mb_dump(pCurMb, pMd, pSlice);
             }
             //step (5): update cache
             UpdateNonZeroCountCache(pCurMb, pMbCache);
