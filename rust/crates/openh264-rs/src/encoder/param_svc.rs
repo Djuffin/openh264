@@ -490,10 +490,17 @@ impl SWelsSvcCodingParam {
 
         while iIdxSpatial < self.iSpatialLayerNum {
             let idx = iIdxSpatial as usize;
+            // `sSpatialLayers->uiProfileIdc` in the C++ is `sSpatialLayers[0]`, on
+            // every iteration -- not `[iIdxSpatial]`. Five fields here decay the
+            // array to a pointer that way (uiProfileIdc, uiLevelIdc,
+            // iSpatialBitrate, iMaxSpatialBitrate, iDLayerQp) and five index it
+            // properly (fFrameRate, iVideoWidth/Height and the two internal ones).
+            // Writing both is not "a superset": at more than one spatial layer the
+            // reference leaves `[1..]`'s profile, level, bitrate and QP at whatever
+            // FillDefault left, and `[0]`'s profile ends at PRO_SCALABLE_BASELINE
+            // because the last iteration rewrites it. Faithful to param_svc.h:222.
             self.sSpatialLayers[0].uiProfileIdc = uiProfileIdc;
-            self.sSpatialLayers[idx].uiProfileIdc = uiProfileIdc;
             self.sSpatialLayers[0].uiLevelIdc = LEVEL_UNKNOWN;
-            self.sSpatialLayers[idx].uiLevelIdc = LEVEL_UNKNOWN;
 
             self.sSpatialLayers[idx].fFrameRate =
                 WELS_CLIP3(pCodingParam.fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE);
@@ -510,13 +517,13 @@ impl SWelsSvcCodingParam {
             self.sSpatialLayers[idx].iVideoHeight = self.iPicHeight;
             self.sDependencyLayers[idx].iActualHeight = self.iPicHeight;
 
-            self.sSpatialLayers[0].iSpatialBitrate = pCodingParam.iTargetBitrate;
+            // `sSpatialLayers->iSpatialBitrate = sSpatialLayers[iIdxSpatial]
+            // .iSpatialBitrate = ...` -- this one really does write both.
             self.sSpatialLayers[idx].iSpatialBitrate = pCodingParam.iTargetBitrate;
+            self.sSpatialLayers[0].iSpatialBitrate = pCodingParam.iTargetBitrate;
 
             self.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
-            self.sSpatialLayers[idx].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
             self.sSpatialLayers[0].iDLayerQp = SVC_QUALITY_BASE_QP;
-            self.sSpatialLayers[idx].iDLayerQp = SVC_QUALITY_BASE_QP;
 
             uiProfileIdc = if !self.bSimulcastAVC {
                 PRO_SCALABLE_BASELINE
