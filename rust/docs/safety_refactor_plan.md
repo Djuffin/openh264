@@ -509,3 +509,59 @@ P0 ──► P1 ──► P2 (kernels) ──► P4 (dispatch) ──► P5 (dec
 ---
 
 *Sources: three subsystem surveys (decoder, encoder, common/api/processing) conducted 2026-08-07 against `eb463dbd`, with file:line references verified at survey time; per-file difficulty tiers and counts come from those surveys. The taxonomy table (§1.2) is the index back into the details.*
+
+---
+
+## Progress
+
+Per-phase checklist, updated at the end of every session. The running narrative —
+gate numbers, what was tried, what to do next — is in
+[`safety_refactor_log.md`](safety_refactor_log.md); findings that are recorded rather
+than fixed are in [`phase0_findings.md`](phase0_findings.md).
+
+### Phase 0 — guardrails, dead-code purge, tooling
+
+- [x] **T1 — session-start control run.** Green at `353791f7`: `cargo test` and
+      `cargo test --release` 294 passed / 0 failed / 20 ignored; `sweep.sh st mt def`
+      341/341 byte-identical; both benches all-rows bit-identical.
+- [x] **T2 — resolve the dangling working tree.** The `sweep.sh` modification had
+      already been committed as `353791f7` before this session started. The plan
+      update found in its place was committed as inherited (`87127430`), and the
+      session brief recorded in-tree (`156b9abb`).
+- [x] **T3 — the `eb463dbd` release segfault.** Reproduced, root-caused, closed. It was
+      a stack buffer overflow (16-byte `uiBS`, 32-byte writes), not a pointer-wiring
+      gap; already fixed at HEAD by `e6fce464`, so no fix commit was needed. Recorded
+      in §1.4, `phase0_findings.md` §F1, and auto-memory. `86b40ed1`
+- [x] **T4 — recover docs, record baselines.** `ac5b91d2` (handoff, status log and four
+      audit scripts, each marked recovered-and-unverified), `89c05aa2`
+      (`perf_baseline.md`, 3-run medians, machine info, and the measured proof that the
+      encoder bench measures frame-skipping rather than encoding without `FFMPEG` set).
+- [x] **T5a — 62 unreferenced SIMD externs** in `mc.rs`. `89aa6109`
+- [x] **T5b — SIMD delegating stubs.** 113 definitions across four files, plus the
+      CPU-flag branches that installed them, machine-verified to delegate to exactly the
+      `_c` already in each slot. `a2a19d3c`, `fbe45f11`
+- [ ] **T5c — decoder threading scaffolding.** Not started. Step 1 of the recipe is
+      already proven and written up in the log: `pThreadCtx`/`pLastThreadCtx`/
+      `pCsDecoder` are never assigned. **`GetThreadCount` must become a literal `0`, not
+      the `1` the brief says** — `api/codec_api.rs:1831` branches on `<= 0`.
+- [x] **T5d — duplicated bitstream writer.** No deletion: there are four copies, not
+      two, and they are not identical. Recorded as `phase0_findings.md` §F2 per the stop
+      rule; Phase 3.2 owns the dedupe. `dc8487cb`
+- [ ] **T5e — small stragglers.** Not started; depends on T5c's dead-code harvest.
+- [ ] **T6 — ratchet script + gate runner.** Not started. Note for whoever writes it:
+      the naive `unsafe fn` pattern misses `unsafe extern "C" fn` and reported no change
+      across 113 deleted stubs — count `unsafe (extern "C" )?fn`.
+- [ ] **T7 — fuzz crate.** Not started. Needs `rustup toolchain install nightly` and
+      `cargo install cargo-fuzz`; neither is on this machine.
+- [x] **T8 — bookkeeping.** This appendix, `safety_refactor_log.md`, and the auto-memory
+      updates. Re-run at the end of each Phase 0 session.
+
+Tooling that landed alongside: `da5c06ae` made the diffharness able to build and run a
+**release** driver at all (`RUST_ENC_PROFILE`), which is what makes §7.2 gate 0
+executable; `f1c90948` fixed a bash 3.2 regression in it.
+
+### Phases 1–9
+
+Not started. Phase 1 must not begin until Phase 0's exit gate is met: both profiles
+green on the full battery, ratchet baseline committed and strictly below the
+session-start counts.
