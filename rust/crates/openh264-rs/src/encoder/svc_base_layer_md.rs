@@ -1,10 +1,16 @@
 //! Port of `codec/encoder/core/src/svc_base_layer_md.cpp` — the base-layer
 //! mode-decision layer.
 //!
-//! This module currently carries the **intra (I-slice) half**: the tables, the
-//! neighbour-mode predictor, and the `WelsMdIntraInit` -> `WelsMdIntraMb` chain that
-//! `WelsISliceMdEnc` (`svc_encode_slice.cpp:562`/`:566`) drives. The inter half of the
-//! file is still unported; see `rust/docs/encoder_port_status.md`.
+//! This module carries the **intra (I-slice) half**: the tables, the neighbour-mode
+//! predictor, and the `WelsMdIntraInit` -> `WelsMdIntraMb` chain that
+//! `WelsISliceMdEnc` (`svc_encode_slice.cpp:562`/`:566`) drives, plus
+//! `WelsMdInterInit`, `WelsMdInterMbRefinement` and `WelsMdFirstIntraMode`.
+//!
+//! The rest of the C++ file's inter half is ported too, but lives elsewhere:
+//! `WelsMdP16x16`, `WelsMdBackgroundMbEnc` and `WelsMdInterSecondaryModesEnc` in
+//! `svc_mode_decision.rs`, and `WelsMdInterMbLoop` in `svc_encode_slice.rs`. All of
+//! it is exercised — P slices are byte-exact across every sweep. (This header said
+//! "the inter half of the file is still unported" until Phase 5.4; that was stale.)
 //!
 //! ## Deviation: the `Combined3` SIMD fast paths are not translated
 //!
