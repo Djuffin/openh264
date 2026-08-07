@@ -18,6 +18,14 @@ mod common;
 use common::prng::Prng;
 use openh264_rs::safe::plane::PaddedPlane;
 
+/// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
+/// turn a phase-exit gate into an hour. The *shapes* tested are identical — every
+/// corner, every geometry except the 1080p one, both planes — only the PRNG sample
+/// counts shrink, and the full-size run happens on every `cargo test`.
+fn scale(n: usize) -> usize {
+    if cfg!(miri) { (n / 100).max(2) } else { n }
+}
+
 /// The luma geometry `AllocPicture` (`decoder/pic_queue.rs:198-252`) computes for a
 /// picture of `w` x `h`, with `PADDING_LENGTH = 32` and
 /// `PICTURE_RESOLUTION_ALIGNMENT = 32`.
@@ -42,7 +50,12 @@ fn alloc_picture_chroma_geometry(w: usize, h: usize) -> (usize, usize, usize) {
 fn plane_samples_match_raw_mid_pointer_arithmetic() {
     let mut rng = Prng::new(0x9A5D_0001);
 
-    for &(w, h) in &[(176usize, 144usize), (16, 16), (320, 192), (1920, 1080)] {
+    let sizes: &[(usize, usize)] = if cfg!(miri) {
+        &[(176, 144), (16, 16)]
+    } else {
+        &[(176, 144), (16, 16), (320, 192), (1920, 1080)]
+    };
+    for &(w, h) in sizes {
         for &(stride, rows, origin, pad) in &[
             {
                 let (s, r, o) = alloc_picture_luma_geometry(w, h);
@@ -75,7 +88,7 @@ fn plane_samples_match_raw_mid_pointer_arithmetic() {
                 (-1, -1),
                 (pw as isize - 1, ph as isize - 1),
             ];
-            for _ in 0..3000 {
+            for _ in 0..scale(3000) {
                 coords.push((
                     rng.range_i32(xlo as i32, xhi as i32 - 1) as isize,
                     rng.range_i32(ylo as i32, yhi as i32 - 1) as isize,
@@ -93,7 +106,7 @@ fn plane_samples_match_raw_mid_pointer_arithmetic() {
             }
 
             // Rows, including rows that start inside the left padding.
-            for _ in 0..500 {
+            for _ in 0..scale(500) {
                 let y = rng.range_i32(ylo as i32, yhi as i32 - 1) as isize;
                 let x0 = rng.range_i32(xlo as i32, xhi as i32 - 1) as isize;
                 let len = rng.below((xhi - x0) as u32) as usize + 1;
@@ -118,7 +131,7 @@ fn plane_cursors_match_the_roving_macroblock_pointer() {
     let plane = PaddedPlane::from_parts(bytes.clone(), stride, origin, w, h);
     let p_data = unsafe { bytes.as_ptr().add(origin) };
 
-    for _ in 0..400 {
+    for _ in 0..scale(400) {
         let mb_x = rng.below((w / 16) as u32) as isize;
         let mb_y = rng.below((h / 16) as u32) as isize;
         // `pDstY = pData[0] + ((iMbY * iLumaStride + iMbX) << 4)`
@@ -126,7 +139,7 @@ fn plane_cursors_match_the_roving_macroblock_pointer() {
         let p_dst = unsafe { p_data.offset(mb_off) };
         let cursor = plane.cursor(mb_x * 16, mb_y * 16);
 
-        for _ in 0..64 {
+        for _ in 0..scale(64).max(8) {
             // Intra prediction reaches one row up and one column left of the block.
             let dx = rng.range_i32(-1, 16) as isize;
             let dy = rng.range_i32(-1, 16) as isize;
@@ -155,7 +168,7 @@ fn plane_writes_land_where_the_raw_pointer_would_have_put_them() {
     let mut raw = vec![0u8; rows * stride];
     let mut plane = PaddedPlane::from_parts(vec![0u8; rows * stride], stride, origin, w, h);
 
-    for _ in 0..2000 {
+    for _ in 0..scale(2000) {
         let x = rng.range_i32(-32, (w + 32) as i32 - 1) as isize;
         let y = rng.range_i32(-32, (h + 32) as i32 - 1) as isize;
         let v = rng.next_u8();
