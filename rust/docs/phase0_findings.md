@@ -144,3 +144,53 @@ today, including constants that hold **two distinct values** under one name. It 
 written after `SBitStringAux` was found duplicated four times with a wrong-constness field
 and `g_kuiGolombUELength` three times with two wrong copies. Duplication of this kind is a
 standing defect class in this port, not an incident.
+
+---
+
+## F3 — The multi-threaded dynamic-slicing encoder is nondeterministic in release builds
+
+**Status: open, unfixed, and it makes one gate unreliable.** Found during T5b.
+
+Roughly 1 in 400–1000 encodes of a `iMultipleThreadIdc=4` + `SM_SIZELIMITED_SLICE`
+configuration produces the wrong bitstream. Two failure shapes were seen:
+
+- a **zero-byte** output while `rust_enc` still exits 0, and
+- a **short but non-empty** output — `Rust : 41946 bytes` against `C++ : 42538`,
+  i.e. a genuinely different bitstream, not a truncated write.
+
+Measured rates, 120-configuration `sweep.sh mt` runs, same machine, same tree:
+
+| profile | tree | configurations | failures |
+|---|---|---|---|
+| release | before the T5b deletion (stashed) | 1200 | 1 |
+| release | after the T5b deletion | 1200 | 3 |
+| debug | after the T5b deletion | 1200 | 0 |
+
+1 vs 3 out of 1200 is the same rate within Poisson noise, which is what
+establishes that the T5b deletion did not cause it — the failure reproduces on
+the committed tree with the change stashed. Every failure observed so far is on
+`t=4 sm=3`, at both byte constraints (600 and 1500) and both entropy coders.
+Isolated, the failing configuration ran 40/40 clean, so it needs the sweep's
+back-to-back load to show up.
+
+**Do not read "release fails, debug doesn't" as proof of optimiser-induced UB
+here.** A debug build is several times slower, which widens every thread window;
+a race can simply never lose in debug. What the shape *does* point at is a data
+race in the one encoder path that combines threading with a data structure that
+grows during encoding — the slice list. Plan §P10 already flags
+`ReallocateSliceList` (`svc_encode_slice.rs:2520+`) as invalidating outstanding
+`SSlice` pointers, and §2.2.7/T9 covers the threading. This is very likely the two
+interacting.
+
+**Gate consequence, act on this now:** a single `sweep.sh mt` release run is not a
+reliable 341/341 signal. A failure confined to `t=4 sm=3` must be re-run before
+being treated as a regression, and a *new* failure anywhere else should be treated
+as real immediately. `gates.sh` should say this where it prints the sweep result
+rather than leaving each session to rediscover it.
+
+**Who fixes it:** Phase 6.4 (`Vec<SliceState>` + indices, P10) and Phase 7 (the
+threading rework) between them delete the mechanism. Phase 7's exit gate already
+demands MT determinism across thread counts; this finding says that gate must be
+run *repeatedly*, not once, because the bug's natural frequency is well below one
+sweep. Until then, do not add `t=4 sm=3` results to any pass/fail automation
+without a retry.
