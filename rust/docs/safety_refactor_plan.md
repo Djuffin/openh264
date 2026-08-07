@@ -85,34 +85,41 @@ Also: commit `eb463dbd` deleted the port's handoff/status docs and the diffharne
 
 These live in a new `src/safe/` module (name bikesheddable), built and unit-tested in Phase 1, adopted incrementally. Sketches below are contracts, not final code.
 
+**Built as of Phase 1** (2026-08-07): `src/safe/{plane,bits,pool,mb_grid,err}.rs`, every file `#![forbid(unsafe_code)]`, 63 in-module unit tests plus 18 differential tests against the implementations they replace (`tests/safe_plane_differential.rs`, `tests/safe_bits_differential.rs`), all Miri-clean. Where the implementation deviates from a sketch below, the sketch has been updated and the deviation flagged **[P1]** with its reason — the plan must never lag the code.
+
 #### 2.2.1 `PaddedPlane` / plane views — replaces T2
 
 The invariant the C code relies on: a plane allocation is `(pad + h + pad) × stride` bytes and `pData` points at `(0,0)` *inside* it, so `y ∈ [-pad, h+pad)` reads are in-allocation. Encode exactly that:
 
 ```rust
 pub struct PaddedPlane {
-    buf: Vec<u8>,          // owns (pad_t + h + pad_b) * stride
+    buf: Vec<u8>,          // owns >= (pad + h + pad) * stride
     stride: usize,
     origin: usize,         // byte offset of logical (0,0); origin = pad*stride + pad
     width: usize, height: usize, pad: usize,
 }
 impl PaddedPlane {
-    /// Biased index: callers use logical (x, y), possibly negative into padding.
-    #[inline] fn idx(&self, x: isize, y: isize) -> usize {
-        (self.origin as isize + y * self.stride as isize + x) as usize  // slice indexing bounds-checks
-    }
-    #[inline] pub fn at(&self, x: isize, y: isize) -> u8 { self.buf[self.idx(x, y)] }
-    #[inline] pub fn row(&self, y: isize, x: isize, len: usize) -> &[u8] { … }
-    #[inline] pub fn row_mut(&mut self, y: isize, x: isize, len: usize) -> &mut [u8] { … }
-    /// A movable sub-view anchored at an MB origin — the safe version of the roving `pDstY` cursor.
-    pub fn cursor_mut(&mut self, x: isize, y: isize) -> PlaneCursorMut<'_> { … }
+    pub fn new(width: usize, height: usize, pad: usize, stride: usize) -> Self;   // zeroed
+    /// Validates the invariant; `pad` is recovered as `origin % stride`. Phase 2 shims feed this.
+    pub fn from_parts(buf: Vec<u8>, stride: usize, origin: usize, width: usize, height: usize) -> Self;
+    #[inline] pub fn at(&self, x: isize, y: isize) -> u8;
+    #[inline] pub fn set(&mut self, x: isize, y: isize, v: u8);
+    #[inline] pub fn row(&self, y: isize, x0: isize, len: usize) -> &[u8];
+    #[inline] pub fn row_mut(&mut self, y: isize, x0: isize, len: usize) -> &mut [u8];
+    /// Movable sub-views anchored at an MB origin — the safe version of the roving `pDstY`.
+    pub fn cursor(&self, x: isize, y: isize) -> PlaneCursor<'_>;
+    pub fn cursor_mut(&mut self, x: isize, y: isize) -> PlaneCursorMut<'_>;
+    /// Escape hatch for `chunks_exact` row-walking and whole-plane fills.
+    pub fn as_slice(&self) -> &[u8];  pub fn as_mut_slice(&mut self) -> &mut [u8];
+    pub fn width/height/pad/stride/origin(&self) -> usize;
 }
+/// Read view; `Copy`, so rebasing is a value operation.
+pub struct PlaneCursor<'a>    { buf: &'a [u8],     center: usize, stride: usize }
 pub struct PlaneCursorMut<'a> { buf: &'a mut [u8], center: usize, stride: usize }
-impl PlaneCursorMut<'_> {
-    #[inline] pub fn at(&self, dx: isize, dy: isize) -> u8 { self.buf[off(self.center, dx, dy, self.stride)] }
-    #[inline] pub fn set(&mut self, dx: isize, dy: isize, v: u8) { … }
-    #[inline] pub fn row_mut(&mut self, dy: isize, dx: isize, len: usize) -> &mut [u8] { … }
-}
+// both: new(buf, center, stride) [validated], at(dx,dy), row(dy,dx0,len),
+//       advance(dx,dy) -> Self (by value), center(), stride()
+// mut also: set(dx,dy,v), row_mut(dy,dx0,len), as_ref() -> PlaneCursor<'_>
+// One private `fn idx(center, dx, dy, stride) -> usize` does all the biasing.
 ```
 
 Key points:
@@ -127,18 +134,32 @@ Key points:
 
 ```rust
 /// Reader state; NO buffer reference inside. The buffer is passed to each call.
-#[derive(Default, Clone, Copy)]
-pub struct BsCursor { pub pos: usize, pub cur_bits: u32, pub left_bits: i32 }
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub struct BsCursor { pos: usize, cur_bits: u32, left_bits: i32, len: usize, bits: i32 }
+//                                                               ^^^^^^^^^^^^^^^^^^^^^ [P1]
 
-impl BsCursor {
-    pub fn next_bits(&mut self, buf: &[u8], n: u8) -> Result<u32, DecodeError> { … }
-    pub fn read_ue(&mut self, buf: &[u8]) -> Result<u32, DecodeError> { … }
+impl BsCursor {                                   // mirrors, in order:
+    pub fn init(buf: &[u8], size_bits: i32) -> Result<Self, ErrInfo>;          // DecInitBits
+    pub fn init_read_bits(&mut self, buf: &[u8], end_offset: isize) -> …;      // InitReadBits
+    pub fn get_bits(&mut self, buf: &[u8], n: i32) -> Result<u32, ErrInfo>;    // BsGetBits
+    pub fn get_one_bit / get_ue / get_se / get_te0(…);                         // BsGet*
+    pub fn peek_bits(&self, n: i32) -> u32;                                    // UBITS
+    pub fn check_more_rbsp_data(&self) -> bool;                                // CheckMoreRBSPData
+    pub fn pos/len/bits/cur_bits/left_bits(&self);                             // state, for parity tests
 }
+pub fn trailing_bits(byte: u8) -> i32;                                         // BsGetTrailingBits
 
-/// Writer: owns position only; the output Vec lives in the NAL/slice output owner.
-#[derive(Default, Clone, Copy)]
-pub struct BsWriter { pub pos: usize, pub cur_bits: u32, pub left_bits: i32 }
+/// Writer: owns position only; the output slice is a parameter, as for the reader.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BsWriter { pos: usize, cur_bits: u32, left_bits: i32 }
+// new() [= InitBits], write_bits, write_one_bit, write_ue, write_se, flush,
+// rbsp_trailing_bits, bits_pos [= BsGetBitsPos], pos, left_bits;
+// free fns size_ue/size_se [= BsSizeUE/BsSizeSE, computed rather than table-driven].
 ```
+
+- **[P1] `BsCursor` carries `len` and `bits`, not three fields.** `len` is `pEndBuf - pStartBuf`, the *logical* end of the RBSP, which is not the same as the length of the slice passed in — the allocation legitimately continues past it, and the slop below depends on the difference. Without it, error-code parity at the end of a NAL is not expressible. `bits` is `iBits`, needed only by `check_more_rbsp_data`. Both are state in the C++ struct too; nothing is stored that `SBitStringAux` did not already hold.
+- **[P1] The slop reads three bytes past the RBSP, not one** (and the initial prime reads four bytes from the start regardless of NAL length). `BsCursor` reproduces the *predicate* exactly and expresses the loads through `get`, so it is identical to the C++ given ≥3 bytes of slack and strictly safer without. Measured and written up as [`phase1_findings.md`](phase1_findings.md) §F4; Phase 3.1 owns the guard-byte decision.
+- **[P1] `BsWriter` implements only the canonical (`vlc_encoder.rs`) semantics.** No guard, no masking, no wrapping variant is smuggled in from the other three copies — Phase 3.2 must decide those explicitly (F2). Building it turned up [`phase1_findings.md`](phase1_findings.md) §F5: the canonical writer panics in debug builds on a 32-bit write into an empty accumulator; `BsWriter` does not, and a test pins both profiles.
 
 - `SDataBuffer{pHead,pEnd,pStartPos,pCurPos}` → `Vec<u8>` + two `usize` offsets. `ExpandBsBuffer`'s pointer-rebasing block (`decoder_core.rs:1816-1842`) is deleted, not converted — offsets survive realloc by definition.
 - NAL units store `Range<usize>` into the AU buffer instead of `pNalPos: *mut u8`.
@@ -152,29 +173,42 @@ pub struct BsWriter { pub pos: usize, pub cur_bits: u32, pub left_bits: i32 }
 #### 2.2.3 Picture arena + handles — replaces T4
 
 ```rust
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct PicId(u8);                      // index into the pool; identity == handle equality
+/// Index into a pool; identity == handle equality. Generation is debug-only (D1) and
+/// is NOT part of `PartialEq` — equality must mean the same thing in both profiles.
+#[derive(Copy, Clone, Debug)]
+pub struct Id { index: u32, #[cfg(debug_assertions)] generation: u32 }
 
-pub struct PicPool { pics: Vec<Picture>, /* capacity == iPicQueueNumber / pool size */ }
-impl PicPool {
-    pub fn get(&self, id: PicId) -> &Picture;
-    pub fn get_mut(&mut self, id: PicId) -> &mut Picture;
-    /// The critical split: current picture &mut + reference picture & simultaneously.
-    pub fn cur_and_ref(&mut self, cur: PicId, r: PicId) -> (&mut Picture, &Picture);
-    pub fn cur_and_refs(&mut self, cur: PicId, refs: &[PicId]) -> (&mut Picture, RefViews<'_>);
-    pub fn find_free(&self) -> Option<PicId>;  // ports the bUsedAsRef/iRefCount recycling predicate
+/// Generic [P1]: the encoder needs the same shape (6.1/6.2), so `PicId` becomes a
+/// newtype/alias over `Id` and `PicPool` over `Pool<Picture>` in Phase 5.1.
+pub struct Pool<T> { slots: Vec<T>, #[cfg(debug_assertions)] generations: Vec<u32> }
+impl<T> Pool<T> {
+    pub fn new(slots: Vec<T>) -> Self;   pub fn len(&self) -> usize;
+    pub fn id(&self, index: usize) -> Id;         // mints a handle, stamped
+    pub fn ids(&self) -> impl Iterator<Item = Id>;
+    pub fn iter(&self) -> impl Iterator<Item = (Id, &T)>;   // the `find_free` predicate rides here
+    pub fn get(&self, id: Id) -> &T;    pub fn get_mut(&mut self, id: Id) -> &mut T;
+    pub fn pair_mut(&mut self, a: Id, b: Id) -> (&mut T, &mut T);          // panics if a == b
+    /// The critical split: one picture &mut while any others are read.
+    pub fn mut_and_rest(&mut self, cur: Id) -> (&mut T, PoolRest<'_, T>);  // [P1]
+    pub fn replace(&mut self, id: Id, value: T) -> T;   // recycling; bumps the generation
 }
+pub struct PoolRest<'a, T> { … }   // get(id) -> &T, panics on the mutably-held slot
 ```
+
+- **[P1] `mut_and_rest(cur)` replaces `cur_and_ref`/`cur_and_refs(cur, refs)`.** The reference *list* carried no weight: its only job was rejecting `cur ∈ refs`, which `PoolRest::get` does anyway at the point of access, and taking it would force either an allocation or an arbitrary fixed capacity into a per-macroblock path. Splitting the slot span is allocation-free, subsumes `cur_and_ref`, and handles the B-slice case (one `&mut` + two `&`, P1) without a special method.
+- **`find_free` is not a method**; it is `pool.iter().find(…)`, because the predicate (`bUsedAsRef`/`iRefCount`) belongs to `Picture`, which Phase 5.1 defines.
 
 - All nine decoder alias sites (`pDec`, `pTempDec`, ref lists, `pECRefPic`, `pPreviousDecodedPictureInDpb`, `SPicture::pRefPic`, `SDeblockingFilter::pRefPics`, thread ctx, pool) become `Option<PicId>` / `[Option<PicId>; N]`. The per-picture `pRefPic` graph (cycles!) is just data as handles — no ownership cycles because handles don't own.
 - The three decoder pointer-identity comparisons that carry semantics — `deblocking.rs:258` (boundary strength: "same reference picture?"), `manage_dec_ref.rs:739` (self-copy guard), `error_concealment.rs:599` — become `PicId == PicId`, which is *exactly* the same predicate. The encoder needs no care at all: the survey found zero pointer-identity comparisons; all matching is by `iFrameNum`/`iFramePoc` values.
-- Recycling can hand a stale `PicId` the same slot a fresh picture occupies — identical to the C++ hazard, so behavior is preserved; add a `debug_assertions`-only generation counter to catch logic rot in tests without changing release semantics.
+- Recycling can hand a stale `PicId` the same slot a fresh picture occupies — identical to the C++ hazard, so behavior is preserved; a `debug_assertions`-only generation counter catches logic rot in tests without changing release semantics. **Implemented in Phase 1** (D1 resolved); `replace` bumps it, every accessor checks it, and `PartialEq` deliberately ignores it.
 - `Picture` itself becomes: 3 × `PaddedPlane` + owned `Vec`s for the per-MB metadata (`pMbType`, `pMv`, `pRefIndex`, `pNzc`, `pMbCorrectlyDecodedFlag`) + value fields. Ten manual allocations and `FreePicture` collapse into struct construction and `Drop`.
 - Encoder side identical shape; the pool ownership moves out of `CWelsPreProcess` (see §3 P10 for the cycle it currently forms).
 
 #### 2.2.4 `MbGrid` — single owner for per-MB metadata — replaces T5
 
 Decoder today: `pCtx->sMb.pXXX[0]` (25 arrays) and `pCurDqLayer->pXXX` are the same allocations reachable through two paths — instant UB under `&mut` rules and the #1 blocker for borrow-checking `decode_slice.rs`. Encoder today: each `SMB` caches 5 pointers into ctx flat arrays.
+
+**Phase 1 built the addressing, not the fields** — `MbDims` (grid geometry: `mb_xy`, `xy_of`, `count`, and `left`/`top`/`top_left`/`top_right` mirroring the guards at `mv_pred.rs:485-510`, availability logic deliberately excluded) and `MbArray<T>` (one owned per-MB array over an `MbDims`). The field union below is Phase 5.2's to decide, since only it knows which of the `sMb`/`SDqLayer`/`SMB` fields survive; `MbGrid` is then a struct of `MbArray`s.
 
 ```rust
 pub struct MbGrid {                    // one per dq-layer; owns everything per-MB
@@ -499,7 +533,7 @@ P0 ──► P1 ──► P2 (kernels) ──► P4 (dispatch) ──► P5 (dec
 
 ## 10. Open decisions (need Eugene's call, none block Phases 0–4)
 
-- **D1 — Handle hygiene:** plain `PicId(u8)` (C-equivalent recycling semantics, zero overhead) vs debug-only generation counters (recommended: yes, debug-only) vs full generational arena (not recommended — changes semantics C doesn't have).
+- **D1 — Handle hygiene: RESOLVED (2026-08-07, by implementing the recommendation).** Plain indices with release semantics identical to C recycling, plus a `#[cfg(debug_assertions)]` generation counter per slot, bumped by `Pool::replace` and checked in every accessor. Handle equality ignores the generation in both profiles, so identity semantics (P3) cannot differ between debug and release. Built and tested in Phase 1 (`src/safe/pool.rs`); no full generational arena.
 - **D2 — C ABI future: RESOLVED (2026-08-07): drop-in replacement is a requirement.** The C-ABI surface (vtables, 7 exports, `repr(C)` structs, slot order) is frozen as public contract; `src/api/` is the sole `unsafe` module; crate ships as cdylib/staticlib; §2.2.8 and Phase 8 encode the consequences. Follow-on packaging (soname, version script, pkg-config) is tracked outside this plan.
 - **D3 — Decoder MT:** the C++ has a threaded decoder the port stubbed out. This plan deletes the stubs. If decoder MT is wanted later, it's a fresh design on the safe architecture (frame-level pipelining with `PicPool` + per-frame `MbGrid` is well-suited) — flagging so the deletion isn't a surprise.
 - **D4 — Workspace split:** single crate (status quo, recommended through Phase 9) vs splitting afterwards into `openh264-core` (pure safe codec, `#![forbid(unsafe_code)]` — the strongest possible statement) + `openh264-capi` (the cdylib boundary, the only unsafe). With D2 resolved, the split earns more: it turns "deny with one allow" into a hard `forbid`, and gives Rust consumers a dependency with zero unsafe anywhere in its tree. Still deferred to post-Phase-9 — module boundaries make the split mechanical then.
@@ -551,8 +585,10 @@ than fixed are in [`phase0_findings.md`](phase0_findings.md).
 - [ ] **T6 — ratchet script + gate runner.** Not started. Note for whoever writes it:
       the naive `unsafe fn` pattern misses `unsafe extern "C" fn` and reported no change
       across 113 deleted stubs — count `unsafe (extern "C" )?fn`.
-- [ ] **T7 — fuzz crate.** Not started. Needs `rustup toolchain install nightly` and
-      `cargo install cargo-fuzz`; neither is on this machine.
+- [ ] **T7 — fuzz crate.** Not started, and **deferred by direction** during the Phase 1
+      session (2026-08-07): "skip fuzzing, do phase 1". `cargo-fuzz` is still not
+      installed; nightly now is (Phase 1 needed it for Miri). Nothing else depends on
+      it, but §7.2 gate 6 and §7.3 stay unavailable until it lands.
 - [x] **T8 — bookkeeping.** This appendix, `safety_refactor_log.md`, and the auto-memory
       updates. Re-run at the end of each Phase 0 session.
 
@@ -560,8 +596,56 @@ Tooling that landed alongside: `da5c06ae` made the diffharness able to build and
 **release** driver at all (`RUST_ENC_PROFILE`), which is what makes §7.2 gate 0
 executable; `f1c90948` fixed a bash 3.2 regression in it.
 
-### Phases 1–9
+### Phase 1 — safe vocabulary types
 
-Not started. Phase 1 must not begin until Phase 0's exit gate is met: both profiles
-green on the full battery, ratchet baseline committed and strictly below the
-session-start counts.
+**Started ahead of Phase 0's exit gate, by direction** (2026-08-07). Phase 0's T5c,
+T5e and T6 are still open and T7 is deferred; the session was told to skip fuzzing and
+proceed to Phase 1. That is sound for *this* phase specifically — Phase 1 changes no
+codec code, adds no `unsafe`, and its own gate is the full battery, which was run as a
+control first and again at the end — but the missing ratchet script (T6) means Phase 1
+could not run `unsafe_ratchet.sh check`. Substituted: the raw counts below, and the
+structural fact that every file in `src/safe/` is `#![forbid(unsafe_code)]`.
+
+- [x] **T1 — control battery.** `cargo test` and `cargo test --release`
+      294 / 0 / 20 each; `sweep.sh st mt def` 341/341 debug, 340/341 release with the
+      single failure at `t=4 sm=3 n=600` — F3's exact signature. The exit run behaved
+      the same way, so the rate was measured against the control commit directly (8 mt
+      sweeps each, 960 configurations: 1 failure at `53e211f7`, 2 at HEAD — noise, same
+      signature). F3's write-up updated with both refinements.
+- [x] **T2 — module skeleton, error plumbing, test PRNG.** `448c8118`. Note for the
+      record: the plan said the error codes live in `decoder_context.rs`; they do not —
+      that file has only `ERR_NONE`, and the reader codes are declared *twice*, in
+      `decoder/bit_stream.rs` and `decoder/dec_golomb.rs`. `err.rs` reuses them and
+      carries a test pinning the two copies together.
+- [x] **T3 — `PaddedPlane` + plane cursors.** `952c8b1d`. §2.2.1 updated to the built
+      API.
+- [x] **T4 + T5 — `BsCursor` and `BsWriter`.** `5b47b1fe`. §2.2.2 updated; two
+      deviations and two findings (F4, F5) recorded.
+- [x] **T6 — `Pool`/handles and the `MbGrid` skeleton.** `e3a09459`, `066471ea`.
+      §2.2.3 updated (`mut_and_rest` replaces `cur_and_refs`, generic over `T`);
+      D1 resolved by implementing the recommendation.
+- [x] **T7 — error plumbing.** Landed with T2 as `ErrInfo`; per D6 it stays a
+      transparent newtype over the C++ `int32_t` codes.
+- [x] **T8 — Miri.** `cargo +nightly miri test --lib safe::` clean, 63/63. Both
+      differential files clean under Miri as well — including the *old* unsafe
+      implementations they drive, which is free UB coverage of `dec_golomb`,
+      `bit_stream` and `vlc_encoder`. No test needed `#[cfg_attr(miri, ignore)]`.
+      Sample counts scale down under `cfg!(miri)` so the gate stays minutes, not hours.
+- [x] **T9 — bookkeeping.** This appendix, `phase1_findings.md`, the log entry, and the
+      §2.2/§10 updates above.
+
+Counts, for the ratchet baseline whenever Phase 0 T6 lands: `src/safe/` is 2,517
+lines over 7 files — 1,681 of implementation and documentation, the rest in-module
+tests — and contains **zero** `unsafe` of any spelling (the only three occurrences of
+the word are in `mod.rs`'s prose). 63 in-module unit tests. The
+differential tests add 18 more in two integration files that *do* use `unsafe` (they
+must — they drive the raw-pointer reference implementations). Test totals moved 294 → **375** in debug and **373** in release; the two-test
+difference is deliberate — `pool`'s stale-handle tests are `#[cfg(debug_assertions)]`,
+because the behaviour they check only exists in a debug build. Every *pre-existing* test
+binary keeps its exact control count, and the 20-test `#[ignore]` set is unchanged.
+
+### Phases 2–9
+
+Not started. Phase 2's first action is the pilot conversion of
+`decoder/decode_mb_aux.rs` onto the plane API (plan §Phase 2), deliberately small so
+an API-shape mistake surfaces before mass adoption.

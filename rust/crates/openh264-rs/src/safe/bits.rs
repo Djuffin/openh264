@@ -484,7 +484,11 @@ impl BsWriter {
 
     /// Writes a signed Exp-Golomb code, `se(v)`.
     ///
-    /// Mirrors `BsWriteSE` (`encoder/vlc_encoder.rs:472`).
+    /// Mirrors `BsWriteSE` (`encoder/vlc_encoder.rs:472`). One out-of-contract input
+    /// differs: at `i32::MIN` the canonical writer negates and overflows, which panics
+    /// in a debug build; `unsigned_abs` cannot, so this one encodes the wrapped value
+    /// the release build would have produced. Same class as `phase1_findings.md` §F5 —
+    /// no syntax element comes anywhere near that magnitude.
     #[inline]
     pub fn write_se(&mut self, buf: &mut [u8], value: i32) {
         if value == 0 {
