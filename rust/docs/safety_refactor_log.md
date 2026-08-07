@@ -122,3 +122,161 @@ T6 (ratchet + `gates.sh`), T7 (fuzz — **needs `rustup toolchain install nightl
 `gates.sh`, when written, must carry two things this session learned: run the encoder
 bench with `FFMPEG` set and `BENCH_REQUIRE_FFMPEG=1`, and print F3's retry rule next to
 the sweep result.
+
+---
+
+## 2026-08-07 — Phase 1, session A (T1–T9, complete)
+
+**Goal:** Phase 1 per `prompts/phase1.md` — build the safe vocabulary types in
+`src/safe/`, fully unit- and differential-tested, Miri-clean, wired into nothing.
+All nine tasks landed; Phase 1 is complete.
+
+**Started at** `53e211f7`, **ended at** the commit carrying this entry. Working tree
+clean at both ends.
+
+### Deviation from the brief, by direction
+
+The brief gates Phase 1 on Phase 0's exit gate, and Phase 0's T5c, T5e, T6 and T7 were
+(and are) unchecked. Mid-session direction was **"skip fuzzing, do phase 1"**, so the
+session went straight to Phase 1 rather than finishing Phase 0 first. That is sound for
+this phase in particular — it changes no codec code and adds no `unsafe`, so the only
+gate that could move is the test count — but two consequences are inherited by whoever
+picks Phase 0 back up:
+
+- **there is still no `unsafe_ratchet.sh` or `gates.sh`** (T6), so "ratchet check" could
+  not be run. Substituted: every file in `src/safe/` is `#![forbid(unsafe_code)]`, which
+  is a stronger statement than a count, and the raw counts are in the plan's appendix.
+- **the fuzz crate (T7) is deferred**, so §7.2 gate 6 stays unavailable. Nightly *is*
+  now installed (Phase 1 needed it for Miri); only `cargo-fuzz` is missing.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `1dcf6b47` | the Phase 1 brief recorded in-tree |
+| `448c8118` | T2: `src/safe/` skeleton, `ErrInfo`, the test PRNG |
+| `952c8b1d` | T3: `PaddedPlane`, `PlaneCursor`, `PlaneCursorMut` + differential tests |
+| `5b47b1fe` | T4+T5: `BsCursor`, `BsWriter` + differential tests |
+| `e3a09459` | T6a: `Pool<T>`, `Id` handles, `PoolRest` |
+| `066471ea` | T6b: `MbDims`, `MbArray` |
+
+Plus this entry, `phase1_findings.md`, and the plan's §2.2/§10/Progress updates.
+
+The brief's bookkeeping step also asks for an auto-memory update. **Auto-memory is
+switched off on this machine** (`~/.claude/settings.json`: `"autoMemoryEnabled": false`,
+and there is no memory store), so the earlier sessions' memory notes cannot be extended
+and these three documents are the whole record. Later sessions should not go looking for
+a memory note that says otherwise.
+
+### Gates
+
+| gate | control (`53e211f7`) | final |
+|---|---|---|
+| `cargo test` | 294 / 0 / 20 | 375 / 0 / 20 |
+| `cargo test --release` | 294 / 0 / 20 | 373 / 0 / 20 |
+| `sweep.sh st mt def` (debug) | 341/341 | 341/341 |
+| `sweep.sh st mt def` (release) | 340/341, F3 | 340/341, F3 — see below |
+| `decode_1080p_bench` | 60/60 frames, hashes match | same |
+| `cargo +nightly miri test --lib safe::` | — | 63/63 clean, 19s |
+| `cargo +nightly miri test --test safe_plane_differential` | — | 3/3 clean, 37s |
+| `cargo +nightly miri test --test safe_bits_differential` | — | 15/15 clean, 13s |
+
+The +81 tests are 63 in-module unit tests and 18 differential ones. Debug runs two more
+than release on purpose: `pool`'s stale-handle tests are `#[cfg(debug_assertions)]`,
+since the behaviour they check exists only there. **Every pre-existing test binary keeps
+its exact control count** and the 20-test `#[ignore]` set is untouched, as is every
+hash — the whole phase's diff outside `src/safe/`, `tests/` and `docs/` is the single
+line `pub mod safe;` in `lib.rs`.
+
+That per-binary check earned its keep: the first exit run showed
+`decoder_conformance_test`, `e2e_conformance_test` and `loopback_sha1_test` each up by
+3, because `cfg(test)` is *on* in an integration-test crate, so the PRNG's own unit
+tests — declared in a file included by path into `tests/common/` — compiled into every
+binary that pulls that module in. The totals still only went up, so a totals-only check
+would have passed. The generator's tests now live in `src/safe/mod.rs` instead, and
+`prng.rs` carries a comment saying why it must stay test-free.
+
+**The release sweep and F3.** Three release sweeps this session each failed exactly one
+configuration, always `t=4 sm=3 n=600`, always zero-byte or short output — F3's
+signature. One of the three was the *control* run on an untouched tree, which already
+settles it, but the rate (1 per sweep) was well above the ~1 in 400–1000 F3 recorded, so
+it was measured properly rather than waved through: eight `sweep.sh mt` runs at HEAD
+against eight at `53e211f7`, release, quiescent machine.
+
+| tree | configurations | failures |
+|---|---|---|
+| `53e211f7` (control) | 960 | 1 |
+| HEAD | 960 | 2 |
+
+Same signature, same clip. 1 vs 2 in 960 is noise, and Phase 1's entire codec diff is one
+`pub mod` line, so there is no mechanism by which it could be otherwise. F3's write-up
+gained the two refinements this produced: every failure that day was at `n=600`
+specifically, and the rate rises when the machine is busy — the elevated readings all
+came from sweeps running alongside `cargo test` or Miri. **Don't run the release `mt`
+sweep concurrently with other builds** if a single run has to mean something.
+
+### Findings — recorded, not fixed
+
+Written up in [`phase1_findings.md`](phase1_findings.md); numbering continues from
+Phase 0's F1–F3.
+
+- **F4 — the reader's slop reads three bytes past the RBSP, not one.** The plan
+  describes the *cursor* correctly and understates the *reads*: `iReadBytes >
+  iAllowedBytes + 1` permits a cursor one byte past the end, and the refill then loads
+  two bytes there; separately the initial prime reads four bytes regardless of NAL
+  length. Soundness today is a property of the 4 MiB `sRawData` allocation, not of the
+  NAL. `BsCursor` reproduces the predicate exactly and is identical to the C++ given
+  ≥3 bytes of slack, strictly safer without. Phase 3.1 owns the guard-byte decision.
+- **F5 — the canonical writer panics in debug on a 32-bit write** into an empty
+  accumulator (`uiCurBits << 32`; UB in C++). Unreachable today — no encoder call site
+  writes a full word — but one syntax element away from live. `BsWriter` folds the
+  shift away; a test pins both profiles.
+- **F6 — `malloc` is declared returning `*mut u8`** rather than `*mut c_void`
+  (`common/memory_align.rs:17`). Miri warns; ABI-compatible in practice; the file is
+  deleted outright in Phase 6, so the fix is deletion.
+- **F7 — two out-of-bounds pointer computations in the reader**, found by Miri:
+  `DecInitBits`'s `pStartBuf.offset((kiSize + 7) >> 3)` for `kiSize < -7`, and
+  `InitReadBits`'s `pEndBuf.offset(-iEndOffset)` for an `iEndOffset` past the buffer.
+  UB by the arithmetic alone. Unreachable today, but only by two invariants that are
+  nowhere written down; both die in Phase 3.1 when the offsets replace the pointers.
+
+### Notes for later phases
+
+1. **Miri on the differential tests is worth its cost and should stay a phase-exit
+   gate.** It executes the *old* unsafe code, which is how F7 surfaced — the first UB
+   ever found in this port by a tool rather than by a crash. Sample counts scale down
+   under `cfg!(miri)` (a `scale()` helper in each differential file) so the whole
+   Miri battery is ~70 seconds rather than an hour; the full-size run happens on every
+   `cargo test`.
+2. **No test needed `#[cfg_attr(miri, ignore)]`**, which the brief expected to be
+   necessary. Where the old side has UB (F7) the comparison is bounded to the
+   in-contract range and the safe side is checked alone beyond it — that keeps the UB
+   coverage the ignore would have thrown away. Prefer this shape in later phases.
+3. **Three quirks of the C++ reader are now pinned by tests** and must not be
+   "fixed" during Phase 3: the slop predicate (F4), the 16-bit ceiling on
+   `BsGetBits` (the refill only guarantees 16 valid bits at rest, so wider reads
+   return stale low bits — the decoder never asks for more), and
+   `CheckMoreRBSPData`'s fixed 2-byte subtraction, which over-counts by 16 bits until
+   the cursor reaches its steady state.
+4. **The plan said the decoder error codes live in `decoder_context.rs`.** They do
+   not; that file has only `ERR_NONE`. They are declared *twice*, in
+   `decoder/bit_stream.rs` and `decoder/dec_golomb.rs`. `safe::err` reuses them and
+   carries a test pinning the copies together — F2's defect class, pre-empted.
+5. Two API deviations from §2.2, both now in the plan: `BsCursor` carries `len` and
+   `bits` (without the logical end, error-code parity at a NAL boundary is not
+   expressible), and `Pool::mut_and_rest(cur)` replaces `cur_and_refs(cur, refs)`
+   (the ref list only served to reject `cur ∈ refs`, which the returned view does
+   anyway, and it would have forced an allocation into a per-MB path).
+
+### Next session's first action
+
+**Phase 2, the pilot conversion of `decoder/decode_mb_aux.rs`** onto the plane API
+(plan §Phase 2) — the smallest kernel family, converted deliberately first so an
+API-shape mistake surfaces before mass adoption. Watch for two things the vocabulary
+types have not yet been asked to prove: whether `PlaneCursorMut::row_mut` hoists out of
+4x4 inner loops well enough to hold the §7.4 budget, and whether kernels want
+`(buf, center, stride)` triples rather than the cursor for the hottest paths.
+
+If Phase 0 is picked up instead, its first action is unchanged from the previous
+entry — **T5c, decoder threading scaffolding**, with `GetThreadCount` simplifying to a
+literal `0`, not `1`.

@@ -173,6 +173,28 @@ the committed tree with the change stashed. Every failure observed so far is on
 Isolated, the failing configuration ran 40/40 clean, so it needs the sweep's
 back-to-back load to show up.
 
+**Second measurement, 2026-08-07 (Phase 1 exit gate).** Three release sweeps that
+session each failed exactly one `t=4 sm=3` configuration, which is well above the
+rate above and initially looked like a regression. It is not. Eight `sweep.sh mt`
+runs at HEAD were compared against eight at the session's control commit
+`53e211f7`, release, same machine:
+
+| tree | configurations | failures |
+|---|---|---|
+| `53e211f7` (control) | 960 | 1 |
+| HEAD (Phase 1 complete) | 960 | 2 |
+
+Same signature, same clip, both zero-byte. 1 vs 2 in 960 is noise; the finding
+reproduces on an untouched tree, and Phase 1 changed no encoder code at all
+(its whole codec diff is one `pub mod` line). Two refinements to the profile
+above: **every failure observed that day was at `n=600`, none at 1500**, and the
+rate rises noticeably when the machine is busy — the elevated readings came from
+sweeps run alongside `cargo test`/Miri, the quiescent 16-run comparison above sat
+back at ~1.5 per 1000. Both are consistent with a race whose window widens under
+load. Practical consequence for future sessions: **do not run the release `mt`
+sweep concurrently with other builds** if you want a clean single-run signal, and
+keep applying the retry rule regardless.
+
 **Do not read "release fails, debug doesn't" as proof of optimiser-induced UB
 here.** A debug build is several times slower, which widens every thread window;
 a race can simply never lose in debug. What the shape *does* point at is a data
