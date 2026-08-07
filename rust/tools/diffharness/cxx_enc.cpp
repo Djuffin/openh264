@@ -39,6 +39,8 @@ int main (int argc, char** argv) {
   //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
   const int   kiSliceMode = (argc > 11) ? atoi (argv[11]) : 0;
   const int   kiSliceNum  = (argc > 12) ? atoi (argv[12]) : 1;
+  // 13th: iMultipleThreadIdc. 1 (default) is single-threaded.
+  const int   kiThreads   = (argc > 13) ? atoi (argv[13]) : 1;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -76,7 +78,7 @@ int main (int argc, char** argv) {
   sParam.bEnableLongTermReference   = false;
   sParam.iLTRRefNum                 = 0;
   sParam.iLtrMarkPeriod             = 30;
-  sParam.iMultipleThreadIdc         = 1;      // single-threaded: deterministic
+  sParam.iMultipleThreadIdc         = kiThreads;
   sParam.bUseLoadBalancing          = false;
   sParam.iLoopFilterDisableIdc      = 0;
   sParam.iLoopFilterAlphaC0Offset   = 0;

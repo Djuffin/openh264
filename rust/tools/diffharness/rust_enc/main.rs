@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit] [slicemode] [slicenum]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit] [slicemode] [slicenum] [threads]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -33,6 +33,8 @@ fn main() {
     //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
     let slicemode: i32 = if a.len() > 11 { a[11].parse().unwrap() } else { 0 };
     let slicenum: i32 = if a.len() > 12 { a[12].parse().unwrap() } else { 1 };
+    // Optional 13th: iMultipleThreadIdc. 1 (default) is single-threaded.
+    let threads: i32 = if a.len() > 13 { a[13].parse().unwrap() } else { 1 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -67,7 +69,7 @@ fn main() {
         p.bEnableLongTermReference = false;
         p.iLTRRefNum = 0;
         p.iLtrMarkPeriod = 30;
-        p.iMultipleThreadIdc = 1;
+        p.iMultipleThreadIdc = threads as u16;
         p.bUseLoadBalancing = false;
         p.iLoopFilterDisableIdc = 0;
         p.iLoopFilterAlphaC0Offset = 0;
