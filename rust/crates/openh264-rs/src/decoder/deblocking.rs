@@ -418,14 +418,15 @@ pub unsafe fn IN_BS_EDGE(
     (bsx1 | smb) << (if bsx1 != 0 { 1 } else { 0 })
 }
 
+/// The macroblock's non-zero-count row.
+///
+/// The C++ picks between two sources here — the decoded picture's own `pNzc` array and
+/// the dq-layer's — because under decoder multi-threading the picture carries its own
+/// copy. That array was only ever allocated behind a thread-count gate that this port
+/// never opened, so the picture branch was unreachable for the port's whole life and
+/// died with the rest of the MT scaffolding (T5c). Only the layer source remains.
 #[inline(always)]
 pub unsafe fn GetPNzc(pCurDqLayer: *mut SDqLayer, iMbXy: i32) -> *mut i8 {
-    if !pCurDqLayer.is_null()
-        && !(*pCurDqLayer).pDec.is_null()
-        && !(*(*pCurDqLayer).pDec).pNzc.is_null()
-    {
-        return (*(*(*pCurDqLayer).pDec).pNzc.add(iMbXy as usize)).as_mut_ptr();
-    }
     (*(*pCurDqLayer).pNzc.add(iMbXy as usize)).as_mut_ptr()
 }
 

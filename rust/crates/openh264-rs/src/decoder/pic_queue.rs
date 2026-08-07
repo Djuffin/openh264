@@ -86,7 +86,7 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 
-pub use crate::decoder::picture::{SPicture, PPicture, SWelsDecEvent};
+pub use crate::decoder::picture::{SPicture, PPicture};
 
 /// Recycled picture buffer queue container.
 ///
@@ -128,41 +128,6 @@ pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
 }
 
 pub use crate::decoder::decoder_core::GetThreadCount;
-
-/// Initializes an event object.
-#[inline]
-pub unsafe fn EventCreate(e: *mut SWelsDecEvent, manualReset: i32, initialState: i32) -> i32 {
-    if e.is_null() {
-        return 1;
-    }
-    unsafe {
-        (*e).manualReset = manualReset;
-        (*e).isSignaled = initialState;
-    }
-    0
-}
-
-/// Destroys an event object.
-#[inline]
-pub unsafe fn EventDestroy(e: *mut SWelsDecEvent) {
-    if !e.is_null() {
-        unsafe {
-            (*e).isSignaled = 0;
-        }
-    }
-}
-
-/// Helper wrapper for `CREATE_EVENT`.
-#[inline]
-pub unsafe fn CREATE_EVENT(ph: *mut SWelsDecEvent, manualreset: i32, initial_state: i32) -> i32 {
-    unsafe { EventCreate(ph, manualreset, initial_state) }
-}
-
-/// Helper wrapper for `CLOSE_EVENT`.
-#[inline]
-pub unsafe fn CLOSE_EVENT(ph: *mut SWelsDecEvent) {
-    unsafe { EventDestroy(ph) }
-}
 
 // ============================================================================
 // Picture Memory Lifecycle Functions
@@ -273,15 +238,6 @@ pub unsafe fn AllocPicture(
             b"pPic->pMbCorrectlyDecodedFlag\0".as_ptr() as *const c_char,
         ) as *mut bool;
 
-        (*pPic).pNzc = if GetThreadCount(pCtx) > 1 {
-            (*pMa).WelsMallocz(
-                uiMbCount * 24,
-                b"pPic->pNzc\0".as_ptr() as *const c_char,
-            ) as *mut [i8; 24]
-        } else {
-            std::ptr::null_mut()
-        };
-
         (*pPic).pMbType = (*pMa).WelsMallocz(
             uiMbCount * std::mem::size_of::<u32>() as u32,
             b"pPic->pMbType\0".as_ptr() as *const c_char,
@@ -307,12 +263,6 @@ pub unsafe fn AllocPicture(
             b"pCtx->sMb.pRefIndex[]\0".as_ptr() as *const c_char,
         ) as *mut [i8; 16];
 
-        // The per-MB-row event array was allocated only when `pCtx->pThreadCtx` was
-        // non-null, which it never was (T5c) — so this pointer has always been null
-        // for the port's whole life, and `FreePicture` has always taken its null
-        // branch. The allocation and the `CREATE_EVENT` loop are deleted with the
-        // field they gated.
-        (*pPic).pReadyEvent = std::ptr::null_mut();
     }
 
     pPic
@@ -344,14 +294,6 @@ pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
             (*pPic).pMbCorrectlyDecodedFlag = std::ptr::null_mut();
         }
 
-        if !(*pPic).pNzc.is_null() {
-            (*pMa).WelsFree(
-                (*pPic).pNzc as *mut c_void,
-                b"pPic->pNzc\0".as_ptr() as *const c_char,
-            );
-            (*pPic).pNzc = std::ptr::null_mut();
-        }
-
         if !(*pPic).pMbType.is_null() {
             (*pMa).WelsFree(
                 (*pPic).pMbType as *mut c_void,
@@ -375,18 +317,6 @@ pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
                 );
                 (*pPic).pRefIndex[listIdx] = std::ptr::null_mut();
             }
-        }
-
-        if !(*pPic).pReadyEvent.is_null() {
-            let uiMbHeight = (((*pPic).iHeightInPixel + 15) >> 4) as usize;
-            for i in 0..uiMbHeight {
-                CLOSE_EVENT((*pPic).pReadyEvent.add(i));
-            }
-            (*pMa).WelsFree(
-                (*pPic).pReadyEvent as *mut c_void,
-                b"pPic->pReadyEvent\0".as_ptr() as *const c_char,
-            );
-            (*pPic).pReadyEvent = std::ptr::null_mut();
         }
 
         (*pMa).WelsFree(

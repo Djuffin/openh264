@@ -80,26 +80,6 @@ pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 /// Base H.264 slice types matching `EWelsSliceType` in `wels_common_defs.h`.
 pub use crate::decoder::slice::EWelsSliceType;
 
-/// Decoder synchronization event representation matching `SWelsDecEvent` in `wels_decoder_thread.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SWelsDecEvent {
-    pub manualReset: i32,
-    pub isSignaled: i32,
-    pub c: [u8; 48],
-    pub m: [u8; 40],
-}
-
-impl Default for SWelsDecEvent {
-    fn default() -> Self {
-        Self {
-            manualReset: 0,
-            isSignaled: 0,
-            c: [0; 48],
-            m: [0; 40],
-        }
-    }
-}
 
 /// Reconstructed Picture definition.
 ///
@@ -228,7 +208,6 @@ pub struct SPicture {
     pub pMbCorrectlyDecodedFlag: *mut bool,
 
     /// Non-Zero Count (NZC) transform coefficient table for multi-threaded decoding context sharing.
-    pub pNzc: *mut [i8; 24],
 
     /// Array of macroblock coding types (`MB_TYPE_*`) used for direct mode derivation (`[iMbNum]`).
     pub pMbType: *mut u32,
@@ -242,8 +221,6 @@ pub struct SPicture {
     /// Pointers to active reference pictures in `LIST_0` and `LIST_1` used for motion compensation.
     pub pRefPic: [[*mut SPicture; 17]; LIST_A],
 
-    /// Macroblock row-level synchronization event array for multi-threaded decoding (`[iMbHeight]`).
-    pub pReadyEvent: *mut SWelsDecEvent,
 }
 
 /// Pointer typedef for reconstructed pictures matching `typedef struct SPicture* PPicture;`.
@@ -284,12 +261,10 @@ impl Default for SPicture {
             iMbEcedPropNum: 0,
             iMbNum: 0,
             pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pNzc: std::ptr::null_mut(),
             pMbType: std::ptr::null_mut(),
             pMv: [std::ptr::null_mut(); LIST_A],
             pRefIndex: [std::ptr::null_mut(); LIST_A],
             pRefPic: [[std::ptr::null_mut(); 17]; LIST_A],
-            pReadyEvent: std::ptr::null_mut(),
         }
     }
 }
