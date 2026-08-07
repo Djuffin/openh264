@@ -34,6 +34,11 @@ int main (int argc, char** argv) {
   // scene-change detection, background detection, adaptive quantisation and
   // frame skip are all ON. 0 (default) is InitializeExt with the gate config.
   const int   kiBaseInit = (argc > 10) ? atoi (argv[10]) : 0;
+  // 11th/12th: uiSliceMode and uiSliceNum. SM_SINGLE_SLICE/1 is the gate.
+  //   0 = SM_SINGLE_SLICE, 1 = SM_FIXEDSLCNUM_SLICE, 2 = SM_RASTER_SLICE,
+  //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
+  const int   kiSliceMode = (argc > 11) ? atoi (argv[11]) : 0;
+  const int   kiSliceNum  = (argc > 12) ? atoi (argv[12]) : 1;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -97,8 +102,26 @@ int main (int argc, char** argv) {
   sParam.sSpatialLayers[0].iSpatialBitrate     = 500000;
   sParam.sSpatialLayers[0].iMaxSpatialBitrate  = UNSPECIFIED_BIT_RATE;
   sParam.sSpatialLayers[0].iDLayerQp           = kiQp;
-  sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
-  sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = 1;
+  switch (kiSliceMode) {
+  case 1:
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = kiSliceNum;
+    break;
+  case 2:
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_RASTER_SLICE;
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = kiSliceNum;
+    // uiSliceMbNum[0] rows per slice; 0 means one MB row per slice.
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceMbNum[0] = kiSliceNum;
+    break;
+  case 3:
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SIZELIMITED_SLICE;
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = kiSliceNum;
+    break;
+  default:
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+    sParam.sSpatialLayers[0].sSliceArgument.uiSliceNum  = 1;
+    break;
+  }
 
   if (kiBaseInit) {
     SEncParamBase sBase;

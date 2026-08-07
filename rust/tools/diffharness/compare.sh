@@ -1,7 +1,11 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit]
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum]
+#
+#   slicemode: 0 SM_SINGLE_SLICE (default), 1 SM_FIXEDSLCNUM_SLICE,
+#              2 SM_RASTER_SLICE, 3 SM_SIZELIMITED_SLICE.
+#   slicenum:  slice count for 1/2, rows-per-slice for 2, byte constraint for 3.
 #   e.g.   rust/tools/diffharness/compare.sh res/CiscoVT2people_160x96_6fps.yuv 160 96 5 26 0 -1
 #
 # Both drivers set a fully explicit, identical SEncParamExt, so the only
@@ -18,12 +22,13 @@ OUT=$HERE/out
 mkdir -p "$OUT"
 
 YUV=$1; W=$2; H=$3; N=$4; QP=$5; CABAC=$6; GOP=$7; RC=${8:-}; BASE=${9:-}
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}
+SLM=${10:-}; SLN=${11:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE 2>"$OUT/c_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN 2>"$OUT/c_$TAG.log"
 cxx_rc=$?
-"$HERE/rust_enc/target/debug/rust_enc" "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE 2>"$OUT/r_$TAG.log"
+"$HERE/rust_enc/target/debug/rust_enc" "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN 2>"$OUT/r_$TAG.log"
 rust_rc=$?
 
 # A driver that aborts leaves a short file, which otherwise reads as an ordinary

@@ -13,11 +13,9 @@ configurations. `SetOption` handles all 32 of upstream's options; `todo!()` and
 upstream's own hash — passes. What is not yet exact is listed under *Phase 5.3*;
 multi-threading, the multi-slice modes and `METHOD_DOWNSAMPLE` are the largest items.
 
-> **Multi-slice is the biggest unmeasured area.** `SM_FIXEDSLCNUM_SLICE` and
-> `SM_RASTER_SLICE` are accepted by `ParamValidationExt` and have never been
-> encoded end to end, and Phase 5.2 found two helpers (`WelsGetNextMbOfSlice`,
-> `GetCurrentSliceNum`) that are wrong for exactly those modes and indistinguishable
-> from correct at one slice per frame. Every number above is a one-slice number.
+`SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` are byte-identical too, over 256
+configurations — the first time either has been encoded end to end. The axes still
+pinned are **one thread**, **one spatial layer** and `SM_SIZELIMITED_SLICE`.
 
 ---
 
@@ -78,8 +76,9 @@ setting `fMaxFrameRate` and `sSpatialLayers[0].fFrameRate` to the same value.
 Single spatial layer, single slice, CAVLC, RC off, single-threaded, deblocking on,
 `CONSTANT_ID`, no LTR/denoise/AQ/BGD/scene-change. See `cxx_enc.cpp` for the exact
 field-by-field setting. As of Phase 5.2 the measured range is far wider: all five
-`iRCMode` values, both entropy coders, both init paths and all 52 QPs. The two axes
-still pinned are **one slice** and **one thread**.
+`iRCMode` values, both entropy coders, both init paths, all 52 QPs, and
+`SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE` at 2/3/4/6 slices. The axes still pinned are
+**one thread**, **one spatial layer** and `SM_SIZELIMITED_SLICE`.
 
 ---
 
@@ -1283,6 +1282,7 @@ qp=0 difference is closed, and `todo!()`/`unimplemented!()` are both zero in
 | `iRCMode` x input x GOP x init path, **CAVLC** | 5 modes x 4 inputs x GOP −1/2/8 x baseinit 0/1 | 120 | identical |
 | the same, **CABAC** | as above | 120 | identical |
 | QP x `iRCMode` x cabac x size | 52 QPs x 5 modes x cabac 0/1 x 3 inputs | 1560 | identical |
+| **slice mode** x count x `iRCMode` x GOP x cabac x input | `SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE` x 2/3/4/6 slices x 4 modes x GOP −1/2 x cabac 0/1 x 2 inputs | 256 | identical |
 
 | check | result |
 |---|---|
@@ -1457,6 +1457,40 @@ value and every table now agrees element for element except the three deblocking
 tables, which are `static const` file-local in C++ and deliberately `[52 + 12]` in
 the encoder against `[52 + 24]` in the decoder — annotated in both sources.
 
+#### The multi-slice modes work, and `compare.sh` can now drive them
+
+`compare.sh` gained a tenth and eleventh argument:
+
+```bash
+compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum]
+```
+
+`slicemode` is 0 `SM_SINGLE_SLICE` (default), 1 `SM_FIXEDSLCNUM_SLICE`,
+2 `SM_RASTER_SLICE`, 3 `SM_SIZELIMITED_SLICE`; `slicenum` is the slice count for 1
+and 2, the rows-per-slice for 2, and the byte constraint for 3.
+
+`SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` were **byte-identical on the first
+run**, 256/256. That is the interesting part: the two shadowed helpers this phase
+deleted — `WelsGetNextMbOfSlice` returning `kiMbXY + 1` and `GetCurrentSliceNum`
+returning a hardcoded `1` — were both wrong for exactly these modes and both
+invisible at one slice. Had the drivers grown this argument before the `--dups`
+sweep, the sweep would have been a debugging session instead of a clean pass.
+
+`SM_SIZELIMITED_SLICE` is still refused: `WelsEncoderEncodeExt` returns
+`ENC_RETURN_UNSUPPORTED_PARA` (it needs `WelsCodeOnePicPartition` and
+`WelsInitCurrentDlayerMltslc`).
+
+> **The refusal is invisible to the caller, and that is upstream's doing, not the
+> port's.** `EncodeFrameInternal` (`welsEncoderExt.cpp:404`) maps only
+> `ENC_RETURN_MEMALLOCERR`/`MEMOVERFLOWFOUND`/`VLCOVERFLOWFOUND` and
+> `ENC_RETURN_INVALIDINPUT` to failures; its third arm is
+> `(kiEncoderReturn != ENC_RETURN_SUCCESS) && (kiEncoderReturn == ENC_RETURN_CORRECTED)`,
+> which is a typo for `!=` upstream and makes every other non-zero code fall through
+> to `cmResultSuccess`. The port copies that statement for statement, so
+> `SM_SIZELIMITED_SLICE` reports success and emits nothing. If you want the harness
+> to distinguish "refused" from "produced zero bytes", check the driver's frame
+> count, not its return code.
+
 ### Phase 5.3 — what is still not exact — **NOT STARTED**
 
 In the order the next session should take them. Every one is an explicit error or a
@@ -1466,13 +1500,11 @@ documented gap; there is no known silent-success stub left in the tree.
    `SliceLayerInfoUpdate`. Determinism is the risk, not correctness: verify the C++
    is deterministic first by running `cxx_enc` twice with `iMultipleThreadIdc = 4`
    and `cmp`ing, or a difference that is upstream's will read as yours.
-2. **The slice modes.** `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` pass
-   `ParamValidationExt` (Phase 3.9) but **have never been exercised end to end**, and
-   this phase found two shadowed helpers (`WelsGetNextMbOfSlice`,
-   `GetCurrentSliceNum`) that are wrong for exactly those modes and invisible at one
-   slice. Add a slice-mode argument to both drivers — the way `rcmode` and `baseinit`
-   were added — before assuming anything about multi-slice. `SM_SIZELIMITED_SLICE`
-   additionally needs `WelsCodeOnePicPartition` and `WelsInitCurrentDlayerMltslc`.
+2. **`SM_SIZELIMITED_SLICE`** — needs `WelsCodeOnePicPartition` and
+   `WelsInitCurrentDlayerMltslc`. `compare.sh … 3 <bytes>` drives it already; the
+   port currently returns `ENC_RETURN_UNSUPPORTED_PARA`, which upstream's own return
+   mapping turns into a success with zero output (see above), so compare **frame
+   counts**, not exit codes, while working on it.
 3. **The remaining VP methods** — `METHOD_DENOISE`, `METHOD_DOWNSAMPLE` (this is what
    blocks more than one spatial layer), and the three `SCREEN_CONTENT_REAL_TIME` ones
    (`METHOD_SCENE_CHANGE_DETECTION_SCREEN`, `METHOD_COMPLEXITY_ANALYSIS_SCREEN`,
