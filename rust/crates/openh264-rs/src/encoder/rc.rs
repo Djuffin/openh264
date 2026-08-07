@@ -785,7 +785,6 @@ pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
         (*pWelsSvcRc).iLastAllocatedBits = (*pWelsSvcRc).iRemainingBits;
     }
     (*pWelsSvcRc).iRemainingWeights = (*pWelsSvcRc).iGopNumberInVGop * WEIGHT_MULTIPLY;
-
     (*pWelsSvcRc).iFrameCodedInVGop = 0;
     (*pWelsSvcRc).iGopIndexInVGop = 0;
 
@@ -1323,9 +1322,14 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
             pWelsSvcRc
         };
 
+        // `int32_t iSumSad` in C++, and it really does overflow: under `GOM_VAR`
+        // each `pCurrentFrameGomSad[j]` is a whole GOM's luma variance, which at
+        // 720p is order 1e9, so a sum over 20+ GOMs wraps. Keep the wrap — a
+        // debug-build `+` traps here instead.
         let mut iSumSad: i32 = 0;
         for i in (kiComplexityIndex + 1)..=iLastGomIndex {
-            iSumSad += *(*pWelsSvcRc_Base).pCurrentFrameGomSad.add(i as usize);
+            iSumSad =
+                iSumSad.wrapping_add(*(*pWelsSvcRc_Base).pCurrentFrameGomSad.add(i as usize));
         }
 
         let iAllocateBits = if iSumSad == 0 {
@@ -1353,14 +1357,22 @@ pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _
         pSOverRc.iCalculatedQpSlice += 2;
     } else {
         let iBitsRatio = 10000 * iLeftBits / (iTargetLeftBits + 1);
+        // The order of the last two arms is `ratectl.cpp:760-767` verbatim and is
+        // load-bearing: `> 10600` is tested first, so the `-= 2` arm is unreachable
+        // (every ratio above 11900 is also above 10600). Sorting the thresholds
+        // "correctly" makes every ratio above 11900 drop the QP by 2 instead of 1.
         if iBitsRatio < 8409 {
+            //2^(-1.5/6)*10000
             pSOverRc.iCalculatedQpSlice += 2;
         } else if iBitsRatio < 9439 {
+            //2^(-0.5/6)*10000
             pSOverRc.iCalculatedQpSlice += 1;
-        } else if iBitsRatio > 11900 {
-            pSOverRc.iCalculatedQpSlice -= 2;
         } else if iBitsRatio > 10600 {
+            //2^(0.5/6)*10000
             pSOverRc.iCalculatedQpSlice -= 1;
+        } else if iBitsRatio > 11900 {
+            //2^(1.5/6)*10000
+            pSOverRc.iCalculatedQpSlice -= 2;
         }
     }
     pSOverRc.iCalculatedQpSlice = WELS_CLIP3(
@@ -1873,7 +1885,50 @@ pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeS
     }
     RcInitSliceInformation(pEncCtx);
     RcInitGomParameters(pEncCtx);
+    if crate::encoder::dump_enabled(&RC_DUMP, "OH264_RCDUMP") {
+        let r = &*pWelsSvcRc;
+        eprintln!(
+            "RCF st={} gqp={} tgt={} rem={} bpf={} maxbpf={} bpmb={} remw={} \
+             idr={} gomqp={} minfq={} maxfq={} minq={} maxq={} nmbf={} nmbg={} gsz={} \
+             gidx={} gnum={} fcv={} iq={} qs={} lcq={} icx={} icm={} imc={} skip={} bfs={} cbl={}",
+            (*pEncCtx).eSliceType as i32,
+            (*pEncCtx).iGlobalQp,
+            r.iTargetBits,
+            r.iRemainingBits,
+            r.iBitsPerFrame,
+            r.iMaxBitsPerFrame,
+            r.iBitsPerMb,
+            r.iRemainingWeights,
+            r.iIdrNum,
+            r.bEnableGomQp,
+            r.iMinFrameQp,
+            r.iMaxFrameQp,
+            r.iMinQp,
+            r.iMaxQp,
+            r.iNumberMbFrame,
+            r.iNumberMbGom,
+            r.iGomSize,
+            r.iGopIndexInVGop,
+            r.iGopNumberInVGop,
+            r.iFrameCodedInVGop,
+            r.iInitialQp,
+            r.iQStep,
+            r.iLastCalculatedQScale,
+            r.iIntraComplexity,
+            r.iIntraComplxMean,
+            r.iIntraMbCount,
+            r.iSkipFrameNum,
+            r.iBufferFullnessSkip,
+            r.iCurrentBitsLevel
+        );
+    }
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static RC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, iLayerSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
@@ -1928,6 +1983,21 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
         (*pCurMb).uiLumaQp = (*pEncCtx).iGlobalQp as u8;
         (*pCurMb).uiChromaQp = g_kuiChromaQpTable
             [CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + kuiChromaQpIndexOffset as i32)];
+    }
+    if crate::encoder::dump_enabled(&RC_MB_DUMP, "OH264_RCMBDUMP") {
+        eprintln!(
+            "RCMB xy={} lq={} cq={} cqs={} cis={} gtb={} tbs={} fbs={} gbs={} bps={}",
+            (*pCurMb).iMbXY,
+            (*pCurMb).uiLumaQp,
+            (*pCurMb).uiChromaQp,
+            pSOverRc.iCalculatedQpSlice,
+            pSOverRc.iComplexityIndexSlice,
+            pSOverRc.iGomTargetBits,
+            pSOverRc.iTargetBitsSlice,
+            pSOverRc.iFrameBitsSlice,
+            pSOverRc.iGomBitsSlice,
+            pSOverRc.iBsPosSlice
+        );
     }
 }
 

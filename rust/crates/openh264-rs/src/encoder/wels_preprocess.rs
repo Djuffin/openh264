@@ -1,7 +1,8 @@
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
-pub const FRAME_SAD: i32 = 0;
-pub const GOM_SAD: i32 = 1;
-pub const GOM_VAR: i32 = 2;
+/// `EComplexityAnalysisMode` — `codec/processing/interface/IWelsVP.h:215`.
+/// The two GOM modes are **negative**; the port had them as `1`/`2` until Phase 5.1,
+/// which sent `CComplexityAnalysis::Process` down its `default:` arm.
+pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 // Copyright (c) 2011-2013, Cisco Systems
 // All rights reserved.
 //

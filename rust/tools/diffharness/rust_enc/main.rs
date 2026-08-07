@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 9 {
-        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode]");
+        eprintln!("usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac> <gop> <out.264> [rcmode] [baseinit]");
         std::process::exit(1);
     }
     let src = &a[1];
@@ -22,6 +22,12 @@ fn main() {
     let out = &a[8];
     // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
     let rcmode: i32 = if a.len() > 9 { a[9].parse().unwrap() } else { RC_MODES::RC_OFF_MODE as i32 };
+    // Optional 10th argument: 1 selects Initialize(SEncParamBase), the path
+    // upstream's BaseEncoderTest::InitWithParam takes and the one the SHA-1 parity
+    // test exercises. It leaves FillDefault's values in place, so scene-change
+    // detection, background detection, adaptive quantisation and frame skip are all
+    // ON. 0 (default) is InitializeExt with the gate configuration.
+    let baseinit: i32 = if a.len() > 10 { a[10].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -84,8 +90,19 @@ fn main() {
         p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
         p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
 
-        let ret = (*pEnc).InitializeExt(&p);
-        assert_eq!(ret, 0, "InitializeExt returned {}", ret);
+        if baseinit != 0 {
+            let mut b = SEncParamBase::default();
+            b.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+            b.fMaxFrameRate = 30.0;
+            b.iPicWidth = w;
+            b.iPicHeight = h;
+            b.iTargetBitrate = 5000000;
+            let ret = (*pEnc).Initialize(&b);
+            assert_eq!(ret, 0, "Initialize returned {}", ret);
+        } else {
+            let ret = (*pEnc).InitializeExt(&p);
+            assert_eq!(ret, 0, "InitializeExt returned {}", ret);
+        }
 
         let mut fsrc = File::open(src).expect("open src");
         let mut fout = File::create(out).expect("create out");

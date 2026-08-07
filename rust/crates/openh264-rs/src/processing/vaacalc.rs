@@ -91,6 +91,80 @@ pub struct CVAACalculation {
     pub m_sCalcParam: SVAACalcParam,
 }
 
+/// `VAACalcSadVar_c` — `codec/processing/src/vaacalc/vaacalcfuncs.cpp:121`.
+///
+/// `VAACalcSad_c` plus, per macroblock, the sum and the sum of squares of the
+/// current picture's 256 luma samples. `CWelsPreProcess::AnalyzeSpatialPic` selects
+/// it whenever `iRCMode >= RC_BITRATE_MODE` and the slice is an I slice
+/// (`wels_preprocess.cpp:283`), because `AnalyzeGomComplexityViaVar` derives each
+/// GOM's variance from those two sums.
+///
+/// # Safety
+/// As [`VAACalcSad_c`], and `pSum16x16`/`psqsum16x16` must each have room for
+/// `(iPicWidth >> 4) * (iPicHeight >> 4)` `i32`s.
+pub unsafe fn VAACalcSadVar_c(
+    pCurData: *const u8,
+    pRefData: *const u8,
+    iPicWidth: i32,
+    iPicHeight: i32,
+    iPicStride: i32,
+    pFrameSad: *mut i32,
+    pSad8x8: *mut i32,
+    pSum16x16: *mut i32,
+    psqsum16x16: *mut i32,
+) {
+    let mut tmp_ref = pRefData;
+    let mut tmp_cur = pCurData;
+    let iMbWidth = iPicWidth >> 4;
+    let mb_height = iPicHeight >> 4;
+    let mut mb_index = 0isize;
+    let pic_stride_x8 = (iPicStride << 3) as isize;
+    let step = ((iPicStride << 4) - iPicWidth) as isize;
+
+    *pFrameSad = 0;
+    for _i in 0..mb_height {
+        for _j in 0..iMbWidth {
+            *pSum16x16.offset(mb_index) = 0;
+            *psqsum16x16.offset(mb_index) = 0;
+
+            // The four quadrants in the C++'s order: top-left, top-right,
+            // bottom-left, bottom-right.
+            for (n, offset) in [
+                (0isize, 0isize),
+                (1, 8),
+                (2, pic_stride_x8),
+                (3, pic_stride_x8 + 8),
+            ] {
+                let mut l_sad = 0i32;
+                let mut l_sum = 0i32;
+                let mut l_sqsum = 0i32;
+                let mut tmp_cur_row = tmp_cur.offset(offset);
+                let mut tmp_ref_row = tmp_ref.offset(offset);
+                for _k in 0..8 {
+                    for l in 0..8isize {
+                        let cur = *tmp_cur_row.offset(l) as i32;
+                        l_sad += (cur - *tmp_ref_row.offset(l) as i32).abs();
+                        l_sum += cur;
+                        l_sqsum += cur * cur;
+                    }
+                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
+                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
+                }
+                *pFrameSad += l_sad;
+                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
+                *pSum16x16.offset(mb_index) += l_sum;
+                *psqsum16x16.offset(mb_index) += l_sqsum;
+            }
+
+            tmp_ref = tmp_ref.offset(16);
+            tmp_cur = tmp_cur.offset(16);
+            mb_index += 1;
+        }
+        tmp_ref = tmp_ref.offset(step);
+        tmp_cur = tmp_cur.offset(step);
+    }
+}
+
 impl CVAACalculation {
     /// `CVAACalculation::Set` — copies the caller's parameter block.
     ///
@@ -129,10 +203,25 @@ impl CVAACalculation {
         (*pResult).pCurY = pCurData;
         (*pResult).pRefY = pRefData;
 
-        if self.m_sCalcParam.iCalcBgd || self.m_sCalcParam.iCalcSsd || self.m_sCalcParam.iCalcVar {
-            // pfVAACalcSadBgd / pfVAACalcSadSsdBgd / pfVAACalcSadSsd / pfVAACalcSadVar
-            // are not translated; see the module docs.
+        if self.m_sCalcParam.iCalcBgd || self.m_sCalcParam.iCalcSsd {
+            // pfVAACalcSadBgd / pfVAACalcSadSsdBgd / pfVAACalcSadSsd are not
+            // translated; see the module docs.
             return RET_NOTSUPPORTED;
+        }
+
+        if self.m_sCalcParam.iCalcVar {
+            VAACalcSadVar_c(
+                pCurData,
+                pRefData,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                &mut (*pResult).iFrameSad as *mut i32,
+                (*pResult).pSad8x8 as *mut i32,
+                (*pResult).pSum16x16,
+                (*pResult).pSumOfSquare16x16,
+            );
+            return RET_SUCCESS;
         }
 
         VAACalcSad_c(
