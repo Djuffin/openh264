@@ -11,6 +11,8 @@
 //! header in C++, so these types have exactly one definition here rather than one
 //! copy per module.
 
+use std::ffi::c_void;
+
 /// Bit-stream auxiliary reading / writing state.
 ///
 /// Matches `TagBitStringAux` in `codec/common/inc/wels_common_defs.h:232`. The field
@@ -276,3 +278,119 @@ pub const g_kuiGolombUELength: [u32; 256] = [
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 17,
 ];
+
+// ============================================================================
+// PSNR — `codec/common/src/utils.cpp:74-125`
+// ============================================================================
+
+/// `CONST_FACTOR_PSNR` — utils.cpp:78. `10.0 / log(10.0)`, in `double`.
+pub const CONST_FACTOR_PSNR: f64 = 4.342944819032518; // 10.0 / ln(10.0)
+
+/// `CALC_PSNR` — utils.cpp:79. The multiply `65025.0 * w * h` is `double`; only
+/// the final result narrows to `float`.
+#[inline]
+pub fn CALC_PSNR(w: i32, h: i32, s: i64) -> f32 {
+    (CONST_FACTOR_PSNR * (65025.0f64 * w as f64 * h as f64 / s as f64).ln()) as f32
+}
+
+/// `WelsCalcPsnr` — `codec/common/src/utils.cpp:101`.
+///
+/// Returns `-1.0` for a null plane and the saturating `99.99` for an exact match,
+/// both of which are the reference's own sentinels rather than errors. `iSqe`
+/// accumulates in `int64_t`; the per-pixel difference is `int32_t`.
+///
+/// # Safety
+/// Both planes must be readable for `kiHeight` rows of `kiWidth` bytes at the
+/// given strides.
+pub unsafe fn WelsCalcPsnr(
+    kpTarPic: *const c_void,
+    kiTarStride: i32,
+    kpRefPic: *const c_void,
+    kiRefStride: i32,
+    kiWidth: i32,
+    kiHeight: i32,
+) -> f32 {
+    let mut iSqe: i64 = 0;
+    let pTar = kpTarPic as *const u8;
+    let pRef = kpRefPic as *const u8;
+
+    if pTar.is_null() || pRef.is_null() {
+        return -1.0;
+    }
+
+    for y in 0..kiHeight {
+        for x in 0..kiWidth {
+            let kiT = *pTar.add((y * kiTarStride + x) as usize) as i32
+                - *pRef.add((y * kiRefStride + x) as usize) as i32;
+            iSqe += (kiT * kiT) as i64;
+        }
+    }
+    if iSqe == 0 {
+        return 99.99;
+    }
+    CALC_PSNR(kiWidth, kiHeight, iSqe)
+}
+
+#[cfg(test)]
+mod psnr_tests {
+    use super::*;
+
+    /// Expectations **measured** against `libopenh264.a`, not derived: a probe
+    /// called `WelsCalcPsnr` on the same six inputs and printed these values.
+    /// See `rust/docs/encoder_port_status.md`, Phase 5.3.
+    #[test]
+    fn test_wels_calc_psnr_matches_cxx() {
+        const W: i32 = 32;
+        const H: i32 = 16;
+        let n = (W * H) as usize;
+        let a: Vec<u8> = (0..n).map(|i| (i * 7) as u8).collect();
+        let mut b: Vec<u8> = a.clone();
+
+        let call = |t: &[u8], ts: i32, r: &[u8], rs: i32, w: i32, h: i32| unsafe {
+            WelsCalcPsnr(
+                t.as_ptr() as *const c_void,
+                ts,
+                r.as_ptr() as *const c_void,
+                rs,
+                w,
+                h,
+            )
+        };
+
+        // Exactly equal planes return the 99.99 sentinel, not +inf.
+        assert_eq!(call(&a, W, &b, W, W, H), 99.99);
+
+        for i in 0..n {
+            b[i] = a[i] ^ 1;
+        }
+        assert!((call(&a, W, &b, W, W, H) - 48.130802).abs() < 1e-4);
+
+        for i in 0..n {
+            b[i] = 255 - a[i];
+        }
+        assert!((call(&a, W, &b, W, W, H) - 4.737283).abs() < 1e-4);
+
+        let mut s: u32 = 12345;
+        for i in 0..n {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345);
+            b[i] = ((s >> 16) & 0xff) as u8;
+        }
+        assert!((call(&a, W, &b, W, W, H) - 8.052674).abs() < 1e-4);
+
+        // A null plane is a sentinel in the reference, not an error.
+        let got = unsafe {
+            WelsCalcPsnr(
+                std::ptr::null(),
+                W,
+                b.as_ptr() as *const c_void,
+                W,
+                W,
+                H,
+            )
+        };
+        assert_eq!(got, -1.0);
+
+        // Distinct target and reference strides.
+        assert!((call(&a, 40, &b, 48, 20, 8) - 7.720985).abs() < 1e-4);
+    }
+}

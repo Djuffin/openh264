@@ -3559,13 +3559,57 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // MinCr check is a diagnostic log in C++ with no state change; omitted.
 
-        let _ = fsnr;
-        let _ = pEncPic;
+        // encoder_ext.cpp:3927-3980. Note the asymmetry, which is the reference's
+        // and not a transcription slip: each plane is *computed* when either
+        // `pSvcParam->bPsnrX` or `pSrcPic->bPsnrX` is set, but only *reported*
+        // when `pSrcPic->bPsnrX` is set. Asking through SEncParamExt alone
+        // therefore costs the full-frame scan and reports nothing.
+        let mut fSnrY: f32 = 0.0;
+        let mut fSnrU: f32 = 0.0;
+        let mut fSnrV: f32 = 0.0;
+        if !fsnr.is_null() && ((*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY) {
+            fSnrY = crate::common::wels_common_defs::WelsCalcPsnr(
+                (*fsnr).pData[0] as *const c_void,
+                (*fsnr).iLineSize[0],
+                (*pEncPic).pData[0] as *const c_void,
+                (*pEncPic).iLineSize[0],
+                iCurWidth,
+                iCurHeight,
+            );
+        }
+        if !fsnr.is_null() && ((*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU) {
+            fSnrU = crate::common::wels_common_defs::WelsCalcPsnr(
+                (*fsnr).pData[1] as *const c_void,
+                (*fsnr).iLineSize[1],
+                (*pEncPic).pData[1] as *const c_void,
+                (*pEncPic).iLineSize[1],
+                iCurWidth >> 1,
+                iCurHeight >> 1,
+            );
+        }
+        if !fsnr.is_null() && ((*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV) {
+            fSnrV = crate::common::wels_common_defs::WelsCalcPsnr(
+                (*fsnr).pData[2] as *const c_void,
+                (*fsnr).iLineSize[2],
+                (*pEncPic).pData[2] as *const c_void,
+                (*pEncPic).iLineSize[2],
+                iCurWidth >> 1,
+                iCurHeight >> 1,
+            );
+        }
+
         (*pLayerBsInfo).rPsnr[0] = 0.0;
         (*pLayerBsInfo).rPsnr[1] = 0.0;
         (*pLayerBsInfo).rPsnr[2] = 0.0;
-        // WelsCalcPsnr is only reachable when the caller asks for PSNR; it is unported,
-        // so bPsnrY/U/V are treated as if unset (the harness does not request PSNR).
+        if (*pSrcPic).bPsnrY {
+            (*pLayerBsInfo).rPsnr[0] = fSnrY;
+        }
+        if (*pSrcPic).bPsnrU {
+            (*pLayerBsInfo).rPsnr[1] = fSnrU;
+        }
+        if (*pSrcPic).bPsnrV {
+            (*pLayerBsInfo).rPsnr[2] = fSnrV;
+        }
 
         iCountNal = (*pLayerBsInfo).iNalCount;
         iLayerNum += 1;
