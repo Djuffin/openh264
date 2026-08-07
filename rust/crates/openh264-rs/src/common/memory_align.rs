@@ -64,6 +64,9 @@ pub unsafe fn WelsMalloc(
 ///
 /// # Safety
 /// `pPointer` must be a pointer previously returned by [`WelsMalloc`] or [`WelsMallocz`], or null.
+// Two WelsFree definitions are correct and both exist in C++: this free
+// function (memory_align.h's global helper) and CMemoryAlign::WelsFree below,
+// which also updates the allocator's usage counters. --dups flags the pair.
 pub unsafe fn WelsFree(pPointer: *mut c_void, _kpTag: *const c_char) {
     if !pPointer.is_null() {
         unsafe {
