@@ -12,8 +12,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
 PROFILE=${RUST_ENC_PROFILE:-debug}
 case "$PROFILE" in
-  debug)   CARGO_PROFILE_ARGS=() ;;
-  release) CARGO_PROFILE_ARGS=(--release) ;;
+  debug|release) ;;
   *) echo "RUST_ENC_PROFILE must be debug or release, got: $PROFILE" >&2; exit 2 ;;
 esac
 
@@ -21,5 +20,13 @@ c++ -std=c++11 -I"$ROOT/codec/api/wels" -o "$HERE/cxx_enc" "$HERE/cxx_enc.cpp" \
     "$ROOT/libopenh264.a" -lpthread
 echo "built $HERE/cxx_enc"
 
-cd "$HERE/rust_enc" && cargo build --quiet "${CARGO_PROFILE_ARGS[@]}"
+# Spelled out per profile rather than accumulating flags in an array: `set -u`
+# plus an *empty* array is an unbound-variable error in bash 3.2, which is what
+# /bin/bash is on macOS, and the empty case is the default one.
+cd "$HERE/rust_enc" || exit 1
+if [ "$PROFILE" = release ]; then
+  cargo build --quiet --release
+else
+  cargo build --quiet
+fi
 echo "built $HERE/rust_enc/target/$PROFILE/rust_enc"
