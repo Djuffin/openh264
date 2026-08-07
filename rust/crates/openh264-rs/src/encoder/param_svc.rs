@@ -20,6 +20,9 @@ use crate::{
 // Profile/level/complexity/SPS-id enumerators live in api::codec_api (one definition
 // per type); glob-import the variants so the C++ spellings stay bare, as in the C++.
 use crate::api::codec_api::{EProfileIdc, ELevelIdc as _ELevelIdc};
+use crate::api::codec_api::{
+    EColorMatrix, EColorPrimaries, ESampleAspectRatio, ETransferCharacteristics, EVideoFormatSPS,
+};
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::api::codec_api::EProfileIdc::*;
 use crate::api::codec_api::ELevelIdc::*;
@@ -330,6 +333,8 @@ impl SWelsSvcCodingParam {
         param.iMultipleThreadIdc = 1;
         param.bUseLoadBalancing = true;
 
+        param.iLTRRefNum = 0;
+
         param.bEnableSSEI = false;
         param.bSimulcastAVC = false;
         param.bEnableFrameCroppingFlag = true;
@@ -358,6 +363,11 @@ impl SWelsSvcCodingParam {
         param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
         param.uiMaxNalSize = 0;
         param.bIsLosslessLink = false;
+        param.bFixRCOverShoot = true;
+        param.iIdrBitrateRatio = IDR_BITRATE_RATIO * 100;
+        param.bPsnrY = false;
+        param.bPsnrU = false;
+        param.bPsnrV = false;
 
         for iLayer in 0..MAX_SPATIAL_LAYER_NUM {
             let layer = &mut param.sSpatialLayers[iLayer];
@@ -374,6 +384,11 @@ impl SWelsSvcCodingParam {
             layer.sSliceArgument.uiSliceNum = 0;
             layer.sSliceArgument.uiSliceSizeConstraint = 1500;
 
+            layer.bAspectRatioPresent = false;
+            layer.eAspectRatio = ESampleAspectRatio::ASP_UNSPECIFIED;
+            layer.sAspectRatioExtWidth = 0;
+            layer.sAspectRatioExtHeight = 0;
+
             let kiLesserSliceNum = if MAX_SLICES_NUM < MAX_SLICES_NUM_TMP {
                 MAX_SLICES_NUM
             } else {
@@ -382,6 +397,15 @@ impl SWelsSvcCodingParam {
             for idx in 0..kiLesserSliceNum.min(layer.sSliceArgument.uiSliceMbNum.len()) {
                 layer.sSliceArgument.uiSliceMbNum[idx] = 0;
             }
+
+            // See codec_app_def.h: defaults write no colour information to the header.
+            layer.bVideoSignalTypePresent = false;
+            layer.uiVideoFormat = EVideoFormatSPS::VF_UNDEF as u8;
+            layer.bFullRange = false;
+            layer.bColorDescriptionPresent = false;
+            layer.uiColorPrimaries = EColorPrimaries::CP_UNDEF as u8;
+            layer.uiTransferCharacteristics = ETransferCharacteristics::TRC_UNDEF as u8;
+            layer.uiColorMatrix = EColorMatrix::CM_UNDEF as u8;
         }
     }
 

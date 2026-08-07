@@ -1598,6 +1598,13 @@ pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx,
     (*pWelsSvcRc).iRemainingBits += kiOutputBits;
     (*pWelsSvcRc).iSkipFrameNum += 1;
     (*pWelsSvcRc).iSkipFrameInVGop += 1;
+    if crate::encoder::dump_enabled(&RC_DUMP, "OH264_RCDUMP") {
+        let r = &*pWelsSvcRc;
+        eprintln!(
+            "RCS rem={} bfs={} skip={} csf={}",
+            r.iRemainingBits, r.iBufferFullnessSkip, r.iSkipFrameNum, r.iContinualSkipFrames
+        );
+    }
 }
 
 /// Advances the 5000 ms sliding check window for maximum bitrate monitoring.
@@ -1951,6 +1958,21 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, i
         RcVBufferCalculationPadding(pEncCtx);
     }
     (*pWelsSvcRc).iFrameCodedInVGop += 1;
+    if crate::encoder::dump_enabled(&RC_DUMP, "OH264_RCDUMP") {
+        let r = &*pWelsSvcRc;
+        eprintln!(
+            "RCU dq={} rem={} bfs={} skip={} sivg={} fcv={} gidx={} sf={} lab={}",
+            r.iFrameDqBits,
+            r.iRemainingBits,
+            r.iBufferFullnessSkip,
+            r.iSkipFrameNum,
+            r.iSkipFrameInVGop,
+            r.iFrameCodedInVGop,
+            r.iGopIndexInVGop,
+            r.bSkipFlag as i32,
+            r.iLastAllocatedBits
+        );
+    }
 }
 
 pub unsafe extern "C" fn WelsRcMbInitGom(
