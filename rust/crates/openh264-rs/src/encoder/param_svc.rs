@@ -34,7 +34,12 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
 pub const MAX_FNAME_LEN: usize = 256;
 pub const MAX_SPS_COUNT: usize = 32;
-pub const MAX_PPS_COUNT: usize = 256;
+/// The **encoder's** PPS ceiling — `wels_const.h:51` sets `MAX_PPS_COUNT` to
+/// `MAX_PPS_COUNT_LIMITED` (57), not the standard's 256, "because of known
+/// limitation of receiver endpoints". This module declared its own 256 (the
+/// decoder's value), which oversized `SExistingParasetList::sPps` by 199
+/// entries. Re-exported from the one encoder-side definition instead.
+pub use crate::encoder::encoder_context::MAX_PPS_COUNT;
 pub const MAX_SLICEGROUP_IDS: usize = 8;
 pub const MAX_SLICES_NUM: usize = 35;
 pub const MAX_SLICES_NUM_TMP: usize = 32;
