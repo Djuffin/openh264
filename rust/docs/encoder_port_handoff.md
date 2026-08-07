@@ -5,8 +5,9 @@ You are continuing a multi-session, hand-written Rust port of Cisco's OpenH264
 mature and passes conformance; the encoder is the work.
 
 **The encoder is byte-identical with the C++ reference across every configuration
-the harness can currently drive.** What is left is configurations the port still
-refuses, plus cleanup. Read this file, then
+the harness can currently drive, single- and multi-threaded.** As of Phase 5.4 the
+harness has no knob the port refuses. What is left needs *new* knobs — a second
+spatial layer, screen content — plus cleanup. Read this file, then
 [`encoder_port_status.md`](encoder_port_status.md) — that is the living record with
 the per-phase log and every defect found so far. Update it before you finish; it is
 the only thing the session after you will read.
@@ -44,17 +45,20 @@ the only thing the session after you will read.
 
 ## 1. Verified current state
 
-`HEAD` = `441ddf3d`, 103 commits on top of `master`. Working tree clean.
+`HEAD` = `09fa77f3`, 105 commits on top of `master`. Working tree clean.
 
 ```
-cargo build                 clean, 16 warnings, all dead_code/unused
-cargo test --no-fail-fast   293 passed, 0 failed, 20 ignored
+cargo build                 clean, 15 warnings, all dead_code/unused
+cargo test --no-fail-fast   294 passed, 0 failed, 20 ignored
 decoder conformance         53/53
 codec_unittest              533/534 (DecoderDeblocking.DeblockingInit, pre-existing)
 todo!() in src/             0
 unimplemented!() in src/    0
 codec/ vs master            no diff
 ```
+
+The crate root is `rust/crates/openh264-rs/`; there is no workspace `Cargo.toml`
+at `rust/`, so `cargo` must be run from the crate directory.
 
 **Use `--no-fail-fast`.** Plain `cargo test` stops at the first failing binary and
 under-reports.
@@ -77,9 +81,24 @@ All measured with `compare.sh` (§2.1):
 | QP × `iRCMode` × cabac × size (all 52 QPs) | 1560 | identical |
 | `SM_FIXEDSLCNUM_SLICE`/`SM_RASTER_SLICE` × 2/3/4/6 slices × mode × GOP × cabac × input | 256 | identical |
 | `SM_SIZELIMITED_SLICE` × 5 constraints × 2 QPs × mode × GOP × cabac × input | 320 | identical |
+| **`iMultipleThreadIdc` 2/4 × 4 slice modes × cabac × `iRCMode` × input** | **120** | **identical** |
+| the single-threaded re-run that guards it (5 `iRCMode` × init × GOP × cabac × input, plus slice modes) | 210 | identical |
 
-**The one axis still pinned is `iMultipleThreadIdc == 1`.** After that, one spatial
-layer and `CAMERA_VIDEO_REAL_TIME`.
+**No configuration axis the harness can drive is refused any more.** What remains is
+more than one spatial layer (needs `METHOD_DOWNSAMPLE`) and
+`SCREEN_CONTENT_REAL_TIME`; neither has a harness knob yet.
+
+Two limits on that claim, both measured, neither a port defect:
+
+- **`iRCMode = 4` (`RC_BITRATE_MODE_POST_SKIP`) is rejected by the reference.** A
+  probe over all six values shows `InitializeExt` returning 0 for −1…3 and **1** for
+  4. The port returns 1 too. The five valid modes are −1, 0, 1, 2, 3; a sweep over
+  `0..4` will show 18 spurious "failures" in which *both* encoders exit non-zero.
+- **`bUseLoadBalancing` is not byte-verifiable by construction.** `cxx_enc.cpp:82`
+  pins it false. With it on, `DynamicAdjustSlicing` re-slices from
+  `uiSliceConsumeTime` — wall-clock microseconds — and upstream says so itself:
+  "the result of each run may be different" (`codec_app_def.h:579`). The arm is
+  ported and reachable, but no differential test can judge it. Do not add one.
 
 ---
 
@@ -129,6 +148,18 @@ Write them fresh.
   this session was exactly that, and re-running clean gave 120/120.
 - **A configuration that "passes on the first run" over a newly-enabled feature is
   evidence the feature is not enabled.** See §3.
+- **`set -- $spec` does not work in zsh** — this is the same non-word-splitting trap
+  as above and it is easy to hit twice, because the loop *looks* right and every run
+  silently gets garbage arguments. Two sightings this session: once with `set --`,
+  once with an unquoted `"$O/name_${VAR}"` where `$VAR` contained a space, which
+  split the output path into two arguments and shifted everything after it. **Write
+  sweeps as `bash -c '...'` with `read -r A B C <<< "$spec"`, not as zsh loops.**
+- **Sweep `iRCMode` over −1…3, not 0…4.** 4 is `RC_BITRATE_MODE_POST_SKIP`, which
+  `InitializeExt` rejects — in the reference too (measured: returns 1). A sweep that
+  includes it reports failures in which both encoders exit non-zero.
+- **Watchdog every run.** `perl -e 'alarm shift; exec @ARGV' 180 <cmd>` — macOS has
+  no `timeout(1)`. A deadlocked `rust_enc` otherwise stalls the whole sweep, and the
+  sweep looks merely slow.
 
 A non-zero driver exit is reported with the log path. A debug-build Rust panic (an
 arithmetic overflow the C++ wraps through, say) otherwise reads as an ordinary byte
@@ -182,6 +213,12 @@ Order of attack, coarse to fine: per-frame RC/VP state → per-macroblock mode
 decision → `BsGetBitsPos(pBs)` after each syntax stage. A difference of N bits
 localises to one syntax element.
 
+**For a hang, none of this applies — take one stack sample instead.**
+`sample <pid> 2 -mayDie` diagnosed the Phase 5.4 thread-pool deadlock in a single
+shot: main thread in `wait_for_completion`, both workers parked *idle*, dispatcher
+asleep, queue non-empty. Idle workers plus a non-empty queue is a lost wakeup and
+nothing else. Instrumenting would have taken an hour to say the same thing.
+
 **Reason from the failure's shape before instrumenting.** Phase 5.3's `qp=0` defect
 was found without any dump: *CAVLC-only + low-QP-only + size-dependent* names exactly
 one code path, and there is only one CAVLC-only branch in the I-slice loop
@@ -210,9 +247,19 @@ Five shapes, all of which you should expect again:
 |---|---|---|
 | a body that does a fraction of the work under the correct name | `WelsEncoderApplyFrameRate`, `WelsEncoderParamAdjust` (12 lines against 296), `WelsCabacInit`, `OutputPMbWithoutConstructCsRsNoCopy` | `find_stub_bodies.py`'s call-set audit; reading the C++ beside it |
 | a faithful body with **no call site** | `GomRCInitForOneSlice`, `WelsCabacInitContexts`, `WelsCabacContextInitFromContexts` | nothing automated — only diffing the *caller* against the C++. Narrowing the `dead_code` allows would surface these |
-| a faithful body **shadowed** by a same-named one in the module that uses it | `WelsMdUpdateBGDInfo`, `BsAlign` (missing its `BsFlush`), `WelsGetNextMbOfSlice`, `GetCurrentSliceNum`, `WelsInterMbEncode` | `find_stub_bodies.py --dups` |
+| a faithful body **shadowed** by a same-named one in the module that uses it | `WelsMdUpdateBGDInfo`, `BsAlign` (missing its `BsFlush`), `WelsGetNextMbOfSlice`, `GetCurrentSliceNum`, `WelsInterMbEncode`, `CWelsThreadPool` (a second, inline-executing copy shadowing the real 905-line one), `WriteBlockResidualCavlc` | `find_stub_bodies.py --dups` |
 | a correct function reached through a **wrong constant** | `GOM_SAD`/`GOM_VAR`, `DELTA_QP` (1 where `rc.h` says 2), `MAX_FRAME_RATE` (30 where the header says 60), `g_kuiGolombUELength` | `find_dup_types.sh`'s value comparison |
 | a correct function under a **configuration that never runs** | the whole CABAC path, silently downgraded to CAVLC by `PRO_BASELINE`; both dynamic-slicing MB loops | checking that the knob changes the **C++** output |
+
+A sixth shape, new in Phase 5.4 and not catchable by any audit of the Rust:
+
+| shape | example | what finds it |
+|---|---|---|
+| a body that is faithful, reachable and **wrong the first time it runs**, because it was never run | `CWelsThreadPool`'s two condvar wait loops, which lose a wakeup and deadlock as soon as tasks outnumber threads | executing it; then `sample <pid>` |
+
+Concurrency code is the extreme case: it cannot be validated by reading, and a unit
+test that queues one or two tasks will not reach the bug. `test_thread_pool_singleton_lifecycle`
+passed throughout.
 
 Two corollaries earned the hard way:
 
@@ -238,49 +285,35 @@ A third, about counting:
 
 ## 4. The work, in order
 
-### 4.1 `iMultipleThreadIdc > 1` — the last refused configuration, and the big one
+### 4.1 `iMultipleThreadIdc > 1` — **DONE** (Phase 5.4)
 
-This is the only axis left that the harness can drive and the port refuses.
+Byte-identical over 120 configurations; all three refusal sites are gone, plus a
+fourth nobody had catalogued (`pTaskManage->InitFrame`, skipped in
+`WelsInitCurrentLayer` under a comment asserting `pTaskManage` is always null).
+Full account in `encoder_port_status.md`, Phase 5.4. What is worth carrying forward:
 
-**The ground truth is already measured, so you do not have to re-establish it:**
-
-- **The C++ multi-threaded encoder is deterministic.** Three runs each at
-  `iMultipleThreadIdc` 2 and 4 produced identical bytes, for both
-  `SM_FIXEDSLCNUM_SLICE` and `SM_SIZELIMITED_SLICE`. `compare.sh` is a valid oracle.
-- **Multi-threaded output differs from single-threaded** for the same nominal
-  configuration — 8324 bytes against 8322 at `SM_FIXEDSLCNUM_SLICE`/4 slices.
-  Threading is not a scheduling detail here: it changes the slice partitioning and
-  therefore the bitstream. **Compare against the multi-threaded C++, not the
-  single-threaded one.**
-
-**Do not trust the inventory.** More of this exists than you would guess:
-`slice_multi_threading.rs` (903 lines), `wels_task_management.rs` (865) and
-`common/wels_thread_pool.rs` (905) total 2673 lines against 948 lines of C++ in
-`slice_multi_threading.cpp` + `wels_task_management.cpp`, and `InitAllSlicesInThread`,
-`SliceLayerInfoUpdate`, `AdjustBaseLayer`, `AdjustEnhanceLayer`, `CreateTaskManage`
-and `AppendSliceToFrameBs` all have bodies. **Every one of those bodies is
-unverified.** Phase 5.3 found that both dynamic-slicing MB loops — ported, long,
-plausible, structurally right — were badly wrong because nothing had ever executed
-them. The MT bodies are in exactly that state. Diff each against the C++ before
-believing it.
-
-What is definitely missing:
-
-- **`RequestMtResource`** (`slice_multi_threading.rs:550`) allocates `SSliceThreading`,
-  `pThreadPEncCtx` and `pThreadBsBuffer` and stops. The C++ (111 lines against the
-  port's 55) then opens four event sets per thread — `pUpdateMbListEvent`,
-  `pFinUpdateMbListEvent`, `pSliceCodedEvent`, `pReadySliceCodingEvent` — and creates
-  the threads.
-- **`pTaskManage` is never created** in `WelsInitEncoderExt`.
-- **Three refusal sites** in `encoder_ext.rs`: `:1151` (`RequestMtResource`), `:3227`
-  (the `AdjustEnhanceLayer`/`AdjustBaseLayer` load-balancing arm under
-  `SM_FIXEDSLCNUM_SLICE`), `:3422` (the MT encode branch —
-  `encoder_ext.cpp:3714`, `pCtx->pTaskManage->ExecuteTasks()` then
-  `AppendSliceToFrameBs`).
-
-Suggested order: get `iMultipleThreadIdc = 2` with `SM_FIXEDSLCNUM_SLICE` and 2
-slices byte-exact on one frame first, then widen. The single-threaded path must stay
-green throughout — re-run the 120-config CAVLC sweep after every commit.
+- **The shared `CWelsThreadPool` in `common/` now actually runs tasks.** It had no
+  caller outside its own tests, because `wels_task_management.rs` declared a second
+  one that executed every task inline. It also deadlocked the first time it was given
+  more tasks than threads: both wait loops test a predicate guarded by one lock while
+  waiting on a condvar paired with another, and notified without holding it. Fixed by
+  taking `m_mutex` around each notify. **If you add another producer of pool tasks,
+  keep that pairing.**
+- **The C++ task classes use real inheritance and the port must reproduce the
+  vtable.** `CWelsBaseTask` carries an `ETaskKind` discriminant for that reason.
+  Casting `*mut Derived` to `*mut Base` — what the previous port did — silently
+  resolves every virtual call to the base, and also makes `Box::from_raw` free the
+  wrong type. Note `CWelsConstrainedSizeSlicingEncodingTask` derives from
+  `CWelsLoadBalancingSlicingEncodingTask`, not from `CWelsSliceEncodingTask`.
+- **`RequestMtResource` is smaller than it looks.** It creates no threads, and the
+  four per-thread event sets, `pSliceCodedMasterEvent` and `mutexEvent` are opened
+  and closed but never signalled or waited on anywhere in `codec/`. Only
+  `mutexSliceNumUpdate`, `mutexThreadBsBufferUsage`, `mutexThreadSlcBuffReallocate`
+  and `mutexEncoderError` are live.
+- **Thread assignment does not affect output for the fixed-slice modes.**
+  `InitOneSliceInThread` uses `kiSlcBuffIdx` only to pick a scratch bs buffer unless
+  `bThreadSlcBufferFlag` is set. That is why a racy `QueryEmptyThread` still yields a
+  deterministic bitstream, and it is the fact to lean on if MT output ever wobbles.
 
 ### 4.2 `METHOD_DOWNSAMPLE`, and with it multi-layer SVC
 
@@ -335,8 +368,10 @@ correct-but-unreachable for the same reason. Low priority; do not "fix" the flag
 
 Do these alongside the above, not after.
 
-1. **`find_stub_bodies.py --dups`: 90 names, most unread.** Four of the seven
-   inspected across Phases 5.2 and 5.3 were real defects. **This is the
+1. **`find_stub_bodies.py --dups`: 90 names, most unread.** Six of the ten inspected
+   across Phases 5.2–5.4 were real defects — including the shadowed `CWelsThreadPool`
+   that made the whole MT path dead, and `WriteBlockResidualCavlc`, which had a
+   caller-less second copy in `vlc_encoder.rs` (removed). **This is still the
    highest-yield unfinished audit in the tree.** Work down the list worst-disparity
    first. For each: is one body a truncation of the other, and which one do the call
    sites actually resolve to? Delete the loser, or add a one-line comment saying why
@@ -392,15 +427,39 @@ So you know the failure mode of these documents:
 - The Phase-5.1 session reported the `SetOption` gap as 14 options, then 20. It was
   **20 switch arms plus six stubbed helpers**.
 
+Corrected by Phase 5.4, in the §4.1 text this file carried until then:
+
+- It said `RequestMtResource` "creates the threads". **It does not** —
+  `slice_multi_threading.cpp:327` zeroes `pThreadHandles[iIdx]`, and every worker
+  comes from the shared pool. It also listed the four event sets as work to port;
+  they are dead in `codec/` and were deliberately skipped.
+- It said the C++ MT/ST difference was "8324 bytes against 8322 at
+  `SM_FIXEDSLCNUM_SLICE`/4 slices". Re-measured on
+  `CiscoVT2people_320x192_12fps.yuv`: 13163 single-threaded against 13319
+  multi-threaded. The *claim* holds — MT changes the bitstream — but the numbers
+  belong to some other input, so do not use them as a fingerprint.
+- It did not mention that for `SM_FIXEDSLCNUM_SLICE` the thread *count* does not
+  change the output (2 and 4 threads agree), only that MT differs from ST. Nor that
+  `bUseLoadBalancing` makes the C++ non-deterministic by design, which is the whole
+  reason `compare.sh` works as an oracle here at all.
+- It gave `HEAD` as `441ddf3d`; the handoff commit `3c2bb9fe` sat on top of it.
+
+And one this file still gets right but understated: it warned that the already-ported
+MT bodies were unverified. They were worse than unverified — the task bodies were
+hollow and the pool they ran on deadlocked. **Treat "ported but never executed" as
+"not written".**
+
 ---
 
 ## 7. Definition of done, and reporting
 
 **Full parity** means all of:
 
-1. `compare.sh` exits 0 across the cross-product of: 5 `iRCMode` × both init paths ×
-   cabac 0/1 × the four inputs × GOP −1/2/8 × all four slice modes ×
-   `iMultipleThreadIdc` 1/2/4, plus all 52 QPs at one size.
+1. `compare.sh` exits 0 across the cross-product of: 5 `iRCMode` (−1…3, **not** 4)
+   × both init paths × cabac 0/1 × the four inputs × GOP −1/2/8 × all four slice
+   modes × `iMultipleThreadIdc` 1/2/4, plus all 52 QPs at one size. Every axis here
+   has now been swept at least once; no single run has covered the whole
+   cross-product.
 2. No configuration the C++ accepts is rejected by the port, and none is accepted and
    silently mishandled. Every remaining refusal is a documented C++ refusal too.
 3. `todo!()` and `unimplemented!()` both zero in `src/`.
