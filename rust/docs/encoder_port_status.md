@@ -1632,33 +1632,54 @@ It is answered:
    SIMD dispatch makes these three live, and `common/cpu_core.rs` load-bearing, the
    same moment.
 
-### Phase 6 — cleanup — **duplicated constants and tables DONE, rest NOT STARTED**
+### Phase 6 — cleanup — **about a third done**
 
-Phase 5.2 closed the constant and table halves: every duplicated `pub const` in
-`src/` now holds the same value in every module, every duplicated table is
-element-for-element identical except the three deblocking tables that are
-legitimately different sizes, and `find_dup_types.sh` compares **values**, not names.
-See *Both audits now compare contents, not names* under Phase 5.2 for the seven
-constants and two tables that were wrong.
+Done in Phase 5.2:
+
+- **The encoder's duplicated constants agree by value.** Seven held wrong values and
+  are fixed; see *Both audits now compare contents, not names*.
+- **Duplicated tables agree element for element**, except the three deblocking
+  tables that are deliberately different sizes in the C++ and are annotated in both
+  sources. Two truncated tables were fixed.
+- **`find_dup_types.sh` compares values, not names**, and covers types, aliases,
+  tables and scalar constants across all four source directories.
+
+> **A correction to what this section used to claim.** It said "every duplicated
+> `pub const` in `src/` now holds the same value in every module". That is true for
+> `src/encoder/`; it is **not** true for `src/`. Measured now: **38 duplicated
+> constants still differ by value text.** Roughly half are notation only (`1` vs
+> `0x01`, `1 << 1` vs `2`, `MAX_REF_PIC_COUNT + 1` vs `17`, `0x08: u8` vs
+> `0x00000008: u32`); several are legitimately different between the codecs
+> (`CHROMA_AC`/`CHROMA_DC`, `MAX_PPS_COUNT`, `MAX_SHORT_REF_COUNT`); **19 are
+> decoder `ERR_INFO_*`/`ERR_LEVEL_*` codes that genuinely disagree** across decoder
+> modules, and **two are genuinely wrong and live**:
+>
+> | constant | wrong copy | header | effect |
+> |---|---|---|---|
+> | `MAX_MB_SIZE` | `decoder/parameter_sets.rs` = 1024 | `dec_golomb.h:338` = **36864** | `nalu.rs:1481` rejects an SPS with `iMbWidth > 1024`; the reference allows 36864. Stricter than the reference, so it rejects nothing real — but it is a divergence, not a hardening. |
+> | `MAX_NAL_UNIT_NUM_IN_AU` | `decoder/decoder_core.rs` = 1024 | `wels_const.h:59` = **32** | sizes the access-unit NAL list (`MemInitNalList`) and seeds `uiCountUnitsNum`, so the port allocates 32x the reference and grows on a different schedule. |
+>
+> Both are decoder-side and both survive conformance, which is exactly why they are
+> still here.
 
 What is left:
 
 - **Collapse the remaining duplicated *names*.** Agreeing values is not one
-  definition. Most of the 130 remaining duplicates are one encoder declaration
-  beside one decoder declaration of a name the two codecs genuinely keep separate;
-  those need a one-line comment, not a merge. The encoder-vs-encoder pairs can be
-  re-exported the way `MAX_PPS_COUNT`, `MAX_FRAME_RATE`, `DELTA_QP`,
-  `MAX_SLICES_NUM`, `GOM_H_SCC`, `RECIEVE_FAILED` and the whole `WELS_CPU_*` set now
-  are.
-- **`find_stub_bodies.py --dups`: 87 names, most unread.** Three of the four
-  inspected in Phase 5.2 were defects. This is the highest-yield unfinished audit in
-  the tree.
+  definition. `find_dup_types.sh` reports **130**: 23 types, 40 aliases, 29 tables,
+  38 constants. Most are one encoder declaration beside one decoder declaration of a
+  name the two codecs genuinely keep separate; those need a one-line comment, not a
+  merge. The encoder-vs-encoder pairs can be re-exported the way `MAX_PPS_COUNT`,
+  `MAX_FRAME_RATE`, `DELTA_QP`, `MAX_SLICES_NUM`, `GOM_H_SCC`, `RECIEVE_FAILED` and
+  the whole `WELS_CPU_*` set now are.
+- **`find_stub_bodies.py --dups`: 90 names, most unread.** Four of the seven
+  inspected across Phases 5.2 and 5.3 were defects. This is the highest-yield
+  unfinished audit in the tree.
 - **Fold the module-level `#![allow(dead_code, unused_variables, …)]` blankets back
-  to the narrowest scope that still compiles.** These hide exactly the warning —
-  `dead_code` on a function that should have a caller — that would have flagged
-  `GomRCInitForOneSlice`'s missing call site, `WelsCabacInitContexts` and
-  `WelsCabacContextInitFromContexts`, all of which were faithful bodies nothing
-  called.
+  to the narrowest scope that still compiles. 67 modules carry one; 63 of those
+  silence `dead_code`.** These hide exactly the warning — `dead_code` on a function
+  that should have a caller — that would have flagged `GomRCInitForOneSlice`'s
+  missing call site, `WelsCabacInitContexts` and `WelsCabacContextInitFromContexts`,
+  all of which were faithful bodies nothing called.
 
 #### The dominant defect class, restated after seven phases
 
