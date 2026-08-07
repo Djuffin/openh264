@@ -311,7 +311,10 @@ pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 pub use crate::common::expand_pic::SExpandPicFunc;
 // The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs;
 // this module used to carry stubs that took *mut c_void and returned false.
-use crate::encoder::svc_mode_decision::{WelsMdInterJudgeBGDPskip, WelsMdInterJudgeBGDPskipFalse};
+use crate::encoder::svc_mode_decision::{
+    WelsMdInterJudgeBGDPskip, WelsMdInterJudgeBGDPskipFalse, WelsMdUpdateBGDInfo,
+    WelsMdUpdateBGDInfoNULL,
+};
 
 
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
@@ -526,24 +529,6 @@ impl Default for sWelsEncCtx {
         unsafe { std::mem::zeroed() }
     }
 }
-
-// ============================================================================
-// Background Detection Fallback Callbacks
-// ============================================================================
-
-pub unsafe extern "C" fn WelsMdUpdateBGDInfo(
-    _pCurLayer: *mut SDqLayer,
-    _pCurMb: *mut SMB,
-    _bFlag: bool,
-    _kiRefPictureType: i32,
-) {}
-
-pub unsafe extern "C" fn WelsMdUpdateBGDInfoNULL(
-    _pCurLayer: *mut SDqLayer,
-    _pCurMb: *mut SMB,
-    _bFlag: bool,
-    _kiRefPictureType: i32,
-) {}
 
 // ============================================================================
 // Core Encoder Functions (encoder.cpp)

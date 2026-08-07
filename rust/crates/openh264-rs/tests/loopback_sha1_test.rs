@@ -160,28 +160,14 @@ fn workspace_root() -> std::path::PathBuf {
 /// `bEnableSceneChangeDetect`, `bEnableBackgroundDetection`, `bEnableAdaptiveQuant`
 /// and `bEnableFrameSkip` are all `true` as well.
 ///
-/// **Ignored, with a measurement rather than a guess.** Phase 5.0's doc comment
-/// blamed rate control. Phase 5.1 made all five `iRCMode` values byte-exact — and
-/// this test still fails, so that diagnosis was incomplete. `compare.sh` grew a
-/// tenth argument that selects this exact `Initialize(SEncParamBase)` path
-/// (`compare.sh <yuv> <w> <h> <n> <qp> <cabac> <gop> <rcmode> 1`). On
-/// `res/CiscoVT2people_320x192_12fps.yuv 320 192 <n> 26 0 -1 0 1`:
-///
-/// | frames | C++ | Rust | |
-/// |---|---|---|---|
-/// | 1 | 13304 | 13304 | byte-identical — the IDR is exact |
-/// | 2 | 20144 | 20214 | differ |
-/// | 3 | 26621 | 29709 | differ |
-///
-/// The IDR is exact and the first **P** frame is not, which is where
-/// `bNeededMbAq` (`bEnableAdaptiveQuant && P_SLICE`) and `bCalculateBGD`
-/// (`bEnableBackgroundDetection && P_SLICE`) first take effect. What this test
-/// needs is the rest of `codec/processing/`: `METHOD_ADAPTIVE_QUANT`,
-/// `METHOD_BACKGROUND_DETECTION` and `METHOD_SCENE_CHANGE_DETECTION_VIDEO`, plus
-/// the `pfVAACalcSadSsd`/`SadBgd`/`SadSsdBgd` kernels they read. All still return
-/// `RET_NOTSUPPORTED`.
+/// It was `#[ignore]`d through Phase 5.0 because the QP-adapting rate-control modes
+/// were not byte-exact. Phase 5.1 closed that and three more things this
+/// configuration needs — `METHOD_COMPLEXITY_ANALYSIS`,
+/// `METHOD_BACKGROUND_DETECTION` and the `WelsMdUpdateBGDInfo` that was shadowed
+/// by an empty stub — and `compare.sh` now exits 0 for this exact
+/// `Initialize(SEncParamBase)` path as well
+/// (`compare.sh <yuv> <w> <h> <n> <qp> <cabac> <gop> <rcmode> 1`).
 #[test]
-#[ignore = "needs METHOD_ADAPTIVE_QUANT / METHOD_BACKGROUND_DETECTION; see the doc comment"]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
     for param in K_DECODE_ENCODE_FILE_ARRAY {

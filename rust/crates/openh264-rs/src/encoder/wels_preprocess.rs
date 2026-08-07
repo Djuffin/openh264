@@ -1379,6 +1379,50 @@ impl CWelsPreProcess {
                     self.m_pLastSpatialPicture[dIdx][0],
                 );
             }
+            VP_DUMP_SQD.store(bCalculateSQDiff, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        if crate::encoder::dump_enabled(&VP_DUMP, "OH264_VPDUMP")
+            && (*pCtx).eSliceType == EWelsSliceType::P_SLICE
+            && !(*(*pCtx).pVaa).pVaaBackgroundMbFlag.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSad8x8.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfDiff8x8.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pMad8x8.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSsd16x16.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSum16x16.is_null()
+            && !(*(*pCtx).pVaa).sVaaCalcInfo.pSumOfSquare16x16.is_null()
+        {
+            let v = &*(*pCtx).pVaa;
+            let iMbNum = (((*pCurPic).iWidthInPixel + 15) >> 4)
+                * (((*pCurPic).iHeightInPixel + 15) >> 4);
+            let (mut aq, mut bg, mut sad, mut ssd, mut sd, mut mad, mut sum, mut sqsum) =
+                (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
+            for i in 0..iMbNum as isize {
+                let w = i as i64 + 1;
+                bg += w * *v.pVaaBackgroundMbFlag.offset(i) as i64;
+                let s8 = &*v.sVaaCalcInfo.pSad8x8.offset(i);
+                let d8 = &*v.sVaaCalcInfo.pSumOfDiff8x8.offset(i);
+                let m8 = &*v.sVaaCalcInfo.pMad8x8.offset(i);
+                for k in 0..4 {
+                    sad += w * s8[k] as i64;
+                    sd += w * d8[k] as i64;
+                    mad += w * m8[k] as i64;
+                }
+                ssd += w * *v.sVaaCalcInfo.pSsd16x16.offset(i) as i64;
+                sum += w * *v.sVaaCalcInfo.pSum16x16.offset(i) as i64;
+                sqsum += w * *v.sVaaCalcInfo.pSumOfSquare16x16.offset(i) as i64;
+            }
+            eprintln!(
+                "VP st={} sqd={} var={} bgd={} frmsad={} aqavg={} aq={} bg={} sad={} sd={} mad={} ssd={} sum={} sqsum={} scd={}",
+                (*pCtx).eSliceType as i32,
+                VP_DUMP_SQD.load(std::sync::atomic::Ordering::Relaxed) as i32,
+                bCalculateVar as i32,
+                bCalculateBGD as i32,
+                v.sVaaCalcInfo.iFrameSad,
+                v.sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp,
+                aq, bg, sad, sd, mad, ssd, sum, sqsum,
+                v.bSceneChangeFlag as i32
+            );
         }
 
         0
@@ -2709,3 +2753,7 @@ mod tests {
         assert_eq!(judgement.iMinFrameNumGap, i32::MAX);
     }
 }
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static VP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static VP_DUMP_SQD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
