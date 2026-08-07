@@ -1134,10 +1134,18 @@ pub unsafe fn RequestMemorySvc(
     (**ppCtx).iFrameBsSize = iTotalLength;
     (**ppCtx).iPosBsBuffer = 0;
 
-    // for dynamic slice mode && CABAC, allocate slice buffers to restore slice data
+    // for dynamic slice mode && CABAC, allocate slice buffers to restore slice data.
+    // These are `sDss.pRestoreBuffer` in the two dynamic MB loops: CABAC
+    // renormalisation can rewrite bytes already emitted, so stepping back over a
+    // slice boundary has to restore the bytes as well as the coder state.
     if bDynamicSlice && (*pParam).iEntropyCodingModeFlag != 0 {
-        // encoder_ext.cpp:1649. Not ported.
-        return ENC_RETURN_UNSUPPORTED_PARA;
+        for iIdx in 0..MAX_THREADS_NUM {
+            (**ppCtx).pDynamicBsBuffer[iIdx] =
+                (*pMa).WelsMalloc(iMaxSliceBufferSize as u32, tag!("DynamicSliceBs")) as *mut u8;
+            if (**ppCtx).pDynamicBsBuffer[iIdx].is_null() {
+                return 1;
+            }
+        }
     }
     // for slice bs buffers
     if (*pParam).iMultipleThreadIdc > 1 {
@@ -2753,6 +2761,310 @@ pub unsafe fn PicPartitionNumDecision(pCtx: *mut sWelsEncCtx) -> i32 {
     iPartitionNum
 }
 
+/// `DynslcUpdateMbNeighbourInfoListForAllSlices` — encoder_ext.cpp:2397.
+///
+/// # Safety
+/// `pCurDq` must be live with `sMbDataP` allocated.
+pub unsafe fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: *mut SDqLayer, pMbList: *mut SMB) {
+    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    let kiMbWidth = pSliceCtx.iMbWidth as i32;
+    let kiEndMbInSlice = pSliceCtx.iMbNumInFrame - 1;
+    let mut iIdx = 0i32;
+
+    loop {
+        let pMb = pMbList.add(iIdx as usize);
+        let uiSliceIdc =
+            crate::encoder::svc_encode_slice::WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY as i32);
+        crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, pMb, kiMbWidth, uiSliceIdc);
+        iIdx += 1;
+        if iIdx > kiEndMbInSlice {
+            break;
+        }
+    }
+}
+
+/// `WelsInitCurrentQBLayerMltslc` — encoder_ext.cpp:2423.
+///
+/// # Safety
+/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
+    // pData init
+    let pCurDq = (*pCtx).pCurDqLayer;
+    // mb_neighbor
+    DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, (*pCurDq).sMbDataP);
+}
+
+/// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
+///
+/// Splits the frame into `iPartitionNum` macroblock ranges and stamps
+/// `pOverallMbMap` with the partition index. Note the trailing loop clears the
+/// *whole* of the four partition arrays out to `MAX_THREADS_NUM`, not just the
+/// entries beyond `iPartitionNum` that this call wrote.
+///
+/// # Safety
+/// `pCurDq` must be live with `sSliceEncCtx.pOverallMbMap` allocated.
+pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartitionNum: i32) {
+    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
+    let mut iCountMbNumPerPartition = kiMbNumInFrame;
+    let mut iAssignableMbLeft = kiMbNumInFrame;
+    let mut iCountMbNumInPartition;
+    let mut iFirstMbIdx = 0i32;
+    let mut i: usize;
+
+    if iPartitionNum <= 0 {
+        iPartitionNum = 1;
+    } else if iPartitionNum
+        > crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as i32
+    {
+        iPartitionNum = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as i32;
+    }
+    iCountMbNumPerPartition /= iPartitionNum;
+    if iCountMbNumPerPartition == 0 || iCountMbNumPerPartition == 1 {
+        iCountMbNumPerPartition = kiMbNumInFrame;
+        iPartitionNum = 1;
+    }
+
+    pSliceCtx.iSliceNumInFrame = iPartitionNum;
+
+    i = 0;
+    while i < iPartitionNum as usize {
+        if i + 1 == iPartitionNum as usize {
+            iCountMbNumInPartition = iAssignableMbLeft;
+        } else {
+            iCountMbNumInPartition = iCountMbNumPerPartition;
+        }
+
+        (*pCurDq).FirstMbIdxOfPartition[i] = iFirstMbIdx;
+        (*pCurDq).EndMbIdxOfPartition[i] = iFirstMbIdx + iCountMbNumInPartition - 1;
+        (*pCurDq).LastCodedMbIdxOfPartition[i] = 0;
+        (*pCurDq).NumSliceCodedOfPartition[i] = 0;
+
+        crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
+            (*pCurDq).sSliceEncCtx.pOverallMbMap.add(iFirstMbIdx as usize) as *mut c_void,
+            i as u32,
+            iCountMbNumInPartition,
+            std::mem::size_of::<u16>() as i32,
+        );
+
+        // for next partition (or pSlice)
+        iFirstMbIdx += iCountMbNumInPartition;
+        iAssignableMbLeft -= iCountMbNumInPartition;
+        i += 1;
+    }
+
+    while i < MAX_THREADS_NUM {
+        (*pCurDq).FirstMbIdxOfPartition[i] = 0;
+        (*pCurDq).EndMbIdxOfPartition[i] = 0;
+        (*pCurDq).LastCodedMbIdxOfPartition[i] = 0;
+        (*pCurDq).NumSliceCodedOfPartition[i] = 0;
+        i += 1;
+    }
+}
+
+/// `WelsInitCurrentDlayerMltslc` — encoder_ext.cpp:2482.
+///
+/// The I-slice block only logs a warning when `uiSliceSizeConstraint` is too
+/// small for the resolution; it does not clamp or fail, so nothing in the
+/// bitstream depends on it. It is transcribed anyway because `uiFrmByte`'s
+/// arithmetic is unsigned and the shift is data-dependent.
+///
+/// # Safety
+/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+pub unsafe fn WelsInitCurrentDlayerMltslc(pCtx: *mut sWelsEncCtx, iPartitionNum: i32) {
+    /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
+    const byte_complexIMBat26: u32 = 60;
+
+    let pCurDq = (*pCtx).pCurDqLayer;
+
+    UpdateSlicepEncCtxWithPartition(pCurDq, iPartitionNum);
+
+    if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
+        // check if uiSliceSizeConstraint too small
+        let iCurDid = (*pCtx).uiDependencyId as usize;
+        let mut uiFrmByte: u32;
+
+        if (*(*pCtx).pSvcParam).iRCMode != crate::RCMode::RC_OFF_MODE {
+            // RC case
+            uiFrmByte = (((*(*pCtx).pSvcParam).sSpatialLayers[iCurDid].iSpatialBitrate as u32)
+                / ((*(*pCtx).pSvcParam).sDependencyLayers[iCurDid].fInputFrameRate as u32))
+                >> 3;
+        } else {
+            // fixed QP case
+            let iTtlMbNumInFrame = (*pCurDq).sSliceEncCtx.iMbNumInFrame;
+            let mut iQDeltaTo26 = 26 - (*(*pCtx).pSvcParam).sSpatialLayers[iCurDid].iDLayerQp;
+
+            uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
+            if iQDeltaTo26 > 0 {
+                // smaller QP than 26
+                uiFrmByte = (uiFrmByte as f32 * (iQDeltaTo26 as f32 / 4.0)) as u32;
+            } else if iQDeltaTo26 < 0 {
+                // larger QP than 26
+                iQDeltaTo26 = (-iQDeltaTo26) >> 2; // delta mod 4
+                uiFrmByte >>= iQDeltaTo26; // if delta 4, byte /2
+            }
+        }
+
+        // MINPACKETSIZE_CONSTRAINT: suppose 16 byte per mb at average
+        let _uiMiniPacketSize = uiFrmByte / (*pCurDq).sSliceEncCtx.iMaxSliceNumConstraint as u32;
+        // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
+    }
+
+    WelsInitCurrentQBLayerMltslc(pCtx);
+}
+
+/// `DynSliceRealloc` — encoder_ext.cpp:4525.
+///
+/// # Safety
+/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+pub unsafe fn DynSliceRealloc(
+    pCtx: *mut sWelsEncCtx,
+    pFrameBsInfo: *mut SFrameBSInfo,
+    pLayerBsInfo: *mut SLayerBSInfo,
+) -> i32 {
+    let mut iRet = crate::encoder::svc_encode_slice::FrameBsRealloc(
+        pCtx,
+        pFrameBsInfo,
+        pLayerBsInfo,
+        (*(*pCtx).pCurDqLayer).iMaxSliceNum,
+    );
+    if iRet != ENC_RETURN_SUCCESS {
+        return iRet;
+    }
+
+    iRet = crate::encoder::svc_encode_slice::ReallocSliceBuffer(pCtx);
+    if iRet != ENC_RETURN_SUCCESS {
+        return iRet;
+    }
+
+    iRet
+}
+
+/// `WelsCodeOnePicPartition` — encoder_ext.cpp:4543.
+///
+/// The dynamic-slicing coding loop: keeps emitting slices until the partition's
+/// macroblocks are exhausted, where "exhausted" is measured by
+/// `LastCodedMbIdxOfPartition`, which `AddSliceBoundary` advances — not by a
+/// slice counter. `iSliceIdx` steps by `iActiveThreadsNum`, so slice indices are
+/// **not** contiguous when more than one partition is in play.
+///
+/// # Safety
+/// `pCtx` must be a context built by [`WelsInitEncoderExt`]; `pLayerBsInfo` must
+/// have `pNalLengthInByte` installed.
+pub unsafe fn WelsCodeOnePicPartition(
+    pCtx: *mut sWelsEncCtx,
+    pFrameBSInfo: *mut SFrameBSInfo,
+    pLayerBsInfo: *mut SLayerBSInfo,
+    pNalIdxInLayer: *mut i32,
+    pLayerSize: *mut i32,
+    iFirstMbIdxInPartition: i32,
+    iEndMbIdxInPartition: i32,
+    iStartSliceIdx: i32,
+) -> i32 {
+    let pCurLayer = (*pCtx).pCurDqLayer;
+    let uSlcBuffIdx = 0usize;
+    let pStartSlice = (*pCurLayer).sSliceBufferInfo[uSlcBuffIdx]
+        .pSliceBuffer
+        .add(iStartSliceIdx as usize);
+    let mut iNalIdxInLayer = *pNalIdxInLayer;
+    let mut iSliceIdx = iStartSliceIdx;
+    let kiSliceStep = (*pCtx).iActiveThreadsNum as i32;
+    let kiPartitionId = (iStartSliceIdx % kiSliceStep) as usize;
+    let mut iPartitionBsSize = 0i32;
+    let mut iAnyMbLeftInPartition = iEndMbIdxInPartition - iFirstMbIdxInPartition + 1;
+    let keNalType = (*pCtx).eNalType;
+    let keNalRefIdc = (*pCtx).eNalPriority;
+    let kbNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+    let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
+    let mut iReturn;
+
+    (*pStartSlice)
+        .sSliceHeaderExt
+        .sSliceHeader
+        .iFirstMbInSlice = iFirstMbIdxInPartition;
+
+    while iAnyMbLeftInPartition > 0 {
+        let mut iPayloadSize = 0i32;
+
+        if iSliceIdx
+            >= ((*pCurLayer).sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
+        {
+            // insufficient memory in pSliceInLayer[]
+            if (*pCtx).iActiveThreadsNum == 1 {
+                // only single thread supports re-alloc now
+                if DynSliceRealloc(pCtx, pFrameBSInfo, pLayerBsInfo) != 0 {
+                    return ENC_RETURN_MEMALLOCERR;
+                }
+            } else if iSliceIdx >= (*pCurLayer).iMaxSliceNum {
+                return ENC_RETURN_MEMALLOCERR;
+            }
+        }
+
+        if kbNeedPrefix {
+            iReturn = AddPrefixNal(
+                pCtx,
+                pLayerBsInfo,
+                (*pLayerBsInfo).pNalLengthInByte,
+                &mut iNalIdxInLayer,
+                keNalType,
+                keNalRefIdc,
+                &mut iPayloadSize,
+            );
+            if iReturn != ENC_RETURN_SUCCESS {
+                return iReturn;
+            }
+            iPartitionBsSize += iPayloadSize;
+        }
+
+        crate::encoder::nal_encap::WelsLoadNal((*pCtx).pOut, keNalType as i32, keNalRefIdc as i32);
+        let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[uSlcBuffIdx]
+            .pSliceBuffer
+            .add(iSliceIdx as usize);
+        (*pCurSlice).iSliceIdx = iSliceIdx;
+
+        iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
+            pCtx,
+            pCurSlice,
+            keNalType as i32,
+        );
+        if iReturn != ENC_RETURN_SUCCESS {
+            return iReturn;
+        }
+        crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
+
+        iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+            (*(*pCtx).pOut).sNalList.add(((*(*pCtx).pOut).iNalIndex - 1) as usize),
+            &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+            (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
+            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
+            (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+        );
+        if iReturn != ENC_RETURN_SUCCESS {
+            return iReturn;
+        }
+        let iSliceSize = *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize);
+
+        (*pCtx).iPosBsBuffer += iSliceSize;
+        iPartitionBsSize += iSliceSize;
+
+        iNalIdxInLayer += 1;
+        iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
+        iAnyMbLeftInPartition =
+            iEndMbIdxInPartition - (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId];
+    }
+
+    *pLayerSize = iPartitionBsSize;
+    *pNalIdxInLayer = iNalIdxInLayer;
+
+    // slice based packing???
+    (*pLayerBsInfo).uiLayerType = VIDEO_CODING_LAYER;
+    (*pLayerBsInfo).uiSpatialId = (*pCtx).uiDependencyId as u8;
+    (*pLayerBsInfo).uiTemporalId = (*pCtx).uiTemporalId as u8;
+    (*pLayerBsInfo).uiQualityId = 0;
+    (*pLayerBsInfo).iNalCount = iNalIdxInLayer;
+    ENC_RETURN_SUCCESS
+}
+
 /// `encoder_ext.cpp:3448` — the core SVC encoding process.
 ///
 /// Replaces the `WelsEncoderEncodeExtRust` sketch, which hardcoded an IDR, wrote one
@@ -2923,8 +3235,11 @@ pub unsafe fn WelsEncoderEncodeExt(
                 }
             }
             SliceModeEnum::SM_SIZELIMITED_SLICE => {
-                // Needs WelsInitCurrentDlayerMltslc, which is unported.
-                return ENC_RETURN_UNSUPPORTED_PARA;
+                let iPicIPartitionNum = PicPartitionNumDecision(pCtx);
+                // MT compatibility: try to activate a number of threads equal to
+                // the number of picture partitions.
+                (*pCtx).iActiveThreadsNum = iPicIPartitionNum as i16;
+                WelsInitCurrentDlayerMltslc(pCtx, iPicIPartitionNum);
             }
             _ => {}
         }
@@ -3087,8 +3402,23 @@ pub unsafe fn WelsEncoderEncodeExt(
         } else if (*pParam).sSliceArgument.uiSliceMode == SM_SIZELIMITED_SLICE
             && (*pSvcParam).iMultipleThreadIdc <= 1
         {
-            // Needs WelsCodeOnePicPartition, which is unported.
-            return ENC_RETURN_UNSUPPORTED_PARA;
+            // dynamic slicing, single threading
+            let kiLastMbInFrame = (*(*pCtx).pCurDqLayer).sSliceEncCtx.iMbNumInFrame;
+            (*pCtx).iEncoderError = WelsCodeOnePicPartition(
+                pCtx,
+                pFbi,
+                pLayerBsInfo,
+                &mut iNalIdxInLayer,
+                &mut iLayerSize,
+                0,
+                kiLastMbInFrame - 1,
+                0,
+            );
+            (*pLayerBsInfo).eFrameType = eFrameType;
+            (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
+            if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
+                return (*pCtx).iEncoderError;
+            }
         } else if (*pSvcParam).iMultipleThreadIdc > 1 {
             // Every multi-threaded slice path needs pTaskManage / InitAllSlicesInThread
             // / SliceLayerInfoUpdate, none of which are ported.

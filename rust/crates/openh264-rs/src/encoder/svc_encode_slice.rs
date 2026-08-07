@@ -671,10 +671,17 @@ pub unsafe fn UpdateMbNeighbourInfoForNextSlice(
     let iCountMbUpdate = kiMbWidth + iNextSliceFirstMbIdxRowStart;
     let kiEndMbNeedUpdate = kiFirstMbIdxOfNextSlice + iCountMbUpdate;
 
-    while (iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition) {
-        let pMb = pMbList.add(iIdx as usize);
+    // C++ is a do-while: the first macroblock is always updated, even when
+    // `kiFirstMbIdxOfNextSlice > kiLastMbIdxInPartition` -- which happens when the
+    // boundary lands on the last macroblock of a partition. A `while` skips it.
+    let mut pMb = pMbList.add(iIdx as usize);
+    loop {
         UpdateMbNeighbor(pCurDq, pMb, kiMbWidth, WelsMbToSliceIdc(pCurDq, (*pMb).iMbXY));
+        pMb = pMb.add(1);
         iIdx += 1;
+        if !((iIdx < kiEndMbNeedUpdate) && (iIdx <= kiLastMbIdxInPartition)) {
+            break;
+        }
     }
 }
 
@@ -1295,7 +1302,14 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
-    sDss.iStartPos = BsGetBitsPos(pBs);
+    if (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0 {
+        crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
+        sDss.pRestoreBuffer = (*pEncCtx).pDynamicBsBuffer[kiPartitionId];
+        sDss.iStartPos = 0;
+        sDss.iCurrentPos = 0;
+    } else {
+        sDss.iStartPos = BsGetBitsPos(pBs);
+    }
 
     loop {
         iCurMbIdx = iNextMbIdx;
@@ -1315,9 +1329,17 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            pEncCtx,
+            pCurMb,
+            pMbCache,
+            kiSliceFirstMbXY,
+        );
 
+        // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pCurMb, pMbCache);
             UpdateNonZeroCountCache(pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
@@ -1609,7 +1631,14 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     };
 
     let mut sDss = SDynamicSlicingStack::default();
-    sDss.iStartPos = BsGetBitsPos(pBs);
+    if (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0 {
+        crate::encoder::svc_set_mb_syn_cabac::WelsInitSliceCabac(pEncCtx, pSlice);
+        sDss.iStartPos = 0;
+        sDss.iCurrentPos = 0;
+        sDss.pRestoreBuffer = (*pEncCtx).pDynamicBsBuffer[kiPartitionId];
+    } else {
+        sDss.iStartPos = BsGetBitsPos(pBs);
+    }
     (*pSlice).iMbSkipRun = 0;
 
     loop {
@@ -1633,12 +1662,38 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
 
+        // step (2): save some values for future use, initialise pWelsMd. Both of
+        // these were missing: WelsMdInterInit is what installs the reference-block
+        // pointers in pMbCache, so pfInterMd read a null pSample2.
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            pEncCtx,
+            pCurMb,
+            pMbCache,
+            kiSliceFirstMbXY,
+        );
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(
+            pEncCtx,
+            pSlice,
+            pCurMb,
+            kiSliceFirstMbXY,
+        );
+
+        // TRY_REENCODING
         loop {
             WelsInitInterMDStruc(pCurMb, pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, pSlice, pCurMb, pMbCache);
                 }
+            }
+            // step (4): save from the MD process for future use
+            crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
+                (*(*pCurLayer).pDecPic).uiRefMbType,
+                pMbCache,
+                pCurMb,
+                pMd,
+            );
+            if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfMdBackgroundInfoUpdate {
                     func(
                         pCurLayer,
@@ -1744,6 +1799,12 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
     let mut sMd = SWelsMD::default();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
+    // `svc_encode_slice.cpp:715`. The same assignment was already missing from
+    // `WelsPSliceMdEnc` and fixed there; this twin still had the defect, so every
+    // dynamic-slice P macroblock costed with SATD where LOW_COMPLEXITY costs with
+    // SAD.
+    sMd.bMdUsingSad = (*(*pEncCtx).pSvcParam).iComplexityMode
+        == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
     WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd as *mut SWelsMD as *mut c_void, kiSliceFirstMbXY)
 }
@@ -1956,11 +2017,15 @@ pub unsafe fn AddSliceBoundary(
         std::ptr::copy_nonoverlapping(&(*pCurSlice).sSliceHeaderExt, &mut (*pNextSlice).sSliceHeaderExt, 1);
         (*pNextSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxOfNextSlice;
 
-        let mb_count = (kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1) as usize;
-        let map_ptr = (*pSliceCtx).pOverallMbMap.add(iFirstMbIdxOfNextSlice as usize);
-        for i in 0..mb_count {
-            *map_ptr.add(i) = iNextSliceIdc;
-        }
+        // C++ calls WelsSetMemMultiplebytes_c, whose count is a signed int32_t; the
+        // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
+        // when the boundary landed past the end of the partition.
+        crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
+            (*pSliceCtx).pOverallMbMap.add(iFirstMbIdxOfNextSlice as usize) as *mut c_void,
+            iNextSliceIdc as u32,
+            kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1,
+            std::mem::size_of::<u16>() as i32,
+        );
 
         UpdateMbNeighbourInfoForNextSlice(pCurLayer, (*pCurLayer).sMbDataP, iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
