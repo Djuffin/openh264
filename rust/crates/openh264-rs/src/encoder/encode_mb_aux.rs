@@ -53,19 +53,6 @@ pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 // CPU Feature Flag Bitmasks (matching cpu_core.h)
 // ============================================================================
 
-pub const WELS_CPU_MMXEXT: u32 = 0x00000002;
-pub const WELS_CPU_SSE2: u32   = 0x00000004;
-pub const WELS_CPU_SSSE3: u32  = 0x00000008;
-pub const WELS_CPU_SSE41: u32  = 0x00000010;
-pub const WELS_CPU_SSE42: u32  = 0x00000020;
-pub const WELS_CPU_AVX: u32    = 0x00000040;
-pub const WELS_CPU_FMA: u32    = 0x00000080;
-pub const WELS_CPU_AVX2: u32   = 0x00000100;
-pub const WELS_CPU_NEON: u32   = 0x00001000;
-pub const WELS_CPU_MMI: u32    = 0x00010000;
-pub const WELS_CPU_MSA: u32    = 0x00020000;
-pub const WELS_CPU_LSX: u32    = 0x00040000;
-pub const WELS_CPU_LASX: u32   = 0x00080000;
 
 // ============================================================================
 // Quantization Lookup Tables (16-byte aligned in C)
@@ -1397,3 +1384,8 @@ mod tests {
         assert!(func_list.pfQuantization4x4.is_some());
     }
 }
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};

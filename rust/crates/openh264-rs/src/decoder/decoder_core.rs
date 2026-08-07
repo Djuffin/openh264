@@ -79,14 +79,17 @@ pub const LIST_0: usize = 0;
 pub const LIST_1: usize = 1;
 pub const LIST_A: usize = 2;
 
-// Macroblock Types
+// Macroblock Types -- `wels_common_defs.h:276-283`. This module used to declare
+// its own set shifted one bit down (16x16 = 0x2 where the header says 0x8, and so
+// on through SKIP = 0x40 where the header says 0x100), and the match in
+// `CheckRefPicturesComplete` below reads them, so every macroblock there was
+// classified against the wrong mask. Error-free conformance streams never take
+// that path, which is why 53/53 stayed green. Twelve other modules already had
+// the header's values; use them.
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
-pub const MB_TYPE_16x16: u32 = 0x00000002;
-pub const MB_TYPE_16x8: u32 = 0x00000004;
-pub const MB_TYPE_8x16: u32 = 0x00000008;
-pub const MB_TYPE_8x8: u32 = 0x00000010;
-pub const MB_TYPE_8x8_REF0: u32 = 0x00000020;
-pub const MB_TYPE_SKIP: u32 = 0x00000040;
+pub use crate::decoder::decode_slice::{
+    MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16, MB_TYPE_8x8, MB_TYPE_8x8_REF0, MB_TYPE_SKIP,
+};
 
 // Error Codes
 pub const ERR_NONE: i32 = 0;

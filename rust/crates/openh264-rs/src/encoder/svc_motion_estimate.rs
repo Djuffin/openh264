@@ -109,10 +109,6 @@ pub const ENC_RETURN_UNSUPPORTED_PARA: i32 = 0x02;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 
 // CPU Capability Bit Flags
-pub const WELS_CPU_SSE2: u32 = 0x00000008;
-pub const WELS_CPU_SSE41: u32 = 0x00000020;
-pub const WELS_CPU_NEON: u32 = 0x000004;
-pub const WELS_CPU_LSX: u32 = 0x00000003;
 
 /// Quantization Step Lookup Table ($16 \times Q_{\text{step}}$ for $\text{QP} \in [0, 51]$)
 pub static QStepx16ByQp: [i32; 52] = [
@@ -1837,3 +1833,8 @@ mod tests {
 
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
+// used to live in this module disagreed with cpu_core.h and with each other --
+// WELS_CPU_NEON alone had seven distinct values across eight modules.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41};

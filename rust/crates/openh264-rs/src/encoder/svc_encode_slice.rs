@@ -70,7 +70,11 @@ pub const TOP_MB_POS: u8 = 0x02;
 pub const TOPRIGHT_MB_POS: u8 = 0x04;
 pub const TOPLEFT_MB_POS: u8 = 0x08;
 
-pub const DELTA_QP: u8 = 1;
+/// `rc.h:77` says **2**, not 1. `UpdateQpForOverflow` is the only user, so a
+/// macroblock that overflowed the CAVLC level suffix was re-encoded one QP step
+/// higher than the reference chose. Only reachable at very low QP, which is why
+/// it survived every sweep except qp=0. Re-exported from the one definition.
+pub use crate::encoder::rc::DELTA_QP;
 pub const MB_COEFF_LIST_SIZE: usize = 384;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
@@ -995,26 +999,11 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 // Macroblock Residual & Chroma Reconstruction
 // ============================================================================
 
-pub unsafe fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) {
-    if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() {
-        return;
-    }
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let stride = (*pCurLayer).iEncStride[0];
-
-    if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-        if let Some(dct) = func_list.pfDctFourT4 {
-            dct(
-                (*pMbCache).pCoeffLevel,
-                (*pMbCache).SPicData.pEncMb[0],
-                stride,
-                (*pMbCache).pMemPredLuma,
-                16,
-            );
-        }
-    }
-}
+// `WelsInterMbEncode` lives in `svc_mode_decision.rs`, which is where the C++
+// has it (svc_mode_decision.cpp) and where all three call sites resolve. A
+// truncated second copy used to sit here: it did the DCT and dropped
+// quantisation and reconstruction entirely. It was dead, but one unqualified
+// call in this file would have silently activated it.
 
 pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pMbCache: *mut SMbCache) {
     if pEncCtx.is_null() || pCurMb.is_null() || pMbCache.is_null() {
@@ -1115,7 +1104,7 @@ pub unsafe fn UpdateQpForOverflow(pCurMb: *mut SMB, kuiChromaQpIndexOffset: u8) 
     if pCurMb.is_null() {
         return;
     }
-    (*pCurMb).uiLumaQp = (*pCurMb).uiLumaQp.wrapping_add(DELTA_QP);
+    (*pCurMb).uiLumaQp = (*pCurMb).uiLumaQp.wrapping_add(DELTA_QP as u8);
     let clamped_idx = CLIP3_QP_0_51((*pCurMb).uiLumaQp as i32 + kuiChromaQpIndexOffset as i32);
     (*pCurMb).uiChromaQp = g_kuiChromaQpTable[clamped_idx];
 }

@@ -69,7 +69,8 @@ pub const EPSN: f32 = 0.000001;
 pub const INT_MULTIPLY: i32 = 100;
 pub const SEM_NAME_MAX: usize = 32;
 pub const MAX_THREADS_NUM: usize = 4;
-pub const MAX_SLICES_NUM: usize = 35;
+/// One definition, in `wels_encoder_ext` — `svc_enc_slice_segment.h:62`.
+pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 pub const ENC_RETURN_SUCCESS: i32 = 0;

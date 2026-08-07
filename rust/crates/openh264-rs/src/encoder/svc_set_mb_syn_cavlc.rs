@@ -39,7 +39,10 @@ pub const MB_TYPE_8x16: u32 = 0x00000020;
 pub const MB_TYPE_8x8: u32 = 0x00000040;
 pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
 pub const MB_TYPE_SKIP: u32 = 0x00000100;
-pub const MB_TYPE_DIRECT: u32 = 0x00000200;
+/// `wels_common_defs.h:286` says **0x00000800**, not 0x200 (0x200 is
+/// `MB_TYPE_INTRA_PCM`). Nothing in this module reads it, so the wrong value was
+/// dead. One definition now.
+pub use crate::encoder::deblocking::MB_TYPE_DIRECT;
 
 pub const SUB_MB_TYPE_8x8: u32 = 0x00000001;
 pub const SUB_MB_TYPE_8x4: u32 = 0x00000002;

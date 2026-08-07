@@ -86,7 +86,10 @@ pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
 
-pub const GOM_H_SCC: i32 = 2;
+/// `rc.h:57` says **8**, not 2. Only `SComplexityAnalysisScreenParam` uses it and
+/// `METHOD_COMPLEXITY_ANALYSIS_SCREEN` is still unported, so the wrong value is
+/// dead today -- but it is the same shape as GOM_SAD/GOM_VAR in Phase 5.1.
+pub use crate::encoder::rc::GOM_H_SCC;
 pub const MAX_MBS_PER_FRAME: i32 = 36864;
 
 pub const I_SLICE: i32 = 2;
@@ -108,8 +111,10 @@ pub const WELSVP_MINOR_VERSION: i32 = 1;
 pub const WELSVP_VERSION: i32 = (WELSVP_MAJOR_VERSION << 8) + WELSVP_MINOR_VERSION;
 pub const WELSVP_INTERFACE_VERSION: i32 = 0x8000 + (WELSVP_VERSION & 0x7fff);
 
-pub const RECIEVE_SUCCESS: u8 = 1;
-pub const RECIEVE_FAILED: u8 = 0;
+/// `wels_const.h:152-153` — RECIEVE_SUCCESS = 1, RECIEVE_FAILED = **2**. This
+/// module's copy of RECIEVE_FAILED said 0; nothing here reads it (only
+/// RECIEVE_SUCCESS is tested), so the wrong value was dead. One definition now.
+pub use crate::encoder::picture::{RECIEVE_FAILED, RECIEVE_SUCCESS};
 
 /// Look-up table mapping the frame coding index within a GOP to its temporal reference index.
 pub const g_kuiRefTemporalIdx: [[u8; MAX_GOP_SIZE]; MAX_TEMPORAL_LEVEL] = [
