@@ -68,3 +68,6 @@ codec/build/iOS/dec/welsdec/build/
 Cargo.lock
 target/
 
+
+# Gate battery scratch logs (rust/tools/gates.sh)
+.gates/

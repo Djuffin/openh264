@@ -478,6 +478,19 @@ Untouched throughout: `decoder/vlc_tables.rs`, `common/cpu_core.rs` (trivial), `
 ### 7.1 The unsafe ratchet
 `rust/tools/unsafe_ratchet.sh`: per-file counts of `unsafe fn`, `unsafe {`, `*mut|*const`, `transmute`, `unsafe impl`, `mem::zeroed`, `no_mangle`, `SHIM(` vs a checked-in baseline JSON. CI (or the session-start checklist) fails on any increase; each phase commits a decreased baseline. This — not `unsafe_op_in_unsafe_fn` churn — is the progress meter. (Flipping that lint crate-wide would add thousands of `unsafe {}` wrappers only to delete them again; don't. It gets enabled per-module as modules go safe, where it's vacuous.)
 
+Built in Phase 2, session A. Invocations, from anywhere:
+
+```bash
+bash rust/tools/unsafe_ratchet.sh generate   # (re)write rust/tools/unsafe_baseline.json
+bash rust/tools/unsafe_ratchet.sh check      # non-zero if any file × metric increased
+bash rust/tools/unsafe_ratchet.sh report     # same output, always exit 0
+```
+
+Two counting rules the script encodes, both learned the hard way:
+
+- **`unsafe fn` alone does not match `unsafe extern "C" fn`.** Phase 0's T5b deleted 113 definitions spelled that way and the naive pattern reported no change at all. The pattern is `unsafe (extern "C" )?fn`.
+- **That pattern also matches function-pointer *types*** — `Option<unsafe extern "C" fn(..)>` occurs ~210 times in the dispatch tables. Definitions are therefore counted **line-anchored**; the pointer types show up in `raw_ptr`/`transmute`, which is where Phase 4 will show its work. Baseline at `956a8c07`: `unsafe_fn` 1372, `unsafe_block` 507, `raw_ptr` 5390, `transmute` 23, `unsafe_impl` 11, `mem_zeroed` 26, `no_mangle` 42, `SHIM(` 0. (§1.1's "~922 `unsafe fn`" was the naive count; 1372 is the real one.)
+
 ### 7.2 The gate battery (every merge)
 0. Both build profiles compile and agree (debug **and** `--release`; the pre-Phase-0 release segfault means any debug/release divergence is treated as UB evidence, not flakiness).
 1. `cargo test` and `cargo test --release` — all green, `#[ignore]` set unchanged.
@@ -499,6 +512,25 @@ Untouched throughout: `decoder/vlc_tables.rs`, `common/cpu_core.rs` (trivial), `
 
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
+
+The battery is `rust/tools/gates.sh` (built in Phase 2, session A), in four levels so the
+cheap ones can run per commit:
+
+```bash
+bash rust/tools/gates.sh commit   # cargo test debug+release + ratchet          (~2 min)
+bash rust/tools/gates.sh family   # + diffharness st/mt/def in BOTH profiles    (~5 min)
+FFMPEG=/opt/homebrew/bin/ffmpeg bash rust/tools/gates.sh full    # + benches + Miri --lib
+FFMPEG=/opt/homebrew/bin/ffmpeg bash rust/tools/gates.sh exit    # + Miri over tests/*differential*
+```
+
+It prints one `PASS`/`FAIL`/`SKIP` line per gate and exits non-zero on any failure.
+Three behaviours are deliberate: the test gate checks the **ignored count is exactly 20**
+as well as the exit status (a test that stops being compiled looks like a test that
+passes); a sweep failure prints **F3's retry rule** next to the result rather than
+leaving each session to rediscover it; and the encoder bench **SKIPs loudly** without
+`FFMPEG`, because its fallback measures the frame-skip path rather than the encode
+kernels (`perf_baseline.md` §2). The fuzz gate (§7.2 gate 6) prints a permanent SKIP
+until T7 lands.
 
 ---
 
