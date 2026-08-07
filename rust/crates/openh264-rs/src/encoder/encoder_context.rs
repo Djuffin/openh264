@@ -704,12 +704,6 @@ pub unsafe fn InitFunctionPointers(
     crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(pFuncList, _uiCpuFlag);
     crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(pFuncList, _uiCpuFlag);
 
-    // See InitCoeffFunc: the three CABAC bitstream-stashing entry points are
-    // unported, so refuse the configuration outright rather than run with nulls.
-    if (*pParam).iEntropyCodingModeFlag != 0 {
-        return crate::encoder::wels_encoder_ext::ENC_RETURN_UNSUPPORTED_PARA;
-    }
-
     // C++ does NOT set pfInterMd here. It is assigned per-slice in
     // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
     // depending on kbBaseAvail && kbHighestSpatial. This line used to assign
@@ -754,14 +748,12 @@ pub unsafe fn InitFunctionPointers(
     ENC_RETURN_SUCCESS
 }
 
-/// `set_mb_syn_cavlc.cpp:290`. Selects the coefficient-writing entry points for the
+/// `set_mb_syn_cavlc.cpp:305`. Selects the coefficient-writing entry points for the
 /// configured entropy coder.
 ///
-/// **Incomplete for CABAC**: `StashMBStatusCabac`, `StashPopMBStatusCabac` and
-/// `GetBsPosCabac` (`set_mb_syn_cabac.cpp`) are unported, so the CABAC branch leaves
-/// those three slots as they were and only assigns `pfWelsSpatialWriteMbSyn`. The
-/// caller checks for this and returns `ENC_RETURN_UNSUPPORTED_PARA` rather than
-/// running with three null function pointers.
+/// The SSE2/SSE4.2 `CavlcParamCal` variants are x86-only and this target reports
+/// no CPU features (`WelsCPUFeatureDetect` returns 0), so only the `_c` kernel is
+/// ever assigned.
 unsafe fn InitCoeffFunc(
     pFuncList: *mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
@@ -770,10 +762,15 @@ unsafe fn InitCoeffFunc(
     (*pFuncList).pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
 
     if iEntropyCodingModeFlag != 0 {
-        // WelsSpatialWriteMbSynCabac is ported but is a plain Rust fn, not the
-        // extern "C" the pfWelsSpatialWriteMbSyn slot holds; the CABAC branch is
-        // unreachable anyway because the caller rejects the configuration.
-        // pfStashMBStatus / pfStashPopMBStatus / pfGetBsPosition: UNPORTED, see above.
+        (*pFuncList).pfStashMBStatus =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac);
+        (*pFuncList).pfStashPopMBStatus =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac);
+        // WelsSpatialWriteMbSynCabac is a plain Rust fn; the slot holds an
+        // extern "C" pointer, hence the thunk.
+        (*pFuncList).pfWelsSpatialWriteMbSyn =
+            Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSynCabacThunk);
+        (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac);
     } else {
         (*pFuncList).pfStashMBStatus =
             Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc);

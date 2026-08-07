@@ -1911,20 +1911,19 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 /// that pushes the last partial 32-bit accumulator word out to the buffer -- so every
 /// slice lost its final byte.
 ///
-/// **Incomplete for CABAC**: `WelsCabacEncodeFlush` / `WelsCabacEncodeGetPtr` are
-/// unported. The caller rejects `iEntropyCodingModeFlag` before reaching here (see
-/// `encoder_context::InitFunctionPointers`), so the branch panics rather than
-/// silently emitting a truncated slice.
+/// The CABAC branch hands the bitstream cursor back to `SBitStringAux` from the
+/// arithmetic coder's own buffer pointer -- there is no `BsRbspTrailingBits` /
+/// `BsFlush` pair, because `WelsCabacEncodeFlush` has already written the last
+/// bytes directly.
 ///
 /// # Safety
 /// `pSlice` must be valid and have `pSliceBsa` installed.
 pub unsafe fn WelsWriteSliceEndSyn(pSlice: *mut SSlice, bEntropyCodingModeFlag: bool) {
     let pBs = (*pSlice).pSliceBsa;
     if bEntropyCodingModeFlag {
-        unimplemented!(
-            "WelsWriteSliceEndSyn: the CABAC tail needs WelsCabacEncodeFlush / \
-             WelsCabacEncodeGetPtr, which are unported"
-        );
+        crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(&mut (*pSlice).sCabacCtx);
+        (*pBs).pCurBuf =
+            crate::encoder::set_mb_syn_cabac::WelsCabacEncodeGetPtr(&mut (*pSlice).sCabacCtx);
     } else {
         crate::encoder::vlc_encoder::BsRbspTrailingBits(pBs);
         crate::encoder::vlc_encoder::BsFlush(pBs);

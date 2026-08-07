@@ -86,7 +86,10 @@ int main (int argc, char** argv) {
   sParam.iIdrBitrateRatio           = 400;
   sParam.bPsnrY = sParam.bPsnrU = sParam.bPsnrV = false;
 
-  sParam.sSpatialLayers[0].uiProfileIdc        = PRO_BASELINE;
+  // PRO_BASELINE forces CAVLC: ParamValidationExt (encoder_ext.cpp:655) resets
+  // iEntropyCodingModeFlag to 0 for a baseline layer, so pinning it here made
+  // `cabac 1` a silent no-op. Pick the profile from the flag instead.
+  sParam.sSpatialLayers[0].uiProfileIdc        = kiCabac ? PRO_HIGH : PRO_BASELINE;
   sParam.sSpatialLayers[0].uiLevelIdc          = LEVEL_UNKNOWN;
   sParam.sSpatialLayers[0].iVideoWidth         = kiWidth;
   sParam.sSpatialLayers[0].iVideoHeight        = kiHeight;
