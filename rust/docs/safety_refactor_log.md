@@ -532,22 +532,185 @@ which is what was meant and is identical on every target this project builds for
 not have been this commit — the family is decoder-only and the sweep exercises the
 encoder — but the rule is to re-run rather than argue, and re-running settled it.
 
+### Next session's first action (as recorded at the time; superseded below)
+
+Phase 2 T4 — `common/mc.rs`. Its three carry-ins (cursor *pair*, the MV clamp as the
+shim contract, folding `pWelsMcFunc_c`) all held up and all three are reflected in what
+landed.
+
+---
+
+## 2026-08-08 — Phase 2, session B (T4, `common/mc.rs`)
+
+**Goal:** the session brief's S1 split — T4 then T5. **T4 alone consumed the session**,
+because it is the first family to break the §7.4 performance budget and the
+investigation that entailed was the work. T5 is untouched and is the next action.
+
+**Started at** `34ad2eb4`, **ended at** the commit carrying this entry. Tree clean at
+both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `46053993` | T4 A: 24 safe kernels + a differential entry per kernel, old code untouched |
+| `ea52b387` | T4 B: swap + 28 shims, equivalence entries replaced by one span property |
+| `e26164e6` | the plane-API row walker, built, measured, rejected, reverted |
+
+Plus `perf_baseline.md` §Phase 2 T4 and the plan's Progress appendix.
+
+### Gates
+
+| gate | control (`34ad2eb4`) | final |
+|---|---|---|
+| `cargo test` | 377 / 0 / 20 | 378 / 0 / 20 |
+| `cargo test --release` | 375 / 0 / 20 | 376 / 0 / 20 |
+| `sweep.sh st mt def` (debug) | 341/341 | 341/341, 141s |
+| `sweep.sh st mt def` (release) | 341/341 | 341/341, 22s |
+| ratchet | clean | clean, baseline regenerated |
+| `miri --test kernels_differential_phase2` | 1/1 | 2/2, 74s |
+
+**No F3 hit in any of the eight release `mt` sweeps this session.** The +1 net test is
+the one surviving property test; every pre-existing binary kept its count and the
+ignored set never moved.
+
+**A correction to the brief's numbers:** it records the control as 375 debug / 373
+release, which was T1's control at `afcdd785`, not the state at `34ad2eb4`. HEAD was
+**377 / 375** — the pilot's two surviving tests. Nothing was wrong, but a session that
+trusts the brief's figure will think it has gained two tests it did not.
+
+### The headline: this family is over budget, and the reason is the shim, not the kernels
+
+**+8.2% / +7.2% / +7.0%** on the three decode-bench streams, against §7.4's 5%
+per-family limit. Everything below is in `perf_baseline.md` §Phase 2 T4 with the run
+values; what belongs here is what the next family should do differently.
+
+1. **The measurement protocol had to change, and should stay changed.** Sequential
+   `cargo bench` invocations of the *same binary* drifted ~3% on the Rust rows while
+   the C++ rows in the same runs held to ±0.3%. A 5% budget cannot be judged through
+   that. The protocol that works: build both binaries, keep them on disk, and run them
+   **interleaved in one loop**. T3's "trust the paired table, not a single run" was an
+   understatement — an unpaired reading of this family said +5.1% when the paired
+   reading said +8.7%, and I acted on the wrong one for a while.
+2. **Profile before theorising.** The first measurement was +33/+20/+20 and my first
+   two guesses (missing `inline(always)`, a dynamic reach lookup) were both wrong and
+   both cost a build-and-bench cycle. `/usr/bin/sample` on the running bench, with
+   self-time computed from the call graph, found the real cause in one pass. The
+   *third* instrument — a scratch microbenchmark driving old kernels (recovered with
+   `git show`) against new ones per phase and per block shape — is what gave the 10.8x
+   number that made the fix obvious. Build it early next time; it costs ten minutes.
+3. **Three real defects, all of which generalise to T5–T8:**
+   - **`copy_from_slice` on a runtime length is a `memmove` call.** The C++ copies a
+     fixed 16/8/4/2 bytes per row for a reason. Const-generic width (`copy_rows::<16>`)
+     took the zero-MV 16x16 copy from **10.8x to ~1x**, and that was most of the
+     regression. Any kernel copying a runtime-width window has this bug.
+   - **Indexing several same-length slices by `j` is not free.** LLVM does not prove
+     seven bounds facts per sample. Zip the iterators.
+   - **Attribute parity with the C++ matters**, and is not cosmetic: its kernels are
+     all `inline` and its composites sit in a *table*, i.e. out of line with the inner
+     kernels inlined into them. `#[inline(always)]` on inner kernels, `#[inline(never)]`
+     on the ones carrying a big scratch.
+4. **Three structural hypotheses tested and rejected by paired measurement**, recorded
+   so nobody retries them: cursors passed **by value** rather than by reference (a
+   wash); `McLuma_c` dispatching over the raw per-phase shims so every span computation
+   folds to constants (a wash, and it would have left two dispatch implementations to
+   keep in agreement); and **a `rows()`/`rows_mut()` walker on the Phase 1 plane API**
+   — one bounds check per block, advancing by pointer addition instead of a multiply
+   per row. That last one was Eugene's call and it is the important negative result:
+   it made things **worse**, +23.6/+13.5/+13.2 everywhere and still +14.4/+10.2/+10.2
+   when confined to `copy_rows`, the simplest two-way zip in the file. `Chunks::next`
+   is a `min` plus a `split_at` plus a runtime-length slice needing `[..WIDTH]` and a
+   `try_into`; `row()` hands back a statically-sized window whose checks fold. **A
+   multiply per row is cheaper than that.** The API addition was reverted rather than
+   left unused, because an API that measures worse is a trap for the families that
+   read its doc comment and not this log.
+5. **What the residual actually is.** Fixed per-call overhead — span arithmetic, two
+   `from_raw_parts`, four constructor asserts — at ~7–16 ns a call, on a family called
+   constantly with small blocks (every inter partition, plus two chroma calls each).
+   The *kernels* are at parity or better: the centre filters measure 0.88–0.99x
+   against the raw ones. **That overhead is the strangler scaffolding, and Phase 5
+   deletes it with the shims.** The open question for the phase is whether to carry it
+   until then.
+
+### Inventory, as re-proven by grep
+
+**26 kernels** (24 safe bodies; `McHorizLuma_c`/`McVertLuma_c` are C++ aliases sharing
+`mc_hor_ver20`/`mc_hor_ver02`) plus two filter helpers and `InitMcFunc`. The brief's
+"26 kernels + InitMcFunc" was right.
+
+**Only `InitMcFunc` is called by name from outside the module** — `decoder_core.rs:1909`
+and `encoder_context.rs:689`. Everything else is reached through `SMcFunc` slots:
+`decode_slice.rs:1093,1105` (decoder), and `md.rs:1059,1196,1229,1289…`,
+`svc_mode_decision.rs:545,548,1904,1916`, `svc_base_layer_md.rs:1438,1450,1596`
+(encoder). `InitMcFunc` is untouched: it writes a struct through a `*mut SMcFunc` and is
+dispatch plumbing, which is Phase 4's.
+
+### Four things the remaining families inherit
+
+1. **The encoder drives half-pel at `iWidth + 1` / `iHeight + 1`** — up to **17**, which
+   is why `McHorVer22_c`'s scratch is `int16_t[17 + 5]` and why the quarter-pel
+   composites (a `uint8_t[256]` at stride 16) are capped at 16 instead. Any family with
+   encoder consumers must find that ceiling before sizing a test.
+2. **The MC safety argument is the caller's clamp, not the padding.** `pSrc` has already
+   been displaced by the motion vector, so `PADDING_LENGTH` alone proves nothing. The
+   shim section quotes `BaseMC`'s clamp (`decode_slice.rs:1069-1091`) and derives why it
+   is *exactly* calibrated: the integer vector lands in `-30 ..= width + 13`, so a
+   16-wide block reaching `x - 2` and `x + 19` touches `-32 ..= width + 32`, precisely
+   the 32-sample luma border, with nothing to spare. The `+ 2` and `- 19` in the clamp
+   **are** that margin, and `19 == 16 + 3`. This is the contract Phase 5 converts
+   callers against.
+3. **Per-kernel reach, not the union.** `LUMA_REACH[iMvX & 3][iMvY & 3]` gives each of
+   the sixteen kernels its own span because `McHorVer10_c` reads no row outside its
+   block and `McHorVer13_c` reads five. A shim claiming the union would assert validity
+   for rows its caller never promised — cheaper to write, and a lie.
+4. **The surviving test is a span property, and it is worth copying.** Each shim is run
+   against source and destination allocations sized to **exactly** the span its contract
+   declares. Too large a span is UB that Miri reports at the `from_raw_parts`; too small
+   a span panics in the safe kernel; and running the same call into two differently
+   noised destinations pins that the kernel writes every byte of its block and reads
+   none of them. All three directions were mutation-tested. This replaces the
+   equivalence entries with something that outlives the family.
+
+### Two smaller things worth not rediscovering
+
+- **A macro over shims makes the ratchet lie.** Folding fifteen
+  `unsafe extern "C" fn` definitions into one macro invocation made `unsafe_fn` report
+  a 13-definition *drop* that had not happened. The shims are written out one by one.
+  Same trap for the `SHIM(` marker: put it on each invocation, not inside the macro.
+- **`raw_ptr` cannot fall during a strangler phase, and R-f overstates it.** The metric
+  counts `*mut`/`*const` **occurrences** — signatures and casts, not the pointer
+  arithmetic in bodies — so a shim that keeps its signature keeps its count. This family
+  went **+2**, both from `shim_wh`, the one shared helper where a pointer becomes a
+  slice; paying that beats 29 copies of the span arithmetic. Judge the shape, not the
+  sign.
+
+### A test that was exercising UB
+
+`test_mc_horiz_and_vert_luma_aliases` anchored a 4x4 block at `src.as_ptr()` of a bare
+`[u8; 64]` and filtered it, reading `pSrc[-2]` and `pSrc[-2 * 8]` off the front of the
+array — in a test whose whole subject is a kernel that reaches outside its block. The
+raw code did that read silently; the shim materialises the span, so it had to be fixed.
+Worth noting that `gates.sh` runs Miri as `--lib safe::`, which would never have covered
+it: **the Miri gate does not see the port's own unit tests.** Not changed here (it would
+be a gate change mid-phase), but a candidate for T9.
+
 ### Next session's first action
 
-**Phase 2 T4 — `common/mc.rs`**, motion compensation: 26 kernels plus `InitMcFunc`, the
-6-tap Wiener filters, consumers in decoder MC/EC and encoder MD/ME. Three things to
-carry in:
+**Phase 2 T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`**, per
+`prompts/phase2.md` §T5 and the continuation brief. Carry-ins unchanged: the `Four` SAD
+kernels read **outside** the nominal block (`-stride`, `-1`, `+1`) so they take plane
+cursors and the differential must cover the edge reads; the three pre-existing unused
+`sample_sad_*` safe wrappers get absorbed rather than left as a second SAD API;
+consumers are `encoder/sample.rs`'s installers plus the direct call at
+`processing/scene_change_detection.rs:103`; and `intra_pred_common`'s two 3-arg kernels
+must not be unified with the same-named 2-arg decoder ones already converted in T3.
 
-- **The safe kernels take a `PlaneCursor` (read) + `PlaneCursorMut` (write) pair**, not
-  one cursor: MC reads a *reference* plane and writes the *current* one, and they are
-  different allocations.
-- **The shim contract must state the MV clamp verbatim** (`decode_slice.rs:1072-1091`).
-  Unlike intra prediction, the legality of an MC read comes from the caller's clamp
-  rather than from the padding alone, and that clamp is the whole safety argument.
-- **Fold `pWelsMcFunc_c: [[fn; 4]; 4]` into a `match`** (or a table of *safe* fn
-  pointers). It is module-internal, which makes it the one dispatch table this phase
-  may touch — everything else is Phase 4's.
+**Before starting it, settle T4's budget question with Eugene** — it is a phase
+decision, not a T5 one. The options as they now stand: carry the ~7% to Phase 5, which
+deletes the shim layer that causes it; revert T4 and leave `mc.rs` raw until Phase 5
+converts its callers; or accept a per-family budget that is unachievable while
+strangling and restate §7.4 in terms the phase can actually meet. What is *not* still
+open is whether a cleverer kernel or a better plane API fixes it — three attempts say
+no, and the numbers are in `perf_baseline.md`.
 
-Then T5 (`sad_common` + `intra_pred_common`) and on down §4's list. T7 (fuzz) remains
-deferred by direction; its absence prints as a SKIP on every `gates.sh` run so it cannot
-quietly stop being a decision.
+Build the microbenchmark harness first in T5 and T7, not third.
