@@ -181,6 +181,32 @@ Encoder side: unmeasured for this family, correctly — `decode_mb_aux.rs` is de
 `c_vs_rust_bench` was run anyway as a correctness gate (all rows bit-identical) and the
 release sweep held its ~21s wall time.
 
+### T3 — `decoder/get_intra_predictor.rs` (the designated worst case)
+
+Same protocol: `b7f48311` (42 safe kernels present but unreachable) against `a4828187`
+(the same kernels live behind shims), 3 runs per side, medians in ms/frame.
+
+| stream | control median | Phase 2 median | delta | control runs | Phase 2 runs |
+|---|---|---|---|---|---|
+| Constrained Baseline (CAVLC, no B) | 2.243 | 2.247 | +0.2% | 2.252, 2.243, 2.243 | 2.211, 2.247, 2.249 |
+| Main (CABAC, B-frames) | 5.810 | 5.762 | −0.8% | 5.768, 5.826, 5.810 | 5.761, 5.786, 5.762 |
+| High (CABAC, B, 8x8 transform) | 5.814 | 5.821 | +0.1% | 5.825, 5.811, 5.814 | 5.821, 5.808, 5.856 |
+
+60/60 frames and the three anchor SHA-1s on every run, both sides.
+
+**The phase's designated worst case is a wash** — every row inside ±1%, which is the
+per-side spread. This is the family plan §9's risk register names ("perf regression in
+MD/ME/intra hot loops … convert worst case early"), and it is 42 kernels with the
+highest pointer-arithmetic density in the tree, ~140 punned accesses, converted to
+bounds-checked slice access. The risk row can be downgraded.
+
+Why it costs nothing is worth stating, because it generalises: **the bounds checks land
+per row, not per sample.** A 4x4 mode does one `row_mut` per output row (4 checks for 16
+samples) and reads its neighbours into fixed-size arrays with one check each; the 8x8
+modes do ~50 arithmetic operations per row against one check. The old code's advantage —
+unaligned `u32`/`u64` stores covering 4 or 8 samples at once — survives too, because
+`copy_from_slice` and `fill` on a fixed-size window compile to the same wide stores.
+
 **One caveat, stated rather than smoothed over.** The session-end battery's own bench run
 — taken minutes after a full `cargo test` in both profiles, on a machine that had been
 building all session — read 2.251 / 5.830 / 5.873, i.e. back at the control's level
