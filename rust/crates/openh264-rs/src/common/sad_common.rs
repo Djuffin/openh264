@@ -43,291 +43,219 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 
 //=================== Single-Block SAD Functions =====================//
 
-/// C++: `WelsSampleSad4x4_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for a 4x4 block.
+///
+/// Matches `int32_t WelsSampleSad4x4_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 4 x 4 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 3 * iStrideN + 4)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 4.
-#[inline(always)]
+/// `pSample1` and `pSample2` must point to valid readable pixel buffers of at least 4 rows with
+/// the specified strides.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x4_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<4, 4>
-    unsafe { shim_sad::<4, 4>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    let mut pSrc1 = pSample1;
+    let mut pSrc2 = pSample2;
+
+    unsafe {
+        for _ in 0..4 {
+            iSadSum += (*pSrc1.add(0) as i32 - *pSrc2.add(0) as i32).abs();
+            iSadSum += (*pSrc1.add(1) as i32 - *pSrc2.add(1) as i32).abs();
+            iSadSum += (*pSrc1.add(2) as i32 - *pSrc2.add(2) as i32).abs();
+            iSadSum += (*pSrc1.add(3) as i32 - *pSrc2.add(3) as i32).abs();
+
+            pSrc1 = pSrc1.offset(iStride1 as isize);
+            pSrc2 = pSrc2.offset(iStride2 as isize);
+        }
+    }
+
+    iSadSum
 }
 
-/// C++: `WelsSampleSad8x4_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for an 8x4 block.
+///
+/// Matches `int32_t WelsSampleSad8x4_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 8 x 4 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 3 * iStrideN + 8)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 8.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x4_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<8, 4>
-    unsafe { shim_sad::<8, 4>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    unsafe {
+        iSadSum += WelsSampleSad4x4_c(pSample1, iStride1, pSample2, iStride2);
+        iSadSum += WelsSampleSad4x4_c(pSample1.add(4), iStride1, pSample2.add(4), iStride2);
+    }
+    iSadSum
 }
 
-/// C++: `WelsSampleSad4x8_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for a 4x8 block.
+///
+/// Matches `int32_t WelsSampleSad4x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 4 x 8 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 7 * iStrideN + 4)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 4.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad4x8_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<4, 8>
-    unsafe { shim_sad::<4, 8>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    unsafe {
+        iSadSum += WelsSampleSad4x4_c(pSample1, iStride1, pSample2, iStride2);
+        iSadSum += WelsSampleSad4x4_c(
+            pSample1.offset((iStride1 << 2) as isize),
+            iStride1,
+            pSample2.offset((iStride2 << 2) as isize),
+            iStride2,
+        );
+    }
+    iSadSum
 }
 
-/// C++: `WelsSampleSad8x8_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for an 8x8 block.
+///
+/// Matches `int32_t WelsSampleSad8x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 8 x 8 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 7 * iStrideN + 8)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 8.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x8_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<8, 8>
-    unsafe { shim_sad::<8, 8>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    let mut pSrc1 = pSample1;
+    let mut pSrc2 = pSample2;
+
+    unsafe {
+        for _ in 0..8 {
+            iSadSum += (*pSrc1.add(0) as i32 - *pSrc2.add(0) as i32).abs();
+            iSadSum += (*pSrc1.add(1) as i32 - *pSrc2.add(1) as i32).abs();
+            iSadSum += (*pSrc1.add(2) as i32 - *pSrc2.add(2) as i32).abs();
+            iSadSum += (*pSrc1.add(3) as i32 - *pSrc2.add(3) as i32).abs();
+            iSadSum += (*pSrc1.add(4) as i32 - *pSrc2.add(4) as i32).abs();
+            iSadSum += (*pSrc1.add(5) as i32 - *pSrc2.add(5) as i32).abs();
+            iSadSum += (*pSrc1.add(6) as i32 - *pSrc2.add(6) as i32).abs();
+            iSadSum += (*pSrc1.add(7) as i32 - *pSrc2.add(7) as i32).abs();
+
+            pSrc1 = pSrc1.offset(iStride1 as isize);
+            pSrc2 = pSrc2.offset(iStride2 as isize);
+        }
+    }
+
+    iSadSum
 }
 
-/// C++: `WelsSampleSad16x8_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for a 16x8 block.
+///
+/// Matches `int32_t WelsSampleSad16x8_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 16 x 8 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 7 * iStrideN + 16)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 16.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x8_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<16, 8>
-    unsafe { shim_sad::<16, 8>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    unsafe {
+        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
+        iSadSum += WelsSampleSad8x8_c(pSample1.add(8), iStride1, pSample2.add(8), iStride2);
+    }
+    iSadSum
 }
 
-/// C++: `WelsSampleSad8x16_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for an 8x16 block.
+///
+/// Matches `int32_t WelsSampleSad8x16_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 8 x 16 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 15 * iStrideN + 8)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 8.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad8x16_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<8, 16>
-    unsafe { shim_sad::<8, 16>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    unsafe {
+        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
+        iSadSum += WelsSampleSad8x8_c(
+            pSample1.offset((iStride1 << 3) as isize),
+            iStride1,
+            pSample2.offset((iStride2 << 3) as isize),
+            iStride2,
+        );
+    }
+    iSadSum
 }
 
-/// C++: `WelsSampleSad16x16_c`, `codec/common/src/sad_common.cpp`.
+/// Computes the Sum of Absolute Differences for a 16x16 macroblock.
+///
+/// Matches `int32_t WelsSampleSad16x16_c (uint8_t* pSample1, int32_t iStride1, uint8_t* pSample2, int32_t iStride2)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `pSample1` and `pSample2` point at sample `(0, 0)` of a 16 x 16 block in
-///   surfaces whose rows are `iStride1` / `iStride2` bytes apart. Reads span
-///   `[0, 15 * iStrideN + 16)` from each, and nothing outside the block.
-/// * Both strides must be positive and at least 16.
-#[inline(always)]
+/// Requires valid readable pointers for `pSample1` and `pSample2`.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSad16x16_c(
     pSample1: *mut u8,
     iStride1: i32,
     pSample2: *mut u8,
     iStride2: i32,
 ) -> i32 {
-    // SHIM(phase2) -> sample_sad::<16, 16>
-    unsafe { shim_sad::<16, 16>(pSample1, iStride1, pSample2, iStride2) }
+    let mut iSadSum: i32 = 0;
+    unsafe {
+        iSadSum += WelsSampleSad8x8_c(pSample1, iStride1, pSample2, iStride2);
+        iSadSum += WelsSampleSad8x8_c(pSample1.add(8), iStride1, pSample2.add(8), iStride2);
+        iSadSum += WelsSampleSad8x8_c(
+            pSample1.offset((iStride1 << 3) as isize),
+            iStride1,
+            pSample2.offset((iStride2 << 3) as isize),
+            iStride2,
+        );
+        iSadSum += WelsSampleSad8x8_c(
+            pSample1.offset((iStride1 << 3) as isize).add(8),
+            iStride1,
+            pSample2.offset((iStride2 << 3) as isize).add(8),
+            iStride2,
+        );
+    }
+    iSadSum
 }
 
 //=================== 4-Directional Diamond SAD Functions =====================//
 
-/// C++: `WelsSampleSadFour4x4_c`, `codec/common/src/sad_common.cpp`.
+/// Computes 4-point directional diamond search SAD for 16x16 macroblocks (Top, Bottom, Left, Right).
+///
+/// Matches `void WelsSampleSadFour16x16_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
 ///
 /// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 4 x 4 block; reads span
-///   `[0, 3 * iStride1 + 4)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 4 * iStride2 + 4)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 4 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<4, 4>
-    unsafe { shim_sad_four::<4, 4>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour8x4_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 8 x 4 block; reads span
-///   `[0, 3 * iStride1 + 8)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 4 * iStride2 + 8)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 8 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<8, 4>
-    unsafe { shim_sad_four::<8, 4>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour4x8_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 4 x 8 block; reads span
-///   `[0, 7 * iStride1 + 4)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 8 * iStride2 + 4)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 4 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<4, 8>
-    unsafe { shim_sad_four::<4, 8>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour8x8_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 8 x 8 block; reads span
-///   `[0, 7 * iStride1 + 8)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 8 * iStride2 + 8)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 8 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<8, 8>
-    unsafe { shim_sad_four::<8, 8>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour16x8_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 16 x 8 block; reads span
-///   `[0, 7 * iStride1 + 16)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 8 * iStride2 + 16)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 16 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<16, 8>
-    unsafe { shim_sad_four::<16, 8>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour8x16_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 8 x 16 block; reads span
-///   `[0, 15 * iStride1 + 8)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 16 * iStride2 + 8)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 8 + 2.
-#[inline(always)]
-pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
-    iSample1: *mut u8,
-    iStride1: i32,
-    iSample2: *mut u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    // SHIM(phase2) -> sample_sad_four::<8, 16>
-    unsafe { shim_sad_four::<8, 16>(iSample1, iStride1, iSample2, iStride2, pSad) }
-}
-
-/// C++: `WelsSampleSadFour16x16_c`, `codec/common/src/sad_common.cpp`.
-///
-/// # Safety
-/// * `iSample1` points at sample `(0, 0)` of a 16 x 16 block; reads span
-///   `[0, 15 * iStride1 + 16)`, the block and nothing more.
-/// * `iSample2` points at sample `(0, 0)` of the block the diamond is centred on, and
-///   the search steps one whole sample in each direction, so reads span
-///   **`[-iStride2, 16 * iStride2 + 16)`** — one row above the block and one below
-///   it. The left arm's `-1` lies inside `-iStride2` for any stride of 1 or more; the
-///   down arm's last row is what sets the far end.
-/// * `pSad` points at **four** writable `i32`. Exactly four are written.
-/// * Both strides must be positive and at least 16 + 2.
-#[inline(always)]
+/// `iSample1`, `iSample2`, and `pSad` (must have at least 4 elements) must be valid pointers.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
     iSample1: *mut u8,
     iStride1: i32,
@@ -335,8 +263,150 @@ pub unsafe extern "C" fn WelsSampleSadFour16x16_c(
     iStride2: i32,
     pSad: *mut i32,
 ) {
-    // SHIM(phase2) -> sample_sad_four::<16, 16>
-    unsafe { shim_sad_four::<16, 16>(iSample1, iStride1, iSample2, iStride2, pSad) }
+    unsafe {
+        *pSad.add(0) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad16x16_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 16x8 blocks.
+///
+/// Matches `void WelsSampleSadFour16x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour16x8_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad16x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 8x16 blocks.
+///
+/// Matches `void WelsSampleSadFour8x16_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour8x16_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad8x16_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 8x8 blocks.
+///
+/// Matches `void WelsSampleSadFour8x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour8x8_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad8x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 4x4 blocks.
+///
+/// Matches `void WelsSampleSadFour4x4_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour4x4_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad4x4_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 8x4 blocks.
+///
+/// Matches `void WelsSampleSadFour8x4_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour8x4_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad8x4_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
+}
+
+/// Computes 4-point directional diamond search SAD for 4x8 blocks.
+///
+/// Matches `void WelsSampleSadFour4x8_c (uint8_t* iSample1, int32_t iStride1, uint8_t* iSample2, int32_t iStride2, int32_t* pSad)`
+/// in `sad_common.cpp`.
+///
+/// # Safety
+/// Requires valid pointers for `iSample1`, `iSample2`, and `pSad`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
+    iSample1: *mut u8,
+    iStride1: i32,
+    iSample2: *mut u8,
+    iStride2: i32,
+    pSad: *mut i32,
+) {
+    unsafe {
+        *pSad.add(0) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(-(iStride2 as isize)), iStride2);
+        *pSad.add(1) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(iStride2 as isize), iStride2);
+        *pSad.add(2) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(-1), iStride2);
+        *pSad.add(3) = WelsSampleSad4x8_c(iSample1, iStride1, iSample2.offset(1), iStride2);
+    }
 }
 
 //=================== Safe kernels =====================//
@@ -420,69 +490,6 @@ pub fn sample_sad_four<const W: usize, const H: usize>(
     sad[1] = sad_at::<W, H>(sample1, sample2, 0, 1);
     sad[2] = sad_at::<W, H>(sample1, sample2, -1, 0);
     sad[3] = sad_at::<W, H>(sample1, sample2, 1, 0);
-}
-
-//=================== Shim span arithmetic =====================//
-
-// Two helpers rather than the span arithmetic written out fourteen times. This costs
-// the ratchet a handful of `*const`/`*mut` occurrences it would not otherwise have
-// (R-f: judge the shape, not the sign — T4 paid the same +2 for `shim_wh`), and buys
-// having the reach derivation in one place where it can be read against the contracts.
-
-/// Spans for a single-block SAD shim: both surfaces are read over the nominal block
-/// only, `(H - 1) * stride + W` bytes from each sample pointer.
-///
-/// # Safety
-/// Exactly the contract each shim states: both pointers address those spans, both
-/// strides are positive, and neither span is aliased by a live `&mut`.
-#[inline(always)]
-unsafe fn shim_sad<const W: usize, const H: usize>(
-    pSample1: *const u8,
-    iStride1: i32,
-    pSample2: *const u8,
-    iStride2: i32,
-) -> i32 {
-    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
-    let (b1, b2) = unsafe {
-        (
-            std::slice::from_raw_parts(pSample1, (H - 1) * s1 + W),
-            std::slice::from_raw_parts(pSample2, (H - 1) * s2 + W),
-        )
-    };
-    sample_sad::<W, H>(&PlaneCursor::new(b1, 0, s1), &PlaneCursor::new(b2, 0, s2))
-}
-
-/// Spans for a four-point SAD shim. `pSample1` spans its block; `pSample2` spans
-/// `[-iStride2, H * iStride2 + W)` — one row above the block and one below — because
-/// the diamond's arms leave it. The `-1` of the left arm is inside `-iStride2` for any
-/// stride of 1 or more, so the row above is what sets the near end, and the down arm's
-/// last row sets the far end.
-///
-/// # Safety
-/// As above, plus: `pSad` addresses four writable, properly aligned `i32`.
-#[inline(always)]
-unsafe fn shim_sad_four<const W: usize, const H: usize>(
-    pSample1: *const u8,
-    iStride1: i32,
-    pSample2: *const u8,
-    iStride2: i32,
-    pSad: *mut i32,
-) {
-    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
-    let (b1, b2) = unsafe {
-        (
-            std::slice::from_raw_parts(pSample1, (H - 1) * s1 + W),
-            std::slice::from_raw_parts(pSample2.sub(s2), (H + 1) * s2 + W),
-        )
-    };
-    // `&mut [i32; 4]` rather than a slice: the safe kernel then cannot write a fifth,
-    // and the count stops being a thing the shim has to remember.
-    let sad = unsafe { &mut *pSad.cast::<[i32; 4]>() };
-    sample_sad_four::<W, H>(
-        &PlaneCursor::new(b1, 0, s1),
-        &PlaneCursor::new(b2, s2, s2),
-        sad,
-    );
 }
 
 #[cfg(test)]

@@ -376,6 +376,14 @@ fn mc_shims_stay_inside_the_spans_they_declare() {
 // T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`
 // ===========================================================================
 //
+// **This family is half-landed.** `intra_pred_common`'s two predictors are behind
+// shims; `sad_common`'s fourteen SAD kernels were swapped and then **unswapped**,
+// because the swap cost the encoder +16.8% median and breached §7.4's 10% ceiling
+// (`perf_baseline.md` §Phase 2 T5). So the SAD entries below are commit-A entries
+// again — a live differential against raw code that is still the code that runs —
+// while the intra entries are shim properties. When the SAD swap re-lands, the
+// differential goes and the span property stays.
+//
 // `56a3dbf9` proved all sixteen safe kernels against the raw ones — every SAD shape,
 // every stride pair from the minimum legal to 240, random unaligned anchors on both
 // surfaces, and a real independently-noised margin around the four-point kernels'
@@ -392,9 +400,123 @@ use openh264_rs::common::intra_pred_common as ipc;
 use openh264_rs::common::sad_common as sad;
 use openh264_rs::safe::plane::PlaneCursor;
 
+/// A noise surface with at least `pad` rows and columns of margin around a `w` x `h`
+/// block, and a random legal anchor for it. The anchor is random so the block lands
+/// unaligned: these kernels run on every partition of every macroblock at every search
+/// position, so alignment is not something a caller can promise.
+fn sad_surface(
+    rng: &mut Prng,
+    stride: usize,
+    w: usize,
+    h: usize,
+    pad: usize,
+) -> (Vec<u8>, usize) {
+    assert!(stride >= w + 2 * pad);
+    let rows = h + 2 * pad + 2;
+    let buf = rng.bytes(rows * stride);
+    let y = pad + rng.below((rows - h - 2 * pad) as u32) as usize;
+    let x = pad + rng.below((stride - w - 2 * pad) as u32 + 1) as usize;
+    (buf, y * stride + x)
+}
+
+/// Dispatches the const-generic safe kernel for a runtime shape, so the tables below
+/// can stay tables. Every arm is also the assertion that the instantiation is wired to
+/// the shape its raw counterpart claims.
+fn safe_sad(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
+    match (w, h) {
+        (4, 4) => sad::sample_sad::<4, 4>(c1, c2),
+        (8, 4) => sad::sample_sad::<8, 4>(c1, c2),
+        (4, 8) => sad::sample_sad::<4, 8>(c1, c2),
+        (8, 8) => sad::sample_sad::<8, 8>(c1, c2),
+        (16, 8) => sad::sample_sad::<16, 8>(c1, c2),
+        (8, 16) => sad::sample_sad::<8, 16>(c1, c2),
+        _ => sad::sample_sad::<16, 16>(c1, c2),
+    }
+}
+
+fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>, out: &mut [i32; 4]) {
+    match (w, h) {
+        (4, 4) => sad::sample_sad_four::<4, 4>(c1, c2, out),
+        (8, 4) => sad::sample_sad_four::<8, 4>(c1, c2, out),
+        (4, 8) => sad::sample_sad_four::<4, 8>(c1, c2, out),
+        (8, 8) => sad::sample_sad_four::<8, 8>(c1, c2, out),
+        (16, 8) => sad::sample_sad_four::<16, 8>(c1, c2, out),
+        (8, 16) => sad::sample_sad_four::<8, 16>(c1, c2, out),
+        _ => sad::sample_sad_four::<16, 16>(c1, c2, out),
+    }
+}
+
+/// The safe SAD kernels against the raw ones they will replace once the swap can hold
+/// the performance budget. Live again after the unswap — while `sad_common.rs` runs
+/// raw code, this is what keeps the safe kernels honest.
+#[test]
+fn sad_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0x5AD0_0500);
+
+    for &(name, raw, w, h) in SAD_SHIMS {
+        for &s1 in &strides(w) {
+            for &s2 in &strides(w) {
+                for _ in 0..scale(40) {
+                    let (mut b1, c1) = sad_surface(&mut rng, s1, w, h, 0);
+                    let (mut b2, c2) = sad_surface(&mut rng, s2, w, h, 0);
+                    let old = unsafe {
+                        raw(b1.as_mut_ptr().add(c1), s1 as i32, b2.as_mut_ptr().add(c2), s2 as i32)
+                    };
+                    let new = safe_sad(
+                        w,
+                        h,
+                        &PlaneCursor::new(&b1, c1, s1),
+                        &PlaneCursor::new(&b2, c2, s2),
+                    );
+                    assert_eq!(old, new, "{name}: strides {s1}/{s2}, seed {:#x}", rng.seed());
+                }
+            }
+        }
+    }
+
+    // `pad = 1` on the second surface is exactly the four-point reach, so the noise the
+    // diamond's arms read is real data that differs from the block's own edge.
+    for &(name, raw, w, h) in FOUR_SHIMS {
+        for &s1 in &strides(w) {
+            for &s2 in &strides(w + 2) {
+                for _ in 0..scale(40) {
+                    let (mut b1, c1) = sad_surface(&mut rng, s1, w, h, 0);
+                    let (mut b2, c2) = sad_surface(&mut rng, s2, w, h, 1);
+                    let mut old = [0i32; 4];
+                    unsafe {
+                        raw(
+                            b1.as_mut_ptr().add(c1),
+                            s1 as i32,
+                            b2.as_mut_ptr().add(c2),
+                            s2 as i32,
+                            old.as_mut_ptr(),
+                        )
+                    };
+                    let mut new = [0i32; 4];
+                    safe_sad_four(
+                        w,
+                        h,
+                        &PlaneCursor::new(&b1, c1, s1),
+                        &PlaneCursor::new(&b2, c2, s2),
+                        &mut new,
+                    );
+                    assert_eq!(
+                        old, new,
+                        "{name}: strides {s1}/{s2}, seed {:#x} (up, down, left, right)",
+                        rng.seed()
+                    );
+                }
+            }
+        }
+    }
+}
+
 type RawSad = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32) -> i32;
 type RawFour = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i32);
 
+/// Named `_SHIMS` because that is what these entry points are when the swap is
+/// landed; right now the SAD half is unswapped and they are the raw kernels. Both
+/// readings are true of the spans, which is why the property survives the unswap.
 const SAD_SHIMS: &[(&str, RawSad, usize, usize)] = &[
     ("Sad4x4", sad::WelsSampleSad4x4_c, 4, 4),
     ("Sad8x4", sad::WelsSampleSad8x4_c, 8, 4),
@@ -503,15 +625,7 @@ fn sad_shims_stay_inside_the_spans_they_declare() {
                 let c1 = PlaneCursor::new(&b1, 0, s1);
                 let c2 = PlaneCursor::new(&b2, s2, s2);
                 let mut want = [0i32; 4];
-                match (w, h) {
-                    (4, 4) => sad::sample_sad_four::<4, 4>(&c1, &c2, &mut want),
-                    (8, 4) => sad::sample_sad_four::<8, 4>(&c1, &c2, &mut want),
-                    (4, 8) => sad::sample_sad_four::<4, 8>(&c1, &c2, &mut want),
-                    (8, 8) => sad::sample_sad_four::<8, 8>(&c1, &c2, &mut want),
-                    (16, 8) => sad::sample_sad_four::<16, 8>(&c1, &c2, &mut want),
-                    (8, 16) => sad::sample_sad_four::<8, 16>(&c1, &c2, &mut want),
-                    _ => sad::sample_sad_four::<16, 16>(&c1, &c2, &mut want),
-                }
+                safe_sad_four(w, h, &c1, &c2, &mut want);
                 assert_eq!(
                     &sads[..4],
                     &want[..],
