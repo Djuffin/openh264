@@ -368,7 +368,7 @@ The repeatable transformations, so sessions can be scripted/parallelized. Each r
 
 ## 5. Phase plan
 
-Estimates are in focused sessions (the unit this port has been built in). Total: **≈45–60 sessions**. Every phase ends with the full gate battery (§7.5) green.
+Estimates are in focused sessions (the unit this port has been built in). Total: **≈50–65 sessions** (revised 2026-08-08 from ≈45–60 after Phase 2's scale correction; see the calibration row in §9 — count before sizing, and treat per-phase figures as −0/+40% ranges). Every phase ends with the full gate battery (§7.5) green.
 
 ### Phase 0 — Guardrails, dead-code purge, tooling *(3 sessions)*
 
@@ -387,7 +387,9 @@ Build `src/safe/`: `PaddedPlane`/`PlaneCursorMut`, `BsCursor`/`BsWriter`, `PicId
 
 *Exit gate: unit tests + Miri clean; codec untouched. Risk: API-shape mistakes — mitigated by piloting on one consumer each in Phase 2/3 before mass adoption.*
 
-### Phase 2 — Leaf DSP kernels, both codecs *(5–7 sessions)*
+### Phase 2 — Leaf DSP kernels, both codecs *(6–8 sessions; resized 2026-08-08)*
+
+*Scale correction from execution: the "~120 kernels" figure undercounted by ~60% — the real total, counted as `unsafe fn` definitions in the phase's files, is ≈190, and per-family estimates in briefs have been wrong in both directions (T2 "~13" was 4; T3 "44" was 42; T4's "26" held). Count the file before sizing the session, and treat every kernel figure in this section as an estimate.*
 
 R2 across: `decoder/decode_mb_aux.rs` → `encoder/encode_mb_aux.rs` + `sample.rs` + `encoder/decode_mb_aux.rs` → `common/sad_common.rs` + `intra_pred_common.rs` + `mc.rs` (fold the `[[fn;4];4]` quarter-pel table into a `match` or safe-fn table) → `common/deblocking_common.rs` (mind the stride-swap V/H trick and `-3*stride` reads — cursor handles both) → `common/expand_pic.rs` + `decoder_core.rs` expand functions → `processing/vaacalc.rs` + `adaptive_quantization.rs` kernels → both `get_intra_predictor.rs` (the biggest: 44 decoder kernels + encoder set; scriptable — uniform signature, uniform punning pattern; keep the decoder/encoder same-name-different-signature functions distinct).
 
@@ -409,7 +411,7 @@ Callers keep calling through R7 shims where tables still exist; tables themselve
 
 Tier 1 deletions (tables → direct calls; the Phase 0/2 work makes this mostly deletion), tier 2 enums (`EntropyCoder`, MD/ME strategy enums, RC mode — note `SWelsRcFunc` maps to an enum over the five RC modes already proven byte-identical), tier 3 traits (`ParamsetStrategy`, `RefStrategy`), `IWelsVP` inlined per §2.2.5, all 21+2 transmutes gone, `wels_func_ptr_def.rs` reduced to the ~15 algorithm choices and then dissolved into config-typed fields on `Encoder`.
 
-*Exit gate: battery. Risk: low — every replaced pointer provably pointed at exactly one function per config; assert-map the table-init functions before deleting them.*
+*Exit gate: battery, **plus the D-perf-1 recovery checkpoint**: re-measure every deficit-ledger family's streams with dispatch direct (shims now inlinable into callers — span arithmetic folds against caller constants, `from_raw_parts` inlines to ~nothing) and record the recovery in the ledger. Risk: low — every replaced pointer provably pointed at exactly one function per config; assert-map the table-init functions before deleting them.*
 
 ### Phase 5 — Decoder structural rewrite *(9–12 sessions)* — the first pivot
 
@@ -422,7 +424,7 @@ Order inside the phase (each step lands with shims + full gates):
 5. **5.5 `decoder_core.rs`**: allocation → constructors (`AllocPicture` dies into `Picture::new`), paramset store (P4), context decomposition per §2.2.6, `Drop` teardown, `Default` derives.
 6. **5.6 `decode_slice.rs`** last (P1), including EC MC paths; delete the last decoder shims and `SBitStringAux` shell; decoder modules get `#![deny(unsafe_code)]` one by one.
 
-*Exit gate: battery with special attention to frame-count parity and the `#[ignore]` set; long fuzz run; decoder src/ is unsafe-free. Risk: highest of the plan — this is where borrow-splits are designed for real. Mitigation: strict step order above, each step's shims keep the tree green, and any step can pause for a session boundary without leaving broken state.*
+*Exit gate: battery with special attention to frame-count parity and the `#[ignore]` set; long fuzz run; decoder src/ is unsafe-free; **every §7.4 deficit-ledger entry whose shims died in this phase must clear** (the ledger empties as the scaffolding it measures is deleted). Risk: highest of the plan — this is where borrow-splits are designed for real. Mitigation: strict step order above, each step's shims keep the tree green, and any step can pause for a session boundary without leaving broken state.*
 
 ### Phase 6 — Encoder structural rewrite *(10–14 sessions)* — the second pivot
 
@@ -514,10 +516,19 @@ Two counting rules the script encodes, both learned the hard way:
 `fuzz_targets/decode_annexb.rs`: feed arbitrary bytes through the full decode+flush sequence; assert no panic, no abort, bounded memory. Seed with `res/`. After Phase 3, add a structured mutator target for NAL-level mutation. Stretch (worth it by Phase 5): differential target comparing Rust vs dlopen'd C++ on error codes + output hashes — it converts the byte-exactness property into a fuzzable invariant.
 
 ### 7.4 Performance budget
+
+*Restated 2026-08-08 after T4 (`common/mc.rs`) became the first family to exceed the original flat budget and the investigation showed the flat budget was measuring the wrong thing during a strangler phase. Decision record below.*
+
 - Baseline: Phase 0 bench medians (`c_vs_rust_bench`, `decode_1080p_bench`). All comparisons are scalar-vs-scalar (the C++ dylib never dispatches SIMD), so ratios are meaningful.
-- Budget: ≤5% regression per phase, ≤10% cumulative at Phase 9, tracked in a checked-in log. Anything over 5% in a single PR gets investigated before merge.
-- Safe-but-fast idioms, in order of preference: fixed-size array windows (`&mut plane[i..i+16].try_into().unwrap()` → `&mut [u8;16]` — eliminates per-access checks), `chunks_exact`/`chunks_exact_mut` row walking, hoisting `row_mut` slices out of inner loops, iterator zips for src/dst pairs. `get_unchecked` is **banned** — if a hot loop can't be made fast safely, restructure the loop, don't reintroduce unsafe.
-- Expect some *wins*: direct calls replacing indirect dispatch (Phase 4) and `match` replacing fn-pointer tables are LLVM-inlinable where the C design never was.
+- **Measurement protocol (normative since T4):** sequential `cargo bench` runs of the *same binary* drift ~3%, which cannot judge a 5% budget. Build control and candidate binaries, keep both on disk, run them **interleaved in one loop**, 3+ pairs, medians. For hot families, build the per-kernel scratch microbenchmark (old-via-`git show` vs new, per phase and block shape) *first*, not after the numbers look bad — it is what separates kernel cost from scaffolding cost. Profile (`/usr/bin/sample`) before theorizing.
+- **Two ledgers, not one budget:**
+  - **End-state regression** — cost intrinsic to the safe kernels/algorithms themselves, as isolated by the paired microbenchmark. Budget unchanged: bodies at ≤1.05x per family (investigate anything over), ≤10% cumulative at Phase 9 on the full-stream benches. This is the number that must hold forever.
+  - **Scaffolding deficit** — overhead attributable to the strangler shims (span arithmetic, `from_raw_parts`, constructor asserts at the raw boundary), which Phase 5 deletes with the shims. A family may carry a scaffolding deficit past 5% **only if all three hold**: (a) the paired microbenchmark shows kernel bodies at ≤1.05x, (b) the overhead is demonstrated to be fixed per-call shim cost, not per-sample kernel cost, and (c) a **deficit ledger** entry in `perf_baseline.md` names the family, the measured deficit per stream, and the phase that deletes it. Hard ceiling regardless: **≤10% total regression on any bench stream at any commit** — a breach stops the phase for recovery (slim the specific shims, or unswap that family's commit B as the last resort; the two-commit discipline exists so unswap stays cheap).
+- **Recovery checkpoints:** Phase 4 (direct dispatch makes shims inlinable into callers — measure the ledgered families' streams and record the recovery); Phase 5 (shim deletion — every ledger entry must clear; the ledger going empty is part of Phase 5's exit gate).
+- Safe-but-fast idioms, as measured through T4 (order matters): **const-generic widths for copies** — `copy_from_slice` on a runtime length is a `memmove` *call*, and `copy_rows::<16>` vs `copy_rows(16)` was 10.8x vs ~1x; fixed-size array windows (`try_into().unwrap()` → `&[u8; 16]`); **zip iterators instead of indexing several slices by `j`** (LLVM will not prove seven bounds facts per sample); a rolling row window over re-fetching rows; `#[inline(always)]`/`#[inline(never)]` parity with the C++'s `inline`-plus-table structure; `row()`'s statically-sized window per row — **not** `chunks()`-based walkers, which measured worse everywhere they were tried (`perf_baseline.md` §Phase 2 T4, the row-walker table). `get_unchecked` is **banned** — if a hot loop can't be made fast safely, restructure the loop, don't reintroduce unsafe.
+- Expect some *wins*: direct calls replacing indirect dispatch (Phase 4) and `match` replacing fn-pointer tables are LLVM-inlinable where the C design never was; T2 measured 1.3–1.8% *faster* and T3 a wash.
+
+**Decision D-perf-1 (2026-08-08): T4's ~7–8% is carried as a scaffolding deficit, not reverted.** Basis: the kernel bodies measure 0.88–0.99x (at parity or better — the end-state cost is zero or negative); the residual is 7–16 ns of fixed per-call shim overhead on the most call-dense family in the codec; three structural mitigations were built, paired-measured, and rejected, so further optimization attempts are closed; and unswapping would forfeit the full battery's continuous exercise of the safe kernels while concentrating re-swap risk exactly where the strangler pattern exists to avoid it. The deficit is ledgered in `perf_baseline.md`, bounded by the ≤10% ceiling, checkpointed at Phase 4, and must clear at Phase 5.
 
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
@@ -562,7 +573,8 @@ P0 ──► P1 ──► P2 (kernels) ──► P4 (dispatch) ──► P5 (dec
 |---|---|---|---|
 | More latent UB like the release-deblocking segfault surfaces mid-refactor (an optimizer or layout change flips behavior that was never defined) | **High** (raised: the known instance turned out to be a stack overflow executing thousands of times per frame on the mainline path, silently, for the port's whole life) | High | Phase 0 root-caused the known instance (§1.4, already fixed by `e6fce464`) and added the dual-profile gate; any later debug/release disagreement halts the phase until root-caused — it is always a pre-existing bug being exposed, and fixing it is in scope. Note the instance was *invisible to every gate*: 341/341 byte-identical sweeps ran on top of it. Byte-exactness does not imply soundness, which is the argument for the fuzzer (§7.3) and for Phase 2 replacing `*mut u8` kernel arguments with real array types |
 | Silent behavior change on malformed streams (EC paths, slop P6) | Medium | High (conformance can't see it) | Error-code parity tests, fuzz differential vs C++, malformed-stream corpus from the ignored e2e cases |
-| Perf regression in MD/ME/intra hot loops | High (locally) | Medium | §7.4 idioms, per-PR budget, convert worst case early (Phase 2 `get_intra_predictor`) |
+| Perf: scaffolding deficit on call-dense families (T4's ~7% is the instance; intra worst-case measured a wash, so kernel-intrinsic risk is largely retired) | Medium | Medium | §7.4 two-ledger rules + ≤10% hard ceiling; Phase 4 recovery checkpoint; Phase 5 must clear the ledger; unswap-commit-B as last resort |
+| Estimates derived from the surveys run low (Phase 2's kernel count was −60%; per-family brief figures wrong in both directions) | High | Low–Medium | Count before sizing every session; phases 5/6 are file/deref-based (more robust) but treat all session counts as −0/+40% ranges |
 | `decode_slice.rs`/`encoder_ext.rs` pivots stall mid-way | Medium | High | Strict internal step order, shims keep tree green, each step is a session-sized unit |
 | Borrow-splits force design churn late (a subsystem needs 4 parts at once) | Medium | Medium | §2.2.6 decomposition reviewed against the top-20 fattest call paths *before* Phase 5 starts (one session of dry-run signature sketching) |
 | MT output nondeterminism after Phase 7 | Low | High | Slice-order stitching preserved, determinism gate across thread counts, diffharness threads sweep |
@@ -695,7 +707,9 @@ binary keeps its exact control count, and the 20-test `#[ignore]` set is unchang
 
 ### Phase 2 — leaf DSP kernels, both codecs
 
-Sized at 5–7 sessions; session A landed the preconditions, the control and the pilot.
+Sized at 5–7 sessions, **resized to 6–8 on 2026-08-08** (real total ≈190 fns, not ~120;
+T7 alone is 69 — bigger than T3 and T4 combined). Session A landed the preconditions,
+the control and the pilot; session B landed T4 and the budget investigation.
 Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
 
 - [x] **Phase 0 T6 — ratchet script + gate runner.** `99f4ab5c`. Both instruments
@@ -757,8 +771,15 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       `copy_from_slice` lowering to a `memmove` **call** (10.8x on the zero-MV copy),
       per-sample bounds checks across seven same-length slices, and missing
       `#[inline(always)]`/`#[inline(never)]` parity with the C++.
+- [x] **D-perf-1 — the T4 budget call (2026-08-08).** Carried as a scaffolding
+      deficit, not reverted; §7.4 restated with the end-state/scaffolding split, the
+      interleaved-pairs measurement protocol, the deficit ledger
+      (`perf_baseline.md` §Ledger), the ≤10% hard ceiling, and the Phase 4/Phase 5
+      recovery checkpoints. Further T4 optimization attempts are **closed** — three
+      structural fixes were built, paired-measured, and rejected; do not reopen
+      without new evidence of a different mechanism.
 - [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started;
-      this is the next action.
+      this is the next action, unblocked by D-perf-1.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.
 - [ ] **T7 — the four encoder kernel files.** Not started.

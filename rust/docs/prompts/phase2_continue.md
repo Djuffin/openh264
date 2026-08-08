@@ -7,26 +7,30 @@ family), naming/shim conventions (§3.2), perf protocol (§3.3), gates (§5), no
 first sessions learned that you inherit as *rules*, and the remaining task list with
 its carry-ins. Where this file and `phase2.md` disagree, this file is newer.
 
-State as of **`34ad2eb4`** (tree clean, full battery green):
+State as of **`3ddd2405`** (tree clean, full battery green):
 
 | | |
 |---|---|
-| Done | Preconditions (Phase 0 T5c/T5e/T6 — **Phase 0 is now complete except T7-fuzz, deferred by Eugene's direction**), T1 control, T2 pilot (`decoder/decode_mb_aux.rs`, 4 kernels, −1.3…1.8% — a win), T3 (`decoder/get_intra_predictor.rs`, 42 kernels, ±1% wash) |
-| Remaining | T4 `mc.rs` → T5 `sad_common`+`intra_pred_common` → T6 `deblocking_common`+F1+expand → T7 four encoder files → T8 processing → T9 exit — ~74 of ~120 kernels, including the phase's two hardest items (both in T6) |
-| Instruments | `rust/tools/gates.sh` + ratchet exist and are the workflow; gates.sh prints the F3 retry rule and a T7-SKIP line every run |
-| Counts | tests 375 debug / 373 release / 20 ignored; sweeps 341/341 both profiles; ratchet at `34ad2eb4`: `unsafe_fn` 1365, `unsafe_block` 549, `raw_ptr` 5212, `SHIM(` 46, `no_mangle` 38 |
+| Done | Preconditions (Phase 0 complete except T7-fuzz, deferred by Eugene), T1 control, T2 pilot (4 kernels, −1.3…1.8% — a win), T3 (42 kernels, ±1% wash), **T4 `common/mc.rs` (26 kernels — landed over budget, investigated, and carried under decision D-perf-1: plan §7.4)** |
+| Remaining | T5 `sad_common`+`intra_pred_common` (16 fns) → T6 `deblocking_common`+F1+expand (~24) → T7 four encoder files (**69** — the biggest task, larger than T3+T4 combined) → T8 processing (11) → T9 exit. **~120 fns of the phase's real ≈190** (the plan's "~120 total" was ~60% low; count files before sizing sessions) |
+| Instruments | `rust/tools/gates.sh` + ratchet; gates.sh prints the F3 retry rule and a T7-SKIP line every run; the **interleaved-pairs perf protocol and the scratch microbenchmark are now normative** (§7.4, R-h) |
+| Counts | tests 378 debug / 376 release / 20 ignored (the +1 over T4's control is its surviving span property test); sweeps 341/341 both profiles; ratchet baseline regenerated at `ea52b387` — run `check`, don't trust remembered numbers |
 
-Suggested split of the remaining 3–4 sessions: **S1 = T4 + T5; S2 = T6 alone** (the
-likeliest overrun — don't pair it with anything); **S3 = T7; S4 = T8 + T9** (fold into
-S3 if room). Clean stops anywhere, per the standing exit protocol.
+Suggested split of the remaining 3–4 sessions: **S1 = T5 + T8** (both small and
+mechanical — T8 is pulled forward deliberately to fill the session while keeping T6
+isolated); **S2 = T6 alone** (the likeliest overrun — don't pair it with anything);
+**S3 = T7 part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8);
+**S4 = T7 part 2** (`encoder/get_intra_predictor` 33) **+ T9**. Clean stops anywhere,
+per the standing exit protocol.
 
 ---
 
 ## 1. Read first
 
-1. `rust/docs/safety_refactor_log.md` — the Phase 2 entry **in full**: the pilot retro
-   verdicts, T3's four carry-forwards (restated below as rules), and the T4 carry-in
-   list. This is the highest-density context you have.
+1. `rust/docs/safety_refactor_log.md` — **both** Phase 2 entries (sessions A and B) in
+   full: the pilot retro verdicts, T3's carry-forwards, and session B's T4 write-up
+   (the budget investigation, the span property test, the "four things the remaining
+   families inherit"). This is the highest-density context you have.
 2. `rust/docs/phase2_findings.md` — **F8** (the 8×8 IDCT's `i16` intermediates overflow;
    debug panics where the C++ wraps; pre-existing, open, unreachable on conformant
    streams). It generalizes — see rule R-e below.
@@ -71,13 +75,17 @@ S3 if room). Clean stops anywhere, per the standing exit protocol.
   check the widths against both the old Rust and the C++ before writing the safe body,
   and bound differential-test inputs to the in-contract range where the old code
   doesn't panic (F7/F8 precedent).
-- **R-f — Ratchet arithmetic during the strangler phase** (as re-characterized in the
-  log, not as `phase2.md` loosely implied): `raw_ptr` is the metric that must fall and
-  is strictly non-increasing per commit; `no_mangle` non-increasing; `SHIM(` rises
-  only in a family's commit B; `unsafe_block` may rise **only by that commit's shim
-  count** (each counted `from_raw_parts` replaces formerly-invisible derefs);
-  `unsafe_fn` stays ~flat until Phase 5 deletes shims. Judge every commit against
-  that shape; anything off-shape is a mistake, not noise.
+- **R-f — Ratchet arithmetic during the strangler phase: judge the shape, not the
+  sign** (corrected by T4 — the earlier "raw_ptr strictly non-increasing" version of
+  this rule was wrong). `raw_ptr` counts *occurrences* — signatures and casts, not
+  body arithmetic — so a shim that keeps its raw signature keeps its count, and a
+  shared helper that turns a pointer into a slice may legitimately add one or two
+  (T4 went **+2**, both from `shim_wh`; paying that beat 29 copies of the span
+  arithmetic). `SHIM(` rises only in a family's commit B; `unsafe_block` may rise
+  only by that commit's shim count; `no_mangle` non-increasing; `unsafe_fn` ~flat
+  until Phase 5. Two counting traps from T4: **never fold shims into a macro** — it
+  makes `unsafe_fn` report a drop that didn't happen and hides `SHIM(` markers; write
+  them out one per definition, marker on each.
 - **R-g — F3 protocol, as practiced:** one release-`mt` hit at `t=4 sm=3` → re-run
   rather than argue, even when the change is structurally unrelated. More than one hit
   in a session → equal-count sweeps at HEAD vs the control commit, and append the
@@ -85,22 +93,43 @@ S3 if room). Clean stops anywhere, per the standing exit protocol.
   revert, investigate. And log any moment where the missing fuzzer (T7-skip) would
   plausibly have caught something first — F8 is the first such entry; accumulation is
   the signal to re-raise T7 with Eugene.
+- **R-h — The perf protocol is interleaved pairs plus an early microbenchmark**
+  (normative, §7.4). Sequential runs of the same binary drift ~3% — an unpaired
+  reading of T4 said +5.1% when the paired reading said +8.7%, and the session acted
+  on the wrong one for a while. Keep both binaries on disk, interleave in one loop,
+  3+ pairs, medians. For any family on a hot path, **build the scratch
+  microbenchmark first** (old kernels via `git show` vs new, per phase and block
+  shape) — T4's brief says "first in T5 and T7, not third"; it is what separates
+  kernel cost from scaffolding cost, and that separation is what §7.4's two ledgers
+  are judged on. Profile with `/usr/bin/sample` before theorizing — T4's first two
+  theories were wrong and cost a build-bench cycle each.
+- **R-i — The perf defect catalog from T4** (check each before measuring, they all
+  generalize): `copy_from_slice` on a runtime length is a `memmove` **call** — use
+  const-generic widths (`copy_rows::<16>`) exactly as the C++ dispatches fixed
+  widths; indexing N same-length slices by `j` leaves N bounds facts per sample —
+  zip the iterators, and roll the row window instead of re-fetching; match the C++'s
+  inline structure (`#[inline(always)]` inner kernels, `#[inline(never)]` on
+  composites carrying big scratch). And the negative results are binding: by-value
+  cursors (wash), dispatch-over-shims (wash), and `chunks()`-based row walkers
+  (**worse everywhere**, the API was built, measured, and removed — read
+  `perf_baseline.md` §Phase 2 T4 before re-proposing any of the three).
 
 ## 3. Remaining tasks
 
-### T4 — `common/mc.rs` (next action; carry-ins from the log, verbatim)
-26 kernels + `InitMcFunc`; 6-tap Wiener filters; consumers in decoder MC/EC **and**
-encoder MD/ME — the first family with encoder-side exposure, so record the encoder
-signal (sweep wall time; `FFMPEG` bench if set) alongside `decode_1080p_bench`.
-Carry-ins: (1) safe kernels take a **`PlaneCursor` (read) + `PlaneCursorMut` (write)
-pair** — reference and current are different allocations; (2) the shim contract states
-the **MV clamp verbatim** (`decode_slice.rs:1072-1091`) — unlike intra, legality comes
-from the caller's clamp, and that clamp is the entire safety argument; (3) fold the
-module-internal `pWelsMcFunc_c: [[fn; 4]; 4]` quarter-pel table into a `match` or a
-table of **safe** fn pointers — the one dispatch table this phase may touch. R-e check:
-the 6-tap sums' intermediate widths.
+### T4 — `common/mc.rs` — DONE (`46053953`…`3ddd2405`), carried over budget under D-perf-1
+Landed at +8.2/+7.2/+7.0% on the decode streams; kernel bodies at 0.88–0.99x; the
+residual is fixed per-call shim overhead, ledgered in `perf_baseline.md` §Ledger,
+bounded by §7.4's ≤10% ceiling, checkpointed at Phase 4, cleared at Phase 5. **Further
+T4 optimization is closed** — three structural fixes were built, paired-measured, and
+rejected (R-i). If a later family's work makes a T4 stream drift further, that counts
+against the ceiling, not against T4's closed investigation. Everything reusable from
+the session is in R-f/R-h/R-i and the log's "four things the remaining families
+inherit" (the 17-wide encoder half-pel ceiling; clamp-as-contract; per-kernel reach
+tables, not unions; the span property test that replaced per-kernel equivalence
+entries — copy that test shape in every remaining family).
 
-### T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`
+### T5 — `common/sad_common.rs` + `common/intra_pred_common.rs` (next action; unblocked by D-perf-1)
+16 fns (14 + 2 — the one brief estimate that has matched reality; still recount).
 Per `phase2.md` §T5 unchanged: the `Four` SAD kernels read **outside the nominal
 block** (`-stride`, `-1`, `+1`) — plane cursors, not block slices, and the
 differential must cover the edge reads; absorb the three pre-existing unused
@@ -108,7 +137,10 @@ differential must cover the edge reads; absorb the three pre-existing unused
 consumers are `encoder/sample.rs`'s installers + one direct call in
 `processing/scene_change_detection.rs:103`. intra_pred_common is two 3-arg kernels —
 mind the same-name-different-arity collision with the decoder file you already
-converted.
+converted. **Build the microbenchmark first (R-h)**: SAD is encoder-ME-hot and
+call-dense — the same per-call-overhead profile that put T4 over budget — so this is
+the first family where the two-ledger split gets applied from the start rather than
+discovered late. Per-kernel reach tables per T4's carry-in, not a union span.
 
 ### T6 — `deblocking_common` + the F1 surgery + expansion (schedule alone)
 The phase's two hardest items live here; both have full briefs in `phase2.md` §T6 —
@@ -123,14 +155,21 @@ constant (32 luma / 16 chroma), explicit pad parameter where a call site can't p
 it; the two `mem::transmute` fn-pointer re-wraps stay (Phase 4). R-c applies doubly
 here: the expand span helper and its contract sentence are the whole game.
 
-### T7 — the four encoder kernel files (first real encoder perf signal)
-`encode_mb_aux.rs`, `encoder/decode_mb_aux.rs`, `sample.rs` (installers keep
-installing shims), `encoder/get_intra_predictor.rs` — per `phase2.md` §T7. This is
-where R-a's mechanism gets its encoder-side test and where R-e is most likely to bite
-(DCT/quant/SATD intermediates). Measure before and after per family: sweep wall time
-(control ~21s release) + `FFMPEG` bench when available; if a regression shows up with
-no decode-bench equivalent to localize it, bisect by family — that's why the commits
-are two-per-family.
+### T7 — the four encoder kernel files (first real encoder perf signal; plan for two sessions)
+**69 fns by real count** — `encode_mb_aux.rs` 22, `encoder/decode_mb_aux.rs` 6,
+`sample.rs` 8 (installers keep installing shims), `encoder/get_intra_predictor.rs` 33
+— the biggest task in the phase, larger than T3 and T4 combined; the suggested split
+is S3 = the first three files, S4 = `get_intra_predictor` + T9. This is where R-a's
+mechanism gets its encoder-side test and where R-e is most likely to bite
+(DCT/quant/SATD intermediates — check widths against both the old Rust and the C++
+before writing each safe body). **Microbenchmark first (R-h), per family** — there is
+no decode-bench equivalent on this path, so the microbench plus `FFMPEG`-gated
+`c_vs_rust_bench` (1080p Mandelbrot as primary, per `perf_baseline.md`) *are* the
+instruments, with sweep wall time as the coarse cross-check; if a regression shows up,
+bisect by family — that's why the commits are two-per-family. SAD/SATD in `sample.rs`
+have T4's call-density profile: expect scaffolding overhead, apply the two-ledger
+split, and ledger any deficit with its evidence rather than burning the session
+optimizing closed ground.
 
 ### T8 — `processing/{vaacalc,adaptive_quantization}.rs` kernels
 Per `phase2.md` §T8: safe signatures with `&[u8]` planes + `&mut` out-slices; extend
@@ -140,11 +179,19 @@ the file's two real unit tests; the `IWelsVP` plumbing above is Phase 4's.
 Per `phase2.md` §T9, plus what's now known: final `SHIM(phase2)` and `no_mangle`
 counts recorded (kernels must contribute zero no_mangles; api/ exports remain); full
 battery + the Miri protocol (`--lib` + differential files with `scale()`); final
-3-run medians and the per-family delta table; **append** a Phase 2 column to
-`perf_baseline.md`; Progress appendix updated with hashes; log entry whose
-next-action is "Phase 3, decoder read side first — read F4/F5/F7 before touching
-anything, and F2 before the write side"; auto-memory updated (Phase 2 complete, where
-the shims stand, ratchet shape).
+**interleaved-pair** medians (R-h, not the old 3-run protocol) and the per-family
+delta table; **append** a Phase 2 column to `perf_baseline.md` and reconcile the
+§Ledger (T4's entry stays open with its Phase 4 checkpoint pending; any new entries
+carry their evidence); Progress appendix updated with hashes. Two T9-specific items
+from session B: **evaluate widening the Miri gate to the port's own unit tests** —
+`gates.sh` runs Miri only on `--lib safe::`, which is why a port unit test exercising
+UB (the mc alias test reading `pSrc[-2]` off a bare array) went unseen until a shim
+materialized the span; a gate change is legitimate at a phase boundary and this is
+the boundary. And carry the straggler grep for any arch-suffixed or table-installed
+stub the per-family passes missed. Log entry's next-action: "Phase 3, decoder read
+side first — read F4/F5/F7 before touching anything, and F2 before the write side";
+auto-memory updated (Phase 2 complete, where the shims stand, ledger state, ratchet
+shape).
 
 ## 4. Gates
 
