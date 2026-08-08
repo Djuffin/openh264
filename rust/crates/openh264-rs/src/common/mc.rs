@@ -9,6 +9,8 @@
 
 // CPU feature flags from cpu_core.h
 
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+
 // Function pointer signatures matching mc.h
 pub type PWelsMcFunc = unsafe extern "C" fn(
     pSrc: *const u8,
@@ -197,6 +199,566 @@ pub fn WelsClip1(iX: i32) -> u8 {
         }
     } else {
         iX as u8
+    }
+}
+
+// ============================================================================
+// Safe kernels (plan §Phase 2, recipe R2)
+// ============================================================================
+//
+// These are the implementations; the `Mc*_c` / `PixelAvg_c` functions below are
+// strangler shims (R7) that build cursors from the raw pointers and call in here,
+// so no call site and no dispatch-table installer changes in this phase.
+//
+// **This is the first family whose kernels read one plane and write another**, so
+// unlike the intra-prediction families they take a `PlaneCursor` (the reference
+// picture, or an encoder search buffer) *and* a `PlaneCursorMut` (the destination)
+// rather than one cursor over a single surface. The two are different allocations
+// at every real call site.
+//
+// The reads reach outside the block by design — the 6-tap Wiener filter of H.264
+// half-pel interpolation needs two samples before and three after each output
+// sample, in whichever direction it runs. Where intra prediction's legality came
+// from `PADDING_LENGTH` alone, **an MC read is legal because the caller clamped the
+// motion vector first**; each shim's `# Safety` block states that clamp, and
+// `luma_reach`/`src_span` below are the only places the resulting span is computed.
+//
+// Arithmetic parity (plan §Phase 2, R-e): every intermediate below keeps the width
+// the old port used. The 6-tap sums were checked against both the old Rust and
+// `codec/common/src/mc.cpp` — with byte inputs they are bounded by `510 * 20 =
+// 10200` in `filter_input_8bit` and by `21420 + 25500 + 428400 = 475320` in
+// `hor_filter_input_16bit`, so nothing here can overflow its `i32`, and the `as
+// i16` narrowing in `mc_hor_ver22` is likewise inside range. No F-finding.
+
+/// The 6-tap Wiener filter over six samples — the C++ `FilterInput8bitWithStride_c`
+/// with its `kiOffset` walk already done by the caller, so `p[i]` is that kernel's
+/// `pSrc[(i - 2) * kiOffset]`.
+///
+/// C++: `FilterInput8bitWithStride_c`, `codec/common/src/mc.cpp`.
+///
+/// The expression is the old port's term for term, including the `u32` accumulation
+/// and the shift-and-add spellings of `*5` and `*20`.
+#[inline(always)]
+pub fn filter_input_8bit(p: &[u8; 6]) -> i32 {
+    let kuiPix05 = (p[0] as u32) + (p[5] as u32);
+    let kuiPix14 = (p[1] as u32) + (p[4] as u32);
+    let kuiPix23 = (p[2] as u32) + (p[3] as u32);
+
+    (kuiPix05 as i32)
+        - (((kuiPix14 << 2) + kuiPix14) as i32)
+        + (((kuiPix23 << 4) + (kuiPix23 << 2)) as i32)
+}
+
+/// The same filter over the 16-bit intermediates of the centre kernel.
+///
+/// C++: `HorFilterInput16bit_c`, `codec/common/src/mc.cpp`.
+#[inline(always)]
+pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
+    let iPix05 = (p[0] as i32) + (p[5] as i32);
+    let iPix14 = (p[1] as i32) + (p[4] as i32);
+    let iPix23 = (p[2] as i32) + (p[3] as i32);
+    iPix05 - (iPix14 * 5) + (iPix23 * 20)
+}
+
+/// `width` bytes of each of `height` rows, source to destination.
+///
+/// One `copy_from_slice` per row: the same wide moves the `LD64`/`ST64A8` pairs in
+/// the C++ existed for, with the bounds check landing per row rather than per sample.
+#[inline(always)]
+fn copy_rows(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+    for dy in 0..height as isize {
+        dst.row_mut(dy, 0, width).copy_from_slice(src.row(dy, 0, width));
+    }
+}
+
+/// C++: `McCopyWidthEq2_c` — chroma only, the one width the copy path narrows to.
+pub fn mc_copy_width_eq2(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows(src, dst, 2, height);
+}
+
+/// C++: `McCopyWidthEq4_c`.
+pub fn mc_copy_width_eq4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows(src, dst, 4, height);
+}
+
+/// C++: `McCopyWidthEq8_c`.
+pub fn mc_copy_width_eq8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows(src, dst, 8, height);
+}
+
+/// C++: `McCopyWidthEq16_c`.
+pub fn mc_copy_width_eq16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
+    copy_rows(src, dst, 16, height);
+}
+
+/// The width `McCopy_c` actually copies for a nominal `width`.
+///
+/// The C++ dispatches on the exact value and treats **everything that is not 16, 8
+/// or 4 as 2** — the comment there reads "here iWidth == 2". Reproduced rather than
+/// generalised to a `width`-byte copy: a caller passing 3 gets two bytes from the
+/// C++ and would get three from the obvious rewrite.
+#[inline(always)]
+fn copy_width(width: usize) -> usize {
+    match width {
+        16 => 16,
+        8 => 8,
+        4 => 4,
+        _ => 2,
+    }
+}
+
+/// C++: `McCopy_c`.
+pub fn mc_copy(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+    copy_rows(src, dst, copy_width(width), height);
+}
+
+/// C++: `PixelAvg_c` — the rounded average of two surfaces, `SMcFunc::pfSampleAveraging`.
+///
+/// The three surfaces carry their own strides because the encoder's quarter-pel
+/// refinement averages a `ME_REFINE_BUF_STRIDE` scratch buffer against the reference
+/// picture (`encoder/md.rs:1059`).
+pub fn pixel_avg(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &PlaneCursor<'_>,
+    b: &PlaneCursor<'_>,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        let ra = a.row(dy, 0, width);
+        let rb = b.row(dy, 0, width);
+        let out = dst.row_mut(dy, 0, width);
+        for j in 0..width {
+            out[j] = (((ra[j] as u32) + (rb[j] as u32) + 1) >> 1) as u8;
+        }
+    }
+}
+
+/// C++: `McHorVer20_c` — the horizontal half-pel filter, `(2, 0)` in quarter-pel.
+///
+/// Reads `x` in `-2 .. width + 3`, `y` in `0 .. height`.
+pub fn mc_hor_ver20(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        // One row window per output row, six-sample sliding windows inside it: the
+        // bounds check lands per row, the filter arithmetic per sample.
+        let row = src.row(dy, -2, width + 5);
+        let out = dst.row_mut(dy, 0, width);
+        for (o, w) in out.iter_mut().zip(row.windows(6)) {
+            *o = WelsClip1((filter_input_8bit(w.try_into().unwrap()) + 16) >> 5);
+        }
+    }
+}
+
+/// C++: `McHorVer02_c` — the vertical half-pel filter, `(0, 2)` in quarter-pel.
+///
+/// Reads `x` in `0 .. width`, `y` in `-2 .. height + 3`.
+pub fn mc_hor_ver02(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        // Six row windows, then a column walk across them — six bounds checks per
+        // output row rather than six per output sample.
+        let r = [
+            src.row(dy - 2, 0, width),
+            src.row(dy - 1, 0, width),
+            src.row(dy, 0, width),
+            src.row(dy + 1, 0, width),
+            src.row(dy + 2, 0, width),
+            src.row(dy + 3, 0, width),
+        ];
+        let out = dst.row_mut(dy, 0, width);
+        for j in 0..width {
+            let p = [r[0][j], r[1][j], r[2][j], r[3][j], r[4][j], r[5][j]];
+            out[j] = WelsClip1((filter_input_8bit(&p) + 16) >> 5);
+        }
+    }
+}
+
+/// C++: `McHorVer22_c` — the centre half-pel filter, `(2, 2)` in quarter-pel:
+/// vertical 6-tap into 16-bit intermediates, then horizontal 6-tap over those.
+///
+/// Reads `x` in `-2 .. width + 3`, `y` in `-2 .. height + 3`.
+///
+/// `iTmp` is `[i16; 17 + 5]` as in the C++, and `width` above 17 indexes past it —
+/// a panic here, exactly as in the old port, which used a Rust array too. The
+/// encoder's half-pel refinement is what needs the 17: it filters `iWidth + 1`
+/// columns (`encoder/md.rs:1289`).
+pub fn mc_hor_ver22(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut iTmp = [0i16; 17 + 5];
+    let n = width + 5;
+    for dy in 0..height as isize {
+        let r = [
+            src.row(dy - 2, -2, n),
+            src.row(dy - 1, -2, n),
+            src.row(dy, -2, n),
+            src.row(dy + 1, -2, n),
+            src.row(dy + 2, -2, n),
+            src.row(dy + 3, -2, n),
+        ];
+        for j in 0..n {
+            let p = [r[0][j], r[1][j], r[2][j], r[3][j], r[4][j], r[5][j]];
+            iTmp[j] = filter_input_8bit(&p) as i16;
+        }
+        let out = dst.row_mut(dy, 0, width);
+        for (o, w) in out.iter_mut().zip(iTmp[..n].windows(6)) {
+            *o = WelsClip1((hor_filter_input_16bit(w.try_into().unwrap()) + 512) >> 10);
+        }
+    }
+}
+
+/// A `16`-stride scratch surface for the quarter-pel kernels — the C++
+/// `uint8_t uiTmp[256]`, which is why luma MC blocks are at most 16 wide and tall.
+#[inline(always)]
+fn scratch() -> [u8; 256] {
+    [0u8; 256]
+}
+
+/// C++: `McHorVer01_c`.
+pub fn mc_hor_ver01(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut tmp = scratch();
+    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+}
+
+/// C++: `McHorVer03_c`.
+pub fn mc_hor_ver03(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut tmp = scratch();
+    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &src.advance(0, 1),
+        &PlaneCursor::new(&tmp, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer10_c`.
+pub fn mc_hor_ver10(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut tmp = scratch();
+    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+}
+
+/// C++: `McHorVer11_c`.
+pub fn mc_hor_ver11(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer12_c`.
+pub fn mc_hor_ver12(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut ver = scratch();
+    let mut ctr = scratch();
+    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&ver, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer13_c`.
+pub fn mc_hor_ver13(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    mc_hor_ver20(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+        width,
+        height,
+    );
+    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer21_c`.
+pub fn mc_hor_ver21(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ctr = scratch();
+    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer23_c`.
+pub fn mc_hor_ver23(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ctr = scratch();
+    mc_hor_ver20(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+        width,
+        height,
+    );
+    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer30_c`.
+pub fn mc_hor_ver30(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &src.advance(1, 0),
+        &PlaneCursor::new(&hor, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer31_c`.
+pub fn mc_hor_ver31(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver02(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+        width,
+        height,
+    );
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer32_c`.
+pub fn mc_hor_ver32(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut ver = scratch();
+    let mut ctr = scratch();
+    mc_hor_ver02(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+        width,
+        height,
+    );
+    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&ver, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McHorVer33_c`.
+pub fn mc_hor_ver33(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    mc_hor_ver20(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+        width,
+        height,
+    );
+    mc_hor_ver02(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+        width,
+        height,
+    );
+    pixel_avg(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+        width,
+        height,
+    );
+}
+
+/// C++: `McLuma_c` — quarter-pel dispatch on the low two bits of each MV component.
+///
+/// This `match` replaces the module-internal `pWelsMcFunc_c: [[fn; 4]; 4]` table of
+/// raw-pointer function pointers. It is the one dispatch table Phase 2 may touch
+/// (plan §Phase 2, §3.2) — it never left this module, so folding it changes no
+/// caller and no typedef, and the arms are in the table's `[iMvX & 3][iMvY & 3]`
+/// order so the two can be read against each other.
+pub fn mc_luma(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
+        (0, 0) => mc_copy(src, dst, width, height),
+        (0, 1) => mc_hor_ver01(src, dst, width, height),
+        (0, 2) => mc_hor_ver02(src, dst, width, height),
+        (0, 3) => mc_hor_ver03(src, dst, width, height),
+        (1, 0) => mc_hor_ver10(src, dst, width, height),
+        (1, 1) => mc_hor_ver11(src, dst, width, height),
+        (1, 2) => mc_hor_ver12(src, dst, width, height),
+        (1, 3) => mc_hor_ver13(src, dst, width, height),
+        (2, 0) => mc_hor_ver20(src, dst, width, height),
+        (2, 1) => mc_hor_ver21(src, dst, width, height),
+        (2, 2) => mc_hor_ver22(src, dst, width, height),
+        (2, 3) => mc_hor_ver23(src, dst, width, height),
+        (3, 0) => mc_hor_ver30(src, dst, width, height),
+        (3, 1) => mc_hor_ver31(src, dst, width, height),
+        (3, 2) => mc_hor_ver32(src, dst, width, height),
+        _ => mc_hor_ver33(src, dst, width, height),
+    }
+}
+
+/// C++: `McChromaWithFragMv_c` — bilinear chroma interpolation at eighth-pel.
+///
+/// Reads `x` in `0 .. width + 1`, `y` in `0 .. height + 1`.
+pub fn mc_chroma_with_frag_mv(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    if width == 0 {
+        return;
+    }
+    let pABCD = &g_kuiABCD[(mv_y & 0x07) as usize][(mv_x & 0x07) as usize];
+    let iA = pABCD[0] as i32;
+    let iB = pABCD[1] as i32;
+    let iC = pABCD[2] as i32;
+    let iD = pABCD[3] as i32;
+
+    for dy in 0..height as isize {
+        let r0 = src.row(dy, 0, width + 1);
+        let r1 = src.row(dy + 1, 0, width + 1);
+        let out = dst.row_mut(dy, 0, width);
+        for j in 0..width {
+            out[j] = ((iA * (r0[j] as i32)
+                + iB * (r0[j + 1] as i32)
+                + iC * (r1[j] as i32)
+                + iD * (r1[j + 1] as i32)
+                + 32)
+                >> 6) as u8;
+        }
+    }
+}
+
+/// C++: `McChroma_c` — the copy path when the eighth-pel fraction is zero.
+pub fn mc_chroma(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    if (mv_x & 0x07) == 0 && (mv_y & 0x07) == 0 {
+        mc_copy(src, dst, width, height);
+    } else {
+        mc_chroma_with_frag_mv(src, dst, mv_x, mv_y, width, height);
     }
 }
 
