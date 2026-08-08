@@ -316,6 +316,18 @@ two `from_raw_parts`, four constructor asserts — which is **scaffolding Phase 
 deletes**, not a property of the safe kernels. The kernels themselves are at parity or
 better: the centre filters measure 0.88–0.99x against the raw ones.
 
+## Deficit ledger (§7.4 scaffolding deficits — must be empty at Phase 5 exit)
+
+Entries here are temporary regressions attributable to strangler-shim scaffolding,
+carried under §7.4's three conditions (kernel bodies at parity by microbench; overhead
+demonstrated fixed-per-call; deleting phase named). The ≤10%-per-stream hard ceiling
+is judged over the *sum* of live entries. Phase 4 re-measures every entry (direct
+dispatch makes shims inlinable); Phase 5 closes them with the shims.
+
+| family | entered | deficit (CB / Main / High, decode ms/frame) | body evidence | deleting phase | Phase 4 checkpoint | closed |
+|---|---|---|---|---|---|---|
+| T4 `common/mc.rs` (28 shims) | 2026-08-08, D-perf-1 | +8.2% / +7.2% / +7.0% | centre kernels 0.88–0.99x; 8x8 chroma copy overhead 7 ns fixed/call (§Phase 2 T4) | Phase 5 | *pending* | — |
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
