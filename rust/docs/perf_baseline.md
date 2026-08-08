@@ -283,12 +283,38 @@ repeats them: passing the cursors by value instead of by reference (a wash: 2.37
 computation folds to constants (a wash: +8.3/+6.1/+5.9 against +8.2/+7.2/+7.0, and it
 would have left two dispatch implementations to keep in agreement).
 
-The systematic fix, if this budget is to be recovered, is in the **Phase 1 plane API
-rather than in this file**: a row-walking iterator on `PlaneCursor`/`PlaneCursorMut`
-that bounds-checks a whole block once and advances by stride addition, instead of
-`row()`/`row_mut()` recomputing `center + dy * stride` and re-checking per row. That
-would benefit every remaining family (T5–T8), which is precisely why it is a decision
-about the phase and not about `mc.rs`.
+#### The row walker, built and rejected
+
+The obvious systematic fix was tried, at Eugene's direction, and it **loses**. The
+hypothesis was that the residual is per-row cost, so `PlaneCursor::rows` /
+`PlaneCursorMut::rows_mut` were added to the Phase 1 API — one bounds check for the
+whole block, then `chunks(stride)` walking by pointer addition instead of
+`row()`/`row_mut()` recomputing `center + dy * stride` and re-checking per row — and
+every kernel here was re-fitted onto them.
+
+| variant | Constrained Baseline | Main | High |
+|---|---|---|---|
+| `row()` per row (what landed) | +8.2% | +7.2% | +7.0% |
+| `rows()` everywhere | **+23.6%** | **+13.5%** | **+13.2%** |
+| `rows()` in the copy path only | **+14.4%** | **+10.2%** | **+10.2%** |
+
+Both directions measured against the same control binary, interleaved. The second row
+could be blamed on the seven-deep `Zip` the 6-tap kernels need; the third cannot — it
+is `copy_rows`, a two-way zip, the simplest loop in the file, and it is still 6 points
+worse. So the conclusion is about the iterator and not about the nesting:
+`Chunks::next` is a `min` plus a `split_at` plus a runtime-length slice that then needs
+`[..WIDTH]` and a `try_into`, where `row()` gives a statically-sized window that folds.
+A multiply per row is cheaper than that.
+
+`rows`/`rows_mut` were therefore **removed from `safe/plane.rs`** rather than left in
+place: an unused API that measures worse is a trap for T5–T8, which would reach for it
+on the strength of its doc comment. Anyone tempted to re-add it should read this table
+first.
+
+That leaves the residual ~7% as per-call overhead in the shim layer — span arithmetic,
+two `from_raw_parts`, four constructor asserts — which is **scaffolding Phase 5
+deletes**, not a property of the safe kernels. The kernels themselves are at parity or
+better: the centre filters measure 0.88–0.99x against the raw ones.
 
 ## How to use this in later phases
 
