@@ -107,403 +107,264 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
 // T4 — `common/mc.rs`, motion compensation
 // ===========================================================================
 //
-// The first family that reads one plane and writes another, and the first with
-// encoder-side consumers. Every entry below drives the old raw kernel and the new
-// safe one over the same noise and compares the **whole** destination buffer.
+// `46053993` proved all 24 safe kernels against the raw ones — every luma block
+// shape plus the encoder's `+1` half-pel shapes, every chroma shape, three strides
+// per surface, random unaligned anchors in both, **exhaustive** sweeps of the
+// selectors (all 16 `(iMvX & 3, iMvY & 3)` pairs for `McLuma_c`, all 64 `(& 7)`
+// pairs for the chroma pair, each from a positive and a negative vector), and every
+// byte of the destination compared rather than the nominal block. The shim commit
+// then deleted those equivalences, because both sides now run the same code.
 //
-// Three things these tests do on purpose, per the carry-forwards the intra-prediction
-// family left (`safety_refactor_log.md`, Phase 2 entry):
-//
-//   * **Selector sweeps are exhaustive, not random.** `McLuma_c` picks one of sixteen
-//     kernels from `(iMvX & 3, iMvY & 3)` and `McChroma_c` one of sixty-five weight
-//     sets from `(iMvX & 7, iMvY & 7)`; a random sweep blurs exactly the distinction a
-//     conversion is most likely to get wrong, so both are driven over every value —
-//     including negative MVs, where `&` on a signed type is the whole trick.
-//   * **Anchors are random and unaligned** in both the source and the destination.
-//   * **Source geometry is per-kernel**, sized to that kernel's exact read reach, which
-//     is the same table the shims will encode. `McHorVer13_c` reaching two rows above
-//     and three below is not the same fact as `McHorVer10_c` reaching neither.
-//
-// Size lists differ by kernel for a reason that is not cosmetic: the half-pel kernels
-// are called by the encoder's ME refinement at `iWidth + 1` / `iHeight + 1`, i.e. up
-// to 17 (`encoder/md.rs:1196,1229,1289`), while the quarter-pel composites interpolate
-// through a `uint8_t[256]` scratch at stride 16 and are therefore 16x16 at most.
+// What survives is the one thing the shims add that the kernels do not: **span
+// arithmetic**. Each shim turns `pSrc` and `pDst` into slices whose lengths it
+// derives from the kernel's read reach, and its `# Safety` contract states that
+// derivation as the caller's obligation. The test below is the assertion that the
+// contract is neither too small nor too large.
 
 use openh264_rs::common::mc;
-use openh264_rs::safe::plane::PlaneCursor;
 
 /// `(left, top, right, bottom)`: the kernel reads `x` in `-left .. width + right`
-/// and `y` in `-top .. height + bottom`, relative to `pSrc`.
+/// and `y` in `-top .. height + bottom`, relative to `pSrc`. An independent
+/// restatement of `mc.rs`'s private `Reach` — if the two ever disagree, this test
+/// fails, which is the point of restating it rather than exporting it.
 type Reach = (usize, usize, usize, usize);
 
 const R_COPY: Reach = (0, 0, 0, 0);
 const R_HOR: Reach = (2, 0, 3, 0);
 const R_VER: Reach = (0, 2, 0, 3);
 const R_CEN: Reach = (2, 2, 3, 3);
+const R_CHROMA: Reach = (0, 0, 1, 1);
 
-/// Luma MC block shapes, plus the encoder's `+1` half-pel refinement shapes.
-const HALFPEL_SIZES: &[(usize, usize)] = &[
-    (16, 16),
-    (16, 8),
-    (8, 16),
-    (8, 8),
-    (8, 4),
-    (4, 8),
-    (4, 4),
-    (17, 16),
-    (16, 17),
-    (17, 17),
-    (9, 8),
-    (5, 4),
-    (2, 2),
-];
+/// Luma MC block shapes, plus the encoder's `+1` half-pel refinement shapes
+/// (`encoder/md.rs:1196,1229,1289`).
+const HALFPEL_SIZES: &[(usize, usize)] = &[(16, 16), (16, 8), (8, 4), (4, 4), (17, 17), (2, 2)];
 
-/// The quarter-pel composites' scratch is `[u8; 256]` at stride 16, so 16 is the hard
-/// ceiling in both dimensions — the same ceiling the C++ has.
-const QPEL_SIZES: &[(usize, usize)] = &[
-    (16, 16),
-    (16, 8),
-    (8, 16),
-    (8, 8),
-    (8, 4),
-    (4, 8),
-    (4, 4),
-    (2, 2),
-];
+/// The quarter-pel composites interpolate through a `[u8; 256]` at stride 16, so 16
+/// is the ceiling in both dimensions — the same ceiling the C++ has.
+const QPEL_SIZES: &[(usize, usize)] = &[(16, 16), (16, 8), (8, 16), (8, 4), (4, 4), (2, 2)];
 
-/// Chroma shapes: half the luma partition sizes.
-const CHROMA_SIZES: &[(usize, usize)] = &[(8, 8), (8, 4), (4, 8), (4, 4), (4, 2), (2, 4), (2, 2)];
+const CHROMA_SIZES: &[(usize, usize)] = &[(8, 8), (8, 4), (4, 2), (2, 2)];
 
-/// `McCopy_c` dispatches on the *exact* width and copies two bytes for anything that
-/// is not 16, 8 or 4 — so the list has to contain widths that are none of those.
-const COPY_SIZES: &[(usize, usize)] = &[(16, 16), (8, 8), (4, 4), (2, 2), (6, 4), (3, 2), (12, 3)];
+/// `McCopy_c` copies two bytes for any width that is not 16, 8 or 4, so the list has
+/// to contain widths that are none of those — the span must narrow with it.
+const COPY_SIZES: &[(usize, usize)] = &[(16, 16), (8, 8), (4, 4), (2, 2), (6, 4), (3, 2)];
 
-/// Strides worth driving: the minimum legal one (where an off-by-one in the span
-/// arithmetic shows up first), a non-multiple of 16, and a real picture stride.
+/// The width `McCopy_c` actually touches — `mc.rs`'s `copy_width`, restated.
+fn copy_width(width: usize) -> usize {
+    match width {
+        16 => 16,
+        8 => 8,
+        4 => 4,
+        _ => 2,
+    }
+}
+
+/// Strides worth driving: the minimum legal one, where an off-by-one in the span
+/// arithmetic shows up first, and two larger ones.
+///
+/// Under Miri only the minimum survives — see [`sizes`] for why the cut falls here
+/// and not on the selector sweeps.
 fn strides(min: usize) -> Vec<usize> {
-    let mut v: Vec<usize> = [min, min + 7, 32, 240]
-        .into_iter()
-        .filter(|&s| s >= min.max(1))
-        .collect();
+    let min = min.max(1);
+    if cfg!(miri) {
+        return vec![min];
+    }
+    let mut v: Vec<usize> = [min, min + 7, 32, 240].into_iter().filter(|&s| s >= min).collect();
     v.sort_unstable();
     v.dedup();
     v
 }
 
-/// A noise-filled source surface and a random legal anchor for a `width` x `height`
-/// block whose kernel reads `reach` beyond it.
-fn src_surface(
+/// Block shapes, cut to two under Miri.
+///
+/// Miri is the only instrument that sees the *over*-reach half of [`probe_span`], so
+/// it has to run — but at ~100x it cannot run everything. The cut falls on the stride
+/// and shape sweeps and **not** on the selector sweeps: an MV chooses which reach a
+/// shim declares, so those stay exhaustive under Miri too. Shapes and strides only
+/// re-run the same span arithmetic with different numbers.
+fn sizes(all: &'static [(usize, usize)]) -> &'static [(usize, usize)] {
+    if cfg!(miri) { &all[..2] } else { all }
+}
+
+/// `(slice length, offset of `pSrc` within it)` — `mc.rs`'s `src_span`, restated.
+fn src_span(stride: usize, width: usize, height: usize, r: Reach) -> (usize, usize) {
+    let (left, top, right, bottom) = r;
+    let center = top * stride + left;
+    (center + (height + bottom - 1) * stride + width + right, center)
+}
+
+/// Bytes spanned by a `width` x `height` block at `stride` — `mc.rs`'s `block_span`.
+fn block_span(stride: usize, width: usize, height: usize) -> usize {
+    (height - 1) * stride + width
+}
+
+/// Runs one shim against source and destination allocations sized to **exactly** the
+/// span its contract declares, and asserts two things at once.
+///
+/// * **The declared span is not too large.** The source buffer is `src_span` bytes
+///   and not one more, so a shim that materialises a longer slice from a pointer into
+///   it is constructing a reference to memory it does not own — undefined behaviour,
+///   which Miri reports at the `from_raw_parts` rather than as a wrong pixel. This is
+///   the direction no output comparison can see, because reading a byte past the end
+///   of a generously-sized test buffer produces perfectly plausible pixels.
+/// * **The declared span is not too small.** If it is, the safe kernel indexes past
+///   its slice and panics, in any build, on the first call.
+///
+/// The assertion on top is a property worth keeping in its own right: running the
+/// same call into two differently-noised destinations must produce identical blocks,
+/// i.e. the kernel **writes every byte of its block and reads none of them**. A
+/// kernel that skipped a sample would leave the two destinations' noise showing.
+fn probe_span(
+    name: &str,
     rng: &mut Prng,
-    stride: usize,
-    width: usize,
-    height: usize,
     reach: Reach,
-) -> (Vec<u8>, usize) {
-    let (left, top, right, bottom) = reach;
-    let rows = top + height + bottom + 2;
-    let buf = rng.bytes(rows * stride);
-    let row = top + rng.below((rows - (top + height + bottom)) as u32) as usize;
-    let col = left + rng.below((stride - (left + width + right)) as u32 + 1) as usize;
-    (buf, row * stride + col)
+    span_width: usize,
+    h: usize,
+    ss: usize,
+    ds: usize,
+    run: impl Fn(*const u8, i32, *mut u8, i32),
+) {
+    let (slen, sc) = src_span(ss, span_width, h, reach);
+    let src = rng.bytes(slen);
+    let mut d1 = rng.bytes(block_span(ds, span_width, h));
+    let mut d2 = rng.bytes(block_span(ds, span_width, h));
+    unsafe {
+        run(src.as_ptr().add(sc), ss as i32, d1.as_mut_ptr(), ds as i32);
+        run(src.as_ptr().add(sc), ss as i32, d2.as_mut_ptr(), ds as i32);
+    }
+    for y in 0..h {
+        assert_eq!(
+            &d1[y * ds..][..span_width],
+            &d2[y * ds..][..span_width],
+            "{name}: row {y} of the destination block still shows what was there \
+             before the call — the kernel did not write every byte of its block \
+             (src_stride {ss}, dst_stride {ds}, seed {:#x})",
+            rng.seed()
+        );
+    }
 }
 
-/// A noise-filled destination surface and a random legal anchor. Noise rather than a
-/// constant so a write on the wrong row cannot hide.
-fn dst_surface(rng: &mut Prng, stride: usize, width: usize, height: usize) -> (Vec<u8>, usize) {
-    let rows = height + 2;
-    let buf = rng.bytes(rows * stride);
-    let row = rng.below((rows - height) as u32 + 1) as usize;
-    let col = rng.below((stride - width) as u32 + 1) as usize;
-    (buf, row * stride + col)
-}
-
-/// The `(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight)` shape — seventeen of
-/// this family's kernels share it.
-type OldWh = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32, i32);
-type NewWh = fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>, usize, usize);
-
-fn check_wh(name: &str, old: OldWh, new: NewWh, reach: Reach, sizes: &[(usize, usize)], seed: u64) {
-    let mut rng = Prng::new(seed);
-    let (left, _, right, _) = reach;
-    for &(w, h) in sizes {
-        for &ss in &strides(left + w + right) {
-            for &ds in &strides(w) {
-                for _ in 0..scale(30) {
-                    let (src, sc) = src_surface(&mut rng, ss, w, h, reach);
-                    let (dst, dc) = dst_surface(&mut rng, ds, w, h);
-                    let mut a = dst.clone();
-                    let mut b = dst;
-                    unsafe {
-                        old(
-                            src.as_ptr().add(sc),
-                            ss as i32,
-                            a.as_mut_ptr().add(dc),
-                            ds as i32,
-                            w as i32,
-                            h as i32,
-                        );
-                    }
-                    new(
-                        &PlaneCursor::new(&src, sc, ss),
-                        &mut PlaneCursorMut::new(&mut b, dc, ds),
-                        w,
-                        h,
-                    );
-                    assert_eq!(
-                        a,
-                        b,
-                        "{name} {w}x{h} src_stride {ss} anchor {sc} / dst_stride {ds} \
-                         anchor {dc}, seed {:#x}",
-                        rng.seed()
-                    );
+/// Every `common/mc.rs` shim, against allocations sized to exactly the span it
+/// declares. See [`probe_span`] for what each call proves; run this file under Miri
+/// for the over-reach half of it.
+#[test]
+fn mc_shims_stay_inside_the_spans_they_declare() {
+    type Wh = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32, i32);
+    let wh: &[(&str, Wh, Reach, &[(usize, usize)])] = &[
+        ("McCopy_c", mc::McCopy_c, R_COPY, COPY_SIZES),
+        ("McHorVer20_c", mc::McHorVer20_c, R_HOR, HALFPEL_SIZES),
+        ("McHorVer02_c", mc::McHorVer02_c, R_VER, HALFPEL_SIZES),
+        ("McHorVer22_c", mc::McHorVer22_c, R_CEN, HALFPEL_SIZES),
+        ("McHorizLuma_c", mc::McHorizLuma_c, R_HOR, HALFPEL_SIZES),
+        ("McVertLuma_c", mc::McVertLuma_c, R_VER, HALFPEL_SIZES),
+        ("McHorVer01_c", mc::McHorVer01_c, R_VER, QPEL_SIZES),
+        ("McHorVer03_c", mc::McHorVer03_c, R_VER, QPEL_SIZES),
+        ("McHorVer10_c", mc::McHorVer10_c, R_HOR, QPEL_SIZES),
+        ("McHorVer11_c", mc::McHorVer11_c, R_CEN, QPEL_SIZES),
+        ("McHorVer12_c", mc::McHorVer12_c, R_CEN, QPEL_SIZES),
+        ("McHorVer13_c", mc::McHorVer13_c, R_CEN, QPEL_SIZES),
+        ("McHorVer21_c", mc::McHorVer21_c, R_CEN, QPEL_SIZES),
+        ("McHorVer23_c", mc::McHorVer23_c, R_CEN, QPEL_SIZES),
+        ("McHorVer30_c", mc::McHorVer30_c, R_HOR, QPEL_SIZES),
+        ("McHorVer31_c", mc::McHorVer31_c, R_CEN, QPEL_SIZES),
+        ("McHorVer32_c", mc::McHorVer32_c, R_CEN, QPEL_SIZES),
+        ("McHorVer33_c", mc::McHorVer33_c, R_CEN, QPEL_SIZES),
+    ];
+    let mut rng = Prng::new(0x4C40_0500);
+    for &(name, f, reach, sizes_of) in wh {
+        for &(w, h) in sizes(sizes_of) {
+            // Only the copy path narrows; everything else spans its nominal width.
+            let sw = if name == "McCopy_c" { copy_width(w) } else { w };
+            for &ss in &strides(reach.0 + sw + reach.2) {
+                for &ds in &strides(sw) {
+                    probe_span(name, &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
+                        f(s, ssz, d, dsz, w as i32, h as i32)
+                    });
                 }
             }
         }
     }
-}
 
-#[test]
-fn mc_width_height_kernels_match_the_raw_ones() {
-    let cases: &[(&str, OldWh, NewWh, Reach, &[(usize, usize)])] = &[
-        ("McCopy_c", mc::McCopy_c, mc::mc_copy, R_COPY, COPY_SIZES),
-        ("McHorVer20_c", mc::McHorVer20_c, mc::mc_hor_ver20, R_HOR, HALFPEL_SIZES),
-        ("McHorVer02_c", mc::McHorVer02_c, mc::mc_hor_ver02, R_VER, HALFPEL_SIZES),
-        ("McHorVer22_c", mc::McHorVer22_c, mc::mc_hor_ver22, R_CEN, HALFPEL_SIZES),
-        ("McHorizLuma_c", mc::McHorizLuma_c, mc::mc_hor_ver20, R_HOR, HALFPEL_SIZES),
-        ("McVertLuma_c", mc::McVertLuma_c, mc::mc_hor_ver02, R_VER, HALFPEL_SIZES),
-        ("McHorVer01_c", mc::McHorVer01_c, mc::mc_hor_ver01, R_VER, QPEL_SIZES),
-        ("McHorVer03_c", mc::McHorVer03_c, mc::mc_hor_ver03, R_VER, QPEL_SIZES),
-        ("McHorVer10_c", mc::McHorVer10_c, mc::mc_hor_ver10, R_HOR, QPEL_SIZES),
-        ("McHorVer11_c", mc::McHorVer11_c, mc::mc_hor_ver11, R_CEN, QPEL_SIZES),
-        ("McHorVer12_c", mc::McHorVer12_c, mc::mc_hor_ver12, R_CEN, QPEL_SIZES),
-        ("McHorVer13_c", mc::McHorVer13_c, mc::mc_hor_ver13, R_CEN, QPEL_SIZES),
-        ("McHorVer21_c", mc::McHorVer21_c, mc::mc_hor_ver21, R_CEN, QPEL_SIZES),
-        ("McHorVer23_c", mc::McHorVer23_c, mc::mc_hor_ver23, R_CEN, QPEL_SIZES),
-        ("McHorVer30_c", mc::McHorVer30_c, mc::mc_hor_ver30, R_HOR, QPEL_SIZES),
-        ("McHorVer31_c", mc::McHorVer31_c, mc::mc_hor_ver31, R_CEN, QPEL_SIZES),
-        ("McHorVer32_c", mc::McHorVer32_c, mc::mc_hor_ver32, R_CEN, QPEL_SIZES),
-        ("McHorVer33_c", mc::McHorVer33_c, mc::mc_hor_ver33, R_CEN, QPEL_SIZES),
+    type Fixed = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32);
+    let fixed: &[(&str, Fixed, usize)] = &[
+        ("McCopyWidthEq2_c", mc::McCopyWidthEq2_c, 2),
+        ("McCopyWidthEq4_c", mc::McCopyWidthEq4_c, 4),
+        ("McCopyWidthEq8_c", mc::McCopyWidthEq8_c, 8),
+        ("McCopyWidthEq16_c", mc::McCopyWidthEq16_c, 16),
     ];
-    for (i, &(name, old, new, reach, sizes)) in cases.iter().enumerate() {
-        check_wh(name, old, new, reach, sizes, 0x4C40_0000 + i as u64);
-    }
-}
-
-/// The four fixed-width copy kernels — `(pSrc, iSrcStride, pDst, iDstStride, iHeight)`,
-/// with the width baked into the name.
-#[test]
-fn mc_fixed_width_copy_kernels_match_the_raw_ones() {
-    type Old = unsafe extern "C" fn(*const u8, i32, *mut u8, i32, i32);
-    type New = fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>, usize);
-    let cases: &[(&str, Old, New, usize)] = &[
-        ("McCopyWidthEq2_c", mc::McCopyWidthEq2_c, mc::mc_copy_width_eq2, 2),
-        ("McCopyWidthEq4_c", mc::McCopyWidthEq4_c, mc::mc_copy_width_eq4, 4),
-        ("McCopyWidthEq8_c", mc::McCopyWidthEq8_c, mc::mc_copy_width_eq8, 8),
-        ("McCopyWidthEq16_c", mc::McCopyWidthEq16_c, mc::mc_copy_width_eq16, 16),
-    ];
-    let mut rng = Prng::new(0x4C40_0100);
-    for &(name, old, new, w) in cases {
-        for &h in &[1usize, 2, 4, 8, 16, 17] {
+    for &(name, f, w) in fixed {
+        for &h in &[1usize, 4, 16, 17] {
             for &ss in &strides(w) {
                 for &ds in &strides(w) {
-                    for _ in 0..scale(30) {
-                        let (src, sc) = src_surface(&mut rng, ss, w, h, R_COPY);
-                        let (dst, dc) = dst_surface(&mut rng, ds, w, h);
-                        let mut a = dst.clone();
-                        let mut b = dst;
-                        unsafe {
-                            old(
-                                src.as_ptr().add(sc),
-                                ss as i32,
-                                a.as_mut_ptr().add(dc),
-                                ds as i32,
-                                h as i32,
-                            );
-                        }
-                        new(
-                            &PlaneCursor::new(&src, sc, ss),
-                            &mut PlaneCursorMut::new(&mut b, dc, ds),
-                            h,
-                        );
-                        assert_eq!(
-                            a, b,
-                            "{name} h={h} src_stride {ss}/{sc} dst_stride {ds}/{dc}, seed {:#x}",
-                            rng.seed()
-                        );
-                    }
+                    probe_span(name, &mut rng, R_COPY, w, h, ss, ds, |s, ssz, d, dsz| unsafe {
+                        f(s, ssz, d, dsz, h as i32)
+                    });
                 }
             }
         }
     }
-}
 
-/// `PixelAvg_c` — three surfaces, three independent strides. The encoder averages a
-/// `ME_REFINE_BUF_STRIDE` scratch against the reference picture, so the strides really
-/// do differ at a live call site (`encoder/md.rs:1059`).
-#[test]
-fn pixel_avg_matches_the_raw_one() {
-    let mut rng = Prng::new(0x4C40_0200);
-    for &(w, h) in HALFPEL_SIZES {
+    // Both MV-dispatching entry points, over every selector value: the reach — and so
+    // the span — is chosen by the vector, which is what makes an exhaustive sweep the
+    // only honest one here.
+    for &(w, h) in sizes(QPEL_SIZES) {
+        for phase in 0..16i16 {
+            let (mvx, mvy) = (phase & 3, phase >> 2);
+            let reach = match (mvx, mvy) {
+                (0, 0) => R_COPY,
+                (0, _) => R_VER,
+                (_, 0) => R_HOR,
+                _ => R_CEN,
+            };
+            let sw = if (mvx, mvy) == (0, 0) { copy_width(w) } else { w };
+            for &ss in &strides(reach.0 + sw + reach.2) {
+                for &ds in &strides(sw) {
+                    probe_span("McLuma_c", &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
+                        mc::McLuma_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
+                    });
+                }
+            }
+        }
+    }
+
+    for &(w, h) in sizes(CHROMA_SIZES) {
+        for phase in 0..64i16 {
+            let (mvx, mvy) = (phase & 7, phase >> 3);
+            let frag = mvx != 0 || mvy != 0;
+            let (reach, sw) = if frag { (R_CHROMA, w) } else { (R_COPY, copy_width(w)) };
+            for &ss in &strides(sw + reach.2) {
+                for &ds in &strides(sw) {
+                    probe_span("McChroma_c", &mut rng, reach, sw, h, ss, ds, |s, ssz, d, dsz| unsafe {
+                        mc::McChroma_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
+                    });
+                    probe_span(
+                        "McChromaWithFragMv_c",
+                        &mut rng,
+                        R_CHROMA,
+                        w,
+                        h,
+                        ss.max(w + 1),
+                        ds,
+                        |s, ssz, d, dsz| unsafe {
+                            mc::McChromaWithFragMv_c(s, ssz, d, dsz, mvx, mvy, w as i32, h as i32)
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // Three surfaces, three independent strides — the encoder averages a
+    // `ME_REFINE_BUF_STRIDE` scratch against the reference picture, so the strides
+    // really do differ at a live call site (`encoder/md.rs:1059`).
+    for &(w, h) in sizes(HALFPEL_SIZES) {
         for &sa in &strides(w) {
             for &sb in &strides(w) {
                 for &ds in &strides(w) {
-                    for _ in 0..scale(20) {
-                        let (pa, ca) = src_surface(&mut rng, sa, w, h, R_COPY);
-                        let (pb, cb) = src_surface(&mut rng, sb, w, h, R_COPY);
-                        let (dst, dc) = dst_surface(&mut rng, ds, w, h);
-                        let mut a = dst.clone();
-                        let mut b = dst;
-                        unsafe {
-                            mc::PixelAvg_c(
-                                a.as_mut_ptr().add(dc),
-                                ds as i32,
-                                pa.as_ptr().add(ca),
-                                sa as i32,
-                                pb.as_ptr().add(cb),
-                                sb as i32,
-                                w as i32,
-                                h as i32,
-                            );
-                        }
-                        mc::pixel_avg(
-                            &mut PlaneCursorMut::new(&mut b, dc, ds),
-                            &PlaneCursor::new(&pa, ca, sa),
-                            &PlaneCursor::new(&pb, cb, sb),
-                            w,
-                            h,
-                        );
-                        assert_eq!(a, b, "PixelAvg_c {w}x{h} {sa}/{sb}/{ds}, seed {:#x}", rng.seed());
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// `McLuma_c` over **every** `(iMvX & 3, iMvY & 3)` pair, driven from both a positive
-/// and a negative MV so the sign behaviour of `&` on `i16` is pinned rather than
-/// assumed. This is the entry that proves the folded quarter-pel dispatch: the safe
-/// side is a `match`, the old side is the `pWelsMcFunc_c[[fn; 4]; 4]` table, and if
-/// the two disagree about which kernel an MV selects, only an exhaustive sweep sees it.
-#[test]
-fn mc_luma_matches_the_raw_one_over_every_quarter_pel_phase() {
-    let mut rng = Prng::new(0x4C40_0300);
-    for &(w, h) in QPEL_SIZES {
-        for &ss in &strides(2 + w + 3) {
-            for &ds in &strides(w) {
-                for phase in 0..16i16 {
-                    // Same (x & 3, y & 3) from a positive and a negative vector.
-                    let mvs = [
-                        (phase & 3, phase >> 2),
-                        ((phase & 3) - 64, (phase >> 2) - 64),
-                    ];
-                    for (mvx, mvy) in mvs {
-                        for _ in 0..scale(6) {
-                            let (src, sc) = src_surface(&mut rng, ss, w, h, R_CEN);
-                            let (dst, dc) = dst_surface(&mut rng, ds, w, h);
-                            let mut a = dst.clone();
-                            let mut b = dst;
-                            unsafe {
-                                mc::McLuma_c(
-                                    src.as_ptr().add(sc),
-                                    ss as i32,
-                                    a.as_mut_ptr().add(dc),
-                                    ds as i32,
-                                    mvx,
-                                    mvy,
-                                    w as i32,
-                                    h as i32,
-                                );
-                            }
-                            mc::mc_luma(
-                                &PlaneCursor::new(&src, sc, ss),
-                                &mut PlaneCursorMut::new(&mut b, dc, ds),
-                                mvx,
-                                mvy,
-                                w,
-                                h,
-                            );
-                            assert_eq!(
-                                a, b,
-                                "McLuma_c {w}x{h} mv ({mvx},{mvy}) {ss}/{ds}, seed {:#x}",
-                                rng.seed()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// `McChroma_c` and `McChromaWithFragMv_c` over **every** `(iMvX & 7, iMvY & 7)` pair —
-/// all 64 weight quadruples of `g_kuiABCD`, including the `(0, 0)` one where
-/// `McChroma_c` takes the copy path instead and `McChromaWithFragMv_c` does not.
-#[test]
-fn mc_chroma_matches_the_raw_ones_over_every_eighth_pel_phase() {
-    let mut rng = Prng::new(0x4C40_0400);
-    for &(w, h) in CHROMA_SIZES {
-        for &ss in &strides(w + 1) {
-            for &ds in &strides(w) {
-                for phase in 0..64i16 {
-                    let mvs = [(phase & 7, phase >> 3), ((phase & 7) - 64, (phase >> 3) - 64)];
-                    for (mvx, mvy) in mvs {
-                        for _ in 0..scale(3) {
-                            let (src, sc) = src_surface(&mut rng, ss, w, h, (0, 0, 1, 1));
-                            let (dst, dc) = dst_surface(&mut rng, ds, w, h);
-                            let (mut a, mut b) = (dst.clone(), dst.clone());
-                            let (mut c, mut d) = (dst.clone(), dst);
-                            unsafe {
-                                mc::McChroma_c(
-                                    src.as_ptr().add(sc),
-                                    ss as i32,
-                                    a.as_mut_ptr().add(dc),
-                                    ds as i32,
-                                    mvx,
-                                    mvy,
-                                    w as i32,
-                                    h as i32,
-                                );
-                                mc::McChromaWithFragMv_c(
-                                    src.as_ptr().add(sc),
-                                    ss as i32,
-                                    c.as_mut_ptr().add(dc),
-                                    ds as i32,
-                                    mvx,
-                                    mvy,
-                                    w as i32,
-                                    h as i32,
-                                );
-                            }
-                            mc::mc_chroma(
-                                &PlaneCursor::new(&src, sc, ss),
-                                &mut PlaneCursorMut::new(&mut b, dc, ds),
-                                mvx,
-                                mvy,
-                                w,
-                                h,
-                            );
-                            mc::mc_chroma_with_frag_mv(
-                                &PlaneCursor::new(&src, sc, ss),
-                                &mut PlaneCursorMut::new(&mut d, dc, ds),
-                                mvx,
-                                mvy,
-                                w,
-                                h,
-                            );
-                            assert_eq!(
-                                a, b,
-                                "McChroma_c {w}x{h} mv ({mvx},{mvy}) {ss}/{ds}, seed {:#x}",
-                                rng.seed()
-                            );
-                            assert_eq!(
-                                c, d,
-                                "McChromaWithFragMv_c {w}x{h} mv ({mvx},{mvy}) {ss}/{ds}, \
-                                 seed {:#x}",
-                                rng.seed()
-                            );
-                        }
-                    }
+                    let other = rng.bytes(block_span(sb, w, h));
+                    probe_span("PixelAvg_c", &mut rng, R_COPY, w, h, sa, ds, |s, ssz, d, dsz| unsafe {
+                        mc::PixelAvg_c(d, dsz, s, ssz, other.as_ptr(), sb as i32, w as i32, h as i32)
+                    });
                 }
             }
         }

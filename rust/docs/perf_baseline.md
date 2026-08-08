@@ -218,6 +218,78 @@ rule for later families is the one this makes obvious — a budget claim needs i
 paired run, and `gates.sh`'s bench line is a correctness gate (frame counts and hashes),
 not a budget one.
 
+### T4 — `common/mc.rs` (motion compensation) — **over budget, and the first family that is**
+
+Protocol changed here, deliberately. T3's caveat — "trust the paired table, not a
+single run from a battery" — turned out to understate the problem: sequential
+`cargo bench` invocations of the *same binary* drifted ~3% on the Rust rows while the
+C++ rows in the same runs held to ±0.3%. So this family was measured by building both
+binaries, keeping them on disk, and **interleaving control and candidate runs inside
+one loop**. Every number below comes from that, 3 pairs, medians in ms/frame.
+
+| stream | control median | Phase 2 median | delta | control runs | Phase 2 runs |
+|---|---|---|---|---|---|
+| Constrained Baseline (CAVLC, no B) | 2.232 | 2.415 | **+8.2%** | 2.232, 2.228, 2.248 | 2.413, 2.421, 2.415 |
+| Main (CABAC, B-frames) | 5.716 | 6.129 | **+7.2%** | 5.716, 5.712, 5.737 | 6.157, 6.129, 6.098 |
+| High (CABAC, B, 8x8) | 5.770 | 6.176 | **+7.0%** | 5.770, 5.768, 5.773 | 6.176, 6.194, 6.163 |
+
+60/60 frames and the three anchor SHA-1s on every run, both sides. **This exceeds the
+§7.4 per-family budget of 5%.**
+
+#### What the investigation found, in the order it found it
+
+The first measurement was **+33% / +20% / +20%**. Three defects, each found by
+profiling rather than by reading, account for the difference between that and the
+number above.
+
+1. **`copy_from_slice` on a runtime length is a `memmove` call.** `_platform_memmove`
+   went 12 → 55 profile samples. The C++ copies a fixed 16/8/4/2 bytes per row through
+   `LD64`/`ST64A8`; a generic `copy_from_slice(width)` cannot see the width and calls
+   out. Making the width a **const generic** (`copy_rows::<16>`) and dispatching
+   `mc_copy` to the four instantiations — which is exactly what the C++ dispatch
+   does — took `McLuma_c(0, 0)` on a 16x16 block from **10.8x to ~1x**. This is the
+   single biggest item, and the zero-MV copy is the commonest phase in real content.
+2. **Indexing several same-length slices by `j` is not free.** The vertical 6-tap
+   reads six rows; indexing all six plus the output by `j` leaves LLVM seven bounds
+   facts to prove per *sample* and it does not prove them. Zipping the seven
+   iterators moves the check to one per row. Combined with a **rolling row window**
+   (rotate five slices down, fetch only the new bottom row, so one
+   `center + dy * stride` multiply per row instead of six), the luma micro-benchmark
+   total went 1.22x → 1.09x.
+3. **Attribute parity matters.** Every C++ kernel here is `inline` and the twelve
+   quarter-pel composites are reached through a *table*, so each is out of line with
+   the inner kernels inlined into it. Reproducing that — `#[inline(always)]` on the
+   inner kernels, `#[inline(never)]` on the composites — is worth a few percent;
+   letting the sixteen-way `match` inline everything into one frame is not.
+
+#### What remains, and why it is not another bug
+
+The residual ~7% is **fixed per-call overhead**, not per-sample cost. The evidence:
+
+* A 16x16 luma block through the shim runs at 0.85–1.30x the old code depending on
+  phase, and the centre kernels are now *faster* than the raw ones (0.88–0.99x).
+* An 8x8 chroma **copy** runs at ~2.9x — 3.5 ns to 10.4 ns. The kernel is trivial;
+  the whole difference is the shim's span arithmetic (three multiplies), two
+  `from_raw_parts`, four constructor asserts, and the per-row `idx` multiply and
+  bounds check that replace the C++'s pointer increment.
+* That overhead is ~7–16 ns per call, and MC is called *very often with small blocks*
+  — every inter partition, plus two chroma calls for each. At roughly 24k luma and
+  48k chroma calls per 1080p frame, 7 ns of chroma overhead alone is ~0.34 ms against
+  a 2.2 ms frame.
+
+Two structural hypotheses were tested and **rejected by measurement**, so nobody
+repeats them: passing the cursors by value instead of by reference (a wash: 2.372 vs
+2.344), and making `McLuma_c` dispatch over the raw per-phase shims so every span
+computation folds to constants (a wash: +8.3/+6.1/+5.9 against +8.2/+7.2/+7.0, and it
+would have left two dispatch implementations to keep in agreement).
+
+The systematic fix, if this budget is to be recovered, is in the **Phase 1 plane API
+rather than in this file**: a row-walking iterator on `PlaneCursor`/`PlaneCursorMut`
+that bounds-checks a whole block once and advances by stride addition, instead of
+`row()`/`row_mut()` recomputing `center + dy * stride` and re-checking per row. That
+would benefit every remaining family (T5–T8), which is precisely why it is a decision
+about the phase and not about `mc.rs`.
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
