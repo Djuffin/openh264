@@ -739,8 +739,26 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       replacement — was not needed anywhere in it. These are also the first shims whose
       span is not derivable from the signature: they anchor at `pPred - stride - 1` and
       their contract names `PADDING_LENGTH` as the reason the `-1` row and column exist.
-- [ ] **T4 — `common/mc.rs`.** Not started; this is the next action.
-- [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started.
+- [x] **T4 — `common/mc.rs`**, motion compensation. **26 kernels** (24 safe bodies,
+      two of them shared by the `McHorizLuma_c`/`McVertLuma_c` aliases) plus two filter
+      helpers; `InitMcFunc` left alone as dispatch plumbing. `46053993` (safe kernels +
+      differential proof), `ea52b387` (swap + 28 shims), `e26164e6` (the rejected row
+      walker). Firsts for the phase: **two planes** — a `PlaneCursor` read + a
+      `PlaneCursorMut` write, since reference and current are different allocations —
+      and the first **encoder-side consumers** (`pfLumaHalfpelHor/Ver/Cen` at
+      `iWidth + 1` up to 17). The module-internal `pWelsMcFunc_c` quarter-pel table is
+      folded into `mc_luma`'s `match` and deleted, per §3.2's single exception.
+      **This family is over budget: +8.2% / +7.2% / +7.0%** against §7.4's 5% —
+      investigated at length, written up in `perf_baseline.md` §Phase 2 T4, and the
+      residual is per-call overhead in the *shim* layer, which Phase 5 deletes. Three
+      structural fixes were tried and rejected by paired measurement (by-value cursors,
+      shim-to-shim dispatch, and a `rows()`/`rows_mut()` walker added to the Phase 1
+      plane API and then reverted). Three real defects were found and fixed: a runtime
+      `copy_from_slice` lowering to a `memmove` **call** (10.8x on the zero-MV copy),
+      per-sample bounds checks across seven same-length slices, and missing
+      `#[inline(always)]`/`#[inline(never)]` parity with the C++.
+- [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started;
+      this is the next action.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.
 - [ ] **T7 — the four encoder kernel files.** Not started.
