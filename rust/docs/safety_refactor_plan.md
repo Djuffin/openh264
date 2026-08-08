@@ -520,7 +520,10 @@ Two counting rules the script encodes, both learned the hard way:
 *Restated 2026-08-08 after T4 (`common/mc.rs`) became the first family to exceed the original flat budget and the investigation showed the flat budget was measuring the wrong thing during a strangler phase. Decision record below.*
 
 - Baseline: Phase 0 bench medians (`c_vs_rust_bench`, `decode_1080p_bench`). All comparisons are scalar-vs-scalar (the C++ dylib never dispatches SIMD), so ratios are meaningful.
-- **Measurement protocol (normative since T4):** sequential `cargo bench` runs of the *same binary* drift ~3%, which cannot judge a 5% budget. Build control and candidate binaries, keep both on disk, run them **interleaved in one loop**, 3+ pairs, medians. For hot families, build the per-kernel scratch microbenchmark (old-via-`git show` vs new, per phase and block shape) *first*, not after the numbers look bad — it is what separates kernel cost from scaffolding cost. Profile (`/usr/bin/sample`) before theorizing.
+- **Measurement protocol (normative since T4, extended by T5):** sequential `cargo bench` runs of the *same binary* drift ~3%, which cannot judge a 5% budget. Build control and candidate binaries, keep both on disk, run them **interleaved in one loop**, 3+ pairs, medians — and interleave *variants inside* a microbenchmark process too, not just binaries. For hot families, build the per-kernel scratch microbenchmark (old-via-`git show` vs new, per phase and block shape) *first*, not after the numbers look bad — it is what separates kernel cost from scaffolding cost. Profile (`/usr/bin/sample`) and **disassemble** before theorizing; T4 and T5 each burned two build-and-bench cycles on hypotheses that one disassembly refuted.
+- **A microbenchmark's working set is part of its correctness (T5).** T5's SAD microbenchmark ran at a 1984-byte stride over 190 KB, so every row access missed cache and the safe kernels' per-row overhead hid behind the misses: it reported 0.82–1.33x where the encoder reported **+16.8%**. The same benchmark L1-resident reported 1.0–2.0x and agreed. **Size the working set from the real caller, state it beside the numbers, and measure both residencies when the caller's is not obvious.** Four more microbenchmark bugs T5 hit, each of which produced a plausible table first: no per-iteration `black_box` (LLVM caches results); observing only one of several outputs (LLVM deletes the rest of the kernel while the opaque raw call keeps computing it); a `const` stride where the real kernel takes a runtime one; variants timed in blocks rather than interleaved.
+- **`FFMPEG` must be set for every gate run.** It was unset for the whole of Phase 2 sessions A and B, so `c_vs_rust_bench` skipped and the encoder was **unmeasured** across three families. T5's regression is the first one it would have caught. Encoder-side families (T7 especially) have no other end-to-end instrument.
+- **Bisect a swap by file before optimising it.** T5 read as +13.9% overall; one extra build and two bench runs split it into a +16.8% half and a +0.57% half, which turned a wholesale revert into a narrow one.
 - **Two ledgers, not one budget:**
   - **End-state regression** — cost intrinsic to the safe kernels/algorithms themselves, as isolated by the paired microbenchmark. Budget unchanged: bodies at ≤1.05x per family (investigate anything over), ≤10% cumulative at Phase 9 on the full-stream benches. This is the number that must hold forever.
   - **Scaffolding deficit** — overhead attributable to the strangler shims (span arithmetic, `from_raw_parts`, constructor asserts at the raw boundary), which Phase 5 deletes with the shims. A family may carry a scaffolding deficit past 5% **only if all three hold**: (a) the paired microbenchmark shows kernel bodies at ≤1.05x, (b) the overhead is demonstrated to be fixed per-call shim cost, not per-sample kernel cost, and (c) a **deficit ledger** entry in `perf_baseline.md` names the family, the measured deficit per stream, and the phase that deletes it. Hard ceiling regardless: **≤10% total regression on any bench stream at any commit** — a breach stops the phase for recovery (slim the specific shims, or unswap that family's commit B as the last resort; the two-commit discipline exists so unswap stays cheap).
@@ -778,12 +781,31 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       recovery checkpoints. Further T4 optimization attempts are **closed** — three
       structural fixes were built, paired-measured, and rejected; do not reopen
       without new evidence of a different mechanism.
-- [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started;
-      this is the next action, unblocked by D-perf-1.
+- [x] **T5-intra — `common/intra_pred_common.rs`.** `56a3dbf9` (A, with the SAD kernels)
+      and `209d3c66` (B). Two 16x16 luma predictors behind shims, **+0.57% median** on
+      the encoder bench. Per-kernel reference shapes rather than a shared one — V reads
+      the row above, H reads the column left — and both write a *packed* `[u8; 256]`,
+      which is what distinguishes them from the same-named 2-arg decoder cousins.
+- [~] **T5-sad — `common/sad_common.rs`.** Safe kernels written and differentially proven
+      (`56a3dbf9`); swapped in `209d3c66` and **unswapped in `11f82d41`**. The swap cost
+      the encoder **+16.8% median, +78% worst**, breaching §7.4's 10% ceiling. The raw
+      kernels run; the safe ones are dead but proven and their spans are pinned.
+      Re-landing needs a **per-row** overhead fix: the corrected (L1-resident)
+      microbenchmark shows cost independent of block width — 4x8, 8x8 and 16x8 all
+      ~7.0 ns through the safe kernel — so the per-sample arithmetic is already free and
+      only the 16-wide shapes amortise the per-row bounds and iterator work. Rolling the
+      row offset and `u8::abs_diff` were both measured and changed nothing.
+- [x] **`PlaneCursor::row_windows`.** `840a48dc`. One bounds check per block instead of
+      two per row, for kernels whose stride and buffer length are runtime values and
+      whose checks therefore cannot fold. Does **not** repeal T4's `chunks` verdict —
+      `mc.rs` keeps `row()`, where the widths are const and the checks do fold — and the
+      rule is written on the method.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.
 - [ ] **T7 — the four encoder kernel files.** Not started.
-- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started.
+- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started; **this is
+      the next action**. Recount: **6 kernels** (vaacalc 5 + `SampleVariance16x16_c`),
+      not the continuation brief's 11. Not started.
 - [ ] **T9 — phase exit.** Not started.
 
 ### Phases 3–9

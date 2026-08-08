@@ -154,12 +154,21 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   fi
 
   hdr "c_vs_rust_bench (encoder)"
+  # Find ffmpeg rather than requiring it to be exported. Phase 2 sessions A and B both
+  # ran the whole battery with FFMPEG unset on a machine that had ffmpeg on PATH the
+  # whole time, so the encoder went UNMEASURED across three families and T5's +16.8%
+  # regression reached a commit before anything noticed. An instrument that silently
+  # skips because of an unset variable is not an instrument.
+  if [ -z "${FFMPEG:-}" ] && command -v ffmpeg >/dev/null 2>&1; then
+    FFMPEG="$(command -v ffmpeg)"
+    echo "  (FFMPEG was unset; using $FFMPEG from PATH)"
+  fi
   if [ -z "${FFMPEG:-}" ]; then
-    echo "  *** FFMPEG is not set. Without it this bench encodes a synthetic pattern"
-    echo "  *** that the rate control skips from VGA up, so it measures the cost of"
-    echo "  *** DECIDING TO SKIP rather than the encode kernels (perf_baseline.md §2)."
-    echo "  *** Re-run with: FFMPEG=/opt/homebrew/bin/ffmpeg bash tools/gates.sh"
-    skip "c_vs_rust_bench: FFMPEG unset — encoder perf is UNMEASURED this run"
+    echo "  *** No ffmpeg on PATH and FFMPEG is not set. Without it this bench encodes"
+    echo "  *** a synthetic pattern that the rate control skips from VGA up, so it"
+    echo "  *** measures the cost of DECIDING TO SKIP rather than the encode kernels"
+    echo "  *** (perf_baseline.md §2). Install ffmpeg, or set FFMPEG=/path/to/ffmpeg."
+    skip "c_vs_rust_bench: no ffmpeg — encoder perf is UNMEASURED this run"
   else
     if (cd "$CRATE" && FFMPEG="$FFMPEG" BENCH_REQUIRE_FFMPEG=1 \
           cargo bench --bench c_vs_rust_bench 2>&1) \

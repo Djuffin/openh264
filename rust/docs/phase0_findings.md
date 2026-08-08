@@ -195,6 +195,36 @@ load. Practical consequence for future sessions: **do not run the release `mt`
 sweep concurrently with other builds** if you want a clean single-run signal, and
 keep applying the retry rule regardless.
 
+**Third measurement, 2026-08-08 (Phase 2 session C, T5).** The session-end battery
+failed one `t=4 sm=3` configuration, the re-run failed two *different* ones, and the
+rate looked alarming enough to run the full R-g comparison. Six `sweep.sh mt` runs at
+HEAD (`11f82d41`) **alternating in one loop** with six at the session control
+(`82014c9d`), so both sides saw identical machine load:
+
+| tree | runs | configurations | failures |
+|---|---|---|---|
+| `82014c9d` (control) | 6 | 720 | **4** |
+| HEAD (T5) | 6 | 720 | **1** |
+
+Across the whole session, 14 HEAD runs gave 5 failures and 12 control runs gave 4 —
+36% vs 33% of runs, indistinguishable. The control fails *more often* in the equal-count
+comparison, which settles it. **Alternate the two trees inside one loop**; the earlier
+"HEAD 4/8 vs control 0/6" reading came from measuring them at different times under
+different load, which for a load-sensitive race is not a comparison at all.
+
+Two refinements to the profile, both from the control side:
+
+- **It is not confined to `t=4`.** The control produced
+  `mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=0` (41938 vs 42462 bytes).
+  Every prior observation was `t=4`; `t=2 sm=3` is now in the signature, so the retry
+  rule should read **any `sm=3` release `mt` configuration**, not just `t=4`.
+- **The output is not always zero-length.** Roughly half of this session's failures
+  were short or simply different rather than empty (42462 vs 41938, 37837 vs 39981,
+  40857 vs 42538). A "zero bytes" test is too narrow to recognise the finding.
+
+Both are consistent with a race in slice-list growth: a lost slice gives short output,
+losing the first gives none.
+
 **Do not read "release fails, debug doesn't" as proof of optimiser-induced UB
 here.** A debug build is several times slower, which widens every thread window;
 a race can simply never lose in debug. What the shape *does* point at is a data

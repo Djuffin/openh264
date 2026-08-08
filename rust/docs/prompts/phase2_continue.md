@@ -7,21 +7,24 @@ family), naming/shim conventions (§3.2), perf protocol (§3.3), gates (§5), no
 first sessions learned that you inherit as *rules*, and the remaining task list with
 its carry-ins. Where this file and `phase2.md` disagree, this file is newer.
 
-State as of **`3ddd2405`** (tree clean, full battery green):
+State as of **`11f82d41`** (tree clean, full battery green — and the battery now *includes* the encoder bench, see Instruments):
 
 | | |
 |---|---|
-| Done | Preconditions (Phase 0 complete except T7-fuzz, deferred by Eugene), T1 control, T2 pilot (4 kernels, −1.3…1.8% — a win), T3 (42 kernels, ±1% wash), **T4 `common/mc.rs` (26 kernels — landed over budget, investigated, and carried under decision D-perf-1: plan §7.4)** |
-| Remaining | T5 `sad_common`+`intra_pred_common` (16 fns) → T6 `deblocking_common`+F1+expand (~24) → T7 four encoder files (**69** — the biggest task, larger than T3+T4 combined) → T8 processing (11) → T9 exit. **~120 fns of the phase's real ≈190** (the plan's "~120 total" was ~60% low; count files before sizing sessions) |
-| Instruments | `rust/tools/gates.sh` + ratchet; gates.sh prints the F3 retry rule and a T7-SKIP line every run; the **interleaved-pairs perf protocol and the scratch microbenchmark are now normative** (§7.4, R-h) |
-| Counts | tests 378 debug / 376 release / 20 ignored (the +1 over T4's control is its surviving span property test); sweeps 341/341 both profiles; ratchet baseline regenerated at `ea52b387` — run `check`, don't trust remembered numbers |
+| Done | Preconditions (Phase 0 complete except T7-fuzz), T1 control, T2 pilot, T3 (42 kernels), **T4 `common/mc.rs` (26, carried over budget under D-perf-1)**, **T5-intra `common/intra_pred_common.rs` (2 kernels, +0.57% — landed)** |
+| Reverted | **T5-sad `common/sad_common.rs` (14 kernels).** Safe kernels written and differentially proven; swapped, measured at **+16.8% median / +78% worst** on the encoder, and **unswapped** (`11f82d41`). Raw kernels run. Re-landing is an optimisation problem, not a conversion one — see §2.5 |
+| Remaining | **T8 processing (6 fns — next action)** → then T5-sad or T6 (a scheduling call, see below) → T7 four encoder files (69) → T9 exit |
+| Instruments | `gates.sh` + ratchet; **run it as `FFMPEG=/opt/homebrew/bin/ffmpeg bash tools/gates.sh` — always.** It was unset for sessions A and B, so the encoder was unmeasured for three families; T5 is the first regression it would have caught. Interleaved pairs are normative (R-h); **so is the working-set rule (R-j)** |
+| Counts | tests 384 debug / 382 release / 20 ignored; sweeps 341/341 both profiles; ratchet baseline regenerated at `11f82d41` — run `check`, don't trust remembered numbers |
 
-Suggested split of the remaining 3–4 sessions: **S1 = T5 + T8** (both small and
-mechanical — T8 is pulled forward deliberately to fill the session while keeping T6
-isolated); **S2 = T6 alone** (the likeliest overrun — don't pair it with anything);
-**S3 = T7 part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8);
-**S4 = T7 part 2** (`encoder/get_intra_predictor` 33) **+ T9**. Clean stops anywhere,
-per the standing exit protocol.
+Suggested split: **S1 = T8 + a decision on T5-sad vs T6** (T8 is small, mechanical,
+off every hot path, and independent of the SAD question — do it first to bank a clean
+family); **S2 = T6 alone** (the phase's hardest conversion, never pair it); **S3 = T7
+part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8); **S4 = T7 part
+2** (`encoder/get_intra_predictor` 33) **+ T9**. T5-sad slots wherever Eugene wants it —
+the argument for early is that T7's SAD/SATD have the same profile and solving it once
+serves both; the argument for later is that T6 is the conversion the plan's order
+assumes. Clean stops anywhere, per the standing exit protocol.
 
 ---
 
@@ -114,6 +117,26 @@ per the standing exit protocol.
   (**worse everywhere**, the API was built, measured, and removed — read
   `perf_baseline.md` §Phase 2 T4 before re-proposing any of the three).
 
+- **R-j — A microbenchmark's working set is part of its correctness** (new, T5, and it
+  cost that session). T5's SAD microbench ran at a 1984-byte stride over 190 KB: every
+  row access missed cache, the safe kernels' per-row overhead hid behind the misses,
+  and it reported **0.82-1.33x** where the encoder reported **+16.8%**. The identical
+  benchmark at a 64-byte stride over 4 KB — L1-resident, which is what a motion search
+  is — reported 1.0-2.0x and agreed. **Size the working set from the real caller, state
+  it next to the numbers, and measure both residencies when the caller's is unclear.**
+  Four further microbench bugs T5 hit, each of which produced a plausible table first:
+  no per-iteration `black_box` (LLVM caches results across a rotating input set);
+  observing only one of several outputs (LLVM deletes the rest of the kernel while the
+  opaque `extern "C"` raw call keeps computing it — a 4x handicap pointing the wrong
+  way); a `const` stride where the real kernel takes a runtime `i32`; and variants timed
+  in blocks rather than interleaved, so drift lands on whichever ran last. Also: two
+  guesses were tested and refuted before anything was disassembled, exactly as in T4.
+  **Disassemble first.** It found T5's mechanism in one pass.
+- **R-k — Bisect a swap by file before optimising it.** T5 read as +13.9% overall; one
+  extra build and two bench runs split it into a +16.8% half and a +0.57% half, which
+  turned a wholesale revert into a narrow one and saved the intra work. The two-commit
+  discipline makes the unswap cheap; a per-file bisect makes it *small*.
+
 ## 3. Remaining tasks
 
 ### T4 — `common/mc.rs` — DONE (`46053953`…`3ddd2405`), carried over budget under D-perf-1
@@ -128,19 +151,27 @@ inherit" (the 17-wide encoder half-pel ceiling; clamp-as-contract; per-kernel re
 tables, not unions; the span property test that replaced per-kernel equivalence
 entries — copy that test shape in every remaining family).
 
-### T5 — `common/sad_common.rs` + `common/intra_pred_common.rs` (next action; unblocked by D-perf-1)
-16 fns (14 + 2 — the one brief estimate that has matched reality; still recount).
-Per `phase2.md` §T5 unchanged: the `Four` SAD kernels read **outside the nominal
-block** (`-stride`, `-1`, `+1`) — plane cursors, not block slices, and the
-differential must cover the edge reads; absorb the three pre-existing unused
-`sample_sad_*` safe wrappers into the new kernels (one safe SAD API, not two);
-consumers are `encoder/sample.rs`'s installers + one direct call in
-`processing/scene_change_detection.rs:103`. intra_pred_common is two 3-arg kernels —
-mind the same-name-different-arity collision with the decoder file you already
-converted. **Build the microbenchmark first (R-h)**: SAD is encoder-ME-hot and
-call-dense — the same per-call-overhead profile that put T4 over budget — so this is
-the first family where the two-ledger split gets applied from the start rather than
-discovered late. Per-kernel reach tables per T4's carry-in, not a union span.
+### T5-intra — DONE (`56a3dbf9`, `209d3c66`). T5-sad — REVERTED (`11f82d41`)
+The two 16x16 luma predictors are behind shims at +0.57%, with per-kernel reference
+shapes (V takes `&[u8; 16]` for the row above, H takes a cursor for the column left —
+a shared parameter would have each contract claiming the other's reach) and a packed
+`[u8; 256]` destination, which is what distinguishes them from the same-named 2-arg
+decoder cousins converted in T3.
+
+**T5-sad is a live optimisation problem and the brief for it is this.** The fourteen
+safe SAD kernels exist, are proven against the raw ones by a differential that is live
+again, and have their spans pinned; they are simply not installed. The corrected,
+L1-resident microbenchmark says the cost is **per row and independent of block width**
+— 4x8, 8x8 and 16x8 all take ~7.0 ns through the safe kernel against 4.0/4.2/6.8 ns
+raw — so the per-sample arithmetic already vectorises to free and what remains is
+bounds and iterator work once per row, which only the 16-wide shapes have enough
+samples to amortise (16x8 and 16x16 land at 1.00-1.02x; 4x4 and 8x8 at 1.55-1.68x).
+**Attack per-row overhead.** Already measured and rejected on the corrected instrument:
+rolling the row offset instead of computing it (worse), `u8::abs_diff` for the
+per-sample term (no change, LLVM already emitted it), and the per-row `PlaneCursor::row`
+walk that `row_windows` replaced (worse on twelve of fourteen shapes). Do not re-propose
+those without new evidence. The numbers and the method are in `perf_baseline.md`
+§Phase 2 T5; rebuild the microbench at a 4 KB working set before judging any candidate.
 
 ### T6 — `deblocking_common` + the F1 surgery + expansion (schedule alone)
 The phase's two hardest items live here; both have full briefs in `phase2.md` §T6 —
@@ -155,25 +186,41 @@ constant (32 luma / 16 chroma), explicit pad parameter where a call site can't p
 it; the two `mem::transmute` fn-pointer re-wraps stay (Phase 4). R-c applies doubly
 here: the expand span helper and its contract sentence are the whole game.
 
-### T7 — the four encoder kernel files (first real encoder perf signal; plan for two sessions)
+### T7 — the four encoder kernel files (plan for two sessions)
 **69 fns by real count** — `encode_mb_aux.rs` 22, `encoder/decode_mb_aux.rs` 6,
 `sample.rs` 8 (installers keep installing shims), `encoder/get_intra_predictor.rs` 33
 — the biggest task in the phase, larger than T3 and T4 combined; the suggested split
 is S3 = the first three files, S4 = `get_intra_predictor` + T9. This is where R-a's
 mechanism gets its encoder-side test and where R-e is most likely to bite
 (DCT/quant/SATD intermediates — check widths against both the old Rust and the C++
-before writing each safe body). **Microbenchmark first (R-h), per family** — there is
-no decode-bench equivalent on this path, so the microbench plus `FFMPEG`-gated
-`c_vs_rust_bench` (1080p Mandelbrot as primary, per `perf_baseline.md`) *are* the
-instruments, with sweep wall time as the coarse cross-check; if a regression shows up,
+before writing each safe body). **Microbenchmark first (R-h) and L1-resident (R-j), per family** — `sample.rs`'s
+SAD/SATD are the same kernels and the same profile T5-sad failed on, so expect the same
+result and settle the per-row question before converting them. `c_vs_rust_bench` with
+`FFMPEG` set is the end-to-end instrument and it works — T5 proved both that it catches
+this class of regression and that it had been silently skipping, with sweep wall time as the coarse cross-check; if a regression shows up,
 bisect by family — that's why the commits are two-per-family. SAD/SATD in `sample.rs`
 have T4's call-density profile: expect scaffolding overhead, apply the two-ledger
 split, and ledger any deficit with its evidence rather than burning the session
 optimizing closed ground.
 
-### T8 — `processing/{vaacalc,adaptive_quantization}.rs` kernels
-Per `phase2.md` §T8: safe signatures with `&[u8]` planes + `&mut` out-slices; extend
-the file's two real unit tests; the `IWelsVP` plumbing above is Phase 4's.
+### T8 — `processing/{vaacalc,adaptive_quantization}.rs` kernels (next action)
+**6 kernels by real count**, not the 11 this brief used to say: `vaacalc.rs` has five
+(`VAACalcSad_c`, `…SadVar_c`, `…SadSsd_c`, `…SadBgd_c`, `…SadSsdBgd_c`) and
+`adaptive_quantization.rs` has `SampleVariance16x16_c`. `phase2.md` §T8 was right and
+the continuation brief was wrong.
+
+Per `phase2.md` §T8: safe signatures with `&[u8]` planes + `&mut` out-slices; extend the
+file's two real unit tests; the `IWelsVP` plumbing above is Phase 4's. Three carry-ins
+from T5. **R-e applies to `SampleVariance16x16_c`**: its `u16`/`u32` accumulators
+already carry explicit `wrapping_add`/`wrapping_mul` and the C++ truncation is written
+out in a comment — reproduce it exactly, widen nothing. The five vaacalc kernels are
+whole-picture walkers differing only in which per-block statistics they report, so a
+shared 8x8 block accumulator with `#[inline(always)]` is the obvious shape — but the
+one that matters for perf is `VAACalcSad_c` (the only one the gate configuration
+selects), so **check that the unused accumulators actually die** before trusting it.
+And these run once per frame over a whole picture, i.e. **streaming, not L1-resident**:
+per R-j, size the microbench working set accordingly — this is the one family where the
+large working set is the honest one.
 
 ### T9 — Phase exit
 Per `phase2.md` §T9, plus what's now known: final `SHIM(phase2)` and `no_mangle`
