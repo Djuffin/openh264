@@ -714,3 +714,182 @@ open is whether a cleverer kernel or a better plane API fixes it — three attem
 no, and the numbers are in `perf_baseline.md`.
 
 Build the microbenchmark harness first in T5 and T7, not third.
+
+---
+
+## 2026-08-08 — Phase 2, session C (T5, and a measurement lesson)
+
+**Goal:** the continuation brief's S1 split — T5 then T8. **T5 alone consumed the
+session**, and it ends *half* landed: `intra_pred_common`'s two predictors are behind
+shims, `sad_common`'s fourteen SAD kernels were swapped, measured, and **unswapped**.
+T8 is untouched and is the next action.
+
+**Started at** `3ddd2405` with three uncommitted files (session B's open decision),
+**ended at** the commit carrying this entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `82014c9d` | D-perf-1 written up: §7.4 restated with the two-ledger split, the deficit ledger, the 10% ceiling, Phase 4/5 recovery checkpoints |
+| `56a3dbf9` | T5 A: 16 safe kernels + a differential entry per kernel, old code untouched |
+| `840a48dc` | `PlaneCursor::row_windows`, and why T4's `chunks` verdict still stands |
+| `209d3c66` | T5 B: swap + 16 shims |
+| `11f82d41` | unswap the fourteen SAD shims; keep the two intra ones |
+
+Plus `perf_baseline.md` §Phase 2 T5 and the Progress appendix.
+
+### Gates
+
+| gate | control (`82014c9d`) | final |
+|---|---|---|
+| `cargo test` | 378 / 0 / 20 | 384 / 0 / 20 |
+| `cargo test --release` | 376 / 0 / 20 | 382 / 0 / 20 |
+| `sweep.sh st mt def` (debug) | 341/341, 142s | 341/341 |
+| `sweep.sh st mt def` (release) | 341/341, 22s | 341/341 |
+| ratchet | clean | clean, baseline regenerated |
+| `miri --test kernels_differential_phase2` | 2/2 | 5/5, 78s |
+| `c_vs_rust_bench` | **now runs** | see below |
+
+**F3 hit, and it was chased properly.** The session-end battery failed one `t=4 sm=3`
+release `mt` configuration and the re-run failed two different ones — more than one hit,
+so R-g's comparison applies. Six `mt` sweeps at HEAD **alternating in one loop** with six
+at the control gave **control 4 failures, HEAD 1**; across the session, HEAD 5/14 runs and
+control 4/12. Pre-existing, appended to F3 with two refinements the control supplied: it
+also fires at **`t=2 sm=3`**, and the output is often short rather than zero-length, so
+both the retry rule and any automation matching on "zero bytes" were too narrow. Also
+learned: measuring the two trees at different times is worthless for a load-sensitive
+race — an earlier "HEAD 4/8 vs control 0/6" reading inverted once they were alternated.
+
+### The instrument was wrong, and it cost the session
+
+This is the headline and it generalises further than T5 does.
+
+**`FFMPEG` was never set, so the encoder bench had been skipping for the whole
+phase.** `ffmpeg` is installed at `/opt/homebrew/bin/ffmpeg` on this machine and
+always was. Every prior session recorded `SKIP c_vs_rust_bench: encoder perf is
+UNMEASURED`, and T5 is the first encoder-side family, so this was the first family
+whose regression the battery *could* have caught and hadn't. **Set `FFMPEG` on every
+run from here on.** It is one environment variable between a measured encoder and an
+unmeasured one.
+
+**The microbenchmark reported the safe SAD kernels at 0.82-1.33x. The encoder
+reported +16.8%.** The microbenchmark was wrong, and it was wrong in a way that looked
+like diligence: it drove the kernels at a 1984-byte stride over a 190 KB working set,
+so every row access was a cache miss and the extra per-row work hid behind the misses.
+The same benchmark at a 64-byte stride over 4 KB — L1-resident, which is what a motion
+search actually is — says 1.0-2.0x and agrees with the encoder. **Size a kernel
+microbenchmark's working set from the caller, and say the size next to the numbers.**
+Where residency is not obvious, measure both; a kernel at parity memory-bound and 1.7x
+L1-resident is 1.7x in a real encoder.
+
+Three further methodology bugs were found and fixed *before* that one, each of which
+first produced a plausible-looking table:
+
+1. **No per-iteration `black_box`.** LLVM cached results across the rotating anchor set
+   and reported a shim faster than the body it wraps.
+2. **Only `out[0]` observed** on the four-point kernels, so LLVM deleted three quarters
+   of the safe kernel while the opaque `extern "C"` raw call kept doing all of it — a
+   4x handicap pointing the wrong way.
+3. **A `const` stride.** Every span and row offset folded; the real shims take
+   `iStride1`/`iStride2` as runtime `i32`. This one flattered the safe side most.
+
+And the variants have to be **interleaved**, not run in blocks — R-h's rule applies
+inside one process, not just across binaries. Run in blocks, drift across a 20-second
+run lands entirely on whichever variant went last, which is how an earlier table showed
+`plane` beating `shim` at doing strictly less work.
+
+### Two guesses, both wrong, before anything was profiled
+
+Same trap T4's log names, walked into again. Rolling the row offset instead of
+computing it: **worse** (1.5-2.7x). `u8::abs_diff` instead of the `i32`
+subtract-and-abs: **no change at all**, LLVM already emitted it. Disassembling
+`sample_sad::<16, 8>` found the answer in one pass — ~96 instructions of bounds
+checking hoisted to the top of the function before a single sample is read, because
+`PlaneCursor::row` costs two compare-and-branch pairs and a 16x8 walked row by row on
+two surfaces is 32 of them. **Disassemble before hypothesising, not after two build
+cycles.**
+
+### What the corrected instrument says the cost is
+
+Per row, and **independent of width**: through the safe kernel, 4x8, 8x8 and 16x8 all
+take ~7.0 ns against 4.0 / 4.2 / 6.8 ns raw. The per-sample arithmetic vectorises to
+free. What remains is bounds and iterator work once per row, which only the 16-wide
+shapes have enough samples to amortise — hence 16x8 and 16x16 at 1.00-1.02x while 4x4
+and 8x8 sit at 1.55-1.68x. **Any fix must attack per-row overhead.** The inner loop is
+already optimal and two attempts to improve it changed nothing.
+
+### `row_windows` — kept, and the T4 verdict survives intact
+
+`PlaneCursor::row_windows::<W>` takes the block as one slice and walks it with
+`chunks`: one bounds check per block instead of two per row. Re-measured L1-resident
+against the `row()` walk it replaced, it wins on twelve of fourteen shapes and wins
+large on the four-point ones (1.2-2.0x against 2.1-3.3x). It was the right change made
+for the wrong reason, and it is not why SAD is slow.
+
+It does **not** repeal T4's rejection of `chunks` walkers, and `mc.rs` was deliberately
+not refitted. T4's `rows()` yielded runtime-length slices needing `[..WIDTH]` and a
+`try_into`, and lost to `row()` in `mc.rs` — where the widths are const-generic and the
+checks genuinely fold, so `row()`'s branches cost nothing and `Chunks::next` costs
+something. Both results hold, and the rule is now written on the method: **`row` where
+the window is statically sized and the checks fold, `row_windows` where they cannot.**
+
+### Four things the remaining families inherit
+
+1. **`FFMPEG=/opt/homebrew/bin/ffmpeg` on every `gates.sh` run.** T7 is encoder-only;
+   without it there is no gate on the thing being changed.
+2. **A microbenchmark's working set is part of its correctness**, not a detail. T7's
+   SAD/SATD have exactly T5's profile.
+3. **Bisect a swap by file before optimising it.** One extra build and two bench runs
+   turned "T5 costs +14%" into "the SAD half costs +17% and the intra half is free",
+   which is what made a narrow unswap possible instead of a wholesale one.
+4. **Sizing a span does not pin where it starts.** The first span property test passed
+   six mutations but survived one that built its slice from `pSample2` instead of one
+   row above while leaving the cursor anchored at `iStride2` — reading a block shifted
+   a whole row down and returning four plausible, distinct, in-range numbers. The test
+   now recomputes each four-point result through independently anchored cursors. Copy
+   that shape: **span size and span anchor need separate assertions.**
+
+### Inventory, as re-proven by grep
+
+**16 kernels** — `sad_common.rs` 14 (7 single-block, 7 four-point) and
+`intra_pred_common.rs` 2 — matching the brief, the second brief estimate to hold.
+Consumers as briefed: `encoder/sample.rs:218-241` installs all fourteen SAD;
+`encoder/get_intra_predictor.rs:782-783` installs the two predictors; one direct call
+at `processing/scene_change_detection.rs:103`. The three `sample_sad_4x4/8x8/16x16`
+slice wrappers had **no caller anywhere in the tree** and were absorbed.
+
+**T8 recount: 6 kernels, not 11** — `vaacalc.rs` 5 and
+`adaptive_quantization.rs` 1. The continuation brief's 11 was wrong; `phase2.md` §T8's
+"5 + `SampleVariance16x16_c`" was right.
+
+### Two smaller things worth not rediscovering
+
+- **`git checkout -- <file>` in a mutation-test loop reverts to HEAD**, which silently
+  discarded an hour of uncommitted commit-A work. Mutation loops back up with `cp`, or
+  run against committed code.
+- **A scratch benchmark under `tests/` runs in `cargo test`**, in a debug build, at
+  release iteration counts. It hung the suite. Keep scratch harnesses outside the crate
+  between runs.
+
+### Where T5 stands
+
+`intra_pred_common` is done: two shims, contracts written, span property pinned, and
++0.57% measured, which is inside every budget. `sad_common` has its fourteen safe
+kernels written, differentially proven against the raw ones, and **not installed**. The
+raw kernels run. Re-landing it needs a per-row overhead fix, and the corrected
+microbenchmark is the instrument for judging one.
+
+### Next session's first action
+
+**Phase 2 T8 — `processing/{vaacalc,adaptive_quantization}.rs`**, 6 kernels, per
+`phase2.md` §T8. It is small, it is off the ME hot path, and it does not depend on the
+SAD question. `SampleVariance16x16_c` is an R-e case: its `u16`/`u32` accumulators
+already carry explicit `wrapping_add`/`wrapping_mul`, so reproduce them exactly.
+
+**Then T5-sad or T6, and that is a scheduling call for Eugene.** T5b needs a per-row
+overhead fix on kernels whose per-sample work is already free — a real optimisation
+problem, not a conversion one, and it is the same problem T7's SAD/SATD will present at
+larger scale, so solving it once serves both. T6 is the phase's hardest conversion and
+was always meant to be scheduled alone. Doing T5-sad first buys the technique T7 needs;
+doing T6 first keeps the conversion order the plan assumed.

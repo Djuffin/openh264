@@ -316,6 +316,79 @@ two `from_raw_parts`, four constructor asserts — which is **scaffolding Phase 
 deletes**, not a property of the safe kernels. The kernels themselves are at parity or
 better: the centre filters measure 0.88–0.99x against the raw ones.
 
+### T5 — `common/sad_common.rs` + `common/intra_pred_common.rs` — **swap reverted for SAD**
+
+The first family whose swap was measured and **taken back out**. Also the first time
+the microbenchmark and the end-to-end bench disagreed, and the microbenchmark was
+wrong. Both facts matter more than the numbers.
+
+**The encoder measurement that decided it.** `c_vs_rust_bench` with `FFMPEG` set,
+control (`82014c9d`, before any T5 code) against commit B (`209d3c66`), binaries kept
+on disk and **interleaved**, 3 pairs, medians in ms/frame. Rust side only.
+
+| stream | thr | control | commit B | delta |
+|---|---|---|---|---|
+| 320x240 Mandelbrot | 1 | 0.902 | 0.927 | +2.77% |
+| 640x480 Mandelbrot | 1 | 2.288 | 2.380 | +4.02% |
+| 720p Mandelbrot | 1 | 4.969 | 5.210 | +4.85% |
+| 1080p Mandelbrot | 1 | 9.938 | 10.554 | +6.20% |
+| 1080p Testsrc | 1 | 4.271 | 4.799 | +12.36% |
+| 1080p SMPTE Bars | 1 | 2.914 | 3.400 | +16.68% |
+| 720p SMPTE Bars | 1 | 1.085 | 1.279 | +17.88% |
+| 640x480 SMPTE Bars | 1 | 0.240 | 0.289 | +20.42% |
+
+Median across all 30 stream/thread rows **+13.85%**, worst **+20.42%**. §7.4's hard
+ceiling is 10% on any stream at any commit, so this is a breach, and a breach stops
+the phase for recovery.
+
+**Bisected by file**, same protocol, 2 pairs each. The regression is entirely SAD:
+
+| half | median | worst |
+|---|---|---|
+| `intra_pred_common` shims only (SAD raw) | **+0.57%** | +4.02% |
+| `sad_common` shims only (intra raw) | **+16.76%** | +78.16% |
+
+So `intra_pred_common` stayed swapped and `sad_common` was unswapped (`11f82d41`).
+
+**Why the microbenchmark said 0.82-1.33x.** It drove the kernels at a **1984-byte
+stride over a 190 KB working set**. Every row access was a cache miss, and the safe
+kernels' extra per-row work hid entirely behind the misses. The identical benchmark at
+a 64-byte stride over 4 KB — L1-resident, which is what a motion search is — agrees
+with the encoder:
+
+| shape | raw | safe, 190 KB set | safe, 4 KB set |
+|---|---|---|---|
+| Sad4x4 | 2.75 | 4.65 (1.02x*) | 4.26 (**1.55x**) |
+| Sad8x8 | 4.20 | 11.7 (1.37x*) | 7.03 (**1.68x**) |
+| Sad8x16 | 6.98 | 16.4 (1.02x*) | 12.45 (**1.79x**) |
+| Sad16x8 | 6.86 | 19.3 (1.58x*) | 7.02 (1.02x) |
+| Sad16x16 | 12.48 | 19.0 (0.81x*) | 12.45 (1.00x) |
+| SadFour8x8 | 12.63 | 43.0 (2.03x*) | 25.28 (2.00x) |
+| SadFour16x16 | 38.32 | 67.2 (1.29x*) | 47.00 (1.23x) |
+
+\* ratios against that column's own raw timings, which the large working set inflated
+too — the point is that the ratio is meaningless when the memory system dominates
+both sides.
+
+**The shape of the remaining cost, from the corrected instrument.** It is **per row
+and independent of width**: through the safe kernel, 4x8, 8x8 and 16x8 all take
+~7.0 ns, against 4.0 / 4.2 / 6.8 ns raw. The per-sample arithmetic is free — it
+vectorises — and what is left is bounds and iterator work once per row, which only the
+16-wide shapes have enough samples to amortise. Any fix has to attack **per-row
+overhead**, not the inner loop. Two things already measured and rejected on the
+corrected instrument: rolling the row offset instead of computing it (worse), and
+`u8::abs_diff` for the per-sample term (no change — LLVM already emitted it).
+
+**`row_windows` is not the culprit and stays.** Re-measured L1-resident against the
+per-row `PlaneCursor::row` walk it replaced, it wins on twelve of fourteen shapes and
+wins large on the four-point ones (1.2-2.0x against 2.1-3.3x). It was the right change
+made for the wrong reason, and `mc.rs` was correctly not refitted onto it.
+
+**Instrument rule this establishes, binding on T6-T9:** a kernel microbenchmark must
+run at a working set the real caller has. Size it from the caller, state the size next
+to the numbers, and where the caller's residency is not obvious, **measure both** — a
+kernel that is at parity memory-bound and 1.7x L1-resident is 1.7x in an encoder.
+
 ## Deficit ledger (§7.4 scaffolding deficits — must be empty at Phase 5 exit)
 
 Entries here are temporary regressions attributable to strangler-shim scaffolding,
@@ -327,6 +400,15 @@ dispatch makes shims inlinable); Phase 5 closes them with the shims.
 | family | entered | deficit (CB / Main / High, decode ms/frame) | body evidence | deleting phase | Phase 4 checkpoint | closed |
 |---|---|---|---|---|---|---|
 | T4 `common/mc.rs` (28 shims) | 2026-08-08, D-perf-1 | +8.2% / +7.2% / +7.0% | centre kernels 0.88–0.99x; 8x8 chroma copy overhead 7 ns fixed/call (§Phase 2 T4) | Phase 5 | *pending* | — |
+
+**T5-sad was considered for this ledger and rejected**, which is worth recording
+because it is the criteria doing their job. Condition (a) is that the paired
+microbenchmark shows kernel *bodies* at ≤1.05x, and once the microbenchmark was
+corrected for working set it showed 1.0–2.0x — the cost is in the safe kernel, not in
+the shim, so Phase 5 would not delete it. Condition (b) fails for the same reason: the
+overhead is per row, not fixed per call. A deficit that no later phase removes is not a
+deficit, it is a regression, and the family was unswapped instead (`11f82d41`). The
+distinction between this and T4 is exactly what the two-ledger split was written for.
 
 ## How to use this in later phases
 
