@@ -260,35 +260,52 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
     iPix05 - (iPix14 * 5) + (iPix23 * 20)
 }
 
-/// `width` bytes of each of `height` rows, source to destination.
+/// `WIDTH` bytes of each of `height` rows, source to destination.
 ///
-/// One `copy_from_slice` per row: the same wide moves the `LD64`/`ST64A8` pairs in
-/// the C++ existed for, with the bounds check landing per row rather than per sample.
+/// **The width is a const parameter and not an argument, and that is a measured
+/// decision rather than a stylistic one.** With a runtime length, `copy_from_slice`
+/// lowers to a `_platform_memmove` *call* per row; with the width const, the whole
+/// row is one pair of wide loads and stores — which is what the C++ `LD64`/`ST64A8`
+/// pairs were hand-written to get. This path carries the zero-MV block, the
+/// commonest luma case there is, and the difference measured **10.8x** on
+/// `McLuma_c(0, 0)` for a 16x16 block (`docs/perf_baseline.md` §Phase 2 T4).
+///
+/// The bounds check lands once per row either way.
 #[inline(always)]
-fn copy_rows(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+fn copy_rows<const WIDTH: usize>(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
     for dy in 0..height as isize {
-        dst.row_mut(dy, 0, width).copy_from_slice(src.row(dy, 0, width));
+        let s: &[u8; WIDTH] = src.row(dy, 0, WIDTH).try_into().unwrap();
+        let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
+        *d = *s;
     }
 }
 
 /// C++: `McCopyWidthEq2_c` — chroma only, the one width the copy path narrows to.
+#[inline(always)]
 pub fn mc_copy_width_eq2(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows(src, dst, 2, height);
+    copy_rows::<2>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq4_c`.
+#[inline(always)]
 pub fn mc_copy_width_eq4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows(src, dst, 4, height);
+    copy_rows::<4>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq8_c`.
+#[inline(always)]
 pub fn mc_copy_width_eq8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows(src, dst, 8, height);
+    copy_rows::<8>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq16_c`.
+#[inline(always)]
 pub fn mc_copy_width_eq16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, height: usize) {
-    copy_rows(src, dst, 16, height);
+    copy_rows::<16>(src, dst, height);
 }
 
 /// The width `McCopy_c` actually copies for a nominal `width`.
@@ -308,8 +325,16 @@ fn copy_width(width: usize) -> usize {
 }
 
 /// C++: `McCopy_c`.
+#[inline(always)]
 pub fn mc_copy(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-    copy_rows(src, dst, copy_width(width), height);
+    // Dispatched exactly as the C++ dispatches, and for the same reason it does:
+    // each arm is a constant-width copy. See [`copy_rows`].
+    match width {
+        16 => copy_rows::<16>(src, dst, height),
+        8 => copy_rows::<8>(src, dst, height),
+        4 => copy_rows::<4>(src, dst, height),
+        _ => copy_rows::<2>(src, dst, height),
+    }
 }
 
 /// C++: `PixelAvg_c` — the rounded average of two surfaces, `SMcFunc::pfSampleAveraging`.
@@ -317,6 +342,7 @@ pub fn mc_copy(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize
 /// The three surfaces carry their own strides because the encoder's quarter-pel
 /// refinement averages a `ME_REFINE_BUF_STRIDE` scratch buffer against the reference
 /// picture (`encoder/md.rs:1059`).
+#[inline(always)]
 pub fn pixel_avg(
     dst: &mut PlaneCursorMut<'_>,
     a: &PlaneCursor<'_>,
@@ -337,6 +363,7 @@ pub fn pixel_avg(
 /// C++: `McHorVer20_c` — the horizontal half-pel filter, `(2, 0)` in quarter-pel.
 ///
 /// Reads `x` in `-2 .. width + 3`, `y` in `0 .. height`.
+#[inline(always)]
 pub fn mc_hor_ver20(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -357,28 +384,39 @@ pub fn mc_hor_ver20(
 /// C++: `McHorVer02_c` — the vertical half-pel filter, `(0, 2)` in quarter-pel.
 ///
 /// Reads `x` in `0 .. width`, `y` in `-2 .. height + 3`.
+#[inline(always)]
 pub fn mc_hor_ver02(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
+    // Two shapes carry this loop, and both were measured rather than assumed.
+    //
+    // *A zipped column walk, not indexing.* Indexing seven same-length slices by `j`
+    // leaves LLVM to prove seven bounds facts per output *sample*, and it does not.
+    // The zip moves the whole check to the `row` calls, one per output row.
+    //
+    // *A rolling window, not six fresh `row` calls per output row.* Six calls means
+    // six `center + dy * stride` multiplies per row where the C++ advanced one
+    // pointer by one add; rotating five slices down and fetching only the new bottom
+    // row costs one.
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        src.row(-2, 0, width),
+        src.row(-1, 0, width),
+        src.row(0, 0, width),
+        src.row(1, 0, width),
+        src.row(2, 0, width),
+    );
     for dy in 0..height as isize {
-        // Six row windows, then a column walk across them — six bounds checks per
-        // output row rather than six per output sample.
-        let r = [
-            src.row(dy - 2, 0, width),
-            src.row(dy - 1, 0, width),
-            src.row(dy, 0, width),
-            src.row(dy + 1, 0, width),
-            src.row(dy + 2, 0, width),
-            src.row(dy + 3, 0, width),
-        ];
+        let r5 = src.row(dy + 3, 0, width);
         let out = dst.row_mut(dy, 0, width);
-        for j in 0..width {
-            let p = [r[0][j], r[1][j], r[2][j], r[3][j], r[4][j], r[5][j]];
-            out[j] = WelsClip1((filter_input_8bit(&p) + 16) >> 5);
+        for ((((((o, &a), &b), &c), &d), &e), &f) in
+            out.iter_mut().zip(r0).zip(r1).zip(r2).zip(r3).zip(r4).zip(r5)
+        {
+            *o = WelsClip1((filter_input_8bit(&[a, b, c, d, e, f]) + 16) >> 5);
         }
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
     }
 }
 
@@ -391,6 +429,7 @@ pub fn mc_hor_ver02(
 /// a panic here, exactly as in the old port, which used a Rust array too. The
 /// encoder's half-pel refinement is what needs the 17: it filters `iWidth + 1`
 /// columns (`encoder/md.rs:1289`).
+#[inline(always)]
 pub fn mc_hor_ver22(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -399,19 +438,22 @@ pub fn mc_hor_ver22(
 ) {
     let mut iTmp = [0i16; 17 + 5];
     let n = width + 5;
+    // Zipped and rolling, for the reasons given in `mc_hor_ver02`.
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        src.row(-2, -2, n),
+        src.row(-1, -2, n),
+        src.row(0, -2, n),
+        src.row(1, -2, n),
+        src.row(2, -2, n),
+    );
     for dy in 0..height as isize {
-        let r = [
-            src.row(dy - 2, -2, n),
-            src.row(dy - 1, -2, n),
-            src.row(dy, -2, n),
-            src.row(dy + 1, -2, n),
-            src.row(dy + 2, -2, n),
-            src.row(dy + 3, -2, n),
-        ];
-        for j in 0..n {
-            let p = [r[0][j], r[1][j], r[2][j], r[3][j], r[4][j], r[5][j]];
-            iTmp[j] = filter_input_8bit(&p) as i16;
+        let r5 = src.row(dy + 3, -2, n);
+        for ((((((t, &a), &b), &c), &d), &e), &f) in
+            iTmp[..n].iter_mut().zip(r0).zip(r1).zip(r2).zip(r3).zip(r4).zip(r5)
+        {
+            *t = filter_input_8bit(&[a, b, c, d, e, f]) as i16;
         }
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
         let out = dst.row_mut(dy, 0, width);
         for (o, w) in out.iter_mut().zip(iTmp[..n].windows(6)) {
             *o = WelsClip1((hor_filter_input_16bit(w.try_into().unwrap()) + 512) >> 10);
@@ -427,6 +469,7 @@ fn scratch() -> [u8; 256] {
 }
 
 /// C++: `McHorVer01_c`.
+#[inline(never)]
 pub fn mc_hor_ver01(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -439,6 +482,7 @@ pub fn mc_hor_ver01(
 }
 
 /// C++: `McHorVer03_c`.
+#[inline(never)]
 pub fn mc_hor_ver03(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -457,6 +501,7 @@ pub fn mc_hor_ver03(
 }
 
 /// C++: `McHorVer10_c`.
+#[inline(never)]
 pub fn mc_hor_ver10(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -469,6 +514,7 @@ pub fn mc_hor_ver10(
 }
 
 /// C++: `McHorVer11_c`.
+#[inline(never)]
 pub fn mc_hor_ver11(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -489,6 +535,7 @@ pub fn mc_hor_ver11(
 }
 
 /// C++: `McHorVer12_c`.
+#[inline(never)]
 pub fn mc_hor_ver12(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -509,6 +556,7 @@ pub fn mc_hor_ver12(
 }
 
 /// C++: `McHorVer13_c`.
+#[inline(never)]
 pub fn mc_hor_ver13(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -534,6 +582,7 @@ pub fn mc_hor_ver13(
 }
 
 /// C++: `McHorVer21_c`.
+#[inline(never)]
 pub fn mc_hor_ver21(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -554,6 +603,7 @@ pub fn mc_hor_ver21(
 }
 
 /// C++: `McHorVer23_c`.
+#[inline(never)]
 pub fn mc_hor_ver23(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -579,6 +629,7 @@ pub fn mc_hor_ver23(
 }
 
 /// C++: `McHorVer30_c`.
+#[inline(never)]
 pub fn mc_hor_ver30(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -597,6 +648,7 @@ pub fn mc_hor_ver30(
 }
 
 /// C++: `McHorVer31_c`.
+#[inline(never)]
 pub fn mc_hor_ver31(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -622,6 +674,7 @@ pub fn mc_hor_ver31(
 }
 
 /// C++: `McHorVer32_c`.
+#[inline(never)]
 pub fn mc_hor_ver32(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -647,6 +700,7 @@ pub fn mc_hor_ver32(
 }
 
 /// C++: `McHorVer33_c`.
+#[inline(never)]
 pub fn mc_hor_ver33(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -683,6 +737,7 @@ pub fn mc_hor_ver33(
 /// (plan §Phase 2, §3.2) — it never left this module, so folding it changes no
 /// caller and no typedef, and the arms are in the table's `[iMvX & 3][iMvY & 3]`
 /// order so the two can be read against each other.
+#[inline(always)]
 pub fn mc_luma(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -714,6 +769,7 @@ pub fn mc_luma(
 /// C++: `McChromaWithFragMv_c` — bilinear chroma interpolation at eighth-pel.
 ///
 /// Reads `x` in `0 .. width + 1`, `y` in `0 .. height + 1`.
+#[inline(always)]
 pub fn mc_chroma_with_frag_mv(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -747,6 +803,7 @@ pub fn mc_chroma_with_frag_mv(
 }
 
 /// C++: `McChroma_c` — the copy path when the eighth-pel fraction is zero.
+#[inline(always)]
 pub fn mc_chroma(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
@@ -762,66 +819,243 @@ pub fn mc_chroma(
     }
 }
 
+// ============================================================================
+// Strangler shims (plan §4 R7) — the raw-pointer entry points `SMcFunc` still
+// holds. Each builds the cursor pair its kernel needs and calls the safe
+// implementation above.
+// ============================================================================
+//
+// # Why an MC read outside the block is legal
+//
+// Every shim below reaches past the block it is given: the 6-tap filter needs
+// two samples before and three after each output sample. Intra prediction could
+// justify its one-sample reach from `PADDING_LENGTH` alone. **MC cannot** — the
+// source pointer has already been displaced by a motion vector, so the reach is
+// legal only because the caller clamped that vector first. The decoder's clamp
+// is `BaseMC` (`decoder/decode_slice.rs:1069-1091`), quoted here because it is
+// the entire safety argument and it is *exactly* calibrated to this reach:
+//
+// ```text
+// const PADDING_LENGTH: i32 = 32;
+// iFullMVx = WELS_CLIP3(iFullMVx, (-PADDING_LENGTH + 2) * 4,
+//                       (pMCRefMem.iPicWidth  + PADDING_LENGTH - 19) * 4);
+// iFullMVy = WELS_CLIP3(iFullMVy, (-PADDING_LENGTH + 2) * 4,
+//                       (pMCRefMem.iPicHeight + PADDING_LENGTH - 19) * 4);
+// pSrcY = pMCRefMem.pSrcY.offset((iFullMVx >> 2) + (iFullMVy >> 2) * iSrcLineLuma);
+// ```
+//
+// Read the arithmetic out: the integer part of the vector lands in
+// `-30 ..= width + 13`, so a 16-wide block reaching `x - 2` at the low end and
+// `x + 16 + 3` at the high end touches `-32 ..= width + 32` — precisely the
+// 32-sample luma border `AllocPicture` allocates (`decoder/pic_queue.rs`), with
+// nothing to spare at either end. The `+ 2` and the `- 19` in the clamp are that
+// margin: `19 == 16 + 3`. Chroma is the same argument at half scale against the
+// 16-sample chroma border.
+//
+// The encoder's callers are a different family of buffers and their own
+// argument: ME refinement filters out of the reference picture into
+// `pBufferInterPredMe` scratch (`encoder/md.rs:1043-1046`), and the search
+// window is bounded before the call rather than by a clamp inside it.
+//
+// **Phase 5 converts callers against these contracts**, so they say what the
+// caller must guarantee rather than what this code happens to do.
+
+/// The samples a kernel reads around `pSrc`'s `(0, 0)`: `x` in
+/// `-left .. width + right`, `y` in `-top .. height + bottom`.
+#[derive(Clone, Copy)]
+struct Reach {
+    left: usize,
+    top: usize,
+    right: usize,
+    bottom: usize,
+}
+
+/// Copy path: the block and nothing else.
+const R_COPY: Reach = Reach { left: 0, top: 0, right: 0, bottom: 0 };
+/// Horizontal 6-tap: two samples left, three right.
+const R_HOR: Reach = Reach { left: 2, top: 0, right: 3, bottom: 0 };
+/// Vertical 6-tap: two rows above, three below.
+const R_VER: Reach = Reach { left: 0, top: 2, right: 0, bottom: 3 };
+/// Both, which is also the union over every quarter-pel kernel.
+const R_CEN: Reach = Reach { left: 2, top: 2, right: 3, bottom: 3 };
+/// Bilinear chroma: one sample right and one row below, for the `(1 - a)` terms.
+const R_CHROMA: Reach = Reach { left: 0, top: 0, right: 1, bottom: 1 };
+
+/// Per-kernel read reach, in `[iMvX & 3][iMvY & 3]` order — the same indexing the
+/// deleted `pWelsMcFunc_c` table used, so the two read against each other.
+///
+/// It is not one reach for all sixteen: `McHorVer10_c` reads no row outside its
+/// block and `McHorVer13_c` reads five, and a shim that claimed the union would be
+/// asserting validity for rows its caller never promised.
+///
+/// **`static`, not `const`, and that is worth 8% of decode time.** A `const` is
+/// substituted at each use, so `LUMA_REACH[x][y]` with runtime indices makes the
+/// compiler materialise all sixteen entries on the stack at every `McLuma_c` call
+/// and then index that copy — 64 stores to read four words. As a `static` it lives
+/// in rodata and the same expression is one load.
+static LUMA_REACH: [[Reach; 4]; 4] = [
+    [R_COPY, R_VER, R_VER, R_VER],
+    [R_HOR, R_CEN, R_CEN, R_CEN],
+    [R_HOR, R_CEN, R_CEN, R_CEN],
+    [R_HOR, R_CEN, R_CEN, R_CEN],
+];
+
+/// `(slice length, cursor centre)` for a source slice anchored at
+/// `pSrc - top*stride - left`.
+///
+/// This and [`block_span`] are the only places in the module where a span is
+/// computed; every shim gets its numbers from here.
+#[inline]
+fn src_span(stride: usize, width: usize, height: usize, r: Reach) -> (usize, usize) {
+    let center = r.top * stride + r.left;
+    let len = center + (height + r.bottom - 1) * stride + width + r.right;
+    (len, center)
+}
+
+/// Bytes spanned by a `width` x `height` block at `stride`, from its own `(0, 0)` —
+/// the destination surface of every kernel here, and the source of the ones that
+/// read nothing outside their block.
+#[inline]
+fn block_span(stride: usize, width: usize, height: usize) -> usize {
+    (height - 1) * stride + width
+}
+
+/// Runs a safe `(src, dst, width, height)` kernel behind a raw-pointer entry point:
+/// **the one place in this module where a raw pointer becomes a slice.**
+///
+/// `span_width` is the width the *span* covers, which is the kernel's `width`
+/// everywhere except the copy path, where `McCopy_c` narrows it (see
+/// [`copy_width`]) and claiming the nominal width would over-assert validity.
+///
+/// A non-positive width or height returns without touching memory, matching the
+/// old kernels, whose loops simply did not run.
+///
+/// # Safety
+/// `pSrc` and `pDst` point at sample `(0, 0)` of the source and destination blocks;
+/// the source's `reach` neighbourhood and the destination's block must be valid for
+/// reads and writes respectively, at the given strides, and the two spans must not
+/// overlap.
+#[inline(always)]
+unsafe fn shim_wh(
+    pSrc: *const u8,
+    iSrcStride: i32,
+    pDst: *mut u8,
+    iDstStride: i32,
+    iWidth: i32,
+    iHeight: i32,
+    reach: Reach,
+    span_width: usize,
+    f: impl FnOnce(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>, usize, usize),
+) {
+    if iWidth <= 0 || iHeight <= 0 {
+        return;
+    }
+    let (w, h) = (iWidth as usize, iHeight as usize);
+    let (ss, ds) = (iSrcStride as usize, iDstStride as usize);
+    let (slen, scenter) = src_span(ss, span_width, h, reach);
+    let src = unsafe { std::slice::from_raw_parts(pSrc.sub(scenter), slen) };
+    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, block_span(ds, span_width, h)) };
+    f(
+        &PlaneCursor::new(src, scenter, ss),
+        &mut PlaneCursorMut::new(dst, 0, ds),
+        w,
+        h,
+    );
+}
+
+/// C++: `McCopyWidthEq2_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` and `pDst` point at sample `(0, 0)` of a 2 x `iHeight` block in surfaces
+///   whose rows are `iSrcStride` / `iDstStride` bytes apart, and reads span
+///   `[0, (iHeight - 1) * iSrcStride + 2)` from `pSrc`, writes the same shape from
+///   `pDst`. Nothing outside the block is touched.
+/// * The two spans must not overlap, and both strides must be positive.
 #[inline(always)]
 pub unsafe extern "C" fn McCopyWidthEq2_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        std::ptr::copy_nonoverlapping(pSrc, pDst, 2);
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_copy_width_eq2
+    unsafe {
+        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 2, iHeight, R_COPY, 2, |s, d, _, h| {
+            mc_copy_width_eq2(s, d, h)
+        })
+    };
 }
 
+/// C++: `McCopyWidthEq4_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// As [`McCopyWidthEq2_c`], with a block 4 samples wide.
 #[inline(always)]
 pub unsafe extern "C" fn McCopyWidthEq4_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        std::ptr::copy_nonoverlapping(pSrc, pDst, 4);
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_copy_width_eq4
+    unsafe {
+        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 4, iHeight, R_COPY, 4, |s, d, _, h| {
+            mc_copy_width_eq4(s, d, h)
+        })
+    };
 }
 
+/// C++: `McCopyWidthEq8_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// As [`McCopyWidthEq2_c`], with a block 8 samples wide.
 #[inline(always)]
 pub unsafe extern "C" fn McCopyWidthEq8_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        std::ptr::copy_nonoverlapping(pSrc, pDst, 8);
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_copy_width_eq8
+    unsafe {
+        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 8, iHeight, R_COPY, 8, |s, d, _, h| {
+            mc_copy_width_eq8(s, d, h)
+        })
+    };
 }
 
+/// C++: `McCopyWidthEq16_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// As [`McCopyWidthEq2_c`], with a block 16 samples wide.
 #[inline(always)]
 pub unsafe extern "C" fn McCopyWidthEq16_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        std::ptr::copy_nonoverlapping(pSrc, pDst, 16);
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_copy_width_eq16
+    unsafe {
+        shim_wh(pSrc, iSrcStride, pDst, iDstStride, 16, iHeight, R_COPY, 16, |s, d, _, h| {
+            mc_copy_width_eq16(s, d, h)
+        })
+    };
 }
 
+/// C++: `McCopy_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` and `pDst` point at sample `(0, 0)` of a `w` x `iHeight` block, where
+///   **`w` is 16, 8 or 4 if `iWidth` is exactly that and 2 otherwise** — this kernel
+///   dispatches on the exact value and copies two bytes for anything else. Reads span
+///   `[0, (iHeight - 1) * iSrcStride + w)` from `pSrc` and writes the same shape from
+///   `pDst`; nothing outside the block is touched.
+/// * The two spans must not overlap, and both strides must be positive.
 #[inline(always)]
 pub unsafe extern "C" fn McCopy_c(
     pSrc: *const u8,
@@ -831,100 +1065,162 @@ pub unsafe extern "C" fn McCopy_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    if iWidth == 16 {
-        McCopyWidthEq16_c(pSrc, iSrcStride, pDst, iDstStride, iHeight);
-    } else if iWidth == 8 {
-        McCopyWidthEq8_c(pSrc, iSrcStride, pDst, iDstStride, iHeight);
-    } else if iWidth == 4 {
-        McCopyWidthEq4_c(pSrc, iSrcStride, pDst, iDstStride, iHeight);
-    } else {
-        McCopyWidthEq2_c(pSrc, iSrcStride, pDst, iDstStride, iHeight);
-    }
+    // SHIM(phase2) -> mc_copy
+    let span_width = copy_width(iWidth.max(0) as usize);
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            R_COPY,
+            span_width,
+            mc_copy,
+        )
+    };
 }
 
+/// C++: `HorFilterInput16bit_c`, `codec/common/src/mc.cpp`.
+///
+/// Nothing in the tree calls this any more — `mc_hor_ver22` uses
+/// [`hor_filter_input_16bit`] directly. The raw entry point is kept so this phase
+/// changes no signature; Phase 5 deletes it.
+///
+/// # Safety
+/// `pSrc` must be valid to read for six `i16`s, `pSrc[0..6]`.
 #[inline(always)]
 pub unsafe fn HorFilterInput16bit_c(pSrc: *const i16) -> i32 {
-    let iPix05 = (*pSrc.add(0) as i32) + (*pSrc.add(5) as i32);
-    let iPix14 = (*pSrc.add(1) as i32) + (*pSrc.add(4) as i32);
-    let iPix23 = (*pSrc.add(2) as i32) + (*pSrc.add(3) as i32);
-    iPix05 - (iPix14 * 5) + (iPix23 * 20)
+    // SHIM(phase2) -> hor_filter_input_16bit
+    let p = unsafe { std::slice::from_raw_parts(pSrc, 6) };
+    hor_filter_input_16bit(p.try_into().unwrap())
 }
 
+/// C++: `FilterInput8bitWithStride_c`, `codec/common/src/mc.cpp`.
+///
+/// Nothing in the tree calls this any more — the half-pel kernels use
+/// [`filter_input_8bit`] over a row window (horizontal) or six row windows
+/// (vertical), which is where the per-row rather than per-sample bounds check comes
+/// from. The raw entry point is kept so this phase changes no signature; Phase 5
+/// deletes it.
+///
+/// # Safety
+/// `kiOffset` is positive — 1 for the horizontal filter, the source stride for the
+/// vertical one — and `pSrc[-2*kiOffset ..= 3*kiOffset]` must be valid to read.
 #[inline(always)]
 pub unsafe fn FilterInput8bitWithStride_c(pSrc: *const u8, kiOffset: i32) -> i32 {
-    let kiOffset1 = kiOffset as isize;
-    let kiOffset2 = kiOffset1 << 1;
-    let kiOffset3 = kiOffset1 + kiOffset2;
-    let kuiPix05 = (*pSrc.offset(-kiOffset2) as u32) + (*pSrc.offset(kiOffset3) as u32);
-    let kuiPix14 = (*pSrc.offset(-kiOffset1) as u32) + (*pSrc.offset(kiOffset2) as u32);
-    let kuiPix23 = (*pSrc as u32) + (*pSrc.offset(kiOffset1) as u32);
-
-    (kuiPix05 as i32)
-        - (((kuiPix14 << 2) + kuiPix14) as i32)
-        + (((kuiPix23 << 4) + (kuiPix23 << 2)) as i32)
+    // SHIM(phase2) -> filter_input_8bit
+    let k = kiOffset as isize;
+    let span = unsafe { std::slice::from_raw_parts(pSrc.offset(-2 * k), (5 * k + 1) as usize) };
+    let k = k as usize;
+    let p = [span[0], span[k], span[2 * k], span[3 * k], span[4 * k], span[5 * k]];
+    filter_input_8bit(&p)
 }
 
+/// C++: `PixelAvg_c`, `codec/common/src/mc.cpp` — `SMcFunc::pfSampleAveraging`.
+///
+/// # Safety
+/// * `pDst`, `pSrcA` and `pSrcB` each point at sample `(0, 0)` of an `iWidth` x
+///   `iHeight` block in a surface of its own stride; each span is
+///   `[0, (iHeight - 1) * stride + iWidth)`. Nothing outside the blocks is touched.
+/// * The destination span must not overlap either source span. The encoder does hand
+///   this kernel two regions of one allocation (`pBufferInterPredMe`, at the fixed
+///   640-byte offsets of `encoder/md.rs:1043-1046`) — those regions are disjoint,
+///   which is what makes it legal.
+/// * All three strides must be positive.
 #[inline(always)]
 pub unsafe extern "C" fn PixelAvg_c(
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
-    mut pSrcA: *const u8,
+    pSrcA: *const u8,
     iSrcAStride: i32,
-    mut pSrcB: *const u8,
+    pSrcB: *const u8,
     iSrcBStride: i32,
     iWidth: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        for j in 0..iWidth as isize {
-            *pDst.offset(j) = (((*pSrcA.offset(j) as u32) + (*pSrcB.offset(j) as u32) + 1) >> 1) as u8;
-        }
-        pDst = pDst.offset(iDstStride as isize);
-        pSrcA = pSrcA.offset(iSrcAStride as isize);
-        pSrcB = pSrcB.offset(iSrcBStride as isize);
+    // SHIM(phase2) -> pixel_avg
+    if iWidth <= 0 || iHeight <= 0 {
+        return;
     }
+    let (w, h) = (iWidth as usize, iHeight as usize);
+    let (ds, sa, sb) = (iDstStride as usize, iSrcAStride as usize, iSrcBStride as usize);
+    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, block_span(ds, w, h)) };
+    let a = unsafe { std::slice::from_raw_parts(pSrcA, block_span(sa, w, h)) };
+    let b = unsafe { std::slice::from_raw_parts(pSrcB, block_span(sb, w, h)) };
+    pixel_avg(
+        &mut PlaneCursorMut::new(dst, 0, ds),
+        &PlaneCursor::new(a, 0, sa),
+        &PlaneCursor::new(b, 0, sb),
+        w,
+        h,
+    );
 }
 
+// The fifteen quarter-pel entry points. Written out one by one rather than generated
+// from a macro on purpose: a macro folds fifteen `unsafe extern "C" fn` definitions
+// into one line of source, which makes the unsafe ratchet report a 13-definition drop
+// that did not happen (plan §7.1) — and it would hide each kernel's own reach behind a
+// table lookup in the one place a reader is looking for it.
+
+/// C++: `McHorVer20_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[2][0]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * No internal scratch, so no width or height ceiling beyond the spans above.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer20_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iWidth: i32,
     iHeight: i32,
 ) {
-    for _ in 0..iHeight {
-        for j in 0..iWidth as isize {
-            *pDst.offset(j) = WelsClip1((FilterInput8bitWithStride_c(pSrc.offset(j), 1) + 16) >> 5);
-        }
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_hor_ver20
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[2][0],
+            iWidth.max(0) as usize,
+            mc_hor_ver20,
+        )
+    };
 }
 
+/// C++: `McHorVer02_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][2]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * No internal scratch, so no width or height ceiling beyond the spans above.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer02_c(
-    mut pSrc: *const u8,
-    iSrcStride: i32,
-    mut pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    for _ in 0..iHeight {
-        for j in 0..iWidth as isize {
-            *pDst.offset(j) =
-                WelsClip1((FilterInput8bitWithStride_c(pSrc.offset(j), iSrcStride) + 16) >> 5);
-        }
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
-    }
-}
-
-/// Horizontal luma half-pel motion compensation (`McHorizLuma_c`, alias for `McHorVer20_c`).
-#[inline(always)]
-pub unsafe extern "C" fn McHorizLuma_c(
     pSrc: *const u8,
     iSrcStride: i32,
     pDst: *mut u8,
@@ -932,44 +1228,80 @@ pub unsafe extern "C" fn McHorizLuma_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    McHorVer20_c(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
+    // SHIM(phase2) -> mc_hor_ver02
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[0][2],
+            iWidth.max(0) as usize,
+            mc_hor_ver02,
+        )
+    };
 }
 
-/// Vertical luma half-pel motion compensation (`McVertLuma_c`, alias for `McHorVer02_c`).
-#[inline(always)]
-pub unsafe extern "C" fn McVertLuma_c(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    McHorVer02_c(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
-}
-
+/// C++: `McHorVer22_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][2]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` is at most 17: this kernel's 16-bit intermediates live in a
+///   `[i16; 17 + 5]`, and the encoder's half-pel refinement is what needs the 17
+///   (`encoder/md.rs:1289` filters `iWidth + 1` columns).
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer22_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut iTmp = [0i16; 17 + 5];
-    for _ in 0..iHeight {
-        for j in 0..(iWidth + 5) as isize {
-            iTmp[j as usize] = FilterInput8bitWithStride_c(pSrc.offset(-2 + j), iSrcStride) as i16;
-        }
-        for k in 0..iWidth as isize {
-            *pDst.offset(k) = WelsClip1((HorFilterInput16bit_c(iTmp.as_ptr().offset(k)) + 512) >> 10);
-        }
-        pSrc = pSrc.offset(iSrcStride as isize);
-        pDst = pDst.offset(iDstStride as isize);
-    }
+    // SHIM(phase2) -> mc_hor_ver22
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[2][2],
+            iWidth.max(0) as usize,
+            mc_hor_ver22,
+        )
+    };
 }
 
+/// C++: `McHorVer01_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][1]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer01_c(
     pSrc: *const u8,
@@ -979,11 +1311,38 @@ pub unsafe extern "C" fn McHorVer01_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiTmp = [0u8; 256];
-    McHorVer02_c(pSrc, iSrcStride, uiTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(pDst, iDstStride, pSrc, iSrcStride, uiTmp.as_ptr(), 16, iWidth, iHeight);
+    // SHIM(phase2) -> mc_hor_ver01
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[0][1],
+            iWidth.max(0) as usize,
+            mc_hor_ver01,
+        )
+    };
 }
 
+/// C++: `McHorVer03_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-0 .. iWidth + 0` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[0][3]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer03_c(
     pSrc: *const u8,
@@ -993,20 +1352,38 @@ pub unsafe extern "C" fn McHorVer03_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiTmp = [0u8; 256];
-    McHorVer02_c(pSrc, iSrcStride, uiTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        pSrc.offset(iSrcStride as isize),
-        iSrcStride,
-        uiTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver03
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[0][3],
+            iWidth.max(0) as usize,
+            mc_hor_ver03,
+        )
+    };
 }
 
+/// C++: `McHorVer10_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[1][0]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer10_c(
     pSrc: *const u8,
@@ -1016,11 +1393,38 @@ pub unsafe extern "C" fn McHorVer10_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiTmp = [0u8; 256];
-    McHorVer20_c(pSrc, iSrcStride, uiTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(pDst, iDstStride, pSrc, iSrcStride, uiTmp.as_ptr(), 16, iWidth, iHeight);
+    // SHIM(phase2) -> mc_hor_ver10
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[1][0],
+            iWidth.max(0) as usize,
+            mc_hor_ver10,
+        )
+    };
 }
 
+/// C++: `McHorVer11_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][1]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer11_c(
     pSrc: *const u8,
@@ -1030,22 +1434,38 @@ pub unsafe extern "C" fn McHorVer11_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiVerTmp = [0u8; 256];
-    McHorVer20_c(pSrc, iSrcStride, uiHorTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    McHorVer02_c(pSrc, iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiVerTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver11
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[1][1],
+            iWidth.max(0) as usize,
+            mc_hor_ver11,
+        )
+    };
 }
 
+/// C++: `McHorVer12_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][2]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer12_c(
     pSrc: *const u8,
@@ -1055,22 +1475,38 @@ pub unsafe extern "C" fn McHorVer12_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiVerTmp = [0u8; 256];
-    let mut uiCtrTmp = [0u8; 256];
-    McHorVer02_c(pSrc, iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    McHorVer22_c(pSrc, iSrcStride, uiCtrTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiVerTmp.as_ptr(),
-        16,
-        uiCtrTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver12
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[1][2],
+            iWidth.max(0) as usize,
+            mc_hor_ver12,
+        )
+    };
 }
 
+/// C++: `McHorVer13_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[1][3]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer13_c(
     pSrc: *const u8,
@@ -1080,29 +1516,38 @@ pub unsafe extern "C" fn McHorVer13_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiVerTmp = [0u8; 256];
-    McHorVer20_c(
-        pSrc.offset(iSrcStride as isize),
-        iSrcStride,
-        uiHorTmp.as_mut_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
-    McHorVer02_c(pSrc, iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiVerTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver13
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[1][3],
+            iWidth.max(0) as usize,
+            mc_hor_ver13,
+        )
+    };
 }
 
+/// C++: `McHorVer21_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][1]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer21_c(
     pSrc: *const u8,
@@ -1112,22 +1557,38 @@ pub unsafe extern "C" fn McHorVer21_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiCtrTmp = [0u8; 256];
-    McHorVer20_c(pSrc, iSrcStride, uiHorTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    McHorVer22_c(pSrc, iSrcStride, uiCtrTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiCtrTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver21
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[2][1],
+            iWidth.max(0) as usize,
+            mc_hor_ver21,
+        )
+    };
 }
 
+/// C++: `McHorVer23_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[2][3]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer23_c(
     pSrc: *const u8,
@@ -1137,29 +1598,38 @@ pub unsafe extern "C" fn McHorVer23_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiCtrTmp = [0u8; 256];
-    McHorVer20_c(
-        pSrc.offset(iSrcStride as isize),
-        iSrcStride,
-        uiHorTmp.as_mut_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
-    McHorVer22_c(pSrc, iSrcStride, uiCtrTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiCtrTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver23
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[2][3],
+            iWidth.max(0) as usize,
+            mc_hor_ver23,
+        )
+    };
 }
 
+/// C++: `McHorVer30_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-0 .. iHeight + 0` — `LUMA_REACH[3][0]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer30_c(
     pSrc: *const u8,
@@ -1169,20 +1639,38 @@ pub unsafe extern "C" fn McHorVer30_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    McHorVer20_c(pSrc, iSrcStride, uiHorTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        pSrc.offset(1),
-        iSrcStride,
-        uiHorTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver30
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[3][0],
+            iWidth.max(0) as usize,
+            mc_hor_ver30,
+        )
+    };
 }
 
+/// C++: `McHorVer31_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][1]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer31_c(
     pSrc: *const u8,
@@ -1192,22 +1680,38 @@ pub unsafe extern "C" fn McHorVer31_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiVerTmp = [0u8; 256];
-    McHorVer20_c(pSrc, iSrcStride, uiHorTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    McHorVer02_c(pSrc.offset(1), iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiVerTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver31
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[3][1],
+            iWidth.max(0) as usize,
+            mc_hor_ver31,
+        )
+    };
 }
 
+/// C++: `McHorVer32_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][2]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer32_c(
     pSrc: *const u8,
@@ -1217,22 +1721,38 @@ pub unsafe extern "C" fn McHorVer32_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiVerTmp = [0u8; 256];
-    let mut uiCtrTmp = [0u8; 256];
-    McHorVer02_c(pSrc.offset(1), iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    McHorVer22_c(pSrc, iSrcStride, uiCtrTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiVerTmp.as_ptr(),
-        16,
-        uiCtrTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver32
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[3][2],
+            iWidth.max(0) as usize,
+            mc_hor_ver32,
+        )
+    };
 }
 
+/// C++: `McHorVer33_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block in a surface
+///   whose rows are `iSrcStride` bytes apart. This kernel reads `x` in
+///   `-2 .. iWidth + 3` and `y` in `-2 .. iHeight + 3` — `LUMA_REACH[3][3]` — and all
+///   of it must be valid to read.
+/// * For a decoder reference picture that follows from the motion-vector clamp in
+///   `BaseMC` (`decoder/decode_slice.rs:1069-1091`) against the 32-sample
+///   `PADDING_LENGTH` border, as derived in this section's header. `PADDING_LENGTH`
+///   alone is **not** sufficient: `pSrc` has already been displaced by the vector.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else. The two spans must
+///   not overlap, and both strides are positive.
+/// * `iWidth` and `iHeight` are at most 16: this kernel interpolates through a
+///   `[u8; 256]` scratch at stride 16, exactly as the C++ does.
 #[inline(always)]
 pub unsafe extern "C" fn McHorVer33_c(
     pSrc: *const u8,
@@ -1242,36 +1762,89 @@ pub unsafe extern "C" fn McHorVer33_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut uiHorTmp = [0u8; 256];
-    let mut uiVerTmp = [0u8; 256];
-    McHorVer20_c(
-        pSrc.offset(iSrcStride as isize),
-        iSrcStride,
-        uiHorTmp.as_mut_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
-    McHorVer02_c(pSrc.offset(1), iSrcStride, uiVerTmp.as_mut_ptr(), 16, iWidth, iHeight);
-    PixelAvg_c(
-        pDst,
-        iDstStride,
-        uiHorTmp.as_ptr(),
-        16,
-        uiVerTmp.as_ptr(),
-        16,
-        iWidth,
-        iHeight,
-    );
+    // SHIM(phase2) -> mc_hor_ver33
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[3][3],
+            iWidth.max(0) as usize,
+            mc_hor_ver33,
+        )
+    };
 }
 
-pub static pWelsMcFunc_c: [[PWelsMcWidthHeightFunc; 4]; 4] = [
-    [McCopy_c, McHorVer01_c, McHorVer02_c, McHorVer03_c],
-    [McHorVer10_c, McHorVer11_c, McHorVer12_c, McHorVer13_c],
-    [McHorVer20_c, McHorVer21_c, McHorVer22_c, McHorVer23_c],
-    [McHorVer30_c, McHorVer31_c, McHorVer32_c, McHorVer33_c],
-];
+/// Horizontal luma half-pel motion compensation — the C++ names this separately from
+/// `McHorVer20_c` and then defines it as the same function.
+///
+/// # Safety
+/// As [`McHorVer20_c`].
+#[inline(always)]
+pub unsafe extern "C" fn McHorizLuma_c(
+    pSrc: *const u8,
+    iSrcStride: i32,
+    pDst: *mut u8,
+    iDstStride: i32,
+    iWidth: i32,
+    iHeight: i32,
+) {
+    // SHIM(phase2) -> mc_hor_ver20
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            R_HOR,
+            iWidth.max(0) as usize,
+            mc_hor_ver20,
+        )
+    };
+}
 
+/// Vertical luma half-pel motion compensation — the C++ alias of `McHorVer02_c`.
+///
+/// # Safety
+/// As [`McHorVer02_c`].
+#[inline(always)]
+pub unsafe extern "C" fn McVertLuma_c(
+    pSrc: *const u8,
+    iSrcStride: i32,
+    pDst: *mut u8,
+    iDstStride: i32,
+    iWidth: i32,
+    iHeight: i32,
+) {
+    // SHIM(phase2) -> mc_hor_ver02
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            R_VER,
+            iWidth.max(0) as usize,
+            mc_hor_ver02,
+        )
+    };
+}
+
+/// C++: `McLuma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcLumaFunc`.
+///
+/// # Safety
+/// As the quarter-pel kernels this dispatches to (`LUMA_REACH[iMvX & 3][iMvY & 3]`
+/// selects both the kernel and its reach); the widest case is two samples and two
+/// rows before the block and three after, and the decoder's guarantee for it is the
+/// `BaseMC` clamp quoted in this section's header. `iWidth` and `iHeight` are at most
+/// 16, which is what the kernels' `[u8; 256]` scratch at stride 16 holds.
 pub unsafe extern "C" fn McLuma_c(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -1282,44 +1855,70 @@ pub unsafe extern "C" fn McLuma_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let x_idx = (iMvX & 0x03) as usize;
-    let y_idx = (iMvY & 0x03) as usize;
-    pWelsMcFunc_c[x_idx][y_idx](pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
+    // SHIM(phase2) -> mc_luma
+    let (x, y) = ((iMvX & 0x03) as usize, (iMvY & 0x03) as usize);
+    let w = iWidth.max(0) as usize;
+    // (0, 0) is the copy path, which narrows the width it touches.
+    let span_width = if x == 0 && y == 0 { copy_width(w) } else { w };
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            LUMA_REACH[x][y],
+            span_width,
+            |s, d, w, h| mc_luma(s, d, iMvX, iMvY, w, h),
+        )
+    };
 }
 
+/// C++: `McChromaWithFragMv_c`, `codec/common/src/mc.cpp`.
+///
+/// # Safety
+/// * `pSrc` points at sample `(0, 0)` of an `iWidth` x `iHeight` block whose
+///   bilinear neighbourhood — `x` in `0 .. iWidth + 1`, `y` in `0 .. iHeight + 1`,
+///   one sample right and one row below — is valid to read. For a decoder reference
+///   picture that follows from the `BaseMC` clamp against the 16-sample chroma
+///   border, per this section's header.
+/// * `pDst` points at sample `(0, 0)` of the destination block; writes span
+///   `[0, (iHeight - 1) * iDstStride + iWidth)` and nothing else.
+/// * The two spans must not overlap, and both strides must be positive.
 #[inline(always)]
 pub unsafe extern "C" fn McChromaWithFragMv_c(
-    mut pSrc: *const u8,
+    pSrc: *const u8,
     iSrcStride: i32,
-    mut pDst: *mut u8,
+    pDst: *mut u8,
     iDstStride: i32,
     iMvX: i16,
     iMvY: i16,
     iWidth: i32,
     iHeight: i32,
 ) {
-    let mut pSrcNext = pSrc.offset(iSrcStride as isize);
-    let pABCD = &g_kuiABCD[(iMvY & 0x07) as usize][(iMvX & 0x07) as usize];
-    let iA = pABCD[0] as i32;
-    let iB = pABCD[1] as i32;
-    let iC = pABCD[2] as i32;
-    let iD = pABCD[3] as i32;
-
-    for _ in 0..iHeight {
-        for j in 0..iWidth as isize {
-            *pDst.offset(j) = ((iA * (*pSrc.offset(j) as i32)
-                + iB * (*pSrc.offset(j + 1) as i32)
-                + iC * (*pSrcNext.offset(j) as i32)
-                + iD * (*pSrcNext.offset(j + 1) as i32)
-                + 32)
-                >> 6) as u8;
-        }
-        pDst = pDst.offset(iDstStride as isize);
-        pSrc = pSrcNext;
-        pSrcNext = pSrcNext.offset(iSrcStride as isize);
-    }
+    // SHIM(phase2) -> mc_chroma_with_frag_mv
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            R_CHROMA,
+            iWidth.max(0) as usize,
+            |s, d, w, h| mc_chroma_with_frag_mv(s, d, iMvX, iMvY, w, h),
+        )
+    };
 }
 
+/// C++: `McChroma_c`, `codec/common/src/mc.cpp` — `SMcFunc::pMcChromaFunc`.
+///
+/// # Safety
+/// As [`McChromaWithFragMv_c`] when either eighth-pel fraction is non-zero; as
+/// [`McCopy_c`] — block only, and the same narrowing of `iWidth` — when both are
+/// zero.
 pub unsafe extern "C" fn McChroma_c(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -1330,13 +1929,27 @@ pub unsafe extern "C" fn McChroma_c(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let kiD8x = iMvX & 0x07;
-    let kiD8y = iMvY & 0x07;
-    if kiD8x == 0 && kiD8y == 0 {
-        McCopy_c(pSrc, iSrcStride, pDst, iDstStride, iWidth, iHeight);
+    // SHIM(phase2) -> mc_chroma
+    let frag = (iMvX & 0x07) != 0 || (iMvY & 0x07) != 0;
+    let w = iWidth.max(0) as usize;
+    let (reach, span_width) = if frag {
+        (R_CHROMA, w)
     } else {
-        McChromaWithFragMv_c(pSrc, iSrcStride, pDst, iDstStride, iMvX, iMvY, iWidth, iHeight);
-    }
+        (R_COPY, copy_width(w))
+    };
+    unsafe {
+        shim_wh(
+            pSrc,
+            iSrcStride,
+            pDst,
+            iDstStride,
+            iWidth,
+            iHeight,
+            reach,
+            span_width,
+            |s, d, w, h| mc_chroma(s, d, iMvX, iMvY, w, h),
+        )
+    };
 }
 
 pub unsafe extern "C" fn InitMcFunc(pMcFuncs: *mut SMcFunc, _uiCpuFlag: u32) {
@@ -1356,22 +1969,40 @@ pub unsafe extern "C" fn InitMcFunc(pMcFuncs: *mut SMcFunc, _uiCpuFlag: u32) {
 mod tests {
     use super::*;
 
+    /// The two aliases really are `McHorVer20_c` and `McHorVer02_c`.
+    ///
+    /// This test used to anchor a 4x4 block at `src.as_ptr()` of a bare `[u8; 64]`
+    /// and filter it, which reads `pSrc[-2]` (horizontal) and `pSrc[-2 * 8]`
+    /// (vertical) — off the front of the array, in a test whose whole subject is a
+    /// kernel that reaches outside its block. The old raw code did that read
+    /// silently; the shim now materialises the span as a slice, so it is stated
+    /// instead. The block is anchored inside a padded surface here, which is what a
+    /// real caller hands these kernels.
     #[test]
     fn test_mc_horiz_and_vert_luma_aliases() {
-        unsafe {
-            let mut src = [0u8; 64];
-            for i in 0..64 {
-                src[i] = i as u8;
-            }
-            let mut dst_hor = [0u8; 64];
-            let mut dst_vert = [0u8; 64];
-
-            McHorizLuma_c(src.as_ptr(), 8, dst_hor.as_mut_ptr(), 8, 4, 4);
-            McVertLuma_c(src.as_ptr(), 8, dst_vert.as_mut_ptr(), 8, 4, 4);
-
-            assert!(dst_hor.iter().any(|&x| x != 0));
-            assert!(dst_vert.iter().any(|&x| x != 0));
+        const STRIDE: usize = 16;
+        const PAD: usize = 4;
+        let mut src = [0u8; STRIDE * 16];
+        for (i, v) in src.iter_mut().enumerate() {
+            *v = i as u8;
         }
+        let center = PAD * STRIDE + PAD;
+        let mut dst_hor = [0u8; 64];
+        let mut dst_vert = [0u8; 64];
+        let mut want_hor = [0u8; 64];
+        let mut want_vert = [0u8; 64];
+
+        unsafe {
+            McHorizLuma_c(src.as_ptr().add(center), STRIDE as i32, dst_hor.as_mut_ptr(), 8, 4, 4);
+            McVertLuma_c(src.as_ptr().add(center), STRIDE as i32, dst_vert.as_mut_ptr(), 8, 4, 4);
+            McHorVer20_c(src.as_ptr().add(center), STRIDE as i32, want_hor.as_mut_ptr(), 8, 4, 4);
+            McHorVer02_c(src.as_ptr().add(center), STRIDE as i32, want_vert.as_mut_ptr(), 8, 4, 4);
+        }
+
+        assert!(dst_hor.iter().any(|&x| x != 0));
+        assert!(dst_vert.iter().any(|&x| x != 0));
+        assert_eq!(dst_hor, want_hor, "McHorizLuma_c must be McHorVer20_c");
+        assert_eq!(dst_vert, want_vert, "McVertLuma_c must be McHorVer02_c");
     }
 }
 
