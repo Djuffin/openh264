@@ -444,13 +444,16 @@ fn sad_at<const W: usize, const H: usize>(
     dy: isize,
 ) -> i32 {
     let mut sum: i32 = 0;
-    for y in 0..H as isize {
-        // Statically-sized row windows on both sides: the bounds check lands per row,
-        // and the inner loop's trip count is a constant, so it vectorises.
-        let a: &[u8; W] = sample1.row(y, 0, W).try_into().unwrap();
-        let b: &[u8; W] = sample2.row(y + dy, dx, W).try_into().unwrap();
+    // One bounds check per block per side, not two per row per side. Through a shim
+    // neither the stride nor the buffer length is a compile-time value, so a per-row
+    // `row()` walk cannot fold its checks and a 16x8 emits 32 branches before reading
+    // a sample — see `PlaneCursor::row_windows` for the measurement and for why this
+    // is the right call here and the wrong one in `mc.rs`.
+    let rows1 = sample1.row_windows::<W>(0, 0, H);
+    let rows2 = sample2.row_windows::<W>(dy, dx, H);
+    for (a, b) in rows1.zip(rows2) {
         for (p, q) in a.iter().zip(b.iter()) {
-            sum += (*p as i32 - *q as i32).abs();
+            sum += p.abs_diff(*q) as i32;
         }
     }
     sum
