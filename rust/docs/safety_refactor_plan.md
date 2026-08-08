@@ -727,9 +727,19 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       deferred by direction** — so §7.2 gate 6 stays unavailable and `gates.sh` prints a
       permanent SKIP for it. F8 is the first recorded case of a finding a fuzzer would
       plausibly have reached first.
-- [ ] **T3 — `decoder/get_intra_predictor.rs`** (44 kernels, the perf worst case).
-      Not started; this is the next action.
-- [ ] **T4 — `common/mc.rs`.** Not started.
+- [x] **T3 — `decoder/get_intra_predictor.rs`** — the designated perf worst case,
+      **42** kernels (not 44): 14 I4x4, 14 I8x8, 7 chroma, 7 I16x16. `b7f48311`
+      (safe kernels + differential proof), `a4828187` (swap + shims). Verdicts:
+      **the worst case is a wash** — every decode-bench row inside ±1%, which is the
+      per-side spread (`perf_baseline.md` §Phase 2 T3), so §9's "perf regression in
+      MD/ME/intra hot loops" risk can be downgraded. Bounds checks land **per row**,
+      not per sample, and `copy_from_slice`/`fill` on fixed-size windows keep the wide
+      stores the punned `u32`/`u64` accesses gave. All ~140 punned accesses in the file
+      turned out to be pure byte *moves*, so `u32::from_ne_bytes` — T7's nominated
+      replacement — was not needed anywhere in it. These are also the first shims whose
+      span is not derivable from the signature: they anchor at `pPred - stride - 1` and
+      their contract names `PADDING_LENGTH` as the reason the `-1` row and column exist.
+- [ ] **T4 — `common/mc.rs`.** Not started; this is the next action.
 - [ ] **T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`.** Not started.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.

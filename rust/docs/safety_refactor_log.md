@@ -310,6 +310,8 @@ clean at both ends.
 | `5fe41f17` | T5c 3/4: the row-sync event machinery and its two dead `SPicture` fields |
 | `01ad9ba1` | T5c 4/4: `OpenDecoderThreads`, `CloseDecoderThreads`, `WelsTaskThread` |
 | `4e174285` | T5e: the dead `use std::ffi::c_void` in `lib.rs` |
+| `b7f48311` | T3 A: 42 safe intra-prediction kernels + differential proof |
+| `a4828187` | T3 B: swap + 42 shims, tautological differential entries deleted |
 
 Plus `phase2_findings.md` (F8), the plan's §2.2.1/§Phase 2/§7.1/§7.5 and Progress
 updates, and `perf_baseline.md`'s Phase 2 section.
@@ -452,6 +454,8 @@ decision for the other ~120 kernels. They were therefore taken second, and they 
 | `5fe41f17` | the row-sync events — `SWelsDecEvent`, the four Event helpers, `Picture::pReadyEvent`, `Picture::pNzc`, `GetPNzc`'s picture branch |
 | `01ad9ba1` | the entry points — `OpenDecoderThreads`, `CloseDecoderThreads`, `WelsTaskThread` and their call sites |
 | `4e174285` | T5e: the dead `use std::ffi::c_void` in `lib.rs` |
+| `b7f48311` | T3 A: 42 safe intra-prediction kernels + differential proof |
+| `a4828187` | T3 B: swap + 42 shims, tautological differential entries deleted |
 
 Ratchet across the five: `unsafe_fn` 1372 → 1365, `raw_ptr` 5390 → 5352,
 `unsafe_block` 511 → 507 — the first *drops* of the session, and worth contrasting with
@@ -481,20 +485,69 @@ Four things worth carrying forward:
 
 **Phase 0 is now complete except T7 (fuzz), which stays deferred by direction.**
 
+### T3 — `decoder/get_intra_predictor.rs`, the designated worst case
+
+Taken next in the same session. `b7f48311` proved 42 safe kernels against the raw ones;
+`a4828187` swapped them behind shims. **42, not the 44 the brief counts**: 14 I4x4 luma,
+14 I8x8 luma, 7 chroma, 7 I16x16 luma.
+
+**The headline: the phase's designated perf worst case is a wash.** Paired 3-run
+medians, every decode-bench row inside ±1%, which is the per-side spread
+(`perf_baseline.md` §Phase 2 T3). Plan §9's "perf regression in MD/ME/intra hot loops"
+risk row can be downgraded on the strength of it. The mechanism generalises and is worth
+carrying into T4 and T7: **bounds checks land per row, not per sample** — a 4x4 mode does
+one `row_mut` per output row against 16 samples of arithmetic — and `copy_from_slice` /
+`fill` on a fixed-size window compile to the same wide stores the punned `u32`/`u64`
+accesses were there to get.
+
+Four things learned that the remaining families inherit:
+
+1. **Every punned access in this file is a byte *move*, not an arithmetic use.** So
+   `u32::from_ne_bytes`, the taxonomy T7 replacement the brief nominates, was needed
+   nowhere in ~140 accesses. Two idioms covered all of them: `ST32/ST64(p, 0x0101.. * v)`
+   → `row_mut(..).fill(v)`, and a window of a local `kuiList` → `copy_from_slice`. Check
+   for arithmetic use before reaching for `from_ne_bytes` in T4/T7.
+2. **The shim span formula.** These are the first shims not derivable from the
+   signature. One helper computes it and nothing else does the arithmetic:
+   `centre = stride + 1`, `len = max(centre + (bh-1)*stride + bw, 1 + top_reach)`, slice
+   anchored at `pPred - stride - 1`. `top_reach` is 8 for the 4x4 diagonals and 16 for
+   the 8x8/16x16 ones. The contract names `PADDING_LENGTH` as the reason the `-1` row and
+   column exist at all — that sentence is what Phase 5 converts callers against.
+3. **Sweep availability flags exhaustively, not randomly.** `bTLAvail`/`bTRAvail` select
+   different formulas at both ends of the filtered-neighbour arrays, and three of the
+   fourteen 8x8 kernels ignore `bTLAvail` entirely while still taking it. A random sweep
+   blurs exactly the distinction a conversion is most likely to get wrong.
+4. **Anchor test blocks at random legal offsets.** Several of these kernels were written
+   around unaligned `u32`/`u64` stores; a fixed, conveniently-aligned test anchor would
+   not exercise that.
+
+Two quirks preserved deliberately, both of which look like bugs and are not:
+`DDLTop`/`VLTop` pad their 16-sample neighbour array with the **raw** `T7` rather than
+the filtered one, and `WelsI8x8LumaPredV_c` packs its output into a `u64` low byte first
+— little-endian-dependent, upstream included. The safe rewrite copies bytes instead,
+which is what was meant and is identical on every target this project builds for.
+
+**F3 fired once and was retried per the rule.** The release `mt` sweep failed exactly
+`t=4 sm=3 n=600` with a short output; the retry ran 120/120 clean. Structurally it could
+not have been this commit — the family is decoder-only and the sweep exercises the
+encoder — but the rule is to re-run rather than argue, and re-running settled it.
+
 ### Next session's first action
 
-**Phase 2 T3 — `decoder/get_intra_predictor.rs`**, the 44-kernel family and the phase's
-perf worst case, taken early on purpose. Two things to carry in:
+**Phase 2 T4 — `common/mc.rs`**, motion compensation: 26 kernels plus `InitMcFunc`, the
+6-tap Wiener filters, consumers in decoder MC/EC and encoder MD/ME. Three things to
+carry in:
 
-- **Its shims are the first that cannot be derived from the signature.** All 44 read
-  the `-1` column and the `-stride` row, so each shim must build its slice from
-  `pPred.sub(stride + 1)` and its `# Safety` contract must state that the block has at
-  least one valid row above and one valid column left. That contract is identical for
-  the whole file, which is what makes 44 kernels tractable in one family.
-- **Do not unify the same-named 3-arg cousins in `common/intra_pred_common.rs`.**
-  Different functions, different arity, T5's job.
+- **The safe kernels take a `PlaneCursor` (read) + `PlaneCursorMut` (write) pair**, not
+  one cursor: MC reads a *reference* plane and writes the *current* one, and they are
+  different allocations.
+- **The shim contract must state the MV clamp verbatim** (`decode_slice.rs:1072-1091`).
+  Unlike intra prediction, the legality of an MC read comes from the caller's clamp
+  rather than from the padding alone, and that clamp is the whole safety argument.
+- **Fold `pWelsMcFunc_c: [[fn; 4]; 4]` into a `match`** (or a table of *safe* fn
+  pointers). It is module-internal, which makes it the one dispatch table this phase
+  may touch — everything else is Phase 4's.
 
-Then T4 (`mc.rs`) and so on down §4's list. There is no longer a competing "if Phase 0
-is picked up instead" branch: T5c and T5e landed this session, and T7 (fuzz) is deferred
-by direction — its absence is now printed as a SKIP on every `gates.sh` run so it cannot
+Then T5 (`sad_common` + `intra_pred_common`) and on down §4's list. T7 (fuzz) remains
+deferred by direction; its absence prints as a SKIP on every `gates.sh` run so it cannot
 quietly stop being a decision.
