@@ -304,6 +304,45 @@ impl<'a> PlaneCursor<'a> {
         &self.buf[start..][..len]
     }
 
+    /// `h` consecutive rows of `W` samples each, as fixed-size windows, starting at
+    /// relative `(dx0, dy0)`.
+    ///
+    /// **When to use this instead of calling [`row`](Self::row) per row.** `row` costs
+    /// two bounds branches per call — one for `buf[start..]`, one for `[..len]` — and
+    /// LLVM can only fold them away when it can see the stride and the buffer length.
+    /// Inside a kernel reached through a shim, it can see neither: the stride arrives
+    /// as a runtime `i32` from the caller and the buffer was just materialised from a
+    /// pointer. A per-row `row()` walk of a 16x8 block then emits **32** compare-and-
+    /// branch pairs before the first sample is read, and on a kernel as cheap per
+    /// sample as SAD that is most of the run time. This walker pays one bounds check
+    /// for the whole block and one `[..W]` per row, and measured 1.32-1.69x -> 0.83-
+    /// 1.14x across the seven SAD shapes (T5; table in `perf_baseline.md`).
+    ///
+    /// **This does not repeal T4's negative result**, which is about a different
+    /// thing. T4 built a `rows()` walker yielding *runtime-length* slices that each
+    /// needed `[..WIDTH]` and a `try_into`, and measured it worse than `row()` in
+    /// `mc.rs` — where the widths are const-generic and the checks genuinely do fold,
+    /// so `row()`'s two branches cost nothing and `Chunks::next`'s `min` and
+    /// `split_at` cost something. Both results hold: **use `row` where the window is
+    /// statically sized and the compiler can fold the checks, and this where it
+    /// cannot.** `mc.rs` was deliberately not refitted onto this.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer, at the first slicing — same contract as `row`.
+    #[inline]
+    pub fn row_windows<const W: usize>(
+        &self,
+        dy0: isize,
+        dx0: isize,
+        h: usize,
+    ) -> impl Iterator<Item = &[u8; W]> {
+        let start = idx(self.center, dx0, dy0, self.stride);
+        let span = if h == 0 { 0 } else { (h - 1) * self.stride + W };
+        self.buf[start..][..span]
+            .chunks(self.stride)
+            .map(|r| r[..W].try_into().unwrap())
+    }
+
     /// The same view rebased by `(dx, dy)` — `pSrc.add(dy * stride + dx)`.
     ///
     /// # Panics
@@ -622,5 +661,46 @@ mod tests {
     fn cursor_rejects_an_anchor_outside_the_buffer() {
         let buf = [0u8; 64];
         PlaneCursor::new(&buf, 64, 8);
+    }
+
+    /// `row_windows` must yield exactly what the same block of `row` calls yields —
+    /// it exists only to move where the bounds checks land, never what is read.
+    #[test]
+    fn row_windows_yields_the_same_samples_as_a_row_walk() {
+        let mut rng = Prng::new(0x9114_0570);
+        for &stride in &[9usize, 16, 64, 240] {
+            let buf = rng.bytes(stride * 24);
+            for &(dx0, dy0) in &[(0isize, 0isize), (-1, -1), (1, 2), (-1, 3)] {
+                let c = PlaneCursor::new(&buf, 6 * stride + 4, stride);
+                let want: Vec<&[u8]> = (0..8).map(|y| c.row(dy0 + y, dx0, 8)).collect();
+                let got: Vec<&[u8; 8]> = c.row_windows::<8>(dy0, dx0, 8).collect();
+                assert_eq!(got.len(), 8, "stride {stride}, offset {dx0},{dy0}");
+                for (y, (w, g)) in want.iter().zip(got.iter()).enumerate() {
+                    assert_eq!(*w, g.as_slice(), "stride {stride}, row {y}");
+                }
+            }
+        }
+    }
+
+    /// The last row of the block is `W` samples, not a whole stride, so the walker's
+    /// final chunk is short — it must still yield a full `W`-wide window rather than
+    /// panicking or dropping the row. A block at the very end of its allocation is
+    /// where an over-long span would be caught, and this is that block.
+    #[test]
+    fn row_windows_reaches_the_last_row_of_a_block_that_ends_the_buffer() {
+        let stride = 20usize;
+        let buf: Vec<u8> = (0..(3 * stride + 8) as u8).collect();
+        let c = PlaneCursor::new(&buf, 0, stride);
+        let rows: Vec<&[u8; 8]> = c.row_windows::<8>(0, 0, 4).collect();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[3][0], (3 * stride) as u8);
+        assert_eq!(rows[3][7], (3 * stride + 7) as u8);
+    }
+
+    #[test]
+    fn row_windows_of_zero_rows_is_empty() {
+        let buf = [7u8; 64];
+        let c = PlaneCursor::new(&buf, 0, 8);
+        assert_eq!(c.row_windows::<4>(0, 0, 0).count(), 0);
     }
 }
