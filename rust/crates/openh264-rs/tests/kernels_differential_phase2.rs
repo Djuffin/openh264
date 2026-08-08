@@ -29,6 +29,7 @@ mod common;
 
 use common::prng::Prng;
 use openh264_rs::decoder::decode_mb_aux as dec_aux;
+use openh264_rs::decoder::get_intra_predictor as pred;
 use openh264_rs::safe::plane::PlaneCursorMut;
 
 /// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
@@ -51,6 +52,38 @@ fn surface(rng: &mut Prng, stride: usize, bw: usize, bh: usize) -> (Vec<u8>, usi
         + rng.below((stride - bw) as u32 + 1) as usize;
     (buf, center)
 }
+
+/// A noise surface with an intra-prediction block anchored inside it, padded the way a
+/// real picture plane is: at least one row above and one column left of the block, and
+/// enough room to the right of the block's top row for the diagonal modes' reach.
+///
+/// `top_reach` is how far past the block's left edge the row above is read — 8 for the
+/// 4x4 modes (`DDL` reads `T4..T7`), 16 for the 8x8 and 16x16 ones. Anchoring at a
+/// *random* legal position rather than a fixed one is what catches a kernel that
+/// assumed its block was word-aligned, which several of these were written to be.
+fn pred_surface(
+    rng: &mut Prng,
+    stride: usize,
+    bw: usize,
+    bh: usize,
+    top_reach: usize,
+) -> (Vec<u8>, usize) {
+    let rows = bh + 3;
+    let buf = rng.bytes(rows * stride);
+    // Row >= 1 leaves the row above; column in 1..=stride-max(bw, top_reach) leaves the
+    // column to the left and the top row's reach.
+    let max_col = stride - bw.max(top_reach);
+    let center = (1 + rng.below((rows - bh - 1) as u32) as usize) * stride
+        + 1
+        + rng.below(max_col as u32) as usize;
+    (buf, center)
+}
+
+/// Strides for the intra-prediction families: the minimum that can hold the widest
+/// read (the block plus its left column plus the diagonal reach), two non-multiples of
+/// 16, and two real picture strides.
+const STRIDES_PRED_4X4: [usize; 5] = [9, 21, 33, 240, 1952];
+const STRIDES_PRED_8X8: [usize; 5] = [17, 21, 33, 240, 1952];
 
 /// A sub-block whose only non-zero coefficient is its DC must still be transformed,
 /// even though its non-zero count is zero.
@@ -98,6 +131,166 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
                     "DC-only sub-block {k} at stride {stride}, center {center}, seed {:#x}",
                     rng.seed()
                 );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T3 — decoder/get_intra_predictor.rs
+// ---------------------------------------------------------------------------
+
+/// Every 4x4 luma intra-prediction mode, old kernel against new, over the whole
+/// destination surface.
+///
+/// The surface check is doing real work here in a way it was not for the pilot: these
+/// kernels write four rows through unaligned `u32` stores and read a neighbourhood that
+/// extends past their own block, so an off-by-one in either direction lands on a byte
+/// the block-shaped assertion would never look at.
+#[test]
+fn i4x4_luma_pred_modes_match_the_raw_kernels() {
+    type Old = unsafe extern "C" fn(*mut u8, i32);
+    type New = fn(&mut PlaneCursorMut<'_>);
+    let modes: &[(&str, Old, New)] = &[
+        ("V", pred::WelsI4x4LumaPredV_c, pred::i4x4_luma_pred_v),
+        ("H", pred::WelsI4x4LumaPredH_c, pred::i4x4_luma_pred_h),
+        ("Dc", pred::WelsI4x4LumaPredDc_c, pred::i4x4_luma_pred_dc),
+        ("DcLeft", pred::WelsI4x4LumaPredDcLeft_c, pred::i4x4_luma_pred_dc_left),
+        ("DcTop", pred::WelsI4x4LumaPredDcTop_c, pred::i4x4_luma_pred_dc_top),
+        ("DcNA", pred::WelsI4x4LumaPredDcNA_c, pred::i4x4_luma_pred_dc_na),
+        ("DDL", pred::WelsI4x4LumaPredDDL_c, pred::i4x4_luma_pred_ddl),
+        ("DDLTop", pred::WelsI4x4LumaPredDDLTop_c, pred::i4x4_luma_pred_ddl_top),
+        ("DDR", pred::WelsI4x4LumaPredDDR_c, pred::i4x4_luma_pred_ddr),
+        ("VL", pred::WelsI4x4LumaPredVL_c, pred::i4x4_luma_pred_vl),
+        ("VLTop", pred::WelsI4x4LumaPredVLTop_c, pred::i4x4_luma_pred_vl_top),
+        ("VR", pred::WelsI4x4LumaPredVR_c, pred::i4x4_luma_pred_vr),
+        ("HU", pred::WelsI4x4LumaPredHU_c, pred::i4x4_luma_pred_hu),
+        ("HD", pred::WelsI4x4LumaPredHD_c, pred::i4x4_luma_pred_hd),
+    ];
+
+    let mut rng = Prng::new(0x2DC7_0010);
+    for &stride in &STRIDES_PRED_4X4 {
+        for (name, old_fn, new_fn) in modes {
+            for _ in 0..scale(200) {
+                let (before, center) = pred_surface(&mut rng, stride, 4, 4, 8);
+
+                let mut old = before.clone();
+                let mut new = before.clone();
+
+                unsafe { old_fn(old.as_mut_ptr().add(center), stride as i32) };
+                new_fn(&mut PlaneCursorMut::new(&mut new, center, stride));
+
+                assert_eq!(
+                    old, new,
+                    "I4x4 {name} at stride {stride}, center {center}, seed {:#x}",
+                    rng.seed()
+                );
+            }
+        }
+    }
+}
+
+/// Every 8x8 luma intra-prediction mode, both availability flags, old against new.
+///
+/// `bTLAvail`/`bTRAvail` are swept exhaustively rather than randomly: they select
+/// different formulas for the first and last filtered neighbour, and three of the
+/// fourteen kernels ignore `bTLAvail` entirely — a distinction a random sweep would
+/// blur and a conversion could silently get wrong.
+#[test]
+fn i8x8_luma_pred_modes_match_the_raw_kernels() {
+    type Old = unsafe extern "C" fn(*mut u8, i32, bool, bool);
+    type New = fn(&mut PlaneCursorMut<'_>, bool, bool);
+    let modes: &[(&str, Old, New)] = &[
+        ("V", pred::WelsI8x8LumaPredV_c, pred::i8x8_luma_pred_v),
+        ("H", pred::WelsI8x8LumaPredH_c, pred::i8x8_luma_pred_h),
+        ("Dc", pred::WelsI8x8LumaPredDc_c, pred::i8x8_luma_pred_dc),
+        ("DcLeft", pred::WelsI8x8LumaPredDcLeft_c, pred::i8x8_luma_pred_dc_left),
+        ("DcTop", pred::WelsI8x8LumaPredDcTop_c, pred::i8x8_luma_pred_dc_top),
+        ("DcNA", pred::WelsI8x8LumaPredDcNA_c, pred::i8x8_luma_pred_dc_na),
+        ("DDL", pred::WelsI8x8LumaPredDDL_c, pred::i8x8_luma_pred_ddl),
+        ("DDLTop", pred::WelsI8x8LumaPredDDLTop_c, pred::i8x8_luma_pred_ddl_top),
+        ("DDR", pred::WelsI8x8LumaPredDDR_c, pred::i8x8_luma_pred_ddr),
+        ("VL", pred::WelsI8x8LumaPredVL_c, pred::i8x8_luma_pred_vl),
+        ("VLTop", pred::WelsI8x8LumaPredVLTop_c, pred::i8x8_luma_pred_vl_top),
+        ("VR", pred::WelsI8x8LumaPredVR_c, pred::i8x8_luma_pred_vr),
+        ("HU", pred::WelsI8x8LumaPredHU_c, pred::i8x8_luma_pred_hu),
+        ("HD", pred::WelsI8x8LumaPredHD_c, pred::i8x8_luma_pred_hd),
+    ];
+
+    let mut rng = Prng::new(0x2DC7_0011);
+    for &stride in &STRIDES_PRED_8X8 {
+        for (name, old_fn, new_fn) in modes {
+            for &tl in &[false, true] {
+                for &tr in &[false, true] {
+                    for _ in 0..scale(60) {
+                        let (before, center) = pred_surface(&mut rng, stride, 8, 8, 16);
+
+                        let mut old = before.clone();
+                        let mut new = before.clone();
+
+                        unsafe { old_fn(old.as_mut_ptr().add(center), stride as i32, tl, tr) };
+                        new_fn(&mut PlaneCursorMut::new(&mut new, center, stride), tl, tr);
+
+                        assert_eq!(
+                            old, new,
+                            "I8x8 {name} tl={tl} tr={tr} at stride {stride}, center {center}, \
+                             seed {:#x}",
+                            rng.seed()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Every 8x8 chroma and 16x16 luma mode, old against new.
+#[test]
+fn chroma_and_i16x16_pred_modes_match_the_raw_kernels() {
+    type Old = unsafe extern "C" fn(*mut u8, i32);
+    type New = fn(&mut PlaneCursorMut<'_>);
+
+    let chroma: &[(&str, Old, New)] = &[
+        ("V", pred::WelsIChromaPredV_c, pred::chroma_pred_v),
+        ("H", pred::WelsIChromaPredH_c, pred::chroma_pred_h),
+        ("Plane", pred::WelsIChromaPredPlane_c, pred::chroma_pred_plane),
+        ("Dc", pred::WelsIChromaPredDc_c, pred::chroma_pred_dc),
+        ("DcLeft", pred::WelsIChromaPredDcLeft_c, pred::chroma_pred_dc_left),
+        ("DcTop", pred::WelsIChromaPredDcTop_c, pred::chroma_pred_dc_top),
+        ("DcNA", pred::WelsIChromaPredDcNA_c, pred::chroma_pred_dc_na),
+    ];
+    let luma16: &[(&str, Old, New)] = &[
+        ("V", pred::WelsI16x16LumaPredV_c, pred::i16x16_luma_pred_v),
+        ("H", pred::WelsI16x16LumaPredH_c, pred::i16x16_luma_pred_h),
+        ("Plane", pred::WelsI16x16LumaPredPlane_c, pred::i16x16_luma_pred_plane),
+        ("Dc", pred::WelsI16x16LumaPredDc_c, pred::i16x16_luma_pred_dc),
+        ("DcTop", pred::WelsI16x16LumaPredDcTop_c, pred::i16x16_luma_pred_dc_top),
+        ("DcLeft", pred::WelsI16x16LumaPredDcLeft_c, pred::i16x16_luma_pred_dc_left),
+        ("DcNA", pred::WelsI16x16LumaPredDcNA_c, pred::i16x16_luma_pred_dc_na),
+    ];
+
+    let mut rng = Prng::new(0x2DC7_0012);
+    for &(label, modes, size) in &[("chroma", chroma, 8usize), ("i16x16", luma16, 16usize)] {
+        for &stride in &STRIDES_PRED_8X8 {
+            if stride < size + 1 {
+                continue;
+            }
+            for (name, old_fn, new_fn) in modes {
+                for _ in 0..scale(120) {
+                    let (before, center) = pred_surface(&mut rng, stride, size, size, size);
+
+                    let mut old = before.clone();
+                    let mut new = before.clone();
+
+                    unsafe { old_fn(old.as_mut_ptr().add(center), stride as i32) };
+                    new_fn(&mut PlaneCursorMut::new(&mut new, center, stride));
+
+                    assert_eq!(
+                        old, new,
+                        "{label} {name} at stride {stride}, center {center}, seed {:#x}",
+                        rng.seed()
+                    );
+                }
             }
         }
     }
