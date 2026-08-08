@@ -49,6 +49,58 @@ pub type PGetIntraPredFunc = unsafe extern "C" fn(pPred: *mut u8, pRef: *mut u8,
 pub type PWelsI16x16LumaPredFunc = unsafe extern "C" fn(pPred: *mut u8, pRef: *mut u8, kiStride: i32);
 
 // ============================================================================
+// Safe kernels
+// ============================================================================
+
+// Both kernels write a **packed** 16x16 block: `pPred` advances by a literal 16 per
+// row, and `kiStride` describes the reference surface only. That is what separates
+// these two from their same-named 2-arg cousins in `decoder/get_intra_predictor.rs`
+// (converted in T3), which predict in place on a strided plane. Same Wels names,
+// different functions, and they must never be unified — hence `[u8; 256]` here where
+// the decoder side takes a `PlaneCursorMut`.
+//
+// The two also take *different* reference shapes rather than a common one, because
+// their reaches genuinely differ: V reads the sixteen samples of the row above and
+// nothing else, H reads one sample from each of sixteen rows in the column to the
+// left. A shared `(cursor)` parameter would make each kernel's contract claim the
+// other's reach — the union-span mistake T4 recorded (`safety_refactor_log.md`,
+// "per-kernel reach, not the union").
+
+use crate::safe::plane::PlaneCursor;
+
+/// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp`.
+///
+/// Copies the sixteen reconstructed samples above the macroblock down all sixteen
+/// rows. `top` is the caller's proof that the row above exists — in Phase 5 it is
+/// `refc.row(-1, 0, 16)`.
+#[inline(always)]
+pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
+    for y in 0..16 {
+        let row: &mut [u8; 16] = (&mut pred[y * 16..][..16]).try_into().unwrap();
+        *row = *top;
+    }
+}
+
+/// C++: `WelsI16x16LumaPredH_c`, `codec/common/src/intra_pred_common.cpp`.
+///
+/// Broadcasts the reconstructed sample left of each row across that row. Reads `x` at
+/// `-1` for `y` in `0 .. 16` from `reference`, and nothing else.
+///
+/// The C++ walks rows 15 down to 0 because it carries two descending offsets; each row
+/// is written once from an input the block does not contain, so ascending is the same
+/// sixteen writes in a different order. `fill` replaces the `0x0101010101010101 *
+/// value` broadcast — that trick was never a memory operation, only a way to spell a
+/// wide store (`prompts/phase2.md` §3.3, taxonomy T7).
+#[inline(always)]
+pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
+    for y in 0..16 {
+        let v = reference.at(-1, y as isize);
+        let row: &mut [u8; 16] = (&mut pred[y * 16..][..16]).try_into().unwrap();
+        row.fill(v);
+    }
+}
+
+// ============================================================================
 // C Reference Implementations
 // ============================================================================
 

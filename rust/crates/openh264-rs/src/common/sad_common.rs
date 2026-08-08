@@ -409,45 +409,84 @@ pub unsafe extern "C" fn WelsSampleSadFour4x8_c(
     }
 }
 
-//=================== Safe Rust Slice Wrappers =====================//
+//=================== Safe kernels =====================//
 
-/// Safe slice-based wrapper to compute 4x4 block SAD.
-pub fn sample_sad_4x4(sample1: &[u8], stride1: usize, sample2: &[u8], stride2: usize) -> i32 {
+// The three `sample_sad_4x4/8x8/16x16` wrappers that used to sit here were a second,
+// unused SAD API — a `(&[u8], stride)` pair per surface, three fixed shapes, no
+// four-point form, and no caller anywhere in the tree. They are absorbed into the two
+// const-generic kernels below rather than left beside them: one safe SAD API, not two.
+//
+// **Why the composites flatten.** The raw kernels build the larger shapes out of the
+// smaller ones — `WelsSampleSad16x16_c` sums four 8x8 quadrants, `WelsSampleSad8x4_c`
+// sums two 4x4 halves — and the safe side computes each shape in one pass instead.
+// That is not an approximation. The summands are the same set of `|a - b|` terms and
+// `i32` addition is associative, so the only way regrouping could change the result is
+// overflow; the largest shape sums 16 x 16 terms of at most 255, i.e. **65 280**, four
+// orders of magnitude inside `i32`. No grouping of these operands can overflow, which
+// is what makes the flattening exact rather than merely close (contrast the 8x8 IDCT,
+// `phase2_findings.md` F8, where the intermediates *can* overflow and the port
+// therefore reproduces the old grouping operation for operation).
+
+use crate::safe::plane::PlaneCursor;
+
+/// Sum of absolute differences between a `W` x `H` block at `sample1` and one at
+/// `sample2` displaced by `(dx, dy)`.
+///
+/// The displacement is what the four-point kernels need and is a parameter rather than
+/// four rebased cursors because `PlaneCursor::advance` re-runs the anchor assertion:
+/// folding the offset into the row lookup keeps the four probes at one bounds check
+/// per row each, which is where this family's checks are meant to land (plan §7.4).
+#[inline(always)]
+fn sad_at<const W: usize, const H: usize>(
+    sample1: &PlaneCursor<'_>,
+    sample2: &PlaneCursor<'_>,
+    dx: isize,
+    dy: isize,
+) -> i32 {
     let mut sum: i32 = 0;
-    for y in 0..4 {
-        let r1 = &sample1[y * stride1..y * stride1 + 4];
-        let r2 = &sample2[y * stride2..y * stride2 + 4];
-        for x in 0..4 {
-            sum += (r1[x] as i32 - r2[x] as i32).abs();
+    for y in 0..H as isize {
+        // Statically-sized row windows on both sides: the bounds check lands per row,
+        // and the inner loop's trip count is a constant, so it vectorises.
+        let a: &[u8; W] = sample1.row(y, 0, W).try_into().unwrap();
+        let b: &[u8; W] = sample2.row(y + dy, dx, W).try_into().unwrap();
+        for (p, q) in a.iter().zip(b.iter()) {
+            sum += (*p as i32 - *q as i32).abs();
         }
     }
     sum
 }
 
-/// Safe slice-based wrapper to compute 8x8 block SAD.
-pub fn sample_sad_8x8(sample1: &[u8], stride1: usize, sample2: &[u8], stride2: usize) -> i32 {
-    let mut sum: i32 = 0;
-    for y in 0..8 {
-        let r1 = &sample1[y * stride1..y * stride1 + 8];
-        let r2 = &sample2[y * stride2..y * stride2 + 8];
-        for x in 0..8 {
-            sum += (r1[x] as i32 - r2[x] as i32).abs();
-        }
-    }
-    sum
+/// C++: `WelsSampleSad<W>x<H>_c`, `codec/common/src/sad_common.cpp` — the seven
+/// single-block SAD shapes, which differ only in `W` and `H`.
+///
+/// Reads `x` in `0 .. W` and `y` in `0 .. H` from both cursors, and nothing else.
+#[inline(always)]
+pub fn sample_sad<const W: usize, const H: usize>(
+    sample1: &PlaneCursor<'_>,
+    sample2: &PlaneCursor<'_>,
+) -> i32 {
+    sad_at::<W, H>(sample1, sample2, 0, 0)
 }
 
-/// Safe slice-based wrapper to compute 16x16 macroblock SAD.
-pub fn sample_sad_16x16(sample1: &[u8], stride1: usize, sample2: &[u8], stride2: usize) -> i32 {
-    let mut sum: i32 = 0;
-    for y in 0..16 {
-        let r1 = &sample1[y * stride1..y * stride1 + 16];
-        let r2 = &sample2[y * stride2..y * stride2 + 16];
-        for x in 0..16 {
-            sum += (r1[x] as i32 - r2[x] as i32).abs();
-        }
-    }
-    sum
+/// C++: `WelsSampleSadFour<W>x<H>_c`, `codec/common/src/sad_common.cpp` — the SAD of
+/// `sample1`'s block against `sample2`'s at each of the four whole-sample neighbours
+/// the diamond search steps to, in the order the caller indexes them: **up, down,
+/// left, right**.
+///
+/// `sample1` is read over its nominal block only. `sample2` is read one row above and
+/// one row below it, and one column either side: `x` in `-1 .. W + 1`, `y` in
+/// `-1 .. H + 1`. That reach is the whole reason this kernel takes a plane cursor and
+/// not a block slice — the diamond's arms leave the block.
+#[inline(always)]
+pub fn sample_sad_four<const W: usize, const H: usize>(
+    sample1: &PlaneCursor<'_>,
+    sample2: &PlaneCursor<'_>,
+    sad: &mut [i32; 4],
+) {
+    sad[0] = sad_at::<W, H>(sample1, sample2, 0, -1);
+    sad[1] = sad_at::<W, H>(sample1, sample2, 0, 1);
+    sad[2] = sad_at::<W, H>(sample1, sample2, -1, 0);
+    sad[3] = sad_at::<W, H>(sample1, sample2, 1, 0);
 }
 
 #[cfg(test)]
