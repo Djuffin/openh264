@@ -104,56 +104,48 @@ pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
 // C Reference Implementations
 // ============================================================================
 
-/// Mode 0: Intra 16x16 Luma Vertical Prediction (C fallback)
-///
-/// Copies the 16 top reconstructed reference samples at `pRef[-kiStride .. -kiStride + 15]`
-/// down across all 16 rows of the destination block `pPred`.
+/// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp` — mode 0,
+/// vertical.
 ///
 /// # Safety
-/// - `pPred` must point to a writable memory region of at least 256 bytes (16x16).
-/// - `pRef.offset(-(kiStride as isize))` must point to a readable memory region of at least 16 bytes.
+/// * `pPred` points at a writable **packed** 16x16 block: 256 bytes at an implicit
+///   stride of 16. `kiStride` describes `pRef` and nothing else.
+/// * `pRef` points at sample `(0, 0)` of that macroblock in a surface whose rows are
+///   `kiStride` bytes apart, with one valid row above it. Reads span
+///   `[-kiStride, -kiStride + 16)` — the sixteen samples above the block, and nothing
+///   else. In particular this kernel never reads to the left.
+/// * The two regions must not overlap, and `kiStride` must be positive.
 #[inline]
 pub unsafe extern "C" fn WelsI16x16LumaPredV_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
+    // SHIM(phase2) -> i16x16_luma_pred_v
     unsafe {
-        let kpSrc = pRef.offset(-(kiStride as isize));
-        let kuiT1 = (kpSrc as *const u64).read_unaligned();
-        let kuiT2 = (kpSrc.add(8) as *const u64).read_unaligned();
-        let mut pDst = pPred;
-
-        for _ in 0..16 {
-            (pDst as *mut u64).write_unaligned(kuiT1);
-            (pDst.add(8) as *mut u64).write_unaligned(kuiT2);
-            pDst = pDst.add(16);
-        }
+        let top: &[u8; 16] = std::slice::from_raw_parts(pRef.offset(-(kiStride as isize)), 16)
+            .try_into()
+            .unwrap();
+        let pred: &mut [u8; 256] = std::slice::from_raw_parts_mut(pPred, 256).try_into().unwrap();
+        i16x16_luma_pred_v(pred, top);
     }
 }
 
-/// Mode 1: Intra 16x16 Luma Horizontal Prediction (C fallback)
-///
-/// For each row `y` from 15 down to 0, reads the reconstructed left boundary pixel at
-/// `pRef[y * kiStride - 1]`, broadcasts it across a 64-bit register, and writes it across
-/// the 16 bytes of row `y` in `pPred`.
+/// C++: `WelsI16x16LumaPredH_c`, `codec/common/src/intra_pred_common.cpp` — mode 1,
+/// horizontal.
 ///
 /// # Safety
-/// - `pPred` must point to a writable memory region of at least 256 bytes (16x16).
-/// - For each `y` in `0..16`, `pRef.offset(y * kiStride - 1)` must be readable.
+/// * `pPred` points at a writable **packed** 16x16 block, as above.
+/// * `pRef` points at sample `(0, 0)` of that macroblock, with one valid column to its
+///   left across all sixteen rows. Reads span **`[-1, 15 * kiStride)`** — one sample
+///   per row, at `x = -1`. In particular this kernel never reads the row above, which
+///   is why it and the vertical one take different reference shapes rather than a
+///   shared span that would have each claiming the other's reach.
+/// * The two regions must not overlap, and `kiStride` must be positive.
 #[inline]
 pub unsafe extern "C" fn WelsI16x16LumaPredH_c(pPred: *mut u8, pRef: *mut u8, kiStride: i32) {
+    // SHIM(phase2) -> i16x16_luma_pred_h
     unsafe {
-        let mut iStridex15: isize = ((kiStride << 4) - kiStride) as isize;
-        let iPredStride: usize = 16;
-        let mut iPredStridex15: usize = 240;
-
-        for _ in 0..16 {
-            let kuiSrc8 = *pRef.offset(iStridex15 - 1);
-            let kuiV64: u64 = 0x0101_0101_0101_0101u64.wrapping_mul(kuiSrc8 as u64);
-
-            (pPred.add(iPredStridex15) as *mut u64).write_unaligned(kuiV64);
-            (pPred.add(iPredStridex15 + 8) as *mut u64).write_unaligned(kuiV64);
-
-            iStridex15 -= kiStride as isize;
-            iPredStridex15 = iPredStridex15.wrapping_sub(iPredStride);
-        }
+        let stride = kiStride as usize;
+        let refs = std::slice::from_raw_parts(pRef.sub(1), 15 * stride + 1);
+        let pred: &mut [u8; 256] = std::slice::from_raw_parts_mut(pPred, 256).try_into().unwrap();
+        i16x16_luma_pred_h(pred, &PlaneCursor::new(refs, 1, stride));
     }
 }
 
