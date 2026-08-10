@@ -1332,16 +1332,26 @@ fn expand_shims_stay_inside_the_spans_they_declare() {
 // T7 — `encoder/encode_mb_aux.rs`, the forward transform / quant / scan family
 // ===========================================================================
 //
-// Commit-A entries: every kernel driven old-vs-new over the same inputs, the
-// destination arrays compared in full and the pixel sources asserted
-// untouched. The quantization sweeps are **exhaustive over the QP tables**
-// (all 52 QPs, inter and intra rows — R-d's rule; a random sweep blurs
-// exactly the lane-indexing mistakes a conversion makes), with coefficients
-// at the full `i16` range, which is in-bounds here: for non-negative table
-// factors `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX` (the bound is derived
-// at `encode_mb_aux::quant_one`; a negative `mf` could overflow, and no table
-// contains one, so the sweep stays in the tables). These entries are deleted
-// at the family's commit B, when both sides become the same code.
+// `f233d506` proved all 21 safe kernels against the raw ones: exhaustive QP x
+// {inter, intra} table sweeps for the quantizers and the 2x2 Hadamard (R-d's
+// rule — a random sweep blurs exactly the lane-indexing mistakes a conversion
+// makes), full-range `i16` coefficients everywhere they are in-bounds (for
+// non-negative table factors `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`,
+// derived at `encode_mb_aux::quant_one`; a negative `mf` could overflow and
+// no table contains one), whole-destination compares, and sources asserted
+// untouched. Three mutations (zigzag swap, quant lane index, DCT butterfly)
+// were run against the entries and all three died. The shim commit deleted
+// the equivalences, because both sides now run the same code.
+//
+// What survives is what the shims add: **span arithmetic**. Two spans in this
+// family are exact reaches over strided reads — the 2x2 Hadamard's
+// `[i16; 49]` (DC raster positions 0/16/32/48 of the chroma group) and the
+// DC-Hadamard's `[i16; 241]` (block 15's DC at index 240 of the 256-element
+// luma buffer) — and the probes below hand each shim an allocation of
+// exactly that size (an over-claim is UB Miri reports; an under-claim panics
+// in the safe kernel), with a **golden direct run** of the safe kernel at
+// the contract's own geometry pinning the anchor (session E's probe lesson),
+// and untouched-byte assertions pinning the touch set.
 
 use openh264_rs::encoder::encode_mb_aux as ema;
 
@@ -1350,285 +1360,200 @@ fn coeffs<const N: usize>(rng: &mut Prng) -> [i16; N] {
     core::array::from_fn(|_| rng.range_i32(-32768, 32767) as i16)
 }
 
-/// Sparse random coefficients — mostly zero, the distribution the run-length
-/// scanners actually see.
-fn sparse_coeffs<const N: usize>(rng: &mut Prng) -> [i16; N] {
-    core::array::from_fn(|_| {
-        if rng.below(4) == 0 {
-            rng.range_i32(-32768, 32767) as i16
-        } else {
-            0
-        }
-    })
-}
-
 #[test]
-fn encode_dct_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xE4C0_DC70);
+fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
+    let mut rng = Prng::new(0xE4C0_59A9);
 
-    for &(s1, s2) in &[(4usize, 16usize), (21, 4), (240, 25), (16, 16)] {
-        for _ in 0..scale(100) {
-            let (b1, c1) = surface(&mut rng, s1.max(4), 4, 4);
-            let (b2, c2) = surface(&mut rng, s2.max(4), 4, 4);
-            let mut raw = [0i16; 16];
-            let mut safe = [0i16; 16];
-
-            let (mut m1, mut m2) = (b1.clone(), b2.clone());
-            unsafe {
-                ema::WelsDctT4_c(
-                    raw.as_mut_ptr(),
-                    m1.as_mut_ptr().add(c1),
-                    s1 as i32,
-                    m2.as_mut_ptr().add(c2),
-                    s2 as i32,
-                );
-            }
-            ema::dct_4x4(
-                &mut safe,
-                &PlaneCursor::new(&b1, c1, s1),
-                &PlaneCursor::new(&b2, c2, s2),
+    // --- The two DCTs: exact pixel spans (3*stride + 4 / 7*stride + 8, the
+    // forward-only reach), exact coefficient spans, golden direct run,
+    // sources untouched.
+    for &(s1, s2) in &[(4usize, 16usize), (21, 5), (240, 25)] {
+        let mut b1 = rng.bytes(3 * s1 + 4);
+        let mut b2 = rng.bytes(3 * s2 + 4);
+        let (k1, k2) = (b1.clone(), b2.clone());
+        let mut dct = [0i16; 16];
+        unsafe {
+            ema::WelsDctT4_c(
+                dct.as_mut_ptr(),
+                b1.as_mut_ptr(),
+                s1 as i32,
+                b2.as_mut_ptr(),
+                s2 as i32,
             );
-            assert_eq!(raw, safe, "DctT4 s1={s1} s2={s2}, seed {:#x}", rng.seed());
-            assert_eq!((m1, m2), (b1, b2), "DctT4 wrote a pixel source");
         }
+        let mut golden = [0i16; 16];
+        ema::dct_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
+        assert_eq!(dct, golden, "DctT4 shim vs direct at s1={s1} s2={s2}");
+        assert_eq!((b1, b2), (k1, k2), "DctT4 shim moved a source byte");
     }
-
     for &(s1, s2) in &[(8usize, 16usize), (21, 8), (240, 25)] {
-        for _ in 0..scale(60) {
-            let (b1, c1) = surface(&mut rng, s1, 8, 8);
-            let (b2, c2) = surface(&mut rng, s2, 8, 8);
-            let mut raw = [0i16; 64];
-            let mut safe = [0i16; 64];
-
-            let (mut m1, mut m2) = (b1.clone(), b2.clone());
-            unsafe {
-                ema::WelsDctFourT4_c(
-                    raw.as_mut_ptr(),
-                    m1.as_mut_ptr().add(c1),
-                    s1 as i32,
-                    m2.as_mut_ptr().add(c2),
-                    s2 as i32,
-                );
-            }
-            ema::dct_four_4x4(
-                &mut safe,
-                &PlaneCursor::new(&b1, c1, s1),
-                &PlaneCursor::new(&b2, c2, s2),
+        let mut b1 = rng.bytes(7 * s1 + 8);
+        let mut b2 = rng.bytes(7 * s2 + 8);
+        let (k1, k2) = (b1.clone(), b2.clone());
+        let mut dct = [0i16; 64];
+        unsafe {
+            ema::WelsDctFourT4_c(
+                dct.as_mut_ptr(),
+                b1.as_mut_ptr(),
+                s1 as i32,
+                b2.as_mut_ptr(),
+                s2 as i32,
             );
-            assert_eq!(raw, safe, "DctFourT4 s1={s1} s2={s2}, seed {:#x}", rng.seed());
-            assert_eq!((m1, m2), (b1, b2), "DctFourT4 wrote a pixel source");
         }
+        let mut golden = [0i16; 64];
+        ema::dct_four_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
+        assert_eq!(dct, golden, "DctFourT4 shim vs direct at s1={s1} s2={s2}");
+        assert_eq!((b1, b2), (k1, k2), "DctFourT4 shim moved a source byte");
     }
-}
 
-#[test]
-fn encode_quant_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xE4C0_0A47);
+    // --- Quantizers: exact fixed arrays, golden direct run. One mid-table QP
+    // is enough here — the exhaustive sweep proved kernel arithmetic at
+    // commit A, and these shims add only the array views.
+    let ff = &ema::g_kiQuantInterFF[26];
+    let mf = &ema::g_kiQuantMF[26];
+    for _ in 0..scale(20) {
+        let base: [i16; 64] = coeffs(&mut rng);
+        let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
 
-    for qp in 0..52usize {
-        for intra in [false, true] {
-            let ff = &ema::g_kiQuantInterFF[qp + if intra { 6 } else { 0 }];
-            let mf = &ema::g_kiQuantMF[qp];
+        let mut a = *sub;
+        let mut g = *sub;
+        unsafe { ema::WelsQuant4x4_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
+        ema::quant_4x4(&mut g, ff, mf);
+        assert_eq!(a, g, "Quant4x4 shim vs direct");
 
-            for _ in 0..scale(6) {
-                let base: [i16; 64] = coeffs(&mut rng);
+        let mut a = *sub;
+        let mut g = *sub;
+        unsafe { ema::WelsQuant4x4Dc_c(a.as_mut_ptr(), ff[0] << 1, mf[0] >> 1) };
+        ema::quant_4x4_dc(&mut g, ff[0] << 1, mf[0] >> 1);
+        assert_eq!(a, g, "Quant4x4Dc shim vs direct");
 
-                let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
-                let mut raw = *sub;
-                let mut safe = *sub;
-                unsafe { ema::WelsQuant4x4_c(raw.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
-                ema::quant_4x4(&mut safe, ff, mf);
-                assert_eq!(raw, safe, "Quant4x4 qp={qp} intra={intra}");
+        let mut a = base;
+        let mut g = base;
+        unsafe { ema::WelsQuantFour4x4_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
+        ema::quant_four_4x4(&mut g, ff, mf);
+        assert_eq!(a, g, "QuantFour4x4 shim vs direct");
 
-                let mut raw = *sub;
-                let mut safe = *sub;
-                unsafe { ema::WelsQuant4x4Dc_c(raw.as_mut_ptr(), ff[0] << 1, mf[0] >> 1) };
-                ema::quant_4x4_dc(&mut safe, ff[0] << 1, mf[0] >> 1);
-                assert_eq!(raw, safe, "Quant4x4Dc qp={qp} intra={intra}");
+        let mut a = base;
+        let mut g = base;
+        let mut a_max = [0i16; 4];
+        let mut g_max = [0i16; 4];
+        unsafe {
+            ema::WelsQuantFour4x4Max_c(a.as_mut_ptr(), ff.as_ptr(), mf.as_ptr(), a_max.as_mut_ptr())
+        };
+        ema::quant_four_4x4_max(&mut g, ff, mf, &mut g_max);
+        assert_eq!((a, a_max), (g, g_max), "QuantFour4x4Max shim vs direct");
+    }
 
-                let mut raw = base;
-                let mut safe = base;
-                unsafe { ema::WelsQuantFour4x4_c(raw.as_mut_ptr(), ff.as_ptr(), mf.as_ptr()) };
-                ema::quant_four_4x4(&mut safe, ff, mf);
-                assert_eq!(raw, safe, "QuantFour4x4 qp={qp} intra={intra}");
+    // --- The 2x2 Hadamard pair: allocations of exactly 49 i16 (the declared
+    // reach — a shim materializing 64 would be UB Miri reports), the touch
+    // set pinned to {0, 16, 32, 48}, and the skip variant read-only.
+    for _ in 0..scale(20) {
+        let base: [i16; 49] = coeffs(&mut rng);
+        let (ff, mf) = (ema::g_kiQuantInterFF[30][0] << 1, ema::g_kiQuantMF[30][0] >> 1);
 
-                let mut raw = base;
-                let mut safe = base;
-                let mut raw_max = [0i16; 4];
-                let mut safe_max = [0i16; 4];
-                unsafe {
-                    ema::WelsQuantFour4x4Max_c(
-                        raw.as_mut_ptr(),
-                        ff.as_ptr(),
-                        mf.as_ptr(),
-                        raw_max.as_mut_ptr(),
-                    )
-                };
-                ema::quant_four_4x4_max(&mut safe, ff, mf, &mut safe_max);
-                assert_eq!(raw, safe, "QuantFour4x4Max qp={qp} intra={intra}");
-                assert_eq!(raw_max, safe_max, "QuantFour4x4Max max qp={qp} intra={intra}");
+        let mut a = base;
+        let ra = unsafe { ema::WelsHadamardQuant2x2Skip_c(a.as_mut_ptr(), ff, mf) };
+        let rg = ema::hadamard_quant_2x2_skip(&base, ff, mf);
+        assert_eq!(ra, rg, "HadamardQuant2x2Skip shim vs direct");
+        assert_eq!(a, base, "HadamardQuant2x2Skip wrote through a read-only contract");
+
+        let mut a = base;
+        let mut g = base;
+        let (mut a_dct, mut a_blk) = ([0i16; 4], [0i16; 4]);
+        let (mut g_dct, mut g_blk) = ([0i16; 4], [0i16; 4]);
+        let ra = unsafe {
+            ema::WelsHadamardQuant2x2_c(a.as_mut_ptr(), ff, mf, a_dct.as_mut_ptr(), a_blk.as_mut_ptr())
+        };
+        let rg = ema::hadamard_quant_2x2(&mut g, ff, mf, &mut g_dct, &mut g_blk);
+        assert_eq!((ra, a, a_dct, a_blk), (rg, g, g_dct, g_blk), "HadamardQuant2x2 shim vs direct");
+        for (i, (&now, &was)) in a.iter().zip(base.iter()).enumerate() {
+            if !matches!(i, 0 | 16 | 32 | 48) {
+                assert_eq!(now, was, "HadamardQuant2x2 touched index {i}, outside its touch set");
             }
         }
     }
-}
 
-#[test]
-fn encode_hadamard_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xE4C0_44D0);
-
-    // T4Dc: the 256-coefficient luma buffer, full range (the kernel computes
-    // in i32 with an explicit clip, total over all of it).
-    for _ in 0..scale(200) {
-        let mb: [i16; 256] = coeffs(&mut rng);
-        let mut raw = [0i16; 16];
-        let mut safe = [0i16; 16];
-        let mut m = mb;
-        unsafe { ema::WelsHadamardT4Dc_c(raw.as_mut_ptr(), m.as_mut_ptr()) };
-        ema::hadamard_t4_dc(&mut safe, (&mb[..241]).try_into().unwrap());
-        assert_eq!(raw, safe, "HadamardT4Dc, seed {:#x}", rng.seed());
-        assert_eq!(m, mb, "HadamardT4Dc wrote its source");
+    // --- The DC Hadamard: source allocation of exactly 241 i16 (block 15's
+    // DC at index 240 is the declared reach), source untouched.
+    for _ in 0..scale(20) {
+        let base: [i16; 241] = coeffs(&mut rng);
+        let mut src = base;
+        let mut a = [0i16; 16];
+        unsafe { ema::WelsHadamardT4Dc_c(a.as_mut_ptr(), src.as_mut_ptr()) };
+        let mut g = [0i16; 16];
+        ema::hadamard_t4_dc(&mut g, &base);
+        assert_eq!(a, g, "HadamardT4Dc shim vs direct");
+        assert_eq!(src, base, "HadamardT4Dc wrote through a read-only contract");
     }
 
-    // 2x2 + skip: factors exactly as the one caller passes them
-    // (`ff << 1`, `mf >> 1`, `svc_encode_mb.rs` WelsEncRecUV), every QP row.
-    for qp in 0..52usize {
-        for intra in [false, true] {
-            let ff = ema::g_kiQuantInterFF[qp + if intra { 6 } else { 0 }][0] << 1;
-            let mf = ema::g_kiQuantMF[qp][0] >> 1;
+    // --- Scans and scorers: exact 16-element views, sources untouched.
+    for _ in 0..scale(20) {
+        let dct: [i16; 16] = coeffs(&mut rng);
+        let mut src = dct;
 
-            for _ in 0..scale(6) {
-                let base: [i16; 64] = coeffs(&mut rng);
+        let mut a = [0i16; 16];
+        let mut g = [0i16; 16];
+        unsafe { ema::WelsScan4x4DcAc_c(a.as_mut_ptr(), src.as_mut_ptr()) };
+        ema::scan_4x4_dc_ac(&mut g, &dct);
+        assert_eq!(a, g, "Scan4x4DcAc shim vs direct");
 
-                let mut raw = base;
-                let raw_ret = unsafe { ema::WelsHadamardQuant2x2Skip_c(raw.as_mut_ptr(), ff, mf) };
-                let safe_ret =
-                    ema::hadamard_quant_2x2_skip((&base[..49]).try_into().unwrap(), ff, mf);
-                assert_eq!(raw_ret, safe_ret, "HadamardQuant2x2Skip qp={qp} intra={intra}");
-                assert_eq!(raw, base, "HadamardQuant2x2Skip wrote its source");
+        let mut a = [0i16; 16];
+        unsafe { ema::WelsScan4x4Dc(a.as_mut_ptr(), src.as_mut_ptr()) };
+        assert_eq!(a, g, "Scan4x4Dc shim vs direct");
 
-                let mut raw = base;
-                let mut safe = base;
-                let mut raw_dct = [0i16; 4];
-                let mut raw_blk = [0i16; 4];
-                let mut safe_dct = [0i16; 4];
-                let mut safe_blk = [0i16; 4];
-                let raw_ret = unsafe {
-                    ema::WelsHadamardQuant2x2_c(
-                        raw.as_mut_ptr(),
-                        ff,
-                        mf,
-                        raw_dct.as_mut_ptr(),
-                        raw_blk.as_mut_ptr(),
-                    )
-                };
-                let safe_ret = ema::hadamard_quant_2x2(
-                    (&mut safe[..49]).try_into().unwrap(),
-                    ff,
-                    mf,
-                    &mut safe_dct,
-                    &mut safe_blk,
-                );
-                assert_eq!(raw_ret, safe_ret, "HadamardQuant2x2 return qp={qp}");
-                assert_eq!(raw, safe, "HadamardQuant2x2 residual qp={qp}");
-                assert_eq!(raw_dct, safe_dct, "HadamardQuant2x2 dct qp={qp}");
-                assert_eq!(raw_blk, safe_blk, "HadamardQuant2x2 block qp={qp}");
-            }
-        }
+        let mut a = [0i16; 16];
+        let mut g = [0i16; 16];
+        unsafe { ema::WelsScan4x4Ac_c(a.as_mut_ptr(), src.as_mut_ptr()) };
+        ema::scan_4x4_ac(&mut g, &dct);
+        assert_eq!(a, g, "Scan4x4Ac shim vs direct");
+
+        let ra = unsafe { ema::WelsCalculateSingleCtr4x4_c(src.as_mut_ptr()) };
+        assert_eq!(ra, ema::calculate_single_ctr_4x4(&dct), "CalculateSingleCtr shim vs direct");
+
+        let ra = unsafe { ema::WelsGetNoneZeroCount_c(src.as_mut_ptr()) };
+        assert_eq!(ra, ema::get_none_zero_count(&dct), "GetNoneZeroCount shim vs direct");
+
+        assert_eq!(src, dct, "a scan shim wrote through a read-only contract");
     }
-}
 
-#[test]
-fn encode_scan_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xE4C0_5CA7);
-
-    for i in 0..scale(400) {
-        // Alternate dense and sparse inputs — the run-length walker
-        // (`CalculateSingleCtr`) only branches interestingly on sparse ones.
-        let dct: [i16; 16] = if i % 2 == 0 { coeffs(&mut rng) } else { sparse_coeffs(&mut rng) };
-        let mut m = dct;
-
-        let mut raw = [0i16; 16];
-        let mut safe = [0i16; 16];
-        unsafe { ema::WelsScan4x4DcAc_c(raw.as_mut_ptr(), m.as_mut_ptr()) };
-        ema::scan_4x4_dc_ac(&mut safe, &dct);
-        assert_eq!(raw, safe, "Scan4x4DcAc, seed {:#x}", rng.seed());
-
-        let mut raw = [0i16; 16];
-        unsafe { ema::WelsScan4x4Dc(raw.as_mut_ptr(), m.as_mut_ptr()) };
-        assert_eq!(raw, safe, "Scan4x4Dc (alias of DcAc), seed {:#x}", rng.seed());
-
-        let mut raw = [0i16; 16];
-        let mut safe = [0i16; 16];
-        unsafe { ema::WelsScan4x4Ac_c(raw.as_mut_ptr(), m.as_mut_ptr()) };
-        ema::scan_4x4_ac(&mut safe, &dct);
-        assert_eq!(raw, safe, "Scan4x4Ac, seed {:#x}", rng.seed());
-
-        let raw_ctr = unsafe { ema::WelsCalculateSingleCtr4x4_c(m.as_mut_ptr()) };
-        assert_eq!(
-            raw_ctr,
-            ema::calculate_single_ctr_4x4(&dct),
-            "CalculateSingleCtr4x4, seed {:#x}",
-            rng.seed()
-        );
-
-        let raw_nzc = unsafe { ema::WelsGetNoneZeroCount_c(m.as_mut_ptr()) };
-        assert_eq!(
-            raw_nzc,
-            ema::get_none_zero_count(&dct),
-            "GetNoneZeroCount, seed {:#x}",
-            rng.seed()
-        );
-
-        assert_eq!(m, dct, "a scan kernel wrote its source");
-    }
-}
-
-#[test]
-fn encode_copy_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xE4C0_C099);
+    // --- The seven copies: exact spans both sides ((H-1)*stride + W), every
+    // block byte equal to its source row (write-every-byte), bytes outside
+    // the block untouched, source untouched.
     type RawCopy = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
-    type SafeCopy = fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>);
-    let kernels: &[(&str, usize, usize, RawCopy, SafeCopy)] = &[
-        ("Copy4x4", 4, 4, ema::WelsCopy4x4_c, ema::copy_4x4),
-        ("Copy8x4", 8, 4, ema::WelsCopy8x4_c, ema::copy_8x4),
-        ("Copy4x8", 4, 8, ema::WelsCopy4x8_c, ema::copy_4x8),
-        ("Copy8x8", 8, 8, ema::WelsCopy8x8_c, ema::copy_8x8),
-        ("Copy16x8", 16, 8, ema::WelsCopy16x8_c, ema::copy_16x8),
-        ("Copy8x16", 8, 16, ema::WelsCopy8x16_c, ema::copy_8x16),
-        ("Copy16x16", 16, 16, ema::WelsCopy16x16_c, ema::copy_16x16),
+    let kernels: &[(&str, usize, usize, RawCopy)] = &[
+        ("Copy4x4", 4, 4, ema::WelsCopy4x4_c),
+        ("Copy8x4", 8, 4, ema::WelsCopy8x4_c),
+        ("Copy4x8", 4, 8, ema::WelsCopy4x8_c),
+        ("Copy8x8", 8, 8, ema::WelsCopy8x8_c),
+        ("Copy16x8", 16, 8, ema::WelsCopy16x8_c),
+        ("Copy8x16", 8, 16, ema::WelsCopy8x16_c),
+        ("Copy16x16", 16, 16, ema::WelsCopy16x16_c),
     ];
-
-    for &(name, w, h, raw, safe) in kernels {
+    for &(name, w, h, raw) in kernels {
         for &ss in &[w, 21.max(w), 240] {
             for &ds in &[w, 29.max(w), 240] {
-                for _ in 0..scale(20) {
-                    let (src, sc) = surface(&mut rng, ss, w, h);
-                    let (dst, dc) = surface(&mut rng, ds, w, h);
-
-                    let mut src_m = src.clone();
-                    let mut dst_raw = dst.clone();
-                    unsafe {
-                        raw(
-                            dst_raw.as_mut_ptr().add(dc),
-                            ds as i32,
-                            src_m.as_mut_ptr().add(sc),
-                            ss as i32,
-                        )
-                    };
-
-                    let mut dst_safe = dst.clone();
-                    safe(
-                        &PlaneCursor::new(&src, sc, ss),
-                        &mut PlaneCursorMut::new(&mut dst_safe, dc, ds),
-                    );
-
+                let mut src = rng.bytes((h - 1) * ss + w);
+                let mut dst = rng.bytes((h - 1) * ds + w);
+                let src_before = src.clone();
+                let dst_before = dst.clone();
+                unsafe { raw(dst.as_mut_ptr(), ds as i32, src.as_mut_ptr(), ss as i32) };
+                for y in 0..h {
                     assert_eq!(
-                        dst_raw, dst_safe,
-                        "{name} ss={ss} ds={ds}, seed {:#x}",
-                        rng.seed()
+                        &dst[y * ds..][..w],
+                        &src_before[y * ss..][..w],
+                        "{name} ss={ss} ds={ds}: row {y} not copied"
                     );
-                    assert_eq!(src_m, src, "{name} wrote its source");
+                    let tail = y * ds + w;
+                    let next = ((y + 1) * ds).min(dst.len());
+                    if tail < next {
+                        assert_eq!(
+                            &dst[tail..next],
+                            &dst_before[tail..next],
+                            "{name} ss={ss} ds={ds}: bytes beyond row {y}'s block moved"
+                        );
+                    }
                 }
+                assert_eq!(src, src_before, "{name} wrote its source");
             }
         }
     }
