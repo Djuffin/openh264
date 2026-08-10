@@ -2424,3 +2424,116 @@ fn mc_table_slots_match_the_direct_calls() {
         }
     }
 }
+
+/// Every `SDeblockingFunc` slot computes exactly what the function the direct
+/// call sites name computes.
+///
+/// The behavioural half of the deblocking assert-map; see
+/// `deblocking_init_ignores_the_cpu_flag` in the library for the flag-invariance
+/// half and for why the two are split. Unlike
+/// `encoder_deblocking_table_installs_the_common_shims` above — which compares
+/// addresses and works only because these kernels happen to carry no inline
+/// attribute — this compares outputs, so it keeps working if one ever gains
+/// `#[inline]`.
+///
+/// The whole surface is compared, not the filtered lines: a kernel that writes
+/// one sample outside its edge is exactly what this class of test exists for.
+/// `tc` is swept over its negative gate (a negative entry means "do not filter
+/// this group") as well as real thresholds, because that selector decides
+/// whether the kernel touches memory at all — S10's rule that selectors are
+/// swept, not sampled.
+#[test]
+fn deblocking_table_slots_match_the_direct_calls() {
+    let mut rng = Prng::new(0x04A0_0002);
+    let mut t = deb::SDeblockingFunc::default();
+    unsafe { deb::DeblockingInit(&mut t, 0) };
+
+    const STRIDE: usize = 64;
+    const ROWS: usize = 48;
+    // The strong luma filter reads p3 at -4*step_x; the widest reach in either
+    // axis is 4 samples and edges run 16 lines, so an anchor 8 samples and 8
+    // rows in, on a 64x48 surface, keeps every access inside for both the V
+    // (step_x = stride) and H (step_x = 1) orientations.
+    const ANCHOR: usize = 8 * STRIDE + 8;
+
+    /// `(slot, direct)` over one surface, with a `tc` gate.
+    macro_rules! cmp1_tc {
+        ($base:expr, $tc:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
+            let (mut a, mut b) = ($base.clone(), $base.clone());
+            let (mut ta, mut tb) = ($tc, $tc);
+            unsafe {
+                $slot(a.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, ta.as_mut_ptr());
+                $direct(b.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, tb.as_mut_ptr());
+            }
+            assert_eq!(a, b, concat!($name, ": slot vs direct disagree"));
+        }};
+    }
+    /// `(slot, direct)` over one surface, no `tc`.
+    macro_rules! cmp1 {
+        ($base:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
+            let (mut a, mut b) = ($base.clone(), $base.clone());
+            unsafe {
+                $slot(a.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
+                $direct(b.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
+            }
+            assert_eq!(a, b, concat!($name, ": slot vs direct disagree"));
+        }};
+    }
+    /// `(slot, direct)` over the Cb/Cr pair, with a `tc` gate.
+    macro_rules! cmp2_tc {
+        ($base:expr, $tc:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
+            let (mut acb, mut acr) = ($base.clone(), $base.clone());
+            let (mut bcb, mut bcr) = ($base.clone(), $base.clone());
+            let (mut ta, mut tb) = ($tc, $tc);
+            unsafe {
+                $slot(acb.as_mut_ptr().add(ANCHOR), acr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, ta.as_mut_ptr());
+                $direct(bcb.as_mut_ptr().add(ANCHOR), bcr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta, tb.as_mut_ptr());
+            }
+            assert_eq!(acb, bcb, concat!($name, ": Cb slot vs direct disagree"));
+            assert_eq!(acr, bcr, concat!($name, ": Cr slot vs direct disagree"));
+        }};
+    }
+    /// `(slot, direct)` over the Cb/Cr pair, no `tc`.
+    macro_rules! cmp2 {
+        ($base:expr, $alpha:expr, $beta:expr, $slot:expr, $direct:expr, $name:literal) => {{
+            let (mut acb, mut acr) = ($base.clone(), $base.clone());
+            let (mut bcb, mut bcr) = ($base.clone(), $base.clone());
+            unsafe {
+                $slot(acb.as_mut_ptr().add(ANCHOR), acr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
+                $direct(bcb.as_mut_ptr().add(ANCHOR), bcr.as_mut_ptr().add(ANCHOR), STRIDE as i32, $alpha, $beta);
+            }
+            assert_eq!(acb, bcb, concat!($name, ": Cb slot vs direct disagree"));
+            assert_eq!(acr, bcr, concat!($name, ": Cr slot vs direct disagree"));
+        }};
+    }
+
+    for trial in 0..scale(200) {
+        let alpha = rng.range_i32(0, 255);
+        let beta = rng.range_i32(0, 18);
+        let tc: [i8; 4] = match trial % 4 {
+            0 => [-1, -1, -1, -1],           // gate closed on every group
+            1 => [0, 0, 0, 0],               // open, but no clipping headroom
+            2 => [-1, 3, -1, 12],            // mixed — the case a uniform sweep misses
+            _ => [
+                rng.range_i32(0, 25) as i8, rng.range_i32(0, 25) as i8,
+                rng.range_i32(0, 25) as i8, rng.range_i32(0, 25) as i8,
+            ],
+        };
+        let base: Vec<u8> = (0..STRIDE * ROWS).map(|_| rng.range_i32(0, 255) as u8).collect();
+
+        cmp1_tc!(base, tc, alpha, beta, t.pfLumaDeblockingLT4Ver.unwrap(), deb::DeblockLumaLt4V_c, "LumaLT4Ver");
+        cmp1_tc!(base, tc, alpha, beta, t.pfLumaDeblockingLT4Hor.unwrap(), deb::DeblockLumaLt4H_c, "LumaLT4Hor");
+        cmp1!(base, alpha, beta, t.pfLumaDeblockingEQ4Ver.unwrap(), deb::DeblockLumaEq4V_c, "LumaEQ4Ver");
+        cmp1!(base, alpha, beta, t.pfLumaDeblockingEQ4Hor.unwrap(), deb::DeblockLumaEq4H_c, "LumaEQ4Hor");
+
+        cmp2_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Ver.unwrap(), deb::DeblockChromaLt4V_c, "ChromaLT4Ver");
+        cmp2_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Hor.unwrap(), deb::DeblockChromaLt4H_c, "ChromaLT4Hor");
+        cmp2!(base, alpha, beta, t.pfChromaDeblockingEQ4Ver.unwrap(), deb::DeblockChromaEq4V_c, "ChromaEQ4Ver");
+        cmp2!(base, alpha, beta, t.pfChromaDeblockingEQ4Hor.unwrap(), deb::DeblockChromaEq4H_c, "ChromaEQ4Hor");
+
+        cmp1_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Ver2.unwrap(), deb::DeblockChromaLt4V2_c, "ChromaLT4Ver2");
+        cmp1_tc!(base, tc, alpha, beta, t.pfChromaDeblockingLT4Hor2.unwrap(), deb::DeblockChromaLt4H2_c, "ChromaLT4Hor2");
+        cmp1!(base, alpha, beta, t.pfChromaDeblockingEQ4Ver2.unwrap(), deb::DeblockChromaEq4V2_c, "ChromaEQ4Ver2");
+        cmp1!(base, alpha, beta, t.pfChromaDeblockingEQ4Hor2.unwrap(), deb::DeblockChromaEq4H2_c, "ChromaEQ4Hor2");
+    }
+}

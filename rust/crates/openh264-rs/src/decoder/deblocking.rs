@@ -1317,9 +1317,7 @@ pub unsafe fn FilteringEdgeLumaH(
     if (iAlpha | iBeta) != 0 {
         let bs_slice = std::slice::from_raw_parts(pBS, 4);
         TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
-            func(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-        }
+        DeblockLumaLt4V_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
     }
 }
 
@@ -1347,9 +1345,7 @@ pub unsafe fn FilteringEdgeLumaV(
     if (iAlpha | iBeta) != 0 {
         let bs_slice = std::slice::from_raw_parts(pBS, 4);
         TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
-            func(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-        }
+        DeblockLumaLt4H_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
     }
 }
 
@@ -1374,9 +1370,7 @@ pub unsafe fn FilteringEdgeLumaIntraH(
     );
 
     if (iAlpha | iBeta) != 0 {
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingEQ4Ver {
-            func(pPix, iStride, iAlpha, iBeta);
-        }
+        DeblockLumaEq4V_c(pPix, iStride, iAlpha, iBeta);
     }
 }
 
@@ -1401,9 +1395,7 @@ pub unsafe fn FilteringEdgeLumaIntraV(
     );
 
     if (iAlpha | iBeta) != 0 {
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingEQ4Hor {
-            func(pPix, iStride, iAlpha, iBeta);
-        }
+        DeblockLumaEq4H_c(pPix, iStride, iAlpha, iBeta);
     }
 }
 
@@ -1431,9 +1423,7 @@ pub unsafe fn FilteringEdgeChromaH(
         if (iAlpha | iBeta) != 0 {
             let bs_slice = std::slice::from_raw_parts(pBS, 4);
             TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver {
-                func(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-            }
+            DeblockChromaLt4V_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
         }
     } else {
         for i in 0..2 {
@@ -1449,9 +1439,7 @@ pub unsafe fn FilteringEdgeChromaH(
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
                 let bs_slice = std::slice::from_raw_parts(pBS, 4);
                 TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver2 {
-                    func(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-                }
+                DeblockChromaLt4V2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
             }
         }
     }
@@ -1481,9 +1469,7 @@ pub unsafe fn FilteringEdgeChromaV(
         if (iAlpha | iBeta) != 0 {
             let bs_slice = std::slice::from_raw_parts(pBS, 4);
             TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor {
-                func(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-            }
+            DeblockChromaLt4H_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
         }
     } else {
         for i in 0..2 {
@@ -1499,9 +1485,7 @@ pub unsafe fn FilteringEdgeChromaV(
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
                 let bs_slice = std::slice::from_raw_parts(pBS, 4);
                 TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor2 {
-                    func(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
-                }
+                DeblockChromaLt4H2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
             }
         }
     }
@@ -1528,9 +1512,7 @@ pub unsafe fn FilteringEdgeChromaIntraH(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Ver {
-                func(pPixCb, pPixCr, iStride, iAlpha, iBeta);
-            }
+            DeblockChromaEq4V_c(pPixCb, pPixCr, iStride, iAlpha, iBeta);
         }
     } else {
         for i in 0..2 {
@@ -1544,9 +1526,7 @@ pub unsafe fn FilteringEdgeChromaIntraH(
             );
             if (iAlpha | iBeta) != 0 {
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Ver2 {
-                    func(pPixCbCr, iStride, iAlpha, iBeta);
-                }
+                DeblockChromaEq4V2_c(pPixCbCr, iStride, iAlpha, iBeta);
             }
         }
     }
@@ -1573,9 +1553,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Hor {
-                func(pPixCb, pPixCr, iStride, iAlpha, iBeta);
-            }
+            DeblockChromaEq4H_c(pPixCb, pPixCr, iStride, iAlpha, iBeta);
         }
     } else {
         for i in 0..2 {
@@ -1589,9 +1567,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
             );
             if (iAlpha | iBeta) != 0 {
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingEQ4Hor2 {
-                    func(pPixCbCr, iStride, iAlpha, iBeta);
-                }
+                DeblockChromaEq4H2_c(pPixCbCr, iStride, iAlpha, iBeta);
             }
         }
     }
@@ -1788,19 +1764,13 @@ pub unsafe fn FilteringEdgeLumaHV(
         TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
 
         if !is_8x8 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
-                func(pDestY.add(1 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
-            }
+            DeblockLumaLt4H_c(pDestY.add(1 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
         }
 
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
-            func(pDestY.add(2 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
-        }
+        DeblockLumaLt4H_c(pDestY.add(2 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
 
         if !is_8x8 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Hor {
-                func(pDestY.add(3 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
-            }
+            DeblockLumaLt4H_c(pDestY.add(3 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
         }
     }
 
@@ -1816,20 +1786,8 @@ pub unsafe fn FilteringEdgeLumaHV(
     (*pFilter).iLumaQP = iCurQp as i8;
     if (iAlpha | iBeta) != 0 {
         if !is_8x8 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
-                func(
-                    pDestY.add(((1 << 2) * iLineSize) as usize),
-                    iLineSize,
-                    iAlpha,
-                    iBeta,
-                    iTc.as_mut_ptr(),
-                );
-            }
-        }
-
-        if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
-            func(
-                pDestY.add(((2 << 2) * iLineSize) as usize),
+            DeblockLumaLt4V_c(
+                pDestY.add(((1 << 2) * iLineSize) as usize),
                 iLineSize,
                 iAlpha,
                 iBeta,
@@ -1837,16 +1795,22 @@ pub unsafe fn FilteringEdgeLumaHV(
             );
         }
 
+        DeblockLumaLt4V_c(
+            pDestY.add(((2 << 2) * iLineSize) as usize),
+            iLineSize,
+            iAlpha,
+            iBeta,
+            iTc.as_mut_ptr(),
+        );
+
         if !is_8x8 {
-            if let Some(func) = (*(*pFilter).pLoopf).pfLumaDeblockingLT4Ver {
-                func(
-                    pDestY.add(((3 << 2) * iLineSize) as usize),
-                    iLineSize,
-                    iAlpha,
-                    iBeta,
-                    iTc.as_mut_ptr(),
-                );
-            }
+            DeblockLumaLt4V_c(
+                pDestY.add(((3 << 2) * iLineSize) as usize),
+                iLineSize,
+                iAlpha,
+                iBeta,
+                iTc.as_mut_ptr(),
+            );
         }
     }
 }
@@ -1898,16 +1862,14 @@ pub unsafe fn FilteringEdgeChromaHV(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor {
-                func(
-                    pDestCb.add(2 << 1),
-                    pDestCr.add(2 << 1),
-                    iLineSize,
-                    iAlpha,
-                    iBeta,
-                    iTc.as_mut_ptr(),
-                );
-            }
+            DeblockChromaLt4H_c(
+                pDestCb.add(2 << 1),
+                pDestCr.add(2 << 1),
+                iLineSize,
+                iAlpha,
+                iBeta,
+                iTc.as_mut_ptr(),
+            );
         }
     } else {
         for i in 0..2 {
@@ -1926,9 +1888,7 @@ pub unsafe fn FilteringEdgeChromaHV(
                     pDestCr.add(2 << 1)
                 };
                 TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Hor2 {
-                    func(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
-                }
+                DeblockChromaLt4H2_c(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
             }
         }
     }
@@ -1958,16 +1918,14 @@ pub unsafe fn FilteringEdgeChromaHV(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-            if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver {
-                func(
-                    pDestCb.add(((2 << 1) * iLineSize) as usize),
-                    pDestCr.add(((2 << 1) * iLineSize) as usize),
-                    iLineSize,
-                    iAlpha,
-                    iBeta,
-                    iTc.as_mut_ptr(),
-                );
-            }
+            DeblockChromaLt4V_c(
+                pDestCb.add(((2 << 1) * iLineSize) as usize),
+                pDestCr.add(((2 << 1) * iLineSize) as usize),
+                iLineSize,
+                iAlpha,
+                iBeta,
+                iTc.as_mut_ptr(),
+            );
         }
     } else {
         for i in 0..2 {
@@ -1986,9 +1944,7 @@ pub unsafe fn FilteringEdgeChromaHV(
                 } else {
                     pDestCr.add(((2 << 1) * iLineSize) as usize)
                 };
-                if let Some(func) = (*(*pFilter).pLoopf).pfChromaDeblockingLT4Ver2 {
-                    func(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
-                }
+                DeblockChromaLt4V2_c(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
             }
         }
     }
