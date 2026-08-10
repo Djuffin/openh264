@@ -1,7 +1,8 @@
 # Why the debug sweep takes ~142s, and the one-line fix
 
-Investigation only — **nothing is applied**. The tree is stock; this note is the
-record so the change can be made deliberately rather than rediscovered.
+**Status: measured, applied, acceptance-tested, and reverted.** The fix is real (5.9x)
+and its acceptance test failed for a reason worth a decision rather than a workaround —
+see "The acceptance test was run" below. The tree is stock.
 
 ## Where the time goes
 
@@ -83,16 +84,64 @@ particular assert and eliminates the unreachable panic, so its string is strippe
 Strings cannot distinguish "eliminated because proven" from "never compiled in"; the
 rustc flag check can, and did.
 
-## Expected effect, and what is still unverified
+## The acceptance test was run, and it FAILED. The change is NOT applied.
 
-Debug sweep is ~93% `rust_enc`, so 141s should fall to roughly **25-35s** — the same
-order as the release sweep's 21s, which is what one would expect once the two profiles
-differ only by the checks.
+Applied the profile, rebuilt, ran `RUST_ENC_PROFILE=debug sweep.sh st mt def`:
 
-**Not yet done:** run the full `sweep.sh st mt def` under the candidate profile and
-confirm **341/341** and the actual wall time. That is the acceptance test and it has
-not been run. Apply the profile, run it, and record the real number here before
-believing the estimate.
+* **Wall time 141s → 23.9s — a 5.9x speedup**, close to the release sweep's 21s, which
+  is what one expects once the profiles differ only by the checks.
+* **PASS=339 FAIL=2.** Both failures were `mt … t=4 sm=3 n=600` with the Rust output
+  **zero bytes** — F3's exact fingerprint, but **in debug**, where `phase0_findings.md`
+  records F3 as 0-in-1200 and where R-g says a hit is "real, stop, revert,
+  investigate", never F3.
+
+So the profile is **reverted** and the tree is stock. The speedup is real and so is the
+problem with it.
+
+### What the follow-up measurement says
+
+Alternating the two debug builds in one loop (R-g's protocol for comparing failure
+rates, because sequential sampling of a load-sensitive race misleads), `mt` preset,
+three rounds each:
+
+| round | fast debug | stock debug |
+|---|---|---|
+| 1 | 120/120 | 120/120 |
+| 2 | 120/120 | 120/120 |
+| 3 | 120/120 | 120/120 |
+
+**Not reproduced.** Total fast-debug exposure is 480 `mt` configurations for 2 events,
+all of them in the first run; stock debug is clean here and historically 341/341.
+
+That is two events and no reproduction, which is not enough to characterise a rate. It
+is also not nothing: both carried F3's precise signature, and the mechanism is
+plausible — F3 is a timing/load-sensitive race, the stock debug build is 26.5x slower
+than release, and a build that runs at near-release speed plausibly reopens a window
+that `opt-level = 0` had been holding shut. The acceptance run also came directly after
+several optimising builds, so the machine was at its least quiescent.
+
+### The decision this needs
+
+Not a technical question any more — a gate-policy one, and it is Eugene's:
+
+1. **Take the 5.9x and widen the F3 retry rule to cover debug `mt` at `sm=3`,
+   `t` in {2,4}, short-or-zero output.** Cost: the debug sweep stops being the
+   unambiguous signal it is today; a debug failure at that signature becomes a retry
+   rather than a stop. That is a real loss — the current rule's value is that it has no
+   exceptions.
+2. **Stay on `opt-level = 0` and keep the 141s.** Cost: every gate run pays two
+   minutes, forever, for a property that 480 configurations could not show being
+   violated.
+3. **Split the difference**: optimised profile for `st`/`qp`/`def`, stock build for
+   `mt`. Keeps the deterministic rule where the race lives and takes most of the win
+   elsewhere — `mt` is 120 of 341 configurations, so this is roughly a 3x speedup
+   rather than 5.9x. Costs a two-build dance in `build.sh` and `compare.sh`.
+
+There is a genuine upside to option 1 worth weighing against its cost: F3 is a
+pre-existing, unfixed encoder race that until now only appeared in release builds. A
+fast **debug** reproducer — assertions live, symbols present, 6x faster to iterate on
+— is a materially better instrument for whoever eventually fixes it than the release
+build is.
 
 ## A methodology warning for whoever picks this up
 
