@@ -622,45 +622,65 @@ pub use crate::common::expand_pic::SExpandPicFunc;
 /// `codec/common/inc/expand_pic.h`).
 pub const PADDING_LENGTH: usize = 32;
 
-unsafe fn ExpandPictureCommon(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32, kiPaddingLen: usize) {
-    let stride = kiStride as isize;
-    let w = kiPicW as usize;
-    let mut pTmp = pDst;
-    let pDstLastLine = pDst.offset((kiPicH as isize - 1) * stride);
-    let kuiTL = *pTmp;
-    let kuiTR = *pTmp.add(w - 1);
-    let kuiBL = *pDstLastLine;
-    let kuiBR = *pDstLastLine.add(w - 1);
-
-    for i in 0..kiPaddingLen {
-        let kiStrides = (1 + i as isize) * stride;
-        let pTop = pTmp.offset(-kiStrides);
-        let pBottom = pDstLastLine.offset(kiStrides);
-
-        std::ptr::copy_nonoverlapping(pTmp, pTop, w);
-        std::ptr::copy_nonoverlapping(pDstLastLine, pBottom, w);
-
-        std::ptr::write_bytes(pTop.sub(kiPaddingLen), kuiTL, kiPaddingLen);
-        std::ptr::write_bytes(pTop.add(w), kuiTR, kiPaddingLen);
-        std::ptr::write_bytes(pBottom.sub(kiPaddingLen), kuiBL, kiPaddingLen);
-        std::ptr::write_bytes(pBottom.add(w), kuiBR, kiPaddingLen);
-    }
-
-    for _ in 0..kiPicH {
-        std::ptr::write_bytes(pTmp.sub(kiPaddingLen), *pTmp, kiPaddingLen);
-        std::ptr::write_bytes(pTmp.add(w), *pTmp.add(w - 1), kiPaddingLen);
-        pTmp = pTmp.offset(stride);
-    }
+/// The one place a mid-plane `pDst` becomes the full allocation slice
+/// (R-c: nothing else does this arithmetic). Every caller of the expand
+/// functions hands `pData[i]`, which both codecs' `AllocPicture`s place at
+/// `pBuffer + (1 + stride) * pad` — i.e. `pad` rows plus `pad` bytes into the
+/// allocation (`decoder/pic_queue.rs:177-330`, `encoder/wels_preprocess.rs:
+/// 764-806`; chroma divides the same expression by two, which is the same
+/// layout at `pad = 16`). The reconstructed span is the padded plane:
+/// `(h + 2*pad)` rows of `stride`. The real allocation may be taller (row
+/// counts are aligned up); claiming the prefix is exactly what the kernel may
+/// touch.
+///
+/// # Safety
+/// `pDst` must point at `(0, 0)` of a picture plane laid out as above, `pad`
+/// rows and `pad` bytes into a live allocation of at least
+/// `(kiPicH + 2*pad) * kiStride` bytes, with no other live reference to it.
+unsafe fn expand_shim_span<'a>(pDst: *mut u8, kiStride: i32, kiPicH: i32, pad: usize) -> &'a mut [u8] {
+    let stride = kiStride as usize;
+    let h = kiPicH as usize;
+    std::slice::from_raw_parts_mut(pDst.sub(pad * stride + pad), (h + 2 * pad) * stride)
 }
 
 /// Matches `ExpandPictureLuma_c` in `codec/common/src/expand_pic.cpp`.
+///
+/// # Safety
+/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 32`
+/// (`PADDING_LENGTH` — the luma border); `kiPicW + 64 <= kiStride`; positive
+/// width and height.
 pub unsafe extern "C" fn ExpandPictureLuma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    ExpandPictureCommon(pDst, kiStride, kiPicW, kiPicH, PADDING_LENGTH);
+    // SHIM(phase2) -> expand_picture
+    unsafe {
+        let buf = expand_shim_span(pDst, kiStride, kiPicH, PADDING_LENGTH);
+        crate::common::expand_pic::expand_picture(
+            buf,
+            kiStride as usize,
+            kiPicW as usize,
+            kiPicH as usize,
+            PADDING_LENGTH,
+        );
+    }
 }
 
 /// Matches `ExpandPictureChroma_c` in `codec/common/src/expand_pic.cpp`.
+///
+/// # Safety
+/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 16`
+/// (`PADDING_LENGTH >> 1` — the chroma border); `kiPicW + 32 <= kiStride`;
+/// positive width and height.
 pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    ExpandPictureCommon(pDst, kiStride, kiPicW, kiPicH, PADDING_LENGTH >> 1);
+    // SHIM(phase2) -> expand_picture
+    unsafe {
+        let buf = expand_shim_span(pDst, kiStride, kiPicH, PADDING_LENGTH >> 1);
+        crate::common::expand_pic::expand_picture(
+            buf,
+            kiStride as usize,
+            kiPicW as usize,
+            kiPicH as usize,
+            PADDING_LENGTH >> 1,
+        );
+    }
 }
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
