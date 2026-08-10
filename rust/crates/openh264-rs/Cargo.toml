@@ -13,3 +13,7 @@ harness = false
 [[bench]]
 name = "decode_1080p_bench"
 harness = false
+
+[[bench]]
+name = "sad_bodies_bench"
+harness = false
