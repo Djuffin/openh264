@@ -623,6 +623,162 @@ leaving each session to rediscover it; and the encoder bench **SKIPs loudly** wi
 kernels (`perf_baseline.md` §2). The fuzz gate (§7.2 gate 6) prints a permanent SKIP
 until T7 lands.
 
+### 7.6 Standing working rules
+
+*Hoisted from `prompts/phase2_continue.md` §2 at Phase 2's exit. The criterion for
+being here is that a Phase 3+ session needs the rule **verbatim**; phase-2-only
+carry-ins (shim-span specifics, per-family traps) stayed in that brief and archive
+with it. Briefs from Phase 4a on cite this section instead of copying rules forward.
+Each rule keeps the tag it was derived under, so the log entry that paid for it is
+findable.*
+
+#### Measurement
+
+- **S1 (was R-h) — measure with interleaved pairs, never sequential runs.** Two runs
+  of the *same* binary drift ~3%. Keep both binaries on disk, alternate them inside
+  one loop, take medians over 3+ pairs. An unpaired reading of T4 said +5.1% where
+  the paired one said +8.7%, and the session acted on the wrong number for a while.
+  Profile with `/usr/bin/sample` and **disassemble before theorising** — T4's and
+  T5's first two theories were each wrong and cost a build-bench cycle.
+- **S2 (was R-l) — run a null before calling anything noise.** Same binary in both
+  slots, same harness, fresh **per session**: the floor is not a constant (session D
+  ±1.8%, session E ±5.4%, sessions F and G ≈±2.5-3%). It costs one pass of a bench
+  that is already built, and in T8 it converted a suspected artefact into a real
+  +3.5%. **`Spatial Ramps` is excluded from every verdict** — it has moved ±38%,
+  -11% and +226% between runs of one binary — but record what it says, because
+  gradient content is the per-block-scaffolding path at its purest and Phase 4a's
+  checkpoint wants that datapoint.
+- **S3 (was R-j) — a microbenchmark's working set is part of its correctness.**
+  T5's SAD bench at a 1984-byte stride over 190 KB reported 0.82-1.33x where the
+  encoder reported +16.8%; the same bench L1-resident reported 1.0-2.0x and agreed.
+  Size the working set from the real caller, state it beside the numbers, and
+  measure both residencies when the caller's is unclear. Four further ways a
+  microbench lies, each of which produced a plausible table first: no per-iteration
+  `black_box`; observing one of several outputs (LLVM deletes the rest of the safe
+  kernel while the opaque `extern "C"` call keeps computing it — a 4x handicap
+  pointing the wrong way); a `const` stride where the kernel takes a runtime `i32`;
+  and variants timed in blocks rather than interleaved.
+- **S4 (was R-m) — after a swap, the "raw" side of a microbench is the shim.**
+  Calling `WelsFoo_c` post-swap measures the safe kernel wrapped in a shim against
+  the safe kernel. T8's first table read 0.99-1.07x for exactly this reason; the
+  true figures were 0.69-1.47x. Measure bodies **before** commit B, or recover them
+  with `git show <commit-A>:<file>` into the bench crate.
+- **S5 (was R-k) — bisect a swap by file before optimising it.** T5 read as +13.9%
+  overall; one extra build and two bench runs split it into a +16.8% half and a
+  +0.57% half, turning a wholesale revert into a narrow one. The two-commit-per-family
+  discipline makes the unswap cheap; a per-file bisect makes it small.
+
+#### Conversion
+
+- **S6 (was R-e) — arithmetic parity, not repair.** When a kernel's intermediates can
+  overflow, the safe kernel reproduces the **old Rust port's exact behaviour**: same
+  widths, same operations, the same debug-panic exposure and the same release
+  wrapping. Never widen, never add a `wrapping_*` the old code lacked, never "fix" it
+  — that is a behaviour change on malformed input. Check the widths against both the
+  old Rust and the C++ *before* writing each safe body, bound differential inputs to
+  the range where the old code does not panic, and write the derivation next to the
+  bound. A newly *noticed* overflow-capable intermediate gets an F-finding and
+  nothing else (F8, F9, F11).
+- **S7 (was R-c) — one span helper per family, and the contract sentence is the
+  deliverable.** Shims are not derivable from the signature alone. One helper
+  computes the slice span and *nothing else does that arithmetic*. The sentence
+  naming **why** a negative reach is legal (`PADDING_LENGTH`, an MV clamp, an
+  availability gate) is what Phase 5 converts callers against. Prefer **per-kernel**
+  reaches to a family union — a shared parameter makes each kernel's contract claim
+  its neighbour's reach.
+- **S8 (was R-i) — the fast-idiom catalog, and its binding negative results.**
+  Bounds checks land per *row*, not per sample: one `row_mut` per output row
+  amortises over the row's arithmetic. `copy_from_slice` on a **runtime** length is a
+  `memmove` call — use const-generic widths (`copy_rows::<16>`), as the C++ dispatches
+  fixed widths. Zip iterators instead of indexing N same-length slices by `j`. Roll
+  the row window rather than re-fetching. Match the C++'s inline structure
+  (`#[inline(always)]` inner kernels, `#[inline(never)]` on composites carrying big
+  scratch). `fill`/`copy_from_slice` on fixed windows compile to the same wide stores
+  the punned `u32`/`u64` accesses existed for — and in 140 T3 accesses `from_ne_bytes`
+  was needed **zero** times. **Negative results, do not re-propose without reading
+  `perf_baseline.md` §Phase 2 T4 first:** by-value cursors (wash),
+  dispatch-over-shims (wash), `chunks()`-based row walkers (**worse everywhere**).
+  `get_unchecked` is banned — restructure the loop instead.
+- **S9 (was R-o) — the exact-span trim is the per-row-bounds-check fix that works.**
+  Handed an open tail (`&plane[origin..]`) LLVM cannot relate `k * stride + W` to the
+  length and re-checks every row; handed a window it knows is `(H-1)*stride + W` long,
+  the checks fold. It took T8's walk from 1.82x to 1.02x. Try it first on any kernel
+  whose disassembly shows `slice_index_fail` in a row loop. **It does not rescue
+  SAD** — measured — so it is a technique, not a cure.
+
+#### Proof
+
+- **S10 (was R-d) — differential discipline.** Sweep selector/availability flags
+  **exhaustively**, never randomly: T3 found kernels that ignore a flag they take, and
+  a random sweep blurs exactly what a conversion gets wrong. Anchor test blocks at
+  **random legal offsets** — kernels written around unaligned stores must be exercised
+  unaligned. Compare **every written byte of the destination surface**, not the
+  nominal block. Kill at least one deliberate mutation per family before commit A.
+- **S11 (session E) — every span probe gets a golden direct run.** Span size, touch
+  set, and anchor must be pinned by three *independent* mechanisms: an exact-span
+  allocation under Miri, a touch-set assertion, and the shim's output compared against
+  the safe kernel invoked directly at the contract's own geometry. A +1-anchor
+  mutation walks straight through exact-span and touch-set assertions alone, because
+  a shift along the line axis stays inside the touch set and filters plausibly.
+- **S12 (F10) — a raw kernel's pointer footprint is bigger than its read footprint.**
+  Kernels transliterated from C bump the row pointer after the *last* row, and a
+  composite's sub-blocks bump from their **own** anchors. Any test handing an
+  exactly-sized buffer to a raw kernel must size it **`(h + 1) * stride`**. Exact
+  spans are for the *safe* side; restore them on the raw side only at re-landing.
+- **S13 (session G) — an accommodation is only as wide as the instrument that found
+  it.** F10 was recorded twice and fixed only in the differential file, because that
+  was the only file Miri ran; the same UB sat in the kernels' own unit tests for three
+  sessions. When a rule is first applied, **run the instrument everywhere it could
+  apply**, not only where it fired.
+
+#### Instruments and gates
+
+- **S14 (was R-g) — the F3 protocol.** Signature: `mt`, `sm=3`, `t` in {2, 4}, output
+  of **any** wrong length (zero, short, or long), **either** profile. One hit → re-run
+  that configuration rather than argue. **More than one hit in a session → alternate
+  both trees inside one loop and compare counts**; sequential sampling of a
+  load-sensitive race actively misleads. Append every such measurement to F3. Any
+  other configuration, any `st`/`def` hit, anything outside the signature: real —
+  stop, revert, investigate. The natural rate is 1/400-1000 and rises an order of
+  magnitude on a loaded machine, so a single clean `mt` sweep is **not** a 341/341
+  signal.
+- **S15 — the Miri gate, and its skip list.** `gates.sh` runs Miri over the **whole
+  library** (`--lib`, `-Zmiri-ignore-leaks`) plus the differential integration files
+  at phase exits. The skips in that step are a **work queue, not a settled state**:
+  each names a module whose production code still trips Miri and cites the finding
+  that owns it (F12, F13). Deleting a line is part of fixing the thing it names; **no
+  skip may be added without a finding**. Byte-exactness does not imply soundness —
+  341/341 identical sweeps ran on top of F1's stack overflow for the port's whole
+  life, and the widened gate found seven more defects in one afternoon.
+- **S16 (was R-f, R-p) — read the ratchet's shape, not its sign.** `raw_ptr` counts
+  *occurrences* — signatures, casts, **and pointer types written in prose**, so
+  documenting a contract inflates it. A shim keeping its raw signature keeps its
+  count; a shared helper may legitimately add one or two, and paying that beats N
+  copies of the span arithmetic. `SHIM(` rises only in a family's commit B;
+  `unsafe_block` may rise by that commit's shim count plus its shared helpers;
+  `no_mangle` non-increasing; `unsafe_fn` ~flat until raw bodies are *deleted* rather
+  than strangled, and then it falls hard. **Never fold shims into a macro** — it makes
+  `unsafe_fn` report a drop that did not happen and hides the `SHIM(` markers. Commit
+  B regenerates the baseline, with the reason in the commit message.
+- **S17 — `FFMPEG` must be set on every gate run.** It was unset for two whole
+  sessions, so `c_vs_rust_bench` skipped and the encoder went unmeasured across three
+  families; T5's +16.8% regression reached a commit before anything noticed. An
+  instrument that silently skips because of an unset variable is not an instrument.
+
+#### Phase exits
+
+- **S18 — the straggler sweep.** Before closing a phase, list every definition the
+  phase's per-family passes were supposed to reach and subtract the ones carrying a
+  conversion marker; group the remainder by file. Each hit is **converted**,
+  **deleted-dead**, or **listed in the log with its owner phase** — no fourth option.
+  Phase 2's sweep found `encoder/deblocking.rs` running a raw duplicate of a family
+  the phase had already converted, on the encoder's mainline path, for four sessions.
+- **S19 — update §0 and hand off one brief ahead.** Every phase exit refreshes the
+  status preamble (§0) and writes the *next* phase's brief in `prompts/`, then stamps
+  its own brief superseded-historical. One brief ahead, not two: the phase after next
+  gets written at the next exit, when its inputs are real.
+
+
 ---
 
 ## 8. Sequencing rationale & parallelism
@@ -956,12 +1112,44 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       turned a suspected artefact into a real +3.48%. Also re-condemned Spatial Ramps
       (-38% between two runs of one binary). Cheap, decisive, and it belongs in front
       of every "that's just noise" conclusion from here on.
-- [ ] **T9 — phase exit.** Not started. Besides the standard exit duties, T9 carries
-      the **consolidation deliverables** (2026-08-10, full spec in the continuation
-      brief §T9): the status preamble at the top of this document, hoisting the
-      durable working rules into §7.6, and writing `prompts/phase4a.md` as the
-      hand-off. Phase numbers stay as permanent identifiers — no renumbering;
-      execution order is owned by this appendix and §8.
+- [x] **T7 part 2 — `encoder/get_intra_predictor.rs`** (`6e0009d3` A, `cbc18d94` B).
+      **26 kernels + the installer** as the brief's recount said; the two I16x16 modes
+      it installs but does not define come from `common/intra_pred_common.rs` (T5).
+      Per-kernel reference shapes: a top-only predictor takes `&[u8; N]` and *cannot*
+      read the left column, which is why mode decision may offer it when the left
+      neighbour is missing. **R-d's exhaustive-selector rule landed on the availability
+      offset**, and `reach_table_agrees_with_the_availability_tables` now asserts, over
+      all 16 I4x4 offsets and all 8 of the others, that every offered mode reads only
+      neighbours that offset declares — turning the shims' central contract sentence
+      into a checked property. It also pinned that `DDL_TOP`/`VL_TOP` are installed but
+      unreachable, and that the I16x16/chroma tables have no top-left bit while their
+      plane mode reads the corner. Encoder +0.42%, inside the null floor.
+- [x] **T9 — phase exit. Phase 2 is complete** (`a6361ee3`, `19b1391f`, and this
+      appendix). All seven exit steps ran, in order, and two of them found work:
+      * **Straggler sweep** — `encoder/deblocking.rs` was carrying live raw copies of
+        the deblocking family T6 had converted in `common/deblocking_common.rs`, with
+        its own installer, on the encoder's mainline path. Converted as **G-2**
+        (`b3da21e1` A, `ee8735df` B): proven equivalent first, then 13 raw bodies
+        deleted and 8 wrappers re-exported. The other 50 raw kernel-shaped definitions
+        are listed with their owner phases in the session-G log entry.
+      * **Counts** — `SHIM(phase2)` **154** across 13 files; `no_mangle` **24**, of
+        which zero come from any file Phase 2 converted (5 `api/` exports, 2 in
+        `wels_encoder_ext.rs`, 14 in the parked `sad_common.rs`, 3 CABAC init).
+      * **Miri widened** from `--lib safe::` (63 tests) to the whole library minus four
+        finding-cited skips (**267 tests, 81s**). It found seven defects immediately:
+        four test-side (fixed, including **F10's third instance**) and three in
+        production (**F12**, **F13** — recorded, not repaired).
+      * **Final perf** — three interleaved pairs per bench: decoder
+        **+16.6 / +10.6 / +9.9%**, encoder **+14.73% median**, against ledger
+        predictions of ≈ +17/+10/+10% and ≈ +14%. **The ledger is validated as an
+        instrument**, which is what D-perf-4 was betting on.
+      * **Fuzz-absence tally** presented for Eugene with its composition analysed:
+        Miri owns five of the eight, and the case for T7 now rests on **F3** and the
+        F8/F11 arithmetic class — the input-space instrument that is still missing.
+      * **Consolidation deliverables** — §0 (status preamble), §7.6 (standing rules
+        S1–S19), `prompts/phase4a.md`. Both Phase 2 briefs stamped
+        superseded-historical. No renumbering; phase numbers stay permanent
+        identifiers and execution order is owned by this appendix and §8.
 
 ### Phases 3–9
 

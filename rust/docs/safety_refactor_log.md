@@ -1455,3 +1455,306 @@ arithmetic shown. For T9: the Miri gate widening (session-B item) is specified i
 the brief §3 step 3; F10's `(h+1)*stride` correction and F3's widened signature
 belong in the §7.6 hoist; and the fuzz-absence tally now carries F8, F9, F10 (×2),
 F11 and F3's sixth measurement.
+
+---
+
+## 2026-08-10 — Phase 2, session G (T7 part 2, the straggler sweep, and the phase exit)
+
+**Goal:** the finishing brief's session G — `encoder/get_intra_predictor.rs` (G-1),
+then T9 in full. Both landed, in the brief's order. **The session produced two things
+the brief did not ask for and could not have: a family Phase 2 had already converted
+and left half-raw, and a Miri gate that found seven soundness defects the moment it
+was pointed at the rest of the library.** Both came out of T9's own checklist working
+as designed, which is the argument for never compressing a phase exit.
+
+**Started at** `12440d34` with one modified brief (committed first as `f375536e`, the
+session control), **ended at** the commit carrying this entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `f375536e` | the session-G brief (control point) |
+| `6e0009d3` | G-1 A: 26 safe kernels, the reach table, 3 differential entries + 2 property tests |
+| `cbc18d94` | G-1 B: swap behind 26 shims; span probe with golden runs |
+| `b3da21e1` | G-2 A: the encoder's own deblocking kernels proven against T6's safe ones |
+| `ee8735df` | G-2 B: 13 raw bodies deleted, 8 wrappers re-exported from `common` |
+| `a6361ee3` | the Miri gate widened to the whole library; **F12** and **F13** recorded |
+| `19b1391f` | Phase 2's exit measurement, and the per-family delta table |
+
+Plus `phase0_findings.md` F3's seventh measurement, `phase2_findings.md` F10's third
+instance, plan §0 (the status preamble) and §7.6 (standing rules S1–S19),
+`prompts/phase4a.md`, and this entry.
+
+### Gates
+
+| gate | control (`f375536e`) | final |
+|---|---|---|
+| `cargo test` | 399 / 0 / 20 | 404 / 0 / 20 |
+| `cargo test --release` | 397 / 0 / 20 | 402 / 0 / 20 |
+| sweeps st mt def (debug) | 340/341 — F3, retry 120/120 | 340/341 — F3 (`t=4 sm=3 cabac=1 rc=1`, zero-length), retry 120/120 |
+| sweeps st mt def (release) | 340/341 — F3, retry 120/120 | 341/341, 19s |
+| ratchet | clean (1361/5200/127/24) | clean, regenerated 3x (1346/5175/154/24) |
+| `decode_1080p_bench` | all streams bit-identical | all streams bit-identical |
+| `c_vs_rust_bench` (FFMPEG set) | all rows bit-identical | all rows bit-identical |
+| miri `--lib` | *(gate was `safe::` only, 63 tests)* | **267 tests, 81s**, minus 4 skips |
+| miri differential files | — | 17/17 |
+
+Net **+5 tests**. G-1's three entries came and went inside the family (+5 at A with two
+property tests, −3 +1 probe at B); G-2's the same (+3, −2 +1 installer property). The
+two surviving G-1 property tests and G-2's are the phase's last additions. Ignored-20
+never moved.
+
+### Ratchet across the session
+
+```
+no_mangle      24 -> 24    (0: neither family had any left)
+unsafe_fn    1361 -> 1346  (-15: 13 raw deblocking bodies + 6 raw movers deleted, 4 helpers added)
+raw_ptr      5200 -> 5175  (-25: their signatures, net of the shims' and the doc comments' prose)
+SHIM(         127 -> 154   (+27: 26 intra + 1 encoder NonZeroCount)
+unsafe_block  624 -> 654   (+30: 26 + 3 shared helpers at G-1, 1 at G-2)
+```
+
+**The first session in the phase where `unsafe_fn` falls hard**, and the reason is
+worth keeping: G-2 *deleted* duplicated raw bodies rather than strangling them. The
+strangler shape (S16) trades `unsafe_fn` flat for `SHIM(` up; deletion is what actually
+moves the number, and Phases 4-5 are made of deletion.
+
+### G-1 — the encoder's intra predictors: 26 kernels, and the availability argument became a test
+
+27 `pub unsafe fn` = **26 kernels + the installer**, exactly as the brief's recount
+said; nothing had drifted this time, and a grep for predictor bodies in adjacent files
+found none. The two I16x16 modes this module installs but does not define (`V`, `H`)
+are *imported* from `common/intra_pred_common.rs`, converted in T5-intra — the same
+two functions, not same-named cousins.
+
+**Two surfaces with different rules, and the signatures now carry the difference.** The
+destination is a *packed* candidate buffer (16 / 64 / 256 bytes at implicit strides
+4 / 8 / 16, one half of a mode-decision ping-pong pair), never a plane, so it is a
+fixed-size array and `kiStride` describes only the reference. That is the third
+occurrence of the name-collision trap and the module header now carries the three-way
+table so no later session unifies them.
+
+**Per-kernel reference shapes (S7), and the type does the arguing.** A predictor that
+reads only the row above takes `&[u8; N]` — it *cannot* touch the left column, which is
+the entire reason mode decision may offer it when the left neighbour is missing. One
+that reads the left column takes a `PlaneCursor` spanning exactly its reach. The reach
+is data (`Reach { top, left, corner }`, one constant per shape) and `ref_span` is the
+only place it becomes a slice.
+
+**The result worth carrying forward: R-d's exhaustive-selector rule found its target,
+and it was not the kernels.** These take no flags at all, so "sweep the selectors
+exhaustively" cashes out as the *availability offset*, and
+`reach_table_agrees_with_the_availability_tables` walks all 16 `g_kiIntra4AvailMode`
+offsets and all 8 of the I16x16/chroma ones asserting that every offered mode reads
+only neighbours that offset declares. **It holds exactly**, and it converted the
+shims' central contract sentence from prose into a checked property. It also pinned two
+things that were folklore:
+
+- `g_kiIntra4AvailMode` **never offers `DDL_TOP` or `VL_TOP`.** Both are installed in
+  the dispatch table and neither is reachable through it. Converted anyway (an
+  installed slot is live surface), with the unreachability asserted rather than left to
+  be rediscovered.
+- The I16x16 and chroma tables have **no top-left bit** — their index is
+  `uiNeighborIntra & 0x07` = left | top<<1 | topright<<2 — yet the plane mode they offer
+  at index 7 reads the corner at `(-1, -1)`. The corner exists whenever left and top
+  both do, by raster order inside a slice, and the C++ leans on the identical
+  implication. That is now written down in an assertion instead of nowhere.
+
+Two of my own tests failed first and were right to: `ref_span` seeded its extent from
+zero and so dragged `pRef` into every span, and `I4_PRED_INVALID` and `I4_PRED_V` are
+**both zero**, so a table row's padding is indistinguishable from mode V and
+`g_kiIntra4AvailCount` is the only thing that says where the live prefix ends.
+
+Five mutations killed at A (a DDL tap position, a chroma-plane row centring, an I16x16
+DC rounding constant, a reach that over-claims — killed by the availability test and
+correctly ignored by the differential — and one that under-claims, the mirror). Two
+more at B: an anchor shifted one byte left, killed by the **golden direct run** (S11)
+and invisible to Miri; and a reach reading eight top samples where its contract says
+four, killed by **Miri on the exact-span allocation** and invisible to a normal build.
+Each instrument caught what only it could see, which is the point of having three.
+
+**Perf:** encoder **+0.42% median** against a null floor of +0.00% / max +2.50% —
+inside it. Decode flat. T3's wash reproduced on the encoder side, as the call density
+predicted. Tripwire ≈ +13.4%, under +25% → swap and ledger. The phase's last swap
+decision, and the least eventful.
+
+### G-2 — T9's straggler sweep found a live raw half of a converted family
+
+The sweep is mechanical: every `pub extern "C" fn` whose name ends `_c`, minus those
+whose body carries a `SHIM(phase2)` marker, grouped by file. 63 hits across 13 files.
+Twelve of those files are kernel-shaped code **outside** the plan's Phase 2 list, and
+they are listed below with their owner phases. One was not.
+
+**`encoder/deblocking.rs` carried its own copies of the eight deblocking ABI wrappers,
+their four inner kernels, and a third `WelsNonZeroCount_c` — and its own
+`DeblockingInit` installed them.** T6 converted the family in
+`common/deblocking_common.rs` and the *decoder* picked the conversion up by
+re-exporting that module wholesale (`decoder/deblocking.rs:200`); the encoder never
+did. Every encoded frame since T6 has run raw deblocking kernels while the phase's
+records said the family was converted.
+
+Commit A proved the two sets equivalent — `ALPHAS` × `BETAS` × three strides × V/H,
+whole-buffer comparison, using T6's own entry shapes recovered from `bbb9348e` — and
+that mattered more than saving typing: deblocking is *conditional*, and T6 had already
+learned that full-range noise almost never passes `|p0-q0| < alpha`, so the surface
+generator drives three amplitude tiers and the tc pool carries the values that gate
+whole lines off. Reusing the shapes reuses the lesson. Commit B then deleted thirteen
+raw bodies and re-exported the common shims — a deduplication of two copies of one
+function, not a unification of two functions sharing a name, and proven so before it
+was done.
+
+**Perf: encoder +0.59% median / +4.33% worst, decode unchanged.** The four Mandelbrot
+rows moved together above the null floor, so this is a small *real* cost: the encoder
+now pays the per-edge shim scaffolding the decoder has paid since T6. Decode staying
+flat is the load-bearing observation — a moved decode number would have meant the
+re-export changed the wrong caller.
+
+**The lesson, which is S18's reason for existing:** a per-family pass converts the file
+it was pointed at. Nothing in the phase's records would ever have caught the encoder's
+copy, because every gate was green and every number was byte-exact the whole time.
+
+#### The rest of the straggler list, with owners
+
+Fifty kernel-shaped definitions remain raw. None is a Phase 2 miss; all are recorded
+here so no later session has to re-derive the classification.
+
+| file | count | owner |
+|---|---|---|
+| `common/sad_common.rs` | 14 | **parked**, re-attempt Phase 4a (§Parked) |
+| `encoder/sample.rs` SATD | 7 | **parked**, re-attempt Phase 4a |
+| `encoder/svc_motion_estimate.rs` | 7 | Phase 6.3 (ME caller conversion) |
+| `encoder/svc_encode_slice.rs` | 6 | Phase 6 — slice drivers, not leaf kernels |
+| `encoder/md.rs` | 3 | Phase 6.3 (`UpdateMbMv_c`, the two VAA analysers) |
+| `encoder/slice_multi_threading.rs` | 3 | Phase 7 (`WelsSetMem*_c`) |
+| `decoder/decode_slice.rs` | 3 | Phase 5.6 (`WelsBlockZero*`, the decoder's `WelsNonZeroCount_c`) |
+| `decoder/error_concealment.rs` | 2 | Phase 5.1 |
+| `encoder/svc_set_mb_syn_cavlc.rs`, `encoder/vlc_encoder.rs` | 2 | Phase 3.2 (`CavlcParamCal_c` ×2) |
+| `encoder/deblocking.rs` | 1 | `DeblockingBSCalc_c` — T6's F1 surgery typed its `uiBS`; the rest reads MB structs, Phase 6 |
+| `encoder/encoder_context.rs`, `encoder/wels_preprocess.rs` | 2 | Phase 6 (`WelsSetMemZero_c`, `WelsMoveMemory_c`) |
+
+`no_mangle` finishes at **24**: five `api/` exports, two in `wels_encoder_ext.rs`
+(`WelsGetCodecVersion`/`Ex`), **fourteen in the parked `common/sad_common.rs`**, and
+three CABAC init functions in `encoder/set_mb_syn_cabac.rs` (Phase 6). **Every file
+Phase 2 converted contributes zero**, which is the claim the phase made.
+
+### The Miri gate, widened — seven defects in an afternoon
+
+Session B's item, executed at the boundary it was reserved for:
+`--lib safe::` (63 tests) → `--lib` minus four skips (**267 tests, 81 seconds**).
+
+Four were the tests' own and were fixed: `sad_common` taking `as_mut_ptr()` twice for
+one buffer; `error_concealment` writing an array through its binding while a derived
+pointer was live; `parse_mb_syn_cavlc` making three derivations for one
+`SBitStringAux`; and **F10's third instance** — `sad_common`'s own unit tests handing
+exactly-sized buffers to parked raw composites, which had been running that UB
+continuously for three sessions because F10's accommodation was applied only in the
+differential file, which was the only file Miri ran. **An accommodation is only as wide
+as the instrument that found it** (now S13).
+
+Three are in production code and are recorded, not repaired:
+
+- **F12** — `IWelsTaskThreadSink`'s methods take `&mut self`, so every worker thread
+  materialises a `&mut` to the one shared `CWelsThreadPool`. Miri calls it a data race
+  on the retag itself. Every field is `Mutex`-wrapped, so the *data* is fine and the
+  code works; `&mut` is a uniqueness claim regardless of contents. F1's category, not
+  F8's. Phase 7.
+- **F13** — four instances of one class (derive a pointer, derive a second from the
+  same owner, then use the first). The one that matters: **`SWelsFuncPtrList` is
+  self-referential** — `SetFastCodingFunc` sets
+  `sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr()`, so every later `&mut` reborrow of the
+  list invalidates it. **That lands on Phase 4a**, which owns the dispatch tables, and
+  de-virtualizing them *is* the fix. Also `AddLongTermToList`'s `ptr::copy` across an
+  invalidated `as_ptr()` (Phase 5), `InitDqLayers`' overlapping `&mut` (Phase 6), and
+  `InitBits` declaring `kpBuf: *const u8`, storing it as `*mut`, and writing through it
+  — a signature that documents the opposite of what the function does, so **every
+  honest caller is wrong** (Phase 3.2, F2's family).
+
+The four skips are a **work queue, not a settled state** (S15). `-Zmiri-ignore-leaks`
+is set deliberately: this gate is for undefined behaviour, and leak-checking a
+mid-refactor C transliteration reports the design rather than a defect.
+
+**Byte-exactness does not imply soundness.** That sentence has been in the plan since
+Phase 0, where F1's stack overflow ran under 341/341 identical sweeps for the port's
+whole life. This is its third demonstration, and the first where the instrument that
+could have seen it existed and was simply pointed at one-quarter of the codebase.
+
+### The exit measurement — the ledger, checked
+
+Three interleaved pairs per bench, `afcdd785` against `a6361ee3`:
+
+    decoder  +16.59 / +10.63 / +9.86%     ledger predicted  ≈ +17 / +10 / +10%
+    encoder  +14.73% median               ledger predicted  ≈ +14%
+
+**The ledger is validated as an instrument.** Six rows, each measured with one
+interleaved pair at its own commit B across five sessions, sum to within a point of a
+three-pair end-to-end reading. Phase 4a's checkpoint can read recovery row by row and
+trust the arithmetic — which is exactly what D-perf-4 was betting on when it replaced
+the hard ceiling with a ledger.
+
+Both cumulative figures are under the +25% tripwire, so **nothing parks retroactively**.
+The full table, the row-class gradient, and the per-family deltas are in
+`perf_baseline.md` §Phase 2 exit.
+
+### F3, seventh measurement — the day-rate, twice
+
+Two alternating loops (S14), three release `mt` presets per side each: **G-1 A 3
+failures / 360, G-1 B 2 / 360; G-2 A 1 / 360, G-2 B 2 / 360.** Neither separates the
+sides, and in the first the *raw* side was higher. Day's tally **17 hits in ≈840
+`mt sm=3` encodes (≈1/49)**, against session F's ≈1/110.
+
+The attribution argument that makes today's data better than its predecessors':
+**two of the day's hits landed on the session's control commit, which changes one
+markdown file and no code.** The elevation preceded the first kernel move. Every hit
+matched the widened signature; nothing outside it fired all day, in either profile.
+
+### The fuzz-absence tally, for Eugene
+
+The standing signal, presented rather than acted on. Findings a fuzzer would plausibly
+have reached first, now **eight**:
+
+| finding | what | would a fuzzer have found it first? |
+|---|---|---|
+| **F8** | 8x8 IDCT `i16` intermediates overflow; debug panics where C++ wraps | yes — a `decode_annexb` target, minutes |
+| **F9** | `iFrameSad` overflows at ≥8.4 megapixels | encoder-input target, needs 4K frames |
+| **F10 ×3** | raw SAD/SATD trailing pointer bump is out-of-allocation | **no** — this is Miri's, and Miri found all three |
+| **F11** | `WelsIHadamard4x4Dc` plain `i16` adds overflow above ±2047 | yes, with a qp<12 saturated-DC frame |
+| **F12** | every worker takes `&mut` to the shared thread pool | **no** — Miri's, and only under `-Zmiri-disable-isolation`-free threading |
+| **F13** | four aliasing defects incl. the self-referential dispatch table | **no** — Miri's |
+| **F3** | MT slice-list race, now eight measurements | **yes, emphatically** — it is a nondeterminism bug and a differential fuzzer is the instrument for it |
+
+**The honest reading, which is new this session:** the tally has been growing, but its
+composition has changed. Miri, once pointed at the whole library, found *five* of these
+eight and would plausibly have found F10 three sessions earlier had it been pointed
+there sooner. A fuzzer remains the right instrument for **F3** and for the F8/F11
+arithmetic class — malformed and adversarial *input* — and nothing else in the tally is
+an argument for it. That is a sharper case than "eight findings, please reopen T7":
+**the input-space instrument is still missing and F3 is the standing evidence.**
+Re-raising Phase 0 T7 is Eugene's call; the tally is the job.
+
+### Where Phase 2 stands
+
+**Complete.** 154 shims across 13 files; ~190 kernels reached; two families parked with
+their re-attempt in the immediately next phase; six findings recorded and none
+repaired; the ledger open, measured, and validated. `unsafe_fn` 1346, `raw_ptr` 5175,
+`no_mangle` 24 with **zero** from any converted kernel file.
+
+The three consolidation artifacts are in place: plan **§0** (the status preamble,
+refreshed at every phase exit from now on), plan **§7.6** (standing rules S1–S19,
+hoisted from `prompts/phase2_continue.md` §2 — briefs from here on cite it instead of
+copying rules forward), and **`prompts/phase4a.md`**. Both Phase 2 briefs are stamped
+superseded-historical.
+
+### Next session's first action
+
+**Phase 4a — read [`prompts/phase4a.md`](prompts/phase4a.md)**, then plan §0 and §7.6.
+`mc.rs`'s consumers first under the preserved D-perf-3 protocol, because it is the
+largest ledger row and because if direct dispatch does not recover *it* the recovery
+thesis is wrong and the first session should be what discovers that. Then the decoder
+tables (including the three untyped installer casts T6 left at `decoder_core.rs:1906`
+and `:920-921`), then the encoder's ~55 CPU-dispatch members including
+`WelsInitSampleSadFunc`. **Do not compress the checkpoint** — re-measure every ledger
+row, re-attempt both parked families with the harness rebuilt first (S3/S4), and delete
+`--skip svc_mode_decision` from the Miri gate, because F13's self-referential dispatch
+table is 4a's to fix and de-virtualizing it is the fix.
+
