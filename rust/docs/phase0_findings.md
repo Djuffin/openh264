@@ -282,6 +282,36 @@ the least quiescent state this machine reaches. The session's three earlier full
 sweep batteries (two mid-session, one dedicated to the F1 surgery) all passed
 341/341 first try.
 
+**Sixth measurement, 2026-08-10 (Phase 2 session F, T7 part 1) — the wrong
+bitstream can be LONGER, not only short or zero.** The F-1 commit-B release sweep
+failed one configuration — `CiscoVT2people_160x96 t=2 sm=3 n=600 cabac=0 rc=0`,
+Rust **42462** bytes against C++ 41938 — which matches F3's configuration class
+exactly but not its recorded output shape: every prior event was zero-byte or
+short, this one is 1.2% *longer*. Because the shape was outside the signature, the
+full attribution protocol ran instead of the one-hit retry: the exact configuration
+re-run **12/12 clean on the swapped tree and 12/12 on the pre-swap tree,
+alternating in one loop**; a single full release `mt` preset re-run cleared the
+original config but produced one classic short-output hit at a *different*
+config (`t=4 sm=3 n=600 rc=1`, Rust 40857 vs C++ 42538) — two hits in one session,
+so the two-hit protocol ran: three full release `mt` presets per side, alternated
+in one loop, read **pre-swap 0 failures / 360 configs, swapped 1 / 360** —
+indistinguishable rates at F3's known frequency, on a commit that touches no MT
+machinery and whose kernels are proven byte-identical differentially. Verdict: F3, with the **signature's output clause
+widened — any wrong-length output at `mt` `sm=3`, `t` in {2,4}, either profile, is
+the fingerprint**; a divergence at matching *length* has still never been seen.
+Consistent with a slice-list race repacking slices rather than truncating them.
+
+The same session's end battery added two more data points, both `t=4 sm=3 n=600`,
+both cleared by a 120/120 preset re-run: a release hit that was again *longer*
+(42616 vs 42538 — the widened shape's second sighting), and **the first debug-build
+hit ever observed** (`320x192 cabac=1 rc=0`, Rust short at 37837 vs 39981) —
+the manifestation the fourth measurement predicted when the debug driver went to
+`opt-level = 3` but had not yet seen. Day's tally: 4 hits in ≈430 `mt sm=3`
+encodes (≈1/110, against the historical 1/400-1000), on a machine that spent the
+whole session under build + bench + Miri load — the known widening condition —
+with the alternating-loop counts (pre-swap 0/360 vs swapped 1/360) showing the
+rate is the day's, not the commit's.
+
 **Gate consequence, act on this now:** a single `sweep.sh mt` release run is not a
 reliable 341/341 signal. A failure confined to `t=4 sm=3` must be re-run before
 being treated as a regression, and a *new* failure anywhere else should be treated

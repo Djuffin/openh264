@@ -1278,3 +1278,180 @@ Rust and the C++ before writing each safe body; every span probe gets a golden
 direct run; encoder families measure the encoder bench in their own right (R-n),
 one interleaved pair per bench at commit B, null run fresh if a reading needs a
 noise verdict. Then S+2 = `encoder/get_intra_predictor.rs` (33) + T9.
+
+---
+
+## 2026-08-10 — Phase 2, session F (T7 part 1: forward transforms, recon IDCT, SATD parked)
+
+**Goal:** the finishing brief's session F — `encoder/encode_mb_aux.rs` (F-1),
+`encoder/decode_mb_aux.rs` (F-2), `encoder/sample.rs`'s SATD prove-and-park (F-3) —
+under D-perf-4. All three landed in the brief's order, no order deviation to record.
+**The headline is two instrument events, not the conversions**: an F3 hit with a
+shape outside the recorded signature (Rust output *longer*), resolved by the
+full alternating-loop protocol and appended as F3's sixth measurement; and Miri
+catching F10's rule *under-applied* in the new SATD differential — whole rows are
+not enough for composite kernels.
+
+**Started at** `915bb554` with one untracked doc (the finishing brief, committed
+first as `97ad7975` — the session control), **ended at** the commit carrying this
+entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `97ad7975` | the finishing brief committed (control point) |
+| `f233d506` | F-1 A: 21 safe kernels + 5 differential entries, 3 mutations killed |
+| `b1fb7448` | F-1 B: swap behind 21 shims; span probe with golden runs |
+| `fc92dab0` | F-2 A: 9 safe kernels (recount; brief said 6) + entries; **F11** recorded |
+| `55e6d7fe` | F-2 B: swap behind 9 shims (4 in decode_mb_aux, 5 in svc_encode_mb) |
+| `1383acb5` | F-3: 7 SATD kernels proven and **parked** — no commit B by decision |
+| `20e84e47` | F10 second instance: SATD raw-side buffers to `(h+1)*stride` |
+
+Plus `perf_baseline.md` §Phase 2 T7 part 1, two ledger rows and the T7-satd
+§Parked row, `phase2_findings.md` F11 and F10's second instance,
+`phase0_findings.md` F3's sixth measurement, and the Progress appendix.
+
+### Gates
+
+| gate | control (`97ad7975`) | final |
+|---|---|---|
+| `cargo test` | 395 / 0 / 20 | 399 / 0 / 20 |
+| `cargo test --release` | 393 / 0 / 20 | 397 / 0 / 20 |
+| sweeps st mt def (debug) | 341/341, 23s | 340/341 — **the first debug F3 hit ever observed** (`t=4 sm=3 n=600 cabac=1`, short); preset retry 120/120 |
+| sweeps st mt def (release) | 341/341, 20s | 340/341 — F3, longer-shape again (`t=4 sm=3 n=600 rc=1`); preset retry 120/120. F-1 B's mid-session battery had the sixth-measurement hit (below) |
+| ratchet | clean (1360/5198/97/24) | clean, baseline regenerated twice (F-1 B, F-2 B) |
+| `decode_1080p_bench` | all streams bit-identical | all streams bit-identical |
+| `c_vs_rust_bench` (FFMPEG set) | all rows bit-identical | all rows bit-identical |
+| `miri --lib safe::` | pass | pass |
+| `miri --test kernels_differential_phase2` | — | **caught F10's second instance**, then 16/16 |
+
+Net **+4 tests** (399 vs 395 debug): F-1's five equivalence entries came and went
+inside the family (+5 at A, −5 +1 probe at B), F-2's the same (+2, −2 +1), and
+F-3's two entries are **live** — a parked family's differentials outlive the
+session by design. Ignored-20 never moved.
+
+### The F3 event — a new signature shape, and the protocol run in full
+
+F-1 B's release sweep failed one configuration:
+`mt CiscoVT2people_160x96 t=2 sm=3 n=600 cabac=0 rc=0`, Rust **42462** bytes vs
+C++ 41938 — the F3 configuration class exactly, but *longer*, where every recorded
+event was zero-byte or short. Outside the signature means no one-hit retry, so
+attribution ran the full instrument: the exact config **12/12 clean per side**,
+alternating a commit-A harness binary (raw kernels, built in a worktree) against
+commit B in one loop; then, after the preset re-run produced a second, classic
+short-output hit (`t=4 sm=3 n=600 rc=1`), the two-hit protocol: **three full
+release `mt` presets per side, alternated — A 0 failures/360 configs, B 1/360.**
+Indistinguishable rates on a commit that touches no MT machinery, with kernels
+proven byte-identical. Verdict: F3, sixth measurement, signature's output clause
+widened to *any wrong length*. The counts are in `phase0_findings.md`.
+
+The session-end battery then added two more F3 hits (one per profile — the release
+one *longer* again, the debug one the **first debug hit ever observed**, exactly
+the manifestation the fourth measurement predicted), both cleared by 120/120
+preset retries. Day's tally 4 hits in ≈430 `mt sm=3` encodes — elevated (≈1/110)
+on a machine under continuous build + bench + Miri load all session, which is
+F3's known widening condition; the alternating counts pin the elevation on the
+day, not the commit. All appended to F3.
+
+### F-1 — `encoder/encode_mb_aux.rs`: 21 kernels, +2.1% ledgered
+
+The brief's "22" is 21 kernels + the installer. Every consumer reaches these
+through `SWelsFuncPtrList` slots (no direct calls anywhere — proven by grep), and
+`decoder/error_concealment.rs` has same-named `WelsCopy16x16_c`/`WelsCopy8x8_c`
+cousins (third occurrence of the collision trap; never unify). Fixed arrays
+everywhere; the interesting contracts are the two strided Hadamard reads, typed as
+exact reaches — `[i16; 49]` (chroma DC group, position 48 last) and `[i16; 241]`
+(luma DC of block 15 at index 240). R-e bound derivations are in the doc comments:
+the DCT is total (u8 pixels, per-pass gain 6x, ≤ ±9180 over two passes — the old
+Rust's i32 scratch and the C++'s int16_t agree everywhere reachable), and quant's
+`(ff + |v|) * mf` stays under `2^31` for any non-negative table factors, so the
+differentials drove full-range coefficients over the **exhaustive** QP × {inter,
+intra} table sweep (R-d). Three mutations (zigzag swap, quant lane index, DCT
+butterfly sign) each killed by an entry before commit A.
+
+**Perf** (one interleaved pair per bench, against a fresh null floor of median
++0.87% / max ±3.1%, the quietest of the three sessions that have measured one):
+decode flat (+0.3..+0.5% — not a consumer); encoder **+2.10% median, +9.86% worst
+usable, 9 rows in +5..10%**. The shape is T4's per-call mechanism transplanted:
+flat-content synthetic rows encode fastest and pay the biggest fraction of fixed
+per-block scaffolding; content rows read -6..+2%. Tripwire: ≈ +11% + 2.1 ≈ **+13%
+median cumulative, under +25%** → swap-and-ledger, no single-family flag (< 15%).
+No microbenchmark built (D-perf-4: nothing surprised).
+
+**The Spatial Ramps observation** (excluded from every verdict per R-l, recorded
+anyway): the condemned row read +226% at F-1's pair — and unlike its historical
+same-binary ±38% chaos, today's readings are *consistent per binary* (control-class
+0.11-0.15 ms across four runs; F-1 B 0.345-0.362 ms across three; F-2 B 0.223 ms
+twice). Gradients content is the all-skip path — per-block quant scaffolding at its
+purest. Filed in the baseline as data for Phase 4a's checkpoint, not acted on.
+
+### F-2 — the encoder recon IDCT family: 9 kernels by recount, noise-level
+
+The C++ `decode_mb_aux.cpp` family is 9 leaf kernels, not the brief's 6: four in
+`encoder/decode_mb_aux.rs` and five whose raw bodies the port left in
+`svc_encode_mb.rs` (re-exported; the module doc says so). All nine converted; the
+`WelsIDctT4RecOnMb` composite (takes a fn pointer) and the installer stay as
+dispatch plumbing. Two R-e shapes worth keeping: the dequants' `wrapping_*` i16
+arithmetic **equals** the C++'s int-arithmetic-narrowed-per-store (truncation
+mod 2^16 commutes with + and ×), so they are total and were driven full-range; and
+`idct_t4_rec` keeps the load-bearing `as i16` horizontal narrowing while
+transposing the column-major write loop to row windows (bit-exact — every sample
+written once; the pilot's argument). The recon shims keep the C++'s null-tolerance
+guard, and the probe exercises it.
+
+**F11** (recorded, not fixed): `WelsIHadamard4x4Dc` does its butterflies in
+**plain** `i16` — 16x gain, so inputs past ±2047 panic in a debug build where the
+C++ narrows. Its qp ≥ 12 sibling already wraps; the two siblings disagree about
+the same hazard. In-contract DC levels sit far below the threshold, but a
+saturated-DC frame at qp < 12 can reach ~6553 through defined paths — F8's class,
+F9's encoder-side severity. Differential bounded to ±2047 with the derivation.
+
+**Perf:** encoder +0.82% median / max +3.52% / zero rows over 5%, decode +0.61% —
+noise-level both benches, as predicted. Ledgered as such.
+
+### F-3 — SATD proven and parked, and F10's second instance
+
+Seven `satd_*` kernels (all-i32 butterfly matching C++ and port; composition order
+mirrored because per-4x4 rounding makes it part of the contract), nothing installs
+them, `WelsInitSampleSadFunc` untouched. The differential entries are **live** —
+they run the raw kernels, which remain the code that runs — and one
+composition-offset mutation died. §Parked row: re-attempt Phase 4a, with T5-sad.
+
+**The instrument event:** the differential sized raw-side buffers `h * stride`
+per F10 as remembered — and the phase-exit Miri protocol, run mid-session on
+purpose, flagged `WelsSampleSatd8x4_c`'s right sub-block bumping to
+`anchor + 4 + 4*stride`, past a whole-row buffer at any nonzero anchor. **A
+composite's sub-blocks bump from their own anchors**: the F10 rule as now applied
+is raw-side buffers of `(h+1)*stride`, covering every sub-block at every legal
+anchor. Recorded as F10's second instance. The lesson generalizes: *run the Miri
+protocol when a test first applies a UB-accommodation rule, not only at the phase
+exit* — the fix cost one commit today and would have been a T9 surprise otherwise.
+
+### Ratchet across the session
+
+```
+no_mangle      24 -> 24    (0: this family had none left to delete)
+unsafe_fn    1360 -> 1361  (+1: copy_shim, the shared span helper — shim_wh's precedent)
+raw_ptr      5198 -> 5200  (+2: copy_shim's signature; F-2's prose additions netted zero against its deleted raw bodies)
+SHIM(          97 -> 127   (+30: 21 + 9; F-3 adds none — parked kernels have no shims)
+unsafe_block  597 -> 624   (+27, within the +30 shim allowance)
+```
+
+R-f's strangler shape, twice regenerated with reasons in the commit messages.
+
+### Next session's first action
+
+**Session G: T7 part 2 — `encoder/get_intra_predictor.rs` (27 kernels by the
+finishing brief's recount; recount again at session start), then T9 in full** per
+`prompts/phase2_finish.md` §3 — the brief's order is binding, T9 never compresses.
+Carry-ins: two surfaces per kernel with different rules (reference side
+availability-gated PADDING-legal reads at `-1`/`-stride` — T3's span-helper shape;
+destination side **packed** prediction buffers, T5-intra's lesson); name-collision
+discipline third occurrence (decoder T3 + common T5 names overlap); R-d exhaustive
+availability-mask sweeps; commit-B pair + tripwire arithmetic against encoder
+≈ +13% cumulative — this is the phase's last swap decision, record it with the
+arithmetic shown. For T9: the Miri gate widening (session-B item) is specified in
+the brief §3 step 3; F10's `(h+1)*stride` correction and F3's widened signature
+belong in the §7.6 hoist; and the fuzz-absence tally now carries F8, F9, F10 (×2),
+F11 and F3's sixth measurement.

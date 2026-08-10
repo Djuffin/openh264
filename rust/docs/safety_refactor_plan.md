@@ -889,9 +889,29 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       The differential span probes gained a **golden direct-run comparison** after
       a +1-anchor mutation survived the touch-set assertion — span size, touch set
       and anchor are now pinned independently.
-- [ ] **T7 — the four encoder kernel files.** Not started; SAD/SATD go
-      prove-and-park per D-perf-2's verdict, with raw-side differential buffers
-      sized whole-rows per F10.
+- [~] **T7 — the four encoder kernel files. Part 1 complete (session F,
+      2026-08-10); part 2 (`encoder/get_intra_predictor.rs`) remains.**
+      **F-1 `encoder/encode_mb_aux.rs`**: 21 kernels + installer; `f233d506` (safe
+      kernels + differential proof, three mutations killed), `b1fb7448` (swap + 21
+      shims). Fixed-array signatures throughout — the two strided Hadamard reads
+      carry exact-reach types `[i16; 49]` and `[i16; 241]`. Encoder +2.1% median /
+      +9.9% worst usable (T4's per-call mechanism on flat content), decode flat;
+      cumulative encoder ≈ +13%, under the tripwire → ledgered.
+      **F-2 `encoder/decode_mb_aux.rs`**: **9 leaf kernels by recount** (the brief
+      said 6 — five raw bodies live in `svc_encode_mb.rs`; the OnMb composite and
+      installer are dispatch plumbing); `fc92dab0` (A), `55e6d7fe` (B, 9 shims).
+      Noise-level on both benches. Finding **F11**: `WelsIHadamard4x4Dc`'s plain
+      `i16` adds panic in debug above ±2047 where the C++ wraps — third member of
+      F8's class, reproduced not repaired.
+      **F-3 `encoder/sample.rs` SATD**: proven-and-parked directly per D-perf-2,
+      `1383acb5` + `20e84e47` — 7 safe kernels, nothing installs them, raw bodies
+      live, re-attempt at Phase 4a with T5-sad. F10 got a **second instance**: the
+      composites' sub-block bumps reach past whole-row buffers, so raw-side
+      differential buffers are `(h+1)*stride` now (Miri caught the under-sizing
+      mid-session). One F3 hit with a **new signature shape** (Rust output *longer*)
+      was attributed by the alternating-loop protocol (24/24 clean on the exact
+      config; A 0/360 vs B 1/360 preset configs) and appended to F3 as its sixth
+      measurement — the signature's output clause is now "any wrong length".
 - [x] **T8 — `processing/{vaacalc,adaptive_quantization}.rs` (`d41244c2`,
       `af98f6ab`).** **6 kernels** as recounted (vaacalc 5 + `SampleVariance16x16_c`),
       not the continuation brief's 11. No dispatch table and no `no_mangle` anywhere
