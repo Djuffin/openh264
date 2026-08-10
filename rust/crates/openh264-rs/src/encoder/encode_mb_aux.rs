@@ -213,6 +213,407 @@ pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(pLevel: *mut i16) -> i32;
 // Encoder Function Pointer Table (SWelsFuncPtrList)
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// Safe kernels (plan §Phase 2, recipe R2). These are the implementations; the
+// `Wels*_c` functions below are strangler shims (R7) that build views from the
+// raw pointers and call in here, so no call site and no dispatch-table
+// installer changes in this phase.
+//
+// Every block dimension in this family is a compile-time constant, so the
+// coefficient signatures are fixed arrays and the shim spans are derivable
+// from the signature alone (T2's situation, not T3's). The two pixel-reading
+// kernels (the forward DCTs) reach forward only from their own (0, 0) — no
+// `-1` column, no `-stride` row — so their spans need no padding knowledge
+// either.
+//
+// Arithmetic parity (rule R-e, findings F8/F9): every kernel reproduces the
+// raw port's integer widths and operations exactly. The DCT and Hadamard
+// intermediates are `i32` here as they were there; on all in-contract inputs
+// the values stay far inside `i32` (the per-kernel bounds are derived in the
+// doc comments below), so none of these kernels can panic in a debug build.
+// The `as i16` narrowings are the C++'s own implicit `int -> int16_t`
+// conversions, kept where the C++ has them.
+// ---------------------------------------------------------------------------
+
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+
+/// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
+/// raster order.
+///
+/// C++: `WelsDctT4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+///
+/// Bound derivation (why this is total): inputs are `u8` pixels, so each
+/// residual is in `[-255, 255]`; one 1-D pass gains at most 6x
+/// (`|2a + b - c - 2d| <= 6 * 255`), so after both passes every value is
+/// inside `+-36 * 255 = +-9180` — no `i32` intermediate and no `i16` store
+/// can overflow on any input the signature admits. (The C++ computes the same
+/// values in `int16_t` scratch; the two agree everywhere because the values
+/// fit `i16` too.)
+pub fn dct_4x4(dct: &mut [i16; 16], pix1: &PlaneCursor<'_>, pix2: &PlaneCursor<'_>) {
+    let mut data = [0i32; 16];
+    let mut s = [0i32; 4];
+
+    for row in 0..4usize {
+        let i = row << 2;
+        let r1: &[u8; 4] = pix1.row(row as isize, 0, 4).try_into().unwrap();
+        let r2: &[u8; 4] = pix2.row(row as isize, 0, 4).try_into().unwrap();
+        for k in 0..4 {
+            data[i + k] = r1[k] as i32 - r2[k] as i32;
+        }
+
+        // Horizontal 1D transform.
+        s[0] = data[i] + data[i + 3];
+        s[3] = data[i] - data[i + 3];
+        s[1] = data[i + 1] + data[i + 2];
+        s[2] = data[i + 1] - data[i + 2];
+
+        dct[i] = (s[0] + s[1]) as i16;
+        dct[i + 2] = (s[0] - s[1]) as i16;
+        dct[i + 1] = ((s[3] << 1) + s[2]) as i16;
+        dct[i + 3] = (s[3] - (s[2] << 1)) as i16;
+    }
+
+    // Vertical 1D transform.
+    for i in 0..4usize {
+        let d0 = dct[i] as i32;
+        let d4 = dct[4 + i] as i32;
+        let d8 = dct[8 + i] as i32;
+        let d12 = dct[12 + i] as i32;
+
+        s[0] = d0 + d12;
+        s[3] = d0 - d12;
+        s[1] = d4 + d8;
+        s[2] = d4 - d8;
+
+        dct[i] = (s[0] + s[1]) as i16;
+        dct[8 + i] = (s[0] - s[1]) as i16;
+        dct[4 + i] = ((s[3] << 1) + s[2]) as i16;
+        dct[12 + i] = (s[3] - (s[2] << 1)) as i16;
+    }
+}
+
+/// [`dct_4x4`] on the four 4x4 blocks of one 8x8 quadrant, 16 coefficients
+/// each, in the C++'s block order: top-left, top-right, bottom-left,
+/// bottom-right.
+///
+/// C++: `WelsDctFourT4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn dct_four_4x4(dct: &mut [i16; 64], pix1: &PlaneCursor<'_>, pix2: &PlaneCursor<'_>) {
+    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &mut [i16; 16] = (&mut dct[k << 4..][..16]).try_into().unwrap();
+        dct_4x4(sub, &pix1.advance(dx, dy), &pix2.advance(dx, dy));
+    }
+}
+
+/// Dead-zone quantization of one coefficient: `sign(v) * (((ff + |v|) * mf) >> 16)`.
+///
+/// Bound derivation (why the widths hold): `|v| <= 32767` and the tables'
+/// `ff <= 767 << 1`, `mf <= 26214`, so `(ff + |v|) * mf < 2^31` — but the
+/// contract this family actually needs is weaker and worth stating once:
+/// for any **non-negative** `ff` and `mf` up to `i16::MAX`,
+/// `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`, so the product cannot
+/// overflow. A negative `mf` could (the differential tests bound their inputs
+/// accordingly), and no table contains one.
+#[inline(always)]
+fn quant_one(v: i16, ff: i32, mf: i32) -> i16 {
+    let sign = (v as i32) >> 31;
+    let abs = (sign ^ (v as i32)) - sign;
+    let q = ((ff + abs) * mf) >> 16;
+    ((sign ^ q) - sign) as i16
+}
+
+/// In-place dead-zone forward quantization of a 4x4 block. `ff`/`mf` are one
+/// 8-lane row of the QP tables; lane `i & 0x07` quantizes coefficient `i`,
+/// exactly the C++'s indexing.
+///
+/// C++: `WelsQuant4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
+    for i in (0..16).step_by(4) {
+        let j = i & 0x07;
+        for k in 0..4 {
+            dct[i + k] = quant_one(dct[i + k], ff[j + k] as i32, mf[j + k] as i32);
+        }
+    }
+}
+
+/// In-place quantization of the 16 Hadamard-transformed luma DC coefficients
+/// with scalar factors (the callers pass `ff << 1`, `mf >> 1`).
+///
+/// C++: `WelsQuant4x4Dc_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
+    let (ff, mf) = (ff as i32, mf as i32);
+    for v in dct.iter_mut() {
+        *v = quant_one(*v, ff, mf);
+    }
+}
+
+/// In-place dead-zone quantization of four consecutive 4x4 blocks.
+///
+/// C++: `WelsQuantFour4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
+    for i in (0..64).step_by(4) {
+        let j = i & 0x07;
+        for k in 0..4 {
+            dct[i + k] = quant_one(dct[i + k], ff[j + k] as i32, mf[j + k] as i32);
+        }
+    }
+}
+
+/// [`quant_four_4x4`], also returning each block's maximum absolute quantized
+/// level in `max[0..4]` — the callers' early-zero test.
+///
+/// C++: `WelsQuantFour4x4Max_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
+    for (k, m) in max.iter_mut().enumerate() {
+        let mut max_abs: i16 = 0;
+        for i in 0..16 {
+            let j = i & 0x07;
+            let v = dct[(k << 4) + i];
+            let sign = (v as i32) >> 31;
+            let abs = (sign ^ (v as i32)) - sign;
+            let q_mag = (((ff[j] as i32 + abs) * mf[j] as i32) >> 16) as i16;
+            if max_abs < q_mag {
+                max_abs = q_mag;
+            }
+            dct[(k << 4) + i] = ((sign ^ (q_mag as i32)) - sign) as i16;
+        }
+        *m = max_abs;
+    }
+}
+
+/// The four chroma DC coefficients a 2x2 Hadamard reads, at raster positions
+/// 0, 16, 32 and 48 of the chroma coefficient group — index 48 is the reach,
+/// which is why the parameter is `[i16; 49]` and not `[i16; 64]`: 49 elements
+/// is exactly the span the kernel touches, and the shim materializes no more.
+#[inline(always)]
+fn hadamard_2x2_butterfly(rs: &[i16; 49]) -> [i32; 4] {
+    let (r0, r16, r32, r48) = (rs[0] as i32, rs[16] as i32, rs[32] as i32, rs[48] as i32);
+    let s0 = r0 + r32;
+    let s1 = r0 - r32;
+    let s2 = r16 + r48;
+    let s3 = r16 - r48;
+    [s0 + s2, s0 - s2, s1 + s3, s1 - s3]
+}
+
+/// Early-termination test for the 2x2 chroma DC Hadamard: 1 if any transformed
+/// coefficient would survive quantization at `(ff, mf)`, else 0.
+///
+/// The threshold division requires `mf != 0`; the callers' `mf` comes from
+/// `g_kiQuantMF >> 1`, whose smallest entry is 28 >> 1 = 14.
+///
+/// C++: `WelsHadamardQuant2x2Skip_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn hadamard_quant_2x2_skip(rs: &[i16; 49], ff: i16, mf: i16) -> i32 {
+    let threshold: i32 = if mf != 0 {
+        ((1i32 << 16) - 1) / (mf as i32) - (ff as i32)
+    } else {
+        0
+    };
+    let d = hadamard_2x2_butterfly(rs);
+    let over = d.iter().any(|&v| {
+        let abs = (v ^ (v >> 31)) - (v >> 31);
+        abs > threshold
+    });
+    over as i32
+}
+
+/// 2x2 forward Hadamard of the four chroma DC coefficients, quantization into
+/// `dct` and `block`, and the DC positions of `rs` cleared. Returns the count
+/// of non-zero quantized levels.
+///
+/// The butterfly is computed in `i32` and narrowed per the C++'s implicit
+/// `int -> int16_t` store (`|d| <= 4 * 32767` can exceed `i16`, and the
+/// truncation is the C++'s own behaviour, kept).
+///
+/// C++: `WelsHadamardQuant2x2_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn hadamard_quant_2x2(
+    rs: &mut [i16; 49],
+    ff: i16,
+    mf: i16,
+    dct: &mut [i16; 4],
+    block: &mut [i16; 4],
+) -> i32 {
+    let d = hadamard_2x2_butterfly(rs);
+    rs[0] = 0;
+    rs[16] = 0;
+    rs[32] = 0;
+    rs[48] = 0;
+
+    let (ff, mf) = (ff as i32, mf as i32);
+    let mut dc_nzc = 0;
+    for i in 0..4 {
+        let q = quant_one(d[i] as i16, ff, mf);
+        dct[i] = q;
+        block[i] = q;
+        if q != 0 {
+            dc_nzc += 1;
+        }
+    }
+    dc_nzc
+}
+
+/// 4x4 forward Hadamard of the 16 luma DC coefficients of an I16x16
+/// macroblock, `(x + 1) >> 1` rounded and clipped to `i16`.
+///
+/// `dct` is the macroblock's 256-coefficient luma buffer; the DC of raster
+/// block `k` sits at `dct[k * 16]`, and the highest one read is block 15's at
+/// index 240 — hence `[i16; 241]`, the exact reach. Computed in `i32` with an
+/// explicit clip, as the C++ does (`WELS_CLIP3`), so it is total over the full
+/// `i16` input range.
+///
+/// C++: `WelsHadamardT4Dc_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
+    let mut p = [0i32; 16];
+    let mut s = [0i32; 4];
+
+    for i in (0..16).step_by(4) {
+        let idx = ((i & 0x08) << 4) + ((i & 0x04) << 3);
+        let d0 = dct[idx] as i32;
+        let d80 = dct[idx + 80] as i32;
+        let d16 = dct[idx + 16] as i32;
+        let d64 = dct[idx + 64] as i32;
+
+        s[0] = d0 + d80;
+        s[3] = d0 - d80;
+        s[1] = d16 + d64;
+        s[2] = d16 - d64;
+
+        p[i] = s[0] + s[1];
+        p[i + 2] = s[0] - s[1];
+        p[i + 1] = s[3] + s[2];
+        p[i + 3] = s[3] - s[2];
+    }
+
+    for i in 0..4usize {
+        s[0] = p[i] + p[i + 12];
+        s[3] = p[i] - p[i + 12];
+        s[1] = p[i + 4] + p[i + 8];
+        s[2] = p[i + 4] - p[i + 8];
+
+        luma_dc[i] = ((s[0] + s[1] + 1) >> 1).clamp(-32768, 32767) as i16;
+        luma_dc[i + 8] = ((s[0] - s[1] + 1) >> 1).clamp(-32768, 32767) as i16;
+        luma_dc[i + 4] = ((s[3] + s[2] + 1) >> 1).clamp(-32768, 32767) as i16;
+        luma_dc[i + 12] = ((s[3] - s[2] + 1) >> 1).clamp(-32768, 32767) as i16;
+    }
+}
+
+/// The 4x4 zigzag permutation: raster position of scan position `i`.
+const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+
+/// All 16 coefficients of `dct`, zigzag-reordered into `level`.
+///
+/// C++: `WelsScan4x4DcAc_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+/// (`WelsScan4x4Dc` is the same permutation; its shim calls in here too.)
+pub fn scan_4x4_dc_ac(level: &mut [i16; 16], dct: &[i16; 16]) {
+    for (l, &z) in level.iter_mut().zip(ZIGZAG.iter()) {
+        *l = dct[z];
+    }
+}
+
+/// The 15 AC coefficients of `dct` (DC omitted), zigzag-reordered into
+/// `level[0..15]`, with `level[15] = 0`.
+///
+/// C++: `WelsScan4x4Ac_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn scan_4x4_ac(level: &mut [i16; 16], dct: &[i16; 16]) {
+    for (l, &z) in level.iter_mut().zip(ZIGZAG[1..].iter()) {
+        *l = dct[z];
+    }
+    level[15] = 0;
+}
+
+/// JVT-O079 CAVLC bit-cost estimate: for each run of zeros between non-zero
+/// coefficients (scanning from the high end), add the run-length penalty.
+///
+/// C++: `WelsCalculateSingleCtr4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
+    let mut single_ctr: i32 = 0;
+    let mut idx: i32 = 15;
+
+    while idx >= 0 && dct[idx as usize] == 0 {
+        idx -= 1;
+    }
+
+    while idx >= 0 {
+        idx -= 1;
+        let mut run = idx;
+        while idx >= 0 && dct[idx as usize] == 0 {
+            idx -= 1;
+        }
+        run -= idx;
+        if (run as usize) < KI_TRUN_TABLE.len() {
+            single_ctr += KI_TRUN_TABLE[run as usize];
+        }
+    }
+
+    single_ctr
+}
+
+/// Count of non-zero coefficients in a 16-element level array.
+///
+/// C++: `WelsGetNoneZeroCount_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
+    16 - level.iter().filter(|&&v| v == 0).count() as i32
+}
+
+/// Fixed-width strided block copy. The width is a const parameter for the same
+/// measured reason as `mc.rs`'s `copy_rows`: a runtime length lowers to a
+/// `memmove` call per row, a const one to a pair of wide moves
+/// (`docs/perf_baseline.md` §Phase 2 T4).
+#[inline(always)]
+fn copy_rows<const WIDTH: usize>(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        let s: &[u8; WIDTH] = src.row(dy, 0, WIDTH).try_into().unwrap();
+        let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
+        *d = *s;
+    }
+}
+
+/// C++: `WelsCopy4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+#[inline(always)]
+pub fn copy_4x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<4>(src, dst, 4);
+}
+
+/// C++: `WelsCopy8x4_c`.
+#[inline(always)]
+pub fn copy_8x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8>(src, dst, 4);
+}
+
+/// C++: `WelsCopy4x8_c`.
+#[inline(always)]
+pub fn copy_4x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<4>(src, dst, 8);
+}
+
+/// C++: `WelsCopy8x8_c`. (The decoder's error-concealment module has its own
+/// same-named kernel — different function, never unify.)
+#[inline(always)]
+pub fn copy_8x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8>(src, dst, 8);
+}
+
+/// C++: `WelsCopy16x8_c`.
+#[inline(always)]
+pub fn copy_16x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<16>(src, dst, 8);
+}
+
+/// C++: `WelsCopy8x16_c`.
+#[inline(always)]
+pub fn copy_8x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<8>(src, dst, 16);
+}
+
+/// C++: `WelsCopy16x16_c`. (Same name-collision note as [`copy_8x8`].)
+#[inline(always)]
+pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    copy_rows::<16>(src, dst, 16);
+}
+
 // ============================================================================
 // Forward Discrete Cosine Transform (FDCT)
 // ============================================================================
