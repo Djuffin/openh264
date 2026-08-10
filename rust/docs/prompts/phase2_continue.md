@@ -1,5 +1,11 @@
 # Session prompt — Safety refactor, Phase 2 continuation (T4 → T9)
 
+> **SUPERSEDED — HISTORICAL.** Phase 2 closed 2026-08-10. The durable rules this
+> brief carried now live in [`../safety_refactor_plan.md`](../safety_refactor_plan.md)
+> §7.6 (S1–S19); the phase's state is in that document's §0 preamble; the next phase's
+> brief is [`phase4a.md`](phase4a.md). Kept for the history in its state tables and
+> for the derivations behind the hoisted rules — **do not execute it.**
+
 You are continuing **Phase 2** of `rust/docs/safety_refactor_plan.md`.
 **`prompts/phase2.md` remains the governing brief** — recipe (§3.1 two commits per
 family), naming/shim conventions (§3.2), perf protocol (§3.3), gates (§5), non-goals

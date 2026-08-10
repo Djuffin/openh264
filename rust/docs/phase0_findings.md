@@ -325,8 +325,8 @@ the pair of counts rather than either one:
 Three release `mt` presets per side per loop, alternated inside one loop, binaries
 kept on disk (the pre-change side built from a worktree at the commit-A hash).
 Neither loop separates the sides, and in the first one the *raw* side was the
-higher. Whole-day tally: **16 hits in ≈750 `mt sm=3` encodes, ≈1/47** — roughly
-2.3x session F's ≈1/110 and 10-20x the historical 1/400-1000 — on a machine that
+higher. Whole-day tally: **17 hits in ≈840 `mt sm=3` encodes, ≈1/49** — roughly
+2.2x session F's ≈1/110 and 10-20x the historical 1/400-1000 — on a machine that
 spent the session running builds, two bench pairs, four Miri passes and two
 worktree compiles.
 
@@ -337,7 +337,7 @@ present before the first kernel moved, which is what the alternating loops then
 confirmed at both commits. Machine load is the widening condition; the commits are
 not.
 
-Every one of the sixteen matched the signature as widened by the sixth
+Every one of the seventeen matched the signature as widened by the sixth
 measurement — `mt`, `sm=3`, `t` in {2, 4}, output of any wrong length, either
 profile. The shapes seen today: zero-length (most), short, and long. No hit at any
 other configuration class, in either profile, all day.

@@ -1,5 +1,11 @@
 # Session prompt — Safety refactor, finishing Phase 2 (T7 part 1 → T7 part 2 → T9)
 
+> **SUPERSEDED — HISTORICAL.** Phase 2 closed 2026-08-10. The durable rules this
+> brief carried now live in [`../safety_refactor_plan.md`](../safety_refactor_plan.md)
+> §7.6 (S1–S19); the phase's state is in that document's §0 preamble; the next phase's
+> brief is [`phase4a.md`](phase4a.md). Kept for the history in its state tables and
+> for the derivations behind the hoisted rules — **do not execute it.**
+
 You are finishing **Phase 2** of `rust/docs/safety_refactor_plan.md`: the last two
 kernel families and the phase exit. Expected span: **two sessions** (F: T7 part 1;
 G: T7 part 2 + T9), with T9 allowed to spill into a short third if part 2 runs long —
