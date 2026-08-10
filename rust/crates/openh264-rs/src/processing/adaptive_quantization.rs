@@ -64,8 +64,16 @@ fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
 /// `SampleVariance16x16_c` — `AdaptiveQuantization.cpp:245`.
 ///
 /// # Safety
-/// Both planes must have at least 16 readable rows of 16 bytes at the given
-/// strides; `pMotionTexture` must be writable.
+/// * `pRefY` and `pSrcY` each point at the top-left sample of a 16x16 macroblock in
+///   a luma plane whose rows are `iRefStride` / `iSrcStride` bytes apart, with at
+///   least `mb_span(stride)` = `15 * stride + 16` readable bytes from there. The
+///   reach is strictly forward — sixteen rows of sixteen samples, no row above and
+///   no column left — so this shim needs no padding constant to justify itself.
+/// * **The two strides are independent.** `CAdaptiveQuantization::Process` walks the
+///   reference and source pictures with separate strides taken from separate
+///   `SPixMap`s, and they are not equal in general; each plane's span is computed
+///   from its own.
+/// * `pMotionTexture` is writable.
 pub unsafe fn SampleVariance16x16_c(
     pRefY: *const u8,
     iRefStride: i32,
@@ -73,36 +81,16 @@ pub unsafe fn SampleVariance16x16_c(
     iSrcStride: i32,
     pMotionTexture: *mut SMotionTextureUnit,
 ) {
-    let mut uiCurSquare: u32 = 0;
-    let mut uiSquare: u32 = 0;
-    let mut uiCurSum: u16 = 0;
-    let mut uiSum: u16 = 0;
-
-    let mut pRef = pRefY;
-    let mut pSrc = pSrcY;
-    for _y in 0..MB_WIDTH_LUMA {
-        for x in 0..MB_WIDTH_LUMA as isize {
-            let src = *pSrc.offset(x);
-            let uiDiff = (*pRef.offset(x) as i32 - src as i32).unsigned_abs();
-            uiSum = uiSum.wrapping_add(uiDiff as u16);
-            uiSquare = uiSquare.wrapping_add(uiDiff.wrapping_mul(uiDiff));
-
-            uiCurSum = uiCurSum.wrapping_add(src as u16);
-            uiCurSquare = uiCurSquare.wrapping_add((src as u32) * (src as u32));
-        }
-        pRef = pRef.offset(iRefStride as isize);
-        pSrc = pSrc.offset(iSrcStride as isize);
+    // SHIM(phase2) -> sample_variance_16x16
+    unsafe {
+        let (ref_stride, src_stride) = (iRefStride as usize, iSrcStride as usize);
+        *pMotionTexture = sample_variance_16x16(
+            core::slice::from_raw_parts(pRefY, mb_span(ref_stride)),
+            ref_stride,
+            core::slice::from_raw_parts(pSrcY, mb_span(src_stride)),
+            src_stride,
+        );
     }
-
-    // `uiSum * uiSum` promotes to `int` in C++ and the store back into the
-    // `uint16_t` field truncates.
-    uiSum >>= 8;
-    (*pMotionTexture).uiMotionIndex =
-        ((uiSquare >> 8) as i32 - (uiSum as i32) * (uiSum as i32)) as u16;
-
-    uiCurSum >>= 8;
-    (*pMotionTexture).uiTextureIndex =
-        ((uiCurSquare >> 8) as i32 - (uiCurSum as i32) * (uiCurSum as i32)) as u16;
 }
 
 //=================== Safe kernels =====================//
@@ -372,5 +360,74 @@ impl CAdaptiveQuantization {
             iAverMotionTextureIndexToDeltaQp / iMbTotalNum;
 
         RET_SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A block whose samples are all equal has zero texture index, and a block whose
+    /// difference from the reference is uniform has zero motion index — for any
+    /// stride pair. Checked against the C++ arithmetic by construction:
+    /// `uiSquare >> 8` is `(256 * d^2) >> 8 = d^2` and `(uiSum >> 8)^2` is
+    /// `((256 * d) >> 8)^2 = d^2`, so the two cancel exactly.
+    #[test]
+    fn variance_of_a_uniform_block_is_zero() {
+        for &(ref_stride, src_stride) in &[(16usize, 16usize), (16, 33), (48, 17)] {
+            for d in [0u8, 1, 17, 255] {
+                let refy = vec![d; mb_span(ref_stride)];
+                let srcy = vec![0u8; mb_span(src_stride)];
+                let got = sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
+                assert_eq!(got.uiMotionIndex, 0, "difference {d}, strides {ref_stride}/{src_stride}");
+                assert_eq!(got.uiTextureIndex, 0, "strides {ref_stride}/{src_stride}");
+            }
+        }
+    }
+
+    /// The two strides are read independently, which is the one thing a shim sizing
+    /// both spans from a single stride would get wrong.
+    ///
+    /// The source plane is laid out so that its 16x16 block is uniform at its *own*
+    /// stride but would be ragged at the reference's, so a kernel that walked the
+    /// source at `iRefStride` reports a non-zero texture index where the right answer
+    /// is zero.
+    #[test]
+    fn the_two_strides_are_independent() {
+        let (ref_stride, src_stride) = (64usize, 20usize);
+        let refy = vec![0u8; mb_span(ref_stride)];
+        // A whole 16 rows rather than `mb_span`, so the inter-row gap after the last
+        // row exists to be (wrongly) read. The kernel is still only entitled to
+        // `mb_span`; this test is about which bytes it picks, not how many.
+        let mut srcy = vec![0u8; 16 * src_stride];
+        for row in 0..16 {
+            for col in 0..src_stride {
+                // 100 inside the block, 200 in the inter-row gap the walk must skip.
+                srcy[row * src_stride + col] = if col < 16 { 100 } else { 200 };
+            }
+        }
+        let got = sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
+        assert_eq!(got.uiTextureIndex, 0, "the source walk picked up the row gap");
+        assert_eq!(got.uiMotionIndex, 0);
+    }
+
+    /// The kernel reads exactly `mb_span`, which is what the shim allocates: sixteen
+    /// rows of sixteen samples reaching forward only. A plane one byte shorter is a
+    /// panic, and this pins that the span is not over-stated either — the last byte
+    /// of the allocation is the last sample of the block, so it must be read.
+    #[test]
+    fn the_span_is_exactly_the_block() {
+        let stride = 24usize;
+        assert_eq!(mb_span(stride), 15 * stride + 16);
+
+        let refy = vec![0u8; mb_span(stride)];
+        let mut srcy = vec![0u8; mb_span(stride)];
+        // Only the very last sample of the block differs.
+        *srcy.last_mut().unwrap() = 255;
+        let got = sample_variance_16x16(&refy, stride, &srcy, stride);
+        assert_ne!(
+            got.uiTextureIndex, 0,
+            "the last sample of the declared span was never read"
+        );
     }
 }

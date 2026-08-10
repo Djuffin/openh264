@@ -25,6 +25,16 @@ pub const RET_OUTOFMEMORY: i32 = -3;
 pub const RET_NOTSUPPORTED: i32 = -4;
 pub const RET_UNEXPECTED: i32 = -5;
 
+/// The two quantities every `VAACalc*` shim needs to turn its raw pointers into
+/// slices: the plane span the walk reads, and the number of macroblocks it writes.
+///
+/// One helper, so that no shim does this arithmetic itself and a wrong span is one
+/// bug rather than five (the T3 rule — `safety_refactor_log.md`, Phase 2 session A).
+fn shim_extent(pic_width: i32, pic_height: i32, pic_stride: i32) -> (usize, usize) {
+    let mbs = (pic_width >> 4).max(0) as usize * (pic_height >> 4).max(0) as usize;
+    (vaa_span(pic_width, pic_height, pic_stride), mbs)
+}
+
 /// `VAACalcSad_c` — `codec/processing/src/vaacalc/vaacalcfuncs.cpp:39`.
 ///
 /// Walks the picture macroblock by macroblock, writing the four 8x8 sums of
@@ -32,9 +42,19 @@ pub const RET_UNEXPECTED: i32 = -5;
 /// accumulating the frame total into `*pFrameSad`.
 ///
 /// # Safety
-/// `pCurData` and `pRefData` must each address at least `iPicHeight * iPicStride`
-/// readable bytes; `pSad8x8` must have room for `4 * (iPicWidth >> 4) *
-/// (iPicHeight >> 4)` `i32`s.
+/// * `pCurData` and `pRefData` each point at sample `(0, 0)` of a luma plane whose
+///   rows are `iPicStride` bytes apart, with at least
+///   `vaa_span(iPicWidth, iPicHeight, iPicStride)` readable bytes from there. That is
+///   the walk's **exact** reach and it is strictly forward — this family reads no row
+///   above and no column left of its origin, so no padding is required in any
+///   direction and `PADDING_LENGTH` does not enter the argument. A plane of
+///   `iPicHeight * iPicStride` bytes, which is what every caller has, always contains
+///   the span; the tighter figure is stated because it is what the shim claims.
+/// * `pSad8x8` has room for `4 * (iPicWidth >> 4) * (iPicHeight >> 4)` `i32`s, i.e.
+///   one `[i32; 4]` per macroblock — which is the type `SVAACalcResult::pSad8x8`
+///   actually declares, and the cast below undoes the caller's own cast to `*mut i32`.
+/// * `pFrameSad` is writable. See F9: it is an `i32` accumulated over the whole
+///   picture and overflows above 32 896 macroblocks, exactly as the C++ does.
 pub unsafe fn VAACalcSad_c(
     pCurData: *const u8,
     pRefData: *const u8,
@@ -44,47 +64,17 @@ pub unsafe fn VAACalcSad_c(
     pFrameSad: *mut i32,
     pSad8x8: *mut i32,
 ) {
-    let mut tmp_ref = pRefData;
-    let mut tmp_cur = pCurData;
-    let iMbWidth = iPicWidth >> 4;
-    let mb_height = iPicHeight >> 4;
-    let mut mb_index = 0isize;
-    let pic_stride_x8 = (iPicStride << 3) as isize;
-    let step = ((iPicStride << 4) - iPicWidth) as isize;
-
-    *pFrameSad = 0;
-    for _i in 0..mb_height {
-        for _j in 0..iMbWidth {
-            // The four quadrants in the C++'s order: top-left, top-right,
-            // bottom-left, bottom-right.
-            for (n, offset) in [
-                (0isize, 0isize),
-                (1, 8),
-                (2, pic_stride_x8),
-                (3, pic_stride_x8 + 8),
-            ] {
-                let mut l_sad = 0i32;
-                let mut tmp_cur_row = tmp_cur.offset(offset);
-                let mut tmp_ref_row = tmp_ref.offset(offset);
-                for _k in 0..8 {
-                    for l in 0..8isize {
-                        let diff =
-                            (*tmp_cur_row.offset(l) as i32 - *tmp_ref_row.offset(l) as i32).abs();
-                        l_sad += diff;
-                    }
-                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
-                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
-                }
-                *pFrameSad += l_sad;
-                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
-            }
-
-            tmp_ref = tmp_ref.offset(16);
-            tmp_cur = tmp_cur.offset(16);
-            mb_index += 1;
-        }
-        tmp_ref = tmp_ref.offset(step);
-        tmp_cur = tmp_cur.offset(step);
+    // SHIM(phase2) -> vaa_calc_sad
+    unsafe {
+        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
+        *pFrameSad = vaa_calc_sad(
+            core::slice::from_raw_parts(pCurData, span),
+            core::slice::from_raw_parts(pRefData, span),
+            iPicWidth,
+            iPicHeight,
+            iPicStride,
+            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
+        );
     }
 }
 
@@ -117,55 +107,19 @@ pub unsafe fn VAACalcSadVar_c(
     pSum16x16: *mut i32,
     psqsum16x16: *mut i32,
 ) {
-    let mut tmp_ref = pRefData;
-    let mut tmp_cur = pCurData;
-    let iMbWidth = iPicWidth >> 4;
-    let mb_height = iPicHeight >> 4;
-    let mut mb_index = 0isize;
-    let pic_stride_x8 = (iPicStride << 3) as isize;
-    let step = ((iPicStride << 4) - iPicWidth) as isize;
-
-    *pFrameSad = 0;
-    for _i in 0..mb_height {
-        for _j in 0..iMbWidth {
-            *pSum16x16.offset(mb_index) = 0;
-            *psqsum16x16.offset(mb_index) = 0;
-
-            // The four quadrants in the C++'s order: top-left, top-right,
-            // bottom-left, bottom-right.
-            for (n, offset) in [
-                (0isize, 0isize),
-                (1, 8),
-                (2, pic_stride_x8),
-                (3, pic_stride_x8 + 8),
-            ] {
-                let mut l_sad = 0i32;
-                let mut l_sum = 0i32;
-                let mut l_sqsum = 0i32;
-                let mut tmp_cur_row = tmp_cur.offset(offset);
-                let mut tmp_ref_row = tmp_ref.offset(offset);
-                for _k in 0..8 {
-                    for l in 0..8isize {
-                        let cur = *tmp_cur_row.offset(l) as i32;
-                        l_sad += (cur - *tmp_ref_row.offset(l) as i32).abs();
-                        l_sum += cur;
-                        l_sqsum += cur * cur;
-                    }
-                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
-                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
-                }
-                *pFrameSad += l_sad;
-                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
-                *pSum16x16.offset(mb_index) += l_sum;
-                *psqsum16x16.offset(mb_index) += l_sqsum;
-            }
-
-            tmp_ref = tmp_ref.offset(16);
-            tmp_cur = tmp_cur.offset(16);
-            mb_index += 1;
-        }
-        tmp_ref = tmp_ref.offset(step);
-        tmp_cur = tmp_cur.offset(step);
+    // SHIM(phase2) -> vaa_calc_sad_var
+    unsafe {
+        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
+        *pFrameSad = vaa_calc_sad_var(
+            core::slice::from_raw_parts(pCurData, span),
+            core::slice::from_raw_parts(pRefData, span),
+            iPicWidth,
+            iPicHeight,
+            iPicStride,
+            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pSum16x16, mbs),
+            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
+        );
     }
 }
 
@@ -188,50 +142,20 @@ pub unsafe fn VAACalcSadSsd_c(
     psqsum16x16: *mut i32,
     psqdiff16x16: *mut i32,
 ) {
-    let mut tmp_ref = pRefData;
-    let mut tmp_cur = pCurData;
-    let iMbWidth = iPicWidth >> 4;
-    let mb_height = iPicHeight >> 4;
-    let mut mb_index = 0isize;
-    let pic_stride_x8 = (iPicStride << 3) as isize;
-    let step = ((iPicStride << 4) - iPicWidth) as isize;
-
-    *pFrameSad = 0;
-    for _i in 0..mb_height {
-        for _j in 0..iMbWidth {
-            *pSum16x16.offset(mb_index) = 0;
-            *psqsum16x16.offset(mb_index) = 0;
-            *psqdiff16x16.offset(mb_index) = 0;
-
-            for (n, offset) in QUADRANTS(pic_stride_x8) {
-                let (mut l_sad, mut l_sqdiff, mut l_sum, mut l_sqsum) = (0i32, 0i32, 0i32, 0i32);
-                let mut tmp_cur_row = tmp_cur.offset(offset);
-                let mut tmp_ref_row = tmp_ref.offset(offset);
-                for _k in 0..8 {
-                    for l in 0..8isize {
-                        let cur = *tmp_cur_row.offset(l) as i32;
-                        let diff = (cur - *tmp_ref_row.offset(l) as i32).abs();
-                        l_sad += diff;
-                        l_sqdiff += diff * diff;
-                        l_sum += cur;
-                        l_sqsum += cur * cur;
-                    }
-                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
-                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
-                }
-                *pFrameSad += l_sad;
-                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
-                *pSum16x16.offset(mb_index) += l_sum;
-                *psqsum16x16.offset(mb_index) += l_sqsum;
-                *psqdiff16x16.offset(mb_index) += l_sqdiff;
-            }
-
-            tmp_ref = tmp_ref.offset(16);
-            tmp_cur = tmp_cur.offset(16);
-            mb_index += 1;
-        }
-        tmp_ref = tmp_ref.offset(step);
-        tmp_cur = tmp_cur.offset(step);
+    // SHIM(phase2) -> vaa_calc_sad_ssd
+    unsafe {
+        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
+        *pFrameSad = vaa_calc_sad_ssd(
+            core::slice::from_raw_parts(pCurData, span),
+            core::slice::from_raw_parts(pRefData, span),
+            iPicWidth,
+            iPicHeight,
+            iPicStride,
+            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pSum16x16, mbs),
+            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
+            core::slice::from_raw_parts_mut(psqdiff16x16, mbs),
+        );
     }
 }
 
@@ -254,46 +178,19 @@ pub unsafe fn VAACalcSadBgd_c(
     pSd8x8: *mut i32,
     pMad8x8: *mut u8,
 ) {
-    let mut tmp_ref = pRefData;
-    let mut tmp_cur = pCurData;
-    let iMbWidth = iPicWidth >> 4;
-    let mb_height = iPicHeight >> 4;
-    let mut mb_index = 0isize;
-    let pic_stride_x8 = (iPicStride << 3) as isize;
-    let step = ((iPicStride << 4) - iPicWidth) as isize;
-
-    *pFrameSad = 0;
-    for _i in 0..mb_height {
-        for _j in 0..iMbWidth {
-            for (n, offset) in QUADRANTS(pic_stride_x8) {
-                let (mut l_sad, mut l_sd, mut l_mad) = (0i32, 0i32, 0i32);
-                let mut tmp_cur_row = tmp_cur.offset(offset);
-                let mut tmp_ref_row = tmp_ref.offset(offset);
-                for _k in 0..8 {
-                    for l in 0..8isize {
-                        let diff = *tmp_cur_row.offset(l) as i32 - *tmp_ref_row.offset(l) as i32;
-                        let abs_diff = diff.abs();
-                        l_sd += diff;
-                        l_sad += abs_diff;
-                        if abs_diff > l_mad {
-                            l_mad = abs_diff;
-                        }
-                    }
-                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
-                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
-                }
-                *pFrameSad += l_sad;
-                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
-                *pSd8x8.offset((mb_index << 2) + n) = l_sd;
-                *pMad8x8.offset((mb_index << 2) + n) = l_mad as u8;
-            }
-
-            tmp_ref = tmp_ref.offset(16);
-            tmp_cur = tmp_cur.offset(16);
-            mb_index += 1;
-        }
-        tmp_ref = tmp_ref.offset(step);
-        tmp_cur = tmp_cur.offset(step);
+    // SHIM(phase2) -> vaa_calc_sad_bgd
+    unsafe {
+        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
+        *pFrameSad = vaa_calc_sad_bgd(
+            core::slice::from_raw_parts(pCurData, span),
+            core::slice::from_raw_parts(pRefData, span),
+            iPicWidth,
+            iPicHeight,
+            iPicStride,
+            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pSd8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pMad8x8 as *mut [u8; 4], mbs),
+        );
     }
 }
 
@@ -301,7 +198,7 @@ pub unsafe fn VAACalcSadBgd_c(
 /// compute, in one pass.
 ///
 /// Note it squares `abs_diff`, not `diff`, where `VAACalcSadSsd_c` squares the
-/// already-absolute `diff`. Same value; kept as written.
+/// already-absolute `diff`. Same value; the safe side computes one form for both.
 ///
 /// # Safety
 /// The union of [`VAACalcSadSsd_c`]'s and [`VAACalcSadBgd_c`]'s requirements.
@@ -320,72 +217,23 @@ pub unsafe fn VAACalcSadSsdBgd_c(
     pSd8x8: *mut i32,
     pMad8x8: *mut u8,
 ) {
-    let mut tmp_ref = pRefData;
-    let mut tmp_cur = pCurData;
-    let iMbWidth = iPicWidth >> 4;
-    let mb_height = iPicHeight >> 4;
-    let mut mb_index = 0isize;
-    let pic_stride_x8 = (iPicStride << 3) as isize;
-    let step = ((iPicStride << 4) - iPicWidth) as isize;
-
-    *pFrameSad = 0;
-    for _i in 0..mb_height {
-        for _j in 0..iMbWidth {
-            *pSum16x16.offset(mb_index) = 0;
-            *psqsum16x16.offset(mb_index) = 0;
-            *psqdiff16x16.offset(mb_index) = 0;
-
-            for (n, offset) in QUADRANTS(pic_stride_x8) {
-                let (mut l_sad, mut l_sqdiff, mut l_sum, mut l_sqsum, mut l_sd, mut l_mad) =
-                    (0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
-                let mut tmp_cur_row = tmp_cur.offset(offset);
-                let mut tmp_ref_row = tmp_ref.offset(offset);
-                for _k in 0..8 {
-                    for l in 0..8isize {
-                        let cur = *tmp_cur_row.offset(l) as i32;
-                        let diff = cur - *tmp_ref_row.offset(l) as i32;
-                        let abs_diff = diff.abs();
-                        l_sd += diff;
-                        if abs_diff > l_mad {
-                            l_mad = abs_diff;
-                        }
-                        l_sad += abs_diff;
-                        l_sqdiff += abs_diff * abs_diff;
-                        l_sum += cur;
-                        l_sqsum += cur * cur;
-                    }
-                    tmp_cur_row = tmp_cur_row.offset(iPicStride as isize);
-                    tmp_ref_row = tmp_ref_row.offset(iPicStride as isize);
-                }
-                *pFrameSad += l_sad;
-                *pSad8x8.offset((mb_index << 2) + n) = l_sad;
-                *pSum16x16.offset(mb_index) += l_sum;
-                *psqsum16x16.offset(mb_index) += l_sqsum;
-                *psqdiff16x16.offset(mb_index) += l_sqdiff;
-                *pSd8x8.offset((mb_index << 2) + n) = l_sd;
-                *pMad8x8.offset((mb_index << 2) + n) = l_mad as u8;
-            }
-
-            tmp_ref = tmp_ref.offset(16);
-            tmp_cur = tmp_cur.offset(16);
-            mb_index += 1;
-        }
-        tmp_ref = tmp_ref.offset(step);
-        tmp_cur = tmp_cur.offset(step);
+    // SHIM(phase2) -> vaa_calc_sad_ssd_bgd
+    unsafe {
+        let (span, mbs) = shim_extent(iPicWidth, iPicHeight, iPicStride);
+        *pFrameSad = vaa_calc_sad_ssd_bgd(
+            core::slice::from_raw_parts(pCurData, span),
+            core::slice::from_raw_parts(pRefData, span),
+            iPicWidth,
+            iPicHeight,
+            iPicStride,
+            core::slice::from_raw_parts_mut(pSad8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pSum16x16, mbs),
+            core::slice::from_raw_parts_mut(psqsum16x16, mbs),
+            core::slice::from_raw_parts_mut(psqdiff16x16, mbs),
+            core::slice::from_raw_parts_mut(pSd8x8 as *mut [i32; 4], mbs),
+            core::slice::from_raw_parts_mut(pMad8x8 as *mut [u8; 4], mbs),
+        );
     }
-}
-
-/// The four 8x8 quadrants of a macroblock in the order every `VAACalc*` kernel
-/// unrolls them: top-left, top-right, bottom-left, bottom-right.
-#[inline]
-#[allow(non_snake_case)]
-fn QUADRANTS(pic_stride_x8: isize) -> [(isize, isize); 4] {
-    [
-        (0, 0),
-        (1, 8),
-        (2, pic_stride_x8),
-        (3, pic_stride_x8 + 8),
-    ]
 }
 
 //=================== Safe kernels =====================//
@@ -427,52 +275,112 @@ struct BlockStats {
     sqsum: i32,
 }
 
-/// One 8x8 quadrant's statistics, from two plane slices anchored at its top-left
-/// sample.
+/// Accumulate the eight samples at `c[FROM..FROM+8]` against `r[FROM..FROM+8]` into
+/// one quadrant's statistics.
 ///
-/// C++: the innermost `for (k) for (l)` of every kernel in
-/// `codec/processing/src/vaacalc/vaacalcfuncs.cpp` — the five copies differ in
-/// nothing but which accumulators they keep.
+/// C++: the body of the innermost `for (l)` in every kernel in
+/// `codec/processing/src/vaacalc/vaacalcfuncs.cpp`. The five copies differ in nothing
+/// but which accumulators they keep, which is what the three flags select.
+///
+/// `FROM` is a const so that both call sites index a compile-time window of a
+/// compile-time-sized array: there is no bounds check in here at all, and the eight
+/// iterations are free to vectorise.
+///
+/// Passing the statistics **by value** rather than through `&mut` was tried, on the
+/// theory that `s.mad`'s read-modify-write blocked the max from becoming a vector
+/// reduction. It measured no better and slightly worse (1.52x against 1.33x at
+/// 1080p) and is therefore not here — see [`half_mb_stats`] for what the remaining
+/// `VAACalcSadBgd_c` gap actually is.
 ///
 /// **Arithmetic parity.** Every accumulator is `i32` and every operation is the
 /// C++'s, in the C++'s width; nothing is widened and no `wrapping_*` the old code
 /// lacks is added. `VAACalcSadSsd_c` squares an already-absolute difference where
-/// `VAACalcSadSsdBgd_c` squares `abs_diff` — the same value, so one form serves both,
-/// and the old port's comment saying so is preserved on the shim.
+/// `VAACalcSadSsdBgd_c` squares `abs_diff` — the same value, so one form serves both.
 #[inline(always)]
-fn block_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
+fn accumulate<const VAR: bool, const SQDIFF: bool, const BGD: bool, const FROM: usize>(
+    s: &mut BlockStats,
+    c: &[u8; 16],
+    r: &[u8; 16],
+) {
+    for i in FROM..FROM + 8 {
+        let cur_sample = c[i] as i32;
+        let diff = cur_sample - r[i] as i32;
+        let abs_diff = diff.abs();
+        s.sad += abs_diff;
+        if BGD {
+            s.sd += diff;
+            if abs_diff > s.mad {
+                s.mad = abs_diff;
+            }
+        }
+        if SQDIFF {
+            s.sqdiff += abs_diff * abs_diff;
+        }
+        if VAR {
+            s.sum += cur_sample;
+            s.sqsum += cur_sample * cur_sample;
+        }
+    }
+}
+
+/// The statistics of the two 8x8 quadrants sitting side by side in one half of a
+/// macroblock, from plane slices anchored at that half's top-left sample.
+///
+/// **This reads each row once, sixteen samples wide, and splits it in registers.**
+/// The C++ walks a quadrant at a time, so it reads rows 0..8 once for the top-left
+/// quadrant and *again* for the top-right; transliterating that shape costs two range
+/// checks per row per quadrant, i.e. 64 per macroblock, and a disassembly of the first
+/// version of this file showed all 64 of them surviving as `slice_index_fail` sites
+/// (the same mechanism that parked T5's SAD kernels — `perf_baseline.md` §Phase 2 T5).
+/// Reading a 16-wide row instead halves the checks to 32 per macroblock, makes each
+/// window a fixed-size `[u8; 16]` whose inner loops need no check at all, and walks
+/// the macroblock in one sequential pass instead of two overlapping ones.
+///
+/// **Why it is still bit-exact.** Regrouping only changes the order in which each
+/// quadrant's own samples are accumulated, and every accumulator is an associative,
+/// commutative `i32` sum (`mad` is a max, which is both as well). No sample moves
+/// between quadrants, and no accumulator mixes with another. The frame total is still
+/// summed in the C++'s quadrant order by [`walk_picture`], which is the one place the
+/// order could be observed at all — see F9 for why that ordering is worth preserving.
+///
+/// **Where this shape does not pay, measured.** The 16-wide read is a clear win for
+/// every flag combination except `BGD` alone, which lands at **1.44x** against the
+/// raw kernel while the others sit at 0.69-0.97x (`perf_baseline.md` §Phase 2 T8).
+/// The reason is visible in the disassembly and is not the bounds checks: the raw
+/// `VAACalcSadBgd_c` issues 16 `uabd` and 16 `umax`, this one issues 8 and 8. `BGD`'s
+/// two extra accumulators — a signed sum and a running maximum — are **per quadrant**
+/// and cannot be merged across the row the way `sad` can, so each 8-sample half fills
+/// only half a vector register and the loop vectorises at half width. Where `SQDIFF`
+/// and `VAR` are also on there is enough other arithmetic to hide it (`SsdBgd` is
+/// 0.97x), and where none of them are on the 16 samples go through one `uabd.16b`
+/// (`Sad` is 0.86x). Only the middle case loses. Recorded rather than fixed: the fix
+/// is a second, quadrant-shaped walk selected on `BGD`, which is a real option for
+/// T7's similarly-shaped kernels but is more machinery than this family's measured
+/// end-to-end cost justifies.
+#[inline(always)]
+fn half_mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     cur: &[u8],
     refp: &[u8],
     stride: usize,
-) -> BlockStats {
-    let mut s = BlockStats::default();
+) -> (BlockStats, BlockStats) {
+    let mut left = BlockStats::default();
+    let mut right = BlockStats::default();
+    // Trim both planes to **exactly** the eight rows this half reads, once, before
+    // the loop. Handed an open tail (`&cur[origin..]`) LLVM cannot relate the row
+    // offset `k * stride` to the slice length and re-checks every row; handed a
+    // window whose length it knows to be `7 * stride + 16` it can, and the eight
+    // per-row checks collapse into the two above. Same reads either way — this is
+    // the check placement changing, not the reach.
+    let cur = &cur[..7 * stride + 16];
+    let refp = &refp[..7 * stride + 16];
     for k in 0..8 {
         let base = k * stride;
-        // Fixed-size windows, so the eight-sample inner loop carries no bounds check
-        // at all and the two range checks land once per row (plan §7.4's idiom list).
-        let c: &[u8; 8] = cur[base..base + 8].try_into().unwrap();
-        let r: &[u8; 8] = refp[base..base + 8].try_into().unwrap();
-        for (&cv, &rv) in c.iter().zip(r.iter()) {
-            let cur_sample = cv as i32;
-            let diff = cur_sample - rv as i32;
-            let abs_diff = diff.abs();
-            s.sad += abs_diff;
-            if BGD {
-                s.sd += diff;
-                if abs_diff > s.mad {
-                    s.mad = abs_diff;
-                }
-            }
-            if SQDIFF {
-                s.sqdiff += abs_diff * abs_diff;
-            }
-            if VAR {
-                s.sum += cur_sample;
-                s.sqsum += cur_sample * cur_sample;
-            }
-        }
+        let c: &[u8; 16] = cur[base..base + 16].try_into().unwrap();
+        let r: &[u8; 16] = refp[base..base + 16].try_into().unwrap();
+        accumulate::<VAR, SQDIFF, BGD, 0>(&mut left, c, r);
+        accumulate::<VAR, SQDIFF, BGD, 8>(&mut right, c, r);
     }
-    s
+    (left, right)
 }
 
 /// Walks the picture macroblock by macroblock, handing each macroblock's four
@@ -500,7 +408,7 @@ fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     let mb_width = pic_width >> 4;
     let mb_height = pic_height >> 4;
     let stride = pic_stride as usize;
-    let quadrants = [0usize, 8, stride * 8, stride * 8 + 8];
+    let bottom = stride * 8;
     let step = ((pic_stride << 4) - pic_width) as usize;
 
     let mut frame_sad = 0i32;
@@ -509,14 +417,20 @@ fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     for _ in 0..mb_height {
         let mut mb_origin = row_origin;
         for _ in 0..mb_width {
-            let mut stats = [BlockStats::default(); 4];
-            for (n, quadrant) in quadrants.iter().enumerate() {
-                stats[n] = block_stats::<VAR, SQDIFF, BGD>(
-                    &cur[mb_origin + quadrant..],
-                    &refp[mb_origin + quadrant..],
-                    stride,
-                );
-                frame_sad += stats[n].sad;
+            let (q0, q1) = half_mb_stats::<VAR, SQDIFF, BGD>(
+                &cur[mb_origin..],
+                &refp[mb_origin..],
+                stride,
+            );
+            let (q2, q3) = half_mb_stats::<VAR, SQDIFF, BGD>(
+                &cur[mb_origin + bottom..],
+                &refp[mb_origin + bottom..],
+                stride,
+            );
+            let stats = [q0, q1, q2, q3];
+            // The frame total still accumulates in the C++'s quadrant order.
+            for q in &stats {
+                frame_sad += q.sad;
             }
             on_mb(mb_index, &stats);
             mb_index += 1;
@@ -892,5 +806,63 @@ mod tests {
         assert_eq!(sad8x8[(3 << 2) + 3], 64);
         assert_eq!(frame_sad, 64);
         assert_eq!(sad8x8.iter().filter(|&&v| v != 0).count(), 1);
+    }
+
+    /// A width that is not a multiple of 16 makes the walk's step quirk observable,
+    /// and this is the test that pins it now that the old-vs-new differential is
+    /// gone.
+    ///
+    /// The C++ advances 16 bytes per macroblock and *then* by
+    /// `(iPicStride << 4) - iPicWidth` at the end of the macroblock row. When the
+    /// width is a multiple of 16 those two cancel to exactly sixteen rows. When it is
+    /// not — here width 40, so `iMbWidth` is 2 and only 32 of the 40 columns are
+    /// walked — the row advance comes up eight bytes short, and every macroblock row
+    /// after the first starts *before* the row it looks like it should.
+    ///
+    /// That is faithful to `vaacalcfuncs.cpp` and is reproduced deliberately. A
+    /// "corrected" walk that advanced a clean `16 * stride` would put the second
+    /// macroblock row eight bytes later and read a different block, which is exactly
+    /// what this asserts against.
+    #[test]
+    fn calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16() {
+        let (w, h, stride) = (40i32, 32i32, 64i32);
+        let refp = vec![0u8; (h * stride) as usize];
+        let mut cur = vec![0u8; (h * stride) as usize];
+
+        // Macroblock row 1 begins at 1 * (2 * 16 + step) where step = 64*16 - 40,
+        // i.e. byte 1016 — row 15, column 56 — and NOT at byte 1024 (row 16,
+        // column 0). Mark the top-left 8x8 of the macroblock the quirky walk lands
+        // on, and nothing else.
+        let step = ((stride << 4) - w) as usize;
+        let mb_row1 = 2 * 16 + step;
+        assert_eq!(mb_row1, 1016, "the quirk's arithmetic, restated");
+        for row in 0..8 {
+            for col in 0..8 {
+                cur[mb_row1 + row * stride as usize + col] = 7;
+            }
+        }
+
+        let mut sad8x8 = [0i32; 16];
+        let mut frame_sad = 0i32;
+        unsafe {
+            VAACalcSad_c(
+                cur.as_ptr(),
+                refp.as_ptr(),
+                w,
+                h,
+                stride,
+                &mut frame_sad,
+                sad8x8.as_mut_ptr(),
+            );
+        }
+
+        // Macroblock 2 is the first of the second row; quadrant 0 is its top-left.
+        assert_eq!(sad8x8[2 << 2], 64 * 7, "the quirky walk did not land here");
+        assert_eq!(frame_sad, 64 * 7);
+        assert_eq!(
+            sad8x8.iter().filter(|&&v| v != 0).count(),
+            1,
+            "the marked block leaked into another quadrant"
+        );
     }
 }

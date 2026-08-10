@@ -389,6 +389,97 @@ run at a working set the real caller has. Size it from the caller, state the siz
 to the numbers, and where the caller's residency is not obvious, **measure both** — a
 kernel that is at parity memory-bound and 1.7x L1-resident is 1.7x in an encoder.
 
+### T8 — `processing/{vaacalc,adaptive_quantization}.rs` — landed, and the session's instrument lesson
+
+Six kernels, all swapped. The headline is that **five of six are at parity or
+faster** and the family landed inside budget, but the route there is worth more than
+the numbers: this session made *two* microbenchmark errors of the exact kind session
+C's rules were written to prevent, and caught both only because the end-to-end bench
+and the arithmetic disagreed with the microbench.
+
+**Kernel bodies**, safe against the raw ones recovered from commit A with `git show`,
+interleaved, medians, at the caller's working set (a whole picture per frame — this
+family is streaming, so the large working set is the honest one here, unlike T5):
+
+| kernel | 1080p | 720p | VGA | QVGA |
+|---|---|---|---|---|
+| `VAACalcSad` | 0.86x | 0.79x | 0.82x | 0.86x |
+| `VAACalcSadVar` | 0.86x | 0.86x | 0.85x | 0.85x |
+| `VAACalcSadSsd` | 0.69x | 0.68x | 0.68x | 0.69x |
+| **`VAACalcSadBgd`** | **1.33x** | **1.39x** | **1.43x** | **1.47x** |
+| `VAACalcSadSsdBgd` | 0.97x | 0.97x | 0.97x | 0.97x |
+| `SampleVariance16x16` (per picture) | 1.04x | 1.02x | 1.04x | 1.05x |
+
+**What made the fast ones fast, in the order it mattered.** The first version measured
+**2.51x** at 1080p. Disassembly (first, not after two guesses) found 16
+`slice_index_fail` sites: `cur[base..base + 8]` re-checks per row per plane, 64 per
+macroblock — T5-sad's mechanism exactly. Two changes fixed it:
+
+1. **Read a 16-wide row once and split it in registers** instead of walking each 8x8
+   quadrant separately the way the C++ does. Halves the checks (32 per macroblock) and
+   walks the macroblock in one sequential pass. 2.51x → 1.82x.
+2. **Trim each plane to exactly the span the eight rows read, before the row loop.**
+   Handed an open tail (`&cur[origin..]`) LLVM cannot relate `k * stride` to the slice
+   length and re-checks every row; handed a window it knows is `7 * stride + 16` long,
+   it folds them. 1.82x → **1.02x**, and 0.84-0.88x at the smaller sizes.
+
+Step 2 is the transferable one and it is **the technique D-perf-2 should try on
+SAD**: same shape (fixed-size window, runtime stride, per-row checks that will not
+fold), and it is not one of the three things T5 already measured and rejected.
+
+**The one kernel that lost, and why.** `VAACalcSadBgd_c` sits at 1.44x. Not bounds
+checks — the disassembly says the raw kernel issues 16 `uabd` and 16 `umax` where this
+one issues 8 and 8. `BGD`'s two extra accumulators (a signed sum and a running
+maximum) are **per quadrant** and cannot merge across a row, so each 8-sample half
+fills half a vector register and the loop vectorises at half width. With `SQDIFF` and
+`VAR` also on there is enough other arithmetic to hide it (`SsdBgd` 0.97x); with none
+of them on, all 16 samples go through one `uabd.16b` (`Sad` 0.86x). Only the middle
+case loses. Passing the statistics by value instead of `&mut` was tried and measured
+**worse** (1.52x against 1.33x) — do not retry it. The real fix is a second,
+quadrant-shaped walk selected on the `BGD` const, which is left undone here and is a
+live option for T7's similarly shaped kernels.
+
+**End to end**, `c_vs_rust_bench` with `FFMPEG` set, commit A (raw) against commit B
+(swapped), binaries kept on disk and interleaved, 3 pairs, Rust rows:
+**median +3.48%**, worst usable row +8.53% (720p SMPTE Bars, 4 threads), 6 usable rows
+over +5%, none over the §7.4 ceiling of 10%.
+
+#### Two instrument errors, both caught, both worth not repeating
+
+**1. After a swap, the "raw" side of a microbenchmark is the shim.** The six-kernel
+table above was first produced *after* commit B, calling `vaa::VAACalcSad_c` as the
+raw side — which by then was a shim onto the safe kernel. Every row read 0.99-1.07x,
+which looked like a clean result and was a function compared with itself. The raw
+bodies have to come from `git show` of the pre-swap commit, exactly as T4's log says.
+**Measure bodies before swapping, or recover them explicitly; never call the old name
+afterwards and believe it.**
+
+**2. Calibrate the end-to-end bench with a null run before disbelieving it.** The
++3.48% was initially suspected of being noise, on the reasoning that the whole VAA
+walk costs 0.11 ms at 1080p and cannot produce the observed +0.29 ms. Running the
+**same binary in both slots** through the identical harness settled it:
+
+| | median | max | rows > +5% | rows > +10% |
+|---|---|---|---|---|
+| null (identical binary both sides) | **+0.00%** | +1.81% | 0 / 30 | 0 |
+| T8 swap | +3.48% | +29.52% | 8 / 30 | 2 |
+
+So the bench's noise floor is about ±2% and **the +3.48% is real**. The suspicion was
+wrong and the null run is what proved it — cheap, decisive, and now the standard step
+before attributing a bench reading to noise. It also independently re-condemned
+**Spatial Ramps**, which moved **-38%** between two runs of the same binary: that row
+cannot detect anything and both of T8's ">10%" rows are it.
+
+A residual remains honestly unexplained: the measured kernel deltas do not add up to
++3.48% end to end (`Bgd` contributes about +0.07 ms/frame at 1080p against an observed
++0.31 ms). It is recorded rather than resolved. Candidates not chased: code layout
+differences between the two binaries, and which walker the rate-control flags actually
+select frame by frame — `bEnableBackgroundDetection` and `bEnableAdaptiveQuant` both
+default **on** (`encoder/param_svc.rs:351-352`), so `Bgd`/`SsdBgd` are live and
+`VAACalcSad_c` — the only kernel the file's header used to claim was reachable — may
+be the one that mostly is not.
+
+
 ## Deficit ledger (§7.4 scaffolding deficits — must be empty at Phase 5 exit)
 
 Entries here are temporary regressions attributable to strangler-shim scaffolding,
