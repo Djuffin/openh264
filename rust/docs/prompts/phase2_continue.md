@@ -13,28 +13,47 @@ State as of **session D's final commit** (tree clean, full battery green):
 |---|---|
 | Done | Preconditions (Phase 0 complete except T7-fuzz), T1 control, T2 pilot, T3 (42 kernels), **T4 `common/mc.rs` (26, over budget — see D-perf-3)**, **T5-intra (2 kernels, +0.57%)**, **T8 `processing/*` (6 kernels, +3.5% encoder)** |
 | Parked | **T5-sad `common/sad_common.rs` (14 kernels).** Proven, uninstalled, raw kernels run. **D-perf-2's one attempt was spent and the verdict is park** — T7's SAD/SATD go prove-and-park from the start. Box closed; do not reopen in this phase |
-| **OPEN — needs Eugene** | **D-perf-3: the encoder-side ceiling is breached.** T4 costs **+7.6% median / +16.7% worst** on the encoder (isolated this session), T8 adds +3.5% on top, cumulative ≈ **+11%** against a 10%-per-stream hard ceiling. Three options in `perf_baseline.md` §"The encoder-side ceiling is breached". **Put this to Eugene before starting T6** |
-| Remaining | **T6 (alone — the phase's hardest conversion)** → T7 four encoder files (69, SAD/SATD prove-and-park) → T9 exit |
+| **REGIME — D-perf-4** | **Safety first (Eugene, 2026-08-09; plan §7.4 v3).** The hard ceiling is retired and the recovery session is cancelled — the ~11% cumulative encoder deficit stays ledgered and stops nothing. New rules: **swap-and-ledger by default**; a family that would push any stream's cumulative past **+25% median parks** instead; commit B measures both benches as **one interleaved pair each**; **no optimization boxes** (one short profile+disassembly look at most, then ledger-or-park and move on); recovery consolidated at Phase 4 (mc.rs dispatch-forward is its first task), Phase 5/6 (shims and callers), Phase 9 (perf pass; end-state target unchanged). Fast idioms and instrument rules stay binding — fast-by-construction is free |
+| Remaining | **T6 (next — alone, the phase's hardest conversion)** → T7 four encoder files (69) → T9 exit |
 | Instruments | `gates.sh`; **always `FFMPEG=/opt/homebrew/bin/ffmpeg bash rust/tools/gates.sh`**. Interleaved pairs (R-h), L1-vs-streaming working set (R-j), **the null run (R-l)** and **post-swap raw recovery (R-m)** are all normative |
 | Counts | tests 392 debug / 390 release / 20 ignored; sweeps 341/341 both profiles; ratchet baseline regenerated at T8 B — run `check`, don't trust remembered numbers |
 
-**Session order for the next session:**
-1. **Put D-perf-3 to Eugene** before touching code. The tree is over the encoder
-   ceiling *now*, and T6 adds shims to both codecs.
-2. **T6 alone**, per `phase2.md` §T6 and §3 below. Never pair it.
+**The next session is T6, alone** — the recovery session is cancelled under D-perf-4,
+and the perf regime you work under is the one in the REGIME row above (authoritative
+text: plan §7.4 v3). What it means in practice for a conversion session:
 
-Then **S+1 = T7 part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8,
-the last prove-and-park); **S+2 = T7 part 2** (`encoder/get_intra_predictor` 33) **+
-T9**. Clean stops anywhere, per the standing exit protocol.
+1. **Convert for safety; write the fast version first** (the R-i idiom catalog and
+   the negative-results list are still binding — that part of "as fast as possible"
+   is free). Do not spend conversion time optimizing beyond the idioms.
+2. **Commit B measures one interleaved pair on each bench** (decoder + encoder,
+   `FFMPEG` set, null run only if a number looks suspicious). That's the ledger
+   entry and the tripwire check, ~minutes, not the old 3-pair protocol — that now
+   runs at phase exit only.
+3. **Tripwire arithmetic, not judgment calls:** live cumulative encoder deficit is
+   ≈ +11% (T4 ~7.6 + T8 ~3.5); decode ≈ +7%. If a family's pair-read would push any
+   stream past **+25% median cumulative**, it **parks** (proven, uninstalled,
+   §Parked entry with the numbers) — otherwise it **swaps and ledgers**, even if the
+   number is ugly. A single family >15% on a stream gets flagged in its entry but
+   still lands if the cumulative holds. Anything genuinely bizarre: one short
+   profile+disassembly look (an hour, not a box), record what you saw, ledger-or-park,
+   move on.
+4. **Never trade byte-exactness or gate greenness for speed or scope** — those rules
+   are untouched by D-perf-4.
+
+Then: **S+1 = T7 part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8);
+**S+2 = T7 part 2** (`encoder/get_intra_predictor` 33) **+ T9**. Clean stops anywhere,
+per the standing exit protocol.
 
 ---
 
 ## 1. Read first
 
-1. `rust/docs/safety_refactor_log.md` — **both** Phase 2 entries (sessions A and B) in
-   full: the pilot retro verdicts, T3's carry-forwards, and session B's T4 write-up
-   (the budget investigation, the span property test, the "four things the remaining
-   families inherit"). This is the highest-density context you have.
+1. `rust/docs/safety_refactor_log.md` — **all four** Phase 2 entries (A–D) in full.
+   For the recovery session the load-bearing ones are session B's T4 write-up (the
+   shim-overhead evidence and call-site inventory) and session D (the breach
+   isolation, the null-run and post-swap-raw instrument rules, and the recorded
+   order-deviation warning — the next session inherits the same temptation it names).
+   This is the highest-density context you have.
 2. `rust/docs/phase2_findings.md` — **F8** (the 8×8 IDCT's `i16` intermediates overflow;
    debug panics where the C++ wraps; pre-existing, open, unreachable on conformant
    streams). It generalizes — see rule R-e below.
@@ -90,10 +109,12 @@ T9**. Clean stops anywhere, per the standing exit protocol.
   until Phase 5. Two counting traps from T4: **never fold shims into a macro** — it
   makes `unsafe_fn` report a drop that didn't happen and hides `SHIM(` markers; write
   them out one per definition, marker on each.
-- **R-g — F3 protocol, broadened by session C's measurement:** the signature is now
-  **release `mt`, `sm=3`, `t∈{2,4}`, output short *or* zero-length** — the original
-  "t=4, zero bytes" rule was too narrow and would have misread session C's hits as a
-  regression. One hit → re-run rather than argue, even when the change is structurally
+- **R-g — F3 protocol, broadened twice:** the signature is now **`mt`, `sm=3`,
+  `t∈{2,4}`, output short *or* zero-length, in EITHER profile** — session C widened it
+  from "t=4, zero bytes", and the diffharness profile change (2026-08-10) removed the
+  debug exemption. Debug was only ever clean because the driver built at
+  `opt-level = 0` and was too slow to lose the race; at `opt-level = 3` (checks still
+  on, sweep 141s → 24s) it reproduces F3, exactly as F3's own write-up predicted. One hit → re-run rather than argue, even when the change is structurally
   unrelated. More than one hit in a session → **alternate both trees in one loop** and
   compare counts; sequential sampling actively misleads (it read "HEAD 4/8 vs control
   0/6" where the alternating loop read control 4, HEAD 1 — the same instrument lesson
@@ -179,7 +200,7 @@ T9**. Clean stops anywhere, per the standing exit protocol.
 
 ## 3. Remaining tasks
 
-### T4 — `common/mc.rs` — DONE (`46053953`…`3ddd2405`), carried over budget under D-perf-1
+### T4 — `common/mc.rs` — DONE, carried under D-perf-1; encoder side ledgered at +7.6%/+16.7% (D-perf-3 superseded by D-perf-4 — recovery moved to Phase 4's first task)
 Landed at +8.2/+7.2/+7.0% on the decode streams; kernel bodies at 0.88–0.99x; the
 residual is fixed per-call shim overhead, ledgered in `perf_baseline.md` §Ledger,
 bounded by §7.4's ≤10% ceiling, checkpointed at Phase 4, cleared at Phase 5. **Further
@@ -230,7 +251,15 @@ constant (32 luma / 16 chroma), explicit pad parameter where a call site can't p
 it; the two `mem::transmute` fn-pointer re-wraps stay (Phase 4). R-c applies doubly
 here: the expand span helper and its contract sentence are the whole game.
 
-### T7 — the four encoder kernel files (plan for two sessions)
+### T7 — the four encoder kernel files (plan for two sessions; D-perf-4 applies)
+
+**Under D-perf-4, "prove-and-park" is no longer doctrine — it's tripwire arithmetic.**
+Prove every family (commit A always lands); at commit B, take the one-pair read and do
+the sum: with encoder cumulative at ≈+11%, `sample.rs`'s SAD/SATD — same profile that
+cost T5-sad +16.8% — will likely project past the +25% tripwire and park exactly as
+D-perf-2 predicted, while `encode_mb_aux`, `encoder/decode_mb_aux` and
+`get_intra_predictor` swap-and-ledger by default. Let the measured number decide, not
+the precedent; record whichever way it goes.
 **69 fns by real count** — `encode_mb_aux.rs` 22, `encoder/decode_mb_aux.rs` 6,
 `sample.rs` 8 (installers keep installing shims), `encoder/get_intra_predictor.rs` 33
 — the biggest task in the phase, larger than T3 and T4 combined; the suggested split
@@ -279,19 +308,22 @@ shape).
 ## 4. Gates
 
 Unchanged from `phase2.md` §5, with the R-f ratchet shape and R-g F3 protocol from
-this file as the operative refinements. Frozen invariants: the original test suites'
-counts, ignored-20, 341/341 both profiles, conformance hashes and frame counts, the
-`#[ignore]` set. Per-family bench when on the decode path; sweep timing + `FFMPEG`
-bench when on the encode path; session-end full `gates.sh`.
+this file as the operative refinements — except the perf gate, which D-perf-4
+replaces: **commit B = one interleaved pair on both benches** (tripwire check +
+ledger entry), full paired medians at phase exit only. Frozen invariants: the
+original test suites' counts, ignored-20, 341/341 both profiles, conformance hashes
+and frame counts, the `#[ignore]` set — byte-exactness is untouched by D-perf-4.
+Session-end full `gates.sh`.
 
 ## 5. Non-goals
 
-Everything `phase2.md` §6 lists, plus: no fixing **F8** (R-e is parity, not repair),
-no reopening T7-fuzz without Eugene (log the signal instead), no dispatch-table work
-beyond the two named module-internal exceptions (mc's quarter-pel fold; the F1
-signature surgery), no Phase 3 early start. **The D-perf-2 box is a non-goal
-boundary, not a target:** when the half-session stop arrives, the state you are in is
-the verdict — parking is success, not failure, and a third SAD investigation is out
-of scope for the phase no matter how close the last experiment looked. Surplus time:
+Everything `phase2.md` §6 lists, plus: no fixing **F8**/**F9** (R-e is parity, not
+repair), no reopening T7-fuzz without Eugene (log the signal instead), no
+dispatch-table work beyond the named module-internal exceptions (mc's quarter-pel
+fold was T4's; the F1 signature surgery is T6's) — **including the mc.rs
+direct-dispatch experiment, which is Phase 4's first task now, not a conversion
+session's**. No Phase 3 early start. **And under D-perf-4, no perf investigation of
+any size beyond the one-hour look** — no boxes, no re-litigating T4/T5-sad/D-perf-2
+(all closed; the ledger and §Parked carry them to the checkpoints). Surplus time:
 sharpen shim contracts and differential edge coverage — T6's contracts especially,
 since they're the ones Phase 5 will lean on hardest.

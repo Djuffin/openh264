@@ -89,13 +89,22 @@ fi
 # 3. Diffharness sweeps, both build profiles.
 #
 # F3 (phase0_findings.md) — READ BEFORE CALLING A SWEEP FAILURE A REGRESSION:
-# roughly 1 in 400-1000 release `t=4 sm=3` encodes produces a wrong bitstream,
-# pre-existing, unfixed, and 0-in-1200 in debug. A single release `mt` failure
-# at `t=4 sm=3` (zero-byte or short output) is F3 until proven otherwise — re-run
-# that configuration. If more than one lands in a session, prove the rate against
-# the control commit (equal-count sweeps at HEAD vs control) before concluding,
-# and append the measurement to F3. A failure at ANY other configuration, or in
-# debug, or in st/def, is real: stop, revert, investigate.
+# roughly 1 in 400-1000 `mt` `sm=3` encodes produces a wrong bitstream (zero-byte
+# or short), pre-existing, unfixed, a race in slice-list growth.
+#
+# The signature is any `mt` configuration at `sm=3`, `t` in {2,4}, in EITHER
+# profile. Debug used to be exempt (0-in-1200) and no longer is: that immunity was
+# an artefact of `opt-level = 0` being too slow to lose the race, and the driver now
+# builds at `opt-level = 3` (F3's fourth measurement, 2026-08-10). The checks are
+# still on — only the speed changed.
+#
+# One such failure is F3 until proven otherwise: re-run that configuration. If more
+# than one lands in a session, prove the rate by ALTERNATING HEAD and the control
+# commit inside one loop — sequential sampling of a load-sensitive race is not a
+# comparison — and append the measurement to F3.
+#
+# A failure at ANY other configuration, or in `st`/`def`, is real, in either
+# profile: stop, revert, investigate.
 # ---------------------------------------------------------------------------
 sweep_gate() {  # $1 = profile
   local prof=$1 log="$LOGS/sweep_$1.log" rc t0 t1
@@ -116,8 +125,10 @@ sweep_gate() {  # $1 = profile
     pass "sweep ($prof): $tally, ${wall}s wall"
   else
     echo "  --- F3 retry rule ---"
-    echo "  A single release failure at t=4 sm=3 (zero-byte or short output) is F3,"
-    echo "  not a regression: re-run that configuration. Anything else is real."
+    echo "  A single mt failure at sm=3, t in {2,4} (zero-byte or short output) is F3,"
+    echo "  not a regression, in EITHER profile — debug included since the driver went"
+    echo "  to opt-level 3. Re-run that configuration. st/def, or any other mt config,"
+    echo "  is real. More than one hit: alternate HEAD and control in ONE loop."
     grep -E '^  ' "$log" | grep -vE '^\s*$' | head -10
     fail "sweep ($prof): $tally — apply the F3 retry rule above"
   fi

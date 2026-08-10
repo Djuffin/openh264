@@ -164,7 +164,7 @@ Measured rates, 120-configuration `sweep.sh mt` runs, same machine, same tree:
 |---|---|---|---|
 | release | before the T5b deletion (stashed) | 1200 | 1 |
 | release | after the T5b deletion | 1200 | 3 |
-| debug | after the T5b deletion | 1200 | 0 |
+| debug | after the T5b deletion | 1200 | 0 | *(at `opt-level = 0`; see the fourth measurement — the fast debug build does fail)*
 
 1 vs 3 out of 1200 is the same rate within Poisson noise, which is what
 establishes that the T5b deletion did not cause it — the failure reproduces on
@@ -224,6 +224,43 @@ Two refinements to the profile, both from the control side:
 
 Both are consistent with a race in slice-list growth: a lost slice gives short output,
 losing the first gives none.
+
+**Fourth measurement, 2026-08-10 (the diffharness profile change) — F3 now fires in
+DEBUG, and the signature grows a clause.** The debug driver was built at
+`opt-level = 0` because its `Cargo.toml` declared no profile; giving it
+`opt-level = 3` (checks still on) took the debug sweep from 141s to 24s and made it
+**fail two `t=4 sm=3 n=600` configurations, both zero-byte, on the first run**. That
+is F3's fingerprint in a build where the recorded rate was 0-in-1200.
+
+**This is not a new defect; it is this finding's own prediction coming true.** The
+paragraph immediately below has said since T5b that debug's immunity is an artefact
+of its slowness, not evidence of optimiser-induced UB. Remove the slowness and the
+immunity goes with it, which is about as direct a confirmation of the race hypothesis
+as this project has produced without a debugger.
+
+Rate, by R-g's alternating protocol (`sweep.sh mt`, three rounds each, the two debug
+builds swapped in one loop so both see identical load):
+
+| debug build | runs | configurations | failures |
+|---|---|---|---|
+| `opt-level = 3` (fast) | 3 | 360 | 0 |
+| `opt-level = 0` (stock) | 3 | 360 | 0 |
+
+So: 2 events in the first run and none in 480 further fast-debug configurations. Not
+enough to state a rate, and the two events came directly after several optimising
+builds — the least quiescent the machine had been, which the second measurement above
+already identified as the condition that widens the window.
+
+**Consequence for the retry rule, decided and applied:** the rule now reads **any
+`sm=3` `mt` configuration in either profile**, not release only. The debug sweep loses
+its status as the one gate with no exceptions; that was the price of the 5.9x, taken
+knowingly. Full reasoning and the alternatives rejected: `rust/docs/diffharness_perf.md`.
+
+**One upside worth naming.** F3 has only ever been reproducible in release builds,
+which is the worst possible instrument for debugging a race — no assertions, poor
+symbols. There is now a **debug** reproducer with `debug_assert!` live, full symbols,
+and a 6x faster edit-run loop. Whoever takes plan §P10's `ReallocateSliceList`
+hypothesis should start there.
 
 **Do not read "release fails, debug doesn't" as proof of optimiser-induced UB
 here.** A debug build is several times slower, which widens every thread window;
