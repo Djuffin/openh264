@@ -1,5 +1,5 @@
 {
-  "commit": "6e0009d3",
+  "commit": "b3da21e1",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -39,7 +39,7 @@
     "decoder/vlc_tables.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/au_set.rs": { "unsafe_fn": 14, "unsafe_block": 5, "raw_ptr": 37, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/deblocking.rs": { "unsafe_fn": 39, "unsafe_block": 1, "raw_ptr": 123, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/deblocking.rs": { "unsafe_fn": 27, "unsafe_block": 2, "raw_ptr": 99, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 1 },
     "encoder/decode_mb_aux.rs": { "unsafe_fn": 6, "unsafe_block": 14, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 4 },
     "encoder/encode_mb_aux.rs": { "unsafe_fn": 23, "unsafe_block": 47, "raw_ptr": 71, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 21 },
     "encoder/encoder_context.rs": { "unsafe_fn": 11, "unsafe_block": 7, "raw_ptr": 77, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },

@@ -2226,140 +2226,32 @@ fn steps(stride: usize, vertical_taps: bool) -> (isize, isize) {
 
 use openh264_rs::encoder::deblocking as encdeb;
 
+/// The eight encoder wrappers are now the common module's shims, re-exported —
+/// so the equivalence entries went with the swap, as the recipe intends, and
+/// what survives is the fact the re-export rests on: the encoder's dispatch
+/// table really does end up holding the shimmed functions.
+///
+/// A `pub use` is checked by the compiler, so this is not testing the language.
+/// It is testing that `DeblockingInit` was not left installing something else,
+/// which is the only way the re-export could be undone by a later edit — and it
+/// is exactly the mistake that produced the straggler in the first place.
 #[test]
-fn encoder_deblock_luma_kernels_match_the_common_safe_ones() {
-    let mut rng = Prng::new(0xE0EB_10C1);
-    let rows = 26usize;
-    for &stride in &[26usize, 43, 240] {
-        for &vertical in &[true, false] {
-            let (sx, sy) = steps(stride, vertical);
-            for &alpha in ALPHAS {
-                for &beta in BETAS {
-                    for _ in 0..scale(6) {
-                        // bS < 4 — reach [-3, +2], 16 lines, tc-gated.
-                        let mut tc = tc_group(&mut rng);
-                        let base = deblock_surface(&mut rng, rows, stride);
-                        let anchor = deblock_anchor(&mut rng, rows, stride, 3, 2, 16, vertical);
-                        let mut got_raw = base.clone();
-                        let mut got_safe = base;
-                        unsafe {
-                            let f = if vertical {
-                                encdeb::DeblockLumaLt4V_c
-                            } else {
-                                encdeb::DeblockLumaLt4H_c
-                            };
-                            f(got_raw.as_mut_ptr().add(anchor), stride as i32, alpha, beta,
-                              tc.as_mut_ptr());
-                        }
-                        deb::deblock_luma_lt4(
-                            &mut PlaneCursorMut::new(&mut got_safe, anchor, stride),
-                            sx, sy, alpha, beta, &tc,
-                        );
-                        assert_eq!(
-                            got_raw, got_safe,
-                            "encoder Lt4 luma {} stride {stride} alpha {alpha} beta {beta} \
-                             tc {tc:?} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
+fn encoder_deblocking_table_installs_the_common_shims() {
+    let mut fl = encdeb::DeblockingFunc::default();
+    unsafe { encdeb::DeblockingInit(&mut fl, 0) };
 
-                        // bS == 4 — reach [-4, +3], 16 lines.
-                        let base = deblock_surface(&mut rng, rows, stride);
-                        let anchor = deblock_anchor(&mut rng, rows, stride, 4, 3, 16, vertical);
-                        let mut got_raw = base.clone();
-                        let mut got_safe = base;
-                        unsafe {
-                            let f = if vertical {
-                                encdeb::DeblockLumaEq4V_c
-                            } else {
-                                encdeb::DeblockLumaEq4H_c
-                            };
-                            f(got_raw.as_mut_ptr().add(anchor), stride as i32, alpha, beta);
-                        }
-                        deb::deblock_luma_eq4(
-                            &mut PlaneCursorMut::new(&mut got_safe, anchor, stride),
-                            sx, sy, alpha, beta,
-                        );
-                        assert_eq!(
-                            got_raw, got_safe,
-                            "encoder Eq4 luma {} stride {stride} alpha {alpha} beta {beta} \
-                             seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn encoder_deblock_chroma_kernels_match_the_common_safe_ones() {
-    let mut rng = Prng::new(0xE0EB_20C8);
-    let rows = 14usize;
-    for &stride in &[14usize, 27, 120] {
-        for &vertical in &[true, false] {
-            let (sx, sy) = steps(stride, vertical);
-            for &alpha in ALPHAS {
-                for &beta in BETAS {
-                    for _ in 0..scale(6) {
-                        let mut tc = tc_group(&mut rng);
-                        let cb0 = deblock_surface(&mut rng, rows, stride);
-                        let cr0 = deblock_surface(&mut rng, rows, stride);
-                        let a_cb = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let a_cr = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let (mut cb_raw, mut cr_raw) = (cb0.clone(), cr0.clone());
-                        let (mut cb_safe, mut cr_safe) = (cb0, cr0);
-                        unsafe {
-                            let f = if vertical {
-                                encdeb::DeblockChromaLt4V_c
-                            } else {
-                                encdeb::DeblockChromaLt4H_c
-                            };
-                            f(cb_raw.as_mut_ptr().add(a_cb), cr_raw.as_mut_ptr().add(a_cr),
-                              stride as i32, alpha, beta, tc.as_mut_ptr());
-                        }
-                        deb::deblock_chroma_lt4(
-                            &mut PlaneCursorMut::new(&mut cb_safe, a_cb, stride),
-                            &mut PlaneCursorMut::new(&mut cr_safe, a_cr, stride),
-                            sx, sy, alpha, beta, &tc,
-                        );
-                        assert_eq!(
-                            (cb_raw, cr_raw), (cb_safe, cr_safe),
-                            "encoder Lt4 chroma {} stride {stride} alpha {alpha} beta {beta} \
-                             tc {tc:?} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
-
-                        let cb0 = deblock_surface(&mut rng, rows, stride);
-                        let cr0 = deblock_surface(&mut rng, rows, stride);
-                        let a_cb = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let a_cr = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let (mut cb_raw, mut cr_raw) = (cb0.clone(), cr0.clone());
-                        let (mut cb_safe, mut cr_safe) = (cb0, cr0);
-                        unsafe {
-                            let f = if vertical {
-                                encdeb::DeblockChromaEq4V_c
-                            } else {
-                                encdeb::DeblockChromaEq4H_c
-                            };
-                            f(cb_raw.as_mut_ptr().add(a_cb), cr_raw.as_mut_ptr().add(a_cr),
-                              stride as i32, alpha, beta);
-                        }
-                        deb::deblock_chroma_eq4(
-                            &mut PlaneCursorMut::new(&mut cb_safe, a_cb, stride),
-                            &mut PlaneCursorMut::new(&mut cr_safe, a_cr, stride),
-                            sx, sy, alpha, beta,
-                        );
-                        assert_eq!(
-                            (cb_raw, cr_raw), (cb_safe, cr_safe),
-                            "encoder Eq4 chroma {} stride {stride} alpha {alpha} beta {beta} \
-                             seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
-                    }
-                }
-            }
-        }
+    let pairs: [(usize, usize); 8] = [
+        (fl.pfLumaDeblockingLT4Ver.unwrap() as usize, deb::DeblockLumaLt4V_c as usize),
+        (fl.pfLumaDeblockingEQ4Ver.unwrap() as usize, deb::DeblockLumaEq4V_c as usize),
+        (fl.pfLumaDeblockingLT4Hor.unwrap() as usize, deb::DeblockLumaLt4H_c as usize),
+        (fl.pfLumaDeblockingEQ4Hor.unwrap() as usize, deb::DeblockLumaEq4H_c as usize),
+        (fl.pfChromaDeblockingLT4Ver.unwrap() as usize, deb::DeblockChromaLt4V_c as usize),
+        (fl.pfChromaDeblockingEQ4Ver.unwrap() as usize, deb::DeblockChromaEq4V_c as usize),
+        (fl.pfChromaDeblockingLT4Hor.unwrap() as usize, deb::DeblockChromaLt4H_c as usize),
+        (fl.pfChromaDeblockingEQ4Hor.unwrap() as usize, deb::DeblockChromaEq4H_c as usize),
+    ];
+    for (i, (installed, expected)) in pairs.into_iter().enumerate() {
+        assert_eq!(installed, expected, "encoder deblocking slot {i} is not the common shim");
     }
 }
 
