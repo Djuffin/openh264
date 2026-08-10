@@ -531,7 +531,42 @@ for honesty rather than argued away.
 Cumulative after T6: decode ≈ **+17 / +10 / +10%**, encoder ≈ **+11%** (T4 + T8;
 T6's encoder contributions are all inside the floor). All under the +25% tripwire.
 
-## Deficit ledger (§7.4 scaffolding deficits — must be empty at Phase 5 exit)
+### T7 part 1 — forward transform/quant/scan + encoder recon IDCT + SATD (session F, D-perf-4 protocol)
+
+Session F's null run (same control binary both slots, fresh per R-l): median
+**+0.87%**, min -3.10%, max +2.90%, zero rows over 5% — the quietest floor of the
+three sessions that have measured one.
+
+**F-1 `encoder/encode_mb_aux.rs` (21 shims; A `f233d506` → B `b1fb7448`),
+one interleaved pair per bench:** decode **+0.48 / +0.26 / +0.35%** (flat — the
+decoder installs nothing from this file). Encoder **+2.10% median, +9.86% worst
+usable, 9 rows over +5%, none over +10%**. The shape is T4's per-call mechanism on
+the encoder side: the flat-content synthetic rows (SMPTE/PAL/RGB/YUV bars at
+QVGA-VGA, +5-10%) encode fastest and pay the largest fraction of fixed per-block
+shim cost (transform+quant runs per coded block), while the content-heavy rows
+(Mandelbrot, Testsrc) read -6..+2%. No microbenchmark built: the number matched the
+known mechanism (D-perf-4 makes it diagnostic-only). Tripwire: encoder cumulative
+≈ +11% + 2.1% ≈ **+13% median, under +25%** → swap-and-ledger.
+
+**F-2 `encoder/decode_mb_aux.rs` + the five raw bodies in `svc_encode_mb.rs`
+(9 shims; A `fc92dab0` → B `55e6d7fe`), one pair:** decode +0.61% median, encoder
+**+0.82% median, max +3.52%, zero rows over 5%** — noise-level both benches,
+exactly the pilot-shaped expectation. Recount recorded: the C++ family is 9 leaf
+kernels, not the 6 the finishing brief carried.
+
+**F-3 `encoder/sample.rs` SATD: no measurement — prove-and-park by decision**
+(D-perf-2's sad-class numbers are the projection; §Parked row below).
+
+**The Spatial Ramps caveat, kept honest:** the condemned row read **+226%** at
+F-1's pair (0.111 → 0.362 ms) and the readings are *consistent per binary* across
+runs today (control-class binaries 0.11-0.15 ms; the F-1 B binary 0.345-0.362 ms
+over three separate passes; the F-2 B binary 0.223 ms twice — i.e. ≈2-3x against
+control, direction stable). That is unlike the row's historical same-binary ±38%
+chaos, and gradients content is exactly the all-skip path where per-block quant
+scaffolding is the whole cost. The row stays excluded from every verdict per R-l,
+but this observation is recorded as **data for Phase 4a's checkpoint**: if
+direct dispatch recovers it, it was the per-call mechanism at its purest; output
+was bit-identical throughout.
 
 Entries here are temporary regressions attributable to strangler-shim scaffolding,
 carried under §7.4's three conditions (kernel bodies at parity by microbench; overhead
@@ -545,6 +580,8 @@ dispatch makes shims inlinable); Phase 5 closes them with the shims.
 | T8 `processing/*` (6 shims) | 2026-08-09 | encoder +3.5% median, +8.5% worst usable | five of six bodies 0.69–1.04x; `VAACalcSadBgd_c` 1.44x (§Phase 2 T8) | Phase 5 | *pending* | — |
 | T6 deblocking `common/deblocking_common.rs` (13 shims) | 2026-08-10, under D-perf-4 | decode +7.8% / +2.6% / +2.3%; encoder flat (-0.1% median — not a consumer) | none taken: D-perf-4 makes the microbench diagnostic-only and the shape matched T4's known per-call mechanism; Phase 4 re-measures | Phase 5 | *pending* | — |
 | T6 expand `decoder_core.rs` (2 shims) | 2026-08-10, under D-perf-4 | decode +1.0% / +0.1% / +0.5% (at the noise floor's edge); encoder inside the null floor (§Phase 2 T6) | once-per-reference-picture kernel; body is the same memcpy/memset calls | Phase 5 | *pending* | — |
+| T7 `encoder/encode_mb_aux.rs` (21 shims) | 2026-08-10, under D-perf-4 | encoder +2.1% median, +9.9% worst usable (flat-content rows +5-10%); decode flat (+0.3-0.5%, not a consumer) | none taken: D-perf-4 diagnostic-only, shape matched T4's per-call mechanism (fixed per-block cost, largest fraction on fastest content); Spatial Ramps observation recorded in §Phase 2 T7 part 1 | Phase 5 | *pending* | — |
+| T7 `encoder/decode_mb_aux.rs` + `svc_encode_mb.rs` recon (9 shims) | 2026-08-10, under D-perf-4 | encoder +0.8% median / decode +0.6% median — both inside the session's null floor | noise-level; nothing to isolate | Phase 5 | *pending* | — |
 
 ### The encoder-side ceiling is breached, and it needs a decision (2026-08-09)
 
@@ -625,7 +662,8 @@ found), by the Phase 4 direct-dispatch checkpoint, or by their callers convertin
 
 | family | parked | body evidence | blocking mechanism | re-attempt point | closed |
 |---|---|---|---|---|---|
-| T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, `abs_diff`, and now T8's exact-span shape all measured null | **D-perf-2 attempt spent 2026-08-09 — stays parked.** Next: Phase 4 direct-dispatch checkpoint → else caller conversion (ME, Phase 6.3) | — |
+| T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, `abs_diff`, and now T8's exact-span shape all measured null | **D-perf-2 attempt spent 2026-08-09 — stays parked.** Next: Phase 4a direct-dispatch checkpoint (slices-and-offsets on the table) → else caller conversion (ME, Phase 6.3) | — |
+| T7-satd `encoder/sample.rs` (7 safe kernels, never installed; `1383acb5`) | 2026-08-10 | none taken — parked by projection, not measurement: D-perf-2's sad-class bodies 1.39-2.97x and the T5 swap's +16.8% median, onto an encoder cumulative ≈ +13%, cross the +25% tripwire | same class as T5-sad (tiny blocks, per-candidate ME calls) with a Hadamard butterfly on top — strictly more work per call than SAD, which already failed parity | **Phase 4a direct-dispatch checkpoint**, alongside T5-sad; differential entries are live (F10 whole-row raw buffers), exact-span probe covers the safe side | — |
 
 #### D-perf-2's one attempt, and its verdict (2026-08-09)
 

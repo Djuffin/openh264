@@ -200,6 +200,16 @@ exist. Worth knowing for T7: the encoder's `sample.rs` SAD/SATD raw kernels have
 same loop shape, so their prove-and-park differential tests should size raw-side
 buffers to whole rows from the start.
 
+**Second instance, 2026-08-10 (session F, T7's SATD) — whole rows are not enough
+for composites.** The SATD differential applied this rule as `h * stride` and Miri
+flagged it anyway: a *composite* kernel's sub-blocks bump from their own anchors,
+so `WelsSampleSatd8x4_c`'s right 4x4 computes `anchor + 4 + 4*stride` — up to
+`(w-4) + h*stride` past the block anchor, beyond a whole-row buffer at any anchor
+past column 0. The rule as now applied: raw-side buffers span
+**`(h + 1) * stride`**, which covers every sub-block's trailing bump at every
+legal anchor. The safe side keeps exact spans; the instrument that caught this was
+the same phase-exit Miri run that found the original, run mid-session on purpose.
+
 ---
 
 ## F11 — `WelsIHadamard4x4Dc`'s plain `i16` additions overflow above ±2047, and a debug build panics where the C++ wraps
