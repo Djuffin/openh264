@@ -480,6 +480,57 @@ default **on** (`encoder/param_svc.rs:351-352`), so `Bgd`/`SsdBgd` are live and
 be the one that mostly is not.
 
 
+### T6 — deblocking + the F1 surgery + border expansion — landed under D-perf-4's protocol
+
+The first family group measured under §7.4 v3: **one interleaved pair per bench per
+commit B**, binaries kept on disk, `FFMPEG` set, null run only where a "noise" claim
+needed it. No microbenchmarks were built (D-perf-4 makes them diagnostic; nothing here
+surprised).
+
+**Deblocking (`common/deblocking_common.rs`, 13 shims; A `5756ad75` → B `64633e5f`),
+decode bench Rust rows (each side internally best-of-3):**
+
+| stream | A (raw) | B (swapped) | delta |
+|---|---|---|---|
+| Constrained Baseline (CAVLC) | 2.375 ms | 2.560 ms | **+7.79%** |
+| Main (CABAC, B-frames) | 6.118 ms | 6.274 ms | +2.55% |
+| High (CABAC, 8x8) | 6.173 ms | 6.317 ms | +2.33% |
+
+The shape is T4's decode-side entry again: fixed per-edge scaffolding (span
+arithmetic, one or two `from_raw_parts`, cursor construction, per-access checked
+indexing against a runtime `step_x`/`step_y`) levied per filtered edge, so the
+fastest stream — CAVLC at 2.4 ms/frame — pays the largest fraction. Encoder side:
+median **-0.11%** over 28 usable rows (max +1.62%), i.e. flat, exactly as the
+consumer topology predicts — the encoder runs its own kernel copies in
+`encoder/deblocking.rs` and installs nothing from this module. Tripwire arithmetic
+at commit B: cumulative decode ≈ +16.0 / +9.8 / +9.3% (T4 + this), worst stream well
+under +25%, no single-family stream reading over 15% → swap-and-ledger.
+
+**The F1 surgery (`d878916b`, encoder-only):** median **+0.36%** over 28 usable rows
+(range -1.68 .. +5.10%). The same session's null run (below) puts same-binary row
+movement at ±5.4%, so this is noise-level; recorded, not ledgered — it adds no shim
+and no scaffolding, it replaces five 32-byte casts with typed stores.
+
+**Expansion (`decoder_core.rs` shims onto `common/expand_pic.rs`, 2 shims;
+`d878916b` → `9c32f890`):** decode **+0.97 / +0.08 / +0.53%**; encoder median +1.55%
+(range -3.09 .. +10.45%). The +10.45% outlier is QVGA YUV Space [4t] — and the null
+run (same `9c32f890` binary, two passes, this session) moved **that same row -5.41%**:
+
+| | median | min | max |
+|---|---|---|---|
+| null (identical binary, this session) | -1.27% | -5.41% | +4.36% |
+| expand swap | +1.55% | -3.09% | +10.45% |
+
+Today's floor is ±5% on the tiny QVGA rows and ~±1.3% on medians — noticeably worse
+than session D's ±1.81% null (the machine had been building for hours; session A saw
+the same drift pattern). Verdict: the expand encoder reading is indistinguishable
+from noise, which is what a once-per-reference-picture kernel should read as. The
+decode side's ~+1% on CAVLC is at the floor's edge and is carried in the ledger row
+for honesty rather than argued away.
+
+Cumulative after T6: decode ≈ **+17 / +10 / +10%**, encoder ≈ **+11%** (T4 + T8;
+T6's encoder contributions are all inside the floor). All under the +25% tripwire.
+
 ## Deficit ledger (§7.4 scaffolding deficits — must be empty at Phase 5 exit)
 
 Entries here are temporary regressions attributable to strangler-shim scaffolding,
@@ -492,6 +543,8 @@ dispatch makes shims inlinable); Phase 5 closes them with the shims.
 |---|---|---|---|---|---|---|
 | T4 `common/mc.rs` (28 shims) | 2026-08-08, D-perf-1 | decode +8.2% / +7.2% / +7.0%; **encoder +7.6% median, +16.7% worst** (measured 2026-08-09, see below) | centre kernels 0.88–0.99x; 8x8 chroma copy overhead 7 ns fixed/call (§Phase 2 T4) | Phase 5 | *pending* | — |
 | T8 `processing/*` (6 shims) | 2026-08-09 | encoder +3.5% median, +8.5% worst usable | five of six bodies 0.69–1.04x; `VAACalcSadBgd_c` 1.44x (§Phase 2 T8) | Phase 5 | *pending* | — |
+| T6 deblocking `common/deblocking_common.rs` (13 shims) | 2026-08-10, under D-perf-4 | decode +7.8% / +2.6% / +2.3%; encoder flat (-0.1% median — not a consumer) | none taken: D-perf-4 makes the microbench diagnostic-only and the shape matched T4's known per-call mechanism; Phase 4 re-measures | Phase 5 | *pending* | — |
+| T6 expand `decoder_core.rs` (2 shims) | 2026-08-10, under D-perf-4 | decode +1.0% / +0.1% / +0.5% (at the noise floor's edge); encoder inside the null floor (§Phase 2 T6) | once-per-reference-picture kernel; body is the same memcpy/memset calls | Phase 5 | *pending* | — |
 
 ### The encoder-side ceiling is breached, and it needs a decision (2026-08-09)
 
