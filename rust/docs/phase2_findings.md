@@ -146,3 +146,58 @@ consumer of it, which is Phase 4's plumbing or later, and it has to be taken tog
 with a decision about whether matching the C++'s wrap still matters at that point.
 
 ---
+
+## F10 — The raw SAD kernels' trailing row-pointer bump is out-of-allocation pointer arithmetic on an exactly-sized buffer
+
+**Status: open, pre-existing, latent on every real call — the UB is in pointer
+*arithmetic*, not in any access, and real picture allocations always extend past the
+block.** Found by Miri during T6's session, in the **parked** T5-sad family.
+
+### What it is
+
+Every single-block raw SAD kernel walks its rows as the C++ does:
+
+```rust
+for _ in 0..4 {
+    iSadSum += ...;                       // reads row
+    pSrc1 = pSrc1.offset(iStride1 as isize);   // bumps AFTER the last row too
+}
+```
+
+After the final row the bump computes `pSample + h*stride` (`+ offset` for the
+composite kernels' sub-blocks, `+ (h+2)*stride` through a four-point down arm). On a
+buffer that ends at the block's last row — `(h-1)*stride + w` bytes, exactly the span
+the T5 shim contracts declare — that pointer is past one-past-the-end, which is UB in
+both Rust and C (`sad_common.cpp` has the identical `pSrc += iStride`). Nothing ever
+dereferences it.
+
+### How it surfaced, and why only now
+
+`sad_shims_stay_inside_the_spans_they_declare` probes the Wels names with exact-span
+buffers. When session C wrote it the names were shims (safe kernels compute nothing
+past their span); the same session's unswap `11f82d41` made the names raw again, and
+the next Miri run of the differential file — T6's session — flagged the bump.
+`gates.sh` runs Miri on `--lib safe::` per commit and on the differential files only
+at phase exits, which is the gap it slipped through.
+
+### What was done about it
+
+The probe's buffers are sized to the raw kernels' pointer-arithmetic footprint while
+the family is parked (`h*stride + w`, and `(h+2)*stride + w` on the four-point
+reference side), with a comment in the test naming this finding and instructing the
+re-landing commit to restore the exact spans. T4 set the precedent: the test is the
+thing handing the kernel an allocation no real caller hands it, so the test carries
+the accommodation, not the kernel — the raw bodies are already written safe-side
+(`common/sad_common.rs` kernels are proven and parked) and die at re-landing or
+caller conversion.
+
+### Who fixes it
+
+Nobody fixes the raw bodies — they are scheduled to be *replaced* (Phase 4
+direct-dispatch checkpoint or Phase 6.3 caller conversion; `perf_baseline.md`
+§Parked). If the family re-lands, the safe kernels take over and the bump ceases to
+exist. Worth knowing for T7: the encoder's `sample.rs` SAD/SATD raw kernels have the
+same loop shape, so their prove-and-park differential tests should size raw-side
+buffers to whole rows from the start.
+
+---
