@@ -201,3 +201,59 @@ same loop shape, so their prove-and-park differential tests should size raw-side
 buffers to whole rows from the start.
 
 ---
+
+## F11 — `WelsIHadamard4x4Dc`'s plain `i16` additions overflow above ±2047, and a debug build panics where the C++ wraps
+
+**Status: open, pre-existing, unreachable on realistic content — a third instance of
+F8's defect class, in the encoder's qp < 12 luma-DC reconstruction path.** Found
+while converting T7's `encoder/decode_mb_aux.rs` family (the raw body lives in
+`svc_encode_mb.rs`).
+
+### What it is
+
+The inverse 4x4 Hadamard for the I16x16 luma DC block does both passes in plain
+`i16`, faithfully to `codec/encoder/core/src/decode_mb_aux.cpp`:
+
+```rust
+iTemp[0] = *pRes.add(kiIdx) + *pRes.add(kiIdx2);   // i16 + i16, no wrapping_*
+```
+
+Worst-case gain across the two passes is **16x** (each pass sums four inputs), so
+any input above `32767 / 16 ≈ 2047` can overflow an intermediate.
+
+| | C++ | this port |
+|---|---|---|
+| behaviour | `int` arithmetic, implicit narrowing to `int16_t` per store — wraps | **panics**, `attempt to add with overflow`, in a debug build |
+| release | wraps | wraps (overflow checks off) |
+
+Unlike its qp >= 12 sibling `WelsDequantIHadamard4x4_c` — whose port already uses
+`wrapping_add`/`wrapping_mul` throughout and is total — this kernel kept the plain
+operators, so the two siblings disagree about the same arithmetic hazard.
+
+### Reachability
+
+The one caller is gated on `uiQp < 12` (`svc_encode_mb.rs:586`) and hands DC levels
+that just came out of `pfQuantizationDc4x4`. At qp 0 with a saturated Hadamard DC
+input of 32767 the quantized level reaches `((0 + 32767) * 13107) >> 16 = 6553` —
+past the 2047 threshold, so the overflow is reachable in principle through
+defined-value paths. Reaching it takes a hand-crafted frame whose 16 4x4 DC sums all
+saturate at qp < 12; ordinary content is orders of magnitude below. Encoder-side, so
+F9's severity class: the input is the application's raw frames, not a hostile
+bitstream — a correctness ceiling, not a panic candidate for P13.
+
+### What Phase 2 did about it
+
+Nothing to the kernel — `ihadamard_4x4_dc` reproduces the plain `i16` additions
+exactly, panic for panic (R-e). The differential test bounds its inputs to ±2047
+with the 16x-gain derivation written next to the bound, because above it the test
+would compare two panics. Recorded here as fuzz-absence data: an encoder-input
+fuzzer would plausibly reach this in its first corpus.
+
+### Who fixes it
+
+Whoever unifies the encoder's DC arithmetic policy — the natural fix is the same
+`wrapping_*` treatment its qp >= 12 sibling already has, but that is a behaviour
+choice (match-the-C++-wrap) that belongs with F9's owner, Phase 4's plumbing or
+later, not with a parity conversion.
+
+---
