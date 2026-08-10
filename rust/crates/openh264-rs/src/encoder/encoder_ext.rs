@@ -12,6 +12,8 @@
 //! and `WelsEncoderEncodeExtRust` was a sketch that emitted no bytes.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
+// Phase 4a: `pfMdCost`/`pfMeCost` are enum selectors, not interior pointers (F13).
+use crate::encoder::md::CostFamily;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 
@@ -2415,7 +2417,7 @@ unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
     (*pFuncList).pfIntraFineMd =
         Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
-    sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr();
+    sdf.pfMdCost = CostFamily::Sad;
     sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Sad;
     sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Sad;
 }
@@ -2424,7 +2426,7 @@ unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
 unsafe fn SetNormalCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
     (*pFuncList).pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
-    sdf.pfMdCost = sdf.pfSampleSatd.as_mut_ptr();
+    sdf.pfMdCost = CostFamily::Satd;
     sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Satd;
     sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Satd;
     sdf.pfIntra4x4Combined3 = sdf.pfIntra4x4Combined3Satd;
@@ -2497,7 +2499,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
         (*pFuncList).pfFirstIntraMode =
             Some(crate::encoder::svc_base_layer_md::WelsMdFirstIntraMode);
         let sdf = &mut (*pFuncList).sSampleDealingFuncs;
-        sdf.pfMeCost = sdf.pfSampleSatd.as_mut_ptr();
+        sdf.pfMeCost = CostFamily::Satd;
         (*pFuncList).pfSetScrollingMv =
             Some(crate::encoder::svc_mode_decision::SetScrollingMvToMdNull);
 
@@ -2513,7 +2515,7 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
                 Some(crate::encoder::svc_base_layer_md::WelsMdInterFinePartition);
         }
     } else {
-        (*pFuncList).sSampleDealingFuncs.pfMeCost = null_mut();
+        (*pFuncList).sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
     }
 
     // The SCREEN_CONTENT_REAL_TIME block of the C++ (encoder_ext.cpp:2708-2771) sets up
@@ -2523,8 +2525,14 @@ pub unsafe fn PreprocessSliceCoding(pCtx: *mut sWelsEncCtx) {
 
     // update some layer-dependent variables to save judgements at MB level
     let sdf = &(*pFuncList).sSampleDealingFuncs;
-    (*pCurLayer).bSatdInMdFlag = std::ptr::eq(sdf.pfMeCost, sdf.pfSampleSatd.as_ptr())
-        && std::ptr::eq(sdf.pfMdCost, sdf.pfSampleSatd.as_ptr());
+    // Was two `ptr::eq` comparisons against `pfSampleSatd.as_ptr()` — i.e. "does
+    // this interior pointer still point at the SATD array". With the pointers
+    // gone the question is asked directly, and asking it directly is also what
+    // makes it correct: `as_ptr()` here derived a *third* pointer from the
+    // struct purely to compare, which under Stacked Borrows invalidated the
+    // very pointers it was testing.
+    (*pCurLayer).bSatdInMdFlag =
+        sdf.pfMeCost == CostFamily::Satd && sdf.pfMdCost == CostFamily::Satd;
 
     let kiCurDid = (*pCtx).uiDependencyId as usize;
     let kiCurTid = (*pCtx).uiTemporalId as i32;

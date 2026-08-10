@@ -430,3 +430,84 @@ not imply soundness**, and the instrument that can tell the difference had been
 pointed at a small corner of the codebase.
 
 ---
+
+## F14 — The 16x16 SAD walks one row past `pMemPredMb`, in production
+
+**Status: FIXED 2026-08-10 (Phase 4a), by accommodation rather than by repair.**
+Found by the Miri `--lib` gate the moment F13's fourth site stopped blocking it —
+which is the finding's real subject and the reason it is written up rather than
+just patched.
+
+### What it is
+
+`SMbCache::pMemPredMb` is `WelsMallocz(2 * 256)` (`svc_encode_slice.rs`), two
+256-byte halves that are the I16x16 prediction ping-pong: `pMemPredLuma` at +0,
+`pMemPredChroma` at +256 (`svc_base_layer_md.rs:371-373`). `WelsMdI16x16` writes
+a candidate prediction into one half and scores it with `WelsSampleSad16x16_c`
+at stride 16.
+
+That kernel decomposes into four `WelsSampleSad8x8_c` calls; the last starts at
+`base + (16 << 3) + 8` = +136 and reads eight rows, through byte `256 + 136 +
+7*16 + 7` = **byte 511 of a 512-byte allocation — exactly in bounds, with
+nothing to spare.** But `WelsSampleSad8x8_c` is a faithful C transliteration and
+bumps its row pointer at the *end* of every iteration including the last
+(`sad_common.rs:158`), so it computes `base + 520` and then returns without
+dereferencing it.
+
+Forming that pointer is UB — in Rust (`ptr::offset` requires the result to stay
+in bounds) and in C alike. Nothing observable ever came of it: the value is
+computed into a register and discarded. That is exactly why it survived the
+port, the conformance suite, 341/341 sweeps, and every profile.
+
+### Why it is F10's class and S12's rule, met in production
+
+S12 was written after F10 was found three times in *tests*: "a raw kernel's
+pointer footprint is bigger than its read footprint. Any test handing an
+exactly-sized buffer to a raw kernel must size it `(h + 1) * stride`." Every
+prior instance was a test manufacturing an exact buffer. This one is the encoder
+itself, and the C++ upstream has the identical latent defect — the port did not
+introduce it, it transliterated it.
+
+The distinction matters for how it gets fixed. A test-side instance is the
+test's bug and gets corrected outright (F13's four). A production instance is
+behaviour, and §7.6 S6 says parity, not repair.
+
+### The fix, and why this one is an accommodation and not a repair
+
+`2 * 256` became `2 * 256 + 16` — one luma row at the ping-pong's stride, the
+smallest allocation that makes the arithmetic legal. It **cannot change an
+encoded byte**: the extra 16 bytes are never read, never written, and never
+addressed except by the one-past bump that this exists to keep in bounds.
+Byte-exactness gates confirm it (341/341 both profiles, loopback and option
+sweeps unchanged).
+
+The alternative — stop the kernel bumping after its last row — is a change to a
+**parked** family's raw body, and S12 is explicit that exact spans are for the
+safe side and get restored on the raw side only at re-landing. Sizing the buffer
+is the move that does not touch the kernel.
+
+**It is temporary by construction.** If `common/sad_common.rs` re-lands from its
+park, the shim hands the safe kernel an exact span and the safe kernel stops at
+its last row, so the `+ 16` becomes dead and goes with it. Deleting the `+ 16`
+today restores the UB, and Miri's `--lib` gate now catches it in
+`svc_mode_decision::tests::test_wels_md_i16x16_cost` — the accommodation is
+guarded by the instrument that found it.
+
+### What this says about the gate
+
+**Removing one Miri skip immediately exposed a second, unrelated defect
+underneath it** — F13's `pfMdCost` was standing in front of F14, and no
+instrument could see past it. That is the third time in this refactor that
+widening an instrument paid out on the first run (F1 behind the release
+segfault, seven defects behind the `--lib safe::` narrowing, and now this), and
+it is the concrete argument for treating the skip list as a work queue rather
+than a settled state: **each skip hides an unknown number of further defects,
+not just the one it names.**
+
+It is also the brief's prediction about parked code coming true on schedule.
+`common/sad_common.rs` has now yielded latent UB **four** separate times — F10
+three times, F14 once — and it is the family that has spent the longest
+uninstalled with raw bodies live. Re-landing it is a safety goal, not only a
+perf one.
+
+---

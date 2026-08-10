@@ -1155,7 +1155,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
     // here silently forced the fast-mode choice in normal mode.
-    let pfMdCost16x16 = (*(*pFunc).sSampleDealingFuncs.pfMdCost.add(BLOCK_16x16)).unwrap();
+    let pfMdCost16x16 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -2399,14 +2399,13 @@ mod tests {
             // The function-pointer tables must be populated the way the real caller
             // does it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
             // WelsInitSampleSadFunc installs pfSampleSad, which SetFastCodingFunc then
-            // aliases to pfMdCost. This test previously left every entry unset, so it
+            // selects via pfMdCost. This test previously left every entry unset, so it
             // asserted only that a function which silently did nothing returned
             // something below i32::MAX.
             let mut func_list = SWelsFuncPtrList::default();
             crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut func_list, 0);
             crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
-            func_list.sSampleDealingFuncs.pfMdCost =
-                func_list.sSampleDealingFuncs.pfSampleSad.as_mut_ptr();
+            func_list.sSampleDealingFuncs.pfMdCost = crate::encoder::md::CostFamily::Sad;
 
             // Reconstruction and source planes need a real border: the V/H/DC
             // predictors read pRef[-stride] and pRef[-1].
@@ -2420,7 +2419,10 @@ mod tests {
                     enc_plane[(y + 16) * STRIDE + (x + 16)] = 138;
                 }
             }
-            let mut pred_buf = [0u8; 512];
+            // 2*256 + 16, matching the real allocation in
+            // `svc_encode_slice.rs` — see F14 there for why the +16 exists (the
+            // raw 16x16 SAD bumps its row pointer one stride past its last read).
+            let mut pred_buf = [0u8; 2 * 256 + 16];
 
             let mut mb_cache = SMbCache {
                 SPicData: SPicData {
