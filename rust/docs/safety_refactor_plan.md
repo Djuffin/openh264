@@ -531,7 +531,12 @@ Two counting rules the script encodes, both learned the hard way:
 - Safe-but-fast idioms, as measured through T4 (order matters): **const-generic widths for copies** — `copy_from_slice` on a runtime length is a `memmove` *call*, and `copy_rows::<16>` vs `copy_rows(16)` was 10.8x vs ~1x; fixed-size array windows (`try_into().unwrap()` → `&[u8; 16]`); **zip iterators instead of indexing several slices by `j`** (LLVM will not prove seven bounds facts per sample); a rolling row window over re-fetching rows; `#[inline(always)]`/`#[inline(never)]` parity with the C++'s `inline`-plus-table structure; `row()`'s statically-sized window per row — **not** `chunks()`-based walkers, which measured worse everywhere they were tried (`perf_baseline.md` §Phase 2 T4, the row-walker table). `get_unchecked` is **banned** — if a hot loop can't be made fast safely, restructure the loop, don't reintroduce unsafe.
 - Expect some *wins*: direct calls replacing indirect dispatch (Phase 4) and `match` replacing fn-pointer tables are LLVM-inlinable where the C design never was; T2 measured 1.3–1.8% *faster* and T3 a wash.
 
-**Decision D-perf-1 (2026-08-08): T4's ~7–8% is carried as a scaffolding deficit, not reverted.** Basis: the kernel bodies measure 0.88–0.99x (at parity or better — the end-state cost is zero or negative); the residual is 7–16 ns of fixed per-call shim overhead on the most call-dense family in the codec; three structural mitigations were built, paired-measured, and rejected, so further optimization attempts are closed; and unswapping would forfeit the full battery's continuous exercise of the safe kernels while concentrating re-swap risk exactly where the strangler pattern exists to avoid it. The deficit is ledgered in `perf_baseline.md`, bounded by the ≤10% ceiling, checkpointed at Phase 4, and must clear at Phase 5.
+- **Parked families (added 2026-08-09 after T5-sad):** a family whose *bodies* cannot reach ≤1.05x on the honest microbenchmark at the shim boundary does not qualify for the deficit ledger (nothing later deletes body cost) and does not stay swapped — it is **parked**: safe kernels in-tree, differentially proven, spans pinned, shims unswapped, with a named re-attempt point (the Phase 4 direct-dispatch checkpoint, or the phase that converts its callers). Parked families are tracked in the ledger doc next to the deficits. Corollary, binding for every remaining call-dense tiny-block family (SAD/SATD class): **measure bodies on the L1-resident microbenchmark *before* swapping** — body parity is a precondition of the swap attempt, not something to discover from the stream bench afterwards.
+- **Microbenchmark validity (added 2026-08-09):** per-call overhead must be measured **L1-resident** — T5's harness ran a 1984-byte stride over 190 KB and the overhead hid behind cache misses (0.82–1.33x reported against a real +16.8%). And the encoder bench is only a gate when it actually runs: `gates.sh` now locates ffmpeg itself after silently skipping the encoder bench for three encoder-touching families.
+
+**Decision D-perf-1 (2026-08-08): T4's ~7–8% is carried as a scaffolding deficit, not reverted.** Basis: the kernel bodies measure 0.88–0.99x (at parity or better — the end-state cost is zero or negative); the residual is 7–16 ns of fixed per-call shim overhead on the most call-dense family in the codec; three structural mitigations were built, paired-measured, and rejected, so further optimization attempts are closed; and unswapping would forfeit the full battery's continuous exercise of the safe kernels while concentrating re-swap risk exactly where the strangler pattern exists to avoid it. The deficit is ledgered in `perf_baseline.md`, bounded by the ≤10% ceiling, checkpointed at Phase 4, and must clear at Phase 5. *Addendum 2026-08-09: with the encoder bench now actually running, T4's encoder-stream contribution was never isolated — measure it at the next session start and append it to T4's ledger row.*
+
+**Decision D-perf-2 (2026-08-09): T5-sad gets one bounded re-landing attempt, scheduled with T8 in the next session — T6's order is unaffected, and T7 inherits the verdict either way.** The question the attempt answers is not "can SAD be a bit faster" but the technique question that gates T7's ~30 SAD/SATD-shaped kernels: whether per-row cost on tiny fixed blocks with runtime strides can be made to fold in safe code at the shim boundary at all. Time-box: half a session, hard stop, disassembly-first (both prior guesses measured null; `row_windows` alone was not enough). Exit states, both acceptable: (a) bodies reach ≤1.05x L1-resident and the family re-swaps inside the ceiling — the technique transfers to T7; or (b) it doesn't, T5-sad stays **parked** until the Phase 4 checkpoint or its callers convert (ME is Phase 6.3), and T7's SAD/SATD families go **prove-and-park** from the start instead of burning swap-measure-unswap cycles. What is not acceptable is a third unbounded investigation: one attempt, one verdict, recorded.
 
 ### 7.5 Session workflow
 Each session: run battery → pick next plan item → convert with shims → battery → commit with ratchet update → update this doc's checkbox (add a `## Progress` appendix on first execution session). The phase structure is deliberately interruptible; no step leaves the tree broken across a session boundary.
@@ -800,12 +805,20 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       whose checks therefore cannot fold. Does **not** repeal T4's `chunks` verdict —
       `mc.rs` keeps `row()`, where the widths are const and the checks do fold — and the
       rule is written on the method.
+- [x] **D-perf-2 — the T5-sad sequencing call (2026-08-09).** One bounded re-landing
+      attempt (half-session hard stop, disassembly-first, body-parity precondition per
+      §7.4), scheduled **with T8 in the next session**; T6 keeps its slot; T7 inherits
+      the verdict — re-land technique if it exists, prove-and-park for its SAD/SATD
+      families if it doesn't. Recorded in §7.4.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.
-- [ ] **T7 — the four encoder kernel files.** Not started.
-- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started; **this is
-      the next action**. Recount: **6 kernels** (vaacalc 5 + `SampleVariance16x16_c`),
-      not the continuation brief's 11. Not started.
+- [ ] **T7 — the four encoder kernel files.** Not started; shape depends on D-perf-2's
+      verdict (swap vs prove-and-park for `sample.rs`'s SAD/SATD).
+- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started; **next
+      action, sharing the session with D-perf-2's bounded attempt**. Recount:
+      **6 kernels** (vaacalc 5 + `SampleVariance16x16_c`), not the continuation
+      brief's 11. Also at session start: isolate T4's encoder-stream deficit with the
+      now-live encoder bench (D-perf-1 addendum).
 - [ ] **T9 — phase exit.** Not started.
 
 ### Phases 3–9
