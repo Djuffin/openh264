@@ -621,73 +621,43 @@ pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
 /// Computes pixel residual differencing followed by the 2D 4x4 Forward Integer DCT.
 ///
 /// # Safety
-/// - `pDct` must point to a writable buffer of at least 16 `i16` elements.
-/// - `pPixel1` and `pPixel2` must point to valid readable pixel buffers with corresponding strides.
+/// * `pDct` points at 16 writable, `i16`-aligned `i16`, disjoint from both
+///   pixel surfaces.
+/// * `pPixel1` and `pPixel2` each point at sample `(0, 0)` of a 4x4 block
+///   whose rows are `iStride1` / `iStride2` bytes apart; the bytes
+///   `[0, 3*stride + 4)` from each pointer must be readable (the kernel
+///   reaches forward only — no `-1` column, no `-stride` row). Both strides
+///   `>= 4` and positive. The pixel surfaces are only read.
+///
+/// Every call path is a `pfDctT4` table slot; the callers hand a source
+/// macroblock cursor and a 16- or 8-stride prediction scratch
+/// (`svc_encode_mb.rs:684`, `svc_encode_slice.rs`).
 #[inline]
 pub unsafe extern "C" fn WelsDctT4_c(
     pDct: *mut i16,
-    mut pPixel1: *mut u8,
+    pPixel1: *mut u8,
     iStride1: i32,
-    mut pPixel2: *mut u8,
+    pPixel2: *mut u8,
     iStride2: i32,
 ) {
-    unsafe {
-        let mut pData = [0i32; 16];
-        let mut s = [0i32; 4];
-
-        for i in (0..16).step_by(4) {
-            let kiI1 = 1 + i;
-            let kiI2 = 2 + i;
-            let kiI3 = 3 + i;
-
-            pData[i] = (*pPixel1.add(0) as i32) - (*pPixel2.add(0) as i32);
-            pData[kiI1] = (*pPixel1.add(1) as i32) - (*pPixel2.add(1) as i32);
-            pData[kiI2] = (*pPixel1.add(2) as i32) - (*pPixel2.add(2) as i32);
-            pData[kiI3] = (*pPixel1.add(3) as i32) - (*pPixel2.add(3) as i32);
-
-            pPixel1 = pPixel1.offset(iStride1 as isize);
-            pPixel2 = pPixel2.offset(iStride2 as isize);
-
-            // Horizontal 1D transform
-            s[0] = pData[i] + pData[kiI3];
-            s[3] = pData[i] - pData[kiI3];
-            s[1] = pData[kiI1] + pData[kiI2];
-            s[2] = pData[kiI1] - pData[kiI2];
-
-            *pDct.add(i) = (s[0] + s[1]) as i16;
-            *pDct.add(kiI2) = (s[0] - s[1]) as i16;
-            *pDct.add(kiI1) = ((s[3] << 1) + s[2]) as i16;
-            *pDct.add(kiI3) = (s[3] - (s[2] << 1)) as i16;
-        }
-
-        // Vertical 1D transform
-        for i in 0..4 {
-            let kiI4 = 4 + i;
-            let kiI8 = 8 + i;
-            let kiI12 = 12 + i;
-
-            let d0 = *pDct.add(i) as i32;
-            let d4 = *pDct.add(kiI4) as i32;
-            let d8 = *pDct.add(kiI8) as i32;
-            let d12 = *pDct.add(kiI12) as i32;
-
-            s[0] = d0 + d12;
-            s[3] = d0 - d12;
-            s[1] = d4 + d8;
-            s[2] = d4 - d8;
-
-            *pDct.add(i) = (s[0] + s[1]) as i16;
-            *pDct.add(kiI8) = (s[0] - s[1]) as i16;
-            *pDct.add(kiI4) = ((s[3] << 1) + s[2]) as i16;
-            *pDct.add(kiI12) = (s[3] - (s[2] << 1)) as i16;
-        }
-    }
+    // SHIM(phase2) -> dct_4x4
+    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
+        .try_into()
+        .unwrap();
+    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
+    let b1 = unsafe { std::slice::from_raw_parts(pPixel1, 3 * s1 + 4) };
+    let b2 = unsafe { std::slice::from_raw_parts(pPixel2, 3 * s2 + 4) };
+    dct_4x4(dct, &PlaneCursor::new(b1, 0, s1), &PlaneCursor::new(b2, 0, s2));
 }
 
 /// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant.
 ///
 /// # Safety
-/// - `pDct` must point to a writable buffer of at least 64 `i16` elements.
+/// * `pDct` points at 64 writable, `i16`-aligned `i16`, disjoint from both
+///   pixel surfaces.
+/// * `pPixel1` and `pPixel2` each point at sample `(0, 0)` of an 8x8 block;
+///   the bytes `[0, 7*stride + 8)` from each pointer must be readable
+///   (forward reach only). Both strides `>= 8` and positive. Only read.
 #[inline]
 pub unsafe extern "C" fn WelsDctFourT4_c(
     pDct: *mut i16,
@@ -696,21 +666,14 @@ pub unsafe extern "C" fn WelsDctFourT4_c(
     pPixel2: *mut u8,
     iStride2: i32,
 ) {
-    unsafe {
-        let stride_1 = (iStride1 << 2) as isize;
-        let stride_2 = (iStride2 << 2) as isize;
-
-        WelsDctT4_c(pDct, pPixel1, iStride1, pPixel2, iStride2);
-        WelsDctT4_c(pDct.add(16), pPixel1.add(4), iStride1, pPixel2.add(4), iStride2);
-        WelsDctT4_c(pDct.add(32), pPixel1.offset(stride_1), iStride1, pPixel2.offset(stride_2), iStride2);
-        WelsDctT4_c(
-            pDct.add(48),
-            pPixel1.offset(stride_1 + 4),
-            iStride1,
-            pPixel2.offset(stride_2 + 4),
-            iStride2,
-        );
-    }
+    // SHIM(phase2) -> dct_four_4x4
+    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
+        .try_into()
+        .unwrap();
+    let (s1, s2) = (iStride1 as usize, iStride2 as usize);
+    let b1 = unsafe { std::slice::from_raw_parts(pPixel1, 7 * s1 + 8) };
+    let b2 = unsafe { std::slice::from_raw_parts(pPixel2, 7 * s2 + 8) };
+    dct_four_4x4(dct, &PlaneCursor::new(b1, 0, s1), &PlaneCursor::new(b2, 0, s2));
 }
 
 // ============================================================================
@@ -720,99 +683,75 @@ pub unsafe extern "C" fn WelsDctFourT4_c(
 /// In-place dead-zone forward quantization on a single 4x4 block (16 coefficients).
 ///
 /// # Safety
-/// - `pDct` must point to 16 contiguous `i16` elements.
-/// - `pFF` and `pMF` must point to at least 8 `i16` elements.
+/// * `pDct` points at 16 writable, `i16`-aligned `i16`.
+/// * `pFF` and `pMF` point at 8 readable `i16` each (one QP row of
+///   `g_kiQuantInterFF` / `g_kiQuantMF`), disjoint from `pDct`.
 #[inline]
 pub unsafe extern "C" fn WelsQuant4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
-    unsafe {
-        for i in (0..16).step_by(4) {
-            let j = i & 0x07;
-            for k in 0..4 {
-                let val = *pDct.add(i + k);
-                let iSign = (val as i32) >> 31;
-                let abs_val = (iSign ^ (val as i32)) - iSign;
-                let ff = *pFF.add(j + k) as i32;
-                let mf = *pMF.add(j + k) as i32;
-                let q = ((ff + abs_val) * mf) >> 16;
-                *pDct.add(i + k) = ((iSign ^ q) - iSign) as i16;
-            }
-        }
-    }
+    // SHIM(phase2) -> quant_4x4
+    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
+        .try_into()
+        .unwrap();
+    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
+    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
+    quant_4x4(dct, ff, mf);
 }
 
 /// In-place forward quantization of 16 Hadamard-transformed Luma DC coefficients.
 ///
 /// # Safety
-/// - `pDct` must point to 16 contiguous `i16` elements.
+/// `pDct` points at 16 writable, `i16`-aligned `i16`.
 #[inline]
 pub unsafe extern "C" fn WelsQuant4x4Dc_c(pDct: *mut i16, iFF: i16, iMF: i16) {
-    unsafe {
-        let ff = iFF as i32;
-        let mf = iMF as i32;
-        for i in 0..16 {
-            let val = *pDct.add(i);
-            let iSign = (val as i32) >> 31;
-            let abs_val = (iSign ^ (val as i32)) - iSign;
-            let q = ((ff + abs_val) * mf) >> 16;
-            *pDct.add(i) = ((iSign ^ q) - iSign) as i16;
-        }
-    }
+    // SHIM(phase2) -> quant_4x4_dc
+    let dct: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pDct, 16) }
+        .try_into()
+        .unwrap();
+    quant_4x4_dc(dct, iFF, iMF);
 }
 
 /// In-place forward quantization across 4 blocks (64 coefficients).
 ///
 /// # Safety
-/// - `pDct` must point to 64 contiguous `i16` elements.
+/// * `pDct` points at 64 writable, `i16`-aligned `i16`.
+/// * `pFF` and `pMF` point at 8 readable `i16` each, disjoint from `pDct`.
 #[inline]
 pub unsafe extern "C" fn WelsQuantFour4x4_c(pDct: *mut i16, pFF: *const i16, pMF: *const i16) {
-    unsafe {
-        for i in (0..64).step_by(4) {
-            let j = i & 0x07;
-            for k in 0..4 {
-                let val = *pDct.add(i + k);
-                let iSign = (val as i32) >> 31;
-                let abs_val = (iSign ^ (val as i32)) - iSign;
-                let ff = *pFF.add(j + k) as i32;
-                let mf = *pMF.add(j + k) as i32;
-                let q = ((ff + abs_val) * mf) >> 16;
-                *pDct.add(i + k) = ((iSign ^ q) - iSign) as i16;
-            }
-        }
-    }
+    // SHIM(phase2) -> quant_four_4x4
+    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
+        .try_into()
+        .unwrap();
+    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
+    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
+    quant_four_4x4(dct, ff, mf);
 }
 
 /// In-place forward quantization across 4 blocks while computing max absolute levels `pMax[0..3]`.
 ///
 /// # Safety
-/// - `pDct` must point to 64 contiguous `i16` elements.
-/// - `pMax` must point to 4 writable `i16` elements.
+/// * `pDct` points at 64 writable, `i16`-aligned `i16`.
+/// * `pFF` and `pMF` point at 8 readable `i16` each.
+/// * `pMax` points at 4 writable `i16`.
+/// * All four regions are mutually disjoint (the one caller passes a stack
+///   array for `pMax` and table rows for the factors,
+///   `svc_encode_mb.rs:868-870`).
 #[inline]
 pub unsafe extern "C" fn WelsQuantFour4x4Max_c(
-    mut pDct: *mut i16,
+    pDct: *mut i16,
     pFF: *const i16,
     pMF: *const i16,
     pMax: *mut i16,
 ) {
-    unsafe {
-        for k in 0..4 {
-            let mut iMaxAbs: i16 = 0;
-            for i in 0..16 {
-                let j = i & 0x07;
-                let val = *pDct.add(i);
-                let iSign = (val as i32) >> 31;
-                let abs_val = (iSign ^ (val as i32)) - iSign;
-                let ff = *pFF.add(j) as i32;
-                let mf = *pMF.add(j) as i32;
-                let q_mag = (((ff + abs_val) * mf) >> 16) as i16;
-                if iMaxAbs < q_mag {
-                    iMaxAbs = q_mag;
-                }
-                *pDct.add(i) = ((iSign ^ (q_mag as i32)) - iSign) as i16;
-            }
-            pDct = pDct.add(16);
-            *pMax.add(k) = iMaxAbs;
-        }
-    }
+    // SHIM(phase2) -> quant_four_4x4_max
+    let dct: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pDct, 64) }
+        .try_into()
+        .unwrap();
+    let ff: &[i16; 8] = unsafe { std::slice::from_raw_parts(pFF, 8) }.try_into().unwrap();
+    let mf: &[i16; 8] = unsafe { std::slice::from_raw_parts(pMF, 8) }.try_into().unwrap();
+    let max: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pMax, 4) }
+        .try_into()
+        .unwrap();
+    quant_four_4x4_max(dct, ff, mf, max);
 }
 
 // ============================================================================
@@ -823,50 +762,30 @@ pub unsafe extern "C" fn WelsQuantFour4x4Max_c(
 /// Returns 1 if any transformed Chroma DC coefficient exceeds the zero-quantization threshold.
 ///
 /// # Safety
-/// - `pRs` must point to a residual buffer with readable entries at offsets 0, 16, 32, 48.
+/// * `pRs` points at 49 readable, `i16`-aligned `i16` — the exact reach: the
+///   kernel reads the chroma DC raster positions 0, 16, 32 and 48, and 48 is
+///   the last. Nothing is written. Every caller hands a >= 64-coefficient
+///   chroma group (`svc_encode_mb.rs:1067`, `pMbCache->pCoeffLevel` chroma
+///   offsets), so 49 always exists.
+/// * `iMF != 0` (the callers' `mf >> 1` table values are all >= 14).
 #[inline]
 pub unsafe extern "C" fn WelsHadamardQuant2x2Skip_c(pRs: *mut i16, iFF: i16, iMF: i16) -> i32 {
-    unsafe {
-        let iThreshold: i32 = if iMF != 0 {
-            (((1i32 << 16) - 1) / (iMF as i32)) - (iFF as i32)
-        } else {
-            0
-        };
-
-        let r0 = *pRs as i32;
-        let r32 = *pRs.add(32) as i32;
-        let r16 = *pRs.add(16) as i32;
-        let r48 = *pRs.add(48) as i32;
-
-        let s0 = r0 + r32;
-        let s1 = r0 - r32;
-        let s2 = r16 + r48;
-        let s3 = r16 - r48;
-
-        let d0 = s0 + s2;
-        let d1 = s0 - s2;
-        let d2 = s1 + s3;
-        let d3 = s1 - s3;
-
-        let abs_d0 = (d0 ^ (d0 >> 31)) - (d0 >> 31);
-        let abs_d1 = (d1 ^ (d1 >> 31)) - (d1 >> 31);
-        let abs_d2 = (d2 ^ (d2 >> 31)) - (d2 >> 31);
-        let abs_d3 = (d3 ^ (d3 >> 31)) - (d3 >> 31);
-
-        if abs_d0 > iThreshold || abs_d1 > iThreshold || abs_d2 > iThreshold || abs_d3 > iThreshold {
-            1
-        } else {
-            0
-        }
-    }
+    // SHIM(phase2) -> hadamard_quant_2x2_skip
+    let rs: &[i16; 49] = unsafe { std::slice::from_raw_parts(pRs, 49) }.try_into().unwrap();
+    hadamard_quant_2x2_skip(rs, iFF, iMF)
 }
 
 /// 2x2 Forward Hadamard transform and quantization for Chroma DC coefficients.
 /// Returns the count of non-zero quantized DC coefficients (`iDcNzc`).
 ///
 /// # Safety
-/// - `pRs` has DC positions 0, 16, 32, 48 read and cleared to 0.
-/// - `pDct` and `pBlock` must point to writable buffers of at least 4 `i16` elements.
+/// * `pRs` points at 49 writable, `i16`-aligned `i16` (the exact reach — DC
+///   raster positions 0, 16, 32, 48 are read and cleared, 48 is the last).
+/// * `pDct` and `pBlock` point at 4 writable `i16` each.
+/// * The three regions are mutually disjoint. The one caller passes the
+///   chroma residual group, a stack `aDct2x2`, and
+///   `pMbCache->pDct.iChromaDc` (`svc_encode_mb.rs:862-866`) — three
+///   distinct allocations.
 #[inline]
 pub unsafe extern "C" fn WelsHadamardQuant2x2_c(
     pRs: *mut i16,
@@ -875,91 +794,38 @@ pub unsafe extern "C" fn WelsHadamardQuant2x2_c(
     pDct: *mut i16,
     pBlock: *mut i16,
 ) -> i32 {
-    unsafe {
-        let r0 = *pRs as i32;
-        let r32 = *pRs.add(32) as i32;
-        let r16 = *pRs.add(16) as i32;
-        let r48 = *pRs.add(48) as i32;
-
-        let s0 = r0 + r32;
-        let s1 = r0 - r32;
-        let s2 = r16 + r48;
-        let s3 = r16 - r48;
-
-        *pRs = 0;
-        *pRs.add(16) = 0;
-        *pRs.add(32) = 0;
-        *pRs.add(48) = 0;
-
-        let d = [
-            (s0 + s2) as i16,
-            (s0 - s2) as i16,
-            (s1 + s3) as i16,
-            (s1 - s3) as i16,
-        ];
-
-        let ff = kiFF as i32;
-        let mf = iMF as i32;
-        let mut iDcNzc = 0;
-
-        for i in 0..4 {
-            let val = d[i];
-            let iSign = (val as i32) >> 31;
-            let abs_val = (iSign ^ (val as i32)) - iSign;
-            let q = ((ff + abs_val) * mf) >> 16;
-            let res = ((iSign ^ q) - iSign) as i16;
-            *pDct.add(i) = res;
-            *pBlock.add(i) = res;
-            if res != 0 {
-                iDcNzc += 1;
-            }
-        }
-
-        iDcNzc
-    }
+    // SHIM(phase2) -> hadamard_quant_2x2
+    let rs: &mut [i16; 49] = unsafe { std::slice::from_raw_parts_mut(pRs, 49) }
+        .try_into()
+        .unwrap();
+    let dct: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pDct, 4) }
+        .try_into()
+        .unwrap();
+    let block: &mut [i16; 4] = unsafe { std::slice::from_raw_parts_mut(pBlock, 4) }
+        .try_into()
+        .unwrap();
+    hadamard_quant_2x2(rs, kiFF, iMF, dct, block)
 }
 
 /// 4x4 Forward Hadamard Transform on the 16 Luma DC coefficients of an Intra 16x16 macroblock.
 ///
 /// # Safety
-/// - `pLumaDc` must point to a writable buffer of 16 `i16` elements.
-/// - `pDct` must point to the 256-element macroblock coefficient buffer.
+/// * `pLumaDc` points at 16 writable, `i16`-aligned `i16`.
+/// * `pDct` points at 241 readable `i16` — the exact reach: the DC of raster
+///   block `k` sits at `k * 16` and block 15's DC at index 240 is the last
+///   read. Every caller hands the 256-coefficient luma buffer
+///   (`svc_encode_mb.rs:537-539`). Nothing is written through it.
+/// * The two regions are disjoint (the caller's `aDctT4Dc` is a stack array).
 #[inline]
 pub unsafe extern "C" fn WelsHadamardT4Dc_c(pLumaDc: *mut i16, pDct: *mut i16) {
-    unsafe {
-        let mut p = [0i32; 16];
-        let mut s = [0i32; 4];
-
-        for i in (0..16).step_by(4) {
-            let iIdx = ((i & 0x08) << 4) + ((i & 0x04) << 3);
-            let d0 = *pDct.add(iIdx) as i32;
-            let d80 = *pDct.add(iIdx + 80) as i32;
-            let d16 = *pDct.add(iIdx + 16) as i32;
-            let d64 = *pDct.add(iIdx + 64) as i32;
-
-            s[0] = d0 + d80;
-            s[3] = d0 - d80;
-            s[1] = d16 + d64;
-            s[2] = d16 - d64;
-
-            p[i] = s[0] + s[1];
-            p[i + 2] = s[0] - s[1];
-            p[i + 1] = s[3] + s[2];
-            p[i + 3] = s[3] - s[2];
-        }
-
-        for i in 0..4 {
-            s[0] = p[i] + p[i + 12];
-            s[3] = p[i] - p[i + 12];
-            s[1] = p[i + 4] + p[i + 8];
-            s[2] = p[i + 4] - p[i + 8];
-
-            *pLumaDc.add(i) = (((s[0] + s[1] + 1) >> 1).clamp(-32768, 32767)) as i16;
-            *pLumaDc.add(i + 8) = (((s[0] - s[1] + 1) >> 1).clamp(-32768, 32767)) as i16;
-            *pLumaDc.add(i + 4) = (((s[3] + s[2] + 1) >> 1).clamp(-32768, 32767)) as i16;
-            *pLumaDc.add(i + 12) = (((s[3] - s[2] + 1) >> 1).clamp(-32768, 32767)) as i16;
-        }
-    }
+    // SHIM(phase2) -> hadamard_t4_dc
+    let luma_dc: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLumaDc, 16) }
+        .try_into()
+        .unwrap();
+    let dct: &[i16; 241] = unsafe { std::slice::from_raw_parts(pDct, 241) }
+        .try_into()
+        .unwrap();
+    hadamard_t4_dc(luma_dc, dct);
 }
 
 // ============================================================================
@@ -969,64 +835,47 @@ pub unsafe extern "C" fn WelsHadamardT4Dc_c(pLumaDc: *mut i16, pDct: *mut i16) {
 /// Reorders all 16 transform coefficients from 2D raster order in `pDct` to 1D zigzag scan order in `pLevel`.
 ///
 /// # Safety
-/// - `pLevel` and `pDct` must point to at least 16 `i16` elements.
+/// `pLevel` points at 16 writable, `pDct` at 16 readable, `i16`-aligned
+/// `i16`; the two regions are disjoint (every caller pairs a level buffer
+/// with a separate coefficient buffer, `svc_encode_mb.rs:543-548`). `pDct`
+/// is only read.
 #[inline]
 pub unsafe extern "C" fn WelsScan4x4DcAc_c(pLevel: *mut i16, pDct: *mut i16) {
-    unsafe {
-        *pLevel.add(0) = *pDct.add(0);
-        *pLevel.add(1) = *pDct.add(1);
-        *pLevel.add(2) = *pDct.add(4);
-        *pLevel.add(3) = *pDct.add(8);
-        *pLevel.add(4) = *pDct.add(5);
-        *pLevel.add(5) = *pDct.add(2);
-        *pLevel.add(6) = *pDct.add(3);
-        *pLevel.add(7) = *pDct.add(6);
-        *pLevel.add(8) = *pDct.add(9);
-        *pLevel.add(9) = *pDct.add(12);
-        *pLevel.add(10) = *pDct.add(13);
-        *pLevel.add(11) = *pDct.add(10);
-        *pLevel.add(12) = *pDct.add(7);
-        *pLevel.add(13) = *pDct.add(11);
-        *pLevel.add(14) = *pDct.add(14);
-        *pLevel.add(15) = *pDct.add(15);
-    }
+    // SHIM(phase2) -> scan_4x4_dc_ac
+    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
+        .try_into()
+        .unwrap();
+    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
+    scan_4x4_dc_ac(level, dct);
 }
 
 /// Reorders 15 AC coefficients into `pLevel[0..14]` (omitting DC at `pDct[0]`) and sets `pLevel[15] = 0`.
 ///
 /// # Safety
-/// - `pLevel` and `pDct` must point to at least 16 `i16` elements.
+/// Same contract as [`WelsScan4x4DcAc_c`]: 16 writable / 16 readable
+/// disjoint `i16` regions.
 #[inline]
 pub unsafe extern "C" fn WelsScan4x4Ac_c(pLevel: *mut i16, pDct: *mut i16) {
-    unsafe {
-        *pLevel.add(0) = *pDct.add(1);
-        *pLevel.add(1) = *pDct.add(4);
-        *pLevel.add(2) = *pDct.add(8);
-        *pLevel.add(3) = *pDct.add(5);
-        *pLevel.add(4) = *pDct.add(2);
-        *pLevel.add(5) = *pDct.add(3);
-        *pLevel.add(6) = *pDct.add(6);
-        *pLevel.add(7) = *pDct.add(9);
-        *pLevel.add(8) = *pDct.add(12);
-        *pLevel.add(9) = *pDct.add(13);
-        *pLevel.add(10) = *pDct.add(10);
-        *pLevel.add(11) = *pDct.add(7);
-        *pLevel.add(12) = *pDct.add(11);
-        *pLevel.add(13) = *pDct.add(14);
-        *pLevel.add(14) = *pDct.add(15);
-        *pLevel.add(15) = 0;
-    }
+    // SHIM(phase2) -> scan_4x4_ac
+    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
+        .try_into()
+        .unwrap();
+    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
+    scan_4x4_ac(level, dct);
 }
 
 /// Reorders 16 DC coefficients into 1D zigzag scan order (identical to `WelsScan4x4DcAc_c`).
 ///
 /// # Safety
-/// - `pLevel` and `pDct` must point to at least 16 `i16` elements.
+/// Same contract as [`WelsScan4x4DcAc_c`].
 #[inline]
 pub unsafe extern "C" fn WelsScan4x4Dc(pLevel: *mut i16, pDct: *mut i16) {
-    unsafe {
-        WelsScan4x4DcAc_c(pLevel, pDct);
-    }
+    // SHIM(phase2) -> scan_4x4_dc_ac
+    let level: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pLevel, 16) }
+        .try_into()
+        .unwrap();
+    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
+    scan_4x4_dc_ac(level, dct);
 }
 
 // ============================================================================
@@ -1036,129 +885,114 @@ pub unsafe extern "C" fn WelsScan4x4Dc(pLevel: *mut i16, pDct: *mut i16) {
 /// Fast rate-distortion CAVLC bit-cost approximation for a 4x4 block based on JVT-O079.
 ///
 /// # Safety
-/// - `pDct` must point to at least 16 `i16` elements.
+/// `pDct` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
 #[inline]
 pub unsafe extern "C" fn WelsCalculateSingleCtr4x4_c(pDct: *mut i16) -> i32 {
-    unsafe {
-        let mut iSingleCtr: i32 = 0;
-        let mut iIdx: i32 = 15;
-
-        while iIdx >= 0 && *pDct.offset(iIdx as isize) == 0 {
-            iIdx -= 1;
-        }
-
-        while iIdx >= 0 {
-            iIdx -= 1;
-            let mut iRun = iIdx;
-            while iIdx >= 0 && *pDct.offset(iIdx as isize) == 0 {
-                iIdx -= 1;
-            }
-            iRun -= iIdx;
-            if (iRun as usize) < KI_TRUN_TABLE.len() {
-                iSingleCtr += KI_TRUN_TABLE[iRun as usize];
-            }
-        }
-
-        iSingleCtr
-    }
+    // SHIM(phase2) -> calculate_single_ctr_4x4
+    let dct: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDct, 16) }.try_into().unwrap();
+    calculate_single_ctr_4x4(dct)
 }
 
 /// Counts the number of non-zero coefficients in a 16-element array `pLevel`.
 ///
 /// # Safety
-/// - `pLevel` must point to at least 16 `i16` elements.
+/// `pLevel` points at 16 readable, `i16`-aligned `i16`. Nothing is written.
 #[inline]
 pub unsafe extern "C" fn WelsGetNoneZeroCount_c(pLevel: *mut i16) -> i32 {
-    unsafe {
-        let mut iCnt: i32 = 0;
-        for i in 0..16 {
-            if *pLevel.add(i) == 0 {
-                iCnt += 1;
-            }
-        }
-        16 - iCnt
-    }
+    // SHIM(phase2) -> get_none_zero_count
+    let level: &[i16; 16] = unsafe { std::slice::from_raw_parts(pLevel, 16) }
+        .try_into()
+        .unwrap();
+    get_none_zero_count(level)
 }
 
 // ============================================================================
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
 // ============================================================================
 
-#[inline]
-pub unsafe extern "C" fn WelsCopy4x4_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..4 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 4);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+/// One span construction for the seven fixed-shape copy shims (rule R-c: the
+/// span arithmetic lives in one place). Builds exact-reach views —
+/// `(H-1)*stride + W` bytes each side — and hands them to the named safe
+/// kernel.
+///
+/// # Safety
+/// `pDst` addresses a writable `(H-1)*iStrideD + W` byte span, `pSrc` a
+/// readable `(H-1)*iStrideS + W` byte span (both reach forward only from
+/// their block's `(0, 0)`); the spans are disjoint; strides `>= W` and
+/// positive.
+#[inline(always)]
+unsafe fn copy_shim<const W: usize, const H: usize>(
+    pDst: *mut u8,
+    iStrideD: i32,
+    pSrc: *mut u8,
+    iStrideS: i32,
+    kernel: fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>),
+) {
+    let (sd, ss) = (iStrideD as usize, iStrideS as usize);
+    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, (H - 1) * sd + W) };
+    let src = unsafe { std::slice::from_raw_parts(pSrc, (H - 1) * ss + W) };
+    kernel(
+        &PlaneCursor::new(src, 0, ss),
+        &mut PlaneCursorMut::new(dst, 0, sd),
+    );
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 4`, `H = 4`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy8x4_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..4 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 8);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy4x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_4x4
+    unsafe { copy_shim::<4, 4>(pDst, iStrideD, pSrc, iStrideS, copy_4x4) }
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 8`, `H = 4`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy4x8_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..8 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 4);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy8x4_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_8x4
+    unsafe { copy_shim::<8, 4>(pDst, iStrideD, pSrc, iStrideS, copy_8x4) }
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 4`, `H = 8`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy8x8_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..8 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 8);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy4x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_4x8
+    unsafe { copy_shim::<4, 8>(pDst, iStrideD, pSrc, iStrideS, copy_4x8) }
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 8`, `H = 8`. (The decoder's error-concealment
+/// module has its own same-named kernel — different function, never unify.)
 #[inline]
-pub unsafe extern "C" fn WelsCopy16x8_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..8 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 16);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_8x8
+    unsafe { copy_shim::<8, 8>(pDst, iStrideD, pSrc, iStrideS, copy_8x8) }
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 16`, `H = 8`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy8x16_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..16 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 8);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy16x8_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_16x8
+    unsafe { copy_shim::<16, 8>(pDst, iStrideD, pSrc, iStrideS, copy_16x8) }
 }
 
+/// # Safety
+/// See [`copy_shim`] with `W = 8`, `H = 16`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy16x16_c(mut pDst: *mut u8, iStrideD: i32, mut pSrc: *mut u8, iStrideS: i32) {
-    unsafe {
-        for _ in 0..16 {
-            core::ptr::copy_nonoverlapping(pSrc, pDst, 16);
-            pDst = pDst.offset(iStrideD as isize);
-            pSrc = pSrc.offset(iStrideS as isize);
-        }
-    }
+pub unsafe extern "C" fn WelsCopy8x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_8x16
+    unsafe { copy_shim::<8, 16>(pDst, iStrideD, pSrc, iStrideS, copy_8x16) }
+}
+
+/// # Safety
+/// See [`copy_shim`] with `W = 16`, `H = 16`. (Same name-collision note as
+/// [`WelsCopy8x8_c`].)
+#[inline]
+pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32) {
+    // SHIM(phase2) -> copy_16x16
+    unsafe { copy_shim::<16, 16>(pDst, iStrideD, pSrc, iStrideS, copy_16x16) }
 }
 
 // ARM NEON fallbacks
