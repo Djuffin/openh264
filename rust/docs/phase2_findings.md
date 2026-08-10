@@ -79,3 +79,70 @@ whether malformed input may reach the kernel at all, and to clamp or reject at t
 parse/dequant boundary if so. Do not "fix" it inside the transform.
 
 ---
+
+## F9 — `iFrameSad` is an `int32_t` accumulated over a whole picture, and overflows at the maximum frame size
+
+**Status: open, pre-existing, unreachable below ~8.4 megapixels — a second instance of
+F8's defect class, in the encoder's analysis pass rather than the decoder's transform.**
+Found while converting T8 (`processing/vaacalc.rs`).
+
+### What it is
+
+All five `VAACalc*` kernels accumulate the picture's total SAD into one `int32_t`,
+faithfully to `codec/processing/src/vaacalc/vaacalcfuncs.cpp`:
+
+```rust
+*pFrameSad += l_sad;        // int32_t += int32_t, once per 8x8 quadrant
+```
+
+`l_sad` is bounded (64 samples x 255 = 16 320 per quadrant) and the per-macroblock
+accumulators are reset each macroblock, so `iFrameSad` is the only quantity in the
+family that accumulates across the whole picture. Its ceiling is
+`width * height * 255`.
+
+| | C++ | this port |
+|---|---|---|
+| behaviour | signed-overflow **UB**; wraps on every target this builds for | **panics**, `attempt to add with overflow`, in a debug build |
+| release | wraps | wraps (overflow checks off) |
+
+### Reachability
+
+`i32::MAX / 255 = 8 421 504` samples, i.e. **32 896 macroblocks**. `MAX_MBS_PER_FRAME`
+is **36 864** (`encoder/wels_preprocess.rs:93`, level 5.2's `uiMaxFS`), which is
+4096x2304 and 9 437 184 samples — comfortably past the threshold. So the overflow is
+reachable at the top two frame sizes the encoder accepts, and only there, and only with
+a frame pair whose mean absolute difference exceeds ~227 of 255 across the entire
+picture. A cut from near-black to near-white at 4K does it; ordinary content nowhere
+near does.
+
+This is why the gate battery has never seen it: every bench and sweep configuration
+tops out at 1080p, where the ceiling is 528 768 000 — a quarter of the way to overflow.
+
+### Why it is F8's class and not a new one
+
+Same shape, same verdict: a C++ signed-overflow UB that the transliteration turns into
+a debug-build panic, unreachable on realistic input, reachable in principle, and
+**not** Phase 2's to repair. Widening `iFrameSad` to `int64_t` would change the release
+path's output on the wrapping case and break byte-exactness against the C++, which is
+the one thing this refactor may never do.
+
+Unlike F8 this one is encoder-side, so the input that reaches it is the *application's*
+raw frames rather than a hostile bitstream — there is no attacker-controlled path here,
+only a correctness ceiling. That makes it lower severity than F8, and it is recorded
+for completeness rather than as a decoder-panic candidate.
+
+### What Phase 2 did about it
+
+Nothing to the kernels — the safe walker accumulates `frame_sad` as an `i32` with the
+same `+=` in the same order (quadrant within macroblock within row), so it panics and
+wraps exactly where the old code does. The differential test drives pictures up to
+64x48, far below the threshold, so it compares two kernels rather than two panics.
+
+### Who fixes it
+
+Whoever owns the encoder's analysis arithmetic — not P13, which is decoder panic
+policy. The fix is a type change at the `SVAACalcResult::iFrameSad` field and every
+consumer of it, which is Phase 4's plumbing or later, and it has to be taken together
+with a decision about whether matching the C++'s wrap still matters at that point.
+
+---

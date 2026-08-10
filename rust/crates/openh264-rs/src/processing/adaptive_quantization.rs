@@ -13,13 +13,19 @@
 //! ## Integer widths are load-bearing
 //!
 //! `SampleVariance16x16_c` accumulates the two sums in `uint16_t` and the two
-//! squares in `uint32_t`, so `uiSum`/`uiCurSum` wrap at 65536 — for a 16x16 block
-//! of bright samples `uiCurSum` reaches 65280 and does not wrap, but the
-//! difference sum can, and `(uiSum >> 8)` is a 16-bit shift either way. Both are
-//! `u16` here with `wrapping_add`. The products `uiSum * uiSum` and
-//! `uiCurSum * uiCurSum` are `int` in C++ (integer promotion of `uint16_t`), and
-//! the result is stored back into a `uint16_t` field, so the truncation happens at
-//! the store.
+//! squares in `uint32_t`. Both are `u16` here with `wrapping_add`, faithfully —
+//! but **neither sum can actually reach the wrap**: a 16x16 block is 256 samples of
+//! at most 255, so both top out at 65280, 255 short of `uint16_t`'s range. (An
+//! earlier version of this note claimed the difference sum could wrap. It cannot;
+//! it has exactly the same bound as `uiCurSum`, and
+//! `sample_variance_16x16_accumulators_cannot_wrap` in
+//! `tests/kernels_differential_phase2.rs` drives both extremes to pin it.) The
+//! `wrapping_add`s stay regardless, because reproducing the C++'s declared widths
+//! is the rule, not reproducing only the widths that turn out to matter.
+//!
+//! The products `uiSum * uiSum` and `uiCurSum * uiCurSum` are `int` in C++ (integer
+//! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
+//! so the truncation happens at the store.
 
 use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap};
 use core::ffi::c_void;
@@ -97,6 +103,71 @@ pub unsafe fn SampleVariance16x16_c(
     uiCurSum >>= 8;
     (*pMotionTexture).uiTextureIndex =
         ((uiCurSquare >> 8) as i32 - (uiCurSum as i32) * (uiCurSum as i32)) as u16;
+}
+
+//=================== Safe kernels =====================//
+
+/// The bytes [`sample_variance_16x16`] reads from one plane, counted from the
+/// macroblock's top-left sample.
+///
+/// Sixteen rows of sixteen samples reaching forward only, so the last sample sits
+/// `15 * stride + 15` past the origin and the block needs no padding in any
+/// direction. The two shims size their slices with this and nothing else does the
+/// arithmetic; `tests/kernels_differential_phase2.rs` pins it.
+pub fn mb_span(stride: usize) -> usize {
+    15 * stride + 16
+}
+
+/// C++: `SampleVariance16x16_c`, `AdaptiveQuantization.cpp:245`.
+///
+/// The variance proxies for one macroblock: `uiMotionIndex` from the difference
+/// against the reference, `uiTextureIndex` from the current picture alone.
+///
+/// **Arithmetic parity is the whole difficulty here** (plan §7.4 / the R-e rule). The
+/// C++ accumulates the two sums in `uint16_t` and the two squares in `uint32_t`, so
+/// `uiSum` and `uiCurSum` genuinely wrap at 65536 — `uiCurSum` reaches 65280 for a
+/// block of maximum-brightness samples and stops just short, while the difference sum
+/// can go over. The products then promote to `int` and truncate at the store into the
+/// `uint16_t` field. Every one of those widths is reproduced below, wrap for wrap:
+/// nothing is widened, nothing is clamped, and the `wrapping_*` calls are the ones the
+/// old port already carried. Repairing this belongs to whoever owns the C++'s
+/// arithmetic, not to a conversion.
+pub fn sample_variance_16x16(
+    refy: &[u8],
+    ref_stride: usize,
+    srcy: &[u8],
+    src_stride: usize,
+) -> SMotionTextureUnit {
+    let mut cur_square: u32 = 0;
+    let mut square: u32 = 0;
+    let mut cur_sum: u16 = 0;
+    let mut sum: u16 = 0;
+
+    for y in 0..MB_WIDTH_LUMA as usize {
+        let ref_base = y * ref_stride;
+        let src_base = y * src_stride;
+        // Fixed-size windows: the sixteen-sample inner loop carries no bounds check,
+        // and the two range checks land once per row.
+        let r: &[u8; 16] = refy[ref_base..ref_base + 16].try_into().unwrap();
+        let s: &[u8; 16] = srcy[src_base..src_base + 16].try_into().unwrap();
+        for (&rv, &sv) in r.iter().zip(s.iter()) {
+            let diff = (rv as i32 - sv as i32).unsigned_abs();
+            sum = sum.wrapping_add(diff as u16);
+            square = square.wrapping_add(diff.wrapping_mul(diff));
+
+            cur_sum = cur_sum.wrapping_add(sv as u16);
+            cur_square = cur_square.wrapping_add((sv as u32) * (sv as u32));
+        }
+    }
+
+    // `uiSum * uiSum` promotes to `int` in C++ and the store back into the
+    // `uint16_t` field truncates.
+    sum >>= 8;
+    cur_sum >>= 8;
+    SMotionTextureUnit {
+        uiMotionIndex: ((square >> 8) as i32 - (sum as i32) * (sum as i32)) as u16,
+        uiTextureIndex: ((cur_square >> 8) as i32 - (cur_sum as i32) * (cur_sum as i32)) as u16,
+    }
 }
 
 /// `CAdaptiveQuantization` — `AdaptiveQuantization.h`.
