@@ -267,68 +267,55 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 /// dequantisation multiplier. For qp >= 12.
 ///
 /// # Safety
-/// `pRes` must point to 16 writable `i16`.
+/// `pRes` points at 16 writable, `i16`-aligned `i16`.
 pub unsafe extern "C" fn WelsDequantIHadamard4x4_c(pRes: *mut i16, kuiMF: u16) {
-    let mut iTemp = [0i16; 4];
-
-    let mut i = 0usize;
-    while i < 16 {
-        iTemp[0] = (*pRes.add(i)).wrapping_add(*pRes.add(i + 2));
-        iTemp[1] = (*pRes.add(i)).wrapping_sub(*pRes.add(i + 2));
-        iTemp[2] = (*pRes.add(i + 1)).wrapping_sub(*pRes.add(i + 3));
-        iTemp[3] = (*pRes.add(i + 1)).wrapping_add(*pRes.add(i + 3));
-
-        *pRes.add(i) = iTemp[0].wrapping_add(iTemp[3]);
-        *pRes.add(i + 1) = iTemp[1].wrapping_add(iTemp[2]);
-        *pRes.add(i + 2) = iTemp[1].wrapping_sub(iTemp[2]);
-        *pRes.add(i + 3) = iTemp[0].wrapping_sub(iTemp[3]);
-        i += 4;
-    }
-
-    for i in 0..4usize {
-        iTemp[0] = (*pRes.add(i)).wrapping_add(*pRes.add(i + 8));
-        iTemp[1] = (*pRes.add(i)).wrapping_sub(*pRes.add(i + 8));
-        iTemp[2] = (*pRes.add(i + 4)).wrapping_sub(*pRes.add(i + 12));
-        iTemp[3] = (*pRes.add(i + 4)).wrapping_add(*pRes.add(i + 12));
-
-        *pRes.add(i) = iTemp[0].wrapping_add(iTemp[3]).wrapping_mul(kuiMF as i16);
-        *pRes.add(i + 4) = iTemp[1].wrapping_add(iTemp[2]).wrapping_mul(kuiMF as i16);
-        *pRes.add(i + 8) = iTemp[1].wrapping_sub(iTemp[2]).wrapping_mul(kuiMF as i16);
-        *pRes.add(i + 12) = iTemp[0].wrapping_sub(iTemp[3]).wrapping_mul(kuiMF as i16);
-    }
+    // SHIM(phase2) -> dequant_ihadamard_4x4
+    let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
+        .try_into()
+        .unwrap();
+    dequant_ihadamard_4x4(res, kuiMF);
 }
 
 /// `decode_mb_aux.cpp:139`. Scales one 4x4 coefficient block in place.
 ///
 /// # Safety
-/// `pRes` must point to 16 writable `i16`; `kpMF` to 8 readable `u16`.
+/// `pRes` points at 16 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
+/// `u16` (a `g_kuiDequantCoeff` row), disjoint from `pRes`.
 pub unsafe extern "C" fn WelsDequant4x4_c(pRes: *mut i16, kpMF: *const u16) {
-    for i in 0..8usize {
-        *pRes.add(i) = (*pRes.add(i)).wrapping_mul(*kpMF.add(i) as i16);
-        *pRes.add(i + 8) = (*pRes.add(i + 8)).wrapping_mul(*kpMF.add(i) as i16);
-    }
+    // SHIM(phase2) -> dequant_4x4
+    let res: &mut [i16; 16] = unsafe { std::slice::from_raw_parts_mut(pRes, 16) }
+        .try_into()
+        .unwrap();
+    let mf: &[u16; 8] = unsafe { std::slice::from_raw_parts(kpMF, 8) }.try_into().unwrap();
+    dequant_4x4(res, mf);
 }
 
 /// `decode_mb_aux.cpp:147`. Scales four 4x4 coefficient blocks in place.
 ///
 /// # Safety
-/// `pRes` must point to 64 writable `i16`; `kpMF` to 8 readable `u16`.
+/// `pRes` points at 64 writable, `i16`-aligned `i16`; `kpMF` at 8 readable
+/// `u16`, disjoint from `pRes`.
 pub unsafe extern "C" fn WelsDequantFour4x4_c(pRes: *mut i16, kpMF: *const u16) {
-    for i in 0..8usize {
-        let mf = *kpMF.add(i) as i16;
-        for k in 0..8usize {
-            let idx = i + (k << 3);
-            *pRes.add(idx) = (*pRes.add(idx)).wrapping_mul(mf);
-        }
-    }
+    // SHIM(phase2) -> dequant_four_4x4
+    let res: &mut [i16; 64] = unsafe { std::slice::from_raw_parts_mut(pRes, 64) }
+        .try_into()
+        .unwrap();
+    let mf: &[u16; 8] = unsafe { std::slice::from_raw_parts(kpMF, 8) }.try_into().unwrap();
+    dequant_four_4x4(res, mf);
 }
 
 /// `decode_mb_aux.cpp:223`. Luma IDCT of an I16x16 macroblock when only the DC
 /// coefficients are non-zero.
 ///
 /// # Safety
-/// `pRec` and `pPred` must address 16 rows at their strides; `pDctDc` 16 readable
-/// `i16`.
+/// * `pRec` points at sample `(0, 0)` of a 16x16 block; bytes
+///   `[0, 15*iStride + 16)` from it must be readable and writable.
+/// * `pPred` points at sample `(0, 0)` of a 16x16 block; bytes
+///   `[0, 15*iPredStride + 16)` from it must be readable. Only read.
+/// * Both reach forward only; strides `>= 16` and positive; the two spans
+///   are disjoint (the callers hand a recon-plane cursor and a prediction
+///   scratch, `svc_encode_mb.rs:640-651`).
+/// * `pDctDc` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
 pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
     pRec: *mut u8,
     iStride: i32,
@@ -336,17 +323,16 @@ pub unsafe extern "C" fn WelsIDctRecI16x16Dc_c(
     iPredStride: i32,
     pDctDc: *mut i16,
 ) {
-    let mut pRec = pRec;
-    let mut pPred = pPred;
-
-    for i in 0..16i32 {
-        for j in 0..16i32 {
-            let dc = *pDctDc.offset(((i & 0x0C) + (j >> 2)) as isize) as i32;
-            *pRec.offset(j as isize) = WelsClip1(*pPred.offset(j as isize) as i32 + ((dc + 32) >> 6));
-        }
-        pRec = pRec.offset(iStride as isize);
-        pPred = pPred.offset(iPredStride as isize);
-    }
+    // SHIM(phase2) -> idct_rec_i16x16_dc
+    let (rs, ps) = (iStride as usize, iPredStride as usize);
+    let rec = unsafe { std::slice::from_raw_parts_mut(pRec, 15 * rs + 16) };
+    let pred = unsafe { std::slice::from_raw_parts(pPred, 15 * ps + 16) };
+    let dc: &[i16; 16] = unsafe { std::slice::from_raw_parts(pDctDc, 16) }.try_into().unwrap();
+    idct_rec_i16x16_dc(
+        &mut PlaneCursorMut::new(rec, 0, rs),
+        &PlaneCursor::new(pred, 0, ps),
+        dc,
+    );
 }
 
 /// `decode_mb_aux.cpp:209`. Applies `pfIDctFourT4` to the four 8x8 quadrants of a
