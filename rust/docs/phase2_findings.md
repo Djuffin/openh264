@@ -212,6 +212,24 @@ the same phase-exit Miri run that found the original, run mid-session on purpose
 
 ---
 
+**Third instance, 2026-08-10 (session G, T9's Miri-gate widening) — it was in the
+module's own unit tests all along.** Widening `gates.sh`'s Miri step from
+`--lib safe::` to the whole library (the session-B item, executed at this phase
+boundary) failed immediately on `common/sad_common.rs`'s
+`test_sample_sad_16x16_diff`, which hands `[0u8; 256]` at stride 16 to a parked
+raw composite: the bottom-right 8x8 starts at `8*stride + 8` and bumps eight
+times, reaching `264` in a 256-byte allocation. `test_sample_sad_partitions` had
+the same defect at stride 32. Both are now `(h + 1) * stride`, the rule as
+corrected by the second instance, with the derivation in the test.
+
+This is the finding's own lesson turned back on itself: F10 was recorded twice in
+the *differential* file and both times the fix was applied only there, because
+that was the only file the Miri gate ran. The kernels' own unit tests — written
+long before, in the module — had been exercising the same UB continuously and
+invisibly. **An accommodation is only as wide as the instrument that found it**,
+and this one had been two files too narrow for three sessions.
+
+
 ## F11 — `WelsIHadamard4x4Dc`'s plain `i16` additions overflow above ±2047, and a debug build panics where the C++ wraps
 
 **Status: open, pre-existing, unreachable on realistic content — a third instance of
@@ -265,5 +283,134 @@ Whoever unifies the encoder's DC arithmetic policy — the natural fix is the sa
 `wrapping_*` treatment its qp >= 12 sibling already has, but that is a behaviour
 choice (match-the-C++-wrap) that belongs with F9's owner, Phase 4's plumbing or
 later, not with a parity conversion.
+
+---
+
+## F12 — Every worker thread takes `&mut` to the one shared `CWelsThreadPool`, and Miri calls it a data race
+
+**Status: open, pre-existing, live on every multi-threaded encode — a *soundness*
+defect rather than an arithmetic one, and the first of its class this refactor has
+recorded.** Found by widening `gates.sh`'s Miri step from `--lib safe::` to the
+port's own unit tests, at Phase 2's exit (the session-B item).
+
+### What it is
+
+`IWelsTaskThreadSink`'s methods take `&mut self`:
+
+```rust
+pub trait IWelsTaskThreadSink: Send + Sync {
+    fn OnTaskStart(&mut self, pThread: *mut CWelsTaskThread, pTask: Option<TaskPtr>) -> …;
+    fn OnTaskStop (&mut self, pThread: *mut CWelsTaskThread, pTask: Option<TaskPtr>) -> …;
+}
+```
+
+and `CWelsThreadPool` implements it. Each `CWelsTaskThread` holds
+`m_pSink: *mut dyn IWelsTaskThreadSink` pointing at the **one** pool, and calls
+`OnTaskStart`/`OnTaskStop` from its own thread as tasks are dispatched. Every such
+call materialises a `&mut CWelsThreadPool`, so two worker threads plus the pool's
+own thread routinely hold `&mut` to the same object at the same time. Miri's
+report is the retag itself, not any field access:
+
+```
+Data race detected between (1) retag read on thread `CWelsThreadPool`
+and (2) retag write of type `CWelsThreadPool` on thread `CWelsTaskThread`
+   --> src/common/wels_thread_pool.rs:435:9   ( `&mut self,` )
+```
+
+### Why the mutexes do not save it
+
+Every field of `CWelsThreadPool` is a `Mutex` (`m_cWaitedTasks`, `m_cIdleThreads`,
+`m_cBusyThreads`, `m_cLockPool`, `m_running`, `m_end_flag`, `m_handle`), so the
+*data* is race-free and the code works. What is unsound is the reference: `&mut T`
+carries a uniqueness claim to the compiler regardless of what `T` contains, and two
+live `&mut` to one allocation is Undefined Behaviour whether or not either is
+dereferenced. LLVM is entitled to optimise on the `noalias` that claim implies.
+This is the same category as F1 — a size/aliasing fact the type system was told
+wrongly — not the F8/F9/F11 arithmetic-parity category.
+
+The `unsafe impl Send for CWelsThreadPool` / `unsafe impl Sync` pair is the place
+the claim was made; it makes sharing legal but says nothing about `&mut`.
+
+### Reachability
+
+Every encode with `iMultipleThreadIdc > 1`, on every frame. It has never produced
+an observed failure — which is exactly the F1 warning restated: 341/341 byte-identical
+sweeps ran on top of a stack overflow for the port's whole life.
+
+### What Phase 2 did about it
+
+Nothing to the code, per the phase's parity rule. `gates.sh`'s widened Miri step
+**skips the `wels_thread_pool` tests by name**, with this finding cited at the
+skip, so the rest of the library's unit tests are covered from now on. Removing
+that skip is part of the fix, not a separate task.
+
+### Who fixes it
+
+**Phase 7** (the threading rework), which owns this file, or Phase 6.4 if the
+`Vec<SliceState>` work reaches it first. The likely shape is small — every field is
+already a `Mutex`, so the sink methods can take `&self` and the trait object can be
+`*const dyn` — but it is a threading-layer interface change and it wants to land
+with the thread-pool rework rather than in front of it. Phase 7's exit gate should
+run the Miri step with the skip removed.
+
+---
+
+## F13 — The widened Miri gate's remaining queue: four aliasing defects it cannot get past
+
+**Status: open, pre-existing, live. Two are in production code and one is an API
+signature that lies about mutability.** Found in the same pass as F12, by widening
+`gates.sh`'s Miri step from `--lib safe::` to the whole library at Phase 2's exit.
+Recorded together because they are one class with one cause, and because they are
+the reason the widened gate carries a skip list.
+
+### The class
+
+A raw pointer is derived from an owner, a **second** pointer is then derived from
+that same owner, and the **first** is used afterwards. Under Stacked Borrows the
+second derivation pops the first pointer's tag, so the later use is Undefined
+Behaviour — even though the addresses are identical and every build produces the
+code the author expected. Nothing in a normal test run can see it; Miri sees it
+immediately.
+
+### The four sites
+
+| site | shape | owner phase |
+|---|---|---|
+| `decoder/manage_dec_ref.rs:476` `AddLongTermToList` | `ptr::copy(list.as_ptr().add(i), list.as_mut_ptr().add(i+1), n)` — the `as_mut_ptr()` argument is evaluated after the `as_ptr()` one and invalidates it, so the copy reads through a dead tag. Fix is `copy_within`. | **Phase 5** (decoder structural rewrite owns the ref lists) |
+| `encoder/encoder_ext.rs:820` `InitDqLayers` | takes `&mut (*(*pCtx).pSvcParam).sSpatialLayers[i].sSliceArgument` while another live reference into the same parameter struct is in scope | **Phase 6** (encoder context restructuring) |
+| `encoder/vlc_encoder.rs:353` `InitBits` | declares `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer writes through it. A caller that honestly passes `as_ptr()` produces a pointer with no write provenance, and the first `BsFlush` is UB. | **Phase 3.2** (the encoder write side; F2's family) |
+| `encoder/encoder_ext.rs:2418`, `:2427` `SetFastCodingFunc` / `SetNormalCodingFunc` | **`SWelsFuncPtrList` is self-referential.** `sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr()` stores a pointer into the struct's own `pfSampleSad` array; `SetNormalCodingFunc` does the same with `pfSampleSatd`. Every later `&mut SWelsFuncPtrList` — and the encoder takes one constantly — reborrows the whole struct and pops that interior pointer's tag, so the next `(*pFuncList).sSampleDealingFuncs.pfMdCost.add(BLOCK_16x16)` read is UB. | **Phase 4a** (it owns `SWelsFuncPtrList` and the dispatch tables) |
+
+The third is the interesting one: it is not a caller mistake, it is a signature
+that documents the opposite of what the function does. Every honest caller is
+wrong. `au_set.rs`'s two tests carried the accommodation
+(`as_mut_ptr() as *const u8`, with the reason written next to it) rather than the
+signature being changed, because changing it is Phase 3's job and it wants to
+happen with `BsWriter`.
+
+### What Phase 2 did about it
+
+Recorded them, and **widened the gate around them**: `gates.sh`'s Miri step now
+runs the whole library with `--skip wels_thread_pool --skip manage_dec_ref
+--skip encoder_ext --skip svc_mode_decision`, each skip commented with the finding
+that owns it. The skip
+list is a work queue — deleting a line from it is part of fixing the thing it
+names, and no skip may be added without a finding.
+
+Four *test-side* instances of the same class were fixed outright in the same pass,
+since a test that manufactures the aliasing is the test's bug and not a behaviour
+change to the port: `common/sad_common.rs` (one `as_mut_ptr()` used for both
+operands), `decoder/error_concealment.rs` (array written through its binding while
+a derived pointer was still live), `decoder/parse_mb_syn_cavlc.rs` (three
+derivations for one `SBitStringAux`), and F10's third instance in `sad_common`'s
+buffer sizes.
+
+### Why this matters more than the count suggests
+
+Seven real defects in the first afternoon of a gate that had been running on 63 tests
+and now runs on ~270. None of them had ever produced an observable failure, which
+is F1's lesson restated for the third time in this refactor: **byte-exactness does
+not imply soundness**, and the instrument that can tell the difference had been
+pointed at a small corner of the codebase.
 
 ---

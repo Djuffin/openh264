@@ -940,16 +940,24 @@ mod tests {
         }
     }
 
+    /// The flag array is mutated **through the pointer the layer holds**, not
+    /// through the array binding. Writing `mb_flags[2]` directly would reborrow the
+    /// array and pop `pMbCorrectlyDecodedFlag`'s tag off the borrow stack, so the
+    /// next `NeedErrorCon` would read through a pointer Stacked Borrows has already
+    /// invalidated — Undefined Behaviour in the *test*, not in `NeedErrorCon`.
+    /// Found when the Miri gate was widened to the port's unit tests at Phase 2's
+    /// exit; the same shape as `sad_common`'s twice-taken `as_mut_ptr`.
     #[test]
     fn test_need_error_con() {
         let mut mb_flags = [true; 4];
+        let flags = mb_flags.as_mut_ptr();
         let mut sps = SSps {
             iMbWidth: 2,
             iMbHeight: 2,
             ..Default::default()
         };
         let mut dq_layer = SDqLayer {
-            pMbCorrectlyDecodedFlag: mb_flags.as_mut_ptr(),
+            pMbCorrectlyDecodedFlag: flags,
             ..Default::default()
         };
         let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
@@ -958,8 +966,7 @@ mod tests {
 
         unsafe {
             assert_eq!(NeedErrorCon(&mut *ctx), false);
-            mb_flags[2] = false;
-            let _ = mb_flags;
+            *flags.add(2) = false;
             assert_eq!(NeedErrorCon(&mut *ctx), true);
         }
     }

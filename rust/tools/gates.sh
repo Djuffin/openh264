@@ -201,14 +201,44 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   #    which is how F7 was found, so they are not optional, just infrequent.
   #    Sample counts scale down under cfg!(miri) via each file's scale() helper.
   # -------------------------------------------------------------------------
-  hdr "miri (--lib safe::)"
+  # WIDENED at Phase 2's exit (2026-08-10) from `--lib safe::` to the whole
+  # library. The old scope was the vocabulary types only, which meant a port unit
+  # test exercising UB went unseen until a shim happened to materialise the same
+  # span — session B flagged that gap, and widening it here found six real defects
+  # in its first afternoon (three test-side accommodations, three in production
+  # code; `phase2_findings.md` F10's third instance, F12 and F13).
+  #
+  # SKIPS. Each names a module whose *production* code still trips Miri, with the
+  # finding that owns it. They are a work queue, not a settled state — deleting a
+  # line here is part of fixing the thing it names, and no skip may be added
+  # without a finding.
+  #
+  #   wels_thread_pool  F12  every worker takes `&mut` to the one shared pool
+  #                          (data race on the retag; Phase 7 owns it)
+  #   manage_dec_ref    F13  `AddLongTermToList` copies through an `as_ptr()` the
+  #                          following `as_mut_ptr()` has already invalidated
+  #   encoder_ext       F13  `InitDqLayers` holds `&mut` into `sSpatialLayers`
+  #                          across an aliasing use
+  #   svc_mode_decision F13  `SWelsFuncPtrList` is self-referential — `pfMdCost`
+  #                          points into `pfSampleSad`/`pfSampleSatd` in the same
+  #                          struct, so every later `&mut` reborrow of the list
+  #                          invalidates it (Phase 4a owns the tables)
+  MIRI_SKIPS=(--skip wels_thread_pool --skip manage_dec_ref --skip encoder_ext
+              --skip svc_mode_decision)
+  hdr "miri (--lib, minus the F12/F13 skips)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
-  elif (cd "$CRATE" && cargo +nightly miri test --lib safe:: 2>&1) \
+  # -Zmiri-ignore-leaks: this gate is for *undefined behaviour*, not for leaks. The
+  # port allocates C-style through `WelsMalloc` on purpose and frees through paired
+  # destructors the unit tests mostly do not call, so leak-checking a mid-refactor
+  # transliteration reports the design rather than a defect. Phase 8 (the API layer)
+  # is where ownership becomes Rust's and the leak check becomes meaningful.
+  elif (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} -Zmiri-ignore-leaks" \
+          cargo +nightly miri test --lib -- "${MIRI_SKIPS[@]}" 2>&1) \
          | tee "$LOGS/miri_lib.log" | tail -5; then
-    pass "miri --lib safe::"
+    pass "miri --lib (whole library, minus the F12/F13 skips)"
   else
-    fail "miri --lib safe:: — see $LOGS/miri_lib.log"
+    fail "miri --lib — see $LOGS/miri_lib.log"
   fi
 fi
 

@@ -2959,12 +2959,18 @@ mod tests {
     #[test]
     fn test_cavlc_zero_coeff_block_decoding() {
         let mut buf = [0u8; 16];
+        // One derivation, three uses. Calling `as_mut_ptr()` three times would
+        // reborrow twice, leaving `pStartBuf` and `pCurBuf` holding tags that
+        // Stacked Borrows has already popped — Undefined Behaviour the moment the
+        // parser reads through either. Found when the Miri gate was widened to the
+        // port's unit tests at Phase 2's exit.
+        let p = buf.as_mut_ptr();
         let mut bs = SBitStringAux {
-            pStartBuf: buf.as_mut_ptr(),
-            pEndBuf: unsafe { buf.as_mut_ptr().add(16) },
+            pStartBuf: p,
+            pEndBuf: unsafe { p.add(16) },
             iBits: 128,
             iIndex: 0,
-            pCurBuf: buf.as_mut_ptr(),
+            pCurBuf: p,
             uiCurBits: 0,
             iLeftBits: 0,
         };

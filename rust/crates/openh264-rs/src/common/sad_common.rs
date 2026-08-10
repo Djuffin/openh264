@@ -503,11 +503,19 @@ mod tests {
         assert_eq!(WELS_ABS(0), 0);
     }
 
+    /// One `as_mut_ptr()`, reused — not two. Calling it twice on the same `&mut`
+    /// reborrows, which pops the first pointer's tag off the borrow stack and makes
+    /// the kernel's read through it Undefined Behaviour under Stacked Borrows. The
+    /// kernel is blameless (it only reads); the *test* was manufacturing two live
+    /// mutable pointers into one allocation, which is exactly the aliasing shape
+    /// session B predicted the `safe::`-only Miri gate could not see. Found when
+    /// that gate was widened to the port's unit tests at Phase 2's exit.
     #[test]
     fn test_sample_sad_4x4_identical() {
         let mut buf = [42u8; 64];
         unsafe {
-            let sad = WelsSampleSad4x4_c(buf.as_mut_ptr(), 8, buf.as_mut_ptr(), 8);
+            let p = buf.as_mut_ptr();
+            let sad = WelsSampleSad4x4_c(p, 8, p, 8);
             assert_eq!(sad, 0);
         }
     }
@@ -532,10 +540,18 @@ mod tests {
         }
     }
 
+    /// Buffers are `(h + 1) * stride`, not `h * stride`: these kernels are
+    /// **parked raw** (`perf_baseline.md` §Parked), so they still carry the C++'s
+    /// trailing `pSrc += iStride` past the last row, and a composite's sub-blocks
+    /// bump from their own anchors — `WelsSampleSad16x16_c`'s bottom-right 8x8
+    /// reaches `8*stride + 8 + 8*stride`. On an exactly-sized buffer that is
+    /// out-of-allocation pointer arithmetic: `phase2_findings.md` **F10**, third
+    /// instance, found by the widened Miri gate at Phase 2's exit. The exact spans
+    /// come back when the family re-lands (Phase 4a).
     #[test]
     fn test_sample_sad_16x16_diff() {
-        let mut buf1 = [0u8; 256];
-        let mut buf2 = [2u8; 256];
+        let mut buf1 = [0u8; 17 * 16];
+        let mut buf2 = [2u8; 17 * 16];
         unsafe {
             let sad = WelsSampleSad16x16_c(buf1.as_mut_ptr(), 16, buf2.as_mut_ptr(), 16);
             assert_eq!(sad, 256 * 2);
@@ -544,8 +560,9 @@ mod tests {
 
     #[test]
     fn test_sample_sad_partitions() {
-        let mut buf1: Vec<u8> = (0..512).map(|x| (x % 255) as u8).collect();
-        let mut buf2: Vec<u8> = (0..512).map(|x| ((x + 5) % 255) as u8).collect();
+        // (16 + 1) * 32 for the same F10 reason as `test_sample_sad_16x16_diff`.
+        let mut buf1: Vec<u8> = (0..17 * 32).map(|x| (x % 255) as u8).collect();
+        let mut buf2: Vec<u8> = (0..17 * 32).map(|x| ((x + 5) % 255) as u8).collect();
 
         unsafe {
             let s8x4 = WelsSampleSad8x4_c(buf1.as_mut_ptr(), 32, buf2.as_mut_ptr(), 32);

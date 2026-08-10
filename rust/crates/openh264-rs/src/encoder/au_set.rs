@@ -899,7 +899,14 @@ mod tests {
 
         let written = unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            InitBits(&mut bs, buf.as_ptr(), buf.len() as i32);
+            // `as_mut_ptr() as *const u8`, not `as_ptr()`: `InitBits` declares
+            // `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer
+            // writes through it. A pointer derived from `as_ptr()` carries no write
+            // provenance, so the first `BsFlush` is Undefined Behaviour. The
+            // const-declared-but-written parameter is the real defect and belongs to
+            // Phase 3's write side (F2's family); the test carries the accommodation,
+            // per F10's precedent.
+            InitBits(&mut bs, buf.as_mut_ptr() as *const u8, buf.len() as i32);
             WelsWriteSpsNal(&mut sps, &mut bs, delta.as_mut_ptr());
             bs.pCurBuf.offset_from(bs.pStartBuf) as usize
         };
@@ -955,7 +962,14 @@ mod tests {
 
             let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
             assert!(!st.is_null());
-            InitBits(&mut bs, buf.as_ptr(), buf.len() as i32);
+            // `as_mut_ptr() as *const u8`, not `as_ptr()`: `InitBits` declares
+            // `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer
+            // writes through it. A pointer derived from `as_ptr()` carries no write
+            // provenance, so the first `BsFlush` is Undefined Behaviour. The
+            // const-declared-but-written parameter is the real defect and belongs to
+            // Phase 3's write side (F2's family); the test carries the accommodation,
+            // per F10's precedent.
+            InitBits(&mut bs, buf.as_mut_ptr() as *const u8, buf.len() as i32);
             WelsWritePpsSyntax(&mut pps, &mut bs, st);
             let n = bs.pCurBuf.offset_from(bs.pStartBuf) as usize;
             DestroyParametersetStrategy(st);
