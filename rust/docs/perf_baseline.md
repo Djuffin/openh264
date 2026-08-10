@@ -488,9 +488,59 @@ demonstrated fixed-per-call; deleting phase named). The ≤10%-per-stream hard c
 is judged over the *sum* of live entries. Phase 4 re-measures every entry (direct
 dispatch makes shims inlinable); Phase 5 closes them with the shims.
 
-| family | entered | deficit (CB / Main / High, decode ms/frame) | body evidence | deleting phase | Phase 4 checkpoint | closed |
+| family | entered | deficit | body evidence | deleting phase | Phase 4 checkpoint | closed |
 |---|---|---|---|---|---|---|
-| T4 `common/mc.rs` (28 shims) | 2026-08-08, D-perf-1 | +8.2% / +7.2% / +7.0% | centre kernels 0.88–0.99x; 8x8 chroma copy overhead 7 ns fixed/call (§Phase 2 T4) | Phase 5 | *pending* | — |
+| T4 `common/mc.rs` (28 shims) | 2026-08-08, D-perf-1 | decode +8.2% / +7.2% / +7.0%; **encoder +7.6% median, +16.7% worst** (measured 2026-08-09, see below) | centre kernels 0.88–0.99x; 8x8 chroma copy overhead 7 ns fixed/call (§Phase 2 T4) | Phase 5 | *pending* | — |
+| T8 `processing/*` (6 shims) | 2026-08-09 | encoder +3.5% median, +8.5% worst usable | five of six bodies 0.69–1.04x; `VAACalcSadBgd_c` 1.44x (§Phase 2 T8) | Phase 5 | *pending* | — |
+
+### The encoder-side ceiling is breached, and it needs a decision (2026-08-09)
+
+**D-perf-1's addendum asked for T4's encoder contribution to be isolated. It is
++7.6% median and +16.7% at worst, and that breaches §7.4's 10%-per-stream hard
+ceiling.** Measured commit A `46053993` (mc.rs raw) against commit B `ea52b387`
+(mc.rs swapped), binaries kept on disk and interleaved, 3 pairs, Rust rows, with the
+same-binary null run putting the floor at ±2%:
+
+| stream | thr | A (raw) | B (swapped) | delta |
+|---|---|---|---|---|
+| 1080p SMPTE Bars | 4 | 2.918 | 3.405 | **+16.69%** |
+| 320x240 PAL 75% | 1 | 0.057 | 0.066 | **+15.79%** |
+| 320x240 YUV Space | 4 | 0.059 | 0.067 | **+13.56%** |
+| 640x480 SMPTE Bars | 1 | 0.219 | 0.248 | **+13.24%** |
+| 1080p SMPTE Bars | 1 | 2.899 | 3.250 | **+12.11%** |
+| 320x240 SMPTE Bars | 1/4 | 0.058 | 0.065 | **+12.07%** |
+| 1080p Testsrc | 1 | 4.318 | 4.654 | +7.78% |
+| 1080p Mandelbrot | 1 | 10.270 | 10.834 | +5.49% |
+| 720p Mandelbrot | 1 | 5.113 | 5.237 | +2.43% |
+
+Median **+7.57%** over the 28 usable rows (Spatial Ramps excluded — the null run
+moved it -38%), worst **+16.69%**, **11 usable rows over the 10% ceiling**.
+
+Three things follow, none of which this session decided:
+
+1. **The cumulative encoder deficit is roughly +11%**, because T8's +3.5% was measured
+   on top of an already-swapped `mc.rs`. §7.4 judges the ceiling over the *sum* of live
+   entries, and the sum is over.
+2. **This does not change T4's ledger eligibility.** Its bodies are still 0.88–0.99x
+   and the residual is still fixed per-call scaffolding that Phase 5 deletes with the
+   shims. What changed is the size, and the reason it is bigger here than on the decode
+   side is that motion estimation calls MC far more times per frame than decoding does
+   — a fixed per-call cost is levied per *call*, and the encoder makes many more.
+3. **It is a phase decision, like D-perf-1 was, and it is Eugene's.** The options are
+   the same three: carry a larger deficit to Phase 5 with the ceiling explicitly raised
+   for encoder streams and the reasoning recorded; revert T4 and leave `mc.rs` raw
+   until Phase 5 converts its callers; or bring Phase 4's direct-dispatch checkpoint
+   forward for `mc.rs` specifically, since direct calls are what make these shims
+   inlinable and the per-call cost is exactly what inlining removes.
+
+What is *not* open is whether a cleverer kernel fixes it — T4 measured three structural
+mitigations and rejected all three, and its bodies are already at or under parity.
+
+**The instrument lesson underneath this is the same one session C paid for.** T4 landed
+in session B, was judged against the decode bench alone, and was carried under a
+decision that assumed the encoder side looked similar. It did not, and nobody could
+have known, because `FFMPEG` was unset and `c_vs_rust_bench` had been printing SKIP for
+three families. One environment variable hid a ceiling breach for two sessions.
 
 **T5-sad was considered for this ledger and rejected**, which is worth recording
 because it is the criteria doing their job. Condition (a) is that the paired
@@ -510,7 +560,45 @@ found), by the Phase 4 direct-dispatch checkpoint, or by their callers convertin
 
 | family | parked | body evidence | blocking mechanism | re-attempt point | closed |
 |---|---|---|---|---|---|
-| T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, and `abs_diff` all measured null | D-perf-2 bounded attempt (next session) → else Phase 4 checkpoint → else caller conversion (ME, Phase 6.3) | — |
+| T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, `abs_diff`, and now T8's exact-span shape all measured null | **D-perf-2 attempt spent 2026-08-09 — stays parked.** Next: Phase 4 direct-dispatch checkpoint → else caller conversion (ME, Phase 6.3) | — |
+
+#### D-perf-2's one attempt, and its verdict (2026-08-09)
+
+**Verdict: parked. T7's SAD/SATD families go prove-and-park from the start.** This is
+exit state (b) of the two the decision allowed, and the box is now closed — a third
+investigation is out of scope for the phase.
+
+The candidate was the shape that had just taken T8's whole-picture walk from 2.51x to
+1.02x, and it was a real candidate rather than a guess: same problem (fixed-size
+window, runtime stride, per-row checks that will not fold) and **not** one of the three
+things T5 had already measured and rejected. Trim the block to its exact span once
+(`(H-1) * stride + W`), then index rows directly at `k * stride` instead of walking
+them with `chunks()`, which is what `PlaneCursor::row_windows` does.
+
+Measured L1-resident (64-byte stride over 4 KB, the residency a motion search has),
+raw against the live pointer kernels — T5-sad being unswapped means those are genuinely
+raw. In the framing **most favourable to the candidate** — plain slices and offsets,
+no cursor construction at all — it came in at **1.39x to 2.97x** across the seven
+shapes. Better than the in-tree kernel in the same harness, and nowhere near the
+≤1.05x body-parity bar the swap requires.
+
+Two things worth carrying, and one caveat that limits how far to trust the numbers:
+
+- **`PlaneCursor::new` is itself a significant per-call cost at this size.** Making the
+  candidate pay the same two constructions the in-tree kernel pays moved 4x4 from 1.61x
+  to **4.93x** and 8x8 from 2.29x to 3.24x. For kernels whose whole body is a couple of
+  nanoseconds, validating a cursor twice per call is a large fraction of the work. That
+  suggests a direction genuinely outside T5's rejected set: let the shim hand these
+  kernels **slices and offsets** rather than cursors. It is a convention change (the
+  phase's rule is that plane-reading kernels take cursors), so it belongs to whoever
+  reopens this at the Phase 4 checkpoint, not here.
+- **The caveat: this harness is not sound enough for its absolute numbers to enter the
+  record.** It reads the in-tree `sample_sad` at 2.9-8.7x where T5's harness read
+  1.55-1.68x and 1.00-1.02x, and raw `Sad8x4` moved 6.49 ns → 2.18 ns between two runs
+  of the same binary. At ~2 ns per call it cannot resolve the small shapes. The verdict
+  rests only on the robust part: **nothing measured came near parity, in any framing,
+  including the one that gave the candidate every advantage.** Anyone reopening this
+  should rebuild the harness before trusting a number from it.
 
 ## How to use this in later phases
 

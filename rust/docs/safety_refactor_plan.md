@@ -536,6 +536,23 @@ Two counting rules the script encodes, both learned the hard way:
 
 **Decision D-perf-1 (2026-08-08): T4's ~7–8% is carried as a scaffolding deficit, not reverted.** Basis: the kernel bodies measure 0.88–0.99x (at parity or better — the end-state cost is zero or negative); the residual is 7–16 ns of fixed per-call shim overhead on the most call-dense family in the codec; three structural mitigations were built, paired-measured, and rejected, so further optimization attempts are closed; and unswapping would forfeit the full battery's continuous exercise of the safe kernels while concentrating re-swap risk exactly where the strangler pattern exists to avoid it. The deficit is ledgered in `perf_baseline.md`, bounded by the ≤10% ceiling, checkpointed at Phase 4, and must clear at Phase 5. *Addendum 2026-08-09: with the encoder bench now actually running, T4's encoder-stream contribution was never isolated — measure it at the next session start and append it to T4's ledger row.*
 
+**Decision D-perf-3 is OPEN and blocks nothing yet, but it is the phase's largest
+outstanding question (raised 2026-08-09): the encoder-side ceiling is breached.**
+D-perf-1's addendum asked for `mc.rs`'s encoder contribution to be isolated now that
+the encoder bench actually runs. It is **+7.6% median and +16.7% worst** across 28
+usable stream/thread rows, against a same-binary null floor of ±2% — eleven rows over
+§7.4's 10%-per-stream hard ceiling — and T8's +3.5% sits on top of it, so the live
+cumulative encoder deficit is roughly **+11%**. T4's ledger *eligibility* is unchanged
+(bodies 0.88–0.99x, residual is fixed per-call scaffolding Phase 5 deletes); what is
+new is the magnitude, and its cause is structural rather than fixable: motion
+estimation calls MC far more often per frame than decoding does, so a fixed per-call
+shim cost is levied far more often. The three options are carry-with-a-raised-ceiling,
+revert `mc.rs` until Phase 5 converts its callers, or pull Phase 4's direct-dispatch
+checkpoint forward for `mc.rs` alone (direct calls are what make a shim inlinable, and
+inlining is exactly what deletes a per-call cost). Evidence and the full table are in
+`perf_baseline.md` §"The encoder-side ceiling is breached". **This is Eugene's call,
+as D-perf-1 was.**
+
 **Decision D-perf-2 (2026-08-09): T5-sad gets one bounded re-landing attempt, scheduled with T8 in the next session — T6's order is unaffected, and T7 inherits the verdict either way.** The question the attempt answers is not "can SAD be a bit faster" but the technique question that gates T7's ~30 SAD/SATD-shaped kernels: whether per-row cost on tiny fixed blocks with runtime strides can be made to fold in safe code at the shim boundary at all. Time-box: half a session, hard stop, disassembly-first (both prior guesses measured null; `row_windows` alone was not enough). Exit states, both acceptable: (a) bodies reach ≤1.05x L1-resident and the family re-swaps inside the ceiling — the technique transfers to T7; or (b) it doesn't, T5-sad stays **parked** until the Phase 4 checkpoint or its callers convert (ME is Phase 6.3), and T7's SAD/SATD families go **prove-and-park** from the start instead of burning swap-measure-unswap cycles. What is not acceptable is a third unbounded investigation: one attempt, one verdict, recorded.
 
 ### 7.5 Session workflow
@@ -805,20 +822,38 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       whose checks therefore cannot fold. Does **not** repeal T4's `chunks` verdict —
       `mc.rs` keeps `row()`, where the widths are const and the checks do fold — and the
       rule is written on the method.
-- [x] **D-perf-2 — the T5-sad sequencing call (2026-08-09).** One bounded re-landing
-      attempt (half-session hard stop, disassembly-first, body-parity precondition per
-      §7.4), scheduled **with T8 in the next session**; T6 keeps its slot; T7 inherits
-      the verdict — re-land technique if it exists, prove-and-park for its SAD/SATD
-      families if it doesn't. Recorded in §7.4.
+- [x] **D-perf-2 — the T5-sad sequencing call (2026-08-09), and its verdict
+      (2026-08-09).** The one bounded attempt was spent. The candidate was T8's
+      exact-span shape, which had just taken that family from 2.51x to 1.02x and was
+      not in T5's rejected set; on SAD it measured **1.39-2.97x L1-resident even in
+      the framing most favourable to it**. **T5-sad stays parked and T7's SAD/SATD go
+      prove-and-park from the start.** The box is closed. One thing found on the way
+      that a later reopening should start from: `PlaneCursor::new` costs enough at
+      this block size that paying it twice per call moved 4x4 from 1.61x to 4.93x, so
+      handing these kernels slices-and-offsets instead of cursors is a live idea —
+      and a convention change, hence not this phase's. `perf_baseline.md` §Parked.
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
       Not started.
 - [ ] **T7 — the four encoder kernel files.** Not started; shape depends on D-perf-2's
       verdict (swap vs prove-and-park for `sample.rs`'s SAD/SATD).
-- [ ] **T8 — `processing/{vaacalc,adaptive_quantization}.rs`.** Not started; **next
-      action, sharing the session with D-perf-2's bounded attempt**. Recount:
-      **6 kernels** (vaacalc 5 + `SampleVariance16x16_c`), not the continuation
-      brief's 11. Also at session start: isolate T4's encoder-stream deficit with the
-      now-live encoder bench (D-perf-1 addendum).
+- [x] **T8 — `processing/{vaacalc,adaptive_quantization}.rs` (`d41244c2`,
+      `af98f6ab`).** **6 kernels** as recounted (vaacalc 5 + `SampleVariance16x16_c`),
+      not the continuation brief's 11. No dispatch table and no `no_mangle` anywhere
+      in the family, so all six shims are plain `unsafe fn`. Bodies at 0.69-1.04x
+      against the raw ones except `VAACalcSadBgd_c` at **1.44x**, which is recorded
+      with its mechanism rather than fixed; end-to-end +3.48% median on the encoder,
+      inside the ceiling. Two microbenchmark errors and their fixes are in
+      `perf_baseline.md` §Phase 2 T8 — the important one is that **after a swap the
+      "raw" side of a microbenchmark is the shim**, so bodies must be measured before
+      swapping or recovered with `git show`. Findings: **F9** (`iFrameSad` overflows
+      above 32 896 macroblocks) plus two false claims corrected in the converted
+      files' own headers.
+- [x] **A new instrument step: the null run.** Before attributing an encoder-bench
+      reading to noise, run the **same binary in both slots** through the identical
+      harness. Measured here at median +0.00% / max +1.81% / zero rows over 5%, which
+      turned a suspected artefact into a real +3.48%. Also re-condemned Spatial Ramps
+      (-38% between two runs of one binary). Cheap, decisive, and it belongs in front
+      of every "that's just noise" conclusion from here on.
 - [ ] **T9 — phase exit.** Not started.
 
 ### Phases 3–9
