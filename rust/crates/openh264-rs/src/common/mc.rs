@@ -2007,7 +2007,14 @@ mod tests {
     /// and lives in `tests/kernels_differential_phase2.rs`
     /// (`mc_table_slots_match_the_direct_calls`), where identity is proven by
     /// output rather than by symbol address.
+    /// Not under Miri: it mints a fresh synthetic address for each reified
+    /// function pointer, so even two calls of the *same* installer compare
+    /// unequal there. The property this test states is about symbol identity,
+    /// which Miri deliberately does not model; the behavioural half
+    /// (`mc_table_slots_match_the_direct_calls`) does run under Miri and is
+    /// what covers this path there.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn init_mc_func_ignores_the_cpu_flag() {
         use crate::common::cpu_core::*;
         let flags: [u32; 10] = [

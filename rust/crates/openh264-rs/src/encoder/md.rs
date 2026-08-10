@@ -440,6 +440,28 @@ pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 
+/// Which sibling cost array a selector in [`SSampleDealingFunc`] names.
+///
+/// Phase 4a, §2.2.5 tier 2: config dispatch becomes an `enum` + `match`. The
+/// C++ (`wels_func_ptr_def.h`) stores a `PSampleSadSatdCostFunc*` and points it
+/// at one of the two arrays in the same struct; the port copied that literally,
+/// which is F13's fourth site. The selection is made once per layer from
+/// encoder config and never varies per macroblock, so a tag carries every bit
+/// of information the pointer did — and unlike the pointer, taking `&mut` on
+/// the enclosing struct cannot invalidate it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum CostFamily {
+    /// No cost function selected — the old null pointer. The C++ leaves the
+    /// slot unset outside the configurations that use it, where reading it was
+    /// already a null deref.
+    #[default]
+    Unset,
+    /// `pfSampleSad` — sum of absolute differences.
+    Sad,
+    /// `pfSampleSatd` — Hadamard-transformed absolute differences.
+    Satd,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SSampleDealingFunc {
@@ -453,8 +475,19 @@ pub struct SSampleDealingFunc {
     pub pfIntra16x16Combined3Sad: *mut c_void,
     pub pfIntra8x8Combined3Satd: *mut c_void,
     pub pfIntra8x8Combined3Sad: *mut c_void,
-    pub pfMdCost: *mut Option<PSampleSadSatdCostFunc>,
-    pub pfMeCost: *mut Option<PSampleSadSatdCostFunc>,
+    /// Which of the two sibling cost arrays mode decision reads. **Was
+    /// `*mut Option<PSampleSadSatdCostFunc>` pointing into this same struct**,
+    /// which is F13's fourth site: `SetFastCodingFunc` stored
+    /// `pfSampleSad.as_mut_ptr()` here, so every later `&mut SWelsFuncPtrList`
+    /// — and the encoder takes one constantly — reborrowed the whole struct and
+    /// popped that interior pointer's tag, making the next read UB under
+    /// Stacked Borrows. A tag has nothing to invalidate. Read it through
+    /// [`SSampleDealingFunc::md_cost`].
+    pub pfMdCost: CostFamily,
+    /// As [`Self::pfMdCost`], for motion estimation. `CostFamily::Unset` is the
+    /// old null: the C++ leaves this unset outside the ME-capable
+    /// configurations, and the port reproduced that with a null pointer.
+    pub pfMeCost: CostFamily,
     pub pfIntra16x16Combined3: *mut c_void,
     pub pfIntra8x8Combined3: *mut c_void,
     pub pfIntra4x4Combined3: *mut c_void,
@@ -471,11 +504,43 @@ impl Default for SSampleDealingFunc {
             pfIntra16x16Combined3Sad: std::ptr::null_mut(),
             pfIntra8x8Combined3Satd: std::ptr::null_mut(),
             pfIntra8x8Combined3Sad: std::ptr::null_mut(),
-            pfMdCost: std::ptr::null_mut(),
-            pfMeCost: std::ptr::null_mut(),
+            pfMdCost: CostFamily::Unset,
+            pfMeCost: CostFamily::Unset,
             pfIntra16x16Combined3: std::ptr::null_mut(),
             pfIntra8x8Combined3: std::ptr::null_mut(),
             pfIntra4x4Combined3: std::ptr::null_mut(),
+        }
+    }
+}
+
+impl SSampleDealingFunc {
+    /// The mode-decision cost function for `block`, or `None` if unselected.
+    ///
+    /// Replaces `(*sdf.pfMdCost.add(block)).unwrap()`. The old expression read
+    /// through a pointer into this struct's own `pfSampleSad`/`pfSampleSatd`
+    /// array, which any intervening `&mut SWelsFuncPtrList` had already
+    /// invalidated (F13). Same selection, same array, no interior pointer.
+    #[inline(always)]
+    pub fn md_cost(&self, block: usize) -> Option<PSampleSadSatdCostFunc> {
+        match self.pfMdCost {
+            CostFamily::Sad => self.pfSampleSad[block],
+            CostFamily::Satd => self.pfSampleSatd[block],
+            CostFamily::Unset => None,
+        }
+    }
+
+    /// The motion-estimation cost function for `block`, or `None` if unselected.
+    ///
+    /// As [`Self::md_cost`]. `CostFamily::Unset` is the old null pointer, which
+    /// the encoder installs outside the ME-capable configurations; a caller
+    /// that reached it used to null-deref and now unwraps a `None`, which is
+    /// the same bug reported at the same place with a legible message.
+    #[inline(always)]
+    pub fn me_cost(&self, block: usize) -> Option<PSampleSadSatdCostFunc> {
+        match self.pfMeCost {
+            CostFamily::Sad => self.pfSampleSad[block],
+            CostFamily::Satd => self.pfSampleSatd[block],
+            CostFamily::Unset => None,
         }
     }
 }
@@ -1060,7 +1125,7 @@ pub unsafe fn MeRefineQuarPixel(
 ) {
     let pEncMb = (*pMe).pEncMb;
     let kuiPixel = (*pMe).uiBlockSize as usize;
-    let pfMeCost = (*(*pFunc).sSampleDealingFuncs.pfMeCost.add(kuiPixel)).unwrap();
+    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost(kuiPixel).unwrap();
 
     // =========================(0, -1) [TOP] =========================
     PixelAvg_c(
@@ -1181,7 +1246,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     let mut iCurCost: i32;
     let mut iBestHalfPix: i32;
 
-    let pfMeCost = (*(*pFunc).sSampleDealingFuncs.pfMeCost.add((*pMe).uiBlockSize as usize)).unwrap();
+    let pfMeCost = (*pFunc).sSampleDealingFuncs.me_cost((*pMe).uiBlockSize as usize).unwrap();
 
     if (*pCurDqLayer).bSatdInMdFlag {
         iBestCost = (*pMe).uSadPredISatd.uiSatd as i32

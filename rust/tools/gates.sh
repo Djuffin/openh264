@@ -219,12 +219,13 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   #                          following `as_mut_ptr()` has already invalidated
   #   encoder_ext       F13  `InitDqLayers` holds `&mut` into `sSpatialLayers`
   #                          across an aliasing use
-  #   svc_mode_decision F13  `SWelsFuncPtrList` is self-referential — `pfMdCost`
-  #                          points into `pfSampleSad`/`pfSampleSatd` in the same
-  #                          struct, so every later `&mut` reborrow of the list
-  #                          invalidates it (Phase 4a owns the tables)
-  MIRI_SKIPS=(--skip wels_thread_pool --skip manage_dec_ref --skip encoder_ext
-              --skip svc_mode_decision)
+  #
+  # `svc_mode_decision` was here for F13's fourth site — `SWelsFuncPtrList` being
+  # self-referential, `pfMdCost` pointing into `pfSampleSad`/`pfSampleSatd` in the
+  # same struct. Phase 4a de-virtualized those two slots into `CostFamily` tags,
+  # so there is no interior pointer left for a `&mut` reborrow to invalidate, and
+  # the skip is deleted rather than carried.
+  MIRI_SKIPS=(--skip wels_thread_pool --skip manage_dec_ref --skip encoder_ext)
   hdr "miri (--lib, minus the F12/F13 skips)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"

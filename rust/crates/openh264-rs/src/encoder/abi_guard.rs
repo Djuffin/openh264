@@ -94,7 +94,21 @@ assert_size!(SLTRMarkingFeedback, 16);
 assert_size!(SLTRRecoverRequest, 20);
 assert_size!(SExpandPicFunc, 24);
 assert_size!(SMcFunc, 48);
-assert_size!(SSampleDealingFunc, 248);
+// 248 in the C++ and in this port until Phase 4a. `SSampleDealingFunc::pfMdCost`
+// and `pfMeCost` were `PSampleSadSatdCostFunc*` pointing *into this same
+// struct's* sibling arrays — F13's fourth site, and UB under Stacked Borrows the
+// moment anything took `&mut SWelsFuncPtrList`. They are now `CostFamily` tags,
+// which is 2 bytes where two 8-byte pointers used to sit (-16, then +8 of tail
+// padding to keep the 8-byte alignment the fn-pointer arrays require).
+//
+// This is the first deliberate divergence from a C++ layout in the port, and the
+// file's own premise says a size change means "a field was added, dropped, or
+// given the wrong width" — here it means the first, on purpose. Phase 4's job is
+// to stop transliterating the dispatch tables; Phase 6.6 deletes these asserts
+// entirely as the structs de-C-ify. Nothing crosses the C ABI with this layout:
+// `SWelsFuncPtrList` is encoder-internal and `api/abi_guard.rs` guards the
+// public surface separately.
+assert_size!(SSampleDealingFunc, 240);
 assert_size!(SRCSlicing, 44);
 assert_size!(SSpatialPicIndex, 16);
 assert_size!(SStrideTables, 160);
@@ -136,7 +150,8 @@ assert_size!(SSliceBufferInfo, 16);
 assert_size!(SDqLayer, 512);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
-assert_size!(SWelsFuncPtrList, 1280);
+// 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above.
+assert_size!(SWelsFuncPtrList, 1272);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models

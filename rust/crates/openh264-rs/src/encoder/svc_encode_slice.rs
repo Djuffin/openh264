@@ -2078,7 +2078,32 @@ pub unsafe fn AllocMbCacheAligned(pMbCache: *mut SMbCache, pMa: *mut CMemoryAlig
     }
     let tag = c"SMbCache_alloc".as_ptr();
 
-    (*pMbCache).pMemPredMb = (*pMa).WelsMallocz((2 * 256) as u32, tag) as *mut u8;
+    // C++: `WelsMallocz(2 * 256)` (`svc_encode_slice.cpp`). The `+ 16` is this
+    // port's, and it is a soundness accommodation rather than a size the codec
+    // uses — F14, `phase2_findings.md`.
+    //
+    // The two 256-byte halves are the I16x16 prediction ping-pong
+    // (`pMemPredLuma` / `pMemPredChroma`, split at +256 in
+    // `svc_base_layer_md.rs:371-373`). `WelsMdI16x16` scores a candidate in the
+    // upper half with `WelsSampleSad16x16_c`, whose last 8x8 sub-block starts at
+    // +392 and reads through byte 511 — *exactly* in bounds. But the raw kernel
+    // is a C transliteration that bumps its row pointer after the final row
+    // (`sad_common.rs:158`), computing `base + 520` and never dereferencing it.
+    // Forming that pointer is UB in Rust and in C alike; nothing observable ever
+    // came of it, which is why it survived the port.
+    //
+    // This is S12's rule met in production rather than in a test: a raw kernel's
+    // pointer footprint is one stride larger than its read footprint. The `+ 16`
+    // is one luma row at the ping-pong's stride of 16 — the smallest thing that
+    // makes the arithmetic legal. It cannot change any encoded byte: the extra
+    // bytes are never read, never written, and never addressed except by the
+    // one-past bump this exists to keep in bounds.
+    //
+    // It goes away on its own if `common/sad_common.rs` re-lands from its park:
+    // the safe kernels take exact spans and stop at the last row. Until then,
+    // deleting this `+ 16` restores the UB and Miri's `--lib` gate catches it in
+    // `svc_mode_decision::tests::test_wels_md_i16x16_cost`.
+    (*pMbCache).pMemPredMb = (*pMa).WelsMallocz((2 * 256 + 16) as u32, tag) as *mut u8;
     if (*pMbCache).pMemPredMb.is_null() {
         return ENC_RETURN_MEMALLOCERR;
     }

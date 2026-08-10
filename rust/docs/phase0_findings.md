@@ -348,6 +348,42 @@ being treated as a regression, and a *new* failure anywhere else should be treat
 as real immediately. `gates.sh` should say this where it prints the sweep result
 rather than leaving each session to rediscover it.
 
+**Eighth measurement, 2026-08-10 (Phase 4a session A, the F13/F14 commit) — the
+first session where the post-change side is cleaner than the control, and the
+day-rate falls back to its historical band.** The family gate's release sweep hit
+once (`mt CiscoVT2people_160x96_6fps t=4 sm=3 cabac=1 rc=1`, 41989 vs 42281
+bytes — short). Three re-runs of the `mt` preset gave 0, 1, 0, the single hit on
+a *different* stream (`CiscoVT2people_320x192_12fps`, rc=0). Two hits in a
+session is S14's escalation trigger, so the alternating loop ran:
+
+| side | failures / configs |
+|---|---|
+| HEAD (mc de-virtualization + `CostFamily` + F14's `+ 16`) | **0 / 600** |
+| control `2f65a765` (pre-4a) | **2 / 600** |
+
+Five rounds, `mt` release preset both sides, alternated inside one loop, control
+`rust_enc` built from a worktree at the pre-phase commit and the two binaries
+swapped at `compare.sh`'s fixed path (md5-checked distinct). **The control side
+hit and the changed side did not** — the fourth consecutive loop in which the
+sides do not separate, and the first in which the direction favours the changed
+tree.
+
+Whole-session tally on HEAD: **2 hits in ≈1080 `mt sm=3` encodes, ≈1/540** —
+back inside the historical 1/400-1000 band and ~11x quieter than session G's
+≈1/49. The machine ran benches and Miri today as it did then, so this is not a
+clean quiescence claim; what it does say is that the elevation session G measured
+is not monotonic and not commit-attributable.
+
+Both hits matched the signature exactly (`mt`, `sm=3`, `t=4`, wrong length,
+release). No hit at any other configuration class, either profile, all session.
+
+**Nothing in this session's changes could plausibly reach it**, which is worth
+stating because the changes were large: `SMcFunc` de-virtualization, an enum
+replacing two interior pointers, and a 16-byte allocation increase. None touches
+threading, slice partitioning, or `ReallocateSliceList` — the two known-UB
+mechanisms F12's note names as sitting under F3 are both untouched and both
+still live.
+
 **Who fixes it:** Phase 6.4 (`Vec<SliceState>` + indices, P10) and Phase 7 (the
 threading rework) between them delete the mechanism. Phase 7's exit gate already
 demands MT determinism across thread counts; this finding says that gate must be

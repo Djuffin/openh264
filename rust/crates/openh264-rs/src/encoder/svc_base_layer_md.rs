@@ -522,7 +522,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pfMdCost4x4 = (*(*pFunc).sSampleDealingFuncs.pfMdCost.add(BLOCK_4x4)).unwrap();
+    let pfMdCost4x4 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_4x4).unwrap();
 
     for i in 0..16usize {
         let kiOffset = kpNeighborIntraToI4x4[i] as usize;
@@ -726,7 +726,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
     assert_no_combined3((*pFunc).sSampleDealingFuncs.pfIntra8x8Combined3, "pfIntra8x8Combined3");
-    let pfMdCost8x8 = (*(*pFunc).sSampleDealingFuncs.pfMdCost.add(BLOCK_8x8)).unwrap();
+    let pfMdCost8x8 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
 
     let mut iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount as usize {

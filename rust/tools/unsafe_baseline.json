@@ -1,5 +1,5 @@
 {
-  "commit": "ea2304ce",
+  "commit": "c9d416de",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -20,7 +20,7 @@
     "decoder/deblocking.rs": { "unsafe_fn": 33, "unsafe_block": 1, "raw_ptr": 125, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/dec_golomb.rs": { "unsafe_fn": 8, "unsafe_block": 12, "raw_ptr": 6, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/decode_mb_aux.rs": { "unsafe_fn": 4, "unsafe_block": 11, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 4 },
-    "decoder/decode_slice.rs": { "unsafe_fn": 57, "unsafe_block": 5, "raw_ptr": 445, "transmute": 19, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
+    "decoder/decode_slice.rs": { "unsafe_fn": 57, "unsafe_block": 5, "raw_ptr": 442, "transmute": 19, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "decoder/decoder_context.rs": { "unsafe_fn": 0, "unsafe_block": 5, "raw_ptr": 121, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "decoder/decoder_core.rs": { "unsafe_fn": 97, "unsafe_block": 11, "raw_ptr": 270, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 2 },
     "decoder/error_concealment.rs": { "unsafe_fn": 14, "unsafe_block": 5, "raw_ptr": 23, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -45,7 +45,7 @@
     "encoder/encoder_context.rs": { "unsafe_fn": 11, "unsafe_block": 7, "raw_ptr": 77, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },
     "encoder/encoder_ext.rs": { "unsafe_fn": 40, "unsafe_block": 2, "raw_ptr": 228, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/get_intra_predictor.rs": { "unsafe_fn": 30, "unsafe_block": 53, "raw_ptr": 56, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 26 },
-    "encoder/md.rs": { "unsafe_fn": 17, "unsafe_block": 0, "raw_ptr": 88, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/md.rs": { "unsafe_fn": 17, "unsafe_block": 0, "raw_ptr": 87, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/nal_encap.rs": { "unsafe_fn": 11, "unsafe_block": 5, "raw_ptr": 27, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/param_svc.rs": { "unsafe_fn": 2, "unsafe_block": 1, "raw_ptr": 12, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
