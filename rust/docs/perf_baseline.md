@@ -582,6 +582,109 @@ dispatch makes shims inlinable); Phase 5 closes them with the shims.
 | T6 expand `decoder_core.rs` (2 shims) | 2026-08-10, under D-perf-4 | decode +1.0% / +0.1% / +0.5% (at the noise floor's edge); encoder inside the null floor (§Phase 2 T6) | once-per-reference-picture kernel; body is the same memcpy/memset calls | Phase 5 | *pending* | — |
 | T7 `encoder/encode_mb_aux.rs` (21 shims) | 2026-08-10, under D-perf-4 | encoder +2.1% median, +9.9% worst usable (flat-content rows +5-10%); decode flat (+0.3-0.5%, not a consumer) | none taken: D-perf-4 diagnostic-only, shape matched T4's per-call mechanism (fixed per-block cost, largest fraction on fastest content); Spatial Ramps observation recorded in §Phase 2 T7 part 1 | Phase 5 | *pending* | — |
 | T7 `encoder/decode_mb_aux.rs` + `svc_encode_mb.rs` recon (9 shims) | 2026-08-10, under D-perf-4 | encoder +0.8% median / decode +0.6% median — both inside the session's null floor | noise-level; nothing to isolate | Phase 5 | *pending* | — |
+| T7 `encoder/get_intra_predictor.rs` (26 shims) | 2026-08-10, under D-perf-4 | encoder +0.42% median / max +2.69%, decode flat — **inside the session's null floor** (median +0.00%, max +2.50%) | none taken: per-mode-per-MB call density, T3's wash reproduced on the encoder side | Phase 5 | *pending* | — |
+| T9 `encoder/deblocking.rs` straggler (1 shim; 8 wrappers re-exported) | 2026-08-10, under D-perf-4 | encoder +0.59% median / **+4.33% worst**, decode unchanged | small but real: the four Mandelbrot rows move together above the null floor — the encoder now pays the per-edge shim cost the decoder has paid since T6 | Phase 5 | *pending* | — |
+
+### T7 part 2 + T9 straggler — encoder intra predictors and the encoder's deblocking duplicate (session G)
+
+Null floor, fresh (**S2**, same binary both slots): median **+0.00%**, max **+2.50%**,
+zero rows over 5%. `Spatial Ramps` moved **-10.7 / -11.5%** on that same-binary run, and
+**-24%** in the G-1 pair — it re-earned its exclusion twice in one session.
+
+**G-1 `encoder/get_intra_predictor.rs` (26 shims; A `6e0009d3` → B `cbc18d94`), one
+interleaved pair per bench:** encoder **+0.42% median, max +2.69%, zero rows over 5%**
+— inside the null floor. Decode **+0.58 / -0.05 / +0.19%**, flat, as it must be: the
+decoder installs nothing from this module. T3's wash reproduced on the encoder side,
+which is what the call density predicted (per-mode-per-macroblock, an order less often
+than SAD per candidate). Tripwire: encoder cumulative ≈ +13% + 0.4 ≈ **+13.4%, under
++25%** → swap and ledger. No microbenchmark: nothing surprised.
+
+**G-2 `encoder/deblocking.rs` (T9 straggler; A `b3da21e1` → B `ee8735df`), one pair:**
+encoder **+0.59% median, max +4.33%, zero rows over 5%**; decode **-0.38% median**
+(unchanged — the decoder already ran these shims, and a moved decode number would have
+meant the re-export changed the wrong caller). The four Mandelbrot rows move together
+at +3.7..+4.3%, above the null floor's +2.50% max, so this reads as a small **real**
+cost rather than noise: the encoder now pays the per-edge shim scaffolding the decoder
+has paid since T6, on the content that deblocks most. T6's decode +7.8% mechanism at a
+fifth the size. Cumulative ≈ **+14%, under +25%** → swap and ledger.
+
+---
+
+## Phase 2 exit — the cumulative measurement, and what it says about the ledger
+
+**Measured 2026-08-10 at Phase 2's close: the phase's control commit `afcdd785`
+against `a6361ee3`, both bench binaries built and kept on disk, three interleaved
+pairs per bench, medians (S1).** This is the one place the heavyweight protocol still
+runs, and it is the first time the ledger has been checked against a direct
+start-to-end reading rather than believed as a running sum.
+
+Exit null floor (S2, same binary both slots, immediately after): median **+0.00%**,
+max **+4.0%** excluding `Spatial Ramps` (which read +13.8% / +11.9% against itself and
+is excluded from every verdict).
+
+### Decoder — `decode_1080p_bench`, 3 pairs
+
+| stream | Phase 2 start | Phase 2 end | delta | ledger predicted |
+|---|---|---|---|---|
+| Constrained Baseline (CAVLC, no B-frames) | 2.218 ms | 2.586 ms | **+16.59%** | ≈ +17% |
+| Main (CABAC, B-frames) | 5.736 | 6.346 | **+10.63%** | ≈ +10% |
+| High (CABAC, B-frames, 8x8) | 5.813 | 6.386 | **+9.86%** | ≈ +10% |
+
+### Encoder — `c_vs_rust_bench`, 3 pairs, 30 rows
+
+**Median +14.73%**, min +5.40%, max **+33.3%** usable (+60.0% on `Spatial Ramps`,
+excluded). All 30 rows over +5%; 19 over +10%. Ledger predicted ≈ +14% median.
+
+| row class | delta |
+|---|---|
+| flat-content QVGA/VGA synthetics (SMPTE, PAL 75%, RGB, YUV Space) | +25 .. +33% |
+| 720p/1080p SMPTE Bars | +14 .. +17% |
+| Testsrc 1080p | +9 .. +11% |
+| Mandelbrot, all sizes | +5.4 .. +8.2% |
+| Moving Box, High-Contrast QVGA | +7.5 .. +13% |
+| `Spatial Ramps` (excluded) | +58 .. +60% |
+
+**The two instruments agree.** Six ledger rows summed to ≈ +14% on the encoder and
+≈ +17/+10/+10% on the decoder; the direct measurement says **+14.73%** and
+**+16.6/+10.6/+9.9%**. That is the ledger validated as an instrument, not just as
+bookkeeping — every per-family reading was taken with one pair, and their sum survives
+a three-pair end-to-end check. Phase 4a's checkpoint can therefore read recovery row by
+row and trust the arithmetic.
+
+**The shape is the mechanism, stated once for the phases that inherit it.** The
+gradient runs cleanly from Mandelbrot (+5-8%: dense, high-entropy content where real
+coding work dominates) to the flat synthetics (+25-33%: almost nothing to code, so the
+fixed per-block scaffolding *is* the frame time) to `Spatial Ramps` (+58%: the all-skip
+path, pure scaffolding). The deficit is **per-call, not per-sample** — which is exactly
+the claim Phase 4a's direct dispatch is supposed to cash, and exactly why the flat rows
+are the ones to watch when it does.
+
+**Against the budget:** §7.4's ≤10%-per-stream hard ceiling was retired by **D-perf-4**
+(2026-08-09) in favour of the +25%-median-cumulative tripwire. The encoder's +14.73%
+median and the decoder's +10.63% are both under it, so nothing parks retroactively.
+The decode Constrained Baseline row (+16.6%) and 19 encoder rows are over the old
+ceiling; that is the ledgered, deliberate state D-perf-4 chose, not a breach.
+
+### Per-family delta table, as landed
+
+| family | shims | encoder | decode | note |
+|---|---|---|---|---|
+| T2 pilot `decoder/decode_mb_aux.rs` | 4 | — | **-1.3 .. -1.8%** (faster) | the pilot verdict that licensed the cursor API |
+| T3 `decoder/get_intra_predictor.rs` | 42 | — | wash | the designated worst case, and it was not one |
+| T4 `common/mc.rs` | 28 | +7.6% med / +16.7% worst | +8.2 / +7.2 / +7.0% | the largest single row; bodies 0.88-0.99x |
+| T5-intra `common/intra_pred_common.rs` | 2 | +0.57% | — | |
+| T5-sad `common/sad_common.rs` | 0 | **parked** | — | 14 kernels proven, unswapped |
+| T6 deblocking `common/deblocking_common.rs` | 13 | flat | +7.8 / +2.6 / +2.3% | |
+| T6 expand `decoder_core.rs` | 2 | flat | +1.0 / +0.1 / +0.5% | |
+| T8 `processing/*` | 6 | +3.5% med / +8.5% worst | — | `VAACalcSadBgd_c` body 1.44x, mechanism recorded |
+| T7 F-1 `encoder/encode_mb_aux.rs` | 21 | +2.10% med / +9.86% worst | flat | |
+| T7 F-2 encoder recon IDCT | 9 | +0.82% | +0.61% | noise-level |
+| T7 F-3 `encoder/sample.rs` SATD | 0 | **parked** | — | 7 kernels proven, never installed |
+| T7 G-1 `encoder/get_intra_predictor.rs` | 26 | +0.42% | flat | inside the null floor |
+| T9 G-2 `encoder/deblocking.rs` | 1 | +0.59% / +4.33% worst | flat | the straggler; 13 raw bodies deleted |
+| **total, measured end-to-end** | **154** | **+14.73% median** | **+16.6 / +10.6 / +9.9%** | |
+
+---
 
 ### The encoder-side ceiling is breached, and it needs a decision (2026-08-09)
 
@@ -664,6 +767,15 @@ found), by the Phase 4 direct-dispatch checkpoint, or by their callers convertin
 |---|---|---|---|---|---|
 | T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, `abs_diff`, and now T8's exact-span shape all measured null | **D-perf-2 attempt spent 2026-08-09 — stays parked.** Next: Phase 4a direct-dispatch checkpoint (slices-and-offsets on the table) → else caller conversion (ME, Phase 6.3) | — |
 | T7-satd `encoder/sample.rs` (7 safe kernels, never installed; `1383acb5`) | 2026-08-10 | none taken — parked by projection, not measurement: D-perf-2's sad-class bodies 1.39-2.97x and the T5 swap's +16.8% median, onto an encoder cumulative ≈ +13%, cross the +25% tripwire | same class as T5-sad (tiny blocks, per-candidate ME calls) with a Hadamard butterfly on top — strictly more work per call than SAD, which already failed parity | **Phase 4a direct-dispatch checkpoint**, alongside T5-sad; differential entries are live (F10 whole-row raw buffers), exact-span probe covers the safe side | — |
+
+**Phase 2 closed 2026-08-10 with both rows open, by design.** Neither family is a
+Phase 2 failure: T5-sad spent the phase's one sanctioned attempt and T7-satd was parked
+on that measurement's projection rather than its own. **Phase 4a's checkpoint is their
+re-attempt point and it is now the immediately next phase** (D-seq-1), which is the
+shortest the park was ever going to be. Two things go with them: the
+slices-and-offsets lead below, and the reason re-landing is a *safety* goal and not
+only a perf one — parked raw code is where latent UB sits, and F10 was found in this
+very family three separate times.
 
 #### D-perf-2's one attempt, and its verdict (2026-08-09)
 
