@@ -71,3 +71,6 @@ target/
 
 # Gate battery scratch logs (rust/tools/gates.sh)
 .gates/
+
+# perfpair.py's stashed bench binaries (rust/tools/perfpair.py)
+.perfpair/
