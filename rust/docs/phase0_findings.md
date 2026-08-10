@@ -368,11 +368,21 @@ hit and the changed side did not** — the fourth consecutive loop in which the
 sides do not separate, and the first in which the direction favours the changed
 tree.
 
-Whole-session tally on HEAD: **2 hits in ≈1080 `mt sm=3` encodes, ≈1/540** —
-back inside the historical 1/400-1000 band and ~11x quieter than session G's
-≈1/49. The machine ran benches and Miri today as it did then, so this is not a
-clean quiescence claim; what it does say is that the elevation session G measured
-is not monotonic and not commit-attributable.
+A **third** hit arrived at the exit battery, this time in the *debug* sweep
+(`mt CiscoVT2people_160x96_6fps t=4 sm=3 cabac=1 rc=0`, zero-length — the same
+stream as the first hit, the other rc). Three debug `mt` re-runs then gave
+120/120 each.
+
+Whole-session tally on HEAD: **3 hits in ≈1560 `mt sm=3` encodes, ≈1/520** —
+inside the historical 1/400-1000 band and ~10x quieter than session G's ≈1/49.
+The machine ran benches and Miri today as it did then, so this is not a clean
+quiescence claim; what it does say is that the elevation session G measured is
+not monotonic and not commit-attributable.
+
+One shape observation, offered as data rather than a theory: all three of this
+session's hits were `t=4`, and two of the three were the same 160x96 stream in
+its two `rc` settings. The smallest frame size in the sweep is where a
+slice-partitioning race would have the fewest macroblocks to hide in.
 
 Both hits matched the signature exactly (`mt`, `sm=3`, `t=4`, wrong length,
 release). No hit at any other configuration class, either profile, all session.

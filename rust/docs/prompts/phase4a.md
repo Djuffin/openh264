@@ -1,5 +1,20 @@
 # Session prompt — Safety refactor, Phase 4a (dispatch de-virtualization + the recovery checkpoint)
 
+> **SUPERSEDED — HISTORICAL.** Phase 4a completed 2026-08-10. This brief is kept as
+> the record of what the phase was asked to do; what it actually did, and the two
+> places it diverged, are in [`../safety_refactor_log.md`](../safety_refactor_log.md)
+> and [`../perf_baseline.md`](../perf_baseline.md) §Phase 4a. The live brief is
+> [`phase3.md`](phase3.md).
+>
+> **Where this brief was wrong, for the record:** it stated the inherited ratchet as
+> `raw_ptr 5167` when the baseline was 5175 (which is why S16 says never to trust a
+> remembered number — the first command of the session caught it), and it assumed
+> de-virtualization would recover the *decode* ledger rows. It did not; the recovery
+> is conditional on callers supplying constant dimensions, which the encoder does and
+> the decoder does not. The brief's own instruction — cut de-virtualization scope
+> before compressing the checkpoint — is what the session followed when that became
+> clear.
+
 You are starting **Phase 4a** of [`safety_refactor_plan.md`](../safety_refactor_plan.md).
 Phase 2 closed on 2026-08-10; **D-seq-1** puts 4a here, before Phase 3.
 
