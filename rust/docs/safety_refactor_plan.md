@@ -434,7 +434,7 @@ Callers keep calling through R7 shims where tables still exist; tables themselve
 2. Encoder write side: `vlc_encoder.rs` → safe `BsWriter`; `set_mb_syn_cabac.rs` cursor triple; `svc_set_mb_syn_cavlc.rs` rollback snapshots + `pEndBuf - pCurBuf` space checks → `len - pos`; `nal_encap.rs` owned buffers.
 3. `SBitStringAux` itself remains as a compat shell only where still-unconverted structs embed it (`SDqLayer::pBitStringAux` waits for Phase 5); the shell is deleted in Phase 5/6.
 
-*Exit gate: battery + a dedicated malformed-stream error-code parity test + fuzz burn-in on the new reader. Risk: the P6 slop and CABAC end-ladder byte counting — both have precise existing tests (truncated streams in conformance set).*
+*Exit gate: battery + a dedicated malformed-stream error-code parity test (systematic truncations, EPB edges, degenerate NALs — exact error codes and cursor/frame-count behaviour). The originally-specified fuzz burn-in is removed from this gate (2026-08-10, by direction — T7 stays deferred; §0's "absent instrument" row tracks the tally), which is why the parity test's corpus must carry the malformed-input burden alone. Risk: the P6 slop and CABAC end-ladder byte counting — both have precise existing tests (truncated streams in conformance set).*
 
 ### Phase 4 — Dispatch de-virtualization *(3 sessions; split 4a/4b and resequenced by D-seq-1, 2026-08-10)*
 
