@@ -6,6 +6,32 @@
 
 ---
 
+## 0. Status — read this first
+
+*Maintained at every phase exit. One screen; everything below §1 is the original
+proposal and its accumulated history, and stays as written.*
+
+| | |
+|---|---|
+| **Phase 2 complete** | 2026-08-10. Leaf DSP kernels of both codecs converted onto safe signatures behind strangler shims: **154 shims** across 13 files, ~190 kernels reached |
+| **Next** | **Phase 4a — dispatch de-virtualization + the recovery/unpark checkpoint.** Brief: [`prompts/phase4a.md`](prompts/phase4a.md). Then Phase 3 |
+| **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, a family that would push any stream past **+25% median cumulative** parks instead, commit B measures one interleaved pair per bench, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a runs before Phase 3 |
+| **Cumulative ledger** | decode ≈ **+17 / +10 / +10%**, encoder ≈ **+14% median** — all fixed per-call shim scaffolding, all open, all re-measured at 4a's checkpoint ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
+| **Parked** | `common/sad_common.rs` (14 kernels) and `encoder/sample.rs`'s SATD (7) — proven, uninstalled, raw kernels still running. Both re-attempt at 4a (§Parked) |
+| **Ratchet** | `unsafe_fn` 1346, `raw_ptr` 5167, `SHIM(` 154, `no_mangle` 24. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Standing rules** | **§7.6** below. Phase 3+ briefs cite it rather than copying rules forward |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1–F3, [`phase1_findings.md`](phase1_findings.md) F4–F7, [`phase2_findings.md`](phase2_findings.md) **F8–F13**. F12/F13 are aliasing soundness defects found by the widened Miri gate and are the first of their class; the rest are arithmetic-parity or UB-in-parked-code |
+| **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, and F3's sixth measurement** — re-raising T7 is Eugene's call |
+
+**Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
+session executes; [`safety_refactor_log.md`](safety_refactor_log.md) is the per-session
+record and the highest-density context available; [`perf_baseline.md`](perf_baseline.md)
+holds every measurement and both ledgers; the findings files hold what was found and
+deliberately not fixed. This plan holds the strategy and, in §7.6, the rules.
+
+
+---
+
 ## 1. Where we are
 
 ### 1.1 Inventory

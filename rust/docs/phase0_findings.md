@@ -312,6 +312,36 @@ whole session under build + bench + Miri load — the known widening condition �
 with the alternating-loop counts (pre-swap 0/360 vs swapped 1/360) showing the
 rate is the day's, not the commit's.
 
+**Seventh measurement, 2026-08-10 (Phase 2 session G, T7 part 2 + T9) — the
+day-rate, measured twice, on a session whose control commit changed no code.**
+This session ran the alternating-loop protocol **twice**, and the useful result is
+the pair of counts rather than either one:
+
+| loop | pre-change side | post-change side |
+|---|---|---|
+| G-1 (26 intra-predictor shims) | **3 failures / 360 configs** | **2 / 360** |
+| G-2 (encoder deblocking dedup) | **1 / 360** | **2 / 360** |
+
+Three release `mt` presets per side per loop, alternated inside one loop, binaries
+kept on disk (the pre-change side built from a worktree at the commit-A hash).
+Neither loop separates the sides, and in the first one the *raw* side was the
+higher. Whole-day tally: **16 hits in ≈750 `mt sm=3` encodes, ≈1/47** — roughly
+2.3x session F's ≈1/110 and 10-20x the historical 1/400-1000 — on a machine that
+spent the session running builds, two bench pairs, four Miri passes and two
+worktree compiles.
+
+The attribution argument that makes this session's data worth more than its
+predecessors': **two of the day's hits landed on the session's *control* commit,
+which touches one markdown file and no code at all.** The elevation was therefore
+present before the first kernel moved, which is what the alternating loops then
+confirmed at both commits. Machine load is the widening condition; the commits are
+not.
+
+Every one of the sixteen matched the signature as widened by the sixth
+measurement — `mt`, `sm=3`, `t` in {2, 4}, output of any wrong length, either
+profile. The shapes seen today: zero-length (most), short, and long. No hit at any
+other configuration class, in either profile, all day.
+
 **Gate consequence, act on this now:** a single `sweep.sh mt` release run is not a
 reliable 341/341 signal. A failure confined to `t=4 sm=3` must be re-run before
 being treated as a regression, and a *new* failure anywhere else should be treated
