@@ -517,6 +517,19 @@ Two counting rules the script encodes, both learned the hard way:
 
 ### 7.4 Performance budget
 
+#### Current regime — v3, decision D-perf-4 (Eugene, 2026-08-09): safety first, speed tracked and recovered at checkpoints
+
+*Supersedes the v2 gating rules below (kept as decision history). Direction: interim perf must not consume sessions or block conversion — the big unsafe mass is in Phases 3/5/6, and every session spent on a perf box delays it. We still want to be as fast as possible: fast idioms stay mandatory, everything stays measured and ledgered, and recovery is consolidated at the checkpoints instead of litigated per family.*
+
+- **Priority order for interim work: byte-exactness > safety progress (ratchet) > speed.** Speed is never traded silently — it is ledgered and recovered at defined points — but it no longer stops a phase.
+- **No hard ceiling; one tripwire.** The v2 "≤10% per stream, breach stops the phase" rule is retired. Instead: if a swap would push the **cumulative deficit past +25% median on any bench stream**, that family **parks** (proven, uninstalled — the existing §Parked machinery) instead of swapping; everything under the tripwire **swaps and ledgers by default**. A single family projecting >15% on a stream gets flagged in its ledger entry but still lands if the cumulative holds. No session stops, no escalation mid-phase — egregious surprises go in the log for Eugene, work continues.
+- **Measurement, lightweight but honest:** commit B runs **one interleaved pair on both benches** (enough for a ledger entry and a tripwire check; the full 3-pair-medians protocol moves to phase exits only). The instrument rules stand — interleaved pairs (never sequential), null run before any "noise" claim, working set sized from the real caller, post-swap "raw" recovered via `git show`. The per-family microbenchmark is now **diagnostic, not mandatory** — build it when a number surprises, not before every family.
+- **No optimization boxes during conversion phases.** If a family lands ugly: one *short* look (profile + disassembly, an hour, not a half-session box), then ledger-or-park by the tripwire arithmetic and move on. Multi-attempt investigations (T4's, T5-sad's) are retired until the recovery checkpoints.
+- **The recovery checkpoints are where speed comes back**, and they are unchanged: **Phase 4** (direct dispatch — re-measure every ledgered family; the `mc.rs` dispatch-forward experiment from D-perf-3 folds back into Phase 4 proper as its first task, and D-perf-2's slices-and-offsets idea for tiny-block kernels is queued there too); **Phase 5/6** (shim deletion and caller conversion — scaffolding cost and parked families' raw bodies both die here by construction); and a **dedicated perf-recovery pass at Phase 9**, driven by the ledger, with the end-state target unchanged: **≤10% cumulative vs C++ scalar at Phase 9, aspirationally parity**. The ledger and §Parked tables are the contract that "for now" means *for now*.
+- **Fast-by-construction stays binding:** the idiom catalog (const-generic copy widths, zips, exact-span trims, inline parity, `row()` over walkers) and the negative-results list are still rules — writing the fast version first costs nothing and is most of "as fast as possible".
+
+*The v2 rules and decision records D-perf-1…3 follow as history; where they say "hard ceiling", "breach stops the phase", "body-parity precondition", or "half-session box", D-perf-4 supersedes them.*
+
 *Restated 2026-08-08 after T4 (`common/mc.rs`) became the first family to exceed the original flat budget and the investigation showed the flat budget was measuring the wrong thing during a strangler phase. Decision record below.*
 
 - Baseline: Phase 0 bench medians (`c_vs_rust_bench`, `decode_1080p_bench`). All comparisons are scalar-vs-scalar (the C++ dylib never dispatches SIMD), so ratios are meaningful.
@@ -552,6 +565,8 @@ checkpoint forward for `mc.rs` alone (direct calls are what make a shim inlinabl
 inlining is exactly what deletes a per-call cost). Evidence and the full table are in
 `perf_baseline.md` §"The encoder-side ceiling is breached". **This is Eugene's call,
 as D-perf-1 was.**
+
+**Decision D-perf-3 (2026-08-09): the encoder ceiling breach is recovered by pulling Phase 4's direct-dispatch checkpoint forward for `mc.rs` alone — boxed, with unswap as the pre-authorized same-session fallback.** The breach: T4's encoder contribution measured +7.6% median / +16.7% worst (11 rows over the 10% ceiling; cumulative with T8 ≈ +11%). Of the three options: raising the ceiling the first time it binds would convert the mechanism from a gate into a suggestion — rejected; unswapping outright clears the breach but retreats from a within-budget decode position and, worse, leaves the **Phase 4 recovery hypothesis untested** while T6/T7 accumulate more scaffolding deficits premised on it. Direct dispatch for `mc.rs`'s consumers is a surgical slice of Phase 4 (~13 call sites already enumerated in T4's log), it attacks the measured mechanism exactly (fixed per-call cost that inlining removes — reinforced by D-perf-2's finding that cursor construction is a large per-call cost at small block sizes), and it converts the ledger's load-bearing assumption into evidence either way. Success metric: every encoder stream's cumulative deficit back ≤10% (mc median expected ≲5%), decode not regressed, all gates green. Fallback if the box closes unmet: revert the dispatch commit, unswap `mc.rs` commit B, park the family (both sides), and **downgrade every "Phase 4 checkpoint" claim in the ledger to "re-evaluate at caller conversion"** — if inlining doesn't recover scaffolding cost here, it won't elsewhere, and the plan must stop promising it. Corollary rule, binding from T6 on (session D's finding): **a per-call deficit scales with call count — an encoder-side family's budget is not its decoder-side budget; every commit B measures both benches before merging.**
 
 **Decision D-perf-2 (2026-08-09): T5-sad gets one bounded re-landing attempt, scheduled with T8 in the next session — T6's order is unaffected, and T7 inherits the verdict either way.** The question the attempt answers is not "can SAD be a bit faster" but the technique question that gates T7's ~30 SAD/SATD-shaped kernels: whether per-row cost on tiny fixed blocks with runtime strides can be made to fold in safe code at the shim boundary at all. Time-box: half a session, hard stop, disassembly-first (both prior guesses measured null; `row_windows` alone was not enough). Exit states, both acceptable: (a) bodies reach ≤1.05x L1-resident and the family re-swaps inside the ceiling — the technique transfers to T7; or (b) it doesn't, T5-sad stays **parked** until the Phase 4 checkpoint or its callers convert (ME is Phase 6.3), and T7's SAD/SATD families go **prove-and-park** from the start instead of burning swap-measure-unswap cycles. What is not acceptable is a third unbounded investigation: one attempt, one verdict, recorded.
 
@@ -732,7 +747,9 @@ binary keeps its exact control count, and the 20-test `#[ignore]` set is unchang
 
 ### Phase 2 — leaf DSP kernels, both codecs
 
-Sized at 5–7 sessions, **resized to 6–8 on 2026-08-08** (real total ≈190 fns, not ~120;
+Sized at 5–7 sessions, resized to 6–8 on 2026-08-08, briefly 8–9, and **7–8 as of
+D-perf-4** (four spent through session D; the recovery session is cancelled; remaining:
+T6 alone, T7 across two, T9). Original basis: (real total ≈190 fns, not ~120;
 T7 alone is 69 — bigger than T3 and T4 combined). Session A landed the preconditions,
 the control and the pilot; session B landed T4 and the budget investigation.
 Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
@@ -832,10 +849,25 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       this block size that paying it twice per call moved 4x4 from 1.61x to 4.93x, so
       handing these kernels slices-and-offsets instead of cursors is a live idea —
       and a convention change, hence not this phase's. `perf_baseline.md` §Parked.
+- [x] **D-perf-3 — the encoder ceiling breach (decided 2026-08-09; superseded by
+      D-perf-4 before execution).** T4's encoder side measured +7.6% median / +16.7%
+      worst; cumulative with T8 ≈ +11% against the then-live 10% ceiling. The decided
+      recovery (mc.rs direct-dispatch forward, unswap fallback) was **cancelled as a
+      dedicated session** when D-perf-4 retired the ceiling: the breach no longer
+      blocks, the deficit stays ledgered, and the dispatch-forward experiment returns
+      to **Phase 4 as its first task**. The rule it produced survives: an
+      encoder-side family's budget is not its decoder-side budget; commit B measures
+      both benches (now as one interleaved pair each).
+- [x] **D-perf-4 — the regime change (Eugene, 2026-08-09).** Safety first; §7.4 v3:
+      no hard ceiling, +25%-cumulative tripwire parks a family instead of stopping a
+      phase; swap-and-ledger is the default; no optimization boxes; lightweight
+      commit-B measurement; recovery consolidated at Phase 4 / Phase 5–6 / a Phase 9
+      perf pass with the end-state target unchanged. **T6 is unblocked and is the
+      next action.**
 - [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
-      Not started.
-- [ ] **T7 — the four encoder kernel files.** Not started; shape depends on D-perf-2's
-      verdict (swap vs prove-and-park for `sample.rs`'s SAD/SATD).
+      Not started; **next action**, scheduled alone.
+- [ ] **T7 — the four encoder kernel files.** Not started; SAD/SATD go
+      prove-and-park per D-perf-2's verdict.
 - [x] **T8 — `processing/{vaacalc,adaptive_quantization}.rs` (`d41244c2`,
       `af98f6ab`).** **6 kernels** as recounted (vaacalc 5 + `SampleVariance16x16_c`),
       not the continuation brief's 11. No dispatch table and no `no_mangle` anywhere

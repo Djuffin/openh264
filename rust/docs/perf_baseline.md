@@ -533,6 +533,18 @@ Three things follow, none of which this session decided:
    forward for `mc.rs` specifically, since direct calls are what make these shims
    inlinable and the per-call cost is exactly what inlining removes.
 
+   **DECIDED 2026-08-09 — D-perf-3 (plan §7.4): option three, boxed, with option two
+   as the pre-authorized same-session fallback.**
+
+   **SUPERSEDED same day by D-perf-4 (plan §7.4 v3, Eugene's direction): safety
+   first.** The ceiling this section reports a breach of is retired; the numbers
+   above stay as the record of what the swap costs, the ledger row stays open, and
+   recovery moved to the checkpoints — the mc.rs direct-dispatch experiment is now
+   **Phase 4's first task**, shim deletion clears scaffolding at Phase 5, and the
+   Phase 9 perf pass owns whatever remains. Interim rule from here: swap-and-ledger
+   by default; a family that would push any stream's cumulative past **+25% median**
+   parks instead.
+
 What is *not* open is whether a cleverer kernel fixes it — T4 measured three structural
 mitigations and rejected all three, and its bodies are already at or under parity.
 
