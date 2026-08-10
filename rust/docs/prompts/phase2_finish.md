@@ -15,20 +15,20 @@ disagreement.** The regime is **D-perf-4** (plan §7.4 v3: swap-and-ledger by de
 commit B, no optimization boxes, byte-exactness untouchable) and the schedule beyond
 this phase is **D-seq-1** (Phase 4a next, before Phase 3).
 
-State at `915bb554` (tree clean; the last two commits are docs):
+State at **`12440d34`** (session F complete — tree clean, all gates green):
 
 | | |
 |---|---|
-| Tests | 395 debug / 393 release / 20 ignored |
-| Sweeps | 341/341 both profiles (~25s debug, ~21s release), F3 retry rule in force |
-| Ratchet | `unsafe_fn` 1360, `raw_ptr` 5198, `SHIM(` 97, `no_mangle` 24 — regenerated at T6 expand-B; run `check`, never trust remembered numbers |
-| Cumulative ledger | decode ≈ **+17 / +10 / +10%**, encoder ≈ **+11%** — tripwire headroom is real but not infinite |
-| Parked | T5-sad (14 kernels, raw live, re-attempt at Phase 4a) |
+| Tests | 399 debug / 397 release / 20 ignored; differential file 16/16 under Miri |
+| Sweeps | 341/341 both profiles after F3 retries — **F3's signature widened again, see §4** |
+| Ratchet | `unsafe_fn` 1361, `raw_ptr` 5200, `SHIM(` 127, `no_mangle` 24 — run `check`, never trust remembered numbers |
+| Cumulative ledger | decode ≈ **+17 / +10 / +10%**, encoder ≈ **+13% median** (F-1 added +2.1) — G-1's tripwire arithmetic starts from these |
+| Parked | T5-sad (14) **+ the seven SATD kernels** (session F), both re-attempting at Phase 4a |
 
-**Counts corrected while writing this brief** (the estimate-drift rule struck again):
-`encoder/get_intra_predictor.rs` has **27** `pub unsafe fn` definitions, not the 33
-every earlier doc says; `sample.rs`'s "8" is **7 SATD kernels + 1 installer**. Recount
-each file at session start anyway; the counts below are grounded but not gospel.
+**Counts:** `encoder/get_intra_predictor.rs` measured **27** `pub unsafe fn` when this
+brief was written — but session F recounted *both* its families up (21+installer, 9
+not 6, with five raw bodies found living in `svc_encode_mb.rs`). Recount at session
+start, and grep for stray bodies in *adjacent* files, not just the named one.
 
 ---
 
@@ -36,85 +36,42 @@ each file at session start anyway; the counts below are grounded but not gospel.
 
 1. This file, then `prompts/phase2_continue.md` §2 (rules R-a…R-p — R-e, R-l, R-m,
    R-n and the golden-run/F10 additions are the ones this stretch leans on).
-2. `rust/docs/safety_refactor_log.md` — sessions D and E entries in full (T8's
-   kernel-shape lessons and instrument rules; T6's probe lesson and per-session
-   noise floor; both sessions' recorded order-deviations — you inherit the same
-   temptation, and the brief's order is binding).
-3. `rust/docs/phase2_findings.md` — **F8** (i16 IDCT overflow: the arithmetic-parity
-   precedent) and **F10** (parked raw kernels' trailing bump is UB on exact-span
-   buffers — it dictates your differential harness sizing).
+2. `rust/docs/safety_refactor_log.md` — sessions E and **F** entries in full (the
+   probe lesson and per-session noise floor; F's recounts, its F10-second-instance
+   correction, and the F3 sixth-measurement protocol run — the widened signature you
+   gate under). Session D for the instrument rules if you need their derivations.
+3. `rust/docs/phase2_findings.md` — **F8** and **F11** (the arithmetic-parity
+   precedents, decoder- and encoder-side), **F10 both instances** (raw-side
+   differential buffers are **`(h+1)*stride`** — the finding as written, not "whole
+   rows" as remembered; session F paid for the difference), and **F3's current
+   signature** (§4 below).
 4. `perf_baseline.md` — §Ledger and §Parked (you will add rows to both), §Phase 2 T8
    (the exact-span trim and the two microbench lies), the T4 row-walker table
    (negative results you must not re-propose).
 5. Plan §5 Phase 4a and §7.4 D-perf-4/D-seq-1 — so T9's hand-off artifacts say the
    right things.
 
-## 2. Session F — T7 part 1: `encode_mb_aux.rs`, `encoder/decode_mb_aux.rs`, `sample.rs`
+## 2. Session F — DONE (`12440d34`, eight commits, no deviations)
 
-Open with: commit any inherited doc changes; control battery (`FFMPEG` set); ratchet
-`check`; **fresh null run** (the floor is per-session — session D read ±1.8%, session
-E ±5.4% on tiny rows; yours is whatever the null says today).
+Outcomes, compressed (the log's session F entry has the full record):
+**F-1** `encode_mb_aux.rs` — 21 kernels + installer behind 21 shims, fixed-array
+signatures, the two strided Hadamard reads carrying exact-reach types (`[i16; 49]`,
+`[i16; 241]`); encoder +2.1% median / +9.9% worst, ledgered; cumulative encoder
+now ≈ +13%. **F-2** — the recon IDCT family was **9** kernels, not 6 (five raw bodies
+lived in `svc_encode_mb.rs`); noise-level both benches; **F11** recorded
+(`WelsIHadamard4x4Dc` i16 adds panic in debug above ±2047 where the C++ wraps —
+F8's class, reproduced not repaired). **F-3** — seven SATD kernels proven and
+**parked**, no commit B, §Parked row names Phase 4a. **F10 second instance**: the
+composites bump from sub-block anchors, reaching `(w-4) + h*stride` past the block —
+"whole rows" as remembered was not enough; raw-side differential buffers are
+**`(h+1)*stride`**, per the finding as written. The phase-exit Miri protocol was run
+mid-session (that's how the F10 instance surfaced) — it still re-runs at T9.
+**Spatial Ramps read +226% with per-binary-consistent readings** — excluded from all
+verdicts per the standing rule, recorded in the baseline as Phase 4a checkpoint data
+(gradient content is the per-block-scaffolding path at its purest).
 
-### F-1. `encoder/encode_mb_aux.rs` — 22 kernels, the forward-transform family
-
-- **What's there:** forward DCT (`WelsDctT4_c`, `WelsDctFourT4_c`), quantization
-  (`WelsQuant4x4_c` family, `WelsQuantFour4x4Max_c` etc.), scan/zig-zag
-  (`WelsScan4x4Ac_c` and friends), `WelsGetNoneZeroCount_c`, hadamard/DC transforms,
-  and copy helpers. Every block dimension is a compile-time constant — signatures
-  convert to fixed arrays (`&mut [i16; 16]`, `&[i16; 8]`), which makes the shim spans
-  **derivable from the signature** (T2's situation, not T3's): expect short contracts
-  and no span-helper subtleties. Phase 0 already deleted this file's 80 SIMD stubs
-  and its `no_mangle`s — what remains is all real.
-- **R-e, checked per kernel before writing:** the forward DCT sums differences of
-  `u8` pixels in `i16` (max |diff| 255 × gains through the butterfly — do the bound
-  arithmetic like F8 did); quant multiplies into `i32` with rounding offsets — match
-  the old Rust's widths and operations exactly, wrapping only where it wraps, and
-  bound differential inputs to the in-contract range. Any newly *noticed*
-  overflow-capable intermediate → F-finding in F8's format, nothing else.
-- **Dispatch:** these install into `SWelsFuncPtrList` slots (`pfQuantization*`,
-  `pfDctT4*`, `pfScan4x4*`, `pfTransformHadamard4x4Dc`, …) — installers keep
-  installing the shims; some helpers are also direct-called — inventory call paths
-  first (`grep -n` each name) so commit B swaps every path.
-- **Differential + probes:** exhaustive over the quant max/rounding branches
-  (selector flags per R-d), random anchors, whole-destination comparison; every span
-  probe carries the **golden direct run** (session E's rule — exact-span + touch-set
-  alone is blind along uniform axes).
-- **Commit B measurement:** one interleaved pair, both benches. This family is
-  encoder-per-block-dense (transform+quant runs for every coded block) — a T4-shaped
-  per-call number is plausible. Tripwire arithmetic against encoder +11%: park only
-  if a stream's cumulative projects past +25% median; otherwise ledger and continue,
-  flagging >15% single-family. One profile+disassembly look maximum if it's ugly.
-
-### F-2. `encoder/decode_mb_aux.rs` — 6 kernels, the encoder's recon IDCT
-
-The decoder pilot's shape replayed: `IdctResAddPred_c` and friends, fixed 4×4/8×8
-blocks, plane cursor for the recon write. **This is F8's arithmetic class exactly**
-(i16 IDCT intermediates) on the encoder side — same width-parity discipline, same
-bounded differential inputs. Small, fast, should be the cleanest family of the
-session. Same commit-B pair; expect noise-level.
-
-### F-3. `sample.rs` — 7 SATD kernels: **prove-and-park, directly. No commit B.**
-
-- The seven `WelsSampleSatd{4x4,8x4,4x8,8x8,16x8,8x16,16x16}_c` are ME's cost
-  kernels — the same tiny-block, call-dense profile that parked T5-sad, with a
-  Hadamard butterfly on top. D-perf-2's measurements are the tripwire projection
-  (sad-class swap cost +16.8% median onto +11% cumulative crosses +25%), so:
-  **commit A lands safe kernels + differentials + span probes; nothing installs
-  them.** Their §Parked row lists re-attempt = Phase 4a, alongside T5-sad.
-- **F10 rule from the first differential:** raw-side buffers sized **whole rows** —
-  the raw kernels' post-last-row pointer bump is UB on exact-span buffers and Miri
-  runs this file at T9. Exact spans on the safe side only.
-- **R-e:** the C++ SATD accumulates the butterfly in `i32` after `i16` stages —
-  verify against the old Rust per kernel.
-- `WelsInitSampleSadFunc` (the installer) is **untouched**: it installs the parked
-  raw `sad_common` names and would install SATD — both stay raw until Phase 4a;
-  the installer itself is dispatch plumbing (Phase 4a's to delete).
-- Do **not** try D-perf-2's slices-and-offsets idea here — it's queued for Phase 4a's
-  checkpoint, where the convention change can be made once for all parked families.
-
-Close session F per the standing exit protocol: log entry (gates control vs final,
-per-family verdicts, ledger/parked updates with evidence), Progress appendix,
-ratchet regenerated with reason, hand-off naming session G's first action.
+The original session-F instructions are spent and removed; the durable rules they
+carried live in `phase2_continue.md` §2 and the F10/F11 findings.
 
 ## 3. Session G — T7 part 2: `encoder/get_intra_predictor.rs` (27), then T9
 
@@ -135,9 +92,10 @@ ratchet regenerated with reason, hand-off naming session G's first action.
   flag combination — T3 found kernels that ignore flags they take.
 - **Commit B pair + tripwire:** call density here is per-mode-per-MB (an order less
   than SAD's per-candidate), so T3's wash is the base expectation — but this is the
-  encoder, so let the pair decide: cumulative past +25% median on any stream →
-  park with the SATDs (Phase 4a re-attempt); under → swap and ledger. Either way
-  this is the phase's last swap decision — record it with its arithmetic shown.
+  encoder, so let the pair decide, **starting the arithmetic from encoder ≈ +13%
+  median cumulative** (post-F-1): past +25% median on any stream → park with the
+  SATDs (Phase 4a re-attempt); under → swap and ledger. Either way this is the
+  phase's last swap decision — record it with its arithmetic shown.
 
 ### G-2. T9 — the phase exit, in full
 
@@ -159,9 +117,9 @@ Run in this order (document work last, so the code state it describes is final):
    place the heavyweight protocol still runs); per-family delta table; append the
    Phase 2 column to `perf_baseline.md`; reconcile §Ledger (rows stay open, Phase 4a
    checkpoint pending) and §Parked (T5-sad + SATD + G-1 if parked).
-5. **The fuzz-absence tally** (standing signal): list every finding a fuzzer would
-   plausibly have reached first (F8, F10, any new ones) in the log for Eugene —
-   re-raising Phase 0 T7 is his call, the tally is your job.
+5. **The fuzz-absence tally** (standing signal): the list now stands at **F8, F9,
+   F10 ×2, F11, and F3's sixth measurement** — present it in the log for Eugene with
+   any session-G additions; re-raising Phase 0 T7 is his call, the tally is your job.
 6. **Consolidation deliverables** (decided 2026-08-10; specs in
    `phase2_continue.md` §T9 — execute, don't redesign):
    - the **status preamble** at the top of `safety_refactor_plan.md` (one screen:
@@ -172,23 +130,30 @@ Run in this order (document work last, so the code state it describes is final):
      continuation brief's §T9), leaving phase-2-only carry-ins behind;
    - **`prompts/phase4a.md`** — the next phase's brief: the preserved D-perf-3
      protocol for `mc.rs`'s consumers first, checkpoint duties (re-measure every
-     ledger row, re-attempt every §Parked family, slices-and-offsets on the table),
-     the 4a/4b scope fence, Phase 3's read-first list (F4/F5/F7 read side, F2 write
-     side) staged for 4a's exit, and the standing-rules pointer to §7.6.
+     ledger row — **including the Spatial Ramps +226% datapoint session F banked:
+     gradient content is the per-block-scaffolding path at its purest, the
+     checkpoint's most sensitive instrument** — and re-attempt every §Parked
+     family, slices-and-offsets on the table), the 4a/4b scope fence, Phase 3's
+     read-first list (F4/F5/F7 read side, F2 write side) staged for 4a's exit, and
+     the standing-rules pointer to §7.6.
 7. **Close the phase:** Progress appendix Phase 2 marked complete with commit
    hashes; log entry whose next-action is "Phase 4a — read `prompts/phase4a.md`";
    stamp `phase2_continue.md` and this file's headers **superseded-historical**;
    commit everything; tree clean.
 
-## 4. Gates (unchanged, stated once)
+## 4. Gates (stated once; F3 signature as widened by session F)
 
 Per-commit: `cargo test` both profiles, pre-existing counts frozen, ignored-20
 frozen. Commit B: + one interleaved pair per bench. Family checkpoint and session
 end: full `gates.sh` (`FFMPEG` set), sweeps both profiles with the R-g F3 protocol
-(signature `mt sm=3 t∈{2,4}` short-or-zero output **either profile** → retry;
-anything else → real, stop, revert). Miri per the schedule above. Ratchet
-non-increasing except the R-f strangler shape (SHIM-matched `unsafe_block` rises,
-prose-count wrinkles). Any gate red after a change: revert first, think second.
+under its **sixth-measurement signature: `mt sm=3 t∈{2,4}`, output of ANY wrong
+length** (the race repacks slices, not just truncates — longer output is in-signature
+now), **either profile** (the first debug hit is on record) → retry; anything
+else → real, stop, revert. Session F's day-rate ran ≈1/110 under heavy machine load —
+if retries pile up, run the alternating-loop comparison before drawing conclusions,
+exactly as F's protocol run did. Miri per the schedule above. Ratchet non-increasing
+except the R-f strangler shape (SHIM-matched `unsafe_block` rises, prose-count
+wrinkles). Any gate red after a change: revert first, think second.
 
 ## 5. Non-goals
 
