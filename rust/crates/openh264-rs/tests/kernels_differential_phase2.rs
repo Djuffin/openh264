@@ -1819,3 +1819,285 @@ fn satd_kernels_stay_inside_the_spans_they_declare() {
         }
     }
 }
+
+// ===========================================================================
+// T7 part 2 — `encoder/get_intra_predictor.rs` (G-1)
+//
+// The encoder's intra candidate generators: 14 I4x4 luma modes, 7 chroma, and 5
+// I16x16 (the 16x16 V and H modes are shared with the decoder and were converted
+// in T5-intra, in `common/intra_pred_common.rs`).
+//
+// Two things make this family different from its same-named cousins, and both are
+// in the assertions below:
+//
+//   * the destination is a **packed** candidate buffer — 16, 64 or 256 bytes at an
+//     implicit stride of 4, 8 or 16, never a picture plane. Each entry allocates
+//     `PRED_SLACK` bytes of noise on both sides of it and compares the *whole*
+//     allocation, so a kernel that writes one byte past its block fails here (F1's
+//     defect class, and R-d's "every written byte of the destination surface");
+//   * the reference side has a **per-kernel** reach, not one per block size. The
+//     safe kernels take `&[u8; N]` when they read only the row above and a
+//     `PlaneCursor` spanning exactly their reach when they read the left column,
+//     and `safe_i4x4`/`safe_chroma`/`safe_i16x16` below build each one through
+//     `ref_span` — so these entries drive the span helper as hard as the kernels.
+//
+// R-d's exhaustive-selector rule lands on the **mode**: every mode of every table
+// is driven at every stride, not a random subset. What the mode *means* — which
+// neighbours the availability tables say exist when it is offered — is pinned
+// separately and permanently by `reach_table_agrees_with_the_availability_tables`
+// in the module's own unit tests.
+// ===========================================================================
+
+use openh264_rs::encoder::get_intra_predictor as eip;
+use openh264_rs::encoder::svc_base_layer_md as blmd;
+use openh264_rs::encoder::svc_mode_decision as smd;
+use openh264_rs::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
+/// Noise bytes on each side of a packed prediction block. The kernels write
+/// exactly the block; anything else moving is the bug this family can have.
+const PRED_SLACK: usize = 8;
+
+/// A reference plane of noise, plus a legal anchor for a `bw` x `bh` block that
+/// leaves one row above, one column left, and `right` samples of top-row reach past
+/// the block's right edge.
+///
+/// Noise rather than a ramp: a ramp makes several of the diagonal modes agree by
+/// accident, which is exactly how a transposed tap table survives a test.
+fn ref_anchor(
+    rng: &mut Prng,
+    stride: usize,
+    bw: usize,
+    bh: usize,
+    right: usize,
+) -> (Vec<u8>, usize) {
+    let rows = bh + 4;
+    let plane = rng.bytes(rows * stride);
+    let x = 1 + rng.below((stride - bw - right) as u32) as usize;
+    let y = 1 + rng.below((rows - bh - 1) as u32) as usize;
+    (plane, y * stride + x)
+}
+
+/// The `N` samples of the row above the block at `anchor`.
+fn top_of<const N: usize>(plane: &[u8], anchor: usize, stride: usize) -> &[u8; N] {
+    plane[anchor - stride..][..N].try_into().unwrap()
+}
+
+/// A cursor spanning exactly `reach`, anchored at the block's `(0, 0)` — built
+/// through the module's own `ref_span`, so a wrong span is a panic here rather than
+/// a silent over-claim in a shim.
+fn cursor_of(plane: &[u8], anchor: usize, stride: usize, reach: eip::Reach) -> PlaneCursor<'_> {
+    let (len, center) = eip::ref_span(stride, reach);
+    PlaneCursor::new(&plane[anchor - center..][..len], center, stride)
+}
+
+/// Drives the safe kernel behind I4x4 mode `mode`, with that kernel's own reference
+/// shape. The `match` is the point: there is no one shape to pass.
+fn safe_i4x4(mode: i8, pred: &mut [u8; 16], plane: &[u8], anchor: usize, stride: usize) {
+    match mode {
+        blmd::I4_PRED_V => eip::i4x4_luma_pred_v(pred, top_of::<4>(plane, anchor, stride)),
+        blmd::I4_PRED_H => {
+            eip::i4x4_luma_pred_h(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_LEFT))
+        }
+        blmd::I4_PRED_DC => {
+            eip::i4x4_luma_pred_dc(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_DC))
+        }
+        blmd::I4_PRED_DC_L => eip::i4x4_luma_pred_dc_left(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_I4X4_LEFT),
+        ),
+        blmd::I4_PRED_DC_T => eip::i4x4_luma_pred_dc_top(pred, top_of::<4>(plane, anchor, stride)),
+        blmd::I4_PRED_DC_128 => eip::i4x4_luma_pred_dc_na(pred),
+        blmd::I4_PRED_DDL => eip::i4x4_luma_pred_ddl(pred, top_of::<8>(plane, anchor, stride)),
+        blmd::I4_PRED_DDL_TOP => {
+            eip::i4x4_luma_pred_ddl_top(pred, top_of::<4>(plane, anchor, stride))
+        }
+        blmd::I4_PRED_DDR => {
+            eip::i4x4_luma_pred_ddr(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_DDR))
+        }
+        blmd::I4_PRED_VL => eip::i4x4_luma_pred_vl(pred, top_of::<7>(plane, anchor, stride)),
+        blmd::I4_PRED_VL_TOP => {
+            eip::i4x4_luma_pred_vl_top(pred, top_of::<4>(plane, anchor, stride))
+        }
+        blmd::I4_PRED_VR => {
+            eip::i4x4_luma_pred_vr(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_VR))
+        }
+        blmd::I4_PRED_HU => {
+            eip::i4x4_luma_pred_hu(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_LEFT))
+        }
+        blmd::I4_PRED_HD => {
+            eip::i4x4_luma_pred_hd(pred, &cursor_of(plane, anchor, stride, eip::REACH_I4X4_HD))
+        }
+        m => panic!("unknown I4x4 mode {m}"),
+    }
+}
+
+/// As [`safe_i4x4`], for the seven chroma modes.
+fn safe_chroma(mode: i8, pred: &mut [u8; 64], plane: &[u8], anchor: usize, stride: usize) {
+    match mode {
+        blmd::C_PRED_V => eip::chroma_pred_v(pred, top_of::<8>(plane, anchor, stride)),
+        blmd::C_PRED_H => {
+            eip::chroma_pred_h(pred, &cursor_of(plane, anchor, stride, eip::REACH_CHROMA_LEFT))
+        }
+        blmd::C_PRED_P => eip::chroma_pred_plane(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_CHROMA_PLANE),
+        ),
+        blmd::C_PRED_DC => {
+            eip::chroma_pred_dc(pred, &cursor_of(plane, anchor, stride, eip::REACH_CHROMA_DC))
+        }
+        blmd::C_PRED_DC_L => eip::chroma_pred_dc_left(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_CHROMA_LEFT),
+        ),
+        blmd::C_PRED_DC_T => eip::chroma_pred_dc_top(pred, top_of::<8>(plane, anchor, stride)),
+        blmd::C_PRED_DC_128 => eip::chroma_pred_dc_na(pred),
+        m => panic!("unknown chroma mode {m}"),
+    }
+}
+
+/// As [`safe_i4x4`], for the five I16x16 modes this module owns plus the two it
+/// imports from `common/intra_pred_common.rs` — driving all seven keeps the sweep
+/// exhaustive over the table the installer fills, which is what R-d asks for.
+fn safe_i16x16(mode: i8, pred: &mut [u8; 256], plane: &[u8], anchor: usize, stride: usize) {
+    match mode {
+        smd::I16_PRED_V => ipc::i16x16_luma_pred_v(pred, top_of::<16>(plane, anchor, stride)),
+        smd::I16_PRED_H => ipc::i16x16_luma_pred_h(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_I16X16_LEFT),
+        ),
+        smd::I16_PRED_P => eip::i16x16_luma_pred_plane(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_I16X16_PLANE),
+        ),
+        smd::I16_PRED_DC => eip::i16x16_luma_pred_dc(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_I16X16_DC),
+        ),
+        smd::I16_PRED_DC_L => eip::i16x16_luma_pred_dc_left(
+            pred,
+            &cursor_of(plane, anchor, stride, eip::REACH_I16X16_LEFT),
+        ),
+        smd::I16_PRED_DC_T => {
+            eip::i16x16_luma_pred_dc_top(pred, top_of::<16>(plane, anchor, stride))
+        }
+        smd::I16_PRED_DC_128 => eip::i16x16_luma_pred_dc_na(pred),
+        m => panic!("unknown I16x16 mode {m}"),
+    }
+}
+
+/// Every I4x4 mode, at every stride, at random legal anchors: the raw kernel and
+/// the safe one must agree on all sixteen bytes and disturb neither slack margin.
+#[test]
+fn encoder_i4x4_intra_pred_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0x14D4_0001);
+    let modes = [
+        blmd::I4_PRED_V, blmd::I4_PRED_H, blmd::I4_PRED_DC, blmd::I4_PRED_DC_L,
+        blmd::I4_PRED_DC_T, blmd::I4_PRED_DC_128, blmd::I4_PRED_DDL, blmd::I4_PRED_DDL_TOP,
+        blmd::I4_PRED_DDR, blmd::I4_PRED_VL, blmd::I4_PRED_VL_TOP, blmd::I4_PRED_VR,
+        blmd::I4_PRED_HU, blmd::I4_PRED_HD,
+    ];
+
+    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+
+    for &stride in &strides(16) {
+        for &mode in &modes {
+            for _ in 0..scale(40) {
+                // 8 samples of top-row reach: DDL is the widest of the fourteen.
+                let (plane, anchor) = ref_anchor(&mut rng, stride, 4, 4, 8);
+
+                let mut raw = rng.bytes(16 + 2 * PRED_SLACK);
+                let mut safe = raw.clone();
+                unsafe {
+                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
+                    fl.pfGetLumaI4x4Pred[mode as usize].unwrap()(
+                        raw.as_mut_ptr().add(PRED_SLACK),
+                        p_ref,
+                        stride as i32,
+                    );
+                }
+                let blk: &mut [u8; 16] =
+                    (&mut safe[PRED_SLACK..][..16]).try_into().unwrap();
+                safe_i4x4(mode, blk, &plane, anchor, stride);
+
+                assert_eq!(raw, safe, "I4x4 mode {mode} stride {stride} anchor {anchor}");
+            }
+        }
+    }
+}
+
+/// Every chroma mode, same shape. The destination is 64 bytes at stride 8.
+#[test]
+fn encoder_chroma_intra_pred_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0x0C40_0002);
+    let modes = [
+        blmd::C_PRED_DC, blmd::C_PRED_H, blmd::C_PRED_V, blmd::C_PRED_P, blmd::C_PRED_DC_L,
+        blmd::C_PRED_DC_T, blmd::C_PRED_DC_128,
+    ];
+
+    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+
+    for &stride in &strides(16) {
+        for &mode in &modes {
+            for _ in 0..scale(40) {
+                let (plane, anchor) = ref_anchor(&mut rng, stride, 8, 8, 0);
+
+                let mut raw = rng.bytes(64 + 2 * PRED_SLACK);
+                let mut safe = raw.clone();
+                unsafe {
+                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
+                    fl.pfGetChromaPred[mode as usize].unwrap()(
+                        raw.as_mut_ptr().add(PRED_SLACK),
+                        p_ref,
+                        stride as i32,
+                    );
+                }
+                let blk: &mut [u8; 64] =
+                    (&mut safe[PRED_SLACK..][..64]).try_into().unwrap();
+                safe_chroma(mode, blk, &plane, anchor, stride);
+
+                assert_eq!(raw, safe, "chroma mode {mode} stride {stride} anchor {anchor}");
+            }
+        }
+    }
+}
+
+/// Every I16x16 mode, same shape, 256 bytes at stride 16. Modes `V` and `H` come
+/// from `common/intra_pred_common.rs` and are already shimmed — driving them here
+/// costs nothing and keeps the table sweep exhaustive.
+#[test]
+fn encoder_i16x16_intra_pred_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0x1616_0003);
+    let modes = [
+        smd::I16_PRED_V, smd::I16_PRED_H, smd::I16_PRED_DC, smd::I16_PRED_P, smd::I16_PRED_DC_L,
+        smd::I16_PRED_DC_T, smd::I16_PRED_DC_128,
+    ];
+
+    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+
+    for &stride in &strides(32) {
+        for &mode in &modes {
+            for _ in 0..scale(40) {
+                let (plane, anchor) = ref_anchor(&mut rng, stride, 16, 16, 0);
+
+                let mut raw = rng.bytes(256 + 2 * PRED_SLACK);
+                let mut safe = raw.clone();
+                unsafe {
+                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
+                    fl.pfGetLumaI16x16Pred[mode as usize].unwrap()(
+                        raw.as_mut_ptr().add(PRED_SLACK),
+                        p_ref,
+                        stride as i32,
+                    );
+                }
+                let blk: &mut [u8; 256] =
+                    (&mut safe[PRED_SLACK..][..256]).try_into().unwrap();
+                safe_i16x16(mode, blk, &plane, anchor, stride);
+
+                assert_eq!(raw, safe, "I16x16 mode {mode} stride {stride} anchor {anchor}");
+            }
+        }
+    }
+}

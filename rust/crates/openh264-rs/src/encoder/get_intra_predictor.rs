@@ -9,10 +9,28 @@
 //! Only the `_c` scalar variants exist here. The SIMD variants in the C++ are all
 //! behind `uiCpuFlag` tests that do not fire on any target this port builds for;
 //! `WelsCPUFeatureDetect` measured `0x00000000` against `libopenh264.a` on darwin/arm64.
+//!
+//! # Three same-named families, and they must never be unified
+//!
+//! `WelsI4x4LumaPredV_c` and its siblings exist three times in this port, with three
+//! different signatures and three different destinations:
+//!
+//! | module | signature | destination |
+//! |---|---|---|
+//! | `decoder/get_intra_predictor.rs` (T3) | `(pPred, kiStride)` | **in place**, strided |
+//! | `common/intra_pred_common.rs` (T5) | `(pPred, pRef, kiStride)` | packed, 16x16 only |
+//! | **this module** | `(pPred, pRef, kiStride)` | **packed** candidate buffer |
+//!
+//! Third occurrence of the collision trap (`safety_refactor_log.md`, T3/T5/F-1).
+//! Same names, different functions: never unify them, never delete one for the
+//! other. The two 16x16 modes this module *does* share with `intra_pred_common`
+//! (`V` and `H`) it imports rather than redefines — those two really are the same
+//! function, and the table below installs the imported ones.
 
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
 use crate::common::intra_pred_common::{WelsI16x16LumaPredH_c, WelsI16x16LumaPredV_c};
+use crate::safe::plane::PlaneCursor;
 use crate::encoder::svc_base_layer_md::{
     C_PRED_DC, C_PRED_DC_128, C_PRED_DC_L, C_PRED_DC_T, C_PRED_H, C_PRED_P, C_PRED_V, I4_PRED_DC,
     I4_PRED_DC_128, I4_PRED_DC_L, I4_PRED_DC_T, I4_PRED_DDL, I4_PRED_DDL_TOP, I4_PRED_DDR,
@@ -69,6 +87,748 @@ unsafe fn WelsFillingPred1to16(pPred: *mut u8, kuiSrc: u8) {
     let v = 0x0101_0101_0101_0101u64.wrapping_mul(kuiSrc as u64);
     ST64(pPred, v);
     ST64(pPred.add(8), v);
+}
+
+// ============================================================================
+// Safe kernels (plan §Phase 2, recipe R2)
+// ============================================================================
+//
+// Every predictor in this module has **two surfaces with different rules**, and the
+// signatures below say so:
+//
+//   * the **destination** is a *packed* candidate buffer — 16 bytes at an implicit
+//     stride of 4 (I4x4), 64 at 8 (chroma), 256 at 16 (I16x16). It is one of the
+//     mode-decision ping-pong halves (`pMemPredBlk4`, `pMemPredChroma`,
+//     `pMemPredMb`; `svc_base_layer_md.rs:437`, `:734`, `svc_mode_decision.rs:1167`),
+//     never a picture plane, so it is a fixed-size array and `kiStride` says
+//     nothing about it. That is what separates these from the same-named strided
+//     decoder cousins converted in T3;
+//   * the **reference** is the reconstructed plane, read at `x = -1` and
+//     `y = -1` around the block. Those reads are in-allocation because a picture
+//     plane is `PADDING_LENGTH`-padded on every side, and they are *correct*
+//     because mode decision only offers a mode whose neighbours exist — the
+//     availability tables `g_kiIntra16AvaliMode` / `g_kiIntra4AvailMode` /
+//     `g_kiIntraChromaAvailMode` pick the candidate list from
+//     `uiNeighborIntra`, which is why `…DcTop`, `…DcLeft`, `…DDLTop` and
+//     `…VLTop` exist at all.
+//
+// **Per-kernel reference shapes, not one shared shape** (T4's "per-kernel reach,
+// not the union"; T5-intra applied it to this exact pair of modes). A predictor
+// that reads only the row above takes `&[u8; N]` — it *cannot* touch the left
+// column, which is the whole reason mode decision may offer it when the left
+// neighbour is missing. A predictor that reads the left column takes a
+// [`PlaneCursor`] whose span is that kernel's reach and no more. The reach table
+// is `REACH_*` below and `ref_span` is the only place it becomes a slice.
+
+/// What one predictor reads of the reconstructed plane, relative to the block's
+/// own `(0, 0)` — i.e. relative to `pRef`.
+///
+/// This is the contract in data form: one `Reach` per kernel, never a union over a
+/// family. `WelsI4x4LumaPredDcTop_c` and `WelsI4x4LumaPredDDR_c` are both 4x4 luma
+/// predictors and their reaches have nothing in common.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reach {
+    /// Samples of the row above, at `x` in `0..top`. Zero means the row above is
+    /// not read at all.
+    pub top: usize,
+    /// Samples of the column to the left, at `y` in `0..left`. Zero means the
+    /// column is not read at all.
+    pub left: usize,
+    /// Reads the corner sample at `(-1, -1)`.
+    pub corner: bool,
+}
+
+impl Reach {
+    const fn new(top: usize, left: usize, corner: bool) -> Self {
+        Self { top, left, corner }
+    }
+}
+
+/// The byte span a [`Reach`] needs at `stride`, as `(len, center)`: the shim hands
+/// `from_raw_parts(pRef.sub(center), len)` to a [`PlaneCursor`] anchored at
+/// `center`, and the kernel's relative coordinates then land inside it by
+/// construction.
+///
+/// This is R-c's one-helper rule: the whole file's reference arithmetic lives here,
+/// and every shim is three lines that cannot get it wrong differently from its
+/// neighbours. Note the span covers **reads only** — nothing in this module writes
+/// the reference, and `pRef` itself is *not* read by any predictor — so it is the
+/// tightest claim each contract can make, and the probe test hands exactly-sized
+/// allocations to prove it.
+///
+/// A consequence worth stating: for a reach that reads only the row above, the span
+/// lies **entirely above `pRef`** and `center >= len`, which no [`PlaneCursor`] will
+/// accept. That is not a defect — those kernels take `&[u8; N]` rather than a
+/// cursor, precisely because their whole reach is one contiguous run. T5-intra's
+/// probe made the same observation about `WelsI16x16LumaPredV_c`.
+///
+/// # Panics
+/// Never. A reach that reads nothing (`DcNA`) produces `(0, 0)`; those kernels take
+/// no reference at all.
+#[inline(always)]
+pub fn ref_span(stride: usize, reach: Reach) -> (usize, usize) {
+    let s = stride as isize;
+    // Lowest byte read, and one past the highest, as signed offsets from `pRef`.
+    // Seeded from the first read rather than from zero: seeding at zero would drag
+    // `pRef` itself into every span, and no predictor in this module reads it.
+    let (mut lo, mut hi) = if reach.corner {
+        (-s - 1, -s)
+    } else if reach.top > 0 {
+        (-s, -s + reach.top as isize)
+    } else if reach.left > 0 {
+        // The last left sample sits at `(left-1)*stride - 1`; one past it is
+        // `(left-1)*stride`.
+        (-1, (reach.left as isize - 1) * s)
+    } else {
+        return (0, 0);
+    };
+    if reach.top > 0 {
+        lo = lo.min(-s);
+        hi = hi.max(-s + reach.top as isize);
+    }
+    if reach.left > 0 {
+        lo = lo.min(-1);
+        hi = hi.max((reach.left as isize - 1) * s);
+    }
+    ((hi - lo) as usize, (-lo) as usize)
+}
+
+// --- I4x4 luma: reaches ------------------------------------------------------
+
+/// `WelsI4x4LumaPredDcNA_c` — reads nothing. Its C++ `pRef` parameter is dead.
+pub const REACH_NONE: Reach = Reach::new(0, 0, false);
+/// `WelsI4x4LumaPredV_c`, `…DcTop_c`, `…DDLTop_c`, `…VLTop_c` — the block's own
+/// four top samples and nothing else.
+pub const REACH_I4X4_TOP: Reach = Reach::new(4, 0, false);
+/// `WelsI4x4LumaPredVL_c` — **seven** top samples: three past the right edge.
+pub const REACH_I4X4_TOP7: Reach = Reach::new(7, 0, false);
+/// `WelsI4x4LumaPredDDL_c` — **eight** top samples: four past the right edge, which
+/// is why this mode is gated on the top-right neighbour.
+pub const REACH_I4X4_TOP8: Reach = Reach::new(8, 0, false);
+/// `WelsI4x4LumaPredH_c` — the four samples left of the block.
+pub const REACH_I4X4_LEFT: Reach = Reach::new(0, 4, false);
+/// `WelsI4x4LumaPredDc_c` — four above and four left.
+pub const REACH_I4X4_DC: Reach = Reach::new(4, 4, false);
+/// `WelsI4x4LumaPredDDR_c` — the corner, four above and four left.
+pub const REACH_I4X4_DDR: Reach = Reach::new(4, 4, true);
+/// `WelsI4x4LumaPredVR_c` — the corner, four above and **three** left.
+pub const REACH_I4X4_VR: Reach = Reach::new(4, 3, true);
+/// `WelsI4x4LumaPredHD_c` — the corner, **three** above and four left.
+pub const REACH_I4X4_HD: Reach = Reach::new(3, 4, true);
+
+// --- chroma 8x8: reaches -----------------------------------------------------
+
+/// `WelsIChromaPredV_c`, `WelsIChromaPredDcTop_c` — the eight samples above.
+pub const REACH_CHROMA_TOP: Reach = Reach::new(8, 0, false);
+/// `WelsIChromaPredH_c`, `WelsIChromaPredDcLeft_c` — the eight samples left.
+pub const REACH_CHROMA_LEFT: Reach = Reach::new(0, 8, false);
+/// `WelsIChromaPredDc_c` — eight above and eight left.
+pub const REACH_CHROMA_DC: Reach = Reach::new(8, 8, false);
+/// `WelsIChromaPredPlane_c` — eight above and eight left **plus the corner**: the
+/// `pTop[2 - i]` and `pLeft[(2 - i) * stride]` arms reach `-1` at `i == 3`.
+pub const REACH_CHROMA_PLANE: Reach = Reach::new(8, 8, true);
+
+// --- I16x16 luma: reaches ----------------------------------------------------
+
+/// `WelsI16x16LumaPredV_c` (imported), `WelsI16x16LumaPredDcTop_c` — the sixteen
+/// samples above.
+pub const REACH_I16X16_TOP: Reach = Reach::new(16, 0, false);
+/// `WelsI16x16LumaPredH_c` (imported), `WelsI16x16LumaPredDcLeft_c` — the sixteen
+/// samples left.
+pub const REACH_I16X16_LEFT: Reach = Reach::new(0, 16, false);
+/// `WelsI16x16LumaPredDc_c` — sixteen above and sixteen left.
+pub const REACH_I16X16_DC: Reach = Reach::new(16, 16, false);
+/// `WelsI16x16LumaPredPlane_c` — sixteen above and sixteen left **plus the
+/// corner**, for the same reason as chroma plane (`6 - i` reaches `-1` at
+/// `i == 7`).
+pub const REACH_I16X16_PLANE: Reach = Reach::new(16, 16, true);
+
+// --- the reach table, by mode ------------------------------------------------
+//
+// The three lookups below are the reach table as mode decision sees it. Nothing in
+// `src/` calls them — each shim names its own constant, which is statically known
+// and folds — but they are what makes the availability argument *checkable*
+// (`reach_table_agrees_with_the_availability_tables` in this module's tests), and
+// they are the shape Phase 5 needs when it converts the call sites: given a mode
+// and a neighbour mask, exactly which samples must exist.
+
+/// Reference reach of the I4x4 luma predictor installed at `mode`.
+pub const fn reach_i4x4(mode: i8) -> Reach {
+    match mode {
+        I4_PRED_V | I4_PRED_DC_T | I4_PRED_DDL_TOP | I4_PRED_VL_TOP => REACH_I4X4_TOP,
+        I4_PRED_VL => REACH_I4X4_TOP7,
+        I4_PRED_DDL => REACH_I4X4_TOP8,
+        I4_PRED_H | I4_PRED_DC_L | I4_PRED_HU => REACH_I4X4_LEFT,
+        I4_PRED_DC => REACH_I4X4_DC,
+        I4_PRED_DDR => REACH_I4X4_DDR,
+        I4_PRED_VR => REACH_I4X4_VR,
+        I4_PRED_HD => REACH_I4X4_HD,
+        _ => REACH_NONE, // I4_PRED_DC_128
+    }
+}
+
+/// Reference reach of the chroma predictor installed at `mode`.
+pub const fn reach_chroma(mode: i8) -> Reach {
+    match mode {
+        C_PRED_V | C_PRED_DC_T => REACH_CHROMA_TOP,
+        C_PRED_H | C_PRED_DC_L => REACH_CHROMA_LEFT,
+        C_PRED_DC => REACH_CHROMA_DC,
+        C_PRED_P => REACH_CHROMA_PLANE,
+        _ => REACH_NONE, // C_PRED_DC_128
+    }
+}
+
+/// Reference reach of the I16x16 luma predictor installed at `mode`. `V` and `H`
+/// are the imported `intra_pred_common` kernels; their reaches are stated here
+/// because mode decision indexes one table, not two.
+pub const fn reach_i16x16(mode: i8) -> Reach {
+    match mode {
+        I16_PRED_V | I16_PRED_DC_T => REACH_I16X16_TOP,
+        I16_PRED_H | I16_PRED_DC_L => REACH_I16X16_LEFT,
+        I16_PRED_DC => REACH_I16X16_DC,
+        I16_PRED_P => REACH_I16X16_PLANE,
+        _ => REACH_NONE, // I16_PRED_DC_128
+    }
+}
+
+// --- I4x4 luma: kernels ------------------------------------------------------
+//
+// The C++ builds a 16-byte `uiSrc` scratch by *index assignment* and then moves it
+// to `pPred` with `WelsFillingPred8x2to16` (two `u64` stores — a byte move, not
+// arithmetic: taxonomy T7). Here the destination *is* that scratch, because every
+// one of these modes assigns all sixteen positions. The index sets stay written out
+// rather than folded into a formula: they are the mode's whole identity, and T3's
+// `write4x4_windows` made the same call for the same reason.
+
+/// C++: `WelsI4x4LumaPredV_c`, `codec/encoder/core/src/get_intra_predictor.cpp:79`.
+///
+/// Each of the four rows is the four samples above the block. Takes `top` by value
+/// shape rather than a cursor because it reads nothing else — mode decision offers
+/// this mode when the row above exists whether or not the left column does.
+#[inline(always)]
+pub fn i4x4_luma_pred_v(pred: &mut [u8; 16], top: &[u8; 4]) {
+    for y in 0..4 {
+        let row: &mut [u8; 4] = (&mut pred[y * 4..][..4]).try_into().unwrap();
+        *row = *top;
+    }
+}
+
+/// C++: `WelsI4x4LumaPredH_c`, `:87`.
+///
+/// Row `y` is the sample at `(-1, y)` broadcast across it. Reads `[`[`REACH_I4X4_LEFT`]`]`
+/// and nothing above, which is why it takes a cursor rather than a top array.
+#[inline(always)]
+pub fn i4x4_luma_pred_h(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    for y in 0..4 {
+        let v = reference.at(-1, y as isize);
+        let row: &mut [u8; 4] = (&mut pred[y * 4..][..4]).try_into().unwrap();
+        row.fill(v);
+    }
+}
+
+/// C++: `WelsI4x4LumaPredDc_c`, `:106`. Mean of the four left and four top
+/// samples; reach [`REACH_I4X4_DC`].
+#[inline(always)]
+pub fn i4x4_luma_pred_dc(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let mut sum: i32 = 4;
+    for y in 0..4 {
+        sum += reference.at(-1, y) as i32;
+    }
+    for &v in reference.row(-1, 0, 4) {
+        sum += v as i32;
+    }
+    pred.fill((sum >> 3) as u8);
+}
+
+/// C++: `WelsI4x4LumaPredDcLeft_c`, `:114`. Mean of the four left samples only;
+/// reach [`REACH_I4X4_LEFT`] — this is the mode decision picks when the row above
+/// is unavailable, so the type must not be able to read it.
+#[inline(always)]
+pub fn i4x4_luma_pred_dc_left(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let mut sum: i32 = 2;
+    for y in 0..4 {
+        sum += reference.at(-1, y) as i32;
+    }
+    pred.fill((sum >> 2) as u8);
+}
+
+/// C++: `WelsI4x4LumaPredDcTop_c`, `:121`. Mean of the four top samples only —
+/// the mirror case, and correspondingly it takes only the top row.
+#[inline(always)]
+pub fn i4x4_luma_pred_dc_top(pred: &mut [u8; 16], top: &[u8; 4]) {
+    let sum: i32 = 2 + top.iter().map(|&v| v as i32).sum::<i32>();
+    pred.fill((sum >> 2) as u8);
+}
+
+/// C++: `WelsI4x4LumaPredDcNA_c`, `:127`. Neither neighbour exists; the block
+/// predicts flat mid-grey. Takes no reference at all — the only honest shape for a
+/// kernel whose C++ `pRef` parameter is dead.
+#[inline(always)]
+pub fn i4x4_luma_pred_dc_na(pred: &mut [u8; 16]) {
+    pred.fill(0x80);
+}
+
+/// C++: `WelsI4x4LumaPredDDL_c`, `:134` — diagonal down-left.
+///
+/// Reads **eight** samples of the row above: four past the block's right edge, which
+/// is the reach that makes this mode conditional on the top-right neighbour.
+#[inline(always)]
+pub fn i4x4_luma_pred_ddl(pred: &mut [u8; 16], top: &[u8; 8]) {
+    let t = |i: usize| top[i] as i32;
+    let ddl0 = ((2 + t(0) + t(2) + (t(1) << 1)) >> 2) as u8;
+    let ddl1 = ((2 + t(1) + t(3) + (t(2) << 1)) >> 2) as u8;
+    let ddl2 = ((2 + t(2) + t(4) + (t(3) << 1)) >> 2) as u8;
+    let ddl3 = ((2 + t(3) + t(5) + (t(4) << 1)) >> 2) as u8;
+    let ddl4 = ((2 + t(4) + t(6) + (t(5) << 1)) >> 2) as u8;
+    let ddl5 = ((2 + t(5) + t(7) + (t(6) << 1)) >> 2) as u8;
+    let ddl6 = ((2 + t(6) + t(7) + (t(7) << 1)) >> 2) as u8;
+    pred[0] = ddl0;
+    pred[1] = ddl1;
+    pred[4] = ddl1;
+    pred[2] = ddl2;
+    pred[5] = ddl2;
+    pred[8] = ddl2;
+    pred[3] = ddl3;
+    pred[6] = ddl3;
+    pred[9] = ddl3;
+    pred[12] = ddl3;
+    pred[7] = ddl4;
+    pred[10] = ddl4;
+    pred[13] = ddl4;
+    pred[11] = ddl5;
+    pred[14] = ddl5;
+    pred[15] = ddl6;
+}
+
+/// C++: `WelsI4x4LumaPredDDLTop_c`, `:164` — diagonal down-left with the top-right
+/// neighbour replaced by `T3` repeated. Four top samples, no eighth.
+#[inline(always)]
+pub fn i4x4_luma_pred_ddl_top(pred: &mut [u8; 16], top: &[u8; 4]) {
+    let t = |i: usize| top[i] as i32;
+    let dlt0 = ((2 + t(0) + t(2) + (t(1) << 1)) >> 2) as u8;
+    let dlt1 = ((2 + t(1) + t(3) + (t(2) << 1)) >> 2) as u8;
+    let dlt2 = ((2 + t(2) + t(3) + (t(3) << 1)) >> 2) as u8;
+    let dlt3 = ((2 + (t(3) << 2)) >> 2) as u8;
+    // The C++ memsets ten bytes first and then overwrites seven of them; the four
+    // assignments below that land inside `6..16` are the overwrites.
+    pred[6..16].fill(dlt3);
+    pred[0] = dlt0;
+    pred[1] = dlt1;
+    pred[4] = dlt1;
+    pred[2] = dlt2;
+    pred[5] = dlt2;
+    pred[8] = dlt2;
+    pred[3] = dlt3;
+}
+
+/// C++: `WelsI4x4LumaPredDDR_c`, `:186` — diagonal down-right. Reach
+/// [`REACH_I4X4_DDR`]: the corner sample, four above and four left.
+#[inline(always)]
+pub fn i4x4_luma_pred_ddr(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let lt = reference.at(-1, -1) as i32;
+    let l0 = reference.at(-1, 0) as i32;
+    let l1 = reference.at(-1, 1) as i32;
+    let l2 = reference.at(-1, 2) as i32;
+    let l3 = reference.at(-1, 3) as i32;
+    let top = reference.row(-1, 0, 4);
+    let (t0, t1, t2, t3) = (top[0] as i32, top[1] as i32, top[2] as i32, top[3] as i32);
+    let tl0 = 1 + lt + l0;
+    let lt0 = 1 + lt + t0;
+    let t01 = 1 + t0 + t1;
+    let t12 = 1 + t1 + t2;
+    let t23 = 1 + t2 + t3;
+    let l01 = 1 + l0 + l1;
+    let l12 = 1 + l1 + l2;
+    let l23 = 1 + l2 + l3;
+    let ddr0 = ((tl0 + lt0) >> 2) as u8;
+    let ddr1 = ((lt0 + t01) >> 2) as u8;
+    let ddr2 = ((t01 + t12) >> 2) as u8;
+    let ddr3 = ((t12 + t23) >> 2) as u8;
+    let ddr4 = ((tl0 + l01) >> 2) as u8;
+    let ddr5 = ((l01 + l12) >> 2) as u8;
+    let ddr6 = ((l12 + l23) >> 2) as u8;
+    pred[0] = ddr0;
+    pred[5] = ddr0;
+    pred[10] = ddr0;
+    pred[15] = ddr0;
+    pred[1] = ddr1;
+    pred[6] = ddr1;
+    pred[11] = ddr1;
+    pred[2] = ddr2;
+    pred[7] = ddr2;
+    pred[3] = ddr3;
+    pred[4] = ddr4;
+    pred[9] = ddr4;
+    pred[14] = ddr4;
+    pred[8] = ddr5;
+    pred[13] = ddr5;
+    pred[12] = ddr6;
+}
+
+/// C++: `WelsI4x4LumaPredVL_c`, `:228` — vertical left. **Seven** top samples, not
+/// eight: `kuiVL9` is the last tap and it stops at `T6`.
+#[inline(always)]
+pub fn i4x4_luma_pred_vl(pred: &mut [u8; 16], top: &[u8; 7]) {
+    let t = |i: usize| top[i] as i32;
+    let vl0 = ((1 + t(0) + t(1)) >> 1) as u8;
+    let vl1 = ((1 + t(1) + t(2)) >> 1) as u8;
+    let vl2 = ((1 + t(2) + t(3)) >> 1) as u8;
+    let vl3 = ((1 + t(3) + t(4)) >> 1) as u8;
+    let vl4 = ((1 + t(4) + t(5)) >> 1) as u8;
+    let vl5 = ((2 + t(0) + (t(1) << 1) + t(2)) >> 2) as u8;
+    let vl6 = ((2 + t(1) + (t(2) << 1) + t(3)) >> 2) as u8;
+    let vl7 = ((2 + t(2) + (t(3) << 1) + t(4)) >> 2) as u8;
+    let vl8 = ((2 + t(3) + (t(4) << 1) + t(5)) >> 2) as u8;
+    let vl9 = ((2 + t(4) + (t(5) << 1) + t(6)) >> 2) as u8;
+    pred[0] = vl0;
+    pred[1] = vl1;
+    pred[8] = vl1;
+    pred[2] = vl2;
+    pred[9] = vl2;
+    pred[3] = vl3;
+    pred[10] = vl3;
+    pred[4] = vl5;
+    pred[5] = vl6;
+    pred[12] = vl6;
+    pred[6] = vl7;
+    pred[13] = vl7;
+    pred[7] = vl8;
+    pred[14] = vl8;
+    pred[11] = vl4;
+    pred[15] = vl9;
+}
+
+/// C++: `WelsI4x4LumaPredVLTop_c`, `:265` — vertical left with the top-right
+/// neighbour replaced by `T3` repeated.
+///
+/// The C++ walks from `pTopLeft = pRef - stride - 1` and indexes `+1 .. +4`, so it
+/// *forms* a corner pointer but never reads through it; the four samples it reads
+/// are the block's own top row.
+#[inline(always)]
+pub fn i4x4_luma_pred_vl_top(pred: &mut [u8; 16], top: &[u8; 4]) {
+    let t = |i: usize| top[i] as i32;
+    let vlt0 = ((1 + t(0) + t(1)) >> 1) as u8;
+    let vlt1 = ((1 + t(1) + t(2)) >> 1) as u8;
+    let vlt2 = ((1 + t(2) + t(3)) >> 1) as u8;
+    let vlt3 = ((1 + (t(3) << 1)) >> 1) as u8;
+    let vlt4 = ((2 + t(0) + (t(1) << 1) + t(2)) >> 2) as u8;
+    let vlt5 = ((2 + t(1) + (t(2) << 1) + t(3)) >> 2) as u8;
+    let vlt6 = ((2 + t(2) + (t(3) << 1) + t(3)) >> 2) as u8;
+    let vlt7 = ((2 + (t(3) << 2)) >> 2) as u8;
+    pred[0] = vlt0;
+    pred[1] = vlt1;
+    pred[8] = vlt1;
+    pred[2] = vlt2;
+    pred[9] = vlt2;
+    pred[3] = vlt3;
+    pred[10] = vlt3;
+    pred[11] = vlt3;
+    pred[4] = vlt4;
+    pred[5] = vlt5;
+    pred[12] = vlt5;
+    pred[6] = vlt6;
+    pred[13] = vlt6;
+    pred[7] = vlt7;
+    pred[14] = vlt7;
+    pred[15] = vlt7;
+}
+
+/// C++: `WelsI4x4LumaPredVR_c`, `:294` — vertical right. Reach [`REACH_I4X4_VR`]:
+/// the corner, four above, and **three** left — `L3` is never read.
+#[inline(always)]
+pub fn i4x4_luma_pred_vr(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let lt = reference.at(-1, -1) as i32;
+    let l0 = reference.at(-1, 0) as i32;
+    let l1 = reference.at(-1, 1) as i32;
+    let l2 = reference.at(-1, 2) as i32;
+    let top = reference.row(-1, 0, 4);
+    let (t0, t1, t2, t3) = (top[0] as i32, top[1] as i32, top[2] as i32, top[3] as i32);
+    let vr0 = ((1 + lt + t0) >> 1) as u8;
+    let vr1 = ((1 + t0 + t1) >> 1) as u8;
+    let vr2 = ((1 + t1 + t2) >> 1) as u8;
+    let vr3 = ((1 + t2 + t3) >> 1) as u8;
+    let vr4 = ((2 + l0 + (lt << 1) + t0) >> 2) as u8;
+    let vr5 = ((2 + lt + (t0 << 1) + t1) >> 2) as u8;
+    let vr6 = ((2 + t0 + (t1 << 1) + t2) >> 2) as u8;
+    let vr7 = ((2 + t1 + (t2 << 1) + t3) >> 2) as u8;
+    let vr8 = ((2 + lt + (l0 << 1) + l1) >> 2) as u8;
+    let vr9 = ((2 + l0 + (l1 << 1) + l2) >> 2) as u8;
+    pred[0] = vr0;
+    pred[9] = vr0;
+    pred[1] = vr1;
+    pred[10] = vr1;
+    pred[2] = vr2;
+    pred[11] = vr2;
+    pred[3] = vr3;
+    pred[4] = vr4;
+    pred[13] = vr4;
+    pred[5] = vr5;
+    pred[14] = vr5;
+    pred[6] = vr6;
+    pred[15] = vr6;
+    pred[7] = vr7;
+    pred[8] = vr8;
+    pred[12] = vr9;
+}
+
+/// C++: `WelsI4x4LumaPredHU_c`, `:332` — horizontal up. Reach
+/// [`REACH_I4X4_LEFT`]: four left samples, nothing above.
+#[inline(always)]
+pub fn i4x4_luma_pred_hu(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let l0 = reference.at(-1, 0) as i32;
+    let l1 = reference.at(-1, 1) as i32;
+    let l2 = reference.at(-1, 2) as i32;
+    let l3 = reference.at(-1, 3) as i32;
+    let l01 = 1 + l0 + l1;
+    let l12 = 1 + l1 + l2;
+    let l23 = 1 + l2 + l3;
+    let hu0 = (l01 >> 1) as u8;
+    let hu1 = ((l01 + l12) >> 2) as u8;
+    let hu2 = (l12 >> 1) as u8;
+    let hu3 = ((l12 + l23) >> 2) as u8;
+    let hu4 = (l23 >> 1) as u8;
+    let hu5 = ((1 + l23 + (l3 << 1)) >> 2) as u8;
+    pred[0] = hu0;
+    pred[1] = hu1;
+    pred[2] = hu2;
+    pred[4] = hu2;
+    pred[3] = hu3;
+    pred[5] = hu3;
+    pred[6] = hu4;
+    pred[8] = hu4;
+    pred[7] = hu5;
+    pred[9] = hu5;
+    pred[10..16].fill(l3 as u8);
+}
+
+/// C++: `WelsI4x4LumaPredHD_c`, `:363` — horizontal down. Reach
+/// [`REACH_I4X4_HD`]: the corner, **three** above, four left — `T3` is never read.
+#[inline(always)]
+pub fn i4x4_luma_pred_hd(pred: &mut [u8; 16], reference: &PlaneCursor<'_>) {
+    let lt = reference.at(-1, -1) as i32;
+    let l0 = reference.at(-1, 0) as i32;
+    let l1 = reference.at(-1, 1) as i32;
+    let l2 = reference.at(-1, 2) as i32;
+    let l3 = reference.at(-1, 3) as i32;
+    let top = reference.row(-1, 0, 3);
+    let (t0, t1, t2) = (top[0] as i32, top[1] as i32, top[2] as i32);
+    let hd0 = ((1 + lt + l0) >> 1) as u8;
+    let hd1 = ((2 + l0 + (lt << 1) + t0) >> 2) as u8;
+    let hd2 = ((2 + lt + (t0 << 1) + t1) >> 2) as u8;
+    let hd3 = ((2 + t0 + (t1 << 1) + t2) >> 2) as u8;
+    let hd4 = ((1 + l0 + l1) >> 1) as u8;
+    let hd5 = ((2 + lt + (l0 << 1) + l1) >> 2) as u8;
+    let hd6 = ((1 + l1 + l2) >> 1) as u8;
+    let hd7 = ((2 + l0 + (l1 << 1) + l2) >> 2) as u8;
+    let hd8 = ((1 + l2 + l3) >> 1) as u8;
+    let hd9 = ((2 + l1 + (l2 << 1) + l3) >> 2) as u8;
+    pred[0] = hd0;
+    pred[6] = hd0;
+    pred[1] = hd1;
+    pred[7] = hd1;
+    pred[2] = hd2;
+    pred[3] = hd3;
+    pred[4] = hd4;
+    pred[10] = hd4;
+    pred[5] = hd5;
+    pred[11] = hd5;
+    pred[8] = hd6;
+    pred[14] = hd6;
+    pred[9] = hd7;
+    pred[15] = hd7;
+    pred[12] = hd8;
+    pred[13] = hd9;
+}
+
+// --- chroma 8x8: kernels -----------------------------------------------------
+
+/// C++: `WelsIChromaPredV_c`, `:404`. Eight rows of the eight samples above.
+#[inline(always)]
+pub fn chroma_pred_v(pred: &mut [u8; 64], top: &[u8; 8]) {
+    for y in 0..8 {
+        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
+        *row = *top;
+    }
+}
+
+/// C++: `WelsIChromaPredH_c`, `:417`. Row `y` is `(-1, y)` broadcast.
+///
+/// The C++ walks rows 7 down to 0 carrying two descending offsets (and lets the
+/// destination one wrap past zero on the last step); each row is written once from
+/// an input the block does not contain, so ascending is the same eight writes in a
+/// different order — the pilot's argument.
+#[inline(always)]
+pub fn chroma_pred_h(pred: &mut [u8; 64], reference: &PlaneCursor<'_>) {
+    for y in 0..8 {
+        let v = reference.at(-1, y as isize);
+        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
+        row.fill(v);
+    }
+}
+
+/// C++: `WelsIChromaPredPlane_c`, `:433`. Reach [`REACH_CHROMA_PLANE`].
+///
+/// Arithmetic parity (R-e): every intermediate is `i32` in both the C++ and the old
+/// port. `iTopSum`/`iLeftSum` are bounded by `10 * 255 = 2550`, `iLTshift` by
+/// `510 << 4 = 8160`, and the per-sample expression by roughly `2^16` — nowhere
+/// near `i32`, so this family has no F8-class hazard and the differential drives
+/// full-range reference samples.
+#[inline(always)]
+pub fn chroma_pred_plane(pred: &mut [u8; 64], reference: &PlaneCursor<'_>) {
+    let mut top_sum: i32 = 0;
+    let mut left_sum: i32 = 0;
+    for i in 0..4isize {
+        top_sum += (i as i32 + 1)
+            * (reference.at(4 + i, -1) as i32 - reference.at(2 - i, -1) as i32);
+        left_sum += (i as i32 + 1)
+            * (reference.at(-1, 4 + i) as i32 - reference.at(-1, 2 - i) as i32);
+    }
+
+    let lt_shift = (reference.at(-1, 7) as i32 + reference.at(7, -1) as i32) << 4;
+    let top_shift = (17 * top_sum + 16) >> 5;
+    let left_shift = (17 * left_sum + 16) >> 5;
+
+    for i in 0..8i32 {
+        let base = lt_shift + left_shift * (i - 3) + 16;
+        let row: &mut [u8; 8] = (&mut pred[i as usize * 8..][..8]).try_into().unwrap();
+        for (j, dst) in row.iter_mut().enumerate() {
+            *dst = WelsClip1((base + top_shift * (j as i32 - 3)) >> 5);
+        }
+    }
+}
+
+/// C++: `WelsIChromaPredDc_c`, `:457`. Four quadrant means over the eight top and
+/// eight left samples; reach [`REACH_CHROMA_DC`].
+#[inline(always)]
+pub fn chroma_pred_dc(pred: &mut [u8; 64], reference: &PlaneCursor<'_>) {
+    let top = reference.row(-1, 0, 8);
+    let left = [
+        reference.at(-1, 0),
+        reference.at(-1, 1),
+        reference.at(-1, 2),
+        reference.at(-1, 3),
+        reference.at(-1, 4),
+        reference.at(-1, 5),
+        reference.at(-1, 6),
+        reference.at(-1, 7),
+    ];
+    /* caculate the iMean value */
+    let mean1 = ((top[..4].iter().chain(left[..4].iter()).map(|&v| v as i32).sum::<i32>() + 4)
+        >> 3) as u8;
+    let sum2: u32 = top[4..].iter().map(|&v| v as u32).sum();
+    let sum3: u32 = left[4..].iter().map(|&v| v as u32).sum();
+    let mean2 = ((sum2 + 2) >> 2) as u8;
+    let mean3 = ((sum3 + 2) >> 2) as u8;
+    let mean4 = ((sum2 + sum3 + 4) >> 3) as u8;
+
+    let top_mean = [mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2];
+    let bottom_mean = [mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4];
+    for y in 0..8 {
+        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
+        *row = if y < 4 { top_mean } else { bottom_mean };
+    }
+}
+
+/// C++: `WelsIChromaPredDcLeft_c`, `:489`. Reach [`REACH_CHROMA_LEFT`] — the top
+/// half of the block takes the mean of `L0..L3`, the bottom half `L4..L7`.
+#[inline(always)]
+pub fn chroma_pred_dc_left(pred: &mut [u8; 64], reference: &PlaneCursor<'_>) {
+    let l = |y: isize| reference.at(-1, y) as i32;
+    /* caculate the iMean value */
+    let top_mean = ((l(0) + l(1) + l(2) + l(3) + 2) >> 2) as u8;
+    let bottom_mean = ((l(4) + l(5) + l(6) + l(7) + 2) >> 2) as u8;
+    pred[..32].fill(top_mean);
+    pred[32..].fill(bottom_mean);
+}
+
+/// C++: `WelsIChromaPredDcTop_c`, `:512`. The left and right halves of every row
+/// take the means of `T0..T3` and `T4..T7`; reads only the row above.
+#[inline(always)]
+pub fn chroma_pred_dc_top(pred: &mut [u8; 64], top: &[u8; 8]) {
+    /* caculate the iMean value */
+    let mean1 = ((top[..4].iter().map(|&v| v as i32).sum::<i32>() + 2) >> 2) as u8;
+    let mean2 = ((top[4..].iter().map(|&v| v as i32).sum::<i32>() + 2) >> 2) as u8;
+    let mean = [mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2];
+    for y in 0..8 {
+        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
+        *row = mean;
+    }
+}
+
+/// C++: `WelsIChromaPredDcNA_c`, `:529`. Neither neighbour exists.
+#[inline(always)]
+pub fn chroma_pred_dc_na(pred: &mut [u8; 64]) {
+    pred.fill(0x80);
+}
+
+// --- I16x16 luma: kernels ----------------------------------------------------
+//
+// The vertical and horizontal modes are **not** here: they are shared with the
+// decoder's common module and live in `common/intra_pred_common.rs`, converted in
+// T5-intra. `WelsInitIntraPredFuncs` installs those two by import.
+
+/// C++: `WelsI16x16LumaPredPlane_c`, `:542`. Reach [`REACH_I16X16_PLANE`]; the same
+/// R-e argument as [`chroma_pred_plane`], with `iTopSum` bounded by `36 * 255`.
+#[inline(always)]
+pub fn i16x16_luma_pred_plane(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
+    let mut top_sum: i32 = 0;
+    let mut left_sum: i32 = 0;
+    for i in 0..8isize {
+        top_sum += (i as i32 + 1)
+            * (reference.at(8 + i, -1) as i32 - reference.at(6 - i, -1) as i32);
+        left_sum += (i as i32 + 1)
+            * (reference.at(-1, 8 + i) as i32 - reference.at(-1, 6 - i) as i32);
+    }
+
+    let lt_shift = (reference.at(-1, 15) as i32 + reference.at(15, -1) as i32) << 4;
+    let top_shift = (5 * top_sum + 32) >> 6;
+    let left_shift = (5 * left_sum + 32) >> 6;
+
+    for i in 0..16i32 {
+        let base = lt_shift + left_shift * (i - 7) + 16;
+        let row: &mut [u8; 16] = (&mut pred[i as usize * 16..][..16]).try_into().unwrap();
+        for (j, dst) in row.iter_mut().enumerate() {
+            *dst = WelsClip1((base + top_shift * (j as i32 - 7)) >> 5);
+        }
+    }
+}
+
+/// C++: `WelsI16x16LumaPredDc_c`, `:566`. Mean of the sixteen top and sixteen left
+/// samples; reach [`REACH_I16X16_DC`].
+#[inline(always)]
+pub fn i16x16_luma_pred_dc(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
+    let mut sum: i32 = 16;
+    for &v in reference.row(-1, 0, 16) {
+        sum += v as i32;
+    }
+    for y in 0..16 {
+        sum += reference.at(-1, y) as i32;
+    }
+    pred.fill((sum >> 5) as u8);
+}
+
+/// C++: `WelsI16x16LumaPredDcTop_c`, `:582`. Sixteen top samples only.
+#[inline(always)]
+pub fn i16x16_luma_pred_dc_top(pred: &mut [u8; 256], top: &[u8; 16]) {
+    let sum: i32 = 8 + top.iter().map(|&v| v as i32).sum::<i32>();
+    pred.fill((sum >> 4) as u8);
+}
+
+/// C++: `WelsI16x16LumaPredDcLeft_c`, `:595`. Reach [`REACH_I16X16_LEFT`] —
+/// sixteen left samples only.
+#[inline(always)]
+pub fn i16x16_luma_pred_dc_left(pred: &mut [u8; 256], reference: &PlaneCursor<'_>) {
+    let mut sum: i32 = 8;
+    for y in 0..16 {
+        sum += reference.at(-1, y) as i32;
+    }
+    pred.fill((sum >> 4) as u8);
+}
+
+/// C++: `WelsI16x16LumaPredDcNA_c`, `:610`. Neither neighbour exists.
+#[inline(always)]
+pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
+    pred.fill(0x80);
 }
 
 // ============================================================================
@@ -958,6 +1718,137 @@ mod tests {
                 unsafe { f(pred.as_mut_ptr(), refp, stride as i32) };
                 let expected = if mode == I16_PRED_DC_128 as usize { 0x80 } else { 91 };
                 assert!(pred.iter().all(|&b| b == expected), "i16x16 mode {mode}");
+            }
+        }
+    }
+
+    /// **The availability argument, checked.** Every mode an availability table
+    /// offers must read only neighbours that table's index says exist.
+    ///
+    /// This is what the per-kernel [`Reach`] types are *for*. The shims' `# Safety`
+    /// contracts say the negative reads are in-allocation because the plane is
+    /// `PADDING_LENGTH`-padded; this test says they are *correct* because mode
+    /// decision never offers a mode whose neighbours are missing. R-d asks for the
+    /// selector sweep to be exhaustive, and for this family the selector is the
+    /// availability offset — all 16 of the I4x4 ones and all 8 of the others, every
+    /// mode in each.
+    ///
+    /// Two facts the test pins that are easy to lose:
+    ///
+    /// * **`g_kiIntra4AvailMode` never offers `DDL_TOP` or `VL_TOP`.** Both are
+    ///   installed in the dispatch table and neither is reachable through it — the
+    ///   `*_TOP` variants exist for a top-right-substitution path the C++ tables do
+    ///   not take either. They are converted anyway (an installed slot is live
+    ///   surface) and swept by the differential, and this test asserts the
+    ///   unreachability rather than leaving it as folklore.
+    /// * **The I16x16 and chroma tables have no top-left bit.** Their index is
+    ///   `uiNeighborIntra & 0x07` = left | top<<1 | topright<<2, yet the plane mode
+    ///   they offer at index 7 reads the corner at `(-1, -1)`. The corner is
+    ///   available whenever left and top both are — raster order inside a slice —
+    ///   so that is the rule asserted here, and the C++ relies on exactly the same
+    ///   implication.
+    #[test]
+    fn reach_table_agrees_with_the_availability_tables() {
+        use crate::encoder::svc_base_layer_md::{
+            g_kiIntra4AvailCount, g_kiIntra4AvailMode, g_kiIntraChromaAvailMode,
+        };
+        use crate::encoder::svc_mode_decision::g_kiIntra16AvaliMode;
+
+        // --- I4x4: index is left | top<<1 | topleft<<2 | topright<<3 -----------
+        let mut i4x4_seen = [false; 14];
+        for (idx, modes) in g_kiIntra4AvailMode.iter().enumerate() {
+            let (left, top, topleft, topright) =
+                (idx & 1 != 0, idx & 2 != 0, idx & 4 != 0, idx & 8 != 0);
+            let count = g_kiIntra4AvailCount[idx] as usize;
+            for &mode in &modes[..count] {
+                // `I4_PRED_INVALID` and `I4_PRED_V` are **both zero** in the C++ and
+                // in this port, so the padding value is indistinguishable from a
+                // real mode; `g_kiIntra4AvailCount` is the only thing that says
+                // where a row's live prefix ends. Hence the slice, not a filter.
+                let r = reach_i4x4(mode);
+                i4x4_seen[mode as usize] = true;
+                assert!(r.left == 0 || left, "offset {idx:04b} offers mode {mode}, which reads left");
+                assert!(r.top == 0 || top, "offset {idx:04b} offers mode {mode}, which reads above");
+                assert!(
+                    r.top <= 4 || topright,
+                    "offset {idx:04b} offers mode {mode}, which reads {} samples above — past the \
+                     block's right edge, into the top-right neighbour",
+                    r.top
+                );
+                assert!(
+                    !r.corner || topleft,
+                    "offset {idx:04b} offers mode {mode}, which reads the corner"
+                );
+            }
+        }
+        assert!(!i4x4_seen[I4_PRED_DDL_TOP as usize], "DDL_TOP became reachable");
+        assert!(!i4x4_seen[I4_PRED_VL_TOP as usize], "VL_TOP became reachable");
+        for m in [
+            I4_PRED_V, I4_PRED_H, I4_PRED_DC, I4_PRED_DDL, I4_PRED_DDR, I4_PRED_VR, I4_PRED_HD,
+            I4_PRED_VL, I4_PRED_HU, I4_PRED_DC_L, I4_PRED_DC_T, I4_PRED_DC_128,
+        ] {
+            assert!(i4x4_seen[m as usize], "mode {m} is offered by no availability offset");
+        }
+
+        // --- I16x16 and chroma: index is left | top<<1 | topright<<2 -----------
+        // No top-left bit; `corner` is legal exactly when left and top both are.
+        for (table, name, reach) in [
+            (&g_kiIntra16AvaliMode, "I16x16", reach_i16x16 as fn(i8) -> Reach),
+            (&g_kiIntraChromaAvailMode, "chroma", reach_chroma as fn(i8) -> Reach),
+        ] {
+            for (idx, row) in table.iter().enumerate() {
+                let (left, top) = (idx & 1 != 0, idx & 2 != 0);
+                let count = row[4] as usize;
+                for &mode in &row[..count] {
+                    let r = reach(mode);
+                    assert!(r.left == 0 || left, "{name} offset {idx:03b} mode {mode} reads left");
+                    assert!(r.top == 0 || top, "{name} offset {idx:03b} mode {mode} reads above");
+                    assert!(
+                        !r.corner || (left && top),
+                        "{name} offset {idx:03b} mode {mode} reads the corner without both \
+                         neighbours"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `ref_span` claims exactly what the reach describes and not a byte more: the
+    /// anchor sits `center` bytes into the slice, the lowest read lands at 0, and
+    /// the highest lands at `len - 1`.
+    #[test]
+    fn ref_span_is_tight_at_both_ends() {
+        for stride in [4usize, 16, 33, 240] {
+            for reach in [
+                REACH_I4X4_TOP, REACH_I4X4_TOP7, REACH_I4X4_TOP8, REACH_I4X4_LEFT,
+                REACH_I4X4_DC, REACH_I4X4_DDR, REACH_I4X4_VR, REACH_I4X4_HD,
+                REACH_CHROMA_TOP, REACH_CHROMA_LEFT, REACH_CHROMA_DC, REACH_CHROMA_PLANE,
+                REACH_I16X16_TOP, REACH_I16X16_LEFT, REACH_I16X16_DC, REACH_I16X16_PLANE,
+            ] {
+                let (len, center) = ref_span(stride, reach);
+                let s = stride as isize;
+                let c = center as isize;
+                let mut lo = isize::MAX;
+                let mut hi = isize::MIN;
+                let mut note = |off: isize| {
+                    lo = lo.min(off);
+                    hi = hi.max(off);
+                };
+                if reach.corner {
+                    note(-s - 1);
+                }
+                for x in 0..reach.top as isize {
+                    note(-s + x);
+                }
+                for y in 0..reach.left as isize {
+                    note(y * s - 1);
+                }
+                assert_eq!(c + lo, 0, "stride {stride} {reach:?}: span starts before the first read");
+                assert_eq!(
+                    c + hi,
+                    len as isize - 1,
+                    "stride {stride} {reach:?}: span outlives the last read"
+                );
             }
         }
     }
