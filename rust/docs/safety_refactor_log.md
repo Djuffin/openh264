@@ -1101,3 +1101,180 @@ are the whole deliverable.
 **Before starting T6, put D-perf-3 to Eugene.** It is a phase decision of the same kind
 as D-perf-1, the ceiling is already breached, and T6 adds decoder- *and* encoder-side
 shims to a tree that is over budget on the encoder side.
+
+---
+
+## 2026-08-10 — Phase 2, session E (T6 complete: deblocking, the F1 surgery, expansion)
+
+**Goal:** the continuation brief's T6, scheduled alone — the phase's hardest
+conversion plus its one Phase-6-file surgery — and the first session run under
+**D-perf-4's** regime (swap-and-ledger, one interleaved pair per bench per commit B,
+no boxes). All three items landed, in the brief's order, with no deviation to record.
+
+**Started at** `b339818d` with two uncommitted decision docs (session D's D-perf-4
+write-up, committed first as `1dc0ecad`), **ended at** the commit carrying this
+entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `1dc0ecad` | D-perf-4 recorded: plan §7.4 v3, the D-perf-3 decision history, the baseline's breach section annotated |
+| `bbb9348e` | T6-deblocking A: 7 safe kernels + differential proof, old code untouched |
+| `5756ad75` | **F10**: the parked raw SAD kernels' trailing bump is UB on exact spans; test accommodated |
+| `64633e5f` | T6-deblocking B: the 12 ABI wrappers become the shims; 6 raw inner kernels deleted; 14 `no_mangle` gone |
+| `d878916b` | the F1 surgery: `uiBS: [[[u8; 4]; 4]; 2]` end-to-end, five 32-byte casts deleted |
+| `2fe283e4` | T6-expand A: one pad-parameterised `expand_picture` + differential proof |
+| `9c32f890` | T6-expand B: the two mid-pointer shims (`expand_shim_span`, pads 32/16) |
+
+Plus `perf_baseline.md` §Phase 2 T6 and two ledger rows, `phase2_findings.md` F10,
+and the plan's §2.2.1 expand-packaging wording and Progress appendix.
+
+### Gates
+
+| gate | control (`1dc0ecad`) | final |
+|---|---|---|
+| `cargo test` | 392 / 0 / 20 | 395 / 0 / 20 |
+| `cargo test --release` | 390 / 0 / 20 | 393 / 0 / 20 |
+| sweeps st mt def (debug) | 341/341 | 341/341, 25s |
+| sweeps st mt def (release) | 341/341 | 340/341, **one F3 hit, retry 120/120** |
+| ratchet | clean | clean, baseline regenerated twice (deblocking B, expand B) |
+| `decode_1080p_bench` | hashes match | all streams bit-identical |
+| `c_vs_rust_bench` (FFMPEG set) | all rows bit-identical | all rows bit-identical |
+| `miri --lib safe::` | pass | pass |
+| `miri --test kernels_differential_phase2` | **FAIL (pre-existing, F10)** | 12/12, 139s |
+
+**One F3 hit, in the session-end battery, and the retry cleared it.** Release `mt`,
+`t=4 sm=3 n=600 cabac=0 rc=0`, Rust output zero-length — the signature exactly; the
+release `mt` preset re-ran 120/120. One hit → R-g's retry rule, not the alternating
+loop; appended to F3 as its fifth measurement. The session's three earlier full
+sweep batteries (both profiles) had passed 341/341 first try, and the hit came in
+the least quiescent state of the session — after hours of builds with two background
+bench runs — which is F3's known widening condition. `FFMPEG` was set on every
+battery and bench run.
+
+Net **+3 tests**: the three deblocking equivalence entries came and went inside the
+family (commit A +3, commit B -3 +2 span/anchor properties), expansion the same
+(+1, then swapped for the span probe), and F10's accommodation changed sizes, not
+counts. Every pre-existing binary kept its count; the ignored set never moved.
+
+### Ratchet across the session
+
+```
+no_mangle    38 -> 24   (-14: 12 wrappers + WelsNonZeroCount_c + DeblockingInit)
+unsafe_fn  1366 -> 1360 ( -6: the six raw inner edge kernels)
+raw_ptr    5218 -> 5198 (-20: deleted raw bodies, five uiBS casts, ExpandPictureCommon)
+SHIM(        82 -> 97   (+15: 13 deblocking + 2 expand)
+unsafe_block 588 -> 597 ( +9: the shims' from_raw_parts, within the +15 allowance)
+```
+
+The shape is R-f's exactly: exports and raw bodies die, shims and their blocks rise,
+`unsafe_fn` falls only where raw kernels are *deleted* rather than strangled.
+
+### T6-deblocking — the V/H trick ported honestly, and what it cost
+
+The `(iStrideX, iStrideY)` swap **is** the V/H encoding, and it survives as one safe
+body per kernel taking `(step_x, step_y)` in bytes, indexing `i*step_y + j*step_x`
+around the cursor anchor through checked math — the twelve ABI wrappers *are* the
+shims, fixing `(iStride, 1)` or `(1, iStride)` exactly as the C++'s wrappers do. No
+per-direction bodies, no dispatch: the brief's shape held with nothing forced.
+
+Per-kernel reach, not the union (T4's rule): Lt4 luma claims `[-3, +2]` taps, Eq4
+`[-4, +3]`, chroma `[-2, +1]`; `shim_span` is the one place the arithmetic lives.
+The availability argument is written once at module level and quoted by every
+contract: **the negative reach is legal because the drivers only filter an edge
+whose p side exists** — MB-boundary edges gated on left/top availability (and
+same-slice under `uiFilterIdc == 2`), interior edges 4/8/12 samples in. The padding
+is *not* part of this argument, which makes it a cleaner Phase 5 target than the
+intra families' padding-based contracts.
+
+**Perf under D-perf-4** (first family through the new protocol, ~20 minutes of
+measurement all told): decode **+7.79 / +2.55 / +2.33%**, worst on the CAVLC stream
+because it is the fastest and the fixed per-edge scaffolding is the biggest fraction
+of it — T4's decode mechanism, recognised rather than re-investigated. Encoder flat
+(median -0.11%), because the encoder installs nothing from this module. Tripwire
+arithmetic: cumulative decode ≈ +17/+10/+10%, under +25% → ledgered, moved on. No
+microbenchmark was built and no optimisation attempted: the number matched the known
+mechanism, which is exactly the case D-perf-4's "no boxes" rule was written for.
+
+### The F1 surgery — the type now carries what five casts used to
+
+`uiBS` is `[[[u8; 4]; 4]; 2]` through the `PDeblockingBSCalc` table typedef,
+`DeblockingBSCalc_c`, both `DeblockingBSInsideMB*` helpers (now `&mut` — they are
+direct-called), and `DeblockingInterMb`'s read side. The five
+`from_raw_parts_mut(uiBS as *mut u8, 32)` sites and the 32-byte read are gone; the
+boundary rows write through 4-byte row assignment where the C++ puns `uint32_t`.
+The 16-vs-32-byte relationship that caused the release segfault is now the
+signatures' job, checked by the compiler at every call site. `FilteringEdge*`'s
+`pBS: *const u8` parameters stay — not in F1's named scope, and their four-byte rows
+now come from typed `uiBS[dir][edge]` arrays. Sweeps 341/341 both profiles,
+byte-exact; encoder pair read median +0.36%, inside the session's null floor.
+
+### T6-expand — the trickiest shim span, and it fit one helper
+
+Callers hand `pData[i]`, a **mid-allocation** pointer; `expand_shim_span` walks back
+`(1 + stride) * pad` with the per-variant constant and claims the
+`(h + 2*pad) * stride` padded-plane prefix. Both codecs' `AllocPicture`s were
+re-proven to place the origin identically (`pic_queue.rs`, `wels_preprocess.rs` —
+chroma is the same expression halved), so **no call site needed the explicit-pad
+fallback** the brief pre-authorised. The safe kernel is one pad-parameterised body
+in `common/expand_pic.rs`, runtime-length `copy_within`/`fill` on purpose — once per
+reference picture, the same library calls the C++ makes (R-i's const-generic rule is
+for per-block kernels, and this is the counter-case worth naming). Perf: decode
++1.0/+0.1/+0.5%, encoder indistinguishable from the null floor.
+
+### The probe lesson: a golden run pins what a touch-set cannot
+
+The deblocking span probe first asserted exact-span in-bounds behaviour plus
+"no byte outside the declared touch set moved" — and a **+1-anchor mutation walked
+through it**, because a shift along the line axis stays inside the touch set and
+filters plausibly. The fix is a third assertion: the shim's output must equal the
+safe kernel run directly at the contract's own geometry. Span size (exact-span
+allocation + Miri), touch set, and anchor are now pinned by three independent
+mechanisms, and the same golden-run shape went into the expand probe from the start
+(where it kills the `pad*stride`-without-`+pad` reconstruction). **Carry to T7:
+every span probe gets a golden direct run; touch-set assertions alone are blind
+along any axis the crafted input is uniform in.**
+
+### F10 — the instrument found UB in *parked* raw code
+
+The full-file Miri run flagged the **T5-sad** span test: the raw kernels' post-last-
+row pointer bump (`pSrc = pSrc.offset(iStride)`, inherited from the C++) computes an
+out-of-allocation pointer on a buffer that ends at the block's last row — exactly
+the exact-span buffers the probe hands them, and exactly the state the T5 unswap
+left the Wels names in. Pre-existing since `11f82d41`; it slipped through because
+the differential file runs under Miri only at phase exits. Per T4's precedent the
+*test* carries the accommodation (whole-row buffers while the family is parked,
+exact spans restored at re-landing), the finding is `phase2_findings.md` F10, and
+T7's SAD/SATD prove-and-park differentials must size raw-side buffers whole-rows
+from the start.
+
+### The noise floor is not a constant
+
+Session D's null run measured ±1.81% max; this session's, on the same bench and
+machine, **±5.41%** on the tiny QVGA rows (and the biggest same-binary mover was
+the very row the expand pair flagged at +10.45%). A null run is now demonstrably
+*per-session* evidence — run it fresh before judging any reading against a
+remembered floor. Both nulls agree the medians hold to ~±1.3%, which is what the
+commit-B pair verdicts rest on.
+
+### Where T6 stands
+
+Complete. Deblocking: 13 shims live, decoder table and installers untouched, the
+decoder's untyped double-cast at `decoder_core.rs:1906` left for Phase 4. F1:
+surgical, encoder-only, byte-exact. Expansion: 2 shims live, the two
+`mem::transmute` fn-pointer re-wraps at `decoder_core.rs:920-921` left for Phase 4.
+Cumulative ledger: decode ≈ +17/+10/+10%, encoder ≈ +11%, all under D-perf-4's
+tripwire; recovery unchanged at Phase 4 / 5–6 / 9.
+
+### Next session's first action
+
+**Phase 2 T7 part 1 — `encoder/encode_mb_aux.rs` (22) + `encoder/decode_mb_aux.rs`
+(6) + `encoder/sample.rs` (8)**, per the continuation brief's S+1. Carry-ins:
+`sample.rs`'s SAD/SATD are **prove-and-park, decided** (D-perf-2) — write, prove,
+do not swap, size raw-side differential buffers whole-rows (F10); R-e is most
+likely to bite in the DCT/quant arithmetic — check widths against both the old
+Rust and the C++ before writing each safe body; every span probe gets a golden
+direct run; encoder families measure the encoder bench in their own right (R-n),
+one interleaved pair per bench at commit B, null run fresh if a reading needs a
+noise verdict. Then S+2 = `encoder/get_intra_predictor.rs` (33) + T9.

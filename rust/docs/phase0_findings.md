@@ -271,6 +271,17 @@ grows during encoding — the slice list. Plan §P10 already flags
 `SSlice` pointers, and §2.2.7/T9 covers the threading. This is very likely the two
 interacting.
 
+**Fifth measurement, 2026-08-10 (Phase 2 session E, T6).** The session-end battery's
+release `mt` sweep failed exactly one configuration —
+`Static_152_100 t=4 sm=3 n=600 cabac=0 rc=0`, Rust output **zero bytes** (C++
+29375) — and the re-run of the full release `mt` preset passed **120/120**. One hit,
+so the retry rule applied and the alternating-loop comparison did not. Signature
+match is exact. Context consistent with every prior event: the battery ran after a
+session of continuous optimising builds plus two concurrent background bench runs —
+the least quiescent state this machine reaches. The session's three earlier full
+sweep batteries (two mid-session, one dedicated to the F1 surgery) all passed
+341/341 first try.
+
 **Gate consequence, act on this now:** a single `sweep.sh mt` release run is not a
 reliable 341/341 signal. A failure confined to `t=4 sm=3` must be re-run before
 being treated as a regression, and a *new* failure anywhere else should be treated

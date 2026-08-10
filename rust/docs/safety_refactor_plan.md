@@ -135,7 +135,7 @@ Key points:
 4. **Shim contracts are short exactly when a kernel reaches forward only.** These four do, so the reachable span is `(bh-1)*stride + bw` — derivable from the signature, needing no knowledge of the plane's padding. The families that read `-1`/`-stride` (`get_intra_predictor`), `-3*stride` (deblocking) or write the padding (`expand_pic`) will need `from_raw_parts_mut(p.sub(k*stride + k), …)` and a contract that names the padding constant. Budget for that; it is where the phase's real documentation value is.
 - The MC clamp (`decode_slice.rs:1072-1091`) stays byte-for-byte: the clamp guarantees the biased index is in range; slice indexing then *proves* it, converting a silent-corruption class into a loud panic if the port ever miscomputes.
 - Cross-plane pairs (MC: read ref picture, write current) are two views of two different `PaddedPlane`s — no conflict. Same-picture src/dst in error concealment goes through a `copy_within`-style method on one plane.
-- Border expansion (`ExpandPictureCommon`) becomes methods on `PaddedPlane` — it is the one place that writes the padding, and owning the padding makes it safe by construction.
+- Border expansion is a **free function over the raw geometry for now** — Phase 2 T6 built it as `expand_picture(&mut [u8], stride, w, h, pad)` in `common/expand_pic.rs`, because in Phase 2 the allocation is still C-owned and arrives at the shim as a mid-plane pointer. The original intent stands as the Phase 5 packaging step: once `Picture` owns `PaddedPlane`s, the free function becomes (or is wrapped by) a `PaddedPlane` method, and the shim's span reconstruction (`expand_shim_span`, `decoder_core.rs`) dies with the shim.
 
 #### 2.2.2 Detached bit cursors — replaces T3
 
@@ -864,10 +864,28 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       commit-B measurement; recovery consolidated at Phase 4 / Phase 5–6 / a Phase 9
       perf pass with the end-state target unchanged. **T6 is unblocked and is the
       next action.**
-- [ ] **T6 — `common/deblocking_common.rs` + F1's `uiBS` cleanup + `expand_pic.rs`.**
-      Not started; **next action**, scheduled alone.
+- [x] **T6 — `common/deblocking_common.rs` + F1's `uiBS` surgery + expansion
+      (`bbb9348e`, `64633e5f`, `d878916b`, `2fe283e4`, `9c32f890`).** All three items
+      landed in one session under D-perf-4. Deblocking: 7 safe kernels (6 edge
+      filters porting the `(iStrideX, iStrideY)` V/H trick as one `(step_x, step_y)`
+      body each, + `nonzero_count`), the 12 ABI wrappers *are* the shims, 6 raw inner
+      kernels deleted, all 14 `no_mangle` exports gone; decode +7.8/+2.6/+2.3%,
+      encoder flat (not a consumer), ledgered — cumulative decode ≈ +17/+10/+10%,
+      under the tripwire. The F1 surgery: `uiBS` is `[[[u8; 4]; 4]; 2]` through the
+      `PDeblockingBSCalc` typedef and every signature, the five 32-byte
+      `from_raw_parts_mut` sites and the 32-byte read deleted; byte-exact, encoder
+      noise-level. Expansion: one pad-parameterised `expand_picture` in
+      `common/expand_pic.rs`; the two `_c` shims reconstruct the full allocation
+      from the mid-pointer (`expand_shim_span`, pads 32/16) — no call site needed
+      the explicit-pad fallback; perf inside the noise floor. Findings: **F10**
+      (the parked raw SAD kernels' trailing pointer bump is UB on exactly-sized
+      buffers — test accommodated, T7's prove-and-park tests inherit the rule).
+      The differential span probes gained a **golden direct-run comparison** after
+      a +1-anchor mutation survived the touch-set assertion — span size, touch set
+      and anchor are now pinned independently.
 - [ ] **T7 — the four encoder kernel files.** Not started; SAD/SATD go
-      prove-and-park per D-perf-2's verdict.
+      prove-and-park per D-perf-2's verdict, with raw-side differential buffers
+      sized whole-rows per F10.
 - [x] **T8 — `processing/{vaacalc,adaptive_quantization}.rs` (`d41244c2`,
       `af98f6ab`).** **6 kernels** as recounted (vaacalc 5 + `SampleVariance16x16_c`),
       not the continuation brief's 11. No dispatch table and no `no_mangle` anywhere
