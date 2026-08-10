@@ -1,5 +1,5 @@
 {
-  "commit": "fc92dab0",
+  "commit": "6e0009d3",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -44,7 +44,7 @@
     "encoder/encode_mb_aux.rs": { "unsafe_fn": 23, "unsafe_block": 47, "raw_ptr": 71, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 21 },
     "encoder/encoder_context.rs": { "unsafe_fn": 11, "unsafe_block": 7, "raw_ptr": 77, "transmute": 2, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },
     "encoder/encoder_ext.rs": { "unsafe_fn": 40, "unsafe_block": 2, "raw_ptr": 228, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/get_intra_predictor.rs": { "unsafe_fn": 33, "unsafe_block": 24, "raw_ptr": 65, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 0 },
+    "encoder/get_intra_predictor.rs": { "unsafe_fn": 30, "unsafe_block": 53, "raw_ptr": 56, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 0, "shim": 26 },
     "encoder/md.rs": { "unsafe_fn": 17, "unsafe_block": 0, "raw_ptr": 88, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/nal_encap.rs": { "unsafe_fn": 11, "unsafe_block": 5, "raw_ptr": 27, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },

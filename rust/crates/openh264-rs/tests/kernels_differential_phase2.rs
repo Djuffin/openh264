@@ -1985,119 +1985,163 @@ fn safe_i16x16(mode: i8, pred: &mut [u8; 256], plane: &[u8], anchor: usize, stri
     }
 }
 
-/// Every I4x4 mode, at every stride, at random legal anchors: the raw kernel and
-/// the safe one must agree on all sixteen bytes and disturb neither slack margin.
+/// The three families' shims stay inside the spans their contracts declare, and
+/// land where the contract says they land.
+///
+/// The equivalence entries this replaces went with the swap, as the recipe intends:
+/// the `Wels*_c` names now *are* the safe kernels. What survives is the span
+/// arithmetic, which is the only thing the shims add — and it is pinned by three
+/// independent mechanisms, per session E's probe lesson (a touch-set assertion
+/// alone is blind along any axis the crafted input is uniform in):
+///
+/// 1. **span size** — the reference allocation is sized to exactly `ref_span`'s
+///    claim, so an over-claim is an out-of-bounds read that Miri reports and a
+///    release build may not;
+/// 2. **anchor** — a *golden direct run*: the shim's output must equal the safe
+///    kernel called at the contract's own geometry, which kills an anchor that is
+///    off by a row or a column while staying inside the span;
+/// 3. **destination extent** — eight bytes of noise slack on each side of the
+///    packed block, compared byte for byte.
+///
+/// A wrinkle the top-only modes share with T5-intra's `PredV`: their span lies
+/// **entirely above `pRef`**, so it can only be allocated exactly when `pRef` is one
+/// past the end of it — i.e. when the stride equals the number of samples read.
+/// At wider strides the call still runs (and still catches an under-claim, as a
+/// panic inside the safe kernel), but the bytes past the span exist and Miri has
+/// nothing to say. Those modes are therefore probed tight at `stride == reach.top`
+/// and driven padded everywhere else.
 #[test]
-fn encoder_i4x4_intra_pred_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0x14D4_0001);
-    let modes = [
+fn encoder_intra_pred_shims_stay_inside_the_spans_they_declare() {
+    let mut rng = Prng::new(0x1_47A_0001);
+
+    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
+    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+
+    // (family label, mode, dst bytes, the shim, the safe driver, the reach)
+    type Shim = unsafe extern "C" fn(*mut u8, *mut u8, i32);
+    let i4x4: Vec<(i8, Shim)> = [
         blmd::I4_PRED_V, blmd::I4_PRED_H, blmd::I4_PRED_DC, blmd::I4_PRED_DC_L,
         blmd::I4_PRED_DC_T, blmd::I4_PRED_DC_128, blmd::I4_PRED_DDL, blmd::I4_PRED_DDL_TOP,
         blmd::I4_PRED_DDR, blmd::I4_PRED_VL, blmd::I4_PRED_VL_TOP, blmd::I4_PRED_VR,
         blmd::I4_PRED_HU, blmd::I4_PRED_HD,
-    ];
-
-    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
-    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
-
-    for &stride in &strides(16) {
-        for &mode in &modes {
-            for _ in 0..scale(40) {
-                // 8 samples of top-row reach: DDL is the widest of the fourteen.
-                let (plane, anchor) = ref_anchor(&mut rng, stride, 4, 4, 8);
-
-                let mut raw = rng.bytes(16 + 2 * PRED_SLACK);
-                let mut safe = raw.clone();
-                unsafe {
-                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
-                    fl.pfGetLumaI4x4Pred[mode as usize].unwrap()(
-                        raw.as_mut_ptr().add(PRED_SLACK),
-                        p_ref,
-                        stride as i32,
-                    );
-                }
-                let blk: &mut [u8; 16] =
-                    (&mut safe[PRED_SLACK..][..16]).try_into().unwrap();
-                safe_i4x4(mode, blk, &plane, anchor, stride);
-
-                assert_eq!(raw, safe, "I4x4 mode {mode} stride {stride} anchor {anchor}");
-            }
-        }
-    }
-}
-
-/// Every chroma mode, same shape. The destination is 64 bytes at stride 8.
-#[test]
-fn encoder_chroma_intra_pred_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0x0C40_0002);
-    let modes = [
+    ]
+    .into_iter()
+    .map(|m| (m, fl.pfGetLumaI4x4Pred[m as usize].unwrap()))
+    .collect();
+    let chroma: Vec<(i8, Shim)> = [
         blmd::C_PRED_DC, blmd::C_PRED_H, blmd::C_PRED_V, blmd::C_PRED_P, blmd::C_PRED_DC_L,
         blmd::C_PRED_DC_T, blmd::C_PRED_DC_128,
-    ];
-
-    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
-    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+    ]
+    .into_iter()
+    .map(|m| (m, fl.pfGetChromaPred[m as usize].unwrap()))
+    .collect();
+    let i16x16: Vec<(i8, Shim)> = [
+        smd::I16_PRED_V, smd::I16_PRED_H, smd::I16_PRED_DC, smd::I16_PRED_P, smd::I16_PRED_DC_L,
+        smd::I16_PRED_DC_T, smd::I16_PRED_DC_128,
+    ]
+    .into_iter()
+    .map(|m| (m, fl.pfGetLumaI16x16Pred[m as usize].unwrap()))
+    .collect();
 
     for &stride in &strides(16) {
-        for &mode in &modes {
-            for _ in 0..scale(40) {
-                let (plane, anchor) = ref_anchor(&mut rng, stride, 8, 8, 0);
-
-                let mut raw = rng.bytes(64 + 2 * PRED_SLACK);
-                let mut safe = raw.clone();
-                unsafe {
-                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
-                    fl.pfGetChromaPred[mode as usize].unwrap()(
-                        raw.as_mut_ptr().add(PRED_SLACK),
-                        p_ref,
-                        stride as i32,
-                    );
-                }
-                let blk: &mut [u8; 64] =
-                    (&mut safe[PRED_SLACK..][..64]).try_into().unwrap();
-                safe_chroma(mode, blk, &plane, anchor, stride);
-
-                assert_eq!(raw, safe, "chroma mode {mode} stride {stride} anchor {anchor}");
-            }
+        // --- I4x4, 16-byte packed destination --------------------------------
+        for &(mode, shim) in &i4x4 {
+            let reach = eip::reach_i4x4(mode);
+            probe_intra::<16>(&mut rng, mode, "I4x4", shim, reach, stride, &mut |m, p, pl, a, s| {
+                safe_i4x4(m, p, pl, a, s)
+            });
+        }
+        // --- chroma, 64-byte packed destination ------------------------------
+        for &(mode, shim) in &chroma {
+            let reach = eip::reach_chroma(mode);
+            probe_intra::<64>(&mut rng, mode, "chroma", shim, reach, stride, &mut |m, p, pl, a, s| {
+                safe_chroma(m, p, pl, a, s)
+            });
+        }
+        // --- I16x16, 256-byte packed destination -----------------------------
+        for &(mode, shim) in &i16x16 {
+            let reach = eip::reach_i16x16(mode);
+            probe_intra::<256>(&mut rng, mode, "I16x16", shim, reach, stride, &mut |m, p, pl, a, s| {
+                safe_i16x16(m, p, pl, a, s)
+            });
         }
     }
 }
 
-/// Every I16x16 mode, same shape, 256 bytes at stride 16. Modes `V` and `H` come
-/// from `common/intra_pred_common.rs` and are already shimmed — driving them here
-/// costs nothing and keeps the table sweep exhaustive.
-#[test]
-fn encoder_i16x16_intra_pred_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0x1616_0003);
-    let modes = [
-        smd::I16_PRED_V, smd::I16_PRED_H, smd::I16_PRED_DC, smd::I16_PRED_P, smd::I16_PRED_DC_L,
-        smd::I16_PRED_DC_T, smd::I16_PRED_DC_128,
-    ];
+/// One mode's probe: exact-span reference where the geometry allows one, a padded
+/// reference everywhere, a golden direct run against both, and slack on the
+/// destination that may not move.
+fn probe_intra<const N: usize>(
+    rng: &mut Prng,
+    mode: i8,
+    family: &str,
+    shim: unsafe extern "C" fn(*mut u8, *mut u8, i32),
+    reach: eip::Reach,
+    stride: usize,
+    safe: &mut dyn FnMut(i8, &mut [u8; N], &[u8], usize, usize),
+) {
+    let top_only = reach.left == 0 && !reach.corner && reach.top > 0;
+    let reads_nothing = reach.top == 0 && reach.left == 0 && !reach.corner;
 
-    let mut fl: SWelsFuncPtrList = unsafe { core::mem::zeroed() };
-    unsafe { eip::WelsInitIntraPredFuncs(&mut fl, 0) };
+    // The exact-span pass. A top-only span sits entirely above `pRef`, so it can
+    // only be allocated tight when the stride equals its length; a mode that reads
+    // nothing has no reference to probe at all.
+    let tight = if reads_nothing {
+        None
+    } else if top_only {
+        Some(reach.top)
+    } else {
+        Some(stride)
+    };
 
-    for &stride in &strides(32) {
-        for &mode in &modes {
-            for _ in 0..scale(40) {
-                let (plane, anchor) = ref_anchor(&mut rng, stride, 16, 16, 0);
-
-                let mut raw = rng.bytes(256 + 2 * PRED_SLACK);
-                let mut safe = raw.clone();
-                unsafe {
-                    let p_ref = plane.as_ptr().add(anchor) as *mut u8;
-                    fl.pfGetLumaI16x16Pred[mode as usize].unwrap()(
-                        raw.as_mut_ptr().add(PRED_SLACK),
-                        p_ref,
-                        stride as i32,
-                    );
-                }
-                let blk: &mut [u8; 256] =
-                    (&mut safe[PRED_SLACK..][..256]).try_into().unwrap();
-                safe_i16x16(mode, blk, &plane, anchor, stride);
-
-                assert_eq!(raw, safe, "I16x16 mode {mode} stride {stride} anchor {anchor}");
+    if let Some(tight_stride) = tight {
+        for _ in 0..scale(20) {
+            let (len, center) = eip::ref_span(tight_stride, reach);
+            let plane = rng.bytes(len);
+            let mut viashim = rng.bytes(N + 2 * PRED_SLACK);
+            let mut golden = viashim.clone();
+            unsafe {
+                shim(
+                    viashim.as_mut_ptr().add(PRED_SLACK),
+                    plane.as_ptr().add(center) as *mut u8,
+                    tight_stride as i32,
+                );
             }
+            let blk: &mut [u8; N] = (&mut golden[PRED_SLACK..][..N]).try_into().unwrap();
+            safe(mode, blk, &plane, center, tight_stride);
+            assert_eq!(
+                viashim, golden,
+                "{family} mode {mode} stride {tight_stride}: exact-span shim disagrees with the \
+                 safe kernel at the contract's own geometry"
+            );
         }
+    }
+
+    // The padded pass, at every stride: same content embedded in a generous plane,
+    // anchored somewhere the shim cannot have guessed. This is what catches an
+    // anchor that is off by a row while staying inside a span.
+    let bw = if N == 16 { 4 } else if N == 64 { 8 } else { 16 };
+    let right = reach.top.saturating_sub(bw);
+    // A stride has to hold the block, the top row's over-reach, and a left column;
+    // 16 is legal for a 4x4 block and not for a 16x16 one, so the sweep widens
+    // rather than skipping — every stride in the set still gets exercised.
+    let stride = stride.max(bw + right + 2);
+    for _ in 0..scale(20) {
+        let (plane, anchor) = ref_anchor(rng, stride, bw, bw, right);
+        let mut viashim = rng.bytes(N + 2 * PRED_SLACK);
+        let mut golden = viashim.clone();
+        unsafe {
+            shim(
+                viashim.as_mut_ptr().add(PRED_SLACK),
+                plane.as_ptr().add(anchor) as *mut u8,
+                stride as i32,
+            );
+        }
+        let blk: &mut [u8; N] = (&mut golden[PRED_SLACK..][..N]).try_into().unwrap();
+        safe(mode, blk, &plane, anchor, stride);
+        assert_eq!(
+            viashim, golden,
+            "{family} mode {mode} stride {stride} anchor {anchor}: shim and safe kernel disagree"
+        );
     }
 }
