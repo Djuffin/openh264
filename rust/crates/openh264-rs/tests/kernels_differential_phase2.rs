@@ -549,11 +549,24 @@ const FOUR_SHIMS: &[(&str, RawFour, usize, usize)] = &[
 fn sad_shims_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5AD0_0501);
 
+    // PARKED-FAMILY BUFFER SIZES (F10). While T5-sad is unswapped these Wels
+    // names are the *raw* kernels, whose row loop bumps its pointers one stride
+    // past the last row after the final iteration (`pSrc = pSrc.offset(iStride)`,
+    // inherited from the C++'s `pSrc += iStride`). On a buffer that ends at the
+    // block's last row that bump computes an out-of-allocation pointer — UB that
+    // Miri reports even though nothing dereferences it (`phase2_findings.md`
+    // F10). The buffers below are therefore sized to the raw kernels'
+    // pointer-arithmetic footprint — whole rows plus the composite sub-block
+    // offset, and two extra rows on the four-point reference side for the
+    // down/right arms. **The shim-contract spans are `(h-1)*stride + w` and
+    // `(h+1)*stride + w`: restore them in the commit that re-lands the swap**,
+    // because the safe kernels never compute past their span and the exact size
+    // is what makes an over-claiming shim Miri-visible.
     for &(name, f, w, h) in SAD_SHIMS {
         for &s1 in &strides(w) {
             for &s2 in &strides(w) {
-                let mut b1 = rng.bytes((h - 1) * s1 + w);
-                let mut b2 = rng.bytes((h - 1) * s2 + w);
+                let mut b1 = rng.bytes(h * s1 + w);
+                let mut b2 = rng.bytes(h * s2 + w);
                 let got =
                     unsafe { f(b1.as_mut_ptr(), s1 as i32, b2.as_mut_ptr(), s2 as i32) };
                 // A SAD is bounded by its own block; anything else means the kernel
@@ -570,8 +583,8 @@ fn sad_shims_stay_inside_the_spans_they_declare() {
     for &(name, f, w, h) in FOUR_SHIMS {
         for &s1 in &strides(w) {
             for &s2 in &strides(w + 2) {
-                let mut b1 = rng.bytes((h - 1) * s1 + w);
-                let mut b2 = rng.bytes((h + 1) * s2 + w);
+                let mut b1 = rng.bytes(h * s1 + w);
+                let mut b2 = rng.bytes((h + 2) * s2 + w);
                 // Eight slots, of which exactly four may be written. The back half is
                 // the assertion that the shim's `[i32; 4]` really is four: a kernel
                 // handed a bare `int32_t*` has nothing else stopping it at four, and
