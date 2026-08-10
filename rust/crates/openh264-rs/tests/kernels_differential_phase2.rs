@@ -1558,3 +1558,186 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         }
     }
 }
+
+// ===========================================================================
+// T7 — `encoder/decode_mb_aux.rs` (+ the five raw bodies in
+// `svc_encode_mb.rs`): the encoder's recon IDCT and dequantisation family
+// ===========================================================================
+//
+// Commit-A entries: all nine leaf kernels of the C++ `decode_mb_aux.cpp`
+// driven old-vs-new, whole destination surfaces compared, sources asserted
+// untouched. Input bounds per R-e: full `i16` range wherever the raw port is
+// total (the wrapping dequants; the IDCTs, whose one narrowing is a defined
+// `as i16`), the MF factors from the real table (max 5888 keeps the 2x2
+// butterfly product under `2^31`), qp swept 0..12 for the qp-gated luma DC
+// dequant, and `+-2047` for `ihadamard_4x4_dc` — the bound below which its
+// plain `i16` additions cannot overflow (16x worst-case gain; above it the
+// raw port panics in a debug build where the C++ wraps, finding **F11**).
+// Deleted at the family's commit B.
+
+use openh264_rs::encoder::decode_mb_aux as eda;
+use openh264_rs::encoder::svc_encode_mb::g_kuiDequantCoeff;
+
+/// Coefficients bounded to `+-bound`.
+fn bounded_coeffs<const N: usize>(rng: &mut Prng, bound: i32) -> [i16; N] {
+    core::array::from_fn(|_| rng.range_i32(-bound, bound) as i16)
+}
+
+#[test]
+fn encoder_dequant_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0xEDA0_0DE4);
+
+    for qp in 0..52usize {
+        let mf_row = &g_kuiDequantCoeff[qp];
+        for _ in 0..scale(6) {
+            let base: [i16; 64] = coeffs(&mut rng);
+            let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
+
+            let mut raw = *sub;
+            let mut safe = *sub;
+            unsafe { eda::WelsDequantIHadamard4x4_c(raw.as_mut_ptr(), mf_row[0] >> 2) };
+            eda::dequant_ihadamard_4x4(&mut safe, mf_row[0] >> 2);
+            assert_eq!(raw, safe, "DequantIHadamard4x4 qp={qp}");
+
+            let mut raw = *sub;
+            let mut safe = *sub;
+            unsafe { eda::WelsDequant4x4_c(raw.as_mut_ptr(), mf_row.as_ptr()) };
+            eda::dequant_4x4(&mut safe, mf_row);
+            assert_eq!(raw, safe, "Dequant4x4 qp={qp}");
+
+            let mut raw = base;
+            let mut safe = base;
+            unsafe { eda::WelsDequantFour4x4_c(raw.as_mut_ptr(), mf_row.as_ptr()) };
+            eda::dequant_four_4x4(&mut safe, mf_row);
+            assert_eq!(raw, safe, "DequantFour4x4 qp={qp}");
+
+            let mut raw4: [i16; 4] = coeffs(&mut rng);
+            let mut safe4 = raw4;
+            unsafe { eda::WelsDequantIHadamard2x2Dc(raw4.as_mut_ptr(), mf_row[0]) };
+            eda::dequant_ihadamard_2x2_dc(&mut safe4, mf_row[0]);
+            assert_eq!(raw4, safe4, "DequantIHadamard2x2Dc qp={qp}");
+        }
+    }
+
+    // qp-gated: the raw shift count goes negative at qp >= 12 (panic in
+    // debug, same both sides) — the caller gates on uiQp < 12, so the sweep
+    // does too.
+    for qp in 0..12i32 {
+        for _ in 0..scale(10) {
+            let base: [i16; 16] = coeffs(&mut rng);
+            let mut raw = base;
+            let mut safe = base;
+            unsafe { eda::WelsDequantLumaDc4x4(raw.as_mut_ptr(), qp) };
+            eda::dequant_luma_dc_4x4(&mut safe, qp);
+            assert_eq!(raw, safe, "DequantLumaDc4x4 qp={qp}");
+        }
+    }
+
+    // F11's bound: +-2047 keeps every plain-i16 intermediate in range.
+    for _ in 0..scale(300) {
+        let base: [i16; 16] = bounded_coeffs(&mut rng, 2047);
+        let mut raw = base;
+        let mut safe = base;
+        unsafe { eda::WelsIHadamard4x4Dc(raw.as_mut_ptr()) };
+        eda::ihadamard_4x4_dc(&mut safe);
+        assert_eq!(raw, safe, "IHadamard4x4Dc, seed {:#x}", rng.seed());
+    }
+}
+
+#[test]
+fn encoder_recon_idct_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0xEDA0_1DC7);
+
+    // IDctT4Rec / IDctFourT4Rec: independent rec and pred strides, random
+    // anchors, full-range coefficients (total: the horizontal narrowing is a
+    // defined truncation), whole rec surface compared, pred untouched.
+    for &(rs, ps) in &[(4usize, 16usize), (21, 4), (240, 25), (16, 16)] {
+        for _ in 0..scale(80) {
+            let (pred, pc) = surface(&mut rng, ps.max(4), 4, 4);
+            let (rec, rc) = surface(&mut rng, rs.max(4), 4, 4);
+            let dct: [i16; 16] = coeffs(&mut rng);
+
+            let mut m_dct = dct;
+            let mut m_pred = pred.clone();
+            let mut raw_rec = rec.clone();
+            unsafe {
+                eda::WelsIDctT4Rec_c(
+                    raw_rec.as_mut_ptr().add(rc),
+                    rs as i32,
+                    m_pred.as_mut_ptr().add(pc),
+                    ps as i32,
+                    m_dct.as_mut_ptr(),
+                );
+            }
+
+            let mut safe_rec = rec.clone();
+            eda::idct_t4_rec(
+                &mut PlaneCursorMut::new(&mut safe_rec, rc, rs),
+                &PlaneCursor::new(&pred, pc, ps),
+                &dct,
+            );
+            assert_eq!(raw_rec, safe_rec, "IDctT4Rec rs={rs} ps={ps}, seed {:#x}", rng.seed());
+            assert_eq!((m_pred, m_dct), (pred, dct), "IDctT4Rec wrote a source");
+        }
+    }
+
+    for &(rs, ps) in &[(8usize, 16usize), (21, 8), (240, 25)] {
+        for _ in 0..scale(50) {
+            let (pred, pc) = surface(&mut rng, ps, 8, 8);
+            let (rec, rc) = surface(&mut rng, rs, 8, 8);
+            let dct: [i16; 64] = coeffs(&mut rng);
+
+            let mut m_dct = dct;
+            let mut m_pred = pred.clone();
+            let mut raw_rec = rec.clone();
+            unsafe {
+                eda::WelsIDctFourT4Rec_c(
+                    raw_rec.as_mut_ptr().add(rc),
+                    rs as i32,
+                    m_pred.as_mut_ptr().add(pc),
+                    ps as i32,
+                    m_dct.as_mut_ptr(),
+                );
+            }
+
+            let mut safe_rec = rec.clone();
+            eda::idct_four_t4_rec(
+                &mut PlaneCursorMut::new(&mut safe_rec, rc, rs),
+                &PlaneCursor::new(&pred, pc, ps),
+                &dct,
+            );
+            assert_eq!(raw_rec, safe_rec, "IDctFourT4Rec rs={rs} ps={ps}, seed {:#x}", rng.seed());
+            assert_eq!((m_pred, m_dct), (pred, dct), "IDctFourT4Rec wrote a source");
+        }
+    }
+
+    for &(rs, ps) in &[(16usize, 16usize), (21, 16), (240, 25)] {
+        for _ in 0..scale(40) {
+            let (pred, pc) = surface(&mut rng, ps, 16, 16);
+            let (rec, rc) = surface(&mut rng, rs, 16, 16);
+            let dc: [i16; 16] = coeffs(&mut rng);
+
+            let mut m_dc = dc;
+            let mut m_pred = pred.clone();
+            let mut raw_rec = rec.clone();
+            unsafe {
+                eda::WelsIDctRecI16x16Dc_c(
+                    raw_rec.as_mut_ptr().add(rc),
+                    rs as i32,
+                    m_pred.as_mut_ptr().add(pc),
+                    ps as i32,
+                    m_dc.as_mut_ptr(),
+                );
+            }
+
+            let mut safe_rec = rec.clone();
+            eda::idct_rec_i16x16_dc(
+                &mut PlaneCursorMut::new(&mut safe_rec, rc, rs),
+                &PlaneCursor::new(&pred, pc, ps),
+                &dc,
+            );
+            assert_eq!(raw_rec, safe_rec, "IDctRecI16x16Dc rs={rs} ps={ps}, seed {:#x}", rng.seed());
+            assert_eq!((m_pred, m_dc), (pred, dc), "IDctRecI16x16Dc wrote a source");
+        }
+    }
+}
