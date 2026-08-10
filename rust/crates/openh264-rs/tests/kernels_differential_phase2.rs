@@ -702,3 +702,432 @@ fn i16x16_luma_pred_shims_stay_inside_the_spans_they_declare() {
     ipc::i16x16_luma_pred_h(&mut direct, &PlaneCursor::new(&refs, 1, 32));
     assert_eq!(&viashim[..], &direct[..]);
 }
+
+// ---------------------------------------------------------------------------
+// T8 — `processing/vaacalc.rs` + `processing/adaptive_quantization.rs`
+//
+// Six kernels: the five whole-picture `VAACalc*` walkers and the one 16x16
+// variance probe. Unlike every family before them these are **streaming** — one
+// pass per frame over a whole picture — and they write their results into
+// caller-supplied output arrays rather than into a pixel surface, so "compare every
+// written byte of the destination" means comparing whole output arrays, including a
+// slack tail past the last macroblock that neither side may touch.
+//
+// The five walkers share one code path on the safe side (`walk_picture` over
+// `block_stats`, with const flags selecting the accumulators), which is exactly why
+// each of the five needs its own entry: a flag wired to the wrong accumulator
+// produces a kernel that is still correct for the other four.
+// ---------------------------------------------------------------------------
+
+use openh264_rs::encoder::wels_preprocess::SMotionTextureUnit;
+use openh264_rs::processing::adaptive_quantization as aq;
+use openh264_rs::processing::vaacalc as vaa;
+
+/// Macroblocks of slack allocated past the end of every output array, filled with
+/// noise that neither implementation may disturb.
+const SLACK_MBS: usize = 3;
+
+/// Picture geometries worth driving. Every `(width, height, stride)` is legal for
+/// the caller (`stride >= width`), and the set covers what this family's index
+/// arithmetic can get wrong:
+///
+/// * one macroblock at the minimum legal stride, where an off-by-one in the span
+///   shows up first, and the two geometries whose span lands *exactly* on the end of
+///   the plane (`16x16@16` and `64x48@64`);
+/// * strides wider than the width, and strides that are not multiples of 16;
+/// * **widths that are not multiples of 16**, which is where the walk's step quirk
+///   lives. `VAACalc*` advances 16 per macroblock and then by
+///   `(stride << 4) - width` at the end of the row, so a width of 40 leaves each
+///   macroblock row starting eight bytes *before* the row it looks like it should.
+///   The safe walk has to reproduce that, and only a non-multiple-of-16 width can
+///   tell whether it does;
+/// * heights that are not multiples of 16, where the last partial row is dropped.
+fn pictures() -> Vec<(i32, i32, i32)> {
+    let all = vec![
+        (16, 16, 16),
+        (16, 16, 24),
+        (32, 32, 32),
+        (32, 32, 48),
+        (64, 48, 64),
+        (48, 64, 80),
+        (40, 32, 64),
+        (32, 40, 48),
+        (24, 24, 33),
+    ];
+    if cfg!(miri) {
+        // Miri sees the over-claim half of the span check and has to run, but at
+        // ~100x it cannot run a 48x64 picture. The cut keeps the two tight-span
+        // geometries and the step quirk, and drops the merely-larger ones.
+        return vec![(16, 16, 16), (40, 32, 64)];
+    }
+    all
+}
+
+/// A picture pair plus its macroblock count. Noise, not a constant: a flat picture
+/// cannot show a walk that read the wrong row.
+fn picture(rng: &mut Prng, w: i32, h: i32, stride: i32) -> (Vec<u8>, Vec<u8>, usize) {
+    let len = (h * stride) as usize;
+    let cur = rng.bytes(len);
+    let refp = rng.bytes(len);
+    (cur, refp, ((w >> 4) * (h >> 4)) as usize)
+}
+
+/// A noise-filled `i32` output array — a zeroed one cannot show an entry the kernel
+/// failed to write.
+fn noise_i32(rng: &mut Prng, len: usize) -> Vec<i32> {
+    (0..len).map(|_| rng.next_u32() as i32).collect()
+}
+
+fn quads(seed: &[i32]) -> Vec<[i32; 4]> {
+    seed.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
+}
+
+fn flat(q: &[[i32; 4]]) -> Vec<i32> {
+    q.iter().flatten().copied().collect()
+}
+
+fn quads_u8(seed: &[u8]) -> Vec<[u8; 4]> {
+    seed.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()
+}
+
+fn flat_u8(q: &[[u8; 4]]) -> Vec<u8> {
+    q.iter().flatten().copied().collect()
+}
+
+#[test]
+fn vaa_calc_sad_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0001);
+    for &(w, h, stride) in &pictures() {
+        for _ in 0..scale(8) {
+            let (cur, refp, mbs) = picture(&mut rng, w, h, stride);
+            let seed = noise_i32(&mut rng, (mbs + SLACK_MBS) * 4);
+
+            let mut old_sad = seed.clone();
+            let mut old_frame = 0i32;
+            unsafe {
+                vaa::VAACalcSad_c(
+                    cur.as_ptr(),
+                    refp.as_ptr(),
+                    w,
+                    h,
+                    stride,
+                    &mut old_frame,
+                    old_sad.as_mut_ptr(),
+                );
+            }
+
+            let mut new_sad = quads(&seed);
+            let new_frame = vaa::vaa_calc_sad(&cur, &refp, w, h, stride, &mut new_sad);
+
+            let at = format!("{w}x{h}@{stride}");
+            assert_eq!(old_frame, new_frame, "frame sad, {at}");
+            assert_eq!(old_sad, flat(&new_sad), "sad8x8 (with slack tail), {at}");
+        }
+    }
+}
+
+#[test]
+fn vaa_calc_sad_var_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0002);
+    for &(w, h, stride) in &pictures() {
+        for _ in 0..scale(8) {
+            let (cur, refp, mbs) = picture(&mut rng, w, h, stride);
+            let n = mbs + SLACK_MBS;
+            let seed_sad = noise_i32(&mut rng, n * 4);
+            let seed_sum = noise_i32(&mut rng, n);
+            let seed_sqsum = noise_i32(&mut rng, n);
+
+            let (mut old_sad, mut old_sum, mut old_sqsum) =
+                (seed_sad.clone(), seed_sum.clone(), seed_sqsum.clone());
+            let mut old_frame = 0i32;
+            unsafe {
+                vaa::VAACalcSadVar_c(
+                    cur.as_ptr(),
+                    refp.as_ptr(),
+                    w,
+                    h,
+                    stride,
+                    &mut old_frame,
+                    old_sad.as_mut_ptr(),
+                    old_sum.as_mut_ptr(),
+                    old_sqsum.as_mut_ptr(),
+                );
+            }
+
+            let mut new_sad = quads(&seed_sad);
+            let (mut new_sum, mut new_sqsum) = (seed_sum.clone(), seed_sqsum.clone());
+            let new_frame = vaa::vaa_calc_sad_var(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &mut new_sad,
+                &mut new_sum,
+                &mut new_sqsum,
+            );
+
+            let at = format!("{w}x{h}@{stride}");
+            assert_eq!(old_frame, new_frame, "frame sad, {at}");
+            assert_eq!(old_sad, flat(&new_sad), "sad8x8, {at}");
+            assert_eq!(old_sum, new_sum, "sum16x16, {at}");
+            assert_eq!(old_sqsum, new_sqsum, "sqsum16x16, {at}");
+        }
+    }
+}
+
+#[test]
+fn vaa_calc_sad_ssd_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0003);
+    for &(w, h, stride) in &pictures() {
+        for _ in 0..scale(8) {
+            let (cur, refp, mbs) = picture(&mut rng, w, h, stride);
+            let n = mbs + SLACK_MBS;
+            let seed_sad = noise_i32(&mut rng, n * 4);
+            let seed_sum = noise_i32(&mut rng, n);
+            let seed_sqsum = noise_i32(&mut rng, n);
+            let seed_sqdiff = noise_i32(&mut rng, n);
+
+            let (mut old_sad, mut old_sum, mut old_sqsum, mut old_sqdiff) = (
+                seed_sad.clone(),
+                seed_sum.clone(),
+                seed_sqsum.clone(),
+                seed_sqdiff.clone(),
+            );
+            let mut old_frame = 0i32;
+            unsafe {
+                vaa::VAACalcSadSsd_c(
+                    cur.as_ptr(),
+                    refp.as_ptr(),
+                    w,
+                    h,
+                    stride,
+                    &mut old_frame,
+                    old_sad.as_mut_ptr(),
+                    old_sum.as_mut_ptr(),
+                    old_sqsum.as_mut_ptr(),
+                    old_sqdiff.as_mut_ptr(),
+                );
+            }
+
+            let mut new_sad = quads(&seed_sad);
+            let (mut new_sum, mut new_sqsum, mut new_sqdiff) = (
+                seed_sum.clone(),
+                seed_sqsum.clone(),
+                seed_sqdiff.clone(),
+            );
+            let new_frame = vaa::vaa_calc_sad_ssd(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &mut new_sad,
+                &mut new_sum,
+                &mut new_sqsum,
+                &mut new_sqdiff,
+            );
+
+            let at = format!("{w}x{h}@{stride}");
+            assert_eq!(old_frame, new_frame, "frame sad, {at}");
+            assert_eq!(old_sad, flat(&new_sad), "sad8x8, {at}");
+            assert_eq!(old_sum, new_sum, "sum16x16, {at}");
+            assert_eq!(old_sqsum, new_sqsum, "sqsum16x16, {at}");
+            assert_eq!(old_sqdiff, new_sqdiff, "sqdiff16x16, {at}");
+        }
+    }
+}
+
+#[test]
+fn vaa_calc_sad_bgd_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0004);
+    for &(w, h, stride) in &pictures() {
+        for _ in 0..scale(8) {
+            let (cur, refp, mbs) = picture(&mut rng, w, h, stride);
+            let n = mbs + SLACK_MBS;
+            let seed_sad = noise_i32(&mut rng, n * 4);
+            let seed_sd = noise_i32(&mut rng, n * 4);
+            let seed_mad = rng.bytes(n * 4);
+
+            let (mut old_sad, mut old_sd, mut old_mad) =
+                (seed_sad.clone(), seed_sd.clone(), seed_mad.clone());
+            let mut old_frame = 0i32;
+            unsafe {
+                vaa::VAACalcSadBgd_c(
+                    cur.as_ptr(),
+                    refp.as_ptr(),
+                    w,
+                    h,
+                    stride,
+                    &mut old_frame,
+                    old_sad.as_mut_ptr(),
+                    old_sd.as_mut_ptr(),
+                    old_mad.as_mut_ptr(),
+                );
+            }
+
+            let mut new_sad = quads(&seed_sad);
+            let mut new_sd = quads(&seed_sd);
+            let mut new_mad = quads_u8(&seed_mad);
+            let new_frame = vaa::vaa_calc_sad_bgd(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &mut new_sad,
+                &mut new_sd,
+                &mut new_mad,
+            );
+
+            let at = format!("{w}x{h}@{stride}");
+            assert_eq!(old_frame, new_frame, "frame sad, {at}");
+            assert_eq!(old_sad, flat(&new_sad), "sad8x8, {at}");
+            assert_eq!(old_sd, flat(&new_sd), "sd8x8, {at}");
+            assert_eq!(old_mad, flat_u8(&new_mad), "mad8x8, {at}");
+        }
+    }
+}
+
+#[test]
+fn vaa_calc_sad_ssd_bgd_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0005);
+    for &(w, h, stride) in &pictures() {
+        for _ in 0..scale(8) {
+            let (cur, refp, mbs) = picture(&mut rng, w, h, stride);
+            let n = mbs + SLACK_MBS;
+            let seed_sad = noise_i32(&mut rng, n * 4);
+            let seed_sum = noise_i32(&mut rng, n);
+            let seed_sqsum = noise_i32(&mut rng, n);
+            let seed_sqdiff = noise_i32(&mut rng, n);
+            let seed_sd = noise_i32(&mut rng, n * 4);
+            let seed_mad = rng.bytes(n * 4);
+
+            let (mut old_sad, mut old_sum, mut old_sqsum, mut old_sqdiff, mut old_sd, mut old_mad) = (
+                seed_sad.clone(),
+                seed_sum.clone(),
+                seed_sqsum.clone(),
+                seed_sqdiff.clone(),
+                seed_sd.clone(),
+                seed_mad.clone(),
+            );
+            let mut old_frame = 0i32;
+            unsafe {
+                vaa::VAACalcSadSsdBgd_c(
+                    cur.as_ptr(),
+                    refp.as_ptr(),
+                    w,
+                    h,
+                    stride,
+                    &mut old_frame,
+                    old_sad.as_mut_ptr(),
+                    old_sum.as_mut_ptr(),
+                    old_sqsum.as_mut_ptr(),
+                    old_sqdiff.as_mut_ptr(),
+                    old_sd.as_mut_ptr(),
+                    old_mad.as_mut_ptr(),
+                );
+            }
+
+            let mut new_sad = quads(&seed_sad);
+            let (mut new_sum, mut new_sqsum, mut new_sqdiff) =
+                (seed_sum.clone(), seed_sqsum.clone(), seed_sqdiff.clone());
+            let mut new_sd = quads(&seed_sd);
+            let mut new_mad = quads_u8(&seed_mad);
+            let new_frame = vaa::vaa_calc_sad_ssd_bgd(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &mut new_sad,
+                &mut new_sum,
+                &mut new_sqsum,
+                &mut new_sqdiff,
+                &mut new_sd,
+                &mut new_mad,
+            );
+
+            let at = format!("{w}x{h}@{stride}");
+            assert_eq!(old_frame, new_frame, "frame sad, {at}");
+            assert_eq!(old_sad, flat(&new_sad), "sad8x8, {at}");
+            assert_eq!(old_sum, new_sum, "sum16x16, {at}");
+            assert_eq!(old_sqsum, new_sqsum, "sqsum16x16, {at}");
+            assert_eq!(old_sqdiff, new_sqdiff, "sqdiff16x16, {at}");
+            assert_eq!(old_sd, flat(&new_sd), "sd8x8, {at}");
+            assert_eq!(old_mad, flat_u8(&new_mad), "mad8x8, {at}");
+        }
+    }
+}
+
+/// `SampleVariance16x16_c` reads two planes at **independent** strides, which no
+/// other kernel in this phase does — so the sweep is over stride *pairs*, not
+/// strides. A conversion that used one stride for both planes passes every
+/// equal-stride case.
+///
+/// The two allocations are sized to exactly `mb_span(stride)`, so an over-claiming
+/// shim is UB that Miri reports rather than a test that quietly passes.
+#[test]
+fn sample_variance_16x16_matches_the_raw_kernel() {
+    let mut rng = Prng::new(0x7A08_0006);
+    for &ref_stride in &strides(16) {
+        for &src_stride in &strides(16) {
+            for _ in 0..scale(25) {
+                let refy = rng.bytes(aq::mb_span(ref_stride));
+                let srcy = rng.bytes(aq::mb_span(src_stride));
+
+                let mut old = SMotionTextureUnit {
+                    uiMotionIndex: 0xAAAA,
+                    uiTextureIndex: 0x5555,
+                };
+                unsafe {
+                    aq::SampleVariance16x16_c(
+                        refy.as_ptr(),
+                        ref_stride as i32,
+                        srcy.as_ptr(),
+                        src_stride as i32,
+                        &mut old,
+                    );
+                }
+                let new = aq::sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
+
+                let at = format!("ref stride {ref_stride}, src stride {src_stride}");
+                assert_eq!(old.uiMotionIndex, new.uiMotionIndex, "motion index, {at}");
+                assert_eq!(old.uiTextureIndex, new.uiTextureIndex, "texture index, {at}");
+            }
+        }
+    }
+}
+
+/// The two extremes of the variance probe's input domain, driven directly, because
+/// the random sweep above never reaches them and they are where the C++'s integer
+/// widths would bite if they could.
+///
+/// A 16x16 block holds 256 samples of at most 255, so the `uint16_t` sums top out at
+/// **65280** and the `uint32_t` squares at **16 646 400** — both short of wrapping.
+/// The `wrapping_add`s the port carries are therefore unreachable, and this test is
+/// what says so: maximal difference in both directions, and maximal brightness.
+#[test]
+fn sample_variance_16x16_accumulators_cannot_wrap() {
+    for (refv, srcv) in [(255u8, 0u8), (0, 255), (255, 255), (0, 0)] {
+        let refy = vec![refv; aq::mb_span(16)];
+        let srcy = vec![srcv; aq::mb_span(16)];
+
+        let mut old = SMotionTextureUnit {
+            uiMotionIndex: 0xAAAA,
+            uiTextureIndex: 0x5555,
+        };
+        unsafe {
+            aq::SampleVariance16x16_c(refy.as_ptr(), 16, srcy.as_ptr(), 16, &mut old);
+        }
+        let new = aq::sample_variance_16x16(&refy, 16, &srcy, 16);
+        assert_eq!(old.uiMotionIndex, new.uiMotionIndex, "motion, ref {refv} src {srcv}");
+        assert_eq!(old.uiTextureIndex, new.uiTextureIndex, "texture, ref {refv} src {srcv}");
+
+        // A uniform block has zero variance either way round, and a uniform
+        // difference has zero variance of differences: `(sum >> 8)^2 == square >> 8`
+        // exactly when every sample is equal, which is the arithmetic this pins.
+        assert_eq!(new.uiMotionIndex, 0, "uniform difference, ref {refv} src {srcv}");
+        assert_eq!(new.uiTextureIndex, 0, "uniform picture, ref {refv} src {srcv}");
+    }
+}
