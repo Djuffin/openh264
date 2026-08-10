@@ -773,3 +773,83 @@ mod tests {
         assert_eq!(buf[4 * 16], 128);
     }
 }
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    /// Plan §5's de-virtualization mitigation for `SDeblockingFunc`:
+    /// `DeblockingInit` is a constant function of its CPU argument.
+    ///
+    /// See `common::mc::tests::init_mc_func_ignores_the_cpu_flag` for why this
+    /// compares two installed tables rather than a table against named
+    /// functions, and why it is scoped out of Miri. In short: taking a
+    /// function's address can mint a fresh instantiation per codegen unit, and
+    /// Miri mints one per cast, so only two addresses produced by the *same*
+    /// installer are safely comparable. The complementary behavioural half is
+    /// `deblocking_table_slots_match_the_direct_calls` in the differential file.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn deblocking_init_ignores_the_cpu_flag() {
+        use crate::common::cpu_core::*;
+        let flags: [i32; 10] = [
+            0, -1,
+            WELS_CPU_SSE2 as i32, WELS_CPU_SSE41 as i32, WELS_CPU_SSE42 as i32,
+            WELS_CPU_AVX as i32, WELS_CPU_AVX2 as i32, WELS_CPU_NEON as i32,
+            WELS_CPU_MMI as i32, WELS_CPU_LSX as i32,
+        ];
+        let addrs = |t: &SDeblockingFunc| -> [usize; 12] {
+            [
+                t.pfLumaDeblockingLT4Ver.unwrap() as usize,
+                t.pfLumaDeblockingEQ4Ver.unwrap() as usize,
+                t.pfLumaDeblockingLT4Hor.unwrap() as usize,
+                t.pfLumaDeblockingEQ4Hor.unwrap() as usize,
+                t.pfChromaDeblockingLT4Ver.unwrap() as usize,
+                t.pfChromaDeblockingEQ4Ver.unwrap() as usize,
+                t.pfChromaDeblockingLT4Hor.unwrap() as usize,
+                t.pfChromaDeblockingEQ4Hor.unwrap() as usize,
+                t.pfChromaDeblockingLT4Ver2.unwrap() as usize,
+                t.pfChromaDeblockingEQ4Ver2.unwrap() as usize,
+                t.pfChromaDeblockingLT4Hor2.unwrap() as usize,
+                t.pfChromaDeblockingEQ4Hor2.unwrap() as usize,
+            ]
+        };
+        const NAMES: [&str; 12] = [
+            "LumaLT4Ver", "LumaEQ4Ver", "LumaLT4Hor", "LumaEQ4Hor",
+            "ChromaLT4Ver", "ChromaEQ4Ver", "ChromaLT4Hor", "ChromaEQ4Hor",
+            "ChromaLT4Ver2", "ChromaEQ4Ver2", "ChromaLT4Hor2", "ChromaEQ4Hor2",
+        ];
+        let mut base = SDeblockingFunc::default();
+        unsafe { DeblockingInit(&mut base, 0) };
+        let want = addrs(&base);
+        for flag in flags {
+            let mut t = SDeblockingFunc::default();
+            unsafe { DeblockingInit(&mut t, flag) };
+            for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
+                assert_eq!(got, expected, "cpu flag {flag:#x} changed slot {}", NAMES[i]);
+            }
+        }
+    }
+
+    /// Every slot is populated after init, so the decoder's former
+    /// `if let Some(f) = (*pLoopf).pf...` guards — 22 of them — were never
+    /// taken, and unconditional direct calls preserve behaviour.
+    ///
+    /// A `None` there did not degrade gracefully: it silently skipped filtering
+    /// one edge, which is a wrong picture rather than an error. `DeblockingInit`
+    /// runs from `WelsInitDecoderFuncs` at open, before any slice is decoded.
+    #[test]
+    fn deblocking_table_is_fully_populated_after_init() {
+        let mut t = SDeblockingFunc::default();
+        unsafe { DeblockingInit(&mut t, 0) };
+        assert!(
+            t.pfLumaDeblockingLT4Ver.is_some() && t.pfLumaDeblockingEQ4Ver.is_some()
+                && t.pfLumaDeblockingLT4Hor.is_some() && t.pfLumaDeblockingEQ4Hor.is_some()
+                && t.pfChromaDeblockingLT4Ver.is_some() && t.pfChromaDeblockingEQ4Ver.is_some()
+                && t.pfChromaDeblockingLT4Hor.is_some() && t.pfChromaDeblockingEQ4Hor.is_some()
+                && t.pfChromaDeblockingLT4Ver2.is_some() && t.pfChromaDeblockingEQ4Ver2.is_some()
+                && t.pfChromaDeblockingLT4Hor2.is_some() && t.pfChromaDeblockingEQ4Hor2.is_some(),
+            "DeblockingInit must leave every slot populated"
+        );
+    }
+}

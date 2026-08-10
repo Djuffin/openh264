@@ -1,12 +1,12 @@
 {
-  "commit": "c9d416de",
+  "commit": "ededdee8",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "api/codec_api.rs": { "unsafe_fn": 48, "unsafe_block": 43, "raw_ptr": 233, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 3, "no_mangle": 5, "shim": 0 },
     "api/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/cpu_core.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "common/deblocking_common.rs": { "unsafe_fn": 14, "unsafe_block": 16, "raw_ptr": 36, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 13 },
+    "common/deblocking_common.rs": { "unsafe_fn": 14, "unsafe_block": 19, "raw_ptr": 36, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 13 },
     "common/expand_pic.rs": { "unsafe_fn": 1, "unsafe_block": 0, "raw_ptr": 2, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "common/intra_pred_common.rs": { "unsafe_fn": 2, "unsafe_block": 4, "raw_ptr": 8, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 2 },
     "common/mc.rs": { "unsafe_fn": 30, "unsafe_block": 36, "raw_ptr": 73, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 28 },
