@@ -1227,59 +1227,101 @@ fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
 }
 
 // ===========================================================================
-// T6 — border expansion (`common/expand_pic.rs` + `decoder_core.rs`'s `_c` fns)
+// T6 — border expansion (`common/expand_pic.rs` + `decoder_core.rs`'s shims)
 // ===========================================================================
 //
-// Commit-A equivalence entries: the raw `ExpandPictureLuma_c`/`Chroma_c` are
-// driven against `expand_picture` over identically-noised full allocations and
-// **every byte of the allocation** is compared — the padding is the output
-// here, so a block-shaped assertion would miss exactly the writes the kernel
-// exists to make. Geometry per `AllocPicture` both sides: the picture origin
-// at `pad*stride + pad`, pad 32 for luma and 16 for chroma, strides at the
-// minimum legal and wider (aligned strides leave slack columns the kernel must
-// not touch), and both exactly-sized and over-tall allocations (the C rounds
-// the row count up).
+// `2fe283e4` proved `expand_picture` against both raw variants over full
+// allocations — every byte compared, minimum-legal and slack strides, exact
+// and over-tall row counts, odd sizes; corner-swap and first-row-skip
+// mutations died. The shim commit deleted that equivalence, because both
+// sides now run the same code.
+//
+// What survives is what the shims add, and it is the trickiest span in the
+// phase: the caller hands a **mid-allocation** pointer (`pData[i]`, `pad`
+// rows plus `pad` bytes in) and the shim walks *backwards* to the allocation
+// start with the per-variant pad constant (32 luma, 16 chroma) before
+// claiming `(h + 2*pad) * stride` bytes. The probes below hand each shim an
+// allocation of exactly that size (an over-claim or a wrong-direction
+// reconstruction is UB Miri reports; an under-claim asserts in the safe
+// kernel), and three assertions pin the rest:
+//
+// * **Every padding byte is written and none is read**: two runs whose
+//   inputs differ only in the padding bytes must produce identical
+//   allocations.
+// * **The anchor is where the contract says**: the shim's result must equal
+//   `expand_picture` run directly on the same input — a reconstruction of
+//   `pad*stride` instead of `pad*stride + pad` would land every write one
+//   pad short.
+// * **Slack columns stay untouched** at a wider-than-minimal stride, which is
+//   what an aligned real allocation has.
 
 use openh264_rs::common::expand_pic as exp;
 use openh264_rs::decoder::decoder_core as dcore;
 
 #[test]
-fn expand_picture_matches_the_raw_ones() {
+fn expand_shims_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0xE8_9A2D_0016);
-    // (pad, raw fn): the two real variants.
     type RawExpand = unsafe extern "C" fn(*mut u8, i32, i32, i32);
     let variants: &[(usize, RawExpand, &str)] = &[
         (32, dcore::ExpandPictureLuma_c as RawExpand, "luma"),
         (16, dcore::ExpandPictureChroma_c as RawExpand, "chroma"),
     ];
-    for &(pad, raw, name) in variants {
-        for &(w, h) in &[(16usize, 16usize), (24, 20), (9, 11), (33, 8)] {
-            for stride_extra in [0usize, 5, 23] {
-                for rows_extra in [0usize, 7] {
-                    if cfg!(miri) && (stride_extra == 5 || rows_extra == 7) {
-                        continue; // shapes already covered; Miri needs the small set
+    for &(pad, shim, name) in variants {
+        for &(w, h) in &[(16usize, 16usize), (9, 11)] {
+            for &slack in &[0usize, 13] {
+                let stride = w + 2 * pad + slack;
+                let rows = h + 2 * pad;
+                for _ in 0..scale(3) {
+                    // `a` and `b` share the picture rectangle; everything
+                    // outside it is noised independently.
+                    let before_a = rng.bytes(rows * stride);
+                    let mut before_b = rng.bytes(rows * stride);
+                    for y in 0..h {
+                        for x in 0..w {
+                            let i = (pad + y) * stride + pad + x;
+                            before_b[i] = before_a[i];
+                        }
                     }
-                    let stride = w + 2 * pad + stride_extra;
-                    let rows = h + 2 * pad + rows_extra;
-                    for _ in 0..scale(4) {
-                        let before = rng.bytes(rows * stride);
-                        let mut got_raw = before.clone();
-                        let mut got_safe = before;
-                        unsafe {
-                            raw(
-                                got_raw.as_mut_ptr().add(pad * stride + pad),
-                                stride as i32,
-                                w as i32,
-                                h as i32,
+                    let mut a = before_a.clone();
+                    let mut b = before_b.clone();
+                    unsafe {
+                        shim(a.as_mut_ptr().add(pad * stride + pad), stride as i32, w as i32, h as i32);
+                        shim(b.as_mut_ptr().add(pad * stride + pad), stride as i32, w as i32, h as i32);
+                    }
+
+                    // The anchor: the shim must equal the safe kernel run at
+                    // the geometry the contract names.
+                    let mut golden = before_a.clone();
+                    exp::expand_picture(&mut golden, stride, w, h, pad);
+                    assert_eq!(
+                        a, golden,
+                        "{name} {w}x{h} stride {stride}: shim disagrees with the safe \
+                         kernel at the contract's geometry (seed {:#x})",
+                        rng.seed()
+                    );
+
+                    // Slack columns (an aligned allocation's tail) untouched.
+                    if slack > 0 {
+                        for y in 0..rows {
+                            let sl = y * stride + 2 * pad + w;
+                            assert_eq!(
+                                &a[sl..(y + 1) * stride],
+                                &before_a[sl..(y + 1) * stride],
+                                "{name} {w}x{h}: slack columns of row {y} moved"
                             );
                         }
-                        exp::expand_picture(&mut got_safe, stride, w, h, pad);
-                        assert_eq!(
-                            got_raw, got_safe,
-                            "{name} {w}x{h} stride {stride} rows {rows} seed {:#x}",
-                            rng.seed()
-                        );
+                        continue; // the all-padding-written property needs no slack
                     }
+
+                    // Padding fully written from picture content, picture
+                    // content untouched: inputs differing only in padding
+                    // must converge byte-for-byte.
+                    assert_eq!(
+                        a, b,
+                        "{name} {w}x{h} stride {stride}: some padding byte survived \
+                         (was read or left unwritten) — seed {:#x}",
+                        rng.seed()
+                    );
                 }
             }
         }
