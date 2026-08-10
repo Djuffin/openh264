@@ -1705,3 +1705,111 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         eda::WelsIDctFourT4Rec_c(std::ptr::null_mut(), 8, std::ptr::null_mut(), 8, std::ptr::null_mut());
     }
 }
+
+// ===========================================================================
+// T7 — `encoder/sample.rs`, the SATD family: PROVEN AND PARKED
+// ===========================================================================
+//
+// No commit B exists for this family and none is planned before Phase 4a:
+// D-perf-2's measurements are the tripwire projection (sad-class swap cost
+// +16.8% median onto an encoder already ≈ +13% cumulative crosses +25%), so
+// the safe kernels land proven and **uninstalled** — the raw
+// `WelsSampleSatd*_c` bodies are the code that runs, exactly like the parked
+// T5-sad family. These entries are therefore *live differentials*, not
+// commit-A scaffolding: they outlive this session and die only when the
+// family re-lands.
+//
+// F10's rule, applied from the start: the raw kernels bump their row
+// pointers past the last row (`pSrc += iStride` after row 3), which is
+// out-of-allocation pointer arithmetic on an exactly-sized buffer — so every
+// **raw-side** buffer here spans whole rows (`h * stride`), and the
+// **safe-side** exact-span probe below is the only place exact spans appear.
+// This file runs under Miri at phase exits; whole-row raw buffers are what
+// keep that run meaningful.
+
+use openh264_rs::encoder::sample as satd;
+
+type RawSatd = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32) -> i32;
+type SafeSatd = fn(&PlaneCursor<'_>, &PlaneCursor<'_>) -> i32;
+
+const SATD_SHAPES: &[(&str, usize, usize, RawSatd, SafeSatd)] = &[
+    ("Satd4x4", 4, 4, satd::WelsSampleSatd4x4_c, satd::satd_4x4),
+    ("Satd8x4", 8, 4, satd::WelsSampleSatd8x4_c, satd::satd_8x4),
+    ("Satd4x8", 4, 8, satd::WelsSampleSatd4x8_c, satd::satd_4x8),
+    ("Satd8x8", 8, 8, satd::WelsSampleSatd8x8_c, satd::satd_8x8),
+    ("Satd16x8", 16, 8, satd::WelsSampleSatd16x8_c, satd::satd_16x8),
+    ("Satd8x16", 8, 16, satd::WelsSampleSatd8x16_c, satd::satd_8x16),
+    ("Satd16x16", 16, 16, satd::WelsSampleSatd16x16_c, satd::satd_16x16),
+];
+
+#[test]
+fn satd_kernels_match_the_raw_ones() {
+    let mut rng = Prng::new(0x5A7D_0007);
+
+    for &(name, w, h, raw, safe) in SATD_SHAPES {
+        for &(s1, s2) in &[(0usize, 0usize), (21, 0), (240, 25)] {
+            let (s1, s2) = (s1.max(w), s2.max(w));
+            for _ in 0..scale(60) {
+                // Whole-row buffers on the raw side (F10): h full strides.
+                let mut b1 = rng.bytes(h * s1);
+                let mut b2 = rng.bytes(h * s2);
+                let c1 = rng.below((s1 - w + 1) as u32) as usize;
+                let c2 = rng.below((s2 - w + 1) as u32) as usize;
+
+                let got_raw = unsafe {
+                    raw(b1.as_mut_ptr().add(c1), s1 as i32, b2.as_mut_ptr().add(c2), s2 as i32)
+                };
+                let got_safe = satd_pair(&b1, c1, s1, &b2, c2, s2, safe);
+                assert_eq!(
+                    got_raw, got_safe,
+                    "{name} s1={s1} s2={s2} c1={c1} c2={c2}, seed {:#x}",
+                    rng.seed()
+                );
+            }
+        }
+    }
+}
+
+fn satd_pair(
+    b1: &[u8],
+    c1: usize,
+    s1: usize,
+    b2: &[u8],
+    c2: usize,
+    s2: usize,
+    safe: SafeSatd,
+) -> i32 {
+    safe(&PlaneCursor::new(b1, c1, s1), &PlaneCursor::new(b2, c2, s2))
+}
+
+/// The safe kernels' declared reach is `(h-1)*stride + w` from the anchor on
+/// each surface — exact-span allocations prove it is not under-claimed (an
+/// over-read panics at the slice), and agreement with the same kernel run on
+/// a padded copy of the same content proves the values do not depend on
+/// anything outside the span. The raw kernels are deliberately absent here:
+/// on exact spans their trailing pointer bump is F10's UB.
+#[test]
+fn satd_kernels_stay_inside_the_spans_they_declare() {
+    let mut rng = Prng::new(0x5A7D_59A9);
+
+    for &(name, w, h, _raw, safe) in SATD_SHAPES {
+        for &(s1, s2) in &[(0usize, 0usize), (21, 25)] {
+            let (s1, s2) = (s1.max(w), s2.max(w));
+            for _ in 0..scale(20) {
+                let exact1 = rng.bytes((h - 1) * s1 + w);
+                let exact2 = rng.bytes((h - 1) * s2 + w);
+
+                let got = safe(&PlaneCursor::new(&exact1, 0, s1), &PlaneCursor::new(&exact2, 0, s2));
+
+                // Same content embedded in generously padded surfaces.
+                let mut pad1 = rng.bytes(h * s1 + 64);
+                let mut pad2 = rng.bytes(h * s2 + 64);
+                pad1[..exact1.len()].copy_from_slice(&exact1);
+                pad2[..exact2.len()].copy_from_slice(&exact2);
+                let want = safe(&PlaneCursor::new(&pad1, 0, s1), &PlaneCursor::new(&pad2, 0, s2));
+
+                assert_eq!(got, want, "{name} s1={s1} s2={s2}: exact-span disagreement");
+            }
+        }
+    }
+}
