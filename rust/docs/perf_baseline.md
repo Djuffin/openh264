@@ -410,6 +410,17 @@ overhead is per row, not fixed per call. A deficit that no later phase removes i
 deficit, it is a regression, and the family was unswapped instead (`11f82d41`). The
 distinction between this and T4 is exactly what the two-ledger split was written for.
 
+### Parked families (proven, unswapped; §7.4 "parked" state)
+
+Safe kernels in-tree and differentially proven, shims unswapped because body cost at
+the shim boundary exceeds parity. Each entry names its re-attempt point. This table
+must also be empty by Phase 5's exit — parked families close by re-landing (technique
+found), by the Phase 4 direct-dispatch checkpoint, or by their callers converting.
+
+| family | parked | body evidence | blocking mechanism | re-attempt point | closed |
+|---|---|---|---|---|---|
+| T5-sad `common/sad_common.rs` (14 shims unswapped, `11f82d41`) | 2026-08-09 | ~7.0 ns/call regardless of block shape (4x8 = 8x8 = 16x8), L1-resident; encoder stream cost +16.8% median / +78% worst | per-row bounds + iterator work on tiny fixed-size blocks with runtime stride; per-sample arithmetic already free; `row_windows`, rolled offsets, and `abs_diff` all measured null | D-perf-2 bounded attempt (next session) → else Phase 4 checkpoint → else caller conversion (ME, Phase 6.3) | — |
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.

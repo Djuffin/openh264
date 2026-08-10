@@ -7,24 +7,40 @@ family), naming/shim conventions (§3.2), perf protocol (§3.3), gates (§5), no
 first sessions learned that you inherit as *rules*, and the remaining task list with
 its carry-ins. Where this file and `phase2.md` disagree, this file is newer.
 
-State as of **`11f82d41`** (tree clean, full battery green — and the battery now *includes* the encoder bench, see Instruments):
+State as of **`75beada5`** (tree clean, full battery green — and the battery now *includes* the encoder bench, see Instruments):
 
 | | |
 |---|---|
 | Done | Preconditions (Phase 0 complete except T7-fuzz), T1 control, T2 pilot, T3 (42 kernels), **T4 `common/mc.rs` (26, carried over budget under D-perf-1)**, **T5-intra `common/intra_pred_common.rs` (2 kernels, +0.57% — landed)** |
 | Reverted | **T5-sad `common/sad_common.rs` (14 kernels).** Safe kernels written and differentially proven; swapped, measured at **+16.8% median / +78% worst** on the encoder, and **unswapped** (`11f82d41`). Raw kernels run. Re-landing is an optimisation problem, not a conversion one — see §2.5 |
-| Remaining | **T8 processing (6 fns — next action)** → then T5-sad or T6 (a scheduling call, see below) → T7 four encoder files (69) → T9 exit |
+| Remaining | **T8 processing (6 fns) + the D-perf-2 bounded T5-sad attempt — same session, T8 first** → T6 → T7 four encoder files (69, shape depends on D-perf-2's verdict) → T9 exit |
 | Instruments | `gates.sh` + ratchet; **run it as `FFMPEG=/opt/homebrew/bin/ffmpeg bash tools/gates.sh` — always.** It was unset for sessions A and B, so the encoder was unmeasured for three families; T5 is the first regression it would have caught. Interleaved pairs are normative (R-h); **so is the working-set rule (R-j)** |
 | Counts | tests 384 debug / 382 release / 20 ignored; sweeps 341/341 both profiles; ratchet baseline regenerated at `11f82d41` — run `check`, don't trust remembered numbers |
 
-Suggested split: **S1 = T8 + a decision on T5-sad vs T6** (T8 is small, mechanical,
-off every hot path, and independent of the SAD question — do it first to bank a clean
-family); **S2 = T6 alone** (the phase's hardest conversion, never pair it); **S3 = T7
+**The scheduling call is made — D-perf-2 (plan §7.4, 2026-08-09): the SAD re-landing
+attempt runs early, in the same session as T8, and it is bounded.** Rationale: the
+technique question gates T7's ~30 SAD/SATD-shaped kernels — whether per-row cost on
+tiny fixed blocks with runtime strides can fold in safe code at the shim boundary at
+all — and answering it before T6/T7 converts either into a transferable technique or
+into a cheap prove-and-park rule for T7, instead of a swap-measure-unswap cycle
+discovered late. T6's slot is unaffected.
+
+Session order for S1, fixed so the time-box can't squeeze the deliverables:
+1. **T4 encoder-stream isolation** (D-perf-1 addendum): with the encoder bench now
+   live, isolate `mc.rs`'s encoder-side contribution and append it to T4's ledger row.
+2. **T8** (6 kernels — bank the clean family first).
+3. **The D-perf-2 attempt: half a session, hard stop, disassembly-first.** Exit
+   states, both acceptable: bodies reach ≤1.05x L1-resident and the family re-swaps
+   inside the ceiling (technique recorded, transfers to T7); or it parks — safe
+   kernels stay proven-but-uninstalled, entry updated in `perf_baseline.md` §Parked
+   with the re-attempt point (Phase 4 checkpoint → caller conversion, ME is Phase
+   6.3), and T7's SAD/SATD go **prove-and-park** from the start. What is not
+   acceptable: a third unbounded investigation. One attempt, one verdict, recorded.
+
+Then: **S2 = T6 alone** (the phase's hardest conversion, never pair it); **S3 = T7
 part 1** (`encode_mb_aux` 22 + `encoder/decode_mb_aux` 6 + `sample` 8); **S4 = T7 part
-2** (`encoder/get_intra_predictor` 33) **+ T9**. T5-sad slots wherever Eugene wants it —
-the argument for early is that T7's SAD/SATD have the same profile and solving it once
-serves both; the argument for later is that T6 is the conversion the plan's order
-assumes. Clean stops anywhere, per the standing exit protocol.
+2** (`encoder/get_intra_predictor` 33) **+ T9**. Clean stops anywhere, per the
+standing exit protocol.
 
 ---
 
@@ -89,13 +105,18 @@ assumes. Clean stops anywhere, per the standing exit protocol.
   until Phase 5. Two counting traps from T4: **never fold shims into a macro** — it
   makes `unsafe_fn` report a drop that didn't happen and hides `SHIM(` markers; write
   them out one per definition, marker on each.
-- **R-g — F3 protocol, as practiced:** one release-`mt` hit at `t=4 sm=3` → re-run
-  rather than argue, even when the change is structurally unrelated. More than one hit
-  in a session → equal-count sweeps at HEAD vs the control commit, and append the
-  measurement to F3. Any other config, any debug hit, any `st`/`def` hit: real, stop,
-  revert, investigate. And log any moment where the missing fuzzer (T7-skip) would
-  plausibly have caught something first — F8 is the first such entry; accumulation is
-  the signal to re-raise T7 with Eugene.
+- **R-g — F3 protocol, broadened by session C's measurement:** the signature is now
+  **release `mt`, `sm=3`, `t∈{2,4}`, output short *or* zero-length** — the original
+  "t=4, zero bytes" rule was too narrow and would have misread session C's hits as a
+  regression. One hit → re-run rather than argue, even when the change is structurally
+  unrelated. More than one hit in a session → **alternate both trees in one loop** and
+  compare counts; sequential sampling actively misleads (it read "HEAD 4/8 vs control
+  0/6" where the alternating loop read control 4, HEAD 1 — the same instrument lesson
+  as R-h, applied to failure rates). Append every such measurement to F3. Any other
+  config, any debug hit, any `st`/`def` hit: real, stop, revert, investigate. And log
+  any moment where the missing fuzzer (T7-skip) would plausibly have caught something
+  first — F8 is the first such entry; accumulation is the signal to re-raise T7 with
+  Eugene.
 - **R-h — The perf protocol is interleaved pairs plus an early microbenchmark**
   (normative, §7.4). Sequential runs of the same binary drift ~3% — an unpaired
   reading of T4 said +5.1% when the paired reading said +8.7%, and the session acted
@@ -158,7 +179,9 @@ a shared parameter would have each contract claiming the other's reach) and a pa
 `[u8; 256]` destination, which is what distinguishes them from the same-named 2-arg
 decoder cousins converted in T3.
 
-**T5-sad is a live optimisation problem and the brief for it is this.** The fourteen
+**T5-sad gets exactly one more attempt, under D-perf-2's box (see the session-order
+section above): half a session, disassembly-first, both exit states acceptable,
+verdict recorded either way.** The technical brief for that attempt: the fourteen
 safe SAD kernels exist, are proven against the raw ones by a differential that is live
 again, and have their spans pinned; they are simply not installed. The corrected,
 L1-resident microbenchmark says the cost is **per row and independent of block width**
@@ -253,6 +276,9 @@ bench when on the encode path; session-end full `gates.sh`.
 Everything `phase2.md` §6 lists, plus: no fixing **F8** (R-e is parity, not repair),
 no reopening T7-fuzz without Eugene (log the signal instead), no dispatch-table work
 beyond the two named module-internal exceptions (mc's quarter-pel fold; the F1
-signature surgery), no Phase 3 early start. Surplus time: sharpen shim contracts and
-differential edge coverage — T6's contracts especially, since they're the ones Phase 5
-will lean on hardest.
+signature surgery), no Phase 3 early start. **The D-perf-2 box is a non-goal
+boundary, not a target:** when the half-session stop arrives, the state you are in is
+the verdict — parking is success, not failure, and a third SAD investigation is out
+of scope for the phase no matter how close the last experiment looked. Surplus time:
+sharpen shim contracts and differential edge coverage — T6's contracts especially,
+since they're the ones Phase 5 will lean on hardest.
