@@ -270,10 +270,16 @@ pub type PChromaDeblockingEQ4Func = unsafe extern "C" fn(
     iBeta: i32,
 );
 
+// `uiBS` carries its real C++ type end-to-end: `uint8_t uiBS[2][4][4]`
+// (`deblocking.cpp:629`) — two 4x4 planes, `[dir][edge][blk]`, dir 0 = vertical
+// edges, dir 1 = horizontal. It was previously `*mut [[u8; 4]; 4]` — one plane —
+// with the second plane reached through 32-byte `from_raw_parts_mut` casts, which
+// is exactly the size relationship whose collapse caused the F1 release segfault
+// (`phase0_findings.md`). The F1 surgery (Phase 2 T6) made the type say it.
 pub type PDeblockingBSCalc = unsafe extern "C" fn(
     pFunc: *mut SWelsFuncPtrList,
     pCurMb: *mut SMB,
-    uiBS: *mut [[u8; 4]; 4],
+    uiBS: *mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
     iMbStride: i32,
     iLeftFlag: i32,
@@ -421,11 +427,9 @@ pub fn TC0_TBL_LOOKUP(iTc: &mut [i8; 4], iIdexA: i32, pBS: &[u8], bchroma: i8) {
 #[inline(always)]
 pub unsafe fn DeblockingBSInsideMBAvsbase(
     pNnzTab: *const i8,
-    uiBS: *mut [[u8; 4]; 4],
+    uiBS: &mut [[[u8; 4]; 4]; 2],
     iLShiftFactor: i32,
 ) {
-    let bs_ptr = uiBS as *mut [u8; 4];
-
     let n0 = *pNnzTab.add(0) as u8;
     let n1 = *pNnzTab.add(1) as u8;
     let n2 = *pNnzTab.add(2) as u8;
@@ -447,27 +451,27 @@ pub unsafe fn DeblockingBSInsideMBAvsbase(
     let n15 = *pNnzTab.add(15) as u8;
 
     // Vertical internal edges (dir = 0)
-    (*uiBS.add(0))[1][0] = (n0 | n1) << iLShiftFactor;
-    (*uiBS.add(0))[2][0] = (n1 | n2) << iLShiftFactor;
-    (*uiBS.add(0))[3][0] = (n2 | n3) << iLShiftFactor;
+    uiBS[0][1][0] = (n0 | n1) << iLShiftFactor;
+    uiBS[0][2][0] = (n1 | n2) << iLShiftFactor;
+    uiBS[0][3][0] = (n2 | n3) << iLShiftFactor;
 
-    (*uiBS.add(0))[1][1] = (n4 | n5) << iLShiftFactor;
-    (*uiBS.add(0))[2][1] = (n5 | n6) << iLShiftFactor;
-    (*uiBS.add(0))[3][1] = (n6 | n7) << iLShiftFactor;
+    uiBS[0][1][1] = (n4 | n5) << iLShiftFactor;
+    uiBS[0][2][1] = (n5 | n6) << iLShiftFactor;
+    uiBS[0][3][1] = (n6 | n7) << iLShiftFactor;
 
-    (*uiBS.add(0))[1][2] = (n8 | n9) << iLShiftFactor;
-    (*uiBS.add(0))[2][2] = (n9 | n10) << iLShiftFactor;
-    (*uiBS.add(0))[3][2] = (n10 | n11) << iLShiftFactor;
+    uiBS[0][1][2] = (n8 | n9) << iLShiftFactor;
+    uiBS[0][2][2] = (n9 | n10) << iLShiftFactor;
+    uiBS[0][3][2] = (n10 | n11) << iLShiftFactor;
 
-    (*uiBS.add(0))[1][3] = (n12 | n13) << iLShiftFactor;
-    (*uiBS.add(0))[2][3] = (n13 | n14) << iLShiftFactor;
-    (*uiBS.add(0))[3][3] = (n14 | n15) << iLShiftFactor;
+    uiBS[0][1][3] = (n12 | n13) << iLShiftFactor;
+    uiBS[0][2][3] = (n13 | n14) << iLShiftFactor;
+    uiBS[0][3][3] = (n14 | n15) << iLShiftFactor;
 
     // Horizontal internal edges (dir = 1)
     for k in 0..4 {
-        (*uiBS.add(1))[1][k] = (*pNnzTab.add(k) as u8 | *pNnzTab.add(4 + k) as u8) << iLShiftFactor;
-        (*uiBS.add(1))[2][k] = (*pNnzTab.add(4 + k) as u8 | *pNnzTab.add(8 + k) as u8) << iLShiftFactor;
-        (*uiBS.add(1))[3][k] = (*pNnzTab.add(8 + k) as u8 | *pNnzTab.add(12 + k) as u8) << iLShiftFactor;
+        uiBS[1][1][k] = (*pNnzTab.add(k) as u8 | *pNnzTab.add(4 + k) as u8) << iLShiftFactor;
+        uiBS[1][2][k] = (*pNnzTab.add(4 + k) as u8 | *pNnzTab.add(8 + k) as u8) << iLShiftFactor;
+        uiBS[1][3][k] = (*pNnzTab.add(8 + k) as u8 | *pNnzTab.add(12 + k) as u8) << iLShiftFactor;
     }
 }
 
@@ -475,7 +479,7 @@ pub unsafe fn DeblockingBSInsideMBAvsbase(
 #[inline(always)]
 pub unsafe fn DeblockingBSInsideMBNormal(
     pCurMb: *mut SMB,
-    uiBS: *mut [[u8; 4]; 4],
+    uiBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
 ) {
     let sMv = (*pCurMb).sMv;
@@ -487,9 +491,9 @@ pub unsafe fn DeblockingBSInsideMBNormal(
         let bs1 = *pNnzTab.add(base + 1) as u8 | *pNnzTab.add(base + 2) as u8;
         let bs2 = *pNnzTab.add(base + 2) as u8 | *pNnzTab.add(base + 3) as u8;
 
-        (*uiBS.add(0))[1][j] = BS_EDGE(bs0, sMv, base + 1, base);
-        (*uiBS.add(0))[2][j] = BS_EDGE(bs1, sMv, base + 2, base + 1);
-        (*uiBS.add(0))[3][j] = BS_EDGE(bs2, sMv, base + 3, base + 2);
+        uiBS[0][1][j] = BS_EDGE(bs0, sMv, base + 1, base);
+        uiBS[0][2][j] = BS_EDGE(bs1, sMv, base + 2, base + 1);
+        uiBS[0][3][j] = BS_EDGE(bs2, sMv, base + 3, base + 2);
     }
 
     // Horizontal internal edges (dir = 1)
@@ -498,9 +502,9 @@ pub unsafe fn DeblockingBSInsideMBNormal(
         let bs1 = *pNnzTab.add(4 + k) as u8 | *pNnzTab.add(8 + k) as u8;
         let bs2 = *pNnzTab.add(8 + k) as u8 | *pNnzTab.add(12 + k) as u8;
 
-        (*uiBS.add(1))[1][k] = BS_EDGE(bs0, sMv, 4 + k, k);
-        (*uiBS.add(1))[2][k] = BS_EDGE(bs1, sMv, 8 + k, 4 + k);
-        (*uiBS.add(1))[3][k] = BS_EDGE(bs2, sMv, 12 + k, 8 + k);
+        uiBS[1][1][k] = BS_EDGE(bs0, sMv, 4 + k, k);
+        uiBS[1][2][k] = BS_EDGE(bs1, sMv, 8 + k, 4 + k);
+        uiBS[1][3][k] = BS_EDGE(bs2, sMv, 12 + k, 8 + k);
     }
 }
 
@@ -532,15 +536,26 @@ pub unsafe fn DeblockingBSMarginalMBAvcbase(
 }
 
 /// Reference C implementation of Boundary Strength ($bS$) calculation.
+///
+/// `uiBS[0][0]` is the left MB-boundary edge, `uiBS[1][0]` the top one;
+/// `uiBS[dir][1..4]` are the interior edges. The C++ writes the boundary rows
+/// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
+/// assignment is the same store with the type kept.
+///
+/// # Safety
+/// `pCurMb` must be a valid MB pointer with in-bounds left/top neighbours for
+/// whichever of `iLeftFlag`/`iTopFlag` is set, `pFunc` null or valid, and
+/// `uiBS` must point at a writable `[2][4][4]` boundary-strength array.
 pub unsafe extern "C" fn DeblockingBSCalc_c(
     pFunc: *mut SWelsFuncPtrList,
     pCurMb: *mut SMB,
-    uiBS: *mut [[u8; 4]; 4],
+    uiBS: *mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
     iMbStride: i32,
     iLeftFlag: i32,
     iTopFlag: i32,
 ) {
+    let uiBS = &mut *uiBS;
     if iLeftFlag != 0 {
         let leftMb = pCurMb.offset(-1);
         let val = if IS_INTRA((*leftMb).uiMbType) {
@@ -548,11 +563,9 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
         } else {
             DeblockingBSMarginalMBAvcbase(pCurMb, leftMb, 0)
         };
-        let slice = std::slice::from_raw_parts_mut(uiBS as *mut u8, 32);
-        slice[0..4].copy_from_slice(&val.to_ne_bytes());
+        uiBS[0][0] = val.to_ne_bytes();
     } else {
-        let slice = std::slice::from_raw_parts_mut(uiBS as *mut u8, 32);
-        slice[0..4].fill(0);
+        uiBS[0][0] = [0; 4];
     }
 
     if iTopFlag != 0 {
@@ -562,11 +575,9 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
         } else {
             DeblockingBSMarginalMBAvcbase(pCurMb, topMb, 1)
         };
-        let slice = std::slice::from_raw_parts_mut(uiBS as *mut u8, 32);
-        slice[16..20].copy_from_slice(&val.to_ne_bytes());
+        uiBS[1][0] = val.to_ne_bytes();
     } else {
-        let slice = std::slice::from_raw_parts_mut(uiBS as *mut u8, 32);
-        slice[16..20].fill(0);
+        uiBS[1][0] = [0; 4];
     }
 
     if uiCurMbType != MB_TYPE_SKIP {
@@ -582,9 +593,11 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
             DeblockingBSInsideMBNormal(pCurMb, uiBS, (*pCurMb).pNonZeroCount);
         }
     } else {
-        let slice = std::slice::from_raw_parts_mut(uiBS as *mut u8, 32);
-        slice[4..16].fill(0);
-        slice[20..32].fill(0);
+        for dir in 0..2 {
+            for edge in 1..4 {
+                uiBS[dir][edge] = [0; 4];
+            }
+        }
     }
 }
 
@@ -1119,7 +1132,7 @@ pub unsafe fn DeblockingInterMb(
     pfDeblocking: *const DeblockingFunc,
     pCurMb: *mut SMB,
     pFilter: *mut SDeblockingFilter,
-    uiBS: *const [[u8; 4]; 4],
+    uiBS: &[[[u8; 4]; 4]; 2],
 ) {
     let iCurLumaQp = (*pCurMb).uiLumaQp as i8;
     let iCurChromaQp = (*pCurMb).uiChromaQp as i8;
@@ -1146,15 +1159,13 @@ pub unsafe fn DeblockingInterMb(
     let pDestCb = (*pFilter).pCsData[1];
     let pDestCr = (*pFilter).pCsData[2];
 
-    let bs_slice = std::slice::from_raw_parts(uiBS as *const u8, 32);
-
     if iLeftFlag {
         (*pFilter).uiLumaQP =
             ((iCurLumaQp as i32 + (*pCurMb.offset(-1)).uiLumaQp as i32 + 1) >> 1) as u8;
         (*pFilter).uiChromaQP =
             ((iCurChromaQp as i32 + (*pCurMb.offset(-1)).uiChromaQp as i32 + 1) >> 1) as u8;
 
-        if bs_slice[0] == 0x04 {
+        if uiBS[0][0][0] == 0x04 {
             FilteringEdgeLumaIntraV(pfDeblocking, pFilter, pDestY, iLineSize, std::ptr::null());
             FilteringEdgeChromaIntraV(
                 pfDeblocking,
@@ -1165,16 +1176,16 @@ pub unsafe fn DeblockingInterMb(
                 std::ptr::null(),
             );
         } else {
-            let bs00_u32 = u32::from_ne_bytes(bs_slice[0..4].try_into().unwrap());
+            let bs00_u32 = u32::from_ne_bytes(uiBS[0][0]);
             if bs00_u32 != 0 {
-                FilteringEdgeLumaV(pfDeblocking, pFilter, pDestY, iLineSize, &bs_slice[0]);
+                FilteringEdgeLumaV(pfDeblocking, pFilter, pDestY, iLineSize, uiBS[0][0].as_ptr());
                 FilteringEdgeChromaV(
                     pfDeblocking,
                     pFilter,
                     pDestCb,
                     pDestCr,
                     iLineSizeUV,
-                    &bs_slice[0],
+                    uiBS[0][0].as_ptr(),
                 );
             }
         }
@@ -1183,25 +1194,25 @@ pub unsafe fn DeblockingInterMb(
     (*pFilter).uiLumaQP = iCurLumaQp as u8;
     (*pFilter).uiChromaQP = iCurChromaQp as u8;
 
-    let bs01_u32 = u32::from_ne_bytes(bs_slice[4..8].try_into().unwrap());
+    let bs01_u32 = u32::from_ne_bytes(uiBS[0][1]);
     if bs01_u32 != 0 {
         FilteringEdgeLumaV(
             pfDeblocking,
             pFilter,
             pDestY.add(1 << 2),
             iLineSize,
-            &bs_slice[4],
+            uiBS[0][1].as_ptr(),
         );
     }
 
-    let bs02_u32 = u32::from_ne_bytes(bs_slice[8..12].try_into().unwrap());
+    let bs02_u32 = u32::from_ne_bytes(uiBS[0][2]);
     if bs02_u32 != 0 {
         FilteringEdgeLumaV(
             pfDeblocking,
             pFilter,
             pDestY.add(2 << 2),
             iLineSize,
-            &bs_slice[8],
+            uiBS[0][2].as_ptr(),
         );
         FilteringEdgeChromaV(
             pfDeblocking,
@@ -1209,18 +1220,18 @@ pub unsafe fn DeblockingInterMb(
             pDestCb.add(2 << 1),
             pDestCr.add(2 << 1),
             iLineSizeUV,
-            &bs_slice[8],
+            uiBS[0][2].as_ptr(),
         );
     }
 
-    let bs03_u32 = u32::from_ne_bytes(bs_slice[12..16].try_into().unwrap());
+    let bs03_u32 = u32::from_ne_bytes(uiBS[0][3]);
     if bs03_u32 != 0 {
         FilteringEdgeLumaV(
             pfDeblocking,
             pFilter,
             pDestY.add(3 << 2),
             iLineSize,
-            &bs_slice[12],
+            uiBS[0][3].as_ptr(),
         );
     }
 
@@ -1230,7 +1241,7 @@ pub unsafe fn DeblockingInterMb(
         (*pFilter).uiChromaQP =
             ((iCurChromaQp as i32 + (*pCurMb.offset(-iMbStride)).uiChromaQp as i32 + 1) >> 1) as u8;
 
-        if bs_slice[16] == 0x04 {
+        if uiBS[1][0][0] == 0x04 {
             FilteringEdgeLumaIntraH(pfDeblocking, pFilter, pDestY, iLineSize, std::ptr::null());
             FilteringEdgeChromaIntraH(
                 pfDeblocking,
@@ -1241,16 +1252,16 @@ pub unsafe fn DeblockingInterMb(
                 std::ptr::null(),
             );
         } else {
-            let bs10_u32 = u32::from_ne_bytes(bs_slice[16..20].try_into().unwrap());
+            let bs10_u32 = u32::from_ne_bytes(uiBS[1][0]);
             if bs10_u32 != 0 {
-                FilteringEdgeLumaH(pfDeblocking, pFilter, pDestY, iLineSize, &bs_slice[16]);
+                FilteringEdgeLumaH(pfDeblocking, pFilter, pDestY, iLineSize, uiBS[1][0].as_ptr());
                 FilteringEdgeChromaH(
                     pfDeblocking,
                     pFilter,
                     pDestCb,
                     pDestCr,
                     iLineSizeUV,
-                    &bs_slice[16],
+                    uiBS[1][0].as_ptr(),
                 );
             }
         }
@@ -1259,25 +1270,25 @@ pub unsafe fn DeblockingInterMb(
     (*pFilter).uiLumaQP = iCurLumaQp as u8;
     (*pFilter).uiChromaQP = iCurChromaQp as u8;
 
-    let bs11_u32 = u32::from_ne_bytes(bs_slice[20..24].try_into().unwrap());
+    let bs11_u32 = u32::from_ne_bytes(uiBS[1][1]);
     if bs11_u32 != 0 {
         FilteringEdgeLumaH(
             pfDeblocking,
             pFilter,
             pDestY.add((1 << 2) * iLineSize as usize),
             iLineSize,
-            &bs_slice[20],
+            uiBS[1][1].as_ptr(),
         );
     }
 
-    let bs12_u32 = u32::from_ne_bytes(bs_slice[24..28].try_into().unwrap());
+    let bs12_u32 = u32::from_ne_bytes(uiBS[1][2]);
     if bs12_u32 != 0 {
         FilteringEdgeLumaH(
             pfDeblocking,
             pFilter,
             pDestY.add((2 << 2) * iLineSize as usize),
             iLineSize,
-            &bs_slice[24],
+            uiBS[1][2].as_ptr(),
         );
         FilteringEdgeChromaH(
             pfDeblocking,
@@ -1285,18 +1296,18 @@ pub unsafe fn DeblockingInterMb(
             pDestCb.add((2 << 1) * iLineSizeUV as usize),
             pDestCr.add((2 << 1) * iLineSizeUV as usize),
             iLineSizeUV,
-            &bs_slice[24],
+            uiBS[1][2].as_ptr(),
         );
     }
 
-    let bs13_u32 = u32::from_ne_bytes(bs_slice[28..32].try_into().unwrap());
+    let bs13_u32 = u32::from_ne_bytes(uiBS[1][3]);
     if bs13_u32 != 0 {
         FilteringEdgeLumaH(
             pfDeblocking,
             pFilter,
             pDestY.add((3 << 2) * iLineSize as usize),
             iLineSize,
-            &bs_slice[28],
+            uiBS[1][3].as_ptr(),
         );
     }
 }
@@ -1510,8 +1521,9 @@ pub unsafe fn DeblockingMbAvcbase(
     pFilter: *mut SDeblockingFilter,
 ) {
     // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
-    // horizontal edges). Every callee reaches the second plane, through
-    // `uiBS.add(1)` or a 32-byte `from_raw_parts`, so both must be here.
+    // horizontal edges). Since the F1 surgery the callees take exactly this
+    // type, so the 16-vs-32-byte relationship that caused the release segfault
+    // is carried by the signatures instead of by five raw casts.
     let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
     let uiCurMbType = (*pCurMb).uiMbType;
     let iMbStride = (*pFilter).iMbStride as isize;
@@ -1542,14 +1554,14 @@ pub unsafe fn DeblockingMbAvcbase(
                 bs_calc(
                     pFunc,
                     pCurMb,
-                    uiBS.as_mut_ptr(),
+                    &mut uiBS,
                     uiCurMbType,
                     iMbStride as i32,
                     iLeftFlag,
                     iTopFlag,
                 );
             }
-            DeblockingInterMb(pfDeblocking, pCurMb, pFilter, uiBS.as_ptr());
+            DeblockingInterMb(pfDeblocking, pCurMb, pFilter, &uiBS);
         }
     }
 }
