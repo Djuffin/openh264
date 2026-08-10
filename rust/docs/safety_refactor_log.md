@@ -893,3 +893,211 @@ problem, not a conversion one, and it is the same problem T7's SAD/SATD will pre
 larger scale, so solving it once serves both. T6 is the phase's hardest conversion and
 was always meant to be scheduled alone. Doing T5-sad first buys the technique T7 needs;
 doing T6 first keeps the conversion order the plan assumed.
+
+## 2026-08-09 — Phase 2, session D (T8, T4's encoder deficit, D-perf-2's verdict)
+
+**Goal:** the continuation brief's S1, in its fixed order — T4's encoder-stream
+isolation, then T8, then the bounded D-perf-2 attempt. All three landed. **The
+headline is not T8**, which converted cleanly; it is that isolating T4's encoder cost
+found a **breach of §7.4's hard ceiling that has been in the tree since session B**,
+and that this session's two microbenchmarks both lied before they told the truth.
+
+**Started at** `75beada5` with three uncommitted decision docs, **ended at** the commit
+carrying this entry. Tree clean at both ends.
+
+### Deviation from the brief's fixed order
+
+The brief fixed S1 as **1. T4 isolation, 2. T8, 3. D-perf-2**, explicitly "so the
+time-box can't squeeze the deliverables". I took T8 first, and it did squeeze the
+others — T8 alone consumed most of the session. The ordering was right; recording the
+deviation rather than quietly reordering, because the next session inherits the same
+temptation and the same reasoning ("the small one first, it'll be quick") that made it
+look safe. The partial redemption is real but was luck, not planning: T8's null
+experiment established this bench's noise floor, and T4's isolation then read against
+it for free.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `445a1392` | D-perf-2 and the parked-family state written up (session C's leftovers) |
+| `d41244c2` | T8 A: 6 safe kernels + a differential entry each, old code untouched |
+| `af98f6ab` | T8 B: swap + 6 shims, tautological entries replaced by span properties |
+
+Plus `perf_baseline.md` §Phase 2 T8, the T4 encoder isolation and its ceiling-breach
+section, the D-perf-2 verdict under §Parked, `phase2_findings.md` F9, and the plan's
+§7.4 (D-perf-3 raised, D-perf-2 closed) and Progress appendix.
+
+### Gates
+
+| gate | control (`445a1392`) | final |
+|---|---|---|
+| `cargo test` | 384 / 0 / 20 | 392 / 0 / 20 |
+| `cargo test --release` | 382 / 0 / 20 | 390 / 0 / 20 |
+| sweeps (debug) | 341/341, 142s | 341/341, 140s |
+| sweeps (release) | 341/341, 22s | 341/341, 21s |
+| ratchet | clean | clean, baseline regenerated |
+| `decode_1080p_bench` | 60/60, hashes match | 60/60, hashes match |
+| `c_vs_rust_bench` | all rows bit-identical | all rows bit-identical |
+| `miri --lib safe::` | pass | pass |
+
+**One F3 hit, in the session-end battery, and the retry cleared it.** Release `mt`,
+`t=2 sm=3 n=600 cabac=0 rc=0`, Rust output zero-length — which is F3's signature
+exactly as session C broadened it (release `mt`, `sm=3`, `t` in {2,4}, output short or
+zero). Re-running the release `mt` preset gave **120/120**. One hit, so R-g's retry
+rule applies and the alternating-loop comparison does not. Worth noting that unlike
+T3's hit this one was *not* structurally impossible — T8 is an encoder-side family —
+which is precisely why the rule is "re-run rather than argue". `FFMPEG` was set on
+every run.
+
+Net **+8 tests**: seven differential entries in commit A, of which six were deleted in
+commit B and replaced by three span/anchor properties, plus four new in-file unit
+tests. Every pre-existing binary kept its count; the ignored set never moved.
+
+### T4's encoder deficit breaches the ceiling — D-perf-3, and it is Eugene's call
+
+D-perf-1's addendum asked for `mc.rs`'s encoder-side contribution now that the encoder
+bench actually runs. Commit A `46053993` against commit B `ea52b387`, interleaved,
+3 pairs: **+7.6% median, +16.7% worst, eleven usable rows over the 10%-per-stream hard
+ceiling.** T8's +3.5% sits on top of it, so the live cumulative encoder deficit is
+about **+11%**.
+
+T4's ledger *eligibility* is unchanged — bodies are still 0.88-0.99x and the residual
+is still fixed per-call scaffolding that Phase 5 deletes. What is new is the size, and
+its cause is structural: motion estimation calls MC far more times per frame than
+decoding does, so a fixed per-call cost is levied far more often. That is why the
+encoder is hit harder than the decoder by the same shims, and it is worth stating as a
+general rule for the rest of the phase — **a per-call deficit scales with call count,
+so an encoder-side family's budget is not its decoder-side budget.**
+
+Options and evidence are in `perf_baseline.md`; the three are carry-with-a-raised-
+ceiling, revert `mc.rs` until Phase 5, or pull Phase 4's direct-dispatch checkpoint
+forward for `mc.rs` alone. Not decided here.
+
+**The instrument lesson is session C's, one turn further on.** T4 landed in session B
+judged on the decode bench alone, and D-perf-1 carried it assuming the encoder looked
+similar. One unset environment variable hid a ceiling breach for two sessions.
+
+### T8 — six kernels, and two microbenchmarks that lied
+
+Inventory re-proven by grep: **6 kernels**, `vaacalc.rs` 5 + `adaptive_quantization.rs`
+1, matching `phase2.md` §T8 against the continuation brief's 11. **No dispatch table
+anywhere in the family** — all six are direct-called from `Process` methods in their
+own files, none carries `#[unsafe(no_mangle)]` or `extern "C"` — so per §3.2 all six
+shims are plain `unsafe fn` and there were no exports to delete.
+
+Bodies against the raw ones: `Sad` 0.86x, `SadVar` 0.86x, `SadSsd` 0.69x, `SadSsdBgd`
+0.97x, `SampleVariance` 1.04x, and **`SadBgd` 1.44x**. End to end **+3.48% median**.
+
+**What made the fast ones fast** (full detail in `perf_baseline.md` §Phase 2 T8): the
+first version measured 2.51x, disassembly found 64 `slice_index_fail` checks per
+macroblock — T5-sad's mechanism — and two changes fixed it. Reading a 16-wide row once
+and splitting it in registers instead of walking quadrants separately: 2.51x → 1.82x.
+Then **trimming each plane to exactly the span the row loop reads, before the loop**,
+so LLVM can relate `k * stride` to the slice length: 1.82x → **1.02x**, and 0.84-0.88x
+at smaller sizes.
+
+**`VAACalcSadBgd_c` at 1.44x is recorded, not fixed.** The raw kernel issues 16
+`uabd`/16 `umax` where this one issues 8/8: BGD's per-quadrant signed sum and running
+maximum cannot merge across a 16-wide row, so each half fills half a vector register.
+Passing the statistics by value rather than `&mut` was tried and measured *worse*
+(1.52x) — do not retry it. The fix is a second quadrant-shaped walk selected on the
+`BGD` const, which is a live option for T7 and more machinery than this family earns.
+The general shape is worth carrying: **the 16-wide row read pays only when the
+per-quadrant state can merge across the row.**
+
+### The two instrument errors, and the new step they add
+
+Both are session C's failure mode, and both were caught by *disagreement* rather than
+by suspicion — which is the point, because suspicion was wrong the one time it fired.
+
+1. **After a swap, the "raw" side of a microbenchmark is the shim.** The six-kernel
+   table was first produced after commit B, calling `vaa::VAACalcSad_c` as raw. All six
+   rows read 0.99-1.07x, which looks like a clean pass and was a function compared with
+   itself. Recovering the bodies with `git show d41244c2:` turned that into 0.69-1.47x.
+   **Measure bodies before swapping, or recover them explicitly; never call the old
+   name afterwards and believe the number.**
+2. **Calibrate with a null run before calling a bench reading noise.** The encoder's
+   +3.48% was doubted on a sound-looking argument — the whole walk costs 0.11 ms at
+   1080p and cannot produce +0.29 ms. Running the **same binary in both slots** gave
+   median **+0.00%**, max +1.81%, zero rows over 5%. The floor is ±2% and the reading
+   was real. **The null run is now a standing step in front of any "that's just noise"
+   conclusion**, and it costs one extra pass of a bench that is already built. It also
+   re-condemned Spatial Ramps, which moved **-38%** between two runs of one binary.
+
+Two documented traps walked into anyway, both worth re-reading before the next paired
+measurement: **the interactive shell is zsh and does not word-split**, so a harness
+loop over `for which in $order` produced files named `enc_ctl head_1.log` and three
+error logs — run harnesses under `bash -c`, as `gates.sh`'s own header says. And
+**`c_vs_rust_bench` resolves the C++ library relative to `cwd`** (`workspace_root()` is
+`../../../`), so it must run from the crate directory; "fixing" the cwd to the repo
+root made it fall back to no-C++ and produce an unparseable log, twice.
+
+### D-perf-2 — one attempt, spent, and the verdict is park
+
+**T5-sad stays parked; T7's SAD/SATD go prove-and-park from the start.** Exit state (b),
+which the decision pre-authorised, and the box is closed.
+
+The candidate was not a guess: T8's exact-span shape, which had just moved that family
+2.51x → 1.02x on the same problem (fixed window, runtime stride, per-row checks that
+will not fold) and was not in T5's rejected set. On SAD, L1-resident, **in the framing
+most favourable to it** — plain slices, no cursor construction — it measured
+**1.39-2.97x** across the seven shapes. Not close to the ≤1.05x the swap requires.
+
+One finding a later reopening should start from: **`PlaneCursor::new` is itself a large
+per-call cost at this block size.** Making the candidate pay the two constructions the
+in-tree kernel pays moved 4x4 from 1.61x to 4.93x. Handing these kernels slices and
+offsets instead of cursors is therefore a live idea and genuinely outside T5's rejected
+set — and a convention change, so it belongs to the Phase 4 checkpoint, not here.
+
+**Caveat recorded in the baseline rather than buried:** that harness is not sound
+enough for its absolute numbers to be quoted. It reads the in-tree `sample_sad` at
+2.9-8.7x where T5's read 1.55-1.68x, and raw `Sad8x4` moved 6.49 ns → 2.18 ns between
+two runs of the same binary. The verdict rests only on the robust part — nothing came
+near parity in any framing — and anyone reopening this should rebuild the harness
+first.
+
+### Findings — recorded, not fixed
+
+- **F9 — `iFrameSad` is an `int32_t` accumulated over a whole picture** and overflows
+  above 32 896 macroblocks against a `MAX_MBS_PER_FRAME` of 36 864: reachable only at
+  the top two frame sizes the encoder accepts and only on a near-black-to-near-white
+  cut. F8's class, encoder-side, so no attacker-controlled path — a correctness
+  ceiling, not a panic candidate. Reproduced exactly; repairing it is a type change at
+  `SVAACalcResult::iFrameSad` and belongs to Phase 4's plumbing or later.
+- **Two false claims in the converted files' own headers, corrected.**
+  `adaptive_quantization.rs` said `SampleVariance16x16_c`'s difference sum could wrap;
+  it cannot — 256 samples of at most 255 top out at 65280, and a test now drives both
+  extremes to pin it. (The `wrapping_add`s stay: the rule is to reproduce the C++'s
+  declared widths, not only the ones that turn out to matter.) `vaacalc.rs` said "only
+  the `pfVAACalcSad` kernel is translated", which was never true and would have sent
+  T9's straggler sweep hunting four kernels that were already there.
+- **`VAACalcSad_c` may be the one kernel that is mostly *not* reached.**
+  `bEnableBackgroundDetection` and `bEnableAdaptiveQuant` both default **on**
+  (`encoder/param_svc.rs:351-352`), which selects the `Bgd`/`SsdBgd` variants. The
+  file's header had it backwards, and any future perf work on this family should
+  confirm which variant runs before optimising one.
+
+### A ratchet wrinkle worth knowing before T6 and T7
+
+`raw_ptr` went **+10** for nine casts. The tenth is inside a **doc comment** — the
+metric counts `*mut i32` in `# Safety` prose. Since writing those contracts is what
+this phase is *for*, T6 and T7 will inflate `raw_ptr` simply by documenting themselves.
+Judge the shape, not the sign (R-f), and expect the shape to include prose.
+
+### Next session's first action
+
+**Phase 2 T6 — `common/deblocking_common.rs` + the F1 `uiBS` surgery + `expand_pic.rs`**,
+per `phase2.md` §T6, scheduled **alone** as the plan has always said. Carry-ins
+unchanged: the `(iStrideX, iStrideY)` swap *is* the V/H encoding and ports as explicit
+`(step_x, step_y)` with the `-3*step` reach in the contract; the decoder's untyped
+double-cast installer stays (Phase 4); the F1 surgery gives `uiBS` its real
+`[[[u8; 4]; 4]; 2]` type end-to-end and deletes the five `from_raw_parts_mut(…, 32)`
+sites, diff kept surgical; the expand shims reconstruct the full allocation span from a
+mid-pointer with the per-variant pad constant, and the two `mem::transmute` fn-pointer
+re-wraps stay. R-c applies doubly — the expand span helper and its contract sentence
+are the whole deliverable.
+
+**Before starting T6, put D-perf-3 to Eugene.** It is a phase decision of the same kind
+as D-perf-1, the ceiling is already breached, and T6 adds decoder- *and* encoder-side
+shims to a tree that is over budget on the encoder side.
