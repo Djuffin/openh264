@@ -1,8 +1,11 @@
 # Why the debug sweep takes ~142s, and the one-line fix
 
-**Status: measured, applied, acceptance-tested, and reverted.** The fix is real (5.9x)
-and its acceptance test failed for a reason worth a decision rather than a workaround —
-see "The acceptance test was run" below. The tree is stock.
+**Status: APPLIED (2026-08-10), option 1.** `[profile.dev] opt-level = 3` with both
+check flags on is in `rust_enc/Cargo.toml`; the debug sweep runs **341/341 in ~24s**
+against 141s before. The accepted cost is that the debug sweep now shares release's
+exposure to **F3**, so the retry rule was widened to cover `mt` `sm=3` in *both*
+profiles — `gates.sh`, `phase2.md` §5, `phase2_continue.md` R-g, and `phase0_findings.md`
+F3 (fourth measurement) all say so now.
 
 ## Where the time goes
 
@@ -84,7 +87,7 @@ particular assert and eliminates the unreachable panic, so its string is strippe
 Strings cannot distinguish "eliminated because proven" from "never compiled in"; the
 rustc flag check can, and did.
 
-## The acceptance test was run, and it FAILED. The change is NOT applied.
+## The acceptance test, first run: FAILED — and what came of it
 
 Applied the profile, rebuilt, ran `RUST_ENC_PROFILE=debug sweep.sh st mt def`:
 
@@ -95,8 +98,8 @@ Applied the profile, rebuilt, ran `RUST_ENC_PROFILE=debug sweep.sh st mt def`:
   records F3 as 0-in-1200 and where R-g says a hit is "real, stop, revert,
   investigate", never F3.
 
-So the profile is **reverted** and the tree is stock. The speedup is real and so is the
-problem with it.
+That first run forced the question below, and Eugene took **option 1**. Re-run after
+the rule change, the same sweep is **341/341 in 24.9s**, and the full battery is green.
 
 ### What the follow-up measurement says
 
@@ -120,15 +123,16 @@ than release, and a build that runs at near-release speed plausibly reopens a wi
 that `opt-level = 0` had been holding shut. The acceptance run also came directly after
 several optimising builds, so the machine was at its least quiescent.
 
-### The decision this needs
+### The decision, and what was chosen
 
-Not a technical question any more — a gate-policy one, and it is Eugene's:
+Not a technical question — a gate-policy one. **Option 1 was taken, 2026-08-10.**
 
-1. **Take the 5.9x and widen the F3 retry rule to cover debug `mt` at `sm=3`,
-   `t` in {2,4}, short-or-zero output.** Cost: the debug sweep stops being the
-   unambiguous signal it is today; a debug failure at that signature becomes a retry
-   rather than a stop. That is a real loss — the current rule's value is that it has no
-   exceptions.
+1. **CHOSEN — take the 5.9x and widen the F3 retry rule to cover `mt` at `sm=3`,
+   `t` in {2,4}, short-or-zero output, in both profiles.** Cost, paid knowingly: the
+   debug sweep is no longer the one gate with no exceptions; a debug failure at that
+   signature is now a retry rather than a stop. Everything else in debug — `st`, `def`,
+   any other `mt` configuration — remains an unconditional stop, so the exemption is
+   exactly as narrow as F3's own signature and no narrower.
 2. **Stay on `opt-level = 0` and keep the 141s.** Cost: every gate run pays two
    minutes, forever, for a property that 480 configurations could not show being
    violated.

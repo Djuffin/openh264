@@ -11,3 +11,35 @@ name = "rust_enc"
 path = "main.rs"
 
 [workspace]
+
+# The debug sweep's cost is almost entirely this binary: at Cargo's default
+# `opt-level = 0` it runs 210 ms per configuration against the release build's
+# 7.9 ms — 26.5x, and ~93% of `sweep.sh st mt def`'s wall time. Optimising it takes
+# the debug sweep from 141s to 24s. It is a DSP codec; unoptimised it runs like one.
+#
+# **The two check flags are the point of the debug sweep and both stay on.**
+# `overflow-checks` is what turns a C++ signed overflow into a loud Rust panic (the
+# F8/F9 class in `phase2_findings.md`); `debug-assertions` keeps the port's 39
+# `debug_assert!` sites live. Verified, not assumed: `cargo build -v` passes
+# `-C debug-assertions=on` and `-C opt-level=3`, the `attempt to add with overflow`
+# panic string is present here and absent from the release binary, and the sweep
+# stays byte-identical. **Never trade these two away for speed** — an `opt-level`
+# is a free 15x, dropping the checks buys 1.8x and deletes the reason this build
+# exists.
+#
+# Safe to live here because `rust_enc` is its own workspace root (the empty
+# `[workspace]` above): this governs this crate and its path dependency
+# `openh264-rs` only when built through this manifest, and changes nothing about
+# the port crate's own `cargo test`.
+#
+# **Known consequence, accepted deliberately:** at this speed the debug build
+# reproduces **F3**, the pre-existing MT slice-list race, which `opt-level = 0` was
+# hiding by being too slow to lose it — F3's own write-up predicted exactly this
+# ("a debug build is several times slower, which widens every thread window; a race
+# can simply never lose in debug"). The F3 retry rule therefore now covers debug
+# `mt` as well as release. See `rust/docs/diffharness_perf.md` and
+# `phase0_findings.md` F3, fourth measurement.
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

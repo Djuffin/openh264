@@ -257,12 +257,16 @@ tests, extend them) and `processing/adaptive_quantization.rs`
   `decode_1080p_bench` when the family is on the decode path (T2, T3, T4, T6-decoder
   parts), + sweeps `st mt def` both profiles when on the encode path (T6-F1, T7, T8).
 - **Session end:** full `gates.sh` battery + perf medians.
-- **F3 retry rule, refined by Phase 1's data:** a release `mt` failure at `t=4 sm=3`
-  (zero-byte or short output) → re-run that config; if it clears, it's F3 — but Phase 1
-  set the precedent: when the rate looks elevated (more than one hit in a session),
-  **prove it against the control commit** (equal-count sweep runs at HEAD vs control)
-  before concluding, and append the measurement to F3. A failure at any other config,
-  or in debug, or in `st`/`def`: real, stop, revert, investigate.
+- **F3 retry rule, as it now stands:** an `mt` failure at `sm=3`, `t` in {2,4}
+  (zero-byte or short output) → re-run that config; if it clears, it's F3. **This
+  applies in *both* profiles.** Debug's old exemption is gone: it was an artefact of
+  the driver building at `opt-level = 0`, too slow to lose the race, and the driver is
+  now `opt-level = 3` with the checks still on (F3's fourth measurement). When the rate
+  looks elevated (more than one hit in a session), **prove it by alternating HEAD and
+  the control commit inside one loop** — sampling them at different times is not a
+  comparison for a load-sensitive race — and append the measurement to F3. A failure at
+  any other config, or in `st`/`def`, in either profile: real, stop, revert,
+  investigate.
 - Byte-exactness: any conformance hash change, frame-count change, sweep byte
   difference, or `#[ignore]`-set change is a hard stop. Frame counts before hashes
   when diagnosing.
