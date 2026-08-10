@@ -290,270 +290,57 @@ pub fn nonzero_count(nzc: &mut [i8; 24]) {
 }
 
 // ============================================================================
-// Pure C Core Deblocking Filter Algorithms
+// Shim span arithmetic
 // ============================================================================
 
-/// Normal/Weak Luma Deblocking Kernel (bS < 4)
+/// The one place that turns a deblocking kernel's reach into a slice span
+/// (R-c: nothing else does this arithmetic).
 ///
-/// Filters across 16 lines along a 4x4/16x16 macroblock boundary.
-#[inline(always)]
-pub unsafe fn DeblockLumaLt4_c(
-    mut pPix: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *const i8,
-) {
-    let sx = iStrideX as isize;
-    for i in 0..16 {
-        let iTc0 = *pTc.add(i >> 2) as i32;
-        if iTc0 >= 0 {
-            let p0 = *pPix.offset(-sx) as i32;
-            let p1 = *pPix.offset(-2 * sx) as i32;
-            let p2 = *pPix.offset(-3 * sx) as i32;
-            let q0 = *pPix as i32;
-            let q1 = *pPix.offset(sx) as i32;
-            let q2 = *pPix.offset(2 * sx) as i32;
-
-            let bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-            let mut iTc = iTc0;
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let bDetaP2P0 = (p2 - p0).abs() < iBeta;
-                let bDetaQ2Q0 = (q2 - q0).abs() < iBeta;
-                if bDetaP2P0 {
-                    let clip_val = WELS_CLIP3((p2 + ((p0 + q0 + 1) >> 1) - (p1 * 2)) >> 1, -iTc0, iTc0);
-                    *pPix.offset(-2 * sx) = (p1 + clip_val) as u8;
-                    iTc += 1;
-                }
-                if bDetaQ2Q0 {
-                    let clip_val = WELS_CLIP3((q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1, -iTc0, iTc0);
-                    *pPix.offset(sx) = (q1 + clip_val) as u8;
-                    iTc += 1;
-                }
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc, iTc);
-                *pPix.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPix = WelsClip1(q0 - iDeta);
-            }
-        }
-        pPix = pPix.offset(iStrideY as isize);
-    }
+/// A kernel anchored at `pPix` touches byte offsets `j*step_x + i*step_y` for
+/// taps `j ∈ [-reach_back, reach_fwd]` and lines `i ∈ [0, lines)`. Both steps
+/// are positive at every call site (`(iStride, 1)` or `(1, iStride)`), so the
+/// minimum offset is `-reach_back*step_x` and the maximum
+/// `reach_fwd*step_x + (lines-1)*step_y`. Returns `(back, len)`: the slice is
+/// anchored at `pPix - back` and holds `len` bytes, with the kernel's anchor at
+/// index `back`.
+#[inline]
+fn shim_span(step_x: usize, step_y: usize, reach_back: usize, reach_fwd: usize, lines: usize) -> (usize, usize) {
+    let back = reach_back * step_x;
+    (back, back + reach_fwd * step_x + (lines - 1) * step_y + 1)
 }
 
-/// Strong Intra Luma Deblocking Kernel (bS == 4)
+// ============================================================================
+// Public C ABI wrappers (as declared in deblocking_common.h) — Phase 2 shims
+// ============================================================================
+//
+// The `V`/`H` pairs collapse onto one safe kernel each, exactly as the C++'s
+// wrappers collapse onto one `(iStrideX, iStrideY)` body: `V` fixes the steps
+// to `(iStride, 1)` (taps across rows — a horizontal edge), `H` to
+// `(1, iStride)` (taps across columns — a vertical edge). Each shim
+// materialises exactly the span its kernel's reach declares and anchors a
+// cursor whose stride is the plane's real stride.
+//
+// **Why the negative reach is legal — the availability argument, shared by all
+// twelve shims and quoted from here in each contract:** deblocking runs on
+// decoded picture samples, and the drivers only filter an edge whose p side
+// exists. The macroblock-boundary edge (the anchor's own column or row) is
+// filtered only when the left/top neighbour MB is present and, under
+// `uiFilterIdc == 2`, in the same slice (`decoder/deblocking.rs`
+// `DeblockingAvailableNoInterlayer`; `encoder/deblocking.rs` `bLeftBsValid`/
+// `bTopBsValid`); interior edges sit 4, 8 or 12 samples into the macroblock.
+// So every tap, including the `-reach_back` ones, lands on picture (or left/top
+// neighbour MB) samples — the padding border is *not* part of this argument.
+
+/// C++: `DeblockLumaLt4V_c` — bS<4 luma, taps stepping by `iStride`.
 ///
-/// Filters across 16 lines along a macroblock boundary between Intra-coded blocks.
-#[inline(always)]
-pub unsafe fn DeblockLumaEq4_c(
-    mut pPix: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    let sx = iStrideX as isize;
-    for _ in 0..16 {
-        let p0 = *pPix.offset(-sx) as i32;
-        let p1 = *pPix.offset(-2 * sx) as i32;
-        let p2 = *pPix.offset(-3 * sx) as i32;
-        let q0 = *pPix as i32;
-        let q1 = *pPix.offset(sx) as i32;
-        let q2 = *pPix.offset(2 * sx) as i32;
-
-        let iDetaP0Q0 = (p0 - q0).abs();
-        let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-        if (iDetaP0Q0 < iAlpha) && bDetaP1P0 && bDetaQ1Q0 {
-            if iDetaP0Q0 < ((iAlpha >> 2) + 2) {
-                let bDetaP2P0 = (p2 - p0).abs() < iBeta;
-                let bDetaQ2Q0 = (q2 - q0).abs() < iBeta;
-                if bDetaP2P0 {
-                    let p3 = *pPix.offset(-4 * sx) as i32;
-                    *pPix.offset(-sx) = ((p2 + (p1 * 2) + (p0 * 2) + (q0 * 2) + q1 + 4) >> 3) as u8;
-                    *pPix.offset(-2 * sx) = ((p2 + p1 + p0 + q0 + 2) >> 2) as u8;
-                    *pPix.offset(-3 * sx) = (((p3 * 2) + p2 + (p2 * 2) + p1 + p0 + q0 + 4) >> 3) as u8;
-                } else {
-                    *pPix.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-                }
-                if bDetaQ2Q0 {
-                    let q3 = *pPix.offset(3 * sx) as i32;
-                    *pPix = ((p1 + (p0 * 2) + (q0 * 2) + (q1 * 2) + q2 + 4) >> 3) as u8;
-                    *pPix.offset(sx) = ((p0 + q0 + q1 + q2 + 2) >> 2) as u8;
-                    *pPix.offset(2 * sx) = (((q3 * 2) + q2 + (q2 * 2) + q1 + q0 + p0 + 4) >> 3) as u8;
-                } else {
-                    *pPix = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-                }
-            } else {
-                *pPix.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-                *pPix = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-            }
-        }
-        pPix = pPix.offset(iStrideY as isize);
-    }
-}
-
-/// Normal/Weak Chroma Deblocking Kernel (bS < 4) for separate Cb and Cr planes.
-#[inline(always)]
-pub unsafe fn DeblockChromaLt4_c(
-    mut pPixCb: *mut u8,
-    mut pPixCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *const i8,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for i in 0..8 {
-        let iTc0 = *pTc.add(i >> 1) as i32;
-        if iTc0 > 0 {
-            // Cb plane
-            let mut p0 = *pPixCb.offset(-sx) as i32;
-            let mut p1 = *pPixCb.offset(-2 * sx) as i32;
-            let mut q0 = *pPixCb as i32;
-            let mut q1 = *pPixCb.offset(sx) as i32;
-
-            let mut bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            let mut bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            let mut bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc0, iTc0);
-                *pPixCb.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPixCb = WelsClip1(q0 - iDeta);
-            }
-
-            // Cr plane
-            p0 = *pPixCr.offset(-sx) as i32;
-            p1 = *pPixCr.offset(-2 * sx) as i32;
-            q0 = *pPixCr as i32;
-            q1 = *pPixCr.offset(sx) as i32;
-
-            bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc0, iTc0);
-                *pPixCr.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPixCr = WelsClip1(q0 - iDeta);
-            }
-        }
-        pPixCb = pPixCb.offset(sy);
-        pPixCr = pPixCr.offset(sy);
-    }
-}
-
-/// Strong Chroma Deblocking Kernel (bS == 4) for separate Cb and Cr planes.
-#[inline(always)]
-pub unsafe fn DeblockChromaEq4_c(
-    mut pPixCb: *mut u8,
-    mut pPixCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for _ in 0..8 {
-        // Cb
-        let mut p0 = *pPixCb.offset(-sx) as i32;
-        let mut p1 = *pPixCb.offset(-2 * sx) as i32;
-        let mut q0 = *pPixCb as i32;
-        let mut q1 = *pPixCb.offset(sx) as i32;
-        let mut bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-        let mut bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        let mut bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-        if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-            *pPixCb.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-            *pPixCb = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-        }
-
-        // Cr
-        p0 = *pPixCr.offset(-sx) as i32;
-        p1 = *pPixCr.offset(-2 * sx) as i32;
-        q0 = *pPixCr as i32;
-        q1 = *pPixCr.offset(sx) as i32;
-        bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-        bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-        if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-            *pPixCr.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-            *pPixCr = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-        }
-
-        pPixCb = pPixCb.offset(sy);
-        pPixCr = pPixCr.offset(sy);
-    }
-}
-
-/// Normal/Weak Chroma Deblocking Kernel (bS < 4) for single-buffer interleaved/sequential CbCr.
-#[inline(always)]
-pub unsafe fn DeblockChromaLt42_c(
-    mut pPixCbCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *const i8,
-) {
-    let sx = iStrideX as isize;
-    for i in 0..8 {
-        let iTc0 = *pTc.add(i >> 1) as i32;
-        if iTc0 > 0 {
-            let p0 = *pPixCbCr.offset(-sx) as i32;
-            let p1 = *pPixCbCr.offset(-2 * sx) as i32;
-            let q0 = *pPixCbCr as i32;
-            let q1 = *pPixCbCr.offset(sx) as i32;
-
-            let bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc0, iTc0);
-                *pPixCbCr.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPixCbCr = WelsClip1(q0 - iDeta);
-            }
-        }
-        pPixCbCr = pPixCbCr.offset(iStrideY as isize);
-    }
-}
-
-/// Strong Chroma Deblocking Kernel (bS == 4) for single-buffer interleaved/sequential CbCr.
-#[inline(always)]
-pub unsafe fn DeblockChromaEq42_c(
-    mut pPixCbCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    let sx = iStrideX as isize;
-    for _ in 0..8 {
-        let p0 = *pPixCbCr.offset(-sx) as i32;
-        let p1 = *pPixCbCr.offset(-2 * sx) as i32;
-        let q0 = *pPixCbCr as i32;
-        let q1 = *pPixCbCr.offset(sx) as i32;
-
-        let bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-        let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-        if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-            *pPixCbCr.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-            *pPixCbCr = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-        }
-        pPixCbCr = pPixCbCr.offset(iStrideY as isize);
-    }
-}
-
-// ============================================================================
-// Public C ABI Exported Functions (as declared in deblocking_common.h)
-// ============================================================================
-
-#[unsafe(no_mangle)]
+/// # Safety
+/// * `pPixY` points at the first line's `q0` of a 16-line luma edge in a plane
+///   of stride `iStride > 0`. With `s = iStride as usize`, the call touches
+///   exactly `[pPixY - 3*s, pPixY + 2*s + 15]` — reads `p2..q2` per line,
+///   writes `p1..q1` — and the shim materialises that span (`5*s + 16` bytes),
+///   which must lie inside one live allocation. The p side exists per the
+///   module-level availability argument above.
+/// * `pTc` points at 4 readable `i8` group thresholds.
 pub unsafe extern "C" fn DeblockLumaLt4V_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -561,20 +348,46 @@ pub unsafe extern "C" fn DeblockLumaLt4V_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
-    DeblockLumaLt4_c(pPixY, iStride, 1, iAlpha, iBeta, pTc);
+    // SHIM(phase2) -> deblock_luma_lt4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 3, 2, 16);
+        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_luma_lt4(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta, tc);
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockLumaEq4V_c` — bS==4 luma, taps stepping by `iStride`.
+///
+/// # Safety
+/// * As [`DeblockLumaLt4V_c`], but the strong filter reaches one tap further on
+///   both sides: the span is `[pPixY - 4*s, pPixY + 3*s + 15]` (`7*s + 16`
+///   bytes) — reads `p3..q3`, writes `p2..q2`.
 pub unsafe extern "C" fn DeblockLumaEq4V_c(
     pPixY: *mut u8,
     iStride: i32,
     iAlpha: i32,
     iBeta: i32,
 ) {
-    DeblockLumaEq4_c(pPixY, iStride, 1, iAlpha, iBeta);
+    // SHIM(phase2) -> deblock_luma_eq4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 4, 3, 16);
+        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
+        deblock_luma_eq4(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta);
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockLumaLt4H_c` — bS<4 luma, taps stepping by 1 byte.
+///
+/// # Safety
+/// * `pPixY` points at the first line's `q0` of a 16-line luma edge in a plane
+///   of stride `iStride > 0`. With `s = iStride as usize`, the call touches
+///   exactly `[pPixY - 3, pPixY + 15*s + 2]` (`15*s + 6` bytes) — three
+///   columns left, two right, sixteen rows down. The p side exists per the
+///   module-level availability argument above.
+/// * `pTc` points at 4 readable `i8` group thresholds.
 pub unsafe extern "C" fn DeblockLumaLt4H_c(
     pPixY: *mut u8,
     iStride: i32,
@@ -582,20 +395,46 @@ pub unsafe extern "C" fn DeblockLumaLt4H_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
-    DeblockLumaLt4_c(pPixY, 1, iStride, iAlpha, iBeta, pTc);
+    // SHIM(phase2) -> deblock_luma_lt4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 3, 2, 16);
+        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_luma_lt4(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta, tc);
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockLumaEq4H_c` — bS==4 luma, taps stepping by 1 byte.
+///
+/// # Safety
+/// * As [`DeblockLumaLt4H_c`], one tap further both sides: the span is
+///   `[pPixY - 4, pPixY + 15*s + 3]` (`15*s + 8` bytes).
 pub unsafe extern "C" fn DeblockLumaEq4H_c(
     pPixY: *mut u8,
     iStride: i32,
     iAlpha: i32,
     iBeta: i32,
 ) {
-    DeblockLumaEq4_c(pPixY, 1, iStride, iAlpha, iBeta);
+    // SHIM(phase2) -> deblock_luma_eq4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 4, 3, 16);
+        let buf = std::slice::from_raw_parts_mut(pPixY.sub(back), len);
+        deblock_luma_eq4(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta);
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaLt4V_c` — bS<4 chroma on separate Cb/Cr planes, taps
+/// stepping by `iStride`.
+///
+/// # Safety
+/// * `pPixCb` and `pPixCr` each point at the first line's `q0` of an 8-line
+///   chroma edge; the planes share stride `iStride > 0` and must not overlap.
+///   With `s = iStride as usize`, each plane's touched span is exactly
+///   `[p - 2*s, p + s + 7]` (`3*s + 8` bytes) — reads `p1..q1`, writes
+///   `p0`/`q0`. The p side exists per the module-level availability argument.
+/// * `pTc` points at 4 readable `i8` group thresholds.
 pub unsafe extern "C" fn DeblockChromaLt4V_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -604,10 +443,26 @@ pub unsafe extern "C" fn DeblockChromaLt4V_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
-    DeblockChromaLt4_c(pPixCb, pPixCr, iStride, 1, iAlpha, iBeta, pTc);
+    // SHIM(phase2) -> deblock_chroma_lt4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 2, 1, 8);
+        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
+        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_chroma_lt4(
+            &mut PlaneCursorMut::new(cb, back, s),
+            &mut PlaneCursorMut::new(cr, back, s),
+            s as isize, 1, iAlpha, iBeta, tc,
+        );
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaEq4V_c` — bS==4 chroma on separate Cb/Cr planes, taps
+/// stepping by `iStride`. Same reach and span as [`DeblockChromaLt4V_c`].
+///
+/// # Safety
+/// * As [`DeblockChromaLt4V_c`], without the tc table.
 pub unsafe extern "C" fn DeblockChromaEq4V_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -615,10 +470,27 @@ pub unsafe extern "C" fn DeblockChromaEq4V_c(
     iAlpha: i32,
     iBeta: i32,
 ) {
-    DeblockChromaEq4_c(pPixCb, pPixCr, iStride, 1, iAlpha, iBeta);
+    // SHIM(phase2) -> deblock_chroma_eq4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 2, 1, 8);
+        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
+        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
+        deblock_chroma_eq4(
+            &mut PlaneCursorMut::new(cb, back, s),
+            &mut PlaneCursorMut::new(cr, back, s),
+            s as isize, 1, iAlpha, iBeta,
+        );
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaLt4H_c` — bS<4 chroma on separate Cb/Cr planes, taps
+/// stepping by 1 byte.
+///
+/// # Safety
+/// * As [`DeblockChromaLt4V_c`] with the axes swapped: each plane's span is
+///   exactly `[p - 2, p + 7*s + 1]` (`7*s + 4` bytes) — two columns left, one
+///   right, eight rows down.
 pub unsafe extern "C" fn DeblockChromaLt4H_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -627,10 +499,26 @@ pub unsafe extern "C" fn DeblockChromaLt4H_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
-    DeblockChromaLt4_c(pPixCb, pPixCr, 1, iStride, iAlpha, iBeta, pTc);
+    // SHIM(phase2) -> deblock_chroma_lt4
+    unsafe {
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 2, 1, 8);
+        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
+        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_chroma_lt4(
+            &mut PlaneCursorMut::new(cb, back, s),
+            &mut PlaneCursorMut::new(cr, back, s),
+            1, s as isize, iAlpha, iBeta, tc,
+        );
+    }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaEq4H_c` — bS==4 chroma on separate Cb/Cr planes, taps
+/// stepping by 1 byte. Same span as [`DeblockChromaLt4H_c`].
+///
+/// # Safety
+/// * As [`DeblockChromaLt4H_c`], without the tc table.
 pub unsafe extern "C" fn DeblockChromaEq4H_c(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
@@ -638,12 +526,28 @@ pub unsafe extern "C" fn DeblockChromaEq4H_c(
     iAlpha: i32,
     iBeta: i32,
 ) {
+    // SHIM(phase2) -> deblock_chroma_eq4
     unsafe {
-        DeblockChromaEq4_c(pPixCb, pPixCr, 1, iStride, iAlpha, iBeta);
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 2, 1, 8);
+        let cb = std::slice::from_raw_parts_mut(pPixCb.sub(back), len);
+        let cr = std::slice::from_raw_parts_mut(pPixCr.sub(back), len);
+        deblock_chroma_eq4(
+            &mut PlaneCursorMut::new(cb, back, s),
+            &mut PlaneCursorMut::new(cr, back, s),
+            1, s as isize, iAlpha, iBeta,
+        );
     }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaLt4V2_c` — bS<4 chroma on one combined CbCr buffer, taps
+/// stepping by `iStride`.
+///
+/// # Safety
+/// * `pPixCbCr` points at the first line's `q0`; the touched span is exactly
+///   `[pPixCbCr - 2*s, pPixCbCr + s + 7]` (`3*s + 8` bytes), as one plane of
+///   [`DeblockChromaLt4V_c`].
+/// * `pTc` points at 4 readable `i8` group thresholds.
 pub unsafe extern "C" fn DeblockChromaLt4V2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -651,24 +555,44 @@ pub unsafe extern "C" fn DeblockChromaLt4V2_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
+    // SHIM(phase2) -> deblock_chroma_lt42
     unsafe {
-        DeblockChromaLt42_c(pPixCbCr, iStride, 1, iAlpha, iBeta, pTc);
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 2, 1, 8);
+        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_chroma_lt42(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta, tc);
     }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaEq4V2_c` — bS==4 chroma on one combined CbCr buffer, taps
+/// stepping by `iStride`. Same span as [`DeblockChromaLt4V2_c`].
+///
+/// # Safety
+/// * As [`DeblockChromaLt4V2_c`], without the tc table.
 pub unsafe extern "C" fn DeblockChromaEq4V2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
     iAlpha: i32,
     iBeta: i32,
 ) {
+    // SHIM(phase2) -> deblock_chroma_eq42
     unsafe {
-        DeblockChromaEq42_c(pPixCbCr, iStride, 1, iAlpha, iBeta);
+        let s = iStride as usize;
+        let (back, len) = shim_span(s, 1, 2, 1, 8);
+        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
+        deblock_chroma_eq42(&mut PlaneCursorMut::new(buf, back, s), s as isize, 1, iAlpha, iBeta);
     }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaLt4H2_c` — bS<4 chroma on one combined CbCr buffer, taps
+/// stepping by 1 byte.
+///
+/// # Safety
+/// * `pPixCbCr` points at the first line's `q0`; the touched span is exactly
+///   `[pPixCbCr - 2, pPixCbCr + 7*s + 1]` (`7*s + 4` bytes), as one plane of
+///   [`DeblockChromaLt4H_c`].
+/// * `pTc` points at 4 readable `i8` group thresholds.
 pub unsafe extern "C" fn DeblockChromaLt4H2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
@@ -676,30 +600,48 @@ pub unsafe extern "C" fn DeblockChromaLt4H2_c(
     iBeta: i32,
     pTc: *mut i8,
 ) {
+    // SHIM(phase2) -> deblock_chroma_lt42
     unsafe {
-        DeblockChromaLt42_c(pPixCbCr, 1, iStride, iAlpha, iBeta, pTc);
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 2, 1, 8);
+        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
+        let tc: &[i8; 4] = std::slice::from_raw_parts(pTc, 4).try_into().unwrap();
+        deblock_chroma_lt42(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta, tc);
     }
 }
 
-#[unsafe(no_mangle)]
+/// C++: `DeblockChromaEq4H2_c` — bS==4 chroma on one combined CbCr buffer, taps
+/// stepping by 1 byte. Same span as [`DeblockChromaLt4H2_c`].
+///
+/// # Safety
+/// * As [`DeblockChromaLt4H2_c`], without the tc table.
 pub unsafe extern "C" fn DeblockChromaEq4H2_c(
     pPixCbCr: *mut u8,
     iStride: i32,
     iAlpha: i32,
     iBeta: i32,
 ) {
+    // SHIM(phase2) -> deblock_chroma_eq42
     unsafe {
-        DeblockChromaEq42_c(pPixCbCr, 1, iStride, iAlpha, iBeta);
+        let s = iStride as usize;
+        let (back, len) = shim_span(1, s, 2, 1, 8);
+        let buf = std::slice::from_raw_parts_mut(pPixCbCr.sub(back), len);
+        deblock_chroma_eq42(&mut PlaneCursorMut::new(buf, back, s), 1, s as isize, iAlpha, iBeta);
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
+/// C++: `WelsNonZeroCount_c` — in no dispatch table in this module (the decoder
+/// installs `decode_slice.rs`'s copy, the encoder `encoder/deblocking.rs`'s), so
+/// per the T3 precedent the shim keeps only the Wels name, not the C ABI.
+///
+/// # Safety
+/// * `pNonZeroCount` points at 24 writable `i8` — the per-MB non-zero-count
+///   cache (16 luma + 8 chroma entries).
+pub unsafe fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
+    // SHIM(phase2) -> nonzero_count
     unsafe {
-        for i in 0..24 {
-            let val = *pNonZeroCount.add(i);
-            *pNonZeroCount.add(i) = if val != 0 { 1 } else { 0 };
-        }
+        let nzc: &mut [i8; 24] = std::slice::from_raw_parts_mut(pNonZeroCount, 24).try_into().unwrap();
+        nonzero_count(nzc);
     }
 }
 
@@ -775,7 +717,6 @@ impl Default for SDeblockingFunc {
     }
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn DeblockingInit(pFunc: *mut SDeblockingFunc, _iCpu: i32) {
     if !pFunc.is_null() {
         unsafe {
