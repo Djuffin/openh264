@@ -602,291 +602,53 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
 }
 
 // ============================================================================
-// C Reference Fallback Edge Filtering Implementations
+// Edge filtering — the same kernels the decoder uses (T9 straggler, G-2)
 // ============================================================================
+//
+// This module used to carry its own copies of the eight `Deblock*V_c`/`*H_c`
+// ABI wrappers, their four inner kernels, and `WelsNonZeroCount_c`, duplicating
+// `common/deblocking_common.rs` line for line. T6 converted that module and the
+// decoder picked the conversion up by re-exporting it; the encoder kept the
+// duplicates, so half the family stayed raw on the encoder's mainline path
+// until T9's straggler sweep found it.
+//
+// The eight wrappers are now the common module's shims, re-exported rather than
+// re-implemented. That is a deduplication, not a unification of two things that
+// merely share a name: the bodies were proven byte-for-byte equivalent over
+// `ALPHAS` x `BETAS` x three strides x V/H before this commit
+// (`encoder_deblock_*_kernels_match_the_common_safe_ones`, commit A), and the
+// signatures are identical. The name-collision discipline that keeps the three
+// `WelsI4x4LumaPredV_c`s apart says never unify functions that *differ*; these
+// do not.
+//
+// The common module's availability argument already speaks for this caller — it
+// names `encoder/deblocking.rs`'s `bLeftBsValid`/`bTopBsValid` beside the
+// decoder's gate — so the contracts move across unchanged.
+//
+// `DeblockingInit` below installs these names exactly as before; no dispatch
+// table changes here (that is Phase 4a's).
+pub use crate::common::deblocking_common::{
+    DeblockChromaEq4H_c, DeblockChromaEq4V_c, DeblockChromaLt4H_c, DeblockChromaLt4V_c,
+    DeblockLumaEq4H_c, DeblockLumaEq4V_c, DeblockLumaLt4H_c, DeblockLumaLt4V_c,
+};
 
-pub unsafe extern "C" fn DeblockLumaLt4_c(
-    mut pPix: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for i in 0..16 {
-        let iTc0 = *pTc.add(i >> 2) as i32;
-        if iTc0 >= 0 {
-            let p0 = *pPix.offset(-sx) as i32;
-            let p1 = *pPix.offset(-2 * sx) as i32;
-            let p2 = *pPix.offset(-3 * sx) as i32;
-            let q0 = *pPix as i32;
-            let q1 = *pPix.offset(sx) as i32;
-            let q2 = *pPix.offset(2 * sx) as i32;
-
-            let bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-            let mut iTc = iTc0;
-
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let bDetaP2P0 = (p2 - p0).abs() < iBeta;
-                let bDetaQ2Q0 = (q2 - q0).abs() < iBeta;
-                if bDetaP2P0 {
-                    let diff = (p2 + ((p0 + q0 + 1) >> 1) - (p1 * 2)) >> 1;
-                    *pPix.offset(-2 * sx) = (p1 + WELS_CLIP3(diff, -iTc0, iTc0)) as u8;
-                    iTc += 1;
-                }
-                if bDetaQ2Q0 {
-                    let diff = (q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1;
-                    *pPix.offset(sx) = (q1 + WELS_CLIP3(diff, -iTc0, iTc0)) as u8;
-                    iTc += 1;
-                }
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc, iTc);
-                *pPix.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPix = WelsClip1(q0 - iDeta);
-            }
-        }
-        pPix = pPix.offset(sy);
-    }
-}
-
-pub unsafe extern "C" fn DeblockLumaEq4_c(
-    mut pPix: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for _ in 0..16 {
-        let p0 = *pPix.offset(-sx) as i32;
-        let p1 = *pPix.offset(-2 * sx) as i32;
-        let p2 = *pPix.offset(-3 * sx) as i32;
-        let q0 = *pPix as i32;
-        let q1 = *pPix.offset(sx) as i32;
-        let q2 = *pPix.offset(2 * sx) as i32;
-
-        let iDetaP0Q0 = (p0 - q0).abs();
-        let bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        let bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-        if (iDetaP0Q0 < iAlpha) && bDetaP1P0 && bDetaQ1Q0 {
-            if iDetaP0Q0 < ((iAlpha >> 2) + 2) {
-                let bDetaP2P0 = (p2 - p0).abs() < iBeta;
-                let bDetaQ2Q0 = (q2 - q0).abs() < iBeta;
-                if bDetaP2P0 {
-                    let p3 = *pPix.offset(-4 * sx) as i32;
-                    *pPix.offset(-sx) = ((p2 + (p1 * 2) + (p0 * 2) + (q0 * 2) + q1 + 4) >> 3) as u8;
-                    *pPix.offset(-2 * sx) = ((p2 + p1 + p0 + q0 + 2) >> 2) as u8;
-                    *pPix.offset(-3 * sx) =
-                        (((p3 * 2) + p2 + (p2 * 2) + p1 + p0 + q0 + 4) >> 3) as u8;
-                } else {
-                    *pPix.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-                }
-                if bDetaQ2Q0 {
-                    let q3 = *pPix.offset(3 * sx) as i32;
-                    *pPix = ((p1 + (p0 * 2) + (q0 * 2) + (q1 * 2) + q2 + 4) >> 3) as u8;
-                    *pPix.offset(sx) = ((p0 + q0 + q1 + q2 + 2) >> 2) as u8;
-                    *pPix.offset(2 * sx) =
-                        (((q3 * 2) + q2 + (q2 * 2) + q1 + q0 + p0 + 4) >> 3) as u8;
-                } else {
-                    *pPix = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-                }
-            } else {
-                *pPix.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-                *pPix = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-            }
-        }
-        pPix = pPix.offset(sy);
-    }
-}
-
-pub unsafe extern "C" fn DeblockLumaLt4V_c(
-    pPix: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    tc: *mut i8,
-) {
-    DeblockLumaLt4_c(pPix, iStride, 1, iAlpha, iBeta, tc);
-}
-
-pub unsafe extern "C" fn DeblockLumaLt4H_c(
-    pPix: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    tc: *mut i8,
-) {
-    DeblockLumaLt4_c(pPix, 1, iStride, iAlpha, iBeta, tc);
-}
-
-pub unsafe extern "C" fn DeblockLumaEq4V_c(
-    pPix: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    DeblockLumaEq4_c(pPix, iStride, 1, iAlpha, iBeta);
-}
-
-pub unsafe extern "C" fn DeblockLumaEq4H_c(
-    pPix: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    DeblockLumaEq4_c(pPix, 1, iStride, iAlpha, iBeta);
-}
-
-pub unsafe extern "C" fn DeblockChromaLt4_c(
-    mut pPixCb: *mut u8,
-    mut pPixCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    pTc: *mut i8,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for i in 0..8 {
-        let iTc0 = *pTc.add(i >> 1) as i32;
-        if iTc0 > 0 {
-            // Cb Plane
-            let mut p0 = *pPixCb.offset(-sx) as i32;
-            let mut p1 = *pPixCb.offset(-2 * sx) as i32;
-            let mut q0 = *pPixCb as i32;
-            let mut q1 = *pPixCb.offset(sx) as i32;
-
-            let mut bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            let mut bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            let mut bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc0, iTc0);
-                *pPixCb.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPixCb = WelsClip1(q0 - iDeta);
-            }
-
-            // Cr Plane
-            p0 = *pPixCr.offset(-sx) as i32;
-            p1 = *pPixCr.offset(-2 * sx) as i32;
-            q0 = *pPixCr as i32;
-            q1 = *pPixCr.offset(sx) as i32;
-
-            bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-            bDetaP1P0 = (p1 - p0).abs() < iBeta;
-            bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-            if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-                let iDeta = WELS_CLIP3((((q0 - p0) * 4) + (p1 - q1) + 4) >> 3, -iTc0, iTc0);
-                *pPixCr.offset(-sx) = WelsClip1(p0 + iDeta);
-                *pPixCr = WelsClip1(q0 - iDeta);
-            }
-        }
-        pPixCb = pPixCb.offset(sy);
-        pPixCr = pPixCr.offset(sy);
-    }
-}
-
-pub unsafe extern "C" fn DeblockChromaEq4_c(
-    mut pPixCb: *mut u8,
-    mut pPixCr: *mut u8,
-    iStrideX: i32,
-    iStrideY: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    let sx = iStrideX as isize;
-    let sy = iStrideY as isize;
-    for _ in 0..8 {
-        // Cb Plane
-        let mut p0 = *pPixCb.offset(-sx) as i32;
-        let mut p1 = *pPixCb.offset(-2 * sx) as i32;
-        let mut q0 = *pPixCb as i32;
-        let mut q1 = *pPixCb.offset(sx) as i32;
-
-        let mut bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-        let mut bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        let mut bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-        if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-            *pPixCb.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-            *pPixCb = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-        }
-
-        // Cr Plane
-        p0 = *pPixCr.offset(-sx) as i32;
-        p1 = *pPixCr.offset(-2 * sx) as i32;
-        q0 = *pPixCr as i32;
-        q1 = *pPixCr.offset(sx) as i32;
-
-        bDetaP0Q0 = (p0 - q0).abs() < iAlpha;
-        bDetaP1P0 = (p1 - p0).abs() < iBeta;
-        bDetaQ1Q0 = (q1 - q0).abs() < iBeta;
-
-        if bDetaP0Q0 && bDetaP1P0 && bDetaQ1Q0 {
-            *pPixCr.offset(-sx) = (((p1 * 2) + p0 + q1 + 2) >> 2) as u8;
-            *pPixCr = (((q1 * 2) + q0 + p1 + 2) >> 2) as u8;
-        }
-
-        pPixCb = pPixCb.offset(sy);
-        pPixCr = pPixCr.offset(sy);
-    }
-}
-
-pub unsafe extern "C" fn DeblockChromaLt4V_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    tc: *mut i8,
-) {
-    DeblockChromaLt4_c(pPixCb, pPixCr, iStride, 1, iAlpha, iBeta, tc);
-}
-
-pub unsafe extern "C" fn DeblockChromaLt4H_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-    tc: *mut i8,
-) {
-    DeblockChromaLt4_c(pPixCb, pPixCr, 1, iStride, iAlpha, iBeta, tc);
-}
-
-pub unsafe extern "C" fn DeblockChromaEq4V_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    DeblockChromaEq4_c(pPixCb, pPixCr, iStride, 1, iAlpha, iBeta);
-}
-
-pub unsafe extern "C" fn DeblockChromaEq4H_c(
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
-    iStride: i32,
-    iAlpha: i32,
-    iBeta: i32,
-) {
-    DeblockChromaEq4_c(pPixCb, pPixCr, 1, iStride, iAlpha, iBeta);
-}
-
+/// C++: `WelsNonZeroCount_c` — the encoder's copy, installed into
+/// `pfSetNZCZero` (`PSetNoneZeroCountZeroFunc`, an `extern "C"` slot). The
+/// common module's shim is a plain `unsafe fn` and cannot fill that slot, so
+/// this stays a distinct function; only its body moves to the safe kernel.
+///
+/// # Safety
+/// `pNonZeroCount` points at 24 writable `i8` — the per-macroblock non-zero
+/// count cache (16 luma + 8 chroma entries).
 pub unsafe extern "C" fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
-    for i in 0..24 {
-        let val = *pNonZeroCount.add(i);
-        *pNonZeroCount.add(i) = if val != 0 { 1 } else { 0 };
+    // SHIM(phase2) -> nonzero_count
+    unsafe {
+        let nzc: &mut [i8; 24] =
+            std::slice::from_raw_parts_mut(pNonZeroCount, 24).try_into().unwrap();
+        crate::common::deblocking_common::nonzero_count(nzc);
     }
 }
+
 
 // ============================================================================
 // Directional Filtering Dispatchers
