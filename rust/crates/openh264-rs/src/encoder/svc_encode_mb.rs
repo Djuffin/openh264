@@ -45,6 +45,7 @@
     unused_unsafe
 )]
 
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
@@ -310,6 +311,20 @@ fn WelsClip1(val: i32) -> u8 {
     }
 }
 
+/// 4x4 recon IDCT: `dct` inverse-transformed, added to `pPred`'s block,
+/// saturated into `pRec`'s block.
+///
+/// # Safety
+/// * `pRec` points at sample `(0, 0)` of a 4x4 block; bytes
+///   `[0, 3*iStride + 4)` from it must be readable and writable.
+/// * `pPred` points at sample `(0, 0)` of a 4x4 block; bytes
+///   `[0, 3*iPredStride + 4)` from it must be readable. Only read.
+/// * Both reach forward only; strides `>= 4` and positive; the spans are
+///   disjoint (every caller pairs a recon plane or scratch with a separate
+///   prediction scratch, `svc_encode_mb.rs:713-723`, `svc_encode_slice.rs:1039`).
+/// * `pDct` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
+/// * Any argument may be null, in which case nothing happens (the C++'s own
+///   guard, kept).
 pub unsafe extern "C" fn WelsIDctT4Rec_c(
     pRec: *mut u8,
     iStride: i32,
@@ -317,42 +332,27 @@ pub unsafe extern "C" fn WelsIDctT4Rec_c(
     iPredStride: i32,
     pDct: *mut i16,
 ) {
+    // SHIM(phase2) -> crate::encoder::decode_mb_aux::idct_t4_rec
     if pRec.is_null() || pPred.is_null() || pDct.is_null() {
         return;
     }
-    let mut iTemp = [0i16; 16];
-
-    let iDstStridex2 = iStride << 1;
-    let iDstStridex3 = iStride + iDstStridex2;
-    let iPredStridex2 = iPredStride << 1;
-    let iPredStridex3 = iPredStride + iPredStridex2;
-
-    for i in 0..4 {
-        let iIdx = i << 2;
-        let kiHorSumU = *pDct.add(iIdx) as i32 + *pDct.add(iIdx + 2) as i32;
-        let kiHorDelU = *pDct.add(iIdx) as i32 - *pDct.add(iIdx + 2) as i32;
-        let kiHorSumD = *pDct.add(iIdx + 1) as i32 + (*pDct.add(iIdx + 3) as i32 >> 1);
-        let kiHorDelD = (*pDct.add(iIdx + 1) as i32 >> 1) - *pDct.add(iIdx + 3) as i32;
-
-        iTemp[iIdx] = (kiHorSumU + kiHorSumD) as i16;
-        iTemp[iIdx + 1] = (kiHorDelU + kiHorDelD) as i16;
-        iTemp[iIdx + 2] = (kiHorDelU - kiHorDelD) as i16;
-        iTemp[iIdx + 3] = (kiHorSumU - kiHorSumD) as i16;
-    }
-
-    for i in 0..4 {
-        let kiVerSumL = iTemp[i] as i32 + iTemp[8 + i] as i32;
-        let kiVerDelL = iTemp[i] as i32 - iTemp[8 + i] as i32;
-        let kiVerDelR = (iTemp[4 + i] as i32 >> 1) - iTemp[12 + i] as i32;
-        let kiVerSumR = iTemp[4 + i] as i32 + (iTemp[12 + i] as i32 >> 1);
-
-        *pRec.add(i) = WelsClip1(*pPred.add(i) as i32 + ((kiVerSumL + kiVerSumR + 32) >> 6));
-        *pRec.add(iStride as usize + i) = WelsClip1(*pPred.add(iPredStride as usize + i) as i32 + ((kiVerDelL + kiVerDelR + 32) >> 6));
-        *pRec.add(iDstStridex2 as usize + i) = WelsClip1(*pPred.add(iPredStridex2 as usize + i) as i32 + ((kiVerDelL - kiVerDelR + 32) >> 6));
-        *pRec.add(iDstStridex3 as usize + i) = WelsClip1(*pPred.add(iPredStridex3 as usize + i) as i32 + ((kiVerSumL - kiVerSumR + 32) >> 6));
-    }
+    let (rs, ps) = (iStride as usize, iPredStride as usize);
+    let rec = std::slice::from_raw_parts_mut(pRec, 3 * rs + 4);
+    let pred = std::slice::from_raw_parts(pPred, 3 * ps + 4);
+    let dct: &[i16; 16] = std::slice::from_raw_parts(pDct, 16).try_into().unwrap();
+    crate::encoder::decode_mb_aux::idct_t4_rec(
+        &mut PlaneCursorMut::new(rec, 0, rs),
+        &PlaneCursor::new(pred, 0, ps),
+        dct,
+    );
 }
 
+/// [`WelsIDctT4Rec_c`] over the four 4x4 blocks of one 8x8 quadrant.
+///
+/// # Safety
+/// As [`WelsIDctT4Rec_c`] with 8x8 spans: `[0, 7*iStride + 8)` writable from
+/// `pRec`, `[0, 7*iPredStride + 8)` readable from `pPred`, 64 `i16` from
+/// `pDct`; strides `>= 8`; nulls tolerated.
 pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
     pRec: *mut u8,
     iStride: i32,
@@ -360,15 +360,19 @@ pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
     iPredStride: i32,
     pDct: *mut i16,
 ) {
+    // SHIM(phase2) -> crate::encoder::decode_mb_aux::idct_four_t4_rec
     if pRec.is_null() || pPred.is_null() || pDct.is_null() {
         return;
     }
-    let iDstStridex4 = (iStride << 2) as usize;
-    let iPredStridex4 = (iPredStride << 2) as usize;
-    WelsIDctT4Rec_c(pRec, iStride, pPred, iPredStride, pDct);
-    WelsIDctT4Rec_c(pRec.add(4), iStride, pPred.add(4), iPredStride, pDct.add(16));
-    WelsIDctT4Rec_c(pRec.add(iDstStridex4), iStride, pPred.add(iPredStridex4), iPredStride, pDct.add(32));
-    WelsIDctT4Rec_c(pRec.add(iDstStridex4 + 4), iStride, pPred.add(iPredStridex4 + 4), iPredStride, pDct.add(48));
+    let (rs, ps) = (iStride as usize, iPredStride as usize);
+    let rec = std::slice::from_raw_parts_mut(pRec, 7 * rs + 8);
+    let pred = std::slice::from_raw_parts(pPred, 7 * ps + 8);
+    let dct: &[i16; 64] = std::slice::from_raw_parts(pDct, 64).try_into().unwrap();
+    crate::encoder::decode_mb_aux::idct_four_t4_rec(
+        &mut PlaneCursorMut::new(rec, 0, rs),
+        &PlaneCursor::new(pred, 0, ps),
+        dct,
+    );
 }
 
 
@@ -380,85 +384,38 @@ pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
 /// 4x4 Inverse Hadamard transform for Intra 16x16 Luma DC
 ///
 /// # Safety
-/// - `pRes` must point to a 16-element `int16_t` buffer.
+/// `pRes` points at 16 writable, `i16`-aligned `i16`. Inputs above ±2047 can
+/// overflow the kernel's plain `i16` intermediates — a debug panic where the
+/// C++ wraps (finding F11); the in-contract DC levels stay far below it.
 #[inline]
 pub unsafe fn WelsIHadamard4x4Dc(pRes: *mut i16) {
-    let mut iTemp = [0i16; 4];
-
-    for i in (0..4).rev() {
-        let kiIdx = i << 2;
-        let kiIdx1 = 1 + kiIdx;
-        let kiIdx2 = 1 + kiIdx1;
-        let kiIdx3 = 1 + kiIdx2;
-
-        iTemp[0] = *pRes.add(kiIdx) + *pRes.add(kiIdx2);
-        iTemp[1] = *pRes.add(kiIdx) - *pRes.add(kiIdx2);
-        iTemp[2] = *pRes.add(kiIdx1) - *pRes.add(kiIdx3);
-        iTemp[3] = *pRes.add(kiIdx1) + *pRes.add(kiIdx3);
-
-        *pRes.add(kiIdx) = iTemp[0] + iTemp[3];
-        *pRes.add(kiIdx1) = iTemp[1] + iTemp[2];
-        *pRes.add(kiIdx2) = iTemp[1] - iTemp[2];
-        *pRes.add(kiIdx3) = iTemp[0] - iTemp[3];
-    }
-
-    for i in (0..4).rev() {
-        let kiI4 = 4 + i;
-        let kiI8 = 4 + kiI4;
-        let kiI12 = 4 + kiI8;
-
-        iTemp[0] = *pRes.add(i) + *pRes.add(kiI8);
-        iTemp[1] = *pRes.add(i) - *pRes.add(kiI8);
-        iTemp[2] = *pRes.add(kiI4) - *pRes.add(kiI12);
-        iTemp[3] = *pRes.add(kiI4) + *pRes.add(kiI12);
-
-        *pRes.add(i) = iTemp[0] + iTemp[3];
-        *pRes.add(kiI4) = iTemp[1] + iTemp[2];
-        *pRes.add(kiI8) = iTemp[1] - iTemp[2];
-        *pRes.add(kiI12) = iTemp[0] - iTemp[3];
-    }
+    // SHIM(phase2) -> crate::encoder::decode_mb_aux::ihadamard_4x4_dc
+    let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
+    crate::encoder::decode_mb_aux::ihadamard_4x4_dc(res);
 }
 
 /// Dequantization of 4x4 Luma DC coefficients for QP < 12
 ///
 /// # Safety
-/// - `pRes` must point to a 16-element `int16_t` buffer.
+/// `pRes` points at 16 writable, `i16`-aligned `i16`; `kiQp` in `0..12` (at
+/// 12+ the shift count goes negative — debug panic, the raw port's own
+/// behaviour; the one caller is gated on `uiQp < 12`).
 #[inline]
 pub unsafe fn WelsDequantLumaDc4x4(pRes: *mut i16, kiQp: i32) {
-    let mut i = 15isize;
-    let kuiDequantValue = g_kuiDequantCoeff[(kiQp % 6) as usize][0] as i32;
-    let kiQF0 = (kiQp / 6) as i16;
-    let kiQF1 = 2 - kiQF0;
-    let kiQF0S = (1 << (1 - kiQF0)) as i32;
-
-    while i >= 0 {
-        *pRes.offset(i) = ((*pRes.offset(i) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
-        *pRes.offset(i - 1) =
-            ((*pRes.offset(i - 1) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
-        *pRes.offset(i - 2) =
-            ((*pRes.offset(i - 2) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
-        *pRes.offset(i - 3) =
-            ((*pRes.offset(i - 3) as i32 * kuiDequantValue + kiQF0S) >> kiQF1) as i16;
-        i -= 4;
-    }
+    // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_luma_dc_4x4
+    let res: &mut [i16; 16] = std::slice::from_raw_parts_mut(pRes, 16).try_into().unwrap();
+    crate::encoder::decode_mb_aux::dequant_luma_dc_4x4(res, kiQp);
 }
 
 /// 2x2 Inverse Hadamard and dequantization for Chroma DC
 ///
 /// # Safety
-/// - `pDct` must point to a 4-element `int16_t` buffer.
+/// `pDct` points at 4 writable, `i16`-aligned `i16`.
 #[inline]
 pub unsafe fn WelsDequantIHadamard2x2Dc(pDct: *mut i16, kuiMF: u16) {
-    let kiSumU = *pDct.add(0) as i32 + *pDct.add(2) as i32;
-    let kiDelU = *pDct.add(0) as i32 - *pDct.add(2) as i32;
-    let kiSumD = *pDct.add(1) as i32 + *pDct.add(3) as i32;
-    let kiDelD = *pDct.add(1) as i32 - *pDct.add(3) as i32;
-
-    let mf = kuiMF as i32;
-    *pDct.add(0) = (((kiSumU + kiSumD) * mf) >> 1) as i16;
-    *pDct.add(1) = (((kiSumU - kiSumD) * mf) >> 1) as i16;
-    *pDct.add(2) = (((kiDelU + kiDelD) * mf) >> 1) as i16;
-    *pDct.add(3) = (((kiDelU - kiDelD) * mf) >> 1) as i16;
+    // SHIM(phase2) -> crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc
+    let dct: &mut [i16; 4] = std::slice::from_raw_parts_mut(pDct, 4).try_into().unwrap();
+    crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc(dct, kuiMF);
 }
 
 // ============================================================================
