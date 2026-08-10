@@ -1750,9 +1750,15 @@ fn satd_kernels_match_the_raw_ones() {
         for &(s1, s2) in &[(0usize, 0usize), (21, 0), (240, 25)] {
             let (s1, s2) = (s1.max(w), s2.max(w));
             for _ in 0..scale(60) {
-                // Whole-row buffers on the raw side (F10): h full strides.
-                let mut b1 = rng.bytes(h * s1);
-                let mut b2 = rng.bytes(h * s2);
+                // Raw-side buffers sized to the raw kernels' pointer-arithmetic
+                // footprint (F10) — and for the SATD *composites* that is more
+                // than whole rows: each 4x4 sub-block's trailing bump computes
+                // `sub_anchor + 4*stride`, and the bottom-right sub-block's
+                // anchor is `c + (w-4) + (h-4)*stride`, so the farthest pointer
+                // is `c + (w-4) + h*stride` — Miri flagged exactly this at
+                // `h*stride` sizing. `(h+1)*stride` covers every legal anchor.
+                let mut b1 = rng.bytes((h + 1) * s1);
+                let mut b2 = rng.bytes((h + 1) * s2);
                 let c1 = rng.below((s1 - w + 1) as u32) as usize;
                 let c2 = rng.below((s2 - w + 1) as u32) as usize;
 
