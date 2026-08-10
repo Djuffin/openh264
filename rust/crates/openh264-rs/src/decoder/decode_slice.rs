@@ -1026,6 +1026,8 @@ pub unsafe fn WelsMbInterSampleConstruction(
 }
 
 use crate::decoder::error_concealment::sMCRefMember;
+// Phase 4a: `BaseMC` calls these directly instead of through `SMcFunc` slots.
+use crate::common::mc::{McChroma_c, McLuma_c};
 
 /// Fill an `sMCRefMember` with the reference picture selected by `iRefIdx`.
 /// Matches `GetRefPic` in `rec_mb.cpp`.
@@ -1061,7 +1063,6 @@ unsafe fn BaseMC(
     _iRefIdx: i8,
     iXOffset: i32,
     iYOffset: i32,
-    pMCFunc: *const crate::common::mc::SMcFunc,
     iBlkWidth: i32,
     iBlkHeight: i32,
     iMVs: [i16; 2],
@@ -1090,40 +1091,65 @@ unsafe fn BaseMC(
     let pSrcU = pMCRefMem.pSrcU.offset(iSrcPixOffsetChroma as isize);
     let pSrcV = pMCRefMem.pSrcV.offset(iSrcPixOffsetChroma as isize);
 
-    if let Some(mc_luma) = (*pMCFunc).pMcLumaFunc {
-        mc_luma(
-            pSrcY,
-            pMCRefMem.iSrcLineLuma,
-            pMCRefMem.pDstY,
-            pMCRefMem.iDstLineLuma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidth,
-            iBlkHeight,
-        );
-    }
-    if let Some(mc_chroma) = (*pMCFunc).pMcChromaFunc {
-        mc_chroma(
-            pSrcU,
-            pMCRefMem.iSrcLineChroma,
-            pMCRefMem.pDstU,
-            pMCRefMem.iDstLineChroma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidthChroma,
-            iBlkHeightChroma,
-        );
-        mc_chroma(
-            pSrcV,
-            pMCRefMem.iSrcLineChroma,
-            pMCRefMem.pDstV,
-            pMCRefMem.iDstLineChroma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidthChroma,
-            iBlkHeightChroma,
-        );
-    }
+    // Phase 4a: direct calls. `pMCFunc` held `McLuma_c`/`McChroma_c` and
+    // nothing else — `init_mc_func_ignores_the_cpu_flag` pins that the
+    // installer is constant in its CPU flag, and
+    // `mc_table_slots_match_the_direct_calls` pins that those slots compute
+    // what these symbols compute. The `if let Some` guards are gone with the
+    // indirection: `WelsOpenDecoder` runs `WelsInitDecoderFuncs`
+    // unconditionally before any frame is decoded, so the slots were never
+    // `None` here, and a `None` would have silently left the prediction block
+    // unwritten rather than reported anything.
+    //
+    // **Why this recovers nothing on the decode side, unlike the encoder's.**
+    // Direct dispatch bought the encoder ~5% (see `perf_baseline.md` §Phase 4a)
+    // and this side ~0. The difference is not the calls, it is where the block
+    // dimensions become constant. The encoder's call sites name these shims
+    // with literals (`16, 16` / `8, 8`), so inlining folds the shim's span
+    // arithmetic and its `from_raw_parts` against them. Here the sizes arrive
+    // as `iBlkWidth`/`iBlkHeight` *parameters*: they are constant at `BaseMC`'s
+    // ~40 call sites but runtime inside it, and `BaseMC` is ~1300 instructions,
+    // so `#[inline]` on it is declined. Measured, not assumed — `#[inline]` on
+    // `BaseMC` and `#[inline(always)]` on `McChroma_c` were each built and
+    // paired, and both read inside the null floor. Disassembly confirms
+    // `McLuma_c` does inline here (the `mc_hor_ver*` kernels are called
+    // straight from `BaseMC`) while the two chroma calls stay out of line.
+    //
+    // What would recover it is making the dimensions constant *at the shim*:
+    // const-generic `BaseMC::<W, H>` monomorphised over the seven partition
+    // shapes, or Phase 5 converting these callers so the whole path carries
+    // typed blocks. That is caller conversion, which is Phase 5's job, and the
+    // ledger row is downgraded to say so rather than to keep promising Phase 4.
+    McLuma_c(
+        pSrcY,
+        pMCRefMem.iSrcLineLuma,
+        pMCRefMem.pDstY,
+        pMCRefMem.iDstLineLuma,
+        iFullMVx as i16,
+        iFullMVy as i16,
+        iBlkWidth,
+        iBlkHeight,
+    );
+    McChroma_c(
+        pSrcU,
+        pMCRefMem.iSrcLineChroma,
+        pMCRefMem.pDstU,
+        pMCRefMem.iDstLineChroma,
+        iFullMVx as i16,
+        iFullMVy as i16,
+        iBlkWidthChroma,
+        iBlkHeightChroma,
+    );
+    McChroma_c(
+        pSrcV,
+        pMCRefMem.iSrcLineChroma,
+        pMCRefMem.pDstV,
+        pMCRefMem.iDstLineChroma,
+        iFullMVx as i16,
+        iFullMVy as i16,
+        iBlkWidthChroma,
+        iBlkHeightChroma,
+    );
 }
 
 /// Matches `WeightPrediction` in `rec_mb.cpp`.
@@ -1298,7 +1324,6 @@ pub unsafe fn GetInterPred(
     pCtx: *mut SWelsDecoderContext,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pMCFunc = &(*pCtx).sMcFunc as *const crate::common::mc::SMcFunc;
 
     let iMBXY = (*pCurDqLayer).iMbXyIndex as usize;
     let pDec = (*pCurDqLayer).pDec;
@@ -1332,7 +1357,7 @@ pub unsafe fn GetInterPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, pMCFunc, 16, 16, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bWeight {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 16);
             }
@@ -1344,7 +1369,7 @@ pub unsafe fn GetInterPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, pMCFunc, 16, 8, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 8, iMVs);
             if bWeight {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
             }
@@ -1358,7 +1383,7 @@ pub unsafe fn GetInterPred(
             pMCRefMem.pDstY = pPredY.offset((iDstLineLuma << 3) as isize);
             pMCRefMem.pDstU = pPredCb.offset((iDstLineChroma << 2) as isize);
             pMCRefMem.pDstV = pPredCr.offset((iDstLineChroma << 2) as isize);
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY + 8, pMCFunc, 16, 8, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY + 8, 16, 8, iMVs);
             if bWeight {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
             }
@@ -1370,7 +1395,7 @@ pub unsafe fn GetInterPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 8, 16, iMVs);
             if bWeight {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
             }
@@ -1384,7 +1409,7 @@ pub unsafe fn GetInterPred(
             pMCRefMem.pDstY = pPredY.offset(8);
             pMCRefMem.pDstU = pPredCb.offset(4);
             pMCRefMem.pDstV = pPredCr.offset(4);
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX + 8, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX + 8, iMBOffsetY, 8, 16, iMVs);
             if bWeight {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
             }
@@ -1413,14 +1438,14 @@ pub unsafe fn GetInterPred(
                 match iSubMBType {
                     SUB_MB_TYPE_8x8 => {
                         let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, pMCFunc, 8, 8, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
                         if bWeight {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 8);
                         }
                     }
                     SUB_MB_TYPE_8x4 => {
                         let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, pMCFunc, 8, 4, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
                         if bWeight {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
                         }
@@ -1429,14 +1454,14 @@ pub unsafe fn GetInterPred(
                         pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
                         pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset + 4, pMCFunc, 8, 4, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
                         if bWeight {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
                         }
                     }
                     SUB_MB_TYPE_4x8 => {
                         let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, pMCFunc, 4, 8, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
                         if bWeight {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
                         }
@@ -1445,7 +1470,7 @@ pub unsafe fn GetInterPred(
                         pMCRefMem.pDstY = pMCRefMem.pDstY.offset(4);
                         pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset + 4, iYOffset, pMCFunc, 4, 8, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
                         if bWeight {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
                         }
@@ -1469,7 +1494,6 @@ pub unsafe fn GetInterPred(
                                 iRefIndex,
                                 iXOffset + iBlk4X,
                                 iYOffset + iBlk4Y,
-                                pMCFunc,
                                 4,
                                 4,
                                 iMVs,
@@ -1499,7 +1523,6 @@ pub unsafe fn GetInterBPred(
     pCtx: *mut SWelsDecoderContext,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pMCFunc = &(*pCtx).sMcFunc as *const crate::common::mc::SMcFunc;
 
     let iMBXY = (*pCurDqLayer).iMbXyIndex as usize;
     let mut iMVs = [0i16; 2];
@@ -1549,7 +1572,7 @@ pub unsafe fn GetInterBPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iMBOffsetX, iMBOffsetY, pMCFunc, 16, 16, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
 
             iMVs = pMv(LIST_1, 0);
             iRefIndex1 = pRef(LIST_1, 0);
@@ -1557,7 +1580,7 @@ pub unsafe fn GetInterBPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY, pMCFunc, 16, 16, iMVs);
+            BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bUseWeightedBiPredIdc {
                 BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 16);
             } else {
@@ -1571,7 +1594,7 @@ pub unsafe fn GetInterBPred(
             if ret != ERR_NONE {
                 return ret;
             }
-            BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY, pMCFunc, 16, 16, iMVs);
+            BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bWeightedBipredIdcIs1 {
                 WeightPrediction(pCurDqLayer, &mut pMCRefMem, listIdx, iRefIndex as i32, 16, 16);
             }
@@ -1595,7 +1618,7 @@ pub unsafe fn GetInterBPred(
                         pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 2) as isize);
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 2) as isize);
                     }
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx as i32, pMCFunc, 16, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
                     listCount += 1;
                     if listCount == 2 {
                         iMVs = pMv(LIST_1, iPartIdx);
@@ -1609,7 +1632,7 @@ pub unsafe fn GetInterBPred(
                             pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset((iDstLineChroma << 2) as isize);
                             pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset((iDstLineChroma << 2) as isize);
                         }
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx as i32, pMCFunc, 16, 8, iMVs);
+                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
                         if bUseWeightedBiPredIdc {
                             iRefIndex0 = pRef(LIST_0, iPartIdx);
                             iRefIndex1 = pRef(LIST_1, iPartIdx);
@@ -1643,7 +1666,7 @@ pub unsafe fn GetInterBPred(
                         pMCRefMem.pDstU = pMCRefMem.pDstU.offset(4);
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset(4);
                     }
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, 8, 16, iMVs);
                     listCount += 1;
                     if listCount == 2 {
                         iMVs = pMv(LIST_1, i << 1);
@@ -1657,7 +1680,7 @@ pub unsafe fn GetInterBPred(
                             pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset(4);
                             pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset(4);
                         }
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, 8, 16, iMVs);
                         if bUseWeightedBiPredIdc {
                             iRefIndex0 = pRef(LIST_0, i << 1);
                             iRefIndex1 = pRef(LIST_1, i << 1);
@@ -1722,10 +1745,10 @@ pub unsafe fn GetInterBPred(
             if IS_SUB_8x8(iSubMBType) {
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, pMCFunc, 8, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 8, iMVs);
 
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, pMCFunc, 8, 8, iMVs);
+                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
                         BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 8);
@@ -1736,7 +1759,7 @@ pub unsafe fn GetInterBPred(
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, pMCFunc, 8, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
                         WeightPrediction(pCurDqLayer, &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 8);
                     }
@@ -1745,9 +1768,9 @@ pub unsafe fn GetInterBPred(
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     // B_Bi_8x4
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 4, iMVs);
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 4, iMVs);
 
                     if bUseWeightedBiPredIdc {
                         BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
@@ -1759,13 +1782,13 @@ pub unsafe fn GetInterBPred(
                     pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
                     pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
                     iMVs = pMv(LIST_0, iIIdx + 4);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset + 4, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset + 4, 8, 4, iMVs);
 
                     pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
                     pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
                     pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
                     iMVs = pMv(LIST_1, iIIdx + 4);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset + 4, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset + 4, 8, 4, iMVs);
 
                     if bUseWeightedBiPredIdc {
                         BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
@@ -1777,12 +1800,12 @@ pub unsafe fn GetInterBPred(
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
                     pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
                     pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
                     pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
                     iMVs = pMv(listIdx, iIIdx + 4);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset + 4, pMCFunc, 8, 4, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
                     if bWeightedBipredIdcIs1 {
                         WeightPrediction(pCurDqLayer, &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 4);
                     }
@@ -1791,9 +1814,9 @@ pub unsafe fn GetInterBPred(
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     // B_Bi_4x8
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 4, 8, iMVs);
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 4, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
                         BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
@@ -1805,13 +1828,13 @@ pub unsafe fn GetInterBPred(
                     pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
                     pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
                     iMVs = pMv(LIST_0, iIIdx + 1);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + 4, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + 4, iYOffset, 4, 8, iMVs);
 
                     pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset(4);
                     pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset(2);
                     pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset(2);
                     iMVs = pMv(LIST_1, iIIdx + 1);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + 4, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + 4, iYOffset, 4, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
                         BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
@@ -1823,12 +1846,12 @@ pub unsafe fn GetInterBPred(
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
                     pMCRefMem.pDstY = pMCRefMem.pDstY.offset(4);
                     pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
                     pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
                     iMVs = pMv(listIdx, iIIdx + 1);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + 4, iYOffset, pMCFunc, 4, 8, iMVs);
+                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
                         WeightPrediction(pCurDqLayer, &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 8);
                     }
@@ -1847,7 +1870,7 @@ pub unsafe fn GetInterBPred(
                         pMCRefMem.pDstV = pDstV.offset(iUVLineStride as isize);
 
                         iMVs = pMv(LIST_0, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, pMCFunc, 4, 4, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
 
                         // NOTE: C indexes the LIST_1 destination with iBlk8X/iBlk8Y here,
                         // not iBlk4X/iBlk4Y, so the 8x8 offset is applied twice (pDstY2
@@ -1857,7 +1880,7 @@ pub unsafe fn GetInterBPred(
                         pTempMCRefMem.pDstV = pDstV2.offset(iUVLineStride as isize);
 
                         iMVs = pMv(LIST_1, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + iBlk4X, iYOffset + iBlk4Y, pMCFunc, 4, 4, iMVs);
+                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
 
                         if bUseWeightedBiPredIdc {
                             BiWeightPrediction(pCurDqLayer, &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 4);
@@ -1880,7 +1903,7 @@ pub unsafe fn GetInterBPred(
                         pMCRefMem.pDstV = pDstV.offset(iUVLineStride as isize);
 
                         iMVs = pMv(listIdx, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + iBlk4X, iYOffset + iBlk4Y, pMCFunc, 4, 4, iMVs);
+                        BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
                         if bWeightedBipredIdcIs1 {
                             WeightPrediction(pCurDqLayer, &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 4);
                         }

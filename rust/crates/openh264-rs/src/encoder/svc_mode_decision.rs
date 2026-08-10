@@ -27,6 +27,8 @@ pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
+// Phase 4a: MC is called directly, not via `sMcFuncs`.
+use crate::common::mc::{McChroma_c, McLuma_c};
 pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -542,13 +544,9 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     }
 
     // MC
-    if let Some(pMcLuma) = (*pFunc).sMcFuncs.pMcLumaFunc {
-        pMcLuma(pRefLuma, iLineSizeY, pDstLuma, 16, 0, 0, 16, 16);
-    }
-    if let Some(pMcChroma) = (*pFunc).sMcFuncs.pMcChromaFunc {
-        pMcChroma(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
-        pMcChroma(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
-    }
+    McLuma_c(pRefLuma, iLineSizeY, pDstLuma, 16, 0, 0, 16, 16);
+    McChroma_c(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
+    McChroma_c(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
 
     (*pCurMb).uiCbp = 0;
     (*pMbCache).bCollocatedPredFlag = true;
@@ -1901,40 +1899,36 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     }
 
     // Motion Compensation
-    if let Some(pMcLuma) = (*pFunc).sMcFuncs.pMcLumaFunc {
-        pMcLuma(
-            pRefLuma.offset(iOffsetY as isize),
-            iLineSizeY,
-            pDstLuma,
-            16,
-            0,
-            0,
-            16,
-            16,
-        );
-    }
-    if let Some(pMcChroma) = (*pFunc).sMcFuncs.pMcChromaFunc {
-        pMcChroma(
-            pRefCb.offset(iOffsetUV as isize),
-            iLineSizeUV,
-            pDstCb,
-            8,
-            sMvp.iMvX,
-            sMvp.iMvY,
-            8,
-            8,
-        );
-        pMcChroma(
-            pRefCr.offset(iOffsetUV as isize),
-            iLineSizeUV,
-            pDstCr,
-            8,
-            sMvp.iMvX,
-            sMvp.iMvY,
-            8,
-            8,
-        );
-    }
+    McLuma_c(
+        pRefLuma.offset(iOffsetY as isize),
+        iLineSizeY,
+        pDstLuma,
+        16,
+        0,
+        0,
+        16,
+        16,
+    );
+    McChroma_c(
+        pRefCb.offset(iOffsetUV as isize),
+        iLineSizeUV,
+        pDstCb,
+        8,
+        sMvp.iMvX,
+        sMvp.iMvY,
+        8,
+        8,
+    );
+    McChroma_c(
+        pRefCr.offset(iOffsetUV as isize),
+        iLineSizeUV,
+        pDstCr,
+        8,
+        sMvp.iMvX,
+        sMvp.iMvY,
+        8,
+        8,
+    );
 
     (*pCurMb).uiCbp = 0;
     (*pWelsMd).iCostLuma = 0;

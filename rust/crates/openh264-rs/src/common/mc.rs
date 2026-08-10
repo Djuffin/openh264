@@ -1845,6 +1845,10 @@ pub unsafe extern "C" fn McVertLuma_c(
 /// rows before the block and three after, and the decoder's guarantee for it is the
 /// `BaseMC` clamp quoted in this section's header. `iWidth` and `iHeight` are at most
 /// 16, which is what the kernels' `[u8; 256]` scratch at stride 16 holds.
+// Phase 4a: the composites are `#[inline]` now that their callers name them
+// directly. Inlining is the mechanism the recovery thesis rests on — it is what
+// folds the shim's span arithmetic against the caller's constant block sizes.
+#[inline]
 pub unsafe extern "C" fn McLuma_c(
     pSrc: *const u8,
     iSrcStride: i32,
@@ -1919,6 +1923,10 @@ pub unsafe extern "C" fn McChromaWithFragMv_c(
 /// As [`McChromaWithFragMv_c`] when either eighth-pel fraction is non-zero; as
 /// [`McCopy_c`] — block only, and the same narrowing of `iWidth` — when both are
 /// zero.
+// Phase 4a: the composites are `#[inline]` now that their callers name them
+// directly. Inlining is the mechanism the recovery thesis rests on — it is what
+// folds the shim's span arithmetic against the caller's constant block sizes.
+#[inline]
 pub unsafe extern "C" fn McChroma_c(
     pSrc: *const u8,
     iSrcStride: i32,
