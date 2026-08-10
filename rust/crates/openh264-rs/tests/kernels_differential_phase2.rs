@@ -995,247 +995,233 @@ fn sample_variance_16x16_accumulators_cannot_wrap() {
 // T6 — `common/deblocking_common.rs`, in-loop deblocking
 // ===========================================================================
 //
-// Commit-A equivalence entries: each of the twelve V/H ABI wrappers is driven
-// against the corresponding safe kernel over identically-noised surfaces, and
-// **every byte of every touched buffer** is compared — a filter that writes one
-// line too many or puts a tap on the wrong side of the edge corrupts a byte the
-// nominal edge comparison would never look at.
+// `bbb9348e` proved the six safe edge filters and `nonzero_count` against the
+// raw kernels — all twelve V/H ABI wrappers, three amplitude tiers so every
+// branch of the conditional filters executed, tc sweeps including the
+// gate-closing negatives, three strides per shape, random anchors, every byte
+// of every touched buffer compared, and three mutations (tc gate off-by-one,
+// wrong write tap, step-axis swap) all killed. The shim commit deleted those
+// equivalences, because both sides now run the same code.
 //
-// What makes deblocking different from every earlier family is that it is
-// *conditional*: each line filters only if `|p0-q0| < alpha` and two beta tests
-// pass, and inside that there are two more per-side branches (`bDetaP2P0` /
-// `bDetaQ2Q0`, and the strong filter's `< (alpha>>2)+2` split). Random full-range
-// noise almost never passes the gates (any alpha ≤ 255 is exceeded by most random
-// deltas), so the sweep drives three amplitude tiers — full-range, ±16, ±3 around
-// a random base — so that skip paths, weak paths and every strong branch all
-// execute. The tc sweep includes the negative values that gate whole lines off
-// (luma `>= 0` vs chroma `> 0` is exactly the kind of distinction a conversion
-// gets wrong).
+// What survives is what the shims add: **span arithmetic**. Each shim
+// materialises the slice its `# Safety` contract declares —
+// `[-reach_back*step_x, reach_fwd*step_x + (lines-1)*step_y]` around the edge
+// anchor — and the test below re-derives those spans independently and probes
+// each shim with allocations of exactly that size. Deblocking needs one more
+// assertion than `mc.rs` did, because its writes are *conditional*: a shim
+// whose body silently stopped filtering would pass a pure in-bounds probe. The
+// probe therefore drives a crafted 90-vs-110 step edge under maximal
+// `alpha`/`beta`/`tc`, on which every line provably filters, and asserts both
+// that the filter fired and that **no byte outside the declared touch set
+// moved** — which pins the shim's anchor placement separately from its span
+// size (T5's lesson: sizing a span does not pin where it starts).
 
 use openh264_rs::common::deblocking_common as deb;
 
-/// Alpha values from the ends and middle of `g_kuiAlphaTable` (0..=255), beta
-/// values from `g_kiBetaTable` (0..=18).
-const ALPHAS: &[i32] = &[0, 1, 4, 20, 128, 255];
-const BETAS: &[i32] = &[0, 2, 6, 18];
-
-/// A noised surface of `rows * stride` with per-call amplitude tier: full-range,
-/// or narrow noise around a random base so the filter conditions actually pass.
-fn deblock_surface(rng: &mut Prng, rows: usize, stride: usize) -> Vec<u8> {
-    match rng.below(3) {
-        0 => rng.bytes(rows * stride),
-        tier => {
-            let amp = if tier == 1 { 16i32 } else { 3 };
-            let base = rng.range_i32(amp, 255 - amp);
-            (0..rows * stride)
-                .map(|_| (base + rng.range_i32(-amp, amp)) as u8)
-                .collect()
-        }
-    }
+/// The touched-offset predicate, valid for both directions at once: within the
+/// span (anchored at its own start), a byte at index `k` belongs to the edge's
+/// touch set iff `k % stride` is under the dense width — `lines` for a V-shaped
+/// call (taps step by the stride, lines are contiguous columns), the tap width
+/// `rb + rf + 1` for an H-shaped one (taps are contiguous columns, lines step
+/// by the stride).
+fn deblock_touched(k: usize, stride: usize, dense_width: usize) -> bool {
+    k % stride < dense_width
 }
 
-/// A random 4-entry tc0 group, biased to include the gate-closing values.
-fn tc_group(rng: &mut Prng) -> [i8; 4] {
-    let pool: &[i8] = &[-1, 0, 1, 2, 4, 9, 25];
-    std::array::from_fn(|_| pool[rng.below(pool.len() as u32) as usize])
-}
-
-/// Anchor `(row, col)` for an edge whose taps span `[-rb, rf]` along the tap
-/// axis and whose `lines` lines run along the other axis. `vertical_taps` is the
-/// V-wrapper shape (taps step by the stride, lines by 1 byte).
-fn deblock_anchor(
-    rng: &mut Prng,
-    rows: usize,
+/// Exact-span probe for one single-plane deblocking shim.
+///
+/// * The buffer is `len` bytes and not one more, so an over-claimed span is a
+///   `from_raw_parts_mut` past the allocation — UB that Miri reports; an
+///   under-claimed one panics in the safe kernel at the first out-of-slice tap.
+/// * The crafted step edge (p side 90, q side 110, alpha 255, beta 18, tc 25)
+///   filters on every line, so the probe asserts the surface changed — a shim
+///   that no-ops fails here.
+/// * The same crafted buffer is run through the **safe kernel directly**, on a
+///   cursor built at the anchor the contract names, and the two results must be
+///   bit-identical. This is what pins the shim's anchor: an anchor shifted
+///   along the line axis stays inside the touch set and filters plausibly, and
+///   only a golden comparison sees it (the first version of this probe missed
+///   exactly that mutation).
+/// * Every byte outside the declared touch set must additionally be
+///   bit-identical to the input — the claim the contract makes to callers about
+///   which bytes may move at all.
+fn probe_deblock_span(
+    name: &str,
     stride: usize,
     rb: usize,
     rf: usize,
     lines: usize,
-    vertical_taps: bool,
-) -> usize {
-    let (row, col) = if vertical_taps {
-        (
-            rb + rng.below((rows - rb - rf) as u32) as usize,
-            rng.below((stride - lines + 1) as u32) as usize,
-        )
-    } else {
-        (
-            rng.below((rows - lines + 1) as u32) as usize,
-            rb + rng.below((stride - rb - rf) as u32) as usize,
-        )
-    };
-    row * stride + col
-}
+    vertical: bool,
+    run: impl Fn(*mut u8, i32),
+    direct: impl Fn(&mut [u8], usize, isize, isize),
+) {
+    let (sx, sy) = if vertical { (stride, 1) } else { (1, stride) };
+    let back = rb * sx;
+    let len = back + rf * sx + (lines - 1) * sy + 1;
+    let dense_width = if vertical { lines } else { rb + rf + 1 };
 
-/// Steps in bytes for one direction: V = `(stride, 1)`, H = `(1, stride)`.
-fn steps(stride: usize, vertical_taps: bool) -> (isize, isize) {
-    if vertical_taps {
-        (stride as isize, 1)
-    } else {
-        (1, stride as isize)
+    // 90 on the p side of the edge, 110 on the q side, on every touched byte;
+    // sentinel noise elsewhere.
+    let mut buf: Vec<u8> = (0..len).map(|k| 0x40 + (k % 191) as u8).collect();
+    for j in 0..=(rb + rf) {
+        for i in 0..lines {
+            buf[j * sx + i * sy] = if j < rb { 90 } else { 110 };
+        }
     }
-}
+    let before = buf.clone();
+    let mut golden = buf.clone();
 
-#[test]
-fn deblock_luma_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xDEB1_0C16);
-    let rows = 26usize;
-    for &stride in &[26usize, 43, 240] {
-        for &vertical in &[true, false] {
-            let (sx, sy) = steps(stride, vertical);
-            for &alpha in ALPHAS {
-                for &beta in BETAS {
-                    for _ in 0..scale(6) {
-                        // bS < 4 — reach [-3, +2], 16 lines, tc-gated.
-                        let mut tc = tc_group(&mut rng);
-                        let raw = deblock_surface(&mut rng, rows, stride);
-                        let anchor = deblock_anchor(&mut rng, rows, stride, 3, 2, 16, vertical);
-                        let mut got_raw = raw.clone();
-                        let mut got_safe = raw.clone();
-                        unsafe {
-                            let f = if vertical { deb::DeblockLumaLt4V_c } else { deb::DeblockLumaLt4H_c };
-                            f(got_raw.as_mut_ptr().add(anchor), stride as i32, alpha, beta, tc.as_mut_ptr());
-                        }
-                        deb::deblock_luma_lt4(
-                            &mut PlaneCursorMut::new(&mut got_safe, anchor, stride),
-                            sx, sy, alpha, beta, &tc,
-                        );
-                        assert_eq!(
-                            got_raw, got_safe,
-                            "Lt4 luma {} stride {stride} alpha {alpha} beta {beta} tc {tc:?} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
+    run(unsafe { buf.as_mut_ptr().add(back) }, stride as i32);
+    direct(&mut golden, back, sx as isize, sy as isize);
 
-                        // bS == 4 — reach [-4, +3], 16 lines, unconditional gate.
-                        let raw = deblock_surface(&mut rng, rows, stride);
-                        let anchor = deblock_anchor(&mut rng, rows, stride, 4, 3, 16, vertical);
-                        let mut got_raw = raw.clone();
-                        let mut got_safe = raw;
-                        unsafe {
-                            let f = if vertical { deb::DeblockLumaEq4V_c } else { deb::DeblockLumaEq4H_c };
-                            f(got_raw.as_mut_ptr().add(anchor), stride as i32, alpha, beta);
-                        }
-                        deb::deblock_luma_eq4(
-                            &mut PlaneCursorMut::new(&mut got_safe, anchor, stride),
-                            sx, sy, alpha, beta,
-                        );
-                        assert_eq!(
-                            got_raw, got_safe,
-                            "Eq4 luma {} stride {stride} alpha {alpha} beta {beta} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed()
-                        );
-                    }
-                }
-            }
+    assert_ne!(buf, before, "{name}: the always-filter edge did not filter (stride {stride})");
+    assert_eq!(
+        buf, golden,
+        "{name}: shim output disagrees with the safe kernel run at the \
+         contract's own anchor (stride {stride}, back {back}, len {len})"
+    );
+    for (k, (&now, &was)) in buf.iter().zip(before.iter()).enumerate() {
+        if !deblock_touched(k, stride, dense_width) {
+            assert_eq!(
+                now, was,
+                "{name}: byte {k} is outside the declared touch set and moved \
+                 (stride {stride}, back {back}, len {len})"
+            );
         }
     }
 }
 
 #[test]
-fn deblock_chroma_kernels_match_the_raw_ones() {
-    let mut rng = Prng::new(0xDEB2_0C08);
-    let rows = 14usize;
-    for &stride in &[14usize, 27, 120] {
-        for &vertical in &[true, false] {
-            let (sx, sy) = steps(stride, vertical);
-            for &alpha in ALPHAS {
-                for &beta in BETAS {
-                    for _ in 0..scale(6) {
-                        // Two-plane weak filter: one shared stride, independent
-                        // surfaces and anchors for Cb and Cr.
-                        let mut tc = tc_group(&mut rng);
-                        let cb0 = deblock_surface(&mut rng, rows, stride);
-                        let cr0 = deblock_surface(&mut rng, rows, stride);
-                        let a_cb = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let a_cr = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let (mut cb_raw, mut cr_raw) = (cb0.clone(), cr0.clone());
-                        let (mut cb_safe, mut cr_safe) = (cb0, cr0);
-                        unsafe {
-                            let f = if vertical { deb::DeblockChromaLt4V_c } else { deb::DeblockChromaLt4H_c };
-                            f(cb_raw.as_mut_ptr().add(a_cb), cr_raw.as_mut_ptr().add(a_cr),
-                              stride as i32, alpha, beta, tc.as_mut_ptr());
-                        }
-                        deb::deblock_chroma_lt4(
-                            &mut PlaneCursorMut::new(&mut cb_safe, a_cb, stride),
-                            &mut PlaneCursorMut::new(&mut cr_safe, a_cr, stride),
-                            sx, sy, alpha, beta, &tc,
-                        );
-                        assert_eq!((cb_raw, cr_raw), (cb_safe, cr_safe),
-                            "Lt4 chroma {} stride {stride} alpha {alpha} beta {beta} tc {tc:?} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed());
+fn deblock_shims_stay_inside_the_spans_they_declare() {
+    let mut tc = [25i8; 4];
+    let tcp = tc.as_mut_ptr();
+    // Strides: the dense minimum for each shape, a non-multiple-of-16, and a
+    // real picture stride.
+    for &s in &[16usize, 21, 240] {
+        // Luma, both tap directions: reach [-3,2] weak / [-4,3] strong, 16 lines.
+        for &vert in &[true, false] {
+            let (name_lt, name_eq) = if vert {
+                ("DeblockLumaLt4V_c", "DeblockLumaEq4V_c")
+            } else {
+                ("DeblockLumaLt4H_c", "DeblockLumaEq4H_c")
+            };
+            probe_deblock_span(
+                name_lt, s, 3, 2, 16, vert,
+                |p, st| unsafe {
+                    if vert { deb::DeblockLumaLt4V_c(p, st, 255, 18, tcp) }
+                    else { deb::DeblockLumaLt4H_c(p, st, 255, 18, tcp) }
+                },
+                |b, back, sx, sy| {
+                    deb::deblock_luma_lt4(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18, &[25; 4]);
+                },
+            );
+            probe_deblock_span(
+                name_eq, s, 4, 3, 16, vert,
+                |p, st| unsafe {
+                    if vert { deb::DeblockLumaEq4V_c(p, st, 255, 18) }
+                    else { deb::DeblockLumaEq4H_c(p, st, 255, 18) }
+                },
+                |b, back, sx, sy| {
+                    deb::deblock_luma_eq4(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18);
+                },
+            );
 
-                        // Two-plane strong filter.
-                        let cb0 = deblock_surface(&mut rng, rows, stride);
-                        let cr0 = deblock_surface(&mut rng, rows, stride);
-                        let a_cb = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let a_cr = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let (mut cb_raw, mut cr_raw) = (cb0.clone(), cr0.clone());
-                        let (mut cb_safe, mut cr_safe) = (cb0, cr0);
-                        unsafe {
-                            let f = if vertical { deb::DeblockChromaEq4V_c } else { deb::DeblockChromaEq4H_c };
-                            f(cb_raw.as_mut_ptr().add(a_cb), cr_raw.as_mut_ptr().add(a_cr),
-                              stride as i32, alpha, beta);
-                        }
-                        deb::deblock_chroma_eq4(
-                            &mut PlaneCursorMut::new(&mut cb_safe, a_cb, stride),
-                            &mut PlaneCursorMut::new(&mut cr_safe, a_cr, stride),
-                            sx, sy, alpha, beta,
-                        );
-                        assert_eq!((cb_raw, cr_raw), (cb_safe, cr_safe),
-                            "Eq4 chroma {} stride {stride} alpha {alpha} beta {beta} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed());
+            // Single-buffer chroma variants: reach [-2,1], 8 lines.
+            let (name_lt2, name_eq2) = if vert {
+                ("DeblockChromaLt4V2_c", "DeblockChromaEq4V2_c")
+            } else {
+                ("DeblockChromaLt4H2_c", "DeblockChromaEq4H2_c")
+            };
+            probe_deblock_span(
+                name_lt2, s, 2, 1, 8, vert,
+                |p, st| unsafe {
+                    if vert { deb::DeblockChromaLt4V2_c(p, st, 255, 18, tcp) }
+                    else { deb::DeblockChromaLt4H2_c(p, st, 255, 18, tcp) }
+                },
+                |b, back, sx, sy| {
+                    deb::deblock_chroma_lt42(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18, &[25; 4]);
+                },
+            );
+            probe_deblock_span(
+                name_eq2, s, 2, 1, 8, vert,
+                |p, st| unsafe {
+                    if vert { deb::DeblockChromaEq4V2_c(p, st, 255, 18) }
+                    else { deb::DeblockChromaEq4H2_c(p, st, 255, 18) }
+                },
+                |b, back, sx, sy| {
+                    deb::deblock_chroma_eq42(&mut PlaneCursorMut::new(b, back, s), sx, sy, 255, 18);
+                },
+            );
 
-                        // Single-buffer (CbCr) variants.
-                        let mut tc2 = tc_group(&mut rng);
-                        let s0 = deblock_surface(&mut rng, rows, stride);
-                        let a = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let mut s_raw = s0.clone();
-                        let mut s_safe = s0;
-                        unsafe {
-                            let f = if vertical { deb::DeblockChromaLt4V2_c } else { deb::DeblockChromaLt4H2_c };
-                            f(s_raw.as_mut_ptr().add(a), stride as i32, alpha, beta, tc2.as_mut_ptr());
-                        }
-                        deb::deblock_chroma_lt42(
-                            &mut PlaneCursorMut::new(&mut s_safe, a, stride),
-                            sx, sy, alpha, beta, &tc2,
-                        );
-                        assert_eq!(s_raw, s_safe,
-                            "Lt42 chroma {} stride {stride} alpha {alpha} beta {beta} tc {tc2:?} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed());
-
-                        let s0 = deblock_surface(&mut rng, rows, stride);
-                        let a = deblock_anchor(&mut rng, rows, stride, 2, 1, 8, vertical);
-                        let mut s_raw = s0.clone();
-                        let mut s_safe = s0;
-                        unsafe {
-                            let f = if vertical { deb::DeblockChromaEq4V2_c } else { deb::DeblockChromaEq4H2_c };
-                            f(s_raw.as_mut_ptr().add(a), stride as i32, alpha, beta);
-                        }
-                        deb::deblock_chroma_eq42(
-                            &mut PlaneCursorMut::new(&mut s_safe, a, stride),
-                            sx, sy, alpha, beta,
-                        );
-                        assert_eq!(s_raw, s_safe,
-                            "Eq42 chroma {} stride {stride} alpha {alpha} beta {beta} seed {:#x}",
-                            if vertical { "V" } else { "H" }, rng.seed());
-                    }
-                }
+            // Two-plane chroma: probe each plane position through the pair
+            // call, the other plane parked on its own exact-span scratch. The
+            // planes are filtered independently, so the golden run may use any
+            // content for the scratch plane.
+            let (step_x, step_y) = if vert { (s, 1) } else { (1, s) };
+            let scratch_len = 3 * step_x + 7 * step_y + 1;
+            let scratch_anchor = 2 * step_x;
+            for &probe_cb in &[true, false] {
+                let pos = if probe_cb { "cb" } else { "cr" };
+                probe_deblock_span(
+                    &format!("DeblockChromaLt4{}_c[{pos}]", if vert { "V" } else { "H" }),
+                    s, 2, 1, 8, vert,
+                    |p, st| unsafe {
+                        let mut other = vec![128u8; scratch_len];
+                        let o = other.as_mut_ptr().add(scratch_anchor);
+                        let (cb, cr) = if probe_cb { (p, o) } else { (o, p) };
+                        if vert { deb::DeblockChromaLt4V_c(cb, cr, st, 255, 18, tcp) }
+                        else { deb::DeblockChromaLt4H_c(cb, cr, st, 255, 18, tcp) }
+                    },
+                    |b, back, sx_, sy_| {
+                        let mut other = vec![128u8; scratch_len];
+                        let mut oc = PlaneCursorMut::new(&mut other, scratch_anchor, s);
+                        let mut pc = PlaneCursorMut::new(b, back, s);
+                        let (cb, cr) = if probe_cb { (&mut pc, &mut oc) } else { (&mut oc, &mut pc) };
+                        deb::deblock_chroma_lt4(cb, cr, sx_, sy_, 255, 18, &[25; 4]);
+                    },
+                );
+                probe_deblock_span(
+                    &format!("DeblockChromaEq4{}_c[{pos}]", if vert { "V" } else { "H" }),
+                    s, 2, 1, 8, vert,
+                    |p, st| unsafe {
+                        let mut other = vec![128u8; scratch_len];
+                        let o = other.as_mut_ptr().add(scratch_anchor);
+                        let (cb, cr) = if probe_cb { (p, o) } else { (o, p) };
+                        if vert { deb::DeblockChromaEq4V_c(cb, cr, st, 255, 18) }
+                        else { deb::DeblockChromaEq4H_c(cb, cr, st, 255, 18) }
+                    },
+                    |b, back, sx_, sy_| {
+                        let mut other = vec![128u8; scratch_len];
+                        let mut oc = PlaneCursorMut::new(&mut other, scratch_anchor, s);
+                        let mut pc = PlaneCursorMut::new(b, back, s);
+                        let (cb, cr) = if probe_cb { (&mut pc, &mut oc) } else { (&mut oc, &mut pc) };
+                        deb::deblock_chroma_eq4(cb, cr, sx_, sy_, 255, 18);
+                    },
+                );
             }
         }
     }
 }
 
+/// The `WelsNonZeroCount_c` shim materialises exactly the 24 `i8` its contract
+/// declares (an over-claim is Miri-visible UB against this exact-size array),
+/// and normalisation is total on the full `i8` range including `i8::MIN`.
 #[test]
-fn nonzero_count_matches_the_raw_one() {
+fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
     let mut rng = Prng::new(0xDEB3_0024);
-    for _ in 0..scale(200) {
-        // Full i8 range, including the negatives the cache genuinely holds
-        // (`-1` marks unavailable neighbours) and `i8::MIN`.
-        let mut raw: [i8; 24] = std::array::from_fn(|_| rng.next_u8() as i8);
-        let mut safe = raw;
+    for _ in 0..scale(50) {
+        let mut nzc: [i8; 24] = std::array::from_fn(|_| rng.next_u8() as i8);
+        let want: [i8; 24] = std::array::from_fn(|i| (nzc[i] != 0) as i8);
         unsafe {
-            deb::WelsNonZeroCount_c(raw.as_mut_ptr());
+            deb::WelsNonZeroCount_c(nzc.as_mut_ptr());
         }
-        deb::nonzero_count(&mut safe);
-        assert_eq!(raw, safe, "seed {:#x}", rng.seed());
+        assert_eq!(nzc, want, "seed {:#x}", rng.seed());
     }
+    let mut extremes: [i8; 24] = [i8::MIN; 24];
+    extremes[23] = 0;
+    unsafe {
+        deb::WelsNonZeroCount_c(extremes.as_mut_ptr());
+    }
+    assert_eq!(&extremes[..23], &[1i8; 23][..]);
+    assert_eq!(extremes[23], 0);
 }
