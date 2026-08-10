@@ -1225,3 +1225,63 @@ fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
     assert_eq!(&extremes[..23], &[1i8; 23][..]);
     assert_eq!(extremes[23], 0);
 }
+
+// ===========================================================================
+// T6 — border expansion (`common/expand_pic.rs` + `decoder_core.rs`'s `_c` fns)
+// ===========================================================================
+//
+// Commit-A equivalence entries: the raw `ExpandPictureLuma_c`/`Chroma_c` are
+// driven against `expand_picture` over identically-noised full allocations and
+// **every byte of the allocation** is compared — the padding is the output
+// here, so a block-shaped assertion would miss exactly the writes the kernel
+// exists to make. Geometry per `AllocPicture` both sides: the picture origin
+// at `pad*stride + pad`, pad 32 for luma and 16 for chroma, strides at the
+// minimum legal and wider (aligned strides leave slack columns the kernel must
+// not touch), and both exactly-sized and over-tall allocations (the C rounds
+// the row count up).
+
+use openh264_rs::common::expand_pic as exp;
+use openh264_rs::decoder::decoder_core as dcore;
+
+#[test]
+fn expand_picture_matches_the_raw_ones() {
+    let mut rng = Prng::new(0xE8_9A2D_0016);
+    // (pad, raw fn): the two real variants.
+    type RawExpand = unsafe extern "C" fn(*mut u8, i32, i32, i32);
+    let variants: &[(usize, RawExpand, &str)] = &[
+        (32, dcore::ExpandPictureLuma_c as RawExpand, "luma"),
+        (16, dcore::ExpandPictureChroma_c as RawExpand, "chroma"),
+    ];
+    for &(pad, raw, name) in variants {
+        for &(w, h) in &[(16usize, 16usize), (24, 20), (9, 11), (33, 8)] {
+            for stride_extra in [0usize, 5, 23] {
+                for rows_extra in [0usize, 7] {
+                    if cfg!(miri) && (stride_extra == 5 || rows_extra == 7) {
+                        continue; // shapes already covered; Miri needs the small set
+                    }
+                    let stride = w + 2 * pad + stride_extra;
+                    let rows = h + 2 * pad + rows_extra;
+                    for _ in 0..scale(4) {
+                        let before = rng.bytes(rows * stride);
+                        let mut got_raw = before.clone();
+                        let mut got_safe = before;
+                        unsafe {
+                            raw(
+                                got_raw.as_mut_ptr().add(pad * stride + pad),
+                                stride as i32,
+                                w as i32,
+                                h as i32,
+                            );
+                        }
+                        exp::expand_picture(&mut got_safe, stride, w, h, pad);
+                        assert_eq!(
+                            got_raw, got_safe,
+                            "{name} {w}x{h} stride {stride} rows {rows} seed {:#x}",
+                            rng.seed()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
