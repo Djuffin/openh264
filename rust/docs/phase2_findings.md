@@ -353,6 +353,22 @@ already a `Mutex`, so the sink methods can take `&self` and the trait object can
 with the thread-pool rework rather than in front of it. Phase 7's exit gate should
 run the Miri step with the skip removed.
 
+### The F3 connection (hypothesis, recorded 2026-08-10)
+
+F3 — the ~1-per-several-hundred wrong-length MT `sm=3` bitstream — now has **two**
+known-UB candidate mechanisms sitting under it: the `ReallocateSliceList` pointer
+invalidation F3's own write-up names (plan §P10), and this finding, a `&mut` retag
+race on the pool that every dispatched task executes. A retag race is exactly the
+class that miscompiles *rarely* and moves with codegen — which is F3's observed
+shape (rate varies with machine load and profile, crash-free, output wrong-length
+in either direction). No causal claim is made; the practical consequences are two:
+**nobody should burn a session chasing F3 while two known-UB mechanisms sit under
+it** (fix the UB first, then see what remains), and **Phase 7's exit — which
+deletes both mechanisms and removes this skip — doubles as the F3 experiment**: if
+the repeated-determinism gate runs clean after the rework, F12/P10 were
+load-bearing; if F3 persists, it is a third mechanism and gets hunted on sound
+code with Miri's full coverage.
+
 ---
 
 ## F13 — The widened Miri gate's remaining queue: four aliasing defects it cannot get past

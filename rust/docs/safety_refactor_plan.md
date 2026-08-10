@@ -773,6 +773,12 @@ findable.*
   **deleted-dead**, or **listed in the log with its owner phase** — no fourth option.
   Phase 2's sweep found `encoder/deblocking.rs` running a raw duplicate of a family
   the phase had already converted, on the encoder's mainline path, for four sessions.
+  **Corollary, applied at conversion time rather than discovered at phase exit:
+  "converted" is a per-consumer claim.** When a common module serves both codecs,
+  commit B grep-verifies *every* consumer's installer and every local duplicate
+  (this port duplicates freely — F2's four writers, T6's four `SDeblockingFunc`s);
+  a re-export picked up by one codec is not a family conversion. The claim goes in
+  the commit message with the greps that prove it.
 - **S19 — update §0 and hand off one brief ahead.** Every phase exit refreshes the
   status preamble (§0) and writes the *next* phase's brief in `prompts/`, then stamps
   its own brief superseded-historical. One brief ahead, not two: the phase after next
