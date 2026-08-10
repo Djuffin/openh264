@@ -407,7 +407,12 @@ Callers keep calling through R7 shims where tables still exist; tables themselve
 
 *Exit gate: battery + a dedicated malformed-stream error-code parity test + fuzz burn-in on the new reader. Risk: the P6 slop and CABAC end-ladder byte counting — both have precise existing tests (truncated streams in conformance set).*
 
-### Phase 4 — Dispatch de-virtualization *(3 sessions)*
+### Phase 4 — Dispatch de-virtualization *(3 sessions; split 4a/4b and resequenced by D-seq-1, 2026-08-10)*
+
+**D-seq-1 (2026-08-10): Phase 4a runs immediately after Phase 2's exit, before Phase 3.** The §8 dependency graph always permitted it (P2 → P4 with P3 on a parallel track); what makes it the right schedule now is the ledger: cumulative decode is ≈ +17% on the fastest stream and encoder ≈ +11%, all of it fixed per-call scaffolding that direct dispatch is expected to let LLVM inline away. Running 4a first (a) executes the recovery checkpoint while the deficits are still only kernel-family deficits, (b) gives Phase 3's new decoder-side shim families (bitstream cursors, on the same hot streams) a recovered baseline and full tripwire headroom to land into, (c) triggers the parked families' first re-attempt point (T5-sad and any T7 parkees — earlier re-landing means less time with raw kernels live, which is the safety goal speaking, and F10 showed parked raw code is where latent UB sits), and (d) deletes real unsafe surface in its own right: the `Option<unsafe extern "C" fn>` tables, the 21+2 transmutes, and the untyped installer casts T6 deliberately left behind (`decoder_core.rs:1906`, `:920-921`).
+
+- **Phase 4a (first, ~2 sessions):** kernel-dispatch de-virtualization — `mc.rs`'s consumers first (the D-perf-3 protocol, preserved verbatim: direct calls to `#[inline]` shims, `Option`-unwrap semantics verified post-init, one-pair measurement both benches), then the decoder kernel tables (intra-pred arrays, `sBlockFunc`, `sDeblockingFunc`, `sMcFunc`, expand, the cache-fill transmutes in `decode_slice.rs`), then the encoder's ~55 CPU-dispatch members. **Checkpoint duties:** re-measure every ledger row and record recovery; re-attempt every parked family (bodies re-measured with dispatch direct — D-perf-2's slices-and-offsets idea is on the table here); if recovery does not materialize, downgrade the ledger's remaining recovery claims to Phase 5/6 as D-perf-3's fallback prescribed.
+- **Phase 4b (after Phase 3, ~1 session):** the config-dispatch enums that touch what Phase 3 rewrites (`pfWelsSpatialWriteMbSyn` CAVLC/CABAC, RC-mode fn table → enum) plus the strategy vtables (`ParamsetStrategy`, `RefStrategy`) and `IWelsVP` if Phase 3/6 haven't absorbed them naturally.
 
 Tier 1 deletions (tables → direct calls; the Phase 0/2 work makes this mostly deletion), tier 2 enums (`EntropyCoder`, MD/ME strategy enums, RC mode — note `SWelsRcFunc` maps to an enum over the five RC modes already proven byte-identical), tier 3 traits (`ParamsetStrategy`, `RefStrategy`), `IWelsVP` inlined per §2.2.5, all 21+2 transmutes gone, `wels_func_ptr_def.rs` reduced to the ~15 algorithm choices and then dissolved into config-typed fields on `Encoder`.
 
@@ -602,6 +607,7 @@ P0 ──► P1 ──► P2 (kernels) ──► P4 (dispatch) ──► P5 (dec
 ```
 
 - **Common-first** because both codecs consume the same vocabulary types and kernels; **decoder pivot before encoder pivot** because the decoder has the strongest external ground truth (JVT streams + h264dec triangulation), no threading, and is 30% smaller — it's where the arena/grid/borrow-split patterns get proven before the bigger encoder applies them.
+- **Phase 4a before Phase 3 (D-seq-1, 2026-08-10):** the graph above always allowed P4 directly after P2; with the Phase 2 ledger carrying decode +17% / encoder +11% of shim scaffolding and the parked families waiting on the dispatch checkpoint, 4a's recovery-and-unpark pass runs first so Phase 3's new shim families land on a recovered baseline. 4b (the entropy/RC enums that touch what Phase 3 rewrites) stays after Phase 3.
 - **Threading after encoder ownership** (the split-borrow shape is unknowable before `sWelsEncCtx` is decomposed) and **the API boundary last** — the boundary can only shrink to a thin translation shim once the safe core it translates *to* exists, and until then the C API (and the tests driving it) stays byte-for-byte still.
 - Parallelizable across concurrent sessions/agents: within Phase 2 (kernel families are independent), Phase 3's read vs write sides, Phase 5 vs early Phase 6 steps (6.1/6.2 don't depend on decoder work — only on Phases 1–4), and any R1 sweep. The pivots (5.5/5.6, 6.6) and Phase 7 are single-track.
 
@@ -904,8 +910,16 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
       turned a suspected artefact into a real +3.48%. Also re-condemned Spatial Ramps
       (-38% between two runs of one binary). Cheap, decisive, and it belongs in front
       of every "that's just noise" conclusion from here on.
-- [ ] **T9 — phase exit.** Not started.
+- [ ] **T9 — phase exit.** Not started. Besides the standard exit duties, T9 carries
+      the **consolidation deliverables** (2026-08-10, full spec in the continuation
+      brief §T9): the status preamble at the top of this document, hoisting the
+      durable working rules into §7.6, and writing `prompts/phase4a.md` as the
+      hand-off. Phase numbers stay as permanent identifiers — no renumbering;
+      execution order is owned by this appendix and §8.
 
 ### Phases 3–9
 
-Not started.
+Not started. Order per **D-seq-1** (2026-08-10): after Phase 2's T9, the next phase
+is **4a** (kernel-dispatch de-virtualization + the recovery/unpark checkpoint), then
+Phase 3 (bitstream), then 4b, then Phase 5. Rationale recorded at the §5 Phase 4
+heading and §8.
