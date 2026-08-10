@@ -2273,3 +2273,154 @@ fn nonzero_count_duplicates_agree() {
         assert_eq!(b, c, "decoder copy disagrees with the safe kernel");
     }
 }
+
+// ============================================================================
+// Phase 4a — dispatch assert-maps
+// ============================================================================
+//
+// Plan §5's own mitigation for de-virtualization: *every replaced pointer
+// provably pointed at exactly one function per config*. These tests are how
+// that is proven, and they are written **before** the table they describe is
+// deleted, not after.
+//
+// The claim splits in two, and the split is forced rather than stylistic:
+//
+//   1. The installer ignores its CPU-flag argument, so there is one function
+//      per slot rather than a family selected at run time. Proven by address
+//      equality across flag values, inside the library, where both addresses
+//      come from the same instantiation — `common::mc::tests`,
+//      `init_mc_func_ignores_the_cpu_flag`.
+//   2. That one function is the one the direct call sites now name. Proven
+//      **behaviourally**, here.
+//
+// Half 2 cannot be an address comparison. `#[inline(always)]` functions are
+// instantiated in whatever codegen unit takes their address, so this crate's
+// `mc::McLuma_c as usize` is a local copy, not the pointer `InitMcFunc` stored;
+// four of the six MC shims are `#[inline(always)]` and the assert fails on all
+// four. `encoder_deblocking_table_installs_the_common_shims` above only works
+// cross-crate because its kernels happen to carry no inline attribute. Driving
+// both sides over the same inputs and comparing every written byte is immune to
+// that, and it is the property the call sites actually depend on.
+
+/// Every `SMcFunc` slot computes exactly what the function the direct call
+/// sites name computes — over the same inputs, compared across the whole
+/// destination surface.
+///
+/// The two sides are called through *different* mechanisms on purpose: `t.pMcLumaFunc.unwrap()`
+/// is the pointer the installer stored, `mc::McLuma_c` is the symbol the
+/// de-virtualized call site names. If a later edit re-points a slot at a
+/// different-but-plausible function — the exact mistake that produced Phase 2's
+/// straggler — the outputs diverge here.
+#[test]
+fn mc_table_slots_match_the_direct_calls() {
+    let mut rng = Prng::new(0x04A0_0001);
+    let mut t = mc::SMcFunc::default();
+    unsafe { mc::InitMcFunc(&mut t, 0) };
+
+    let luma_slot = t.pMcLumaFunc.unwrap();
+    let chroma_slot = t.pMcChromaFunc.unwrap();
+    let hor_slot = t.pfLumaHalfpelHor.unwrap();
+    let ver_slot = t.pfLumaHalfpelVer.unwrap();
+    let cen_slot = t.pfLumaHalfpelCen.unwrap();
+    let avg_slot = t.pfSampleAveraging.unwrap();
+
+    // Run one (kernel, direct) pair over a padded source and compare the whole
+    // destination. `reach` is the kernel's own read reach, so the source is
+    // sized exactly as its contract declares.
+    macro_rules! cmp_wh {
+        ($slot:expr, $direct:expr, $sizes:expr, $reach:expr, $mvx:expr, $mvy:expr) => {
+            for &(w, h) in sizes($sizes) {
+                for stride in strides(w + $reach.0 + $reach.2) {
+                    let (len, center) = src_span(stride, w, h, $reach);
+                    let src: Vec<u8> = (0..len).map(|_| rng.range_i32(0, 255) as u8).collect();
+                    let dst_stride = stride.max(w);
+                    let dspan = block_span(dst_stride, w, h);
+                    // Two differently-noised destinations: a byte the kernel
+                    // fails to write shows up as a difference, not as a
+                    // coincidentally-equal zero.
+                    let mut a: Vec<u8> = (0..dspan).map(|_| rng.range_i32(0, 255) as u8).collect();
+                    let mut b = a.clone();
+                    unsafe {
+                        $slot(
+                            src.as_ptr().add(center), stride as i32,
+                            a.as_mut_ptr(), dst_stride as i32,
+                            $mvx, $mvy, w as i32, h as i32,
+                        );
+                        $direct(
+                            src.as_ptr().add(center), stride as i32,
+                            b.as_mut_ptr(), dst_stride as i32,
+                            $mvx, $mvy, w as i32, h as i32,
+                        );
+                    }
+                    assert_eq!(a, b, "slot vs direct disagree at {w}x{h} stride {stride} mv ({}, {})", $mvx, $mvy);
+                }
+            }
+        };
+    }
+
+    // Luma: sweep every quarter-pel selector exhaustively (S10 — a selector
+    // sweep is never sampled), since the MV is what picks the kernel *and* its
+    // reach behind `McLuma_c`.
+    for mvx in 0..4i16 {
+        for mvy in 0..4i16 {
+            let reach = match (mvx, mvy) {
+                (0, 0) => R_COPY,
+                (_, 0) => R_HOR,
+                (0, _) => R_VER,
+                _ => R_CEN,
+            };
+            cmp_wh!(luma_slot, mc::McLuma_c, QPEL_SIZES, reach, mvx, mvy);
+        }
+    }
+
+    // Chroma: the (0,0) eighth-pel case takes the copy path and narrows its
+    // width, every other case is bilinear — both selectors matter.
+    for &(mvx, mvy) in &[(0i16, 0i16), (1, 0), (0, 1), (3, 5), (7, 7)] {
+        let (reach, sz): (Reach, &'static [(usize, usize)]) = if mvx & 7 != 0 || mvy & 7 != 0 {
+            (R_CHROMA, CHROMA_SIZES)
+        } else {
+            (R_COPY, COPY_SIZES)
+        };
+        cmp_wh!(chroma_slot, mc::McChroma_c, sz, reach, mvx, mvy);
+    }
+
+    // The three half-pel slots take (src, srcStride, dst, dstStride, w, h).
+    macro_rules! cmp_halfpel {
+        ($slot:expr, $direct:expr, $reach:expr) => {
+            for &(w, h) in sizes(HALFPEL_SIZES) {
+                for stride in strides(w + $reach.0 + $reach.2) {
+                    let (len, center) = src_span(stride, w, h, $reach);
+                    let src: Vec<u8> = (0..len).map(|_| rng.range_i32(0, 255) as u8).collect();
+                    let dst_stride = stride.max(w);
+                    let dspan = block_span(dst_stride, w, h);
+                    let mut a: Vec<u8> = (0..dspan).map(|_| rng.range_i32(0, 255) as u8).collect();
+                    let mut b = a.clone();
+                    unsafe {
+                        $slot(src.as_ptr().add(center), stride as i32, a.as_mut_ptr(), dst_stride as i32, w as i32, h as i32);
+                        $direct(src.as_ptr().add(center), stride as i32, b.as_mut_ptr(), dst_stride as i32, w as i32, h as i32);
+                    }
+                    assert_eq!(a, b, "half-pel slot vs direct disagree at {w}x{h} stride {stride}");
+                }
+            }
+        };
+    }
+    cmp_halfpel!(hor_slot, mc::McHorVer20_c, R_HOR);
+    cmp_halfpel!(ver_slot, mc::McHorVer02_c, R_VER);
+    cmp_halfpel!(cen_slot, mc::McHorVer22_c, R_CEN);
+
+    // `pfSampleAveraging` has its own shape: (dst, dstStride, srcA, strideA, srcB, strideB, width, height).
+    for &(w, h) in sizes(&[(16, 16), (8, 8), (4, 4), (2, 2)]) {
+        for stride in strides(w) {
+            let span = block_span(stride, w, h);
+            let sa: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
+            let sb: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
+            let mut a: Vec<u8> = (0..span).map(|_| rng.range_i32(0, 255) as u8).collect();
+            let mut b = a.clone();
+            unsafe {
+                avg_slot(a.as_mut_ptr(), stride as i32, sa.as_ptr(), stride as i32, sb.as_ptr(), stride as i32, w as i32, h as i32);
+                mc::PixelAvg_c(b.as_mut_ptr(), stride as i32, sa.as_ptr(), stride as i32, sb.as_ptr(), stride as i32, w as i32, h as i32);
+            }
+            assert_eq!(a, b, "pfSampleAveraging slot vs direct disagree at {w}x{h} stride {stride}");
+        }
+    }
+}

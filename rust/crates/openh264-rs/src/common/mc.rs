@@ -1969,6 +1969,106 @@ pub unsafe extern "C" fn InitMcFunc(pMcFuncs: *mut SMcFunc, _uiCpuFlag: u32) {
 mod tests {
     use super::*;
 
+    /// Plan §5's de-virtualization mitigation, half one: `InitMcFunc` is a
+    /// **constant function of its CPU-flag argument**.
+    ///
+    /// That is the claim direct dispatch actually rests on — that there is one
+    /// function per slot to call, not a family selected at run time. Every
+    /// `_sse2`/`_neon` variant in this port is a delegating stub or a dead
+    /// extern (Phase 0 deleted 62 dead ones from this module alone), so
+    /// `_uiCpuFlag` selects nothing; this pins that, for every flag value the
+    /// port can produce rather than for the one this machine reports.
+    ///
+    /// **Why this compares two tables instead of a table against named
+    /// functions.** The obvious assert-map — `t.pMcLumaFunc.unwrap() as usize
+    /// == McLuma_c as usize`, the shape
+    /// `encoder_deblocking_table_installs_the_common_shims` uses — is *unsound
+    /// for these six functions*, and both a cross-crate and an in-crate draft
+    /// of it failed before this one worked. Four of them are
+    /// `#[inline(always)]`, and an `#[inline(always)]` function whose address
+    /// is taken gets instantiated locally in whatever codegen unit takes it:
+    /// the integration-test crate gets its own copy, and so does this `tests`
+    /// submodule. Neither address is the one `InitMcFunc` stored. The
+    /// deblocking assert-map only works because those kernels happen to carry
+    /// no inline attribute — luck, not design, and worth knowing before the
+    /// next table is de-virtualized.
+    ///
+    /// Both addresses here come from the same `InitMcFunc` instantiation, so
+    /// the comparison is meaningful. The complementary half — that the
+    /// installed function *is* the one the direct calls name — is behavioural
+    /// and lives in `tests/kernels_differential_phase2.rs`
+    /// (`mc_table_slots_match_the_direct_calls`), where identity is proven by
+    /// output rather than by symbol address.
+    #[test]
+    fn init_mc_func_ignores_the_cpu_flag() {
+        use crate::common::cpu_core::*;
+        let flags: [u32; 10] = [
+            0, u32::MAX,
+            WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_AVX,
+            WELS_CPU_AVX2, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX,
+        ];
+        let mut base = SMcFunc::default();
+        unsafe { InitMcFunc(&mut base, 0) };
+        let addrs = |t: &SMcFunc| -> [usize; 6] {
+            [
+                t.pfLumaHalfpelHor.unwrap() as usize,
+                t.pfLumaHalfpelVer.unwrap() as usize,
+                t.pfLumaHalfpelCen.unwrap() as usize,
+                t.pfSampleAveraging.unwrap() as usize,
+                t.pMcChromaFunc.unwrap() as usize,
+                t.pMcLumaFunc.unwrap() as usize,
+            ]
+        };
+        const NAMES: [&str; 6] = [
+            "pfLumaHalfpelHor", "pfLumaHalfpelVer", "pfLumaHalfpelCen",
+            "pfSampleAveraging", "pMcChromaFunc", "pMcLumaFunc",
+        ];
+        let want = addrs(&base);
+        for flag in flags {
+            let mut t = SMcFunc::default();
+            unsafe { InitMcFunc(&mut t, flag) };
+            for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
+                assert_eq!(
+                    got, expected,
+                    "cpu flag {flag:#x} selected a different function for slot {}",
+                    NAMES[i]
+                );
+            }
+        }
+    }
+
+    /// The other half of the de-virtualization argument: the slots were never
+    /// `None` at a call site, so unconditional direct calls preserve behaviour.
+    ///
+    /// This is the half that is easy to wave through. Five of the fifteen
+    /// former call sites spelled the dispatch `if let Some(f) = ...`, which
+    /// *silently skips the call* on `None` — for MC, that means leaving a
+    /// prediction block unwritten rather than filling it. Replacing those with
+    /// unconditional calls is behaviour-preserving only because `InitMcFunc`
+    /// runs unconditionally at codec-open time on both sides
+    /// (`WelsInitDecoderFuncs` via `WelsOpenDecoder`; the encoder's
+    /// `InitFunctionPointers`), before any frame is touched. A
+    /// default-constructed table being all-`None` is what makes the difference
+    /// observable rather than academic.
+    #[test]
+    fn mc_table_is_all_none_before_init_and_all_some_after() {
+        let t = SMcFunc::default();
+        assert!(
+            t.pMcLumaFunc.is_none() && t.pMcChromaFunc.is_none() && t.pfSampleAveraging.is_none()
+                && t.pfLumaHalfpelHor.is_none() && t.pfLumaHalfpelVer.is_none()
+                && t.pfLumaHalfpelCen.is_none(),
+            "a default SMcFunc must be all-None, or the post-init claim proves nothing"
+        );
+        let mut t = SMcFunc::default();
+        unsafe { InitMcFunc(&mut t, 0) };
+        assert!(
+            t.pMcLumaFunc.is_some() && t.pMcChromaFunc.is_some() && t.pfSampleAveraging.is_some()
+                && t.pfLumaHalfpelHor.is_some() && t.pfLumaHalfpelVer.is_some()
+                && t.pfLumaHalfpelCen.is_some(),
+            "InitMcFunc must leave every slot populated"
+        );
+    }
+
     /// The two aliases really are `McHorVer20_c` and `McHorVer02_c`.
     ///
     /// This test used to anchor a 4x4 block at `src.as_ptr()` of a bare `[u8; 64]`
