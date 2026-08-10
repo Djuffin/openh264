@@ -13,15 +13,18 @@ proposal and its accumulated history, and stays as written.*
 
 | | |
 |---|---|
-| **Phase 2 complete** | 2026-08-10. Leaf DSP kernels of both codecs converted onto safe signatures behind strangler shims: **154 shims** across 13 files, ~190 kernels reached |
-| **Next** | **Phase 4a — dispatch de-virtualization + the recovery/unpark checkpoint.** Brief: [`prompts/phase4a.md`](prompts/phase4a.md). Then Phase 3 |
-| **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, a family that would push any stream past **+25% median cumulative** parks instead, commit B measures one interleaved pair per bench, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a runs before Phase 3 |
-| **Cumulative ledger** | decode ≈ **+17 / +10 / +10%**, encoder ≈ **+14% median** — all fixed per-call shim scaffolding, all open, all re-measured at 4a's checkpoint ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
-| **Parked** | `common/sad_common.rs` (14 kernels) and `encoder/sample.rs`'s SATD (7) — proven, uninstalled, raw kernels still running. Both re-attempt at 4a (§Parked) |
-| **Ratchet** | `unsafe_fn` 1346, `raw_ptr` 5167, `SHIM(` 154, `no_mangle` 24. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
-| **Standing rules** | **§7.6** below. Phase 3+ briefs cite it rather than copying rules forward |
-| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1–F3, [`phase1_findings.md`](phase1_findings.md) F4–F7, [`phase2_findings.md`](phase2_findings.md) **F8–F13**. F12/F13 are aliasing soundness defects found by the widened Miri gate and are the first of their class; the rest are arithmetic-parity or UB-in-parked-code |
-| **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, and F3's sixth measurement** — re-raising T7 is Eugene's call |
+| **Phase 4a complete** | 2026-08-10. Kernel-dispatch de-virtualization + the recovery/unpark checkpoint. `SMcFunc`, the decoder's `SDeblockingFunc`, and F13's `pfMdCost`/`pfMeCost` self-reference are gone; **49 dispatch sites now name their kernels directly** |
+| **Next** | **Phase 3 — the bitstream layer.** Brief: [`prompts/phase3.md`](prompts/phase3.md). Then Phase 4b (config-dispatch enums + strategy vtables), which waits for Phase 3 by the 4a/4b fence |
+| **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, +25% median cumulative tripwire, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a ran before Phase 3 — done. **D-perf-3's fallback is now spent, on the decode side only** (see the finding below) |
+| **The checkpoint's result** | **Encoder -5.11% median, all 28 usable rows faster or flat, none regressed**; decode -0.19% (flat). Cumulative vs Phase 2's start is now ≈ **+8.9% encoder** (was +14.73% — back under 10% for the first time since T4) and ≈ +17.8 / +10.1 / +9.6% decode (unmoved). [`perf_baseline.md`](perf_baseline.md) §Phase 4a |
+| **The finding that governs Phases 5/6** | **Direct dispatch recovers per-call scaffolding only where the caller supplies constant dimensions.** Encoder call sites pass literal block sizes and recovered; the decoder's arrive as parameters through `BaseMC` (~1300 instructions, not inlinable) and recovered nothing. Measured on two families in both codecs, with the `#[inline]` fixes built and reverted rather than reasoned about. **Every remaining decode ledger row is downgraded to Phase 5**, which is the phase that makes those dimensions static |
+| **Ledger** | **No row is `pending`.** Two closed as noise, two downgraded to Phase 5 with the reason, four carried into the aggregate ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
+| **Parked** | `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7) — **re-attempted and re-parked 2026-08-10**, second dated verdict, on a rebuilt harness (1.41x–4.94x against a ≤1.05x bar). One debt owed: SATD still has no measurement of its own |
+| **Ratchet** | `unsafe_fn` 1346, `raw_ptr` 5171, `SHIM(` 154, `no_mangle` 24, **`transmute` 23 — unchanged, and that is 4a's main unfinished business**. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Gates** | 410 debug / 408 release / 20 ignored. Sweeps 341/341 both profiles. **Miri widened again: 274 tests, one skip deleted** (`svc_mode_decision`); three remain (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`) |
+| **Standing rules** | **§7.6** below. Phase 3+ briefs cite it rather than copying rules forward. New instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1–F3 (F3 has an **eighth** measurement), [`phase1_findings.md`](phase1_findings.md) F4–F7, [`phase2_findings.md`](phase2_findings.md) **F8–F14**. F13's fourth site is **fixed**; **F14 is new and fixed** — production UB, found the moment F13 stopped blocking Miri |
+| **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, F14, and F3's eighth measurement** — re-raising T7 is Eugene's call |
 
 **Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
 session executes; [`safety_refactor_log.md`](safety_refactor_log.md) is the per-session
@@ -1157,9 +1160,40 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
         superseded-historical. No renumbering; phase numbers stay permanent
         identifiers and execution order is owned by this appendix and §8.
 
-### Phases 3–9
+### Phase 4a — dispatch de-virtualization + the recovery checkpoint
 
-Not started. Order per **D-seq-1** (2026-08-10): after Phase 2's T9, the next phase
-is **4a** (kernel-dispatch de-virtualization + the recovery/unpark checkpoint), then
-Phase 3 (bitstream), then 4b, then Phase 5. Rationale recorded at the §5 Phase 4
-heading and §8.
+**Complete** (2026-08-10, session A: `32dc05c5`…`25a8e287` + close-out; full record
+in the log's Phase 4a entry).
+
+- [x] **`SMcFunc` de-virtualized** — assert-maps first (`32dc05c5`), then 15 sites
+      direct (`c9d416de`); `pMCFunc` parameter deleted.
+- [x] **F13's fourth site fixed** — `pfMdCost`/`pfMeCost` → `CostFamily` enum, the
+      `svc_mode_decision` Miri skip **deleted** (`ededdee8`), which immediately
+      exposed **F14** (`sad_common`'s fourth latent-UB finding — the
+      parked-raw-code thesis is now a measurement, not a prediction).
+- [x] **Decoder `SDeblockingFunc` → direct calls** (12 slots, 22 sites, `3a67cd8e`).
+- [x] **The checkpoint ran and split the ledger** (`perf_baseline.md` §Phase 4a):
+      encoder recovered to ≈ **+8.9% cumulative** — under 10% for the first time
+      since T4 — while **decode did not move**. The finding Phases 5/6 inherit:
+      *direct dispatch recovers per-call scaffolding only where the caller supplies
+      constant dimensions*; `BaseMC`'s runtime sizes and ~1300 instructions defeat
+      inlining, so the decode rows are **downgraded to Phase 5** (D-perf-3's
+      fallback, spent on the decode half only). Spatial Ramps halved, as predicted.
+- [x] **Parked families' second verdict** (`25a8e287`, rebuilt harness): SAD and
+      SATD stay parked; next re-attempt is caller conversion (Phases 5/6).
+- [x] Scope cut on evidence, not clock: decoder intra-pred arrays, `sBlockFunc`,
+      expand, the `decode_slice.rs` cache-fill transmutes, and the encoder's ~55
+      CPU-dispatch members are **not** de-virtualized — `transmute` still 23, the
+      phase's named unfinished business, owned by 4b/5.
+
+### Phase 3 — bitstream layer
+
+**Next.** Brief written at 4a's exit: [`prompts/phase3.md`](prompts/phase3.md).
+First action per the log's hand-off: read F4/F5/F7, F2, and F13's `InitBits` site,
+then **write the malformed-stream error-code parity test against the unconverted
+reader before touching `bit_stream.rs`**.
+
+### Phases 4b–9
+
+Not started. Order per **D-seq-1**: Phase 3 → 4b (config-dispatch enums, strategy
+vtables, and 4a's leftover de-virtualization scope) → 5 → 6 → 7 → 8 → 9.

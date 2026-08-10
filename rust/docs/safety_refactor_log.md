@@ -1758,3 +1758,161 @@ row, re-attempt both parked families with the harness rebuilt first (S3/S4), and
 `--skip svc_mode_decision` from the Miri gate, because F13's self-referential dispatch
 table is 4a's to fix and de-virtualizing it is the fix.
 
+
+---
+
+## 2026-08-10 — Phase 4a, session A (dispatch de-virtualization + the recovery checkpoint)
+
+**Goal:** `prompts/phase4a.md` — de-virtualize kernel dispatch, then run the recovery
+and unpark checkpoint five sessions of ledgered deficits had been waiting for. The
+brief allowed cutting de-virtualization scope to keep the checkpoint whole; that
+allowance was used, deliberately, and §3 below says where.
+
+**Started at** `7de4ebe9` (plus two uncommitted doc edits), **ended at** the commit
+carrying this entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `2f65a765` | Phase 2's two leftover doc edits (F3/F12 hypothesis, S18's corollary) |
+| `ea2304ce` | `rust/tools/perfpair.py` — S1/S2/S17 as an instrument |
+| `32dc05c5` | mc A: the assert-maps that license de-virtualizing `SMcFunc` |
+| `c9d416de` | mc B: 15 sites become direct calls; `pMCFunc` parameter deleted |
+| `ededdee8` | F13's fourth site → `CostFamily` enum; **Miri skip deleted**; F14 found and fixed |
+| `3a67cd8e` | the decoder's `SDeblockingFunc` → direct calls (12 slots, 22 sites) |
+| `25a8e287` | the rebuilt SAD body harness, and the parked families' second verdict |
+
+Plus `perf_baseline.md` §Phase 4a, the ledger's checkpoint column, plan §0, and
+`prompts/phase3.md`.
+
+### Gates
+
+| gate | control (`7de4ebe9`) | final |
+|---|---|---|
+| `cargo test` | 404 / 0 / 20 | **410 / 0 / 20** |
+| `cargo test --release` | 402 / 0 / 20 | **408 / 0 / 20** |
+| `sweep.sh st mt def` (debug) | 341/341 | 341/341 |
+| `sweep.sh st mt def` (release) | 341/341 | 341/341 |
+| Miri `--lib` | 267 tests, 4 skips | **274 tests, 3 skips** |
+| ratchet | clean | clean; `raw_ptr` 5175 → 5171, `transmute` 23 (unmoved) |
+
+### 1. The headline: the thesis is true with a condition attached
+
+**Encoder −5.11% median at the checkpoint, all 28 usable rows faster or flat, none
+regressed. Decode −0.19%, flat.** Cumulative vs Phase 2's start is now ≈ **+8.9%**
+encoder (was +14.73%, under 10% for the first time since T4) and unchanged on decode.
+
+The condition is the phase's real finding, and it is the thing Phases 5/6 inherit:
+
+> **Direct dispatch recovers per-call scaffolding only where the caller supplies
+> constant dimensions.**
+
+The encoder's MC sites name the shims with literal block sizes, so inlining folds the
+span arithmetic and `from_raw_parts` against them — `mc.rs` alone measured **−4.84%**
+the moment its fifteen sites became direct calls, and it recovered *in the deficit's
+own shape*: flat content moved most (YUV Space −12.7%, SMPTE −9.1%), dense Mandelbrot
+barely moved, exactly inverse to how they accumulated the deficit. The decoder's sizes
+arrive as `iBlkWidth`/`iBlkHeight` **parameters** through `BaseMC`, constant at its ~40
+call sites and runtime inside it, and `BaseMC` is ~1300 instructions — far past any
+inlining threshold. Deblocking is the same shape with a runtime *stride*: −0.53%.
+
+**Two fixes were built and paired rather than reasoned about** (S1), and both are
+reverted: `#[inline]` on `BaseMC` read −0.35%, `#[inline(always)]` on `McChroma_c`
+−0.71%, both inside the floor. Disassembly settled it — `McLuma_c` *does* inline into
+`BaseMC` (the `mc_hor_ver*` kernels are called straight from it) while the chroma pair
+stays out of line. That is why D-perf-3's fallback is spent on the decode half only,
+and why those rows are downgraded to Phase 5 rather than left promising Phase 4.
+
+`Spatial Ramps`, excluded from every verdict and still the loudest instrument here,
+**halved (−48%)**. The brief predicted it would show up loudest there. It did.
+
+### 2. Deleting a Miri skip immediately exposed production UB — for the third time
+
+F13's fourth site (`SWelsFuncPtrList` self-referential via `pfMdCost`) became a
+`CostFamily` enum, `--skip svc_mode_decision` came off, and Miri promptly failed on
+something else entirely: **F14**, `WelsSampleSad16x16_c` walking one row past
+`pMemPredMb`. Its reads end *exactly* at byte 511 of a 512-byte allocation; being a C
+transliteration it then bumps its row pointer and forms `base + 520`, never
+dereferenced. UB in Rust and C alike, invisible to every gate the port has, and
+sitting behind F13 where no instrument could see it.
+
+Fixed by accommodation, not repair (S12 — exact spans are for the safe side):
+`WelsMallocz(2 * 256)` → `(2 * 256 + 16)`, provably output-neutral, and guarded by the
+instrument that found it. **That is `sad_common.rs`'s fourth latent-UB finding** (F10
+×3, F14 ×1) — the family that has spent longest parked with raw bodies live. The
+brief's claim that parked raw code is where UB sits was not a prediction by the time
+the session finished; it was a measurement.
+
+Generalisation worth keeping: **each skip hides an unknown number of further defects,
+not just the one it names.** Third time this refactor (F1 behind the release segfault,
+seven behind `--lib safe::`, F14 behind F13).
+
+### 3. Where scope was cut, and why that was right
+
+Not de-virtualized: the decoder intra-pred arrays, `sBlockFunc`, expand, the
+`decode_slice.rs` cache-fill transmutes, and the encoder's ~55 CPU-dispatch members
+including `WelsInitSampleSadFunc`. **`transmute` is therefore still 23 and that is the
+phase's main unfinished business.**
+
+The cut was made on evidence rather than on the clock. Once `mc.rs` and deblocking had
+both shown that the decode side does not recover, further decoder tables had a known
+near-zero perf payoff, and the intra-pred arrays are not even the CPU-dispatch case —
+they dispatch on *mode*, from the bitstream, so they need `enum` + `match`, and
+T3/T7-G1 already measured that family as a wash in both codecs. Spending the remaining
+session on them would have bought unsafe-surface only, at the cost of the checkpoint —
+which is the trade the brief explicitly told this session not to make.
+
+### 4. Two instrument lessons, both of which cost something
+
+- **Address comparison is not a sound assert-map technique.** The obvious shape —
+  `slot.unwrap() as usize == Kernel_c as usize`, which
+  `encoder_deblocking_table_installs_the_common_shims` uses — fails for
+  `#[inline(always)]` functions, cross-crate *and* in-crate, because they are
+  instantiated in whatever codegen unit takes their address; Miri mints a fresh
+  address per cast on top of that. The existing test works by luck, not design. Every
+  assert-map in this phase is split in two: flag-invariance by comparing two tables
+  from the *same* installer, identity by comparing **behaviour**.
+- **`perfpair.py`'s first draft dropped six encoder rows and printed a plausible
+  table.** It parsed bench output by field offset, and these benches pad to a fixed
+  column width, so `( 6.202 ms)` loses its space at `(10.658 ms)` — every row over
+  10 ms vanished. Now regex-parsed, with missing rows reported explicitly. Same class
+  as S17: an instrument that quietly measures less than it claims.
+  A third, smaller one: a mutation test "passed" because the mutated tree failed to
+  *compile* and my grep filtered the error away. A filtered command output is not a
+  result.
+
+### 5. Parked families: re-attempted, re-parked, one debt owed
+
+Harness rebuilt first as the brief required (`benches/sad_bodies_bench.rs`, S1/S3/S4
+with each rule's reason in the module docs). Ratios now reproduce within ~3% across
+runs against a predecessor that moved 3x. **1.41x–4.94x across the seven shapes
+against a ≤1.05x bar — nothing close, in any framing.** Second dated verdict recorded.
+
+New and actionable: **per-row cost is the whole story and it falls off a cliff at
+W = 4** (8x16 costs more than 16x8 at identical sample counts; 4x8 costs twice 8x8 for
+half the samples). Start there.
+
+**D-perf-2's slices-and-offsets lead is still untested and this session did not test
+it.** The cheap probe (hoist `PlaneCursor::new` out of the loop) is invalid —
+`black_box(&cursor)` forces the cursor to memory and made the safe side slower, and
+merely adding that loop swung 8x8 from 2.28x to 4.39x. Recorded rather than reported.
+
+**Debt:** `encoder/sample.rs`'s SATD still has no measurement of its own. The SAD
+verdict is a strictly-easier lower bound so the park holds a fortiori, but the brief
+asked for a real SATD measurement and it is **not** discharged.
+
+### 6. F3, cleared properly
+
+Fired twice (family gate, then one of three re-runs), which is S14's escalation
+trigger. The alternating loop gave **HEAD 0 / 600 configs, control `2f65a765` 2 / 600**
+— the *control* side hit and the changed side did not. Session rate ≈1/540, back in
+the historical 1/400–1000 band and ~11x quieter than session G's ≈1/49. Both hits
+matched the signature exactly. Eighth measurement appended to F3.
+
+### Next session's first action
+
+Phase 3, per [`prompts/phase3.md`](prompts/phase3.md): read F4/F5/F7, F2, and F13's
+`InitBits` site, then **write the malformed-stream error-code parity test against the
+unconverted reader** before touching `bit_stream.rs`. That test is the phase's real
+gate and it is worthless if written after the conversion it is meant to judge.
