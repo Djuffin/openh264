@@ -430,6 +430,8 @@ pub type PUpdateMbMvFunc = unsafe extern "C" fn(pMvBuffer: *mut SMVUnitXY, ksMv:
 // SMcFunc is a common-layer type (codec/common/inc/mc.h:46); common/mc.rs already
 // had it with correctly typed pointers where this copy used *mut c_void.
 pub use crate::common::mc::SMcFunc;
+// Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
+use crate::common::mc::{McHorVer02_c, McHorVer20_c, McHorVer22_c, PixelAvg_c};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
@@ -1056,13 +1058,12 @@ pub unsafe fn MeRefineQuarPixel(
     pParams: *mut SQuarRefineParams,
     iStrideEnc: i32,
 ) {
-    let pSampleAvg = (*pFunc).sMcFuncs.pfSampleAveraging.unwrap();
     let pEncMb = (*pMe).pEncMb;
     let kuiPixel = (*pMe).uiBlockSize as usize;
     let pfMeCost = (*(*pFunc).sSampleDealingFuncs.pfMeCost.add(kuiPixel)).unwrap();
 
     // =========================(0, -1) [TOP] =========================
-    pSampleAvg(
+    PixelAvg_c(
         (*pMeRefine).pQuarPixTmp,
         ME_REFINE_BUF_STRIDE,
         (*pParams).pSrcA[0],
@@ -1081,7 +1082,7 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(0, 1) [BOTTOM] =======================
-    pSampleAvg(
+    PixelAvg_c(
         (*pMeRefine).pQuarPixTmp,
         ME_REFINE_BUF_STRIDE,
         (*pParams).pSrcA[1],
@@ -1100,7 +1101,7 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(-1, 0) [LEFT] ========================
-    pSampleAvg(
+    PixelAvg_c(
         (*pMeRefine).pQuarPixTmp,
         ME_REFINE_BUF_STRIDE,
         (*pParams).pSrcA[2],
@@ -1119,7 +1120,7 @@ pub unsafe fn MeRefineQuarPixel(
     }
 
     // =========================(1, 0) [RIGHT] ========================
-    pSampleAvg(
+    PixelAvg_c(
         (*pMeRefine).pQuarPixTmp,
         ME_REFINE_BUF_STRIDE,
         (*pParams).pSrcA[3],
@@ -1192,8 +1193,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
 
     iBestHalfPix = REFINE_ME_NO_BEST_HALF_PIXEL;
 
-    let pfLumaHalfpelVer = (*pFunc).sMcFuncs.pfLumaHalfpelVer.unwrap();
-    pfLumaHalfpelVer(
+    McHorVer02_c(
         pRef.offset(-(kiStrideRef as isize)),
         kiStrideRef,
         (*pMeRefine).pHalfPixV,
@@ -1225,8 +1225,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         pBestPredInter = (*pMeRefine).pHalfPixV.add(ME_REFINE_BUF_STRIDE as usize);
     }
 
-    let pfLumaHalfpelHor = (*pFunc).sMcFuncs.pfLumaHalfpelHor.unwrap();
-    pfLumaHalfpelHor(
+    McHorVer20_c(
         pRef.offset(-1),
         kiStrideRef,
         (*pMeRefine).pHalfPixH,
@@ -1263,7 +1262,6 @@ pub unsafe extern "C" fn MeRefineFracPixel(
     sParams.pRef = pRef;
     sParams.iBestQuarPix = ME_NO_BEST_QUAR_PIXEL;
 
-    let pfLumaHalfpelCen = (*pFunc).sMcFuncs.pfLumaHalfpelCen.unwrap();
 
     if REFINE_ME_NO_BEST_HALF_PIXEL == iBestHalfPix {
         sParams.iStrideA = kiStrideRef;
@@ -1286,7 +1284,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
         match iBestHalfPix {
             REFINE_ME_HALF_PIXEL_LEFT => {
                 (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixV;
-                pfLumaHalfpelCen(
+                McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
                     (*pMeRefine).pHalfPixHV,
@@ -1309,7 +1307,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
             }
             REFINE_ME_HALF_PIXEL_RIGHT => {
                 (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixV;
-                pfLumaHalfpelCen(
+                McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
                     (*pMeRefine).pHalfPixHV,
@@ -1332,7 +1330,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
             }
             REFINE_ME_HALF_PIXEL_TOP => {
                 (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixH;
-                pfLumaHalfpelCen(
+                McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
                     (*pMeRefine).pHalfPixHV,
@@ -1355,7 +1353,7 @@ pub unsafe extern "C" fn MeRefineFracPixel(
             }
             REFINE_ME_HALF_PIXEL_BOTTOM => {
                 (*pMeRefine).pHalfPixHV = (*pMeRefine).pHalfPixH;
-                pfLumaHalfpelCen(
+                McHorVer22_c(
                     pRef.offset(-1 - kiStrideRef as isize),
                     kiStrideRef,
                     (*pMeRefine).pHalfPixHV,

@@ -30,6 +30,8 @@
 
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types, dead_code)]
 
+// Phase 4a: MC is called directly, not via `sMcFuncs`.
+use crate::common::mc::{McChroma_c, McLuma_c};
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY};
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
@@ -1435,7 +1437,7 @@ pub unsafe fn WelsMdPSkipEnc(
 
     //luma
     pRefLuma = pRefLuma.offset((sQpelMvp.iMvY as i32 * iLineSizeY + sQpelMvp.iMvX as i32) as isize);
-    (*pFunc).sMcFuncs.pMcLumaFunc.expect("pMcLumaFunc unset")(
+    McLuma_c(
         pRefLuma, iLineSizeY, pDstLuma, 16, sMvp.iMvX, sMvp.iMvY, 16, 16,
     );
     iSadCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16]
@@ -1447,11 +1449,10 @@ pub unsafe fn WelsMdPSkipEnc(
     );
 
     let iStrideUV = (sQpelMvp.iMvY as i32 >> 1) * iLineSizeUV + (sQpelMvp.iMvX as i32 >> 1);
-    let pMcChroma = (*pFunc).sMcFuncs.pMcChromaFunc.expect("pMcChromaFunc unset");
     let pfSad8x8 = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_8x8]
         .expect("pfSampleSad[BLOCK_8x8] unset");
     pRefCb = pRefCb.offset(iStrideUV as isize);
-    pMcChroma(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
+    McChroma_c(pRefCb, iLineSizeUV, pDstCb, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
     iSadCostChroma = pfSad8x8(
         (*pMbCache).SPicData.pEncMb[1],
         (*pCurLayer).iEncStride[1],
@@ -1460,7 +1461,7 @@ pub unsafe fn WelsMdPSkipEnc(
     );
 
     pRefCr = pRefCr.offset(iStrideUV as isize);
-    pMcChroma(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
+    McChroma_c(pRefCr, iLineSizeUV, pDstCr, 8, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
     iSadCostChroma += pfSad8x8(
         (*pMbCache).SPicData.pEncMb[2],
         (*pCurLayer).iEncStride[2],
@@ -1593,7 +1594,6 @@ pub unsafe fn WelsMdInterMbRefinement(
     let pDstLuma = (*pMbCache).pMemPredLuma;
 
     let iLineSizeRefUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
-    let pMcChroma = (*pFunc).sMcFuncs.pMcChromaFunc.expect("pMcChromaFunc unset");
 
     match (*pCurMb).uiMbType {
         MB_TYPE_16x16 => {
@@ -1626,8 +1626,8 @@ pub unsafe fn WelsMdInterMbRefinement(
                 ((*pMv).iMvY as i32 >> 3) * iLineSizeRefUV + ((*pMv).iMvX as i32 >> 3);
             pTmpRefCb = pRefCb.offset(iMvStride as isize);
             pTmpRefCr = pRefCr.offset(iMvStride as isize);
-            pMcChroma(pTmpRefCb, iLineSizeRefUV, pDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cb
-            pMcChroma(pTmpRefCr, iLineSizeRefUV, pDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cr
+            McChroma_c(pTmpRefCb, iLineSizeRefUV, pDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cb
+            McChroma_c(pTmpRefCr, iLineSizeRefUV, pDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 8); //Cr
 
             let sdf = &(*pFunc).sSampleDealingFuncs;
             (*pWelsMd).iCostSkipMb = sdf.pfSampleSad[BLOCK_16x16].expect("pfSampleSad unset")(
@@ -1694,8 +1694,8 @@ pub unsafe fn WelsMdInterMbRefinement(
                 let pTmpRefCr = pRefCr.offset((iRefBlk4Stride + iMvStride) as isize);
                 let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
                 let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                pMcChroma(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cb
-                pMcChroma(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cr
+                McChroma_c(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cb
+                McChroma_c(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 8, 4); //Cr
             }
         }
 
@@ -1742,8 +1742,8 @@ pub unsafe fn WelsMdInterMbRefinement(
                 let pTmpRefCr = pRefCr.offset((iRefBlk4Stride + iMvStride) as isize);
                 let pTmpDstCb = pDstCb.offset(iRefBlk4Stride as isize);
                 let pTmpDstCr = pDstCr.offset(iRefBlk4Stride as isize);
-                pMcChroma(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cb
-                pMcChroma(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cr
+                McChroma_c(pTmpRefCb, iLineSizeRefUV, pTmpDstCb, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cb
+                McChroma_c(pTmpRefCr, iLineSizeRefUV, pTmpDstCr, 8, (*pMv).iMvX, (*pMv).iMvY, 4, 8); //Cr
             }
         }
 
@@ -1804,7 +1804,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                         let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
                         let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
                         let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                        pMcChroma(
+                        McChroma_c(
                             pTmpRefCb.offset(iMvStride as isize),
                             iLineSizeRefUV,
                             pTmpDstCb,
@@ -1814,7 +1814,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             4,
                             4,
                         ); //Cb
-                        pMcChroma(
+                        McChroma_c(
                             pTmpRefCr.offset(iMvStride as isize),
                             iLineSizeRefUV,
                             pTmpDstCr,
@@ -1877,7 +1877,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
                             let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
                             let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCb.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCb,
@@ -1887,7 +1887,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 2,
                                 2,
                             ); //Cb
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCr.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCr,
@@ -1951,7 +1951,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
                             let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
                             let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCb.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCb,
@@ -1961,7 +1961,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 4,
                                 2,
                             ); //Cb
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCr.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCr,
@@ -2025,7 +2025,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                             let pTmpDstCb = pDstCb.offset(iDstBlk4Stride as isize);
                             let pTmpRefCr = pRefCr.offset(iRefBlk4Stride as isize);
                             let pTmpDstCr = pDstCr.offset(iDstBlk4Stride as isize);
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCb.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCb,
@@ -2035,7 +2035,7 @@ pub unsafe fn WelsMdInterMbRefinement(
                                 2,
                                 4,
                             ); //Cb
-                            pMcChroma(
+                            McChroma_c(
                                 pTmpRefCr.offset(iMvStride as isize),
                                 iLineSizeRefUV,
                                 pTmpDstCr,
