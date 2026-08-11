@@ -1174,9 +1174,9 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     loop {
         if !kbCabac {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfStashMBStatus {
-                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
-                }
+                func_list
+                    .eEntropyCoder
+                    .StashMBStatus(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
             }
         }
         iCurMbIdx = iNextMbIdx;
@@ -1202,16 +1202,16 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
-                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
-                }
+                iEncReturn = func_list
+                    .eEntropyCoder
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    if let Some(func) = func_list.pfStashPopMBStatus {
-                        func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                    }
+                    func_list
+                        .eEntropyCoder
+                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1284,9 +1284,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         let pCurMb = pMbList.add(iCurMbIdx as usize);
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfStashMBStatus {
-                func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
-            }
+            func_list
+                .eEntropyCoder
+                .StashMBStatus(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
             if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
                 func(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
             }
@@ -1312,16 +1312,16 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
-                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
-                }
+                iEncReturn = func_list
+                    .eEntropyCoder
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    if let Some(func) = func_list.pfStashPopMBStatus {
-                        func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                    }
+                    func_list
+                        .eEntropyCoder
+                        .StashPopMBStatus(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1334,9 +1334,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         }
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfGetBsPosition {
-                sDss.iCurrentPos = func(pSlice);
-            }
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(pSlice);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -1347,9 +1345,9 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             &mut sDss,
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfStashPopMBStatus {
-                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                }
+                func_list
+                    .eEntropyCoder
+                    .StashPopMBStatus(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
@@ -1463,9 +1461,12 @@ pub unsafe fn WelsMdInterMbLoop(
     loop {
         if !kbCabac {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfStashMBStatus {
-                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, (*pSlice).iMbSkipRun);
-                }
+                func_list.eEntropyCoder.StashMBStatus(
+                    slice_bs_buffer(pEncCtx, pSlice),
+                    &mut sDss,
+                    pSlice,
+                    (*pSlice).iMbSkipRun,
+                );
             }
         }
         iCurMbIdx = iNextMbIdx;
@@ -1522,16 +1523,18 @@ pub unsafe fn WelsMdInterMbLoop(
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
-                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
-                }
+                iEncReturn = func_list
+                    .eEntropyCoder
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    if let Some(func) = func_list.pfStashPopMBStatus {
-                        (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                    }
+                    (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
+                        slice_bs_buffer(pEncCtx, pSlice),
+                        &mut sDss,
+                        pSlice,
+                    );
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1613,9 +1616,12 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
     loop {
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfStashMBStatus {
-                func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, (*pSlice).iMbSkipRun);
-            }
+            func_list.eEntropyCoder.StashMBStatus(
+                slice_bs_buffer(pEncCtx, pSlice),
+                &mut sDss,
+                pSlice,
+                (*pSlice).iMbSkipRun,
+            );
         }
         iCurMbIdx = iNextMbIdx;
         let pCurMb = pMbList.add(iCurMbIdx as usize);
@@ -1677,16 +1683,18 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfWelsSpatialWriteMbSyn {
-                    iEncReturn = func(pEncCtx, pSlice, pCurMb);
-                }
+                iEncReturn = func_list
+                    .eEntropyCoder
+                    .WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb);
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                    if let Some(func) = func_list.pfStashPopMBStatus {
-                        (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                    }
+                    (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
+                        slice_bs_buffer(pEncCtx, pSlice),
+                        &mut sDss,
+                        pSlice,
+                    );
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
                 continue;
@@ -1699,9 +1707,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-            if let Some(func) = func_list.pfGetBsPosition {
-                sDss.iCurrentPos = func(pSlice);
-            }
+            sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(pSlice);
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
@@ -1712,9 +1718,11 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             &mut sDss,
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
-                if let Some(func) = func_list.pfStashPopMBStatus {
-                    (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
-                }
+                (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
+                    slice_bs_buffer(pEncCtx, pSlice),
+                    &mut sDss,
+                    pSlice,
+                );
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
             (*pCurLayer).NumSliceCodedOfPartition[kiPartitionId] += 1;
@@ -1879,9 +1887,10 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 ///
 /// **T3.5 added the CABAC callers.** `WelsSpatialWriteMbSynCabac` and
 /// `WelsInitSliceCabac` derive their buffer here rather than gaining a
-/// parameter, which is what keeps `pfWelsSpatialWriteMbSyn`'s signature — Phase
-/// 4b's — untouched for the second session running. The arithmetic coder no
-/// longer reaches the output any other way.
+/// parameter. That kept the entropy dispatch signature untouched through Phase
+/// 3, and T4b.1 vindicated it: with both arms deriving the buffer themselves,
+/// `EntropyCoder::WelsSpatialWriteMbSyn` needed no `buf` at all. The arithmetic
+/// coder no longer reaches the output any other way.
 #[inline]
 pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
     if (*pSlice).pSliceBsa == std::ptr::addr_of_mut!((*pSlice).sSliceBs.sBsWrite) {

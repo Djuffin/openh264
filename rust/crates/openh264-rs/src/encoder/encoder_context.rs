@@ -319,7 +319,7 @@ pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
-pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
 
 
 // ============================================================================
@@ -741,32 +741,17 @@ pub unsafe fn InitFunctionPointers(
 /// The SSE2/SSE4.2 `CavlcParamCal` variants are x86-only and this target reports
 /// no CPU features (`WelsCPUFeatureDetect` returns 0), so only the `_c` kernel is
 /// ever assigned.
+///
+/// **T4b.1**: the four entropy slots this function used to fill from one `if` are
+/// one [`EntropyCoder`] now, so the `if` *is* the assignment. What is left of the
+/// C++ shape is `pfCavlcParamCal`, which is CPU dispatch and Phase 4a's kind.
 unsafe fn InitCoeffFunc(
     pFuncList: *mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
     iEntropyCodingModeFlag: i32,
 ) {
     (*pFuncList).pfCavlcParamCal = Some(crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c);
-
-    if iEntropyCodingModeFlag != 0 {
-        (*pFuncList).pfStashMBStatus =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac);
-        (*pFuncList).pfStashPopMBStatus =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac);
-        // WelsSpatialWriteMbSynCabac is a plain Rust fn; the slot holds an
-        // extern "C" pointer, hence the thunk.
-        (*pFuncList).pfWelsSpatialWriteMbSyn =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSynCabacThunk);
-        (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac);
-    } else {
-        (*pFuncList).pfStashMBStatus =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc);
-        (*pFuncList).pfStashPopMBStatus =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc);
-        (*pFuncList).pfWelsSpatialWriteMbSyn =
-            Some(crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn);
-        (*pFuncList).pfGetBsPosition = Some(crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc);
-    }
+    (*pFuncList).eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
 
 /// Increments the H.264 slice header `frame_num` syntax element for spatial layer `kiDidx`.
@@ -1113,10 +1098,16 @@ mod tests {
             // (encoder.cpp) never sets it. It is assigned per-slice in
             // svc_encode_slice.cpp:733/736. This assertion passed only because the
             // port assigned the wrong function here behind a mem::transmute.
-            assert!(func_list.pfWelsSpatialWriteMbSyn.is_some());
-            assert!(func_list.pfStashMBStatus.is_some());
-            assert!(func_list.pfStashPopMBStatus.is_some());
-            assert!(func_list.pfGetBsPosition.is_some());
+            // The four entropy slots this used to assert `is_some()` on are one
+            // `EntropyCoder` since T4b.1, and "installed" is no longer a state it
+            // can be in. What is still worth asserting is that the flag reached
+            // it: `param` defaults to `iEntropyCodingModeFlag == 0`. The other
+            // arm goes through `InitCoeffFunc` rather than a second
+            // `InitFunctionPointers`, which would allocate a second parameter-set
+            // strategy over the first.
+            assert_eq!(func_list.eEntropyCoder, EntropyCoder::Cavlc);
+            InitCoeffFunc(&mut func_list, 0, 1);
+            assert_eq!(func_list.eEntropyCoder, EntropyCoder::Cabac);
 
             assert!(func_list.pfDeblocking.pfDeblockingFilterSlice.is_some());
         }

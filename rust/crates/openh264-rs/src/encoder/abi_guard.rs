@@ -159,8 +159,11 @@ assert_size!(SSliceBufferInfo, 16);
 assert_size!(SDqLayer, 512);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
-// 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above.
-assert_size!(SWelsFuncPtrList, 1272);
+// 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
+// where four 8-byte entropy slots became one `EntropyCoder` discriminant (-32, +8
+// for the byte and its padding to the pointer that follows). The number tracks the
+// port, not the C++ header, from Phase 4 on: de-virtualization is the point.
+assert_size!(SWelsFuncPtrList, 1248);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models

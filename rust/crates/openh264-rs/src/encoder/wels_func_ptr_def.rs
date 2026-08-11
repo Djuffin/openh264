@@ -30,7 +30,7 @@ use crate::encoder::md::{
     PUpdateMbMvFunc, SSampleDealingFunc, SWelsMD, SMB,
 };
 use crate::encoder::md::SMbCache;
-use crate::encoder::rc::{PGetBsPositionFunc, SWelsRcFunc};
+use crate::encoder::rc::SWelsRcFunc;
 use crate::encoder::svc_encode_mb::{PDeQuantizationFunc, PIDctFunc, PSetMemoryZero};
 use crate::encoder::svc_encode_slice::{SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
@@ -135,40 +135,167 @@ pub type PCavlcParamCalFunc = unsafe extern "C" fn(
     iEndIdx: i32,
 ) -> i32;
 
-/// `wels_func_ptr_def.h:192`
-pub type PWelsSpatialWriteMbSyn =
-    unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) -> i32;
+// ============================================================================
+// Entropy-coder dispatch — T4b.1
+// ============================================================================
 
-/// `wels_func_ptr_def.h:193`
+/// Which entropy coder a slice is written with: `iEntropyCodingModeFlag`, as a type.
 ///
-/// The `buf` parameter is T3.5's, and it is the one slot in this family that
-/// could not avoid gaining one. The CAVLC pair genuinely needs no buffer — a
-/// detached cursor is `Copy`, so its snapshot is a value (T3.4) — but the CABAC
-/// pair must copy the emitted bytes out and back, because `PropagateCarry`
-/// rewrites bytes behind the cursor and restoring the cursor alone would leave
-/// the output wrong. Neither variant can reach the buffer from `pDss`/`pSlice`
-/// alone, so it is passed. The CAVLC variants ignore it.
+/// **This replaces four `Option<fn>` members of [`SWelsFuncPtrList`]**
+/// (`wels_func_ptr_def.h:192-195`: `pfWelsSpatialWriteMbSyn`, `pfGetBsPosition`,
+/// `pfStashMBStatus`, `pfStashPopMBStatus`) and their four typedefs. They were
+/// never four independent choices: `InitCoeffFunc` set all four together, from one
+/// `if`, on one boolean, so what the table actually held was a *configuration*, not
+/// a dispatch — the distinction plan §2.2.5 draws and Phase 4a deferred to here.
 ///
-/// Phase 4b, which owns this signature, is folding both slots into the
-/// `EntropyCoder` dispatch enum; this parameter goes away there for CAVLC and
-/// stays for CABAC.
-pub type PStashMBStatus = unsafe fn(
-    buf: &mut [u8],
-    pDss: *mut SDynamicSlicingStack,
-    pSlice: *mut SSlice,
-    iMbSkipRun: i32,
-);
+/// Three things fall out of saying so in the type system, and they are the reason
+/// this is an `enum` rather than a `Box<dyn EntropyCoder>`:
+///
+/// * **The CAVLC arm drops `buf`.** T3.5 had to add `buf: &mut [u8]` to the stash
+///   pair for CABAC's sake — `PropagateCarry` rewrites bytes behind the cursor, so
+///   restoring the cursor alone would leave the output wrong — and the CAVLC
+///   variants took it and ignored it, because a detached cursor is `Copy` and its
+///   snapshot is a value (T3.4). One signature per arm means only the arm that
+///   needs the buffer names it.
+/// * **The CABAC thunk disappears.** `WelsSpatialWriteMbSynCabac` is a plain Rust
+///   `fn` and the slot held an `extern "C"` pointer, so a bridging thunk existed.
+///   With no slot there is no slot type, and the thunk was pure deletion.
+/// * **The `is_some()` guards disappear** — with them the "installed?" question,
+///   which had exactly one answer from `InitFunctionPointers` onward.
+///
+/// Per the brief's §1.2 the methods `match` at the call site and are `#[inline]`;
+/// what this buys is a signature the compiler can see through, not speed — these
+/// are per-macroblock calls with a runtime-selected arm, and 4a's finding is that
+/// direct dispatch recovers scaffolding only where the caller supplies constant
+/// dimensions.
+///
+/// The discriminants are `iEntropyCodingModeFlag`'s own values, and `Cavlc = 0`
+/// makes the all-zero bit pattern a declared variant — which is what keeps
+/// `SWelsFuncPtrList`'s `mem::zeroed()` construction sound (S21).
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum EntropyCoder {
+    #[default]
+    Cavlc = 0,
+    Cabac = 1,
+}
 
-/// `wels_func_ptr_def.h:194`. See [`PStashMBStatus`] for why `buf` is here.
-pub type PStashPopMBStatus =
-    unsafe fn(buf: &mut [u8], pDss: *mut SDynamicSlicingStack, pSlice: *mut SSlice) -> i32;
+impl EntropyCoder {
+    /// `iEntropyCodingModeFlag != 0`, the one `if` this type replaces.
+    #[inline]
+    pub fn from_flag(iEntropyCodingModeFlag: i32) -> Self {
+        if iEntropyCodingModeFlag != 0 {
+            EntropyCoder::Cabac
+        } else {
+            EntropyCoder::Cavlc
+        }
+    }
+
+    /// True for CABAC — for the call sites that still branch on the mode itself
+    /// rather than on what it dispatches to (the CAVLC-only stash before a
+    /// re-encode, `WelsInitSliceCabac`).
+    #[inline]
+    pub fn is_cabac(self) -> bool {
+        self == EntropyCoder::Cabac
+    }
+
+    /// `pfWelsSpatialWriteMbSyn` — writes one macroblock's syntax elements.
+    ///
+    /// # Safety
+    /// As the two implementations: `pEncCtx`, `pSlice` and `pCurMb` must be live
+    /// and the slice's writer positioned in the buffer `slice_bs_buffer` returns.
+    #[inline]
+    pub unsafe fn WelsSpatialWriteMbSyn(
+        self,
+        pEncCtx: *mut sWelsEncCtx,
+        pSlice: *mut SSlice,
+        pCurMb: *mut SMB,
+    ) -> i32 {
+        match self {
+            EntropyCoder::Cavlc => {
+                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, pCurMb)
+            }
+            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(
+                pEncCtx, pSlice, pCurMb,
+            ),
+        }
+    }
+
+    /// `pfStashMBStatus` — snapshots the coder state before a macroblock, so an
+    /// overflow or a slice-boundary step-back can re-encode it.
+    ///
+    /// `buf` is the slice's output buffer and is **used by the CABAC arm only**;
+    /// see the type-level note. It is still a parameter here because the caller
+    /// cannot know which arm it is calling.
+    ///
+    /// # Safety
+    /// `pDss` and `pSlice` must be live, and `buf` must be the buffer
+    /// `pSlice`'s writer is positioned in.
+    #[inline]
+    pub unsafe fn StashMBStatus(
+        self,
+        buf: &mut [u8],
+        pDss: *mut SDynamicSlicingStack,
+        pSlice: *mut SSlice,
+        iMbSkipRun: i32,
+    ) {
+        match self {
+            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc(
+                pDss, pSlice, iMbSkipRun,
+            ),
+            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac(
+                buf, pDss, pSlice, iMbSkipRun,
+            ),
+        }
+    }
+
+    /// `pfStashPopMBStatus` — restores what [`StashMBStatus`] saved, returning the
+    /// stashed `iMbSkipRun`. See there for `buf`.
+    ///
+    /// # Safety
+    /// As [`StashMBStatus`].
+    ///
+    /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
+    #[inline]
+    pub unsafe fn StashPopMBStatus(
+        self,
+        buf: &mut [u8],
+        pDss: *mut SDynamicSlicingStack,
+        pSlice: *mut SSlice,
+    ) -> i32 {
+        match self {
+            EntropyCoder::Cavlc => {
+                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pDss, pSlice)
+            }
+            EntropyCoder::Cabac => {
+                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac(buf, pDss, pSlice)
+            }
+        }
+    }
+
+    /// `pfGetBsPosition` — the slice writer's bit position, in the units each coder
+    /// counts in. Needs no buffer on either arm: CAVLC reads the writer's own
+    /// position and CABAC subtracts two offsets (T3.5).
+    ///
+    /// # Safety
+    /// `pSlice` must be live.
+    #[inline]
+    pub unsafe fn GetBsPosition(self, pSlice: *mut SSlice) -> i32 {
+        match self {
+            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pSlice),
+            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac(pSlice),
+        }
+    }
+}
 
 // ============================================================================
 // SWelsFuncPtrList
 // ============================================================================
 
 /// `TagWelsFuncPointerList` — `codec/encoder/core/inc/wels_func_ptr_def.h:198`.
-/// **1280 bytes**, 70 members, in C++ declaration order.
+/// 1280 bytes and 70 members in C++, in C++ declaration order; the port's size is
+/// tracked by `encoder/abi_guard.rs`, which records each de-virtualization that
+/// shrinks it.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SWelsFuncPtrList {
@@ -262,10 +389,12 @@ pub struct SWelsFuncPtrList {
     pub pfSetMemZeroSize64: Option<PSetMemoryZero>,
 
     pub pfCavlcParamCal: Option<PCavlcParamCalFunc>,
-    pub pfWelsSpatialWriteMbSyn: Option<PWelsSpatialWriteMbSyn>,
-    pub pfGetBsPosition: PGetBsPositionFunc,
-    pub pfStashMBStatus: Option<PStashMBStatus>,
-    pub pfStashPopMBStatus: Option<PStashPopMBStatus>,
+
+    /// `pfWelsSpatialWriteMbSyn`, `pfGetBsPosition`, `pfStashMBStatus` and
+    /// `pfStashPopMBStatus` (`wels_func_ptr_def.h:192-195`) were four slots set
+    /// together by one `if`; T4b.1 made them one [`EntropyCoder`]. -32 bytes of
+    /// slots, +8 for the discriminant and its padding.
+    pub eEntropyCoder: EntropyCoder,
 
     /// `IWelsParametersetStrategy*` — a thin pointer to the C-style vtable object in
     /// `paraset_strategy.rs`, matching the 8-byte member C++ declares here.
@@ -277,8 +406,9 @@ pub type TagWelsFuncPointerList = SWelsFuncPtrList;
 impl Default for SWelsFuncPtrList {
     fn default() -> Self {
         // All members are function pointers, small POD sub-structs of function
-        // pointers, or a raw pointer; the C++ encoder zeroes this table before
-        // InitFunctionPointers fills it in.
+        // pointers, a raw pointer, or -- since T4b.1 -- an `EntropyCoder` whose
+        // zero discriminant is a declared variant (`Cavlc`); the C++ encoder
+        // zeroes this table before InitFunctionPointers fills it in.
         unsafe { std::mem::zeroed() }
     }
 }
