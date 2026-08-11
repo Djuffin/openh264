@@ -419,7 +419,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
     );
 
     WelsWriteSpsNal(
-        crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize),
+        &mut (&mut *pOut).sBsBuffer[..],
         (*pCtx).pSpsArray.add(kiSpsIdx as usize),
         &mut (*pOut).sBsWrite,
         IWelsParametersetStrategy::GetSpsIdOffsetList(
@@ -430,7 +430,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        (*pOut).sNalList.add(iNal as usize),
+        &mut (&mut *pOut).sNalList[iNal as usize],
         null_mut(),
         // available buffer to be written, so need to subtract the used length
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
@@ -457,7 +457,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
     );
 
     WelsWritePpsSyntax(
-        crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize),
+        &mut (&mut *pOut).sBsBuffer[..],
         (*pCtx).pPPSArray.add(kiPpsIdx as usize),
         &mut (*pOut).sBsWrite,
         (*(*pCtx).pFuncList).pParametersetStrategy,
@@ -465,7 +465,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        (*pOut).sNalList.add(iNal as usize),
+        &mut (&mut *pOut).sNalList[iNal as usize],
         null_mut(),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -553,10 +553,7 @@ pub unsafe fn WelsWriteParameterSets(
         );
 
         WelsWriteSubsetSpsSyntax(
-            crate::encoder::nal_encap::bs_buffer(
-                (*(*pCtx).pOut).pBsBuffer,
-                (*(*pCtx).pOut).uiSize,
-            ),
+            &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
             (*pCtx).pSubsetArray.add(iId as usize),
             &mut (*(*pCtx).pOut).sBsWrite,
             IWelsParametersetStrategy::GetSpsIdOffsetList(
@@ -567,7 +564,7 @@ pub unsafe fn WelsWriteParameterSets(
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            (*(*pCtx).pOut).sNalList.add(iNal as usize),
+            &mut (&mut *(*pCtx).pOut).sNalList[iNal as usize],
             null_mut(),
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
             (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -622,7 +619,7 @@ pub unsafe fn WelsEncoderEncodeParameterSetsRust(
     }
     let pLayerBsInfo = &mut (*pBsInfo).sLayerInfo[0];
     pLayerBsInfo.pBsBuf = (*pCtx).pFrameBs;
-    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    pLayerBsInfo.pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
     // where they were; the writer is a position, and resetting it is all `InitBits`
     // did that still means anything. Its `kpBuf: *const u8` parameter — stored as

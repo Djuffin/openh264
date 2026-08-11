@@ -95,12 +95,18 @@ impl Default for SWelsNalRaw {
 
 /// The one place that turns an encoder output buffer back into a slice.
 ///
-/// SHIM(phase3) -> the raw `pBsBuffer` allocations. `BsWriter` is a position and
-/// nothing else, so the buffer has to be expressed at each write; until **T3.6**
-/// gives `SWelsEncoderOutput` and `SWelsSliceBs` owned buffers, that means
-/// rebuilding a slice from a `WelsMallocz`'d pointer and the `uiSize` recorded
-/// beside it. One helper does that arithmetic and nothing else does it, exactly as
-/// T3.1b's reader-side helper did until T3.3 deleted it.
+/// SHIM(phase3) -> **`SWelsSliceBs`'s** raw `pBsBuffer`, and nothing else now.
+/// `BsWriter` is a position and nothing else, so the buffer has to be expressed
+/// at each write, and for that struct it still means rebuilding a slice from a
+/// `WelsMallocz`'d pointer and the `uiSize` recorded beside it. One helper does
+/// that arithmetic and nothing else does it, exactly as T3.1b's reader-side
+/// helper did until T3.3 deleted it.
+///
+/// **T3.6 took `SWelsEncoderOutput` off this path**: its buffer is a `Vec<u8>`,
+/// so its callers slice it directly and the length is `len()` rather than a
+/// field. What is left on the far side of this shim is the MT-aliased slice
+/// buffer alone — see `SWelsSliceBs` for why that one could not follow, and
+/// which phase takes it.
 ///
 /// **T3.5 narrowed what this guards.** The CABAC arithmetic coder used to hold
 /// its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` pointer triple and reach the
@@ -120,15 +126,28 @@ pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
 }
 
 /// Top-level frame bitstream output container and NAL descriptor list manager.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+///
+/// **T3.6 made the three allocations owned.** They were `WelsMallocz`'d pointers
+/// with their lengths recorded beside them (`uiSize`, `iCountNals`); they are
+/// `Vec`s now, and the lengths are gone because a `Vec` already knows — the
+/// T3.3 standard, which says extents are `buf.len()` and not fields. The
+/// `CMemoryAlign` entries that allocated them and the four
+/// `WelsUninitEncoderExt` entries that freed them are gone with them.
+///
+/// `Copy`/`Clone` are gone too, necessarily: this owns its buffers now, and a
+/// bitwise copy of an owner is a double free waiting to happen. Nothing copied
+/// it — the compiler confirmed that when the derive came off.
+///
+/// The `sNalList` entries' `pRawData` stays a raw pointer, and that is
+/// deliberate: `SWelsNalRaw` is shared with `SWelsSliceBs`, whose own list
+/// points into the MT-aliased slice buffer that this phase excludes. See
+/// `SWelsSliceBs` below.
+#[derive(Debug)]
 pub struct SWelsEncoderOutput {
-    pub pBsBuffer: *mut u8,
-    pub uiSize: u32,
+    pub sBsBuffer: Vec<u8>,
     pub sBsWrite: BsWriter,
-    pub sNalList: *mut SWelsNalRaw,
-    pub pNalLen: *mut i32,
-    pub iCountNals: i32,
+    pub sNalList: Vec<SWelsNalRaw>,
+    pub sNalLen: Vec<i32>,
     pub iNalIndex: i32,
     pub iLayerBsIndex: i32,
 }
@@ -136,19 +155,68 @@ pub struct SWelsEncoderOutput {
 impl Default for SWelsEncoderOutput {
     fn default() -> Self {
         Self {
-            pBsBuffer: core::ptr::null_mut(),
-            uiSize: 0,
+            sBsBuffer: Vec::new(),
             sBsWrite: BsWriter::new(),
-            sNalList: core::ptr::null_mut(),
-            pNalLen: core::ptr::null_mut(),
-            iCountNals: 0,
+            sNalList: Vec::new(),
+            sNalLen: Vec::new(),
             iNalIndex: 0,
             iLayerBsIndex: 0,
         }
     }
 }
 
+impl SWelsEncoderOutput {
+    /// The frame output, constructed on the heap with its buffers sized.
+    ///
+    /// This is what replaced `RequestMemorySvc`'s four `WelsMallocz` calls, and
+    /// the reason it is a constructor rather than four assignments is **S21**:
+    /// the old code wrote into zeroed memory, which is a valid `*mut u8` and is
+    /// *not* a valid `Vec`. Assigning a `Vec` into a zeroed field drops the
+    /// zeroed one first — UB at a distance, invisible to every test, which is
+    /// the incident S21 exists to prevent. There is no zeroed intermediate
+    /// state here: the struct is built whole and then boxed.
+    ///
+    /// `WelsMallocz` zeroed what it returned, so the buffers start zeroed too.
+    ///
+    /// **The rest of the S21 audit, written down because "it seems to work" is
+    /// not the standard.** There is exactly one construction path — this one,
+    /// at `encoder_ext.rs`'s `RequestMemorySvc` — and the struct is reached only
+    /// through `sWelsEncCtx::pOut`, *a raw pointer*. That matters: the encoder
+    /// context is built by `mem::zeroed()` (`encoder_context.rs:516`, behind
+    /// `Box::into_raw`), and zero is a valid null `*mut SWelsEncoderOutput`
+    /// while it would **not** be a valid `Vec`. Because `pOut` is a pointer
+    /// rather than a by-value member, the wholesale zeroing never reaches these
+    /// fields, and no `MaybeUninit` shell is needed — unlike the decoder
+    /// context, which embeds its owned buffers directly and needs
+    /// `new_boxed`'s shell for exactly that reason.
+    ///
+    /// The same reasoning is what kept the S20 closure small: nothing embeds
+    /// this struct by value, so flipping its fields moved no other layout.
+    pub fn new_boxed(kiBsLen: usize, kiCountNals: usize) -> Box<Self> {
+        Box::new(Self {
+            sBsBuffer: vec![0u8; kiBsLen],
+            sBsWrite: BsWriter::new(),
+            sNalList: vec![SWelsNalRaw::default(); kiCountNals],
+            sNalLen: vec![0i32; kiCountNals],
+            iNalIndex: 0,
+            iLayerBsIndex: 0,
+        })
+    }
+}
+
 /// Thread-local bitstream state allocated per slice.
+///
+/// **Deliberately still raw, and not Phase 3's to fix.** T3.6 made
+/// `SWelsEncoderOutput`'s buffers owned; this one is excluded, because it is not
+/// singly owned: in multi-threaded mode `SetOneSliceBsBufferUnderMultithread`
+/// (`slice_multi_threading.rs:942`) binds `pBsBuffer` to
+/// `pSliceThreading->pThreadBsBuffer[kiThreadIdx]`, so the field is an *alias*
+/// into the thread-claimed buffer pool rather than an allocation this struct
+/// holds. Making it a `Vec` would give two owners of one allocation.
+///
+/// The pool, its claiming discipline, and `pBs` alongside it are **Phase 6's**
+/// (F12/P10). Until then these stay pointers and reach the writer through
+/// `bs_buffer` above.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsSliceBs {
@@ -217,25 +285,28 @@ pub unsafe extern "C" fn WelsLoadNal(
     kiType: i32,
     kiNalRefIdc: i32,
 ) {
-    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_null() {
+    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
         return;
     }
     let pWelsEncoderOuput = &mut *pEncoderOuput;
-    let pRawNal = &mut *pWelsEncoderOuput
-        .sNalList
-        .add(pWelsEncoderOuput.iNalIndex as usize);
-    let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
+    let iNalIndex = pWelsEncoderOuput.iNalIndex as usize;
     let kiStartPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
+    let pRawData = pWelsEncoderOuput.sBsBuffer[kiStartPos as usize..].as_mut_ptr();
+    let pRawNal = &mut pWelsEncoderOuput.sNalList[iNalIndex];
+    let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
 
     sNalUnitHeader.eNalUnitType = EWelsNalUnitType::from(kiType);
     sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
     sNalUnitHeader.uiForbiddenZeroBit = 0;
 
-    pRawNal.pRawData = if !pWelsEncoderOuput.pBsBuffer.is_null() {
-        pWelsEncoderOuput.pBsBuffer.add(kiStartPos as usize)
-    } else {
-        std::ptr::null_mut()
-    };
+    // Still a raw pointer, and still `sBsBuffer + iStartPos` — the two are
+    // redundant and always have been. It cannot become a slice or an offset
+    // here because `SWelsNalRaw` is shared with `SWelsSliceBs`, whose entries
+    // point into the MT-aliased slice buffer this phase excludes; one type
+    // cannot hold offsets into two different owners. Deleting it in favour of
+    // `iStartPos` is a caller-side change across both lists, and belongs with
+    // the phase that unifies them.
+    pRawNal.pRawData = pRawData;
     pRawNal.iStartPos = kiStartPos;
     pRawNal.iPayloadSize = 0;
 }
@@ -246,13 +317,13 @@ pub unsafe extern "C" fn WelsLoadNal(
 /// - `pEncoderOuput` must point to a valid `SWelsEncoderOutput` structure.
 #[inline]
 pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
-    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_null() {
+    if pEncoderOuput.is_null() || (*pEncoderOuput).sNalList.is_empty() {
         return;
     }
     let pWelsEncoderOuput = &mut *pEncoderOuput;
-    let pIdx = &mut pWelsEncoderOuput.iNalIndex;
-    let pRawNal = &mut *pWelsEncoderOuput.sNalList.add(*pIdx as usize);
     let kiEndPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
+    let pIdx = &mut pWelsEncoderOuput.iNalIndex;
+    let pRawNal = &mut pWelsEncoderOuput.sNalList[*pIdx as usize];
 
     /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
