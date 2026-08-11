@@ -1,5 +1,5 @@
 {
-  "commit": "6e15c907",
+  "commit": "08b7c29d",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -51,7 +51,7 @@
     "encoder/param_svc.rs": { "unsafe_fn": 2, "unsafe_block": 1, "raw_ptr": 12, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/paraset_strategy.rs": { "unsafe_fn": 35, "unsafe_block": 4, "raw_ptr": 126, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/picture.rs": { "unsafe_fn": 1, "unsafe_block": 0, "raw_ptr": 14, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "encoder/rc.rs": { "unsafe_fn": 51, "unsafe_block": 1, "raw_ptr": 102, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "encoder/rc.rs": { "unsafe_fn": 60, "unsafe_block": 1, "raw_ptr": 102, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
     "encoder/ref_list_mgr_svc.rs": { "unsafe_fn": 51, "unsafe_block": 1, "raw_ptr": 87, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "encoder/sample.rs": { "unsafe_fn": 8, "unsafe_block": 5, "raw_ptr": 15, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
     "encoder/set_mb_syn_cabac.rs": { "unsafe_fn": 13, "unsafe_block": 1, "raw_ptr": 19, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 3, "shim": 0 },

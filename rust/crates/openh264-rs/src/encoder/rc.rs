@@ -461,31 +461,209 @@ pub struct SRCSlicing {
 
 
 
-// Function pointer callbacks
-pub type PWelsRCPictureInitFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64)>;
-pub type PWelsRCPictureDelayJudgeFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32)>;
-pub type PWelsRCPictureInfoUpdateFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iLayerSize: i32)>;
-pub type PWelsRCMBInfoUpdateFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, iCostLuma: i32, pSlice: *mut SSlice)>;
-pub type PWelsRCMBInitFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice)>;
-pub type PWelsCheckFrameSkipBasedMaxbrFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32)>;
-pub type PWelsUpdateBufferWhenFrameSkippedFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iSpatialNum: i32)>;
-pub type PWelsUpdateMaxBrCheckWindowStatusFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iSpatialNum: i32, uiTimeStamp: i64)>;
-pub type PWelsRCPostFrameSkippingFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iDid: i32, uiTimeStamp: i64) -> bool>;
-// `PGetBsPositionFunc` was here. T4b.1 folded `pfGetBsPosition` into
-// `EntropyCoder`, which is the only thing that ever selected it.
+// The nine `PWelsRC*Func` typedefs were here. T4b.1b folded every one of them into
+// `SWelsRcFunc`'s single mode; `PGetBsPositionFunc` went at T4b.1, into
+// `EntropyCoder`. Both tables were configuration, not dispatch.
 
+/// `SWelsRcFunc` — `rc.h:132`. **Nine `Option<fn>` slots became one `RCMode`.**
+///
+/// `WelsRcInitFuncPointers` filled all nine from a single `match` on the mode, with
+/// no arm assigning them independently, so the table's whole information content
+/// was the mode it was built from. It stores that instead, and each former slot is
+/// an `#[inline]` method whose `match` is the same `match` — one level later, where
+/// the compiler can see the call.
+///
+/// **`eInstalledMode` is deliberately *not* `pSvcParam->iRCMode`, and the two can
+/// legitimately differ.** `WelsEncoderParamAdjust`'s no-reset arm assigns
+/// `pOldParam->iRCMode = pNewParam->iRCMode` and does **not** re-point the table —
+/// upstream's own "Any else initialization/reset for rate control here?" sits a few
+/// lines below it — so from that moment the encoder runs the *previous* mode's
+/// callbacks until something re-inits. `SetOption(ENCODER_OPTION_RC_MODE)` is the
+/// path that does re-point, and it is the only one. Reading the live `iRCMode` here
+/// would silently *fix* that, which is a behaviour change on a live configuration
+/// path (S6: parity, not repair). The lag is preserved by storing the installed
+/// mode, and naming the field is what makes it visible rather than accidental.
+///
+/// Zero (`RC_QUALITY_MODE`, C++'s value 0) is a declared variant, so `mem::zeroed()`
+/// construction of `SWelsFuncPtrList` stays sound (S21).
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SWelsRcFunc {
-    pub pfWelsRcPictureInit: PWelsRCPictureInitFunc,
-    pub pfWelsRcPicDelayJudge: PWelsRCPictureDelayJudgeFunc,
-    pub pfWelsRcPictureInfoUpdate: PWelsRCPictureInfoUpdateFunc,
-    pub pfWelsRcMbInit: PWelsRCMBInitFunc,
-    pub pfWelsRcMbInfoUpdate: PWelsRCMBInfoUpdateFunc,
-    pub pfWelsCheckSkipBasedMaxbr: PWelsCheckFrameSkipBasedMaxbrFunc,
-    pub pfWelsUpdateBufferWhenSkip: PWelsUpdateBufferWhenFrameSkippedFunc,
-    pub pfWelsUpdateMaxBrWindowStatus: PWelsUpdateMaxBrCheckWindowStatusFunc,
-    pub pfWelsRcPostFrameSkipping: PWelsRCPostFrameSkippingFunc,
+    /// The mode the callbacks were **installed** for — see the type note.
+    pub eInstalledMode: RCMode,
+}
+
+impl SWelsRcFunc {
+    /// `pfWelsRcPictureInit`.
+    ///
+    /// # Safety
+    /// As the callbacks: `pCtx` must be a live, initialized encoder context.
+    #[inline]
+    pub unsafe fn WelsRcPictureInit(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
+        match self.eInstalledMode {
+            RCMode::RC_OFF_MODE => WelsRcPictureInitDisable(pCtx, uiTimeStamp),
+            RCMode::RC_BUFFERBASED_MODE => WelRcPictureInitBufferBasedQp(pCtx, uiTimeStamp),
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_TIMESTAMP_MODE
+            | RCMode::RC_QUALITY_MODE => WelsRcPictureInitGom(pCtx, uiTimeStamp),
+        }
+    }
+
+    /// `pfWelsRcPicDelayJudge`. Installed by `RC_TIMESTAMP_MODE` alone; every other
+    /// mode left the slot `None`, and every call site guarded on that, so the other
+    /// arm is empty.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsRcPicDelayJudge(self, pCtx: *mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
+        if self.eInstalledMode == RCMode::RC_TIMESTAMP_MODE {
+            WelsRcFrameDelayJudgeTimeStamp(pCtx, uiTimeStamp, iDidIdx);
+        }
+    }
+
+    /// `pfWelsRcPictureInfoUpdate`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsRcPictureInfoUpdate(self, pCtx: *mut sWelsEncCtx, iLayerSize: i32) {
+        match self.eInstalledMode {
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
+                WelsRcPictureInfoUpdateDisable(pCtx, iLayerSize)
+            }
+            RCMode::RC_TIMESTAMP_MODE => WelsRcPictureInfoUpdateGomTimeStamp(pCtx, iLayerSize),
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_QUALITY_MODE => WelsRcPictureInfoUpdateGom(pCtx, iLayerSize),
+        }
+    }
+
+    /// `pfWelsRcMbInit`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit); `pCurMb` and
+    /// `pSlice` must be live.
+    #[inline]
+    pub unsafe fn WelsRcMbInit(self, pCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, pSlice: *mut SSlice) {
+        match self.eInstalledMode {
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
+                WelsRcMbInitDisable(pCtx, pCurMb, pSlice)
+            }
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_TIMESTAMP_MODE
+            | RCMode::RC_QUALITY_MODE => WelsRcMbInitGom(pCtx, pCurMb, pSlice),
+        }
+    }
+
+    /// `pfWelsRcMbInfoUpdate`.
+    ///
+    /// # Safety
+    /// As [`WelsRcMbInit`](SWelsRcFunc::WelsRcMbInit).
+    #[inline]
+    pub unsafe fn WelsRcMbInfoUpdate(
+        self,
+        pCtx: *mut sWelsEncCtx,
+        pCurMb: *mut SMB,
+        iCostLuma: i32,
+        pSlice: *mut SSlice,
+    ) {
+        match self.eInstalledMode {
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
+                WelsRcMbInfoUpdateDisable(pCtx, pCurMb, iCostLuma, pSlice)
+            }
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_TIMESTAMP_MODE
+            | RCMode::RC_QUALITY_MODE => WelsRcMbInfoUpdateGom(pCtx, pCurMb, iCostLuma, pSlice),
+        }
+    }
+
+    /// `pfWelsCheckSkipBasedMaxbr`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
+    /// `RC_TIMESTAMP`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsCheckSkipBasedMaxbr(
+        self,
+        pCtx: *mut sWelsEncCtx,
+        uiTimeStamp: i64,
+        iDidIdx: i32,
+    ) {
+        match self.eInstalledMode {
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_QUALITY_MODE => CheckFrameSkipBasedMaxbr(pCtx, uiTimeStamp, iDidIdx),
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE | RCMode::RC_TIMESTAMP_MODE => {}
+        }
+    }
+
+    /// `pfWelsUpdateBufferWhenSkip`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
+    /// `RC_TIMESTAMP`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsUpdateBufferWhenSkip(self, pCtx: *mut sWelsEncCtx, iSpatialNum: i32) {
+        match self.eInstalledMode {
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_QUALITY_MODE => UpdateBufferWhenFrameSkipped(pCtx, iSpatialNum),
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE | RCMode::RC_TIMESTAMP_MODE => {}
+        }
+    }
+
+    /// `pfWelsUpdateMaxBrWindowStatus`. Absent for `RC_OFF`, `RC_BUFFERBASED` and
+    /// `RC_TIMESTAMP`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsUpdateMaxBrWindowStatus(
+        self,
+        pCtx: *mut sWelsEncCtx,
+        iSpatialNum: i32,
+        uiTimeStamp: i64,
+    ) {
+        match self.eInstalledMode {
+            RCMode::RC_BITRATE_MODE
+            | RCMode::RC_BITRATE_MODE_POST_SKIP
+            | RCMode::RC_QUALITY_MODE => {
+                UpdateMaxBrCheckWindowStatus(pCtx, iSpatialNum, uiTimeStamp)
+            }
+            RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE | RCMode::RC_TIMESTAMP_MODE => {}
+        }
+    }
+
+    /// `pfWelsRcPostFrameSkipping` — the one slot with a return value, and the one
+    /// whose absence a caller reads: `if let Some(f) = …` guarded a whole
+    /// skip-and-return path. **`false` is what "the slot was `None`" meant**, so the
+    /// empty arms return it. Installed by the two bitrate modes only —
+    /// `RC_QUALITY_MODE` is the arm that sets the other three and leaves this one
+    /// `None`.
+    ///
+    /// # Safety
+    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    #[inline]
+    pub unsafe fn WelsRcPostFrameSkipping(
+        self,
+        pCtx: *mut sWelsEncCtx,
+        iDid: i32,
+        uiTimeStamp: i64,
+    ) -> bool {
+        match self.eInstalledMode {
+            RCMode::RC_BITRATE_MODE | RCMode::RC_BITRATE_MODE_POST_SKIP => {
+                WelsRcPostFrameSkipping(pCtx, iDid, uiTimeStamp)
+            }
+            RCMode::RC_OFF_MODE
+            | RCMode::RC_BUFFERBASED_MODE
+            | RCMode::RC_TIMESTAMP_MODE
+            | RCMode::RC_QUALITY_MODE => false,
+        }
+    }
 }
 
 
@@ -1518,22 +1696,22 @@ pub unsafe fn WelsRcCheckFrameStatus(
 
     if (*(*pEncCtx).pSvcParam).bSimulcastAVC {
         let iDidIdx = iCurDid;
-        if let Some(delay_func) = (*(*pEncCtx).pFuncList).pfRc.pfWelsRcPicDelayJudge {
-            delay_func(pEncCtx, uiTimeStamp, iDidIdx);
-        }
+        (*(*pEncCtx).pFuncList)
+            .pfRc
+            .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
         if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
             bSkipMustFlag = true;
         }
 
-        if let Some(check_skip) = (*(*pEncCtx).pFuncList).pfRc.pfWelsCheckSkipBasedMaxbr {
-            if !bSkipMustFlag
-                && (*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
-                    != UNSPECIFIED_BIT_RATE
-            {
-                check_skip(pEncCtx, uiTimeStamp, iDidIdx);
-                if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
-                    bSkipMustFlag = true;
-                }
+        if !bSkipMustFlag
+            && (*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
+                != UNSPECIFIED_BIT_RATE
+        {
+            (*(*pEncCtx).pFuncList)
+                .pfRc
+                .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
+            if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+                bSkipMustFlag = true;
             }
         }
 
@@ -1547,22 +1725,22 @@ pub unsafe fn WelsRcCheckFrameStatus(
     } else {
         for i in 0..iSpatialNum as usize {
             let iDidIdx = (*pEncCtx).sSpatialIndexMap[i].iDid;
-            if let Some(delay_func) = (*(*pEncCtx).pFuncList).pfRc.pfWelsRcPicDelayJudge {
-                delay_func(pEncCtx, uiTimeStamp, iDidIdx);
-            }
+            (*(*pEncCtx).pFuncList)
+                .pfRc
+                .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
             if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
                 bSkipMustFlag = true;
             }
 
-            if let Some(check_skip) = (*(*pEncCtx).pFuncList).pfRc.pfWelsCheckSkipBasedMaxbr {
-                if !bSkipMustFlag
-                    && (*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
-                        != UNSPECIFIED_BIT_RATE
-                {
-                    check_skip(pEncCtx, uiTimeStamp, iDidIdx);
-                    if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
-                        bSkipMustFlag = true;
-                    }
+            if !bSkipMustFlag
+                && (*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate
+                    != UNSPECIFIED_BIT_RATE
+            {
+                (*(*pEncCtx).pFuncList)
+                    .pfRc
+                    .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
+                if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+                    bSkipMustFlag = true;
                 }
             }
             if bSkipMustFlag {
@@ -2344,64 +2522,19 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 }
 
 /// Populates the rate control function dispatch table.
+///
+/// **T4b.1b**: the table is one field, so "populate" is one assignment. The
+/// `match` that used to be here is now nine `match`es, one per former slot, each
+/// at the point of use — see [`SWelsRcFunc`]. The C++ per-mode blocks are
+/// transposed rather than deleted: read the methods down instead of across, and
+/// `rc.cpp:WelsRcInitFuncPointers`'s five cases are still all there.
+///
+/// The signature is unchanged so its two callers — `InitFunctionPointers` and
+/// `SetOption(ENCODER_OPTION_RC_MODE)` — keep their shape; those two are the
+/// **only** places the installed mode may change, which is the property the type
+/// note depends on.
 pub unsafe fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
-    match iRcMode {
-        RCMode::RC_OFF_MODE => {
-            pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitDisable);
-            pRcf.pfWelsRcPicDelayJudge = None;
-            pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateDisable);
-            pRcf.pfWelsRcMbInit = Some(WelsRcMbInitDisable);
-            pRcf.pfWelsRcMbInfoUpdate = Some(WelsRcMbInfoUpdateDisable);
-            pRcf.pfWelsCheckSkipBasedMaxbr = None;
-            pRcf.pfWelsUpdateBufferWhenSkip = None;
-            pRcf.pfWelsUpdateMaxBrWindowStatus = None;
-            pRcf.pfWelsRcPostFrameSkipping = None;
-        }
-        RCMode::RC_BUFFERBASED_MODE => {
-            pRcf.pfWelsRcPictureInit = Some(WelRcPictureInitBufferBasedQp);
-            pRcf.pfWelsRcPicDelayJudge = None;
-            pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateDisable);
-            pRcf.pfWelsRcMbInit = Some(WelsRcMbInitDisable);
-            pRcf.pfWelsRcMbInfoUpdate = Some(WelsRcMbInfoUpdateDisable);
-            pRcf.pfWelsCheckSkipBasedMaxbr = None;
-            pRcf.pfWelsUpdateBufferWhenSkip = None;
-            pRcf.pfWelsUpdateMaxBrWindowStatus = None;
-            pRcf.pfWelsRcPostFrameSkipping = None;
-        }
-        RCMode::RC_BITRATE_MODE | RCMode::RC_BITRATE_MODE_POST_SKIP => {
-            pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
-            pRcf.pfWelsRcPicDelayJudge = None;
-            pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGom);
-            pRcf.pfWelsRcMbInit = Some(WelsRcMbInitGom);
-            pRcf.pfWelsRcMbInfoUpdate = Some(WelsRcMbInfoUpdateGom);
-            pRcf.pfWelsCheckSkipBasedMaxbr = Some(CheckFrameSkipBasedMaxbr);
-            pRcf.pfWelsUpdateBufferWhenSkip = Some(UpdateBufferWhenFrameSkipped);
-            pRcf.pfWelsUpdateMaxBrWindowStatus = Some(UpdateMaxBrCheckWindowStatus);
-            pRcf.pfWelsRcPostFrameSkipping = Some(WelsRcPostFrameSkipping);
-        }
-        RCMode::RC_TIMESTAMP_MODE => {
-            pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
-            pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGomTimeStamp);
-            pRcf.pfWelsRcMbInit = Some(WelsRcMbInitGom);
-            pRcf.pfWelsRcMbInfoUpdate = Some(WelsRcMbInfoUpdateGom);
-            pRcf.pfWelsRcPicDelayJudge = Some(WelsRcFrameDelayJudgeTimeStamp);
-            pRcf.pfWelsCheckSkipBasedMaxbr = None;
-            pRcf.pfWelsUpdateBufferWhenSkip = None;
-            pRcf.pfWelsUpdateMaxBrWindowStatus = None;
-            pRcf.pfWelsRcPostFrameSkipping = None;
-        }
-        RCMode::RC_QUALITY_MODE => {
-            pRcf.pfWelsRcPictureInit = Some(WelsRcPictureInitGom);
-            pRcf.pfWelsRcPicDelayJudge = None;
-            pRcf.pfWelsRcPictureInfoUpdate = Some(WelsRcPictureInfoUpdateGom);
-            pRcf.pfWelsRcMbInit = Some(WelsRcMbInitGom);
-            pRcf.pfWelsRcMbInfoUpdate = Some(WelsRcMbInfoUpdateGom);
-            pRcf.pfWelsCheckSkipBasedMaxbr = Some(CheckFrameSkipBasedMaxbr);
-            pRcf.pfWelsUpdateBufferWhenSkip = Some(UpdateBufferWhenFrameSkipped);
-            pRcf.pfWelsUpdateMaxBrWindowStatus = Some(UpdateMaxBrCheckWindowStatus);
-            pRcf.pfWelsRcPostFrameSkipping = None;
-        }
-    }
+    pRcf.eInstalledMode = iRcMode;
 }
 
 /// Top-level initialization entry point called during encoder creation.
