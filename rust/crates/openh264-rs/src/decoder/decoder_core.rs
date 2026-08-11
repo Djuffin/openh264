@@ -317,7 +317,7 @@ pub use crate::decoder::slice::{SPredWeightTable, SPredList};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking, SReorderingSyntax, SRefBasePicMarking};
 
 
-pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer, SBitStringAux};
+pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 use crate::safe::bits::BsCursor;
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
@@ -651,7 +651,6 @@ pub use crate::decoder::parameter_sets::{PSps, PPps, PSubsetSps};
 pub type PSliceHeader = *mut SSliceHeader;
 pub type PSliceHeaderExt = *mut SSliceHeaderExt;
 pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
-pub type PBitStringAux = *mut SBitStringAux;
 pub type PLayerInfo = *mut SLayerInfo;
 pub type PRefPicListReorderSyn = *mut SRefPicListReorderSyn;
 pub type PRefPicMarking = *mut SRefPicMarking;

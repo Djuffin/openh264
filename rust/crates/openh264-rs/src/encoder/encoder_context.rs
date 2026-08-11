@@ -211,7 +211,6 @@ pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
 
-pub use crate::common::wels_common_defs::SBitStringAux;
 
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 

@@ -24,20 +24,12 @@ pub const ERR_INFO_INVALID_PTR: i32 = ERR_INFO_COMMON_BASE + 2;
 pub const ERR_INFO_INVALID_PARAM: i32 = ERR_INFO_COMMON_BASE + 3;
 pub const ERR_INFO_READ_OVERFLOW: i32 = ERR_INFO_COMMON_BASE + 10;
 
-/// Auxiliary bitstream structure for parsing NAL units / RBSP data.
-///
-/// `SBitStringAux` is a common-layer type (`codec/common/inc/wels_common_defs.h:232`)
-/// shared by the encoder and the decoder, so it has a single definition in
-/// [`crate::common::wels_common_defs`]. Re-exported here so the decoder's existing
-/// `decoder::bit_stream::{TagBitStringAux, SBitStringAux, PBitStringAux}` paths are
-/// unchanged.
-///
-/// **The decoder no longer uses it.** T3.1b moved the read side onto [`BsReader`] +
-/// [`BsCursor`], so what is left are the encoder's writers (`vlc_encoder.rs` and its
-/// three near-copies) and the Phase-5/6 structs that embed it. It dies with those:
-/// **T3.4** takes the writer family to `BsWriter`, **T3.6** takes `nal_encap.rs`, and
-/// the last embedded fields (`SWelsSliceBs`, `SSlice::pSliceBsa`) go in Phase 6.
-pub use crate::common::wels_common_defs::{PBitStringAux, SBitStringAux, TagBitStringAux};
+// The `SBitStringAux` / `TagBitStringAux` / `PBitStringAux` re-export lived here,
+// with a note predicting when the type would die. It died at T3.4 — one seam
+// earlier than that note guessed for the embedded fields, because converting the
+// writer family forced the struct fields in the same commit rather than leaving
+// them to Phase 6. `BsReader` + `BsCursor` are the read side; `BsWriter` is the
+// write side; there is no third thing.
 
 use crate::safe::bits::BsCursor;
 

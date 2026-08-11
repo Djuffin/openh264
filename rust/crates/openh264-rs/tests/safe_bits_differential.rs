@@ -75,7 +75,6 @@ mod common;
 
 use common::prng::Prng;
 
-use openh264_rs::decoder::bit_stream::SBitStringAux;
 use openh264_rs::decoder::dec_golomb::{
     BsGetBits, BsGetOneBit, BsGetSe, BsGetTrailingBits, BsGetUe, GetLeadingZeroBits, ERR_NONE,
 };
