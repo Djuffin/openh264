@@ -211,26 +211,22 @@ pub type PCopyFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, p
 
 pub type PDeblockingFilterMbFunc =
     Option<unsafe extern "C" fn(pCurDqLayer: *mut c_void, filter: *mut SDeblockingFilter, boundry_flag: i32)>;
-pub type PLumaDeblockingLT4Func =
-    Option<unsafe extern "C" fn(iSampleY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32, iTc: *mut i8)>;
-pub type PLumaDeblockingEQ4Func =
-    Option<unsafe extern "C" fn(iSampleY: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
-pub type PChromaDeblockingLT4Func = Option<
-    unsafe extern "C" fn(
-        iSampleCb: *mut u8,
-        iSampleCr: *mut u8,
-        iStride: i32,
-        iAlpha: i32,
-        iBeta: i32,
-        iTc: *mut i8,
-    ),
->;
-pub type PChromaDeblockingEQ4Func =
-    Option<unsafe extern "C" fn(iSampleCb: *mut u8, iSampleCr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
-pub type PChromaDeblockingLT4Func2 =
-    Option<unsafe extern "C" fn(iSampleCbr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32, iTc: *mut i8)>;
-pub type PChromaDeblockingEQ4Func2 =
-    Option<unsafe extern "C" fn(iSampleCbr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
+// The six deblocking kernel-pointer types and the table that holds them
+// (`SDeblockingFunc`, C++ `decoder_context.h:196-209`) are declared **once**, in
+// `common/deblocking_common.rs`, where the decoder's `DeblockingInit`
+// (`decoder/deblocking.cpp:1338`) was ported alongside its kernels. This module
+// re-exports them; it used to redeclare all seven with different parameter names,
+// which made two structurally identical types the compiler treated as distinct.
+// The encoder's same-named table is a **different** C++ type
+// (`encoder/deblocking.cpp:793`, non-`Option` slots) and stays in
+// `encoder/deblocking.rs`.
+pub use crate::common::deblocking_common::{
+    PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func,
+    PChromaDeblockingLT4Func, PChromaDeblockingEQ4Func,
+    PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
+    SDeblockingFunc,
+};
+pub type PDeblockingFunc = *mut SDeblockingFunc;
 
 // `PWelsFillNeighborMbInfoIntra4x4Func`, `PWelsMapNeighToSample` and
 // `PWelsMap16NeighToSample` were deleted at T4b.3. All three declared
@@ -270,24 +266,6 @@ pub struct SDeblockingFilter {
     pub pRefPics: [*mut *mut Picture; LIST_A],
 }
 pub type PDeblockingFilter = *mut SDeblockingFilter;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDeblockingFunc {
-    pub pfLumaDeblockingLT4Ver: PLumaDeblockingLT4Func,
-    pub pfLumaDeblockingEQ4Ver: PLumaDeblockingEQ4Func,
-    pub pfLumaDeblockingLT4Hor: PLumaDeblockingLT4Func,
-    pub pfLumaDeblockingEQ4Hor: PLumaDeblockingEQ4Func,
-    pub pfChromaDeblockingLT4Ver: PChromaDeblockingLT4Func,
-    pub pfChromaDeblockingEQ4Ver: PChromaDeblockingEQ4Func,
-    pub pfChromaDeblockingLT4Hor: PChromaDeblockingLT4Func,
-    pub pfChromaDeblockingEQ4Hor: PChromaDeblockingEQ4Func,
-    pub pfChromaDeblockingLT4Ver2: PChromaDeblockingLT4Func2,
-    pub pfChromaDeblockingEQ4Ver2: PChromaDeblockingEQ4Func2,
-    pub pfChromaDeblockingLT4Hor2: PChromaDeblockingLT4Func2,
-    pub pfChromaDeblockingEQ4Hor2: PChromaDeblockingEQ4Func2,
-}
-pub type PDeblockingFunc = *mut SDeblockingFunc;
 
 pub use crate::decoder::parameter_sets::SPosOffset;
 

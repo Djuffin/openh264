@@ -1430,7 +1430,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
             let mut ctx_box = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
             ctx_box.pMemAlign = &mut (*dec_impl).align;
-            ctx_box.pParam = &mut (*dec_impl).param as *mut _ as *mut _;
+            ctx_box.pParam = &mut (*dec_impl).param;
             // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
             // decoder-owned members into the context, then fill in defaults.
             ctx_box.pLastDecPicInfo = &mut (*dec_impl).sLastDecPicInfo;
