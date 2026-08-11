@@ -462,6 +462,13 @@ pub static g_kuiMatrixV: [[[u8; 8]; 8]; 6] = [
     ],
 ];
 
+/// `TagPartMbInfo` — `codec/decoder/core/inc/wels_common_basis.h:235`.
+///
+/// Single declaration for the decoder. C++ puts this type and its four tables in
+/// one header; the port had transliterated them per consumer, so `mv_pred.rs`,
+/// `parse_mb_syn_cabac.rs` and `parse_mb_syn_cavlc.rs` each carried a copy and
+/// `mv_pred.rs`'s named the first field `iMbType` (unified at T5.A3 — the values
+/// were identical, the field name was not).
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPartMbInfo {
@@ -502,6 +509,33 @@ pub static g_ksInterBMbTypeInfo: [SPartMbInfo; 23] = [
     SPartMbInfo { iType: MB_TYPE_16x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1 | MB_TYPE_P1L0 | MB_TYPE_P1L1, iPartCount: 2, iPartWidth: 4 },
     SPartMbInfo { iType: MB_TYPE_8x16 | MB_TYPE_P0L0 | MB_TYPE_P0L1 | MB_TYPE_P1L0 | MB_TYPE_P1L1, iPartCount: 2, iPartWidth: 2 },
     SPartMbInfo { iType: MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1 | MB_TYPE_P1L0 | MB_TYPE_P1L1, iPartCount: 4, iPartWidth: 4 },
+];
+
+/// Table 7.17 — sub-macroblock type values for P slices.
+/// `codec/decoder/core/inc/wels_common_basis.h:279`.
+pub static g_ksInterPSubMbTypeInfo: [SPartMbInfo; 4] = [
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4, iPartCount: 4, iPartWidth: 1 },
+];
+
+/// Table 7.18 — sub-macroblock type values for B slices.
+/// `codec/decoder/core/inc/wels_common_basis.h:287`.
+pub static g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
+    SPartMbInfo { iType: MB_TYPE_DIRECT, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0, iPartCount: 4, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
+    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
 ];
 
 // ============================================================================
