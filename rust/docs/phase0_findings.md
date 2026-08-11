@@ -428,3 +428,20 @@ The methodological point worth keeping: the tempting argument ("this seam is
 decoder-only, it *cannot* have caused an encoder race") is exactly the kind S14 exists
 to distrust, and running the alternation cost about ten minutes against the alternative
 of a plausible-sounding dismissal.
+
+### Tenth measurement — 2026-08-10, Phase 3 session C: one hit, the fixed gate's first stop
+
+One hit in the T3.2 seam battery's **release** sweep: `mt CiscoVT2people_320x192_12fps
+t=4 sm=3 n=600 cabac=0 rc=0`, zero-byte output — the signature exactly. Debug was
+341/341 in the same battery, and the session's two earlier full sweeps (the F17
+re-baseline) were 341/341 both profiles.
+
+Re-run of that configuration, per the one-hit rule: **5/5 BYTE-IDENTICAL**. Single hit,
+so the alternation clause stays untriggered; the seam under test changes zero bytes of
+`src/encoder/` and `src/common/` (decoder-only conversion), and the failing config is
+`cabac=0` — the encoder's CAVLC path — but per the ninth measurement's lesson that
+argument is corroboration, not the verdict; the re-run is the verdict.
+
+Worth one line: this was the first F3 hit judged by the post-F17 `gates.sh`, and the
+battery printed `OVERALL: FAIL (1 steps failed)` and exited 1 — the gate stopping the
+session and forcing this protocol is the behaviour F17's fix bought.
