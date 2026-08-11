@@ -815,6 +815,126 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 // Neighbor Availability Mapping
 // ============================================================================
 
+/// `bConstainedIntraPredFlag`, as a type. (The misspelling is upstream's, in both
+/// the PPS field and the `Constrain0`/`Constrain1` function names; P14 keeps it.)
+///
+/// **This replaces three `Option<fn>` members of `SWelsDecoderContext`** —
+/// `pFillInfoCacheIntraNxNFunc`, `pMapNxNNeighToSampleFunc`,
+/// `pMap16x16NeighToSampleFunc` — and their three typedefs. They were never three
+/// independent choices: `WelsDecodeSlice` and `WelsDecodeAndConstructSlice` each set
+/// all three together, from one `if`, on one flag read out of the slice's PPS. The
+/// same *configuration, not dispatch* shape as T4b.1's entropy slots.
+///
+/// **Why this seam is where the crate's oldest ratchet metric finally moves.** The
+/// three typedefs declared
+/// `pNeighAvail: *mut c_void` and `extern "C"`; the functions actually stored take
+/// `PWelsNeighAvail` / `PDqLayer` and two of them are not `extern "C"` at all. So
+/// *every* install and *every* fallback had to launder the mismatch through
+/// `mem::transmute` — **19 of the crate's 21 such calls, in this one family**.
+/// Naming the configuration lets the methods take the real types, and the casts at
+/// the call sites (`as *mut _ as *mut c_void`) go with them. Nothing is reinterpreted
+/// any more; the types simply match.
+///
+/// `Constrain0 = 0` is load-bearing twice over: `SWelsDecoderContext` is built from a
+/// `MaybeUninit::zeroed()` shell (`decoder_context.rs`), so the zero pattern must be a
+/// declared variant (S21) — and `Constrain0` is also exactly what every former
+/// `unwrap_or_else` fallback named, so a zeroed context dispatches where an
+/// uninstalled slot used to.
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum IntraPredConstraint {
+    /// `bConstainedIntraPredFlag == false` — `WelsFillCacheConstrain0IntraNxN`,
+    /// `WelsMapNxNNeighToSampleNormal`, `WelsMap16x16NeighToSampleNormal`.
+    #[default]
+    Constrain0 = 0,
+    /// `bConstainedIntraPredFlag == true` — the `Constrain1` trio.
+    Constrain1 = 1,
+}
+
+impl IntraPredConstraint {
+    /// `pPps->bConstainedIntraPredFlag`, the one `if` this type replaces.
+    #[inline]
+    pub fn from_flag(bConstainedIntraPredFlag: bool) -> Self {
+        if bConstainedIntraPredFlag {
+            IntraPredConstraint::Constrain1
+        } else {
+            IntraPredConstraint::Constrain0
+        }
+    }
+
+    /// `pCtx->pFillInfoCacheIntraNxNFunc (…)`.
+    ///
+    /// # Safety
+    /// The pointers must satisfy `WelsFillCacheConstrain0IntraNxN`'s contract.
+    #[inline]
+    pub unsafe fn FillCacheIntraNxN(
+        self,
+        pNeighAvail: crate::decoder::parse_mb_syn_cavlc::PWelsNeighAvail,
+        pNonZeroCount: *mut u8,
+        pIntraPredMode: *mut i8,
+        pCurDqLayer: crate::decoder::decoder_core::PDqLayer,
+    ) {
+        match self {
+            IntraPredConstraint::Constrain0 => {
+                crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN(
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pIntraPredMode,
+                    pCurDqLayer,
+                )
+            }
+            IntraPredConstraint::Constrain1 => {
+                crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain1IntraNxN(
+                    pNeighAvail,
+                    pNonZeroCount,
+                    pIntraPredMode,
+                    pCurDqLayer,
+                )
+            }
+        }
+    }
+
+    /// `pCtx->pMapNxNNeighToSampleFunc (…)`.
+    ///
+    /// # Safety
+    /// Both pointers must be non-null and writable for their element counts.
+    #[inline]
+    pub unsafe fn MapNxNNeighToSample(
+        self,
+        pNeighAvail: *mut SWelsNeighAvail,
+        pSampleAvail: *mut i32,
+    ) {
+        match self {
+            IntraPredConstraint::Constrain0 => {
+                WelsMapNxNNeighToSampleNormal(pNeighAvail, pSampleAvail)
+            }
+            IntraPredConstraint::Constrain1 => {
+                WelsMapNxNNeighToSampleConstrain1(pNeighAvail, pSampleAvail)
+            }
+        }
+    }
+
+    /// `pCtx->pMap16x16NeighToSampleFunc (…)`.
+    ///
+    /// # Safety
+    /// Both pointers must be non-null and writable.
+    #[inline]
+    pub unsafe fn Map16x16NeighToSample(
+        self,
+        pNeighAvail: *mut SWelsNeighAvail,
+        pSampleAvail: *mut u8,
+    ) {
+        match self {
+            IntraPredConstraint::Constrain0 => {
+                WelsMap16x16NeighToSampleNormal(pNeighAvail, pSampleAvail)
+            }
+            IntraPredConstraint::Constrain1 => {
+                WelsMap16x16NeighToSampleConstrain1(pNeighAvail, pSampleAvail)
+            }
+        }
+    }
+}
+
 pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
     pNeighAvail: *mut SWelsNeighAvail,
     pSampleAvail: *mut i32,
@@ -2563,16 +2683,11 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
                 uiMbType = MB_TYPE_INTRA8x8;
             }
         }
-        let fill_fn = (*pCtx).pFillInfoCacheIntraNxNFunc.unwrap_or_else(|| {
-            std::mem::transmute(
-                crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
-            )
-        });
-        fill_fn(
-            &mut sNeighAvail as *mut _ as *mut c_void,
+        (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
+            &mut sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
             pIntraPredMode.as_mut_ptr(),
-            dq as *mut _ as *mut c_void,
+            dq,
         );
         let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
             ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
@@ -3043,17 +3158,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                     *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
-            let fill_fn = (*pCtx).pFillInfoCacheIntraNxNFunc.unwrap_or_else(|| {
-                std::mem::transmute(
-                    crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
-                )
-            });
-            fill_fn(
-                &mut sNeighAvail as *mut _ as *mut c_void,
-                pNonZeroCount.as_mut_ptr(),
-                pIntraPredMode.as_mut_ptr(),
-                dq as *mut _ as *mut c_void,
-            );
+            (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
+            &mut sNeighAvail,
+            pNonZeroCount.as_mut_ptr(),
+            pIntraPredMode.as_mut_ptr(),
+            dq,
+        );
             let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
                 ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
@@ -3391,17 +3501,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                     *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
-            let fill_fn = (*pCtx).pFillInfoCacheIntraNxNFunc.unwrap_or_else(|| {
-                std::mem::transmute(
-                    crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
-                )
-            });
-            fill_fn(
-                &mut sNeighAvail as *mut _ as *mut c_void,
-                pNonZeroCount.as_mut_ptr(),
-                pIntraPredMode.as_mut_ptr(),
-                dq as *mut _ as *mut c_void,
-            );
+            (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
+            &mut sNeighAvail,
+            pNonZeroCount.as_mut_ptr(),
+            pIntraPredMode.as_mut_ptr(),
+            dq,
+        );
             let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
                 ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
@@ -3703,10 +3808,9 @@ pub unsafe fn ParseIntra4x4Mode(
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
 
-    let map_nxn_fn = (*pCtx).pMapNxNNeighToSampleFunc.unwrap_or_else(|| {
-        std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _))
-    });
-    map_nxn_fn(pNeighAvail as *mut _ as *mut c_void, iSampleAvail.as_mut_ptr() as *mut _);
+    (*pCtx)
+        .eIntraPredConstraint
+        .MapNxNNeighToSample(pNeighAvail, iSampleAvail.as_mut_ptr());
 
     uiNeighAvail = ((iSampleAvail[6] << 2) | (iSampleAvail[0] << 1) | (iSampleAvail[1])) as u8;
 
@@ -3830,10 +3934,9 @@ pub unsafe fn ParseIntra8x8Mode(
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
 
-    let map_nxn_fn = (*pCtx).pMapNxNNeighToSampleFunc.unwrap_or_else(|| {
-        std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _))
-    });
-    map_nxn_fn(pNeighAvail as *mut _ as *mut c_void, iSampleAvail.as_mut_ptr() as *mut _);
+    (*pCtx)
+        .eIntraPredConstraint
+        .MapNxNNeighToSample(pNeighAvail, iSampleAvail.as_mut_ptr());
 
     uiNeighAvail = ((iSampleAvail[5] << 3)
         | (iSampleAvail[6] << 2)
@@ -3965,10 +4068,9 @@ pub unsafe fn ParseIntra16x16Mode(
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
 
-    let map_16x16_fn = (*pCtx).pMap16x16NeighToSampleFunc.unwrap_or_else(|| {
-        std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _))
-    });
-    map_16x16_fn(pNeighAvail as *mut _ as *mut c_void, &mut uiNeighAvail as *mut u8 as *mut _);
+    (*pCtx)
+        .eIntraPredConstraint
+        .Map16x16NeighToSample(pNeighAvail, &mut uiNeighAvail);
 
     let pMode = &mut *(*dq).pIntraPredMode.add(iMbXy * 8 + 7);
     if crate::decoder::parse_mb_syn_cavlc::CheckIntra16x16PredMode(uiNeighAvail, pMode) != 0 {
@@ -4038,17 +4140,11 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
                 return ret;
             }
         }
-        let fill_fn = (*pCtx).pFillInfoCacheIntraNxNFunc.unwrap_or_else(|| {
-            std::mem::transmute(
-                crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN
-                    as *const (),
-            )
-        });
-        fill_fn(
-            pNeighAvail as *mut _ as *mut c_void,
+        (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
+            pNeighAvail,
             pNonZeroCount,
             pIntraPredMode,
-            dq as *mut _ as *mut c_void,
+            dq,
         );
 
         if *(*dq).pTransformSize8x8Flag.add(iMbXy) {
@@ -5018,20 +5114,12 @@ pub unsafe fn WelsDecodeSlice(
     };
 
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
+    // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
+    // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
     let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
-    if !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag {
-        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
-            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain1IntraNxN as *const (),
-        );
-        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
-        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
-    } else {
-        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
-            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
-        );
-        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
-        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
-    }
+    ctx.eIntraPredConstraint = IntraPredConstraint::from_flag(
+        !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
+    );
 
     ctx.eSliceType = pSliceHeader.eSliceType;
     if !dq.sLayerInfo.pPps.is_null() && (*dq.sLayerInfo.pPps).bEntropyCodingModeFlag {
@@ -5139,20 +5227,12 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     };
 
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
+    // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
+    // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
     let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
-    if !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag {
-        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
-            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain1IntraNxN as *const (),
-        );
-        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
-        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleConstrain1 as unsafe extern "C" fn(_, _));
-    } else {
-        ctx.pFillInfoCacheIntraNxNFunc = std::mem::transmute(
-            crate::decoder::parse_mb_syn_cavlc::WelsFillCacheConstrain0IntraNxN as *const (),
-        );
-        ctx.pMapNxNNeighToSampleFunc = std::mem::transmute(WelsMapNxNNeighToSampleNormal as unsafe extern "C" fn(_, _));
-        ctx.pMap16x16NeighToSampleFunc = std::mem::transmute(WelsMap16x16NeighToSampleNormal as unsafe extern "C" fn(_, _));
-    }
+    ctx.eIntraPredConstraint = IntraPredConstraint::from_flag(
+        !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
+    );
 
     ctx.eSliceType = pSliceHeader.eSliceType;
     WelsCalcDeqCoeffScalingList(pCtx);
