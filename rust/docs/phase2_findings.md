@@ -394,7 +394,7 @@ immediately.
 |---|---|---|
 | `decoder/manage_dec_ref.rs:476` `AddLongTermToList` | `ptr::copy(list.as_ptr().add(i), list.as_mut_ptr().add(i+1), n)` — the `as_mut_ptr()` argument is evaluated after the `as_ptr()` one and invalidates it, so the copy reads through a dead tag. Fix is `copy_within`. | **Phase 5** (decoder structural rewrite owns the ref lists) |
 | `encoder/encoder_ext.rs:820` `InitDqLayers` | takes `&mut (*(*pCtx).pSvcParam).sSpatialLayers[i].sSliceArgument` while another live reference into the same parameter struct is in scope | **Phase 6** (encoder context restructuring) |
-| `encoder/vlc_encoder.rs:353` `InitBits` | declares `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer writes through it. A caller that honestly passes `as_ptr()` produces a pointer with no write provenance, and the first `BsFlush` is UB. | **Phase 3.2** (the encoder write side; F2's family) |
+| ~~`encoder/vlc_encoder.rs:353` `InitBits`~~ | declares `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer writes through it. A caller that honestly passes `as_ptr()` produces a pointer with no write provenance, and the first `BsFlush` is UB. | **CLOSED 2026-08-11**, T3.4 (`5bd19deb`) — see below |
 | `encoder/encoder_ext.rs:2418`, `:2427` `SetFastCodingFunc` / `SetNormalCodingFunc` | **`SWelsFuncPtrList` is self-referential.** `sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr()` stores a pointer into the struct's own `pfSampleSad` array; `SetNormalCodingFunc` does the same with `pfSampleSatd`. Every later `&mut SWelsFuncPtrList` — and the encoder takes one constantly — reborrows the whole struct and pops that interior pointer's tag, so the next `(*pFuncList).sSampleDealingFuncs.pfMdCost.add(BLOCK_16x16)` read is UB. | **Phase 4a** (it owns `SWelsFuncPtrList` and the dispatch tables) |
 
 The third is the interesting one: it is not a caller mistake, it is a signature
@@ -403,6 +403,17 @@ wrong. `au_set.rs`'s two tests carried the accommodation
 (`as_mut_ptr() as *const u8`, with the reason written next to it) rather than the
 signature being changed, because changing it is Phase 3's job and it wants to
 happen with `BsWriter`.
+
+**Closed at T3.4 (2026-08-11, `5bd19deb`), by deleting the function rather than
+amending it.** There was no signature to fix: the buffer is now a `&mut [u8]` the
+caller already holds, and the only state `InitBits` set that still means anything is
+`BsWriter::new()`. Its five call sites say so, and `WRITE_BE_32` went with it. Both
+`au_set.rs` accommodations are deleted — a named deliverable of Phase 3 — and Miri
+runs the honest code at 291/291 with **no new skip**. 4a's precedent said deleting
+an accommodation exposes the next finding immediately; here it did not, which is
+recorded as a negative result rather than left as an open expectation. Three sites
+remain in this finding's queue, and the Miri skip list still names `encoder_ext` for
+the *other* one (`InitDqLayers`, Phase 6's).
 
 ### What Phase 2 did about it
 

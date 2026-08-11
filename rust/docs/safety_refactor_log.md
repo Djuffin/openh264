@@ -2772,3 +2772,273 @@ Three things this seam leaves T3.4:
 * **Comparison-form arithmetic** paid twice more this session (the ladder at T3.2, the
   `size < 1` guard here). `svc_set_mb_syn_cavlc.rs:752`'s `pEndBuf - pCurBuf - 1` space
   checks are the next instance waiting.
+
+---
+
+## 2026-08-11 — Phase 3, session E (T3.4; the encoder write side, and `SBitStringAux` dies)
+
+**Goal:** [`prompts/phase3_session_e.md`](prompts/phase3_session_e.md) — seam T3.4 in
+three faces. All three landed, plus the headline the brief made conditional. T3.5 was
+not started: faces 2 and 3 merged into one large conversion and there was no standing
+start left, which is the rule working rather than a shortfall.
+
+**Started at** `b308f7d5`; **ended at** `fb4e7c29` + this docs commit. Tree clean at
+both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `13912ffd` | **face 1** — F2's four writer copies collapse onto the canonical family; fifteen functions and four dead transliterations deleted; zero bytes of output move |
+| `5bd19deb` | **faces 2+3** — the encoder write side onto `BsWriter`; `InitBits` deleted (**F13 site 3 closed**); the two `au_set.rs` accommodations deleted; **F5 closed**; four `abi_guard` asserts deleted; the writer differential retired |
+| `fb4e7c29` | **the headline** — `SBitStringAux` deleted, with its inventory |
+
+### Gates
+
+| | inherited (`b308f7d5`) | final |
+|---|---|---|
+| tests | 434 / 428 / 20 | **431 / 425 / 20** — five retired differentials, two new `safe::bits` tests |
+| T3.0 goldens | 2316 rows, 0 `WITHHELD` | 2316 rows, 0 `WITHHELD`, unchanged throughout |
+| conformance | 53 hashes | 53, unchanged throughout |
+| sweeps | 341/341 both | **341/341 both, on a clean `OVERALL: PASS` full battery at the end** — four F3 hits during the session, §5 |
+| benches | bit-identical | bit-identical, both |
+| Miri `--lib` | 289 | **291**, with the accommodations gone and **no new skip** |
+| ratchet | 1327 / 5076 / 155 | **1296 `unsafe_fn` / 5034 `raw_ptr` / 157 `SHIM(`** |
+
+**The milestone:** the bitstream layer no longer contains a pointer cursor of any
+kind. The decoder read side closed at T3.3; this seam closes the encoder write side;
+and with both done the type they shared — `SBitStringAux`, the `pStartBuf`/`pCurBuf`/
+`pEndBuf` triple that §1.2's taxonomy named as T3's emblem — has no users and is
+deleted. What remains of Phase 3 is T3.5 (the CABAC coder's *own* triple, which never
+used this struct) and T3.6 (owned output buffers).
+
+### 1. The session's shape was wrong in one specific, instructive way
+
+The brief split the work as *face 2 = convert the writer functions*, *face 3 = flip
+`SWelsSliceBs`*. **Those do not separate.** A writer function whose signature is
+`(buf: &mut [u8], w: &mut BsWriter)` cannot be fed by a struct field holding an
+`SBitStringAux`: the field's type is *forced* by the signature change, not merely
+adjacent to it, and the same is true of `SWelsEncoderOutput`, `SWelsOut` and
+`SSlice::pSliceBsa`. They landed as one commit, and the four `abi_guard` asserts had
+to die in it too, because a `const` size assertion fails at compile time — there is no
+intermediate state where the tree is green.
+
+What *did* separate cleanly is the thing the brief treated as conditional: deleting
+`SBitStringAux` is a pure subtraction once nothing references it, and it is its own
+commit with its own inventory.
+
+**The generalisable bit for later seams:** the decomposable unit in a struct-field
+conversion is *the set of structs reachable from one signature*, not one struct. Phase
+5 (`SDqLayer`, `MbGrid`) and Phase 6 (the encoder pools) should size their faces that
+way rather than by struct count.
+
+### 2. F2's decision, and the divergence F2 did not know about
+
+The canonical copy won. Every guard the other three added is defensive code the C++
+does not have, and each died with a written reason (the commit message enumerates all
+nine). The one with real teeth was `svc_encode_slice.rs`'s **pre-mask of the value to
+`iLen` bits**: the canonical ORs the value into the accumulator whole, so an
+`iFrameNum` or `iPicOrderCntLsb` carrying bits above its field width would be silently
+truncated by the old copy and would corrupt its neighbouring syntax elements under the
+canonical. The encoder keeps both counters reduced modulo their field width — and the
+sweeps, not my reading of the code, are what says so.
+
+**F2's inventory was incomplete, and collapsing the copies is what showed it.** The
+finding's table compares `BsWriteBits`, and that is all it compares. `nal_encap.rs`
+also carried its own `BsFlush`, and that one was **not** equivalent: it stored only the
+`4 - iLeftBits / 8` bytes it advanced over, where the canonical and
+`golomb_common.h:104` always store a full 32-bit word. Up to three bytes past the write
+position differ; the next write overwrites them, and past the last NAL they are outside
+the output, so every gate the port has was blind to it. F2 is annotated.
+
+The lesson is not about those bytes. It is that **a duplicate-function finding must
+enumerate the whole family, not the function that motivated it** — and the way you
+discover the miss is by doing the collapse, which is the same mechanism session D
+described from the other side (§3 there: retyping the shared thing is what makes dead
+duplicates findable). Both sessions found the same shape: *the dedupe is the
+instrument*.
+
+### 3. F13's third site and F5 both closed by deletion, and one expectation did not pay
+
+`InitBits` declared `kpBuf: *const u8`, stored it as `pStartBuf: *mut u8`, and the
+writer wrote through it — a signature documenting the opposite of what the function
+does, so **every honest caller was UB**. The brief said "deleted, not amended", and
+that turned out to be the only option: once the buffer is a `&mut [u8]` the caller
+already holds, the sole remaining state is `BsWriter::new()`. There is no signature to
+fix because there is no function.
+
+`au_set.rs`'s two accommodations went in the same commit, the phase's named
+deliverable, and Miri ran the honest code at 291/291. **4a's precedent said deleting an
+accommodation exposes the next finding immediately, and this time it did not.** Worth
+recording as a negative result: the precedent came from a *gate skip* being deleted (a
+whole module re-entering Miri's view), whereas these were two test-local pointer casts.
+Deleting an accommodation is only as revealing as the instrument it was hiding from.
+
+F5 closed as a side effect, exactly where its own "who fixes it" line predicted:
+*"Phase 3.2, in the commit that collapses the four writer copies — the fix is the same
+one `BsWriter` already carries."* Face 1 deliberately left the panicking
+`uiCurBits << iLeftBits` alone (S6), and face 2 deleted the body holding it. That is a
+behaviour change on the path F5 describes — a debug build that used to panic now writes
+the intended word — and it is unobservable only because the path is unreachable. **A
+deletion is allowed to stand in for a decision when the decision has no reachable
+consequence, and not otherwise.**
+
+### 4. Phase 4b's fence held, and the reason is worth keeping
+
+Three entry points reach the writer through function pointers whose signatures 4b owns:
+`pfWelsSpatialWriteMbSyn`, the two slice-header writers behind
+`PWelsSliceHeaderWriteFunc`, and `pfStashMBStatus`/`pfGetBsPosition`. None gained a
+parameter.
+
+Two different reasons, and both are reusable:
+
+* **The stash pair and `GetBsPosCavlc` need no buffer at all.** They only ever read or
+  restored cursor *state*, and a detached cursor is `Copy` — so
+  `pBsStackBufPtr`/`uiBsStackCurBits`/`iBsStackLeftBits` became one `sBsStack:
+  BsWriter` restored by assignment, and the bit position is `bits_pos()`. Detaching the
+  cursor removed the parameter rather than adding one. (This is the CAVLC half of
+  T3.5's rollback, landing early because the field types forced it; the CABAC half and
+  the `m_pBufStart/Cur/End` triple are still T3.5's.)
+* **The other three derive the buffer from what they already have.**
+  `slice_bs_buffer(pCtx, pSlice)` picks between the slice's own `sSliceBs.pBsBuffer` and
+  the frame's `pOut->pBsBuffer` by **the identity of the writer `pSliceBsa` aims at** —
+  which is what `InitSliceBsBuffer` wrote and what the C++ `pStartBuf` carried
+  implicitly. The obvious alternative, re-deriving it from `iMultipleThreadIdc` and
+  `uiSliceMode`, was rejected: those parameters can move between allocation and use, and
+  the pointer cannot. Session D's "derive, don't store" rule with its edge showing — the
+  thing to derive from is the state that *recorded the decision*, not the inputs the
+  decision was made from.
+
+### 5. F3's twelfth measurement, and the first LONG output
+
+Four hits, all the signature, each re-run 5/5 clean; the third alternation was run and
+the tree acquitted again (control `b308f7d5` **3/80**, HEAD **1/80**, on the worst-known
+configuration). Full table in F3. Three things new:
+
+* This was the first session whose seam is **encoder-side**, so session D's softening
+  argument ("the seam is decoder-only") was unavailable and the alternation was run on
+  the first excuse rather than the second.
+* **Two batteries on one unchanged tree disagreed with each other**: face 1's `family`
+  battery was 341/341 in both profiles, and the `full` battery minutes later on the
+  identical tree drew one hit per profile. Same binaries, opposite verdicts.
+* The output can be **long**. Every prior recorded failure was zero-byte or short;
+  HEAD's single alternation hit was 42312 bytes against 42281. S14's wording already
+  said "any wrong length (zero, short, or long)"; this is the first observed instance of
+  the third case, and the broad wording was right.
+
+Practical note: alternating a *single known-worst configuration* rather than a sub-sweep
+works and takes ~4 minutes. Build both `rust_enc` binaries, keep them on disk, swap them
+into the harness path inside the loop, never rebuild between sides.
+
+### 6. Perf: nothing moved, and the disassembly says why
+
+Interleaved pairs, 3 pairs, session floor measured fresh (S2): the null was
+median +0.00%, band −1.69% … +1.58% on the encoder. Face 1 alone: encoder median
++0.00% (−1.43% … +1.47%), decode +0.00%. The whole T3.4 conversion (face 1 → HEAD):
+encoder median **+0.00%** (−1.02% … +1.47%), decode median **+0.00%** (−0.33% …
++0.06%). Every row inside the floor; the ledger's ≈ +8.9% encoder is unmoved.
+`Spatial Ramps` printed +111% and is EXCLUDED per S2 — the same null that session
+showed it at −53%.
+
+The S1-proportional disassembly look the brief asked for, on `WelsWriteVUI` as the
+representative literal-`n` writer, control vs HEAD:
+
+| | control | HEAD |
+|---|---|---|
+| instructions | 765 | **720** |
+| calls (`bl`) | 1 | 1 (here: the out-of-line cold bounds-failure path) |
+| **constant-amount shifts** | **6** | **6** |
+| variable-amount shifts | 43 | 40 |
+| stores | 119 | **56** |
+| branches | 77 | 122 |
+
+The constant-shift count is the literal-`n` rule holding: the widths still fold and
+`write_bits` inlines whole, so nothing laundered a literal into a runtime argument.
+The store collapse is `WRITE_BE_32`'s four byte-stores becoming one 32-bit store via
+`copy_from_slice` — S8's catalogued result, arriving unasked. The branch growth is the
+bounds checking the C never had, and it is out-of-line and free on the hot path. **The
+seam that adds bounds checks came out smaller and no slower**, which is worth saying
+plainly because the phase's standing worry is the other direction.
+
+### 7. The `SBitStringAux` inventory, and what licensed the deletion
+
+After faces 1–3, every remaining mention was one of three things and none was a use:
+the definition and its `Default`/`new()`; **five `pub use` re-exports with no
+consumer** (`decoder/bit_stream.rs`, `decoder/cabac_decoder.rs`,
+`decoder/decoder_core.rs`, `encoder/encoder_context.rs`,
+`encoder/svc_set_mb_syn_cabac.rs`); and **two `pub type PBitStringAux = *mut
+SBitStringAux` aliases** nothing named, plus two dead imports. Zero struct fields, zero
+parameters, zero locals. The compiler was the proof — deleting the definition broke
+exactly those and nothing else.
+
+The brief's two suspected holdouts were both checked rather than assumed. The encoder
+CABAC writer carries its own triple inside `SCabacCtx` and never used the struct
+(T3.5's). The MT slice-buffer path names `SWelsSliceBs`, never `SBitStringAux`. And the
+type is in no header under `codec/api/wels/`, so nothing crossed a C ABI with the
+layout; `api/abi_guard.rs` guards the public surface separately.
+
+The `wels_common_defs.rs` sweep the brief warned against did not happen. One deletion,
+the one the inventory licensed.
+
+### 8. What the ratchet did, and the two shims that are owed
+
+`unsafe_fn` 1327 → **1296**, `raw_ptr` 5076 → **5034**, `unsafe_block` 643 → **626**,
+`SHIM(` 155 → **157**. The baseline was regenerated once, at `13912ffd`, with the
+reason in that commit (S16): five per-file increases, all of S16's documented shapes —
+`SHIM(` +1 in each file holding a new marker, and `raw_ptr` +2 in each of three files
+whose *comment* names F13's `*const u8`/`*mut u8` pair. Prose inflating the count is
+exactly what S16 says to read past.
+
+The two new shims are named and owned: `bs_buffer` (`nal_encap.rs`) rebuilds a slice
+from a `WelsMallocz`'d pointer and its recorded `uiSize`, and `slice_bs_buffer`
+(`svc_encode_slice.rs`) picks which buffer a slice writes into. **Both die at T3.6**,
+when those allocations become owned and travel with the writer. One place owns that
+arithmetic, per T3.1b's precedent.
+
+### 9. Differential retirement: the writer half, per plan §2
+
+Five tests retired in the commit that deleted what they compared against, with the
+handover written into the module header of `tests/safe_bits_differential.rs`. Their
+burden passes to the **sweeps** — byte-exactness against the C++ encoder itself, which
+is a stronger referee for a writer than any in-tree comparison and is the one F2 named
+— to `safe::bits`'s own unit tests (the accumulator boundary, the whole-word flush, the
+snapshot/rollback round trip, and the two new ones for `te(v)` and `align`'s
+one-bit padding), and to `written_streams_read_back_through_the_old_reader`, which
+still closes the writer-to-reader loop.
+
+`exp_golomb_sizes_match_the_table_driven_versions` **stays**: `BsSizeUE`/`BsSizeSE`
+survive in `vlc_encoder.rs` because the mode-decision cost functions want a code length
+without writing anything, so it is still a genuine two-implementation comparison. That
+file now has exactly two live comparisons left (this and the frozen CAVLC pair) plus
+the decoder's `GetLeadingZeroBits`/`BsGetTrailingBits`.
+
+### Hand-off: T3.5, the encoder CABAC triple and the rest of the rollback
+
+**Start from a clean full battery** — the tree ends on `OVERALL: PASS` with nothing
+explained away, which is the first time this phase that has been true at a session
+boundary. Then:
+
+* **T3.5 is smaller than the brief thinks.** Its CAVLC half already landed here,
+  forced by the field types: `SDynamicSlicingStack` holds `sBsStack: BsWriter` and
+  `StashMBStatusCavlc`/`StashPopMBStatusCavlc` are two assignments. What remains is
+  `set_mb_syn_cabac.rs`'s `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` triple (`:139-143`,
+  walking at `:825`, `:839-860`, `:1009-1028`) and the CABAC stash's
+  `pRestoreBuffer` byte copy. The `Copy`-of-`BsWriter` design the brief specifies is
+  already proven in production by the CAVLC half.
+* **Two boundaries are marked and waiting for you**, both in the faces-2+3 commit:
+  `WelsInitSliceCabac` hands the coder `buf.as_mut_ptr().add(w.pos())` and the buffer
+  end, and `WelsWriteSliceEndSyn` takes the position back with
+  `BsWriter::set_pos(end.offset_from(buf.as_ptr()))`. `set_pos` exists for that one
+  caller and debug-asserts the empty accumulator that makes it valid; when the triple
+  becomes a `pos`, both boundaries and `set_pos` should disappear together.
+* **T3.6's shape is now visible.** The two `SHIM(phase3)` helpers are the whole of what
+  stands between the encoder and owned output buffers, and they are one-liners.
+  `bs_buffer(ptr, len)` has exactly the signature a `Vec<u8>` field would make
+  unnecessary. Session D's construction-audit rule is what governs that seam: `BsWriter`
+  was safe under `mem::zeroed` because it is three integers, and a `Vec` will not be —
+  the decoder's `MaybeUninit` shell plus `new_boxed()` is the precedent, and the
+  encoder's zeroing is wholesale (`sWelsEncCtx::default()` behind `Box::into_raw`, and
+  `WelsMallocz`'d slice arrays).
+* **One straggler is queued for S18**, not fixed: `md.rs` carries a fifth copy of the
+  *size* pair (`BsSizeUE`/`BsSizeSE`) over a **third** name for the Golomb length table
+  (`G_KUI_GOLOMB_UE_LENGTH`). Different family, different owner; F2's entry records it.

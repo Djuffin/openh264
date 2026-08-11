@@ -1044,6 +1044,55 @@ work is T3.3's ownership seam, which touches no per-bin path.
 
 ---
 
+### T3.4 — the encoder write side (2026-08-11, session E)
+
+Instrument: `perfpair.py`, `FFMPEG` set. Session floor from `null face1`, 3 pairs:
+encoder median **+0.00%**, min −1.69%, max +1.58% — one of the tightest floors this
+project has measured, which is what makes the flat result below worth stating.
+`Spatial Ramps` moved −53% in that null and +111% in the run; EXCLUDED per S2 both
+times, and recorded because the rule says to.
+
+| pair | 3-pair medians |
+|---|---|
+| control `b308f7d5` → face 1 (the F2 dedupe) | encoder **+0.00%** (−1.43% … +1.47%), decode **+0.00%** |
+| face 1 → `fb4e7c29` (the whole conversion) | encoder **+0.00%** (−1.02% … +1.47%), decode **+0.00%** (−0.33% … +0.06%) |
+
+Every row inside the floor, on both benches, for both halves of the seam. **No ledger
+row is opened**; cumulative stays ≈ +8.9% encoder and ≈ +17.8 / +10.1 / +9.6% decode.
+The decode figure is the required wash — the seam changes no decoder code — and the
+face-1 pair is the required wash for a dedupe onto identically-inlined functions.
+
+The number to keep here is again the disassembly, and this time it is the reassuring
+direction. `WelsWriteVUI`, the representative literal-`n` writer, control vs HEAD:
+
+| | control | HEAD |
+|---|---|---|
+| instructions | 765 | **720** |
+| calls (`bl`) | 1 | 1 (the out-of-line cold bounds-failure path) |
+| **constant-amount shifts** | **6** | **6** |
+| variable-amount shifts | 43 | 40 |
+| stores | 119 | **56** |
+| branches | 77 | 122 |
+
+Three readings, in order of how much they generalise:
+
+1. **The literal-`n` rule held** (phase brief §4, 4a's finding). Constant-amount shifts
+   are unchanged at 6 and there is no writer call in the body, so `write_bits` inlines
+   whole and the literal widths still fold — nothing laundered a literal into a runtime
+   argument. That was the specific regression the brief told this seam to watch for.
+2. **The store collapse was free.** `WRITE_BE_32`'s four byte-stores became one 32-bit
+   store because `copy_from_slice` on a fixed window compiles to the wide store the
+   punned access existed for — S8's catalogued result, arriving without being asked
+   for, and the reason the instruction count *fell* across a conversion that adds
+   bounds checks.
+3. **The bounds checks are the branch growth (77 → 122) and they cost nothing
+   measurable.** They are out-of-line — a single cold `bl` at the tail serves all of
+   them — so the hot path is straight-line. Worth recording because the phase's
+   standing worry runs the other way: this is the seam that *adds* checking to the
+   encoder's innermost writer, and it came out smaller and no slower.
+
+---
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.

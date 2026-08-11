@@ -88,7 +88,8 @@ stream, which is precisely where the conformance gates are weakest.
 
 ## F5 — The canonical bitstream writer panics on a 32-bit write in debug builds
 
-**Status: open, latent, unreachable today.** Found while building `BsWriter` (T5).
+**Status: RESOLVED 2026-08-11**, Phase 3 T3.4 faces 1-2 (`5bd19deb`) — by deletion,
+exactly where the "who fixes it" line below predicted. See "Resolution" at the end.
 
 `BsWriteBits` (`encoder/vlc_encoder.rs:367`) computes, in its else branch:
 
@@ -122,6 +123,29 @@ release, so if the old code is ever fixed, that test says so.
 
 **Who fixes it:** Phase 3.2, in the commit that collapses the four writer copies (F2)
 and decides their guard semantics. The fix is the same one `BsWriter` already carries.
+
+### Resolution (2026-08-11, T3.4, `5bd19deb`)
+
+Nothing was repaired. Face 1 collapsed the four copies onto the canonical one **and
+deliberately left the panicking expression alone** (S6: arithmetic parity, not
+repair), with the Phase 1 differential test still pinning both sides. Face 2 then
+moved `vlc_encoder.rs` onto `BsWriter` and deleted the raw bodies, so
+`uiCurBits << iLeftBits` no longer exists anywhere in the port; the replacement had
+folded the shift away since Phase 1.
+
+Two notes worth keeping:
+
+* This is a **behaviour change on the path the finding describes** — a debug build
+  that used to panic on a 32-bit write now writes the intended word. It is not
+  observable, because the path is unreachable (no `BsWriteBits` width in
+  `src/encoder/` reaches 32), which is also why 341/341 sweeps in both profiles
+  cannot tell the two apart. That unreachability is the whole reason a *deletion*
+  was allowed to stand in for a decision.
+* `writer_and_the_32_bit_word`, the differential test that asserted the old side
+  panics in debug and matches in release, retired with the code it tested. The
+  property it protected — that a 32-bit write into an empty accumulator produces the
+  right four bytes — lives on in `safe::bits`'s
+  `writer_handles_the_exact_accumulator_boundary`.
 
 ---
 

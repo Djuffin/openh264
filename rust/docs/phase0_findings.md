@@ -100,7 +100,10 @@ params — `rust_enc <yuv> 320 240 200 26 <cabac> -1 <out> 0 0 3 1500 1`.
 
 ## F2 — The encoder bitstream writer exists four times, and the copies are not identical
 
-**Status: open, do not dedupe yet.** Task T5d, per the phase brief's stop rule.
+**Status: RESOLVED 2026-08-11**, Phase 3 T3.4 face 1 (`13912ffd`). There is one
+writer. See "Resolution" at the end of this entry — and note the inventory below
+was **incomplete**: it tabulated `BsWriteBits` only, and a fifth divergence turned
+up in `BsFlush` when the copies were actually collapsed.
 
 The Phase 0 brief expected `svc_encode_slice.rs:498-585` to be a verbatim duplicate of
 `vlc_encoder.rs`, to be deduped by re-pointing callers. Neither half of that holds.
@@ -138,6 +141,29 @@ not-quite-identical functions onto one is a behaviour change on exactly the edge
 nobody has tested. Phase 3 (§Phase 3.2) converts the write side to a safe `BsWriter`
 anyway; that is the commit where the four copies become one, and it must decide
 explicitly which guard semantics survive. Record the decision there.
+
+### Resolution (2026-08-11, T3.4 face 1, `13912ffd`)
+
+The canonical copy won; the other three are deleted, fifteen functions in all. The
+guard semantics that died, and why each is safe on in-contract input, are enumerated
+in that commit message and summarised in the log's session-E entry §2. The referee
+was the one this finding named: **sweeps 341/341 in both build profiles**, which is
+byte-exactness against the C++ encoder itself. Zero bytes of output moved.
+
+**One divergence this entry missed.** The table above compares `BsWriteBits`, and
+that is all it compares. `nal_encap.rs` also carried its own `BsFlush`, and that one
+was **not** equivalent: it stored only the `4 - iLeftBits / 8` bytes it advanced
+over, where the canonical — and `golomb_common.h:104` — always stores a full 32-bit
+word. The difference is up to three bytes past the new write position, overwritten
+by the next write before anything reads them and outside the output past the last
+NAL, so it survived every gate. The lesson is about the shape of the inventory, not
+the bytes: **a duplicate-function finding must enumerate the whole family, not the
+function that motivated it.**
+
+The related note below still stands and got a little worse before it got better:
+`md.rs` carries a *fifth* copy of the size pair (`BsSizeUE`/`BsSizeSE`) over a
+**third** name for the Golomb length table (`G_KUI_GOLOMB_UE_LENGTH`). Different
+family, listed for S18's straggler sweep at the phase exit.
 
 Related: the recovered `rust/tools/find_dup_types.sh` reports 268 duplicated declarations
 today, including constants that hold **two distinct values** under one name. It was
@@ -493,3 +519,54 @@ Second time the alternation has been run, second time it has acquitted the tree 
 test. Worth noting for whoever runs it next: at this rate a 6×32 alternation is enough
 to see hits on both sides, where the ninth measurement's 6×120 was needed to see two —
 so size the alternation by the *current* rate, not by the historical band.
+
+### Twelfth measurement — 2026-08-11, Phase 3 session E: four hits, the third alternation, and the encoder seam acquitted
+
+The first session in which the seam under test is **encoder-side**, which is the case
+the F3 signature actually lives in — so the "this seam is decoder-only" reasoning that
+softened session D's hits was unavailable, and the alternation was run on the first
+excuse.
+
+Four hits across the session's five full batteries, all the signature, each re-run
+**5/5 BYTE-IDENTICAL** on its own configuration:
+
+| battery | profile | configuration | output |
+|---|---|---|---|
+| opening **control** (inherited tree, before any change) | debug | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0` | zero-byte |
+| face 1 (second battery on the same tree) | debug | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=0` | zero-byte |
+| face 1 (same battery) | release | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0` | short (40602 vs 42538) |
+| faces 2+3 | release | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0` | zero-byte |
+
+Again a hit on the **session-start commit before a line was changed**, for the second
+session running. And again a *pair* of batteries on one unchanged tree disagreed with
+each other — face 1's `family` battery was 341/341 in both profiles, and the `full`
+battery minutes later on the identical tree drew one hit per profile. Two runs of the
+same binaries, opposite verdicts: that is the finding, stated as plainly as it gets.
+
+The alternation, after the second and third hits. Control = `b308f7d5`, both `rust_enc`
+binaries built and kept on disk, alternating **inside one loop** on the worst-known
+configuration (`CiscoVT2people_160x96_6fps t=4 sm=3 n=600`, release), 40 rounds × 2
+entropy coders per side:
+
+| tree | encodes | wrong-length failures |
+|---|---|---|
+| control `b308f7d5` | 80 | **3** (two zero-byte, one zero-byte) |
+| HEAD (T3.4 face 1) | 80 | **1** (long: 42312 vs 42281) |
+
+**The control side failed three times as often.** Third alternation, third acquittal,
+and the third in a row where the control is the worse side.
+
+Two additions to the profile:
+
+* **The output can be LONG.** Every previously recorded failure was zero-byte or
+  short; HEAD's single hit here was 42312 bytes against 42281, i.e. 31 bytes *over*.
+  S14's wording already says "any wrong length (zero, short, or long)" — this is the
+  first observed instance of the third case, so the wording was right to be broad.
+* Rate on the worst configuration under battery load: **4 in 160 ≈ 1/40**, another
+  order of magnitude above session D's 1/64 alternation rate. Sizing advice from the
+  eleventh measurement holds and tightens: 40×2 was ample.
+
+For whoever runs the next one: alternating a *single* configuration rather than a
+whole `mt sm=3` sub-sweep works and is much faster (~4 minutes), because the
+configuration that fails is known. Keep both binaries on disk and swap them into the
+harness path inside the loop; do not rebuild between sides.
