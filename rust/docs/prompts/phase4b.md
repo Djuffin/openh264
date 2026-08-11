@@ -17,7 +17,24 @@ If both fit, the phase is one session; plan the boundary at the seam, never mid-
 
 ---
 
-## 0. Start here
+> **Session A landed §1 in full** — T4b.1 (`08b7c29d`) and T4b.1b (`3e583b9a`).
+> §0 below is spent; start from §2. Two corrections this brief earned, made here
+> per its own rule:
+>
+> * **§0's F3 advice did not hold, and the alternation's *unit* was the real
+>   problem.** The opening battery was clean, breaking the three-session streak.
+>   Three hits came later, and re-running the hitting configurations in isolation
+>   gave **0/40 on both sides** — a non-result, because the race needs a loaded
+>   machine. Alternating whole `mt` sweeps gave HEAD 4/12 vs control 5/12 and
+>   measured F3's rate for the first time. Now **S23b**.
+> * **The RC-mode table is `T4b.1b`, not `T4b.2`** — §2's vtables keep that
+>   number. §1 said to convert RC "in the same seam or the next"; it was the same
+>   session, the next commit, and it is numbered as the second half of §1.
+>
+> The one thing §1 promised that this brief could not have known: **the RC table
+> could not be derived live.** See S23.
+
+## 0. Start here *(spent — session A)*
 
 Tree at session start: clean except a small inherited doc tail — the post-exit
 steward annotations (plan §1.2's vtable-count correction, §3's P5/P13 status notes,

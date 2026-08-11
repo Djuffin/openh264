@@ -3279,3 +3279,146 @@ mapped: one boolean in `encoder_context.rs:752-766` selects four `Option<fn>` sl
 that is an `enum EntropyCoder` with four methods. The thunk deletes itself; the CAVLC
 arm sheds the `buf` parameter T3.5 was forced to add. `transmute` is still 23 and has
 not moved since Phase 0 — 4b's §3 names it explicitly so it stops not moving.
+
+---
+
+## 2026-08-11 — Phase 4b, session A (T4b.1 and T4b.1b — §1's seam, both halves)
+
+**Commits:** `6e15c907` (inherited doc tail), `08b7c29d` (T4b.1, the entropy
+dispatch), `3e583b9a` (T4b.1b, the rate-control table). Phase entry for perf
+purposes is `6e15c907`.
+
+### What landed
+
+The brief's §1 in full. Two dispatch families, one commit each, per its own rule
+that a byte-exactness failure must name its cause:
+
+* **T4b.1** — `pfWelsSpatialWriteMbSyn`, `pfGetBsPosition`, `pfStashMBStatus`,
+  `pfStashPopMBStatus` → `enum EntropyCoder { Cavlc, Cabac }`, four `#[inline]`
+  methods that `match`. Deleted with them: `WelsSpatialWriteMbSynCabacThunk`,
+  four typedefs, four `is_some()` asserts, three `extern "C"`s, and the `buf`
+  parameter on both CAVLC stash variants.
+* **T4b.1b** — `SWelsRcFunc`'s nine slots → one `eInstalledMode: RCMode` and nine
+  methods; nine typedefs deleted, nineteen call sites de-guarded.
+
+`assert_size!(SWelsFuncPtrList)` **1272 → 1248 → 1184**. Both seams' S20 closure
+was the same and trivially small — the table is reached only through
+`sWelsEncCtx::pFuncList`, a *pointer*, so nothing embeds it and nothing else had
+to move. Both S21 audits discharged by statement: each enum's zero discriminant
+is a declared variant (`Cavlc = 0`, `RC_QUALITY_MODE = 0`), so the `mem::zeroed()`
+and `WelsMallocz` construction paths stay sound.
+
+### Gates
+
+Tests **431 / 425 / 20** unchanged across both commits. Miri **291/291**. Decode
+goldens and both benches bit-identical. Sweeps 341/341 in both profiles modulo
+F3, below. Ratchet regenerated twice per S16: `unsafe_fn` 1286 → 1289 → **1298**,
+`raw_ptr` 5001 → **4998**, `mem_zeroed` 26 → **28**, everything else flat —
+`transmute` **still 23**.
+
+### 1. The same question, asked twice, answered both ways
+
+Both seams cache a configuration selector at init. Both therefore raise the same
+question: *can the cached selector and the live parameter disagree?* The answer
+had to be checked separately for each, and it came out differently:
+
+* **Entropy: no.** `svc_encode_slice.rs` keeps a local `kbCabac` read live from
+  `pSvcParam`. `WelsEncoderParamAdjust`'s no-reset arm copies fields one by one
+  ("we can not use direct struct based memcpy due some fields need keep unchanged
+  as before") and `iEntropyCodingModeFlag` **is not among them**; every path that
+  changes it goes through `bNeedReset` into a full uninit/init. So `kbCabac` was
+  left exactly as it was.
+* **Rate control: yes.** The same no-reset arm *does* assign
+  `pOldParam->iRCMode = pNewParam->iRCMode`, and does not re-point the table.
+  Upstream's own comment four lines below reads "Any else initialization/reset for
+  rate control here?". So the encoder can legitimately run the previous mode's
+  callbacks until something re-inits, and **reading the live mode at the call site
+  would have silently fixed that** — S6's "parity, not repair", arriving from an
+  unexpected direction. The field is `eInstalledMode` precisely so the lag is
+  named rather than accidental.
+
+**The reusable form**: when a conversion turns a cached table into a derived
+value, the derivation is only equivalent if the source cannot change behind the
+cache. That is a property of the *update paths*, not of the dispatch, and it has
+to be read out of them one field at a time. Two fields set from the same struct
+by the same init function gave opposite answers.
+
+### 2. Three call sites that did not substitute
+
+Most of the 35 converted call sites are `if let Some(f) = slot { f(args) }` →
+`e.Method(args)`. Three were not, and each needed an argument written down:
+
+* **A condition that read as two and was one.** `PrepareEncodeFrame`'s
+  `if bSimulcastAVC { if let Some(f) … } else if let Some(f) { for … }` tests the
+  *same slot* in both arms; the discriminator is `bSimulcastAVC` alone.
+* **A guard wrapping a test.** `WelsRcCheckFrameStatus` puts `!bSkipMustFlag &&
+  iMaxSpatialBitrate != UNSPECIFIED` *inside* `if let Some(check_skip)`, so
+  hoisting it runs a body that used to be skipped. Equivalent, by the loop's own
+  structure: `!bSkipMustFlag` on entry implies this iteration's `bSkipFlag` was
+  false, so a no-op callback leaves the re-check false.
+* **An absence a caller reads.** `pfWelsRcPostFrameSkipping`'s `None` meant "never
+  take this skip-and-return path", so the method's empty arms must return `false` —
+  the one place in either seam where the *value* of "not installed" is load-bearing.
+
+### 3. F3: sixteenth to eighteenth measurements, and the alternation's unit was wrong
+
+Three hits, two trees, both profiles, all with the signature (`mt`, `sm=3`, `t=4`,
+wrong length). Full table in [`phase0_findings.md`](phase0_findings.md). Two
+process results:
+
+* **The session-start battery was clean**, breaking the three-session streak the
+  brief told me to expect. The standing advice is a tendency, not a rule.
+* **Isolated re-runs are the wrong unit to sample.** The escalated alternation run
+  on the hitting configurations in isolation gave **HEAD 0/40, control 0/40** —
+  neither side reproduced at all. Re-run at the level the hits actually occur
+  (whole `mt` sweep presets, 341 configurations back to back — the *loaded*
+  condition) it gave **HEAD 4/12 sweeps, control 5/12**: the control hit more
+  often. That also measured the rate directly for the first time, ~1 in 800
+  configurations, matching the 1/400-1000 the finding has claimed since Phase 0
+  from indirect evidence; and it produced all three wrong-length forms (zero,
+  short, long) on *both* sides inside one loop.
+* **When an alternation comes back 0/0, it has not run yet.** Re-run it at sweep
+  level before recording a result.
+
+### 4. Perf: S2b's second payment, and a bigger one
+
+Session floor (`null`, 3 pairs): encode median **+0.00%** (−1.45% … +1.45%),
+decode **−0.16%**. Both seams flat: T4b.1 encode +0.05% / decode +0.08% at one
+pair; T4b.1b encode **−0.15%** / decode **−0.06%** at three. **No ledger row
+opens**, cumulative unchanged.
+
+The number to keep is the one that was wrong. T4b.1b's single-pair run reported
+`640x480 (VGA Mandelbrot) [4t]` at **+22.91%**; at three pairs the same row reads
+**−0.49%**, and its 1-thread twin read +0.08% in the same run. A 23-point swing
+from a pair count, on a seam that deletes nine function pointers and adds no work
+to any loop. Phase 3's exit earned S2b with a 2.6-point swing that changed a sign;
+this is an order of magnitude larger. **The median was right at one pair and the
+row was not** — a per-row maximum is a single sample however many rows the table
+has, and "one interleaved pair per seam" buys a median, not a row.
+
+### Hand-off: Phase 4b, session B
+
+§1 is closed. What remains in the brief, in its order:
+
+* **§2, T4b.2 — the two strategy vtables.** Scouted, not started. The
+  implementor counts decide enum-vs-trait and they are asymmetric:
+  `IWelsParametersetStrategy` has **one** ported implementor
+  (`CWelsParametersetIdConstant`; `CreateParametersetStrategy` returns an explicit
+  error for the other four C++ strategies), so it is not really dispatch at all —
+  a concrete type with inherent methods, and `Destroy` becomes `Drop`.
+  `IWelsReferenceStrategy` has **three** (`TemporalLayer`, `Screen`,
+  `LosslessWithLtr`) sharing one data member, which is the closed-and-small case
+  the brief says an enum wins. Both are `Box::into_raw`'d today, both are 8-byte
+  thin pointers stored in structs with size asserts, and **S20's closure must be
+  computed before sizing** — `pParametersetStrategy` is a member of
+  `SWelsFuncPtrList` and `pReferenceStrategy` a `*mut c_void` in `sWelsEncCtx`,
+  both of which have asserts.
+* **§3, T4b.3 — 4a's leftovers**, including `decode_slice.rs`'s cache-fill
+  `transmute`s. **`transmute` is still 23 and still has not moved since Phase 0.**
+  Two seams of this phase have now gone by without touching it; it will keep not
+  moving until a session starts there rather than ending there.
+
+The `SWelsFuncPtrList` size assert is the phase's running tally and is now at
+**1184** from 1280. Every remaining de-virtualization moves it, and the comment
+above it records why each time — that comment is the cheapest place to see how
+much of Phase 4 is actually done.
