@@ -2322,3 +2322,201 @@ things this session leaves it:
 
 S1 before conversion, per the brief: `DecodeBinCabac` was 4a's largest single decode
 consumer (544 self-samples), so disassemble the current raw hot path before touching it.
+
+## 2026-08-10 — Phase 3, session C (F17 fixed and proven; T3.2)
+
+**Goal:** [`prompts/phase3_session_c.md`](prompts/phase3_session_c.md) — (1) make
+`gates.sh` able to fail, prove it, re-baseline; (2) T3.2 from a standing start. Both
+landed. T3.3 was not touched, per the brief's non-goals — the surplus went where the
+brief said to spend it: the audit prose and the disassembly comparison.
+
+**Started at** `331668a7`; **ended at** `00c6cf9f` + this docs commit. Tree clean at
+both ends. Everything ran foreground/sequentially or as a single background battery
+with nothing else touching the target dir, per the session-B correction.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `eae61b94` | **F17** — `gates.sh` can fail again; proven red on a real input; new baseline |
+| `00c6cf9f` | **T3.2** — the CABAC engine's pointer triple → `pos` over a per-call RBSP window |
+
+### 1. F17, and what the audit found beyond the brief
+
+The fix is `run_cargo_test`'s own pattern, now applied everywhere it was missing: one
+`run_miri` helper (both Miri steps) taking `${PIPESTATUS[0]}` + parsed libtest totals +
+a **zero-test clause** (`passed == 0` fails — the script's header names that trap for
+`cargo test`; a mistyped `--skip` walks through everything else). Both bench steps:
+`PIPESTATUS[0]` **and** `[2]` (the display grep matched something — the one signal the
+old shape carried, kept) **and** the MISMATCH/DIFFER check. The empty-file-list case of
+the phase-exit differential loop now fails loudly. `OVERALL: PASS/FAIL (N)` is the last
+line, matching the exit code. `set -o pipefail` stays rejected — four greps in the
+script legitimately return 1 — and the complete per-step audit is a comment block at
+the bottom of the script.
+
+**One correction to the brief, fixed in place per its header:** its table called the
+sweep verdict unsound ("pipe status ignored"). Wrong — `sweep_gate` captured
+`${PIPESTATUS[0]}` all along; the real hole was the no-tally fallback printing `tail
+-3` text that reads like a result. Now an explicit `fail`.
+
+**The known-red self-test earned its keep twice.** Run 1: the fix itself was broken —
+`a=${PIPESTATUS[0]}; b=${PIPESTATUS[2]}` resets `PIPESTATUS` after the first
+assignment, and under `set -u` the battery aborted at the decode bench. One-shot
+array capture (`st=("${PIPESTATUS[@]}")`) fixed it. Run 2, with the F12 skip deleted:
+Miri found the `wels_thread_pool` retag race, and the battery printed
+`FAIL  miri --lib … 0 passed / 0 failed, rc=1` → `OVERALL: FAIL (1 steps failed)`,
+exit 1. (Totals are 0/0 because Miri aborts before libtest's `test result:` line — the
+`rc` clause carried the verdict, so the corroboration is genuinely belt-and-braces.)
+Skip restored; red-proof log archived in the session scratchpad.
+
+**The new baseline** (skips restored, defaults, foreground): 430/424/20, sweeps
+341/341 both profiles, goldens 2316, both benches bit-identical, **miri --lib 285/0 —
+machine-judged for the first time**, `OVERALL: PASS`, exit 0. Session B's
+hand-verified numbers, now machine-confirmed. For the record: every `PASS miri`
+printed by `gates.sh` between Phase 2's exit and `eae61b94` was unconditional; no
+finding is invalidated (all were verified by humans reading logs); the *gate* exists
+from that commit.
+
+### 2. T3.2 step 0 — the read-extent audit, and its two-extents result
+
+Per-site enumeration, written into `cabac_decoder.rs`'s module docs (F16's lesson as
+procedure — no quantifier over an unenumerated set). Three sites touch the buffer;
+nothing else in the engine does; all seven consumers reach it only through
+`Read32BitsCabac`:
+
+| site | loads | max index | needs |
+|---|---|---|---|
+| init prime | 5 bytes at `pos − remaining` | `len + 2` | `avail ≥ len + 3` |
+| end ladder | 4/3/2/1 at `pos` | **`len − 1`** | `len` only |
+| handoff | **none** | — | — |
+
+The surprise is the middle row: **F16's named suspect never reads past the RBSP** —
+its selector is measured against `pBuffEnd`, so every arm is bounded by the logical
+end. That licenses the conversion's shape: the hot path takes
+`BsReader::rbsp_window()` (the first `cursor.len()` bytes of `buf()`), making
+`win.len()` *be* `pBuffEnd − pBuffStart` — no extent arithmetic inside the engine at
+all — and only the once-per-slice init uses the wider `avail` window, through `get`,
+error path not panic. Two numbers, two concepts, one owner each; recorded as a §2.2.2
+[P3] note. The ladder's `iLeftBytes <= 0` became the **comparison** `pos >= win.len()`
+— `pos` legitimately exceeds `len` after init on truncated input, and a `usize`
+subtraction would wrap and select the 4-byte arm: a new OOB where the raw code
+errored.
+
+**The brief's "does the corpus actually reach the ladder?" check was run, and it
+nearly produced a wrong corpus extension before it produced the right answer.** First
+instrumentation (`eprintln!` in the arms) reported **zero** hits from the whole
+battery — parity corpus and conformance both — and on that evidence an EOF-tail
+truncation family was built, goldens regenerated, additions only. Then the
+instrumentation itself failed an attribution sanity check: libtest **captures** a
+passing test's stderr, and the parity test's workers are subprocesses whose stderr the
+parent parses, so `eprintln!` could never have been seen from either gate — the zero
+measured the instrument, not the coverage. File-append tracing (env-gated, capture-
+immune) gave the real numbers: the **existing** corpus enters the short arms 2,678
+times and the no-bytes error arm **896** times (the fine sweep's `boundary − d` cuts
+*are* the genuine-bins-to-the-cut geometry — a truncation is the recomputed `len`),
+and conformance enters the short arms ~9,600 times (well-formed CABAC slices end
+through them) and the error arm never. So 2.0's extension condition is **false**, the
+corpus family and regenerated goldens were reverted unlanded, the goldens stand
+**unmoved**, and the instrumentation is stripped. Three lessons in one: the ladder's
+arms are *well* covered by exactly the gate built for them; the S17/F17 shape — an
+instrument that cannot report is not an instrument — claimed its third instance this
+session, this time as a measurement rather than a gate; and the attribution
+re-run (old corpus, sound instrument) is what stopped a redundant 80-row golden
+diff from landing with a false justification in its commit message.
+
+Both `debug_assert`s the brief asked for are in, each with its why: init's rewind
+(`pos ≥ 4` on every path — `init`/`init_read_bits` prime 4 bytes; tight at
+`pos = 4, remaining = 4`) and restore's (`pos − (bits_left >> 3)` is refill-invariant
+and renorm only raises it; the negative-`bits_left` error path moves *forward*, in
+`isize`, as the raw arithmetic did).
+
+### 3. The conversion, and what the disassembly comparison caught
+
+`SWelsCabacDecEngine` → `{uiRange, uiOffset, iBitsLeft, pos: usize}`, field order
+keeping range/offset adjacent for the `ldp`. `ctx.pCabacDecEngine` keeps its pointer
+type — the struct changed under it, the T3.1b-precedent retype was not needed.
+`parse_mb_syn_cabac.rs`'s 18 functions: call-expression edits only — one
+`cabac_win = cabac_rbsp_window(pCtx)` binding per function (the single `SHIM(phase3)`
+deref chain; dies with `pBitStringAux`), `win` threaded through. The handoff is one
+`usize` each way, pinned by the new CAVLC→CABAC→CAVLC round-trip test at a 20-bit
+offset asserting full cursor state; plus a ladder-bounds test walking all four arms
+and the past-the-end comparisons, and an init end-guard test. Three mutations killed
+(S10): ladder `>=`→`>`, a 4-byte prime, restore without the rewind.
+
+**S1 in the brief's order, and step 3 caught two real defects the tests could not.**
+Step 1 recorded the raw reference (114 instructions, `Read32BitsCabac` fully inlined,
+zero buffer bounds checks, one `uiState < 64` table check, range/offset `ldp`, bare-ret
+MPS exit). The first converted shape — the obvious `match tail.len()` with indexing —
+**failed the comparison**: the refill stopped inlining (a stack frame on every bin,
+refill or not) and the `_` arm re-checked the length (three `panic_bounds_check`
+paths, four `ldrb`s where the raw had one `ldr`+`rev`). Restructured before any bench
+ran: `#[inline(always)]` on the refill, and the ladder as a `first_chunk::<N>()` chain
+testing `>= 4` first — the width stated as a type, S9's exact-span trim at four-byte
+scale. Final shape matches the reference point for point: refill inlined (no symbol
+survives), zero buffer bounds checks, the one pre-existing `uiState` check, `ldp`
+preserved, 4-byte arm a single `ldr`+`rev`, bare-ret fast path, 122 vs ~121
+instructions, and the curr/end pair load became one `pos` load with `win.len` already
+in a register. (3/2-byte arms are `ldrb`+`orr` chains vs `ldurh`+`rev16` — end-of-RBSP
+arms, reachable once per slice, immaterial.) `DecodeBypassCabac`/`DecodeUnaryBinCabac`
+fully inline; `DecodeTerminateCabac`/`DecodeExpBypassCabac` 0 panic paths, 0 calls.
+
+### 4. Gates and perf
+
+| | inherited (`eae61b94` baseline) | final |
+|---|---|---|
+| tests | 430 / 424 / 20 | **433 / 427 / 20** (+3: round-trip, ladder, guard) |
+| T3.0 goldens | 2316 | **2316, unmoved, both profiles** |
+| conformance | 53 hashes | 53, unchanged |
+| sweeps | 341/341 both | debug 341/341; release **340/341, one F3 hit** — below |
+| benches | bit-identical | bit-identical, both |
+| Miri --lib | 285/0 | **288/0** (the three new tests included) |
+| ratchet | 1334 / 5106→ | `raw_ptr` **5109 → 5106** (the triple), `SHIM(` **157 → 158** (`cabac_rbsp_window`), `unsafe_fn` +2 / `unsafe_block` +5 (two helpers + three test blocks); baseline regenerated with the reason in the commit |
+
+**The F3 hit** (`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0`,
+zero-byte, release): the signature exactly, first hit this session → the one-hit rule,
+re-run that configuration: **5/5 BYTE-IDENTICAL**. Appended to F3 as the **tenth
+measurement** — noteworthy only because it was the first F3 hit *stopped* by the
+post-F17 gate (`OVERALL: FAIL (1 steps failed)`, exit 1), which is precisely the
+behaviour the morning's fix bought. Seam changes zero encoder/common bytes;
+corroboration, not verdict.
+
+**Perf** (S2 fresh null first): this session's decode floor is **≈±2%** (null median
+−0.27%, min −2.05% — five times wider than session B's ±0.4%; the machine spent the
+day running batteries), encoder ≈±3.5%. The pair, 3-pair medians, control =
+`eae61b94`:
+
+| row | delta |
+|---|---|
+| decode CB (CAVLC) | +0.19% |
+| decode Main (CABAC) | **+0.76%** |
+| decode High (CABAC 8×8) | **+0.27%** |
+| encoder median (28 rows) | +0.00% |
+
+The CABAC rows are the signal this time and they sit **inside the floor** —
+flat-to-win, exactly the band §4 of the brief predicted for literal-stays-literal.
+CB is the cross-check and is flat; the encoder is the required wash. **No ledger row
+opens.** Cumulative decode stays ≈ +17.8 / +9.6 / +10.1%; the CB allowance is intact
+and T3.3 touches no per-bin path. The durable artefact is the disassembly diff, not
+the bench numbers: both step-3 defects were invisible to 433 tests, 2316 goldens and
+53 conformance hashes, and would have been a real regression shipped as "flat".
+
+### Hand-off: T3.3, the ownership seam
+
+`RawDataBuffer { buf: Vec<u8>, start, cur }` replacing `SDataBuffer`'s pointer
+quadruple; `nalu.rs` payloads → `Range<usize>`; **`ExpandBsBuffer` deleted, not
+converted** (offsets survive realloc — T3.1b already collapsed its rebases to one),
+**and F16's stale-`avail` instance dies with it**; P5's grow-mid-AU unit test written
+loudly; **F15 fixed** at both `nalu.rs` sites (`iNalSize == 0` → checked indexing) and
+`withheld()` **deleted in the same commit** — regenerate with `UPDATE_MALFORMED_GOLDEN=1`
+and the diff must show exactly the eleven-per-stream `WITHHELD` rows gaining real
+outcomes and *nothing else moving*; that diff goes in the commit message. The seam
+also deletes T3.1b's `BsReader` shim family (`base`/`avail`/`buf()`/`split()`/
+`readable_from`/`rbsp_window` and `cabac_rbsp_window` — the `SHIM(phase3)` set is
+enumerable by grep) and takes the phase's biggest single `raw_ptr` drop. What T3.2
+leaves it: the engine consumes the window per call already, so when the owner becomes
+a `Vec` the only change on the CABAC side is where `rbsp_window` gets its bytes.
+
+Meta-rule worth carrying: **the regression-vs-pre-existing principle got exercised in
+miniature here** — the ladder's `usize`-wrap hazard is exactly "your conversion
+narrows/changes a window the raw code had"; writing it as a comparison *before* any
+malformed row could catch it is the cheap form of the session-B disambiguation test.

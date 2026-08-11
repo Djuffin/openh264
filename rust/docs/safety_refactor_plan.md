@@ -1226,7 +1226,20 @@ in the log's Phase 4a entry).
       extent — `BsEndCavlc`'s prime is unbounded on truncated input); the reader half of
       `safe_bits_differential.rs` is retired per §2, with a frozen transliteration of
       the CAVLC pair kept as the parity reference.
-- [ ] T3.2 CABAC engine · T3.3 `SDataBuffer` → owned buffer + `nalu.rs` ranges (F15 dies
+- [x] **T3.2 — the CABAC engine is a detached position** (`00c6cf9f`, session C — the
+      session that first fixed F17 and proved the gate red, `eae61b94`, so this is the
+      first seam judged by a battery that can fail). The pointer triple is deleted;
+      `{uiRange, uiOffset, iBitsLeft, pos}` over a per-call RBSP window
+      (`BsReader::rbsp_window` — see §2.2.2 [P3] for the two-extents result of the
+      step-0 read-extent audit, F16's lesson as procedure). Handoff is one `usize` each
+      way with the round-trip pinning test; the end ladder is comparison-form and
+      proven to stop at the RBSP. S1 executed in the brief's order: disassemble →
+      convert → disassemble caught the first shape's lost inline + three bounds-check
+      paths before any bench ran; final shape matches the raw reference point for
+      point. Pair: decode +0.19/+0.76/+0.27 against a ±2% floor (flat-to-win, no
+      ledger row); encoder wash. Miri 288/0; goldens 2316 unmoved; one release-sweep
+      F3 hit re-run 5/5 clean (tenth measurement, the fixed gate's first stop).
+- [ ] T3.3 `SDataBuffer` → owned buffer + `nalu.rs` ranges (F15 dies
       here) · T3.4 writer dedupe + `BsWriter` (F2, F5, F13's `InitBits` site) · T3.5
       encoder CABAC triple + rollback · T3.6 `nal_encap.rs` + exit
 
