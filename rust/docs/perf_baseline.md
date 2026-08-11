@@ -1172,6 +1172,37 @@ four byte-stores became one 32-bit store via `copy_from_slice`, so the seam came
 
 ---
 
+## Phase 4b — configuration dispatch (2026-08-11 →)
+
+### T4b.1 — the entropy dispatch becomes one enum
+
+Instrument: `perfpair.py`, `FFMPEG` set. Session floor from `null t4b1_ctl`, 3 pairs:
+encoder median **+0.00%** (−1.45% … +1.45%), decode median **−0.16%**
+(−0.20% … +0.05%). Both are tight floors — tighter than the Phase 3 exit session's
+encode band, which ran to +22.57% and is what earned S2b.
+
+| pair (1 pair, per §1.3 of the brief) | median | band |
+|---|---|---|
+| control `6e15c907` → `08b7c29d` **encode** | **+0.05%** | −5.54% … +2.99% |
+| control `6e15c907` → `08b7c29d` **decode** | **+0.08%** | −0.13% … +0.51% |
+
+**No ledger row opens**, and the result is the *predicted* one: the brief's §1.2 said
+in advance not to expect the enum to buy speed, because 4a's finding is that direct
+dispatch recovers per-call scaffolding only where the caller supplies constant
+dimensions — and these are per-macroblock calls with a runtime-selected arm. What the
+seam buys is a deleted `Option`, a deleted thunk, a deleted parameter and a signature
+the compiler can see through. It bought exactly that, and no time.
+
+Two notes on reading the table. The encode band is wider than the null's at one pair
+(−5.54% … +2.99% against ±1.45%), which is what a single pair looks like rather than
+evidence of anything — S2b's remedy is more pairs, and the phase-exit protocol runs
+them; the median is the statistic. The decode figure is the required wash: the seam
+changes no decoder code at all, so +0.08% is a floor reading and nothing else.
+
+`Spatial Ramps` printed −8.00% / −9.04% in the null and is **EXCLUDED** per S2.
+
+---
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.

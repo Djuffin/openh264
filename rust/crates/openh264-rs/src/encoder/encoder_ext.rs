@@ -2699,13 +2699,15 @@ pub unsafe fn PrepareEncodeFrame(
     );
 
     if eFrameType == EVideoFrameType::videoFrameTypeSkip {
+        // The `else if let Some(f)` this replaces read as a second condition but
+        // was the same slot as the `if` branch's: the discriminator is
+        // `bSimulcastAVC` alone, and an absent callback made both arms no-ops.
+        let pfRc = (*(*pCtx).pFuncList).pfRc;
         if (*pSvcParam).bSimulcastAVC {
-            if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
-                f(pCtx, *iCurDid as i32);
-            }
-        } else if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
+            pfRc.WelsUpdateBufferWhenSkip(pCtx, *iCurDid as i32);
+        } else {
             for i in 0..iSpatialNum as usize {
-                f(pCtx, (*pSpatialIndexMap.add(i)).iDid);
+                pfRc.WelsUpdateBufferWhenSkip(pCtx, (*pSpatialIndexMap.add(i)).iDid);
             }
         }
     } else {
@@ -3130,9 +3132,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         return iRet;
     }
 
-    if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateMaxBrWindowStatus {
-        f(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
-    }
+    (*(*pCtx).pFuncList)
+        .pfRc
+        .WelsUpdateMaxBrWindowStatus(pCtx, iSpatialNum, (*pFbi).uiTimeStamp);
 
     if iSpatialNum < 1 {
         for iDidIdx in 0..(*pSvcParam).iSpatialLayerNum as usize {
@@ -3329,9 +3331,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         );
         // update reference picture for the current DQ layer
         PrefetchReferencePicture(pCtx, eFrameType);
-        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPictureInit {
-            f(pCtx, (*pFbi).uiTimeStamp);
-        }
+        (*(*pCtx).pFuncList)
+            .pfRc
+            .WelsRcPictureInit(pCtx, (*pFbi).uiTimeStamp);
         // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
         PreprocessSliceCoding(pCtx);
 
@@ -3602,23 +3604,26 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pLayerBsInfo).iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
         }
 
-        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPostFrameSkipping {
-            if f(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp) {
-                StackBackEncoderStatus(pCtx, eFrameType);
-                ClearFrameBsInfo(pCtx, pFbi);
+        // `None` here meant "never take this path", which is what the method's
+        // empty arms return: `false`.
+        if (*(*pCtx).pFuncList)
+            .pfRc
+            .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, (*pFbi).uiTimeStamp)
+        {
+            StackBackEncoderStatus(pCtx, eFrameType);
+            ClearFrameBsInfo(pCtx, pFbi);
 
-                iFrameSize = 0;
-                iLayerNum = 0;
+            iFrameSize = 0;
+            iLayerNum = 0;
 
-                if let Some(g) = (*(*pCtx).pFuncList).pfRc.pfWelsUpdateBufferWhenSkip {
-                    g(pCtx, iSpatialNum);
-                }
+            (*(*pCtx).pFuncList)
+                .pfRc
+                .WelsUpdateBufferWhenSkip(pCtx, iSpatialNum);
 
-                crate::encoder::rc::WelsRcPostFrameSkippedUpdate(pCtx, iCurDid as i32);
-                (*pCtx).iEncoderError = ENC_RETURN_SUCCESS;
-                let _ = iLayerNum;
-                return ENC_RETURN_SUCCESS;
-            }
+            crate::encoder::rc::WelsRcPostFrameSkippedUpdate(pCtx, iCurDid as i32);
+            (*pCtx).iEncoderError = ENC_RETURN_SUCCESS;
+            let _ = iLayerNum;
+            return ENC_RETURN_SUCCESS;
         }
 
         // deblocking filter. ENABLE_FRAME_DUMP is not defined, so the temporal-id
@@ -3631,9 +3636,9 @@ pub unsafe fn WelsEncoderEncodeExt(
             crate::encoder::deblocking::PerformDeblockingFilter(pCtx);
         }
 
-        if let Some(f) = (*(*pCtx).pFuncList).pfRc.pfWelsRcPictureInfoUpdate {
-            f(pCtx, iLayerSize);
-        }
+        (*(*pCtx).pFuncList)
+            .pfRc
+            .WelsRcPictureInfoUpdate(pCtx, iLayerSize);
         iFrameSize += iLayerSize;
         crate::encoder::rc::RcTraceFrameBits(pCtx, (*pFbi).uiTimeStamp, iFrameSize);
         (*(*pCtx).pDecPic).iFrameAverageQp =
