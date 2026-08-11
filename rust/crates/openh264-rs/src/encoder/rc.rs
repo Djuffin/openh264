@@ -471,7 +471,8 @@ pub type PWelsCheckFrameSkipBasedMaxbrFunc = Option<unsafe extern "C" fn(pCtx: *
 pub type PWelsUpdateBufferWhenFrameSkippedFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iSpatialNum: i32)>;
 pub type PWelsUpdateMaxBrCheckWindowStatusFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iSpatialNum: i32, uiTimeStamp: i64)>;
 pub type PWelsRCPostFrameSkippingFunc = Option<unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, iDid: i32, uiTimeStamp: i64) -> bool>;
-pub type PGetBsPositionFunc = Option<unsafe extern "C" fn(pSlice: *mut SSlice) -> i32>;
+// `PGetBsPositionFunc` was here. T4b.1 folded `pfGetBsPosition` into
+// `EntropyCoder`, which is the only thing that ever selected it.
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -1986,9 +1987,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
-    if let Some(get_bs) = (*(*pEncCtx).pFuncList).pfGetBsPosition {
-        pSOverRc.iBsPosSlice = get_bs(pSlice);
-    }
+    pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(pSlice);
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2036,11 +2035,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice as usize;
 
-    let cur_bs = if let Some(get_bs) = (*(*pEncCtx).pFuncList).pfGetBsPosition {
-        get_bs(pSlice)
-    } else {
-        0
-    };
+    let cur_bs = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(pSlice);
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;

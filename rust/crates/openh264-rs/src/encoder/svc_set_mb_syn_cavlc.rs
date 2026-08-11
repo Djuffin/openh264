@@ -686,7 +686,10 @@ pub fn CheckBitstreamBuffer(
 /// Top-level macroblock CAVLC bitstream serialization function.
 ///
 /// Matches `int32_t WelsSpatialWriteMbSyn (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
-pub unsafe extern "C" fn WelsSpatialWriteMbSyn(
+///
+/// `extern "C"` came off at T4b.1 with the slot that required it — and with the
+/// thunk its CABAC twin needed to reach the same slot.
+pub unsafe fn WelsSpatialWriteMbSyn(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
@@ -975,12 +978,16 @@ pub unsafe fn WelsWriteMbResidual(
 }
 
 /// The CAVLC stash needs no buffer: a detached cursor is `Copy`, so the whole
-/// snapshot is `*pBs`. `buf` is here only because the CABAC variant behind the
-/// same `pfStashMBStatus` slot does need one — see [`PStashMBStatus`].
+/// snapshot is `*pBs`.
 ///
-/// [`PStashMBStatus`]: crate::encoder::wels_func_ptr_def::PStashMBStatus
+/// **T4b.1 deleted the `buf` parameter.** It was here because the CABAC variant
+/// behind the same `pfStashMBStatus` slot needs one, and one slot meant one
+/// signature. [`EntropyCoder`] is a `match` and not a slot, so each arm now names
+/// only what it uses — the first thing banked by making this an enum rather than
+/// a trait object.
+///
+/// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
 pub unsafe fn StashMBStatusCavlc(
-    _buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
     iMbSkipRun: i32,
@@ -1002,8 +1009,8 @@ pub unsafe fn StashMBStatusCavlc(
     (*pDss).iMbSkipRunStack = iMbSkipRun;
 }
 
+/// See [`StashMBStatusCavlc`] for why this takes no buffer.
 pub unsafe fn StashPopMBStatusCavlc(
-    _buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
 ) -> i32 {
@@ -1094,8 +1101,12 @@ pub unsafe fn StashPopMBStatusCabac(
 ///
 /// Both cursor fields are offsets into the same buffer, so the difference is
 /// plain arithmetic and this function needs no buffer — which is why
-/// `pfGetBsPosition`, whose signature Phase 4b owns, gains no parameter.
-pub unsafe extern "C" fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
+/// [`EntropyCoder::GetBsPosition`] takes none on either arm.
+///
+/// `extern "C"` came off at T4b.1 with the slot that required it.
+///
+/// [`EntropyCoder::GetBsPosition`]: crate::encoder::wels_func_ptr_def::EntropyCoder::GetBsPosition
+pub unsafe fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
     if pSlice.is_null() {
         return 0;
     }
@@ -1103,20 +1114,14 @@ pub unsafe extern "C" fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
     ((pCtx.m_iBufCur - pCtx.m_iBufStart) as i32) * 8 + (pCtx.m_iLowBitCnt - 9)
 }
 
-/// `extern "C"` shim for the `pfWelsSpatialWriteMbSyn` slot.
-///
-/// `WelsSpatialWriteMbSynCabac` is a plain Rust `fn`; the slot holds
-/// `PWelsSpatialWriteMbSyn`. C++ assigns the function itself
-/// (`set_mb_syn_cavlc.cpp:308`).
-pub unsafe extern "C" fn WelsSpatialWriteMbSynCabacThunk(
-    pCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
-    pSlice: *mut SSlice,
-    pCurMb: *mut SMB,
-) -> i32 {
-    crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(pCtx, pSlice, pCurMb)
-}
+// `WelsSpatialWriteMbSynCabacThunk` was here. It existed for one reason —
+// `WelsSpatialWriteMbSynCabac` is a plain Rust `fn` and `pfWelsSpatialWriteMbSyn`
+// held an `extern "C"` pointer, so something had to bridge the two, where C++
+// assigns the function itself (`set_mb_syn_cavlc.cpp:308`). T4b.1 deleted the
+// slot; with no slot there is no slot type, and the thunk was pure deletion.
 
-pub unsafe extern "C" fn GetBsPosCavlc(pSlice: *mut SSlice) -> i32 {
+/// `extern "C"` came off at T4b.1 with the slot that required it.
+pub unsafe fn GetBsPosCavlc(pSlice: *mut SSlice) -> i32 {
     if pSlice.is_null() || (*pSlice).pSliceBsa.is_null() {
         return 0;
     }
