@@ -3429,8 +3429,9 @@ much of Phase 4 is actually done.
 
 **Commits:** `87a89d31` (inherited doc tail + the rewritten session-B brief),
 `d6c78c1b` (T4b.2a, the parameter-set strategy), `be67a754` (T4b.2b, the reference
-strategy), `489b95d5` (T4b.3a, the intra-pred constraint family). Perf entry for the
-session is `3e583b9a`.
+strategy), `33b1f0f3` (T4b.3a, the intra-pred constraint family; an earlier draft of
+this entry cited `489b95d5`, the pre-amend hash of the same commit — `33b1f0f3` is
+the one on the branch). Perf entry for the session is `3e583b9a`.
 
 ### What landed
 
