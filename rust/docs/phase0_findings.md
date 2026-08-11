@@ -445,3 +445,37 @@ argument is corroboration, not the verdict; the re-run is the verdict.
 Worth one line: this was the first F3 hit judged by the post-F17 `gates.sh`, and the
 battery printed `OVERALL: FAIL (1 steps failed)` and exited 1 — the gate stopping the
 session and forcing this protocol is the behaviour F17's fix bought.
+
+### Eleventh measurement — 2026-08-11, Phase 3 session D: two hits, the second alternation, and a rate that says "loaded machine"
+
+Two hits across the session's four full batteries, both **release**, both the
+signature: the opening *control* battery on the inherited tree (`mt
+CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=0`, short output — 41989 vs
+42281 bytes) and the T3.3-face-3 battery (`mt CiscoVT2people_320x192_12fps t=4 sm=3
+n=600 cabac=1 rc=1`, zero-byte). Each re-ran **5/5 BYTE-IDENTICAL** on its own
+configuration. The faces-1+2 and face-4 batteries were 341/341 in both profiles.
+
+Note what the first one is: a hit on the **session-start commit, before a line was
+changed**. That is the cleanest possible statement that the rate is the machine's, not
+the seam's — and it is why the second hit was not treated as news.
+
+The alternation ran anyway (two hits ⇒ S14's clause, and the "this seam is decoder-only"
+argument is the one the rule distrusts). Control = `d737a450` in a separate worktree,
+6 rounds × 32 `mt sm=3` configurations per side, alternating inside one loop:
+
+| tree | encodes | wrong-length failures |
+|---|---|---|
+| control `d737a450` | 192 | **4** (rounds 2, 4, 5, 6) |
+| HEAD (T3.3) | 192 | **2** (rounds 1, 3) |
+
+**The control side failed twice as often**, the same direction as the ninth
+measurement. Combined rate this session: 6 in 384 alternation encodes plus 2 in ~2700
+battery encodes ≈ **1/64 in the alternation**, an order of magnitude above the 1/400–1000
+band — measured on a machine that spent the whole session running gate batteries and two
+bench pairs, which is exactly the load-sensitivity the finding predicts. The alternation
+is a *ratio* instrument, not a rate instrument, and the ratio says control ≥ HEAD.
+
+Second time the alternation has been run, second time it has acquitted the tree under
+test. Worth noting for whoever runs it next: at this rate a 6×32 alternation is enough
+to see hits on both sides, where the ninth measurement's 6×120 was needed to see two —
+so size the alternation by the *current* rate, not by the historical band.
