@@ -8,6 +8,7 @@
     unused_mut
 )]
 
+use crate::safe::bits::BsCursor;
 use std::ffi::c_void;
 
 // ============================================================================
@@ -569,7 +570,6 @@ impl Default for SBlockFunc {
 
 pub use crate::decoder::parse_mb_syn_cavlc::SWelsNeighAvail;
 
-pub use crate::decoder::bit_stream::SBitStringAux;
 pub use crate::decoder::parameter_sets::{SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSliceType};
 
@@ -2444,6 +2444,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
     let pBs = &mut *(*dq).pBitStringAux;
+    let buf = pBs.buf();
     let iMbX = dq.iMbX;
     let iMbY = dq.iMbY;
     let iMbXy = dq.iMbXyIndex as usize;
@@ -2458,15 +2459,20 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     let mut pDecU = (*dq.pDec).pData[1].offset(iOffsetC);
     let mut pDecV = (*dq.pDec).pData[2].offset(iOffsetC);
 
-    let iIndex = ((-pBs.iLeftBits) >> 3) + 2;
+    let iIndex = ((-pBs.cursor.left_bits()) >> 3) + 2;
 
     *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
 
-    // step 1: locate the bit-stream pointer (must align to an integer byte)
-    pBs.pCurBuf = pBs.pCurBuf.offset(-(iIndex as isize));
+    // step 1: locate the bit-stream position (must align to an integer byte).
+    // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
+    // negative result was an out-of-bounds pointer with no check, so an underflow is a
+    // pre-existing overrun surfacing (plan §2.2.2) — `pos` is `usize` and the slice
+    // index below is what reports it.
+    let iPcmStart = (pBs.cursor.pos() as isize - iIndex as isize) as usize;
+    pBs.cursor.set_pos(iPcmStart);
 
     // step 2: copy pixels from the bit-stream into the decoded picture
-    let mut pTmpBsBuf = pBs.pCurBuf;
+    let mut pTmpBsBuf = buf[iPcmStart..].as_ptr();
     let bParseOnly = !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly;
     if !bParseOnly {
         for _ in 0..16 {
@@ -2486,7 +2492,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
         }
     }
 
-    pBs.pCurBuf = pBs.pCurBuf.add(384);
+    pBs.cursor.set_pos(iPcmStart + 384);
 
     // step 3: update QP and non-zero counts (Rec. 9.2.1: for PCM, nzc = 16)
     *dq.pLumaQp.add(iMbXy) = 0;
@@ -2494,7 +2500,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     (*dq.pChromaQp.add(iMbXy))[1] = 0;
     let pNzc = &mut *dq.pNzc.add(iMbXy);
     pNzc.fill(16);
-    let ret = crate::decoder::bit_stream::InitReadBits(pBs, 0);
+    let ret = crate::decoder::bit_stream::InitReadBits(buf, &mut pBs.cursor, 0);
     if ret != 0 {
         return ret;
     }
@@ -2505,7 +2511,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBs = (*dq).pBitStringAux;
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2527,7 +2533,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *dq.pTransformSize8x8Flag.add(iMbXy) = false;
 
-    let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+    let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
         return ret as i32;
     }
@@ -2547,7 +2553,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         let mut pIntraPredMode = [0i8; 48];
         *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
         if (*(*pCtx).pPps).bTransform8x8ModeFlag {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -2569,15 +2575,15 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             dq as *mut _ as *mut c_void,
         );
         let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
-            ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+            ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
         } else {
-            ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+            ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
         };
         if ret != ERR_NONE {
             return ret;
         }
 
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -2613,7 +2619,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             pNonZeroCount.as_mut_ptr(),
             dq,
         );
-        let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, pBs, dq);
+        let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, buf, pBs, dq);
         if ret != ERR_NONE {
             return ret;
         }
@@ -2640,7 +2646,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
-        let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
         if ret != 0 {
             return ret;
         }
@@ -2658,7 +2664,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsStartCavlc(pBs);
+        pBs.start_cavlc();
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
@@ -2673,7 +2679,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             return ret;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsEndCavlc(pBs);
+        pBs.end_cavlc(buf);
     }
 
     ERR_NONE
@@ -2693,7 +2699,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     uiCbpC: u32,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBs = (*dq).pBitStringAux;
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let iMbXy = dq.iMbXyIndex as usize;
     let pNzc = &mut *dq.pNzc.add(iMbXy);
     let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
@@ -2712,6 +2718,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
         let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc(
             pVlcTable,
             pNonZeroCount,
+            buf,
             pBs,
             0,
             16,
@@ -2732,6 +2739,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc(
                     pVlcTable,
                     pNonZeroCount,
+                    buf,
                     pBs,
                     i as i32,
                     len,
@@ -2762,6 +2770,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                         let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc8x8(
                             pVlcTable,
                             pNonZeroCount,
+                            buf,
                             pBs,
                             iIndex,
                             len,
@@ -2800,6 +2809,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                         let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc(
                             pVlcTable,
                             pNonZeroCount,
+                            buf,
                             pBs,
                             iIndex,
                             len,
@@ -2842,6 +2852,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
             let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc(
                 pVlcTable,
                 pNonZeroCount,
+                buf,
                 pBs,
                 (16 + (i << 2)) as i32,
                 4,
@@ -2871,6 +2882,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 let ret = crate::decoder::parse_mb_syn_cavlc::WelsResidualBlockCavlc(
                     pVlcTable,
                     pNonZeroCount,
+                    buf,
                     pBs,
                     iIndex as i32,
                     len,
@@ -2907,15 +2919,12 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pBs = (*dq).pBitStringAux;
-    if pBs.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSliceHeaderExt = &mut (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let mut uiCode = 0u32;
     let iBaseModeFlag;
     if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
-        if crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode) != 0 {
+        if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
         iBaseModeFlag = uiCode != 0;
@@ -2929,14 +2938,13 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if ret != ERR_NONE {
         return ret;
     }
-    let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
-        - (16 - (*pBs).iLeftBits as i32);
-    if iUsedBits == ((*pBs).iBits - 1) && (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun <= 0 {
+    let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
+    if iUsedBits == (pBs.bits() - 1) && (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun <= 0 {
         if !uiEosFlag.is_null() {
             *uiEosFlag = 1;
         }
     }
-    if iUsedBits > ((*pBs).iBits - 1) {
+    if iUsedBits > (pBs.bits() - 1) {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
     }
     ERR_NONE
@@ -2946,7 +2954,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBs = (*dq).pBitStringAux;
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2964,7 +2972,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail as *mut _ as *mut _, dq);
     *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
 
-    let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+    let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
         return ret as i32;
     }
@@ -2986,6 +2994,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             pCtx,
             &mut iMotionVector,
             &mut iRefIndex,
+            buf,
             pBs,
         );
         if ret != ERR_NONE {
@@ -2993,7 +3002,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if (*pSlice).sSliceHeaderExt.bAdaptiveResidualPredFlag {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3025,7 +3034,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             let mut pIntraPredMode = [0i8; 48];
             *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
-                let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -3046,9 +3055,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                 dq as *mut _ as *mut c_void,
             );
             let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
-                ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+                ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+                ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3070,7 +3079,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                 pNonZeroCount.as_mut_ptr(),
                 dq,
             );
-            let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, pBs, dq);
+            let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -3078,7 +3087,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     }
 
     if MB_TYPE_INTRA16x16 != *(*dq.pDec).pMbType.add(iMbXy) {
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -3117,7 +3126,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             && (*(*pCtx).pPps).bTransform8x8ModeFlag;
 
         if bNeedParseTransformSize8x8Flag {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3147,7 +3156,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
-        let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
         if ret != 0 {
             return ret;
         }
@@ -3165,7 +3174,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsStartCavlc(pBs);
+        pBs.start_cavlc();
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
@@ -3180,7 +3189,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return ret;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsEndCavlc(pBs);
+        pBs.end_cavlc(buf);
     }
 
     ERR_NONE
@@ -3198,17 +3207,14 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pBs = (*dq).pBitStringAux;
-    if pBs.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeaderExt = &mut (*pSlice).sSliceHeaderExt;
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
 
     if (*pSlice).iMbSkipRun == -1 {
-        if crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode) != 0 {
+        if crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSlice).iMbSkipRun = uiCode as i32;
@@ -3260,7 +3266,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     } else {
         let iBaseModeFlag;
         if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
-            if crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode) != 0 {
+            if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
                 return ERR_INFO_INVALID_ACCESS;
             }
             iBaseModeFlag = uiCode != 0;
@@ -3276,14 +3282,13 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         }
     }
 
-    let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
-        - (16 - (*pBs).iLeftBits as i32);
-    if iUsedBits == ((*pBs).iBits - 1) && (*pSlice).iMbSkipRun <= 0 {
+    let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
+    if iUsedBits == (pBs.bits() - 1) && (*pSlice).iMbSkipRun <= 0 {
         if !uiEosFlag.is_null() {
             *uiEosFlag = 1;
         }
     }
-    if iUsedBits > ((*pBs).iBits - 1) {
+    if iUsedBits > (pBs.bits() - 1) {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
     }
     ERR_NONE
@@ -3297,7 +3302,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBs = (*dq).pBitStringAux;
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3315,7 +3320,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail as *mut _ as *mut _, dq);
     *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
 
-    let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+    let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
         return ret as i32;
     }
@@ -3337,6 +3342,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             pCtx,
             &mut iMotionVector,
             &mut iRefIndex,
+            buf,
             pBs,
         );
         if ret != ERR_NONE {
@@ -3344,7 +3350,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if (*pSlice).sSliceHeaderExt.bAdaptiveResidualPredFlag {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3376,7 +3382,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             let mut pIntraPredMode = [0i8; 48];
             *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
-                let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -3397,9 +3403,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                 dq as *mut _ as *mut c_void,
             );
             let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
-                ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+                ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), pBs, dq)
+                ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3421,7 +3427,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                 pNonZeroCount.as_mut_ptr(),
                 dq,
             );
-            let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, pBs, dq);
+            let ret = ParseIntra16x16Mode(pCtx, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -3429,7 +3435,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     }
 
     if MB_TYPE_INTRA16x16 != *(*dq.pDec).pMbType.add(iMbXy) {
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -3468,7 +3474,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             && (*(*pCtx).pPps).bTransform8x8ModeFlag;
 
         if bNeedParseTransformSize8x8Flag {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3498,7 +3504,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
-        let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
         if ret != 0 {
             return ret;
         }
@@ -3516,7 +3522,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsStartCavlc(pBs);
+        pBs.start_cavlc();
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
@@ -3531,7 +3537,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return ret;
         }
 
-        crate::decoder::parse_mb_syn_cavlc::BsEndCavlc(pBs);
+        pBs.end_cavlc(buf);
     }
 
     ERR_NONE
@@ -3550,10 +3556,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pBs = (*dq).pBitStringAux;
-    if pBs.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+    let (buf, pBs) = (*(*dq).pBitStringAux).split();
     let pSlice: *mut SSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
     let ppRefPicL0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
@@ -3566,7 +3569,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 
     if (*pSlice).iMbSkipRun == -1 {
         // mb_skip_run
-        if crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode) != 0 {
+        if crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSlice).iMbSkipRun = uiCode as i32;
@@ -3652,7 +3655,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     } else {
         let iBaseModeFlag;
         if (*pSlice).sSliceHeaderExt.bAdaptiveBaseModeFlag {
-            if crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode) != 0 {
+            if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
                 return ERR_INFO_INVALID_ACCESS;
             }
             iBaseModeFlag = uiCode != 0;
@@ -3669,10 +3672,9 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     }
 
     // check whether there is left bits to read next time in case multiple slices
-    let iUsedBits = (((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) * 8
-        - (16 - (*pBs).iLeftBits as i32);
+    let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
     // sub 1, for stop bit
-    if iUsedBits == ((*pBs).iBits - 1)
+    if iUsedBits == (pBs.bits() - 1)
         && 0 >= (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun
     {
         // slice boundary
@@ -3680,7 +3682,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
             *uiEosFlag = 1;
         }
     }
-    if iUsedBits > ((*pBs).iBits - 1) {
+    if iUsedBits > (pBs.bits() - 1) {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
     }
     ERR_NONE
@@ -3690,7 +3692,8 @@ pub unsafe fn ParseIntra4x4Mode(
     pCtx: *mut SWelsDecoderContext,
     pNeighAvail: *mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
     let dq = &mut *pCurDqLayer;
@@ -3720,7 +3723,7 @@ pub unsafe fn ParseIntra4x4Mode(
             }
             iPrevIntra4x4PredMode = iCode;
         } else {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBsAux as *mut _, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBsAux, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3740,7 +3743,7 @@ pub unsafe fn ParseIntra4x4Mode(
             if iPrevIntra4x4PredMode != 0 {
                 iBestMode = kiPredMode as i8;
             } else {
-                let ret = crate::decoder::dec_golomb::BsGetBits(pBsAux as *mut _, 3, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetBits(buf, pBsAux, 3, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -3791,7 +3794,7 @@ pub unsafe fn ParseIntra4x4Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBsAux as *mut _, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -3816,7 +3819,8 @@ pub unsafe fn ParseIntra8x8Mode(
     pCtx: *mut SWelsDecoderContext,
     pNeighAvail: *mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
     let dq = &mut *pCurDqLayer;
@@ -3850,7 +3854,7 @@ pub unsafe fn ParseIntra8x8Mode(
             }
             iPrevIntra4x4PredMode = iCode;
         } else {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(pBsAux as *mut _, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBsAux, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3871,7 +3875,7 @@ pub unsafe fn ParseIntra8x8Mode(
             if iPrevIntra4x4PredMode != 0 {
                 iBestMode = kiPredMode as i8;
             } else {
-                let ret = crate::decoder::dec_golomb::BsGetBits(pBsAux as *mut _, 3, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetBits(buf, pBsAux, 3, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -3927,7 +3931,7 @@ pub unsafe fn ParseIntra8x8Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBsAux as *mut _, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -3951,7 +3955,8 @@ pub unsafe fn ParseIntra8x8Mode(
 pub unsafe fn ParseIntra16x16Mode(
     pCtx: *mut SWelsDecoderContext,
     pNeighAvail: *mut SWelsNeighAvail,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
     let dq = &mut *pCurDqLayer;
@@ -3988,7 +3993,7 @@ pub unsafe fn ParseIntra16x16Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(pBsAux as *mut _, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -4017,7 +4022,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     uiMbType: u32,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBsAux = (*dq).pBitStringAux;
+    let (buf, pBsAux) = (*(*dq).pBitStringAux).split();
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     if uiMbType == 0 {
@@ -4048,9 +4053,9 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
 
         if *(*dq).pTransformSize8x8Flag.add(iMbXy) {
             *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
-            ParseIntra8x8Mode(pCtx, pNeighAvail, pIntraPredMode, pBsAux, dq)
+            ParseIntra8x8Mode(pCtx, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         } else {
-            ParseIntra4x4Mode(pCtx, pNeighAvail, pIntraPredMode, pBsAux, dq)
+            ParseIntra4x4Mode(pCtx, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         }
     } else {
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
@@ -4063,7 +4068,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
             pNonZeroCount,
             dq as *mut _ as *mut _,
         );
-        ParseIntra16x16Mode(pCtx, pNeighAvail, pBsAux, dq)
+        ParseIntra16x16Mode(pCtx, pNeighAvail, buf, pBsAux, dq)
     }
 }
 
@@ -4075,7 +4080,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     iScanIdxEnd: usize,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let pBsAux = (*dq).pBitStringAux;
+    let (buf, pBsAux) = (*(*dq).pBitStringAux).split();
     let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let pps_sh = &*(pSliceHeader.pPps as *const SPps);
@@ -4173,7 +4178,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                 pNeighAvail as *const _ as *const _,
                 pNonZeroCount,
-                pBsAux as *mut _ as *mut _,
+                pBsAux,
                 0,
                 16,
                 g_kuiLumaDcZigzagScan.as_ptr(),
@@ -4194,7 +4199,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail as *const _ as *const _,
                         pNonZeroCount,
-                        pBsAux as *mut _ as *mut _,
+                        pBsAux,
                         i as i32,
                         len,
                         scan_ptr,
@@ -4236,7 +4241,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac8x8(
                             pNeighAvail as *const _ as *const _,
                             pNonZeroCount,
-                            pBsAux as *mut _ as *mut _,
+                            pBsAux,
                             iIdx as i32,
                             len,
                             scan_ptr,
@@ -4277,7 +4282,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                                 pNeighAvail as *const _ as *const _,
                                 pNonZeroCount,
-                                pBsAux as *mut _ as *mut _,
+                                pBsAux,
                                 iIdx as i32,
                                 len,
                                 scan_ptr,
@@ -4326,7 +4331,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                     pNeighAvail as *const _ as *const _,
                     pNonZeroCount,
-                    pBsAux as *mut _ as *mut _,
+                    pBsAux,
                     16 + (i as i32 * 4),
                     4,
                     g_kuiChromaDcScan.as_ptr(),
@@ -4365,7 +4370,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail as *const _ as *const _,
                         pNonZeroCount,
-                        pBsAux as *mut _ as *mut _,
+                        pBsAux,
                         index as i32,
                         len,
                         scan_ptr,
@@ -4459,7 +4464,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         if *uiEosFlag != 0 {
             crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                 (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-                (*dq).pBitStringAux as *mut _ as *mut _,
+                &mut *(*dq).pBitStringAux,
             );
         }
         return ERR_NONE;
@@ -4501,7 +4506,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-            (*dq).pBitStringAux as *mut _ as *mut _,
+            &mut *(*dq).pBitStringAux,
         );
     }
     ERR_NONE
@@ -4594,7 +4599,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                     (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-                    (*dq).pBitStringAux as *mut _ as *mut _,
+                    &mut *(*dq).pBitStringAux,
                 );
             }
             return ERR_NONE;
@@ -4637,7 +4642,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-            (*dq).pBitStringAux as *mut _ as *mut _,
+            &mut *(*dq).pBitStringAux,
         );
     }
     ERR_NONE
@@ -4805,7 +4810,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                     (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-                    (*dq).pBitStringAux as *mut _ as *mut _,
+                    &mut *(*dq).pBitStringAux,
                 );
             }
             return ERR_NONE;
@@ -4848,7 +4853,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine as *mut _ as *mut _,
-            (*dq).pBitStringAux as *mut _ as *mut _,
+            &mut *(*dq).pBitStringAux,
         );
     }
     ERR_NONE
@@ -5036,7 +5041,7 @@ pub unsafe fn WelsDecodeSlice(
         pSlice.iLastDeltaQp = 0;
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
             (*pCtx).pCabacDecEngine,
-            (*(*pCtx).pCurDqLayer).pBitStringAux,
+            &mut *(*(*pCtx).pCurDqLayer).pBitStringAux,
         );
         if err != ERR_NONE {
             return err;

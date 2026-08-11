@@ -337,7 +337,8 @@ pub use crate::decoder::slice::{SPredWeightTable, SPredList};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking, SReorderingSyntax, SRefBasePicMarking};
 
 
-pub use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::decoder::bit_stream::{BsReader, SBitStringAux};
+use crate::safe::bits::BsCursor;
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
@@ -347,7 +348,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SVclNal {
     pub sSliceHeaderExt: SSliceHeaderExt,
-    pub sSliceBitsRead: SBitStringAux,
+    pub sSliceBitsRead: BsReader,
     pub bSliceHeaderExtFlag: bool,
     pub iNalLength: i32,
     pub pNalPos: *mut u8,
@@ -408,7 +409,11 @@ impl Default for SLayerInfo {
 #[derive(Debug, Copy, Clone)]
 pub struct SDqLayer {
     pub sLayerInfo: SLayerInfo,
-    pub pBitStringAux: *mut SBitStringAux,
+    /// The slice's reader. `*mut BsReader`, not the brief's default `*mut BsCursor`:
+    /// `decode_slice.rs` reads *through* this pointer and a detached cursor cannot
+    /// produce the buffer, so the base pointer travels with it (see [`BsReader`]).
+    /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
+    pub pBitStringAux: *mut BsReader,
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
     pub pMbType: *mut u32,
     pub pSliceIdc: *mut i32,
@@ -709,23 +714,23 @@ pub type PPrefixNalUnit = *mut SPrefixNalUnit;
 pub unsafe fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
 
 #[inline]
-pub unsafe fn BsGetBits(pBs: *mut SBitStringAux, n: u32, pOut: *mut u32) -> i32 {
-    crate::decoder::dec_golomb::BsGetBits(pBs, n as i32, pOut)
+pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, n: u32, pOut: &mut u32) -> i32 {
+    crate::decoder::dec_golomb::BsGetBits(buf, pBs, n as i32, pOut)
 }
 
 #[inline]
-pub unsafe fn BsGetOneBit(pBs: *mut SBitStringAux, pOut: *mut u32) -> i32 {
-    crate::decoder::dec_golomb::BsGetBits(pBs, 1, pOut)
+pub fn BsGetOneBit(buf: &[u8], pBs: &mut BsCursor, pOut: &mut u32) -> i32 {
+    crate::decoder::dec_golomb::BsGetBits(buf, pBs, 1, pOut)
 }
 
 #[inline]
-pub unsafe fn BsGetUe(pBs: *mut SBitStringAux, pOut: *mut u32) -> i32 {
-    crate::decoder::dec_golomb::BsGetUe(pBs, pOut) as i32
+pub fn BsGetUe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut u32) -> i32 {
+    crate::decoder::dec_golomb::BsGetUe(buf, pBs, pOut) as i32
 }
 
 #[inline]
-pub unsafe fn BsGetSe(pBs: *mut SBitStringAux, pOut: *mut i32) -> i32 {
-    crate::decoder::dec_golomb::BsGetSe(pBs, pOut)
+pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut i32) -> i32 {
+    crate::decoder::dec_golomb::BsGetSe(buf, pBs, pOut)
 }
 
 // Memory Allocation Helper Wrappers
@@ -1374,14 +1379,14 @@ pub unsafe fn WelsDecodeConstructSlice(pCtx: PWelsDecoderContext, pCurNal: PNalU
     iRet
 }
 
-pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i32 {
-    if pBs.is_null() || pSh.is_null() {
+pub unsafe fn ParsePredWeightedTable(buf: &[u8], pBs: &mut BsCursor, pSh: PSliceHeader) -> i32 {
+    if pSh.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
-    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     if uiCode > 7 {
@@ -1392,7 +1397,7 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
     let pSps = (*pSh).pSps as *mut SSps;
 
     if !pSps.is_null() && (*pSps).uiChromaArrayType != 0 {
-        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > 7 {
@@ -1411,11 +1416,11 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
             if i >= MAX_REF_PIC_COUNT {
                 break;
             }
-            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode != 0 {
-                if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 if iCode < -128 || iCode > 127 {
@@ -1423,7 +1428,7 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
                 }
                 (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] = iCode;
 
-                if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 if iCode < -128 || iCode > 127 {
@@ -1440,12 +1445,12 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
                 continue;
             }
 
-            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode != 0 {
                 for j in 0..2 {
-                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     if iCode < -128 || iCode > 127 {
@@ -1453,7 +1458,7 @@ pub unsafe fn ParsePredWeightedTable(pBs: PBitStringAux, pSh: PSliceHeader) -> i
                     }
                     (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] = iCode;
 
-                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     if iCode < -128 || iCode > 127 {
@@ -1536,8 +1541,8 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
     }
 }
 
-pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -> i32 {
-    if pBs.is_null() || pSh.is_null() {
+pub unsafe fn ParseRefPicListReordering(buf: &[u8], pBs: &mut BsCursor, pSh: PSliceHeader) -> i32 {
+    if pSh.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let keSt = (*pSh).eSliceType;
@@ -1553,7 +1558,7 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
     let mut iList = 0;
     let mut uiCode: u32 = 0;
     loop {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         pRefPicListReordering.bRefPicListReorderingFlag[iList] = uiCode != 0;
@@ -1561,7 +1566,7 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
         if pRefPicListReordering.bRefPicListReorderingFlag[iList] {
             let mut iIdx = 0;
             loop {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 let kuiIdc = uiCode;
@@ -1577,7 +1582,7 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
                     return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
                 }
                 if kuiIdc == 0 || kuiIdc == 1 {
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     if uiCode >= (1u32 << (*(pSps as *mut SSps)).uiLog2MaxFrameNum) {
@@ -1585,7 +1590,7 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
                     }
                     pRefPicListReordering.sReorderingSyn[iList][iIdx].uiAbsDiffPicNumMinus1 = uiCode;
                 } else if kuiIdc == 2 {
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     pRefPicListReordering.sReorderingSyn[iList][iIdx].uiLongTermPicNum = uiCode as u16;
@@ -1607,28 +1612,29 @@ pub unsafe fn ParseRefPicListReordering(pBs: PBitStringAux, pSh: PSliceHeader) -
 
 pub unsafe fn ParseDecRefPicMarking(
     pCtx: PWelsDecoderContext,
-    pBs: PBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     pSh: PSliceHeader,
     pSps: PSps,
     kbIdrFlag: bool,
 ) -> i32 {
-    if pBs.is_null() || pSh.is_null() || pSps.is_null() {
+    if pSh.is_null() || pSps.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let kpRefMarking = &mut (*pSh).sRefMarking;
     let mut uiCode: u32 = 0;
 
     if kbIdrFlag {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         kpRefMarking.bNoOutputOfPriorPicsFlag = uiCode != 0;
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         kpRefMarking.bLongTermRefFlag = uiCode != 0;
     } else {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         kpRefMarking.bAdaptiveRefPicMarkingModeFlag = uiCode != 0;
@@ -1640,7 +1646,7 @@ pub unsafe fn ParseDecRefPicMarking(
             let mut bMmco6Exist = false;
 
             while iIdx < MAX_MMCO_COUNT {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 let kuiMmco = uiCode;
@@ -1650,7 +1656,7 @@ pub unsafe fn ParseDecRefPicMarking(
                 }
                 if kuiMmco == MMCO_SHORT2UNUSED || kuiMmco == MMCO_SHORT2LONG {
                     bAllowMmco5 = false;
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
@@ -1659,7 +1665,7 @@ pub unsafe fn ParseDecRefPicMarking(
                         & (((1 << (*pSps).uiLog2MaxFrameNum) - 1) as i32);
                 } else if kuiMmco == MMCO_LONG2UNUSED {
                     bAllowMmco5 = false;
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     kpRefMarking.sMmcoRef[iIdx].uiLongTermPicNum = uiCode;
@@ -1671,7 +1677,7 @@ pub unsafe fn ParseDecRefPicMarking(
                         }
                         bMmco6Exist = true;
                     }
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     kpRefMarking.sMmcoRef[iIdx].iLongTermFrameIdx = uiCode as i32;
@@ -1680,7 +1686,7 @@ pub unsafe fn ParseDecRefPicMarking(
                         return -1;
                     }
                     bMmco4Exist = true;
-                    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     let iMaxLongTermFrameIdx = -1 + (uiCode as i32);
@@ -1812,17 +1818,17 @@ pub unsafe fn ExpandBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
             if i < MAX_NAL_UNIT_NUM_IN_AU && !pNal.is_null() {
                 let pSliceBitsRead = &mut (*pNal).sNalData.sVclNal.sSliceBitsRead;
 
-                if !pSliceBitsRead.pStartBuf.is_null() && !(*pCtx).sRawData.pHead.is_null() {
-                    let offset = pSliceBitsRead.pStartBuf.offset_from((*pCtx).sRawData.pHead);
-                    pSliceBitsRead.pStartBuf = pNewBsBuff.offset(offset);
-                }
-                if !pSliceBitsRead.pEndBuf.is_null() && !(*pCtx).sRawData.pHead.is_null() {
-                    let offset = pSliceBitsRead.pEndBuf.offset_from((*pCtx).sRawData.pHead);
-                    pSliceBitsRead.pEndBuf = pNewBsBuff.offset(offset);
-                }
-                if !pSliceBitsRead.pCurBuf.is_null() && !(*pCtx).sRawData.pHead.is_null() {
-                    let offset = pSliceBitsRead.pCurBuf.offset_from((*pCtx).sRawData.pHead);
-                    pSliceBitsRead.pCurBuf = pNewBsBuff.offset(offset);
+                // Three pointer rebases became one. `pEndBuf` and `pCurBuf` are now
+                // the cursor's `len` and `pos` — offsets, which survive a reallocation
+                // by definition (plan §2.2.2, P5). What still needs moving is the base,
+                // and — because the new buffer is *larger* — the readable extent behind
+                // it (F16): leaving `avail` at its old value would hand the reader a
+                // narrower window than the raw pointer code had, which is the exact
+                // shape of the bug F16 records. T3.3 deletes both with the pointer.
+                if !pSliceBitsRead.base.is_null() && !(*pCtx).sRawData.pHead.is_null() {
+                    let offset = pSliceBitsRead.base.offset_from((*pCtx).sRawData.pHead);
+                    pSliceBitsRead.base = pNewBsBuff.offset(offset);
+                    pSliceBitsRead.avail = iNewBuffLen as usize - offset as usize;
                 }
             }
         }
@@ -2279,10 +2285,11 @@ pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
 
 pub unsafe fn ParseSliceHeaderSyntaxs(
     pCtx: PWelsDecoderContext,
-    pBs: PBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     kbExtensionFlag: bool,
 ) -> i32 {
-    if pCtx.is_null() || pBs.is_null() || (*pCtx).pAccessUnitList.is_null() {
+    if pCtx.is_null() || (*pCtx).pAccessUnitList.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let pCurAu = (*pCtx).pAccessUnitList;
@@ -2304,7 +2311,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
-    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     if uiCode > 36863 {
@@ -2312,7 +2319,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
     (*pSliceHead).iFirstMbInSlice = uiCode as i32;
 
-    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     let mut uiSliceType = uiCode;
@@ -2337,7 +2344,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         _ => SI_SLICE,
     };
 
-    if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     if uiCode >= MAX_PPS_COUNT as u32 {
@@ -2395,7 +2402,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
         );
     }
-    if BsGetBits(pBs, (*pSps).uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
+    if BsGetBits(buf, pBs, (*pSps).uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     (*pSliceHead).iFrameNum = uiCode as i32;
@@ -2409,7 +2416,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if (*pSliceHead).iFrameNum != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FRAME_NUM);
         }
-        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
@@ -2422,14 +2429,14 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
     (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
     if (*pSps).uiPocType == 0 {
-        if BsGetBits(pBs, (*pSps).iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
+        if BsGetBits(buf, pBs, (*pSps).iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         let iMaxPocLsb = 1 << (*pSps).iLog2MaxPocLsb;
         let pocLsb = uiCode as i32;
         (*pSliceHead).iPicOrderCntLsb = pocLsb;
         if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
@@ -2460,12 +2467,12 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
         }
     } else if (*pSps).uiPocType == 1 && !(*pSps).bDeltaPicOrderAlwaysZeroFlag {
-        if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
         if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
@@ -2474,7 +2481,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     (*pSliceHead).iRedundantPicCnt = 0;
     if (*pPps).bRedundantPicCntPresentFlag {
-        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > SLICE_HEADER_REDUNDANT_PIC_CNT_MAX {
@@ -2493,7 +2500,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
 
     if (*pSliceHead).eSliceType == B_SLICE {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
@@ -2508,12 +2515,12 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         bReadNumRefFlag &= pNalHeaderExt.uiQualityId == BASE_QUALITY_ID;
     }
     if bReadNumRefFlag {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
         if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
-            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode > MAX_NUM_REF_IDX_L0_ACTIVE_MINUS1 {
@@ -2524,7 +2531,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             }
             (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
             if (*pSliceHead).eSliceType == B_SLICE {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 if uiCode > MAX_NUM_REF_IDX_L1_ACTIVE_MINUS1 {
@@ -2544,7 +2551,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
 
     if pNalHeaderExt.uiQualityId == BASE_QUALITY_ID {
-        let iRet = ParseRefPicListReordering(pBs, pSliceHead);
+        let iRet = ParseRefPicListReordering(buf, pBs, pSliceHead);
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -2555,7 +2562,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
             || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
         {
-            let iRet = ParsePredWeightedTable(pBs, pSliceHead);
+            let iRet = ParsePredWeightedTable(buf, pBs, pSliceHead);
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -2567,7 +2574,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
 
         if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
-            let iRet = ParseDecRefPicMarking(pCtx, pBs, pSliceHead, pSps, bIdrFlag);
+            let iRet = ParseDecRefPicMarking(pCtx, buf, pBs, pSliceHead, pSps, bIdrFlag);
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -2575,7 +2582,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                 let pSubsetSps =
                     &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
                 if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
@@ -2595,7 +2602,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     if (*pPps).bEntropyCodingModeFlag {
         if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
-            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
@@ -2607,7 +2614,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
     }
 
-    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     (*pSliceHead).iSliceQpDelta = iCode;
@@ -2620,7 +2627,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     (*pSliceHead).iSliceAlphaC0Offset = 0;
     (*pSliceHead).iSliceBetaOffset = 0;
     if (*pPps).bDeblockingFilterControlPresentFlag {
-        if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
@@ -2628,7 +2635,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
         }
         if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
-            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
@@ -2640,7 +2647,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
                 );
             }
-            if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceBetaOffset = iCode * 2;
@@ -2667,7 +2674,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                 as f64)
                 .log2()
                 .ceil() as u32;
-            if BsGetBits(pBs, kiNumBits, &mut uiCode) != ERR_NONE {
+            if BsGetBits(buf, pBs, kiNumBits, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
@@ -2685,12 +2692,12 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut _ as *mut c_void;
 
         if !pNalHeaderExt.bNoInterLayerPredFlag && BASE_QUALITY_ID == pNalHeaderExt.uiQualityId {
-            if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
             if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //disable_inter_layer_deblocking_filter_idc
@@ -2702,7 +2709,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     );
                 }
                 if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
-                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //inter_layer_slice_alpha_c0_offset_div2
@@ -2717,7 +2724,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                             ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
                         );
                     }
-                    if BsGetSe(pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //inter_layer_slice_beta_offset_div2
@@ -2740,7 +2747,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
                 (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
 
-            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
@@ -2778,31 +2785,31 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         };
 
         if !pNalHeaderExt.bNoInterLayerPredFlag {
-            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
             if (*pSliceHeadExt).bSliceSkipFlag {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
             } else {
-                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
                 if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
-                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
                 }
                 if !(*pSliceHeadExt).bDefaultBaseModeFlag {
-                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //adaptive_motion_prediction_flag
                     (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
                     if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
-                        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //default_motion_prediction_flag
@@ -2810,13 +2817,13 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     }
                 }
 
-                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //adaptive_residual_prediction_flag
                 (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
                 if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
-                    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //default_residual_prediction_flag
@@ -2824,7 +2831,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                 }
             }
             if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
-                if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //tcoeff_level_prediction_flag
@@ -2833,11 +2840,11 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
 
         if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-            if BsGetBits(pBs, 4, &mut uiCode) != ERR_NONE {
+            if BsGetBits(buf, pBs, 4, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
-            if BsGetBits(pBs, 4, &mut uiCode) != ERR_NONE {
+            if BsGetBits(buf, pBs, 4, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
@@ -4469,11 +4476,8 @@ mod tests {
     #[test]
     fn test_parse_slice_header_syntaxs_null() {
         unsafe {
-            let res = ParseSliceHeaderSyntaxs(
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                false,
-            );
+            let mut cursor = crate::safe::bits::BsCursor::default();
+            let res = ParseSliceHeaderSyntaxs(std::ptr::null_mut(), &[], &mut cursor, false);
             assert_eq!(res, ERR_INFO_INVALID_PTR);
         }
     }

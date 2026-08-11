@@ -1,39 +1,41 @@
-//! Differential tests: `safe::bits` against `SBitStringAux` + `dec_golomb` +
-//! `vlc_encoder` (plan §2.2.2, taxonomy T3).
-//!
-//! The unit tests inside `src/safe/bits.rs` prove the cursors are *self*-consistent —
-//! that what `BsWriter` writes, `BsCursor` reads back. These prove they are
-//! *C*-consistent: identical values, identical error codes, identical cursor state and
-//! identical output bytes to the implementations the codec uses today, over randomised
-//! operation sequences and every truncation around the reader's slop boundary.
+//! Differential tests: `safe::bits` against the implementations the codec used
+//! before Phase 3 (plan §2.2.2, taxonomy T3).
 //!
 //! This file lives outside `src/`, so unlike everything under `src/safe/` it may use
 //! `unsafe` — it has to, because the reference implementations are raw-pointer code.
 //! Every `unsafe` block here drives the old side of a comparison.
 //!
-//! Running this under Miri additionally checks the old implementations for UB; see
+//! Running this under Miri additionally checks those old implementations for UB; see
 //! `rust/docs/phase1_findings.md`.
 //!
-//! # What the *reader* half proves after T3.1a (plan §2, differential retirement)
+//! # The reader half retired at T3.1b (plan §2, differential retirement)
 //!
-//! `bit_stream.rs` and `dec_golomb.rs` now run [`BsCursor`] behind their raw
-//! signatures, so the reader comparisons below are no longer two independent
-//! implementations. What they still prove — and what nothing else does — is that the
-//! **shim is faithful**: that `SBitStringAux`'s pointer triple survives the round trip
-//! through `cursor_of`/`store_cursor` at every truncation and after every operation,
-//! including the error paths where the raw refill left `uiCurBits`/`iLeftBits`
-//! mutated. They fail if a write-back is dropped or a field transposed.
+//! T3.1a moved the reader's *bodies* onto [`BsCursor`] behind unchanged raw
+//! signatures, and this file's reader tests were retired *in place* then: they stopped
+//! comparing two implementations and began proving the shim was faithful.
+//! **T3.1b deleted the shim**, so there is no longer a second implementation for them
+//! to compare against, and tests that compare a thing to itself are worse than no
+//! tests — they read as coverage. They are deleted here, in the commit that deletes
+//! what they tested, and their burden passes to:
 //!
-//! The *C*-consistency of the cursor arithmetic itself passes to
-//! `tests/malformed_stream_parity.rs` (T3.0), whose 2316 golden rows were recorded
-//! against the raw reader and still hold byte for byte, and to the 53 conformance
-//! hashes. That handover is why T3.0 was built before this conversion rather than
-//! after it. When T3.1b deletes the shim, these reader tests delete with it.
+//! * `tests/malformed_stream_parity.rs` (T3.0) — 2316 golden rows recorded against the
+//!   *raw* reader, covering error-code parity at every truncation and slop boundary,
+//!   still holding byte for byte;
+//! * the 53 conformance hashes and the frame counts beside them;
+//! * `src/safe/bits.rs`'s own unit tests, which keep the properties (the slop
+//!   predicate, the 16-bit ceiling, the Exp-Golomb spec examples).
 //!
-//! Two F7 accommodations were **deleted** here in T3.1a, because the conversion
-//! deleted the UB they were accommodating — see the comments in
-//! `reader_init_matches_dec_init_bits` and `init_read_bits_matches_at_every_end_offset`.
-//! The writer half is untouched: it still compares two implementations, until T3.4.
+//! That handover is why T3.0 was built before the conversion rather than after it.
+//!
+//! # What is still a genuine two-implementation comparison
+//!
+//! * **`GetLeadingZeroBits` and `BsGetTrailingBits`** — the table-driven originals are
+//!   still in `dec_golomb.rs` and still used, so these compare real alternatives.
+//! * **The CAVLC mode** (plan §2.2.2 [P3]) — against a *frozen transliteration* of
+//!   `BsStartCavlc`/`BsEndCavlc`, kept below because it is the only executable
+//!   statement of what parity means for that pair now that the port's copy is gone.
+//! * **The whole writer half** — `vlc_encoder.rs`'s canonical writer is untouched
+//!   until T3.4, so those tests compare two live implementations as before.
 
 #![allow(non_snake_case)]
 
@@ -41,348 +43,38 @@ mod common;
 
 use common::prng::Prng;
 
-use openh264_rs::decoder::bit_stream::{DecInitBits, InitReadBits, SBitStringAux};
+use openh264_rs::decoder::bit_stream::SBitStringAux;
 use openh264_rs::decoder::dec_golomb::{
-    BsGetBits, BsGetOneBit, BsGetSe, BsGetTe0, BsGetTrailingBits, BsGetUe, CheckMoreRBSPData,
-    GetLeadingZeroBits, ERR_NONE,
+    BsGetBits, BsGetOneBit, BsGetSe, BsGetTrailingBits, BsGetUe, GetLeadingZeroBits, ERR_NONE,
 };
-use openh264_rs::decoder::parse_mb_syn_cavlc::{BsEndCavlc, BsStartCavlc};
 use openh264_rs::encoder::vlc_encoder::{
     BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsSizeSE, BsSizeUE, BsWriteBits, BsWriteOneBit,
     BsWriteSE, BsWriteUE, InitBits,
 };
 use openh264_rs::safe::bits::{size_se, size_ue, trailing_bits, BsCursor, BsWriter};
-use openh264_rs::safe::err::ErrInfo;
 
 /// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
 /// turn a phase-exit gate into an hour. The *shapes* tested are identical — every
-/// truncation, every boundary, every operation kind — only the randomised round counts
+/// bit phase, every boundary, every operation kind — only the randomised round counts
 /// shrink, and the full-size run happens on every `cargo test`.
 fn scale(n: usize) -> usize {
-    if cfg!(miri) { (n / 25).max(2) } else { n }
+    if cfg!(miri) {
+        (n / 25).max(2)
+    } else {
+        n
+    }
 }
 
 /// The RBSP plus the slack the C++ reader relies on. See `phase1_findings.md` §F4:
-/// `dump_bits_aux` may sit one byte past the logical end and read two bytes there,
-/// so the *allocation* must extend at least `READER_SLOP` = 3 bytes beyond the
-/// declared RBSP for the old reader to be in bounds at all.
-///
-/// Eight, not three, because `reader_init_matches_dec_init_bits` deliberately declares
-/// RBSP lengths **longer than the payload** (up to `payload + 2` bytes) to probe the
-/// `(kiSize + 7) >> 3` edge, and the contract is `declared + READER_SLOP` readable —
-/// not `payload + READER_SLOP`. Since T3.1a that requirement is checked rather than
-/// implied: `DecInitBits` builds the reader's slice eagerly, so Miri flags a buffer
-/// that is short of it, where the raw reader would merely not have reached that far.
+/// `dump_bits_aux` may sit one byte past the logical end and read two bytes there, and
+/// `BsEndCavlc` primes four bytes at an arbitrary byte offset, so the *allocation* must
+/// extend past the declared RBSP for the old code to be in bounds at all. Eight bytes,
+/// not three, because the CAVLC closes below deliberately land at and past the declared
+/// end.
 fn rbsp_with_slack(payload: &[u8]) -> Vec<u8> {
     let mut v = payload.to_vec();
     v.extend_from_slice(&[0u8; 8]);
     v
-}
-
-/// Drives the old reader: `SBitStringAux` over `buf`, `kiSize` bits of payload.
-fn old_init(buf: &[u8], size_bits: i32) -> (SBitStringAux, i32) {
-    let mut bs = SBitStringAux::default();
-    let err = unsafe { DecInitBits(&mut bs, buf.as_ptr(), size_bits) };
-    (bs, err)
-}
-
-fn old_state(bs: &SBitStringAux) -> (usize, u32, i32) {
-    let pos = (bs.pCurBuf as usize) - (bs.pStartBuf as usize);
-    (pos, bs.uiCurBits, bs.iLeftBits)
-}
-
-fn new_state(c: &BsCursor) -> (usize, u32, i32) {
-    (c.pos(), c.cur_bits(), c.left_bits())
-}
-
-/// `0` from the old side means success; anything else is the error code.
-fn as_result<T>(code: i32, value: T) -> Result<T, ErrInfo> {
-    if code == ERR_NONE {
-        Ok(value)
-    } else {
-        Err(ErrInfo(code))
-    }
-}
-
-#[test]
-fn reader_init_matches_dec_init_bits() {
-    let mut rng = Prng::new(0x8B17_0001);
-    for payload_len in 0..24usize {
-        let payload = rng.bytes(payload_len);
-        let buf = rbsp_with_slack(&payload);
-        // Every bit size in and around the payload, including sizes that are not a
-        // whole number of bytes and the degenerate non-positive ones.
-        //
-        // Below -7, `(kiSize + 7) >> 3` goes negative, and until T3.1a `DecInitBits`
-        // evaluated `pStartBuf.offset(kiSizeBuf)` with it — a pointer before the start
-        // of the allocation, undefined behaviour rather than a wrong value
-        // (`phase1_findings.md` §F7). That accommodation is **deleted**: the old side
-        // now rejects the length before computing anything, so both sides are compared
-        // over the whole range.
-        for size_bits in -9i32..=(payload_len as i32 * 8 + 9) {
-            let new = BsCursor::init(&buf, size_bits).map(|c| new_state(&c));
-            let (bs, err) = old_init(&buf, size_bits);
-            let old = as_result(err, ()).map(|()| old_state(&bs));
-            assert_eq!(old, new, "payload {payload_len} bytes, kiSize {size_bits}");
-        }
-    }
-}
-
-#[test]
-fn init_read_bits_matches_at_every_end_offset() {
-    // `InitReadBits` is called with 1 by the CABAC init (`parse_mb_syn_cabac.rs:3312`)
-    // and 0 by `decode_slice.rs:2474`.
-    //
-    // Until T3.1a this comparison stopped at `end_offset <= payload_len`, because past
-    // that the *old* side was undefined behaviour rather than merely wrong: it
-    // evaluated `pEndBuf.offset(-iEndOffset)`, a pointer before the start of the
-    // allocation (`phase1_findings.md` §F7). That accommodation is **deleted**: the
-    // comparison now runs over the whole range, because both sides do the same
-    // comparison in offset arithmetic.
-    let mut rng = Prng::new(0x8B17_0002);
-    for payload_len in 1..12usize {
-        let payload = rng.bytes(payload_len);
-        let buf = rbsp_with_slack(&payload);
-        let size_bits = payload_len as i32 * 8;
-        for end_offset in 0..4isize {
-            let mut c = BsCursor::init(&buf, size_bits).unwrap();
-
-            let (mut bs, err) = old_init(&buf, size_bits);
-            assert_eq!(err, ERR_NONE);
-            let old_err = unsafe { InitReadBits(&mut bs, end_offset) };
-            let old = as_result(old_err, ()).map(|()| old_state(&bs));
-            let new = c.init_read_bits(&buf, end_offset).map(|()| new_state(&c));
-            assert_eq!(old, new, "payload {payload_len}, end_offset {end_offset}");
-        }
-    }
-}
-
-/// One operation of a randomised read sequence.
-#[derive(Clone, Copy, Debug)]
-enum ReadOp {
-    Bits(i32),
-    OneBit,
-    Ue,
-    Se,
-    Te0(i32),
-}
-
-impl ReadOp {
-    fn random(rng: &mut Prng) -> Self {
-        match rng.below(5) {
-            0 => ReadOp::Bits(rng.range_i32(1, 16)),
-            1 => ReadOp::OneBit,
-            2 => ReadOp::Ue,
-            3 => ReadOp::Se,
-            _ => ReadOp::Te0(rng.range_i32(1, 8)),
-        }
-    }
-
-    /// Applies the operation to both readers and returns `(old, new)` outcomes,
-    /// widened to `i64` so every reader's value type compares in one place.
-    fn apply(
-        self,
-        bs: &mut SBitStringAux,
-        c: &mut BsCursor,
-        buf: &[u8],
-    ) -> (Result<i64, ErrInfo>, Result<i64, ErrInfo>) {
-        match self {
-            ReadOp::Bits(n) => {
-                let mut code = 0u32;
-                let err = unsafe { BsGetBits(bs, n, &mut code) };
-                (
-                    as_result(err, code as i64),
-                    c.get_bits(buf, n).map(|v| v as i64),
-                )
-            }
-            ReadOp::OneBit => {
-                let mut code = 0u32;
-                let err = unsafe { BsGetOneBit(bs, &mut code) } as i32;
-                (
-                    as_result(err, code as i64),
-                    c.get_one_bit(buf).map(|v| v as i64),
-                )
-            }
-            ReadOp::Ue => {
-                let mut code = 0u32;
-                let err = unsafe { BsGetUe(bs, &mut code) } as i32;
-                (as_result(err, code as i64), c.get_ue(buf).map(|v| v as i64))
-            }
-            ReadOp::Se => {
-                let mut code = 0i32;
-                let err = unsafe { BsGetSe(bs, &mut code) };
-                (as_result(err, code as i64), c.get_se(buf).map(|v| v as i64))
-            }
-            ReadOp::Te0(range) => {
-                let mut code = 0u32;
-                let err = unsafe { BsGetTe0(bs, range, &mut code) };
-                (
-                    as_result(err, code as i64),
-                    c.get_te0(buf, range).map(|v| v as i64),
-                )
-            }
-        }
-    }
-}
-
-#[test]
-fn reader_op_sequences_match_bit_for_bit() {
-    let mut rng = Prng::new(0x8B17_0003);
-
-    for round in 0..scale(300) {
-        // Buffer sizes from "shorter than one refill" up to a few KB.
-        let payload_len = match round % 4 {
-            0 => rng.below(9) as usize,
-            1 => rng.below(64) as usize,
-            2 if !cfg!(miri) => 1024 + rng.below(1024) as usize,
-            _ => rng.below(24) as usize,
-        };
-        let payload = rng.bytes(payload_len);
-        let buf = rbsp_with_slack(&payload);
-        // Bit sizes that are not byte-aligned exercise the `(kiSize + 7) >> 3` edge.
-        let size_bits = (payload_len as i32 * 8) - rng.below(8) as i32;
-
-        let (mut bs, old_err) = old_init(&buf, size_bits);
-        let new = BsCursor::init(&buf, size_bits);
-        match (as_result(old_err, ()), new) {
-            (Err(a), Err(b)) => {
-                assert_eq!(a, b, "init disagreed, round {round}");
-                continue;
-            }
-            (Ok(()), Ok(mut c)) => {
-                assert_eq!(old_state(&bs), new_state(&c), "post-init state");
-                for step in 0..scale(64).max(16) {
-                    let op = ReadOp::random(&mut rng);
-                    let (old, new) = op.apply(&mut bs, &mut c, &buf);
-                    assert_eq!(
-                        old, new,
-                        "round {round} step {step} op {op:?}, seed {:#x}",
-                        rng.seed()
-                    );
-                    assert_eq!(
-                        old_state(&bs),
-                        new_state(&c),
-                        "state after round {round} step {step} op {op:?}"
-                    );
-                    assert_eq!(
-                        unsafe { CheckMoreRBSPData(&mut bs) },
-                        c.check_more_rbsp_data(),
-                        "CheckMoreRBSPData after round {round} step {step}"
-                    );
-                    if old.is_err() {
-                        break; // the C++ callers stop at the first error too
-                    }
-                }
-            }
-            (a, b) => panic!("init disagreed: old {a:?}, new {b:?} (round {round})"),
-        }
-    }
-}
-
-#[test]
-fn reader_matches_on_every_truncation_around_the_slop_boundary() {
-    // The predicate under test is `iReadBytes > iAllowedBytes + 1`. Declared payload
-    // lengths 0..=8 walk the cursor onto, over and past that boundary, while the
-    // allocation stays big enough that the *old* reader is in bounds throughout.
-    let mut rng = Prng::new(0x8B17_0004);
-    for declared_len in 0..=8usize {
-        for pattern in 0..6 {
-            let payload: Vec<u8> = match pattern {
-                0 => vec![0x00; 8],
-                1 => vec![0xFF; 8],
-                2 => vec![0x80; 8],
-                3 => vec![0x01; 8],
-                4 => vec![0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA],
-                _ => rng.bytes(8),
-            };
-            let buf = rbsp_with_slack(&payload);
-            let size_bits = declared_len as i32 * 8;
-
-            let (mut bs, old_err) = old_init(&buf, size_bits);
-            let new = BsCursor::init(&buf, size_bits);
-            if old_err != ERR_NONE {
-                assert_eq!(
-                    new.map(|_| ()),
-                    Err(ErrInfo(old_err)),
-                    "init, declared {declared_len}"
-                );
-                continue;
-            }
-            let mut c = new.unwrap();
-
-            // Read well past the end: both sides must fail at the same operation.
-            for step in 0..32 {
-                let mut code = 0u32;
-                let old = as_result(unsafe { BsGetBits(&mut bs, 8, &mut code) }, code as i64);
-                let got = c.get_bits(&buf, 8).map(|v| v as i64);
-                assert_eq!(
-                    old, got,
-                    "declared {declared_len}, pattern {pattern}, step {step}"
-                );
-                assert_eq!(old_state(&bs), new_state(&c), "state, step {step}");
-                if old.is_err() {
-                    assert_eq!(old, Err(ErrInfo::READ_OVERFLOW));
-                    break;
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn ue_prefixes_longer_than_16_bits_match() {
-    // BsGetUe splits its refill when the prefix exceeds 16 bits; those branches are
-    // rare in real streams and easy to get wrong.
-    for lead in 0..=31u32 {
-        let mut payload = vec![0u8; 16];
-        // `lead` zero bits, then a 1, then `lead` value bits of alternating pattern.
-        let mut bit = 0usize;
-        let put = |v: u32, n: usize, payload: &mut Vec<u8>, bit: &mut usize| {
-            for i in (0..n).rev() {
-                if (v >> i) & 1 != 0 {
-                    payload[*bit / 8] |= 0x80 >> (*bit % 8);
-                }
-                *bit += 1;
-            }
-        };
-        put(0, lead as usize, &mut payload, &mut bit);
-        put(1, 1, &mut payload, &mut bit);
-        put(0x5555_5555, lead as usize, &mut payload, &mut bit);
-
-        let buf = rbsp_with_slack(&payload);
-        let size_bits = payload.len() as i32 * 8;
-        let (mut bs, err) = old_init(&buf, size_bits);
-        assert_eq!(err, ERR_NONE);
-        let mut c = BsCursor::init(&buf, size_bits).unwrap();
-
-        let mut code = 0u32;
-        let old = as_result(unsafe { BsGetUe(&mut bs, &mut code) } as i32, code);
-        assert_eq!(old, c.get_ue(&buf), "leading zeros = {lead}");
-        assert_eq!(old_state(&bs), new_state(&c), "state, leading zeros = {lead}");
-    }
-}
-
-#[test]
-fn bit_reads_over_16_reproduce_the_stale_low_bits() {
-    // No decoder call site asks for more than 16 bits, because the refill only
-    // guarantees 16 valid bits at rest — a wider read returns stale low bits. The
-    // safe cursor reproduces that exactly rather than "fixing" it, which is what
-    // makes it a drop-in replacement.
-    let mut rng = Prng::new(0x8B17_0005);
-    for _ in 0..scale(200) {
-        let payload = rng.bytes(64);
-        let buf = rbsp_with_slack(&payload);
-        let size_bits = payload.len() as i32 * 8;
-        let (mut bs, _) = old_init(&buf, size_bits);
-        let mut c = BsCursor::init(&buf, size_bits).unwrap();
-        for _ in 0..16 {
-            let n = rng.range_i32(17, 32);
-            let mut code = 0u32;
-            let old = as_result(unsafe { BsGetBits(&mut bs, n, &mut code) }, code);
-            assert_eq!(old, c.get_bits(&buf, n), "n = {n}");
-            assert_eq!(old_state(&bs), new_state(&c));
-        }
-    }
 }
 
 #[test]
@@ -413,68 +105,90 @@ fn trailing_bits_matches_for_every_byte() {
 }
 
 // ===========================================================================
-// CAVLC mode vs. BsStartCavlc/BsEndCavlc  (plan §2.2.2 [P3], T3.1b step 0)
+// CAVLC mode vs. a frozen BsStartCavlc/BsEndCavlc  (plan §2.2.2 [P3])
 // ===========================================================================
 
-/// All six fields `SBitStringAux` and [`BsCursor`] mirror, old side.
+/// The reader state the C++ pair operated on, as a plain struct.
 ///
-/// The full state, not the three of [`old_state`]: `iIndex` is the point of this pair,
-/// and `iBits`/`pEndBuf` must be shown *not* to move.
-fn old_full_state(bs: &SBitStringAux) -> (usize, u32, i32, usize, i32, isize) {
-    let pos = (bs.pCurBuf as usize) - (bs.pStartBuf as usize);
-    let len = (bs.pEndBuf as usize) - (bs.pStartBuf as usize);
-    (pos, bs.uiCurBits, bs.iLeftBits, len, bs.iBits, bs.iIndex)
+/// This is deliberately **not** `SBitStringAux`: the port's copy of that struct is on
+/// its way out (T3.3/T3.4), and pinning this comparison to it would make the reference
+/// implementation drift with the refactor it is supposed to be judging. The five fields
+/// below are the ones `BsStartCavlc`/`BsEndCavlc` read or write, expressed as offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RawBs {
+    pos: usize,
+    cur_bits: u32,
+    left_bits: i32,
+    len: usize,
+    bits: i32,
+    index: isize,
 }
 
-fn new_full_state(c: &BsCursor) -> (usize, u32, i32, usize, i32, isize) {
-    (
-        c.pos(),
-        c.cur_bits(),
-        c.left_bits(),
-        c.len(),
-        c.bits(),
+/// A frozen transliteration of `BsStartCavlc`
+/// (`codec/decoder/core/src/parse_mb_syn_cavlc.cpp`; the port's copy lived at
+/// `parse_mb_syn_cavlc.rs:2229` until T3.1b deleted it).
+///
+/// **Do not "fix" this to match the safe side** — it is the reference, and its whole
+/// value is that it was written from the C++ and then left alone (S6).
+fn raw_bs_start_cavlc(bs: &mut RawBs) {
+    bs.index = ((bs.pos as isize) << 3) - (16 - bs.left_bits as isize);
+}
+
+/// A frozen transliteration of `BsEndCavlc`, same provenance as
+/// [`raw_bs_start_cavlc`]. The 4-byte load is the C++'s unconditional one; the caller
+/// supplies the slack that makes it legal (F4).
+fn raw_bs_end_cavlc(bs: &mut RawBs, buf: &[u8]) {
+    bs.pos = (bs.index >> 3) as usize;
+    let b0 = buf[bs.pos] as u32;
+    let b1 = buf[bs.pos + 1] as u32;
+    let b2 = buf[bs.pos + 2] as u32;
+    let b3 = buf[bs.pos + 3] as u32;
+    let uiCache32Bit = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    bs.cur_bits = uiCache32Bit << ((bs.index & 0x07) as u32);
+    bs.pos += 4;
+    bs.left_bits = -16 + ((bs.index & 0x07) as i32);
+}
+
+fn raw_of(c: &BsCursor) -> RawBs {
+    RawBs {
+        pos: c.pos(),
+        cur_bits: c.cur_bits(),
+        left_bits: c.left_bits(),
+        len: c.len(),
+        bits: c.bits(),
         // Not `cavlc_bit_pos()`: that one asserts the mode is live, and half these
         // comparisons happen after `end_cavlc` has closed it. See the accessor's docs.
-        c.cavlc_bit_pos_state(),
-    )
+        index: c.cavlc_bit_pos_state(),
+    }
 }
 
-/// Drives both sides through `BsStartCavlc` → *n* bits consumed → `BsEndCavlc`, from
-/// whatever state the cursors are already in, and compares the full state at both
-/// steps.
+/// Drives both sides through `start` → *n* bits consumed → `end`, from whatever state
+/// they are already in, and compares all six fields at both steps.
 ///
 /// `used_bits` is what the residual path reports via `pBs->iIndex += iUsedBits`
-/// (`parse_mb_syn_cavlc.rs:2701, 2726`) — the only write it makes.
+/// (`parse_mb_syn_cavlc.rs`, `WelsResidualBlockCavlc`) — the only write it makes.
 fn assert_cavlc_cycle_matches(
-    bs: &mut SBitStringAux,
+    raw: &mut RawBs,
     c: &mut BsCursor,
     buf: &[u8],
     used_bits: isize,
     label: &str,
 ) {
-    unsafe { BsStartCavlc(bs) };
+    raw_bs_start_cavlc(raw);
     c.start_cavlc();
-    assert_eq!(
-        old_full_state(bs),
-        new_full_state(c),
-        "{label}: state after BsStartCavlc"
-    );
+    assert_eq!(*raw, raw_of(c), "{label}: state after BsStartCavlc");
     assert_eq!(
         c.cavlc_bit_pos(),
-        bs.iIndex,
+        raw.index,
         "{label}: the guarded accessor reads iIndex"
     );
 
-    bs.iIndex += used_bits;
+    raw.index += used_bits;
     c.advance_cavlc_bits(used_bits);
 
-    unsafe { BsEndCavlc(bs) };
+    raw_bs_end_cavlc(raw, buf);
     c.end_cavlc(buf);
-    assert_eq!(
-        old_full_state(bs),
-        new_full_state(c),
-        "{label}: state after BsEndCavlc"
-    );
+    assert_eq!(*raw, raw_of(c), "{label}: state after BsEndCavlc");
 }
 
 #[test]
@@ -482,7 +196,7 @@ fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
     // Random *cursor states*, not just random buffers: the pair's arithmetic is a
     // function of (pos, left_bits), so the interesting axis is how many bits have been
     // consumed before the mode opens. Reads of random widths walk `left_bits` through
-    // its whole −16..=0 range and `pos` through every byte phase.
+    // its whole -16..=0 range and `pos` through every byte phase.
     let mut rng = Prng::new(0x8B17_0010);
 
     for round in 0..scale(200) {
@@ -491,39 +205,33 @@ fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
         let buf = rbsp_with_slack(&payload);
         let size_bits = payload.len() as i32 * 8;
 
-        let (mut bs, old_err) = old_init(&buf, size_bits);
         let mut c = BsCursor::init(&buf, size_bits).unwrap();
-        assert_eq!(old_err, ERR_NONE);
-        assert_eq!(old_full_state(&bs), new_full_state(&c), "round {round}: post-init");
+        let mut raw = raw_of(&c);
 
         for step in 0..scale(24).max(4) {
-            // Advance both by an identical, in-contract read before opening the mode.
             let n = 1 + rng.below(16) as i32;
-            let mut old_code = 0u32;
-            let old_rc = unsafe { BsGetBits(&mut bs, n, &mut old_code) };
-            let new_rc = c.get_bits(&buf, n);
-            assert_eq!(as_result(old_rc, old_code), new_rc, "round {round} step {step}");
-            if new_rc.is_err() {
+            let mut code = 0u32;
+            if BsGetBits(&buf, &mut c, n, &mut code) != 0 {
                 break;
             }
+            raw = raw_of(&c);
 
             // `iUsedBits` in the real residual path is a symbol count, tens of bits at
-            // most; 0 is legal (the `uiTotalCoeff == 0` early return at :2701).
+            // most; 0 is legal (the `uiTotalCoeff == 0` early return).
             //
             // Bounded so the close point's 4-byte prime stays inside the allocation.
             // Past that the *raw* pair reads out of bounds — F4's pre-existing
             // condition, which this test must not manufacture: the safe side would
             // panic on the slice index (correctly, per plan §2.2.2) and the comparison
             // would be against UB rather than against behaviour.
-            let bit_pos = (((bs.pCurBuf as usize) - (bs.pStartBuf as usize)) as isize) * 8
-                - (16 - bs.iLeftBits as isize);
+            let bit_pos = (c.pos() as isize) * 8 - (16 - c.left_bits() as isize);
             let headroom_bits = ((buf.len() - 4) as isize * 8) - bit_pos;
             if headroom_bits < 0 {
                 break;
             }
             let used = rng.below(48.min(headroom_bits as u32 + 1)) as isize;
             assert_cavlc_cycle_matches(
-                &mut bs,
+                &mut raw,
                 &mut c,
                 &buf,
                 used,
@@ -545,27 +253,29 @@ fn cavlc_mode_matches_at_every_bit_phase() {
 
     for skip in 0..8i32 {
         for used in 0..8isize {
-            let (mut bs, old_err) = old_init(&buf, size_bits);
             let mut c = BsCursor::init(&buf, size_bits).unwrap();
-            assert_eq!(old_err, ERR_NONE);
-
             if skip > 0 {
-                let mut old_code = 0u32;
-                let old_rc = unsafe { BsGetBits(&mut bs, skip, &mut old_code) };
-                assert_eq!(as_result(old_rc, old_code), c.get_bits(&buf, skip));
+                let mut code = 0u32;
+                assert_eq!(BsGetBits(&buf, &mut c, skip, &mut code), 0);
             }
-            assert_cavlc_cycle_matches(&mut bs, &mut c, &buf, used, &format!("skip {skip} used {used}"));
+            let mut raw = raw_of(&c);
+            assert_cavlc_cycle_matches(&mut raw, &mut c, &buf, used, &format!("skip {skip} used {used}"));
 
-            // …and both sides read on identically afterwards, which is what the mode is
-            // for. 16 bits is the widest read the codec makes.
+            // …and the cursor reads on from where the raw pair left it, which is what
+            // the mode is for. 16 bits is the widest read the codec makes.
+            let mut plain = BsCursor::init(&buf, size_bits).unwrap();
+            let mut code = 0u32;
+            if skip > 0 {
+                assert_eq!(BsGetBits(&buf, &mut plain, skip, &mut code), 0);
+            }
+            for _ in 0..used {
+                assert_eq!(BsGetBits(&buf, &mut plain, 1, &mut code), 0);
+            }
             for _ in 0..4 {
-                let mut old_code = 0u32;
-                let old_rc = unsafe { BsGetBits(&mut bs, 16, &mut old_code) };
-                assert_eq!(
-                    as_result(old_rc, old_code),
-                    c.get_bits(&buf, 16),
-                    "reads after the cycle, skip {skip} used {used}"
-                );
+                let (mut a, mut b) = (0u32, 0u32);
+                let ra = BsGetBits(&buf, &mut c, 16, &mut a);
+                let rb = BsGetBits(&buf, &mut plain, 16, &mut b);
+                assert_eq!((ra, a), (rb, b), "reads after the cycle, skip {skip} used {used}");
             }
         }
     }
@@ -579,10 +289,10 @@ fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
     // reaches into the slack.
     //
     // S12/F10 sizing: the raw side gets the real slack (`rbsp_with_slack`'s 8 bytes),
-    // because a raw pointer's footprint exceeds its read footprint and an exactly-sized
-    // buffer would make Miri flag the reference implementation rather than the port.
-    // The safe side is handed the same slice, and `end_cavlc` indexes it — so a buffer
-    // short of the contract panics here instead of reading past the allocation.
+    // because a raw implementation's footprint exceeds its read footprint and an
+    // exactly-sized buffer would make Miri flag the reference rather than the port. The
+    // safe side is handed the same slice, and `end_cavlc` indexes it — so a buffer short
+    // of the contract panics here instead of reading past the allocation.
     let mut rng = Prng::new(0x8B17_0011);
 
     for declared_len in 1..=8usize {
@@ -597,40 +307,27 @@ fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
             let buf = rbsp_with_slack(&payload);
             let size_bits = declared_len as i32 * 8;
 
-            let (mut bs, old_err) = old_init(&buf, size_bits);
-            let Ok(mut c) = BsCursor::init(&buf, size_bits) else {
-                assert_ne!(old_err, ERR_NONE, "init disagreed at declared_len {declared_len}");
+            let Ok(c0) = BsCursor::init(&buf, size_bits) else {
                 continue;
             };
-            assert_eq!(old_err, ERR_NONE);
 
-            // Walk the mode's close point from inside the RBSP to past its end.
             for used in [0isize, 8, 16, 24, 32, 40, 48, 56] {
-                let mut bs_c = bs;
-                let mut c_c = c;
-                let idx_bytes = (((bs_c.pCurBuf as usize) - (bs_c.pStartBuf as usize)) as isize)
-                    - 2
-                    + (used >> 3);
+                let mut c = c0;
+                let mut raw = raw_of(&c);
+                let idx_bytes = (c.pos() as isize) - 2 + (used >> 3);
                 // Only exercise closes whose 4-byte prime is inside the allocation: past
-                // that the *raw* pair reads out of bounds, which is F4's pre-existing
+                // that the raw pair reads out of bounds, which is F4's pre-existing
                 // condition and not something this test should manufacture.
                 if idx_bytes < 0 || idx_bytes as usize + 4 > buf.len() {
                     continue;
                 }
                 assert_cavlc_cycle_matches(
-                    &mut bs_c,
-                    &mut c_c,
+                    &mut raw,
+                    &mut c,
                     &buf,
                     used,
                     &format!("declared_len {declared_len} pattern {pattern} used {used}"),
                 );
-            }
-
-            // Consume a little and repeat, so the mode also opens from a mid-byte state.
-            let mut old_code = 0u32;
-            let old_rc = unsafe { BsGetBits(&mut bs, 5, &mut old_code) };
-            if as_result(old_rc, old_code) != c.get_bits(&buf, 5) {
-                panic!("read disagreed at declared_len {declared_len} pattern {pattern}");
             }
         }
     }
@@ -944,29 +641,31 @@ fn written_streams_read_back_through_the_old_reader() {
         }
         let bits = w.bits_pos();
         w.rbsp_trailing_bits(&mut out);
+        // The reader's 4-byte prime and 3-byte slop must be inside the buffer (F4);
+        // `out` is generously sized above, so this only asserts the contract holds.
+        assert!(out.len() >= ((bits as usize + 1 + 7) >> 3) + 3);
 
-        let (mut bs, err) = old_init(&out, bits + 1);
-        assert_eq!(err, ERR_NONE, "round {round}");
+        let mut bs = BsCursor::init(&out, bits + 1).expect("round {round}: init");
         for (i, op) in ops.iter().enumerate() {
             match *op {
                 WriteOp::Bits(n, v) => {
                     let mut code = 0u32;
-                    let e = unsafe { BsGetBits(&mut bs, n, &mut code) };
+                    let e = BsGetBits(&out, &mut bs, n, &mut code);
                     assert_eq!((e, code), (ERR_NONE, v), "round {round} op {i}");
                 }
                 WriteOp::OneBit(v) => {
                     let mut code = 0u32;
-                    let e = unsafe { BsGetOneBit(&mut bs, &mut code) };
+                    let e = BsGetOneBit(&out, &mut bs, &mut code);
                     assert_eq!((e as i32, code), (ERR_NONE, v), "round {round} op {i}");
                 }
                 WriteOp::Ue(v) => {
                     let mut code = 0u32;
-                    let e = unsafe { BsGetUe(&mut bs, &mut code) };
+                    let e = BsGetUe(&out, &mut bs, &mut code);
                     assert_eq!((e as i32, code), (ERR_NONE, v), "round {round} op {i}");
                 }
                 WriteOp::Se(v) => {
                     let mut code = 0i32;
-                    let e = unsafe { BsGetSe(&mut bs, &mut code) };
+                    let e = BsGetSe(&out, &mut bs, &mut code);
                     assert_eq!((e, code), (ERR_NONE, v), "round {round} op {i}");
                 }
             }

@@ -13,7 +13,7 @@
 //! Translated from `codec/decoder/core/inc/decoder_context.h` and `codec/decoder/core/src/decoder.cpp`.
 
 use crate::common::memory_align::CMemoryAlign;
-use crate::decoder::bit_stream::SBitStringAux;
+use crate::decoder::bit_stream::BsReader;
 use crate::decoder::fmo::{PFmo, SFmo};
 use crate::decoder::slice::EWelsSliceType;
 use std::ffi::{c_char, c_void};
@@ -680,7 +680,7 @@ pub struct SWelsDecoderContext {
     pub sRefPic: SRefPic,
     pub sTmpRefPic: SRefPic,
     pub pVlcTable: *mut c_void,
-    pub sBs: SBitStringAux,
+    pub sBs: BsReader,
     pub iMaxBsBufferSizeInByte: i32,
     pub sSpsPpsCtx: SWelsDecoderSpsPpsCTX,
     pub bHasNewSps: bool,
