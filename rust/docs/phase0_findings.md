@@ -644,8 +644,12 @@ Three separate hits across one session, on two trees:
 |---|---|---|---|---|
 | 16 | T4b.1 `full` | release | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **short** — 41989 vs 42281 |
 | — | (its S14 re-run) | release | same | **short** — 40645 vs 42281 |
-| 17 | T4b.2 `family` | debug | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1` | **zero** — 0 vs 40992 |
-| 18 | T4b.2 `full` | debug | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **zero** — 0 vs 42281 |
+| 17 | T4b.1b `family` | debug | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1` | **zero** — 0 vs 40992 |
+| 18 | T4b.1b `full` | debug | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **zero** — 0 vs 42281 |
+
+*(Label note, steward: these two batteries were the RC seam's — written as "T4b.2"
+before the session renumbered that seam T4b.1b; the vtable seam T4b.2 had not started.
+The brief's correction block records the renumbering.)*
 
 Two things to note before the alternations. **The session-start control battery was
 clean**, breaking a three-session streak of session-start hits — so the advice "expect
