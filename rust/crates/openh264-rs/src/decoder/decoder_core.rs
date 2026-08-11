@@ -1773,11 +1773,13 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
     }
     let cpu_flag = (*pCtx).uiCpuFlag;
 
-    // 0. Block helpers. `pWelsSetNonZeroCountFunc` clamps every non-zero
-    // coefficient count to 1 after inter reconstruction; deblocking derives
-    // boundary strengths from those counts, so leaving it unset corrupts the
-    // filter (`InitDecFuncs` in `decoder.cpp`).
-    crate::decoder::decode_slice::WelsBlockFuncInit(&mut (*pCtx).sBlockFunc as *mut _ as *mut _, cpu_flag as i32);
+    // 0. Block helpers. `WelsBlockFuncInit` filled `sBlockFunc` here (`InitDecFuncs`
+    // in `decoder.cpp`), through a `*mut _ as *mut _` double cast that bridged the
+    // port's two incompatible declarations of one struct. T4b.3c deleted both. The
+    // one slot that was ever read -- `pWelsSetNonZeroCountFunc`, which clamps every
+    // non-zero coefficient count to 1 after inter reconstruction so that deblocking
+    // derives the boundary strengths the C++ derives -- is a direct call at its
+    // single use in `decode_slice.rs`.
 
     // 1. Deblocking Filter
     crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc as *mut _ as *mut _, cpu_flag as i32);

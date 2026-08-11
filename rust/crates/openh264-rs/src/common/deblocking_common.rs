@@ -675,7 +675,6 @@ pub type PChromaDeblockingLT4Func2 =
 pub type PChromaDeblockingEQ4Func2 =
     Option<unsafe extern "C" fn(pPixCbCr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
 
-pub type PWelsNonZeroCountFunc = Option<unsafe extern "C" fn(pNonZeroCount: *mut i8)>;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

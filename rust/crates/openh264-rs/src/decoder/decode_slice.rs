@@ -508,8 +508,6 @@ pub static g_ksInterBMbTypeInfo: [SPartMbInfo; 23] = [
 // Function Pointer Types & Block Structures
 // ============================================================================
 
-pub type PWelsNonZeroCountFunc = unsafe extern "C" fn(pNonZeroCount: *mut i8);
-pub type PWelsBlockZeroFunc = unsafe extern "C" fn(block: *mut i16, stride: i32);
 pub type PWelsDecMbFunc = unsafe extern "C" fn(
     pCtx: *mut SWelsDecoderContext,
     pNalCur: *mut SNalUnit,
@@ -546,23 +544,19 @@ pub type PIdctResAddPredFunc8x8 = unsafe extern "C" fn(
     pScaledTCoeff: *mut i16,
 );
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SBlockFunc {
-    pub pWelsSetNonZeroCountFunc: Option<PWelsNonZeroCountFunc>,
-    pub pWelsBlockZero16x16Func: Option<PWelsBlockZeroFunc>,
-    pub pWelsBlockZero8x8Func: Option<PWelsBlockZeroFunc>,
-}
-
-impl Default for SBlockFunc {
-    fn default() -> Self {
-        Self {
-            pWelsSetNonZeroCountFunc: None,
-            pWelsBlockZero16x16Func: None,
-            pWelsBlockZero8x8Func: None,
-        }
-    }
-}
+// T4b.3c: `SBlockFunc` was declared **twice** -- here and in `decoder_context.rs`,
+// with the same three members and two different `PWelsNonZeroCountFunc` /
+// `PWelsBlockZeroFunc` typedef pairs. `WelsInitDecoderFuncs` bridged the two
+// definitions with `&mut (*pCtx).sBlockFunc as *mut _ as *mut _`, a double cast
+// doing exactly what T4b.3b's pair of reinterpreting calls did: laundering one
+// type into an identical one that a second declaration had made incompatible.
+//
+// Both are deleted. Of the three slots, **one was ever read** -- in this port and
+// in the C++: `pWelsSetNonZeroCountFunc`, at `WelsMbInterConstruction` below.
+// `pWelsBlockZero16x16Func` and `pWelsBlockZero8x8Func` are installed by
+// `decode_slice.cpp:2992-2993` and called from nowhere in the C++ tree either, so
+// they and their two `_c` kernels went with the table rather than being kept as
+// dead ports of dead code.
 
 // ============================================================================
 // Core Decoder Structures
@@ -1036,49 +1030,25 @@ pub unsafe extern "C" fn WelsMap16x16NeighToSampleConstrain1(
 }
 
 // ============================================================================
-// SIMD Block Zeroing & NonZero Count Functions
+// Block Zeroing & NonZero Count Functions -- deleted at T4b.3c
 // ============================================================================
-
-pub unsafe fn WelsBlockInit(pBlock: *mut i16, iW: i32, iH: i32, iStride: i32, uiVal: u8) {
-    if pBlock.is_null() {
-        return;
-    }
-    for i in 0..iH {
-        std::ptr::write_bytes(
-            pBlock.offset((i * iStride) as isize) as *mut u8,
-            uiVal,
-            (iW as usize) * std::mem::size_of::<i16>(),
-        );
-    }
-}
-
-pub unsafe extern "C" fn WelsBlockZero16x16_c(pBlock: *mut i16, iStride: i32) {
-    WelsBlockInit(pBlock, 16, 16, iStride, 0);
-}
-
-pub unsafe extern "C" fn WelsBlockZero8x8_c(pBlock: *mut i16, iStride: i32) {
-    WelsBlockInit(pBlock, 8, 8, iStride, 0);
-}
-
-pub unsafe extern "C" fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
-    if pNonZeroCount.is_null() {
-        return;
-    }
-    for i in 0..24 {
-        if *pNonZeroCount.add(i) != 0 {
-            *pNonZeroCount.add(i) = 1;
-        }
-    }
-}
-
-pub unsafe fn WelsBlockFuncInit(pFunc: *mut SBlockFunc, iCpu: i32) {
-    if pFunc.is_null() {
-        return;
-    }
-    (*pFunc).pWelsSetNonZeroCountFunc = Some(WelsNonZeroCount_c);
-    (*pFunc).pWelsBlockZero16x16Func = Some(WelsBlockZero16x16_c);
-    (*pFunc).pWelsBlockZero8x8Func = Some(WelsBlockZero8x8_c);
-}
+//
+// `WelsBlockInit`, `WelsBlockZero16x16_c` and `WelsBlockZero8x8_c`
+// (`decode_slice.cpp:3021-3036`) were installed into `SBlockFunc`'s two zeroing
+// slots and **called from nowhere**, in this port and in the C++ tree alike; they
+// went with the table. `WelsBlockFuncInit` (`decode_slice.cpp:2990`) went with
+// them: its `iCpu` argument selected between `_c`, `_neon`, `_AArch64_neon` and
+// `_sse2` in the C++ and selected nothing here.
+//
+// This module's third `WelsNonZeroCount_c` went too. The C++ has **one**, in
+// `common/src/deblocking_common.cpp:248`; the port had three, and this one was the
+// copy that never got Phase 2's conversion -- a hand-written `if *p != 0 { *p = 1 }`
+// loop where the other two are shims over the safe `nonzero_count` kernel
+// (`(*v != 0) as i8`, the C++'s `!!`). The single reader below now calls
+// `common/deblocking_common.rs`'s shim, which is a plain `unsafe fn`: with no
+// `Option<fn>` slot to fill, the `extern "C"` this copy carried had nothing left to
+// satisfy. `encoder/deblocking.rs` keeps its own `extern "C"` copy for now because
+// `pfSetNZCZero` is still a slot -- that is the last member of this family.
 
 // ============================================================================
 // Macroblock Reconstruction Functions
@@ -2110,9 +2080,13 @@ pub unsafe fn WelsMbInterConstruction(
 
     WelsMbInterSampleConstruction(pCtx, pCurDqLayer, pDstY, pDstCb, pDstCr, iLumaStride, iChromaStride);
 
-    if let Some(nzc_func) = ctx.sBlockFunc.pWelsSetNonZeroCountFunc {
-        nzc_func((*dq.pNzc.add(dq.iMbXyIndex as usize)).as_mut_ptr());
-    }
+    // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
+    // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
+    // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
+    // so the guard is always true and is not transcribed.
+    crate::common::deblocking_common::WelsNonZeroCount_c(
+        (*dq.pNzc.add(dq.iMbXyIndex as usize)).as_mut_ptr(),
+    );
 
     ERR_NONE
 }
