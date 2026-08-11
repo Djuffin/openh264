@@ -232,9 +232,6 @@ pub type PChromaDeblockingLT4Func2 =
 pub type PChromaDeblockingEQ4Func2 =
     Option<unsafe extern "C" fn(iSampleCbr: *mut u8, iStride: i32, iAlpha: i32, iBeta: i32)>;
 
-pub type PWelsNonZeroCountFunc = Option<unsafe extern "C" fn(pNonZeroCount: *mut i8)>;
-pub type PWelsBlockZeroFunc = Option<unsafe extern "C" fn(block: *mut i16, stride: i32)>;
-
 // `PWelsFillNeighborMbInfoIntra4x4Func`, `PWelsMapNeighToSample` and
 // `PWelsMap16NeighToSample` were deleted at T4b.3. All three declared
 // `pNeighAvail: *mut c_void` and `extern "C"`, neither of which matched the functions
@@ -291,14 +288,6 @@ pub struct SDeblockingFunc {
     pub pfChromaDeblockingEQ4Hor2: PChromaDeblockingEQ4Func2,
 }
 pub type PDeblockingFunc = *mut SDeblockingFunc;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SBlockFunc {
-    pub pWelsSetNonZeroCountFunc: PWelsNonZeroCountFunc,
-    pub pWelsBlockZero16x16Func: PWelsBlockZeroFunc,
-    pub pWelsBlockZero8x8Func: PWelsBlockZeroFunc,
-}
 
 pub use crate::decoder::parameter_sets::SPosOffset;
 
@@ -712,7 +701,8 @@ pub struct SWelsDecoderContext {
     // both chroma entries the same function; `common/expand_pic.rs` names the
     // kernels directly now. This struct has no `assert_size!` and no offset pins,
     // so nothing moves with it.
-    pub sBlockFunc: SBlockFunc,
+    // T4b.3c: `sBlockFunc: SBlockFunc` sat here -- three slots of which the port
+    // and the C++ both read exactly one. See `decode_slice.rs`'s note.
     pub iCurSeqIntervalTargetDependId: i32,
     pub iCurSeqIntervalMaxPicWidth: i32,
     pub iCurSeqIntervalMaxPicHeight: i32,

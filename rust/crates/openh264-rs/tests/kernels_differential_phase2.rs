@@ -2272,22 +2272,30 @@ fn encoder_deblocking_table_installs_the_common_shims() {
     }
 }
 
-/// The third and fourth copies of `WelsNonZeroCount_c`: `common` has the shim,
-/// and both `encoder/deblocking.rs` and `decoder/decode_slice.rs` keep raw
-/// duplicates that their own tables install. All of them must agree.
+/// The remaining copies of `WelsNonZeroCount_c`: `common` has the shim over the
+/// safe kernel, and `encoder/deblocking.rs` keeps a raw `extern "C"` duplicate
+/// because `SWelsFuncPtrList::pfSetNZCZero` is still an `Option<fn>` slot and a
+/// plain `unsafe fn` cannot fill one. They must agree.
+///
+/// **This test had a third arm until T4b.3c**, over `decoder/decode_slice.rs`'s
+/// copy — the one that never got Phase 2's conversion and was still a hand-written
+/// `if *p != 0 { *p = 1 }` loop. T4b.3c deleted `sBlockFunc`, the table that
+/// installed it, and pointed its single reader at the `common` shim; the copy went
+/// with the table. The arm is dropped rather than the test, because the duplicate
+/// it guarded no longer exists — and it is worth recording that **this test is what
+/// proved the deletion safe**, having asserted the two bodies byte-equal over 50
+/// random 24-entry inputs since Phase 2. It also caught the deletion, by failing to
+/// compile.
 #[test]
 fn nonzero_count_duplicates_agree() {
     let mut rng = Prng::new(0x0E0F_0003);
     for _ in 0..scale(50) {
         let seed: Vec<i8> = (0..24).map(|_| rng.range_i32(-128, 127) as i8).collect();
         let mut a: [i8; 24] = seed.clone().try_into().unwrap();
-        let mut b: [i8; 24] = seed.clone().try_into().unwrap();
         let mut c: [i8; 24] = seed.try_into().unwrap();
         unsafe { encdeb::WelsNonZeroCount_c(a.as_mut_ptr()) };
-        unsafe { openh264_rs::decoder::decode_slice::WelsNonZeroCount_c(b.as_mut_ptr()) };
         deb::nonzero_count(&mut c);
         assert_eq!(a, c, "encoder copy disagrees with the safe kernel");
-        assert_eq!(b, c, "decoder copy disagrees with the safe kernel");
     }
 }
 
