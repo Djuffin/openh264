@@ -1006,6 +1006,42 @@ The phase's ~7-point CB allowance is intact going into T3.2, which is the seam t
 actually spend it (`DecodeBinCabac` was 4a's largest single decode consumer at 544
 self-samples).
 
+### T3.2 — the CABAC engine's pointer triple becomes `pos` (2026-08-10, session C)
+
+Instrument: `perfpair.py`, A = `t32-control` (`eae61b94`, the F17-fixed gate, engine
+raw), B = `t32-head` (`00c6cf9f`), `FFMPEG` set. Session floor from `null t32-head`,
+3 pairs: **decode ≈±2%** (median −0.27%, min −2.05% — the Main row moved 2% between
+runs of one binary; the machine had been running batteries all day), encode median
+−0.13%, min −3.46%, max +5.80% — a materially wider floor than session B's ±0.4%,
+which sets what "signal" means below.
+
+| | 3-pair medians |
+|---|---|
+| decode Constrained Baseline (CAVLC) | +0.19% |
+| decode Main (CABAC, B-frames) | **+0.76%** |
+| decode High (CABAC, 8×8) | **+0.27%** |
+| decode median | +0.27% |
+| encoder median, 28 rows | +0.00% (min −0.92%, max +2.94%) |
+
+**This time the CABAC rows are the signal and they are inside the floor** — the exact
+band the phase brief's §4 predicted for a conversion whose literal bit-counts stay
+literal ("flat-to-win"). CB is the cross-check (its reads are CAVLC's) and is flat.
+The encoder is the required wash: the seam changes zero bytes of `src/encoder/`.
+
+The number to keep is not the bench delta but the **disassembly diff that preceded
+it** (S1 step 1/3, in the log entry): the first converted shape *failed* that
+comparison — `Read32BitsCabac` stopped inlining (a stack frame per bin) and the
+ladder's `_` arm re-checked the length (three `panic_bounds_check` paths) — and was
+restructured (`#[inline(always)]` + a `first_chunk::<N>()` chain, common arm first)
+before any bench ran. Final shape: refill fully inlined, zero buffer bounds checks,
+the range/offset `ldp` preserved, 122 vs ~121 instructions. Both defects passed every
+test; only the disassembly saw them.
+
+**No ledger row is opened.** Cumulative decode stays ≈ **+17.8 / +9.6 / +10.1%**
+(tripwire arithmetic: +0.2/+0.8/+0.3 on top changes nothing at the 0.1 level against
+a ±2% floor). The CB allowance is still intact; what is left of the phase's decode
+work is T3.3's ownership seam, which touches no per-bin path.
+
 ---
 
 ## How to use this in later phases
