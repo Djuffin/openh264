@@ -400,3 +400,31 @@ demands MT determinism across thread counts; this finding says that gate must be
 run *repeatedly*, not once, because the bug's natural frequency is well below one
 sweep. Until then, do not add `t=4 sm=3` results to any pass/fail automation
 without a retry.
+
+### Ninth measurement — 2026-08-10, Phase 3 session B: the first HEAD-vs-control alternation
+
+Two hits in one session's debug sweeps (`mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600
+cabac=1 rc=0`, then `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1`),
+release 341/341 both times. Two hits triggers S14's alternation clause, which had never
+actually been executed before — prior sessions re-ran the single configuration and moved
+on.
+
+Protocol: control = `1bf5a235`, built in a **separate git worktree** so both `rust_enc`
+binaries were on disk simultaneously, then 6 rounds × the 120-configuration `mt` preset
+per side, alternating inside one loop (the correctness analogue of S1's interleaving).
+
+| tree | encodes | `sm=3` zero-byte failures |
+|---|---|---|
+| control `1bf5a235` | 720 | **2** (rounds 5, 6) |
+| HEAD (T3.1b) | 720 | **0** |
+
+**The control side failed more.** Combined with the seam changing zero bytes of
+`src/encoder/` and `src/common/`, this is as clean a negative as the protocol produces.
+Rate over the session: 4 hits in ~1560 `mt sm=3`-bearing encodes ≈ 1/390, the upper end
+of the 1/400–1000 band, on a machine that spent the session running gate batteries —
+consistent with "rises an order of magnitude on a loaded machine".
+
+The methodological point worth keeping: the tempting argument ("this seam is
+decoder-only, it *cannot* have caused an encoder race") is exactly the kind S14 exists
+to distrust, and running the alternation cost about ten minutes against the alternative
+of a plausible-sounding dismissal.

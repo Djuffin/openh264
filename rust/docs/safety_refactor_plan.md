@@ -20,10 +20,10 @@ proposal and its accumulated history, and stays as written.*
 | **The finding that governs Phases 5/6** | **Direct dispatch recovers per-call scaffolding only where the caller supplies constant dimensions.** Encoder call sites pass literal block sizes and recovered; the decoder's arrive as parameters through `BaseMC` (~1300 instructions, not inlinable) and recovered nothing. Measured on two families in both codecs, with the `#[inline]` fixes built and reverted rather than reasoned about. **Every remaining decode ledger row is downgraded to Phase 5**, which is the phase that makes those dimensions static |
 | **Ledger** | **No row is `pending`.** Two closed as noise, two downgraded to Phase 5 with the reason, four carried into the aggregate ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
 | **Parked** | `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7) — **re-attempted and re-parked 2026-08-10**, second dated verdict, on a rebuilt harness (1.41x–4.94x against a ≤1.05x bar). One debt owed: SATD still has no measurement of its own |
-| **Ratchet** | `unsafe_fn` 1346, `raw_ptr` 5171, `SHIM(` 154, `no_mangle` 24, **`transmute` 23 — unchanged, and that is 4a's main unfinished business**. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
-| **Gates** | 410 debug / 408 release / 20 ignored. Sweeps 341/341 both profiles. **Miri widened again: 274 tests, one skip deleted** (`svc_mode_decision`); three remain (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`) |
+| **Ratchet** | *(T3.1 exit, 2026-08-10)* `unsafe_fn` **1334**, `raw_ptr` **5109**, `SHIM(` **157**, `no_mangle` 24, **`transmute` 23 — unchanged, and that is 4a's main unfinished business**. T3.1b is the first seam where `raw_ptr`/`unsafe_fn` fell hard (−63/−15) rather than staying flat. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Gates** | *(T3.1 exit)* **430 debug / 424 release / 20 ignored**; T3.0's **2316 malformed-stream golden rows** are now part of the battery. Sweeps 341/341 both profiles (F3 per S14). Miri **285 tests**, same three skips (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`) — **but see F17: the Miri step cannot fail, so that number was read from the log by hand** |
 | **Standing rules** | **§7.6** below. Phase 3+ briefs cite it rather than copying rules forward. New instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
-| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1–F3 (F3 has an **eighth** measurement), [`phase1_findings.md`](phase1_findings.md) F4–F7, [`phase2_findings.md`](phase2_findings.md) **F8–F14**. F13's fourth site is **fixed**; **F14 is new and fixed** — production UB, found the moment F13 stopped blocking Miri |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1–F3 (F3 has a **ninth** measurement, and its first proper HEAD-vs-control alternation: control 2 hits, HEAD 0), [`phase1_findings.md`](phase1_findings.md) F4–F7, [`phase2_findings.md`](phase2_findings.md) F8–F14, [`phase3_findings.md`](phase3_findings.md) **F15–F17**. **F15** open, T3.3's to fix. **F16** found and fixed inside T3.1b (`READER_SLOP` was not the readable extent — a warning for T3.2). **F17 is open and is a gate defect: `gates.sh`'s two Miri steps test `tail`'s exit status, so the Miri gate has never been able to fail** — fix it before T3.2 |
 | **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, F14, and F3's eighth measurement** — re-raising T7 is Eugene's call |
 
 **Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
@@ -198,6 +198,8 @@ pub struct BsWriter { pos: usize, cur_bits: u32, left_bits: i32 }
 - **[P1] `BsWriter` implements only the canonical (`vlc_encoder.rs`) semantics.** No guard, no masking, no wrapping variant is smuggled in from the other three copies — Phase 3.2 must decide those explicitly (F2). Building it turned up [`phase1_findings.md`](phase1_findings.md) §F5: the canonical writer panics in debug builds on a 32-bit write into an empty accumulator; `BsWriter` does not, and a test pins both profiles.
 - **[P3] `BsCursor` gains explicit CAVLC-mode support — the Phase 1 omission of `iIndex` was wrong** (found by T3.1b's inventory: `BsStartCavlc`/`BsEndCavlc`, `parse_mb_syn_cavlc.rs:2230-2248`, and the residual path between them are live consumers). `iIndex` is a *second representation of the same position* — an absolute bit index the CAVLC residual decode reads through while the accumulator is deliberately stale. Decision: mirror it 1:1 as a mode, not a parallel field to keep coherent by hand: `cavlc_bit_pos: isize` + `start_cavlc()` (`(pos << 3) − (16 − left_bits)`, the 16-bit half-window convention preserved exactly) + `end_cavlc(buf)` (reseat `pos = idx >> 3`, 4-byte BE prime shifted by `idx & 7`, `pos += 4`, `left_bits = −16 + (idx & 7)` — negative on purpose, parity-exact), plus a `#[cfg(debug_assertions)]` mode flag asserted by both families of accessors so the stale-accumulator misuse the C++ could never detect panics in debug. Differential-tested against the raw pair on random states and round-trips before T3.1b converts any consumer. The mode dissolves when Phase 5 restructures the residual path; until then the field accessors are the consumers' mechanical conversion target.
 - **[P3] P6's resolution is `READER_SLOP = 3` over the real allocation — not zero guard bytes.** T3.1a established that the slop bytes **feed decoded values on some malformed streams**, not just the error predicate, so zeroing them would have changed output; the reader instead declares the slack it always read and is handed the genuine allocation bytes (`decoder_core.rs:3637` guarantees them). Byte-identical by construction, proven by T3.0's 2316 goldens + all 53 conformance hashes.
+- **[P3] T3.1b's storage shape deviates from the brief's default: `BsReader`, not a bare `*mut BsCursor`.** The plan makes `BsCursor` *detached* (§2.1.3 — offsets only, no buffer reference), and the ~20 decoder consumers do take `(buf: &[u8], cursor: &mut BsCursor)` as specified. But until T3.3 the bytes live behind `sRawData`'s pointers, so something must remember where a given reader's bytes start *and how many are readable*. `BsReader { base, avail, cursor }` is that something: one `SHIM(phase3)` type, one `buf()` that reconstructs the slice, one thing for T3.3 to delete. The rejected alternative — base and extent as loose fields beside each cursor, kept coherent by hand — is the same shape this section rejected for `iIndex` above, and for the same reason. `SDqLayer::pBitStringAux` is therefore `*mut BsReader` (the pointer is Phase 5's to remove; the base and extent inside it are T3.3's).
+- **[P3] `READER_SLOP` is not the readable extent — corrected at T3.1b, `phase3_findings.md` §F16.** The `= 3` derivation covers `dump_bits_aux` only. `BsEndCavlc` primes **four** bytes at `iIndex >> 3`, and `iIndex` is advanced by the residual decoder past the RBSP end without bound on truncated input — measured reaching `len + 5` and beyond. The readable extent is a property of the *allocation*, not a constant offset from the RBSP length, and `decoder_core.rs:3637`'s `len + 4` guarantee is not sufficient either. `BsReader::avail` carries it, computed by the one `readable_from(pHead, pEnd, …)` helper. **T3.2's CABAC end ladder and 5-byte init prime must take their extent from the same helper, not re-derive one.**
 
 - `SDataBuffer{pHead,pEnd,pStartPos,pCurPos}` → `Vec<u8>` + two `usize` offsets. `ExpandBsBuffer`'s pointer-rebasing block (`decoder_core.rs:1816-1842`) is deleted, not converted — offsets survive realloc by definition.
 - NAL units store `Range<usize>` into the AU buffer instead of `pNalPos: *mut u8`.
@@ -1207,13 +1209,22 @@ in the log's Phase 4a entry).
       construction. **F7 fixed**, both sites, with both differential accommodations
       deleted in the same commit and the comparisons widened to their whole ranges.
       Decode +0.45% (3 pairs), from shim field-marshalling that T3.1b deletes.
-- [ ] **T3.1b** — `ctx.sBs` and `SVclNal::sSliceBitsRead` become `BsCursor` + a buffer
-      at the call site; ~20 consumer functions move from `pBs` to `(buf, &mut cursor)`;
-      `SDqLayer::pBitStringAux` gets its Phase 5 shell. **Unblocked 2026-08-10**: the
-      `iIndex` gap is resolved by §2.2.2 **[P3]** — `BsCursor` gains a CAVLC mode
-      (`cavlc_bit_pos` + `start_cavlc`/`end_cavlc`, parity-exact incl. the −16
-      half-window, debug-only mode assert). **Build and differential-prove the mode
-      first, then convert consumers** — the mode's tests are step 0 of T3.1b.
+- [x] **T3.1b — DONE**, and with it **T3.1 closes**. Step 0 (`1bf5a235`): `BsCursor`
+      gains the CAVLC mode per §2.2.2 **[P3]** — `cavlc_bit_pos` + `start_cavlc`/
+      `end_cavlc`, parity-exact including the −16 half-window, plus the debug-only
+      coherence guard and a hand-written `PartialEq` over the six C-mirrored fields;
+      differential-proven against the raw pair, three mutations killed, before any
+      consumer moved. The ownership move: `ctx.sBs` and `SVclNal::sSliceBitsRead` become
+      `BsReader` (§2.2.2 [P3]'s recorded deviation from a bare `BsCursor`), 20 consumer
+      functions move from `pBs` to `(buf, &mut cursor)`, `SDqLayer::pBitStringAux`
+      becomes `*mut BsReader`, and T3.1a's marshalling layer
+      (`cursor_of`/`store_cursor`/`read_with`/`BsCursor::from_parts`) is **deleted**.
+      The reader family is now **safe fns** — no `unsafe` left in `dec_golomb.rs`'s
+      entry points. `ExpandBsBuffer`'s three pointer rebases collapse to one (P5's
+      prediction, early). Found and fixed **F16** (`READER_SLOP` is not the readable
+      extent — `BsEndCavlc`'s prime is unbounded on truncated input); the reader half of
+      `safe_bits_differential.rs` is retired per §2, with a frozen transliteration of
+      the CAVLC pair kept as the parity reference.
 - [ ] T3.2 CABAC engine · T3.3 `SDataBuffer` → owned buffer + `nalu.rs` ranges (F15 dies
       here) · T3.4 writer dedupe + `BsWriter` (F2, F5, F13's `InitBits` site) · T3.5
       encoder CABAC triple + rollback · T3.6 `nal_encap.rs` + exit
