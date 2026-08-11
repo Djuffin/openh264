@@ -50,9 +50,6 @@ pub use crate::encoder::encoder_context::SMVComponentUnit;
 // Constants & Configuration Limits
 // ============================================================================
 
-pub const WELS_CONTEXT_COUNT: usize = 460;
-pub const WELS_QP_MAX: i32 = 51;
-
 pub const LEFT_MB_POS: u8 = 0x01;
 pub const TOP_MB_POS: u8 = 0x02;
 pub const TOPRIGHT_MB_POS: u8 = 0x04;
@@ -115,11 +112,6 @@ pub const uiLastCoeffFlagOffset: [u16; 5] = [0, 15, 29, 44, 47];
 pub const uiCoeffAbsLevelMinus1Offset: [u16; 5] = [0, 10, 20, 30, 39];
 pub const uiCodecBlockFlagOffset: [u16; 5] = [0, 4, 8, 12, 16];
 
-pub const g_kiClz5Table: [i8; 32] = [
-    6, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-];
-
 pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
 pub const g_kiMapModeIntraChroma: [i8; 7] = [0, 1, 2, 3, 0, 0, 0];
 
@@ -149,43 +141,6 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
     28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37,
     37, 38, 38, 38, 39, 39, 39, 39,
 ];
-
-pub const g_kuiCabacRangeLps: [[u8; 4]; 64] = [
-    [128, 176, 208, 240], [128, 167, 197, 227], [128, 158, 187, 216], [123, 150, 178, 205],
-    [116, 142, 169, 195], [111, 135, 160, 185], [105, 128, 152, 175], [100, 122, 144, 166],
-    [95, 116, 137, 158],  [90, 110, 130, 150],  [85, 104, 123, 142],  [81, 99, 117, 135],
-    [77, 94, 111, 128],   [73, 89, 105, 122],   [69, 85, 100, 116],   [66, 80, 95, 110],
-    [62, 76, 90, 104],    [59, 72, 86, 99],     [56, 69, 81, 94],     [53, 65, 77, 89],
-    [51, 62, 73, 85],     [48, 59, 69, 80],     [46, 56, 66, 76],     [43, 53, 63, 72],
-    [41, 50, 59, 69],     [39, 48, 56, 65],     [37, 45, 54, 62],     [35, 43, 51, 59],
-    [33, 41, 48, 56],     [32, 39, 46, 53],     [30, 37, 43, 50],     [29, 35, 41, 48],
-    [27, 33, 39, 45],     [26, 31, 37, 43],     [24, 30, 35, 41],     [23, 28, 33, 39],
-    [22, 27, 32, 37],     [21, 26, 30, 35],     [20, 24, 29, 33],     [19, 23, 27, 31],
-    [18, 22, 26, 30],     [17, 21, 25, 28],     [16, 20, 23, 27],     [15, 19, 22, 25],
-    [14, 18, 21, 24],     [14, 17, 20, 23],     [13, 16, 19, 22],     [12, 15, 18, 21],
-    [12, 14, 17, 20],     [11, 14, 16, 19],     [11, 13, 15, 18],     [10, 12, 15, 17],
-    [10, 12, 14, 16],     [9, 11, 13, 15],      [9, 11, 12, 14],      [8, 10, 12, 14],
-    [8, 9, 11, 13],       [7, 9, 11, 12],       [7, 9, 10, 12],       [7, 8, 10, 11],
-    [6, 8, 9, 11],        [6, 7, 9, 10],        [6, 7, 8, 9],         [2, 2, 2, 2],
-];
-
-pub const g_kuiStateTransTable: [[u8; 2]; 64] = [
-    [0, 1],   [0, 2],   [1, 3],   [2, 4],   [2, 5],   [4, 6],   [4, 7],   [5, 8],
-    [6, 9],   [7, 10],  [8, 11],  [9, 12],  [9, 13],  [11, 14], [11, 15], [12, 16],
-    [13, 17], [13, 18], [15, 19], [15, 20], [16, 21], [16, 22], [18, 23], [18, 24],
-    [19, 25], [19, 26], [21, 27], [21, 28], [22, 29], [22, 30], [23, 31], [24, 32],
-    [24, 33], [25, 34], [26, 35], [26, 36], [27, 37], [27, 38], [28, 39], [29, 40],
-    [29, 41], [30, 42], [30, 43], [30, 44], [31, 45], [32, 46], [32, 47], [33, 48],
-    [33, 49], [33, 50], [34, 51], [34, 52], [35, 53], [35, 54], [35, 55], [36, 56],
-    [36, 57], [36, 58], [37, 59], [37, 60], [37, 61], [38, 62], [38, 62], [63, 63],
-];
-
-// ============================================================================
-// Core CABAC & Encoder Data Structures
-// ============================================================================
-
-pub type cabac_low_t = u64;
-pub const CABAC_LOW_WIDTH: usize = 64;
 
 
 
@@ -220,188 +175,31 @@ pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 // have returned `iSpsId`. It was dead code, and it is deleted rather than fixed.
 
 
+
 // ============================================================================
 // Low-Level CABAC Bitstream & Arithmetic Routines
 // ============================================================================
-
-#[inline]
-pub unsafe fn PropagateCarry(mut pBufCur: *mut u8, pBufStart: *mut u8) {
-    unsafe {
-        while pBufCur > pBufStart {
-            pBufCur = pBufCur.sub(1);
-            let prev = *pBufCur;
-            *pBufCur = prev.wrapping_add(1);
-            if *pBufCur != 0 {
-                break;
-            }
-        }
-    }
-}
-
-#[inline]
-pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(pCbCtx: *mut SCabacCtx) {
-    unsafe {
-        let mut iLowBitCnt = (*pCbCtx).m_iLowBitCnt;
-        let mut iRenormCnt = (*pCbCtx).m_iRenormCnt;
-        let mut uiLow = (*pCbCtx).m_uiLow;
-
-        loop {
-            let mut pBufCur = (*pCbCtx).m_pBufCur;
-            let kiInc = (CABAC_LOW_WIDTH as i32) - 1 - iLowBitCnt;
-
-            uiLow <<= kiInc;
-            if (uiLow & (1u64 << ((CABAC_LOW_WIDTH as i32) - 1))) != 0 {
-                PropagateCarry(pBufCur, (*pCbCtx).m_pBufStart);
-            }
-
-            if CABAC_LOW_WIDTH > 32 {
-                let be32 = ((uiLow >> 31) as u32).to_be_bytes();
-                std::ptr::copy_nonoverlapping(be32.as_ptr(), pBufCur, 4);
-                pBufCur = pBufCur.add(4);
-            }
-            *pBufCur = (uiLow >> 23) as u8;
-            pBufCur = pBufCur.add(1);
-            *pBufCur = (uiLow >> 15) as u8;
-            pBufCur = pBufCur.add(1);
-
-            iRenormCnt -= kiInc;
-            iLowBitCnt = 15;
-            uiLow &= (1u64 << iLowBitCnt) - 1;
-            (*pCbCtx).m_pBufCur = pBufCur;
-
-            if iLowBitCnt + iRenormCnt <= (CABAC_LOW_WIDTH as i32) - 1 {
-                break;
-            }
-        }
-
-        (*pCbCtx).m_iLowBitCnt = iLowBitCnt + iRenormCnt;
-        (*pCbCtx).m_uiLow = uiLow << iRenormCnt;
-    }
-}
-
-#[inline(always)]
-pub unsafe fn WelsCabacEncodeUpdateLow_(pCbCtx: *mut SCabacCtx) {
-    unsafe {
-        let low_bit_cnt = (*pCbCtx).m_iLowBitCnt;
-        let renorm_cnt = (*pCbCtx).m_iRenormCnt;
-        if (low_bit_cnt + renorm_cnt) < (CABAC_LOW_WIDTH as i32) {
-            (*pCbCtx).m_iLowBitCnt += renorm_cnt;
-            (*pCbCtx).m_uiLow <<= renorm_cnt;
-        } else {
-            WelsCabacEncodeUpdateLowNontrivial_(pCbCtx);
-        }
-        (*pCbCtx).m_iRenormCnt = 0;
-    }
-}
-
-#[inline]
-pub unsafe fn WelsCabacEncodeDecisionLps_(pCbCtx: *mut SCabacCtx, iCtx: i32) {
-    unsafe {
-        let kiState = (*pCbCtx).m_sStateCtx[iCtx as usize].State() as usize;
-        let mut uiRange = (*pCbCtx).m_uiRange;
-        let uiRangeLps = g_kuiCabacRangeLps[kiState][((uiRange & 0xff) >> 6) as usize] as u32;
-        uiRange = uiRange.wrapping_sub(uiRangeLps);
-
-        let mps = (*pCbCtx).m_sStateCtx[iCtx as usize].Mps();
-        let next_mps = mps ^ if kiState == 0 { 1 } else { 0 };
-        (*pCbCtx).m_sStateCtx[iCtx as usize].Set(g_kuiStateTransTable[kiState][0], next_mps);
-
-        WelsCabacEncodeUpdateLow_(pCbCtx);
-        (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add(uiRange as u64);
-
-        let kiRenormAmount = g_kiClz5Table[(uiRangeLps >> 3) as usize] as i32;
-        (*pCbCtx).m_uiRange = uiRangeLps << kiRenormAmount;
-        (*pCbCtx).m_iRenormCnt = kiRenormAmount;
-    }
-}
-
-#[inline(always)]
-pub unsafe fn WelsCabacEncodeDecision(pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: u32) {
-    unsafe {
-        if (uiBin as u8) == (*pCbCtx).m_sStateCtx[iCtx as usize].Mps() {
-            let kiState = (*pCbCtx).m_sStateCtx[iCtx as usize].State() as usize;
-            let mut uiRange = (*pCbCtx).m_uiRange;
-            let uiRangeLps = g_kuiCabacRangeLps[kiState][((uiRange & 0xff) >> 6) as usize] as u32;
-            uiRange = uiRange.wrapping_sub(uiRangeLps);
-
-            let kiRenormAmount = ((uiRange >> 8) ^ 1) as i32;
-            (*pCbCtx).m_uiRange = uiRange << kiRenormAmount;
-            (*pCbCtx).m_iRenormCnt += kiRenormAmount;
-            (*pCbCtx).m_sStateCtx[iCtx as usize].Set(g_kuiStateTransTable[kiState][1], uiBin as u8);
-        } else {
-            WelsCabacEncodeDecisionLps_(pCbCtx, iCtx);
-        }
-    }
-}
-
-#[inline(always)]
-pub unsafe fn WelsCabacEncodeBypassOne(pCbCtx: *mut SCabacCtx, uiBin: i32) {
-    unsafe {
-        (*pCbCtx).m_iRenormCnt += 1;
-        WelsCabacEncodeUpdateLow_(pCbCtx);
-        if uiBin != 0 {
-            (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add((*pCbCtx).m_uiRange as u64);
-        }
-    }
-}
-
-#[inline]
-pub unsafe fn WelsCabacEncodeTerminate(pCbCtx: *mut SCabacCtx, uiBin: u32) {
-    unsafe {
-        (*pCbCtx).m_uiRange = (*pCbCtx).m_uiRange.wrapping_sub(2);
-        if uiBin != 0 {
-            WelsCabacEncodeUpdateLow_(pCbCtx);
-            (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add((*pCbCtx).m_uiRange as u64);
-
-            let kiRenormAmount: i32 = 7;
-            (*pCbCtx).m_uiRange = 2 << kiRenormAmount;
-            (*pCbCtx).m_iRenormCnt = kiRenormAmount;
-
-            WelsCabacEncodeUpdateLow_(pCbCtx);
-            (*pCbCtx).m_uiLow |= 0x80;
-        } else {
-            let kiRenormAmount = (((*pCbCtx).m_uiRange >> 8) ^ 1) as i32;
-            (*pCbCtx).m_uiRange <<= kiRenormAmount;
-            (*pCbCtx).m_iRenormCnt += kiRenormAmount;
-        }
-    }
-}
-
-#[inline]
-pub unsafe fn WelsCabacEncodeUeBypass(pCbCtx: *mut SCabacCtx, iExpBits: i32, uiVal: u32) {
-    unsafe {
-        let mut iSufS = uiVal as i32;
-        let mut iStopLoop = 0;
-        let mut k = iExpBits;
-        while iStopLoop == 0 {
-            if iSufS >= (1 << k) {
-                WelsCabacEncodeBypassOne(pCbCtx, 1);
-                iSufS -= 1 << k;
-                k += 1;
-            } else {
-                WelsCabacEncodeBypassOne(pCbCtx, 0);
-                while k > 0 {
-                    k -= 1;
-                    WelsCabacEncodeBypassOne(pCbCtx, (iSufS >> k) & 1);
-                }
-                iStopLoop = 1;
-            }
-        }
-    }
-}
-
-#[inline]
-pub unsafe fn WelsCabacEncodeInit(pCbCtx: *mut SCabacCtx, pBuf: *mut u8, pEnd: *mut u8) {
-    unsafe {
-        (*pCbCtx).m_uiLow = 0;
-        (*pCbCtx).m_iLowBitCnt = 9;
-        (*pCbCtx).m_iRenormCnt = 0;
-        (*pCbCtx).m_uiRange = 510;
-        (*pCbCtx).m_pBufStart = pBuf;
-        (*pCbCtx).m_pBufEnd = pEnd;
-        (*pCbCtx).m_pBufCur = pBuf;
-    }
-}
+//
+// There are none here any more, and that is the point. Upstream splits the two
+// CABAC files exactly this way: `set_mb_syn_cabac.cpp` owns the arithmetic
+// engine, `svc_set_mb_syn_cabac.cpp` owns only the macroblock *syntax* that
+// drives it. The port had transliterated the engine a second time into this
+// module — nine functions and five tables — and because a module-local item
+// beats a `use`, this file's syntax layer silently ran the local copy while
+// `WelsWriteSliceEndSyn` flushed through the canonical one. Two engines, one
+// `SCabacCtx`, split across a slice.
+//
+// That exact mechanism has already produced one real defect in this file: see
+// the `BsAlign` note below, where a local copy missing its trailing `BsFlush`
+// beat the import and corrupted every CABAC slice's first bytes. The engine is
+// now imported, once, and the shadowing cannot recur.
+pub use crate::encoder::set_mb_syn_cabac::{
+    cabac_low_t, g_kiClz5Table, g_kuiCabacRangeLps, g_kuiStateTransTable, PropagateCarry,
+    WelsCabacEncodeBypassOne, WelsCabacEncodeDecision, WelsCabacEncodeDecisionLps_,
+    WelsCabacEncodeInit, WelsCabacEncodeTerminate, WelsCabacEncodeUeBypass,
+    WelsCabacEncodeUpdateLow_, WelsCabacEncodeUpdateLowNontrivial_, CABAC_LOW_WIDTH,
+    WELS_CONTEXT_COUNT, WELS_QP_MAX,
+};
 
 // `BsAlign` — svc_enc_golomb.h:112. This module used to declare its own copy
 // **without the trailing `BsFlush (pBs)`**, and being a local item it beat the
