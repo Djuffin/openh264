@@ -1,211 +1,163 @@
-# Phase 5 — the decoder structural rewrite, session A
+# Phase 5 — decoder structural rewrite
 
-> **This is the phase brief**, written at Phase 4b's exit (2026-08-11) per S19. It is
-> the first *pivot* phase: Phases 2–4 changed how code is reached, Phase 5 changes what
-> owns memory. Every count below was greped at `f2e3c5af`. **S24 applies to all of
-> them — re-grep in the session that acts on them.** Phase 4b earned that rule by
-> having two scouted premises fail in one brief, and then a third fail in its successor.
+Scope: plan §5's 5.1–5.6, in that order. Rules: plan §7.6 — S20/S21/S24/S25 bind
+every struct edit here. Perf: §7.4 (D-perf-4, S2b). Before starting, read Phase 4b's
+session B and C log entries (F19, F21) and this file whole. This file supersedes on
+disagreement; fix disagreements in place. Counts below were measured at `263c71b2`;
+re-grep before acting on any of them (S24).
 
-**Governing:** [`safety_refactor_plan.md`](../safety_refactor_plan.md) — §0 for where
-the port stands, **§5 for the 5.1–5.6 order**, §7.6 for S1–S25, §7.4 for the deficit
-ledger this phase is expected to clear. Read Phase 4b's three log entries before
-starting; the two that matter most are session B's (F19, and why an ownership audit
-finds what no gate can) and session C's (F21, and why a duplicate family is a
-divergence that has not happened yet). This file scopes the session and supersedes on
-disagreement; fix disagreements in place.
+Estimated 9–12 sessions. Per-session scope is the **S20 closure, not the file** —
+compute it first, write it down, size commits by it. Enumerate the S25 re-entrancy
+audit (who else reaches this object while I hold a borrow?) together with the
+closure. In all constructor work, run F19's check per allocation: *which line frees
+this?*
 
----
+## 0. Session start
 
-## 0. Start here
+1. Commit any inherited doc tail first.
+2. Control battery: `bash rust/tools/gates.sh full` **from the repo root**.
+   `OVERALL:` is the verdict. Expected: **435 debug / 429 release / 20 ignored**,
+   Miri **295**, sweeps 341/341 both profiles.
+3. Recount every number you are about to rely on.
 
-Tree at session start: clean at Phase 4b's exit. Run the control battery —
-`bash rust/tools/gates.sh full` **from the repo root** — and recount: **435 debug /
-429 release / 20 ignored**, Miri **295**, sweeps 341/341 both profiles. The recount
-rule has now paid fifteen times.
+**F3** — known encoder MT race, not this phase's to fix; acquit and move on:
+- Signature: `mt sm=3 n=600 t∈{2,4}`, wrong-length output (zero, short, long all
+  count). Rate ≈ 1/800 configs under sustained load, ≈ 1/100–150 on susceptible
+  configs.
+- One hit → re-run that configuration 5×; a reproduction in isolation is valid
+  evidence. Two different wrong lengths from one binary+config = race, not
+  divergence.
+- Two hits → alternate whole `mt` presets back to back, 12 per side, both binaries
+  built once and swapped inside one loop, machine otherwise idle. Expect hits on
+  both sides; the question is whether HEAD is worse.
 
-**F3, per S23b and session C's sharpening.** Signature: `mt`, `sm=3`, **`n=600`**,
-`t∈{2,4}`, wrong-length output of any form (zero, short and long are one signature).
+## 1. Session A
 
-* **`n=600`, not `sm=3` generally** — session C's nine hits were all the tighter byte
-  constraint, never `n=1500`. Per-susceptible-configuration rate ≈ **1 in 100–150**;
-  ≈ 1 in 800 over all configurations. The two agree once divided by the susceptible
-  fraction (24 of an `mt` sweep's 120).
-* A session-start hit is a **tendency, not a rule** — three of the last six.
-* Single hit → re-run that configuration 5×. **A reproduction in isolation is
-  evidence**, not the non-result session A took it for; the variable is recent load,
-  not isolation, and session C reproduced 1-in-5 straight after a battery. Run it
-  before the expensive alternation, not instead of it.
-* Two hits → escalate. **Escalation alternates whole `mt` presets back to back**,
-  binaries built once and swapped inside one loop, nothing else on the machine. Twelve
-  per side. Session C's alternation eight is the worked example and the first that was
-  not 0/0: base 2/12, head 3/12, and the *head* side hit one configuration twice with
-  two different wrong lengths — this finding's own race criterion, met on the tree
-  under suspicion. **That is the strongest available acquittal**; prefer it to a rate
-  comparison when you can get it.
-* Twenty measurements, eight alternations, eight acquittals. Nobody has looked for the
-  cause yet. It is a *multithreaded encoder* race; Phase 5 is the decoder, so this
-  phase should expect to keep acquitting rather than fixing.
+### Face 1 — duplicate census (the T4b.3c/F21 class, enumerated up front)
 
----
+Three instruments, none currently in `gates.sh`:
 
-## 1. What this phase is, and the unit of work
+- `sh rust/tools/find_dup_types.sh` — currently a **252-line report**: 17 duplicate
+  types, 34 aliases, **27 tables**, **37 value-divergent constants**. The
+  within-decoder type duplicates sit on this phase's own targets:
+  `SPartMbInfo` ×4 (`decode_slice.rs:467`, `mv_pred.rs:189`,
+  `parse_mb_syn_cabac.rs:258`, `parse_mb_syn_cavlc.rs:304`), `SMbCache` ×2 in the
+  decoder (`decoder_context.rs:546`, `decoder_core.rs:445`), `SPpsBsInfo` ×2,
+  `SLastDecPicInfo` ×2, `SLayerInfo`, `SLogContext`, `SNalUnitHeader(Ext)`,
+  `EWelsSliceType` ×3, `SDeblockingFunc` ×2.
+- `python3 rust/tools/find_stub_bodies.py --dups` — duplicate fn bodies under one
+  name.
+- `grep -rn 'as \*mut _ as \*mut' src/` — **121** double casts (type laundering the
+  `transmute` metric cannot see).
 
-**Per-session scope is the S20 closure, not the file.** This is the single most
-important line in this brief. Phase 3's T3.4 proved that a signature change drags
-every reachable struct into one commit; Phase 4b confirmed it twice more. Compute the
-closure **first**, write it down, and let it size the commit — a step of plan §5 is
-often two or three commits, and `5.2` is likely four.
+Do:
+1. Run all three. Classify every hit:
+   - **(a)** cross-codec namesake matching C++ (`SDqLayer` etc.) → allowlist. No
+     renames (P14).
+   - **(b)** within-codec duplicate declaration of one entity → unify. One commit
+     per entity; divergences enumerated per copy (S21). Decoder-side entries owned
+     by 5.2–5.5 unify now; encoder-side get listed with Phase 6 owners.
+   - **(c)** value-divergent constant/table → record which value each consumer
+     reads today and preserve per-consumer behaviour (S6). A naive merge changes
+     output.
+   - **(d)** legitimate same-name fns → allowlist.
+2. Wire all three checks into `gates.sh`, zero-or-allowlisted (S22).
+3. Zero bytes of output move in this face, or the commit that moved them reverts.
 
-Three rules Phase 4b earned that this phase is *made of*:
+### Face 2 — P3 regression tests
 
-* **S24 — a count that decides a conversion's shape comes from a `grep` over the
-  definitions, in the session that acts on it.** Not from a brief, a hand-off, a module
-  doc, or a prior session's scouting. Phase 4b broke this three times and caught it
-  three times; the third was this brief's own predecessor describing a three-member
-  struct as a "pair".
-* **S25 — converting a raw pointer to a borrow does not introduce an aliasing
-  question, it surfaces one that was already there.** `WelsWriteParameterSets` held a
-  `*mut` across calls that re-enter the same object through `pCtx->pFuncList`. As raw
-  pointers, invisible; as `&mut`, UB that will not compile. **Phase 5 is nothing but
-  raw-to-borrow conversions**, so the re-entrancy audit — *who else can reach this
-  object while I hold it?* — is enumerated **with** the S20 closure, as planned work.
-  Fix shape: re-acquire through one helper at each use, no borrow outliving one
-  expression.
-* **F19's class — every `Box::into_raw` whose `from_raw` lives on no live path is a
-  leak wearing a destructor.** No gate in this project can see one: not byte-exactness,
-  not the sweeps, not Miri `--lib`. 5.5's constructor work runs this check decoder-side
-  (Phase 6.6 runs it encoder-side). The question is *"which line frees this?"*, asked
-  per allocation, and it is only answerable once the field has a type that can hold an
-  owner.
+One targeted test per decoder pointer-identity site, before any identity
+conversion: boundary strength on a stream with duplicate-POC refs; EC self-copy;
+the third site per plan §3 P3. Test additions only.
 
-**Estimated 9–12 sessions.**
+### Face 3 — 5.1 closure
 
----
+Compute and record 5.1's S20 closure. First strangler commits only from a standing
+start.
 
-## 2. The order, with what is already known about each step
-
-Plan §5's order stands. What follows is the per-step intelligence on record, so no
-session re-derives it.
+## 2. The steps (plan §5 order stands)
 
 ### 5.1 Picture & DPB
 `Picture` re-struct (PaddedPlanes + `Vec`s), `PicPool`, `pic_queue.rs` recycling
-predicate, `manage_dec_ref.rs` (near-mechanical per the survey), `error_concealment.rs`
-identity sites. **P3 regression tests first.**
+predicate, `manage_dec_ref.rs`, `error_concealment.rs` identity sites.
+- Decoder plane arrays are `[_; 4]` vs encoder `[_; 3]`
+  (`decoder/picture.rs:102-105`, `encoder/picture.rs:70-71`). Check whether
+  anything reads the fourth entry before fixing the count at three.
+- **F21's fix (sub-32px chroma expand) lives in this step's files and is
+  unpinned** — no corpus stream is narrower than 176px, so a regression is
+  invisible to every gate. The pin is a narrow-frame decode asset: new golden
+  rows, Eugene's call. If unauthorized, record the exposure in the step's log
+  entry.
 
-Note from 4b session C: `manage_dec_ref.rs` and `error_concealment.rs` each just lost
-a duplicate `ExpandReferencingPicture`, and the decoder's plane arrays are `[_; 4]`
-against the encoder's `[_; 3]` (`decoder/picture.rs:102-105`,
-`encoder/picture.rs:70-71`). The fourth entry is never read by anything in the expand
-family; check whether it is read by anything at all before `PaddedPlanes` fixes the
-count at three.
+### 5.2 MbGrid
+Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
+`MbGrid`; re-point `parse_mb_syn_*` cache fills (~40 signatures; the 30-entry
+scratch caches become `&mut` locals passed down).
+- Expect the phase's largest closure; `SDqLayer` is embedded and asserted widely.
+- `SDqLayer::pBitStringAux` (`*mut BsReader`) retires here; `cabac_decoder.rs`'s
+  `SHIM(phase5)` accessor dies with it.
+- The decoder's `SHIM(phase2)` kernel adapters retire as 5.2–5.4 convert their
+  callers (154 markers crate-wide; the decoder share goes here).
 
-### 5.2 MbGrid — the big one
-Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with an owned
-`MbGrid`; re-point `parse_mb_syn_*` cache fills (~40 mechanical signatures, their
-30-entry scratch caches becoming `&mut` locals).
-
-* **S20 computed first, and expect it to be large**: `SDqLayer` is embedded and
-  asserted widely.
-* `SDqLayer::pBitStringAux` (`*mut BsReader`) retires here, and `cabac_decoder.rs`'s
-  **`SHIM(phase5)`** accessor — the crate's only one — dies with it.
-* The decoder's **`SHIM(phase2)` kernel adapters** retire as 5.2–5.4 convert their
-  callers. There are **154** `SHIM(phase2)` markers crate-wide; they are the bulk of
-  the `SHIM(` metric and this phase is where the decoder's share goes.
-
-### 5.3 Neighbor & MV machinery
-`mv_pred.rs` (punning → byte ops, `SetRectBlock` → typed generic on the grid),
+### 5.3 Neighbor & MV
+`mv_pred.rs`: punning → byte ops; `SetRectBlock` → typed generic on the grid;
 colocated reads via `cur_and_ref`.
 
 ### 5.4 Deblocking driver
-`decoder/deblocking.rs`: `SDeblockingFilter` holds `PicId`s + plane cursors built
-per-MB; identity compare per P3.
+`decoder/deblocking.rs`: `SDeblockingFilter` holds `PicId`s + per-MB plane
+cursors; identity compare per P3.
 
-### 5.5 `decoder_core.rs`
-Allocation → constructors (`AllocPicture` dies into `Picture::new`), paramset store
-(P4), context decomposition per §2.2.6, `Drop` teardown, `Default` derives.
+### 5.5 decoder_core.rs
+Allocation → constructors (`AllocPicture` → `Picture::new`), paramset store (P4),
+context decomposition (§2.2.6), `Drop` teardown, `Default` derives.
+- S21 with force: the decoder context embeds its buffers **by value**, so every
+  owned field lands inside `mem::zeroed` reach. The `MaybeUninit` shell +
+  `new_boxed()` exists at `decoder_context.rs:769`; extend it per owned field;
+  replace it with a real constructor at the end of this step.
+- F19's check runs here, per allocation.
+- `SWelsDecoderContext` has no `assert_size!` and no offset pins; don't look for
+  an instrument that isn't there.
 
-* **S21 applies with force.** Unlike the encoder's `pOut`, which is pointer-reached,
-  the decoder context embeds its buffers **by value**, so every owned field lands
-  inside `mem::zeroed` reach. The `MaybeUninit` shell + `new_boxed()` already exists at
-  **`decoder_context.rs:769`** (T3.3); this step extends it per owned field and
-  eventually replaces the shell with a real constructor.
-* **This is where F19's check runs decoder-side.**
-* Two members left this struct in Phase 4b (`sExpandPicFunc` at T4b.3b, `sBlockFunc` at
-  T4b.3c) and **nothing moved**, because `SWelsDecoderContext` has no `assert_size!`
-  and no offset pins. Do not go looking for an instrument that is not there.
+### 5.6 decode_slice.rs (last, per P1)
+Including the EC MC paths. Delete the remaining decoder shims. Decoder modules get
+`#![deny(unsafe_code)]` one by one. No `SBitStringAux` shell exists (deleted at
+T3.4).
 
-### 5.6 `decode_slice.rs` last
-Per P1, including the EC MC paths; delete the last decoder shims; decoder modules get
-`#![deny(unsafe_code)]` one by one.
+## 3. Gates and exit
 
-**There is no `SBitStringAux` shell to delete** — the type died outright at T3.4.
+Per face: full battery; decoder goldens frozen; sweeps 341/341 both profiles;
+3-pair interleaved medians per seam (S2b: a median outside the null band gets more
+pairs before it gets a mechanism); Miri; ratchet regenerated per S16 with deltas
+named.
 
----
+Exit: frame-count parity and the `#[ignore]` set unchanged; T3.0's 2316-row golden
+table green in both profiles (T7 stays deferred); decoder `src/` unsafe-free;
+**every §7.4 ledger entry whose shims died in this phase must clear**. This phase
+collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative; ~7 points of
+CB headroom under the tripwire). The mechanism is constant dimensions reaching the
+kernels, so flat mid-phase bench readings are expected — the ledger is the
+instrument that moves. S19 at exit: refresh §0, write `prompts/phase6.md`, stamp
+this brief historical.
 
-## 3. The exit gate, and the perf debt this phase is expected to collect
+## 4. Metrics inherited
 
-Battery, with **special attention to frame-count parity and the `#[ignore]` set**.
-T3.0's **2316-row malformed-stream golden table over 12 files** gates this phase in
-both profiles — T7 (fuzzing) stays deferred by direction, and the golden corpus is the
-standing approximation. Decoder `src/` is unsafe-free at the end.
-
-**Every §7.4 deficit-ledger entry whose shims died in this phase must clear.** And this
-is the phase that collects Phase 4a's **downgraded decode rows**: direct dispatch
-recovered nothing there because `BaseMC` passes runtime dimensions, and 5.x is what
-makes those dimensions static. The debt is ≈ **+17.8 / +10.1 / +9.6% cumulative
-decode**; the ≈ **7 points of CB headroom under the tripwire** is this phase's to spend.
-
-**Do not expect the benches to reward the structural work step by step.** Phase 4b ran
-five de-virtualization seams and measured flat on all five, for the reason 4a
-established: a runtime-selected arm has no per-call scaffolding to recover. This
-phase's wins are supposed to come from *constant dimensions reaching the kernels*, not
-from removing indirection — so a flat reading mid-phase is expected, and the ledger
-entries are the instrument that will move.
-
-**S2b is in force throughout**: 3 interleaved pairs minimum, a median outside the null
-band gets more pairs before it gets a mechanism, and two pair-counts disagreeing in
-sign means the effect is below the floor.
-
----
-
-## 4. The metric situation you are inheriting
-
-Read these before quoting any number.
-
-* **`transmute` is 4, all prose, zero calls.** The crate contains no `mem::transmute`
-  call at all as of T4b.3b. Every ratchet match is a comment: two pre-existing in
-  `encoder_context.rs`, T4b.3a's tombstone in `decode_slice.rs`, T4b.3b's note in
-  `decoder_core.rs`. **Do not chase this metric.** It has a floor and the floor is
-  prose.
-* **The metric never covered the whole population.** T4b.3c found
-  `&mut (*pCtx).sBlockFunc as *mut _ as *mut _` doing exactly what a `transmute` did —
-  laundering one type into an identical one that a second declaration had made
-  incompatible — and a double cast does not match the grep. If you want to find the
-  rest of that family, grep for `as *mut _ as *mut` and for duplicate struct
-  definitions (`rust/tools/find_dup_types.sh`), not for `transmute`.
-* **`assert_size!(SWelsFuncPtrList)` is not the dispatch ledger it looks like.** It
-  read 1184 across three seams that deleted two vtables, 25 thunks and 19 transmutes,
-  because `Option<Box<_>>` is pointer-sized. It moved to **1160** only when T4b.3b
-  deleted an embedded 24-byte struct. Size measures bytes of members; it cannot see a
-  vtable leave. The **ratchet** is the instrument for that.
-* Phase 4b's real ledger: `raw_ptr` **5001 → 4815**, `unsafe_fn` **1286 → 1250**,
-  `transmute` **23 → 4 (0 calls)**, `SHIM(` 157 with `SHIM(phase3)` still exactly **2**.
-
----
+- `transmute` reads **4: all prose, zero calls**. Don't chase it.
+- `assert_size!(SWelsFuncPtrList)` cannot see dispatch leave (`Option<Box<_>>` is
+  pointer-sized); the **ratchet** is the instrument. Phase 4b ledger:
+  `raw_ptr` 5001 → 4815, `unsafe_fn` 1286 → 1250.
+- `SHIM(` 157: `phase3` = 2 (Phase 6's), `phase5` = 1 (dies in 5.2), rest
+  `phase2`.
 
 ## 5. Non-goals
 
-No Phase 6 pulls: `SMbCache`, `SSlice` layout, the encoder's free cascade,
-`wels_encoder_ext.rs` internals. No re-opening the parked SAD/SATD families (third
-attempt is 6.3's, at caller conversion). No fixing F8/F9/F11-class arithmetic (S6). No
-`get_unchecked`, ever (S8). No golden movement — including the narrow-frame asset F21
-would need; that is a deliberate, separately-justified act. No pool/threading edits
-(F12/P10), and **no attempt on F3**: it is an encoder race and this is the decoder.
+No Phase 6 pulls: encoder `SMbCache`, `SSlice` layout, the free cascade,
+`wels_encoder_ext.rs` internals. No parked-family reopening (6.3's). No
+F8/F9/F11-class fixes (S6). No `get_unchecked` (S8). No golden movement except the
+F21 asset if authorized. No pool/threading edits (F12/P10). No F3 work beyond §0's
+protocol.
 
-One thing that *is* welcome if cheap: `pfSetNZCZero`
-(`encoder/wels_func_ptr_def.rs:385`) is the last live slot of the NZC dispatch family
-T4b.3c closed decoder-side — one slot, one unconditional constant, and deleting it
-takes `SWelsFuncPtrList` to 1152 and removes the last reason
-`encoder/deblocking.rs`'s duplicate `WelsNonZeroCount_c` exists. It is encoder-side, so
-it is 6.5's by rights; it is listed here because it is six lines and its owner is
-otherwise ten sessions away.
+Cheap and welcome if passing: delete `pfSetNZCZero`
+(`encoder/wels_func_ptr_def.rs:385`) — one slot, one unconditional constant;
+takes `assert_size!(SWelsFuncPtrList)` to 1152 and removes the last reason
+`encoder/deblocking.rs`'s duplicate `WelsNonZeroCount_c` exists. Encoder-side
+(6.5's by rights), listed because it is ~6 lines.
