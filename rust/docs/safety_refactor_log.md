@@ -1916,3 +1916,132 @@ Phase 3, per [`prompts/phase3.md`](prompts/phase3.md): read F4/F5/F7, F2, and F1
 `InitBits` site, then **write the malformed-stream error-code parity test against the
 unconverted reader** before touching `bit_stream.rs`. That test is the phase's real
 gate and it is worthless if written after the conversion it is meant to judge.
+
+---
+
+## 2026-08-10 — Phase 3, session A (T3.0 + T3.1a)
+
+**Goal:** Phase 3 per [`prompts/phase3.md`](prompts/phase3.md), session 1 = T3.0 + T3.1.
+Landed T3.0 in full and the first half of T3.1; the seam's second half (T3.1b, the
+storage and call-site conversion) is next.
+
+**Started at** `5e5c9196` with the reworked brief and the plan's edited exit gate
+uncommitted; **ended at** `96fb04a4`. Working tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `d7bc0ac3` | **T3.0** — the malformed-stream error-code parity test, 2316 golden rows, plus **F15** |
+| `96fb04a4` | **T3.1a** — the decoder read side's bodies run on `BsCursor`; **F4's P6 decided, F7 fixed** |
+
+### Gates
+
+| | inherited (`5e5c9196`) | final (`96fb04a4`) |
+|---|---|---|
+| tests | 410 debug / 408 release / 20 ignored | **423 / 421 / 20** (+13, all T3.0) |
+| sweeps | 341/341 both profiles | 341/341 both profiles, no F3 hit |
+| Miri `--lib` | 274 tests, 3 skips | **275** tests, same 3 skips |
+| Miri differential | — | `safe_bits_differential` green with two F7 accommodations **deleted** |
+| ratchet | 1346 / 5171 / 154 | 1349 / 5172 / **158** — regenerated, shape below |
+| T3.0 goldens | — | **unchanged across T3.1a**, both profiles |
+
+### 1. T3.0 found F15 on its first run, before any conversion
+
+The argument for building the gate first did not stay theoretical for long. The first
+execution of the corpus aborted the whole test process, and the abort named
+`nalu.rs:762`: `BsGetTrailingBits(pNal.add(iNalSize as usize - 1))` with `iNalSize == 0`.
+`ParseNalHeader` strips trailing zeros and then the header byte, so **any slice NAL whose
+payload is one non-zero byte** lands there — i.e. truncate a stream one byte past a
+slice's start code. Ten to eleven corpus entries per base stream do it.
+
+Debug panics on the subtraction; release wraps to `pNal.add(usize::MAX)`, which is
+out-of-bounds pointer arithmetic that happens to land on the header byte and returns
+`dsBitstreamError`. Upstream C++ has the same expression twice (`au_parser.cpp:252`,
+`:396`), so this is a transliterated upstream bug — there is no correct behaviour to be
+S6-parity with, and T3.3's fix is a fix. Written up as
+[`phase3_findings.md`](phase3_findings.md) §F15.
+
+### 2. A panic inside the decoder is an abort, not a failure — and that shaped T3.0
+
+`catch_unwind` cannot hold it: the entry points are the `extern "C"` vtable thunks, so
+unwinding out of one is `panic in a function that cannot unwind`. The corpus therefore
+runs in a **child process** that appends one row per entry unbuffered; when the child
+dies the parent knows which entry killed it, records `ABORT` with the panic site, and
+resumes at the next one. One spawn per stream in the happy path, and it enumerated all
+eleven F15 instances in a single run instead of one per bisect.
+
+Because debug aborts where release returns a code, F15's entries are **withheld** rather
+than recorded — a golden table has to hold in both profiles (§7.2 gate 0), and this
+input has no profile-independent behaviour. The `WITHHELD` rows name the finding, so the
+gap is counted and visible. `withheld()` is deleted in T3.3 and those rows fill in.
+
+Cost of the instrument: **36 s debug, 2.4 s release**, parallel across 12 tests. Worth
+stating plainly since it lands on every `gates.sh commit` from here.
+
+### 3. P6 resolved by an option neither the plan nor F4 listed
+
+The plan offered zeroed guard bytes or `get()` fallbacks. Adoption made a third obvious:
+**declare the slack the reader has always read and hand it the real bytes.**
+`READER_SLOP = 3` is derived on the constant; `decoder_core.rs:3637` already refuses to
+copy a NAL payload unless four bytes are spare, so the slack exists for every NAL in
+`sRawData`, and the cursor sees the same bytes the raw reader read — byte-identical by
+construction rather than by an argument about zeros. Zeroing was **rejected**: the slop
+feeds decoded values, not only the error predicate, so zeroing changes behaviour on
+malformed input.
+
+### 4. Fixing F7 widened the differential, and the widening cost a real fix
+
+Both F7 sites are gone, and both accommodations in `safe_bits_differential.rs` came off
+in the same commit — the shape 4a established. Widening `reader_init_matches_dec_init_bits`
+to its whole range then failed under Miri, correctly: the test declares RBSP lengths
+*longer than the payload*, and the contract is `declared + READER_SLOP` readable. The
+shim builds the reader's slice eagerly, so a short buffer is now flagged where the raw
+reader merely never reached that far. `rbsp_with_slack` went 4 → 8 bytes, and the same
+fix went to the three in-module `dec_golomb` buffers (S13).
+
+### 5. The differential's reader half retired in place
+
+It no longer compares two implementations — the raw functions *are* the cursor now — so
+it proves the **shim** instead: that the pointer triple survives `cursor_of`/`store_cursor`
+at every truncation and on the error paths, where the raw refill left `uiCurBits` and
+`iLeftBits` mutated before returning. That is not a tautology and it fails if a
+write-back is dropped. The C-consistency it used to carry passes to T3.0's goldens,
+which is the handover T3.0 was built to make possible. Both facts are in the file's
+module doc.
+
+### 6. Perf: +0.45% decode, and the shim that causes it dies next seam
+
+3 pairs both benches, floor from `null t31a` (decode ±0.2%): decode median **+0.45%**
+(CB +0.77%, Main -0.26%, High +0.45%), encoder median **+0.00%**. The cost is on the
+CAVLC row because that is the row that pulls every syntax element through this family;
+the CABAC rows do their bit work in `cabac_decoder.rs`, which is T3.2. It is field
+marshalling into and out of `SBitStringAux` — exactly what T3.1b deletes — so it is
+ledgered with a deletion point one seam away rather than carried. Cumulative decode
+≈ +18.3 / +9.8 / +10.1%, ~7 points under the tripwire on CB.
+
+### 7. Ratchet shape, and a plan note for T3.1b
+
+`bit_stream.rs` +3 `unsafe_fn`, +2 `unsafe_block`, +3 `SHIM(`, +1 `raw_ptr` (the shared
+`readable` helper's parameter — S16 explicitly allows one or two for a helper that
+replaces N copies of the arithmetic); `dec_golomb.rs` +1 `SHIM(`. **Nothing fell**,
+because what T3.1a deleted is pointer *arithmetic* and the ratchet counts pointer
+*types*. S16 in one measurement: read the shape, not the sign.
+
+One plan correction for T3.1b: §2.2.2's `[P1]` note says `iIndex` "has no consumer in
+this phase". It has two — `BsStartCavlc` and `BsEndCavlc`
+(`parse_mb_syn_cavlc.rs:2230-2248`), the CAVLC fast-path rewind, on the residual path.
+`BsCursor` needs either the field or a bit-position seek before those two can convert.
+
+### Next session's first action
+
+**T3.1b**, the second half of the seam: `SWelsDecoderContext::sBs` and
+`SVclNal::sSliceBitsRead` become `BsCursor` + the buffer at the call site, and the ~20
+consumer functions (`ParseVui` 54 reads, `ParseSliceHeaderSyntaxs` 36, `ParseSps` 31,
+`ParsePps` 21, `ParseInterInfo`/`ParseInterBInfo` 17 each, `WelsDecodeMbCavlcResidual`
+17, and a dozen smaller) switch from `pBs` to `(buf, &mut cursor)`. `SDqLayer::pBitStringAux`
+keeps a shell per the brief §2 — it points *at* `SVclNal`'s field, so that field stays as
+the shell and the sync layer is `SHIM(phase3)` with Phase 5 named as its deleter. The
+`iIndex` gap above has to be closed first. Deleting `cursor_of`/`store_cursor`/`read_with`
+and `BsCursor::from_parts` is the seam's completion signal, and the ledger row from item 6
+should clear with them.
