@@ -20,7 +20,7 @@ use crate::encoder::encoder_context::SCropOffset;
 use crate::encoder::param_svc::{
     SSpatialLayerInternal, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, WELS_LOG2,
 };
-use crate::encoder::paraset_strategy::IWelsParametersetStrategy;
+use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 use crate::encoder::rc::{WELS_CLIP3, WELS_MAX};
 use crate::encoder::vlc_encoder::{
     BsRbspTrailingBits, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
@@ -548,28 +548,26 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
 /// `num_slice_groups_minus1` is the literal 0 at au_set.cpp:417.
 ///
 /// # Safety
-/// `pPps` and `pBsWriter` must be non-null; `pParametersetStrategy` must be a live
-/// strategy from `paraset_strategy::CreateParametersetStrategy`.
+/// `pPps` and `pBsWriter` must be non-null. The strategy is borrowed by reference,
+/// so unlike C++ there is no null case to consider here.
 pub unsafe fn WelsWritePpsSyntax(
     buf: &mut [u8],
     pPps: *mut SWelsPPS,
     pBsWriter: *mut BsWriter,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: &CWelsParametersetIdStrategyObj,
 ) -> i32 {
     let pBs = &mut *pBsWriter;
 
     BsWriteUE(buf, pBs,
-        (*pPps).iPpsId.wrapping_add(IWelsParametersetStrategy::GetPpsIdOffset(
-            pParametersetStrategy,
-            (*pPps).iPpsId as i32,
-        ) as u32),
+        (*pPps)
+            .iPpsId
+            .wrapping_add(pParametersetStrategy.GetPpsIdOffset((*pPps).iPpsId as i32) as u32),
     );
     BsWriteUE(buf, pBs,
-        (*pPps).iSpsId.wrapping_add(IWelsParametersetStrategy::GetSpsIdOffset(
-            pParametersetStrategy,
-            (*pPps).iPpsId as i32,
-            (*pPps).iSpsId as i32,
-        ) as u32),
+        (*pPps).iSpsId.wrapping_add(
+            pParametersetStrategy.GetSpsIdOffset((*pPps).iPpsId as i32, (*pPps).iSpsId as i32)
+                as u32,
+        ),
     );
 
     BsWriteOneBit(buf, pBs, (*pPps).bEntropyCodingModeFlag as u32);
@@ -946,9 +944,7 @@ mod tests {
     #[test]
     fn write_pps_syntax_is_byte_exact_with_cxx() {
         use crate::api::codec_api::EParameterSetStrategy;
-        use crate::encoder::paraset_strategy::{
-            CreateParametersetStrategy, DestroyParametersetStrategy,
-        };
+        use crate::encoder::paraset_strategy::CreateParametersetStrategy;
 
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
@@ -962,12 +958,10 @@ mod tests {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
             WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false);
 
-            let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
-            assert!(!st.is_null());
-            WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, st);
-            let n = bs.pos();
-            DestroyParametersetStrategy(st);
-            n
+            let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1)
+                .expect("CONSTANT_ID is ported");
+            WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, &st);
+            bs.pos()
         };
 
         assert_eq!(

@@ -31,7 +31,7 @@ use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
     SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
 };
-use crate::encoder::paraset_strategy::{IWelsParametersetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
+use crate::encoder::paraset_strategy::{ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
 use crate::api::codec_api::EParameterSetStrategy;
 use crate::encoder::picture::SPicture;
 use crate::encoder::slice_multi_threading::{
@@ -201,18 +201,18 @@ pub unsafe fn AcquireLayersNals(
         }
     }
 
-    if (**ppCtx).pFuncList.is_null()
-        || (*(**ppCtx).pFuncList).pParametersetStrategy.is_null()
-    {
+    if (**ppCtx).pFuncList.is_null() {
         return 1;
     }
     // count parasets
-    let pStrategy = (*(**ppCtx).pFuncList).pParametersetStrategy;
+    let Some(pStrategy) = (*(**ppCtx).pFuncList).pParametersetStrategy.as_mut() else {
+        return 1;
+    };
     iCountNumNals += 1
         + iNumDependencyLayers
         + (iCountNumLayers << 1)
         + iCountNumLayers // plus iCountNumLayers for reserved application
-        + ((*(*pStrategy).pVtbl).GetAllNeededParasetNum)(pStrategy) as i32;
+        + pStrategy.GetAllNeededParasetNum() as i32;
 
     // to check number of layers / nals / slices dependencies, 12/8/2010
     if iCountNumLayers > MAX_LAYER_NUM_OF_FRAME {
@@ -850,13 +850,15 @@ pub unsafe fn InitDqLayers(
     if (**ppCtx).pFuncList.is_null() {
         return 1;
     }
-    let pStrategy = (*(**ppCtx).pFuncList).pParametersetStrategy;
-    if pStrategy.is_null() {
+    // The borrow is re-acquired at each use rather than held across the loop below:
+    // `GenerateNewSps`/`InitPps` take `*ppCtx`, and reaching the strategy through the
+    // context while a `&mut` to it is live would alias. Same reason as
+    // `WelsWriteParameterSets`; T4b.2a.
+    if (*(**ppCtx).pFuncList).pParametersetStrategy.is_none() {
         return 1;
     }
-    let pVtbl = (*pStrategy).pVtbl;
-    let kiNeededSpsNum = ((*pVtbl).GetNeededSpsNum)(pStrategy) as i32;
-    let kiNeededSubsetSpsNum = ((*pVtbl).GetNeededSubsetSpsNum)(pStrategy) as i32;
+    let kiNeededSpsNum = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32;
+    let kiNeededSubsetSpsNum = ParasetStrategy(*ppCtx).GetNeededSubsetSpsNum() as i32;
     (**ppCtx).pSpsArray = (*pMa).WelsMallocz(
         (kiNeededSpsNum as usize * std::mem::size_of::<crate::encoder::param_svc::SWelsSPS>())
             as u32,
@@ -879,7 +881,7 @@ pub unsafe fn InitDqLayers(
     }
 
     // PPS
-    let kiNeededPpsNum = ((*pVtbl).GetNeededPpsNum)(pStrategy) as i32;
+    let kiNeededPpsNum = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32;
     (**ppCtx).pPPSArray = (*pMa).WelsMallocz(
         (kiNeededPpsNum as usize * std::mem::size_of::<crate::encoder::param_svc::SWelsPPS>())
             as u32,
@@ -889,8 +891,7 @@ pub unsafe fn InitDqLayers(
         return 1;
     }
 
-    ((*pVtbl).LoadPrevious)(
-        pStrategy,
+    ParasetStrategy(*ppCtx).LoadPrevious(
         pExistingParasetList,
         (**ppCtx).pSpsArray,
         (**ppCtx).pSubsetArray,
@@ -915,8 +916,7 @@ pub unsafe fn InitDqLayers(
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
         (*pDqIdc).uiSpatialId = iDlayerIndex as i8;
 
-        iSpsId = ((*pVtbl).GenerateNewSps)(
-            pStrategy,
+        iSpsId = ParasetStrategy(*ppCtx).GenerateNewSps(
             *ppCtx,
             bUseSubsetSps,
             iDlayerIndex,
@@ -935,8 +935,7 @@ pub unsafe fn InitDqLayers(
             pSubsetSps = (**ppCtx).pSubsetArray.add(iSpsId as usize);
         }
 
-        iPpsId = ((*pVtbl).InitPps)(
-            pStrategy,
+        iPpsId = ParasetStrategy(*ppCtx).InitPps(
             *ppCtx,
             iSpsId as u32,
             pSps,
@@ -978,7 +977,7 @@ pub unsafe fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
-    ((*pVtbl).UpdateParaSetNum)(pStrategy, *ppCtx);
+    ParasetStrategy(*ppCtx).UpdateParaSetNum(*ppCtx);
     ENC_RETURN_SUCCESS
 }
 
@@ -1029,10 +1028,8 @@ pub unsafe fn RequestMemorySvc(
         return 1;
     }
 
-    let pStrategy = (*(**ppCtx).pFuncList).pParametersetStrategy;
-    let pVtbl = (*pStrategy).pVtbl;
-    let kiSpsSize = ((*pVtbl).GetNeededSpsNum)(pStrategy) as i32 * SPS_BUFFER_SIZE;
-    let kiPpsSize = ((*pVtbl).GetNeededPpsNum)(pStrategy) as i32 * PPS_BUFFER_SIZE;
+    let kiSpsSize = ParasetStrategy(*ppCtx).GetNeededSpsNum() as i32 * SPS_BUFFER_SIZE;
+    let kiPpsSize = ParasetStrategy(*ppCtx).GetNeededPpsNum() as i32 * PPS_BUFFER_SIZE;
     let iNonVclLayersBsSizeCount = SSEI_BUFFER_SIZE + kiSpsSize + kiPpsSize;
 
     let mut bDynamicSlice = false;
@@ -2037,6 +2034,13 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             let _ = crate::encoder::param_svc::FreeCodingParam(&mut (*pCtx).pSvcParam, pMa);
         }
         if !(*pCtx).pFuncList.is_null() {
+            // F19: this `take()` is `encoder_ext.cpp:1995`'s
+            // `WELS_DELETE_OP (pCtx->pFuncList->pParametersetStrategy)`, which the
+            // port had no counterpart for — the strategy object was `Box::into_raw`'d
+            // at init and the table `WelsFree`'d out from under it, leaking it on
+            // every teardown. The table is raw-allocated, so `SWelsFuncPtrList`'s own
+            // drop glue never runs and the owned field has to be taken by hand.
+            drop((*(*pCtx).pFuncList).pParametersetStrategy.take());
             (*pMa).WelsFree((*pCtx).pFuncList as *mut c_void, tag!("SWelsFuncPtrList"));
             (*pCtx).pFuncList = null_mut();
         }
@@ -2211,9 +2215,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let mut iCurPpsId = (*pDqIdc).iPpsId as i32;
     let iCurSpsId = (*pDqIdc).iSpsId as i32;
 
-    let pStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
-    iCurPpsId = ((*(*pStrategy).pVtbl).GetCurrentPpsId)(
-        pStrategy,
+    iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(
         iCurPpsId,
         ((*pParamInternal).uiIdrPicId as i32 - 1).abs() % MAX_PPS_COUNT as i32,
     );
@@ -2600,10 +2602,11 @@ pub unsafe fn WriteSavcParaset(
     let mut pLayerBsInfo = *ppLayerBsInfo;
 
     // --- SPS ---
-    let pStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
-    if !pStrategy.is_null() {
-        ((*(*pStrategy).pVtbl).Update)(
-            pStrategy,
+    // Re-acquired here and again for the PPS below rather than held across the two
+    // writes: `WelsWriteOneSPS`/`WelsWriteOnePPS` reach this same object through
+    // `pCtx->pFuncList`. T4b.2a.
+    if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
+        pStrategy.Update(
             (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
@@ -2636,9 +2639,8 @@ pub unsafe fn WriteSavcParaset(
 
     // --- PPS ---
     iNalSize = 0;
-    if !pStrategy.is_null() {
-        ((*(*pStrategy).pVtbl).Update)(
-            pStrategy,
+    if let Some(pStrategy) = (*(*pCtx).pFuncList).pParametersetStrategy.as_mut() {
+        pStrategy.Update(
             (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );

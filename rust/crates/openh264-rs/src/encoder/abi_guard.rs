@@ -165,6 +165,14 @@ assert_size!(SDqLayer, 512);
 // `SWelsRcFunc`'s nine slots became one `RCMode` (72 -> 4 bytes, and the member's
 // alignment drops from 8 to 4). The number tracks the port, not the C++ header,
 // from Phase 4 on: de-virtualization is the point.
+//
+// **T4b.2a moved it by 0, and that is the ledger entry.** `pParametersetStrategy`
+// went from a raw pointer-to-vtable-object to
+// `Option<Box<CWelsParametersetIdStrategyObj>>`, which is pointer-sized by the
+// null-pointer niche -- so a whole 20-entry vtable, two static instances and 25
+// thunks came out of the crate without this number twitching. Size is the wrong
+// instrument for that seam; the ratchet (raw_ptr -92, unsafe_fn -26) is the right
+// one. Stated here so the next reader does not go looking for the missing bytes.
 assert_size!(SWelsFuncPtrList, 1184);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
