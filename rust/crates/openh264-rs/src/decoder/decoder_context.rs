@@ -237,16 +237,12 @@ pub type PChromaDeblockingEQ4Func2 =
 pub type PWelsNonZeroCountFunc = Option<unsafe extern "C" fn(pNonZeroCount: *mut i8)>;
 pub type PWelsBlockZeroFunc = Option<unsafe extern "C" fn(block: *mut i16, stride: i32)>;
 
-pub type PWelsFillNeighborMbInfoIntra4x4Func = Option<
-    unsafe extern "C" fn(
-        pNeighAvail: *mut c_void,
-        pNonZeroCount: *mut u8,
-        pIntraPredMode: *mut i8,
-        pCurDqLayer: *mut c_void,
-    ),
->;
-pub type PWelsMapNeighToSample = Option<unsafe extern "C" fn(pNeighAvail: *mut c_void, pSampleAvail: *mut i32)>;
-pub type PWelsMap16NeighToSample = Option<unsafe extern "C" fn(pNeighAvail: *mut c_void, pSampleAvail: *mut u8)>;
+// `PWelsFillNeighborMbInfoIntra4x4Func`, `PWelsMapNeighToSample` and
+// `PWelsMap16NeighToSample` were deleted at T4b.3. All three declared
+// `pNeighAvail: *mut c_void` and `extern "C"`, neither of which matched the functions
+// stored in them -- so every install and every fallback had to launder the mismatch.
+// They are one
+// `IntraPredConstraint` now; see that type in `decode_slice.rs`.
 pub type PWelsParseIntra4x4ModeFunc = Option<
     unsafe extern "C" fn(
         pNeighAvail: *mut c_void,
@@ -719,9 +715,10 @@ pub struct SWelsDecoderContext {
     pub iCurSeqIntervalTargetDependId: i32,
     pub iCurSeqIntervalMaxPicWidth: i32,
     pub iCurSeqIntervalMaxPicHeight: i32,
-    pub pFillInfoCacheIntraNxNFunc: PWelsFillNeighborMbInfoIntra4x4Func,
-    pub pMapNxNNeighToSampleFunc: PWelsMapNeighToSample,
-    pub pMap16x16NeighToSampleFunc: PWelsMap16NeighToSample,
+    /// The three C++ slots `pFillInfoCacheIntraNxNFunc`, `pMapNxNNeighToSampleFunc`
+    /// and `pMap16x16NeighToSampleFunc`, which were always set together from one
+    /// flag. **T4b.3**; see [`IntraPredConstraint`](crate::decoder::decode_slice::IntraPredConstraint).
+    pub eIntraPredConstraint: crate::decoder::decode_slice::IntraPredConstraint,
     pub iFeedbackVclNalInAu: i32,
     pub iFeedbackTidInAu: i32,
     pub iFeedbackNalRefIdc: i32,
