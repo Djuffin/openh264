@@ -117,7 +117,6 @@ pub fn WELS_MIN<T: Ord>(x: T, y: T) -> T {
 
 pub type PCopyLumaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
 pub type PCopyChromaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
-pub type PExpandPictureFunc = unsafe extern "C" fn(pDst: *mut u8, iLinesize: i32, iPicWidth: i32, iPicHeight: i32);
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -134,8 +133,6 @@ impl Default for SCopyFunc {
         }
     }
 }
-
-pub use crate::decoder::decoder_core::SExpandPicFunc;
 
 pub use crate::common::mc::SMcFunc;
 
@@ -834,29 +831,6 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
     }
 }
 
-/// Expand border pixels outward to allow out-of-bounds motion vector compensation.
-pub unsafe fn ExpandReferencingPicture(
-    pData: [*mut u8; 4],
-    iWidth: i32,
-    iHeight: i32,
-    iStride: [i32; 4],
-    pExpLuma: Option<PExpandPictureFunc>,
-    pExpChrom: [Option<PExpandPictureFunc>; 2],
-) {
-    if let Some(func_luma) = pExpLuma {
-        func_luma(pData[0], iStride[0], iWidth, iHeight);
-    }
-    let kiWidthUV = iWidth >> 1;
-    let kiHeightUV = iHeight >> 1;
-    let kbChrAligned = (kiWidthUV >= 16) && ((kiWidthUV & 0x0F) == 0);
-    let idx = if kbChrAligned { 1 } else { 0 };
-
-    if let Some(func_chroma) = pExpChrom[idx] {
-        func_chroma(pData[1], iStride[1], kiWidthUV, kiHeightUV);
-        func_chroma(pData[2], iStride[2], kiWidthUV, kiHeightUV);
-    }
-}
-
 /// Fallback DPB reference marking routine.
 pub unsafe extern "C" fn WelsMarkAsRef(pCtx: PWelsDecoderContext) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, std::ptr::null_mut())
@@ -870,13 +844,11 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
     }
 
     if !pCtx.is_null() && !(*pCtx).pDec.is_null() {
-        ExpandReferencingPicture(
-            (*(*pCtx).pDec).pData,
+        crate::common::expand_pic::ExpandReferencingPicture(
+            &(*(*pCtx).pDec).pData,
             (*(*pCtx).pDec).iWidthInPixel,
             (*(*pCtx).pDec).iHeightInPixel,
-            (*(*pCtx).pDec).iLinesize,
-            (*pCtx).sExpandPicFunc.pfExpandLumaPicture,
-            (*pCtx).sExpandPicFunc.pfExpandChromaPicture,
+            &(*(*pCtx).pDec).iLinesize,
         );
     }
 

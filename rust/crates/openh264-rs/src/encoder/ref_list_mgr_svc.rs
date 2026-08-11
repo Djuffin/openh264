@@ -83,11 +83,10 @@ pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SLTRState;
-pub use crate::encoder::encoder_context::SExpandPicFunc;
-// ExpandPictureChroma_c is the shared common-layer routine
-// (codec/common/src/expand_pic.cpp); the decoder module already holds the port.
-use crate::decoder::decoder_core::ExpandPictureChroma_c;
-use crate::common::expand_pic::PExpandPictureFunc;
+// T4b.3b: `ExpandReferencingPicture` was one of three copies of one C++ function
+// in this port. `common/expand_pic.rs` now holds the single one, and the
+// `SExpandPicFunc` table it used to be handed is deleted.
+use crate::common::expand_pic::ExpandReferencingPicture;
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::wels_preprocess::CWelsPreProcess;
@@ -187,47 +186,6 @@ pub struct SLTRMarkingFeedback {
 // ============================================================================
 // Helper Utilities & Logging
 // ============================================================================
-
-#[inline]
-/// Expand the borders of a reference picture.
-///
-/// Matches `ExpandReferencingPicture` in `codec/common/src/expand_pic.cpp:388`.
-/// `pExpChrom` is a two-entry table indexed by whether the chroma width is
-/// 16-aligned, not a single function: the port previously took one scalar and used
-/// it for both planes, which ignored the alignment-specialised variant and the
-/// sub-16 fallback below.
-pub unsafe fn ExpandReferencingPicture(
-    pData: [*mut u8; 3],
-    iWidth: i32,
-    iHeight: i32,
-    iStride: [i32; 3],
-    pExpLuma: Option<PExpandPictureFunc>,
-    pExpChrom: [Option<PExpandPictureFunc>; 2],
-) {
-    let pPicY = pData[0];
-    let pPicCb = pData[1];
-    let pPicCr = pData[2];
-    let kiWidthY = iWidth;
-    let kiHeightY = iHeight;
-    let kiWidthUV = kiWidthY >> 1;
-    let kiHeightUV = kiHeightY >> 1;
-
-    if let Some(fLuma) = pExpLuma {
-        fLuma(pPicY, iStride[0], kiWidthY, kiHeightY);
-    }
-    if kiWidthUV >= 16 {
-        // fix coding picture size as 16x16
-        let kbChrAligned = (kiWidthUV & 0x0F) == 0; // chroma planes: (16+iWidthUV) & 15
-        if let Some(fChroma) = pExpChrom[kbChrAligned as usize] {
-            fChroma(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
-            fChroma(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
-        }
-    } else {
-        // fix coding picture size as 16x16
-        ExpandPictureChroma_c(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
-        ExpandPictureChroma_c(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
-    }
-}
 
 // ============================================================================
 // Global Reference Picture List Lifecycle Functions
@@ -709,16 +667,15 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     if !(*pCtx).pDecPic.is_null() {
         let pDecPic = (*pCtx).pDecPic;
         if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId as i32 {
-            if !(*pCtx).pFuncList.is_null() {
-                ExpandReferencingPicture(
-                    (*pDecPic).pData,
-                    (*pDecPic).iWidthInPixel,
-                    (*pDecPic).iHeightInPixel,
-                    (*pDecPic).iLineSize,
-                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandLumaPicture,
-                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandChromaPicture,
-                );
-            }
+            // T4b.3b: the `pFuncList` null guard went with the table it guarded.
+            // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
+            // here unconditionally, so dropping it is the closer reading.
+            ExpandReferencingPicture(
+                &(*pDecPic).pData,
+                (*pDecPic).iWidthInPixel,
+                (*pDecPic).iHeightInPixel,
+                &(*pDecPic).iLineSize,
+            );
         }
 
         if crate::encoder::dump_enabled(&REC_DUMP, "OH264_RECDUMP") {
@@ -1281,16 +1238,14 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
     if !(*pCtx).pDecPic.is_null() {
         let pDecPic = (*pCtx).pDecPic;
         if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId as i32 {
-            if !(*pCtx).pFuncList.is_null() {
-                ExpandReferencingPicture(
-                    (*pDecPic).pData,
-                    (*pDecPic).iWidthInPixel,
-                    (*pDecPic).iHeightInPixel,
-                    (*pDecPic).iLineSize,
-                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandLumaPicture,
-                    (*(*pCtx).pFuncList).sExpandPicFunc.pfExpandChromaPicture,
-                );
-            }
+            // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
+            // encoder's two identical expand sites.
+            ExpandReferencingPicture(
+                &(*pDecPic).pData,
+                (*pDecPic).iWidthInPixel,
+                (*pDecPic).iHeightInPixel,
+                &(*pDecPic).iLineSize,
+            );
         }
 
         (*pDecPic).uiTemporalId = (*pCtx).uiTemporalId;

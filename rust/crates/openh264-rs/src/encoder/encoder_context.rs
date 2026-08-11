@@ -295,7 +295,6 @@ pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 
 pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
-pub use crate::common::expand_pic::SExpandPicFunc;
 // The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs;
 // this module used to carry stubs that took *mut c_void and returned false.
 use crate::encoder::svc_mode_decision::{
@@ -666,12 +665,12 @@ pub unsafe fn InitFunctionPointers(
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
-    // `encoder.cpp:193`. This call was missing, so `sExpandPicFunc` stayed all-`None`
-    // and `WelsUpdateRefList`'s `ExpandReferencingPicture` expanded nothing.
-    crate::common::expand_pic::InitExpandPictureFunc(
-        &mut (*pFuncList).sExpandPicFunc as *mut _,
-        _uiCpuFlag,
-    );
+    // `encoder.cpp:193` installed `sExpandPicFunc` here. T4b.3b deleted the table:
+    // the call it fed now names its two kernels directly. The history is worth one
+    // line, because this call was *missing* before Phase 4a found it, and with it
+    // every slot stayed `None` and `WelsUpdateRefList`'s `ExpandReferencingPicture`
+    // expanded nothing -- a bug that a table of optional function pointers can
+    // have and a direct call cannot.
 
     /* Intra_Prediction_fn */
     crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(pFuncList, _uiCpuFlag);

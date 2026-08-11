@@ -831,6 +831,8 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 /// `PWelsNeighAvail` / `PDqLayer` and two of them are not `extern "C"` at all. So
 /// *every* install and *every* fallback had to launder the mismatch through
 /// `mem::transmute` — **19 of the crate's 21 such calls, in this one family**.
+/// (T4b.3b took the remaining two, at `decoder_core.rs`'s expand wrapper. The
+/// crate's count is now **zero calls**; the metric's residue is prose only.)
 /// Naming the configuration lets the methods take the real types, and the casts at
 /// the call sites (`as *mut _ as *mut c_void`) go with them. Nothing is reinterpreted
 /// any more; the types simply match.

@@ -14,7 +14,6 @@
 
 use std::ffi::c_void;
 
-use crate::common::expand_pic::SExpandPicFunc;
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::{DeblockingFunc, PSetNoneZeroCountZeroFunc};
 use crate::encoder::encoder_context::{
@@ -302,7 +301,11 @@ impl EntropyCoder {
 // through `sWelsEncCtx::pFuncList`, a pointer -- so this is a derive that had been
 // silently licensing a double-owner ever since the strategy was allocated at all.
 pub struct SWelsFuncPtrList {
-    pub sExpandPicFunc: SExpandPicFunc,
+    // T4b.3b: `sExpandPicFunc: SExpandPicFunc` was the first member (24 bytes).
+    // Both codecs installed the same three `_c` constants into it, so it is gone
+    // and `common/expand_pic.rs::ExpandReferencingPicture` names them directly.
+    // This is the first member deleted from this struct since T4b.1 -- and the
+    // first time since Phase 4a's entry that `assert_size!` moves.
     pub pfFillInterNeighborCache: Option<PFillInterNeighborCacheFunc>,
 
     pub pfGetVarianceFromIntraVaa: Option<PGetVarianceFromIntraVaaFunc>,

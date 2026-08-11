@@ -5,9 +5,6 @@
 //! Translated from `codec/common/inc/expand_pic.h` and
 //! `codec/common/src/expand_pic.cpp`.
 
-/// `PExpandPictureFunc` — `expand_pic.h:86`.
-pub type PExpandPictureFunc = unsafe extern "C" fn(*mut u8, i32, i32, i32);
-
 // ============================================================================
 // Safe kernel
 // ============================================================================
@@ -82,40 +79,73 @@ pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize,
     }
 }
 
-/// `SExpandPicFunc` — `codec/common/inc/expand_pic.h:88`. 24 bytes: one luma entry
-/// plus a **two-element** chroma array (Cb, Cr), not two scalars.
+/// `ExpandReferencingPicture` — `codec/common/src/expand_pic.cpp:388`, and the
+/// **only** copy. Both codecs call this one function, as they do in the C++.
 ///
-/// Both encoder copies were wrong before this became the single definition:
-/// `encoder_context.rs` named the fields `pfExpandPicLuma`/`pfExpandPicChroma`, and
-/// `ref_list_mgr_svc.rs` had the right names but made the chroma entry a scalar,
-/// leaving the struct 16 bytes instead of 24.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SExpandPicFunc {
-    pub pfExpandLumaPicture: Option<PExpandPictureFunc>,
-    pub pfExpandChromaPicture: [Option<PExpandPictureFunc>; 2],
-}
-
-/// `InitExpandPictureFunc` — `codec/common/src/expand_pic.cpp:351`.
+/// # What used to be here, and why it is gone (T4b.3b)
 ///
-/// The SIMD branches (`X86_ASM`, `HAVE_NEON`, `HAVE_NEON_AARCH64`) select faster
-/// kernels for the same result; this port has none, so it assigns the `_c` scalar
-/// kernels unconditionally — which is what the C++ does on this target too, since
-/// `WelsCPUFeatureDetect` measures `0x00000000` here.
+/// The C++ reaches the two kernels through `SExpandPicFunc`, a three-slot table
+/// (`expand_pic.h:88`) filled by `InitExpandPictureFunc` (`expand_pic.cpp:351`)
+/// from the CPU flag — `_sse2`/`_neon`/`_mmi` variants of the same result. This
+/// port has no SIMD, so every install in both codecs set the same three
+/// constants: `ExpandPictureLuma_c` and `ExpandPictureChroma_c` **twice**, so the
+/// alignment index selected between two identical functions. The table, its
+/// installer, its four `PExpandPictureFunc` typedefs and the two `SWelsFuncPtrList`
+/// / `SWelsDecoderContext` members it occupied are all deleted; the kernels are
+/// named directly.
 ///
-/// This function was **missing entirely**, and with it the encoder's
-/// `sExpandPicFunc` was never populated. `ExpandReferencingPicture` then found
-/// `None` in every slot and expanded nothing, so the reference picture's padding
-/// border stayed zero and every motion search that looked outside the frame
-/// compared against black.
+/// # The three copies this replaces
+///
+/// The port had translated one C++ function three times, and two copies had
+/// drifted apart in the `kiWidthUV < 16` case — chroma planes of a frame narrower
+/// than 32 pixels:
+///
+/// | copy | sub-16 chroma |
+/// |---|---|
+/// | C++ `expand_pic.cpp:388` | `ExpandPictureChroma_c` on both planes |
+/// | `encoder/ref_list_mgr_svc.rs` | same — correct |
+/// | `decoder/error_concealment.rs` | `pExpChrom[0]`, which *happens* to be the same function here |
+/// | `decoder/manage_dec_ref.rs` | **nothing at all** — the `else` was never written |
+///
+/// This body is the C++'s. See `phase4b_findings.md` F21 for the reachability
+/// analysis: the corpus is 176x144 and wider, so no gate could have caught it.
+///
+/// # Divergence kept on purpose
+///
+/// The per-plane null guards are the union of what the three copies did (only
+/// `manage_dec_ref`'s had them). The C++ dereferences unconditionally. Keeping
+/// them cannot change output where the pointers are valid, and this runs once per
+/// plane per reference picture, so the branches are free.
 ///
 /// # Safety
-/// `pExpandPicFunc` must point to a valid `SExpandPicFunc`.
-pub unsafe fn InitExpandPictureFunc(pExpandPicFunc: *mut SExpandPicFunc, _kuiCPUFlag: u32) {
-    (*pExpandPicFunc).pfExpandLumaPicture =
-        Some(crate::decoder::decoder_core::ExpandPictureLuma_c);
-    (*pExpandPicFunc).pfExpandChromaPicture[0] =
-        Some(crate::decoder::decoder_core::ExpandPictureChroma_c);
-    (*pExpandPicFunc).pfExpandChromaPicture[1] =
-        Some(crate::decoder::decoder_core::ExpandPictureChroma_c);
+/// `pData[0..=2]` are the plane origins of a picture allocated with
+/// `PADDING_LENGTH` luma / `PADDING_LENGTH >> 1` chroma borders, with matching
+/// `iStride[0..=2]`; see [`expand_picture`] for the geometry each kernel asserts.
+/// Slices shorter than three entries panic rather than read out of bounds — the
+/// C++ parameter is `uint8_t* pData[3]` decayed to a pointer and checks nothing.
+pub unsafe fn ExpandReferencingPicture(pData: &[*mut u8], iWidth: i32, iHeight: i32, iStride: &[i32]) {
+    use crate::decoder::decoder_core::{ExpandPictureChroma_c, ExpandPictureLuma_c};
+
+    let pPicY = pData[0];
+    let pPicCb = pData[1];
+    let pPicCr = pData[2];
+    let kiWidthY = iWidth;
+    let kiHeightY = iHeight;
+    let kiWidthUV = kiWidthY >> 1;
+    let kiHeightUV = kiHeightY >> 1;
+
+    if !pPicY.is_null() {
+        ExpandPictureLuma_c(pPicY, iStride[0], kiWidthY, kiHeightY);
+    }
+    // Both former table slots held `ExpandPictureChroma_c`, so the C++'s
+    // `pExpChrom[kbChrAligned]` and its `else` branch are one call here. The
+    // alignment test is what would pick a `_sse2` variant in a SIMD build; it
+    // selects nothing in this port, which is why the index is gone rather than
+    // computed and discarded.
+    if !pPicCb.is_null() {
+        ExpandPictureChroma_c(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
+    }
+    if !pPicCr.is_null() {
+        ExpandPictureChroma_c(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
+    }
 }
