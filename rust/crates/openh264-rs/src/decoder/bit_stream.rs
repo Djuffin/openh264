@@ -145,6 +145,42 @@ impl BsReader {
         unsafe { std::slice::from_raw_parts(self.base, self.avail) }
     }
 
+    /// The **RBSP window**: the first [`BsCursor::len`] bytes of [`buf`](Self::buf).
+    ///
+    /// This is what the CABAC engine reads through (T3.2). `len` is the logical end of
+    /// the RBSP — the C++ `pBuffEnd` the engine's end ladder measures against — while
+    /// `buf()` runs to the end of the *allocation*. Handing the engine a slice of
+    /// exactly `len` makes `buf.len()` **be** the ladder's selector, so there is no
+    /// second extent computation anywhere in the engine and its loads are in bounds by
+    /// construction. See the read-extent audit at the top of `cabac_decoder.rs`.
+    ///
+    /// The two numbers are not two representations of one extent — F16's defect — but
+    /// two different concepts with one owner each: `cursor.len()` is the logical end,
+    /// [`avail`](Self::avail) is the readable allocation. Only the engine's once-per-slice
+    /// init needs the wider one, and it holds the whole `BsReader`.
+    ///
+    /// `avail >= len` holds structurally: [`readable_from`] returns `pEnd - pNal`, and
+    /// `decoder_core.rs:3644` refuses to write a payload unless
+    /// `pEnd - pCurPos >= payload.len() + 4` (EPB stripping only shrinks it), while its
+    /// fallback branch returns `len + READER_SLOP`. The `min` is therefore dead code;
+    /// it is a clamp rather than an assert-and-panic because a panic here would be a
+    /// *new* failure mode on input where the raw code merely read allocation bytes, and
+    /// the `debug_assert` is what keeps the deadness checkable.
+    ///
+    /// # Safety
+    /// As [`buf`](Self::buf).
+    #[inline(always)]
+    pub unsafe fn rbsp_window<'a>(&self) -> &'a [u8] {
+        let buf = unsafe { self.buf() };
+        debug_assert!(
+            self.avail >= self.cursor.len() || self.base.is_null(),
+            "avail {} < len {}: the readable extent is narrower than the RBSP",
+            self.avail,
+            self.cursor.len()
+        );
+        &buf[..self.cursor.len().min(buf.len())]
+    }
+
     /// Splits into the two halves the consumers take: the bytes, and the position.
     ///
     /// The slice's lifetime is unbounded and therefore does *not* borrow `self`, which

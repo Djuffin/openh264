@@ -1,4 +1,74 @@
 //! Rust translation of OpenH264 CABAC Decoder Engine (`cabac_decoder.h` and `cabac_decoder.cpp`).
+//!
+//! # The read-extent audit (T3.2 step 0)
+//!
+//! [`phase3_findings.md`](../../../docs/phase3_findings.md) **§F16** happened because a
+//! readable extent was derived from *one half* of the reader and then claimed for all
+//! of it — "covers every read the family can make, at any position, for any operation"
+//! was a quantifier over a set nobody had enumerated. This module's extent claim is
+//! therefore **per site**, and the enumeration is the deliverable.
+//!
+//! ## Every buffer access the engine can issue
+//!
+//! Two functions load bytes; one does position arithmetic and loads nothing; nothing
+//! else in this file touches the buffer. `DecodeBinCabac`, `DecodeBypassCabac`,
+//! `DecodeTerminateCabac`, `DecodeUnaryBinCabac`, `DecodeExpBypassCabac`,
+//! `DecodeUEGLevelCabac` and `DecodeUEGMvCabac` reach it **only** through
+//! [`Read32BitsCabac`]; the per-bin path issues no load of its own.
+//!
+//! ### 1. [`InitCabacDecEngineFromBS`] — the 5-byte prime. Max index `len + 2`.
+//!
+//! `curr = pos - remaining_bytes`, guarded by the C++ `pCurr < pEndBuf - 1`, i.e.
+//! `curr <= len - 2`; it then loads `curr[0..=4]`, so the largest index it can touch
+//! is `len + 2`. `remaining_bytes = ((-left_bits) >> 3) + 2 ∈ [0, 4]`, because
+//! `left_bits ∈ [-16, 15]` on every path that reaches here (`init` and
+//! `init_read_bits` set −16, `dump_bits` refills from `>= 0` down by 16, `end_cavlc`
+//! sets `-16 + (idx & 7)`). **Needs `avail >= len + 3`**, which is why this is the one
+//! site that takes the wider [`BsReader::buf`] window rather than the RBSP one, and it
+//! reads through `get` so a violated contract is an error return, not a panic and not
+//! a read past the allocation.
+//!
+//! ### 2. [`Read32BitsCabac`] — the 4/3/2/1 end ladder. Max index `len - 1`.
+//!
+//! This is F16's named suspect and the audit's answer is that **it never reads past the
+//! RBSP**, because its own selector is measured against `pBuffEnd`:
+//!
+//! | `iLeftBytes` | loads | largest index |
+//! |---|---|---|
+//! | `<= 0` | none — error return | — |
+//! | `1` / `2` / `3` | `curr[0..n)` | `curr + n - 1 = len - 1` |
+//! | `>= 4` | `curr[0..4)` | `curr + 3 <= len - 1` |
+//!
+//! So the ladder is bounded by `len`, needs `avail >= len` and nothing more, and can be
+//! handed a slice of exactly `len` bytes — [`BsReader::rbsp_window`]. That makes
+//! `buf.len()` *be* `pBuffEnd - pBuffStart`, so the engine computes no extent of its
+//! own and there is no second `readable_from`-shaped site to keep coherent.
+//!
+//! `iLeftBytes` is genuinely negative in practice: init leaves the position at
+//! `curr + 5 <= len + 3`, so a stream truncated into its first CABAC bytes enters the
+//! ladder at `-3`, takes the `<= 0` arm and returns `ERR_CABAC_NO_BS_TO_READ` having
+//! loaded nothing. The port expresses the predicate as the **comparison** `pos >= len`
+//! rather than as a subtraction for exactly that reason — `len - pos` in `usize` would
+//! wrap to a huge positive and select the 4-byte arm, which would be a new
+//! out-of-bounds read where the raw code errored.
+//!
+//! ### 3. [`RestoreCabacDecEngineToBS`] — **no load**.
+//!
+//! Position only, stated explicitly because the claim is per-site and "reads nothing"
+//! is one of the answers. See its own doc comment for why the rewind cannot underflow.
+//!
+//! ## Where the two numbers come from
+//!
+//! `len` = `cursor.len()` = `pBuffEnd - pBuffStart`, the logical RBSP end, one owner.
+//! `avail` = [`BsReader::avail`] from `readable_from`, the readable allocation, one
+//! owner. `avail >= len + 4` structurally (`decoder_core.rs:3644` sizes every payload
+//! with four bytes to spare) or `len + 3` on `readable_from`'s fallback branch; both
+//! cover site 1's `len + 2`. **T3.3 owns the staleness hazard**: `ExpandBsBuffer` grows
+//! the raw buffer, which leaves a rebased reader's `avail` stale and too small (F16's
+//! second instance, fixed in T3.1b's commit but still live as a *class*). Nothing here
+//! consumes `avail` between a growth and a refresh — site 1 reads it at slice start,
+//! sites 2 and 3 never read it at all — and T3.3 deletes both the hazard and this
+//! paragraph when the owned buffer makes the extent a slice length.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -568,28 +638,33 @@ pub struct SWelsCabacCtx {
 
 pub type PWelsCabacCtx = *mut SWelsCabacCtx;
 
+/// The arithmetic-decoding engine state — a **detached position**, per plan §2.1.3.
+///
+/// The C++ carries a pointer triple (`pBuffStart`/`pBuffCurr`/`pBuffEnd`) alongside
+/// the arithmetic registers. All three are gone:
+///
+/// | C++ field | here | why |
+/// |---|---|---|
+/// | `uiRange`, `uiOffset`, `iBitsLeft` | unchanged | the arithmetic state |
+/// | `pBuffCurr - pBuffStart` | `pos` | the position, the only thing that moves |
+/// | `pBuffStart` | — | the buffer is the caller's; it is passed per call |
+/// | `pBuffEnd` | — | `buf.len()` of the RBSP window ([`BsReader::rbsp_window`]) |
+///
+/// Field order is deliberate: `uiRange` and `uiOffset` stay adjacent so the pair load
+/// the release build already emits for them (`ldp x9, x11, [x0]`) survives the
+/// conversion.
+///
+/// `WelsMalloczHelper` zeroes this at allocation (`decoder_core.rs:3591`), and a zeroed
+/// engine is inert rather than null-pointered: `pos = 0` with an empty window takes the
+/// ladder's error arm.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SWelsCabacDecEngine {
     pub uiRange: u64,
     pub uiOffset: u64,
     pub iBitsLeft: i32,
-    pub pBuffStart: *mut u8,
-    pub pBuffCurr: *mut u8,
-    pub pBuffEnd: *mut u8,
-}
-
-impl Default for SWelsCabacDecEngine {
-    fn default() -> Self {
-        Self {
-            uiRange: 0,
-            uiOffset: 0,
-            iBitsLeft: 0,
-            pBuffStart: std::ptr::null_mut(),
-            pBuffCurr: std::ptr::null_mut(),
-            pBuffEnd: std::ptr::null_mut(),
-        }
-    }
+    /// Byte offset into the slice's RBSP — the C++ `pBuffCurr - pBuffStart`.
+    pub pos: usize,
 }
 
 pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
@@ -663,6 +738,21 @@ pub unsafe fn WelsCabacContextInit(
 }
 
 // 2. Decoding engine initialization
+//
+/// Primes the engine from the CAVLC cursor's position — **audit site 1**, the only
+/// place in this module that reads past the RBSP (`len + 2`, needing `avail >= len+3`).
+///
+/// # The rewind cannot underflow, and here is why it cannot *today*
+///
+/// `curr = pos - remaining_bytes` with `remaining_bytes ∈ [0, 4]` (derived in the
+/// module docs from `left_bits ∈ [-16, 15]`). Every path into this function has primed
+/// the cursor since the last write to `pos` — `DecInitBits` → `BsCursor::init` sets
+/// `pos = 4` for the slice-header path, and `InitReadBits` → `init_read_bits` does
+/// `pos += 4` for the I_PCM re-entry at `parse_mb_syn_cabac.rs:3317` — and both leave
+/// **`pos >= 4`**. The bound is tight rather than generous: a cursor primed and not yet
+/// advanced gives `pos = 4, remaining_bytes = 4`, landing exactly on `curr = 0`. The
+/// `debug_assert` is there because that reasoning is about *callers*, and callers
+/// change.
 pub unsafe fn InitCabacDecEngineFromBS(
     pDecEngine: PWelsCabacDecEngine,
     pBsAux: &mut BsReader,
@@ -671,60 +761,133 @@ pub unsafe fn InitCabacDecEngineFromBS(
         return ERR_INFO_INVALID_ACCESS;
     }
     unsafe {
-        // The engine still walks pointers — T3.2 converts it to offsets, including the
-        // can't-underflow assertion on this rewind. Here the pointers are derived from
-        // the reader's base so the arithmetic is unchanged.
-        let pStartBuf = pBsAux.base;
-        let pCurBuf = pStartBuf.add(pBsAux.cursor.pos());
-        let pEndBuf = pStartBuf.add(pBsAux.cursor.len());
+        let pos = pBsAux.cursor.pos() as isize;
+        let len = pBsAux.cursor.len() as isize;
         let iRemainingBits = -pBsAux.cursor.left_bits();
-        let iRemainingBytes = (iRemainingBits >> 3) + 2;
-        let pCurr = pCurBuf.offset(-(iRemainingBytes as isize));
-        let pEndGuard = pEndBuf.offset(-1);
-        if pCurr >= pEndGuard {
+        let iRemainingBytes = ((iRemainingBits >> 3) + 2) as isize;
+        debug_assert!(
+            (0..=4).contains(&iRemainingBytes),
+            "left_bits {} out of [-16, 15]",
+            pBsAux.cursor.left_bits()
+        );
+        debug_assert!(
+            pos >= iRemainingBytes,
+            "CABAC init rewind underflows: pos {} - {} (a primed cursor has pos >= 4)",
+            pos,
+            iRemainingBytes
+        );
+        let iCurr = pos - iRemainingBytes;
+        // `pCurr >= pEndBuf - 1`, in offsets. Signed on both sides: `len` is at least 1
+        // (`BsCursor::init` rejects a non-positive payload) but the arithmetic is
+        // written so a zero-length window compares rather than wraps.
+        if iCurr >= len - 1 {
             return ERR_INFO_INVALID_ACCESS;
         }
+        let curr = iCurr as usize;
 
-        let b0 = *pCurr.offset(0) as u64;
-        let b1 = *pCurr.offset(1) as u64;
-        let b2 = *pCurr.offset(2) as u64;
-        let b3 = *pCurr.offset(3) as u64;
-        let b4 = *pCurr.offset(4) as u64;
+        // The wider window — this is the one site that needs `avail`, not `len`. The
+        // guard above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <= avail`; the
+        // `get` is therefore unreachable-None, and routes a violated contract to the
+        // error path instead of past the end of the allocation (F4/F16's shape).
+        let buf = pBsAux.buf();
+        let b = match buf.get(curr..curr + 5) {
+            Some(b) => b,
+            None => return ERR_INFO_INVALID_ACCESS,
+        };
 
-        let mut uiOffset = (b0 << 16) | (b1 << 8) | b2;
+        let mut uiOffset = ((b[0] as u64) << 16) | ((b[1] as u64) << 8) | (b[2] as u64);
         uiOffset <<= 16;
-        uiOffset |= (b3 << 8) | b4;
+        uiOffset |= ((b[3] as u64) << 8) | (b[4] as u64);
 
         (*pDecEngine).uiOffset = uiOffset;
         (*pDecEngine).iBitsLeft = 31;
-        (*pDecEngine).pBuffCurr = pCurr.offset(5);
+        (*pDecEngine).pos = curr + 5;
         (*pDecEngine).uiRange = WELS_CABAC_HALF;
-        (*pDecEngine).pBuffStart = pStartBuf;
-        (*pDecEngine).pBuffEnd = pEndBuf;
         pBsAux.cursor.hand_off_to_cabac();
 
         ERR_NONE
     }
 }
 
+/// Hands the position back to the CAVLC cursor — **audit site 3, which reads nothing**.
+///
+/// The C++ wrote four fields into `SBitStringAux` and re-stored `pStartBuf` from
+/// `pBuffStart`, which was a no-op restore of the base it had been given. What actually
+/// moves is the position, and it is now the single `usize` assignment plan §2.2.2
+/// predicted.
+///
+/// # The rewind cannot underflow either
+///
+/// `pos - (bits_left >> 3)` with `bits_left <= 63` (init sets 31; `Read32BitsCabac`
+/// adds at most 32 before any consumer subtracts), so the rewind is at most 7 bytes.
+/// The quantity is invariant under a refill — `pos += k` and `bits_left += 8k` cancel —
+/// and only *increases* under renormalisation, starting from `curr + 5 - 3 = curr + 2`.
+/// On the error path `bits_left` goes negative, the arithmetic shift goes negative, and
+/// the position moves *forward*: the raw code's behaviour, reproduced by doing this in
+/// `isize` and casting once, exactly where the raw code cast its `offset_from`.
 pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux: &mut BsReader) {
     if pDecEngine.is_null() {
         return;
     }
     unsafe {
-        (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(-((*pDecEngine).iBitsLeft >> 3) as isize);
+        let back = ((*pDecEngine).iBitsLeft >> 3) as isize;
+        let pos = (*pDecEngine).pos as isize - back;
+        debug_assert!(pos >= 0, "CABAC restore rewind underflows: pos {}", pos);
+        (*pDecEngine).pos = pos as usize;
         (*pDecEngine).iBitsLeft = 0;
-        // `pStartBuf = pBuffStart` was a no-op restore of the base the engine was given
-        // in the first place; what actually moves is the position, which is now the one
-        // `usize` plan §2.2.2 predicted.
-        pBsAux.base = (*pDecEngine).pBuffStart;
-        let pos = (*pDecEngine).pBuffCurr.offset_from((*pDecEngine).pBuffStart) as usize;
-        pBsAux.cursor.restore_from_cabac(pos);
+        pBsAux.cursor.restore_from_cabac((*pDecEngine).pos);
     }
 }
 
+/// The RBSP window the CABAC engine reads, for a context mid-slice.
+///
+/// One deref chain, once per parsing function rather than once per bin, and it derives
+/// nothing: [`BsReader::rbsp_window`] is the single authority. `SHIM(phase3)` by
+/// association — it dies with `pBitStringAux` at T3.3/Phase 5.
+///
+/// # Safety
+/// `pCtx` must be a live decoder context inside slice decoding, so `pCurDqLayer` and
+/// its `pBitStringAux` are set — the same precondition every caller in
+/// `parse_mb_syn_cabac.rs` already relies on for `pCabacDecEngine`.
+#[inline(always)]
+pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
+    unsafe { (*(*(*pCtx).pCurDqLayer).pBitStringAux).rbsp_window() }
+}
+
 // 3. Actual decoding
+/// The refill — **audit site 2**, the 4/3/2/1 end ladder, bounded by `len - 1`.
+///
+/// `win` is the RBSP window ([`BsReader::rbsp_window`]): `win.len()` **is** the C++
+/// `pBuffEnd - pBuffStart`, so the selector is the slice's own length and the engine
+/// computes no extent of its own.
+///
+/// The `pos >= win.len()` test is the C++ `iLeftBytes <= 0` written as a comparison
+/// rather than a subtraction — see the module docs: `pos` legitimately exceeds
+/// `win.len()` after init on a truncated stream, and `win.len() - pos` in `usize` would
+/// wrap to a huge positive and select the 4-byte arm.
+///
+/// # Why the arms are `first_chunk`, and why the order is inverted (S1 step 3)
+///
+/// Written the obvious way — `match tail.len() { 3 => …, 2 => …, 1 => …, _ => … }` with
+/// `tail[i]` indexing inside each arm — the release build **re-checked the length in
+/// the `_` arm** and emitted three `panic_bounds_check` paths, plus four separate
+/// `ldrb`s where the raw pointer version had one `ldr`+`rev`. LLVM propagated "not 1,
+/// 2 or 3" into the arm but not "therefore >= 4".
+///
+/// `first_chunk::<N>()` states the width as a *type* instead of leaving it to be
+/// re-derived, which is the exact-span trim (S9) at four-byte scale: the `Some` arm
+/// carries a `&[u8; N]`, so the load folds and the checks vanish. Testing `>= 4` first
+/// puts the common case at the top of the chain; the four widths are a disjoint
+/// partition, so the order is free. The final `else` is `tail.len() == 1` — `0` was
+/// rejected by the guard above — and its `tail[0]` folds on that fact.
+///
+/// `#[inline(always)]`: the raw pointer version was inlined into `DecodeBinCabac` by
+/// the cost model alone. Adding a slice parameter tipped it over, and the call cost
+/// `DecodeBinCabac` a stack frame *on every bin*, refill or not. This pins the
+/// reference's shape rather than leaving it to a heuristic (S8).
+#[inline(always)]
 pub unsafe fn Read32BitsCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     uiValue: *mut u32,
     iNumBitsRead: *mut i32,
@@ -733,69 +896,43 @@ pub unsafe fn Read32BitsCabac(
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
     unsafe {
-        let iLeftBytes = (*pDecEngine).pBuffEnd.offset_from((*pDecEngine).pBuffCurr);
+        let pos = (*pDecEngine).pos;
         if !iNumBitsRead.is_null() {
             *iNumBitsRead = 0;
         }
         if !uiValue.is_null() {
             *uiValue = 0;
         }
-        if iLeftBytes <= 0 {
+        if pos >= win.len() {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
         }
-        match iLeftBytes {
-            3 => {
-                let b0 = *(*pDecEngine).pBuffCurr.offset(0) as u32;
-                let b1 = *(*pDecEngine).pBuffCurr.offset(1) as u32;
-                let b2 = *(*pDecEngine).pBuffCurr.offset(2) as u32;
-                if !uiValue.is_null() {
-                    *uiValue = (b0 << 16) | (b1 << 8) | b2;
-                }
-                (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(3);
-                if !iNumBitsRead.is_null() {
-                    *iNumBitsRead = 24;
-                }
-            }
-            2 => {
-                let b0 = *(*pDecEngine).pBuffCurr.offset(0) as u32;
-                let b1 = *(*pDecEngine).pBuffCurr.offset(1) as u32;
-                if !uiValue.is_null() {
-                    *uiValue = (b0 << 8) | b1;
-                }
-                (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(2);
-                if !iNumBitsRead.is_null() {
-                    *iNumBitsRead = 16;
-                }
-            }
-            1 => {
-                let b0 = *(*pDecEngine).pBuffCurr.offset(0) as u32;
-                if !uiValue.is_null() {
-                    *uiValue = b0;
-                }
-                (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(1);
-                if !iNumBitsRead.is_null() {
-                    *iNumBitsRead = 8;
-                }
-            }
-            _ => {
-                let b0 = *(*pDecEngine).pBuffCurr.offset(0) as u32;
-                let b1 = *(*pDecEngine).pBuffCurr.offset(1) as u32;
-                let b2 = *(*pDecEngine).pBuffCurr.offset(2) as u32;
-                let b3 = *(*pDecEngine).pBuffCurr.offset(3) as u32;
-                if !uiValue.is_null() {
-                    *uiValue = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
-                }
-                (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(4);
-                if !iNumBitsRead.is_null() {
-                    *iNumBitsRead = 32;
-                }
-            }
+        let tail = &win[pos..];
+        let (v, n, width) = if let Some(b) = tail.first_chunk::<4>() {
+            (u32::from_be_bytes(*b), 32, 4)
+        } else if let Some(b) = tail.first_chunk::<3>() {
+            (
+                ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32),
+                24,
+                3,
+            )
+        } else if let Some(b) = tail.first_chunk::<2>() {
+            (((b[0] as u32) << 8) | (b[1] as u32), 16, 2)
+        } else {
+            (tail[0] as u32, 8, 1)
+        };
+        if !uiValue.is_null() {
+            *uiValue = v;
+        }
+        (*pDecEngine).pos = pos + width;
+        if !iNumBitsRead.is_null() {
+            *iNumBitsRead = n;
         }
         ERR_NONE
     }
 }
 
 pub unsafe fn DecodeBinCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     pBinCtx: PWelsCabacCtx,
     uiBit: *mut u32,
@@ -853,7 +990,7 @@ pub unsafe fn DecodeBinCabac(
 
         let mut uiVal: u32 = 0;
         let mut iNumBitsRead: i32 = 0;
-        iErrorInfo = Read32BitsCabac(pDecEngine, &mut uiVal, &mut iNumBitsRead);
+        iErrorInfo = Read32BitsCabac(win, pDecEngine, &mut uiVal, &mut iNumBitsRead);
         (*pDecEngine).uiOffset = (uiOffset << iNumBitsRead) | (uiVal as u64);
         (*pDecEngine).iBitsLeft += iNumBitsRead;
 
@@ -865,6 +1002,7 @@ pub unsafe fn DecodeBinCabac(
 }
 
 pub unsafe fn DecodeBypassCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     uiBinVal: *mut u32,
 ) -> i32 {
@@ -879,7 +1017,7 @@ pub unsafe fn DecodeBypassCabac(
         if iBitsLeft <= 0 {
             let mut uiVal: u32 = 0;
             let mut iNumBitsRead: i32 = 0;
-            iErrorInfo = Read32BitsCabac(pDecEngine, &mut uiVal, &mut iNumBitsRead);
+            iErrorInfo = Read32BitsCabac(win, pDecEngine, &mut uiVal, &mut iNumBitsRead);
             uiOffset = (uiOffset << iNumBitsRead) | (uiVal as u64);
             iBitsLeft = iNumBitsRead;
             if iErrorInfo != 0 && iBitsLeft == 0 {
@@ -908,6 +1046,7 @@ pub unsafe fn DecodeBypassCabac(
 }
 
 pub unsafe fn DecodeTerminateCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     uiBinVal: *mut u32,
 ) -> i32 {
@@ -935,7 +1074,7 @@ pub unsafe fn DecodeTerminateCabac(
                 if (*pDecEngine).iBitsLeft < 0 {
                     let mut uiVal: u32 = 0;
                     let mut iNumBitsRead: i32 = 0;
-                    iErrorInfo = Read32BitsCabac(pDecEngine, &mut uiVal, &mut iNumBitsRead);
+                    iErrorInfo = Read32BitsCabac(win, pDecEngine, &mut uiVal, &mut iNumBitsRead);
                     (*pDecEngine).uiOffset = ((*pDecEngine).uiOffset << iNumBitsRead) | (uiVal as u64);
                     (*pDecEngine).iBitsLeft += iNumBitsRead;
                 }
@@ -954,6 +1093,7 @@ pub unsafe fn DecodeTerminateCabac(
 
 // 4. Unary parsing
 pub unsafe fn DecodeUnaryBinCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     pBinCtx: PWelsCabacCtx,
     iCtxOffset: i32,
@@ -967,7 +1107,7 @@ pub unsafe fn DecodeUnaryBinCabac(
             *uiSymVal = 0;
         }
         let mut uiFirstBin: u32 = 0;
-        let err = DecodeBinCabac(pDecEngine, pBinCtx, &mut uiFirstBin);
+        let err = DecodeBinCabac(win, pDecEngine, pBinCtx, &mut uiFirstBin);
         if err != 0 {
             return err;
         }
@@ -982,7 +1122,7 @@ pub unsafe fn DecodeUnaryBinCabac(
         let mut sym_val: u32 = 0;
         loop {
             let mut uiCode: u32 = 0;
-            let err = DecodeBinCabac(pDecEngine, pCtx, &mut uiCode);
+            let err = DecodeBinCabac(win, pDecEngine, pCtx, &mut uiCode);
             if err != 0 {
                 return err;
             }
@@ -1000,6 +1140,7 @@ pub unsafe fn DecodeUnaryBinCabac(
 
 // 5. EXGk parsing
 pub unsafe fn DecodeExpBypassCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     mut iCount: i32,
     uiSymVal: *mut u32,
@@ -1016,7 +1157,7 @@ pub unsafe fn DecodeExpBypassCabac(
         }
 
         loop {
-            let err = DecodeBypassCabac(pDecEngine, &mut uiCode);
+            let err = DecodeBypassCabac(win, pDecEngine, &mut uiCode);
             if err != 0 {
                 return err;
             }
@@ -1035,7 +1176,7 @@ pub unsafe fn DecodeExpBypassCabac(
 
         while iCount > 0 {
             iCount -= 1;
-            let err = DecodeBypassCabac(pDecEngine, &mut uiCode);
+            let err = DecodeBypassCabac(win, pDecEngine, &mut uiCode);
             if err != 0 {
                 return err;
             }
@@ -1052,6 +1193,7 @@ pub unsafe fn DecodeExpBypassCabac(
 }
 
 pub unsafe fn DecodeUEGLevelCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     pBinCtx: PWelsCabacCtx,
     uiBinVal: *mut u32,
@@ -1061,7 +1203,7 @@ pub unsafe fn DecodeUEGLevelCabac(
     }
     unsafe {
         let mut uiCode: u32 = 0;
-        let err = DecodeBinCabac(pDecEngine, pBinCtx, &mut uiCode);
+        let err = DecodeBinCabac(win, pDecEngine, pBinCtx, &mut uiCode);
         if err != 0 {
             return err as u32;
         }
@@ -1077,7 +1219,7 @@ pub unsafe fn DecodeUEGLevelCabac(
         uiCode = 0;
 
         loop {
-            let err = DecodeBinCabac(pDecEngine, pBinCtx, &mut uiTmp);
+            let err = DecodeBinCabac(win, pDecEngine, pBinCtx, &mut uiTmp);
             if err != 0 {
                 return err as u32;
             }
@@ -1089,7 +1231,7 @@ pub unsafe fn DecodeUEGLevelCabac(
         }
 
         if uiTmp != 0 {
-            let err = DecodeExpBypassCabac(pDecEngine, 0, &mut uiTmp);
+            let err = DecodeExpBypassCabac(win, pDecEngine, 0, &mut uiTmp);
             if err != 0 {
                 return err as u32;
             }
@@ -1104,6 +1246,7 @@ pub unsafe fn DecodeUEGLevelCabac(
 }
 
 pub unsafe fn DecodeUEGMvCabac(
+    win: &[u8],
     pDecEngine: PWelsCabacDecEngine,
     pBinCtx: PWelsCabacCtx,
     iMaxC: u32,
@@ -1115,6 +1258,7 @@ pub unsafe fn DecodeUEGMvCabac(
     unsafe {
         let mut first_code: u32 = 0;
         let err = DecodeBinCabac(
+            win,
             pDecEngine,
             pBinCtx.offset(g_kMvdBinPos2Ctx[0] as isize),
             &mut first_code,
@@ -1136,7 +1280,7 @@ pub unsafe fn DecodeUEGMvCabac(
         loop {
             let ctx_offset = g_kMvdBinPos2Ctx[uiCount] as isize;
             uiCount += 1;
-            let err = DecodeBinCabac(pDecEngine, pBinCtx.offset(ctx_offset), &mut uiTmp);
+            let err = DecodeBinCabac(win, pDecEngine, pBinCtx.offset(ctx_offset), &mut uiTmp);
             if err != 0 {
                 return err;
             }
@@ -1147,7 +1291,7 @@ pub unsafe fn DecodeUEGMvCabac(
         }
 
         if uiTmp != 0 {
-            let err = DecodeExpBypassCabac(pDecEngine, 3, &mut uiTmp);
+            let err = DecodeExpBypassCabac(win, pDecEngine, 3, &mut uiTmp);
             if err != 0 {
                 return err;
             }
@@ -1184,6 +1328,177 @@ mod tests {
             WelsCabacGlobalInit(&mut *ctx);
             assert!(ctx.bCabacInited);
             WelsCabacContextInit(&mut *ctx, crate::decoder::slice::EWelsSliceType::I_SLICE as u8, 0, 26);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The CAVLC↔CABAC handoff.
+    //
+    // Both readers now live in one position space, and the whole handoff is a
+    // `usize` in each direction. The plan (§T3.2) calls a round-trip test at a
+    // known bit offset "cheap and permanent"; this is it. It is the only place
+    // the two cursors' agreement is asserted directly rather than inferred from
+    // a decoded frame, and it runs in both profiles.
+    // -----------------------------------------------------------------------
+
+    use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};
+
+    /// An RBSP plus the slack every real caller has (`decoder_core.rs:3644`).
+    fn rbsp_with_slack(payload: &[u8]) -> Vec<u8> {
+        let mut v = payload.to_vec();
+        v.extend_from_slice(&[0u8; READER_SLOP + 1]);
+        v
+    }
+
+    #[test]
+    fn cavlc_to_cabac_and_back_restores_the_cursor_at_a_known_offset() {
+        // 16 bytes of RBSP; the CAVLC side consumes 20 bits, so the handoff
+        // happens mid-byte with a partially-spent accumulator — the case where
+        // `iRemainingBytes`'s rewind actually does something.
+        let payload: [u8; 16] = [
+            0xA5, 0x3C, 0x91, 0x08, 0xFF, 0x00, 0x7E, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE,
+            0xF0, 0x11,
+        ];
+        let buf = rbsp_with_slack(&payload);
+        let mut bs = BsReader::default();
+        let mut engine = SWelsCabacDecEngine::default();
+
+        unsafe {
+            let err = DecInitBits(&mut bs, buf.as_ptr(), (payload.len() * 8) as i32, buf.len());
+            assert_eq!(err, ERR_NONE);
+
+            let (b, cursor) = bs.split();
+            for n in [8, 8, 4] {
+                cursor.get_bits(b, n).expect("20 bits of a 16-byte RBSP");
+            }
+            let bits_consumed = 20;
+            // Where the CAVLC side stands: `pos` is the refill point, and the
+            // accumulator holds the bits between the two.
+            let pos_before = bs.cursor.pos();
+            let left_before = bs.cursor.left_bits();
+
+            assert_eq!(InitCabacDecEngineFromBS(&mut engine, &mut bs), ERR_NONE);
+
+            // The engine started where the *bits* had got to, not where the
+            // refill pointer had: `curr = pos - ((-left_bits >> 3) + 2)`, and it
+            // primed five bytes from there.
+            let remaining_bytes = (((-left_before) >> 3) + 2) as usize;
+            assert_eq!(engine.pos, pos_before - remaining_bytes + 5);
+            assert_eq!(engine.iBitsLeft, 31);
+            assert_eq!(engine.uiRange, WELS_CABAC_HALF);
+            // The handoff spent the cursor's accumulator, and the position is
+            // untouched until the engine gives it back.
+            assert_eq!(bs.cursor.left_bits(), 0);
+            assert_eq!(bs.cursor.pos(), pos_before);
+
+            // Consume some bins so the engine's position is genuinely its own,
+            // then hand back.
+            let win = bs.rbsp_window();
+            assert_eq!(win.len(), payload.len(), "the window is the RBSP, not the allocation");
+            let mut ctx = SWelsCabacCtx { uiState: 20, uiMPS: 1 };
+            let mut bit: u32 = 0;
+            for _ in 0..64 {
+                assert_eq!(DecodeBinCabac(win, &mut engine, &mut ctx, &mut bit), ERR_NONE);
+            }
+            let engine_pos = engine.pos;
+            let engine_bits = engine.iBitsLeft;
+
+            RestoreCabacDecEngineToBS(&mut engine, &mut bs);
+
+            // One `usize`, both directions, and the full cursor state after it.
+            assert_eq!(engine.pos, engine_pos - ((engine_bits >> 3) as usize));
+            assert_eq!(bs.cursor.pos(), engine.pos);
+            assert_eq!(bs.cursor.cur_bits(), 0);
+            assert_eq!(bs.cursor.left_bits(), 0);
+            assert_eq!(bs.cursor.cavlc_bit_pos_state(), 0);
+            assert_eq!(engine.iBitsLeft, 0);
+            // `len`/`bits` describe the RBSP and must survive the whole trip.
+            assert_eq!(bs.cursor.len(), payload.len());
+            assert_eq!(bs.cursor.bits(), (payload.len() * 8) as i32);
+
+            // And the cursor is usable again: re-prime and read, exactly as
+            // `ParseIPCMInfoCabac` does after its own restore.
+            let (b, cursor) = bs.split();
+            assert_eq!(
+                crate::decoder::bit_stream::InitReadBits(b, cursor, 1),
+                ERR_NONE
+            );
+            assert!(cursor.get_bits(b, 8).is_ok());
+            let _ = bits_consumed;
+        }
+    }
+
+    #[test]
+    fn the_end_ladder_stops_at_the_rbsp_and_never_reads_the_slack() {
+        // Audit site 2: the ladder is bounded by `len`, not by `avail`. Drive
+        // the engine off the end of a short RBSP and assert it errors with the
+        // position at `len` rather than walking into the slack bytes that the
+        // allocation genuinely has.
+        let payload: [u8; 8] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        let buf = rbsp_with_slack(&payload);
+        let mut engine = SWelsCabacDecEngine::default();
+        let win = &buf[..payload.len()];
+
+        unsafe {
+            let mut value: u32 = 0;
+            let mut bits: i32 = 0;
+            // Walk the ladder from the last four bytes down: 4, then 3/2/1.
+            engine.pos = 4;
+            assert_eq!(Read32BitsCabac(win, &mut engine, &mut value, &mut bits), ERR_NONE);
+            assert_eq!((bits, engine.pos), (32, 8));
+            // At the end: no bytes left, error, nothing loaded, position frozen.
+            assert_eq!(
+                Read32BitsCabac(win, &mut engine, &mut value, &mut bits),
+                GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ)
+            );
+            assert_eq!((value, bits, engine.pos), (0, 0, 8));
+
+            for (start, want_bits, want_pos) in [(5usize, 24, 8), (6, 16, 8), (7, 8, 8)] {
+                engine.pos = start;
+                assert_eq!(Read32BitsCabac(win, &mut engine, &mut value, &mut bits), ERR_NONE);
+                assert_eq!((bits, engine.pos), (want_bits, want_pos));
+            }
+
+            // `pos` past the end — reachable after init on a truncated stream,
+            // and the C++ `iLeftBytes` is negative there. The comparison form
+            // must take the error arm; a `usize` subtraction would wrap and
+            // select the 4-byte load.
+            for start in [9usize, 12, 64] {
+                engine.pos = start;
+                assert_eq!(
+                    Read32BitsCabac(win, &mut engine, &mut value, &mut bits),
+                    GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ)
+                );
+                assert_eq!(engine.pos, start);
+            }
+        }
+    }
+
+    #[test]
+    fn init_rejects_a_position_at_the_end_guard_rather_than_reading_there() {
+        // The C++ guard is `pCurr >= pEndBuf - 1`, and the rewind is what puts
+        // `pCurr` behind `pos`. A cursor parked at the very end of a short RBSP
+        // must be refused, not primed.
+        let payload: [u8; 5] = [0x80, 0x00, 0x00, 0x00, 0x00];
+        let buf = rbsp_with_slack(&payload);
+        let mut bs = BsReader::default();
+        let mut engine = SWelsCabacDecEngine::default();
+        unsafe {
+            assert_eq!(
+                DecInitBits(&mut bs, buf.as_ptr(), (payload.len() * 8) as i32, buf.len()),
+                ERR_NONE
+            );
+            // Park the cursor at the end: pos == len, left_bits == 0 gives
+            // remaining_bytes == 2, so curr == len - 2 == 3 >= len - 1 == 4 is
+            // false... push it one further to land on the guard.
+            bs.cursor.set_pos(payload.len() + 1);
+            bs.cursor.restore_from_cabac(payload.len() + 1); // left_bits = 0
+            assert_eq!(
+                InitCabacDecEngineFromBS(&mut engine, &mut bs),
+                ERR_INFO_INVALID_ACCESS
+            );
+            // Nothing was written into the engine.
+            assert_eq!(engine, SWelsCabacDecEngine::default());
         }
     }
 }
