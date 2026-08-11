@@ -148,39 +148,51 @@ Shape:
 
 ### T3.1 — `bit_stream.rs` + `dec_golomb.rs`: the CAVLC read side (seam)
 
-Inventory first (`grep -n "pub.*fn" decoder/bit_stream.rs decoder/dec_golomb.rs`,
-plus every `SBitStringAux` field access outside them). Known anchors:
-`DecInitBits`/`InitReadBits` (two init variants — check whether their initial-fill
-semantics differ before unifying), `GetValue4Bytes`, the refill `dump_bits_aux`
-(`dec_golomb.rs:128-150` — the slop predicate `iAllowedBytes + 1` and the 2-byte
-load), the ue/se/bit readers layered on it, and `rbsp_to_ebsp` (already safe).
+**T3.1a is DONE** (`96fb04a4`, session A): the reader *bodies* run on `BsCursor`
+behind unchanged raw signatures — zero call sites changed, T3.0's goldens + all 53
+conformance hashes held, F7 fixed at both sites with the differential
+accommodations deleted. **P6 is resolved** and the resolution is not either of the
+options this brief originally offered: `READER_SLOP = 3` — declare the slack the
+reader always read and hand it the *real allocation bytes* (`decoder_core.rs:3637`
+guarantees them). Zero guard bytes were **rejected on evidence: the slop feeds
+decoded values on some malformed streams, not just the error predicate** — zeroing
+changes output. Plan §2.2.2 [P3] and §3 P6 record it. The measured +0.45% decode is
+temporary shim field-marshalling; T3.1b deletes it.
 
-The conversion:
-- `SWelsDecoderContext::sBs: SBitStringAux` → `BsCursor` + the buffer reference
-  expressed at call sites (`&ctx.raw_data[...]` — until T3.3 lands, the buffer is
-  still `sRawData`'s pointers, so this seam reads through a **temporary slice
-  reconstruction helper** at the boundary, marked `SHIM(phase3)` and deleted by
-  T3.3; write it once, like T3/T4's span helpers, S-style: one place owns the
-  arithmetic).
-- **The F4 guard-byte decision, made explicitly here and written down** (options
-  from plan P6): (a) append ≥3 zero guard bytes to the raw-data buffer at fill
-  time, keeping the slop predicate verbatim — deterministic, in-bounds,
-  byte-identical given the F4 analysis; or (b) express the overrun loads through
-  `buf.get()` fallbacks. Phase 1's differential work says (a) matches the C++
-  exactly and (b) is identical *from the caller's view* on every probed input; the
-  parity corpus (T3.0) is the referee. Whichever you pick: record it as the P6
-  resolution in the findings file and the plan, with the parity run as evidence.
-- `pEndBuf`-arithmetic bounds checks (`iAllowedBytes` etc.) become `len`/`pos`
-  arithmetic with the **same predicates** — resist the urge to "clean up" an
-  off-by-one that is load-bearing (F4).
-- Callers: `dec_golomb`'s readers are called from parameter-set parsing, slice
-  headers, CAVLC residuals — the call sites keep their shapes; only the
-  `(pBs)` argument becomes `(buf, &mut cursor)`. Where a caller is a struct you
-  don't own (e.g. slice-header parsing writing into `SDqLayer`-adjacent state),
-  shell per §2.
+**T3.1b — remaining, and its step 0 is the CAVLC mode.** Session A found the plan's
+`iIndex` omission wrong: `BsStartCavlc`/`BsEndCavlc`
+(`parse_mb_syn_cavlc.rs:2230-2248`) and the CAVLC residual path between them consume
+it — `iIndex` is an absolute *bit position*, a second representation of the cursor
+that is authoritative while the accumulator is deliberately stale. The decision
+(§2.2.2 **[P3]**, made 2026-08-10) is to mirror it as an explicit mode on
+`BsCursor`:
+
+0. **Build the mode first, in `src/safe/bits.rs`, and differential-prove it before
+   converting any consumer**: `cavlc_bit_pos: isize`; `start_cavlc()` computing
+   `(pos << 3) − (16 − left_bits)` (the 16-bit half-window convention, preserved
+   exactly); `end_cavlc(buf)` reseating `pos = idx >> 3`, priming 4 bytes BE
+   shifted by `idx & 7`, then `pos += 4`, `left_bits = −16 + (idx & 7)` —
+   **negative on purpose**, parity-exact. Plus a `#[cfg(debug_assertions)]` mode
+   flag: accumulator ops assert not-in-CAVLC-mode, bit-pos accessors assert
+   in-mode — the stale-state misuse the C++ could never detect becomes a debug
+   panic. Differential tests: random cursor states through raw
+   `BsStartCavlc`/`BsEndCavlc` vs the safe pair (full state compared), plus
+   round-trips at random bit positions, Miri-clean, under the existing
+   `forbid(unsafe_code)` and test discipline of the module.
+1. `ctx.sBs: SBitStringAux` → `BsCursor`, and `SVclNal::sSliceBitsRead` likewise;
+   the buffer is expressed at call sites (until T3.3 lands, through **one**
+   temporary slice-reconstruction helper at the boundary, marked `SHIM(phase3)`,
+   deleted by T3.3 — one place owns that arithmetic).
+2. ~20 consumer functions move from `pBs` to `(buf, &mut cursor)`; the CAVLC
+   residual consumers convert mechanically onto the mode's accessors (their
+   restructure is Phase 5's). `SDqLayer::pBitStringAux` gets its Phase 5 shell
+   per §2.
+3. `pEndBuf`-arithmetic predicates stay verbatim as `len`/`pos` arithmetic —
+   the off-by-ones are load-bearing (F4).
 
 Gate the seam: full battery + T3.0 green + one interleaved pair both benches
-(decode is the one that matters here) + ratchet shape.
+(decode is the one that matters, and the +0.45% marshalling should disappear
+here — say so in the log either way) + ratchet shape.
 
 ### T3.2 — `cabac_decoder.rs`: the arithmetic-coding engine (seam)
 
@@ -227,6 +239,14 @@ Specifics that must survive exactly:
   it gains one by construction); the `BsGetTrailingBits(pNal.add(len - 1))`
   underflow-on-zero-length sites become checked indexing that the parity corpus's
   degenerate NALs exercise.
+- **F15 dies here** (`nalu.rs:762`-class: `pNal.add(iNalSize - 1)` with
+  `iNalSize == 0` — debug aborts, release computes an out-of-bounds pointer;
+  upstream C++ shares the expression, so there is no S6 parity to preserve). When
+  the sites are fixed, **regenerate the golden table
+  (`UPDATE_MALFORMED_GOLDEN=1`) and un-withhold the `WITHHELD` rows that name
+  F15** — the regeneration diff must show exactly those rows gaining recorded
+  outcomes and nothing else moving; that diff is the fix's proof and goes in the
+  commit message.
 - This seam deletes T3.1's temporary slice-reconstruction shim and most of the
   decoder's remaining bitstream `raw_ptr` count. Expect the phase's biggest
   single ratchet drop here; say the numbers in the log.
