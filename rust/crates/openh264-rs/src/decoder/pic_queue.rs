@@ -73,19 +73,6 @@ pub const MV_A: usize = 2;
 // Data Structures & Enums
 // ============================================================================
 
-/// Slice types in H.264 standard bitstream syntax.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
-
 pub use crate::decoder::picture::{SPicture, PPicture};
 
 /// Recycled picture buffer queue container.
