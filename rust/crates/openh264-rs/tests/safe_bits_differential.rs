@@ -46,6 +46,7 @@ use openh264_rs::decoder::dec_golomb::{
     BsGetBits, BsGetOneBit, BsGetSe, BsGetTe0, BsGetTrailingBits, BsGetUe, CheckMoreRBSPData,
     GetLeadingZeroBits, ERR_NONE,
 };
+use openh264_rs::decoder::parse_mb_syn_cavlc::{BsEndCavlc, BsStartCavlc};
 use openh264_rs::encoder::vlc_encoder::{
     BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsSizeSE, BsSizeUE, BsWriteBits, BsWriteOneBit,
     BsWriteSE, BsWriteUE, InitBits,
@@ -408,6 +409,230 @@ fn trailing_bits_matches_for_every_byte() {
     for b in 0..=255u8 {
         let old = unsafe { BsGetTrailingBits(&b) };
         assert_eq!(old, trailing_bits(b), "byte {b:#04x}");
+    }
+}
+
+// ===========================================================================
+// CAVLC mode vs. BsStartCavlc/BsEndCavlc  (plan §2.2.2 [P3], T3.1b step 0)
+// ===========================================================================
+
+/// All six fields `SBitStringAux` and [`BsCursor`] mirror, old side.
+///
+/// The full state, not the three of [`old_state`]: `iIndex` is the point of this pair,
+/// and `iBits`/`pEndBuf` must be shown *not* to move.
+fn old_full_state(bs: &SBitStringAux) -> (usize, u32, i32, usize, i32, isize) {
+    let pos = (bs.pCurBuf as usize) - (bs.pStartBuf as usize);
+    let len = (bs.pEndBuf as usize) - (bs.pStartBuf as usize);
+    (pos, bs.uiCurBits, bs.iLeftBits, len, bs.iBits, bs.iIndex)
+}
+
+fn new_full_state(c: &BsCursor) -> (usize, u32, i32, usize, i32, isize) {
+    (
+        c.pos(),
+        c.cur_bits(),
+        c.left_bits(),
+        c.len(),
+        c.bits(),
+        // Not `cavlc_bit_pos()`: that one asserts the mode is live, and half these
+        // comparisons happen after `end_cavlc` has closed it. See the accessor's docs.
+        c.cavlc_bit_pos_state(),
+    )
+}
+
+/// Drives both sides through `BsStartCavlc` → *n* bits consumed → `BsEndCavlc`, from
+/// whatever state the cursors are already in, and compares the full state at both
+/// steps.
+///
+/// `used_bits` is what the residual path reports via `pBs->iIndex += iUsedBits`
+/// (`parse_mb_syn_cavlc.rs:2701, 2726`) — the only write it makes.
+fn assert_cavlc_cycle_matches(
+    bs: &mut SBitStringAux,
+    c: &mut BsCursor,
+    buf: &[u8],
+    used_bits: isize,
+    label: &str,
+) {
+    unsafe { BsStartCavlc(bs) };
+    c.start_cavlc();
+    assert_eq!(
+        old_full_state(bs),
+        new_full_state(c),
+        "{label}: state after BsStartCavlc"
+    );
+    assert_eq!(
+        c.cavlc_bit_pos(),
+        bs.iIndex,
+        "{label}: the guarded accessor reads iIndex"
+    );
+
+    bs.iIndex += used_bits;
+    c.advance_cavlc_bits(used_bits);
+
+    unsafe { BsEndCavlc(bs) };
+    c.end_cavlc(buf);
+    assert_eq!(
+        old_full_state(bs),
+        new_full_state(c),
+        "{label}: state after BsEndCavlc"
+    );
+}
+
+#[test]
+fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
+    // Random *cursor states*, not just random buffers: the pair's arithmetic is a
+    // function of (pos, left_bits), so the interesting axis is how many bits have been
+    // consumed before the mode opens. Reads of random widths walk `left_bits` through
+    // its whole −16..=0 range and `pos` through every byte phase.
+    let mut rng = Prng::new(0x8B17_0010);
+
+    for round in 0..scale(200) {
+        let payload_len = 48 + rng.below(48) as usize;
+        let payload = rng.bytes(payload_len);
+        let buf = rbsp_with_slack(&payload);
+        let size_bits = payload.len() as i32 * 8;
+
+        let (mut bs, old_err) = old_init(&buf, size_bits);
+        let mut c = BsCursor::init(&buf, size_bits).unwrap();
+        assert_eq!(old_err, ERR_NONE);
+        assert_eq!(old_full_state(&bs), new_full_state(&c), "round {round}: post-init");
+
+        for step in 0..scale(24).max(4) {
+            // Advance both by an identical, in-contract read before opening the mode.
+            let n = 1 + rng.below(16) as i32;
+            let mut old_code = 0u32;
+            let old_rc = unsafe { BsGetBits(&mut bs, n, &mut old_code) };
+            let new_rc = c.get_bits(&buf, n);
+            assert_eq!(as_result(old_rc, old_code), new_rc, "round {round} step {step}");
+            if new_rc.is_err() {
+                break;
+            }
+
+            // `iUsedBits` in the real residual path is a symbol count, tens of bits at
+            // most; 0 is legal (the `uiTotalCoeff == 0` early return at :2701).
+            //
+            // Bounded so the close point's 4-byte prime stays inside the allocation.
+            // Past that the *raw* pair reads out of bounds — F4's pre-existing
+            // condition, which this test must not manufacture: the safe side would
+            // panic on the slice index (correctly, per plan §2.2.2) and the comparison
+            // would be against UB rather than against behaviour.
+            let bit_pos = (((bs.pCurBuf as usize) - (bs.pStartBuf as usize)) as isize) * 8
+                - (16 - bs.iLeftBits as isize);
+            let headroom_bits = ((buf.len() - 4) as isize * 8) - bit_pos;
+            if headroom_bits < 0 {
+                break;
+            }
+            let used = rng.below(48.min(headroom_bits as u32 + 1)) as isize;
+            assert_cavlc_cycle_matches(
+                &mut bs,
+                &mut c,
+                &buf,
+                used,
+                &format!("round {round} step {step} used {used}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn cavlc_mode_matches_at_every_bit_phase() {
+    // Exhaustive over the axis the arithmetic actually turns on — `idx & 7` — rather
+    // than sampled (S10: sweep the selector, don't randomise it). Every starting phase
+    // crossed with every `iUsedBits` phase, so both the `>> 3` reseat and the
+    // `-16 + (idx & 7)` bias are exercised at all 64 combinations.
+    let payload: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(37).wrapping_add(11)).collect();
+    let buf = rbsp_with_slack(&payload);
+    let size_bits = payload.len() as i32 * 8;
+
+    for skip in 0..8i32 {
+        for used in 0..8isize {
+            let (mut bs, old_err) = old_init(&buf, size_bits);
+            let mut c = BsCursor::init(&buf, size_bits).unwrap();
+            assert_eq!(old_err, ERR_NONE);
+
+            if skip > 0 {
+                let mut old_code = 0u32;
+                let old_rc = unsafe { BsGetBits(&mut bs, skip, &mut old_code) };
+                assert_eq!(as_result(old_rc, old_code), c.get_bits(&buf, skip));
+            }
+            assert_cavlc_cycle_matches(&mut bs, &mut c, &buf, used, &format!("skip {skip} used {used}"));
+
+            // …and both sides read on identically afterwards, which is what the mode is
+            // for. 16 bits is the widest read the codec makes.
+            for _ in 0..4 {
+                let mut old_code = 0u32;
+                let old_rc = unsafe { BsGetBits(&mut bs, 16, &mut old_code) };
+                assert_eq!(
+                    as_result(old_rc, old_code),
+                    c.get_bits(&buf, 16),
+                    "reads after the cycle, skip {skip} used {used}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
+    // `BsEndCavlc` loads 4 bytes at `iIndex >> 3` with no bounds test of its own — the
+    // same `READER_SLOP` regime as every other prime in the family (F4, plan §2.2.2
+    // [P3]). Here the mode closes at and past the *declared* RBSP end, so the load
+    // reaches into the slack.
+    //
+    // S12/F10 sizing: the raw side gets the real slack (`rbsp_with_slack`'s 8 bytes),
+    // because a raw pointer's footprint exceeds its read footprint and an exactly-sized
+    // buffer would make Miri flag the reference implementation rather than the port.
+    // The safe side is handed the same slice, and `end_cavlc` indexes it — so a buffer
+    // short of the contract panics here instead of reading past the allocation.
+    let mut rng = Prng::new(0x8B17_0011);
+
+    for declared_len in 1..=8usize {
+        for pattern in 0..5 {
+            let payload: Vec<u8> = match pattern {
+                0 => vec![0x00; 8],
+                1 => vec![0xFF; 8],
+                2 => vec![0x80; 8],
+                3 => vec![0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA],
+                _ => rng.bytes(8),
+            };
+            let buf = rbsp_with_slack(&payload);
+            let size_bits = declared_len as i32 * 8;
+
+            let (mut bs, old_err) = old_init(&buf, size_bits);
+            let Ok(mut c) = BsCursor::init(&buf, size_bits) else {
+                assert_ne!(old_err, ERR_NONE, "init disagreed at declared_len {declared_len}");
+                continue;
+            };
+            assert_eq!(old_err, ERR_NONE);
+
+            // Walk the mode's close point from inside the RBSP to past its end.
+            for used in [0isize, 8, 16, 24, 32, 40, 48, 56] {
+                let mut bs_c = bs;
+                let mut c_c = c;
+                let idx_bytes = (((bs_c.pCurBuf as usize) - (bs_c.pStartBuf as usize)) as isize)
+                    - 2
+                    + (used >> 3);
+                // Only exercise closes whose 4-byte prime is inside the allocation: past
+                // that the *raw* pair reads out of bounds, which is F4's pre-existing
+                // condition and not something this test should manufacture.
+                if idx_bytes < 0 || idx_bytes as usize + 4 > buf.len() {
+                    continue;
+                }
+                assert_cavlc_cycle_matches(
+                    &mut bs_c,
+                    &mut c_c,
+                    &buf,
+                    used,
+                    &format!("declared_len {declared_len} pattern {pattern} used {used}"),
+                );
+            }
+
+            // Consume a little and repeat, so the mode also opens from a mid-byte state.
+            let mut old_code = 0u32;
+            let old_rc = unsafe { BsGetBits(&mut bs, 5, &mut old_code) };
+            if as_result(old_rc, old_code) != c.get_bits(&buf, 5) {
+                panic!("read disagreed at declared_len {declared_len} pattern {pattern}");
+            }
+        }
     }
 }
 

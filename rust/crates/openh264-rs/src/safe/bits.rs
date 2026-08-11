@@ -16,12 +16,15 @@
 //!   `nalu.rs`'s business and stay there — by the time a cursor sees bytes, they are
 //!   raw payload. `RBSP2EBSP` is not a cursor operation.
 //! * **No CABAC.** The arithmetic engine keeps its own cursor triple and is Phase
-//!   3.1's job; the CAVLC↔CABAC handoff (`cabac_decoder.rs:712-717`) additionally
+//!   3.2's job; the CAVLC↔CABAC handoff (`cabac_decoder.rs:712-717`) additionally
 //!   *writes* `uiCurBits`/`iLeftBits`, so it will need an explicit method here when
 //!   that conversion happens. Nothing speculative is offered for it now.
-//! * **No `iIndex`.** The CAVLC fast path (`parse_mb_syn_cavlc.rs:2233-2248`)
-//!   rewinds through `SBitStringAux::iIndex`; that field has no consumer in this
-//!   phase, so [`BsCursor`] does not carry it yet.
+//! * **CAVLC mode, yes.** `SBitStringAux::iIndex` — the absolute bit position the
+//!   CAVLC residual path reads while the accumulator is deliberately stale — is
+//!   mirrored here as [`BsCursor::start_cavlc`]/[`BsCursor::end_cavlc`] and the
+//!   [`cavlc_bit_pos`](BsCursor::cavlc_bit_pos) accessor pair. Phase 1 recorded
+//!   `iIndex` as having no consumer; T3.1b's inventory found that wrong (plan
+//!   §2.2.2 **[P3]**).
 
 use crate::safe::err::ErrInfo;
 
@@ -40,19 +43,47 @@ use crate::safe::err::ErrInfo;
 /// | `uiCurBits` | `cur_bits` | MSB-aligned accumulator |
 /// | `iLeftBits` | `left_bits` | bits available in it, biased by −16 |
 /// | `iBits` | `bits` | size of the RBSP in bits |
+/// | `iIndex` | `cavlc_bit_pos` | absolute bit position, live only in CAVLC mode |
 ///
 /// `len` is state, not a property of the slice passed in: the C++ end pointer marks
 /// the end of the *RBSP*, while the allocation legitimately continues past it — see
 /// the slop discussion on [`BsCursor::get_bits`]. This is a deliberate deviation from
 /// the plan's three-field sketch (§2.2.2); without it, error-code parity at the end
 /// of a NAL is not expressible.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Eq)]
 pub struct BsCursor {
     pos: usize,
     cur_bits: u32,
     left_bits: i32,
     len: usize,
     bits: i32,
+    /// The C++ `iIndex`. See [`start_cavlc`](BsCursor::start_cavlc).
+    cavlc_bit_pos: isize,
+    /// Whether [`start_cavlc`](BsCursor::start_cavlc) has run without a matching
+    /// [`end_cavlc`](BsCursor::end_cavlc) — the coherence guard described there.
+    /// Debug-only, and deliberately **not** part of [`PartialEq`].
+    #[cfg(debug_assertions)]
+    in_cavlc: bool,
+}
+
+/// Equality over the six fields `SBitStringAux` mirrors, and nothing else.
+///
+/// Written by hand rather than derived because `in_cavlc` exists only under
+/// `cfg(debug_assertions)`: a derived `PartialEq` would compare it in debug builds and
+/// not in release, so two cursors could be equal in one profile and unequal in the
+/// other. The parity tests compare cursor states across both profiles (S16's
+/// dual-profile discipline), and that skew is exactly what it exists to prevent — the
+/// same reasoning that keeps the pool's debug generation counter out of handle
+/// equality (plan §D1).
+impl PartialEq for BsCursor {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos
+            && self.cur_bits == other.cur_bits
+            && self.left_bits == other.left_bits
+            && self.len == other.len
+            && self.bits == other.bits
+            && self.cavlc_bit_pos == other.cavlc_bit_pos
+    }
 }
 
 /// Peeks the top `n` bits of an MSB-aligned accumulator.
@@ -126,6 +157,10 @@ impl BsCursor {
     /// creating one, and every field is a value the raw struct was already holding.
     /// **Deleted with the last `SBitStringAux` reader field** (T3.1b/T3.3) — nothing
     /// but a translation shim should ever call it.
+    ///
+    /// `cavlc_bit_pos` is **not** a parameter: the shim's callers are the accumulator
+    /// readers, which run outside CAVLC mode, and `BsStartCavlc`/`BsEndCavlc` are still
+    /// raw at this point. T3.1b deletes this function rather than growing it.
     #[inline]
     pub fn from_parts(pos: usize, cur_bits: u32, left_bits: i32, len: usize, bits: i32) -> Self {
         Self {
@@ -134,6 +169,9 @@ impl BsCursor {
             left_bits,
             len,
             bits,
+            cavlc_bit_pos: 0,
+            #[cfg(debug_assertions)]
+            in_cavlc: false,
         }
     }
 
@@ -159,6 +197,9 @@ impl BsCursor {
             left_bits: 0,
             len: end as usize,
             bits: size_bits,
+            cavlc_bit_pos: 0,
+            #[cfg(debug_assertions)]
+            in_cavlc: false,
         };
         cursor.init_read_bits(buf, 0)?;
         Ok(cursor)
@@ -171,6 +212,7 @@ impl BsCursor {
     /// CABAC initialisation (`parse_mb_syn_cabac.rs:3312`) and with `0` by
     /// `decode_slice.rs:2474`.
     pub fn init_read_bits(&mut self, buf: &[u8], end_offset: isize) -> Result<(), ErrInfo> {
+        self.debug_assert_out_of_cavlc("init_read_bits");
         let end_limit = self.len as isize - end_offset;
         if self.pos as isize >= end_limit {
             return Err(ErrInfo::INVALID_ACCESS);
@@ -223,6 +265,7 @@ impl BsCursor {
     /// sites.
     #[inline]
     pub fn peek_bits(&self, n: i32) -> u32 {
+        self.debug_assert_out_of_cavlc("peek_bits");
         ubits(self.cur_bits, n)
     }
 
@@ -285,6 +328,7 @@ impl BsCursor {
     /// guard bytes into the decoder's real buffers is Phase 3's decision (plan P6);
     /// `phase1_findings.md` §F4 records the measurement behind this paragraph.
     pub fn get_bits(&mut self, buf: &[u8], n: i32) -> Result<u32, ErrInfo> {
+        self.debug_assert_out_of_cavlc("get_bits");
         let value = ubits(self.cur_bits, n);
         self.dump_bits(buf, n)?;
         Ok(value)
@@ -301,6 +345,9 @@ impl BsCursor {
     /// Mirrors `BsGetUe` (`dec_golomb.rs:233`), including its split refill for
     /// prefixes longer than 16 bits and its wrapping reconstruction of the value.
     pub fn get_ue(&mut self, buf: &[u8]) -> Result<u32, ErrInfo> {
+        // `get_se`, `get_te0` and `get_one_bit` reach the accumulator only through this
+        // and `get_bits`, so the two guards above cover the whole read family.
+        self.debug_assert_out_of_cavlc("get_ue");
         let mut value: u32 = 0;
         let lz = leading_zero_bits(self.cur_bits);
 
@@ -352,9 +399,129 @@ impl BsCursor {
     ///
     /// Mirrors `CheckMoreRBSPData` (`dec_golomb.rs:341`).
     pub fn check_more_rbsp_data(&self) -> bool {
+        self.debug_assert_out_of_cavlc("check_more_rbsp_data");
         let offset_bytes = self.pos as isize - 2;
         let bits_consumed = (offset_bytes << 3) as i32;
         self.bits - bits_consumed - self.left_bits > 1
+    }
+
+    // -----------------------------------------------------------------------
+    // CAVLC mode — plan §2.2.2 [P3]
+    // -----------------------------------------------------------------------
+
+    /// Panics in debug builds if the cursor is inside a CAVLC region.
+    ///
+    /// The accumulator is *deliberately stale* between [`start_cavlc`](Self::start_cavlc)
+    /// and [`end_cavlc`](Self::end_cavlc), so reading it there yields bits the residual
+    /// path has already consumed. In C++ that desync is undetectable — `SBitStringAux`
+    /// has no notion of which of its two position representations is authoritative — and
+    /// it decodes silently wrong. Here it is a panic with a name on it.
+    #[inline(always)]
+    fn debug_assert_out_of_cavlc(&self, op: &str) {
+        #[cfg(debug_assertions)]
+        assert!(
+            !self.in_cavlc,
+            "BsCursor::{op} ran inside a CAVLC region: the accumulator is stale between \
+             start_cavlc and end_cavlc, and `cavlc_bit_pos` is the live position"
+        );
+        let _ = op;
+    }
+
+    /// Panics in debug builds if the cursor is *not* inside a CAVLC region — the
+    /// mirror of [`debug_assert_out_of_cavlc`](Self::debug_assert_out_of_cavlc), for
+    /// the bit-position accessors, whose value is dead outside the mode.
+    #[inline(always)]
+    fn debug_assert_in_cavlc(&self, op: &str) {
+        #[cfg(debug_assertions)]
+        assert!(
+            self.in_cavlc,
+            "BsCursor::{op} ran outside a CAVLC region: `cavlc_bit_pos` is only live \
+             between start_cavlc and end_cavlc"
+        );
+        let _ = op;
+    }
+
+    /// Enters CAVLC mode: projects the cursor onto an absolute bit position.
+    ///
+    /// Mirrors `BsStartCavlc` (`parse_mb_syn_cavlc.rs:2229`) exactly. The accumulator
+    /// holds `16 - left_bits` valid bits (32 immediately after a prime, since
+    /// `left_bits` is biased by −16), so the position of the next unread bit is
+    /// `8 * pos - (16 - left_bits)` — and the `16` is the CAVLC residual machinery's
+    /// **16-bit half-window**, not a mistyped 32. It is copied from the C++ rather than
+    /// rederived.
+    ///
+    /// While the mode is live, `cavlc_bit_pos` is authoritative and `cur_bits`/
+    /// `left_bits`/`pos` are stale — the residual decoder walks bytes directly from the
+    /// bit position through its own `SReadBitsCache`. [`end_cavlc`](Self::end_cavlc)
+    /// puts the accumulator back.
+    #[inline]
+    pub fn start_cavlc(&mut self) {
+        self.cavlc_bit_pos = ((self.pos as isize) << 3) - (16 - self.left_bits as isize);
+        #[cfg(debug_assertions)]
+        {
+            self.in_cavlc = true;
+        }
+    }
+
+    /// Leaves CAVLC mode: reseats the accumulator at `cavlc_bit_pos`.
+    ///
+    /// Mirrors `BsEndCavlc` (`parse_mb_syn_cavlc.rs:2236`) exactly, including
+    /// `left_bits` going **negative on purpose** — `-16 + (idx & 7)` is the same −16
+    /// bias every other prime uses, offset by the sub-byte phase the 4-byte load was
+    /// shifted by.
+    ///
+    /// The 4-byte load at `idx >> 3` is legal for the same reason every other prime in
+    /// this module is: the reader's callers hand it `READER_SLOP` bytes of real
+    /// allocation past the RBSP (plan §2.2.2 [P3]; `decoder_core.rs:3637` guarantees
+    /// them). An out-of-range index here is a pre-existing overrun surfacing, per plan
+    /// §2.2.2 — it is not silenced with a `get()` fallback, because the raw pair had no
+    /// such fallback and error-code parity is the gate.
+    ///
+    /// Round-tripping restores the *reading position*, not the field values: the
+    /// re-prime can leave the accumulator holding more valid bits than it did before
+    /// [`start_cavlc`](Self::start_cavlc). Since it always holds at least 16, every read
+    /// the codec makes (widths 1..=16) is unaffected — see the 16-bit ceiling on
+    /// [`get_bits`](Self::get_bits).
+    #[inline]
+    pub fn end_cavlc(&mut self, buf: &[u8]) {
+        let idx = self.cavlc_bit_pos;
+        self.pos = (idx >> 3) as usize;
+        let b = &buf[self.pos..self.pos + 4];
+        let cache = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        self.cur_bits = cache << ((idx & 0x07) as u32);
+        self.pos += 4;
+        self.left_bits = -16 + ((idx & 0x07) as i32);
+        #[cfg(debug_assertions)]
+        {
+            self.in_cavlc = false;
+        }
+    }
+
+    /// The absolute bit position — the C++ `iIndex`. Live only in CAVLC mode.
+    #[inline]
+    pub fn cavlc_bit_pos(&self) -> isize {
+        self.debug_assert_in_cavlc("cavlc_bit_pos");
+        self.cavlc_bit_pos
+    }
+
+    /// Advances the absolute bit position by `bits` — the C++ `pBs->iIndex += n`, which
+    /// is how the residual path reports what it consumed.
+    #[inline]
+    pub fn advance_cavlc_bits(&mut self, bits: isize) {
+        self.debug_assert_in_cavlc("advance_cavlc_bits");
+        self.cavlc_bit_pos += bits;
+    }
+
+    /// The raw `cavlc_bit_pos` field, with no mode assertion.
+    ///
+    /// State inspection for the parity tests, in the same family as
+    /// [`cur_bits`](Self::cur_bits) and [`left_bits`](Self::left_bits) — the differential
+    /// tests compare all six C-mirrored fields *after* `end_cavlc` has cleared the mode,
+    /// where the value is dead but must still match the C++ byte for byte. Production
+    /// code wants [`cavlc_bit_pos`](Self::cavlc_bit_pos), which asserts.
+    #[inline]
+    pub fn cavlc_bit_pos_state(&self) -> isize {
+        self.cavlc_bit_pos
     }
 }
 
@@ -761,6 +928,206 @@ mod tests {
         assert_eq!(c.get_bits(&buf, 4), Ok(0b1010));
         c = saved;
         assert_eq!(c.get_bits(&buf, 4), Ok(0b1010), "rewound to the same bits");
+    }
+
+    // -----------------------------------------------------------------------
+    // CAVLC mode (plan §2.2.2 [P3])
+    // -----------------------------------------------------------------------
+
+    /// Randomised round counts are cut hard under Miri, which runs ~100x slower and is
+    /// part of every `gates.sh full` run via `--lib`. The *shapes* tested are unchanged
+    /// — every bit phase, every width — only the sampling shrinks.
+    fn scale_unit(n: usize) -> usize {
+        if cfg!(miri) {
+            (n / 25).max(2)
+        } else {
+            n
+        }
+    }
+
+    /// A payload long enough that any `end_cavlc` prime in these tests is in bounds.
+    fn cavlc_buf(prng: &mut Prng, n: usize) -> Vec<u8> {
+        with_slack(&prng.bytes(n))
+    }
+
+    #[test]
+    fn start_cavlc_projects_the_cursor_onto_an_absolute_bit_position() {
+        // After `init` the accumulator holds 32 valid bits primed from bytes 0..4, so
+        // the next unread bit is bit 0 and `pos` is 4: 4*8 - (16 - (-16)) = 0.
+        let buf = with_slack(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let mut c = BsCursor::init(&buf, 48).unwrap();
+        assert_eq!((c.pos(), c.left_bits()), (4, -16));
+        c.start_cavlc();
+        assert_eq!(c.cavlc_bit_pos(), 0);
+        c.end_cavlc(&buf);
+
+        // Consume 12 bits and it is 12, whatever the refill did to `pos`/`left_bits`.
+        let mut c = BsCursor::init(&buf, 48).unwrap();
+        c.get_bits(&buf, 12).unwrap();
+        c.start_cavlc();
+        assert_eq!(c.cavlc_bit_pos(), 12);
+    }
+
+    #[test]
+    fn end_cavlc_reseats_the_window_at_every_bit_phase() {
+        // The −16 half-window arithmetic, byte-aligned and at each of the 7 unaligned
+        // phases: `left_bits` is `-16 + (idx & 7)` — negative for phase 0 and rising to
+        // −9 at phase 7 — and `pos` is `(idx >> 3) + 4`.
+        let buf = with_slack(&[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x23, 0x45, 0x67]);
+        for phase in 0..8usize {
+            for byte in 0..4usize {
+                let idx = (byte * 8 + phase) as isize;
+                let mut c = BsCursor::init(&buf, 64).unwrap();
+                c.start_cavlc();
+                c.advance_cavlc_bits(idx);
+                c.end_cavlc(&buf);
+
+                assert_eq!(c.pos(), byte + 4, "pos = (idx >> 3) + 4 at phase {phase}");
+                assert_eq!(
+                    c.left_bits(),
+                    -16 + phase as i32,
+                    "left_bits = -16 + (idx & 7) at phase {phase}"
+                );
+                let expect = u32::from_be_bytes([buf[byte], buf[byte + 1], buf[byte + 2], buf[byte + 3]])
+                    << phase;
+                assert_eq!(c.cur_bits(), expect, "the 4-byte prime is shifted by idx & 7");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cavlc_round_trip_reads_on_identically() {
+        // The contract `end_cavlc` documents: the round trip restores the *reading
+        // position*, not the field values — the re-prime can leave more valid bits in
+        // the accumulator than were there before. Reads of 1..=16 bits are therefore the
+        // ones that must agree, and they are the only widths the codec uses.
+        let mut prng = Prng::new(0x5CA1_AB1E);
+        let buf = cavlc_buf(&mut prng, 64);
+
+        for _ in 0..scale_unit(400) {
+            let skip = prng.below(96) as i32;
+            let mut untouched = BsCursor::init(&buf, 64 * 8).unwrap();
+            for _ in 0..skip {
+                untouched.get_bits(&buf, 1).unwrap();
+            }
+            let mut cycled = untouched;
+            cycled.start_cavlc();
+            assert_eq!(cycled.cavlc_bit_pos(), skip as isize, "the projection is the bit count");
+            cycled.end_cavlc(&buf);
+
+            for _ in 0..8 {
+                let n = 1 + prng.below(16) as i32;
+                assert_eq!(
+                    cycled.get_bits(&buf, n),
+                    untouched.get_bits(&buf, n),
+                    "a cycled cursor reads on identically after skipping {skip} bits"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn advancing_the_bit_position_is_what_end_cavlc_seeks_to() {
+        // The residual path's only write: `pBs->iIndex += iUsedBits`. Advancing by N and
+        // ending is the same reading state as consuming N bits without the mode at all.
+        let mut prng = Prng::new(0xF00D_1234);
+        let buf = cavlc_buf(&mut prng, 64);
+
+        for used in [0isize, 1, 7, 8, 9, 15, 16, 17, 31, 33, 64, 127] {
+            let mut plain = BsCursor::init(&buf, 64 * 8).unwrap();
+            for _ in 0..used {
+                plain.get_bits(&buf, 1).unwrap();
+            }
+            let mut moded = BsCursor::init(&buf, 64 * 8).unwrap();
+            moded.start_cavlc();
+            moded.advance_cavlc_bits(used);
+            moded.end_cavlc(&buf);
+
+            for _ in 0..4 {
+                assert_eq!(
+                    moded.get_bits(&buf, 16),
+                    plain.get_bits(&buf, 16),
+                    "advance_cavlc_bits({used}) lands where {used} single-bit reads do"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_mode_flag_is_not_part_of_equality() {
+        // S16's dual-profile discipline: equality must mean the same thing in debug and
+        // release, so the `cfg`-gated flag is excluded and the six C-mirrored fields are
+        // compared by hand. Two cursors differing *only* by mode are equal — in release
+        // there is no flag to differ by, and debug must agree.
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let plain = BsCursor::init(&buf, 32).unwrap();
+        let mut in_mode = plain;
+        in_mode.start_cavlc();
+        // `start_cavlc` writes `cavlc_bit_pos`, which *is* compared — so re-zero it via a
+        // second cursor that entered the mode at the same position.
+        let mut also_in_mode = plain;
+        also_in_mode.start_cavlc();
+        assert_eq!(in_mode, also_in_mode);
+
+        // And a cursor whose bit position differs is unequal, in both profiles.
+        let mut moved = also_in_mode;
+        moved.advance_cavlc_bits(1);
+        assert_ne!(in_mode, moved, "cavlc_bit_pos is one of the six compared fields");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ran inside a CAVLC region")]
+    fn reading_the_accumulator_inside_the_mode_panics_in_debug() {
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let mut c = BsCursor::init(&buf, 32).unwrap();
+        c.start_cavlc();
+        let _ = c.get_bits(&buf, 4);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ran inside a CAVLC region")]
+    fn peeking_inside_the_mode_panics_in_debug() {
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let mut c = BsCursor::init(&buf, 32).unwrap();
+        c.start_cavlc();
+        let _ = c.peek_bits(4);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ran outside a CAVLC region")]
+    fn reading_the_bit_position_outside_the_mode_panics_in_debug() {
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let c = BsCursor::init(&buf, 32).unwrap();
+        let _ = c.cavlc_bit_pos();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "ran outside a CAVLC region")]
+    fn advancing_the_bit_position_after_end_cavlc_panics_in_debug() {
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let mut c = BsCursor::init(&buf, 32).unwrap();
+        c.start_cavlc();
+        c.end_cavlc(&buf);
+        c.advance_cavlc_bits(4);
+    }
+
+    #[test]
+    fn the_bit_position_survives_end_cavlc_for_the_parity_tests() {
+        // `end_cavlc` clears the mode but leaves `cavlc_bit_pos` set, exactly as the C++
+        // leaves `iIndex` set. The state accessor reads it without asserting, which is
+        // how the differential tests compare all six fields after the mode closes.
+        let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+        let mut c = BsCursor::init(&buf, 48).unwrap();
+        c.start_cavlc();
+        c.advance_cavlc_bits(19);
+        c.end_cavlc(&buf);
+        assert_eq!(c.cavlc_bit_pos_state(), 19);
+        // …and the accumulator is usable again.
+        assert_eq!(c.get_bits(&buf, 4).is_ok(), true);
     }
 
     #[test]
