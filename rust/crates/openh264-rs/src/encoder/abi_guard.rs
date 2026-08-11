@@ -22,7 +22,6 @@ use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};
 use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
 use crate::encoder::nal_encap::SWelsNalRaw;
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
-use crate::common::expand_pic::SExpandPicFunc;
 use crate::common::mc::SMcFunc;
 use crate::encoder::encoder_context::{sWelsEncCtx, SLTRState, SSpatialPicIndex, SStrideTables};
 use crate::encoder::md::{SMB, SMbCache, SSampleDealingFunc, SWelsMD};
@@ -101,7 +100,10 @@ assert_size!(SCabacCtx, 504);
 assert_size!(SLTRState, 60);
 assert_size!(SLTRMarkingFeedback, 16);
 assert_size!(SLTRRecoverRequest, 20);
-assert_size!(SExpandPicFunc, 24);
+// `SExpandPicFunc` (24) was asserted here until T4b.3b deleted the struct: every
+// install in both codecs set the same three `_c` constants, so the table was a
+// dispatch with one arm. `common/expand_pic.rs::ExpandReferencingPicture` names
+// the kernels directly and takes no function pointers.
 assert_size!(SMcFunc, 48);
 // 248 in the C++ and in this port until Phase 4a. `SSampleDealingFunc::pfMdCost`
 // and `pfMeCost` were `PSampleSadSatdCostFunc*` pointing *into this same
@@ -173,7 +175,13 @@ assert_size!(SDqLayer, 512);
 // thunks came out of the crate without this number twitching. Size is the wrong
 // instrument for that seam; the ratchet (raw_ptr -92, unsafe_fn -26) is the right
 // one. Stated here so the next reader does not go looking for the missing bytes.
-assert_size!(SWelsFuncPtrList, 1184);
+//
+// -24 at T4b.3b: `sExpandPicFunc`, the first member and the only *embedded table*
+// in this struct rather than a slot. It moves the number where T4b.2a and T4b.3a
+// could not, and the reason is the same one stated above -- size measures bytes of
+// members, so it sees a 24-byte struct leave and cannot see a vtable leave. Both
+// seams were the same size of change; only one of them is legible here.
+assert_size!(SWelsFuncPtrList, 1160);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models

@@ -571,8 +571,6 @@ pub struct SFmo {
     pub iSliceGroupCount: i32,
 }
 
-pub use crate::common::expand_pic::SExpandPicFunc;
-
 /// Reference-picture border expansion length (`PADDING_LENGTH` in
 /// `codec/common/inc/expand_pic.h`).
 pub const PADDING_LENGTH: usize = 32;
@@ -876,24 +874,15 @@ pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, std::ptr::null_mut())
 }
 
-#[inline]
-pub unsafe fn ExpandReferencingPicture(
-    pData: [*mut u8; 4],
-    iWidth: i32,
-    iHeight: i32,
-    iStride: [i32; 4],
-    pfExpandLuma: Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>,
-    pfExpandChroma: [Option<unsafe extern "C" fn(*mut u8, i32, i32, i32)>; 2],
-) {
-    crate::decoder::error_concealment::ExpandReferencingPicture(
-        pData,
-        iWidth,
-        iHeight,
-        iStride,
-        std::mem::transmute(pfExpandLuma),
-        std::mem::transmute(pfExpandChroma),
-    );
-}
+// T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
+// function-pointer slots as an inline `extern "C"` type and handing them to
+// `error_concealment`'s copy through **the crate's last two `mem::transmute`
+// calls** -- one of them over an entire `[Option<fn>; 2]` array. All four
+// `PExpandPictureFunc` typedefs in play were the same type,
+// `unsafe extern "C" fn(*mut u8, i32, i32, i32)`, so the two calls reinterpreted
+// a type into itself and bridged nothing at all. **The crate now contains zero
+// such calls**; every remaining ratchet match, including this comment, is prose.
+// Callers use `common/expand_pic.rs` directly.
 
 #[inline]
 pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, iStrideUV: i32) {
@@ -1796,9 +1785,10 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
     // 2. Motion Compensation
     crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc as *mut _ as *mut _, cpu_flag);
 
-    // 2b. Reference picture border expansion (`InitExpandPictureFunc`).
-    (*pCtx).sExpandPicFunc.pfExpandLumaPicture = Some(ExpandPictureLuma_c);
-    (*pCtx).sExpandPicFunc.pfExpandChromaPicture = [Some(ExpandPictureChroma_c), Some(ExpandPictureChroma_c)];
+    // 2b. Reference picture border expansion installed `sExpandPicFunc` here,
+    // three constants that T4b.3b turned into direct calls. Both chroma slots held
+    // `ExpandPictureChroma_c`, so the aligned/unaligned index selected between two
+    // identical functions -- the 4a shape, in the decoder.
 
     // 3. IDCT Inverse Transform
     (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctResAddPred_c);
@@ -3943,13 +3933,11 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         }
                     }
                     if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && !(*pCtx).pDec.is_null() {
-                        ExpandReferencingPicture(
-                            (*(*pCtx).pDec).pData,
+                        crate::common::expand_pic::ExpandReferencingPicture(
+                            &(*(*pCtx).pDec).pData,
                             (*(*pCtx).pDec).iWidthInPixel,
                             (*(*pCtx).pDec).iHeightInPixel,
-                            (*(*pCtx).pDec).iLinesize,
-                            (*pCtx).sExpandPicFunc.pfExpandLumaPicture,
-                            (*pCtx).sExpandPicFunc.pfExpandChromaPicture,
+                            &(*(*pCtx).pDec).iLinesize,
                         );
                     }
                 }

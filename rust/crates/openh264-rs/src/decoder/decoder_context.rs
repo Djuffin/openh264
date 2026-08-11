@@ -205,8 +205,6 @@ pub type PGetIntraPredFunc = Option<unsafe extern "C" fn(pPred: *mut u8, kiLumaS
 pub type PIdctResAddPredFunc = Option<unsafe extern "C" fn(pPred: *mut u8, kiStride: i32, pRs: *mut i16)>;
 pub type PIdctFourResAddPredFunc =
     Option<unsafe extern "C" fn(pPred: *mut u8, iStride: i32, pRs: *mut i16, pNzc: *const i8)>;
-pub type PExpandPictureFunc =
-    Option<unsafe extern "C" fn(pDst: *mut u8, kiStride: i32, kiPicWidth: i32, kiPicHeight: i32)>;
 pub type PGetIntraPred8x8Func =
     Option<unsafe extern "C" fn(pPred: *mut u8, kiLumaStride: i32, bTLAvail: bool, bTRAvail: bool)>;
 pub type PCopyFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32)>;
@@ -710,7 +708,10 @@ pub struct SWelsDecoderContext {
     pub pIdctResAddPredFunc8x8: PIdctResAddPredFunc,
     pub sCopyFunc: SCopyFunc,
     pub sDeblockingFunc: SDeblockingFunc,
-    pub sExpandPicFunc: crate::decoder::decoder_core::SExpandPicFunc,
+    // T4b.3b: `sExpandPicFunc: SExpandPicFunc` sat here. Three constant slots,
+    // both chroma entries the same function; `common/expand_pic.rs` names the
+    // kernels directly now. This struct has no `assert_size!` and no offset pins,
+    // so nothing moves with it.
     pub sBlockFunc: SBlockFunc,
     pub iCurSeqIntervalTargetDependId: i32,
     pub iCurSeqIntervalMaxPicWidth: i32,

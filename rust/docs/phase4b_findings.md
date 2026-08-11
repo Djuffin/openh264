@@ -110,3 +110,76 @@ been wrong from the first line.
 selectors — read the update paths, do not read the summary — applies to prose about
 the code exactly as it applies to a cached configuration value. The counts that decide
 enum-vs-deletion get taken from `grep` over the vtable instances, every time.
+
+---
+
+## F21 — One C++ function translated three times, and two copies drifted: sub-16 chroma was expanded three different ways
+
+**Status: FIXED 2026-08-11 (Phase 4b session C, T4b.3b), by unification.** Found while
+computing T4b.3b's S20 closure — the closure asked "who else implements this?" and the
+answer was three files.
+
+### The divergence
+
+The C++ has exactly one `ExpandReferencingPicture` (`common/src/expand_pic.cpp:388`),
+called from five sites — two in the encoder (`ref_list_mgr_svc.cpp:375`, `:779`) and
+three in the decoder (`decoder_core.cpp:2854`, `error_concealment.cpp:446`,
+`manage_dec_ref.cpp:199`). The port had translated it **three times**, once per
+consumer module, plus a fourth forwarding wrapper in `decoder_core.rs` that existed
+only to `transmute` between two identical function-pointer types.
+
+The three bodies agreed on the luma plane and on chroma when `kiWidthUV >= 16`. They
+disagreed below that — the `else` branch of the C++'s width test, which fires for a
+frame narrower than **32 pixels**:
+
+| implementation | chroma when `kiWidthUV < 16` |
+|---|---|
+| C++ `expand_pic.cpp:388` | `ExpandPictureChroma_c` on Cb and Cr |
+| `encoder/ref_list_mgr_svc.rs:199` | same — the faithful copy |
+| `decoder/error_concealment.rs:838` | `pExpChrom[0]`, which on this port *is* `ExpandPictureChroma_c` — right answer, wrong reason |
+| `decoder/manage_dec_ref.rs:176` | **nothing.** The `if kiWidthUV >= 16` had no `else` at all |
+
+So on the `manage_dec_ref` path — `WelsInitRefList`'s error-concealment prefetch — a
+reference picture 16 or 24 pixels wide kept an unexpanded chroma border, and every
+motion vector pointing outside the frame read whatever `AllocPicture` had left there.
+
+`error_concealment.rs`'s copy is the more interesting one: it is correct **only
+because both chroma slots of `SExpandPicFunc` held the same function** in this port. In
+a build with the SIMD variants the C++ installs (`_sse2`, `_neon`, `_mmi`), its
+`pExpChrom[0]` is `ExpandPictureChromaUnalign`, and the sub-16 case would call an
+alignment-specialised kernel where the C++ calls the scalar one. It was one table entry
+away from being a second real divergence.
+
+### Reachability, and why no gate could have caught it
+
+`iWidthInPixel` is `iMbWidth << 4`, so the smallest legal frame is 16 pixels wide and
+the divergent range — widths 16 and 24 — is representable in a conformant stream. The
+project's corpus does not contain one: the JVT conformance assets are 176x144 and
+larger, the diffharness inputs are 152x100 and up, and the malformed-stream corpus is
+derived from the conformance streams, so it inherits their SPS dimensions. Both
+`decoder_conformance_test` and `malformed_stream_parity` are therefore silent on this
+by construction, not by luck.
+
+**A test pinning it would need a new asset** — an encode at 16x16 or 24x16 — which is
+golden movement, so it is not this phase's. Recorded for whoever adds a narrow-frame
+stream; the arithmetic is now identical to the C++'s in the single copy, so such a test
+would be pinning correct behaviour rather than repairing it.
+
+### Why the fix is unification and not three patches
+
+`common/expand_pic.rs::ExpandReferencingPicture` is now the only copy, with the C++'s
+body, and the three duplicates are deleted. Patching `manage_dec_ref`'s missing `else`
+would have restored byte-equality and left the shape that produced the bug: three
+functions with one name, each free to drift again, and each reachable only through a
+table that made them look like different implementations of the same interface. This is
+the F13/F20 pattern once more — **a duplicate family is a divergence that has not
+happened yet** — and S21's inventory rule is what turns it up.
+
+### The reusable form
+
+S21 says a duplicate-family finding must inventory every function per copy. T4b.3b
+adds the corollary that the inventory has to be **behavioural, not structural**: all
+three copies had the same name, the same six parameters and the same C++ citation in
+their doc comments, and a signature-level diff would have called them identical. The
+divergence was one missing `else` in one of three bodies, and reading the three bodies
+side by side is the only thing that finds it.

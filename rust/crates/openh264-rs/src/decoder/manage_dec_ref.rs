@@ -58,14 +58,6 @@ pub const WELS_LOG_INFO: i32 = 3;
 // Data Structures
 // ============================================================================
 
-/// Function pointer callback type for picture expansion.
-pub type PExpandPictureFunc = unsafe extern "C" fn(
-    pDst: *mut u8,
-    kiStride: i32,
-    kiPicWidth: i32,
-    kiPicHeight: i32,
-);
-
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
 
 
@@ -154,8 +146,6 @@ pub struct SLastDecPicInfo {
     pub bLastHasMmco5: bool,
 }
 
-pub use crate::decoder::decoder_core::SExpandPicFunc;
-
 pub use crate::decoder::decoder_context::SLogContext;
 
 
@@ -172,41 +162,11 @@ pub unsafe fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
     // Logging stub for no-std / embedded compatibility
 }
 
-/// Fallback picture border expansion if dynamic assembly function pointers are not set.
-pub unsafe fn ExpandReferencingPicture(
-    pData: [*mut u8; 4],
-    iWidth: i32,
-    iHeight: i32,
-    iStride: [i32; 4],
-    pfExpLuma: Option<PExpandPictureFunc>,
-    pfExpChrom: [Option<PExpandPictureFunc>; 2],
-) {
-    let pPicY = pData[0];
-    let pPicCb = pData[1];
-    let pPicCr = pData[2];
-    let kiWidthY = iWidth;
-    let kiHeightY = iHeight;
-    let kiWidthUV = kiWidthY >> 1;
-    let kiHeightUV = kiHeightY >> 1;
-
-    if let Some(exp_luma) = pfExpLuma {
-        if !pPicY.is_null() {
-            exp_luma(pPicY, iStride[0], kiWidthY, kiHeightY);
-        }
-    }
-    if kiWidthUV >= 16 {
-        let kbChrAligned = (kiWidthUV & 0x0F) == 0;
-        let idx = if kbChrAligned { 1 } else { 0 };
-        if let Some(exp_chrom) = pfExpChrom[idx] {
-            if !pPicCb.is_null() {
-                exp_chrom(pPicCb, iStride[1], kiWidthUV, kiHeightUV);
-            }
-            if !pPicCr.is_null() {
-                exp_chrom(pPicCr, iStride[2], kiWidthUV, kiHeightUV);
-            }
-        }
-    }
-}
+// T4b.3b: this file's `ExpandReferencingPicture` was the third of three copies of
+// `expand_pic.cpp:388`, and the one that had drifted furthest: its `kiWidthUV >= 16`
+// test had no `else`, so the chroma planes of a frame narrower than 32 pixels were
+// never expanded at all. See `phase4b_findings.md` F21. The single copy now lives in
+// `common/expand_pic.rs` with the C++'s body.
 
 // ============================================================================
 // Core Reference Management Implementation
@@ -772,13 +732,11 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                 ref_pic.uiQualityId = 0;
                 ref_pic.eSliceType = ctx.eSliceType;
 
-                ExpandReferencingPicture(
-                    ref_pic.pData,
+                crate::common::expand_pic::ExpandReferencingPicture(
+                    &ref_pic.pData,
                     ref_pic.iWidthInPixel,
                     ref_pic.iHeightInPixel,
-                    ref_pic.iLinesize,
-                    ctx.sExpandPicFunc.pfExpandLumaPicture,
-                    ctx.sExpandPicFunc.pfExpandChromaPicture,
+                    &ref_pic.iLinesize,
                 );
                 AddShortTermToList(&mut ctx.sRefPic, pRef);
             } else {
