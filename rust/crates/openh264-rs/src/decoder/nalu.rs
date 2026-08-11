@@ -15,8 +15,9 @@
 //! This module provides:
 //! 1. In-memory data structures for H.264 Network Abstraction Layer (NAL) units ([`SNalUnit`])
 //!    and Access Units ([`SAccessUnit`]).
-//! 2. Annex B bitstream start code prefix detection ([`DetectStartCodePrefix`]).
-//! 3. NAL header parsing and SVC extension unpacking ([`ParseNalHeader`], [`DecodeNalHeaderExt`]).
+//! 2. NAL header parsing and SVC extension unpacking ([`ParseNalHeader`], [`DecodeNalHeaderExt`]).
+//!    (Annex B start-code scanning is `split_annexb_units` in `lib.rs`; the unused
+//!    `DetectStartCodePrefix` transliteration was deleted dead at T3.3.)
 //! 4. Access Unit (AU) boundary detection algorithms ([`CheckAccessUnitBoundary`], [`CheckAccessUnitBoundaryExt`]).
 //! 5. Syntactic Parameter Set parsers for Sequence Parameter Sets ([`ParseSps`], [`DecodeSpsSvcExt`]),
 //!    Picture Parameter Sets ([`ParsePps`]), Video Usability Information ([`ParseVui`]),
@@ -258,26 +259,20 @@ pub type SNalUnitHeaderExt = TagNalUnitHeaderExt;
 pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
 
 /// Video Coding Layer (VCL) slice payload representation.
+///
+/// The payload's identity is [`sSliceBitsRead`](Self::sSliceBitsRead)'s `start`
+/// offset into the decoder's `sRawData` since T3.3. `pNalPos: *mut u8` was deleted
+/// dead there (S18): nothing in this port ever wrote it — the upstream parse-only
+/// output path that fills it was never carried — and its one read sat behind an
+/// always-true null guard. `iNalLength` stays: the parse-only NAL-length
+/// bookkeeping does execute (with its perpetual default of 0).
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct SVclNal {
     pub sSliceHeaderExt: SSliceHeaderExt,
     pub sSliceBitsRead: BsReader,
-    pub pNalPos: *mut u8,
     pub iNalLength: i32,
     pub bSliceHeaderExtFlag: bool,
-}
-
-impl Default for SVclNal {
-    fn default() -> Self {
-        Self {
-            sSliceHeaderExt: SSliceHeaderExt::default(),
-            sSliceBitsRead: BsReader::default(),
-            pNalPos: std::ptr::null_mut(),
-            iNalLength: 0,
-            bSliceHeaderExtFlag: false,
-        }
-    }
 }
 
 /// Prefix NAL unit syntax elements (NAL type 14).
@@ -461,53 +456,29 @@ unsafe fn bytes_equal<T>(a: *const T, b: *const T) -> bool {
         == std::slice::from_raw_parts(b as *const u8, std::mem::size_of::<T>())
 }
 
-pub unsafe fn DetectStartCodePrefix(
-    kpBuf: *const u8,
-    pOffset: *mut i32,
-    mut iBufSize: i32,
-) -> *mut u8 {
-    let mut pBits = kpBuf as *mut u8;
-
-    loop {
-        let mut iIdx: i32 = 0;
-        while iIdx < iBufSize && *pBits == 0 {
-            pBits = pBits.add(1);
-            iIdx += 1;
-        }
-        if iIdx >= iBufSize {
-            break;
-        }
-
-        iIdx += 1;
-        pBits = pBits.add(1);
-
-        if iIdx >= 3 && *pBits.sub(1) == 0x01 {
-            *pOffset = (pBits as usize - kpBuf as usize) as i32;
-            return pBits;
-        }
-
-        iBufSize -= iIdx;
-    }
-
-    std::ptr::null_mut()
-}
+// `DetectStartCodePrefix` was deleted dead at T3.3 (S18): it had no callers — the
+// Annex B scan is `split_annexb_units` (`lib.rs`), and has been since the port's
+// `WelsDecodeBs` was written.
 
 /// Decodes the 3-byte SVC NAL Unit Header Extension.
-pub unsafe fn DecodeNalHeaderExt(pNal: *mut SNalUnit, mut pSrc: *const u8) {
+///
+/// T3.3: takes the 3-byte window as a slice — the function had **no length
+/// parameter at all** in pointer form; it gains one by construction, and every
+/// caller passes exactly [`NAL_UNIT_HEADER_EXT_SIZE`] bytes behind its own
+/// `iNalSize` guard.
+pub unsafe fn DecodeNalHeaderExt(pNal: *mut SNalUnit, src: &[u8]) {
     let pHeaderExt = &mut (*pNal).sNalHeaderExt;
 
-    let mut uiCurByte = *pSrc;
+    let mut uiCurByte = src[0];
     pHeaderExt.bIdrFlag = (uiCurByte & 0x40) != 0;
     pHeaderExt.uiPriorityId = uiCurByte & 0x3F;
 
-    pSrc = pSrc.add(1);
-    uiCurByte = *pSrc;
+    uiCurByte = src[1];
     pHeaderExt.bNoInterLayerPredFlag = (uiCurByte >> 7) != 0;
     pHeaderExt.uiDependencyId = (uiCurByte & 0x70) >> 4;
     pHeaderExt.uiQualityId = uiCurByte & 0x0F;
 
-    pSrc = pSrc.add(1);
-    uiCurByte = *pSrc;
+    uiCurByte = src[2];
     pHeaderExt.uiTemporalId = uiCurByte >> 5;
     pHeaderExt.bUseRefBasePicFlag = (uiCurByte & 0x10) != 0;
     pHeaderExt.bDiscardableFlag = (uiCurByte & 0x08) != 0;
@@ -518,17 +489,22 @@ pub unsafe fn DecodeNalHeaderExt(pNal: *mut SNalUnit, mut pSrc: *const u8) {
 
 /// Parses the NAL unit header byte, checks parameter set existence, and routes
 /// the NAL unit to the appropriate syntactic decoder.
+///
+/// T3.3: the payload's identity is an **offset into `sRawData`** (`kiRbspStart`,
+/// minted by `RawDataBuffer::append_ebsp_stripped`), and the return is the offset
+/// past the consumed headers — `Some(offset)` where the C returned an advanced
+/// pointer, `None` where it returned null. Every read below is an index into the
+/// owning buffer.
 pub unsafe fn ParseNalHeader(
     pCtx: *mut SWelsDecoderContext,
     pNalUnitHeader: *mut SNalUnitHeader,
-    pSrcRbsp: *mut u8,
+    kiRbspStart: usize,
     iSrcRbspLen: i32,
-    pSrcNal: *mut u8,
-    iSrcNalLen: i32,
     pConsumedBytes: *mut i32,
-) -> *mut u8 {
+) -> Option<usize> {
     let pCurNal: *mut SNalUnit;
-    let mut pNal = pSrcRbsp;
+    let bytes = (*pCtx).sRawData.bytes();
+    let mut iNal = kiRbspStart;
     let mut iNalSize = iSrcRbspLen;
 
     (*pNalUnitHeader).eNalUnitType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
@@ -536,7 +512,7 @@ pub unsafe fn ParseNalHeader(
     // Remove consecutive ZERO bytes at the end of current NAL in reverse order
     let mut iIndex = iSrcRbspLen - 1;
     while iIndex >= 0 {
-        if *pSrcRbsp.add(iIndex as usize) == 0 {
+        if bytes[kiRbspStart + iIndex as usize] == 0 {
             iNalSize -= 1;
             *pConsumedBytes += 1;
             iIndex -= 1;
@@ -545,14 +521,14 @@ pub unsafe fn ParseNalHeader(
         }
     }
 
-    (*pNalUnitHeader).uiForbiddenZeroBit = *pNal >> 7;
+    (*pNalUnitHeader).uiForbiddenZeroBit = bytes[iNal] >> 7;
     if (*pNalUnitHeader).uiForbiddenZeroBit != 0 {
         (*pCtx).iErrorCode |= dsBitstreamError;
-        return std::ptr::null_mut();
+        return None;
     }
 
-    (*pNalUnitHeader).uiNalRefIdc = (*pNal >> 5) & 0x03;
-    (*pNalUnitHeader).eNalUnitType = match *pNal & 0x1F {
+    (*pNalUnitHeader).uiNalRefIdc = (bytes[iNal] >> 5) & 0x03;
+    (*pNalUnitHeader).eNalUnitType = match bytes[iNal] & 0x1F {
         0 => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
         1 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE,
         2 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPA,
@@ -575,7 +551,7 @@ pub unsafe fn ParseNalHeader(
     };
     (*pCtx).sCurNalHead = *pNalUnitHeader;
 
-    pNal = pNal.add(1);
+    iNal += 1;
     iNalSize -= 1;
     *pConsumedBytes += 1;
 
@@ -590,7 +566,7 @@ pub unsafe fn ParseNalHeader(
             (*(*pCtx).pDecoderStatistics).iSpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
-        return std::ptr::null_mut();
+        return None;
     }
 
     if !(IS_SEI_NAL(eType)
@@ -602,7 +578,7 @@ pub unsafe fn ParseNalHeader(
             (*(*pCtx).pDecoderStatistics).iPpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
-        return std::ptr::null_mut();
+        return None;
     }
 
     if (IS_VCL_NAL_AVC_BASE(eType)
@@ -616,7 +592,7 @@ pub unsafe fn ParseNalHeader(
             (*(*pCtx).pDecoderStatistics).iSubSpsNoExistNalNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
-        return std::ptr::null_mut();
+        return None;
     }
 
     match eType {
@@ -643,10 +619,10 @@ pub unsafe fn ParseNalHeader(
                 }
                 (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
                 (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
+                return None;
             }
 
-            DecodeNalHeaderExt(pCurNal, pNal);
+            DecodeNalHeaderExt(pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
             if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                 || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
             {
@@ -660,10 +636,10 @@ pub unsafe fn ParseNalHeader(
                 }
                 (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
                 (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
+                return None;
             }
 
-            pNal = pNal.add(NAL_UNIT_HEADER_EXT_SIZE);
+            iNal += NAL_UNIT_HEADER_EXT_SIZE;
             iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
             *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
 
@@ -672,12 +648,16 @@ pub unsafe fn ParseNalHeader(
             (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
 
             if (*pNalUnitHeader).uiNalRefIdc != 0 {
-                let iBitSize = (iNalSize << 3) - BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
-                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pNal);
-                let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iStart, iBitSize);
+                // F15, preserved verbatim for one more commit: with iNalSize == 0 the
+                // `iNalSize as usize - 1` panics in debug and wraps in release, where
+                // the pointer lands on the header byte. The checked form and the
+                // golden un-withholding land together in the F15 commit.
+                let iBitSize = (iNalSize << 3)
+                    - BsGetTrailingBits(bytes.as_ptr().add(iNal).add(iNalSize as usize - 1));
+                let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iNal, iBitSize);
                 if iErr != ERR_NONE {
                     (*pCtx).iErrorCode |= dsBitstreamError;
-                    return std::ptr::null_mut();
+                    return None;
                 }
                 let (buf, cursor) = (*pCtx).sBs.split(&(*pCtx).sRawData);
                 ParsePrefixNalUnit(pCtx, buf, cursor);
@@ -697,7 +677,7 @@ pub unsafe fn ParseNalHeader(
             pCurNal = MemGetNextNal(&mut (*pCtx).pAccessUnitList, (*pCtx).pMemAlign);
             if pCurNal.is_null() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
-                return std::ptr::null_mut();
+                return None;
             }
             (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
             (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
@@ -719,10 +699,10 @@ pub unsafe fn ParseNalHeader(
                         }
                     }
                     (*pCtx).iErrorCode |= dsBitstreamError;
-                    return std::ptr::null_mut();
+                    return None;
                 }
 
-                DecodeNalHeaderExt(pCurNal, pNal);
+                DecodeNalHeaderExt(pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
                 if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                     || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
                 {
@@ -737,9 +717,9 @@ pub unsafe fn ParseNalHeader(
                         }
                     }
                     (*pCtx).iErrorCode |= dsBitstreamError;
-                    return std::ptr::null_mut();
+                    return None;
                 }
-                pNal = pNal.add(NAL_UNIT_HEADER_EXT_SIZE);
+                iNal += NAL_UNIT_HEADER_EXT_SIZE;
                 iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
                 *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
             } else {
@@ -761,11 +741,16 @@ pub unsafe fn ParseNalHeader(
                 .sNalData
                 .sVclNal
                 .sSliceBitsRead;
-            let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
+            // F15, preserved verbatim for one more commit: with iNalSize == 0 the
+            // `iNalSize as usize - 1` panics in debug and wraps in release, where the
+            // pointer lands on the header byte. The checked form and the golden
+            // un-withholding land together in the F15 commit.
+            let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(
+                bytes.as_ptr().add(iNal).add(iNalSize as usize - 1),
+            );
             let iBitSize = (iNalSize << 3) - trailing_bits;
-            let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pNal);
             let mut iErr =
-                crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
+                crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iNal, iBitSize);
             if iErr != ERR_NONE {
                 ForceClearCurrentNal(pCurAu);
                 if uiAvailNalNum > 1 {
@@ -775,7 +760,7 @@ pub unsafe fn ParseNalHeader(
                     }
                 }
                 (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
+                return None;
             }
 
             let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
@@ -792,7 +777,7 @@ pub unsafe fn ParseNalHeader(
                     }
                 }
                 (*pCtx).iErrorCode |= dsBitstreamError;
-                return std::ptr::null_mut();
+                return None;
             }
 
             let p_last_nal = *(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize);
@@ -814,7 +799,7 @@ pub unsafe fn ParseNalHeader(
         _ => {}
     }
 
-    pNal
+    Some(iNal)
 }
 
 /// Evaluates whether two consecutive VCL NAL units belong to different Access Units.
@@ -990,19 +975,19 @@ pub unsafe fn CheckNextAuNewSeq(
 }
 
 /// Dispatches non-VCL NAL units (SPS, Subset SPS, PPS, SEI) to syntax parsers.
-pub unsafe fn ParseNonVclNal(
-    pCtx: *mut SWelsDecoderContext,
-    pRbsp: *mut u8,
-    kiSrcLen: i32,
-    pSrcNal: *mut u8,
-    kSrcNalLen: i32,
-) -> i32 {
+///
+/// T3.3: `kiRbspStart` is the payload's offset into `sRawData` (was `pRbsp`); the
+/// dead `pSrcNal`/`kSrcNalLen` pair — unused in this port, upstream's parse-only
+/// SPS/PPS caching was never carried — is deleted (S18). The trailing-bits read is
+/// an index, in bounds because the `kiSrcLen <= 0` guard has always preceded it.
+pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize, kiSrcLen: i32) -> i32 {
     if kiSrcLen <= 0 {
         return ERR_NONE;
     }
 
     let pBs = &mut (*pCtx).sBs;
-    let iBitSize = (kiSrcLen << 3) - BsGetTrailingBits(pRbsp.add(kiSrcLen as usize - 1));
+    let iBitSize = (kiSrcLen << 3)
+        - BsGetTrailingBits(&(*pCtx).sRawData.bytes()[kiRbspStart + kiSrcLen as usize - 1]);
     let eNalType = (*pCtx).sCurNalHead.eNalUnitType;
     let mut iPicWidth = 0;
     let mut iPicHeight = 0;
@@ -1011,8 +996,7 @@ pub unsafe fn ParseNonVclNal(
     match eNalType {
         EWelsNalUnitType::NAL_UNIT_SPS | EWelsNalUnitType::NAL_UNIT_SUBSET_SPS => {
             if iBitSize > 0 {
-                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pRbsp);
-                iErr = DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
+                iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1025,7 +1009,7 @@ pub unsafe fn ParseNonVclNal(
                 }
             }
             let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
-            iErr = ParseSps(pCtx, buf, cursor, &mut iPicWidth, &mut iPicHeight, pSrcNal, kSrcNalLen);
+            iErr = ParseSps(pCtx, buf, cursor, &mut iPicWidth, &mut iPicHeight);
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
                     && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1041,8 +1025,7 @@ pub unsafe fn ParseNonVclNal(
 
         EWelsNalUnitType::NAL_UNIT_PPS => {
             if iBitSize > 0 {
-                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pRbsp);
-                iErr = DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
+                iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1060,8 +1043,6 @@ pub unsafe fn ParseNonVclNal(
                 (*pCtx).sSpsPpsCtx.sPpsBuffer.as_mut_ptr(),
                 buf,
                 cursor,
-                pSrcNal,
-                kSrcNalLen,
             );
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
@@ -1338,8 +1319,6 @@ pub unsafe fn ParseSps(
     pBsAux: &mut BsCursor,
     pPicWidth: *mut i32,
     pPicHeight: *mut i32,
-    pSrcNal: *mut u8,
-    kSrcNalLen: i32,
 ) -> i32 {
     // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in au_parser.cpp. Zeroing the
     // raw bytes (rather than using Default) also clears the struct's padding, which
@@ -1647,8 +1626,6 @@ pub unsafe fn ParsePps(
     pPpsList: *mut SPps,
     buf: &[u8],
     pBsAux: &mut BsCursor,
-    pSrcNal: *mut u8,
-    kSrcNalLen: i32,
 ) -> i32 {
     // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp; zeroing the raw bytes also
     // clears padding, which the byte-wise comparison against the active PPS relies on.

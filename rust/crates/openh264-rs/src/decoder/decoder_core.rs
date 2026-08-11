@@ -324,39 +324,9 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVclNal {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-    pub sSliceBitsRead: BsReader,
-    pub bSliceHeaderExtFlag: bool,
-    pub iNalLength: i32,
-    pub pNalPos: *mut u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SPrefixNalUnit {
-    pub bStoreRefBasePicFlag: bool,
-    pub sRefPicBaseMarking: SRefBasePicMarking,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union SNalData {
-    pub sVclNal: SVclNal,
-    pub sPrefixNal: SPrefixNalUnit,
-}
-
-impl Default for SNalData {
-    fn default() -> Self {
-        Self {
-            sVclNal: SVclNal::default(),
-        }
-    }
-}
-
-
+// The duplicate SVclNal/SPrefixNalUnit/SNalData definitions that used to sit here
+// were deleted dead at T3.3 (S18): every live `sNalData` access resolves through
+// `nalu::SNalUnit`, whose own definitions are the ones the decoder uses.
 
 pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
 
@@ -687,7 +657,6 @@ pub type PRefPicListReorderSyn = *mut SRefPicListReorderSyn;
 pub type PRefPicMarking = *mut SRefPicMarking;
 pub type PRefBasePicMarking = *mut SRefBasePicMarking;
 pub type PPredWeightTable = *mut SPredWeightTable;
-pub type PPrefixNalUnit = *mut SPrefixNalUnit;
 
 // Logging and Bitstream Reading Helpers
 
@@ -1186,15 +1155,14 @@ pub unsafe fn DecodeFrameConstruction(
                     let pCurNal = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
                     if !pCurNal.is_null() {
                         let iNalLen = (*pCurNal).sNalData.sVclNal.iNalLength;
-                        let pNalBs = (*pCurNal).sNalData.sVclNal.pNalPos;
                         if !(*pParser).pNalLenInByte.is_null() {
                             *(*pParser).pNalLenInByte.add((*pParser).iNalNum as usize) = iNalLen;
                             (*pParser).iNalNum += 1;
                         }
-                        if !pNalBs.is_null() && !pDstBuf.is_null() && iNalLen > 0 {
-                            std::ptr::copy_nonoverlapping(pNalBs, pDstBuf, iNalLen as usize);
-                            pDstBuf = pDstBuf.add(iNalLen as usize);
-                        }
+                        // The `pNalPos`-guarded copy that sat here never executed:
+                        // nothing in this port wrote `pNalPos`, so the guard was
+                        // always false. Deleted dead with the field at T3.3 (S18);
+                        // the length bookkeeping above is the part that does run.
                     }
                     iIdx += 1;
                 }
@@ -2127,30 +2095,9 @@ pub unsafe fn WelsFreeStaticMemory(pCtx: PWelsDecoderContext) {
     }
 }
 
-pub unsafe fn DecodeNalHeaderExt(pNal: PNalUnit, mut pSrc: *mut u8) {
-    if pNal.is_null() || pSrc.is_null() {
-        return;
-    }
-    let pHeaderExt = &mut (*pNal).sNalHeaderExt;
-    let mut uiCurByte = *pSrc;
-    pHeaderExt.bIdrFlag = (uiCurByte & 0x40) != 0;
-    pHeaderExt.uiPriorityId = uiCurByte & 0x3F;
-
-    pSrc = pSrc.add(1);
-    uiCurByte = *pSrc;
-    pHeaderExt.bNoInterLayerPredFlag = (uiCurByte >> 7) != 0;
-    pHeaderExt.uiDependencyId = (uiCurByte & 0x70) >> 4;
-    pHeaderExt.uiQualityId = uiCurByte & 0x0F;
-
-    pSrc = pSrc.add(1);
-    uiCurByte = *pSrc;
-    pHeaderExt.uiTemporalId = uiCurByte >> 5;
-    pHeaderExt.bUseRefBasePicFlag = (uiCurByte & 0x10) != 0;
-    pHeaderExt.bDiscardableFlag = (uiCurByte & 0x08) != 0;
-    pHeaderExt.bOutputFlag = (uiCurByte & 0x04) != 0;
-    pHeaderExt.uiReservedThree2Bits = uiCurByte & 0x03;
-    pHeaderExt.uiLayerDqId = (pHeaderExt.uiDependencyId << 4) | pHeaderExt.uiQualityId;
-}
+// A duplicate `DecodeNalHeaderExt` was deleted dead here at T3.3 (S18): it had no
+// callers — both call sites resolve to `nalu::DecodeNalHeaderExt`, which takes the
+// 3-byte window as a slice since this seam.
 
 pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
     pDecoderStatistics: *mut SDecoderStatistics,
@@ -3553,32 +3500,23 @@ pub unsafe fn WelsDecodeBs(
             }
             let (payload_start, payload_len) = (*pCtx).sRawData.append_ebsp_stripped(payload_slice);
 
-            // SHIM(phase3): the parse entry points still take pointers until T3.3's
-            // nalu face lands; this is the one place a pointer into the owned buffer
-            // is minted, and it dies with those signatures.
-            let payload_ptr = (*pCtx).sRawData.bytes().as_ptr().add(payload_start) as *mut u8;
-
             let mut consumed_bytes = 0i32;
             let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
             let p_payload = crate::decoder::nalu::ParseNalHeader(
                 pCtx,
                 &mut nal_header,
-                payload_ptr,
-                payload_len as i32,
-                payload_ptr,
+                payload_start,
                 payload_len as i32,
                 &mut consumed_bytes,
             );
 
-            if !p_payload.is_null() {
+            if let Some(nal_start) = p_payload {
                 let nal_type = nal_header.eNalUnitType;
                 if crate::decoder::nalu::IS_PARAM_SETS_NALS(nal_type) {
                     crate::decoder::nalu::ParseNonVclNal(
                         pCtx,
-                        p_payload,
+                        nal_start,
                         (payload_len as i32) - consumed_bytes,
-                        payload_ptr,
-                        payload_len as i32,
                     );
                 }
                 CheckAndFinishLastPic(pCtx, ppDst, pDstInfo);

@@ -404,8 +404,9 @@ fn header_byte(data: &[u8], offset: usize) -> Option<u8> {
 
 /// Degenerate inputs that no truncation of a real stream produces: empty input,
 /// bare start codes, zero-length payloads, a lone SPS, and an SPS/PPS pair with the
-/// slice cut to a handful of bytes. Both feed modes, because `Raw` exercises
-/// `DetectStartCodePrefix` on bytes that `split_annexb_units` would have dropped.
+/// slice cut to a handful of bytes. Both feed modes, because `Raw` exercises the
+/// start-code scan (`split_annexb_units`) on bytes the whole-stream feed would
+/// have dropped.
 fn degenerate_corpus() -> Vec<Case> {
     let mut cases = Vec::new();
     let mut push = |name: &str, bytes: Vec<u8>| {
