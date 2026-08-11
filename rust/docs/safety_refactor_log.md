@@ -2546,7 +2546,7 @@ both ends.
 | tests | 433 / 427 / 20 | **434 / 428 / 20** |
 | T3.0 goldens | 2316 rows, **105 `WITHHELD`** | **2316 rows, 0 `WITHHELD`** — see §4 |
 | conformance | 53 hashes | 53, unchanged throughout |
-| sweeps | 341/341 both | 341/341 both (two F3 hits en route — §5) |
+| sweeps | 341/341 both | 341/341 both **on the battery that gated the last code commit**; three F3 hits across the session's five batteries, each re-run 5/5 clean — §5 |
 | benches | bit-identical | bit-identical, both |
 | Miri `--lib` | 288 | **289** (the P5 growth test) |
 | ratchet | 1336 / 5106 / 158 | **1327 `unsafe_fn` / 5076 `raw_ptr` / 155 `SHIM(`** |
@@ -2665,21 +2665,32 @@ corrected in place. Cheap lesson: a remembered *number* is as untrustworthy as a
 remembered line number, and the protocol survived precisely because it was written as a
 property rather than a count.
 
-### 5. F3's eleventh measurement, and the first hit that arrived before any change
+### 5. F3's eleventh measurement, and the two hits that landed on trees the seam never touched
 
-Two release-sweep hits, both the signature, each re-run 5/5 clean. The first came from
-the **opening control battery — on the session-start commit, before a line was
-changed**, which is the cleanest available statement that the rate belongs to the
-machine. The second, in the face-3 battery, therefore was not news.
+Three hits across five batteries, all the signature, each re-run 5/5 clean. Two of them
+are worth naming precisely, because of *where* they landed: the first came from the
+**opening control battery — on the session-start commit, before a line was changed** —
+and the third from the **final re-verification of a docs-only commit**. Neither tree
+contains a byte this seam wrote. That is the cleanest available statement that the rate
+belongs to the machine, and it is why the second hit (face 3, release) was not news.
 
-The alternation ran anyway, because two hits trigger S14's clause and the tempting
-argument ("decoder-only seam, zero encoder bytes changed" — verified, the diff over
-`src/encoder` and `src/common` is empty) is the one the rule exists to distrust.
-Control `d737a450` in a worktree, 6 rounds × 32 `mt sm=3` configurations per side,
-alternating in one loop: **control 4/192, HEAD 2/192**. Control failed twice as often —
-same direction as the ninth measurement, second acquittal in two runs. Appended to F3
-with a note that the current rate (≈1/64 under battery load) means a 6×32 alternation
-now suffices where the ninth needed 6×120.
+The alternation ran after that second hit, because more than one triggers S14's clause
+and the tempting argument ("decoder-only seam, zero encoder bytes changed" — verified,
+the diff over `src/encoder` and `src/common` is empty) is the one the rule exists to
+distrust. Control `d737a450` in a worktree, 6 rounds × 32 `mt sm=3` configurations per
+side, alternating in one loop: **control 4/192, HEAD 2/192**. Control failed twice as
+often — same direction as the ninth measurement, second acquittal in two runs. The
+third hit, arriving after the alternation had already answered, was recorded as
+corroboration rather than triggering a second one.
+
+Appended to F3 with a note that the current rate (≈1/64 under battery load) means a
+6×32 alternation now suffices where the ninth needed 6×120.
+
+One bookkeeping point for whoever reads the gate logs: the battery that gated the last
+**code** commit (face 4) was `OVERALL: PASS` with 341/341 in both profiles. The
+`OVERALL: FAIL` in the final log is that third F3 hit on a docs-only tree — the
+post-F17 gate stopping the session on a known-flaky configuration, which is the
+behaviour it was fixed to have, and the protocol answered it in five runs.
 
 ### 6. Perf, and the one place the disassembly and the bench disagreed about mattering
 
