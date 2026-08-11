@@ -74,6 +74,42 @@ run_cargo_test debug
 run_cargo_test release --release
 
 # ---------------------------------------------------------------------------
+# 1b. Miri, same verdict discipline (F17, phase3_findings.md).
+#
+# Both Miri steps used to be written `if (cargo miri …) | tee … | tail -5; then`.
+# A pipeline's exit status is its LAST command's, this script does not set
+# `pipefail` (deliberately — see the audit note at the bottom), and `tail`
+# succeeds whenever it can write. So the `if` never saw cargo's status: every
+# `PASS  miri` printed between Phase 2's exit and 2026-08-10 was unconditional.
+# The gate was a reporter, not a gate.
+#
+# The fix is `run_cargo_test`'s, which had it right all along: keep the `tail`
+# for display, take the verdict from `${PIPESTATUS[0]}`, and corroborate it by
+# parsing libtest's own totals out of the log. The zero-test clause is not
+# belt-and-braces — it is this script's own header comment applied to Miri ("a
+# test that stops being compiled in looks exactly like a test that passes"), and
+# a mistyped `--skip` or a renamed module walks straight through everything else.
+# ---------------------------------------------------------------------------
+run_miri() {  # $1 = log slug, $2 = description, $3 = extra MIRIFLAGS, $4.. = args to `cargo miri test`
+  local slug=$1 desc=$2 mflags=$3; shift 3
+  local log="$LOGS/miri_$slug.log"
+  (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} $mflags" \
+     cargo +nightly miri test "$@" 2>&1) | tee "$log" | tail -5
+  local rc=${PIPESTATUS[0]}
+  local passed failed
+  passed=$(awk '/^test result:/ { for (i=1;i<=NF;i++) if ($i=="passed;") s+=$(i-1) } END { print s+0 }' "$log")
+  failed=$(awk '/^test result:/ { for (i=1;i<=NF;i++) if ($i=="failed;") s+=$(i-1) } END { print s+0 }' "$log")
+  printf '  totals: %s passed / %s failed   (cargo miri rc=%s)\n' "$passed" "$failed" "$rc"
+  if [ "$rc" -ne 0 ] || [ "$failed" -ne 0 ]; then
+    fail "miri $desc: $passed passed / $failed failed, rc=$rc — see $log"
+  elif [ "$passed" -eq 0 ]; then
+    fail "miri $desc: ran 0 tests (rc=0) — nothing was compiled in; see $log"
+  else
+    pass "miri $desc: $passed passed / 0 failed"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 2. The unsafe ratchet (plan §7.1).
 # ---------------------------------------------------------------------------
 hdr "unsafe ratchet"
@@ -118,10 +154,17 @@ sweep_gate() {  # $1 = profile
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
   local tally wall=$((t1 - t0))
+  # sweep.sh prints `PASS=n FAIL=n` unconditionally as its last act before
+  # exiting, so a missing tally means it died on the way there — a broken
+  # instrument, not a verdict. It used to fall back to `tail -3` as display
+  # text, which reads like a result. Corroboration, exactly as run_cargo_test
+  # corroborates rc with the test totals.
   tally=$(grep -E '^PASS=[0-9]+ FAIL=[0-9]+' "$log" | tail -1)
-  [ -z "$tally" ] && tally=$(tail -3 "$log" | tr '\n' ' ')
-  printf '  %s   (%ss wall)\n' "$tally" "$wall"
-  if [ "$rc" -eq 0 ]; then
+  printf '  %s   (%ss wall, sweep.sh rc=%s)\n' "${tally:-<no tally line>}" "$wall" "$rc"
+  if [ -z "$tally" ]; then
+    tail -3 "$log"
+    fail "sweep ($prof): no 'PASS=n FAIL=n' tally in $log (sweep.sh rc=$rc) — it died before finishing; this is a broken run, not an F3 hit"
+  elif [ "$rc" -eq 0 ]; then
     pass "sweep ($prof): $tally, ${wall}s wall"
   else
     echo "  --- F3 retry rule ---"
@@ -150,18 +193,33 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Benches. The decoder bench is the sharper instrument (perf_baseline.md);
 #    it exits non-zero on a frame-count or hash mismatch, which is the gate.
+#
+# Verdict shape (F17): three conditions, all of which must hold.
+#   [0] cargo's own status — the one the old `if pipeline; then` discarded. A
+#       bench that prints clean rows and then dies mid-run used to pass.
+#   [2] the display grep matched something — this is the signal the old form
+#       *did* carry (nothing matched ⇒ the bench produced no output at all), and
+#       moving the verdict to PIPESTATUS[0] would have thrown it away.
+#   the log's own MISMATCH/DIFFER marker, which was already checked.
 # ---------------------------------------------------------------------------
 if [ "${LEVEL_DONE:-0}" != 1 ]; then
   hdr "decode_1080p_bench"
-  if (cd "$CRATE" && BENCH_ITERS="${BENCH_ITERS:-3}" cargo bench --bench decode_1080p_bench 2>&1) \
-       | tee "$LOGS/decode_bench.log" | grep -E 'Rust :|C\+\+  :|ratio:|MISMATCH|frames'; then
-    if grep -q 'MISMATCH' "$LOGS/decode_bench.log"; then
-      fail "decode_1080p_bench: output mismatch"
-    else
-      pass "decode_1080p_bench: all streams bit-identical"
-    fi
+  (cd "$CRATE" && BENCH_ITERS="${BENCH_ITERS:-3}" cargo bench --bench decode_1080p_bench 2>&1) \
+    | tee "$LOGS/decode_bench.log" | grep -E 'Rust :|C\+\+  :|ratio:|MISMATCH|frames'
+  # One capture, then index it. `a=${PIPESTATUS[0]}` is itself a command, so it
+  # replaces PIPESTATUS with its own one-element status before a second
+  # `${PIPESTATUS[2]}` can be read — which under `set -u` aborts the whole
+  # battery. Found by the known-red self-test, on its first run.
+  bench_st=("${PIPESTATUS[@]}")
+  bench_rc=${bench_st[0]}; bench_matched=${bench_st[2]}
+  if [ "$bench_rc" -ne 0 ]; then
+    fail "decode_1080p_bench: non-zero exit (rc=$bench_rc) — see $LOGS/decode_bench.log"
+  elif [ "$bench_matched" -ne 0 ]; then
+    fail "decode_1080p_bench: exit 0 but printed no result rows — see $LOGS/decode_bench.log"
+  elif grep -q 'MISMATCH' "$LOGS/decode_bench.log"; then
+    fail "decode_1080p_bench: output mismatch"
   else
-    fail "decode_1080p_bench: non-zero exit"
+    pass "decode_1080p_bench: all streams bit-identical"
   fi
 
   hdr "c_vs_rust_bench (encoder)"
@@ -181,16 +239,19 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     echo "  *** (perf_baseline.md §2). Install ffmpeg, or set FFMPEG=/path/to/ffmpeg."
     skip "c_vs_rust_bench: no ffmpeg — encoder perf is UNMEASURED this run"
   else
-    if (cd "$CRATE" && FFMPEG="$FFMPEG" BENCH_REQUIRE_FFMPEG=1 \
-          cargo bench --bench c_vs_rust_bench 2>&1) \
-         | tee "$LOGS/encode_bench.log" | grep -E 'ms|IDENTICAL|DIFFER'; then
-      if grep -q 'DIFFER' "$LOGS/encode_bench.log"; then
-        fail "c_vs_rust_bench: a row differed"
-      else
-        pass "c_vs_rust_bench: all rows bit-identical"
-      fi
+    (cd "$CRATE" && FFMPEG="$FFMPEG" BENCH_REQUIRE_FFMPEG=1 \
+       cargo bench --bench c_vs_rust_bench 2>&1) \
+      | tee "$LOGS/encode_bench.log" | grep -E 'ms|IDENTICAL|DIFFER'
+    bench_st=("${PIPESTATUS[@]}")
+    bench_rc=${bench_st[0]}; bench_matched=${bench_st[2]}
+    if [ "$bench_rc" -ne 0 ]; then
+      fail "c_vs_rust_bench: non-zero exit (rc=$bench_rc) — see $LOGS/encode_bench.log"
+    elif [ "$bench_matched" -ne 0 ]; then
+      fail "c_vs_rust_bench: exit 0 but printed no rows — see $LOGS/encode_bench.log"
+    elif grep -q 'DIFFER' "$LOGS/encode_bench.log"; then
+      fail "c_vs_rust_bench: a row differed"
     else
-      fail "c_vs_rust_bench: non-zero exit"
+      pass "c_vs_rust_bench: all rows bit-identical"
     fi
   fi
 
@@ -229,17 +290,14 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   hdr "miri (--lib, minus the F12/F13 skips)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
-  # -Zmiri-ignore-leaks: this gate is for *undefined behaviour*, not for leaks. The
-  # port allocates C-style through `WelsMalloc` on purpose and frees through paired
-  # destructors the unit tests mostly do not call, so leak-checking a mid-refactor
-  # transliteration reports the design rather than a defect. Phase 8 (the API layer)
-  # is where ownership becomes Rust's and the leak check becomes meaningful.
-  elif (cd "$CRATE" && MIRIFLAGS="${MIRIFLAGS:-} -Zmiri-ignore-leaks" \
-          cargo +nightly miri test --lib -- "${MIRI_SKIPS[@]}" 2>&1) \
-         | tee "$LOGS/miri_lib.log" | tail -5; then
-    pass "miri --lib (whole library, minus the F12/F13 skips)"
   else
-    fail "miri --lib — see $LOGS/miri_lib.log"
+    # -Zmiri-ignore-leaks: this gate is for *undefined behaviour*, not for leaks. The
+    # port allocates C-style through `WelsMalloc` on purpose and frees through paired
+    # destructors the unit tests mostly do not call, so leak-checking a mid-refactor
+    # transliteration reports the design rather than a defect. Phase 8 (the API layer)
+    # is where ownership becomes Rust's and the leak check becomes meaningful.
+    run_miri lib "--lib (whole library, minus the F12/F13 skips)" \
+      "-Zmiri-ignore-leaks" --lib -- "${MIRI_SKIPS[@]}"
   fi
 fi
 
@@ -248,16 +306,24 @@ fi
 # ---------------------------------------------------------------------------
 # 6. Phase-exit Miri: the differential tests, which drive the raw-pointer
 #    reference implementations as well as the safe ones.
+#
+# The file list is discovered, so an empty list is a step that reports nothing
+# at all — the same class of hole as F17 one level up, and it gets a loud FAIL
+# rather than a silently empty loop. These files retire as the raw code they
+# compare against is deleted (T3.1b deleted the reader half of
+# safe_bits_differential); the day the last one goes, this gate's contract
+# changes and that should be a deliberate edit here, not a quiet no-op.
+# No -Zmiri-ignore-leaks here, matching what this step has always run.
 # ---------------------------------------------------------------------------
 if [ "${LEVEL_DONE:-0}" != 1 ]; then
-  for t in $(cd "$CRATE/tests" && ls *differential*.rs 2>/dev/null | sed 's/\.rs$//'); do
+  diff_tests=$(cd "$CRATE/tests" && ls *differential*.rs 2>/dev/null | sed 's/\.rs$//')
+  if [ -z "$diff_tests" ]; then
+    hdr "miri (differential integration tests)"
+    fail "miri differential: no tests/*differential*.rs found — the phase-exit Miri gate ran nothing"
+  fi
+  for t in $diff_tests; do
     hdr "miri (--test $t)"
-    if (cd "$CRATE" && cargo +nightly miri test --test "$t" 2>&1) \
-         | tee "$LOGS/miri_$t.log" | tail -5; then
-      pass "miri --test $t"
-    else
-      fail "miri --test $t — see $LOGS/miri_$t.log"
-    fi
+    run_miri "$t" "--test $t" "" --test "$t"
   done
 fi
 
@@ -268,8 +334,37 @@ fi
 skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no corpus net"
 
 # ---------------------------------------------------------------------------
+# Pipeline audit (2026-08-10, F17's commit). Every `if`/verdict in this script,
+# and where its status comes from:
+#
+#   run_cargo_test       PIPESTATUS[0] + parsed totals + the ignored set   sound
+#   unsafe_ratchet.sh    direct exit status, no pipeline                   sound
+#   diffharness build.sh redirect, not a pipe                              sound
+#   sweep_gate           PIPESTATUS[0] + tally corroboration (fixed here)  sound
+#   decode / encode bench PIPESTATUS[0] + [2] + MISMATCH/DIFFER (fixed)    sound
+#   run_miri (both steps) PIPESTATUS[0] + totals + zero-test (fixed here)  sound
+#   `rustup toolchain list | grep -q nightly`   grep's status IS the question
+#   `command -v ffmpeg`, `grep -q` on logs      status is the question
+#   `tally=$(grep … | tail -1)`                 substitution, value used, not status
+#
+# No `set -o pipefail`, on purpose: the two bench steps pipe into display greps
+# that legitimately return 1, `sweep_gate`'s tally grep likewise, and the
+# nightly probe *wants* grep's status. Per-step PIPESTATUS is the pattern this
+# script already proved out in run_cargo_test; pipefail would trade one class of
+# wrong verdict for another.
+# ---------------------------------------------------------------------------
 printf '\n%s\n' "=========================== gate battery: $LEVEL ==========================="
 for r in "${RESULTS[@]}"; do printf '%s\n' "$r"; done
 printf '%s\n' "---------------------------------------------------------------------------"
 printf '%d passed, %d failed, %d skipped   (logs in %s)\n' "$PASS" "$FAIL" "$SKIP" "$LOGS"
-[ "$FAIL" -eq 0 ]
+
+# The last line is the verdict, and it matches the exit code. A session B misread
+# took a wrapper's exit status for this script's; there is now one unmissable
+# string to grep for and nothing else to mistake for it.
+if [ "$FAIL" -eq 0 ]; then
+  printf 'OVERALL: PASS\n'
+  exit 0
+else
+  printf 'OVERALL: FAIL (%d steps failed)\n' "$FAIL"
+  exit 1
+fi
