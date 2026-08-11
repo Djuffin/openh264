@@ -449,7 +449,17 @@ pub struct sWelsEncCtx {
     pub pFuncList: *mut SWelsFuncPtrList,
     pub pSliceThreading: *mut SSliceThreading,
     pub pTaskManage: *mut c_void,
-    pub pReferenceStrategy: *mut c_void,
+    /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`); **T4b.2b** made it
+    /// the strategy's *identity* instead of a pointer to an object carrying only a
+    /// back-pointer to this very struct. See [`RefStrategyKind`].
+    ///
+    /// **S20**: this is `#[repr(C)]` and the member sits between two 8-byte-aligned
+    /// pointers, so the 7 bytes of padding that realign `pEncPic` exactly replace the
+    /// 7 bytes the pointer loses. `assert_size!(sWelsEncCtx, ...)` does not move, and
+    /// neither does any of the fifteen `assert_ctx_offset!` pins -- four of which
+    /// (`ppRefPicListExt` 184, `pLtr` 320, `sSpatialIndexMap` 520, `pMemAlign` 1824)
+    /// sit after this field and encode C++ `offsetof` values that must not change.
+    pub eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind,
     pub pEncPic: *mut SPicture,
     pub pDecPic: *mut SPicture,
     pub pRefPic: *mut SPicture,

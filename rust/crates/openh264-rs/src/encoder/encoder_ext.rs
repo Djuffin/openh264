@@ -73,7 +73,7 @@ use crate::encoder::svc_motion_estimate::{
 };
 use crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 use crate::encoder::wels_preprocess::EStaticBlockIdc;
-use crate::encoder::ref_list_mgr_svc::{IWelsReferenceStrategy, MAX_TEMPORAL_LAYER_NUM};
+use crate::encoder::ref_list_mgr_svc::MAX_TEMPORAL_LAYER_NUM;
 
 /// `SPS_BUFFER_SIZE` — `wels_const.h:82`.
 pub const SPS_BUFFER_SIZE: i32 = 32;
@@ -1142,14 +1142,14 @@ pub unsafe fn RequestMemorySvc(
         return 1;
     }
 
-    (**ppCtx).pReferenceStrategy = crate::encoder::ref_list_mgr_svc::CreateReferenceStrategy(
-        *ppCtx,
+    // T4b.2b: the factory allocated an object whose only member was a back-pointer to
+    // this context, so there is nothing left to allocate and nothing left to fail --
+    // the `is_null()` check went with the allocation. **S23**: neither selector can
+    // change behind this choice; see `RefStrategyKind::Select`.
+    (**ppCtx).eRefStrategy = crate::encoder::ref_list_mgr_svc::RefStrategyKind::Select(
         (*pParam).iUsageType,
         (*pParam).bEnableLongTermReference,
-    ) as *mut c_void;
-    if (**ppCtx).pReferenceStrategy.is_null() {
-        return 1;
-    }
+    );
 
     (**ppCtx).pIntra4x4PredModeBlocks = (*pMa).WelsMallocz(
         (iCountMaxMbNum as usize * INTRA_4x4_MODE_NUM) as u32,
@@ -1828,7 +1828,11 @@ mod tests {
 
             assert!(!(*pCtx).pStrideTab.is_null());
             assert!(!(*pCtx).pMvdCostTable.is_null());
-            assert!(!(*pCtx).pReferenceStrategy.is_null());
+            assert_eq!(
+                (*pCtx).eRefStrategy,
+                crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer,
+                "the gate configuration is camera content without LTR"
+            );
 
             let mut p = pCtx;
             WelsUninitEncoderExt(&mut p);
@@ -1879,12 +1883,9 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             drop(Box::from_raw((*pCtx).pOut));
             (*pCtx).pOut = null_mut();
         }
-        if !(*pCtx).pReferenceStrategy.is_null() {
-            crate::encoder::ref_list_mgr_svc::DestroyReferenceStrategy(
-                (*pCtx).pReferenceStrategy as *mut crate::encoder::ref_list_mgr_svc::IWelsReferenceStrategy,
-            );
-            (*pCtx).pReferenceStrategy = null_mut();
-        }
+        // T4b.2b: `DestroyReferenceStrategy` freed a box holding one back-pointer.
+        // With the strategy an enum there is no allocation, so this free-cascade entry
+        // is deleted rather than converted.
         if !(*pCtx).pFrameBs.is_null() {
             (*pMa).WelsFree((*pCtx).pFrameBs as *mut c_void, tag!("pFrameBs"));
             (*pCtx).pFrameBs = null_mut();
@@ -3299,15 +3300,15 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
-        let pRefStrategy = (*pCtx).pReferenceStrategy as *mut IWelsReferenceStrategy;
-        IWelsReferenceStrategy::MarkPic(pRefStrategy);
-        if !IWelsReferenceStrategy::BuildRefList(pRefStrategy, (*pParamInternal).iPOC, 0) {
+        let eRefStrategy = (*pCtx).eRefStrategy;
+        eRefStrategy.MarkPic(pCtx);
+        if !eRefStrategy.BuildRefList(pCtx, (*pParamInternal).iPOC, 0) {
             eFrameType = EVideoFrameType::videoFrameTypeIDR;
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
             break;
         }
         if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
-            IWelsReferenceStrategy::AfterBuildRefList(pRefStrategy);
+            eRefStrategy.AfterBuildRefList(pCtx);
         }
 
         if (*pSvcParam).iRCMode != RC_OFF_MODE {
@@ -3653,7 +3654,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
         // reference picture list update
         if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
-            && !IWelsReferenceStrategy::UpdateRefList(pRefStrategy)
+            && !eRefStrategy.UpdateRefList(pCtx)
         {
             // set the next frame to be IDR
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
