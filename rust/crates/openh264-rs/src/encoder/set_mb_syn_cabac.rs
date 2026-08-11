@@ -40,6 +40,68 @@
 //! - Exp-Golomb multi-bin bypass coding (`WelsCabacEncodeUeBypass`).
 //! - Slice terminating symbol coding and RBSP bitstream flush (`WelsCabacEncodeTerminate`, `WelsCabacEncodeFlush`).
 //! - Carry bit propagation across output byte streams (`PropagateCarry`).
+//!
+//! # The write-extent audit (T3.5 step 0)
+//!
+//! Phase 3's rule for converting a cursor is that *every* write it can issue is
+//! enumerated individually and bounded — the claim "every write is bounded" is
+//! not allowed to be a summary. This engine is the phase's last cursor and the
+//! only one that writes **backward**, so the audit is recorded here in full.
+//!
+//! The cursor is `m_iBufStart` / `m_iBufCur` / `m_iBufEnd`, three byte offsets
+//! into the slice's output buffer. **`m_iBufStart` is not the allocation's
+//! base**: `WelsInitSliceCabac` sets it to the writer's position at slice
+//! start, so it is the first byte *this slice* may touch. That distinction is
+//! what makes the backward walk safe, and it is why the field survives the
+//! conversion instead of collapsing to zero.
+//!
+//! Five write sites, and no others:
+//!
+//! 1. **`WelsCabacEncodeUpdateLowNontrivial_`** — the bulk emitter. Per loop
+//!    iteration, in order: the optional backward carry (site 4); a 4-byte
+//!    store at `[cur, cur+4)`; then two single-byte stores at `cur+4` and
+//!    `cur+5`. Exactly **6 bytes forward per iteration**, and the cursor
+//!    advances by 6. The `if CABAC_LOW_WIDTH > 32` guarding the 4-byte store is
+//!    a compile-time constant (`64 > 32`), so the branch is always taken.
+//! 2. **`WelsCabacEncodeFlush`** — the drain loop, after `Terminate(1)` (which
+//!    can reach site 1) and the optional carry. Writes one byte per iteration
+//!    while `iLowBitCnt -= 8` stays non-negative: `floor(iLowBitCnt / 8)`
+//!    bytes, and `iLowBitCnt <= 63`, so **at most 7 bytes forward**.
+//! 3. **`StashPopMBStatusCabac`** (`svc_set_mb_syn_cavlc.rs`) — the only write
+//!    that is *not* at the cursor. It restores `iLen` bytes at `m_iBufStart`,
+//!    where `iLen = ceil((GetBsPosCabac(pSlice) - iStartPos) / 8)` and
+//!    `GetBsPosCabac` is `(cur - start) * 8 + (m_iLowBitCnt - 9)`. Its
+//!    counterpart `StashMBStatusCabac` reads the same extent. Reachable only
+//!    from the two dynamic-slicing MB loops, which are the only sites that set
+//!    `pRestoreBuffer` non-null.
+//! 4. **`PropagateCarry`** — the backward walk, and the access shape nothing
+//!    else in this phase had. It steps *down* from `cur`, incrementing bytes
+//!    that have already been emitted, and stops on the first one that does not
+//!    wrap to zero. It has **two** termination conditions and they are not
+//!    equally trustworthy:
+//!      - *data-dependent*: the first byte that was not `0xFF`;
+//!      - *structural*: `m_iBufStart`, the slice's own first byte.
+//!    **The conversion relies on the structural one**, spelled as the loop
+//!    condition `while pos > start` — so `pos - 1` is evaluated only after the
+//!    comparison proves `pos > start >= 0`. A `pos - 1` underflow on a `usize`
+//!    is session C's wrap class arriving from the write side, and a comparison
+//!    is what prevents it. The data-dependent condition is left to do what it
+//!    does for the codec's sake, never for memory safety's.
+//! 5. **`WelsCabacEncodeInit`** and `WelsCabacEncodePos` write nothing; the
+//!    former sets the triple, the latter reads `m_iBufCur`.
+//!
+//! **The bound that does not exist.** `m_iBufEnd` (was `m_pBufEnd`) is assigned
+//! by `WelsCabacEncodeInit` and **read by nothing, here or upstream** — the
+//! upper limit the field names has never been enforced at any of the five
+//! sites. So the honest statement of this audit is: writes are bounded *below*
+//! by `m_iBufStart`, enforced, in `PropagateCarry`'s comparison; and bounded
+//! *above* only by the caller's sizing of the slice buffer, which no code
+//! checks. Converting the triple to offsets over a `&mut [u8]` is what finally
+//! supplies the upper bound, via slice indexing — the bounds the C never had,
+//! and a panic there is a pre-existing sizing bug surfacing (plan §2.2.2), not
+//! a regression introduced by the conversion. The field is kept rather than
+//! deleted because it still records the caller's intent, and because deleting
+//! it would move the layout for no gain; that it is dead is now written down.
 
 #![allow(
     non_snake_case,
@@ -135,12 +197,19 @@ pub struct SCabacCtx {
     pub m_uiRange: u32,
     /// Array of 460 packed probability context model state machines.
     pub m_sStateCtx: [SStateCtx; WELS_CONTEXT_COUNT],
-    /// Pointer to the beginning of the slice NAL RBSP output buffer.
-    pub m_pBufStart: *mut u8,
-    /// Upper memory boundary limit of the bitstream output buffer.
-    pub m_pBufEnd: *mut u8,
-    /// Current byte-write cursor in the output bitstream buffer.
-    pub m_pBufCur: *mut u8,
+    /// Offset of **this slice's** first byte in the output buffer — not the
+    /// allocation's base. `PropagateCarry`'s backward walk stops here; see the
+    /// module-level write-extent audit, site 4.
+    pub m_iBufStart: usize,
+    /// One past the last byte the caller intends the coder to use.
+    ///
+    /// Written by `WelsCabacEncodeInit` and read by nothing, here or upstream:
+    /// the limit it names is not enforced at any write site. Slice indexing
+    /// now supplies the real upper bound. Audit, "the bound that does not
+    /// exist".
+    pub m_iBufEnd: usize,
+    /// Current byte-write cursor, as an offset into the output buffer.
+    pub m_iBufCur: usize,
 }
 
 impl Default for SCabacCtx {
@@ -151,9 +220,9 @@ impl Default for SCabacCtx {
             m_iRenormCnt: 0,
             m_uiRange: 0,
             m_sStateCtx: [SStateCtx { m_uiStateMps: 0 }; WELS_CONTEXT_COUNT],
-            m_pBufStart: std::ptr::null_mut(),
-            m_pBufEnd: std::ptr::null_mut(),
-            m_pBufCur: std::ptr::null_mut(),
+            m_iBufStart: 0,
+            m_iBufEnd: 0,
+            m_iBufCur: 0,
         }
     }
 }
@@ -684,20 +753,33 @@ pub const g_kiCabacGlobalContextIdx: [[[i8; 2]; 4]; WELS_CONTEXT_COUNT] = [
 // Core Arithmetic Functions
 // ============================================================================
 
-/// Traverses backwards from `pBufCur - 1` towards `pBufStart`, propagating a carry bit.
+/// Traverses backwards from `iBufCur - 1` towards `iBufStart`, propagating a carry bit.
 ///
-/// If byte `*(pBufCur - 1)` overflows (`0xFF + 1 = 0x00`), the carry bit ripples
+/// If byte `buf[iBufCur - 1]` overflows (`0xFF + 1 = 0x00`), the carry bit ripples
 /// backwards to the preceding byte until a non-overflowing byte is incremented.
 ///
-/// # Safety
-/// - `pBufStart` must point to the valid start of the output buffer memory.
-/// - `pBufCur` must be a valid pointer $\ge$ `pBufStart`.
+/// Write-extent audit site 4. Two things are load-bearing about the loop
+/// condition and neither is stylistic:
+///
+/// * It is `>`, not `>=`, and it is checked **before** the decrement — so
+///   `iBufCur - 1` is only ever evaluated where `iBufCur > iBufStart >= 0`.
+///   On `usize` the alternative wraps to `usize::MAX` and indexes out of the
+///   universe; that is session C's wrap class arriving from the write side,
+///   and a comparison is the whole defence.
+/// * The bound is `iBufStart`, **the slice's first byte**, not `0`. The walk
+///   must not cross into a previous slice's bytes, and before the conversion
+///   the same guarantee rode on `m_pBufStart` being a mid-buffer pointer.
+///
+/// The `!= 0` early exit is the codec's business — it stops the ripple at the
+/// first byte that was not `0xFF`. Memory safety does not depend on it, and
+/// this comment exists so nobody later "simplifies" the structural bound away
+/// on the grounds that the data-dependent one always fires first.
 #[inline]
-pub unsafe fn PropagateCarry(mut pBufCur: *mut u8, pBufStart: *mut u8) {
-    while pBufCur > pBufStart {
-        pBufCur = pBufCur.sub(1);
-        let val = (*pBufCur).wrapping_add(1);
-        *pBufCur = val;
+pub fn PropagateCarry(buf: &mut [u8], mut iBufCur: usize, iBufStart: usize) {
+    while iBufCur > iBufStart {
+        iBufCur -= 1;
+        let val = buf[iBufCur].wrapping_add(1);
+        buf[iBufCur] = val;
         if val != 0 {
             break;
         }
@@ -804,15 +886,14 @@ pub unsafe extern "C" fn WelsCabacContextInit(
 
 /// Prepares the CABAC arithmetic encoding engine registers at the beginning of a slice NAL unit.
 ///
+/// `iStart` is the slice's first byte as an offset into the output buffer, and
+/// `iEnd` the caller's intended limit — which nothing enforces (audit, "the
+/// bound that does not exist").
+///
 /// # Safety
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
-/// - `pBuf` and `pEnd` must point to a valid, allocated memory slice.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCabacEncodeInit(
-    pCbCtx: *mut SCabacCtx,
-    pBuf: *mut u8,
-    pEnd: *mut u8,
-) {
+pub unsafe extern "C" fn WelsCabacEncodeInit(pCbCtx: *mut SCabacCtx, iStart: usize, iEnd: usize) {
     if pCbCtx.is_null() {
         return;
     }
@@ -820,9 +901,9 @@ pub unsafe extern "C" fn WelsCabacEncodeInit(
     (*pCbCtx).m_iLowBitCnt = 9;
     (*pCbCtx).m_iRenormCnt = 0;
     (*pCbCtx).m_uiRange = 510;
-    (*pCbCtx).m_pBufStart = pBuf;
-    (*pCbCtx).m_pBufEnd = pEnd;
-    (*pCbCtx).m_pBufCur = pBuf;
+    (*pCbCtx).m_iBufStart = iStart;
+    (*pCbCtx).m_iBufEnd = iEnd;
+    (*pCbCtx).m_iBufCur = iStart;
 }
 
 /// Flushes accumulated bits from `m_uiLow` to the output bitstream when bit capacity reaches/exceeds 64 bits.
@@ -830,34 +911,36 @@ pub unsafe extern "C" fn WelsCabacEncodeInit(
 /// # Safety
 /// - `pCbCtx` must point to a valid, initialized `SCabacCtx` with allocated buffers.
 #[inline(never)]
-pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(pCbCtx: *mut SCabacCtx) {
+pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
     let mut iLowBitCnt = (*pCbCtx).m_iLowBitCnt;
     let mut iRenormCnt = (*pCbCtx).m_iRenormCnt;
     let mut uiLow = (*pCbCtx).m_uiLow;
 
     loop {
-        let mut pBufCur = (*pCbCtx).m_pBufCur;
+        // Audit site 1: exactly six bytes forward per iteration — a 4-byte
+        // store then two single-byte stores — plus the optional backward carry.
+        let mut iBufCur = (*pCbCtx).m_iBufCur;
         let kiInc = (CABAC_LOW_WIDTH as i32) - 1 - iLowBitCnt;
 
         uiLow = uiLow.wrapping_shl(kiInc as u32);
         if (uiLow & (1u64 << ((CABAC_LOW_WIDTH as u32) - 1))) != 0 {
-            PropagateCarry(pBufCur, (*pCbCtx).m_pBufStart);
+            PropagateCarry(buf, iBufCur, (*pCbCtx).m_iBufStart);
         }
 
         if CABAC_LOW_WIDTH > 32 {
             let be32 = ((uiLow >> 31) as u32).to_be_bytes();
-            std::ptr::copy_nonoverlapping(be32.as_ptr(), pBufCur, 4);
-            pBufCur = pBufCur.add(4);
+            buf[iBufCur..iBufCur + 4].copy_from_slice(&be32);
+            iBufCur += 4;
         }
-        *pBufCur = (uiLow >> 23) as u8;
-        pBufCur = pBufCur.add(1);
-        *pBufCur = (uiLow >> 15) as u8;
-        pBufCur = pBufCur.add(1);
+        buf[iBufCur] = (uiLow >> 23) as u8;
+        iBufCur += 1;
+        buf[iBufCur] = (uiLow >> 15) as u8;
+        iBufCur += 1;
 
         iRenormCnt -= kiInc;
         iLowBitCnt = 15;
         uiLow &= (1u64 << iLowBitCnt) - 1;
-        (*pCbCtx).m_pBufCur = pBufCur;
+        (*pCbCtx).m_iBufCur = iBufCur;
 
         if (iLowBitCnt + iRenormCnt) <= ((CABAC_LOW_WIDTH as i32) - 1) {
             break;
@@ -873,12 +956,12 @@ pub unsafe fn WelsCabacEncodeUpdateLowNontrivial_(pCbCtx: *mut SCabacCtx) {
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeUpdateLow_(pCbCtx: *mut SCabacCtx) {
+pub unsafe fn WelsCabacEncodeUpdateLow_(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
     if ((*pCbCtx).m_iLowBitCnt + (*pCbCtx).m_iRenormCnt) < (CABAC_LOW_WIDTH as i32) {
         (*pCbCtx).m_iLowBitCnt += (*pCbCtx).m_iRenormCnt;
         (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_shl((*pCbCtx).m_iRenormCnt as u32);
     } else {
-        WelsCabacEncodeUpdateLowNontrivial_(pCbCtx);
+        WelsCabacEncodeUpdateLowNontrivial_(buf, pCbCtx);
     }
     (*pCbCtx).m_iRenormCnt = 0;
 }
@@ -889,7 +972,7 @@ pub unsafe fn WelsCabacEncodeUpdateLow_(pCbCtx: *mut SCabacCtx) {
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 /// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline]
-pub unsafe fn WelsCabacEncodeDecisionLps_(pCbCtx: *mut SCabacCtx, iCtx: i32) {
+pub unsafe fn WelsCabacEncodeDecisionLps_(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iCtx: i32) {
     let ctx_idx = iCtx as usize;
     let kiState = (*pCbCtx).m_sStateCtx[ctx_idx].State() as usize;
     let mut uiRange = (*pCbCtx).m_uiRange;
@@ -900,7 +983,7 @@ pub unsafe fn WelsCabacEncodeDecisionLps_(pCbCtx: *mut SCabacCtx, iCtx: i32) {
     let toggle = if kiState == 0 { 1u8 } else { 0u8 };
     (*pCbCtx).m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][0], current_mps ^ toggle);
 
-    WelsCabacEncodeUpdateLow_(pCbCtx);
+    WelsCabacEncodeUpdateLow_(buf, pCbCtx);
     (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add(uiRange as u64);
 
     let kiRenormAmount = g_kiClz5Table[(uiRangeLps >> 3) as usize] as i32;
@@ -914,7 +997,7 @@ pub unsafe fn WelsCabacEncodeDecisionLps_(pCbCtx: *mut SCabacCtx, iCtx: i32) {
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 /// - `iCtx` must be in $[0, \text{WELS\_CONTEXT\_COUNT} - 1]$.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeDecision(pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: u32) {
+pub unsafe fn WelsCabacEncodeDecision(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: u32) {
     let ctx_idx = iCtx as usize;
     if (uiBin as u8) == (*pCbCtx).m_sStateCtx[ctx_idx].Mps() {
         let kiState = (*pCbCtx).m_sStateCtx[ctx_idx].State() as usize;
@@ -927,7 +1010,7 @@ pub unsafe fn WelsCabacEncodeDecision(pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: 
         (*pCbCtx).m_iRenormCnt += kiRenormAmount;
         (*pCbCtx).m_sStateCtx[ctx_idx].Set(g_kuiStateTransTable[kiState][1], uiBin as u8);
     } else {
-        WelsCabacEncodeDecisionLps_(pCbCtx, iCtx);
+        WelsCabacEncodeDecisionLps_(buf, pCbCtx, iCtx);
     }
 }
 
@@ -936,10 +1019,10 @@ pub unsafe fn WelsCabacEncodeDecision(pCbCtx: *mut SCabacCtx, iCtx: i32, uiBin: 
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeBypassOne(pCbCtx: *mut SCabacCtx, uiBin: i32) {
+pub unsafe fn WelsCabacEncodeBypassOne(buf: &mut [u8], pCbCtx: *mut SCabacCtx, uiBin: i32) {
     let kuiBinBitmask = (uiBin as u32).wrapping_neg();
     (*pCbCtx).m_iRenormCnt += 1;
-    WelsCabacEncodeUpdateLow_(pCbCtx);
+    WelsCabacEncodeUpdateLow_(buf, pCbCtx);
     let mask_range = (kuiBinBitmask & (*pCbCtx).m_uiRange) as u64;
     (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add(mask_range);
 }
@@ -949,17 +1032,17 @@ pub unsafe fn WelsCabacEncodeBypassOne(pCbCtx: *mut SCabacCtx, uiBin: i32) {
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeTerminate(pCbCtx: *mut SCabacCtx, uiBin: u32) {
+pub unsafe fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: *mut SCabacCtx, uiBin: u32) {
     (*pCbCtx).m_uiRange = (*pCbCtx).m_uiRange.wrapping_sub(2);
     if uiBin != 0 {
-        WelsCabacEncodeUpdateLow_(pCbCtx);
+        WelsCabacEncodeUpdateLow_(buf, pCbCtx);
         (*pCbCtx).m_uiLow = (*pCbCtx).m_uiLow.wrapping_add((*pCbCtx).m_uiRange as u64);
 
         let kiRenormAmount: i32 = 7;
         (*pCbCtx).m_uiRange = 2 << (kiRenormAmount as u32);
         (*pCbCtx).m_iRenormCnt = kiRenormAmount;
 
-        WelsCabacEncodeUpdateLow_(pCbCtx);
+        WelsCabacEncodeUpdateLow_(buf, pCbCtx);
         (*pCbCtx).m_uiLow |= 0x80;
     } else {
         let kiRenormAmount = (((*pCbCtx).m_uiRange >> 8) ^ 1) as i32;
@@ -973,20 +1056,20 @@ pub unsafe fn WelsCabacEncodeTerminate(pCbCtx: *mut SCabacCtx, uiBin: u32) {
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeUeBypass(pCbCtx: *mut SCabacCtx, iExpBits: i32, uiVal: u32) {
+pub unsafe fn WelsCabacEncodeUeBypass(buf: &mut [u8], pCbCtx: *mut SCabacCtx, iExpBits: i32, uiVal: u32) {
     let mut iSufS = uiVal as i32;
     let mut iStopLoop = 0;
     let mut k = iExpBits;
     loop {
         if iSufS >= (1 << k) {
-            WelsCabacEncodeBypassOne(pCbCtx, 1);
+            WelsCabacEncodeBypassOne(buf, pCbCtx, 1);
             iSufS -= 1 << k;
             k += 1;
         } else {
-            WelsCabacEncodeBypassOne(pCbCtx, 0);
+            WelsCabacEncodeBypassOne(buf, pCbCtx, 0);
             while k > 0 {
                 k -= 1;
-                WelsCabacEncodeBypassOne(pCbCtx, (iSufS >> k) & 1);
+                WelsCabacEncodeBypassOne(buf, pCbCtx, (iSufS >> k) & 1);
             }
             iStopLoop = 1;
         }
@@ -1001,43 +1084,51 @@ pub unsafe fn WelsCabacEncodeUeBypass(pCbCtx: *mut SCabacCtx, iExpBits: i32, uiV
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance.
 #[inline]
-pub unsafe fn WelsCabacEncodeFlush(pCbCtx: *mut SCabacCtx) {
-    WelsCabacEncodeTerminate(pCbCtx, 1);
+pub unsafe fn WelsCabacEncodeFlush(buf: &mut [u8], pCbCtx: *mut SCabacCtx) {
+    WelsCabacEncodeTerminate(buf, pCbCtx, 1);
 
     let mut uiLow = (*pCbCtx).m_uiLow;
     let mut iLowBitCnt = (*pCbCtx).m_iLowBitCnt;
-    let mut pBufCur = (*pCbCtx).m_pBufCur;
+    let mut iBufCur = (*pCbCtx).m_iBufCur;
 
     let shift = (CABAC_LOW_WIDTH as i32) - 1 - iLowBitCnt;
     if shift >= 0 && shift < 64 {
         uiLow = uiLow.wrapping_shl(shift as u32);
     }
     if (uiLow & (1u64 << ((CABAC_LOW_WIDTH as u32) - 1))) != 0 {
-        PropagateCarry(pBufCur, (*pCbCtx).m_pBufStart);
+        PropagateCarry(buf, iBufCur, (*pCbCtx).m_iBufStart);
     }
+    // Audit site 2: one byte per iteration while `iLowBitCnt -= 8` stays
+    // non-negative — at most 7, since `iLowBitCnt <= 63`.
     loop {
         iLowBitCnt -= 8;
         if iLowBitCnt < 0 {
             break;
         }
-        *pBufCur = (uiLow >> ((CABAC_LOW_WIDTH as u32) - 9)) as u8;
-        pBufCur = pBufCur.add(1);
+        buf[iBufCur] = (uiLow >> ((CABAC_LOW_WIDTH as u32) - 9)) as u8;
+        iBufCur += 1;
         uiLow = uiLow.wrapping_shl(8);
     }
 
-    (*pCbCtx).m_pBufCur = pBufCur;
+    (*pCbCtx).m_iBufCur = iBufCur;
 }
 
-/// Returns the current byte output write pointer `m_pBufCur`.
+/// Returns the current byte write cursor `m_iBufCur`, as an offset into the
+/// output buffer.
+///
+/// Was `WelsCabacEncodeGetPtr`, returning `m_pBufCur`. Its one caller
+/// immediately turned that pointer back into an offset with `offset_from`;
+/// now it never becomes a pointer in between, and the `BsWriter::set_pos`
+/// that received it is gone.
 ///
 /// # Safety
 /// - `pCbCtx` must point to a valid `SCabacCtx` instance or null.
 #[inline(always)]
-pub unsafe fn WelsCabacEncodeGetPtr(pCbCtx: *mut SCabacCtx) -> *mut u8 {
+pub unsafe fn WelsCabacEncodePos(pCbCtx: *mut SCabacCtx) -> usize {
     if pCbCtx.is_null() {
-        std::ptr::null_mut()
+        0
     } else {
-        (*pCbCtx).m_pBufCur
+        (*pCbCtx).m_iBufCur
     }
 }
 
@@ -1077,36 +1168,43 @@ mod tests {
         unsafe {
             let mut cb_ctx = SCabacCtx::default();
             let mut buf = vec![0u8; 1024];
-            let p_buf = buf.as_mut_ptr();
-            let p_end = p_buf.add(buf.len());
+            let len = buf.len();
 
-            WelsCabacEncodeInit(&mut cb_ctx, p_buf, p_end);
+            WelsCabacEncodeInit(&mut cb_ctx, 0, len);
             assert_eq!(cb_ctx.m_uiLow, 0);
             assert_eq!(cb_ctx.m_iLowBitCnt, 9);
             assert_eq!(cb_ctx.m_uiRange, 510);
-            assert_eq!(cb_ctx.m_pBufCur, p_buf);
+            assert_eq!(cb_ctx.m_iBufCur, 0);
 
             // Encode a few bypass bits
-            WelsCabacEncodeBypassOne(&mut cb_ctx, 1);
-            WelsCabacEncodeBypassOne(&mut cb_ctx, 0);
+            WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 1);
+            WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 0);
 
-            WelsCabacEncodeFlush(&mut cb_ctx);
-            let ptr = WelsCabacEncodeGetPtr(&mut cb_ctx);
-            let written = ptr.offset_from(p_buf);
-            assert!(written > 0);
+            WelsCabacEncodeFlush(&mut buf, &mut cb_ctx);
+            assert!(WelsCabacEncodePos(&mut cb_ctx) > 0);
         }
     }
 
+    /// A slice that does not start at the allocation's base: the walk must stop
+    /// at `m_iBufStart`, leaving the byte below it — a previous slice's — alone.
     #[test]
     fn test_propagate_carry() {
-        unsafe {
-            let mut buf = [5u8, 0xFFu8, 0u8];
-            let p_start = buf.as_mut_ptr();
-            let p_cur = p_start.add(2); // points to index 2 (after 0xFF)
+        let mut buf = [5u8, 0xFFu8, 0u8];
+        PropagateCarry(&mut buf, 2, 0);
+        assert_eq!(buf[0], 6);
+        assert_eq!(buf[1], 0);
 
-            PropagateCarry(p_cur, p_start);
-            assert_eq!(buf[0], 6);
-            assert_eq!(buf[1], 0);
-        }
+        // Same bytes, but the slice starts at 1. The 0xFF still wraps, and the
+        // carry out of it must be dropped rather than reaching buf[0].
+        let mut buf = [5u8, 0xFFu8, 0u8];
+        PropagateCarry(&mut buf, 2, 1);
+        assert_eq!(buf[1], 0);
+        assert_eq!(buf[0], 5, "carry escaped below m_iBufStart");
+
+        // The degenerate case the comparison exists for: cur == start. One
+        // `pos - 1` here would wrap a usize and index out of the universe.
+        let mut buf = [0xFFu8; 2];
+        PropagateCarry(&mut buf, 0, 0);
+        assert_eq!(buf, [0xFF, 0xFF]);
     }
 }

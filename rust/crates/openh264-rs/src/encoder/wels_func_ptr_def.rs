@@ -140,15 +140,28 @@ pub type PWelsSpatialWriteMbSyn =
     unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: *mut SMB) -> i32;
 
 /// `wels_func_ptr_def.h:193`
-pub type PStashMBStatus = unsafe extern "C" fn(
+///
+/// The `buf` parameter is T3.5's, and it is the one slot in this family that
+/// could not avoid gaining one. The CAVLC pair genuinely needs no buffer — a
+/// detached cursor is `Copy`, so its snapshot is a value (T3.4) — but the CABAC
+/// pair must copy the emitted bytes out and back, because `PropagateCarry`
+/// rewrites bytes behind the cursor and restoring the cursor alone would leave
+/// the output wrong. Neither variant can reach the buffer from `pDss`/`pSlice`
+/// alone, so it is passed. The CAVLC variants ignore it.
+///
+/// Phase 4b, which owns this signature, is folding both slots into the
+/// `EntropyCoder` dispatch enum; this parameter goes away there for CAVLC and
+/// stays for CABAC.
+pub type PStashMBStatus = unsafe fn(
+    buf: &mut [u8],
     pDss: *mut SDynamicSlicingStack,
     pSlice: *mut SSlice,
     iMbSkipRun: i32,
 );
 
-/// `wels_func_ptr_def.h:194`
+/// `wels_func_ptr_def.h:194`. See [`PStashMBStatus`] for why `buf` is here.
 pub type PStashPopMBStatus =
-    unsafe extern "C" fn(pDss: *mut SDynamicSlicingStack, pSlice: *mut SSlice) -> i32;
+    unsafe fn(buf: &mut [u8], pDss: *mut SDynamicSlicingStack, pSlice: *mut SSlice) -> i32;
 
 // ============================================================================
 // SWelsFuncPtrList
