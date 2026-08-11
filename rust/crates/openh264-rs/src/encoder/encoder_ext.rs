@@ -137,7 +137,7 @@ pub unsafe fn WelsGetEncBlockStrideOffset(pBlock: *mut i32, kiStrideY: i32, kiSt
 /// `AcquireLayersNals` — encoder_ext.cpp:749.
 ///
 /// Counts the layers and the worst-case NAL units a frame can need, which sizes
-/// `pOut->sNalList` and `pOut->pNalLen`.
+/// `pOut->sNalList` and `pOut->sNalLen`.
 ///
 /// # Safety
 /// `ppCtx` must point to a live context whose `pFuncList->pParametersetStrategy` is
@@ -1098,36 +1098,19 @@ pub unsafe fn RequestMemorySvc(
         },
     );
 
-    // Output
-    (**ppCtx).pOut = (*pMa).WelsMallocz(
-        std::mem::size_of::<crate::encoder::nal_encap::SWelsEncoderOutput>() as u32,
-        tag!("SWelsEncoderOutput"),
-    ) as *mut crate::encoder::nal_encap::SWelsEncoderOutput;
-    if (**ppCtx).pOut.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pOut).pBsBuffer =
-        (*pMa).WelsMallocz(iCountBsLen as u32, tag!("pOut->pBsBuffer")) as *mut u8;
-    if (*(**ppCtx).pOut).pBsBuffer.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pOut).uiSize = iCountBsLen as u32;
-    (*(**ppCtx).pOut).sNalList = (*pMa).WelsMallocz(
-        (iCountNals as usize * std::mem::size_of::<crate::encoder::nal_encap::SWelsNalRaw>())
-            as u32,
-        tag!("pOut->sNalList"),
-    ) as *mut crate::encoder::nal_encap::SWelsNalRaw;
-    if (*(**ppCtx).pOut).sNalList.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pOut).pNalLen =
-        (*pMa).WelsMallocz((iCountNals as u32) * 4, tag!("pOut->pNalLen")) as *mut i32;
-    if (*(**ppCtx).pOut).pNalLen.is_null() {
-        return 1;
-    }
-    (*(**ppCtx).pOut).iCountNals = iCountNals;
-    (*(**ppCtx).pOut).iNalIndex = 0;
-    (*(**ppCtx).pOut).iLayerBsIndex = 0;
+    // Output.
+    //
+    // Four `WelsMallocz` calls and four null checks became one constructor —
+    // **S21's construction audit is why**. The old shape wrote `Vec`-typed
+    // fields into memory `WelsMallocz` had zeroed, and a zeroed `Vec` is not a
+    // valid `Vec`: the assignment would drop it. `new_boxed` builds the struct
+    // whole, so no zeroed intermediate exists to be dropped. The null checks go
+    // because allocation failure is now a panic-on-OOM, the same trade the
+    // decoder's owned buffers made.
+    (**ppCtx).pOut = Box::into_raw(crate::encoder::nal_encap::SWelsEncoderOutput::new_boxed(
+        iCountBsLen as usize,
+        iCountNals as usize,
+    ));
 
     (**ppCtx).pFrameBs = (*pMa).WelsMalloc(iTotalLength as u32, tag!("pFrameBs")) as *mut u8;
     if (**ppCtx).pFrameBs.is_null() {
@@ -1890,18 +1873,13 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).pDqIdcMap as *mut c_void, tag!("pDqIdcMap"));
             (*pCtx).pDqIdcMap = null_mut();
         }
+        // R4 in miniature, and the first encoder cascade entries to fall: four
+        // `WelsFree` calls — `pOut->pBsBuffer`, `pOut->sNalList`,
+        // `pOut->pNalLen` and the struct itself — are one `drop`. The three
+        // buffers are `Vec`s that free themselves, and the struct came from
+        // `Box::into_raw`, so it goes back through `Box::from_raw`.
         if !(*pCtx).pOut.is_null() {
-            let pOut = (*pCtx).pOut;
-            if !(*pOut).pBsBuffer.is_null() {
-                (*pMa).WelsFree((*pOut).pBsBuffer as *mut c_void, tag!("pOut->pBsBuffer"));
-            }
-            if !(*pOut).sNalList.is_null() {
-                (*pMa).WelsFree((*pOut).sNalList as *mut c_void, tag!("pOut->sNalList"));
-            }
-            if !(*pOut).pNalLen.is_null() {
-                (*pMa).WelsFree((*pOut).pNalLen as *mut c_void, tag!("pOut->pNalLen"));
-            }
-            (*pMa).WelsFree(pOut as *mut c_void, tag!("SWelsEncoderOutput"));
+            drop(Box::from_raw((*pCtx).pOut));
             (*pCtx).pOut = null_mut();
         }
         if !(*pCtx).pReferenceStrategy.is_null() {
@@ -2146,7 +2124,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
 /// `encoder_ext.cpp:3376`.
 pub unsafe fn ClearFrameBsInfo(pCtx: *mut sWelsEncCtx, pFbi: *mut SFrameBSInfo) {
     (*pFbi).sLayerInfo[0].pBsBuf = (*pCtx).pFrameBs;
-    (*pFbi).sLayerInfo[0].pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    (*pFbi).sLayerInfo[0].pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
 
     for i in 0..(*pFbi).iLayerNum as usize {
         (*pFbi).sLayerInfo[i].iNalCount = 0;
@@ -2169,8 +2147,9 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
     (*(*pEncCtx).pOut).iNalIndex = 0; // reset NAL index
     (*(*pEncCtx).pOut).iLayerBsIndex = 0; // reset index of Layer Bs
 
-    // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`. The buffer and
-    // its length stay on `pOut` where they already were; the writer is a position,
+    // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`. The buffer
+    // stays on `pOut` where it already was — owned outright since T3.6, so its
+    // length is `sBsBuffer.len()` and not a field; the writer is a position,
     // and resetting it is the whole of what `InitBits` did that still means
     // anything (F13's third site: the `*const`-declared, `*mut`-stored, written-
     // through buffer parameter is gone, not amended).
@@ -2330,7 +2309,7 @@ pub unsafe fn AddPrefixNal(
         );
 
         crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
-            crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize),
+            &mut (&mut *pOut).sBsBuffer[..],
             &mut (*pOut).sBsWrite,
             keNalRefIdc as i32,
             keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
@@ -2349,7 +2328,7 @@ pub unsafe fn AddPrefixNal(
     }
 
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        (*pOut).sNalList.add((*pOut).iNalIndex as usize - 1),
+        &mut (&mut *pOut).sNalList[(*pOut).iNalIndex as usize - 1],
         &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -2375,13 +2354,13 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     let pOut = (*pCtx).pOut;
     let iNal = (*pOut).iNalIndex;
     // The frame-level writer, for non-VCL NALs.
-    let buf = crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize);
+    let buf = &mut (&mut *pOut).sBsBuffer[..];
     let pBs = &mut (*pOut).sBsWrite;
 
     // `pEndBuf - pCurBuf < iLen` in comparison form; `iLen` is non-negative here
     // and a `usize` `len - pos` cannot wrap because `pos <= len` always holds for a
     // writer that has not overrun, which the write below would panic on anyway.
-    if (buf.len() - pBs.pos()) < iLen as usize || iNal >= (*pOut).iCountNals {
+    if (buf.len() - pBs.pos()) < iLen as usize || iNal >= (*pOut).sNalList.len() as i32 {
         return ENC_RETURN_MEMOVERFLOWFOUND;
     }
 
@@ -2400,7 +2379,7 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        (*pOut).sNalList.add(iNal as usize),
+        &mut (&mut *pOut).sNalList[iNal as usize],
         null_mut(),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
         (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -3055,7 +3034,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            (*(*pCtx).pOut).sNalList.add(((*(*pCtx).pOut).iNalIndex - 1) as usize),
+            &mut (&mut *(*pCtx).pOut).sNalList[((*(*pCtx).pOut).iNalIndex - 1) as usize],
             &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
             (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -3166,7 +3145,7 @@ pub unsafe fn WelsEncoderEncodeExt(
 
     crate::encoder::encoder_context::InitBitStream(pCtx);
     (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs;
-    (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).pNalLen;
+    (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     iCurDid = (*pSpatialIndexMap).iDid as i8;
     (*pCtx).pCurDqLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
     (*(*pCtx).pCurDqLayer).pRefLayer = null_mut();
@@ -3402,9 +3381,7 @@ pub unsafe fn WelsEncoderEncodeExt(
             crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
             (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                (*(*pCtx).pOut)
-                    .sNalList
-                    .add((*(*pCtx).pOut).iNalIndex as usize - 1),
+                &mut (&mut *(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
                 &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
                 (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
                 (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
@@ -3598,9 +3575,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
                 (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                    (*(*pCtx).pOut)
-                        .sNalList
-                        .add((*(*pCtx).pOut).iNalIndex as usize - 1),
+                    &mut (&mut *(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
                     &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
                     (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
                     (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,

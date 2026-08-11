@@ -1862,13 +1862,15 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 
 /// The buffer a slice's writer is positioned in.
 ///
-/// SHIM(phase3) -> the raw slice and frame output allocations; **T3.6** deletes it
-/// when those become owned and travel with the writer.
+/// SHIM(phase3) -> **the MT-aliased slice allocation only.** T3.6 made the frame
+/// output owned, so this function's second branch is now a plain borrow of a
+/// `Vec` and only the first still goes through `bs_buffer`. What is left here
+/// retires with the thread buffer pool, in **Phase 6** — see `SWelsSliceBs`.
 ///
 /// A `BsWriter` is a position and carries no buffer, so every write has to be told
 /// which one. A slice writes into exactly one of two: its own thread-local
 /// `sSliceBs.pBsBuffer` when `InitSliceBsBuffer` gave it an independent buffer, or
-/// the frame-level `pOut->pBsBuffer` when it shares. The discriminator is the
+/// the frame-level `pOut->sBsBuffer` when it shares. The discriminator is the
 /// identity of the writer `pSliceBsa` aims at — which is precisely what that
 /// function's own branch wrote, and what the C++ `pStartBuf` carried implicitly
 /// inside the cursor. Deriving it back from `iMultipleThreadIdc` and `uiSliceMode`
@@ -1885,7 +1887,7 @@ pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     if (*pSlice).pSliceBsa == std::ptr::addr_of_mut!((*pSlice).sSliceBs.sBsWrite) {
         bs_buffer((*pSlice).sSliceBs.pBsBuffer, (*pSlice).sSliceBs.uiSize)
     } else {
-        bs_buffer((*(*pEncCtx).pOut).pBsBuffer, (*(*pEncCtx).pOut).uiSize)
+        &mut (&mut *(*pEncCtx).pOut).sBsBuffer[..]
     }
 }
 
@@ -2860,34 +2862,18 @@ pub unsafe fn FrameBsRealloc(
     pLayerBsInfo: *mut SLayerBSInfo,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
-    let pMA = (*pCtx).pMemAlign;
-    let mut iCountNals = (*(*pCtx).pOut).iCountNals;
+    let pOut = &mut *(*pCtx).pOut;
+    let mut iCountNals = pOut.sNalList.len() as i32;
     let spatial_layers = if !(*pCtx).pSvcParam.is_null() { (*(*pCtx).pSvcParam).iSpatialLayerNum } else { 1 };
     iCountNals += kiMaxSliceNumOld * (spatial_layers + if (*pCtx).bNeedPrefixNalFlag { 1 } else { 0 });
 
-    let pNalList = (*pMA).WelsMallocz(
-        (iCountNals as usize * std::mem::size_of::<SWelsNalRaw>()) as u32,
-        c"pOut->sNalList".as_ptr(),
-    ) as *mut SWelsNalRaw;
-    if pNalList.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-    std::ptr::copy_nonoverlapping((*(*pCtx).pOut).sNalList, pNalList, (*(*pCtx).pOut).iCountNals as usize);
-    (*pMA).WelsFree((*(*pCtx).pOut).sNalList as *mut c_void, c"pOut->sNalList".as_ptr());
-    (*(*pCtx).pOut).sNalList = pNalList;
-
-    let pNalLen = (*pMA).WelsMallocz(
-        (iCountNals as usize * std::mem::size_of::<i32>()) as u32,
-        c"pOut->pNalLen".as_ptr(),
-    ) as *mut i32;
-    if pNalLen.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-    std::ptr::copy_nonoverlapping((*(*pCtx).pOut).pNalLen, pNalLen, (*(*pCtx).pOut).iCountNals as usize);
-    (*pMA).WelsFree((*(*pCtx).pOut).pNalLen as *mut c_void, c"pOut->pNalLen".as_ptr());
-    (*(*pCtx).pOut).pNalLen = pNalLen;
-
-    (*(*pCtx).pOut).iCountNals = iCountNals;
+    // Was: allocate a bigger block, `copy_nonoverlapping` the old contents in,
+    // free the old, store the new — twice, with a null check each. `Vec::resize`
+    // is the same three steps and keeps the same guarantee, that the existing
+    // `iCountNals` entries survive at their indices and the new tail is zeroed
+    // (`WelsMallocz` zeroed it too).
+    pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
+    pOut.sNalLen.resize(iCountNals as usize, 0);
 
     ENC_RETURN_SUCCESS
 }
@@ -2920,7 +2906,7 @@ pub unsafe fn SliceLayerInfoUpdate(
     (*pLayerBsInfo).iNalCount = GetCurLayerNalCount((*pCtx).pCurDqLayer, iCodedSliceNum);
     let iCodedNalCount = GetTotalCodedNalCount(pFrameBsInfo);
 
-    if iCodedNalCount > (*(*pCtx).pOut).iCountNals {
+    if iCodedNalCount > (*(*pCtx).pOut).sNalList.len() as i32 {
         iRet = FrameBsRealloc(pCtx, pFrameBsInfo, pLayerBsInfo, (*(*pCtx).pCurDqLayer).iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
