@@ -579,7 +579,7 @@ mod tests {
     fn test_alloc_and_free_picture() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
@@ -600,7 +600,7 @@ mod tests {
     fn test_prefetch_pic_circular_scan() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
@@ -638,7 +638,7 @@ mod tests {
     fn test_prefetch_pic_for_thread() {
         let mut ma = CMemoryAlign::new(32);
         let mut param = SDecodingParam::default();
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 

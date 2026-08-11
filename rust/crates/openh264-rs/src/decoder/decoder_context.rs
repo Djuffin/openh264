@@ -156,25 +156,10 @@ pub const FEEDBACK_VCL_NAL: i32 = 1;
 
 pub use crate::decoder::cabac_decoder::{SWelsCabacCtx, PWelsCabacCtx, SWelsCabacDecEngine, PWelsCabacDecEngine};
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDataBuffer {
-    pub pHead: *mut u8,
-    pub pEnd: *mut u8,
-    pub pStartPos: *mut u8,
-    pub pCurPos: *mut u8,
-}
-
-impl Default for SDataBuffer {
-    fn default() -> Self {
-        Self {
-            pHead: std::ptr::null_mut(),
-            pEnd: std::ptr::null_mut(),
-            pStartPos: std::ptr::null_mut(),
-            pCurPos: std::ptr::null_mut(),
-        }
-    }
-}
+// `SDataBuffer { pHead, pEnd, pStartPos, pCurPos }` died at T3.3: the raw bitstream
+// buffer is an owned [`RawDataBuffer`] (`decoder::bit_stream`), and positions are
+// offsets that survive its growth by definition.
+pub use crate::decoder::bit_stream::RawDataBuffer;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -653,8 +638,8 @@ pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
 pub struct SWelsDecoderContext {
     pub sLogCtx: SLogContext,
     pub pArgDec: *mut c_void,
-    pub sRawData: SDataBuffer,
-    pub sSavedData: SDataBuffer,
+    pub sRawData: RawDataBuffer,
+    pub sSavedData: RawDataBuffer,
     pub pParam: *mut SDecodingParam,
     pub uiCpuFlag: u32,
     pub eVideoType: VIDEO_BITSTREAM_TYPE,
@@ -681,7 +666,6 @@ pub struct SWelsDecoderContext {
     pub sTmpRefPic: SRefPic,
     pub pVlcTable: *mut c_void,
     pub sBs: BsReader,
-    pub iMaxBsBufferSizeInByte: i32,
     pub sSpsPpsCtx: SWelsDecoderSpsPpsCTX,
     pub bHasNewSps: bool,
     pub sFrameCrop: SPosOffset,
@@ -777,7 +761,35 @@ pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
 impl Default for SWelsDecoderContext {
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        // The context has always been created zeroed (`WelsMallocz` semantics, and
+        // every value field's zero is its C default). Since T3.3 two fields own heap
+        // allocations, and a zeroed `Vec` is not a valid `Vec` — so those are written
+        // through the uninitialized shell before the value materializes, and no
+        // invalid value ever exists.
+        let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
+        Self::make_zeroed_shell_valid(shell.as_mut_ptr());
+        unsafe { shell.assume_init() }
+    }
+}
+
+impl SWelsDecoderContext {
+    /// Writes valid values into the `Vec`-bearing fields of a zeroed, not yet
+    /// materialized context. Everything else's zero is its C default.
+    fn make_zeroed_shell_valid(p: *mut Self) {
+        unsafe {
+            std::ptr::addr_of_mut!((*p).sRawData).write(RawDataBuffer::default());
+            std::ptr::addr_of_mut!((*p).sSavedData).write(RawDataBuffer::default());
+        }
+    }
+
+    /// A zeroed context constructed **on the heap**: the struct is several MiB, so
+    /// `Box::default()`'s by-value path overflows a 2 MiB test-thread stack. This is
+    /// the replacement for the `Box::new_zeroed().assume_init()` idiom, which stopped
+    /// being legal at T3.3 (a zeroed `Vec` is an invalid value).
+    pub fn new_boxed() -> Box<Self> {
+        let mut shell = Box::<Self>::new_zeroed();
+        Self::make_zeroed_shell_valid(shell.as_mut_ptr());
+        unsafe { shell.assume_init() }
     }
 }
 
@@ -827,7 +839,10 @@ mod tests {
     #[test]
     fn test_pic_buff_creation_and_destruction() {
         let mut mem_align = CMemoryAlign::new(16);
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        // `new_zeroed().assume_init()` stopped being legal at T3.3: the context now
+        // owns `Vec`s, and a zeroed `Vec` is an invalid value. `Default` constructs
+        // the same zeroed context with those fields written properly.
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut mem_align;
 
         let mut pic_buff: *mut SPicBuff = std::ptr::null_mut();

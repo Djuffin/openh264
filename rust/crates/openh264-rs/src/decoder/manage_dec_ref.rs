@@ -1613,14 +1613,14 @@ mod tests {
 
     #[test]
     fn test_wels_reset_ref_pic() {
-        let mut ctx = SWelsDecoderContext::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
 
         let mut pic = SPicture::default();
         pic.iFrameNum = 1;
         unsafe {
             AddShortTermToList(&mut ctx.sRefPic, &mut pic);
             assert_eq!(ctx.sRefPic.uiShortRefCount[LIST_0], 1);
-            WelsResetRefPic(&mut ctx);
+            WelsResetRefPic(&mut *ctx);
             assert_eq!(ctx.sRefPic.uiShortRefCount[LIST_0], 0);
             assert_eq!(ctx.sRefPic.pShortRefList[LIST_0][0], std::ptr::null_mut());
         }

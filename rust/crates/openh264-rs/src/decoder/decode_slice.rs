@@ -2444,7 +2444,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
     let pBs = &mut *(*dq).pBitStringAux;
-    let buf = pBs.buf();
+    let buf = (*pCtx).sRawData.window_from(pBs.start);
     let iMbX = dq.iMbX;
     let iMbY = dq.iMbY;
     let iMbXy = dq.iMbXyIndex as usize;
@@ -2511,7 +2511,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2699,7 +2699,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     uiCbpC: u32,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let iMbXy = dq.iMbXyIndex as usize;
     let pNzc = &mut *dq.pNzc.add(iMbXy);
     let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
@@ -2919,7 +2919,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSliceHeaderExt = &mut (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let mut uiCode = 0u32;
     let iBaseModeFlag;
@@ -2954,7 +2954,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3207,7 +3207,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeaderExt = &mut (*pSlice).sSliceHeaderExt;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -3302,7 +3302,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3556,7 +3556,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split();
+    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
     let ppRefPicL0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
@@ -4022,7 +4022,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     uiMbType: u32,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBsAux) = (*(*dq).pBitStringAux).split();
+    let (buf, pBsAux) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     if uiMbType == 0 {
@@ -4080,7 +4080,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     iScanIdxEnd: usize,
 ) -> i32 {
     let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBsAux) = (*(*dq).pBitStringAux).split();
+    let (buf, pBsAux) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let pps_sh = &*(pSliceHeader.pPps as *const SPps);
@@ -5042,6 +5042,7 @@ pub unsafe fn WelsDecodeSlice(
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
             (*pCtx).pCabacDecEngine,
             &mut *(*(*pCtx).pCurDqLayer).pBitStringAux,
+            &(*pCtx).sRawData,
         );
         if err != ERR_NONE {
             return err;
@@ -5248,7 +5249,7 @@ mod tests {
     #[test]
     fn test_wels_calc_deq_coeff_scaling_list() {
         unsafe {
-            let mut ctx = SWelsDecoderContext::default();
+            let mut ctx = SWelsDecoderContext::new_boxed();
             let mut sps = SSps::default();
             let mut pps = SPps::default();
             sps.bSeqScalingMatrixPresentFlag = true;
@@ -5256,7 +5257,7 @@ mod tests {
             pps.iPpsId = 1;
             ctx.pSps = &mut sps;
             ctx.pPps = &mut pps;
-            let res = WelsCalcDeqCoeffScalingList(&mut ctx);
+            let res = WelsCalcDeqCoeffScalingList(&mut *ctx);
             assert_eq!(res, ERR_NONE);
             assert!(ctx.bUseScalingList);
             assert!(ctx.bDequantCoeff4x4Init);

@@ -1425,7 +1425,10 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
         (*dec_impl).param = *pParam;
 
         if (*dec_impl).pCtx.is_null() {
-            let mut ctx_box: Box<crate::decoder::decoder_context::SWelsDecoderContext> = Box::default();
+            // In-place heap construction: the context is several MiB, and since T3.3
+            // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
+            // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
+            let mut ctx_box = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
             ctx_box.pMemAlign = &mut (*dec_impl).align;
             ctx_box.pParam = &mut (*dec_impl).param as *mut _ as *mut _;
             // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the

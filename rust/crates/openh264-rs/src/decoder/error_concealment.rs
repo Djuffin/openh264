@@ -960,7 +960,7 @@ mod tests {
             pMbCorrectlyDecodedFlag: flags,
             ..Default::default()
         };
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pCurDqLayer = &mut dq_layer as *mut _;
         ctx.pSps = &mut sps as *mut _;
 
@@ -977,7 +977,7 @@ mod tests {
             eEcActiveIdc: ERROR_CON_IDC::ERROR_CON_DISABLE,
             ..Default::default()
         };
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = &mut param as *mut _;
 
         unsafe {

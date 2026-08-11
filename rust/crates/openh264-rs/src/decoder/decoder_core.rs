@@ -230,26 +230,6 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 pub use crate::decoder::decoder_context::SPosOffset;
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SDataBuffer {
-    pub pHead: *mut u8,
-    pub pEnd: *mut u8,
-    pub pStartPos: *mut u8,
-    pub pCurPos: *mut u8,
-}
-
-impl Default for SDataBuffer {
-    fn default() -> Self {
-        Self {
-            pHead: std::ptr::null_mut(),
-            pEnd: std::ptr::null_mut(),
-            pStartPos: std::ptr::null_mut(),
-            pCurPos: std::ptr::null_mut(),
-        }
-    }
-}
-
 pub use crate::decoder::decoder_context::SParserBsInfo;
 
 
@@ -337,7 +317,7 @@ pub use crate::decoder::slice::{SPredWeightTable, SPredList};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking, SReorderingSyntax, SRefBasePicMarking};
 
 
-pub use crate::decoder::bit_stream::{BsReader, SBitStringAux};
+pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer, SBitStringAux};
 use crate::safe::bits::BsCursor;
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
@@ -1755,15 +1735,14 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
         return ERR_INFO_INVALID_PTR;
     }
     let pMa = (*pCtx).pMemAlign;
-    (*pCtx).iMaxBsBufferSizeInByte = (MIN_ACCESS_UNIT_CAPACITY * MAX_BUFFERED_NUM) as i32;
-    let head = WelsMalloczHelper(pMa, (*pCtx).iMaxBsBufferSizeInByte as usize);
-    if head.is_null() {
-        return ERR_INFO_OUT_OF_MEMORY;
+    // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
+    // `sRawData.len()` — the `iMaxBsBufferSizeInByte` field died with the pointers,
+    // since a stored copy of the buffer's length is exactly the kind of extent F16
+    // is about.
+    match RawDataBuffer::try_new_zeroed(MIN_ACCESS_UNIT_CAPACITY * MAX_BUFFERED_NUM) {
+        Ok(raw) => (*pCtx).sRawData = raw,
+        Err(()) => return ERR_INFO_OUT_OF_MEMORY,
     }
-    (*pCtx).sRawData.pHead = head;
-    (*pCtx).sRawData.pStartPos = head;
-    (*pCtx).sRawData.pCurPos = head;
-    (*pCtx).sRawData.pEnd = head.add((*pCtx).iMaxBsBufferSizeInByte as usize);
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
         let pParser = WelsMalloczHelper(pMa, std::mem::size_of::<SParserBsInfo>()) as *mut SParserBsInfo;
@@ -1777,14 +1756,10 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
         }
         (*pParser).pDstBuff = dstBuff;
 
-        let savedHead = WelsMalloczHelper(pMa, (*pCtx).iMaxBsBufferSizeInByte as usize);
-        if savedHead.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
+        match RawDataBuffer::try_new_zeroed((*pCtx).sRawData.len()) {
+            Ok(saved) => (*pCtx).sSavedData = saved,
+            Err(()) => return ERR_INFO_OUT_OF_MEMORY,
         }
-        (*pCtx).sSavedData.pHead = savedHead;
-        (*pCtx).sSavedData.pStartPos = savedHead;
-        (*pCtx).sSavedData.pCurPos = savedHead;
-        (*pCtx).sSavedData.pEnd = savedHead.add((*pCtx).iMaxBsBufferSizeInByte as usize);
 
         (*pCtx).iMaxNalNum = (MAX_NAL_UNITS_IN_LAYER + 2) as i32;
         let nalLen = WelsMalloczHelper(pMa, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>()) as *mut i32;
@@ -1796,84 +1771,17 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
     ERR_NONE
 }
 
-pub unsafe fn ExpandBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let iExpandStepShift = 1;
-    let iNewBuffLen = WELS_MAX(
-        kiSrcLen * (MAX_BUFFERED_NUM as i32),
-        (*pCtx).iMaxBsBufferSizeInByte << iExpandStepShift,
-    );
-    let pMa = (*pCtx).pMemAlign;
-    let pNewBsBuff = WelsMalloczHelper(pMa, iNewBuffLen as usize);
-    if pNewBsBuff.is_null() {
-        (*pCtx).iErrorCode |= dsOutOfMemory;
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-
-    if !(*pCtx).pAccessUnitList.is_null() {
-        for i in 0..=(*(*pCtx).pAccessUnitList).uiAvailUnitsNum as usize {
-            let pNal = *(*(*pCtx).pAccessUnitList).pNalUnitsList.add(i);
-            if i < MAX_NAL_UNIT_NUM_IN_AU && !pNal.is_null() {
-                let pSliceBitsRead = &mut (*pNal).sNalData.sVclNal.sSliceBitsRead;
-
-                // Three pointer rebases became one. `pEndBuf` and `pCurBuf` are now
-                // the cursor's `len` and `pos` — offsets, which survive a reallocation
-                // by definition (plan §2.2.2, P5). What still needs moving is the base,
-                // and — because the new buffer is *larger* — the readable extent behind
-                // it (F16): leaving `avail` at its old value would hand the reader a
-                // narrower window than the raw pointer code had, which is the exact
-                // shape of the bug F16 records. T3.3 deletes both with the pointer.
-                if !pSliceBitsRead.base.is_null() && !(*pCtx).sRawData.pHead.is_null() {
-                    let offset = pSliceBitsRead.base.offset_from((*pCtx).sRawData.pHead);
-                    pSliceBitsRead.base = pNewBsBuff.offset(offset);
-                    pSliceBitsRead.avail = iNewBuffLen as usize - offset as usize;
-                }
-            }
-        }
-    }
-
-    if !(*pCtx).sRawData.pHead.is_null() {
-        std::ptr::copy_nonoverlapping(
-            (*pCtx).sRawData.pHead,
-            pNewBsBuff,
-            (*pCtx).iMaxBsBufferSizeInByte as usize,
-        );
-        let startOff = (*pCtx).sRawData.pStartPos.offset_from((*pCtx).sRawData.pHead);
-        let curOff = (*pCtx).sRawData.pCurPos.offset_from((*pCtx).sRawData.pHead);
-        (*pCtx).sRawData.pStartPos = pNewBsBuff.offset(startOff);
-        (*pCtx).sRawData.pCurPos = pNewBsBuff.offset(curOff);
-        (*pCtx).sRawData.pEnd = pNewBsBuff.add(iNewBuffLen as usize);
-        WelsFreeHelper(pMa, (*pCtx).sRawData.pHead, (*pCtx).iMaxBsBufferSizeInByte as usize);
-        (*pCtx).sRawData.pHead = pNewBsBuff;
-    }
-
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
-        let pNewSaved = WelsMalloczHelper(pMa, iNewBuffLen as usize);
-        if pNewSaved.is_null() {
-            (*pCtx).iErrorCode |= dsOutOfMemory;
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-        if !(*pCtx).sSavedData.pHead.is_null() {
-            std::ptr::copy_nonoverlapping(
-                (*pCtx).sSavedData.pHead,
-                pNewSaved,
-                (*pCtx).iMaxBsBufferSizeInByte as usize,
-            );
-            let startOff = (*pCtx).sSavedData.pStartPos.offset_from((*pCtx).sSavedData.pHead);
-            let curOff = (*pCtx).sSavedData.pCurPos.offset_from((*pCtx).sSavedData.pHead);
-            (*pCtx).sSavedData.pStartPos = pNewSaved.offset(startOff);
-            (*pCtx).sSavedData.pCurPos = pNewSaved.offset(curOff);
-            (*pCtx).sSavedData.pEnd = pNewSaved.add(iNewBuffLen as usize);
-            WelsFreeHelper(pMa, (*pCtx).sSavedData.pHead, (*pCtx).iMaxBsBufferSizeInByte as usize);
-            (*pCtx).sSavedData.pHead = pNewSaved;
-        }
-    }
-
-    (*pCtx).iMaxBsBufferSizeInByte = iNewBuffLen;
-    ERR_NONE
-}
+// `ExpandBsBuffer` was deleted at T3.3, not converted. Its growth policy (when to
+// grow is `WelsDecodeBs`'s check; by how much is `max(srcLen * MAX_BUFFERED_NUM,
+// len << 1)`) lives in [`RawDataBuffer::grow`]. Everything else it did was pointer
+// maintenance that offsets made meaningless: the `sRawData`/`sSavedData` rebases
+// (offsets survive a reallocation by definition — plan §2.2.2, P5) and the
+// per-pending-NAL `sSliceBitsRead` rebase with its stale-`avail` repair (F16's
+// second instance) — under the derive-don't-store rule there is nothing left to go
+// stale, so the hazard is unrepresentable rather than repaired. `CheckBsBuffer`
+// (upstream's per-frame growth trigger) had no caller in this port and died with
+// it; the port's only trigger is the single-NAL-bigger-than-the-buffer check in
+// `WelsDecodeBs`, unchanged.
 
 pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i32 {
     let pParser = (*pCtx).pParserBsInfo;
@@ -1900,19 +1808,6 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
     WelsFreeHelper(pMa, (*pParser).pNalLenInByte as *mut u8, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>());
     (*pParser).pNalLenInByte = pNewLenBuffer;
     (*pCtx).iMaxNalNum = iNewLen;
-    ERR_NONE
-}
-
-pub unsafe fn CheckBsBuffer(pCtx: PWelsDecoderContext, kiSrcLen: i32) -> i32 {
-    if kiSrcLen > MAX_ACCESS_UNIT_CAPACITY as i32 {
-        (*pCtx).iErrorCode |= dsBitstreamError;
-        return ERR_INFO_INVALID_ACCESS;
-    } else if kiSrcLen > (*pCtx).iMaxBsBufferSizeInByte / (MAX_BUFFERED_NUM as i32) {
-        let ret = ExpandBsBuffer(pCtx, kiSrcLen);
-        if ret != ERR_NONE {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-    }
     ERR_NONE
 }
 
@@ -2208,22 +2103,12 @@ pub unsafe fn WelsFreeStaticMemory(pCtx: PWelsDecoderContext) {
     let pMa = (*pCtx).pMemAlign;
     MemFreeNalList(&mut (*pCtx).pAccessUnitList, pMa);
 
-    if !(*pCtx).sRawData.pHead.is_null() {
-        WelsFreeHelper(pMa, (*pCtx).sRawData.pHead, (*pCtx).iMaxBsBufferSizeInByte as usize);
-    }
-    (*pCtx).sRawData.pHead = std::ptr::null_mut();
-    (*pCtx).sRawData.pEnd = std::ptr::null_mut();
-    (*pCtx).sRawData.pStartPos = std::ptr::null_mut();
-    (*pCtx).sRawData.pCurPos = std::ptr::null_mut();
+    // The buffers own their allocations now; reset releases them (the WelsFreeHelper
+    // free-cascade entries for sRawData/sSavedData died with the pointers).
+    (*pCtx).sRawData.reset();
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
-        if !(*pCtx).sSavedData.pHead.is_null() {
-            WelsFreeHelper(pMa, (*pCtx).sSavedData.pHead, (*pCtx).iMaxBsBufferSizeInByte as usize);
-        }
-        (*pCtx).sSavedData.pHead = std::ptr::null_mut();
-        (*pCtx).sSavedData.pEnd = std::ptr::null_mut();
-        (*pCtx).sSavedData.pStartPos = std::ptr::null_mut();
-        (*pCtx).sSavedData.pCurPos = std::ptr::null_mut();
+        (*pCtx).sSavedData.reset();
 
         if !(*pCtx).pParserBsInfo.is_null() {
             let pParser = (*pCtx).pParserBsInfo;
@@ -3624,7 +3509,7 @@ pub unsafe fn WelsDecodeBs(
         // The raw-data buffer can be rewound once no pending NAL units
         // reference it (slices stay queued until their access unit completes).
         if (*pCtx).pAccessUnitList.is_null() || (*(*pCtx).pAccessUnitList).uiAvailUnitsNum == 0 {
-            (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
+            (*pCtx).sRawData.rewind();
         }
 
         for (_u_i, unit) in units.iter().enumerate() {
@@ -3641,41 +3526,37 @@ pub unsafe fn WelsDecodeBs(
             // Copy the NAL into the persistent raw-data buffer, stripping
             // emulation-prevention bytes (00 00 03 -> 00 00), as the C++
             // WelsDecodeBs start-code scanner does.
-            if ((*pCtx).sRawData.pEnd.offset_from((*pCtx).sRawData.pCurPos) as usize)
-                < payload_slice.len() + 4
-            {
+            if (*pCtx).sRawData.remaining() < payload_slice.len() + 4 {
                 // Wrap to the buffer head like the C++ scanner; the buffer is
                 // sized for several access units, so pending NAL data (near
                 // the current write position) is not overwritten.
-                (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
-                if ((*pCtx).iMaxBsBufferSizeInByte as usize) < payload_slice.len() + 4 {
-                    if ExpandBsBuffer(pCtx, payload_slice.len() as i32) != ERR_NONE {
+                (*pCtx).sRawData.rewind();
+                if (*pCtx).sRawData.len() < payload_slice.len() + 4 {
+                    // ExpandBsBuffer's policy, now RawDataBuffer::grow. Offsets —
+                    // the write position, every pending reader's `start`/cursor —
+                    // survive the reallocation by definition, so the pointer
+                    // rebasing block is gone rather than converted, and the saved
+                    // buffer keeps `sRawData`'s size as before.
+                    if (*pCtx).sRawData.grow(payload_slice.len()).is_err() {
                         (*pCtx).iErrorCode |= dsOutOfMemory;
                         return (*pCtx).iErrorCode;
                     }
-                    (*pCtx).sRawData.pCurPos = (*pCtx).sRawData.pHead;
+                    if !(*pCtx).pParam.is_null()
+                        && (*(*pCtx).pParam).bParseOnly
+                        && (*pCtx).sSavedData.grow_to((*pCtx).sRawData.len()).is_err()
+                    {
+                        (*pCtx).iErrorCode |= dsOutOfMemory;
+                        return (*pCtx).iErrorCode;
+                    }
+                    (*pCtx).sRawData.rewind();
                 }
             }
-            let dst_start = (*pCtx).sRawData.pCurPos;
-            let mut dst_len = 0usize;
-            let mut zero_run = 0u32;
-            for &b in payload_slice {
-                if zero_run >= 2 && b == 0x03 {
-                    zero_run = 0;
-                    continue;
-                }
-                if b == 0 {
-                    zero_run += 1;
-                } else {
-                    zero_run = 0;
-                }
-                *dst_start.add(dst_len) = b;
-                dst_len += 1;
-            }
-            (*pCtx).sRawData.pCurPos = dst_start.add(dst_len);
+            let (payload_start, payload_len) = (*pCtx).sRawData.append_ebsp_stripped(payload_slice);
 
-            let payload_len = dst_len;
-            let payload_ptr = dst_start;
+            // SHIM(phase3): the parse entry points still take pointers until T3.3's
+            // nalu face lands; this is the one place a pointer into the owned buffer
+            // is minted, and it dies with those signatures.
+            let payload_ptr = (*pCtx).sRawData.bytes().as_ptr().add(payload_start) as *mut u8;
 
             let mut consumed_bytes = 0i32;
             let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
@@ -4423,8 +4304,8 @@ mod tests {
     #[test]
     fn test_decoder_open_end_and_init_static_memory_state_flags() {
         unsafe {
-            let mut ctx = SWelsDecoderContext::default();
-            assert_eq!(WelsOpenDecoder(&mut ctx as *mut _, std::ptr::null_mut()), ERR_NONE);
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            assert_eq!(WelsOpenDecoder(&mut *ctx as *mut _, std::ptr::null_mut()), ERR_NONE);
             assert!(ctx.bParamSetsLostFlag);
             assert!(ctx.bNewSeqBegin);
             assert!(ctx.bPrintFrameErrorTraceFlag);
@@ -4432,7 +4313,7 @@ mod tests {
             assert!(ctx.bFrameFinish);
             assert_eq!(ctx.iSeqNum, 0);
 
-            WelsEndDecoder(&mut ctx as *mut _);
+            WelsEndDecoder(&mut *ctx as *mut _);
             assert!(!ctx.bParamSetsLostFlag);
             assert!(!ctx.bNewSeqBegin);
             assert!(!ctx.bPrintFrameErrorTraceFlag);

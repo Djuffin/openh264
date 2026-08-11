@@ -312,7 +312,7 @@ macro_rules! WELS_CHECK_SE_UPPER_ERROR_NOLOG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::bit_stream::{BsReader, DecInitBits, READER_SLOP};
+    use crate::decoder::bit_stream::{BsReader, DecInitBits, RawDataBuffer, READER_SLOP};
 
     /// The reader family reads `READER_SLOP` bytes past the RBSP (F4); since T3.1a
     /// that is its written contract, so the tests supply it.
@@ -359,7 +359,7 @@ mod tests {
         let mut bs = BsReader::default();
 
         unsafe {
-            let err = DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
+            let err = DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
             assert_eq!(err, ERR_NONE);
 
             let mut code: u32 = 999;
@@ -377,7 +377,7 @@ mod tests {
         let mut bs = BsReader::default();
 
         unsafe {
-            DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
+            DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
 
             let mut se_code1: i32 = 0;
             let ret1 = BsGetSe(&buf, &mut bs.cursor, &mut se_code1);
@@ -397,7 +397,7 @@ mod tests {
         let mut bs = BsReader::default();
 
         unsafe {
-            DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
+            DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
 
             let mut code: u32 = 99;
             // iRange = 1: returns 0 directly without bit consumption

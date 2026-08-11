@@ -672,16 +672,14 @@ pub unsafe fn ParseNalHeader(
             (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
 
             if (*pNalUnitHeader).uiNalRefIdc != 0 {
-                let pBs = &mut (*pCtx).sBs;
                 let iBitSize = (iNalSize << 3) - BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
-                let iAvail = crate::decoder::bit_stream::readable_from(
-                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pNal, (iBitSize as usize + 7) >> 3);
-                let iErr = DecInitBits(pBs, pNal, iBitSize, iAvail);
+                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pNal);
+                let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iStart, iBitSize);
                 if iErr != ERR_NONE {
                     (*pCtx).iErrorCode |= dsBitstreamError;
                     return std::ptr::null_mut();
                 }
-                let (buf, cursor) = pBs.split();
+                let (buf, cursor) = (*pCtx).sBs.split(&(*pCtx).sRawData);
                 ParsePrefixNalUnit(pCtx, buf, cursor);
             }
             (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
@@ -765,9 +763,9 @@ pub unsafe fn ParseNalHeader(
                 .sSliceBitsRead;
             let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
             let iBitSize = (iNalSize << 3) - trailing_bits;
-            let iAvail = crate::decoder::bit_stream::readable_from(
-                (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pNal, (iBitSize as usize + 7) >> 3);
-            let mut iErr = crate::decoder::bit_stream::DecInitBits(pBs, pNal, iBitSize, iAvail);
+            let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pNal);
+            let mut iErr =
+                crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
             if iErr != ERR_NONE {
                 ForceClearCurrentNal(pCurAu);
                 if uiAvailNalNum > 1 {
@@ -780,7 +778,7 @@ pub unsafe fn ParseNalHeader(
                 return std::ptr::null_mut();
             }
 
-            let (buf, cursor) = pBs.split();
+            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
             iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(pCtx, buf, cursor, bExtensionFlag);
             if iErr != ERR_NONE {
                 if uiAvailNalNum == 1 && (*pCurNal).sNalHeaderExt.bIdrFlag {
@@ -1013,8 +1011,8 @@ pub unsafe fn ParseNonVclNal(
     match eNalType {
         EWelsNalUnitType::NAL_UNIT_SPS | EWelsNalUnitType::NAL_UNIT_SUBSET_SPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, pRbsp, iBitSize, crate::decoder::bit_stream::readable_from(
-                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pRbsp, (iBitSize as usize + 7) >> 3));
+                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pRbsp);
+                iErr = DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1026,7 +1024,7 @@ pub unsafe fn ParseNonVclNal(
                     return iErr;
                 }
             }
-            let (buf, cursor) = pBs.split();
+            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
             iErr = ParseSps(pCtx, buf, cursor, &mut iPicWidth, &mut iPicHeight, pSrcNal, kSrcNalLen);
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
@@ -1043,8 +1041,8 @@ pub unsafe fn ParseNonVclNal(
 
         EWelsNalUnitType::NAL_UNIT_PPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, pRbsp, iBitSize, crate::decoder::bit_stream::readable_from(
-                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pRbsp, (iBitSize as usize + 7) >> 3));
+                let iStart = crate::decoder::bit_stream::offset_in(&(*pCtx).sRawData, pRbsp);
+                iErr = DecInitBits(pBs, &(*pCtx).sRawData, iStart, iBitSize);
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1056,7 +1054,7 @@ pub unsafe fn ParseNonVclNal(
                     return iErr;
                 }
             }
-            let (buf, cursor) = pBs.split();
+            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
             iErr = ParsePps(
                 pCtx,
                 (*pCtx).sSpsPpsCtx.sPpsBuffer.as_mut_ptr(),
