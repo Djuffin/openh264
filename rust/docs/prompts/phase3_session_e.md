@@ -12,7 +12,17 @@ engine, buffer, NAL identity — T3.0–T3.3 complete, F15/F16/F17 closed). T3.4
 the encoder write side. Session shape: **face 1 = the F2 dedupe; face 2 =
 `vlc_encoder.rs` → `BsWriter` with F13's signature dying; face 3 = the
 `SWelsSliceBs` flip and, if the inventory says so, the deletion of `SBitStringAux`
-itself.** T3.5 (the encoder CABAC triple + rollback) starts only from a standing
+itself.**
+
+> **Correction, made after the fact (2026-08-11): faces 2 and 3 do not separate, and
+> landed as one commit.** A writer function taking `(buf: &mut [u8], w: &mut BsWriter)`
+> cannot be fed by a struct field holding an `SBitStringAux` — the field's type is
+> *forced* by the signature change, not adjacent to it — and the `abi_guard` asserts
+> are `const` assertions, so there is no intermediate green state. What *does*
+> separate cleanly is the third face's other half: deleting `SBitStringAux` is a pure
+> subtraction and is its own commit. See the log's session-E entry §1 for the
+> generalisation, which Phases 5 and 6 need: **the decomposable unit in a struct-field
+> conversion is the set of structs reachable from one signature, not one struct.** T3.5 (the encoder CABAC triple + rollback) starts only from a standing
 start with a third of the session left — the standing rule, unchanged.
 
 Tree at session start: clean at `b308f7d5`. Open with the control battery
@@ -86,13 +96,18 @@ transliterations around the copies — delete what provably dies, list what does
 
 ## 4. Face 3 — the `SWelsSliceBs` flip, the ABI asserts, and possibly the headline
 
-- `SWelsSliceBs::sBs: SBitStringAux` → `BsWriter` (construction-safe per §1 —
+- `SWelsSliceBs::sBsWrite: SBitStringAux` → `BsWriter` (**correction: the field is
+  `sBsWrite`, not `sBs`** — `nal_encap.rs:133`; `SWelsEncoderOutput` and `SWelsOut`
+  carry a field of the same name and had to flip with it) (construction-safe per §1 —
   discharge the audit in the commit message), and `SSlice::pSliceBsa` retypes
   `*mut SBitStringAux` → `*mut BsWriter` (the T3.1b precedent: pointer stays,
   pointee converts, Phase 6 owns the pointer's removal). The slice's output buffer
   (`pBsBuffer`, raw allocation) stays exactly where it is — buffers are T3.6's.
 - **`encoder/abi_guard.rs` will fight you, by design:** it pins
-  `SBitStringAux` at 48 bytes (`:55`) and `SWelsSliceBs` at 176 (`:61`). The
+  `SBitStringAux` at 48 bytes (`:55`) and `SWelsSliceBs` at 176 (`:61`)
+  — **correction: four asserts had to go, not two.** `SWelsEncoderOutput` (96, `:62`)
+  embeds an `SBitStringAux` too, and `SSlice` (1584, `:146`) embeds `SWelsSliceBs`
+  by value, so both shrank by the same 32 bytes. The
   plan's standing rule (§Phase 6.6, applied early here): **delete each assert in
   the same commit that de-C-ifies its struct** — they are encoder-internal locks
   ("nothing outside the crate depends on these layouts"), and a tripped assert is
