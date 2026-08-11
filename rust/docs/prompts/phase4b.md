@@ -19,10 +19,15 @@ If both fit, the phase is one session; plan the boundary at the seam, never mid-
 
 ## 0. Start here
 
-Tree should be clean. Run the control battery first (`bash rust/tools/gates.sh full`,
-`OVERALL:` is the verdict) and recount — **431 debug / 425 release / 20 ignored** and
-Miri **291** at Phase 3's exit. The recount rule has paid twelve times; it is cheaper
-than every occasion it has caught something.
+Tree at session start: clean except a small inherited doc tail — the post-exit
+steward annotations (plan §1.2's vtable-count correction, §3's P5/P13 status notes,
+the Progress appendix's F18 clause, and this brief's §0). Commit them first, house
+style. The Phase 3 exit itself — the doc suite and F18's test fix
+([`phase3_findings.md`](../phase3_findings.md)) — is already committed as
+`81e3cf9a`. Then run the control battery (`bash rust/tools/gates.sh full`,
+`OVERALL:` is the verdict) and recount — **431 debug / 425 release / 20 ignored**
+and Miri **291** at Phase 3's exit. The recount rule has paid twelve times; it is
+cheaper than every occasion it has caught something.
 
 **Expect an F3 hit on the opening control battery.** It has happened on the
 session-start commit, before a line was changed, in *three consecutive sessions* now.
