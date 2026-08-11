@@ -111,6 +111,32 @@ pub fn trailing_bits(byte: u8) -> i32 {
 }
 
 impl BsCursor {
+    /// Rebuilds a cursor from the five state values `SBitStringAux` holds, in the
+    /// struct's own field order.
+    ///
+    /// This is the Phase 3 strangler's *shim direction*. While the decoder still
+    /// stores an `SBitStringAux` — `SWelsDecoderContext::sBs` and
+    /// `SVclNal::sSliceBitsRead`, both owned by structs later seams convert — the raw
+    /// reader family (`decoder/bit_stream.rs`, `decoder/dec_golomb.rs`) translates the
+    /// struct into a cursor per call, runs the safe body, and writes the state back.
+    /// `pos` and `len` are the pointer differences `pCurBuf - pStartBuf` and
+    /// `pEndBuf - pStartBuf`.
+    ///
+    /// It validates nothing: it reconstructs a state that already exists rather than
+    /// creating one, and every field is a value the raw struct was already holding.
+    /// **Deleted with the last `SBitStringAux` reader field** (T3.1b/T3.3) — nothing
+    /// but a translation shim should ever call it.
+    #[inline]
+    pub fn from_parts(pos: usize, cur_bits: u32, left_bits: i32, len: usize, bits: i32) -> Self {
+        Self {
+            pos,
+            cur_bits,
+            left_bits,
+            len,
+            bits,
+        }
+    }
+
     /// Starts reading an RBSP of `size_bits` bits from the front of `buf`.
     ///
     /// Mirrors `DecInitBits` (`decoder/bit_stream.rs:84` /
@@ -576,6 +602,29 @@ mod tests {
         assert_eq!(c.bits(), 64);
         assert_eq!(c.pos(), 4);
         assert_eq!(c.len(), 8);
+    }
+
+    #[test]
+    fn from_parts_round_trips_through_the_getters() {
+        // Five same-shaped integers in one call is exactly where a transposition
+        // hides, so pin the field order the shims rely on.
+        let c = BsCursor::from_parts(7, 0xDEAD_BEEF, -3, 11, 88);
+        assert_eq!((c.pos(), c.cur_bits(), c.left_bits(), c.len(), c.bits()), (7, 0xDEAD_BEEF, -3, 11, 88));
+
+        // And that a reconstructed cursor reads on from where the original stopped.
+        let buf = with_slack(&[0x12, 0x34, 0x56, 0x78, 0x9A]);
+        let mut original = BsCursor::init(&buf, 40).unwrap();
+        let first = original.get_bits(&buf, 12).unwrap();
+        let mut rebuilt = BsCursor::from_parts(
+            original.pos(),
+            original.cur_bits(),
+            original.left_bits(),
+            original.len(),
+            original.bits(),
+        );
+        assert_eq!(rebuilt, original);
+        assert_eq!(rebuilt.get_bits(&buf, 12).unwrap(), original.get_bits(&buf, 12).unwrap());
+        assert_eq!(first, 0x123);
     }
 
     #[test]

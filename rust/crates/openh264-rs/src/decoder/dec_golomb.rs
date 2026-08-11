@@ -13,7 +13,11 @@
 //! - `codec/decoder/core/inc/dec_golomb.h`
 //! - Associated documentation in `rust/docs/dec_golomb.h.md`
 
-use crate::decoder::bit_stream::{PBitStringAux, SBitStringAux, TagBitStringAux};
+use crate::decoder::bit_stream::{
+    cursor_and_buf, cursor_of, store_cursor, PBitStringAux, SBitStringAux, TagBitStringAux,
+};
+use crate::safe::bits::BsCursor;
+use crate::safe::err::ErrInfo;
 
 // Error and status return codes matching OpenH264 error_code.h
 pub const ERR_NONE: i32 = 0;
@@ -123,30 +127,31 @@ pub fn UBITS(iCurBits: u32, iNumBits: i32) -> u32 {
     }
 }
 
-/// Internal helper to dump bits and refill the 32-bit bitstream register.
+/// Runs one [`BsCursor`] read against the state an `SBitStringAux` holds, and writes
+/// the state back whatever the outcome.
+///
+/// SHIM(phase3) — this is the whole of the decoder read side's strangler boundary.
+/// Every function below is now `read_with(pBs, |cursor, buf| …)`; the arithmetic lives
+/// in `safe::bits`, and what remains here is the translation `SBitStringAux` needs
+/// until T3.1b moves the cursor into the structs that own the buffers.
+///
+/// The write-back is unconditional because the raw refill mutated `uiCurBits` and
+/// `iLeftBits` *before* its overflow check and left them mutated on the error path —
+/// `reader_op_sequences_match_bit_for_bit` in `tests/safe_bits_differential.rs` fails
+/// if that stops being true.
 #[inline(always)]
-pub unsafe fn dump_bits_aux(pBs: PBitStringAux, iNumBits: i32) -> u32 {
+unsafe fn read_with<T>(
+    pBs: PBitStringAux,
+    op: impl FnOnce(&mut BsCursor, &[u8]) -> Result<T, ErrInfo>,
+) -> Result<T, i32> {
     unsafe {
         let bs = &mut *pBs;
-        bs.uiCurBits = bs.uiCurBits.wrapping_shl(iNumBits as u32);
-        bs.iLeftBits += iNumBits;
-        if bs.iLeftBits > 0 {
-            let iAllowedBytes = (bs.pEndBuf as isize) - (bs.pStartBuf as isize);
-            let iReadBytes = (bs.pCurBuf as isize) - (bs.pStartBuf as isize);
-            if iReadBytes > iAllowedBytes + 1 {
-                return ERR_INFO_READ_OVERFLOW as u32;
-            }
-            let b0 = *bs.pCurBuf as u32;
-            let b1 = *bs.pCurBuf.add(1) as u32;
-            let word = (b0 << 8) | b1;
-            let shift = bs.iLeftBits as u32;
-            if shift < 32 {
-                bs.uiCurBits |= word.wrapping_shl(shift);
-            }
-            bs.iLeftBits -= 16;
-            bs.pCurBuf = bs.pCurBuf.add(2);
-        }
-        ERR_NONE as u32
+        let Some((mut cursor, buf)) = cursor_and_buf(bs) else {
+            return Err(ERR_INFO_INVALID_ACCESS);
+        };
+        let out = op(&mut cursor, buf);
+        store_cursor(bs, &cursor);
+        out.map_err(|err| err.0)
     }
 }
 
@@ -156,13 +161,13 @@ pub unsafe fn dump_bits_aux(pBs: PBitStringAux, iNumBits: i32) -> u32 {
 #[inline(always)]
 pub unsafe fn BsGetBits(pBs: PBitStringAux, iNumBits: i32, pCode: *mut u32) -> i32 {
     unsafe {
-        let iRc = UBITS((*pBs).uiCurBits, iNumBits);
-        let err = dump_bits_aux(pBs, iNumBits);
-        if err != ERR_NONE as u32 {
-            return err as i32;
+        match read_with(pBs, |cursor, buf| cursor.get_bits(buf, iNumBits)) {
+            Ok(value) => {
+                *pCode = value;
+                ERR_NONE
+            }
+            Err(code) => code,
         }
-        *pCode = iRc;
-        ERR_NONE
     }
 }
 
@@ -232,39 +237,13 @@ pub fn GetLeadingZeroBits(iCurBits: u32) -> i32 {
 #[inline(always)]
 pub unsafe fn BsGetUe(pBs: PBitStringAux, pCode: *mut u32) -> u32 {
     unsafe {
-        let mut iValue: u32 = 0;
-        let iLeadingZeroBits = GetLeadingZeroBits((*pBs).uiCurBits);
-
-        if iLeadingZeroBits == -1 {
-            return ERR_INFO_READ_LEADING_ZERO as u32;
-        } else if iLeadingZeroBits > 16 {
-            let mut err = dump_bits_aux(pBs, 16);
-            if err != ERR_NONE as u32 {
-                return err;
+        match read_with(pBs, |cursor, buf| cursor.get_ue(buf)) {
+            Ok(value) => {
+                *pCode = value;
+                ERR_NONE as u32
             }
-            err = dump_bits_aux(pBs, iLeadingZeroBits + 1 - 16);
-            if err != ERR_NONE as u32 {
-                return err;
-            }
-        } else {
-            let err = dump_bits_aux(pBs, iLeadingZeroBits + 1);
-            if err != ERR_NONE as u32 {
-                return err;
-            }
+            Err(code) => code as u32,
         }
-
-        if iLeadingZeroBits != 0 {
-            iValue = UBITS((*pBs).uiCurBits, iLeadingZeroBits);
-            let err = dump_bits_aux(pBs, iLeadingZeroBits);
-            if err != ERR_NONE as u32 {
-                return err;
-            }
-        }
-
-        *pCode = (1u32.wrapping_shl(iLeadingZeroBits as u32))
-            .wrapping_sub(1)
-            .wrapping_add(iValue);
-        ERR_NONE as u32
     }
 }
 
@@ -274,18 +253,13 @@ pub unsafe fn BsGetUe(pBs: PBitStringAux, pCode: *mut u32) -> u32 {
 #[inline(always)]
 pub unsafe fn BsGetSe(pBs: PBitStringAux, pCode: *mut i32) -> i32 {
     unsafe {
-        let mut uiCodeNum: u32 = 0;
-        let uiRet = BsGetUe(pBs, &mut uiCodeNum);
-        if uiRet != ERR_NONE as u32 {
-            return uiRet as i32;
+        match read_with(pBs, |cursor, buf| cursor.get_se(buf)) {
+            Ok(value) => {
+                *pCode = value;
+                ERR_NONE
+            }
+            Err(code) => code,
         }
-
-        if (uiCodeNum & 0x01) != 0 {
-            *pCode = ((uiCodeNum + 1) >> 1) as i32;
-        } else {
-            *pCode = NEG_NUM((uiCodeNum >> 1) as i32);
-        }
-        ERR_NONE
     }
 }
 
@@ -295,43 +269,33 @@ pub unsafe fn BsGetSe(pBs: PBitStringAux, pCode: *mut i32) -> i32 {
 #[inline(always)]
 pub unsafe fn BsGetTe0(pBs: PBitStringAux, iRange: i32, pCode: *mut u32) -> i32 {
     unsafe {
+        // `iRange == 1` consumes nothing, so it must not even build a cursor: the raw
+        // version returned before touching `pBs`, and two call sites rely on being
+        // allowed to pass a range of 1 with a spent reader.
         if iRange == 1 {
             *pCode = 0;
-        } else if iRange == 2 {
-            let uiRet = BsGetOneBit(pBs, pCode);
-            if uiRet != ERR_NONE as u32 {
-                return uiRet as i32;
-            }
-            *pCode ^= 1;
-        } else {
-            let uiRet = BsGetUe(pBs, pCode);
-            if uiRet != ERR_NONE as u32 {
-                return uiRet as i32;
-            }
+            return ERR_NONE;
         }
-        ERR_NONE
+        match read_with(pBs, |cursor, buf| cursor.get_te0(buf, iRange)) {
+            Ok(value) => {
+                *pCode = value;
+                ERR_NONE
+            }
+            Err(code) => code,
+        }
     }
 }
 
 /// Counts the number of trailing zero bits following the `rbsp_stop_one_bit` in `pBuf`.
 ///
-/// Matches `int32_t BsGetTrailingBits (uint8_t* pBuf)` in `dec_golomb.h`.
+/// Matches `int32_t BsGetTrailingBits (uint8_t* pBuf)` in `dec_golomb.h`. The body is
+/// [`crate::safe::bits::trailing_bits`]; the pointer stays in the signature because the
+/// *callers* are what is wrong here — `nalu.rs:675` and `:762` index one byte before
+/// this buffer when the NAL strips to nothing
+/// ([`phase3_findings.md`](../../../docs/phase3_findings.md) §F15), and T3.3 fixes them.
 #[inline(always)]
 pub unsafe fn BsGetTrailingBits(pBuf: *const u8) -> i32 {
-    unsafe {
-        let mut uiValue = *pBuf as u32;
-        let mut iRetNum: i32 = 0;
-
-        while iRetNum < 9 {
-            if (uiValue & 1) != 0 {
-                return iRetNum;
-            }
-            uiValue >>= 1;
-            iRetNum += 1;
-        }
-
-        0
-    }
+    unsafe { crate::safe::bits::trailing_bits(*pBuf) }
 }
 
 /// Checks whether additional RBSP syntax elements remain before `rbsp_trailing_bits()`.
@@ -339,12 +303,14 @@ pub unsafe fn BsGetTrailingBits(pBuf: *const u8) -> i32 {
 /// Matches `bool CheckMoreRBSPData (PBitStringAux pBsAux)` in `dec_golomb.h`.
 #[inline(always)]
 pub unsafe fn CheckMoreRBSPData(pBsAux: PBitStringAux) -> bool {
+    // A state query, not a read: no buffer, so no slice.
     unsafe {
-        let offset_bytes =
-            ((*pBsAux).pCurBuf as isize) - ((*pBsAux).pStartBuf as isize) - 2;
-        let bits_consumed = (offset_bytes << 3) as i32;
-        let bits_remaining = (*pBsAux).iBits - bits_consumed - (*pBsAux).iLeftBits;
-        bits_remaining > 1
+        match cursor_of(&*pBsAux) {
+            Some(cursor) => cursor.check_more_rbsp_data(),
+            // The raw version computed on whatever the pointers held. Only reachable
+            // with an uninitialised reader, which no caller has.
+            None => false,
+        }
     }
 }
 
@@ -390,7 +356,15 @@ macro_rules! WELS_CHECK_SE_UPPER_ERROR_NOLOG {
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::decoder::bit_stream::DecInitBits;
+    use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};
+
+    /// The reader family reads `READER_SLOP` bytes past the RBSP (F4); since T3.1a
+    /// that is its written contract, so the tests supply it.
+    fn with_slop(payload: &[u8]) -> Vec<u8> {
+        let mut v = payload.to_vec();
+        v.extend_from_slice(&[0u8; READER_SLOP]);
+        v
+    }
 
     #[test]
     fn test_neg_num() {
@@ -425,7 +399,7 @@ mod tests {
         // '010' (0b01000000 = 0x40) -> codeNum = 1
         // '011' (0b01100000 = 0x60) -> codeNum = 2
         // '00100' (0b00100000 = 0x20) -> codeNum = 3
-        let buf: [u8; 8] = [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = with_slop(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = SBitStringAux::default();
 
         unsafe {
@@ -443,7 +417,7 @@ mod tests {
     fn test_bs_get_se_values() {
         // '010' = ue(1) -> se(+1)
         // '011' = ue(2) -> se(-1)
-        let buf: [u8; 8] = [0b01001100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = with_slop(&[0b01001100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = SBitStringAux::default();
 
         unsafe {
@@ -463,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_bs_get_te0() {
-        let buf: [u8; 8] = [0b10100000, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = with_slop(&[0b10100000, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = SBitStringAux::default();
 
         unsafe {

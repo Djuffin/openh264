@@ -10,8 +10,21 @@ the release segfault, F2 the four bitstream writers, F3 the MT nondeterminism) a
 
 ## F4 — The reader's slop is a read *past the buffer*, not merely past the RBSP
 
-**Status: open; it is Phase 3.1's decision to make, and the plan already assigns it
-(§2.2.2 item 1, P6).** Found while building `BsCursor` (T4).
+**Status: RESOLVED as a contract, T3.1a (2026-08-10) — P6 decided, and by neither of
+the two options the plan listed.** The reader family now declares the slack it has
+always read (`decoder::bit_stream::READER_SLOP = 3`, derived below) and is handed
+exactly that many bytes of the *real* allocation, which `WelsDecodeBs`
+(`decoder_core.rs:3637`) already guarantees by sizing every payload copy with four
+bytes to spare. So the bytes the cursor sees are the bytes the raw reader read —
+byte-identical by construction, no zeroing, no `get()` fallback, nothing latent — and
+`BsCursor` returns `ERR_INFO_READ_OVERFLOW` instead of reading past the slice if a
+caller ever breaks the contract. Zeroing the slack, the plan's option (a), was
+*rejected*: the slop feeds decoded values and not merely the error predicate, so
+zeroing it is a behaviour change on malformed input. T3.3 revisits the same question
+for the owned buffer, with T3.0's golden tables as the referee. The original write-up
+follows unchanged.
+
+Found while building `BsCursor` (T4).
 
 ### What the C++ actually does
 
@@ -134,8 +147,17 @@ nobody should spend a session on it before then.
 
 ## F7 — The reader's boundary pointers go out of bounds — UB, not a wrong value — outside the codec's own invariants
 
-**Status: open, unreachable through the codec's call paths, and it constrains Phase
-3.1.** Found by running the differential tests under Miri (T8), which is the first time
+**Status: FIXED in T3.1a (2026-08-10), both sites, and both differential
+accommodations deleted in the same commit.** `DecInitBits` and `InitReadBits` now run
+`BsCursor` bodies, so the two out-of-bounds pointer computations below no longer exist:
+the length check happens in offset arithmetic before anything is computed from
+`kiSize`, and `InitReadBits`'s end limit is `len - end_offset` in `isize`. The
+comparisons in `tests/safe_bits_differential.rs` that used to skip the UB range
+(`size_bits < -7`, `end_offset > payload_len`) now run over the whole range against the
+old side, which is the gate strengthening that proves the fix rather than asserting it.
+The original write-up follows unchanged.
+
+Found by running the differential tests under Miri (T8), which is the first time
 any part of this port has been executed under Miri at all.
 
 Two sites, both computing a boundary pointer without a range check:
@@ -175,7 +197,7 @@ anticipated, and worth keeping that way: an ignored test is UB coverage lost.
 **Who fixes it:** Phase 3.1, which rewrites both functions onto `BsCursor` and thereby
 deletes the arithmetic. The point of recording it is that Phase 3.1 must not "preserve"
 the pointer form for fidelity — there is nothing to preserve, the offsets are the
-faithful translation.
+faithful translation. *(Done, T3.1a — see the status line above.)*
 
 [ptr-offset]: https://doc.rust-lang.org/std/primitive.pointer.html#method.offset
 
