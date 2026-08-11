@@ -344,8 +344,7 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
     let pSlice = &mut *pSliceBs;
     let pRawNal = &mut pSlice.sNalList[pSlice.iNalIndex as usize];
     let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
-    let pBitStringAux = &pSlice.sBsWrite;
-    let kiStartPos = BsGetBitsPos(pBitStringAux) >> 3;
+    let kiStartPos = BsGetBitsPos(&pSlice.sBsWrite) >> 3;
 
     sNalUnitHeader.eNalUnitType = EWelsNalUnitType::from(kiType);
     sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
@@ -365,8 +364,7 @@ pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
     let pSlice = &mut *pSliceBs;
     let pIdx = &mut pSlice.iNalIndex;
     let pRawNal = &mut pSlice.sNalList[*pIdx as usize];
-    let pBitStringAux = &pSlice.sBsWrite;
-    let kiEndPos = BsGetBitsPos(pBitStringAux) >> 3;
+    let kiEndPos = BsGetBitsPos(&pSlice.sBsWrite) >> 3;
 
     /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
@@ -480,17 +478,17 @@ pub unsafe extern "C" fn WelsEncodeNal(
 /// Writes the RBSP payload for an SVC Prefix NAL unit (NAL unit type 14).
 ///
 /// # Safety
-/// - `pBitStringAux` must point to a valid `BsWriter`, and `buf` must be the
+/// - `pBsWriter` must point to a valid `BsWriter`, and `buf` must be the
 ///   buffer that writer is positioned in.
 #[inline]
 pub unsafe fn WelsWriteSVCPrefixNal(
     buf: &mut [u8],
-    pBitStringAux: *mut BsWriter,
+    pBsWriter: *mut BsWriter,
     kiNalRefIdc: i32,
     _kbIdrFlag: bool,
 ) -> i32 {
     if kiNalRefIdc > 0 {
-        let pBs = &mut *pBitStringAux;
+        let pBs = &mut *pBsWriter;
         BsWriteOneBit(buf, pBs, 0); // bStoreRefBasePicFlag = false
         BsWriteOneBit(buf, pBs, 0); // additional_prefix_nal_unit_extension_flag = false
         BsRbspTrailingBits(buf, pBs);
