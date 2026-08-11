@@ -234,38 +234,6 @@ pub use crate::decoder::decoder_context::SParserBsInfo;
 
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SSpsBsInfo {
-    pub pSpsBsBuf: [u8; 256],
-    pub uiSpsBsLen: i32,
-}
-
-impl Default for SSpsBsInfo {
-    fn default() -> Self {
-        Self {
-            pSpsBsBuf: [0; 256],
-            uiSpsBsLen: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPpsBsInfo {
-    pub pPpsBsBuf: [u8; 256],
-    pub uiPpsBsLen: i32,
-}
-
-impl Default for SPpsBsInfo {
-    fn default() -> Self {
-        Self {
-            pPpsBsBuf: [0; 256],
-            uiPpsBsLen: 0,
-        }
-    }
-}
-
-#[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SVui {
     pub bAspectRatioInfoPresentFlag: bool,
@@ -440,70 +408,6 @@ impl Default for SDqLayer {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SMbCache {
-    pub iMbWidth: i32,
-    pub iMbHeight: i32,
-    pub pMbType: [*mut u32; LAYER_NUM_EXCHANGEABLE],
-    pub pSliceIdc: [*mut i32; LAYER_NUM_EXCHANGEABLE],
-    pub pMv: [[*mut i16; LIST_A]; LAYER_NUM_EXCHANGEABLE],
-    pub pRefIndex: [[*mut i8; LIST_A]; LAYER_NUM_EXCHANGEABLE],
-    pub pDirect: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pNoSubMbPartSizeLessThan8x8Flag: [*mut bool; LAYER_NUM_EXCHANGEABLE],
-    pub pTransformSize8x8Flag: [*mut bool; LAYER_NUM_EXCHANGEABLE],
-    pub pLumaQp: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pChromaQp: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pMvd: [[*mut i16; LIST_A]; LAYER_NUM_EXCHANGEABLE],
-    pub pCbfDc: [*mut u16; LAYER_NUM_EXCHANGEABLE],
-    pub pNzc: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pNzcRs: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pScaledTCoeff: [*mut i16; LAYER_NUM_EXCHANGEABLE],
-    pub pIntraPredMode: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pIntra4x4FinalMode: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pIntraNxNAvailFlag: [*mut u8; LAYER_NUM_EXCHANGEABLE],
-    pub pChromaPredMode: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pCbp: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pSubMbType: [*mut u32; LAYER_NUM_EXCHANGEABLE],
-    pub pInterPredictionDoneFlag: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pResidualPredFlag: [*mut i8; LAYER_NUM_EXCHANGEABLE],
-    pub pMbCorrectlyDecodedFlag: [*mut bool; LAYER_NUM_EXCHANGEABLE],
-    pub pMbRefConcealedFlag: [*mut bool; LAYER_NUM_EXCHANGEABLE],
-}
-
-impl Default for SMbCache {
-    fn default() -> Self {
-        Self {
-            iMbWidth: 0,
-            iMbHeight: 0,
-            pMbType: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pSliceIdc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMv: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
-            pRefIndex: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
-            pDirect: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pNoSubMbPartSizeLessThan8x8Flag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pTransformSize8x8Flag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pLumaQp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pChromaQp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMvd: [[std::ptr::null_mut(); LIST_A]; LAYER_NUM_EXCHANGEABLE],
-            pCbfDc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pNzc: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pNzcRs: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pScaledTCoeff: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pIntraPredMode: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pIntra4x4FinalMode: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pIntraNxNAvailFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pChromaPredMode: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pCbp: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pSubMbType: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pInterPredictionDoneFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pResidualPredFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMbCorrectlyDecodedFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-            pMbRefConcealedFlag: [std::ptr::null_mut(); LAYER_NUM_EXCHANGEABLE],
-        }
-    }
-}
-
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 
 #[repr(C)]
@@ -550,19 +454,6 @@ pub use crate::decoder::decoder_context::{SDecodingParam, SLogContext};
 
 pub use crate::decoder::decoder_context::SWelsCabacDecEngine;
 
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLastDecPicInfo {
-    pub sLastNalHdrExt: SNalUnitHeaderExt,
-    pub sLastSliceHeader: SSliceHeader,
-    pub iPrevFrameNum: i32,
-    pub iPrevPicOrderCntMsb: i32,
-    pub iPrevPicOrderCntLsb: i32,
-    pub bLastHasMmco5: bool,
-    pub uiDecodingTimeStamp: u64,
-    pub pPreviousDecodedPictureInDpb: *mut SPicture,
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]

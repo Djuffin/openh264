@@ -575,14 +575,6 @@ pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub uiQualityId: u8,
-}
-
-
-
 pub use crate::decoder::picture::{SPicture, PPicture};
 
 
@@ -600,14 +592,6 @@ pub struct SParam {
 pub struct SSpsPpsCtx {
     pub bAvcBasedFlag: bool,
 }
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SLogContext {
-    pub pLogCtx: *mut c_void,
-}
-
-
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 

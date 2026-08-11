@@ -65,86 +65,8 @@ pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
 
 
-pub type PSps = *mut SSps;
-
-
-/// Picture Parameter Set representation (`SPps` / `PPps`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPps {
-    pub iPpsId: i32,
-    pub iSpsId: i32,
-}
-
-pub type PPps = *mut SPps;
-
-impl Default for SPps {
-    fn default() -> Self {
-        Self {
-            iPpsId: 0,
-            iSpsId: 0,
-        }
-    }
-}
-
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt};
 
-
-#[repr(C)]
-#[derive(Default)]
-pub struct SSliceInLayer {
-    pub sSliceHeaderExt: SSliceHeaderExt,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeader {
-    pub eNalUnitType: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SNalUnitHeaderExt {
-    pub sNalUnitHeader: SNalUnitHeader,
-    pub uiQualityId: u8,
-    pub uiTemporalId: u8,
-    pub bIdrFlag: bool,
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub struct SLayerInfo {
-    pub sSliceInLayer: SSliceInLayer,
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
-}
-
-#[repr(C)]
-pub struct SNalUnit {
-    pub sNalHeaderExt: SNalUnitHeaderExt,
-}
-
-#[repr(C)]
-pub struct SAccessUnit {
-    pub uiStartPos: u32,
-    pub uiEndPos: u32,
-    pub pNalUnitsList: [*mut SNalUnit; 128],
-}
-
-pub type PAccessUnit = *mut SAccessUnit;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SDecoderParam {
-    pub eEcActiveIdc: i32,
-}
-
-#[repr(C)]
-pub struct SLastDecPicInfo {
-    pub pPreviousDecodedPictureInDpb: *mut SPicture,
-    pub bLastHasMmco5: bool,
-}
 
 pub use crate::decoder::decoder_context::SLogContext;
 
