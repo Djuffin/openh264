@@ -142,39 +142,6 @@ pub fn trailing_bits(byte: u8) -> i32 {
 }
 
 impl BsCursor {
-    /// Rebuilds a cursor from the five state values `SBitStringAux` holds, in the
-    /// struct's own field order.
-    ///
-    /// This is the Phase 3 strangler's *shim direction*. While the decoder still
-    /// stores an `SBitStringAux` — `SWelsDecoderContext::sBs` and
-    /// `SVclNal::sSliceBitsRead`, both owned by structs later seams convert — the raw
-    /// reader family (`decoder/bit_stream.rs`, `decoder/dec_golomb.rs`) translates the
-    /// struct into a cursor per call, runs the safe body, and writes the state back.
-    /// `pos` and `len` are the pointer differences `pCurBuf - pStartBuf` and
-    /// `pEndBuf - pStartBuf`.
-    ///
-    /// It validates nothing: it reconstructs a state that already exists rather than
-    /// creating one, and every field is a value the raw struct was already holding.
-    /// **Deleted with the last `SBitStringAux` reader field** (T3.1b/T3.3) — nothing
-    /// but a translation shim should ever call it.
-    ///
-    /// `cavlc_bit_pos` is **not** a parameter: the shim's callers are the accumulator
-    /// readers, which run outside CAVLC mode, and `BsStartCavlc`/`BsEndCavlc` are still
-    /// raw at this point. T3.1b deletes this function rather than growing it.
-    #[inline]
-    pub fn from_parts(pos: usize, cur_bits: u32, left_bits: i32, len: usize, bits: i32) -> Self {
-        Self {
-            pos,
-            cur_bits,
-            left_bits,
-            len,
-            bits,
-            cavlc_bit_pos: 0,
-            #[cfg(debug_assertions)]
-            in_cavlc: false,
-        }
-    }
-
     /// Starts reading an RBSP of `size_bits` bits from the front of `buf`.
     ///
     /// Mirrors `DecInitBits` (`decoder/bit_stream.rs:84` /
@@ -257,6 +224,20 @@ impl BsCursor {
     #[inline]
     pub fn left_bits(&self) -> i32 {
         self.left_bits
+    }
+
+    /// Moves the byte position, leaving the accumulator alone.
+    ///
+    /// The I_PCM path's seek (`decode_slice.rs`, `WelsActualDecodeMbCavlcISlice`'s
+    /// `25 == uiMbType` branch): PCM samples are byte-aligned raw bytes, so the C++
+    /// rewinds `pCurBuf` to the alignment point, memcpy's 384 bytes out of the stream,
+    /// advances past them and re-primes with `InitReadBits`. Only that re-prime makes
+    /// the accumulator meaningful again, which is why this deliberately does not touch
+    /// it — a `set_pos` that also refilled would not be the same function.
+    #[inline]
+    pub fn set_pos(&mut self, pos: usize) {
+        self.debug_assert_out_of_cavlc("set_pos");
+        self.pos = pos;
     }
 
     /// The top `n` bits of the accumulator, without consuming them.
@@ -470,12 +451,16 @@ impl BsCursor {
     /// bias every other prime uses, offset by the sub-byte phase the 4-byte load was
     /// shifted by.
     ///
-    /// The 4-byte load at `idx >> 3` is legal for the same reason every other prime in
-    /// this module is: the reader's callers hand it `READER_SLOP` bytes of real
-    /// allocation past the RBSP (plan §2.2.2 [P3]; `decoder_core.rs:3637` guarantees
-    /// them). An out-of-range index here is a pre-existing overrun surfacing, per plan
-    /// §2.2.2 — it is not silenced with a `get()` fallback, because the raw pair had no
-    /// such fallback and error-code parity is the gate.
+    /// The 4-byte load at `idx >> 3` indexes the slice, and **`buf` must be the whole
+    /// readable allocation, not the RBSP plus a constant**. `cavlc_bit_pos` is advanced
+    /// by the residual decoder by whatever each symbol consumed, so on a truncated
+    /// stream it runs past the RBSP end by an amount bounded by nothing but how many
+    /// symbols the parser accepts — the raw pair was measured reaching `len + 5` and
+    /// beyond, and was in bounds only because the decoder's raw-data buffer is 4 MiB.
+    /// `phase3_findings.md` §F16 records this; the decoder's `BsReader::avail` is where
+    /// the extent comes from. An out-of-range index here is a pre-existing overrun
+    /// surfacing, per plan §2.2.2 — it is not silenced with a `get()` fallback, because
+    /// the raw pair had no such fallback and error-code parity is the gate.
     ///
     /// Round-tripping restores the *reading position*, not the field values: the
     /// re-prime can leave the accumulator holding more valid bits than it did before
@@ -510,6 +495,51 @@ impl BsCursor {
     pub fn advance_cavlc_bits(&mut self, bits: isize) {
         self.debug_assert_in_cavlc("advance_cavlc_bits");
         self.cavlc_bit_pos += bits;
+    }
+
+    // -----------------------------------------------------------------------
+    // The CAVLC↔CABAC handoff. T3.2 owns the engine; these two are the reader's
+    // side of the boundary, and they exist as *named operations* rather than as
+    // `set_cur_bits`/`set_left_bits` setters because every one of these writes is
+    // only coherent as part of a whole handoff.
+    // -----------------------------------------------------------------------
+
+    /// Marks the accumulator spent because the CABAC engine has taken over the
+    /// position.
+    ///
+    /// Mirrors `InitCabacDecEngineFromBS`'s closing `pBsAux->iLeftBits = 0`
+    /// (`cabac_decoder.rs:697`). The engine reads from the shared buffer from here on;
+    /// the cursor's accumulator is meaningless until [`restore_from_cabac`] or a
+    /// re-prime.
+    ///
+    /// [`restore_from_cabac`]: Self::restore_from_cabac
+    #[inline]
+    pub fn hand_off_to_cabac(&mut self) {
+        self.debug_assert_out_of_cavlc("hand_off_to_cabac");
+        self.left_bits = 0;
+    }
+
+    /// Takes the position back from the CABAC engine, at byte offset `pos`.
+    ///
+    /// Mirrors `RestoreCabacDecEngineToBS`'s four writes to `SBitStringAux`
+    /// (`cabac_decoder.rs:712-718`): position, a cleared accumulator, and `iIndex`
+    /// zeroed. That last one is why this is not simply [`set_pos`](Self::set_pos) —
+    /// the C++ clears `iIndex` defensively here, *outside* any CAVLC region, so it is
+    /// part of the handoff rather than a mode operation and does not assert.
+    ///
+    /// T3.2 converts the engine itself, at which point this is the `usize` assignment
+    /// the phase brief describes and gains its round-trip test against a known bit
+    /// offset.
+    #[inline]
+    pub fn restore_from_cabac(&mut self, pos: usize) {
+        self.pos = pos;
+        self.cur_bits = 0;
+        self.left_bits = 0;
+        self.cavlc_bit_pos = 0;
+        #[cfg(debug_assertions)]
+        {
+            self.in_cavlc = false;
+        }
     }
 
     /// The raw `cavlc_bit_pos` field, with no mode assertion.
@@ -769,29 +799,6 @@ mod tests {
         assert_eq!(c.bits(), 64);
         assert_eq!(c.pos(), 4);
         assert_eq!(c.len(), 8);
-    }
-
-    #[test]
-    fn from_parts_round_trips_through_the_getters() {
-        // Five same-shaped integers in one call is exactly where a transposition
-        // hides, so pin the field order the shims rely on.
-        let c = BsCursor::from_parts(7, 0xDEAD_BEEF, -3, 11, 88);
-        assert_eq!((c.pos(), c.cur_bits(), c.left_bits(), c.len(), c.bits()), (7, 0xDEAD_BEEF, -3, 11, 88));
-
-        // And that a reconstructed cursor reads on from where the original stopped.
-        let buf = with_slack(&[0x12, 0x34, 0x56, 0x78, 0x9A]);
-        let mut original = BsCursor::init(&buf, 40).unwrap();
-        let first = original.get_bits(&buf, 12).unwrap();
-        let mut rebuilt = BsCursor::from_parts(
-            original.pos(),
-            original.cur_bits(),
-            original.left_bits(),
-            original.len(),
-            original.bits(),
-        );
-        assert_eq!(rebuilt, original);
-        assert_eq!(rebuilt.get_bits(&buf, 12).unwrap(), original.get_bits(&buf, 12).unwrap());
-        assert_eq!(first, 0x123);
     }
 
     #[test]

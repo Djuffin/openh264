@@ -46,7 +46,8 @@ use crate::decoder::slice::*;
 use crate::common::memory_align::*;
 
 // Explicit imports to resolve glob ambiguities
-use crate::decoder::bit_stream::{SBitStringAux, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};
+use crate::decoder::bit_stream::{BsReader, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};
+use crate::safe::bits::BsCursor;
 
 use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
 use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, MAX_LAYER_NUM, SPosOffset};
@@ -261,7 +262,7 @@ pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
 #[derive(Copy, Clone)]
 pub struct SVclNal {
     pub sSliceHeaderExt: SSliceHeaderExt,
-    pub sSliceBitsRead: SBitStringAux,
+    pub sSliceBitsRead: BsReader,
     pub pNalPos: *mut u8,
     pub iNalLength: i32,
     pub bSliceHeaderExtFlag: bool,
@@ -271,7 +272,7 @@ impl Default for SVclNal {
     fn default() -> Self {
         Self {
             sSliceHeaderExt: SSliceHeaderExt::default(),
-            sSliceBitsRead: SBitStringAux::default(),
+            sSliceBitsRead: BsReader::default(),
             pNalPos: std::ptr::null_mut(),
             iNalLength: 0,
             bSliceHeaderExtFlag: false,
@@ -673,12 +674,15 @@ pub unsafe fn ParseNalHeader(
             if (*pNalUnitHeader).uiNalRefIdc != 0 {
                 let pBs = &mut (*pCtx).sBs;
                 let iBitSize = (iNalSize << 3) - BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
-                let iErr = DecInitBits(pBs, pNal, iBitSize);
+                let iAvail = crate::decoder::bit_stream::readable_from(
+                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pNal, (iBitSize as usize + 7) >> 3);
+                let iErr = DecInitBits(pBs, pNal, iBitSize, iAvail);
                 if iErr != ERR_NONE {
                     (*pCtx).iErrorCode |= dsBitstreamError;
                     return std::ptr::null_mut();
                 }
-                ParsePrefixNalUnit(pCtx, pBs);
+                let (buf, cursor) = pBs.split();
+                ParsePrefixNalUnit(pCtx, buf, cursor);
             }
             (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
         }
@@ -761,7 +765,9 @@ pub unsafe fn ParseNalHeader(
                 .sSliceBitsRead;
             let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(pNal.add(iNalSize as usize - 1));
             let iBitSize = (iNalSize << 3) - trailing_bits;
-            let mut iErr = crate::decoder::bit_stream::DecInitBits(pBs, pNal, iBitSize);
+            let iAvail = crate::decoder::bit_stream::readable_from(
+                (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pNal, (iBitSize as usize + 7) >> 3);
+            let mut iErr = crate::decoder::bit_stream::DecInitBits(pBs, pNal, iBitSize, iAvail);
             if iErr != ERR_NONE {
                 ForceClearCurrentNal(pCurAu);
                 if uiAvailNalNum > 1 {
@@ -774,7 +780,8 @@ pub unsafe fn ParseNalHeader(
                 return std::ptr::null_mut();
             }
 
-            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(pCtx, pBs, bExtensionFlag);
+            let (buf, cursor) = pBs.split();
+            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(pCtx, buf, cursor, bExtensionFlag);
             if iErr != ERR_NONE {
                 if uiAvailNalNum == 1 && (*pCurNal).sNalHeaderExt.bIdrFlag {
                     crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
@@ -1006,7 +1013,8 @@ pub unsafe fn ParseNonVclNal(
     match eNalType {
         EWelsNalUnitType::NAL_UNIT_SPS | EWelsNalUnitType::NAL_UNIT_SUBSET_SPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, pRbsp, iBitSize);
+                iErr = DecInitBits(pBs, pRbsp, iBitSize, crate::decoder::bit_stream::readable_from(
+                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pRbsp, (iBitSize as usize + 7) >> 3));
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1018,7 +1026,8 @@ pub unsafe fn ParseNonVclNal(
                     return iErr;
                 }
             }
-            iErr = ParseSps(pCtx, pBs, &mut iPicWidth, &mut iPicHeight, pSrcNal, kSrcNalLen);
+            let (buf, cursor) = pBs.split();
+            iErr = ParseSps(pCtx, buf, cursor, &mut iPicWidth, &mut iPicHeight, pSrcNal, kSrcNalLen);
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
                     && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1034,7 +1043,8 @@ pub unsafe fn ParseNonVclNal(
 
         EWelsNalUnitType::NAL_UNIT_PPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, pRbsp, iBitSize);
+                iErr = DecInitBits(pBs, pRbsp, iBitSize, crate::decoder::bit_stream::readable_from(
+                    (*pCtx).sRawData.pHead, (*pCtx).sRawData.pEnd, pRbsp, (iBitSize as usize + 7) >> 3));
                 if iErr != ERR_NONE {
                     if !(*pCtx).pParam.is_null()
                         && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1046,10 +1056,12 @@ pub unsafe fn ParseNonVclNal(
                     return iErr;
                 }
             }
+            let (buf, cursor) = pBs.split();
             iErr = ParsePps(
                 pCtx,
                 (*pCtx).sSpsPpsCtx.sPpsBuffer.as_mut_ptr(),
-                pBs,
+                buf,
+                cursor,
                 pSrcNal,
                 kSrcNalLen,
             );
@@ -1080,11 +1092,12 @@ pub unsafe fn ParseNonVclNal(
 
 /// Parses reference base picture marking syntax for SVC temporal/spatial reference layers.
 pub unsafe fn ParseRefBasePicMarking(
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     pRefBasePicMarking: *mut SRefBasePicMarking,
 ) -> i32 {
     let mut uiCode: u32 = 0;
-    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 {
+    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
         return ERR_INVALID_PARAMETERS;
     }
     let kbAdaptiveMarkingModeFlag = uiCode != 0;
@@ -1093,7 +1106,7 @@ pub unsafe fn ParseRefBasePicMarking(
     if kbAdaptiveMarkingModeFlag {
         let mut iIdx = 0;
         loop {
-            if BsGetUe(pBs, &mut uiCode) != ERR_NONE as u32 {
+            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                 return ERR_INVALID_PARAMETERS;
             }
             let kuiMmco = uiCode;
@@ -1103,13 +1116,13 @@ pub unsafe fn ParseRefBasePicMarking(
                 break;
             }
             if kuiMmco == MMCO_SHORT2UNUSED {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE as u32 {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                     return ERR_INVALID_PARAMETERS;
                 }
                 (*pRefBasePicMarking).mmco_base[iIdx].uiDiffOfPicNums = 1 + uiCode;
                 (*pRefBasePicMarking).mmco_base[iIdx].iShortFrameNum = 0;
             } else if kuiMmco == MMCO_LONG2UNUSED {
-                if BsGetUe(pBs, &mut uiCode) != ERR_NONE as u32 {
+                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                     return ERR_INVALID_PARAMETERS;
                 }
                 (*pRefBasePicMarking).mmco_base[iIdx].uiLongTermPicNum = uiCode;
@@ -1126,7 +1139,8 @@ pub unsafe fn ParseRefBasePicMarking(
 /// Parses prefix NAL unit syntax elements (NAL type 14).
 pub unsafe fn ParsePrefixNalUnit(
     pCtx: *mut SWelsDecoderContext,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
 ) -> i32 {
     let pCurNal = &mut (*pCtx).sSpsPpsCtx.sPrefixNal;
     let mut uiCode: u32 = 0;
@@ -1135,24 +1149,24 @@ pub unsafe fn ParsePrefixNalUnit(
         let head_ext = &pCurNal.sNalHeaderExt;
         let sPrefixNal = &mut pCurNal.sNalData.sPrefixNal;
 
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
             return ERR_INVALID_PARAMETERS;
         }
         sPrefixNal.bStoreRefBasePicFlag = uiCode != 0;
 
         if (head_ext.bUseRefBasePicFlag || sPrefixNal.bStoreRefBasePicFlag) && !head_ext.bIdrFlag {
-            if ParseRefBasePicMarking(pBs, &mut sPrefixNal.sRefPicBaseMarking) != ERR_NONE {
+            if ParseRefBasePicMarking(buf, pBs, &mut sPrefixNal.sRefPicBaseMarking) != ERR_NONE {
                 return ERR_INVALID_PARAMETERS;
             }
         }
 
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
             return ERR_INVALID_PARAMETERS;
         }
         sPrefixNal.bPrefixNalUnitAdditionalExtFlag = uiCode != 0;
 
         if sPrefixNal.bPrefixNalUnitAdditionalExtFlag {
-            if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                 return ERR_INVALID_PARAMETERS;
             }
             sPrefixNal.bPrefixNalUnitExtFlag = uiCode != 0;
@@ -1165,16 +1179,17 @@ pub unsafe fn ParsePrefixNalUnit(
 pub unsafe fn DecodeSpsSvcExt(
     pCtx: *mut SWelsDecoderContext,
     pSpsExt: *mut SSubsetSps,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
 ) -> i32 {
     let pExt = &mut (*pSpsExt).sSpsSvcExt;
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
-    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pExt.bInterLayerDeblockingFilterCtrlPresentFlag = uiCode != 0;
 
-    if BsGetBits(pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pExt.uiExtendedSpatialScalability = uiCode as u8;
     if pExt.uiExtendedSpatialScalability > 2 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_ESS);
@@ -1183,10 +1198,10 @@ pub unsafe fn DecodeSpsSvcExt(
     pExt.uiChromaPhaseXPlus1Flag = 0;
     pExt.uiChromaPhaseYPlus1 = 1;
 
-    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pExt.uiChromaPhaseXPlus1Flag = uiCode as u8;
 
-    if BsGetBits(pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pExt.uiChromaPhaseYPlus1 = uiCode as u8;
 
     pExt.uiSeqRefLayerChromaPhaseXPlus1Flag = pExt.uiChromaPhaseXPlus1Flag;
@@ -1194,34 +1209,34 @@ pub unsafe fn DecodeSpsSvcExt(
     pExt.sSeqScaledRefLayer = SPosOffset::default();
 
     if pExt.uiExtendedSpatialScalability == 1 {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pExt.uiSeqRefLayerChromaPhaseXPlus1Flag = uiCode as u8;
 
-        if BsGetBits(pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBs, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pExt.uiSeqRefLayerChromaPhaseYPlus1 = uiCode as u8;
 
-        if BsGetSe(pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pExt.sSeqScaledRefLayer.iLeftOffset = iCode;
 
-        if BsGetSe(pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pExt.sSeqScaledRefLayer.iTopOffset = iCode;
 
-        if BsGetSe(pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pExt.sSeqScaledRefLayer.iRightOffset = iCode;
 
-        if BsGetSe(pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pExt.sSeqScaledRefLayer.iBottomOffset = iCode;
     }
 
-    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pExt.bSeqTCoeffLevelPredFlag = uiCode != 0;
     pExt.bAdaptiveTCoeffLevelPredFlag = false;
     if pExt.bSeqTCoeffLevelPredFlag {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pExt.bAdaptiveTCoeffLevelPredFlag = uiCode != 0;
     }
 
-    if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pExt.bSliceHeaderRestrictionFlag = uiCode != 0;
 
     ERR_NONE
@@ -1321,7 +1336,8 @@ pub unsafe fn CheckSpsActive(
 /// Parses Sequence Parameter Sets (SPS and Subset SPS).
 pub unsafe fn ParseSps(
     pCtx: *mut SWelsDecoderContext,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
     pPicWidth: *mut i32,
     pPicHeight: *mut i32,
     pSrcNal: *mut u8,
@@ -1342,7 +1358,7 @@ pub unsafe fn ParseSps(
     let mut iCode: i32 = 0;
     let mut bConstraintSetFlags = [false; 6];
 
-    if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     let uiProfileIdc = uiCode as u8;
 
     if uiProfileIdc != PRO_BASELINE
@@ -1356,15 +1372,15 @@ pub unsafe fn ParseSps(
     }
 
     for i in 0..6 {
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         bConstraintSetFlags[i] = uiCode != 0;
     }
 
-    if BsGetBits(pBsAux, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-    if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBsAux, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     let uiLevelIdc = uiCode as u8;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     if uiCode >= MAX_SPS_COUNT as u32 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_SPS_ID_OVERFLOW);
     }
@@ -1391,34 +1407,35 @@ pub unsafe fn ParseSps(
         || uiProfileIdc == PRO_CAVLC444
         || uiProfileIdc == 44
     {
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.uiChromaFormatIdc = uiCode as u8;
         if pSps.uiChromaFormatIdc > 1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
         pSps.uiChromaArrayType = pSps.uiChromaFormatIdc;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
         pSps.uiBitDepthLuma = 8;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
         pSps.uiBitDepthChroma = 8;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.bQpPrimeYZeroTransfBypassFlag = uiCode != 0;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
 
         if pSps.bSeqScalingMatrixPresentFlag {
             ParseScalingList(
                 pSps,
+                buf,
                 pBsAux,
                 false,
                 false,
@@ -1429,39 +1446,39 @@ pub unsafe fn ParseSps(
         }
     }
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     if uiCode > SPS_LOG2_MAX_FRAME_NUM_MINUS4_MAX {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_LOG2_MAX_FRAME_NUM_MINUS4);
     }
     pSps.uiLog2MaxFrameNum = LOG2_MAX_FRAME_NUM_OFFSET + uiCode;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.uiPocType = uiCode;
 
     if pSps.uiPocType == 0 {
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode > SPS_LOG2_MAX_PIC_ORDER_CNT_LSB_MINUS4_MAX {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_LOG2_MAX_PIC_ORDER_CNT_LSB_MINUS4);
         }
         pSps.iLog2MaxPocLsb = LOG2_MAX_PIC_ORDER_CNT_LSB_OFFSET + uiCode as i32;
     } else if pSps.uiPocType == 1 {
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.bDeltaPicOrderAlwaysZeroFlag = uiCode != 0;
 
-        if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pSps.iOffsetForNonRefPic = iCode;
 
-        if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pSps.iOffsetForTopToBottomField = iCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode > SPS_NUM_REF_FRAMES_IN_PIC_ORDER_CNT_CYCLE_MAX {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_NUM_REF_FRAME_IN_PIC_ORDER_CNT_CYCLE);
         }
         pSps.iNumRefFramesInPocCycle = uiCode as i32;
 
         for i in 0..pSps.iNumRefFramesInPocCycle as usize {
-            if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pSps.iOffsetForRefFrame[i] = iCode as i8;
         }
     }
@@ -1470,19 +1487,19 @@ pub unsafe fn ParseSps(
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_POC_TYPE);
     }
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.iNumRefFrames = uiCode as i32;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bGapsInFrameNumValueAllowedFlag = uiCode != 0;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.iMbWidth = (PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32) as u32;
     if pSps.iMbWidth > MAX_MB_SIZE as u32 || pSps.iMbWidth == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.iMbHeight = (PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32) as u32;
     if pSps.iMbHeight > MAX_MB_SIZE as u32 || pSps.iMbHeight == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
@@ -1495,40 +1512,40 @@ pub unsafe fn ParseSps(
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_NUM_REF_FRAMES);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bFrameMbsOnlyFlag = uiCode != 0;
     if !pSps.bFrameMbsOnlyFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_MBAFF);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bDirect8x8InferenceFlag = uiCode != 0;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bFrameCroppingFlag = uiCode != 0;
 
     if pSps.bFrameCroppingFlag {
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iLeftOffset = uiCode as i32;
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iRightOffset = uiCode as i32;
         if (pSps.sFrameCrop.iLeftOffset + pSps.sFrameCrop.iRightOffset) > (pSps.iMbWidth as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iTopOffset = uiCode as i32;
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pSps.sFrameCrop.iBottomOffset = uiCode as i32;
         if (pSps.sFrameCrop.iTopOffset + pSps.sFrameCrop.iBottomOffset) > (pSps.iMbHeight as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bVuiParamPresentFlag = uiCode != 0;
     if pSps.bVuiParamPresentFlag {
-        let iRetVui = ParseVui(pCtx, pSps, pBsAux);
+        let iRetVui = ParseVui(pCtx, pSps, buf, pBsAux);
         if iRetVui != ERR_NONE {
             if kbUseSubsetFlag && iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
                 return iRetVui;
@@ -1537,11 +1554,11 @@ pub unsafe fn ParseSps(
     }
 
     if kbUseSubsetFlag && (uiProfileIdc == PRO_SCALABLE_BASELINE || uiProfileIdc == PRO_SCALABLE_HIGH) {
-        let iRet = DecodeSpsSvcExt(pCtx, pSubsetSps, pBsAux);
+        let iRet = DecodeSpsSvcExt(pCtx, pSubsetSps, buf, pBsAux);
         if iRet != ERR_NONE {
             return iRet;
         }
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         (*pSubsetSps).bSvcVuiParamPresentFlag = uiCode != 0;
     }
 
@@ -1630,7 +1647,8 @@ pub unsafe fn ParseSps(
 pub unsafe fn ParsePps(
     pCtx: *mut SWelsDecoderContext,
     pPpsList: *mut SPps,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
     pSrcNal: *mut u8,
     kSrcNalLen: i32,
 ) -> i32 {
@@ -1642,26 +1660,26 @@ pub unsafe fn ParsePps(
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     let uiPpsId = uiCode;
     if uiPpsId >= MAX_PPS_COUNT as u32 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_PPS_ID_OVERFLOW);
     }
     pPps.iPpsId = uiPpsId as i32;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.iSpsId = uiCode as i32;
     if pPps.iSpsId >= MAX_SPS_COUNT as i32 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_SPS_ID_OVERFLOW);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bEntropyCodingModeFlag = uiCode != 0;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bPicOrderPresentFlag = uiCode != 0;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.uiNumSliceGroups = NUM_SLICE_GROUPS_OFFSET + uiCode;
 
     if pPps.uiNumSliceGroups > MAX_SLICEGROUP_IDS as u32 {
@@ -1669,23 +1687,23 @@ pub unsafe fn ParsePps(
     }
 
     if pPps.uiNumSliceGroups > 1 {
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pPps.uiSliceGroupMapType = uiCode;
         if pPps.uiSliceGroupMapType > 1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_FMOTYPE);
         }
         if pPps.uiSliceGroupMapType == 0 {
             for iTmp in 0..pPps.uiNumSliceGroups as usize {
-                if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+                if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
                 pPps.uiRunLength[iTmp] = RUN_LENGTH_OFFSET + uiCode;
             }
         }
     }
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.uiNumRefIdxL0Active = NUM_REF_IDX_L0_DEFAULT_ACTIVE_OFFSET + uiCode;
 
-    if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.uiNumRefIdxL1Active = NUM_REF_IDX_L1_DEFAULT_ACTIVE_OFFSET + uiCode;
 
     if pPps.uiNumRefIdxL0Active > MAX_REF_PIC_COUNT as u32
@@ -1694,25 +1712,25 @@ pub unsafe fn ParsePps(
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_REF_COUNT_OVERFLOW);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bWeightedPredFlag = uiCode != 0;
 
-    if BsGetBits(pBsAux, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetBits(buf, pBsAux, 2, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pPps.uiWeightedBipredIdc = uiCode as u8;
 
-    if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pPps.iPicInitQp = PIC_INIT_QP_OFFSET + iCode;
     if pPps.iPicInitQp < PPS_PIC_INIT_QP_QS_MIN || pPps.iPicInitQp > PPS_PIC_INIT_QP_QS_MAX {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_PIC_INIT_QP);
     }
 
-    if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pPps.iPicInitQs = PIC_INIT_QS_OFFSET + iCode;
     if pPps.iPicInitQs < PPS_PIC_INIT_QP_QS_MIN || pPps.iPicInitQs > PPS_PIC_INIT_QP_QS_MAX {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_PIC_INIT_QS);
     }
 
-    if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+    if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
     pPps.iChromaQpIndexOffset[0] = iCode;
     if pPps.iChromaQpIndexOffset[0] < PPS_CHROMA_QP_INDEX_OFFSET_MIN
         || pPps.iChromaQpIndexOffset[0] > PPS_CHROMA_QP_INDEX_OFFSET_MAX
@@ -1721,26 +1739,27 @@ pub unsafe fn ParsePps(
     }
     pPps.iChromaQpIndexOffset[1] = pPps.iChromaQpIndexOffset[0];
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bDeblockingFilterControlPresentFlag = uiCode != 0;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bConstainedIntraPredFlag = uiCode != 0;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pPps.bRedundantPicCntPresentFlag = uiCode != 0;
 
     if CheckMoreRBSPData(pBsAux) {
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pPps.bTransform8x8ModeFlag = uiCode != 0;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pPps.bPicScalingMatrixPresentFlag = uiCode != 0;
 
         if pPps.bPicScalingMatrixPresentFlag {
             if (*pCtx).sSpsPpsCtx.bSpsAvailFlags[pPps.iSpsId as usize] {
                 ParseScalingList(
                     &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[pPps.iSpsId as usize],
+                    buf,
                     pBsAux,
                     true,
                     pPps.bTransform8x8ModeFlag,
@@ -1753,7 +1772,7 @@ pub unsafe fn ParsePps(
             }
         }
 
-        if BsGetSe(pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pPps.iChromaQpIndexOffset[1] = iCode;
         if pPps.iChromaQpIndexOffset[1] < PPS_CHROMA_QP_INDEX_OFFSET_MIN
             || pPps.iChromaQpIndexOffset[1] > PPS_CHROMA_QP_INDEX_OFFSET_MAX
@@ -1785,152 +1804,153 @@ pub unsafe fn ParsePps(
 pub unsafe fn ParseVui(
     pCtx: *mut SWelsDecoderContext,
     pSps: *mut SSps,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
 ) -> i32 {
     let mut uiCode: u32 = 0;
     let pVui = &mut (*pSps).sVui;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bAspectRatioInfoPresentFlag = uiCode != 0;
     if pVui.bAspectRatioInfoPresentFlag {
-        if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pVui.uiAspectRatioIdc = uiCode;
         if (pVui.uiAspectRatioIdc as usize) < 17 {
             pVui.uiSarWidth = g_ksVuiSampleAspectRatio[pVui.uiAspectRatioIdc as usize].uiWidth;
             pVui.uiSarHeight = g_ksVuiSampleAspectRatio[pVui.uiAspectRatioIdc as usize].uiHeight;
         } else if pVui.uiAspectRatioIdc as u8 == EXTENDED_SAR {
-            if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiSarWidth = uiCode;
-            if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiSarHeight = uiCode;
         }
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bOverscanInfoPresentFlag = uiCode != 0;
     if pVui.bOverscanInfoPresentFlag {
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.bOverscanAppropriateFlag = uiCode != 0;
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bVideoSignalTypePresentFlag = uiCode != 0;
     if pVui.bVideoSignalTypePresentFlag {
-        if BsGetBits(pBsAux, 3, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 3, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         pVui.uiVideoFormat = uiCode as u8;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.bVideoFullRangeFlag = uiCode != 0;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.bColourDescripPresentFlag = uiCode != 0;
         if pVui.bColourDescripPresentFlag {
-            if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiColourPrimaries = uiCode as u8;
 
-            if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiTransferCharacteristics = uiCode as u8;
 
-            if BsGetBits(pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+            if BsGetBits(buf, pBsAux, 8, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
             pVui.uiMatrixCoeffs = uiCode as u8;
         }
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bChromaLocInfoPresentFlag = uiCode != 0;
     if pVui.bChromaLocInfoPresentFlag {
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiChromaSampleLocTypeTopField = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiChromaSampleLocTypeBottomField = uiCode;
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bTimingInfoPresentFlag = uiCode != 0;
     if pVui.bTimingInfoPresentFlag {
         let mut uiTmp: u32;
-        if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         uiTmp = uiCode << 16;
-        if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         uiTmp |= uiCode;
         pVui.uiNumUnitsInTick = uiTmp;
 
-        if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         uiTmp = uiCode << 16;
-        if BsGetBits(pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
+        if BsGetBits(buf, pBsAux, 16, &mut uiCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
         uiTmp |= uiCode;
         pVui.uiTimeScale = uiTmp;
 
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.bFixedFrameRateFlag = uiCode != 0;
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bNalHrdParamPresentFlag = uiCode != 0;
     if pVui.bNalHrdParamPresentFlag {
         let mut cpb_cnt_minus1: u32 = 0;
-        if BsGetUe(pBsAux, &mut cpb_cnt_minus1) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        let _ = BsGetBits(pBsAux, 4, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 4, &mut uiCode);
+        if BsGetUe(buf, pBsAux, &mut cpb_cnt_minus1) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        let _ = BsGetBits(buf, pBsAux, 4, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 4, &mut uiCode);
         for _ in 0..=(cpb_cnt_minus1 as i32) {
-            let _ = BsGetUe(pBsAux, &mut uiCode);
-            let _ = BsGetUe(pBsAux, &mut uiCode);
-            let _ = BsGetOneBit(pBsAux, &mut uiCode);
+            let _ = BsGetUe(buf, pBsAux, &mut uiCode);
+            let _ = BsGetUe(buf, pBsAux, &mut uiCode);
+            let _ = BsGetOneBit(buf, pBsAux, &mut uiCode);
         }
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bVclHrdParamPresentFlag = uiCode != 0;
     if pVui.bVclHrdParamPresentFlag {
         let mut cpb_cnt_minus1: u32 = 0;
-        if BsGetUe(pBsAux, &mut cpb_cnt_minus1) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        let _ = BsGetBits(pBsAux, 4, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 4, &mut uiCode);
+        if BsGetUe(buf, pBsAux, &mut cpb_cnt_minus1) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        let _ = BsGetBits(buf, pBsAux, 4, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 4, &mut uiCode);
         for _ in 0..=(cpb_cnt_minus1 as i32) {
-            let _ = BsGetUe(pBsAux, &mut uiCode);
-            let _ = BsGetUe(pBsAux, &mut uiCode);
-            let _ = BsGetOneBit(pBsAux, &mut uiCode);
+            let _ = BsGetUe(buf, pBsAux, &mut uiCode);
+            let _ = BsGetUe(buf, pBsAux, &mut uiCode);
+            let _ = BsGetOneBit(buf, pBsAux, &mut uiCode);
         }
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
-        let _ = BsGetBits(pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
+        let _ = BsGetBits(buf, pBsAux, 5, &mut uiCode);
     }
 
     if pVui.bNalHrdParamPresentFlag || pVui.bVclHrdParamPresentFlag {
-        let _ = BsGetOneBit(pBsAux, &mut uiCode);
+        let _ = BsGetOneBit(buf, pBsAux, &mut uiCode);
     }
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bPicStructPresentFlag = uiCode != 0;
 
-    if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+    if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bBitstreamRestrictionFlag = uiCode != 0;
     if pVui.bBitstreamRestrictionFlag {
-        if BsGetOneBit(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.bMotionVectorsOverPicBoundariesFlag = uiCode != 0;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiMaxBytesPerPicDenom = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiMaxBitsPerMbDenom = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiLog2MaxMvLengthHorizontal = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiLog2MaxMvLengthVertical = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiMaxNumReorderFrames = uiCode;
 
-        if BsGetUe(pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
+        if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         pVui.uiMaxDecFrameBuffering = uiCode;
     }
 
@@ -1938,7 +1958,7 @@ pub unsafe fn ParseVui(
 }
 
 /// Reserved SEI message parsing hook.
-pub unsafe fn ParseSei(_pSei: *mut c_void, _pBsAux: *mut SBitStringAux) -> i32 {
+pub unsafe fn ParseSei(_pSei: *mut c_void, _pBsAux: &mut BsCursor) -> i32 {
     ERR_NONE
 }
 
@@ -1947,7 +1967,8 @@ pub unsafe fn SetScalingListValue(
     pScalingList: *mut u8,
     iScalingListNum: i32,
     bUseDefaultScalingMatrixFlag: *mut bool,
-    pBsAux: *mut SBitStringAux,
+    buf: &[u8],
+    pBsAux: &mut BsCursor,
 ) -> i32 {
     let mut iLastScale: i32 = 8;
     let mut iNextScale: i32 = 8;
@@ -1955,7 +1976,7 @@ pub unsafe fn SetScalingListValue(
 
     for j in 0..iScalingListNum as usize {
         if iNextScale != 0 {
-            if BsGetSe(pBsAux, &mut iCode) != ERR_NONE {
+            if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE {
                 return ERR_INVALID_PARAMETERS;
             }
             if iCode < SCALING_LIST_DELTA_SCALE_MIN || iCode > SCALING_LIST_DELTA_SCALE_MAX {
@@ -1988,7 +2009,8 @@ pub unsafe fn SetScalingListValue(
 /// Parses 4x4 and 8x8 frequency scaling list matrices.
 pub unsafe fn ParseScalingList(
     pSps: *mut SSps,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     bPPS: bool,
     kbTrans8x8ModeFlag: bool,
     pScalingListPresentFlag: *mut bool,
@@ -2029,7 +2051,7 @@ pub unsafe fn ParseScalingList(
     };
 
     for i in 0..uiScalingListNum {
-        if BsGetOneBit(pBs, &mut uiCode) != ERR_NONE as u32 {
+        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
             return ERR_INVALID_PARAMETERS;
         }
         *pScalingListPresentFlag.add(i) = uiCode != 0;
@@ -2040,6 +2062,7 @@ pub unsafe fn ParseScalingList(
                     (*iScalingList4x4.add(i)).as_mut_ptr(),
                     16,
                     &mut bUseDefaultScalingMatrixFlag4x4,
+                    buf,
                     pBs,
                 );
                 if bUseDefaultScalingMatrixFlag4x4 {
@@ -2052,6 +2075,7 @@ pub unsafe fn ParseScalingList(
                     (*iScalingList8x8.add(i - 6)).as_mut_ptr(),
                     64,
                     &mut bUseDefaultScalingMatrixFlag8x8,
+                    buf,
                     pBs,
                 );
                 if bUseDefaultScalingMatrixFlag8x8 {

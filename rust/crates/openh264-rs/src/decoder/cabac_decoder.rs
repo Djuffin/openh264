@@ -594,7 +594,7 @@ impl Default for SWelsCabacDecEngine {
 
 pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
 
-pub use crate::decoder::bit_stream::SBitStringAux;
+pub use crate::decoder::bit_stream::{BsReader, SBitStringAux};
 
 
 pub type PBitStringAux = *mut SBitStringAux;
@@ -665,16 +665,22 @@ pub unsafe fn WelsCabacContextInit(
 // 2. Decoding engine initialization
 pub unsafe fn InitCabacDecEngineFromBS(
     pDecEngine: PWelsCabacDecEngine,
-    pBsAux: PBitStringAux,
+    pBsAux: &mut BsReader,
 ) -> i32 {
-    if pDecEngine.is_null() || pBsAux.is_null() {
+    if pDecEngine.is_null() {
         return ERR_INFO_INVALID_ACCESS;
     }
     unsafe {
-        let iRemainingBits = -(*pBsAux).iLeftBits;
+        // The engine still walks pointers — T3.2 converts it to offsets, including the
+        // can't-underflow assertion on this rewind. Here the pointers are derived from
+        // the reader's base so the arithmetic is unchanged.
+        let pStartBuf = pBsAux.base;
+        let pCurBuf = pStartBuf.add(pBsAux.cursor.pos());
+        let pEndBuf = pStartBuf.add(pBsAux.cursor.len());
+        let iRemainingBits = -pBsAux.cursor.left_bits();
         let iRemainingBytes = (iRemainingBits >> 3) + 2;
-        let pCurr = (*pBsAux).pCurBuf.offset(-(iRemainingBytes as isize));
-        let pEndGuard = (*pBsAux).pEndBuf.offset(-1);
+        let pCurr = pCurBuf.offset(-(iRemainingBytes as isize));
+        let pEndGuard = pEndBuf.offset(-1);
         if pCurr >= pEndGuard {
             return ERR_INFO_INVALID_ACCESS;
         }
@@ -693,29 +699,27 @@ pub unsafe fn InitCabacDecEngineFromBS(
         (*pDecEngine).iBitsLeft = 31;
         (*pDecEngine).pBuffCurr = pCurr.offset(5);
         (*pDecEngine).uiRange = WELS_CABAC_HALF;
-        (*pDecEngine).pBuffStart = (*pBsAux).pStartBuf;
-        (*pDecEngine).pBuffEnd = (*pBsAux).pEndBuf;
-        (*pBsAux).iLeftBits = 0;
+        (*pDecEngine).pBuffStart = pStartBuf;
+        (*pDecEngine).pBuffEnd = pEndBuf;
+        pBsAux.cursor.hand_off_to_cabac();
 
         ERR_NONE
     }
 }
 
-pub unsafe fn RestoreCabacDecEngineToBS(
-    pDecEngine: PWelsCabacDecEngine,
-    pBsAux: PBitStringAux,
-) {
-    if pDecEngine.is_null() || pBsAux.is_null() {
+pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux: &mut BsReader) {
+    if pDecEngine.is_null() {
         return;
     }
     unsafe {
         (*pDecEngine).pBuffCurr = (*pDecEngine).pBuffCurr.offset(-((*pDecEngine).iBitsLeft >> 3) as isize);
         (*pDecEngine).iBitsLeft = 0;
-        (*pBsAux).iLeftBits = 0;
-        (*pBsAux).pStartBuf = (*pDecEngine).pBuffStart;
-        (*pBsAux).pCurBuf = (*pDecEngine).pBuffCurr;
-        (*pBsAux).uiCurBits = 0;
-        (*pBsAux).iIndex = 0;
+        // `pStartBuf = pBuffStart` was a no-op restore of the base the engine was given
+        // in the first place; what actually moves is the position, which is now the one
+        // `usize` plan §2.2.2 predicted.
+        pBsAux.base = (*pDecEngine).pBuffStart;
+        let pos = (*pDecEngine).pBuffCurr.offset_from((*pDecEngine).pBuffStart) as usize;
+        pBsAux.cursor.restore_from_cabac(pos);
     }
 }
 

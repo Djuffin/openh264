@@ -44,7 +44,7 @@
     unused_unsafe
 )]
 
-use super::bit_stream::SBitStringAux;
+use crate::safe::bits::BsCursor;
 
 // ============================================================================
 // Constants & Error Codes
@@ -1091,7 +1091,8 @@ pub unsafe fn ParseInterInfo(
     pCtx: *mut SWelsDecoderContext,
     iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: *mut [[i8; 30]; LIST_A],
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
@@ -1114,14 +1115,14 @@ pub unsafe fn ParseInterInfo(
         MB_TYPE_16x16 => {
             let mut iRefIdx = 0i32;
             if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
-                let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
                 iMotionPredFlag[0] = uiCode;
             }
             if iMotionPredFlag[0] == 0 {
-                let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1145,12 +1146,12 @@ pub unsafe fn ParseInterInfo(
             let mut iMv = [0i16; 2];
             crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, 0, 4, iRefIdx as i8, &mut iMv);
 
-            let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+            let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
             if ret != 0 {
                 return ret;
             }
             iMv[0] = iMv[0].wrapping_add(iCode as i16);
-            let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+            let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
             if ret != 0 {
                 return ret;
             }
@@ -1161,7 +1162,7 @@ pub unsafe fn ParseInterInfo(
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
                 if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1172,7 +1173,7 @@ pub unsafe fn ParseInterInfo(
                 if iMotionPredFlag[i] != 0 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                 }
-                let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1195,12 +1196,12 @@ pub unsafe fn ParseInterInfo(
                 let mut iMv = [0i16; 2];
                 crate::decoder::mv_pred::PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 3, iRefIdx[i] as i8, &mut iMv);
 
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1220,7 +1221,7 @@ pub unsafe fn ParseInterInfo(
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
                 if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1229,7 +1230,7 @@ pub unsafe fn ParseInterInfo(
             }
             for i in 0..2 {
                 if iMotionPredFlag[i] == 0 {
-                    let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1255,12 +1256,12 @@ pub unsafe fn ParseInterInfo(
                 let mut iMv = [0i16; 2];
                 crate::decoder::mv_pred::PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 2, iRefIdx[i] as i8, &mut iMv);
 
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1287,7 +1288,7 @@ pub unsafe fn ParseInterInfo(
             }
 
             for i in 0..4 {
-                let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -1304,7 +1305,7 @@ pub unsafe fn ParseInterInfo(
 
             if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
                 for i in 0..4 {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1321,7 +1322,7 @@ pub unsafe fn ParseInterInfo(
                     let uiScan4Idx = g_kuiScan4[iIndex8 as usize] as usize;
 
                     if iMotionPredFlag[i] == 0 {
-                        let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[0], &mut uiCode);
+                        let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1370,12 +1371,12 @@ pub unsafe fn ParseInterInfo(
                     let mut iMv = [0i16; 2];
                     crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx, iBlockWidth, iRefIdx[i] as i8, &mut iMv);
 
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1422,7 +1423,8 @@ pub unsafe fn ParseInterBInfo(
     pCtx: *mut SWelsDecoderContext,
     iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: *mut [[i8; 30]; LIST_A],
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
@@ -1507,7 +1509,7 @@ pub unsafe fn ParseInterBInfo(
         if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 if IS_DIR(mbType, 0, listIdx) {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1518,7 +1520,7 @@ pub unsafe fn ParseInterBInfo(
         for listIdx in LIST_0..LIST_A {
             if IS_DIR(mbType, 0, listIdx) {
                 if iMotionPredFlag[listIdx][0] == 0 {
-                    let ret = crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[listIdx], &mut uiCode);
+                    let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1542,12 +1544,12 @@ pub unsafe fn ParseInterBInfo(
                     ref_idx_list[listIdx][0],
                     &mut iMv,
                 );
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1568,7 +1570,7 @@ pub unsafe fn ParseInterBInfo(
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1582,7 +1584,7 @@ pub unsafe fn ParseInterBInfo(
                 if IS_DIR(mbType, i, listIdx) {
                     if iMotionPredFlag[listIdx][i] == 0 {
                         let ret =
-                            crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[listIdx], &mut uiCode);
+                            crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1610,12 +1612,12 @@ pub unsafe fn ParseInterBInfo(
                         iRefIdx,
                         &mut iMv,
                     );
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1640,7 +1642,7 @@ pub unsafe fn ParseInterBInfo(
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1654,7 +1656,7 @@ pub unsafe fn ParseInterBInfo(
                 if IS_DIR(mbType, i, listIdx) {
                     if iMotionPredFlag[listIdx][i] == 0 {
                         let ret =
-                            crate::decoder::dec_golomb::BsGetTe0(pBs, iRefCount[listIdx], &mut uiCode);
+                            crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1680,12 +1682,12 @@ pub unsafe fn ParseInterBInfo(
                         iRefIdx,
                         &mut iMv,
                     );
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1724,7 +1726,7 @@ pub unsafe fn ParseInterBInfo(
 
         // uiSubMbType, partition
         for i in 0..4usize {
-            let ret = crate::decoder::dec_golomb::BsGetUe(pBs, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -1782,7 +1784,7 @@ pub unsafe fn ParseInterBInfo(
                 for i in 0..4usize {
                     let is_dir = IS_DIR((*(*pCurDqLayer).pSubMbType.add(iMbXy))[i], 0, listIdx);
                     if is_dir {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(pBs, &mut uiCode);
+                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1872,6 +1874,7 @@ pub unsafe fn ParseInterBInfo(
                     if IS_DIR(subMbType, 0, listIdx) {
                         if iMotionPredFlag[listIdx][i] == 0 {
                             let ret = crate::decoder::dec_golomb::BsGetTe0(
+                                buf,
                                 pBs,
                                 iRefCount[listIdx],
                                 &mut uiCode,
@@ -1928,12 +1931,12 @@ pub unsafe fn ParseInterBInfo(
                             iref,
                             &mut iMv,
                         );
-                        let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                         if ret != 0 {
                             return ret;
                         }
                         iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                        let ret = crate::decoder::dec_golomb::BsGetSe(pBs, &mut iCode);
+                        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -2223,31 +2226,11 @@ pub unsafe fn CheckIntraNxNPredMode(
     }
 }
 
-// ============================================================================
-// Bitstream CAVLC Synchronization
-// ============================================================================
-
-pub unsafe fn BsStartCavlc(pBs: *mut SBitStringAux) {
-    unsafe {
-        let bs = &mut *pBs;
-        bs.iIndex = ((bs.pCurBuf.offset_from(bs.pStartBuf)) << 3) - (16 - bs.iLeftBits as isize);
-    }
-}
-
-pub unsafe fn BsEndCavlc(pBs: *mut SBitStringAux) {
-    unsafe {
-        let bs = &mut *pBs;
-        bs.pCurBuf = bs.pStartBuf.offset(bs.iIndex >> 3);
-        let b0 = *bs.pCurBuf as u32;
-        let b1 = *bs.pCurBuf.add(1) as u32;
-        let b2 = *bs.pCurBuf.add(2) as u32;
-        let b3 = *bs.pCurBuf.add(3) as u32;
-        let uiCache32Bit = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
-        bs.uiCurBits = uiCache32Bit << ((bs.iIndex & 0x07) as u32);
-        bs.pCurBuf = bs.pCurBuf.add(4);
-        bs.iLeftBits = -16 + ((bs.iIndex & 0x07) as i32);
-    }
-}
+// `BsStartCavlc`/`BsEndCavlc` used to live here. They are now
+// `BsCursor::start_cavlc`/`end_cavlc` (plan §2.2.2 [P3]) — the arithmetic is
+// identical, and the mode additionally makes the stale-accumulator desync a debug
+// panic instead of a silent miscode. A frozen transliteration of the C++ pair is kept
+// in `tests/safe_bits_differential.rs` as the parity reference.
 
 // ============================================================================
 // Inverse Quantization and Transforms (IDCT)
@@ -2638,7 +2621,8 @@ pub unsafe fn ParseRunBefore(
 pub unsafe fn WelsResidualBlockCavlc(
     pVlcTable: *mut SVlcTable,
     pNonZeroCountCache: *mut u8,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
     kpZigzagTable: *const u8,
@@ -2664,8 +2648,8 @@ pub unsafe fn WelsResidualBlockCavlc(
     let mut uiTotalCoeff: u8 = 0;
     let mut uiTrailingOnes: u8 = 0;
     let mut iUsedBits: i32 = 0;
-    let iCurIdx = (*pBs).iIndex as usize;
-    let pBuf = ((*pBs).pStartBuf as *mut u8).add(iCurIdx >> 3);
+    let iCurIdx = pBs.cavlc_bit_pos() as usize;
+    let pBuf = buf.as_ptr().add(iCurIdx >> 3) as *mut u8;
     let bChromaDc = CHROMA_DC == iResidualProperty;
     let bChroma = bChromaDc || CHROMA_AC == iResidualProperty;
 
@@ -2698,7 +2682,7 @@ pub unsafe fn WelsResidualBlockCavlc(
         *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
     }
     if 0 == uiTotalCoeff {
-        (*pBs).iIndex += iUsedBits as isize;
+        pBs.advance_cavlc_bits(iUsedBits as isize);
         return ERR_NONE;
     }
     if uiTrailingOnes > 3 || uiTotalCoeff > 16 {
@@ -2723,7 +2707,7 @@ pub unsafe fn WelsResidualBlockCavlc(
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_RUN_BEFORE);
     }
     iUsedBits += res;
-    (*pBs).iIndex += iUsedBits as isize;
+    pBs.advance_cavlc_bits(iUsedBits as isize);
     let mut iCoeffNum: i32 = -1;
 
     if iResidualProperty == CHROMA_DC {
@@ -2769,7 +2753,8 @@ pub unsafe fn WelsResidualBlockCavlc(
 pub unsafe fn WelsResidualBlockCavlc8x8(
     pVlcTable: *mut SVlcTable,
     pNonZeroCountCache: *mut u8,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
     kpZigzagTable: *const u8,
@@ -2793,8 +2778,8 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     let mut uiTotalCoeff: u8 = 0;
     let mut uiTrailingOnes: u8 = 0;
     let mut iUsedBits: i32 = 0;
-    let iCurIdx = (*pBs).iIndex as usize;
-    let pBuf = ((*pBs).pStartBuf as *mut u8).add(iCurIdx >> 3);
+    let iCurIdx = pBs.cavlc_bit_pos() as usize;
+    let pBuf = buf.as_ptr().add(iCurIdx >> 3) as *mut u8;
     let bChromaDc = CHROMA_DC == iResidualProperty;
 
     let uiCache32Bit = ((*pBuf.add(0) as u32) << 24)
@@ -2826,7 +2811,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
         *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
     }
     if 0 == uiTotalCoeff {
-        (*pBs).iIndex += iUsedBits as isize;
+        pBs.advance_cavlc_bits(iUsedBits as isize);
         return ERR_NONE;
     }
     if uiTrailingOnes > 3 || uiTotalCoeff > 16 {
@@ -2851,7 +2836,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_CAVLC_INVALID_RUN_BEFORE);
     }
     iUsedBits += res;
-    (*pBs).iIndex += iUsedBits as isize;
+    pBs.advance_cavlc_bits(iUsedBits as isize);
     let mut iCoeffNum: i32 = -1;
 
     for i in (0..(uiTotalCoeff as usize)).rev() {
@@ -2872,7 +2857,8 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
 pub unsafe fn WelsParseMbCavlcResidual(
     pVlcTable: *mut SVlcTable,
     pNonZeroCountCache: *mut u8,
-    pBs: *mut SBitStringAux,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
     kpZigzagTable: *const u8,
@@ -2884,6 +2870,7 @@ pub unsafe fn WelsParseMbCavlcResidual(
     WelsResidualBlockCavlc(
         pVlcTable,
         pNonZeroCountCache,
+        buf,
         pBs,
         iIndex,
         iMaxNumCoeff,
@@ -2958,22 +2945,19 @@ mod tests {
 
     #[test]
     fn test_cavlc_zero_coeff_block_decoding() {
-        let mut buf = [0u8; 16];
-        // One derivation, three uses. Calling `as_mut_ptr()` three times would
-        // reborrow twice, leaving `pStartBuf` and `pCurBuf` holding tags that
-        // Stacked Borrows has already popped — Undefined Behaviour the moment the
-        // parser reads through either. Found when the Miri gate was widened to the
-        // port's unit tests at Phase 2's exit.
-        let p = buf.as_mut_ptr();
-        let mut bs = SBitStringAux {
-            pStartBuf: p,
-            pEndBuf: unsafe { p.add(16) },
-            iBits: 128,
-            iIndex: 0,
-            pCurBuf: p,
-            uiCurBits: 0,
-            iLeftBits: 0,
-        };
+        let buf = [0u8; 16];
+        // The F10-class accommodation that used to be here is **deleted**: it existed
+        // because `SBitStringAux` was built from three `as_mut_ptr()` calls, two of
+        // which Stacked Borrows had already popped by the time the parser read through
+        // them. There are no pointers left to reborrow.
+        //
+        // The setup is now the production sequence: `init` primes the accumulator, and
+        // `start_cavlc` projects it to bit position 0 — `(4 << 3) - (16 - (-16))`. The
+        // residual path asserts it is inside a CAVLC region, which is exactly the
+        // discipline the mode exists to enforce (plan §2.2.2 [P3]).
+        let mut bs = BsCursor::init(&buf, 128).unwrap();
+        bs.start_cavlc();
+        assert_eq!(bs.cavlc_bit_pos(), 0);
         let mut non_zero_cache = [0u8; 48];
         let mut coeffs = [0i16; 16];
         let zigzag = [0u8; 16];
@@ -2989,6 +2973,7 @@ mod tests {
             let res = WelsParseMbCavlcResidual(
                 &mut vlc_table,
                 non_zero_cache.as_mut_ptr(),
+                &buf,
                 &mut bs,
                 0,
                 16,

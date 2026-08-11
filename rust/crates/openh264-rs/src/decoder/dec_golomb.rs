@@ -14,7 +14,7 @@
 //! - Associated documentation in `rust/docs/dec_golomb.h.md`
 
 use crate::decoder::bit_stream::{
-    cursor_and_buf, cursor_of, store_cursor, PBitStringAux, SBitStringAux, TagBitStringAux,
+    PBitStringAux, SBitStringAux, TagBitStringAux,
 };
 use crate::safe::bits::BsCursor;
 use crate::safe::err::ErrInfo;
@@ -127,47 +127,17 @@ pub fn UBITS(iCurBits: u32, iNumBits: i32) -> u32 {
     }
 }
 
-/// Runs one [`BsCursor`] read against the state an `SBitStringAux` holds, and writes
-/// the state back whatever the outcome.
-///
-/// SHIM(phase3) — this is the whole of the decoder read side's strangler boundary.
-/// Every function below is now `read_with(pBs, |cursor, buf| …)`; the arithmetic lives
-/// in `safe::bits`, and what remains here is the translation `SBitStringAux` needs
-/// until T3.1b moves the cursor into the structs that own the buffers.
-///
-/// The write-back is unconditional because the raw refill mutated `uiCurBits` and
-/// `iLeftBits` *before* its overflow check and left them mutated on the error path —
-/// `reader_op_sequences_match_bit_for_bit` in `tests/safe_bits_differential.rs` fails
-/// if that stops being true.
-#[inline(always)]
-unsafe fn read_with<T>(
-    pBs: PBitStringAux,
-    op: impl FnOnce(&mut BsCursor, &[u8]) -> Result<T, ErrInfo>,
-) -> Result<T, i32> {
-    unsafe {
-        let bs = &mut *pBs;
-        let Some((mut cursor, buf)) = cursor_and_buf(bs) else {
-            return Err(ERR_INFO_INVALID_ACCESS);
-        };
-        let out = op(&mut cursor, buf);
-        store_cursor(bs, &cursor);
-        out.map_err(|err| err.0)
-    }
-}
-
 /// Reads arbitrary `iNumBits` (1..32) from the bitstream.
 ///
 /// Matches `int32_t BsGetBits (PBitStringAux pBs, int32_t iNumBits, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn BsGetBits(pBs: PBitStringAux, iNumBits: i32, pCode: *mut u32) -> i32 {
-    unsafe {
-        match read_with(pBs, |cursor, buf| cursor.get_bits(buf, iNumBits)) {
-            Ok(value) => {
-                *pCode = value;
-                ERR_NONE
-            }
-            Err(code) => code,
+pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, iNumBits: i32, pCode: &mut u32) -> i32 {
+    match pBs.get_bits(buf, iNumBits) {
+        Ok(value) => {
+            *pCode = value;
+            ERR_NONE
         }
+        Err(err) => err.0,
     }
 }
 
@@ -199,8 +169,8 @@ pub fn GetPrefixBits(mut uiValue: u32) -> u32 {
 ///
 /// Matches `uint32_t BsGetOneBit (PBitStringAux pBs, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn BsGetOneBit(pBs: PBitStringAux, pCode: *mut u32) -> u32 {
-    unsafe { BsGetBits(pBs, 1, pCode) as u32 }
+pub fn BsGetOneBit(buf: &[u8], pBs: &mut BsCursor, pCode: &mut u32) -> u32 {
+    BsGetBits(buf, pBs, 1, pCode) as u32
 }
 
 /// Fast lookup-table calculation of the number of leading zero bits in `iCurBits`.
@@ -235,15 +205,13 @@ pub fn GetLeadingZeroBits(iCurBits: u32) -> i32 {
 ///
 /// Matches `uint32_t BsGetUe (PBitStringAux pBs, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn BsGetUe(pBs: PBitStringAux, pCode: *mut u32) -> u32 {
-    unsafe {
-        match read_with(pBs, |cursor, buf| cursor.get_ue(buf)) {
-            Ok(value) => {
-                *pCode = value;
-                ERR_NONE as u32
-            }
-            Err(code) => code as u32,
+pub fn BsGetUe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut u32) -> u32 {
+    match pBs.get_ue(buf) {
+        Ok(value) => {
+            *pCode = value;
+            ERR_NONE as u32
         }
+        Err(err) => err.0 as u32,
     }
 }
 
@@ -251,15 +219,13 @@ pub unsafe fn BsGetUe(pBs: PBitStringAux, pCode: *mut u32) -> u32 {
 ///
 /// Matches `int32_t BsGetSe (PBitStringAux pBs, int32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn BsGetSe(pBs: PBitStringAux, pCode: *mut i32) -> i32 {
-    unsafe {
-        match read_with(pBs, |cursor, buf| cursor.get_se(buf)) {
-            Ok(value) => {
-                *pCode = value;
-                ERR_NONE
-            }
-            Err(code) => code,
+pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut i32) -> i32 {
+    match pBs.get_se(buf) {
+        Ok(value) => {
+            *pCode = value;
+            ERR_NONE
         }
+        Err(err) => err.0,
     }
 }
 
@@ -267,22 +233,19 @@ pub unsafe fn BsGetSe(pBs: PBitStringAux, pCode: *mut i32) -> i32 {
 ///
 /// Matches `int32_t BsGetTe0 (PBitStringAux pBs, int32_t iRange, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn BsGetTe0(pBs: PBitStringAux, iRange: i32, pCode: *mut u32) -> i32 {
-    unsafe {
-        // `iRange == 1` consumes nothing, so it must not even build a cursor: the raw
-        // version returned before touching `pBs`, and two call sites rely on being
-        // allowed to pass a range of 1 with a spent reader.
-        if iRange == 1 {
-            *pCode = 0;
-            return ERR_NONE;
+pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) -> i32 {
+    // `iRange == 1` consumes nothing: the raw version returned before touching `pBs`,
+    // and two call sites rely on being allowed to pass a range of 1 with a spent reader.
+    if iRange == 1 {
+        *pCode = 0;
+        return ERR_NONE;
+    }
+    match pBs.get_te0(buf, iRange) {
+        Ok(value) => {
+            *pCode = value;
+            ERR_NONE
         }
-        match read_with(pBs, |cursor, buf| cursor.get_te0(buf, iRange)) {
-            Ok(value) => {
-                *pCode = value;
-                ERR_NONE
-            }
-            Err(code) => code,
-        }
+        Err(err) => err.0,
     }
 }
 
@@ -302,16 +265,9 @@ pub unsafe fn BsGetTrailingBits(pBuf: *const u8) -> i32 {
 ///
 /// Matches `bool CheckMoreRBSPData (PBitStringAux pBsAux)` in `dec_golomb.h`.
 #[inline(always)]
-pub unsafe fn CheckMoreRBSPData(pBsAux: PBitStringAux) -> bool {
-    // A state query, not a read: no buffer, so no slice.
-    unsafe {
-        match cursor_of(&*pBsAux) {
-            Some(cursor) => cursor.check_more_rbsp_data(),
-            // The raw version computed on whatever the pointers held. Only reachable
-            // with an uninitialised reader, which no caller has.
-            None => false,
-        }
-    }
+pub fn CheckMoreRBSPData(pBsAux: &BsCursor) -> bool {
+    // A state query, not a read: no buffer needed.
+    pBsAux.check_more_rbsp_data()
 }
 
 // Validation & error-checking macros translated from C++
@@ -356,7 +312,7 @@ macro_rules! WELS_CHECK_SE_UPPER_ERROR_NOLOG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};
+    use crate::decoder::bit_stream::{BsReader, DecInitBits, READER_SLOP};
 
     /// The reader family reads `READER_SLOP` bytes past the RBSP (F4); since T3.1a
     /// that is its written contract, so the tests supply it.
@@ -400,14 +356,14 @@ mod tests {
         // '011' (0b01100000 = 0x60) -> codeNum = 2
         // '00100' (0b00100000 = 0x20) -> codeNum = 3
         let buf = with_slop(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        let mut bs = SBitStringAux::default();
+        let mut bs = BsReader::default();
 
         unsafe {
-            let err = DecInitBits(&mut bs, buf.as_ptr(), 64);
+            let err = DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
             assert_eq!(err, ERR_NONE);
 
             let mut code: u32 = 999;
-            let ret = BsGetUe(&mut bs, &mut code);
+            let ret = BsGetUe(&buf, &mut bs.cursor, &mut code);
             assert_eq!(ret, ERR_NONE as u32);
             assert_eq!(code, 0);
         }
@@ -418,18 +374,18 @@ mod tests {
         // '010' = ue(1) -> se(+1)
         // '011' = ue(2) -> se(-1)
         let buf = with_slop(&[0b01001100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        let mut bs = SBitStringAux::default();
+        let mut bs = BsReader::default();
 
         unsafe {
-            DecInitBits(&mut bs, buf.as_ptr(), 64);
+            DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
 
             let mut se_code1: i32 = 0;
-            let ret1 = BsGetSe(&mut bs, &mut se_code1);
+            let ret1 = BsGetSe(&buf, &mut bs.cursor, &mut se_code1);
             assert_eq!(ret1, ERR_NONE);
             assert_eq!(se_code1, 1);
 
             let mut se_code2: i32 = 0;
-            let ret2 = BsGetSe(&mut bs, &mut se_code2);
+            let ret2 = BsGetSe(&buf, &mut bs.cursor, &mut se_code2);
             assert_eq!(ret2, ERR_NONE);
             assert_eq!(se_code2, -1);
         }
@@ -438,19 +394,19 @@ mod tests {
     #[test]
     fn test_bs_get_te0() {
         let buf = with_slop(&[0b10100000, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        let mut bs = SBitStringAux::default();
+        let mut bs = BsReader::default();
 
         unsafe {
-            DecInitBits(&mut bs, buf.as_ptr(), 64);
+            DecInitBits(&mut bs, buf.as_ptr(), 64, buf.len());
 
             let mut code: u32 = 99;
             // iRange = 1: returns 0 directly without bit consumption
-            let ret = BsGetTe0(&mut bs, 1, &mut code);
+            let ret = BsGetTe0(&buf, &mut bs.cursor, 1, &mut code);
             assert_eq!(ret, ERR_NONE);
             assert_eq!(code, 0);
 
             // iRange = 2: reads 1 bit (which is '1') -> code = 1 ^ 1 = 0
-            let ret2 = BsGetTe0(&mut bs, 2, &mut code);
+            let ret2 = BsGetTe0(&buf, &mut bs.cursor, 2, &mut code);
             assert_eq!(ret2, ERR_NONE);
             assert_eq!(code, 0);
         }

@@ -47,7 +47,8 @@
 use std::ptr;
 
 
-use super::bit_stream::{InitReadBits, SBitStringAux};
+use super::bit_stream::InitReadBits;
+use crate::safe::bits::BsCursor;
 use super::cabac_decoder::{
     DecodeBinCabac, DecodeBypassCabac, DecodeTerminateCabac, DecodeUEGLevelCabac, DecodeUEGMvCabac,
     DecodeUnaryBinCabac, InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, PWelsCabacCtx,
@@ -3104,7 +3105,7 @@ pub unsafe fn ParseSignificantCoeffCabac(
 pub unsafe fn ParseResidualBlockCabac8x8(
     _pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCountCache: *mut u8,
-    _pBsAux: *mut SBitStringAux,
+    _pBsAux: &mut BsCursor,
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
@@ -3167,7 +3168,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
 pub unsafe fn ParseResidualBlockCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCountCache: *mut u8,
-    _pBsAux: *mut SBitStringAux,
+    _pBsAux: &mut BsCursor,
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
@@ -3261,7 +3262,7 @@ pub unsafe fn ParseResidualBlockCabac(
 pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pBsAux = (*pCurDqLayer).pBitStringAux;
+    let pBsAux = &mut *(*pCurDqLayer).pBitStringAux;
     let iDstStrideLuma = (*(*pCurDqLayer).pDec).iLinesize[0];
     let iDstStrideChroma = (*(*pCurDqLayer).pDec).iLinesize[1];
     let iMbX = (*pCurDqLayer).iMbX;
@@ -3276,13 +3277,16 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let mut pMbDstV = (*(*pCtx).pDec).pData[2].add(iMbOffsetChroma as usize);
 
     *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
-    RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux as *mut _);
+    RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux);
 
-    let iBytesLeft = (*pBsAux).pEndBuf.offset_from((*pBsAux).pCurBuf);
+    // `pEndBuf - pCurBuf` becomes `len - pos`. F4's off-by-ones are load-bearing, so
+    // the comparison keeps its exact shape.
+    let iBytesLeft = pBsAux.cursor.len() as isize - pBsAux.cursor.pos() as isize;
     if iBytesLeft < 384 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
-    let mut pPtrSrc = (*pBsAux).pCurBuf;
+    let iPcmStart = pBsAux.cursor.pos();
+    let mut pPtrSrc = pBsAux.buf()[iPcmStart..].as_ptr();
     if !(*(*pCtx).pParam).bParseOnly {
         for _ in 0..16 {
             ptr::copy_nonoverlapping(pPtrSrc, pMbDstY, 16);
@@ -3301,7 +3305,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
         }
     }
 
-    (*pBsAux).pCurBuf = (*pBsAux).pCurBuf.add(384);
+    pBsAux.cursor.set_pos(iPcmStart + 384);
 
     *(*pCurDqLayer).pLumaQp.add(iMbXy) = 0;
     let pChromaQp = &mut *(*pCurDqLayer).pChromaQp.add(iMbXy);
@@ -3309,11 +3313,12 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     pChromaQp[1] = 0;
     ptr::write_bytes((*pCurDqLayer).pNzc.add(iMbXy) as *mut u8, 16, 24);
 
-    let mut err = InitReadBits(pBsAux, 1);
+    let (buf, cursor) = pBsAux.split();
+    let mut err = InitReadBits(buf, cursor, 1);
     if err != ERR_NONE {
         return err;
     }
-    err = InitCabacDecEngineFromBS(pCabacDecEngine, pBsAux as *mut _);
+    err = InitCabacDecEngineFromBS(pCabacDecEngine, pBsAux);
     if err != ERR_NONE {
         return err;
     }
