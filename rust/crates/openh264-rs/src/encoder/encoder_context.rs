@@ -833,13 +833,12 @@ pub unsafe fn InitBitStream(pEncCtx: *mut sWelsEncCtx) {
     (*(*pEncCtx).pOut).iNalIndex = 0;
     (*(*pEncCtx).pOut).iLayerBsIndex = 0;
 
-    // `uiSize` is uint32_t in C++ and InitBits takes int32_t; the narrowing conversion
-    // is implicit there, explicit here.
-    crate::encoder::vlc_encoder::InitBits(
-        &mut (*(*pEncCtx).pOut).sBsWrite,
-        (*(*pEncCtx).pOut).pBsBuffer,
-        (*(*pEncCtx).pOut).uiSize as i32,
-    );
+    // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
+    // where they were; the writer is a position, and resetting it is all `InitBits`
+    // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
+    // `pStartBuf: *mut u8` and written through — is deleted rather than amended
+    // (`phase2_findings.md` F13, third site).
+    (*(*pEncCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
 }
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.

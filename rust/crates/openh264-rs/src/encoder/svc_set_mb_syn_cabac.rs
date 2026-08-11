@@ -1271,7 +1271,8 @@ pub unsafe fn WelsInitSliceCabac(
     unsafe {
         /* alignment needed */
         let pBs = (*pSlice).pSliceBsa;
-        BsAlign(pBs);
+        let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
+        BsAlign(buf, &mut *pBs);
 
         /* init cabac */
         let iCabacInitIdc = (*pSlice).iCabacInitIdc;
@@ -1280,11 +1281,12 @@ pub unsafe fn WelsInitSliceCabac(
             &mut (*pSlice).sCabacCtx,
             iCabacInitIdc,
         );
-        WelsCabacEncodeInit(
-            &mut (*pSlice).sCabacCtx,
-            (*pBs).pCurBuf,
-            (*pBs).pEndBuf,
-        );
+        // The arithmetic coder still walks a `m_pBufStart/Cur/End` pointer triple
+        // of its own — T3.5's to convert. Handing it `pCurBuf`/`pEndBuf` is now
+        // handing it the slice's position and length within the buffer we hold.
+        let base = buf.as_mut_ptr();
+        let end = base.add(buf.len());
+        WelsCabacEncodeInit(&mut (*pSlice).sCabacCtx, base.add((*pBs).pos()), end);
     }
 }
 

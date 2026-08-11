@@ -262,7 +262,8 @@ impl Default for SSliceHeaderExt {
     }
 }
 
-pub use crate::common::wels_common_defs::{EWelsNalUnitType, SBitStringAux};
+pub use crate::common::wels_common_defs::EWelsNalUnitType;
+pub use crate::safe::bits::BsWriter;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::IWelsParametersetStrategy;
 use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
@@ -272,7 +273,11 @@ use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 #[repr(C)]
 pub struct SSlice {
     pub sMbCacheInfo: SMbCache,
-    pub pSliceBsa: *mut SBitStringAux,
+    /// The slice's write position. Phase 6 removes the pointer itself; T3.4 changed
+    /// only what it points at, per T3.1b's precedent (pointer stays, pointee
+    /// converts). It aims at either `sSliceBs.sBsWrite` just below or the frame's
+    /// `pOut->sBsWrite`, and `slice_bs_buffer` reads that choice back off it.
+    pub pSliceBsa: *mut BsWriter,
     pub sSliceBs: SWelsSliceBs,
     pub sSliceHeaderExt: SSliceHeaderExt,
     pub sMvStartMin: SMVUnitXY,
@@ -310,9 +315,10 @@ impl Default for SSlice {
 pub struct SDynamicSlicingStack {
     pub iStartPos: i32,
     pub iCurrentPos: i32,
-    pub pBsStackBufPtr: *mut u8,
-    pub uiBsStackCurBits: u32,
-    pub iBsStackLeftBits: i32,
+    /// The CAVLC rollback snapshot. Was `pBsStackBufPtr`/`uiBsStackCurBits`/
+    /// `iBsStackLeftBits` — a pointer and the two accumulator fields, restored
+    /// one by one. A detached cursor is `Copy`, so the snapshot is the value.
+    pub sBsStack: BsWriter,
     pub sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx,
     pub iMbSkipRunStack: i32,
     pub uiLastMbQp: u8,
@@ -324,9 +330,7 @@ impl Default for SDynamicSlicingStack {
         Self {
             iStartPos: 0,
             iCurrentPos: 0,
-            pBsStackBufPtr: std::ptr::null_mut(),
-            uiBsStackCurBits: 0,
-            iBsStackLeftBits: 0,
+            sBsStack: BsWriter::new(),
             sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx::default(),
             iMbSkipRunStack: 0,
             uiLastMbQp: 0,
@@ -438,7 +442,7 @@ pub use crate::encoder::nal_encap::SWelsNalRaw;
 
 #[repr(C)]
 pub struct SWelsOut {
-    pub sBsWrite: SBitStringAux,
+    pub sBsWrite: BsWriter,
     pub sNalList: *mut SWelsNalRaw,
     pub pNalLen: *mut i32,
     pub iCountNals: i32,
@@ -464,7 +468,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::nal_encap::SNalUnitHeaderExt;
 pub use crate::encoder::nal_encap::SNalUnitHeader;
-pub use crate::encoder::nal_encap::SWelsSliceBs;
+pub use crate::encoder::nal_encap::{bs_buffer, SWelsSliceBs};
 pub use crate::encoder::param_svc::SWelsSPS;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::param_svc::SSubsetSps;
@@ -484,7 +488,7 @@ pub use crate::encoder::md::SMB;
 pub type PWelsCodingSliceFunc = unsafe extern "C" fn(pCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32;
 pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
     pCtx: *mut sWelsEncCtx,
-    pBs: *mut SBitStringAux,
+    pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
@@ -725,7 +729,7 @@ pub unsafe fn WelsSliceHeaderExtInit(pEncCtx: *mut sWelsEncCtx, pCurLayer: *mut 
     }
 }
 
-pub unsafe fn WriteReferenceReorder(pBs: *mut SBitStringAux, sSliceHeader: *mut SSliceHeader) {
+pub unsafe fn WriteReferenceReorder(buf: &mut [u8], pBs: *mut BsWriter, sSliceHeader: *mut SSliceHeader) {
     if pBs.is_null() || sSliceHeader.is_null() {
         return;
     }
@@ -733,15 +737,15 @@ pub unsafe fn WriteReferenceReorder(pBs: *mut SBitStringAux, sSliceHeader: *mut 
     let eSliceType = (*sSliceHeader).eSliceType;
 
     if eSliceType != EWelsSliceType::I_SLICE && eSliceType != EWelsSliceType::SI_SLICE {
-        BsWriteOneBit(pBs, 1);
+        BsWriteOneBit(buf, &mut *pBs, 1);
         let mut n: usize = 0;
         loop {
             let uiReorderingOfPicNumsIdc = pRefOrdering.SReorderingSyntax[n].uiReorderingOfPicNumsIdc;
-            BsWriteUE(pBs, uiReorderingOfPicNumsIdc as u32);
+            BsWriteUE(buf, &mut *pBs, uiReorderingOfPicNumsIdc as u32);
             if uiReorderingOfPicNumsIdc == 0 || uiReorderingOfPicNumsIdc == 1 {
-                BsWriteUE(pBs, pRefOrdering.SReorderingSyntax[n].uiAbsDiffPicNumMinus1);
+                BsWriteUE(buf, &mut *pBs, pRefOrdering.SReorderingSyntax[n].uiAbsDiffPicNumMinus1);
             } else if uiReorderingOfPicNumsIdc == 2 {
-                BsWriteUE(pBs, pRefOrdering.SReorderingSyntax[n].iLongTermPicNum as u32);
+                BsWriteUE(buf, &mut *pBs, pRefOrdering.SReorderingSyntax[n].iLongTermPicNum as u32);
             }
             n += 1;
             if uiReorderingOfPicNumsIdc == 3 || n >= 32 {
@@ -751,7 +755,7 @@ pub unsafe fn WriteReferenceReorder(pBs: *mut SBitStringAux, sSliceHeader: *mut 
     }
 }
 
-pub unsafe fn WriteRefPicMarking(pBs: *mut SBitStringAux, pSliceHeader: *mut SSliceHeader, pNalHdrExt: *mut SNalUnitHeaderExt) {
+pub unsafe fn WriteRefPicMarking(buf: &mut [u8], pBs: *mut BsWriter, pSliceHeader: *mut SSliceHeader, pNalHdrExt: *mut SNalUnitHeaderExt) {
     if pBs.is_null() || pSliceHeader.is_null() || pNalHdrExt.is_null() {
         return;
     }
@@ -759,25 +763,25 @@ pub unsafe fn WriteRefPicMarking(pBs: *mut SBitStringAux, pSliceHeader: *mut SSl
     let mut n: usize = 0;
 
     if (*pNalHdrExt).bIdrFlag {
-        BsWriteOneBit(pBs, if sRefMarking.bNoOutputOfPriorPicsFlag { 1 } else { 0 });
-        BsWriteOneBit(pBs, if sRefMarking.bLongTermRefFlag { 1 } else { 0 });
+        BsWriteOneBit(buf, &mut *pBs, if sRefMarking.bNoOutputOfPriorPicsFlag { 1 } else { 0 });
+        BsWriteOneBit(buf, &mut *pBs, if sRefMarking.bLongTermRefFlag { 1 } else { 0 });
     } else {
-        BsWriteOneBit(pBs, if sRefMarking.bAdaptiveRefPicMarkingModeFlag { 1 } else { 0 });
+        BsWriteOneBit(buf, &mut *pBs, if sRefMarking.bAdaptiveRefPicMarkingModeFlag { 1 } else { 0 });
         if sRefMarking.bAdaptiveRefPicMarkingModeFlag {
             loop {
                 let iMmcoType = sRefMarking.SMmcoRef[n].iMmcoType;
-                BsWriteUE(pBs, iMmcoType as u32);
+                BsWriteUE(buf, &mut *pBs, iMmcoType as u32);
                 if iMmcoType == 1 || iMmcoType == 3 {
-                    BsWriteUE(pBs, (sRefMarking.SMmcoRef[n].iDiffOfPicNum - 1) as u32);
+                    BsWriteUE(buf, &mut *pBs, (sRefMarking.SMmcoRef[n].iDiffOfPicNum - 1) as u32);
                 }
                 if iMmcoType == 2 {
-                    BsWriteUE(pBs, sRefMarking.SMmcoRef[n].iLongTermPicNum as u32);
+                    BsWriteUE(buf, &mut *pBs, sRefMarking.SMmcoRef[n].iLongTermPicNum as u32);
                 }
                 if iMmcoType == 3 || iMmcoType == 6 {
-                    BsWriteUE(pBs, sRefMarking.SMmcoRef[n].iLongTermFrameIdx as u32);
+                    BsWriteUE(buf, &mut *pBs, sRefMarking.SMmcoRef[n].iLongTermFrameIdx as u32);
                 }
                 if iMmcoType == 4 {
-                    BsWriteUE(pBs, (sRefMarking.SMmcoRef[n].iMaxLongTermFrameIdx + 1) as u32);
+                    BsWriteUE(buf, &mut *pBs, (sRefMarking.SMmcoRef[n].iMaxLongTermFrameIdx + 1) as u32);
                 }
                 n += 1;
                 if iMmcoType == 0 || n >= 32 {
@@ -790,7 +794,7 @@ pub unsafe fn WriteRefPicMarking(pBs: *mut SBitStringAux, pSliceHeader: *mut SSl
 
 pub unsafe fn WelsSliceHeaderWrite(
     pCtx: *mut sWelsEncCtx,
-    pBs: *mut SBitStringAux,
+    pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
@@ -798,13 +802,18 @@ pub unsafe fn WelsSliceHeaderWrite(
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
     }
+    // Derived, not threaded: this function is reached through
+    // `PWelsSliceHeaderWriteFunc`, and widening that signature is Phase 4b's fence.
+    // `pBs` is `pSlice->pSliceBsa` at the only call site, which is exactly what
+    // `slice_bs_buffer` reads to pick the buffer.
+    let buf = slice_bs_buffer(pCtx, pSlice);
     let pSps = (*pCurLayer).sLayerInfo.pSpsP;
     let pPps = (*pCurLayer).sLayerInfo.pPpsP;
     let pSliceHeader = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
     let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
 
-    BsWriteUE(pBs, (*pSliceHeader).iFirstMbInSlice as u32);
-    BsWriteUE(pBs, (*pSliceHeader).eSliceType as u32);
+    BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
+    BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
 
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
@@ -816,66 +825,66 @@ pub unsafe fn WelsSliceHeaderWrite(
     } else {
         0
     };
-    BsWriteUE(pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
+    BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
-    BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
+    BsWriteBits(buf, &mut *pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
     if (*pNalHead).bIdrFlag {
-        BsWriteUE(pBs, (*pSliceHeader).uiIdrPicId as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
     if !pSps.is_null() && (*pSps).uiPocType == 0 {
-        BsWriteBits(pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+        BsWriteBits(buf, &mut *pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
     }
 
     if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
-        BsWriteOneBit(pBs, if (*pSliceHeader).bNumRefIdxActiveOverrideFlag { 1 } else { 0 });
+        BsWriteOneBit(buf, &mut *pBs, if (*pSliceHeader).bNumRefIdxActiveOverrideFlag { 1 } else { 0 });
         if (*pSliceHeader).bNumRefIdxActiveOverrideFlag {
             let active = WELS_CLIP3((*pSliceHeader).uiNumRefIdxL0Active.saturating_sub(1) as u32, 0, MAX_REF_PIC_COUNT);
-            BsWriteUE(pBs, active);
+            BsWriteUE(buf, &mut *pBs, active);
         }
     }
 
     if !(*pNalHead).bIdrFlag {
-        WriteReferenceReorder(pBs, pSliceHeader);
+        WriteReferenceReorder(buf, pBs, pSliceHeader);
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, pBs, pSliceHeader, pNalHead);
     }
 
     if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
-        BsWriteUE(pBs, (*pSlice).iCabacInitIdc as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSlice).iCabacInitIdc as u32);
     }
 
-    BsWriteSE(pBs, (*pSliceHeader).iSliceQpDelta as i32);
+    BsWriteSE(buf, &mut *pBs, (*pSliceHeader).iSliceQpDelta as i32);
 
     if !pPps.is_null() && (*pPps).bDeblockingFilterControlPresentFlag {
         match (*pSliceHeader).uiDisableDeblockingFilterIdc {
             0 | 3 | 4 | 6 => {
-                BsWriteUE(pBs, 0);
+                BsWriteUE(buf, &mut *pBs, 0);
             }
             1 => {
-                BsWriteUE(pBs, 1);
+                BsWriteUE(buf, &mut *pBs, 1);
             }
             2 | 5 => {
-                BsWriteUE(pBs, 2);
+                BsWriteUE(buf, &mut *pBs, 2);
             }
             _ => {
-                BsWriteUE(pBs, 0);
+                BsWriteUE(buf, &mut *pBs, 0);
             }
         }
         if (*pSliceHeader).uiDisableDeblockingFilterIdc != 1 {
-            BsWriteSE(pBs, ((*pSliceHeader).iSliceAlphaC0Offset as i32) >> 1);
-            BsWriteSE(pBs, ((*pSliceHeader).iSliceBetaOffset as i32) >> 1);
+            BsWriteSE(buf, &mut *pBs, ((*pSliceHeader).iSliceAlphaC0Offset as i32) >> 1);
+            BsWriteSE(buf, &mut *pBs, ((*pSliceHeader).iSliceBetaOffset as i32) >> 1);
         }
     }
 }
 
 pub unsafe fn WelsSliceHeaderExtWrite(
     pCtx: *mut sWelsEncCtx,
-    pBs: *mut SBitStringAux,
+    pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
@@ -883,6 +892,11 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
     }
+    // Derived, not threaded: this function is reached through
+    // `PWelsSliceHeaderWriteFunc`, and widening that signature is Phase 4b's fence.
+    // `pBs` is `pSlice->pSliceBsa` at the only call site, which is exactly what
+    // `slice_bs_buffer` reads to pick the buffer.
+    let buf = slice_bs_buffer(pCtx, pSlice);
     let pSps = (*pCurLayer).sLayerInfo.pSpsP;
     let pPps = (*pCurLayer).sLayerInfo.pPpsP;
     let pSubSps = (*pCurLayer).sLayerInfo.pSubsetSpsP;
@@ -890,8 +904,8 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     let pSliceHeader = &mut pSliceHeadExt.sSliceHeader;
     let pNalHead = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
 
-    BsWriteUE(pBs, (*pSliceHeader).iFirstMbInSlice as u32);
-    BsWriteUE(pBs, (*pSliceHeader).eSliceType as u32);
+    BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
+    BsWriteUE(buf, &mut *pBs, (*pSliceHeader).eSliceType as u32);
 
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
@@ -903,55 +917,55 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     } else {
         0
     };
-    BsWriteUE(pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
+    BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
-    BsWriteBits(pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
+    BsWriteBits(buf, &mut *pBs, log2_max_frame_num as i32, (*pSliceHeader).iFrameNum as u32);
 
     if (*pNalHead).bIdrFlag {
-        BsWriteUE(pBs, (*pSliceHeader).uiIdrPicId as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiIdrPicId as u32);
     }
 
     if !pSps.is_null() && (*pSps).uiPocType == 0 {
-        BsWriteBits(pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
+        BsWriteBits(buf, &mut *pBs, (*pSps).iLog2MaxPocLsb, (*pSliceHeader).iPicOrderCntLsb as u32);
     }
 
     if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
-        BsWriteOneBit(pBs, if (*pSliceHeader).bNumRefIdxActiveOverrideFlag { 1 } else { 0 });
+        BsWriteOneBit(buf, &mut *pBs, if (*pSliceHeader).bNumRefIdxActiveOverrideFlag { 1 } else { 0 });
         if (*pSliceHeader).bNumRefIdxActiveOverrideFlag {
             let active = WELS_CLIP3((*pSliceHeader).uiNumRefIdxL0Active.saturating_sub(1) as u32, 0, MAX_REF_PIC_COUNT);
-            BsWriteUE(pBs, active);
+            BsWriteUE(buf, &mut *pBs, active);
         }
     }
 
     if !(*pNalHead).bIdrFlag {
-        WriteReferenceReorder(pBs, pSliceHeader);
+        WriteReferenceReorder(buf, pBs, pSliceHeader);
     }
 
     if (*pNalHead).sNalUnitHeader.uiNalRefIdc != 0 {
-        WriteRefPicMarking(pBs, pSliceHeader, pNalHead);
+        WriteRefPicMarking(buf, pBs, pSliceHeader, pNalHead);
         if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-            BsWriteOneBit(pBs, if pSliceHeadExt.bStoreRefBasePicFlag { 1 } else { 0 });
+            BsWriteOneBit(buf, &mut *pBs, if pSliceHeadExt.bStoreRefBasePicFlag { 1 } else { 0 });
         }
     }
 
     if !pPps.is_null() && (*pPps).bEntropyCodingModeFlag && (*pSliceHeader).eSliceType != EWelsSliceType::I_SLICE {
-        BsWriteUE(pBs, (*pSlice).iCabacInitIdc as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSlice).iCabacInitIdc as u32);
     }
 
-    BsWriteSE(pBs, (*pSliceHeader).iSliceQpDelta as i32);
+    BsWriteSE(buf, &mut *pBs, (*pSliceHeader).iSliceQpDelta as i32);
 
     if !pPps.is_null() && (*pPps).bDeblockingFilterControlPresentFlag {
-        BsWriteUE(pBs, (*pSliceHeader).uiDisableDeblockingFilterIdc as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSliceHeader).uiDisableDeblockingFilterIdc as u32);
         if (*pSliceHeader).uiDisableDeblockingFilterIdc != 1 {
-            BsWriteSE(pBs, ((*pSliceHeader).iSliceAlphaC0Offset as i32) >> 1);
-            BsWriteSE(pBs, ((*pSliceHeader).iSliceBetaOffset as i32) >> 1);
+            BsWriteSE(buf, &mut *pBs, ((*pSliceHeader).iSliceAlphaC0Offset as i32) >> 1);
+            BsWriteSE(buf, &mut *pBs, ((*pSliceHeader).iSliceBetaOffset as i32) >> 1);
         }
     }
 
     if !pSubSps.is_null() && !(*pSubSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-        BsWriteBits(pBs, 4, 0);
-        BsWriteBits(pBs, 4, 15);
+        BsWriteBits(buf, &mut *pBs, 4, 0);
+        BsWriteBits(buf, &mut *pBs, 4, 15);
     }
 }
 
@@ -1235,6 +1249,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         return ENC_RETURN_INVALIDINPUT;
     }
     let pBs = (*pSlice).pSliceBsa;
+    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
@@ -1261,7 +1276,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         sDss.iStartPos = 0;
         sDss.iCurrentPos = 0;
     } else {
-        sDss.iStartPos = BsGetBitsPos(pBs);
+        sDss.iStartPos = (*pBs).bits_pos();
     }
 
     loop {
@@ -1413,6 +1428,7 @@ pub unsafe fn WelsMdInterMbLoop(
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = (*pSlice).pSliceBsa;
+    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let pMbList = (*pCurLayer).sMbDataP;
@@ -1544,7 +1560,7 @@ pub unsafe fn WelsMdInterMbLoop(
     }
 
     if (*pSlice).iMbSkipRun > 0 {
-        BsWriteUE(pBs, (*pSlice).iMbSkipRun as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
     ENC_RETURN_SUCCESS
@@ -1561,6 +1577,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = (*pSlice).pSliceBsa;
+    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
@@ -1590,7 +1607,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         sDss.iCurrentPos = 0;
         sDss.pRestoreBuffer = (*pEncCtx).pDynamicBsBuffer[kiPartitionId];
     } else {
-        sDss.iStartPos = BsGetBitsPos(pBs);
+        sDss.iStartPos = (*pBs).bits_pos();
     }
     (*pSlice).iMbSkipRun = 0;
 
@@ -1723,7 +1740,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     }
 
     if (*pSlice).iMbSkipRun > 0 {
-        BsWriteUE(pBs, (*pSlice).iMbSkipRun as u32);
+        BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
     ENC_RETURN_SUCCESS
@@ -1815,7 +1832,7 @@ pub unsafe extern "C" fn WelsISliceMdEncDynamic_c(pCtx: *mut sWelsEncCtx, pSlice
 
 pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     pCtx: *mut sWelsEncCtx,
-    pBs: *mut SBitStringAux,
+    pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
@@ -1825,7 +1842,7 @@ pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
 
 pub unsafe extern "C" fn WelsSliceHeaderExtWrite_c(
     pCtx: *mut sWelsEncCtx,
-    pBs: *mut SBitStringAux,
+    pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
@@ -1843,6 +1860,29 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
     WelsSliceHeaderExtWrite_c,
 ];
 
+/// The buffer a slice's writer is positioned in.
+///
+/// SHIM(phase3) -> the raw slice and frame output allocations; **T3.6** deletes it
+/// when those become owned and travel with the writer.
+///
+/// A `BsWriter` is a position and carries no buffer, so every write has to be told
+/// which one. A slice writes into exactly one of two: its own thread-local
+/// `sSliceBs.pBsBuffer` when `InitSliceBsBuffer` gave it an independent buffer, or
+/// the frame-level `pOut->pBsBuffer` when it shares. The discriminator is the
+/// identity of the writer `pSliceBsa` aims at — which is precisely what that
+/// function's own branch wrote, and what the C++ `pStartBuf` carried implicitly
+/// inside the cursor. Deriving it back from `iMultipleThreadIdc` and `uiSliceMode`
+/// would re-read parameters that can move between allocation and use; the pointer
+/// cannot.
+#[inline]
+pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
+    if (*pSlice).pSliceBsa == std::ptr::addr_of_mut!((*pSlice).sSliceBs.sBsWrite) {
+        bs_buffer((*pSlice).sSliceBs.pBsBuffer, (*pSlice).sSliceBs.uiSize)
+    } else {
+        bs_buffer((*(*pEncCtx).pOut).pBsBuffer, (*(*pEncCtx).pOut).uiSize)
+    }
+}
+
 pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice, kiNalType: i32) -> i32 {
     if pEncCtx.is_null() || pCurSlice.is_null() {
         return ENC_RETURN_INVALIDINPUT;
@@ -1850,6 +1890,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pNalHeadExt = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
     let pBs = (*pCurSlice).pSliceBsa;
+    let buf = slice_bs_buffer(pEncCtx, pCurSlice);
 
     let kiDynamicSliceFlag = if !(*pEncCtx).pSvcParam.is_null() {
         let did = (*pEncCtx).uiDependencyId as usize;
@@ -1903,7 +1944,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         return iEncReturn;
     }
 
-    WelsWriteSliceEndSyn(pCurSlice, (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0);
+    WelsWriteSliceEndSyn(buf, pCurSlice, (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0);
 
     ENC_RETURN_SUCCESS
 }
@@ -1921,15 +1962,23 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
 ///
 /// # Safety
 /// `pSlice` must be valid and have `pSliceBsa` installed.
-pub unsafe fn WelsWriteSliceEndSyn(pSlice: *mut SSlice, bEntropyCodingModeFlag: bool) {
+pub unsafe fn WelsWriteSliceEndSyn(
+    buf: &mut [u8],
+    pSlice: *mut SSlice,
+    bEntropyCodingModeFlag: bool,
+) {
     let pBs = (*pSlice).pSliceBsa;
     if bEntropyCodingModeFlag {
         crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(&mut (*pSlice).sCabacCtx);
-        (*pBs).pCurBuf =
-            crate::encoder::set_mb_syn_cabac::WelsCabacEncodeGetPtr(&mut (*pSlice).sCabacCtx);
+        // The arithmetic coder wrote through its own byte cursor; what the C++
+        // assigns to `pBs->pCurBuf` is an absolute pointer into this same buffer,
+        // so the detached equivalent is that pointer's offset from the base. The
+        // triple it comes from is T3.5's to convert.
+        let end = crate::encoder::set_mb_syn_cabac::WelsCabacEncodeGetPtr(&mut (*pSlice).sCabacCtx);
+        (*pBs).set_pos(end.offset_from(buf.as_ptr()) as usize);
     } else {
-        crate::encoder::vlc_encoder::BsRbspTrailingBits(pBs);
-        crate::encoder::vlc_encoder::BsFlush(pBs);
+        crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, &mut *pBs);
+        crate::encoder::vlc_encoder::BsFlush(buf, &mut *pBs);
     }
 }
 
@@ -2217,7 +2266,7 @@ pub unsafe fn AllocateSliceMBBuffer(pSlice: *mut SSlice, pMa: *mut CMemoryAlign)
 
 pub unsafe fn InitSliceBsBuffer(
     pSlice: *mut SSlice,
-    pBsWrite: *mut SBitStringAux,
+    pBsWrite: *mut BsWriter,
     bIndependenceBsBuffer: bool,
     iMaxSliceBufferSize: i32,
     pMa: *mut CMemoryAlign,
@@ -2261,7 +2310,7 @@ pub unsafe fn FreeSliceBuffer(pSliceList: *mut *mut SSlice, kiMaxSliceNum: i32, 
 
 pub unsafe fn InitSliceList(
     pSliceList: *mut SSlice,
-    pBsWrite: *mut SBitStringAux,
+    pBsWrite: *mut BsWriter,
     kiMaxSliceNum: i32,
     kiMaxSliceBufferSize: i32,
     bIndependenceBsBuffer: bool,
