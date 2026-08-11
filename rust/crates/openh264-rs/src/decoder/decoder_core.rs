@@ -1673,10 +1673,10 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
     // single use in `decode_slice.rs`.
 
     // 1. Deblocking Filter
-    crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc as *mut _ as *mut _, cpu_flag as i32);
+    crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc, cpu_flag as i32);
 
     // 2. Motion Compensation
-    crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc as *mut _ as *mut _, cpu_flag);
+    crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc, cpu_flag);
 
     // 2b. Reference picture border expansion installed `sExpandPicFunc` here,
     // three constants that T4b.3b turned into direct calls. Both chroma slots held
