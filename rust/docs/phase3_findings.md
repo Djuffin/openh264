@@ -323,3 +323,97 @@ decode-bench step. The array must be captured in one shot
 F13 and session B's 285/0 were all read out of the logs by hand by the session that
 found them. What was never true is that the battery would have *stopped* a session on
 a Miri regression. The gate starts existing on this commit.
+
+---
+
+## F18 — An address-comparison test has been failing the Miri gate since before the gate could fail
+
+**Status: FIXED 2026-08-11 (Phase 3 exit), by `#[cfg_attr(miri, ignore)]` with the
+reason at the site.** A test defect, not a code defect. Recorded because of *how* it
+stayed hidden, which is the reusable part.
+
+### What it was
+
+`tests/kernels_differential_phase2.rs`'s
+`encoder_deblocking_table_installs_the_common_shims` asserts that the encoder's
+`DeblockingInit` installs the *common* module's shims rather than encoder-local
+duplicates. It does so by reifying each installed slot and each expected function to
+`usize` and comparing:
+
+```rust
+(fl.pfLumaDeblockingLT4Ver.unwrap() as usize, deb::DeblockLumaLt4V_c as usize)
+```
+
+**Miri mints a fresh synthetic address for every reified function pointer**, so even two
+reifications of the *same* function compare unequal. Two runs of the failing test
+produced `43215773 vs 43216036` and then `1789169 vs 1789457` — different values each
+time, which is the signature.
+
+The property the test asserts is **symbol identity**. Miri deliberately does not model
+that. So under Miri the test is not *failing to verify* something — the thing it states
+is unrepresentable. `#[cfg_attr(miri, ignore)]` is the correct disposition, and it is
+the same one `common/mc.rs`'s `init_mc_func_ignores_the_cpu_flag` already carries, with
+the original write-up. **The plan's §4 instrument note already stated the rule**, in as
+many words: *"address comparison is not a sound assert-map technique — inlined fns get
+per-CGU addresses and Miri mints synthetic ones — prove table/dispatch equivalences by
+behaviour."* The rule was written down in Phase 4a and this test was written in Phase 4a.
+
+### Why nobody saw it for four phases — this is the part worth keeping
+
+Three independent conditions had to line up, and they did:
+
+1. **The test predates F17's fix.** It was added at `3a67cd8e` (Phase 4a, deblocking);
+   F17 — `gates.sh` reading a pipeline's *last* exit status, which was `tail`'s — was
+   fixed at `eae61b94` (Phase 3 session C). Until then **the Miri gate could not fail**,
+   so a red Miri run reported `PASS`.
+2. **Only the `exit` gate level runs Miri over the integration tests.** `full`, which is
+   what sessions run day to day, is Miri `--lib` only. Sessions C, D and E all ran
+   `full`.
+3. So **Phase 3's exit is the first `exit`-level battery since F17 was repaired** — the
+   first moment at which the gate could both fail *and* look at this test.
+
+It was verified as pre-existing rather than assumed: the identical failure reproduces at
+Phase 3's entry commit `5e5c9196` in a scratch worktree.
+
+**The lesson generalises past this test.** F17's entry says *"the gate starts existing on
+this commit"*; F18 is the first thing the newly-existing gate caught, and it had been red
+the whole time. **A gate that was broken has a backlog, and the backlog only surfaces at
+the level and the moment the repaired gate first runs.** The `exit` level in particular
+runs once per phase — so anything it covers had four phases in which to rot unobserved.
+Whoever next repairs an instrument should expect the same and go looking deliberately,
+rather than waiting for the next scheduled run.
+
+Session E recorded the *negative* of this ("deleting an accommodation is only as
+revealing as the instrument it was hiding from" — two test-local pointer casts exposed
+nothing). This is the positive case: repairing an instrument that had been blind for
+four phases exposed something on its first honest run at that level.
+
+---
+
+## Closing note — Phase 3 complete, 2026-08-11 (session F)
+
+All four of this file's findings are closed, and none of them by being carried:
+
+| | status | closed by |
+|---|---|---|
+| **F15** — truncated slice NAL indexes before the payload; the profiles disagree | **FIXED** | T3.3 face 4. One comparison-form helper; an empty RBSP has bit size 0 and takes the existing error path. Its proof is the 105 `WITHHELD` golden rows coming back as recorded outcomes in both profiles |
+| **F16** — `READER_SLOP` derived from the wrong half of the reader | **resolved at T3.1b; second instance and the whole stored-extent class closed at T3.3** | Nothing stores an extent any more, so the class is *unrepresentable* rather than repaired. T3.3's rule — every readable extent is derived from the owning buffer at call time — is on the type |
+| **F17** — the Miri gate could not fail | **FIXED and proven red** | Session C (`eae61b94`), demonstrated on a known-red input before the baseline was taken |
+| **F18** — an address-comparison test had been failing the Miri gate since before the gate could fail | **FIXED** | Phase 3's exit, by `#[cfg_attr(miri, ignore)]` with the reason. **F17's repair is what surfaced it**: this was the first `exit`-level battery after the gate regained the ability to fail, and the test had been red since Phase 4a |
+
+**F16's procedure outlived F16, and that is the finding's real legacy.** "Enumerate every
+access on paper before converting a cursor" ran at T3.2 (the read-extent audit, which
+found the two-extents result), and again at T3.5 on the *write* side — where it turned up
+two things nobody had asked about: a **second copy of the CABAC arithmetic engine** that
+the live path was using alongside the canonical one, and **`m_pBufEnd`, a bound assigned
+by the initializer and read by nothing**, in this port or upstream. Neither was findable
+by reading the seam being converted; both fell out of enumerating writes exhaustively.
+
+The audit that found them is in `set_mb_syn_cabac.rs`'s module docs, five sites, kept
+there rather than here because it documents live code.
+
+**One new finding was opened at the exit — F18 — and closed in the same session.** Phase 3's residue is not findings but
+two fenced shells — `bs_buffer` and `slice_bs_buffer`, the `SHIM(phase3)` pair, both
+narrowed at T3.5/T3.6 to guard only `SWelsSliceBs`'s MT-aliased buffer, both owned by
+**Phase 6** with F12/P10 — plus one straggler name, the decoder's
+`SDqLayer::pBitStringAux`, owned by **Phase 5**.

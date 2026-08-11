@@ -2235,7 +2235,24 @@ use openh264_rs::encoder::deblocking as encdeb;
 /// It is testing that `DeblockingInit` was not left installing something else,
 /// which is the only way the re-export could be undone by a later edit — and it
 /// is exactly the mistake that produced the straggler in the first place.
+///
+/// **Not under Miri** (Phase 3 exit, 2026-08-11 — see `phase3_findings.md` F18).
+/// This compares reified function pointers, and **Miri mints a fresh synthetic
+/// address for each one**, so even two reifications of the *same* function
+/// compare unequal there: two runs of this test produced
+/// `43215773 vs 43216036` and `1789169 vs 1789457`, different values each time.
+/// The property asserted here is **symbol identity**, which Miri deliberately
+/// does not model, so it is unrepresentable under Miri rather than merely
+/// untested. Same reasoning and same fix as `init_mc_func_ignores_the_cpu_flag`
+/// in `common/mc.rs`, which carries the original write-up; the plan's §4
+/// instrument note states the rule ("address comparison is not a sound
+/// assert-map technique").
+///
+/// It failed unnoticed from the day it was written: it predates F17's fix, and
+/// F17 meant `gates.sh` could not fail on Miri at all. The first `exit`-level
+/// battery after that fix is what surfaced it.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn encoder_deblocking_table_installs_the_common_shims() {
     let mut fl = encdeb::DeblockingFunc::default();
     unsafe { encdeb::DeblockingInit(&mut fl, 0) };

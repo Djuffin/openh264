@@ -570,3 +570,68 @@ For whoever runs the next one: alternating a *single* configuration rather than 
 whole `mt sm=3` sub-sweep works and is much faster (~4 minutes), because the
 configuration that fails is known. Keep both binaries on disk and swap them into the
 harness path inside the loop; do not rebuild between sides.
+
+### Thirteenth and fourteenth measurements — 2026-08-11, Phase 3 session F: three hits, and the first alternation where both sides tie
+
+**Thirteenth (the opening control).** For the *third* session running, the
+session-start battery drew a hit on a tree with not one line changed —
+`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1`, debug, zero-byte —
+on the exact commit session E had signed off as a clean `OVERALL: PASS`. Re-run
+**5/5 BYTE-IDENTICAL**. This is now the most reliably reproducible thing about F3:
+*it is more likely to appear on an unchanged tree at session start than at any
+particular seam.*
+
+**Fourteenth (T3.6's battery, and the alternation).** The release sweep drew **two**
+hits, which is what the retry rule says escalates from re-run to alternation:
+
+| profile | configuration | output |
+|---|---|---|
+| release | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` | zero-byte |
+| release | `mt Static_152_100 t=4 sm=3 n=600 cabac=0 rc=0` | zero-byte |
+
+Both re-ran 5/5 clean individually first. Then the alternation, control =
+`45ab079c` (T3.5 complete), both `rust_enc` release binaries built once and swapped
+into the harness path inside one loop, **20 rounds × both configurations per side**:
+
+| tree | encodes | wrong-length failures |
+|---|---|---|
+| control `45ab079c` | 40 | **2** |
+| HEAD (T3.6) | 40 | **2** |
+
+**The two sides tied exactly** — the first alternation of the five that did not come
+back with the control worse. That is a stronger acquittal than a lopsided one, not a
+weaker one: a difference in either direction on a sample this size is what would need
+explaining, and there is none. Fourth alternation, fourth acquittal.
+
+Rate here: **4 in 80 = 1/20** on the worst-known configurations under load, the
+highest recorded yet — the two configurations chosen were the two that had just
+failed, which is selection bias working *for* the test's sensitivity rather than
+against it.
+
+One new datapoint on breadth: `Static_152_100` had never appeared in a recorded F3
+hit before. The signature is not confined to the two Cisco clips; the third sweep
+input reproduces it too, at the same `sm=3, t=4`.
+
+### Fifteenth measurement — 2026-08-11, Phase 3 exit: two batteries, one tree, opposite verdicts (again)
+
+The exit-level battery drew a single release hit:
+
+| profile | configuration | output |
+|---|---|---|
+| release | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **short** — 41681 vs 42281 |
+
+Re-ran **5/5 BYTE-IDENTICAL**. Single hit, so the retry rule stops there; no alternation.
+
+**What makes this one worth recording is what changed between the two batteries: nothing
+the encoder can see.** The immediately preceding exit battery scored 341/341 in release
+on the same tree; the only edit in between was a `#[cfg_attr(miri, ignore)]` attribute on
+a *test* in `tests/kernels_differential_phase2.rs`, which is not compiled into the
+encoder binary the sweep runs. Same library code, same harness, opposite verdicts —
+the third recorded instance of that shape (session E saw it twice within one session),
+and the cleanest, because this time the intervening diff provably cannot reach the
+binary under test.
+
+Running total: **fifteen measurements, four alternations, four acquittals.** The
+standing advice is unchanged and now very well supported — a lone `mt`/`sm=3`/`t∈{2,4}`
+wrong-length hit is F3 until an alternation says otherwise, and the sweep's verdict on
+any single run is a sample rather than a fact.

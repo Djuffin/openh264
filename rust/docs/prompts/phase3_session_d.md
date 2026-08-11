@@ -1,5 +1,11 @@
 # Session prompt — Phase 3, session D: T3.3, the ownership seam (`RawDataBuffer`, `nalu.rs` ranges, `ExpandBsBuffer` dies, F15 closes)
 
+> **SUPERSEDED — HISTORICAL.** Phase 3 completed 2026-08-11 (sessions A–F). This
+> brief is kept as the record of what was asked, not as instructions. The phase's
+> outcome is in [`../safety_refactor_log.md`](../safety_refactor_log.md) (entries
+> for sessions A–F) and plan §0; the next phase's brief is
+> [`phase4b.md`](phase4b.md).
+
 **Governing:** [`phase3.md`](phase3.md) §T3.3 + §2 (shells, fallback ladder), plan
 §7.6, the [P3] notes in plan §2.2.2, and — read in full —
 [`phase3_findings.md`](../phase3_findings.md) **F15 and F16** plus the session B and

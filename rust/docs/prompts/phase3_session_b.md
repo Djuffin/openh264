@@ -1,5 +1,11 @@
 # Session prompt — Phase 3, session B: T3.1b (the CAVLC mode + the ownership move), then T3.2 if it truly fits
 
+> **SUPERSEDED — HISTORICAL.** Phase 3 completed 2026-08-11 (sessions A–F). This
+> brief is kept as the record of what was asked, not as instructions. The phase's
+> outcome is in [`../safety_refactor_log.md`](../safety_refactor_log.md) (entries
+> for sessions A–F) and plan §0; the next phase's brief is
+> [`phase4b.md`](phase4b.md).
+
 **Governing documents:** [`phase3.md`](phase3.md) (the phase brief — §2's shell
 policy and fallback ladder, §4's constant-dimension rule, §5's gates), plan **§7.6**
 (standing rules, cited by S-tag), plan **§2.2.2** including the two **[P3]** notes
