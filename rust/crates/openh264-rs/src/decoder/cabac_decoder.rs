@@ -60,15 +60,12 @@
 //! ## Where the two numbers come from
 //!
 //! `len` = `cursor.len()` = `pBuffEnd - pBuffStart`, the logical RBSP end, one owner.
-//! `avail` = [`BsReader::avail`] from `readable_from`, the readable allocation, one
-//! owner. `avail >= len + 4` structurally (`decoder_core.rs:3644` sizes every payload
-//! with four bytes to spare) or `len + 3` on `readable_from`'s fallback branch; both
-//! cover site 1's `len + 2`. **T3.3 owns the staleness hazard**: `ExpandBsBuffer` grows
-//! the raw buffer, which leaves a rebased reader's `avail` stale and too small (F16's
-//! second instance, fixed in T3.1b's commit but still live as a *class*). Nothing here
-//! consumes `avail` between a growth and a refresh — site 1 reads it at slice start,
-//! sites 2 and 3 never read it at all — and T3.3 deletes both the hazard and this
-//! paragraph when the owned buffer makes the extent a slice length.
+//! The readable extent past it is **derived from the owning [`RawDataBuffer`] at call
+//! time** (`window_from`), one owner. `window.len() >= len + 4` structurally
+//! (`WelsDecodeBs` sizes every payload with four bytes to spare), which covers site
+//! 1's `len + 2`. The staleness hazard this paragraph used to carry — a stored
+//! `avail` going stale when `ExpandBsBuffer` grew the buffer, F16's second instance —
+//! closed at T3.3: there is no stored extent left to go stale.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -669,7 +666,7 @@ pub struct SWelsCabacDecEngine {
 
 pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
 
-pub use crate::decoder::bit_stream::{BsReader, SBitStringAux};
+pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer, SBitStringAux};
 
 
 pub type PBitStringAux = *mut SBitStringAux;
@@ -756,6 +753,7 @@ pub unsafe fn WelsCabacContextInit(
 pub unsafe fn InitCabacDecEngineFromBS(
     pDecEngine: PWelsCabacDecEngine,
     pBsAux: &mut BsReader,
+    raw: &RawDataBuffer,
 ) -> i32 {
     if pDecEngine.is_null() {
         return ERR_INFO_INVALID_ACCESS;
@@ -785,11 +783,13 @@ pub unsafe fn InitCabacDecEngineFromBS(
         }
         let curr = iCurr as usize;
 
-        // The wider window — this is the one site that needs `avail`, not `len`. The
-        // guard above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <= avail`; the
-        // `get` is therefore unreachable-None, and routes a violated contract to the
-        // error path instead of past the end of the allocation (F4/F16's shape).
-        let buf = pBsAux.buf();
+        // The wider window — this is the one site that needs the readable extent past
+        // the RBSP, and it is derived from the owning buffer at call time (F16's
+        // rule). The guard above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <=
+        // window.len()`; the `get` is therefore unreachable-None, and routes a
+        // violated contract to the error path instead of past the end of the
+        // allocation (F4/F16's shape).
+        let buf = raw.window_from(pBsAux.start);
         let b = match buf.get(curr..curr + 5) {
             Some(b) => b,
             None => return ERR_INFO_INVALID_ACCESS,
@@ -841,9 +841,11 @@ pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux:
 
 /// The RBSP window the CABAC engine reads, for a context mid-slice.
 ///
-/// One deref chain, once per parsing function rather than once per bin, and it derives
-/// nothing: [`BsReader::rbsp_window`] is the single authority. `SHIM(phase3)` by
-/// association — it dies with `pBitStringAux` at T3.3/Phase 5.
+/// One deref chain, once per parsing function rather than once per bin, and the
+/// window is derived from the owning [`RawDataBuffer`] at call time
+/// ([`RawDataBuffer::rbsp_window`] is the single authority). `SHIM(phase5)` — the
+/// `pBitStringAux` pointer it walks is Phase 5's to remove, and the accessor dies
+/// with it.
 ///
 /// # Safety
 /// `pCtx` must be a live decoder context inside slice decoding, so `pCurDqLayer` and
@@ -851,7 +853,10 @@ pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux:
 /// `parse_mb_syn_cabac.rs` already relies on for `pCabacDecEngine`.
 #[inline(always)]
 pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
-    unsafe { (*(*(*pCtx).pCurDqLayer).pBitStringAux).rbsp_window() }
+    unsafe {
+        let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
+        raw.rbsp_window(&*(*(*pCtx).pCurDqLayer).pBitStringAux)
+    }
 }
 
 // 3. Actual decoding
@@ -1321,7 +1326,7 @@ mod tests {
 
     #[test]
     fn test_cabac_global_init() {
-        let mut ctx = unsafe { Box::<SWelsDecoderContext>::new_zeroed().assume_init() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.eSliceType = crate::decoder::slice::EWelsSliceType::I_SLICE;
         ctx.bCabacInited = false;
         unsafe {
@@ -1359,15 +1364,15 @@ mod tests {
             0xA5, 0x3C, 0x91, 0x08, 0xFF, 0x00, 0x7E, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE,
             0xF0, 0x11,
         ];
-        let buf = rbsp_with_slack(&payload);
+        let raw = RawDataBuffer::from_vec(rbsp_with_slack(&payload));
         let mut bs = BsReader::default();
         let mut engine = SWelsCabacDecEngine::default();
 
         unsafe {
-            let err = DecInitBits(&mut bs, buf.as_ptr(), (payload.len() * 8) as i32, buf.len());
+            let err = DecInitBits(&mut bs, &raw, 0, (payload.len() * 8) as i32);
             assert_eq!(err, ERR_NONE);
 
-            let (b, cursor) = bs.split();
+            let (b, cursor) = bs.split(&raw);
             for n in [8, 8, 4] {
                 cursor.get_bits(b, n).expect("20 bits of a 16-byte RBSP");
             }
@@ -1377,7 +1382,7 @@ mod tests {
             let pos_before = bs.cursor.pos();
             let left_before = bs.cursor.left_bits();
 
-            assert_eq!(InitCabacDecEngineFromBS(&mut engine, &mut bs), ERR_NONE);
+            assert_eq!(InitCabacDecEngineFromBS(&mut engine, &mut bs, &raw), ERR_NONE);
 
             // The engine started where the *bits* had got to, not where the
             // refill pointer had: `curr = pos - ((-left_bits >> 3) + 2)`, and it
@@ -1393,7 +1398,7 @@ mod tests {
 
             // Consume some bins so the engine's position is genuinely its own,
             // then hand back.
-            let win = bs.rbsp_window();
+            let win = raw.rbsp_window(&bs);
             assert_eq!(win.len(), payload.len(), "the window is the RBSP, not the allocation");
             let mut ctx = SWelsCabacCtx { uiState: 20, uiMPS: 1 };
             let mut bit: u32 = 0;
@@ -1418,7 +1423,7 @@ mod tests {
 
             // And the cursor is usable again: re-prime and read, exactly as
             // `ParseIPCMInfoCabac` does after its own restore.
-            let (b, cursor) = bs.split();
+            let (b, cursor) = bs.split(&raw);
             assert_eq!(
                 crate::decoder::bit_stream::InitReadBits(b, cursor, 1),
                 ERR_NONE
@@ -1480,12 +1485,12 @@ mod tests {
         // `pCurr` behind `pos`. A cursor parked at the very end of a short RBSP
         // must be refused, not primed.
         let payload: [u8; 5] = [0x80, 0x00, 0x00, 0x00, 0x00];
-        let buf = rbsp_with_slack(&payload);
+        let raw = RawDataBuffer::from_vec(rbsp_with_slack(&payload));
         let mut bs = BsReader::default();
         let mut engine = SWelsCabacDecEngine::default();
         unsafe {
             assert_eq!(
-                DecInitBits(&mut bs, buf.as_ptr(), (payload.len() * 8) as i32, buf.len()),
+                DecInitBits(&mut bs, &raw, 0, (payload.len() * 8) as i32),
                 ERR_NONE
             );
             // Park the cursor at the end: pos == len, left_bits == 0 gives
@@ -1494,7 +1499,7 @@ mod tests {
             bs.cursor.set_pos(payload.len() + 1);
             bs.cursor.restore_from_cabac(payload.len() + 1); // left_bits = 0
             assert_eq!(
-                InitCabacDecEngineFromBS(&mut engine, &mut bs),
+                InitCabacDecEngineFromBS(&mut engine, &mut bs, &raw),
                 ERR_INFO_INVALID_ACCESS
             );
             // Nothing was written into the engine.

@@ -3305,7 +3305,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
     let iPcmStart = pBsAux.cursor.pos();
-    let mut pPtrSrc = pBsAux.buf()[iPcmStart..].as_ptr();
+    let mut pPtrSrc = (*pCtx).sRawData.window_from(pBsAux.start)[iPcmStart..].as_ptr();
     if !(*(*pCtx).pParam).bParseOnly {
         for _ in 0..16 {
             ptr::copy_nonoverlapping(pPtrSrc, pMbDstY, 16);
@@ -3332,12 +3332,12 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     pChromaQp[1] = 0;
     ptr::write_bytes((*pCurDqLayer).pNzc.add(iMbXy) as *mut u8, 16, 24);
 
-    let (buf, cursor) = pBsAux.split();
+    let (buf, cursor) = pBsAux.split(&(*pCtx).sRawData);
     let mut err = InitReadBits(buf, cursor, 1);
     if err != ERR_NONE {
         return err;
     }
-    err = InitCabacDecEngineFromBS(pCabacDecEngine, pBsAux);
+    err = InitCabacDecEngineFromBS(pCabacDecEngine, pBsAux, &(*pCtx).sRawData);
     if err != ERR_NONE {
         return err;
     }
