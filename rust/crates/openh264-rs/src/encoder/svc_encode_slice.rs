@@ -494,88 +494,41 @@ pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
 // Bitstream Helper Functions
 // ============================================================================
 
-#[inline]
-pub unsafe fn BsGetBitsPos(pBs: *const SBitStringAux) -> i32 {
-    if pBs.is_null() {
-        return 0;
-    }
-    let p_start = (*pBs).pStartBuf;
-    let p_cur = (*pBs).pCurBuf;
-    let byte_offset = p_cur.offset_from(p_start) as i32;
-    (byte_offset << 3) + (32 - (*pBs).iLeftBits)
-}
-
-#[inline]
-pub unsafe fn BsWriteBits(pBs: *mut SBitStringAux, mut iLen: i32, kuiValue: u32) -> i32 {
-    if pBs.is_null() || iLen <= 0 {
-        return 0;
-    }
-    let mut val = kuiValue & ((1u64 << iLen) - 1) as u32;
-    if (*pBs).iLeftBits >= iLen {
-        (*pBs).uiCurBits = ((*pBs).uiCurBits << iLen) | val;
-        (*pBs).iLeftBits -= iLen;
-        if (*pBs).iLeftBits == 0 {
-            let word = (*pBs).uiCurBits.to_be();
-            std::ptr::copy_nonoverlapping(&word as *const u32 as *const u8, (*pBs).pCurBuf, 4);
-            (*pBs).pCurBuf = (*pBs).pCurBuf.add(4);
-            (*pBs).uiCurBits = 0;
-            (*pBs).iLeftBits = 32;
-        }
-    } else {
-        let shift = iLen - (*pBs).iLeftBits;
-        let high_val = val >> shift;
-        (*pBs).uiCurBits = ((*pBs).uiCurBits << (*pBs).iLeftBits) | high_val;
-        let word = (*pBs).uiCurBits.to_be();
-        std::ptr::copy_nonoverlapping(&word as *const u32 as *const u8, (*pBs).pCurBuf, 4);
-        (*pBs).pCurBuf = (*pBs).pCurBuf.add(4);
-
-        let rem_bits = shift;
-        let low_val = val & ((1u32 << rem_bits) - 1);
-        (*pBs).uiCurBits = low_val;
-        (*pBs).iLeftBits = 32 - rem_bits;
-    }
-    0
-}
-
-#[inline]
-pub unsafe fn BsWriteOneBit(pBs: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    BsWriteBits(pBs, 1, kuiValue & 1)
-}
-
-#[inline]
-pub unsafe fn BsWriteUE(pBs: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    let mut iTmpValue = kuiValue.wrapping_add(1);
-    if kuiValue < 256 {
-        BsWriteBits(pBs, g_kuiGolombUELength[kuiValue as usize] as i32, iTmpValue);
-    } else {
-        let mut n: u32 = 0;
-        if (iTmpValue & 0xffff0000) != 0 {
-            iTmpValue >>= 16;
-            n += 16;
-        }
-        if (iTmpValue & 0xff00) != 0 {
-            iTmpValue >>= 8;
-            n += 8;
-        }
-        n += (g_kuiGolombUELength[(iTmpValue - 1) as usize] >> 1) as u32;
-        BsWriteBits(pBs, ((n << 1) + 1) as i32, kuiValue.wrapping_add(1));
-    }
-    0
-}
-
-#[inline]
-pub unsafe fn BsWriteSE(pBs: *mut SBitStringAux, kiValue: i32) -> i32 {
-    if kiValue == 0 {
-        BsWriteOneBit(pBs, 1);
-    } else if kiValue > 0 {
-        let iTmpValue = ((kiValue as u32) << 1) - 1;
-        BsWriteUE(pBs, iTmpValue);
-    } else {
-        let iTmpValue = ((-kiValue) as u32) << 1;
-        BsWriteUE(pBs, iTmpValue);
-    }
-    0
-}
+// One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
+// `codec/common/inc/golomb_common.h`. This module used to declare its own copy of
+// the five functions below, and it was the one copy of the four that **diverged**
+// (`phase0_findings.md` F2's fourth row). Four divergences died with it, all of
+// them defensive additions the C++ does not have:
+//
+//   * `pBs.is_null() || iLen <= 0` early-returns, where the canonical would
+//     dereference null or shift by a non-positive amount. Every call site here
+//     writes a length known positive at the call: `uiLog2MaxFrameNum` and
+//     `iLog2MaxPocLsb` are both at least 4, the two literals are 4, and the
+//     Exp-Golomb lengths are at least 1 by construction.
+//   * a **pre-mask** of the value to `iLen` bits, which the canonical does not
+//     do: the canonical ORs the value into the accumulator whole. This is the
+//     divergence with real teeth — a `iFrameNum` or `iPicOrderCntLsb` carrying
+//     bits above its field width would be truncated by the old copy here and
+//     would corrupt the neighbouring syntax elements under the canonical. The
+//     encoder keeps both counters reduced modulo their field width, and the
+//     sweeps are the referee for that claim: 341/341 both profiles, every RC
+//     mode, GOP length and slice mode, 18-20 frames each, so the wrap is
+//     exercised rather than assumed.
+//   * an inverted branch sense (`iLeftBits >= iLen` with a flush-when-empty tail,
+//     against the canonical's `iLen < iLeftBits`). The two converge on the
+//     `iLen == iLeftBits` boundary — both end with the word stored, `uiCurBits`
+//     zero and `iLeftBits` 32 — which F2 checked by hand and this deletes.
+//   * `wrapping_add(1)` in `BsWriteUE` and `& 1` in `BsWriteOneBit`, where the
+//     canonical adds and passes plainly. `u32::MAX` never reaches `BsWriteUE`,
+//     and every `BsWriteOneBit` here passes a literal 0/1 or a `bool` cast.
+//
+// F5 (`phase1_findings.md`) is deliberately NOT fixed here: the canonical writer
+// still shifts a full accumulator by 32 on a 32-bit write and still panics in a
+// debug build, and a Phase 1 differential test pins that. Arithmetic parity, not
+// repair (S6).
+pub use crate::encoder::vlc_encoder::{
+    BsGetBitsPos, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
+};
 
 // ============================================================================
 // Macroblock Topology & Cache Operations

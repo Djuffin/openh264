@@ -145,88 +145,26 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
 // what the divergent copies got wrong.
 pub use crate::common::wels_common_defs::g_kuiGolombUELength;
 
-pub const g_kuiEncNcMapTable: [u8; 18] = [
-    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4,
-];
+// `g_kuiEncNcMapTable` is `encoder_data_tables.cpp`'s. This module used to declare
+// a byte-identical second copy; one definition now, same as `g_kuiGolombUELength`
+// above.
+pub use crate::encoder::vlc_encoder::g_kuiEncNcMapTable;
 
 // ============================================================================
 // Bitstream Writers
 // ============================================================================
 
-#[inline(always)]
-pub unsafe fn BsWriteBits(pBitString: *mut SBitStringAux, mut iLen: i32, kuiValue: u32) -> i32 {
-    let bs = &mut *pBitString;
-    if iLen < bs.iLeftBits {
-        bs.uiCurBits = (bs.uiCurBits << iLen) | kuiValue;
-        bs.iLeftBits -= iLen;
-    } else {
-        iLen -= bs.iLeftBits;
-        bs.uiCurBits = (bs.uiCurBits << bs.iLeftBits) | (kuiValue >> iLen);
-        let ptr = bs.pCurBuf;
-        *ptr = (bs.uiCurBits >> 24) as u8;
-        *ptr.add(1) = (bs.uiCurBits >> 16) as u8;
-        *ptr.add(2) = (bs.uiCurBits >> 8) as u8;
-        *ptr.add(3) = bs.uiCurBits as u8;
-        bs.pCurBuf = bs.pCurBuf.add(4);
-        bs.uiCurBits = kuiValue & ((1u32 << iLen).wrapping_sub(1));
-        bs.iLeftBits = 32 - iLen;
-    }
-    0
-}
-
-#[inline(always)]
-pub unsafe fn BsWriteOneBit(pBitString: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    BsWriteBits(pBitString, 1, kuiValue)
-}
-
-#[inline(always)]
-pub unsafe fn BsWriteUE(pBitString: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    let iTmpValue = kuiValue + 1;
-    if kuiValue < 256 {
-        BsWriteBits(
-            pBitString,
-            g_kuiGolombUELength[kuiValue as usize] as i32,
-            kuiValue + 1,
-        );
-    } else {
-        let mut n = 0u32;
-        let mut tmp = iTmpValue;
-        if (tmp & 0xffff0000) != 0 {
-            tmp >>= 16;
-            n += 16;
-        }
-        if (tmp & 0xff00) != 0 {
-            tmp >>= 8;
-            n += 8;
-        }
-        n += g_kuiGolombUELength[(tmp - 1) as usize] >> 1;
-        BsWriteBits(pBitString, ((n << 1) + 1) as i32, kuiValue + 1);
-    }
-    0
-}
-
-#[inline(always)]
-pub unsafe fn BsWriteSE(pBitString: *mut SBitStringAux, kiValue: i32) -> i32 {
-    if kiValue == 0 {
-        BsWriteOneBit(pBitString, 1);
-    } else if kiValue > 0 {
-        let iTmpValue = ((kiValue as u32) << 1) - 1;
-        BsWriteUE(pBitString, iTmpValue);
-    } else {
-        let iTmpValue = ((-kiValue) as u32) << 1;
-        BsWriteUE(pBitString, iTmpValue);
-    }
-    0
-}
-
-#[inline(always)]
-pub unsafe fn BsWriteTE(pBitString: *mut SBitStringAux, kiX: i32, kuiValue: u32) {
-    if kiX == 1 {
-        BsWriteOneBit(pBitString, if kuiValue == 0 { 1 } else { 0 });
-    } else {
-        BsWriteUE(pBitString, kuiValue);
-    }
-}
+// One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
+// `codec/common/inc/golomb_common.h`. This module used to declare its own copy of
+// the five functions below — equivalent to the canonical one on every in-contract
+// input, differing only in a hand-rolled four-byte store where the canonical calls
+// `WRITE_BE_32`, and in `(1u32 << iLen).wrapping_sub(1)` where the canonical
+// subtracts plainly (`1u32 << iLen` is at least 1 for the `iLen` in `0..=31` that
+// reaches it, so the two cannot differ). See `phase0_findings.md` F2 for the
+// four-copy inventory and the log's session-E entry for what the dedupe decided.
+pub use crate::encoder::vlc_encoder::{
+    BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteTE, BsWriteUE,
+};
 
 // ============================================================================
 // Core C-compatible Data Structures

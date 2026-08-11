@@ -12,9 +12,12 @@
 //! Translated from `codec/encoder/core/inc/vlc_encoder.h`,
 //! `codec/encoder/core/src/encoder_data_tables.cpp`, and `codec/encoder/core/src/set_mb_syn_cavlc.cpp`.
 
-pub const CHROMA_DC_NC_OFFSET: usize = 17;
-pub const ENC_RETURN_SUCCESS: i32 = 0;
-pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
+// `CHROMA_DC_NC_OFFSET`, `ENC_RETURN_SUCCESS` and `ENC_RETURN_VLCOVERFLOWFOUND`
+// were declared here with no reader anywhere in the crate — three more copies of
+// names that live in `svc_set_mb_syn_cavlc.rs` (which holds `CHROMA_DC_NC_OFFSET`
+// as an `i8`, the width its two call sites want) and `svc_encode_slice.rs`. They
+// died with the writer dedupe, which is what makes duplicates findable: routing
+// the callers here is what showed nothing had ever routed to these.
 
 /// Residual transform block category.
 /// Matches `ECtxBlockCat` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.
@@ -52,9 +55,14 @@ pub type SCavlcTableItem = TagCavlcTableItem;
 
 /// Mapping table from neighbor non-zero coefficient count (nC) to VLC table index.
 /// Matches `g_kuiEncNcMapTable[18]` in `codec/encoder/core/src/encoder_data_tables.cpp`.
-#[repr(align(16))]
-pub struct EncNcMapTable(pub [u8; 18]);
-
+///
+/// One definition: `svc_set_mb_syn_cavlc.rs` carried a byte-identical second copy
+/// until the writer dedupe, and re-exports this one now.
+//
+// A `#[repr(align(16))] pub struct EncNcMapTable(pub [u8; 18])` sat here too, with
+// no constructor and no reader — the C++ has no such type; the alignment attribute
+// on the array in `encoder_data_tables.cpp` was transliterated into a newtype that
+// nothing ever wrapped.
 pub const g_kuiEncNcMapTable: [u8; 18] = [
     0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4,
 ];

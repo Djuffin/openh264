@@ -156,66 +156,24 @@ impl Default for SWelsSliceBs {
 // Bitstream Helper Functions
 // ============================================================================
 
-/// Computes the current bit position in the bitstream auxiliary writer.
-#[inline]
-pub unsafe fn BsGetBitsPos(pBs: *const SBitStringAux) -> i32 {
-    let p_bs = &*pBs;
-    let byte_diff = p_bs.pCurBuf.offset_from(p_bs.pStartBuf) as i32;
-    (byte_diff << 3) + 32 - p_bs.iLeftBits
-}
-
-/// Writes `iLen` bits with value `kuiValue` into the bitstream writer.
-#[inline]
-pub unsafe fn BsWriteBits(pBitString: *mut SBitStringAux, mut iLen: i32, kuiValue: u32) -> i32 {
-    let pBs = &mut *pBitString;
-    if iLen < pBs.iLeftBits {
-        pBs.uiCurBits = (pBs.uiCurBits << iLen) | kuiValue;
-        pBs.iLeftBits -= iLen;
-    } else {
-        iLen -= pBs.iLeftBits;
-        pBs.uiCurBits = (pBs.uiCurBits << pBs.iLeftBits) | (kuiValue >> iLen);
-        let bytes = pBs.uiCurBits.to_be_bytes();
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), pBs.pCurBuf, 4);
-        pBs.pCurBuf = pBs.pCurBuf.add(4);
-        pBs.uiCurBits = if iLen == 0 {
-            0
-        } else {
-            kuiValue & ((1u32 << iLen) - 1)
-        };
-        pBs.iLeftBits = 32 - iLen;
-    }
-    0
-}
-
-/// Writes a single bit into the bitstream writer.
-#[inline]
-pub unsafe fn BsWriteOneBit(pBitString: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    BsWriteBits(pBitString, 1, kuiValue)
-}
-
-/// Flushes remaining accumulator bits to the bitstream buffer.
-#[inline]
-pub unsafe fn BsFlush(pBitString: *mut SBitStringAux) -> i32 {
-    let pBs = &mut *pBitString;
-    if pBs.iLeftBits < 32 {
-        let val = pBs.uiCurBits << pBs.iLeftBits;
-        let bytes = val.to_be_bytes();
-        let bytes_to_write = (4 - pBs.iLeftBits / 8) as usize;
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), pBs.pCurBuf, bytes_to_write);
-        pBs.pCurBuf = pBs.pCurBuf.add(bytes_to_write);
-        pBs.iLeftBits = 32;
-        pBs.uiCurBits = 0;
-    }
-    0
-}
-
-/// Writes RBSP stop bit `1` followed by zero-padding bits to align to the next byte boundary.
-#[inline]
-pub unsafe fn BsRbspTrailingBits(pBitString: *mut SBitStringAux) -> i32 {
-    BsWriteOneBit(pBitString, 1);
-    BsFlush(pBitString);
-    0
-}
+// One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
+// `codec/common/inc/golomb_common.h`. This module used to declare its own copy of
+// the five functions below (`phase0_findings.md` F2's third row). Two divergences
+// died with it, both in this module's favour of doing *less* than the C++:
+//
+//   * `BsWriteBits` guarded `iLen == 0` explicitly where the canonical relies on
+//     `(1 << 0) - 1 == 0` masking the value to nothing. Same result, always.
+//   * `BsFlush` stored only the `4 - iLeftBits / 8` bytes it advanced over, where
+//     the canonical — and `golomb_common.h:104` — always stores a full 32-bit
+//     word and advances by the same 1..=4. F2's inventory did not list this one;
+//     it covered `BsWriteBits` only. The bytes that differ are the up-to-three
+//     past the new write position, which the next write overwrites before anything
+//     reads them, and which are past the last NAL's end when nothing follows. The
+//     sweeps are the proof: this is the C++'s own behaviour, and 341/341 both
+//     profiles hold across the change.
+pub use crate::encoder::vlc_encoder::{
+    BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsWriteBits, BsWriteOneBit,
+};
 
 // ============================================================================
 // Core NAL Encapsulation Functions
