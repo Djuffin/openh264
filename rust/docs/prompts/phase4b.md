@@ -1,5 +1,22 @@
 # Phase 4b, session C — §3's tail, then the phase exit
 
+> **SUPERSEDED-HISTORICAL (2026-08-11).** Phase 4b is complete. §1a landed as
+> **T4b.3b** (`d1c1a7d4`) and §1b as **T4b.3c** (`f2e3c5af`); §1c (the CPU-dispatch
+> filler) was deliberately not started, exactly as this brief instructed when the exit
+> was the alternative. The exit ran whole. The successor is
+> [`phase5.md`](phase5.md); the session record is the 2026-08-11 session C entry in
+> [`safety_refactor_log.md`](../safety_refactor_log.md).
+>
+> **Two of this brief's own scouted premises were wrong, and it warned about both in
+> advance.** §1a predicted that some erased fn-pointer types would lack `extern "C"`
+> (they are all the same type — the transmutes reinterpreted a type into itself), and
+> §1b's own correction of its predecessor still under-described `sBlockFunc`: three
+> members, yes, but *declared twice*, bridged by a double cast that the `transmute`
+> metric cannot see. **S24 is now three-for-three at catching this brief's family of
+> mistakes**, which is the argument for keeping it.
+>
+> *(Original header follows.)*
+>
 > **This is the rewritten phase brief** (2026-08-11, after session B closed §2 and
 > started §3; expanded by the steward the same day, every count re-verified at
 > `50212e09`). The session-B-era text is in git history (`87a89d31` vintage) and the

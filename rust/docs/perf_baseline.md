@@ -1278,3 +1278,46 @@ Two readings worth keeping:
    into a flat line.
 5. Expect *wins* in Phase 4 (direct calls replacing indirect dispatch) and losses in
    Phase 2 (bounds checks in 4×4 loops). Both are budgeted per phase, not per commit.
+
+### Session C — T4b.3b, T4b.3c, and the whole-phase measurement
+
+Session floor from `null t4b3a_ctl`, 3 pairs: decode median **-0.24%**
+(-0.47% … +0.23%), encode median **+0.21%** (-0.77% … +1.45%).
+
+**Read the floor first this session: it is not centred on zero.** The decode null came
+back at -0.24%, so a seam reading -0.5% is reading the floor, not an effect. This is
+the same instrument-before-result discipline S2b asks for, applied to the *sign* rather
+than the magnitude.
+
+| pair | decode median | encode median |
+|---|---|---|
+| T4b.3b (expand family) | **-0.64%** (-1.13% … +0.13%) | **+0.00%** (-1.78% … +1.45%) |
+| T4b.3c (`sBlockFunc`) | **-0.47%** (-0.53% … +0.03%) | **+0.32%** (-0.34% … +1.80%) |
+| **whole phase**, `6e15c907` → `f2e3c5af` | **-0.36%** (-0.84% … -0.31%) | **+0.08%** (-2.53% … +1.14%) |
+
+**No ledger row opens.** Cumulative unchanged at ≈ +8.9% encoder and
+≈ +17.8 / +10.1 / +9.6% decode.
+
+Three readings worth keeping.
+
+1. **All four decode medians are negative and cluster inside 0.4 points of each other
+   — including the null.** -0.24 (floor), -0.64, -0.47, -0.36. The honest statement is
+   that this session's decode instrument sat slightly below zero all evening and every
+   seam sampled it. T4b.3b's -0.64% is the only median outside the floor's band, by
+   0.17 points, in the *favourable* direction, on a three-row median. Per S2b that
+   would earn more pairs before it earned a mechanism — but there is no mechanism to
+   claim: no ledger row opens for a gain, and D-perf-4's tripwire is a regression
+   tripwire. **Recorded as flat.**
+2. **Phase 4b measured flat end to end.** Five seams across three sessions, every one
+   inside the floor, and a whole-phase number (`6e15c907` → `f2e3c5af`) of +0.08%
+   encode / -0.36% decode. This is exactly what Phase 4a's finding predicts and the
+   phase brief expected in advance: **direct dispatch recovers per-call scaffolding
+   only where the caller supplies constant dimensions**, and every arm this phase
+   removed was runtime-selected — a parameter set, a usage type, a PPS flag, a CPU flag
+   that was never read. There was nothing to recover, and the phase spent its
+   measurement budget confirming that rather than discovering it.
+3. **So the phase's return is entirely in the ratchet**, and that is a legitimate
+   result rather than a disappointment: `raw_ptr` 5001 → 4815, `unsafe_fn` 1286 → 1250,
+   `transmute` 23 → **4, all prose, zero calls**, two vtables and 25 thunks deleted, two
+   duplicate families collapsed and two findings fixed. Phase 5 is where the decode
+   numbers are supposed to move, because 5.x is what makes `BaseMC`'s dimensions static.

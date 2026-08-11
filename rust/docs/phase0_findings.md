@@ -718,3 +718,71 @@ Three results worth more than the acquittal itself:
    before calling it a result.**
 
 Running total: **eighteen measurements, seven alternations, seven acquittals.**
+
+---
+
+### Twentieth measurement — 2026-08-11, Phase 4b session C: five hits, and the first alternation that is not 0/0
+
+The measurement S23b said was missing. Session A's alternations five to seven were
+0/40, 0/40 and 0/0 in isolation; session B drew a zero across eight sweeps. **This
+one produced hits on both sides in the same loop**, which is the only condition under
+which an alternation answers its question.
+
+**The session's hits, in order.** Every one is `mt`, `sm=3`, **`n=600`**:
+
+| where | profile | configuration | Rust output |
+|---|---|---|---|
+| session-start battery | release | 160x96 `t=2 cabac=0 rc=1` | 42345 vs 41938 — **long** |
+| T4b.3b battery | debug | 320x192 `t=2 cabac=0 rc=0` | **0 bytes** |
+| T4b.3b battery | release | 160x96 `t=4 cabac=1 rc=1` | **0 bytes** |
+| retry of the above, run 5/5 | release | *same configuration* | **0 bytes** |
+| alternation, base ×2 / head ×3 | release | four different inputs | 0 bytes ×4, **28537** vs 30190 once |
+| exit-level battery | debug | 320x192 `t=4 cabac=0 rc=0` | **0 bytes** (retry 5/5 clean) |
+| exit-level battery | release | 160x96 `t=4 cabac=0 rc=1` | **0 bytes** (retry 5/5 clean) |
+
+**The signature narrows: `n=600`, not `sm=3` generally.** The sweep runs `"3 1500"`
+and `"3 600"` — both `SM_SIZELIMITED_SLICE` — and **all eleven of this session's hits
+are the 600-byte constraint**, across three inputs, both thread counts, both entropy
+coders and both RC modes. Twenty-four of an `mt` sweep's 120 configurations are
+`sm=3 n=600`, so the per-susceptible-configuration rate is roughly **1 in 100-150**,
+against ~1 in 800 over all configurations. The two figures agree; the second is the
+first divided by the susceptible fraction. Whoever fixes this should start at the
+tighter byte constraint, where slices are smallest and most numerous.
+
+**Alternation eight** — 12 `mt` sweeps per side, 1440 configurations each, binaries
+built once and swapped inside one loop, nothing else running:
+
+**base (`b6fe4022`) 2 hits / 12 sweeps, head (T4b.3b) 3 hits / 12 sweeps.**
+
+Given five hits split 3-2, P(head ≥ 3 | equal rates) = 0.5. No signal. **T4b.3b
+acquitted**, and with it T4b.3c, which the subsequent battery ran clean at 341/341
+both profiles.
+
+Two things this measurement establishes that the previous nineteen did not:
+
+1. **The head side hit one configuration twice with two different wrong lengths** —
+   `Static_152_100 t=4 sm=3 n=600 cabac=1 rc=0` gave 0 bytes at sweep 8 and 28537
+   bytes at sweep 11, against a stable C++ 30190. That is this finding's own race
+   criterion ("a deterministic port bug repeats its bytes") satisfied *on the tree
+   under suspicion*, which is stronger than a rate comparison: it rules out
+   divergence directly rather than by symmetry.
+2. **An isolated re-run is not always a non-result.** Session A's rule came from
+   0/80 in isolation; this session's retry of the release configuration hit **1 in
+   5** in isolation, immediately after a full battery. The distinguishing variable is
+   not isolation but *recent load* — the retry ran on a machine still warm from the
+   battery, session A's did not. S23b's sweep-level rule stands as the reliable
+   escalation, but a single-configuration re-run that **does** reproduce is evidence,
+   and should be run before the expensive alternation rather than instead of it.
+
+Also on record: **the session-start battery hit**, ending a two-session clean streak.
+The standing advice is unchanged and is now three-for-six: a tendency, not a rule.
+
+The **exit-level battery** (`gates.sh exit`, run once per phase) contributed the last
+two rows above, after the alternation had already acquitted this tree and with only
+documentation changed since. Both retried 5/5 clean. Recorded rather than folded into
+the alternation because they are independent samples of the same tree and they take the
+`n=600` count from nine to eleven. The exit level's *widened Miri* — the F18/S22 backlog
+check that only runs at a phase exit — came back **clean on all four targets**
+(295 `--lib`, 20, 7, 3), so Phase 4b leaves no such backlog behind.
+
+Running total: **twenty measurements, eight alternations, eight acquittals.**
