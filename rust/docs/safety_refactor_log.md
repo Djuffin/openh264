@@ -3564,3 +3564,187 @@ The `SWelsFuncPtrList` assert stayed at **1184** all session and its comment now
 why: `Option<Box<_>>` is pointer-sized, so a 20-entry vtable left the crate without
 moving the number. **Size was the wrong instrument for this session; the ratchet was
 the right one**, and `transmute` 23 → 5 is the line to read.
+
+---
+
+## 2026-08-11 — Phase 4b, session C (T4b.3b, T4b.3c, and the phase exit — Phase 4b is complete)
+
+**Commits:** `b6fe4022` (session B's inherited doc tail + this session's brief),
+`d1c1a7d4` (T4b.3b, the expand family and the last two `transmute` calls),
+`f2e3c5af` (T4b.3c, `sBlockFunc`), and this entry.
+
+### The session in one line
+
+Both remaining §3 items converted, and **both turned out to be the same defect wearing
+two costumes**: a type laundered into an identical type because a second declaration
+had made the compiler disagree with the programmer. T4b.3b's launderer was
+`mem::transmute`; T4b.3c's was `as *mut _ as *mut _`. The first is a tracked metric and
+the second is not, which is the more useful half of the finding.
+
+### 1. T4b.3b — the transmutes bridged nothing
+
+The brief said to take the expand re-wraps first because they held the crate's last two
+`transmute` calls. They did, and what they were doing is the point.
+
+`decoder_core.rs:880` was a forwarding `ExpandReferencingPicture` that took two
+function-pointer slots as an inline `unsafe extern "C" fn(*mut u8, i32, i32, i32)` and
+handed them to `error_concealment`'s same-named function through `transmute` — one of
+them over a whole `[Option<fn>; 2]` array. **This port declares `PExpandPictureFunc`
+four times** (`common/expand_pic.rs`, `decoder_context.rs`, `error_concealment.rs`,
+`manage_dec_ref.rs`), and re-greped this session, **all four are the same type**.
+Parameter names differ; nothing else does. The wrapper reinterpreted a type into
+itself, twice.
+
+The brief's own scouting predicted otherwise — "session B's finding says two of the
+erased ones have no `extern \"C\"` at all". True of T4b.3a's family, not this one.
+**S24 for the third time in three sessions, and this time against a premise written
+specifically for the seam it was wrong about.** The rule is holding up because it keeps
+catching things, not because it is quotable.
+
+The table itself was the 4a shape: `InitExpandPictureFunc` takes a CPU flag and ignores
+it, `decoder_core.rs` assigned the same constants inline, and in both codecs
+`pfExpandChromaPicture[0]` and `[1]` held **the same function** — so the
+aligned/unaligned index that a SIMD build would use selected between two identical `_c`
+kernels. Branch 1 of the brief's decision tree, and it reached further than the brief
+expected: `SExpandPicFunc` lives in `common/`, so this is an **S18 cross-codec
+deletion** covering the struct, its installer, four typedefs, the wrapper, members of
+both `SWelsFuncPtrList` and `SWelsDecoderContext`, and an `assert_size!`.
+
+### 2. F21 — the S20 closure asked who else implements this, and the answer was "three files"
+
+The finding is written up in full in [`phase4b_findings.md`](phase4b_findings.md). The
+short form: C++ has **one** `ExpandReferencingPicture` (`expand_pic.cpp:388`) called
+from five sites; the port had translated it **three times**, once per consumer module,
+and two copies had drifted in the `kiWidthUV < 16` case. `manage_dec_ref`'s had no
+`else` at all, so a frame narrower than 32 pixels kept an unexpanded chroma border on
+the error-concealment prefetch path.
+
+Two things worth carrying forward beyond the fix:
+
+* **`error_concealment`'s copy was correct only by accident.** It used
+  `pExpChrom[0]` where the C++ uses `ExpandPictureChroma_c`, and on this port those are
+  the same function *because both table slots held it*. One table entry away from a
+  second real divergence — and the table is exactly what T4b.3b deleted, so the accident
+  is now a fact of the code rather than a fact of the configuration.
+* **The gates were silent by construction, not by luck.** The smallest legal frame is
+  16 pixels wide; every conformance asset is 176x144 or larger, the diffharness inputs
+  152x100 and up, and the malformed corpus inherits the conformance SPS dimensions. No
+  amount of running the existing battery would ever have found this. Pinning it needs a
+  narrow-frame asset, which is golden movement and deliberately not this phase's.
+
+**S21's inventory rule gains a corollary**: the inventory has to be *behavioural*, not
+structural. All three copies had the same name, the same six parameters, and the same
+C++ citation in their doc comments. A signature-level diff calls them identical. Only
+reading the three bodies side by side finds a missing `else`.
+
+### 3. T4b.3c — and the metric that was never the whole population
+
+The brief called this "the deblocking block-dispatch pair". Re-greped: **not a pair, not
+deblocking, and not one struct.** `SBlockFunc` has three members — NZC bookkeeping and
+two block-zeroing slots — of which **exactly one is ever read**, in this port *and in
+the C++*. The two zeroing slots are installed by `decode_slice.cpp:2992-2993` and called
+from nowhere in either tree, so they and their `_c` kernels went with the table rather
+than being kept as dead ports of dead code.
+
+And the struct was **declared twice** — `decoder_context.rs` and `decode_slice.rs`, same
+three members, two different typedef pairs — with `WelsInitDecoderFuncs` bridging them
+via `&mut (*pCtx).sBlockFunc as *mut _ as *mut _`.
+
+**That double cast is the session's real finding.** It does exactly what T4b.3b's
+transmutes did, for exactly the same reason, and **it does not appear in the `transmute`
+metric at all.** So the number this phase just drove to zero was never counting the whole
+population; it was counting the subset that used one particular spelling. Recorded in
+plan §0 and in the Phase 5 brief, with the instrument that *does* find the rest —
+`find_dup_types.sh` and a grep for `as *mut _ as *mut`.
+
+One more duplicate closed on the way: the port had **three** `WelsNonZeroCount_c` where
+the C++ has one, and the decoder's was the copy that never got Phase 2's conversion — a
+hand-written loop where the other two are shims over the safe kernel. With the table
+gone there was no `Option<fn>` slot left for its `extern "C"` to satisfy, so the single
+reader now calls the `common` shim and the copy is deleted.
+
+**The gate that proved it safe is the gate that caught it.**
+`kernels_differential_phase2.rs::nonzero_count_duplicates_agree` has asserted all three
+bodies byte-equal over 50 random inputs since Phase 2 — so the equivalence was measured
+long before this session needed it — and it failed to *compile* when the third arm's
+function vanished. That is the ideal behaviour from a differential test over a duplicate
+family: it is the reason the deletion is safe *and* the alarm when the deletion happens.
+
+### 4. F3: five hits, and the alternation S23b has been asking for since session A
+
+The session-start battery hit before a line was changed, and the T4b.3b battery hit
+twice more (once per profile). Full detail is F3's twentieth measurement in
+[`phase0_findings.md`](phase0_findings.md); the parts that change how this is tested:
+
+1. **The first alternation that is not 0/0.** 12 `mt` sweeps per side, 1440
+   configurations each, binaries swapped inside one loop: **base 2 hits, head 3**. Given
+   five hits split 3–2, P(head ≥ 3 | equal rates) = 0.5. Alternations five to seven were
+   0/40, 0/40 and 0/0, and session B drew a zero across eight sweeps — this is the first
+   time the instrument has produced a reading rather than a shrug.
+2. **The head side supplied a direct acquittal, not just a symmetric one.** It hit one
+   configuration twice with two *different* wrong lengths — 0 bytes at sweep 8, 28537 at
+   sweep 11, against a stable C++ 30190. This finding's own criterion is that a
+   deterministic port bug repeats its bytes. Met on the tree under suspicion, which
+   beats a rate comparison.
+3. **The signature narrows to `n=600`.** All nine of the session's hits are the tighter
+   of the two `sm=3` byte constraints; none is `n=1500`. Whoever eventually fixes this
+   starts where slices are smallest and most numerous.
+4. **An isolated re-run is not always the wrong instrument.** Session A's rule came from
+   0/80 in isolation. This session's retry hit **1 in 5** in isolation — immediately
+   after a full battery. The variable is *recent load*, not isolation. So the cheap
+   single-configuration re-run goes first, and the expensive sweep alternation follows
+   if it comes back clean.
+
+### 5. What the phase actually bought, and the instrument that shows it
+
+`assert_size!(SWelsFuncPtrList)` is the number this phase's commits keep quoting, and
+it is the wrong one. It read **1272 → 1184** at T4b.1/T4b.1b and then sat unmoved
+through three seams that deleted two vtables, 25 thunks and 19 transmutes — because
+`Option<Box<_>>` is pointer-sized and a size assert measures bytes of members. It moved
+to **1160** only at T4b.3b, when an embedded 24-byte struct left.
+
+The ratchet is the phase's real ledger:
+
+| metric | Phase 4b entry | exit |
+|---|---|---|
+| `raw_ptr` | 5001 | **4815** |
+| `unsafe_fn` | 1286 | **1250** |
+| `transmute` | 23 | **4 — and all four are prose** |
+| `SHIM(` | 157 | 157 (`SHIM(phase3)` still exactly **2**) |
+
+**The `transmute` row now has a floor and the floor is prose.** The crate contains zero
+`mem::transmute` calls. Two matches are pre-existing comments in `encoder_context.rs`,
+one is T4b.3a's tombstone, one is T4b.3b's note. Stated in plan §0 and in the Phase 5
+brief in the same words, because a metric that reads 4 with nothing behind it will
+otherwise be chased.
+
+### 6. Exit bookkeeping
+
+* **Straggler sweep (S18).** Every `Vtbl` name remaining is either the **public C ABI**
+  (`ISVCEncoderVtbl` / `ISVCDecoderVtbl` in `api/codec_api.rs`, `G_ISVCENCODER_VTBL`),
+  which is the codec's external interface and permanent, or prose. No internal dispatch
+  vtable survives. Both converted families (`SExpandPicFunc`, `SBlockFunc`) have zero
+  live slots — every remaining mention is a comment. `SHIM(phase3)` is **2**, both
+  Phase 6's. **One live straggler is listed with its owner**: `pfSetNZCZero`
+  (`encoder/wels_func_ptr_def.rs:385`), the last slot of the NZC family, one
+  unconditional constant, encoder-side and therefore 6.5's — flagged in the Phase 5
+  brief because it is six lines and its owner is ten sessions away.
+* **Perf.** Full 3-pair protocol, four runs. Floor: decode **-0.24%**, encode
+  **+0.21%** — *not centred on zero*, which is the reading that matters, because all
+  four decode medians this session are negative and cluster inside 0.4 points of the
+  floor. T4b.3b **-0.64% / +0.00%**, T4b.3c **-0.47% / +0.32%**, whole phase
+  (`6e15c907` → `f2e3c5af`) **-0.36% decode / +0.08% encode**. **No ledger row opens**;
+  cumulative unchanged at ≈ +8.9% encoder, ≈ +17.8 / +10.1 / +9.6% decode. Flat, as
+  every one of this phase's five seams has been, for 4a's reason — every arm removed was
+  runtime-selected, so there was no per-call scaffolding to recover. Detail in
+  [`perf_baseline.md`](perf_baseline.md) §Session C.
+* **The exit-level gate ran** (`gates.sh exit`, the level that only runs at a phase
+  exit and therefore accumulates a backlog — F18's lesson, S22). **Clean on all four
+  Miri targets**: 295 `--lib`, 20 `kernels_differential_phase2`, 7 `safe_bits_differential`,
+  3 `safe_plane_differential`. Phase 4b leaves no F18-class backlog. It also drew two
+  more F3 hits, both `mt sm=3 n=600 t=4`, both retried 5/5 clean, on a tree the
+  alternation had already acquitted and with only documentation changed since — folded
+  into F3's twentieth measurement as independent samples.
+* **S19.** [`prompts/phase5.md`](prompts/phase5.md) written — the hand-off for the
+  plan's first pivot, carrying S24, S25 and F19's class by name, and stating that
+  per-session scope is the S20 closure rather than the file.
