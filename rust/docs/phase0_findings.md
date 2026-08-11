@@ -657,6 +657,34 @@ a hit before you change a line" is a tendency, not a rule. And measurement 16's 
 produced a *different* wrong length from the same binary and configuration, which is a
 race and not a divergence: a deterministic port bug repeats its bytes.
 
+### Nineteenth measurement — 2026-08-11, Phase 4b session B: eight sweeps, zero hits, and the load is part of the signature
+
+Not a hit: **the absence of one**, recorded because it is a measurement and because it
+is the first session with enough clean sweeps to say something.
+
+Four full batteries (the session-start control, and one per seam for T4b.2a, T4b.2b,
+T4b.3a), **eight 341-configuration sweeps across both profiles, zero hits**. That is
+~2728 configurations against session A's directly measured rate of ~1 in 800, so ~3.4
+were expected and P(0) is about 3%. A mild surprise on its own — but it points the same
+way **S23b** does, and that is the reading to keep:
+
+> Session A's nine hits came out of a loop running whole sweeps **back to back**, with
+> nothing else on the machine and no gaps. A `gates.sh` battery interleaves its two
+> sweeps with cargo builds, two benches and a Miri run, and leaves the machine idle
+> between steps. Same configurations, same binaries, different *load*.
+
+So the sampling unit S23b corrected (whole sweeps, not isolated configurations) is
+necessary but not sufficient: **the sweeps have to be back to back**. An escalation
+that runs one sweep per side inside a battery is closer to the 0/40 non-result than to
+the 4/12-vs-5/12 that acquitted T4b.1b. When F3 next escalates, the alternation loop
+runs sweeps with nothing between them, and this row is the reason.
+
+Also on record: **the session-start control battery was clean for the second session
+running**, which is now two of the last two against a prior streak of three. The
+standing advice stays as session A left it — a tendency, not a rule.
+
+---
+
 **Alternation five** (measurement 16, release, the hitting configuration in isolation,
 binaries swapped inside one loop): **HEAD 1/40, control `6e15c907` 1/40.** A tie, the
 second consecutive one.
