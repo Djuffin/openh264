@@ -792,6 +792,31 @@ findable.*
   status preamble (§0) and writes the *next* phase's brief in `prompts/`, then stamps
   its own brief superseded-historical. One brief ahead, not two: the phase after next
   gets written at the next exit, when its inputs are real.
+- **S20 — the decomposable unit of a struct-field conversion is the
+  signature-reachability closure, not one struct** (Phase 3 session E, T3.4:
+  planned faces "adopt the writer functions" and "flip the embedding struct's
+  field" could not land separately — a function taking `(buf, &mut BsWriter)`
+  *forces* the type of every field that feeds it, by-value embedding propagates
+  the layout change transitively, and `const` ABI asserts leave no intermediate
+  green state). Before sizing commits in any struct conversion — **Phases 5 and 6
+  are made of these** — compute the closure: every struct reachable from the
+  changed signature through fields, embeddings, and layout asserts lands together;
+  what separates cleanly is pure subtraction (deleting the dead type) and pure
+  addition (the proven new API). A session brief that draws a commit boundary
+  through the middle of a closure is wrong before it starts, and the correction
+  protocol applies to it.
+- **S21 — the construction audit (was session D §2's rule).** Any struct gaining
+  an owned field gets its construction paths audited *in the same commit*:
+  `mem::zeroed` construction — 26 sites at Phase 0's count, the encoder and
+  decoder god-contexts included — makes field-type changes UB at a distance, and
+  the incident that proved it was on the live decoder-creation path with every
+  test green. All-integer state (`BsWriter`-shaped) is valid at all-zero and the
+  audit discharges by stating so; owned pointers (`Vec`, `Box`) are not, and the
+  pattern is the decoder's `MaybeUninit` shell + heap-constructing `new_boxed()`
+  with a comment naming the phase that deletes the shell. A duplicate-family
+  finding, relatedly, must inventory **every function of the family per copy**,
+  not one representative — F2's table compared `BsWriteBits` alone and missed
+  `nal_encap.rs`'s divergent `BsFlush` store width for three phases.
 
 
 ---
