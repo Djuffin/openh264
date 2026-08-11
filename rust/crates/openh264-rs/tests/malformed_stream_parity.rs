@@ -11,7 +11,9 @@
 //!   off-by-one truncations at a refill boundary are exactly what must not shift),
 //! * the **CABAC end-of-slice byte ladder** (`cabac_decoder.rs:732-784`, seam T3.2),
 //! * and the **`nalu.rs` range conversion** (seam T3.3), whose
-//!   `BsGetTrailingBits(pNal + len - 1)` sites underflow on a zero-length payload.
+//!   `BsGetTrailingBits(pNal + len - 1)` sites underflowed on a zero-length payload
+//!   — **F15**, which this test found on its first run and T3.3 fixed; the rows it
+//!   withheld until then now carry real outcomes.
 //!
 //! Fuzzing was removed from Phase 3 by direction (2026-08-10) and the plan's exit
 //! gate edited to match, so this file is the phase's **only** malformed-input
@@ -95,94 +97,6 @@ const PREFIX_BOUNDARIES: usize = 8;
 /// forbidden bit, and a referenced-IDR header on a non-IDR NAL.
 const HEADER_BYTES: &[u8] = &[0x00, 0x05, 0x07, 0x08, 0x1F, 0x65, 0x80];
 
-/// The SVC NAL header extension, `nalu.rs:63`.
-const NAL_UNIT_HEADER_EXT_SIZE: i64 = 3;
-
-/// Corpus entries withheld from the decoder because today's code is **unsound** on
-/// them, not merely wrong: `ParseNalHeader` computes
-/// `BsGetTrailingBits(pNal.add(iNalSize as usize - 1))` with `iNalSize == 0`
-/// (`nalu.rs:675` and `nalu.rs:762`), which panics in debug and, in release, wraps to
-/// `pNal.add(usize::MAX)` — out-of-bounds pointer arithmetic, so the two profiles
-/// disagree and neither answer is a specification. Recorded as
-/// [`phase3_findings.md`](../../docs/phase3_findings.md) **F15**, found by this test on
-/// its first run.
-///
-/// Withholding, rather than recording an outcome, is deliberate: a golden table has
-/// to hold in both profiles (plan §7.2 gate 0), and this input has no profile-
-/// independent behaviour to record. **T3.3 turns those sites into checked indexing;
-/// deleting this predicate is part of that seam**, and the rows it currently blanks
-/// out will fill in as a reviewable diff.
-fn withheld(data: &[u8]) -> Option<&'static str> {
-    // Diagnostic escape hatch: `MALFORMED_IGNORE_WITHHELD=1` runs them anyway, which
-    // is how F15's two profiles were measured and how T3.3 will check its fix before
-    // deleting this function. It aborts the run in a debug build — that is the point.
-    if std::env::var_os("MALFORMED_IGNORE_WITHHELD").is_some() {
-        return None;
-    }
-    let (mut sps, mut pps) = (false, false);
-    for unit in split_annexb_units(data) {
-        let rbsp = rbsp_of(unit);
-        // `decoder_core.rs:3630` skips an empty payload before `ParseNalHeader`.
-        if rbsp.is_empty() {
-            continue;
-        }
-        // `nalu.rs:548` returns before any of the sites below.
-        if rbsp[0] >> 7 != 0 {
-            continue;
-        }
-        let ref_idc = (rbsp[0] >> 5) & 0x03;
-        let ty = rbsp[0] & 0x1F;
-        let size = nal_size_after_header(&rbsp);
-        match ty {
-            // The VCL path, `nalu.rs:762`. Reached only once a parameter set of each
-            // kind has arrived (`nalu.rs:583-619`).
-            1 | 5 if sps && pps && size == 0 => {
-                return Some("F15: VCL NAL strips to a bare header byte (nalu.rs:762)");
-            }
-            20 if sps && pps && size == NAL_UNIT_HEADER_EXT_SIZE => {
-                return Some("F15: slice-ext NAL strips to header + extension (nalu.rs:762)");
-            }
-            // The prefix path, `nalu.rs:675`, guarded above by `iNalSize < 3`.
-            14 if ref_idc != 0 && size == NAL_UNIT_HEADER_EXT_SIZE => {
-                return Some("F15: prefix NAL strips to header + extension (nalu.rs:675)");
-            }
-            _ => {}
-        }
-        sps |= ty == 7;
-        pps |= ty == 8;
-    }
-    None
-}
-
-/// The RBSP the decoder hands `ParseNalHeader`: start code stripped, emulation-
-/// prevention bytes removed — `WelsDecodeBs` (`decoder_core.rs:3623-3670`).
-fn rbsp_of(unit: &[u8]) -> Vec<u8> {
-    let payload = if unit.starts_with(&[0, 0, 0, 1]) {
-        &unit[4..]
-    } else if unit.starts_with(&[0, 0, 1]) {
-        &unit[3..]
-    } else {
-        unit
-    };
-    let mut out = Vec::with_capacity(payload.len());
-    let mut zero_run = 0u32;
-    for &b in payload {
-        if zero_run >= 2 && b == 0x03 {
-            zero_run = 0;
-            continue;
-        }
-        zero_run = if b == 0 { zero_run + 1 } else { 0 };
-        out.push(b);
-    }
-    out
-}
-
-/// `ParseNalHeader`'s trailing-zero strip (`nalu.rs:536-545`) followed by consuming
-/// the header byte (`nalu.rs:577-578`) — the `iNalSize` the sites below index with.
-fn nal_size_after_header(rbsp: &[u8]) -> i64 {
-    let stripped = rbsp.iter().rev().take_while(|&&b| b == 0).count();
-    rbsp.len() as i64 - stripped as i64 - 1
-}
 
 /// The base streams. Diversity, not breadth: CAVLC and CABAC, PCM, B-frames, VUI
 /// and subset-SPS parsing, an already-damaged pair, and one stream with a NAL count
@@ -645,20 +559,22 @@ fn rle<T: PartialEq + Copy, F: Fn(T) -> String>(values: &[T], show: F) -> String
     out
 }
 
-/// What a corpus entry produced. `Withheld` is a documented non-run (see
-/// [`withheld`]); `Aborted` is a run whose process died, reconstructed by the parent
-/// from the worker's exit status.
+/// What a corpus entry produced. `Aborted` is a run whose process died,
+/// reconstructed by the parent from the worker's exit status.
+///
+/// A third variant, `Withheld`, existed from T3.0 until T3.3: entries that drove
+/// **F15** were not run at all, because that input had no profile-independent
+/// behaviour to record (debug aborted; release read out of bounds). T3.3 fixed the
+/// sites, both profiles now agree, and the 105 `WITHHELD` rows filled in with real
+/// outcomes — the seam's evidence, and the reason the variant is gone rather than
+/// merely unused.
 enum Outcome {
     Ran(Run, String),
-    Withheld(&'static str),
     Aborted(String),
 }
 
 fn row(case: &Case, outcome: &Outcome) -> String {
     match outcome {
-        Outcome::Withheld(reason) => {
-            format!("{:<24} {:>8}  WITHHELD  {}", case.name, case.data.len(), reason)
-        }
         Outcome::Aborted(message) => {
             format!("{:<24} {:>8}  ABORT     {}", case.name, case.data.len(), message)
         }
@@ -691,14 +607,8 @@ const COLUMN_HEADER: &str =
 /// Runs one corpus entry and renders its row — the unit both the worker and a direct
 /// (non-forking) run share.
 fn run_case(case: &Case) -> String {
-    let outcome = match withheld(&case.data) {
-        Some(reason) => Outcome::Withheld(reason),
-        None => {
-            let (run, digest) = decode_case(case);
-            Outcome::Ran(run, digest)
-        }
-    };
-    row(case, &outcome)
+    let (run, digest) = decode_case(case);
+    row(case, &Outcome::Ran(run, digest))
 }
 
 // ---------------------------------------------------------------------------
@@ -849,8 +759,9 @@ fn check_table(stem: &str, actual: &str) {
         "{} corpus entries killed the decoder process:\n{}\n\
          A panic inside the decoder aborts (it unwinds out of an `extern \"C\"` thunk), so this \
          is a pre-existing defect to record, not to repair (plan §7.6 S6/S12): write it up in \
-         docs/phase3_findings.md and, if the two build profiles disagree on it, extend \
-         `withheld()` with the trigger so the golden table stays profile-independent.",
+         docs/phase3_findings.md. If the two build profiles disagree on it, it is UB evidence \
+         (plan §7.2 gate 0) and the golden table cannot hold both — that is what F15 was, and \
+         the answer there was to fix the defect, not to keep withholding the rows.",
         aborts.len(),
         aborts.join("\n")
     );

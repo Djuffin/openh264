@@ -487,6 +487,39 @@ pub unsafe fn DecodeNalHeaderExt(pNal: *mut SNalUnit, src: &[u8]) {
     pHeaderExt.uiLayerDqId = (pHeaderExt.uiDependencyId << 4) | pHeaderExt.uiQualityId;
 }
 
+/// The RBSP's size in bits: `(len << 3) - trailing_bits(last byte)`, and **zero for
+/// an empty payload** — the fix for [`phase3_findings.md`](../../../docs/phase3_findings.md)
+/// §**F15**.
+///
+/// The three `BsGetTrailingBits(pNal + iNalSize - 1)` sites this replaces computed
+/// the index by subtraction, so `iNalSize == 0` gave `pNal + (0 - 1)`: a debug
+/// panic — which, unwinding out of an `extern "C"` thunk, **aborted the process** —
+/// and in release an out-of-bounds pointer that happened to land on the preceding
+/// header byte. That is not exotic input: `ParseNalHeader` strips trailing zero
+/// bytes and then consumes the header byte, so any slice NAL whose payload is one
+/// non-zero byte followed by zeros arrives here with `iNalSize == 0`, and every
+/// conformance stream in T3.0's corpus has ~11 truncations that produce it.
+///
+/// The guard is a **comparison, not a subtraction** (the seam's arithmetic rule):
+/// `size >= 1` is tested before any index is formed. A zero bit size then flows into
+/// the caller's existing `DecInitBits` failure branch — `(0 + 7) >> 3 == 0` is
+/// rejected as `ERR_INFO_INVALID_ACCESS` — so the NAL is refused through the path
+/// the code already had, with `dsBitstreamError` and the same access-unit
+/// bookkeeping. That is exactly what the **release** build did for a type-1/5 NAL
+/// (its out-of-bounds read landed on an odd header byte, giving 0 trailing bits and
+/// a bit size of 0); the fix makes that outcome the *defined* one, for every NAL
+/// type and in both profiles, without reading a byte it has no right to read.
+///
+/// Upstream C++ (`au_parser.cpp:252` and `:396`) shares the expression, so there is
+/// no S6 arithmetic parity to preserve here — there is no correct behaviour to be
+/// parity *with*.
+fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
+    if size < 1 {
+        return 0;
+    }
+    (size << 3) - crate::safe::bits::trailing_bits(bytes[start + size as usize - 1])
+}
+
 /// Parses the NAL unit header byte, checks parameter set existence, and routes
 /// the NAL unit to the appropriate syntactic decoder.
 ///
@@ -648,12 +681,7 @@ pub unsafe fn ParseNalHeader(
             (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
 
             if (*pNalUnitHeader).uiNalRefIdc != 0 {
-                // F15, preserved verbatim for one more commit: with iNalSize == 0 the
-                // `iNalSize as usize - 1` panics in debug and wraps in release, where
-                // the pointer lands on the header byte. The checked form and the
-                // golden un-withholding land together in the F15 commit.
-                let iBitSize = (iNalSize << 3)
-                    - BsGetTrailingBits(bytes.as_ptr().add(iNal).add(iNalSize as usize - 1));
+                let iBitSize = rbsp_bit_size(bytes, iNal, iNalSize);
                 let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iNal, iBitSize);
                 if iErr != ERR_NONE {
                     (*pCtx).iErrorCode |= dsBitstreamError;
@@ -741,14 +769,7 @@ pub unsafe fn ParseNalHeader(
                 .sNalData
                 .sVclNal
                 .sSliceBitsRead;
-            // F15, preserved verbatim for one more commit: with iNalSize == 0 the
-            // `iNalSize as usize - 1` panics in debug and wraps in release, where the
-            // pointer lands on the header byte. The checked form and the golden
-            // un-withholding land together in the F15 commit.
-            let trailing_bits = crate::decoder::dec_golomb::BsGetTrailingBits(
-                bytes.as_ptr().add(iNal).add(iNalSize as usize - 1),
-            );
-            let iBitSize = (iNalSize << 3) - trailing_bits;
+            let iBitSize = rbsp_bit_size(bytes, iNal, iNalSize);
             let mut iErr =
                 crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iNal, iBitSize);
             if iErr != ERR_NONE {
@@ -986,8 +1007,11 @@ pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize,
     }
 
     let pBs = &mut (*pCtx).sBs;
-    let iBitSize = (kiSrcLen << 3)
-        - BsGetTrailingBits(&(*pCtx).sRawData.bytes()[kiRbspStart + kiSrcLen as usize - 1]);
+    // F15's third instance, the one the finding records as already guarded (the
+    // `kiSrcLen <= 0` early return above). It goes through the same helper anyway:
+    // one expression, one guard, nothing left that can form the index by
+    // subtraction.
+    let iBitSize = rbsp_bit_size((*pCtx).sRawData.bytes(), kiRbspStart, kiSrcLen);
     let eNalType = (*pCtx).sCurNalHead.eNalUnitType;
     let mut iPicWidth = 0;
     let mut iPicHeight = 0;
