@@ -1201,6 +1201,32 @@ changes no decoder code at all, so +0.08% is a floor reading and nothing else.
 
 `Spatial Ramps` printed −8.00% / −9.04% in the null and is **EXCLUDED** per S2.
 
+### T4b.1b — the rate-control table becomes one mode, and S2b pays again
+
+Same session, same floor (the null above).
+
+| pair | median | band |
+|---|---|---|
+| `08b7c29d` → `3e583b9a` **encode**, 1 pair | +0.10% | −2.09% … **+22.91%** |
+| `08b7c29d` → `3e583b9a` **encode**, 3 pairs | **−0.15%** | −0.93% … +1.32% |
+| `08b7c29d` → `3e583b9a` **decode**, 3 pairs | **−0.06%** | −0.38% … +0.04% |
+
+**The row to look at is `640x480 (VGA Mandelbrot) [4t]`: +22.91% at one pair,
+−0.49% at three.** A 23-point swing, on a row whose 1-thread twin read +0.08% in
+the same run, from nothing but a higher pair count. This is S2b's second payment
+in two phases, and it is a sharper instance than the one that earned the rule:
+at Phase 3's exit the swing was 2.6 points and changed a sign; here it is an
+order of magnitude larger and would have been written up as a 23% regression on a
+seam that deletes nine function pointers and adds no work to any inner loop.
+
+The whole-run medians (+0.10% → −0.15%) barely moved, which is the practical
+reading: **the median was right at one pair and the row was not.** A per-row
+maximum is a single sample no matter how many rows are in the table, and the
+brief's "one interleaved pair per bench per seam" buys a median, not a row.
+
+**No ledger row opens** for either seam. Cumulative is unchanged at ≈ +8.9%
+encoder and ≈ +17.8 / +10.1 / +9.6% decode.
+
 ---
 
 ## How to use this in later phases

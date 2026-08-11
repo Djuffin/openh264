@@ -13,18 +13,19 @@ proposal and its accumulated history, and stays as written.*
 
 | | |
 |---|---|
+| **Phase 4b in progress** | 2026-08-11, session A. **§1's seam is closed, both halves**: T4b.1 made the four entropy slots one `EntropyCoder` (`08b7c29d`) and T4b.1b made `SWelsRcFunc`'s nine slots one `RCMode` (`3e583b9a`). `assert_size!(SWelsFuncPtrList)` **1280 → 1184** is the phase's running tally of how much dispatch is gone. Remaining: **§2** the two strategy vtables, **§3** 4a's leftovers *(including `transmute`, still 23)*. Brief: [`prompts/phase4b.md`](prompts/phase4b.md) |
 | **Phase 3 complete** | 2026-08-11, sessions A–F. **The bitstream layer contains no pointer cursor on either side.** T3.0–T3.3 closed the decoder read side, T3.4 closed the encoder write side and deleted `SBitStringAux` (§1.2's emblem for T3), T3.5 converted the CABAC coder's own triple — the last one — and T3.6 gave the frame output owned `Vec` buffers, retiring the first encoder free-cascade entries. Brief: [`prompts/phase3.md`](prompts/phase3.md), superseded-historical |
-| **Next** | **Phase 4b — config-dispatch enums, the two strategy vtables, and 4a's leftovers.** Brief written: [`prompts/phase4b.md`](prompts/phase4b.md). **The 4a/4b fence is lifted**: those tables name the bitstream writer, and the writer is now one family with a stable signature. Order per D-seq-1: 4b → 5 → 6 → 7 → 8 → 9 |
+| **Next** | **Phase 4b session B — §2 (the two strategy vtables) then §3 (4a's leftovers).** The implementor counts are scouted and asymmetric: `IWelsParametersetStrategy` has **one** ported implementor, so it is a concrete type rather than dispatch; `IWelsReferenceStrategy` has **three** sharing one data member, which is the enum case. Order per D-seq-1: 4b → 5 → 6 → 7 → 8 → 9 |
 | **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, +25% median cumulative tripwire, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a ran before Phase 3 — done. **D-perf-3's fallback is now spent, on the decode side only** (see the finding below) |
 | **The checkpoint's result** | **Encoder -5.11% median, all 28 usable rows faster or flat, none regressed**; decode -0.19% (flat). Cumulative vs Phase 2's start is now ≈ **+8.9% encoder** (was +14.73% — back under 10% for the first time since T4) and ≈ +17.8 / +10.1 / +9.6% decode (unmoved). [`perf_baseline.md`](perf_baseline.md) §Phase 4a |
 | **Phase 3's perf, and its lesson** | **Nothing measurable, on a phase that added bounds checking to both bitstream hot paths.** Encoder **+0.00%** at both pair counts on the span that could have moved it; decode's best-converged number is **−1.93%** (5 pairs, whole phase). **No ledger row opens.** The lesson is bigger than the numbers and is now **S2b**: 3 → 5 pairs moved whole-phase decode from +0.68% to −1.93%, *changing the sign*, on a session whose null floor ran to +22.57% on one encode row. When a median lands outside the null band, **re-run at more pairs before reaching for a mechanism** |
 | **The finding that governs Phases 5/6** | **Direct dispatch recovers per-call scaffolding only where the caller supplies constant dimensions.** Encoder call sites pass literal block sizes and recovered; the decoder's arrive as parameters through `BaseMC` (~1300 instructions, not inlinable) and recovered nothing. Measured on two families in both codecs, with the `#[inline]` fixes built and reverted rather than reasoned about. **Every remaining decode ledger row is downgraded to Phase 5**, which is the phase that makes those dimensions static |
 | **Ledger** | **No row is `pending`.** Two closed as noise, two downgraded to Phase 5 with the reason, four carried into the aggregate ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
 | **Parked** | `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7) — **re-attempted and re-parked 2026-08-10**, second dated verdict, on a rebuilt harness (1.41x–4.94x against a ≤1.05x bar). One debt owed: SATD still has no measurement of its own |
-| **Ratchet** | *(Phase 3 exit, 2026-08-11)* `unsafe_fn` **1286**, `raw_ptr` **5001**, `unsafe_block` **616**, `SHIM(` **157** (of which **`SHIM(phase3)` is 2**, both enumerated and both owned by Phase 6), `no_mangle` 24, `mem_zeroed` 26, **`transmute` 23 — still unchanged, and it is the one metric no phase has moved**; it is 4b's, explicitly, in that brief's §3. Across Phase 3: `unsafe_fn` 1372 → 1286, `raw_ptr` 5106 → 5001. Baseline regenerated twice per S16, at `13912ffd` and at T3.6 — the second for **one prose match**, the string `mem::zeroed()` inside the doc comment explaining why `SWelsEncoderOutput` does *not* need a zeroed shell. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
-| **Gates** | *(Phase 3 exit)* **431 debug / 425 release / 20 ignored**. T3.0's **2316 malformed-stream golden rows over 12 files** are part of the battery and **none is `WITHHELD`** since T3.3 — it is the phase's permanent instrument and goes on gating Phases 5 and 8. Sweeps 341/341 both profiles. Miri **291 `--lib` tests**, same three skips (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`), plus the widened `exit`-level run over the differential integration tests; `safe_bits_differential.rs` is down to **one** real `unsafe` block, its raw reader side retired at T3.1b and its raw writer side at T3.4. F3 per S14 — **fifteen measurements, four alternations, four acquittals**, the fourth a tie (2/40 each side); **expect a hit on the session-start control battery**, which has now happened three sessions running on unchanged trees. **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration and was shown to actually fail on a known-red input before the session-C baseline was taken |
-| **Standing rules** | **§7.6** below, now S1–S22. Phase 3+ briefs cite it rather than copying rules forward. **S20** (a struct conversion's decomposable unit is the signature-reachability closure, not one struct) and **S21** (the construction audit, and a duplicate-family finding must inventory every function per copy) were hoisted out of Phase 3 and are what Phases 5 and 6 are made of; **S22** (a repaired instrument has a backlog — run everything it covers at every level, the session it is repaired) is F17 → F18's lesson, hoisted at the exit. Instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
-| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 now has **fifteen** measurements and **four alternations, four acquittals**, the fourth a *tie* — 2/40 each side — which is a stronger acquittal than a lopsided one; the fifteenth is the cleanest instance yet of *two batteries on one tree disagreeing*, the only intervening edit being a test attribute that cannot reach the encoder binary), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended; three sites remain), [`phase3_findings.md`](phase3_findings.md) F15–F18. **All four of Phase 3's own findings are closed**: **F15 FIXED at T3.3**, **F16 resolved at T3.1b with its second instance and the whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`), and **F18** — an address-comparison test that had been failing the Miri gate since *before* F17 made that gate capable of failing — found and fixed at the exit. **F18's lesson: a repaired gate has a backlog, and it surfaces only at the level and moment the repaired gate first runs**; the `exit` level runs once per phase. **F3's standing advice, earned three sessions running: expect a hit on the session-start control battery, before a line is changed.** |
+| **Ratchet** | *(Phase 4b session A, 2026-08-11)* `unsafe_fn` **1298**, `raw_ptr` **4998**, `unsafe_block` **616**, `SHIM(` **157**, `mem_zeroed` **28**, **`transmute` 23 — still, and two 4b seams have now passed it by**. `unsafe_fn` *rose* by 12 across the session and that is the honest shape: thirteen `Option<fn>` slots became thirteen `unsafe fn` dispatch methods that still take raw pointers, and Phases 5/6 delete them when the pointers go. Two of the session's three per-file `mem_zeroed` increases were **prose** — S21 sentences in doc comments, zero new calls. *(Phase 3 exit read: `unsafe_fn` 1286, `raw_ptr` 5001, `mem_zeroed` 26.)* `SHIM(` **157** (of which **`SHIM(phase3)` is 2**, both enumerated and both owned by Phase 6), `no_mangle` 24, `mem_zeroed` 26, **`transmute` 23 — still unchanged, and it is the one metric no phase has moved**; it is 4b's, explicitly, in that brief's §3. Across Phase 3: `unsafe_fn` 1372 → 1286, `raw_ptr` 5106 → 5001. Baseline regenerated twice per S16, at `13912ffd` and at T3.6 — the second for **one prose match**, the string `mem::zeroed()` inside the doc comment explaining why `SWelsEncoderOutput` does *not* need a zeroed shell. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Gates** | *(Phase 3 exit)* **431 debug / 425 release / 20 ignored**. T3.0's **2316 malformed-stream golden rows over 12 files** are part of the battery and **none is `WITHHELD`** since T3.3 — it is the phase's permanent instrument and goes on gating Phases 5 and 8. Sweeps 341/341 both profiles. Miri **291 `--lib` tests**, same three skips (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`), plus the widened `exit`-level run over the differential integration tests; `safe_bits_differential.rs` is down to **one** real `unsafe` block, its raw reader side retired at T3.1b and its raw writer side at T3.4. F3 per S14 — **eighteen measurements, seven alternations, seven acquittals**. Phase 4b session A both broke the session-start streak (its opening battery was clean) and **fixed the alternation's unit**: run on the hitting configurations *in isolation* it gave 0/40 on both sides — a non-result — and re-run on whole `mt` sweep presets, the loaded condition, it gave **HEAD 4/12 sweeps vs control 5/12**, measured the rate directly at ~1 in 800 configurations, and produced all three wrong-length forms on both sides in one loop. **A 0/0 alternation has not run yet; re-run it at sweep level.** **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration and was shown to actually fail on a known-red input before the session-C baseline was taken |
+| **Standing rules** | **§7.6** below, now S1–S23b. Phase 3+ briefs cite it rather than copying rules forward. **S20** (a struct conversion's decomposable unit is the signature-reachability closure, not one struct) and **S21** (the construction audit, and a duplicate-family finding must inventory every function per copy) were hoisted out of Phase 3 and are what Phases 5 and 6 are made of; **S22** (a repaired instrument has a backlog — run everything it covers at every level, the session it is repaired) is F17 → F18's lesson; **S23** (a cached table becomes a derived value only if the source cannot change behind the cache — a property of the *update paths*, read one field at a time) and **S23b** (an alternation that returns 0/0 has not run yet — alternate at the level the hits occur) are 4b session A's. Instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 now has **eighteen** measurements and **seven alternations, seven acquittals**; measurements 16-18 are Phase 4b session A's, and they are the ones that finally measured its *rate* — ~1 in 800 configurations under load — by alternating whole sweeps instead of single configurations), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended; three sites remain), [`phase3_findings.md`](phase3_findings.md) F15–F18. **All four of Phase 3's own findings are closed**: **F15 FIXED at T3.3**, **F16 resolved at T3.1b with its second instance and the whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`), and **F18** — an address-comparison test that had been failing the Miri gate since *before* F17 made that gate capable of failing — found and fixed at the exit. **F18's lesson: a repaired gate has a backlog, and it surfaces only at the level and moment the repaired gate first runs**; the `exit` level runs once per phase. **F3's standing advice, earned three sessions running: expect a hit on the session-start control battery, before a line is changed.** |
 | **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, F14, and F3's eighth measurement** — re-raising T7 is Eugene's call |
 
 **Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
@@ -843,6 +844,30 @@ findable.*
   rather than waiting for the next scheduled run: "the gate starts existing on
   this commit" (F17's line) implies everything it watches is unaudited until it
   has actually run there.
+- **S23 — a cached table becomes a derived value only if the source cannot
+  change behind the cache, and that is a property of the update paths, not of
+  the dispatch** (Phase 4b session A, T4b.1/T4b.1b). De-virtualizing a
+  configuration table invites replacing "the selector installed at init" with
+  "read the parameter at the call site". Those are the same value only while
+  nothing writes the parameter without re-running the installer — so the check
+  is a read of **every** update path, per field, not a look at the table. Two
+  fields of one struct, set by one init function, gave opposite answers in one
+  session: `iEntropyCodingModeFlag` cannot change without a full re-init
+  (`WelsEncoderParamAdjust`'s no-reset arm does not copy it), so deriving is
+  safe; `iRCMode` *is* copied there and the table is *not* re-pointed, so the
+  installed callbacks legitimately lag the configured mode, and deriving would
+  have silently repaired a live behaviour — S6's territory, reached from an
+  unexpected direction. When the answer is "they can diverge", store the
+  installed value and **name the field for it** (`eInstalledMode`), so the lag
+  is documented rather than accidental.
+- **S23b — an alternation that returns 0/0 has not run yet.** S14 says to
+  alternate both trees in one loop; it does not say what to alternate. Running
+  the *hitting configuration in isolation* gave HEAD 0/40 and control 0/40 for
+  a race whose sweeps had just produced it twice — because the race needs the
+  load of a full sweep. Re-run at the level the hits occur (whole presets, 341
+  configurations back to back) it gave HEAD 4/12 vs control 5/12 and, for the
+  first time, F3's actual rate. **A no-reproduction result on both sides is a
+  statement about the harness, not about the trees.**
 
 
 ---
@@ -1373,9 +1398,33 @@ no raw output allocation the encoder owns alone.**
       defect, `#[cfg_attr(miri, ignore)]` with the write-up at the site) — the lesson
       is hoisted as **S22**. The exit's doc set and F18's fix landed as `81e3cf9a`.
 
-### Phases 4b–9
+### Phase 4b — configuration dispatch, the strategy vtables, 4a's leftovers
 
-**Phase 4b is next** per **D-seq-1** (Phase 3 → 4b → 5 → 6 → 7 → 8 → 9), and its brief
-is written: [`prompts/phase4b.md`](prompts/phase4b.md). The 4a/4b fence is **lifted** —
-the config-dispatch tables name the bitstream writer, and the writer is now one family
-with a stable signature. Phases 5–9 not started.
+Brief: [`prompts/phase4b.md`](prompts/phase4b.md), live. Per **D-seq-1**
+(Phase 3 → 4b → 5 → 6 → 7 → 8 → 9). The 4a/4b fence was **lifted** at Phase 3's exit —
+the config-dispatch tables name the bitstream writer, and the writer is one family with
+a stable signature.
+
+- [x] **T4b.1 — entropy-coder dispatch** *(session A, `08b7c29d`)*. Four `Option<fn>`
+      slots → `enum EntropyCoder`, four `#[inline]` methods that `match` at the call
+      site. `WelsSpatialWriteMbSynCabacThunk`, four typedefs, four `is_some()` asserts
+      and three `extern "C"`s deleted; **the CAVLC arm sheds the `buf` parameter T3.5
+      was forced to add**, which is the win an enum buys over a trait object.
+      `assert_size!(SWelsFuncPtrList)` 1272 → 1248.
+- [x] **T4b.1b — rate-control dispatch** *(session A, `3e583b9a`)*. `SWelsRcFunc`'s nine
+      slots → one `eInstalledMode: RCMode` and nine methods; nine typedefs deleted,
+      nineteen call sites de-guarded. Assert 1248 → **1184**. The seam produced **S23**:
+      the installed mode is deliberately *not* read live, because
+      `WelsEncoderParamAdjust`'s no-reset arm changes `iRCMode` without re-pointing the
+      table, so deriving would have silently repaired a live lag.
+- [ ] **T4b.2 — the two strategy vtables.** Scouted at session A's exit and the
+      implementor counts are asymmetric: `IWelsParametersetStrategy` has **one** ported
+      implementor, so it is a concrete type rather than dispatch;
+      `IWelsReferenceStrategy` has **three** sharing one data member — the enum case.
+      Both are `Box::into_raw`'d thin pointers held in structs with size asserts, so
+      **S20's closure comes first**.
+- [ ] **T4b.3 — 4a's named leftovers**, including `decode_slice.rs`'s cache-fill
+      `transmute`s. **`transmute` is still 23 and has not moved since Phase 0**; two
+      4b seams have now gone by without touching it.
+
+Phases 5–9 not started.

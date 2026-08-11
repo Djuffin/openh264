@@ -635,3 +635,54 @@ Running total: **fifteen measurements, four alternations, four acquittals.** The
 standing advice is unchanged and now very well supported — a lone `mt`/`sm=3`/`t∈{2,4}`
 wrong-length hit is F3 until an alternation says otherwise, and the sweep's verdict on
 any single run is a sample rather than a fact.
+
+### Sixteenth to eighteenth measurements — 2026-08-11, Phase 4b: the rate is measured at last, and the isolated re-run is shown to be the wrong instrument
+
+Three separate hits across one session, on two trees:
+
+| # | battery | profile | configuration | output |
+|---|---|---|---|---|
+| 16 | T4b.1 `full` | release | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **short** — 41989 vs 42281 |
+| — | (its S14 re-run) | release | same | **short** — 40645 vs 42281 |
+| 17 | T4b.2 `family` | debug | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1` | **zero** — 0 vs 40992 |
+| 18 | T4b.2 `full` | debug | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` | **zero** — 0 vs 42281 |
+
+Two things to note before the alternations. **The session-start control battery was
+clean**, breaking a three-session streak of session-start hits — so the advice "expect
+a hit before you change a line" is a tendency, not a rule. And measurement 16's re-run
+produced a *different* wrong length from the same binary and configuration, which is a
+race and not a divergence: a deterministic port bug repeats its bytes.
+
+**Alternation five** (measurement 16, release, the hitting configuration in isolation,
+binaries swapped inside one loop): **HEAD 1/40, control `6e15c907` 1/40.** A tie, the
+second consecutive one.
+
+**Alternations six and seven are the informative part, and they change how this
+finding should be tested.** Measurements 17 and 18 escalated per S14. Run in isolation
+— 40 runs per side of the two configurations that had just failed — the result was
+**HEAD 0/40, control `08b7c29d` 0/40**: neither side reproduced *at all*. That acquits
+and proves nothing. So the alternation moved to the level at which the hits actually
+occur: whole `mt` sweep presets, 341 configurations back to back, which is the loaded
+condition the finding has always said it needs. Twelve sweeps per side, binaries
+swapped inside one loop:
+
+**HEAD 4 hits / 12 sweeps, control 5 hits / 12 sweeps.** The control — which does not
+contain the change under test — hit *more* often.
+
+Three results worth more than the acquittal itself:
+
+1. **The rate is now measured directly rather than inferred.** Roughly one hit per
+   2-3 `mt` sweeps ⇒ about **1 in 800 configurations** under load, which lands inside
+   the 1/400-1000 this finding has claimed since Phase 0 from indirect evidence.
+2. **All three wrong-length forms appeared on both sides inside one loop**: zero-byte
+   on both, a **short** output on HEAD (37837 vs 39981) and a **long** one on the
+   control (40463 vs 39981). The form of the wrong length carries no information about
+   which tree produced it — the signature's output clause is a disjunction on purpose.
+3. **An isolated re-run of a hitting configuration is the wrong unit to sample.**
+   0/80 across both sides in isolation, then 9 hits between them once the machine was
+   loaded. S14 already says sequential sampling of a load-sensitive race misleads;
+   this is the same lesson one level up, about *what* is being sampled rather than in
+   what order. **When an alternation comes back 0/0, re-run it at the sweep level
+   before calling it a result.**
+
+Running total: **eighteen measurements, seven alternations, seven acquittals.**
