@@ -102,6 +102,13 @@ impl Default for SWelsNalRaw {
 /// beside it. One helper does that arithmetic and nothing else does it, exactly as
 /// T3.1b's reader-side helper did until T3.3 deleted it.
 ///
+/// **T3.5 narrowed what this guards.** The CABAC arithmetic coder used to hold
+/// its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` pointer triple and reach the
+/// output without passing through here; its cursor is three `usize` offsets now,
+/// so both entropy coders write through this one boundary on the same
+/// convention. What remains on the far side is the *allocation*, not any cursor
+/// — which is precisely the residue T3.6 removes.
+///
 /// # Safety
 /// `ptr` must be non-null and point to `len` writable bytes that outlive `'a`, with
 /// no other live reference to them — which is what `pBsBuffer` plus its own

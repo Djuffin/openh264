@@ -1175,7 +1175,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         if !kbCabac {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfStashMBStatus {
-                    func(&mut sDss, pSlice, 0);
+                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
                 }
             }
         }
@@ -1210,7 +1210,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
-                        func(&mut sDss, pSlice);
+                        func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                     }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
@@ -1285,7 +1285,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
 
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             if let Some(func) = func_list.pfStashMBStatus {
-                func(&mut sDss, pSlice, 0);
+                func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
             }
             if let Some(func) = func_list.pfRc.pfWelsRcMbInit {
                 func(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
@@ -1320,7 +1320,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
-                        func(&mut sDss, pSlice);
+                        func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                     }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
@@ -1348,7 +1348,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfStashPopMBStatus {
-                    func(&mut sDss, pSlice);
+                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
@@ -1464,7 +1464,7 @@ pub unsafe fn WelsMdInterMbLoop(
         if !kbCabac {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfStashMBStatus {
-                    func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+                    func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, (*pSlice).iMbSkipRun);
                 }
             }
         }
@@ -1530,7 +1530,7 @@ pub unsafe fn WelsMdInterMbLoop(
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
-                        (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                        (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                     }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
@@ -1614,7 +1614,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     loop {
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             if let Some(func) = func_list.pfStashMBStatus {
-                func(&mut sDss, pSlice, (*pSlice).iMbSkipRun);
+                func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice, (*pSlice).iMbSkipRun);
             }
         }
         iCurMbIdx = iNextMbIdx;
@@ -1685,7 +1685,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && (*pCurMb).uiLumaQp < 50 {
                 if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                     if let Some(func) = func_list.pfStashPopMBStatus {
-                        (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                        (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                     }
                 }
                 UpdateQpForOverflow(pCurMb, kuiChromaQpIndexOffset);
@@ -1713,7 +1713,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         ) {
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
                 if let Some(func) = func_list.pfStashPopMBStatus {
-                    (*pSlice).iMbSkipRun = func(&mut sDss, pSlice);
+                    (*pSlice).iMbSkipRun = func(slice_bs_buffer(pEncCtx, pSlice), &mut sDss, pSlice);
                 }
             }
             (*pCurLayer).LastCodedMbIdxOfPartition[kiPartitionId] = iCurMbIdx - 1;
@@ -1874,6 +1874,12 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 /// inside the cursor. Deriving it back from `iMultipleThreadIdc` and `uiSliceMode`
 /// would re-read parameters that can move between allocation and use; the pointer
 /// cannot.
+///
+/// **T3.5 added the CABAC callers.** `WelsSpatialWriteMbSynCabac` and
+/// `WelsInitSliceCabac` derive their buffer here rather than gaining a
+/// parameter, which is what keeps `pfWelsSpatialWriteMbSyn`'s signature — Phase
+/// 4b's — untouched for the second session running. The arithmetic coder no
+/// longer reaches the output any other way.
 #[inline]
 pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
     if (*pSlice).pSliceBsa == std::ptr::addr_of_mut!((*pSlice).sSliceBs.sBsWrite) {
@@ -1969,13 +1975,15 @@ pub unsafe fn WelsWriteSliceEndSyn(
 ) {
     let pBs = (*pSlice).pSliceBsa;
     if bEntropyCodingModeFlag {
-        crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(&mut (*pSlice).sCabacCtx);
-        // The arithmetic coder wrote through its own byte cursor; what the C++
-        // assigns to `pBs->pCurBuf` is an absolute pointer into this same buffer,
-        // so the detached equivalent is that pointer's offset from the base. The
-        // triple it comes from is T3.5's to convert.
-        let end = crate::encoder::set_mb_syn_cabac::WelsCabacEncodeGetPtr(&mut (*pSlice).sCabacCtx);
-        (*pBs).set_pos(end.offset_from(buf.as_ptr()) as usize);
+        crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(buf, &mut (*pSlice).sCabacCtx);
+        // Both coders now count in the same units over the same buffer, so
+        // handing the position back is an assignment. This used to be
+        // `set_pos(end.offset_from(buf.as_ptr()))` around a pointer the coder
+        // had derived from an offset in the first place; `BsWriter::set_pos`
+        // existed for this one caller and is deleted with it.
+        *pBs = BsWriter::at(crate::encoder::set_mb_syn_cabac::WelsCabacEncodePos(
+            &mut (*pSlice).sCabacCtx,
+        ));
     } else {
         crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, &mut *pBs);
         crate::encoder::vlc_encoder::BsFlush(buf, &mut *pBs);

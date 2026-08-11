@@ -637,26 +637,27 @@ impl BsWriter {
         self.left_bits
     }
 
-    /// Moves the byte position without touching the accumulator.
+    /// A writer positioned at `pos` with an empty accumulator.
     ///
-    /// This exists for exactly one caller: the CABAC slice tail, where the
-    /// arithmetic coder has written bytes through its *own* cursor and hands the
-    /// position back (`WelsWriteSliceEndSyn`'s `pBs->pCurBuf =
-    /// WelsCabacEncodeGetPtr(…)`). It is not a seek — the accumulator is not
-    /// re-primed, because on that path it is empty: the slice header was flushed by
-    /// `BsAlign` before CABAC started.
+    /// One caller: the CABAC slice tail, where the arithmetic coder has written
+    /// bytes through its own cursor and hands the position back
+    /// (`WelsWriteSliceEndSyn`). Both cursors are offsets into the same buffer,
+    /// so that hand-back is an assignment.
     ///
-    /// # Panics
-    /// In a debug build, if the accumulator is not empty — the invariant that makes
-    /// leaving it alone correct.
+    /// This replaces `set_pos`, which moved the byte position of an existing
+    /// writer and had to `debug_assert!(left_bits == 32)` because doing that with
+    /// bits pending would silently drop them. A constructor cannot have pending
+    /// bits, so the invariant the assert was checking is now structural — and on
+    /// this path it was always a fact rather than a hope: `BsAlign` flushes the
+    /// slice header before CABAC starts, and the coder never touches the
+    /// accumulator.
     #[inline]
-    pub fn set_pos(&mut self, pos: usize) {
-        debug_assert!(
-            self.left_bits == 32,
-            "set_pos with {} bits pending would drop them",
-            32 - self.left_bits
-        );
-        self.pos = pos;
+    pub fn at(pos: usize) -> Self {
+        Self {
+            pos,
+            cur_bits: 0,
+            left_bits: 32,
+        }
     }
 
     /// The write position in bits.

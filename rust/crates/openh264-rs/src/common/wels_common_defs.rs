@@ -28,9 +28,10 @@ use std::ffi::c_void;
 //
 // Nothing crossed a C ABI with this layout — it appears in no header under
 // `codec/api/wels/`, and `api/abi_guard.rs` guards the public surface separately.
-// The encoder CABAC writer keeps its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd`
-// triple inside `SCabacCtx`; converting that is T3.5's, and it never used this
-// struct.
+// The encoder CABAC writer kept its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd`
+// triple inside `SCabacCtx`, which never used this struct. T3.5 converted it to
+// three `usize` offsets, and with that the bitstream layer holds no pointer
+// cursor of any kind, on either side.
 
 
 /// NAL Unit Type (5 bits) per ITU-T H.264 / AVC and Annex G (SVC).

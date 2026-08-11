@@ -974,7 +974,13 @@ pub unsafe fn WelsWriteMbResidual(
     0
 }
 
-pub unsafe extern "C" fn StashMBStatusCavlc(
+/// The CAVLC stash needs no buffer: a detached cursor is `Copy`, so the whole
+/// snapshot is `*pBs`. `buf` is here only because the CABAC variant behind the
+/// same `pfStashMBStatus` slot does need one — see [`PStashMBStatus`].
+///
+/// [`PStashMBStatus`]: crate::encoder::wels_func_ptr_def::PStashMBStatus
+pub unsafe fn StashMBStatusCavlc(
+    _buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
     iMbSkipRun: i32,
@@ -984,16 +990,20 @@ pub unsafe extern "C" fn StashMBStatusCavlc(
     }
     let pBs = (*pSlice).pSliceBsa;
     if !pBs.is_null() {
-        // Three cursor fields become one value. `BsWriter` is `Copy`, which is the
-        // whole point of a detached cursor — T3.5 owns the CABAC half of this
-        // rollback and the `m_pBufStart/Cur/End` triple it snapshots.
+        // Three cursor fields become one value. `BsWriter` is `Copy`, which is
+        // the whole point of a detached cursor. The CABAC twin below now reads
+        // the same way — `sStoredCabac = *pCtx` — since T3.5 turned its triple
+        // into offsets; the two families end symmetric, and the only thing
+        // still asymmetric between them is CABAC's byte copy, which exists for
+        // `PropagateCarry` and not for the cursor.
         (*pDss).sBsStack = *pBs;
     }
     (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp as u8;
     (*pDss).iMbSkipRunStack = iMbSkipRun;
 }
 
-pub unsafe extern "C" fn StashPopMBStatusCavlc(
+pub unsafe fn StashPopMBStatusCavlc(
+    _buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
 ) -> i32 {
@@ -1015,7 +1025,8 @@ pub unsafe extern "C" fn StashPopMBStatusCavlc(
 /// only has to remember three bitstream cursor fields — copies out the bytes
 /// already emitted, because CABAC renormalisation can rewrite them via
 /// `PropagateCarry`.
-pub unsafe extern "C" fn StashMBStatusCabac(
+pub unsafe fn StashMBStatusCabac(
+    buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
     iMbSkipRun: i32,
@@ -1024,11 +1035,22 @@ pub unsafe extern "C" fn StashMBStatusCabac(
         return;
     }
     let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
+    // `SCabacCtx` is `Copy` and, since T3.5, holds no pointers — so the whole
+    // snapshot is this one assignment, the same shape the CAVLC twin above
+    // reached in T3.4. What the two still do not share is the byte copy below:
+    // CABAC's `PropagateCarry` rewrites bytes it already emitted, so restoring
+    // the cursor is not enough to restore the output.
     (*pDss).sStoredCabac = *pCtx;
     if !(*pDss).pRestoreBuffer.is_null() {
         let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
-        std::ptr::copy_nonoverlapping((*pCtx).m_pBufStart, (*pDss).pRestoreBuffer, iLen as usize);
+        let start = (*pCtx).m_iBufStart;
+        // Sliced, not offset: `buf[start..start + iLen]` is what bounds the
+        // read against the output buffer, which the C++ never did. The
+        // destination stays a raw pointer — `pRestoreBuffer` is one of the
+        // `pDynamicBsBuffer` allocations, and those are Phase 6's.
+        let src = &buf[start..start + iLen as usize];
+        std::ptr::copy_nonoverlapping(src.as_ptr(), (*pDss).pRestoreBuffer, iLen as usize);
     }
     (*pDss).uiLastMbQp = (*pSlice).uiLastMbQp;
     (*pDss).iMbSkipRunStack = iMbSkipRun;
@@ -1038,7 +1060,8 @@ pub unsafe extern "C" fn StashMBStatusCabac(
 ///
 /// Note the offset is recomputed from the *restored* context, so
 /// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
-pub unsafe extern "C" fn StashPopMBStatusCabac(
+pub unsafe fn StashPopMBStatusCabac(
+    buf: &mut [u8],
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
 ) -> i32 {
@@ -1047,10 +1070,16 @@ pub unsafe extern "C" fn StashPopMBStatusCabac(
     }
     let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
     *pCtx = (*pDss).sStoredCabac;
+    // Write-extent audit site 3: the one write that is not at the cursor.
     if !(*pDss).pRestoreBuffer.is_null() {
         let iPosBitOffset = GetBsPosCabac(pSlice) - (*pDss).iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
-        std::ptr::copy_nonoverlapping((*pDss).pRestoreBuffer, (*pCtx).m_pBufStart, iLen as usize);
+        let start = (*pCtx).m_iBufStart;
+        // Same bound as the stash side, on the write this time — this is the
+        // one write in the whole engine that is not at the cursor, and
+        // `buf[start..start + iLen]` is what says how far it may reach.
+        let dst = &mut buf[start..start + iLen as usize];
+        std::ptr::copy_nonoverlapping((*pDss).pRestoreBuffer, dst.as_mut_ptr(), iLen as usize);
     }
     (*pSlice).uiLastMbQp = (*pDss).uiLastMbQp;
     (*pDss).iMbSkipRunStack
@@ -1059,16 +1088,19 @@ pub unsafe extern "C" fn StashPopMBStatusCabac(
 /// `GetBsPosCabac` — set_mb_syn_cavlc.cpp:275.
 ///
 /// The bit position is derived from the arithmetic coder's own byte cursor, not
-/// from `SBitStringAux`: `((m_pBufCur - m_pBufStart) << 3) + (m_iLowBitCnt - 9)`.
+/// from `SBitStringAux`: `((m_iBufCur - m_iBufStart) << 3) + (m_iLowBitCnt - 9)`.
 /// The `- 9` is load-bearing and the result can legitimately be negative before
 /// the first byte is emitted.
+///
+/// Both cursor fields are offsets into the same buffer, so the difference is
+/// plain arithmetic and this function needs no buffer — which is why
+/// `pfGetBsPosition`, whose signature Phase 4b owns, gains no parameter.
 pub unsafe extern "C" fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
     if pSlice.is_null() {
         return 0;
     }
     let pCtx = &(*pSlice).sCabacCtx;
-    ((pCtx.m_pBufCur as isize - pCtx.m_pBufStart as isize) as i32) * 8
-        + (pCtx.m_iLowBitCnt - 9)
+    ((pCtx.m_iBufCur - pCtx.m_iBufStart) as i32) * 8 + (pCtx.m_iLowBitCnt - 9)
 }
 
 /// `extern "C"` shim for the `pfWelsSpatialWriteMbSyn` slot.
