@@ -2520,3 +2520,244 @@ Meta-rule worth carrying: **the regression-vs-pre-existing principle got exercis
 miniature here** — the ladder's `usize`-wrap hazard is exactly "your conversion
 narrows/changes a window the raw code had"; writing it as a comparison *before* any
 malformed row could catch it is the cheap form of the session-B disambiguation test.
+
+## 2026-08-11 — Phase 3, session D (T3.3; the decoder read side closes)
+
+**Goal:** [`prompts/phase3_session_d.md`](prompts/phase3_session_d.md) — seam T3.3
+whole, four faces in dependency order. All four landed, plus the seam close. T3.4 was
+not touched, per the brief's non-goals.
+
+**Started at** `d737a450`; **ended at** `0a5550ae` + this docs commit. Tree clean at
+both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `345308cb` | **faces 1+2** — `RawDataBuffer`; the `BsReader` bridge deleted; `ExpandBsBuffer` deleted; **F16 instance 2** closed; P5's growth test |
+| `1db28c4f` | **face 3** — `nalu.rs` payload identity is an offset; four dead transliterations deleted (S18) |
+| `8b611076` | **face 4** — **F15 fixed**; `withheld()` deleted; 105 golden rows un-withheld |
+| `0a5550ae` | the session brief, with three corrections made in place |
+
+### Gates
+
+| | inherited (`d737a450`) | final |
+|---|---|---|
+| tests | 433 / 427 / 20 | **434 / 428 / 20** |
+| T3.0 goldens | 2316 rows, **105 `WITHHELD`** | **2316 rows, 0 `WITHHELD`** — see §4 |
+| conformance | 53 hashes | 53, unchanged throughout |
+| sweeps | 341/341 both | 341/341 both (two F3 hits en route — §5) |
+| benches | bit-identical | bit-identical, both |
+| Miri `--lib` | 288 | **289** (the P5 growth test) |
+| ratchet | 1336 / 5106 / 158 | **1327 `unsafe_fn` / 5076 `raw_ptr` / 155 `SHIM(`** |
+
+**The milestone:** with this seam the decoder's entire read side — cursor (T3.1),
+engine (T3.2), buffer and NAL identity (T3.3) — is safe-owned. There is no
+`from_raw_parts` left anywhere in the bitstream read path, no pointer cursor, and no
+stored extent. `raw_ptr` −30 is the phase's biggest single drop, and `SHIM(` **fell for
+the first time in the phase**: the strangler scaffolding is now being removed rather
+than added.
+
+### 1. The design rule did the work: derive, don't store
+
+The brief's §1 asked for one property — *every readable extent is derived from the
+owning buffer at window-creation time; nothing stores a length the buffer can outgrow* —
+and made it the standard the seam is judged by. Applying it literally is what shrank the
+design twice before a line was written:
+
+* The brief's own sketch stored `start`, `cur` **and** `end`. `end` (`pEnd − pHead`) is a
+  stored copy of the allocation size — the F16 defect in miniature — and is `buf.len()`.
+* `pStartPos` turned out **write-only in this port**: set at init and at each rebase,
+  read by nothing, because upstream's parse-only rewind that consumes it was never
+  transliterated. So `start` had nothing to store either.
+
+`RawDataBuffer { buf: Vec<u8>, cur: usize }`. One offset. Corrections made in the brief
+in place, per its header, and in plan §2.2.2 as a [P3] note.
+
+The same rule is why `ExpandBsBuffer` could be **deleted** rather than converted, and
+why **F16's second instance closed by construction**: that instance existed because a
+growth invalidated a stored `avail`, and there is no longer anything for a growth to
+invalidate. Saying "we fixed the stale-extent bug" would have been weaker than what
+actually happened, which is that the bug became unrepresentable.
+
+What the rule did *not* license was redesigning the slop. T3.1a/F16 established on
+evidence that the reader's slack bytes are real neighbouring stream bytes that feed
+decoded values on malformed input, so the owned `Vec` is kept at full allocated size and
+zero-filled — `WelsMallocz`'s exact semantics — and `buf.len()` is initialized bytes,
+never spare capacity. The 2316 goldens were the referee that the accounting is exact,
+and they did not move for faces 1–3.
+
+### 2. The `Vec` fields exposed production UB the conversion had to fix
+
+`SWelsDecoderContext::Default` was `unsafe { std::mem::zeroed() }`, and `codec_api.rs`'s
+decoder-creation path called it — not a test path. The moment two fields became `Vec`s,
+that call was manufacturing invalid `Vec`s on the live path. `Default` now writes those
+two fields through a `MaybeUninit` shell before the value materializes.
+
+Then the test suite found the second half of it, twice: the context is several MiB, so
+`Box::default()`'s by-value construction overflows a 2 MiB test thread's stack. Hence
+`new_boxed()`, which builds in place on the heap, replacing seven
+`Box::new_zeroed().assume_init()` sites (that idiom stopped being sound for the same
+reason) and three by-value `::default()` sites.
+
+Worth noting how this was found: not by review, but by a stack overflow in a test that
+has nothing to do with bitstreams. The port's habit of zeroing C structs wholesale is a
+standing hazard for every later phase that gives a context an owning field — Phase 5
+will meet it with `MbGrid`, and Phase 6 with the encoder's pools.
+
+### 3. Four dead transliterations, found by conversion rather than by a sweep
+
+S18's straggler discipline is a phase-exit instrument; this seam produced four hits
+without one, because converting a signature forces you to look at every caller:
+
+* `DetectStartCodePrefix` — zero callers. `split_annexb_units` has been the Annex B
+  scanner since `WelsDecodeBs` was written.
+* `decoder_core`'s duplicate `SVclNal`/`SPrefixNalUnit`/`SNalData` trio and its
+  `PPrefixNalUnit` alias — every live `sNalData` access resolves through `nalu.rs`.
+* `decoder_core`'s duplicate `DecodeNalHeaderExt` — zero callers.
+* `SVclNal::pNalPos` — never written in this port, and its one read sat behind an
+  always-true null guard, so a `memcpy` in the parse-only output path has never
+  executed. Deleted with the field; `iNalLength`, whose bookkeeping does run, stays.
+
+Plus two dead parameter pairs (`pSrcNal`/`kSrcNalLen` on `ParseSps`/`ParsePps`/
+`ParseNonVclNal`). The general lesson for T3.4, which faces the same situation with four
+copies of the writer: **a duplicate that no longer compiles is cheaper to find than one
+that still does** — retyping the thing they all embed is what surfaced these.
+
+### 4. F15: the fix is defined by what release accidentally did
+
+The brief said to re-grep the expression shape rather than trust the remembered count.
+Done, and the count held: three sites, two live and one already guarded, all three now
+routed through one helper so none can form the index by subtraction again.
+
+The fix itself is small and the interesting part is the *choice of answer*. An empty
+RBSP yields bit size **0**, which flows into the caller's existing `DecInitBits` failure
+branch — `dsBitstreamError` plus the access-unit bookkeeping the code already had. That
+is exactly what release did by accident (its out-of-bounds read landed on an odd header
+byte, giving zero trailing bits), so the fix promotes an accidental outcome to a defined
+one rather than inventing behaviour. Debug no longer aborts the process; release no
+longer computes an out-of-bounds pointer; and the guard is a **comparison, not a
+subtraction**, per the seam's arithmetic rule.
+
+**The proof is the golden diff, and it is exactly what the protocol demanded:**
+
+```
+removed WITHHELD rows: 105      added WITHHELD rows: 0
+removed OTHER rows:      0      added other rows:  105
+```
+
+12 files, 105 insertions / 105 deletions, classified mechanically rather than eyeballed
+— the F15-named rows gained outcomes and nothing else moved. The new rows read as the
+graceful path: `0x4` (`dsBitstreamError`) at the truncated NAL, `0x0` before and after,
+and the longer truncations carry real per-plane hashes for the frames decoded ahead of
+the damage. **Both profiles then accept the same table** — generated in debug, release
+passes it unchanged — which is the property that could not exist while the finding was
+open, and the reason `Outcome::Withheld` is deleted rather than left unused.
+
+Session C's deliberate near-miss (the reverted-unlanded corpus extension) is what kept
+this diff clean, and no corpus change rode along.
+
+**A note on the count**: the brief's §5 heading promised "exactly 13 rows". 13 is
+**F16's** number — the corpus entries that hit the CAVLC prime narrowing — conflated
+with F15's. F15's own text says ~11 per stream and the tables held 105. The referee
+("exactly the withheld rows, nothing else") was unaffected and was met; the heading is
+corrected in place. Cheap lesson: a remembered *number* is as untrustworthy as a
+remembered line number, and the protocol survived precisely because it was written as a
+property rather than a count.
+
+### 5. F3's eleventh measurement, and the first hit that arrived before any change
+
+Two release-sweep hits, both the signature, each re-run 5/5 clean. The first came from
+the **opening control battery — on the session-start commit, before a line was
+changed**, which is the cleanest available statement that the rate belongs to the
+machine. The second, in the face-3 battery, therefore was not news.
+
+The alternation ran anyway, because two hits trigger S14's clause and the tempting
+argument ("decoder-only seam, zero encoder bytes changed" — verified, the diff over
+`src/encoder` and `src/common` is empty) is the one the rule exists to distrust.
+Control `d737a450` in a worktree, 6 rounds × 32 `mt sm=3` configurations per side,
+alternating in one loop: **control 4/192, HEAD 2/192**. Control failed twice as often —
+same direction as the ninth measurement, second acquittal in two runs. Appended to F3
+with a note that the current rate (≈1/64 under battery load) means a 6×32 alternation
+now suffices where the ninth needed 6×120.
+
+### 6. Perf, and the one place the disassembly and the bench disagreed about mattering
+
+S2 null first: this session's decode floor is **median +0.51%, range +0.36%..+0.57%**
+(≈±0.6% — five times tighter than session C's, the machine having been quieter than its
+battery count suggests), encoder ≈±3.3%. Then the pair, 3 pairs, control =
+`d737a450` (seam start):
+
+| row | delta |
+|---|---|
+| decode CB (CAVLC) | **−0.43%** |
+| decode Main (CABAC) | +0.36% |
+| decode High (CABAC 8×8) | +0.32% |
+| encoder median (28 rows) | **+0.00%** (range −1.45%..+1.47%) |
+
+Every decode row sits at or below the null's own median, so there is no signal at all;
+CB is the row that matters here (it pulls every stream byte through the fill path and
+every syntax element through the reader) and it is a small win. **No ledger row opens**;
+cumulative decode stays ≈ +17.8 / +10.1 / +9.6%, and the phase's ~7-point CB allowance
+is still untouched three seams in.
+
+S1 proportionally, per the brief: one disassembly look at the converted copy path,
+compared honestly against the raw one (control tree, same function, both emitted at
+`--release`). The EPB-stripping loop is a byte scanner in both versions — it never was a
+`memcpy`, since it must detect `00 00 03` — and the conversion costs **two instructions
+per byte**: the raw steady-state body is 10 instructions, the safe one is 12, the extra
+pair being the `cmp`/never-taken-`b.eq` of `dst[dst_len] = b`. The up-front slice take is
+one check per NAL, as designed.
+
+That check does not fold, and it is worth writing down *why* rather than leaving a future
+session to re-derive it: the write index lags the read index by a variable amount (each
+skipped `0x03` widens the gap), so no safe formulation — indexing, `split_first_mut`,
+`iter_mut().next()` — can prove `dst_len < dst.len()` without a per-write test; they all
+compile to the same compare-and-branch. The measurement says it costs nothing (CB
+−0.43%), so it stays. **If a future measurement ever wants it back**, the restructure
+that removes it is a different algorithm, not a different idiom: copy the runs *between*
+EPB markers with `copy_from_slice` and skip the marker bytes, which turns a per-byte
+loop into a handful of `memcpy`s and would likely beat the raw code. Deliberately not
+done here — S1 forbids optimizing without a measurement demanding it, and the brief
+scoped this seam's fill path as "hot-ish", correctly.
+
+### 7. Differential retirement: nothing was owed
+
+The brief expected the bridge deletion to shrink the differential files' raw side. It
+did not, because that retirement already happened: T3.1b deleted the differential's
+reader half outright (a test comparing a thing to itself), leaving only the frozen CAVLC
+transliteration, the trailing-bits/leading-zeros pair, and the writer half — none of
+which touch `BsReader`. So the Miri count moved **288 → 289**, and the +1 is the P5
+growth test, not a retirement. Recorded because "expected the count to move" and "the
+count moved for the reason expected" are different claims, and only the second one is
+true here.
+
+### Hand-off: T3.4, the encoder write side, part 1
+
+**First action, before any conversion: re-read [`phase2_findings.md`](phase2_findings.md)
+F2 and F5 in full**, then dedupe — as its own commit, sweeps as the referee, changing
+zero bytes of output or it reverts. F2's map: `vlc_encoder.rs:367` canonical;
+`svc_set_mb_syn_cavlc.rs:157` equivalent with a hand-rolled 4-byte store;
+`nal_encap.rs:169` equivalent with an explicit `iLen == 0` guard;
+`svc_encode_slice.rs:509` **divergent** (null/`iLen <= 0` early-returns, pre-masks
+`kuiValue`, inverts the branch sense, `wrapping_add` in `BsWriteUE`). The dedupe commit
+records which guard semantics die; F5 says not to "fix" the canonical writer's debug
+panic while deduping (S6).
+
+Then `vlc_encoder.rs` → `BsWriter`, where **F13's lying `InitBits` signature dies** and
+`au_set.rs`'s two accommodations are deleted in the same commit — a named deliverable of
+the phase, and 4a's precedent says deleting an accommodation exposes the next finding
+immediately, so expect one.
+
+Three things this seam leaves T3.4:
+
+* **The dead-duplicate lesson (§3) transfers directly.** Retyping the thing the copies
+  embed is what surfaced four dead transliterations here; F2's four writers are the same
+  shape, and the dedupe is exactly that operation performed deliberately.
+* **The zeroed-struct hazard (§2) is now a known trap**, and the encoder structs T3.6
+  converts (`SWelsNalRaw`, `SWelsEncoderOutput`, `SWelsSliceBs`) are all reached through
+  wholesale-zeroed contexts. Check the construction path *before* giving any of them an
+  owning field.
+* **Comparison-form arithmetic** paid twice more this session (the ladder at T3.2, the
+  `size < 1` guard here). `svc_set_mb_syn_cavlc.rs:752`'s `pEndBuf - pCurBuf - 1` space
+  checks are the next instance waiting.
