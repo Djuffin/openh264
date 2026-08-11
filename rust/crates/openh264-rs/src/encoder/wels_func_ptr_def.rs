@@ -297,7 +297,10 @@ impl EntropyCoder {
 /// tracked by `encoder/abi_guard.rs`, which records each de-virtualization that
 /// shrinks it.
 #[repr(C)]
-#[derive(Copy, Clone)]
+// T4b.2a: `Copy, Clone` came off when `pParametersetStrategy` became an owned
+// `Option<Box<_>>`. Nothing copied the table by value -- it is only ever reached
+// through `sWelsEncCtx::pFuncList`, a pointer -- so this is a derive that had been
+// silently licensing a double-owner ever since the strategy was allocated at all.
 pub struct SWelsFuncPtrList {
     pub sExpandPicFunc: SExpandPicFunc,
     pub pfFillInterNeighborCache: Option<PFillInterNeighborCacheFunc>,
@@ -396,9 +399,18 @@ pub struct SWelsFuncPtrList {
     /// slots, +8 for the discriminant and its padding.
     pub eEntropyCoder: EntropyCoder,
 
-    /// `IWelsParametersetStrategy*` — a thin pointer to the C-style vtable object in
-    /// `paraset_strategy.rs`, matching the 8-byte member C++ declares here.
-    pub pParametersetStrategy: *mut crate::encoder::paraset_strategy::IWelsParametersetStrategy,
+    /// `IWelsParametersetStrategy*` — C++ declares an 8-byte pointer to a
+    /// polymorphic object; **T4b.2a** made it an owned `Option<Box<_>>`, which is
+    /// also 8 bytes by the null-pointer niche and which has a `Drop`.
+    ///
+    /// The name keeps its C++ `p` for diffability, but this member **owns** its
+    /// object: `None` is the uninstalled state (and the all-zero pattern
+    /// `WelsMallocz` produces), and dropping the box is `WELS_DELETE_OP`. Because
+    /// the table itself is `WelsMallocz`'d and `WelsFree`'d, *this struct's* drop
+    /// glue never runs — so `WelsUninitEncoderExt` `take()`s the field explicitly,
+    /// at the same point `encoder_ext.cpp:1995` deletes it. See F19.
+    pub pParametersetStrategy:
+        Option<Box<crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj>>,
 }
 
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
@@ -406,9 +418,12 @@ pub type TagWelsFuncPointerList = SWelsFuncPtrList;
 impl Default for SWelsFuncPtrList {
     fn default() -> Self {
         // All members are function pointers, small POD sub-structs of function
-        // pointers, a raw pointer, or -- since T4b.1 -- an `EntropyCoder` whose
-        // zero discriminant is a declared variant (`Cavlc`); the C++ encoder
-        // zeroes this table before InitFunctionPointers fills it in.
+        // pointers, an `EntropyCoder`/`RCMode` whose zero discriminant is a declared
+        // variant (`Cavlc` / `RC_QUALITY_MODE`), or -- since T4b.2a -- an
+        // `Option<Box<_>>`, for which all-zero is `None` by the guaranteed
+        // null-pointer niche rather than a dangling box. The C++ encoder zeroes this
+        // table before InitFunctionPointers fills it in, and `WelsMallocz` does the
+        // same on the live path; both stay sound for the same reason. (S21.)
         unsafe { std::mem::zeroed() }
     }
 }

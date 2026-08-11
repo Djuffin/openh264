@@ -719,16 +719,22 @@ pub unsafe fn InitFunctionPointers(
         (*pParam).bEnableBackgroundDetection as i32,
     );
 
-    // encoder.cpp:227. Only CONSTANT_ID is ported, so this returns null — and hence
-    // ENC_RETURN_MEMALLOCERR — for the other four strategies rather than quietly
-    // substituting one; see `paraset_strategy::CreateParametersetStrategy`.
+    // encoder.cpp:227. Only CONSTANT_ID and INCREASING_ID are ported, so this returns
+    // `None` — and hence ENC_RETURN_MEMALLOCERR — for the three listing strategies
+    // rather than quietly substituting one; see
+    // `paraset_strategy::CreateParametersetStrategy`.
+    //
+    // The assignment drops whatever was installed before, which is the only way this
+    // can be reached twice: `WelsUninitEncoderExt` runs between two inits and takes
+    // the field. **S23**: the object caches `eSpsPpsIdStrategy` as a
+    // `ParasetIdKind`, and it cannot lag the live parameter — see the type's doc.
     (*pFuncList).pParametersetStrategy =
         crate::encoder::paraset_strategy::CreateParametersetStrategy(
             (*pParam).eSpsPpsIdStrategy,
             (*pParam).bSimulcastAVC,
             (*pParam).iSpatialLayerNum,
         );
-    if (*pFuncList).pParametersetStrategy.is_null() {
+    if (*pFuncList).pParametersetStrategy.is_none() {
         return ENC_RETURN_MEMALLOCERR;
     }
 

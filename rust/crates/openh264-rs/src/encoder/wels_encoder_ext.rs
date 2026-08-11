@@ -20,7 +20,7 @@ use crate::encoder::au_set::{
 };
 use crate::encoder::nal_encap::EWelsNalRefIdc::NRI_PRI_HIGHEST;
 use crate::encoder::paraset_strategy::{
-    IWelsParametersetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS, PARA_SET_TYPE_SUBSETSPS,
+    ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS, PARA_SET_TYPE_SUBSETSPS,
 };
 use crate::encoder::svc_enc_slice_segment::{
     CheckRasterMultiSliceSetting, CheckRowMbMultiSliceSetting,
@@ -422,10 +422,7 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
         &mut (&mut *pOut).sBsBuffer[..],
         (*pCtx).pSpsArray.add(kiSpsIdx as usize),
         &mut (*pOut).sBsWrite,
-        IWelsParametersetStrategy::GetSpsIdOffsetList(
-            (*(*pCtx).pFuncList).pParametersetStrategy,
-            PARA_SET_TYPE_AVCSPS as i32,
-        ),
+        ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32),
     );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
@@ -460,7 +457,7 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
         &mut (&mut *pOut).sBsBuffer[..],
         (*pCtx).pPPSArray.add(kiPpsIdx as usize),
         &mut (*pOut).sBsWrite,
-        (*(*pCtx).pFuncList).pParametersetStrategy,
+        ParasetStrategy(pCtx),
     );
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
@@ -504,24 +501,24 @@ pub unsafe fn WelsWriteParameterSets(
     if pCtx.is_null()
         || pNalLen.is_null()
         || pNumNal.is_null()
-        || (*(*pCtx).pFuncList).pParametersetStrategy.is_null()
+        || (*(*pCtx).pFuncList).pParametersetStrategy.is_none()
     {
         return ENC_RETURN_UNEXPECTED;
     }
-    let pParametersetStrategy = (*(*pCtx).pFuncList).pParametersetStrategy;
-    let pVtbl = (*pParametersetStrategy).pVtbl;
+    // Every access below re-acquires. `WelsWriteOneSPS` and `WelsWriteOnePPS` reach
+    // this same object through `pCtx->pFuncList`, so the local this function used to
+    // keep was an alias of theirs — invisible while it was a `*mut`. T4b.2a.
 
     *pTotalLength = 0;
     /* write all SPS */
     iIdx = 0;
     while iIdx < (*pCtx).iSpsNum {
-        ((*pVtbl).Update)(
-            pParametersetStrategy,
+        ParasetStrategy(pCtx).Update(
             (*(*pCtx).pSpsArray.add(iIdx as usize)).uiSpsId,
             PARA_SET_TYPE_AVCSPS as i32,
         );
         /* generate sequence parameters set */
-        iId = ((*pVtbl).GetSpsIdx)(pParametersetStrategy, iIdx);
+        iId = ParasetStrategy(pCtx).GetSpsIdx(iIdx);
 
         WelsWriteOneSPS(pCtx, iId, &mut iNalLength);
 
@@ -537,8 +534,7 @@ pub unsafe fn WelsWriteParameterSets(
     while iIdx < (*pCtx).iSubsetSpsNum {
         iNal = (*(*pCtx).pOut).iNalIndex;
 
-        ((*pVtbl).Update)(
-            pParametersetStrategy,
+        ParasetStrategy(pCtx).Update(
             (*(*pCtx).pSubsetArray.add(iIdx as usize)).pSps.uiSpsId,
             PARA_SET_TYPE_SUBSETSPS as i32,
         );
@@ -556,10 +552,7 @@ pub unsafe fn WelsWriteParameterSets(
             &mut (&mut *(*pCtx).pOut).sBsBuffer[..],
             (*pCtx).pSubsetArray.add(iId as usize),
             &mut (*(*pCtx).pOut).sBsWrite,
-            IWelsParametersetStrategy::GetSpsIdOffsetList(
-                pParametersetStrategy,
-                PARA_SET_TYPE_SUBSETSPS as i32,
-            ),
+            ParasetStrategy(pCtx).GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32),
         );
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
@@ -582,12 +575,11 @@ pub unsafe fn WelsWriteParameterSets(
         iCountNal += 1;
     }
 
-    ((*pVtbl).UpdatePpsList)(pParametersetStrategy, pCtx);
+    ParasetStrategy(pCtx).UpdatePpsList(pCtx);
 
     iIdx = 0;
     while iIdx < (*pCtx).iPpsNum {
-        ((*pVtbl).Update)(
-            pParametersetStrategy,
+        ParasetStrategy(pCtx).Update(
             (*(*pCtx).pPPSArray.add(iIdx as usize)).iPpsId,
             PARA_SET_TYPE_PPS as i32,
         );
@@ -815,9 +807,7 @@ pub unsafe fn WelsEncoderParamAdjust(
         let mut pExistingParasetList: *mut SExistingParasetList = null_mut();
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && (*pNewParam).eSpsPpsIdStrategy != CONSTANT_ID {
-            let pStrategy = (*(**ppCtx).pFuncList).pParametersetStrategy;
-            ((*(*pStrategy).pVtbl).OutputCurrentStructure)(
-                pStrategy,
+            ParasetStrategy(*ppCtx).OutputCurrentStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
                 *ppCtx,
@@ -857,9 +847,7 @@ pub unsafe fn WelsEncoderParamAdjust(
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
                 && (*pNewParam).eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
-            let pStrategy = (*(**ppCtx).pFuncList).pParametersetStrategy;
-            ((*(*pStrategy).pVtbl).LoadPreviousStructure)(
-                pStrategy,
+            ParasetStrategy(*ppCtx).LoadPreviousStructure(
                 sTmpPsoVariable.as_mut_ptr(),
                 iTmpPpsIdList.as_mut_ptr(),
             );

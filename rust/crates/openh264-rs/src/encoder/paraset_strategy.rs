@@ -3,21 +3,32 @@
 //!
 //! **Partial by design.** C++ declares one abstract `IWelsParametersetStrategy` and
 //! five concrete strategies (`CONSTANT_ID`, `INCREASING_ID`, `SPS_LISTING`,
-//! `SPS_LISTING_AND_PPS_INCREASING`, `SPS_PPS_LISTING`). Only
-//! `CWelsParametersetIdConstant` — the `CONSTANT_ID` strategy the Phase-5 gate
-//! configuration uses — is ported here. `CreateParametersetStrategy` returns an
-//! explicit error for the other four rather than silently substituting the constant
-//! strategy, which would produce a stream that decodes but does not match C++.
+//! `SPS_LISTING_AND_PPS_INCREASING`, `SPS_PPS_LISTING`). **Two** are ported:
+//! `CONSTANT_ID` (the Phase-5 gate configuration) and `INCREASING_ID` (the
+//! `FillDefault` value, and so the strategy an unconfigured encoder actually runs).
+//! [`CreateParametersetStrategy`] returns `None` for the three listing strategies
+//! rather than silently substituting the constant one, which would produce a stream
+//! that decodes but does not match C++.
 //!
-//! ### Why a C-style vtable
+//! ### One object, two kinds — T4b.2a
 //!
-//! `sWelsEncCtx` and `SWelsFuncPtrList` both store this as a plain 8-byte
-//! `IWelsParametersetStrategy*`. A Rust `*mut dyn Trait` is a 16-byte fat pointer and
-//! would mis-size both structs — the exact defect Phase 2 found in
-//! `ref_list_mgr_svc.rs`'s `IWelsReferenceStrategy`. So the interface is modelled the
-//! way C++ lays it out: a thin pointer to an object whose first word is a pointer to a
-//! static vtable. `IWelsParametersetStrategyVtbl` lists the methods in the same order
-//! `paraset_strategy.h:50-93` declares them, so the two can be read side by side.
+//! C++ layers three classes: `CWelsParametersetIdConstant`, the abstract
+//! `CWelsParametersetIdNonConstant` (which overrides `OutputCurrentStructure` and
+//! `LoadPreviousStructure`), and `CWelsParametersetIdIncreasing` (which adds
+//! `GetPpsIdOffset`, `GetSpsIdOffset` and `Update` on top). **All three carry the same
+//! data members** — only their vtables differ — so this module models them as one
+//! [`CWelsParametersetIdStrategyObj`] carrying a [`ParasetIdKind`] discriminant, and
+//! the five methods that actually differ `match` on it. The other fifteen have one
+//! body, which is exactly what the C++ vtables say: `ID_INCREASING_VTBL` used to point
+//! fifteen of its twenty entries at the `ConstId_*` thunks.
+//!
+//! This replaced a hand-written C-style vtable (`IWelsParametersetStrategyVtbl`, 20
+//! entries, 25 thunks, 2 static instances). The vtable existed because `SWelsFuncPtrList`
+//! stores this as a plain 8-byte member and a `*mut dyn Trait` is a 16-byte fat pointer
+//! that would mis-size the struct. `Option<Box<CWelsParametersetIdStrategyObj>>` is 8
+//! bytes by the null-pointer niche, so the size is kept without the indirection — and
+//! the `Box` makes the object's owner visible, which is how T4b.2a found the leak
+//! recorded as F19.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
 
 use std::ptr::null_mut;
@@ -41,120 +52,45 @@ pub const PARA_SET_TYPE_PPS: usize = 2;
 /// parameter set matches the current configuration.
 pub const INVALID_ID: i32 = -1;
 
-/// Virtual-function table for `IWelsParametersetStrategy`
-/// (`paraset_strategy.h:50`). Entries are in C++ declaration order.
+/// Which of C++'s parameter-set id strategies an object implements.
 ///
-/// Every entry takes the object pointer as its first argument, standing in for the
-/// implicit `this`.
-#[repr(C)]
-pub struct IWelsParametersetStrategyVtbl {
-    pub Destroy: unsafe extern "C" fn(*mut IWelsParametersetStrategy),
-    pub GetPpsIdOffset: unsafe extern "C" fn(*mut IWelsParametersetStrategy, i32) -> i32,
-    pub GetSpsIdOffset: unsafe extern "C" fn(*mut IWelsParametersetStrategy, i32, i32) -> i32,
-    pub GetSpsIdOffsetList: unsafe extern "C" fn(*mut IWelsParametersetStrategy, i32) -> *mut i32,
-    pub GetAllNeededParasetNum: unsafe extern "C" fn(*mut IWelsParametersetStrategy) -> u32,
-    pub GetNeededSpsNum: unsafe extern "C" fn(*mut IWelsParametersetStrategy) -> u32,
-    pub GetNeededSubsetSpsNum: unsafe extern "C" fn(*mut IWelsParametersetStrategy) -> u32,
-    pub GetNeededPpsNum: unsafe extern "C" fn(*mut IWelsParametersetStrategy) -> u32,
-    pub LoadPrevious: unsafe extern "C" fn(
-        *mut IWelsParametersetStrategy,
-        *mut SExistingParasetList,
-        *mut SWelsSPS,
-        *mut SSubsetSps,
-        *mut SWelsPPS,
-    ),
-    pub Update: unsafe extern "C" fn(*mut IWelsParametersetStrategy, u32, i32),
-    pub UpdatePpsList: unsafe extern "C" fn(*mut IWelsParametersetStrategy, *mut sWelsEncCtx),
-    pub CheckParamCompatibility: unsafe extern "C" fn(
-        *mut IWelsParametersetStrategy,
-        *mut SWelsSvcCodingParam,
-        *mut SLogContext,
-    ) -> bool,
-    pub GenerateNewSps: unsafe extern "C" fn(
-        *mut IWelsParametersetStrategy,
-        *mut sWelsEncCtx,
-        bool,
-        i32,
-        i32,
-        u32,
-        *mut *mut SWelsSPS,
-        *mut *mut SSubsetSps,
-        bool,
-    ) -> u32,
-    pub InitPps: unsafe extern "C" fn(
-        *mut IWelsParametersetStrategy,
-        *mut sWelsEncCtx,
-        u32,
-        *mut SWelsSPS,
-        *mut SSubsetSps,
-        u32,
-        bool,
-        bool,
-        bool,
-    ) -> u32,
-    pub SetUseSubsetFlag: unsafe extern "C" fn(*mut IWelsParametersetStrategy, u32, bool),
-    pub UpdateParaSetNum: unsafe extern "C" fn(*mut IWelsParametersetStrategy, *mut sWelsEncCtx),
-    pub GetCurrentPpsId: unsafe extern "C" fn(*mut IWelsParametersetStrategy, i32, i32) -> i32,
-    pub OutputCurrentStructure: unsafe extern "C" fn(
-        *mut IWelsParametersetStrategy,
-        *mut SParaSetOffsetVariable,
-        *mut i32,
-        *mut sWelsEncCtx,
-        *mut SExistingParasetList,
-    ),
-    pub LoadPreviousStructure:
-        unsafe extern "C" fn(*mut IWelsParametersetStrategy, *mut SParaSetOffsetVariable, *mut i32),
-    pub GetSpsIdx: unsafe extern "C" fn(*mut IWelsParametersetStrategy, i32) -> i32,
-}
-
-/// `IWelsParametersetStrategy` — the abstract base. One pointer wide, matching the
-/// vptr-only layout C++ gives a class with no data members.
-#[repr(C)]
-pub struct IWelsParametersetStrategy {
-    pub pVtbl: *const IWelsParametersetStrategyVtbl,
-}
-
-impl IWelsParametersetStrategy {
-    /// `pParametersetStrategy->GetPpsIdOffset (iPpsId)`.
-    ///
-    /// # Safety
-    /// `pThis` must be a live strategy object built by [`CreateParametersetStrategy`].
-    pub unsafe fn GetPpsIdOffset(pThis: *mut IWelsParametersetStrategy, iPpsId: i32) -> i32 {
-        ((*(*pThis).pVtbl).GetPpsIdOffset)(pThis, iPpsId)
-    }
-
-    /// `pParametersetStrategy->GetSpsIdOffset (iPpsId, iSpsId)`.
-    ///
-    /// # Safety
-    /// `pThis` must be a live strategy object built by [`CreateParametersetStrategy`].
-    pub unsafe fn GetSpsIdOffset(
-        pThis: *mut IWelsParametersetStrategy,
-        iPpsId: i32,
-        iSpsId: i32,
-    ) -> i32 {
-        ((*(*pThis).pVtbl).GetSpsIdOffset)(pThis, iPpsId, iSpsId)
-    }
-
-    /// `pParametersetStrategy->GetSpsIdOffsetList (iParasetType)`.
-    ///
-    /// # Safety
-    /// `pThis` must be a live strategy object built by [`CreateParametersetStrategy`].
-    pub unsafe fn GetSpsIdOffsetList(
-        pThis: *mut IWelsParametersetStrategy,
-        iParasetType: i32,
-    ) -> *mut i32 {
-        ((*(*pThis).pVtbl).GetSpsIdOffsetList)(pThis, iParasetType)
-    }
-}
-
-/// `CWelsParametersetIdConstant` — `paraset_strategy.h:96`.
+/// C++ spells this as three classes with three vtables over one data layout;
+/// [`CWelsParametersetIdStrategyObj`] spells it as this discriminant, and only the
+/// five methods whose vtable entries actually differ read it.
 ///
-/// Layout mirrors the C++ object: vptr first (as the embedded base), then
-/// `m_sParaSetOffset`, `m_bSimulcastAVC`, `m_iSpatialLayerNum`,
-/// `m_iBasicNeededSpsNum`, `m_iBasicNeededPpsNum`.
+/// `Constant = 0` matters: [`SWelsFuncPtrList`](crate::encoder::wels_func_ptr_def::SWelsFuncPtrList)
+/// is built by `WelsMallocz`, so the all-zero pattern must be a declared variant —
+/// see the S21 note on [`CWelsParametersetIdStrategyObj`].
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ParasetIdKind {
+    /// `CWelsParametersetIdConstant` — `paraset_strategy.h:96`. Every id offset is 0.
+    Constant = 0,
+    /// `CWelsParametersetIdIncreasing` — `paraset_strategy.h:208`, via the abstract
+    /// `CWelsParametersetIdNonConstant` (`paraset_strategy.h:180`). Rotates the id
+    /// written to the bitstream and records the delta back to the encoder-side id.
+    Increasing = 1,
+}
+
+/// The parameter-set id strategy object — C++'s `CWelsParametersetIdConstant`,
+/// `CWelsParametersetIdNonConstant` and `CWelsParametersetIdIncreasing` merged, since
+/// the three declare identical data members (`paraset_strategy.h:96`, `:180`, `:208`)
+/// and differ only in vtable. `eIdKind` says which of them this object is.
+///
+/// Field order after `eIdKind` mirrors the C++ object: `m_sParaSetOffset`,
+/// `m_bSimulcastAVC`, `m_iSpatialLayerNum`, `m_iBasicNeededSpsNum`,
+/// `m_iBasicNeededPpsNum`.
+///
+/// **S21, the construction audit.** This type is only ever built by
+/// [`CreateParametersetStrategy`], which fills every field; it is never `mem::zeroed`
+/// and never `WelsMallocz`'d. What *is* zero-constructed is the
+/// `SWelsFuncPtrList` that holds it, and there the field is an
+/// `Option<Box<CWelsParametersetIdStrategyObj>>` whose all-zero pattern is `None` by
+/// the null-pointer niche — a valid value, not a dangling box. The owned field is
+/// therefore sound at all-zero, which is the case the rule asks about.
 #[repr(C)]
-pub struct CWelsParametersetIdConstant {
-    pub base: IWelsParametersetStrategy,
+pub struct CWelsParametersetIdStrategyObj {
+    pub eIdKind: ParasetIdKind,
     pub m_sParaSetOffset: SParaSetOffset,
     pub m_bSimulcastAVC: bool,
     pub m_iSpatialLayerNum: i32,
@@ -163,13 +99,12 @@ pub struct CWelsParametersetIdConstant {
 }
 
 /// `CWelsParametersetIdConstant::CWelsParametersetIdConstant` —
-/// `paraset_strategy.cpp:203`.
-impl CWelsParametersetIdConstant {
-    pub fn new(bSimulcastAVC: bool, kiSpatialLayerNum: i32) -> Box<Self> {
+/// `paraset_strategy.cpp:203`. The `Increasing` constructor
+/// (`paraset_strategy.cpp:365`) chains to it and adds nothing.
+impl CWelsParametersetIdStrategyObj {
+    pub fn new(eIdKind: ParasetIdKind, bSimulcastAVC: bool, kiSpatialLayerNum: i32) -> Box<Self> {
         Box::new(Self {
-            base: IWelsParametersetStrategy {
-                pVtbl: &ID_CONSTANT_VTBL,
-            },
+            eIdKind,
             // C++ memsets m_sParaSetOffset to 0.
             m_sParaSetOffset: SParaSetOffset::default(),
             m_bSimulcastAVC: bSimulcastAVC,
@@ -178,131 +113,286 @@ impl CWelsParametersetIdConstant {
             m_iBasicNeededPpsNum: (1 + kiSpatialLayerNum) as u32,
         })
     }
-}
 
-/// Recovers the concrete type from the interface pointer. Sound only because
-/// `CWelsParametersetIdConstant` is `#[repr(C)]` with `base` as its first field.
-#[inline]
-unsafe fn as_const_id(pThis: *mut IWelsParametersetStrategy) -> *mut CWelsParametersetIdConstant {
-    pThis as *mut CWelsParametersetIdConstant
-}
+    // ------------------------------------------------------------------
+    // The five methods whose C++ vtable entries differ between the kinds.
+    // Read each `match` against `ID_CONSTANT_VTBL` / `ID_INCREASING_VTBL` as they
+    // were: the `Constant` arm is the `ConstId_*` body, the `Increasing` arm the
+    // `IncId_*` / `NonConstId_*` one.
+    // ------------------------------------------------------------------
 
-unsafe extern "C" fn ConstId_Destroy(pThis: *mut IWelsParametersetStrategy) {
-    // Mirrors `WELS_DELETE_OP`; the allocation came from `Box::new` in `new`.
-    drop(Box::from_raw(as_const_id(pThis)));
-}
+    /// `GetPpsIdOffset` — `paraset_strategy.cpp:216` (Constant) / `:384` (Increasing).
+    #[inline]
+    pub fn GetPpsIdOffset(&self, kiPpsId: i32) -> i32 {
+        match self.eIdKind {
+            ParasetIdKind::Constant => 0,
+            ParasetIdKind::Increasing => {
+                self.m_sParaSetOffset.sParaSetOffsetVariable[PARA_SET_TYPE_PPS].iParaSetIdDelta
+                    [kiPpsId as usize]
+            }
+        }
+    }
 
-/// `CWelsParametersetIdConstant::GetPpsIdOffset` — `paraset_strategy.cpp:216`.
-unsafe extern "C" fn ConstId_GetPpsIdOffset(
-    _pThis: *mut IWelsParametersetStrategy,
-    _iPpsId: i32,
-) -> i32 {
-    0
-}
+    /// `GetSpsIdOffset` — `paraset_strategy.cpp:219` (Constant) / `:391` (Increasing).
+    #[inline]
+    pub fn GetSpsIdOffset(&self, kiPpsId: i32, kiSpsId: i32) -> i32 {
+        match self.eIdKind {
+            ParasetIdKind::Constant => 0,
+            ParasetIdKind::Increasing => {
+                let kiParameterSetType =
+                    if self.m_sParaSetOffset.bPpsIdMappingIntoSubsetsps[kiPpsId as usize] {
+                        PARA_SET_TYPE_SUBSETSPS
+                    } else {
+                        PARA_SET_TYPE_AVCSPS
+                    };
+                self.m_sParaSetOffset.sParaSetOffsetVariable[kiParameterSetType].iParaSetIdDelta
+                    [kiSpsId as usize]
+            }
+        }
+    }
 
-/// `CWelsParametersetIdConstant::GetSpsIdOffset` — `paraset_strategy.cpp:219`.
-unsafe extern "C" fn ConstId_GetSpsIdOffset(
-    _pThis: *mut IWelsParametersetStrategy,
-    _iPpsId: i32,
-    _iSpsId: i32,
-) -> i32 {
-    0
-}
+    /// `Update` — `paraset_strategy.cpp:261` (Constant) / `:370` (Increasing).
+    #[inline]
+    pub fn Update(&mut self, kuiId: u32, iParasetType: i32) {
+        match self.eIdKind {
+            ParasetIdKind::Constant => {
+                self.m_sParaSetOffset = SParaSetOffset::default();
+            }
+            ParasetIdKind::Increasing => {
+                let kuiMaxIdInBs = if iParasetType != PARA_SET_TYPE_PPS as i32 {
+                    MAX_SPS_COUNT as u32
+                } else {
+                    MAX_PPS_COUNT as u32
+                };
+                ParasetIdAdditionIdAdjust(
+                    &mut self.m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize],
+                    kuiId as i32,
+                    kuiMaxIdInBs,
+                );
+            }
+        }
+    }
 
-/// `CWelsParametersetIdConstant::GetSpsIdOffsetList` — `paraset_strategy.cpp:223`.
-unsafe extern "C" fn ConstId_GetSpsIdOffsetList(
-    pThis: *mut IWelsParametersetStrategy,
-    iParasetType: i32,
-) -> *mut i32 {
-    let p = as_const_id(pThis);
-    (*p).m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize]
-        .iParaSetIdDelta
-        .as_mut_ptr()
-}
+    /// `OutputCurrentStructure` — `paraset_strategy.h:145` (Constant, empty) /
+    /// `paraset_strategy.cpp:292` (`CWelsParametersetIdNonConstant`). `pPpsIdList`,
+    /// `pCtx` and `pExistingParasetList` are accepted and unused, as in C++.
+    ///
+    /// # Safety
+    /// On an `Increasing` object, `pParaSetOffsetVariable` must be writable for
+    /// `PARA_SET_TYPE` elements.
+    pub unsafe fn OutputCurrentStructure(
+        &mut self,
+        pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
+        _pPpsIdList: *mut i32,
+        _pCtx: *mut sWelsEncCtx,
+        _pExistingParasetList: *mut SExistingParasetList,
+    ) {
+        match self.eIdKind {
+            ParasetIdKind::Constant => {}
+            ParasetIdKind::Increasing => {
+                for k in 0..PARA_SET_TYPE {
+                    self.m_sParaSetOffset.sParaSetOffsetVariable[k].bUsedParaSetIdInBs =
+                        [false; MAX_PPS_COUNT];
+                }
+                std::ptr::copy_nonoverlapping(
+                    self.m_sParaSetOffset.sParaSetOffsetVariable.as_ptr(),
+                    pParaSetOffsetVariable,
+                    PARA_SET_TYPE,
+                );
+            }
+        }
+    }
 
-/// `CWelsParametersetIdConstant::GetAllNeededParasetNum` — `paraset_strategy.cpp:227`.
-unsafe extern "C" fn ConstId_GetAllNeededParasetNum(pThis: *mut IWelsParametersetStrategy) -> u32 {
-    ConstId_GetNeededSpsNum(pThis)
-        + ConstId_GetNeededSubsetSpsNum(pThis)
-        + ConstId_GetNeededPpsNum(pThis)
-}
+    /// `LoadPreviousStructure` — `paraset_strategy.h:148` (Constant, empty) /
+    /// `paraset_strategy.cpp:300` (`CWelsParametersetIdNonConstant`).
+    ///
+    /// # Safety
+    /// On an `Increasing` object, `pParaSetOffsetVariable` must be readable for
+    /// `PARA_SET_TYPE` elements.
+    pub unsafe fn LoadPreviousStructure(
+        &mut self,
+        pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
+        _pPpsIdList: *mut i32,
+    ) {
+        match self.eIdKind {
+            ParasetIdKind::Constant => {}
+            ParasetIdKind::Increasing => {
+                std::ptr::copy_nonoverlapping(
+                    pParaSetOffsetVariable as *const SParaSetOffsetVariable,
+                    self.m_sParaSetOffset.sParaSetOffsetVariable.as_mut_ptr(),
+                    PARA_SET_TYPE,
+                );
+            }
+        }
+    }
 
-/// `CWelsParametersetIdConstant::GetNeededSpsNum` — `paraset_strategy.cpp:233`.
-unsafe extern "C" fn ConstId_GetNeededSpsNum(pThis: *mut IWelsParametersetStrategy) -> u32 {
-    let p = as_const_id(pThis);
-    // C++ tests `0 >= uiNeededSpsNum` on a uint32_t, i.e. exactly "== 0".
-    if (*p).m_sParaSetOffset.uiNeededSpsNum == 0 {
-        (*p).m_sParaSetOffset.uiNeededSpsNum = (*p).m_iBasicNeededSpsNum
-            * if (*p).m_bSimulcastAVC {
-                (*p).m_iSpatialLayerNum as u32
+    // ------------------------------------------------------------------
+    // The fifteen with one body. `ID_INCREASING_VTBL` pointed all fifteen of these
+    // entries at the `ConstId_*` thunks, which is C++ inheritance resolving them to
+    // the base class — so there is nothing to `match` on.
+    // ------------------------------------------------------------------
+
+    /// `GetSpsIdOffsetList` — `paraset_strategy.cpp:223`.
+    ///
+    /// Returns a raw pointer because its callers hand it straight to the SPS writers,
+    /// which take `*mut i32` from C++.
+    #[inline]
+    pub fn GetSpsIdOffsetList(&mut self, iParasetType: i32) -> *mut i32 {
+        self.m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize]
+            .iParaSetIdDelta
+            .as_mut_ptr()
+    }
+
+    /// `GetAllNeededParasetNum` — `paraset_strategy.cpp:227`.
+    pub fn GetAllNeededParasetNum(&mut self) -> u32 {
+        self.GetNeededSpsNum() + self.GetNeededSubsetSpsNum() + self.GetNeededPpsNum()
+    }
+
+    /// `GetNeededSpsNum` — `paraset_strategy.cpp:233`.
+    pub fn GetNeededSpsNum(&mut self) -> u32 {
+        // C++ tests `0 >= uiNeededSpsNum` on a uint32_t, i.e. exactly "== 0".
+        if self.m_sParaSetOffset.uiNeededSpsNum == 0 {
+            self.m_sParaSetOffset.uiNeededSpsNum = self.m_iBasicNeededSpsNum
+                * if self.m_bSimulcastAVC {
+                    self.m_iSpatialLayerNum as u32
+                } else {
+                    1
+                };
+        }
+        self.m_sParaSetOffset.uiNeededSpsNum
+    }
+
+    /// `GetNeededSubsetSpsNum` — `paraset_strategy.cpp:241`.
+    pub fn GetNeededSubsetSpsNum(&mut self) -> u32 {
+        if self.m_sParaSetOffset.uiNeededSubsetSpsNum == 0 {
+            self.m_sParaSetOffset.uiNeededSubsetSpsNum = if self.m_bSimulcastAVC {
+                0
             } else {
-                1
+                (self.m_iSpatialLayerNum - 1) as u32
             };
+        }
+        self.m_sParaSetOffset.uiNeededSubsetSpsNum
     }
-    (*p).m_sParaSetOffset.uiNeededSpsNum
-}
 
-/// `CWelsParametersetIdConstant::GetNeededSubsetSpsNum` — `paraset_strategy.cpp:241`.
-unsafe extern "C" fn ConstId_GetNeededSubsetSpsNum(pThis: *mut IWelsParametersetStrategy) -> u32 {
-    let p = as_const_id(pThis);
-    if (*p).m_sParaSetOffset.uiNeededSubsetSpsNum == 0 {
-        (*p).m_sParaSetOffset.uiNeededSubsetSpsNum = if (*p).m_bSimulcastAVC {
-            0
-        } else {
-            ((*p).m_iSpatialLayerNum - 1) as u32
-        };
+    /// `GetNeededPpsNum` — `paraset_strategy.cpp:248`.
+    pub fn GetNeededPpsNum(&mut self) -> u32 {
+        if self.m_sParaSetOffset.uiNeededPpsNum == 0 {
+            self.m_sParaSetOffset.uiNeededPpsNum = self.m_iBasicNeededPpsNum
+                * if self.m_bSimulcastAVC {
+                    self.m_iSpatialLayerNum as u32
+                } else {
+                    1
+                };
+        }
+        self.m_sParaSetOffset.uiNeededPpsNum
     }
-    (*p).m_sParaSetOffset.uiNeededSubsetSpsNum
-}
 
-/// `CWelsParametersetIdConstant::GetNeededPpsNum` — `paraset_strategy.cpp:248`.
-unsafe extern "C" fn ConstId_GetNeededPpsNum(pThis: *mut IWelsParametersetStrategy) -> u32 {
-    let p = as_const_id(pThis);
-    if (*p).m_sParaSetOffset.uiNeededPpsNum == 0 {
-        (*p).m_sParaSetOffset.uiNeededPpsNum = (*p).m_iBasicNeededPpsNum
-            * if (*p).m_bSimulcastAVC {
-                (*p).m_iSpatialLayerNum as u32
-            } else {
-                1
-            };
+    /// `LoadPrevious` — `paraset_strategy.cpp:256`; a no-op. The listing strategies
+    /// are the ones that override it, and none of them is ported.
+    #[inline]
+    pub fn LoadPrevious(
+        &mut self,
+        _pExistingParasetList: *mut SExistingParasetList,
+        _pSpsArray: *mut SWelsSPS,
+        _pSubsetArray: *mut SSubsetSps,
+        _pPpsArray: *mut SWelsPPS,
+    ) {
     }
-    (*p).m_sParaSetOffset.uiNeededPpsNum
-}
 
-/// `CWelsParametersetIdConstant::LoadPrevious` — `paraset_strategy.cpp:256`; a no-op.
-unsafe extern "C" fn ConstId_LoadPrevious(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pExistingParasetList: *mut SExistingParasetList,
-    _pSpsArray: *mut SWelsSPS,
-    _pSubsetArray: *mut SSubsetSps,
-    _pPpsArray: *mut SWelsPPS,
-) {
-}
+    /// `UpdatePpsList` — `paraset_strategy.h:114`; empty body.
+    #[inline]
+    pub fn UpdatePpsList(&mut self, _pCtx: *mut sWelsEncCtx) {}
 
-/// `CWelsParametersetIdConstant::Update` — `paraset_strategy.cpp:261`.
-unsafe extern "C" fn ConstId_Update(
-    pThis: *mut IWelsParametersetStrategy,
-    _kuiId: u32,
-    _iParasetType: i32,
-) {
-    (*as_const_id(pThis)).m_sParaSetOffset = SParaSetOffset::default();
-}
+    /// `CheckParamCompatibility` — `paraset_strategy.h:116`; unconditionally true.
+    #[inline]
+    pub fn CheckParamCompatibility(
+        &mut self,
+        _pCodingParam: *mut SWelsSvcCodingParam,
+        _pLogCtx: *mut SLogContext,
+    ) -> bool {
+        true
+    }
 
-/// `CWelsParametersetIdConstant::UpdatePpsList` — `paraset_strategy.h:114`; empty body.
-unsafe extern "C" fn ConstId_UpdatePpsList(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pCtx: *mut sWelsEncCtx,
-) {
-}
+    /// `GenerateNewSps` — `paraset_strategy.cpp:265`.
+    ///
+    /// # Safety
+    /// `pCtx` must satisfy [`WelsGenerateNewSps`]'s contract.
+    pub unsafe fn GenerateNewSps(
+        &mut self,
+        pCtx: *mut sWelsEncCtx,
+        kbUseSubsetSps: bool,
+        iDlayerIndex: i32,
+        iDlayerCount: i32,
+        kuiSpsId: u32,
+        pSps: *mut *mut SWelsSPS,
+        pSubsetSps: *mut *mut SSubsetSps,
+        bSVCBaselayer: bool,
+    ) -> u32 {
+        WelsGenerateNewSps(
+            pCtx,
+            kbUseSubsetSps,
+            iDlayerIndex,
+            iDlayerCount,
+            kuiSpsId as i32,
+            pSps,
+            pSubsetSps,
+            bSVCBaselayer,
+        );
+        kuiSpsId
+    }
 
-/// `CWelsParametersetIdConstant::CheckParamCompatibility` — `paraset_strategy.h:116`;
-/// unconditionally true.
-unsafe extern "C" fn ConstId_CheckParamCompatibility(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pCodingParam: *mut SWelsSvcCodingParam,
-    _pLogCtx: *mut SLogContext,
-) -> bool {
-    true
+    /// `InitPps` — `paraset_strategy.cpp:276`.
+    ///
+    /// Note the literal `true` C++ passes for `kbDeblockingFilterPresentFlag`, ignoring
+    /// the argument of the same name.
+    ///
+    /// # Safety
+    /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
+    pub unsafe fn InitPps(
+        &mut self,
+        pCtx: *mut sWelsEncCtx,
+        _kiSpsId: u32,
+        pSps: *mut SWelsSPS,
+        pSubsetSps: *mut SSubsetSps,
+        kuiPpsId: u32,
+        _kbDeblockingFilterPresentFlag: bool,
+        kbUsingSubsetSps: bool,
+        kbEntropyCodingModeFlag: bool,
+    ) -> u32 {
+        WelsInitPps(
+            (*pCtx).pPPSArray.add(kuiPpsId as usize),
+            pSps,
+            pSubsetSps,
+            kuiPpsId,
+            true,
+            kbUsingSubsetSps,
+            kbEntropyCodingModeFlag,
+        );
+        self.SetUseSubsetFlag(kuiPpsId, kbUsingSubsetSps);
+        kuiPpsId
+    }
+
+    /// `SetUseSubsetFlag` — `paraset_strategy.cpp:288`.
+    #[inline]
+    pub fn SetUseSubsetFlag(&mut self, iPpsId: u32, bUseSubsetSps: bool) {
+        self.m_sParaSetOffset.bPpsIdMappingIntoSubsetsps[iPpsId as usize] = bUseSubsetSps;
+    }
+
+    /// `UpdateParaSetNum` — `paraset_strategy.h:139`; empty.
+    #[inline]
+    pub fn UpdateParaSetNum(&mut self, _pCtx: *mut sWelsEncCtx) {}
+
+    /// `GetCurrentPpsId` — `paraset_strategy.h:141`.
+    #[inline]
+    pub fn GetCurrentPpsId(&self, iPpsId: i32, _iIdrLoop: i32) -> i32 {
+        iPpsId
+    }
+
+    /// `GetSpsIdx` — `paraset_strategy.h:150`.
+    #[inline]
+    pub fn GetSpsIdx(&self, _iIdx: i32) -> i32 {
+        0
+    }
 }
 
 /// `WelsGenerateNewSps` — `paraset_strategy.cpp:78` (file-static).
@@ -361,165 +451,17 @@ pub unsafe fn WelsGenerateNewSps(
     iRet
 }
 
-/// `CWelsParametersetIdConstant::GenerateNewSps` — `paraset_strategy.cpp:265`.
-unsafe extern "C" fn ConstId_GenerateNewSps(
-    _pThis: *mut IWelsParametersetStrategy,
-    pCtx: *mut sWelsEncCtx,
-    kbUseSubsetSps: bool,
-    iDlayerIndex: i32,
-    iDlayerCount: i32,
-    kuiSpsId: u32,
-    pSps: *mut *mut SWelsSPS,
-    pSubsetSps: *mut *mut SSubsetSps,
-    bSVCBaselayer: bool,
-) -> u32 {
-    WelsGenerateNewSps(
-        pCtx,
-        kbUseSubsetSps,
-        iDlayerIndex,
-        iDlayerCount,
-        kuiSpsId as i32,
-        pSps,
-        pSubsetSps,
-        bSVCBaselayer,
-    );
-    kuiSpsId
-}
-
-/// `CWelsParametersetIdConstant::InitPps` — `paraset_strategy.cpp:276`.
-///
-/// Note the literal `true` C++ passes for `kbDeblockingFilterPresentFlag`, ignoring
-/// the argument of the same name.
-unsafe extern "C" fn ConstId_InitPps(
-    pThis: *mut IWelsParametersetStrategy,
-    pCtx: *mut sWelsEncCtx,
-    _kiSpsId: u32,
-    pSps: *mut SWelsSPS,
-    pSubsetSps: *mut SSubsetSps,
-    kuiPpsId: u32,
-    _kbDeblockingFilterPresentFlag: bool,
-    kbUsingSubsetSps: bool,
-    kbEntropyCodingModeFlag: bool,
-) -> u32 {
-    WelsInitPps(
-        (*pCtx).pPPSArray.add(kuiPpsId as usize),
-        pSps,
-        pSubsetSps,
-        kuiPpsId,
-        true,
-        kbUsingSubsetSps,
-        kbEntropyCodingModeFlag,
-    );
-    ConstId_SetUseSubsetFlag(pThis, kuiPpsId, kbUsingSubsetSps);
-    kuiPpsId
-}
-
-/// `CWelsParametersetIdConstant::SetUseSubsetFlag` — `paraset_strategy.cpp:288`.
-unsafe extern "C" fn ConstId_SetUseSubsetFlag(
-    pThis: *mut IWelsParametersetStrategy,
-    iPpsId: u32,
-    bUseSubsetSps: bool,
-) {
-    (*as_const_id(pThis))
-        .m_sParaSetOffset
-        .bPpsIdMappingIntoSubsetsps[iPpsId as usize] = bUseSubsetSps;
-}
-
-/// `CWelsParametersetIdConstant::UpdateParaSetNum` — `paraset_strategy.h:139`; empty.
-unsafe extern "C" fn ConstId_UpdateParaSetNum(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pCtx: *mut sWelsEncCtx,
-) {
-}
-
-/// `CWelsParametersetIdConstant::GetCurrentPpsId` — `paraset_strategy.h:141`.
-unsafe extern "C" fn ConstId_GetCurrentPpsId(
-    _pThis: *mut IWelsParametersetStrategy,
-    iPpsId: i32,
-    _iIdrLoop: i32,
-) -> i32 {
-    iPpsId
-}
-
-/// `CWelsParametersetIdConstant::OutputCurrentStructure` — `paraset_strategy.h:145`;
-/// empty.
-unsafe extern "C" fn ConstId_OutputCurrentStructure(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-    _pPpsIdList: *mut i32,
-    _pCtx: *mut sWelsEncCtx,
-    _pExistingParasetList: *mut SExistingParasetList,
-) {
-}
-
-/// `CWelsParametersetIdConstant::LoadPreviousStructure` — `paraset_strategy.h:148`;
-/// empty.
-unsafe extern "C" fn ConstId_LoadPreviousStructure(
-    _pThis: *mut IWelsParametersetStrategy,
-    _pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-    _pPpsIdList: *mut i32,
-) {
-}
-
-/// `CWelsParametersetIdConstant::GetSpsIdx` — `paraset_strategy.h:150`.
-unsafe extern "C" fn ConstId_GetSpsIdx(_pThis: *mut IWelsParametersetStrategy, _iIdx: i32) -> i32 {
-    0
-}
-
-/// The single static vtable shared by every `CWelsParametersetIdConstant` instance,
-/// as C++ shares one vtable per class.
-pub static ID_CONSTANT_VTBL: IWelsParametersetStrategyVtbl = IWelsParametersetStrategyVtbl {
-    Destroy: ConstId_Destroy,
-    GetPpsIdOffset: ConstId_GetPpsIdOffset,
-    GetSpsIdOffset: ConstId_GetSpsIdOffset,
-    GetSpsIdOffsetList: ConstId_GetSpsIdOffsetList,
-    GetAllNeededParasetNum: ConstId_GetAllNeededParasetNum,
-    GetNeededSpsNum: ConstId_GetNeededSpsNum,
-    GetNeededSubsetSpsNum: ConstId_GetNeededSubsetSpsNum,
-    GetNeededPpsNum: ConstId_GetNeededPpsNum,
-    LoadPrevious: ConstId_LoadPrevious,
-    Update: ConstId_Update,
-    UpdatePpsList: ConstId_UpdatePpsList,
-    CheckParamCompatibility: ConstId_CheckParamCompatibility,
-    GenerateNewSps: ConstId_GenerateNewSps,
-    InitPps: ConstId_InitPps,
-    SetUseSubsetFlag: ConstId_SetUseSubsetFlag,
-    UpdateParaSetNum: ConstId_UpdateParaSetNum,
-    GetCurrentPpsId: ConstId_GetCurrentPpsId,
-    OutputCurrentStructure: ConstId_OutputCurrentStructure,
-    LoadPreviousStructure: ConstId_LoadPreviousStructure,
-    GetSpsIdx: ConstId_GetSpsIdx,
-};
-
-// ============================================================================
-// CWelsParametersetIdNonConstant / CWelsParametersetIdIncreasing
-//
-// C++ layers three classes here: CWelsParametersetIdNonConstant overrides
-// OutputCurrentStructure and LoadPreviousStructure, and CWelsParametersetIdIncreasing
-// adds GetPpsIdOffset, GetSpsIdOffset and Update on top. Rust has no implementation
-// inheritance, so the vtable below reuses the `ConstId_*` thunks verbatim for the
-// members that are not overridden — which is precisely what the C++ vtable does.
-//
-// The two `Debug*` helpers (`paraset_strategy.cpp:310`, `:327`) are `#if _DEBUG`
-// bodies; `_DEBUG` is not defined in this build, so they are empty and not ported.
-// `SParaSetOffset::eSpsPpsIdStrategy` is excluded by the same guard, so
-// `Update`'s first statement has no counterpart either.
-// ============================================================================
-
-/// `CWelsParametersetIdIncreasing` — `paraset_strategy.h:208`. Same data layout as
-/// `CWelsParametersetIdConstant`; only the vtable differs.
-pub type CWelsParametersetIdIncreasing = CWelsParametersetIdConstant;
-
 /// `ParasetIdAdditionIdAdjust` — `paraset_strategy.cpp:337`.
 ///
 /// Rotates the id actually written to the bitstream, recording the delta from the
 /// encoder-side id. `paraset_type = 0: SPS; = 1: PPS`.
 ///
-/// # Safety
-/// `sParaSetOffsetVariable` must be non-null; `kiCurEncoderParaSetId` must index
-/// `iParaSetIdDelta` and `uiNextParaSetIdToUseInBs` must index `bUsedParaSetIdInBs`.
-pub unsafe fn ParasetIdAdditionIdAdjust(
-    sParaSetOffsetVariable: *mut SParaSetOffsetVariable,
+/// The two `Debug*` helpers (`paraset_strategy.cpp:310`, `:327`) are `#if _DEBUG`
+/// bodies; `_DEBUG` is not defined in this build, so they are empty and not ported.
+/// `SParaSetOffset::eSpsPpsIdStrategy` is excluded by the same guard, so
+/// `Update`'s first statement has no counterpart either.
+fn ParasetIdAdditionIdAdjust(
+    sParaSetOffsetVariable: &mut SParaSetOffsetVariable,
     kiCurEncoderParaSetId: i32,
     kuiMaxIdInBs: u32,
 ) {
@@ -531,174 +473,82 @@ pub unsafe fn ParasetIdAdditionIdAdjust(
     // 31st enter:  next_spsid_in_bs == 31; spsid == 0~2;  delta == 31~29;  // actual 31
     // 31st finish: next_spsid_in_bs == 0;
     let kiEncId = kiCurEncoderParaSetId;
-    let mut uiNextIdInBs = (*sParaSetOffsetVariable).uiNextParaSetIdToUseInBs;
+    let mut uiNextIdInBs = sParaSetOffsetVariable.uiNextParaSetIdToUseInBs;
 
     // update current layer's pCodingParam: for the current parameter set, change its
     // id_delta. C++ computes `uiNextIdInBs - kiEncId` in uint32 and stores it in an
     // int32, so the subtraction wraps rather than saturating.
-    (*sParaSetOffsetVariable).iParaSetIdDelta[kiEncId as usize] =
+    sParaSetOffsetVariable.iParaSetIdDelta[kiEncId as usize] =
         uiNextIdInBs.wrapping_sub(kiEncId as u32) as i32;
     // write pso data for the next update: mark the used id
-    (*sParaSetOffsetVariable).bUsedParaSetIdInBs[uiNextIdInBs as usize] = true;
+    sParaSetOffsetVariable.bUsedParaSetIdInBs[uiNextIdInBs as usize] = true;
 
     // prepare for the next update: find the next available id
     uiNextIdInBs += 1;
     if uiNextIdInBs >= kuiMaxIdInBs {
         uiNextIdInBs = 0; // ensure the SPS_ID would not exceed MAX_SPS_COUNT
     }
-    (*sParaSetOffsetVariable).uiNextParaSetIdToUseInBs = uiNextIdInBs;
+    sParaSetOffsetVariable.uiNextParaSetIdToUseInBs = uiNextIdInBs;
 }
 
-/// `CWelsParametersetIdIncreasing::Update` — `paraset_strategy.cpp:370`.
-unsafe extern "C" fn IncId_Update(
-    pThis: *mut IWelsParametersetStrategy,
-    kuiId: u32,
-    iParasetType: i32,
-) {
-    let p = as_const_id(pThis);
-    ParasetIdAdditionIdAdjust(
-        &mut (*p).m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize],
-        kuiId as i32,
-        if iParasetType != PARA_SET_TYPE_PPS as i32 {
-            MAX_SPS_COUNT as u32
-        } else {
-            MAX_PPS_COUNT as u32
-        },
-    );
+/// The installed parameter-set strategy, borrowed for **one call**.
+///
+/// Deliberately not cached in a local. Several call sites either pass `pCtx` to a
+/// method (`GenerateNewSps`, `InitPps`, `UpdatePpsList`, `UpdateParaSetNum`) or call a
+/// function that reaches this same object back through `pCtx->pFuncList`
+/// (`WelsWriteOneSPS`, `WelsWriteOnePPS`) — so a `&mut` held across them would alias
+/// itself. Re-acquiring is one field read, and it makes the re-entrancy impossible to
+/// get wrong rather than merely unlikely. Under the vtable this hazard was invisible:
+/// a `*mut` cached in a local aliased freely and said nothing.
+///
+/// The unbound lifetime is the usual laundering this port does at a raw-pointer
+/// boundary; callers keep the reference for the length of one expression.
+///
+/// # Safety
+/// `pCtx` must be a live context whose `pFuncList` is non-null. The strategy must be
+/// installed — `InitFunctionPointers` fails the encoder build when it is not, and the
+/// call sites that run before that point test the field first. Panics rather than
+/// dereferencing null if the invariant is broken; the vtable version was UB there.
+#[inline]
+pub unsafe fn ParasetStrategy<'a>(
+    pCtx: *mut sWelsEncCtx,
+) -> &'a mut CWelsParametersetIdStrategyObj {
+    (*(*pCtx).pFuncList)
+        .pParametersetStrategy
+        .as_deref_mut()
+        .expect("pParametersetStrategy is installed by InitFunctionPointers")
 }
-
-/// `CWelsParametersetIdIncreasing::GetPpsIdOffset` — `paraset_strategy.cpp:384`.
-unsafe extern "C" fn IncId_GetPpsIdOffset(
-    pThis: *mut IWelsParametersetStrategy,
-    kiPpsId: i32,
-) -> i32 {
-    let p = as_const_id(pThis);
-    (*p).m_sParaSetOffset.sParaSetOffsetVariable[PARA_SET_TYPE_PPS].iParaSetIdDelta
-        [kiPpsId as usize]
-}
-
-/// `CWelsParametersetIdIncreasing::GetSpsIdOffset` — `paraset_strategy.cpp:391`.
-unsafe extern "C" fn IncId_GetSpsIdOffset(
-    pThis: *mut IWelsParametersetStrategy,
-    kiPpsId: i32,
-    kiSpsId: i32,
-) -> i32 {
-    let p = as_const_id(pThis);
-    let kiParameterSetType = if (*p).m_sParaSetOffset.bPpsIdMappingIntoSubsetsps[kiPpsId as usize] {
-        PARA_SET_TYPE_SUBSETSPS
-    } else {
-        PARA_SET_TYPE_AVCSPS
-    };
-    (*p).m_sParaSetOffset.sParaSetOffsetVariable[kiParameterSetType].iParaSetIdDelta
-        [kiSpsId as usize]
-}
-
-/// `CWelsParametersetIdNonConstant::OutputCurrentStructure` —
-/// `paraset_strategy.cpp:292`. `pPpsIdList`, `pCtx` and `pExistingParasetList` are
-/// accepted and unused, as in C++.
-unsafe extern "C" fn NonConstId_OutputCurrentStructure(
-    pThis: *mut IWelsParametersetStrategy,
-    pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-    _pPpsIdList: *mut i32,
-    _pCtx: *mut sWelsEncCtx,
-    _pExistingParasetList: *mut SExistingParasetList,
-) {
-    let p = as_const_id(pThis);
-    for k in 0..PARA_SET_TYPE {
-        (*p).m_sParaSetOffset.sParaSetOffsetVariable[k].bUsedParaSetIdInBs = [false; MAX_PPS_COUNT];
-    }
-    std::ptr::copy_nonoverlapping(
-        (*p).m_sParaSetOffset.sParaSetOffsetVariable.as_ptr(),
-        pParaSetOffsetVariable,
-        PARA_SET_TYPE,
-    );
-}
-
-/// `CWelsParametersetIdNonConstant::LoadPreviousStructure` —
-/// `paraset_strategy.cpp:300`.
-unsafe extern "C" fn NonConstId_LoadPreviousStructure(
-    pThis: *mut IWelsParametersetStrategy,
-    pParaSetOffsetVariable: *mut SParaSetOffsetVariable,
-    _pPpsIdList: *mut i32,
-) {
-    let p = as_const_id(pThis);
-    std::ptr::copy_nonoverlapping(
-        pParaSetOffsetVariable as *const SParaSetOffsetVariable,
-        (*p).m_sParaSetOffset.sParaSetOffsetVariable.as_mut_ptr(),
-        PARA_SET_TYPE,
-    );
-}
-
-/// Vtable for `CWelsParametersetIdIncreasing`. Entries not overridden by the
-/// `NonConstant`/`Increasing` subclasses point at the `CWelsParametersetIdConstant`
-/// implementation, exactly as C++ inheritance resolves them.
-pub static ID_INCREASING_VTBL: IWelsParametersetStrategyVtbl = IWelsParametersetStrategyVtbl {
-    Destroy: ConstId_Destroy,
-    GetPpsIdOffset: IncId_GetPpsIdOffset,
-    GetSpsIdOffset: IncId_GetSpsIdOffset,
-    GetSpsIdOffsetList: ConstId_GetSpsIdOffsetList,
-    GetAllNeededParasetNum: ConstId_GetAllNeededParasetNum,
-    GetNeededSpsNum: ConstId_GetNeededSpsNum,
-    GetNeededSubsetSpsNum: ConstId_GetNeededSubsetSpsNum,
-    GetNeededPpsNum: ConstId_GetNeededPpsNum,
-    LoadPrevious: ConstId_LoadPrevious,
-    Update: IncId_Update,
-    UpdatePpsList: ConstId_UpdatePpsList,
-    CheckParamCompatibility: ConstId_CheckParamCompatibility,
-    GenerateNewSps: ConstId_GenerateNewSps,
-    InitPps: ConstId_InitPps,
-    SetUseSubsetFlag: ConstId_SetUseSubsetFlag,
-    UpdateParaSetNum: ConstId_UpdateParaSetNum,
-    GetCurrentPpsId: ConstId_GetCurrentPpsId,
-    OutputCurrentStructure: NonConstId_OutputCurrentStructure,
-    LoadPreviousStructure: NonConstId_LoadPreviousStructure,
-    GetSpsIdx: ConstId_GetSpsIdx,
-};
 
 /// `IWelsParametersetStrategy::CreateParametersetStrategy` — `paraset_strategy.cpp:40`.
-///
-/// Returns a raw pointer the caller owns; release it with
-/// [`DestroyParametersetStrategy`].
 ///
 /// **Deviation from C++, deliberate.** C++ builds one of five strategies. Only
 /// `CONSTANT_ID` (the Phase-5 gate configuration) and `INCREASING_ID` (the
 /// `FillDefault` value) are ported; `SPS_LISTING`, `SPS_LISTING_AND_PPS_INCREASING`
-/// and `SPS_PPS_LISTING` return null rather than falling through to the constant
+/// and `SPS_PPS_LISTING` return `None` rather than falling through to the constant
 /// strategy. C++'s `default:` label *does* fall through to `CONSTANT_ID`, but
 /// reproducing that here would silently encode a listing strategy with constant
 /// parameter-set ids, giving a decodable stream that does not match the reference. A
-/// caller that gets null must fail, not continue — `InitFunctionPointers` returns
+/// caller that gets `None` must fail, not continue — `InitFunctionPointers` returns
 /// `ENC_RETURN_MEMALLOCERR`, as C++ does when the allocation itself fails.
+///
+/// The returned `Box` **is** the object's lifetime: dropping it is `WELS_DELETE_OP`.
+/// There is no `DestroyParametersetStrategy` any more, which is what closes F19.
 pub fn CreateParametersetStrategy(
     eSpsPpsIdStrategy: EParameterSetStrategy,
     bSimulcastAVC: bool,
     kiSpatialLayerNum: i32,
-) -> *mut IWelsParametersetStrategy {
-    match eSpsPpsIdStrategy {
-        EParameterSetStrategy::CONSTANT_ID => {
-            Box::into_raw(CWelsParametersetIdConstant::new(bSimulcastAVC, kiSpatialLayerNum))
-                as *mut IWelsParametersetStrategy
-        }
-        EParameterSetStrategy::INCREASING_ID => {
-            let mut p = CWelsParametersetIdIncreasing::new(bSimulcastAVC, kiSpatialLayerNum);
-            p.base.pVtbl = &ID_INCREASING_VTBL;
-            Box::into_raw(p) as *mut IWelsParametersetStrategy
-        }
+) -> Option<Box<CWelsParametersetIdStrategyObj>> {
+    let eIdKind = match eSpsPpsIdStrategy {
+        EParameterSetStrategy::CONSTANT_ID => ParasetIdKind::Constant,
+        EParameterSetStrategy::INCREASING_ID => ParasetIdKind::Increasing,
         // SPS_LISTING, SPS_LISTING_AND_PPS_INCREASING, SPS_PPS_LISTING
-        _ => null_mut(),
-    }
-}
-
-/// Counterpart to [`CreateParametersetStrategy`]; dispatches through the vtable so the
-/// right concrete destructor runs.
-///
-/// # Safety
-/// `pStrategy` must have come from [`CreateParametersetStrategy`] and must not be used
-/// afterwards.
-pub unsafe fn DestroyParametersetStrategy(pStrategy: *mut IWelsParametersetStrategy) {
-    if !pStrategy.is_null() {
-        ((*(*pStrategy).pVtbl).Destroy)(pStrategy);
-    }
+        _ => return None,
+    };
+    Some(CWelsParametersetIdStrategyObj::new(
+        eIdKind,
+        bSimulcastAVC,
+        kiSpatialLayerNum,
+    ))
 }
 
 /// `CheckMatchedSps` — `paraset_strategy.cpp:106` (file-static).
@@ -836,15 +686,16 @@ pub unsafe fn FindExistingSps(
 mod tests {
     use super::*;
 
+    fn strategy(e: EParameterSetStrategy) -> Box<CWelsParametersetIdStrategyObj> {
+        CreateParametersetStrategy(e, false, 1).expect("ported strategy")
+    }
+
     #[test]
     fn constant_strategy_reports_zero_id_offsets() {
-        let p = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
-        assert!(!p.is_null());
-        unsafe {
-            assert_eq!(IWelsParametersetStrategy::GetPpsIdOffset(p, 0), 0);
-            assert_eq!(IWelsParametersetStrategy::GetSpsIdOffset(p, 0, 0), 0);
-            DestroyParametersetStrategy(p);
-        }
+        let p = strategy(EParameterSetStrategy::CONSTANT_ID);
+        assert_eq!(p.eIdKind, ParasetIdKind::Constant);
+        assert_eq!(p.GetPpsIdOffset(0), 0);
+        assert_eq!(p.GetSpsIdOffset(0, 0), 0);
     }
 
     /// `m_iBasicNeededSpsNum` is 1 and `m_iBasicNeededPpsNum` is `1 + layers`;
@@ -852,30 +703,40 @@ mod tests {
     /// count is `layers - 1` (`paraset_strategy.cpp:233-254`).
     #[test]
     fn constant_strategy_paraset_counts() {
-        let p = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
-        unsafe {
-            assert_eq!(((*(*p).pVtbl).GetNeededSpsNum)(p), 1);
-            assert_eq!(((*(*p).pVtbl).GetNeededSubsetSpsNum)(p), 0);
-            assert_eq!(((*(*p).pVtbl).GetNeededPpsNum)(p), 2);
-            assert_eq!(((*(*p).pVtbl).GetAllNeededParasetNum)(p), 3);
-            DestroyParametersetStrategy(p);
-        }
+        let mut p = strategy(EParameterSetStrategy::CONSTANT_ID);
+        assert_eq!(p.GetNeededSpsNum(), 1);
+        assert_eq!(p.GetNeededSubsetSpsNum(), 0);
+        assert_eq!(p.GetNeededPpsNum(), 2);
+        assert_eq!(p.GetAllNeededParasetNum(), 3);
+    }
+
+    /// The counts are inherited, not overridden: `ID_INCREASING_VTBL` pointed them at
+    /// the `ConstId_*` thunks, so the merged object must answer identically for both
+    /// kinds. This is the test that would catch a `match` added where C++ has none.
+    #[test]
+    fn both_kinds_share_the_inherited_counts() {
+        let mut c = strategy(EParameterSetStrategy::CONSTANT_ID);
+        let mut i = strategy(EParameterSetStrategy::INCREASING_ID);
+        assert_eq!(i.eIdKind, ParasetIdKind::Increasing);
+        assert_eq!(c.GetNeededSpsNum(), i.GetNeededSpsNum());
+        assert_eq!(c.GetNeededSubsetSpsNum(), i.GetNeededSubsetSpsNum());
+        assert_eq!(c.GetNeededPpsNum(), i.GetNeededPpsNum());
+        assert_eq!(c.GetAllNeededParasetNum(), i.GetAllNeededParasetNum());
+        assert_eq!(c.GetCurrentPpsId(3, 7), i.GetCurrentPpsId(3, 7));
+        assert_eq!(c.GetSpsIdx(2), i.GetSpsIdx(2));
     }
 
     /// The three unported listing strategies must fail loudly rather than silently
     /// behave like `CONSTANT_ID`.
     #[test]
-    fn unported_strategies_return_null() {
-        assert!(CreateParametersetStrategy(EParameterSetStrategy::SPS_LISTING, false, 1).is_null());
-        assert!(CreateParametersetStrategy(
+    fn unported_strategies_return_none() {
+        for e in [
+            EParameterSetStrategy::SPS_LISTING,
             EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING,
-            false,
-            1
-        )
-        .is_null());
-        assert!(
-            CreateParametersetStrategy(EParameterSetStrategy::SPS_PPS_LISTING, false, 1).is_null()
-        );
+            EParameterSetStrategy::SPS_PPS_LISTING,
+        ] {
+            assert!(CreateParametersetStrategy(e, false, 1).is_none(), "{e:?}");
+        }
     }
 
     /// `ParasetIdAdditionIdAdjust` rotates the id written to the bitstream and records
@@ -884,34 +745,41 @@ mod tests {
     /// 0, 1, 2, … up to `MAX_SPS_COUNT - 1`, then wrap to 0.
     #[test]
     fn increasing_strategy_rotates_sps_id_in_bitstream() {
-        let p = CreateParametersetStrategy(EParameterSetStrategy::INCREASING_ID, false, 1);
-        assert!(!p.is_null());
-        unsafe {
-            for expected in 0..MAX_SPS_COUNT as i32 {
-                ((*(*p).pVtbl).Update)(p, 0, PARA_SET_TYPE_AVCSPS as i32);
-                assert_eq!(
-                    IWelsParametersetStrategy::GetSpsIdOffset(p, 0, 0),
-                    expected,
-                    "delta after update #{expected}"
-                );
-            }
-            // 33rd update wraps uiNextParaSetIdToUseInBs back to 0.
-            ((*(*p).pVtbl).Update)(p, 0, PARA_SET_TYPE_AVCSPS as i32);
-            assert_eq!(IWelsParametersetStrategy::GetSpsIdOffset(p, 0, 0), 0);
-            DestroyParametersetStrategy(p);
+        let mut p = strategy(EParameterSetStrategy::INCREASING_ID);
+        for expected in 0..MAX_SPS_COUNT as i32 {
+            p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
+            assert_eq!(p.GetSpsIdOffset(0, 0), expected, "delta after update #{expected}");
         }
+        // 33rd update wraps uiNextParaSetIdToUseInBs back to 0.
+        p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
+        assert_eq!(p.GetSpsIdOffset(0, 0), 0);
     }
 
     /// PPS ids rotate over `MAX_PPS_COUNT`, not `MAX_SPS_COUNT`.
     #[test]
     fn increasing_strategy_uses_pps_bound_for_pps_ids() {
-        let p = CreateParametersetStrategy(EParameterSetStrategy::INCREASING_ID, false, 1);
-        unsafe {
-            for expected in 0..MAX_SPS_COUNT as i32 + 4 {
-                ((*(*p).pVtbl).Update)(p, 0, PARA_SET_TYPE_PPS as i32);
-                assert_eq!(IWelsParametersetStrategy::GetPpsIdOffset(p, 0), expected);
-            }
-            DestroyParametersetStrategy(p);
+        let mut p = strategy(EParameterSetStrategy::INCREASING_ID);
+        for expected in 0..MAX_SPS_COUNT as i32 + 4 {
+            p.Update(0, PARA_SET_TYPE_PPS as i32);
+            assert_eq!(p.GetPpsIdOffset(0), expected);
         }
+    }
+
+    /// `Update` is one of the five that `match`: the constant kind resets the whole
+    /// offset block where the increasing kind rotates. Pinning it stops the two arms
+    /// from being collapsed by someone reading only the constant one.
+    #[test]
+    fn constant_update_resets_rather_than_rotating() {
+        let mut p = strategy(EParameterSetStrategy::CONSTANT_ID);
+        for _ in 0..4 {
+            p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
+            assert_eq!(p.GetSpsIdOffset(0, 0), 0);
+        }
+        p.SetUseSubsetFlag(1, true);
+        p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
+        assert!(
+            !p.m_sParaSetOffset.bPpsIdMappingIntoSubsetsps[1],
+            "CONSTANT_ID's Update is a full reset of m_sParaSetOffset"
+        );
     }
 }

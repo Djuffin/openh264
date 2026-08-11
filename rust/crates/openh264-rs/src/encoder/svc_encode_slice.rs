@@ -265,7 +265,7 @@ impl Default for SSliceHeaderExt {
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 pub use crate::safe::bits::BsWriter;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
-use crate::encoder::paraset_strategy::IWelsParametersetStrategy;
+use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 
@@ -491,7 +491,7 @@ pub type PWelsSliceHeaderWriteFunc = unsafe extern "C" fn(
     pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
 );
 
 // ============================================================================
@@ -797,7 +797,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
 ) {
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
@@ -820,11 +820,7 @@ pub unsafe fn WelsSliceHeaderWrite(
     // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
     // unconditionally; the null guards here follow the surrounding style in this port.
     let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
-    let iPpsIdOffset = if !pParametersetStrategy.is_null() {
-        IWelsParametersetStrategy::GetPpsIdOffset(pParametersetStrategy, pps_id as i32)
-    } else {
-        0
-    };
+    let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
@@ -887,7 +883,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
 ) {
     if pBs.is_null() || pCurLayer.is_null() || pSlice.is_null() {
         return;
@@ -912,11 +908,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
     // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
     // unconditionally; the null guards here follow the surrounding style in this port.
     let pps_id = if !pPps.is_null() { (*pPps).iPpsId } else { 0 };
-    let iPpsIdOffset = if !pParametersetStrategy.is_null() {
-        IWelsParametersetStrategy::GetPpsIdOffset(pParametersetStrategy, pps_id as i32)
-    } else {
-        0
-    };
+    let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
 
     let log2_max_frame_num = if !pSps.is_null() { (*pSps).uiLog2MaxFrameNum } else { 4 };
@@ -1855,7 +1847,7 @@ pub unsafe extern "C" fn WelsSliceHeaderWrite_c(
     pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
 ) {
     WelsSliceHeaderWrite(pCtx, pBs, pCurLayer, pSlice, pParametersetStrategy);
 }
@@ -1865,7 +1857,7 @@ pub unsafe extern "C" fn WelsSliceHeaderExtWrite_c(
     pBs: *mut BsWriter,
     pCurLayer: *mut SDqLayer,
     pSlice: *mut SSlice,
-    pParametersetStrategy: *mut IWelsParametersetStrategy,
+    pParametersetStrategy: Option<&CWelsParametersetIdStrategyObj>,
 ) {
     WelsSliceHeaderExtWrite(pCtx, pBs, pCurLayer, pSlice, pParametersetStrategy);
 }
@@ -1955,7 +1947,11 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         pBs,
         pCurLayer,
         pCurSlice,
-        if !(*pEncCtx).pFuncList.is_null() { (*(*pEncCtx).pFuncList).pParametersetStrategy } else { std::ptr::null_mut() },
+        if !(*pEncCtx).pFuncList.is_null() {
+            (*(*pEncCtx).pFuncList).pParametersetStrategy.as_deref()
+        } else {
+            None
+        },
     );
 
     let pic_init_qp = if !(*pCurLayer).sLayerInfo.pPpsP.is_null() {
