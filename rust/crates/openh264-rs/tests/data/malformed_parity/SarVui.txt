@@ -33,7 +33,7 @@ trunc.b002+01                  28     3     0    0 -          -                 
 trunc.b002+02                  29     3     0    0 -          -                                        0x0*3                      0*3
 trunc.b002+03                  30     3     0    0 -          -                                        0x0*3                      0*3
 trunc.b002+04                  31     4     0    0 -          -                                        0x0*4                      0*4
-trunc.b002+05                  32  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b002+05                  32     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
 trunc.b002+06                  33     4     0    0 -          -                                        0x0*2,0x10,0x0             0*4
 trunc.b002+07                  34     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
 trunc.b002+08                  35     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
@@ -50,7 +50,7 @@ trunc.b003+01                1889     4     0    1 176x144    1ef7e5b8546ef26262
 trunc.b003+02                1890     4     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*4                      0*3,1
 trunc.b003+03                1891     4     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*4                      0*3,1
 trunc.b003+04                1892     5     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*5                      0*4,1
-trunc.b003+05                1893  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b003+05                1893     5     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*3,0x4,0x0              0*4,1
 trunc.b003+06                1894     5     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*3,0x4,0x0              0*4,1
 trunc.b003+07                1895     5     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*3,0x4,0x0              0*4,1
 trunc.b003+08                1896     5     0    1 176x144    1ef7e5b8546ef2626208bd80224d4589db5ca459 0x0*3,0x4,0x0              0*4,1
@@ -67,7 +67,7 @@ trunc.b004+01                2113     5     0    2 176x144    0bd07013da8a90c308
 trunc.b004+02                2114     5     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*5                      0*3,1*2
 trunc.b004+03                2115     5     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*5                      0*3,1*2
 trunc.b004+04                2116     6     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*6                      0*3,1,0,1
-trunc.b004+05                2117  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b004+05                2117     6     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*4,0x4,0x0              0*3,1,0,1
 trunc.b004+06                2118     6     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*4,0x4,0x0              0*3,1,0,1
 trunc.b004+07                2119     6     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*4,0x4,0x0              0*3,1,0,1
 trunc.b004+08                2120     6     0    2 176x144    0bd07013da8a90c308a9db62d29d04978ba17a76 0x0*4,0x4,0x0              0*3,1,0,1
@@ -84,7 +84,7 @@ trunc.b005+01                2584     6     0    3 176x144    b6591d6d80e343abe9
 trunc.b005+02                2585     6     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*6                      0*3,1*3
 trunc.b005+03                2586     6     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*6                      0*3,1*3
 trunc.b005+04                2587     7     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*7                      0*3,1*2,0,1
-trunc.b005+05                2588  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b005+05                2588     7     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*5,0x4,0x0              0*3,1*2,0,1
 trunc.b005+06                2589     7     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*5,0x4,0x0              0*3,1*2,0,1
 trunc.b005+07                2590     7     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*5,0x4,0x0              0*3,1*2,0,1
 trunc.b005+08                2591     7     0    3 176x144    b6591d6d80e343abe92a3edcb4e726321b445540 0x0*5,0x4,0x0              0*3,1*2,0,1
@@ -101,7 +101,7 @@ trunc.b006+01                2926     7     0    4 176x144    8a26e507de604c75bb
 trunc.b006+02                2927     7     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*7                      0*3,1*4
 trunc.b006+03                2928     7     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*7                      0*3,1*4
 trunc.b006+04                2929     8     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*8                      0*3,1*3,0,1
-trunc.b006+05                2930  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b006+05                2930     8     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*6,0x4,0x0              0*3,1*3,0,1
 trunc.b006+06                2931     8     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*6,0x4,0x0              0*3,1*3,0,1
 trunc.b006+07                2932     8     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*6,0x4,0x0              0*3,1*3,0,1
 trunc.b006+08                2933     8     0    4 176x144    8a26e507de604c75bbde40f2f992a8df2d8991ca 0x0*6,0x4,0x0              0*3,1*3,0,1
@@ -118,7 +118,7 @@ trunc.b008+01                3659     9     0    6 176x144    738351a57578e8a4de
 trunc.b008+02                3660     9     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*9                      0*3,1*6
 trunc.b008+03                3661     9     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*9                      0*3,1*6
 trunc.b008+04                3662    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*10                     0*3,1*5,0,1
-trunc.b008+05                3663  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b008+05                3663    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*8,0x4,0x0              0*3,1*5,0,1
 trunc.b008+06                3664    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*8,0x4,0x0              0*3,1*5,0,1
 trunc.b008+07                3665    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*8,0x4,0x0              0*3,1*5,0,1
 trunc.b008+08                3666    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*8,0x4,0x0              0*3,1*5,0,1
@@ -135,7 +135,7 @@ trunc.b010+01                4367    11     0    8 176x144    e0b69a24810159a9ea
 trunc.b010+02                4368    11     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*11                     0*3,1*8
 trunc.b010+03                4369    11     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*11                     0*3,1*8
 trunc.b010+04                4370    12     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*12                     0*3,1*7,0,1
-trunc.b010+05                4371  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b010+05                4371    12     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*10,0x4,0x0             0*3,1*7,0,1
 trunc.b010+06                4372    12     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*10,0x4,0x0             0*3,1*7,0,1
 trunc.b010+07                4373    12     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*10,0x4,0x0             0*3,1*7,0,1
 trunc.b010+08                4374    12     0    8 176x144    e0b69a24810159a9ead9a01d0ea3932d4fd186f6 0x0*10,0x4,0x0             0*3,1*7,0,1
@@ -152,7 +152,7 @@ trunc.b013+01                5423    14     0   11 176x144    7b1dead4dee26faf7e
 trunc.b013+02                5424    14     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*14                     0*3,1*11
 trunc.b013+03                5425    14     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*14                     0*3,1*11
 trunc.b013+04                5426    15     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*15                     0*3,1*10,0,1
-trunc.b013+05                5427  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b013+05                5427    15     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*13,0x4,0x0             0*3,1*10,0,1
 trunc.b013+06                5428    15     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*13,0x4,0x0             0*3,1*10,0,1
 trunc.b013+07                5429    15     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*13,0x4,0x0             0*3,1*10,0,1
 trunc.b013+08                5430    15     0   11 176x144    7b1dead4dee26faf7ec7fef72bdf4dfa381361b1 0x0*13,0x4,0x0             0*3,1*10,0,1
@@ -169,7 +169,7 @@ trunc.b015+01                6129    16     0   13 176x144    aa9fa206587ff8e8f1
 trunc.b015+02                6130    16     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*16                     0*3,1*13
 trunc.b015+03                6131    16     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*16                     0*3,1*13
 trunc.b015+04                6132    17     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*17                     0*3,1*12,0,1
-trunc.b015+05                6133  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b015+05                6133    17     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*15,0x4,0x0             0*3,1*12,0,1
 trunc.b015+06                6134    17     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*15,0x4,0x0             0*3,1*12,0,1
 trunc.b015+07                6135    17     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*15,0x4,0x0             0*3,1*12,0,1
 trunc.b015+08                6136    17     0   13 176x144    aa9fa206587ff8e8f18184dd87bbde14d39eb733 0x0*15,0x4,0x0             0*3,1*12,0,1
@@ -186,7 +186,7 @@ trunc.b018+01                7238    19     0   16 176x144    eb635286aceae6d5df
 trunc.b018+02                7239    19     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*19                     0*3,1*16
 trunc.b018+03                7240    19     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*19                     0*3,1*16
 trunc.b018+04                7241    20     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*20                     0*3,1*15,0,1
-trunc.b018+05                7242  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+trunc.b018+05                7242    20     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*18,0x4,0x0             0*3,1*15,0,1
 trunc.b018+06                7243    20     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*18,0x4,0x0             0*3,1*15,0,1
 trunc.b018+07                7244    20     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*18,0x4,0x0             0*3,1*15,0,1
 trunc.b018+08                7245    20     0   16 176x144    eb635286aceae6d5dfa78349300b5a4c3dc6b70b 0x0*18,0x4,0x0             0*3,1*15,0,1
@@ -211,7 +211,7 @@ tail.zzz                     3661     9     0    6 176x144    738351a57578e8a4de
 tail.epb                     3661     9     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*9                      0*3,1*6
 tail.sc3                     3661    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*10                     0*3,1*5,0,1
 tail.sc4                     3662    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*10                     0*3,1*5,0,1
-tail.sc3_byte                3662  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+tail.sc3_byte                3662    10     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*8,0x4,0x0              0*3,1*5,0,1
 hdr0.00                      3658     9     0    0 -          -                                        0x10*8,0x0                 0*9
 hdr0.05                      3658     9     0    0 -          -                                        0x10*8,0x0                 0*9
 hdr0.07                      3658     9     0    6 176x144    738351a57578e8a4dea01f944055447d6c52a0fd 0x0*9                      0*3,1*6

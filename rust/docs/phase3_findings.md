@@ -10,7 +10,8 @@ F4–F7 are in their own files.
 
 ## F15 — A stream truncated one byte into a slice NAL takes the decoder out of bounds; the two build profiles disagree about what happens next
 
-**Status: open, live on ordinary input, and it is T3.3's to fix.** Found by
+**Status: FIXED 2026-08-11 (Phase 3 session D, T3.3 face 4), and the fix is proven by
+the goldens it un-withheld rather than asserted — see Resolution.** Found by
 `tests/malformed_stream_parity.rs` (T3.0) on its **first run**, before any conversion
 — which is the argument for having built that test first.
 
@@ -60,7 +61,7 @@ in debug. **The C++ is not a specification to preserve here** — there is no co
 behaviour to be parity with, which is why the fix is a real fix rather than an S6
 arithmetic-parity translation.
 
-### What T3.0 did about it, and why it did not just record the outcome
+### What T3.0 did about it while it was open, and why it did not just record the outcome
 
 The corpus **withholds** the triggering entries — see `withheld()` in
 `tests/malformed_stream_parity.rs` — and writes a `WITHHELD` row naming this finding
@@ -73,17 +74,46 @@ profile-independent behaviour to record.
 The rows are therefore visible, counted, and tied to this finding rather than silently
 missing. `MALFORMED_IGNORE_WITHHELD=1` runs them anyway for diagnosis.
 
-### Who fixes it
+### Who fixed it
 
-**T3.3**, the seam that converts `nalu.rs`'s payload pointers to `Range<usize>`: the
-expression becomes an index into a slice, the zero-length case becomes explicit, and
-`withheld()` is **deleted in that same commit** so the eleven-per-stream `WITHHELD`
-rows fill in with real error codes. That golden diff is the seam's evidence, and it is
-a required gate strengthening in the same sense as deleting `au_set.rs`'s F13
-accommodation (T3.4).
+**T3.3**, as forecast, in the seam's fourth commit.
 
-Until then, the decoder aborts in a debug build on a truncated slice NAL. Nothing in
-the gate battery except T3.0 says so.
+### Resolution
+
+One helper, `nalu.rs`'s `rbsp_bit_size(bytes, start, size)`, replaces all three
+`BsGetTrailingBits(pNal + iNalSize - 1)` sites (the two live ones and the guarded
+`ParseNonVclNal` instance — a re-grep before fixing confirmed the finding's own count
+of three, and that upstream's two are the same expression). Its guard is a
+**comparison, not a subtraction** — `size < 1` is tested before any index is formed,
+so there is no `usize` wrap to be had — and an empty payload yields a bit size of
+**0**.
+
+The choice of 0 is what makes the profiles agree, and it is not arbitrary: it routes
+the NAL into the caller's *existing* `DecInitBits` failure branch (`(0 + 7) >> 3 == 0`
+is rejected as `ERR_INFO_INVALID_ACCESS`), which is `dsBitstreamError` plus the same
+access-unit bookkeeping the code already had. That is precisely what the **release**
+build did for a type-1/5 NAL — its out-of-bounds read landed on an odd header byte,
+giving 0 trailing bits — so the fix promotes the accidental release outcome to the
+*defined* one, for every NAL type, in both profiles, without reading a byte it has no
+right to read. Debug no longer aborts; release no longer computes an out-of-bounds
+pointer.
+
+**The proof.** `withheld()` and its three private helpers were deleted in the same
+commit and the tables regenerated with `UPDATE_MALFORMED_GOLDEN=1`. The diff is
+**105 `WITHHELD` rows removed, 105 recorded outcomes added, across 12 files, and
+nothing else moved** — mechanically classified, not eyeballed:
+
+```
+removed WITHHELD rows: 105    added WITHHELD rows: 0
+removed OTHER rows:      0    added other rows:  105
+```
+
+The new rows are the graceful path: `0x4` (`dsBitstreamError`) at the truncated NAL,
+`0x0` before and after it, and for the longer truncations the frames decoded ahead of
+the damage carry real per-plane hashes. **Both profiles then accept the same table** —
+the table was generated in debug and release passes it unchanged, which is the
+property that could not exist while the finding was open. All 53 conformance hashes
+are unaffected, as they always were: well-formed streams never reach the site.
 
 [F7]: phase1_findings.md#f7--the-readers-boundary-pointers-go-out-of-bounds--ub-not-a-wrong-value--outside-the-codecs-own-invariants
 
@@ -91,9 +121,10 @@ the gate battery except T3.0 says so.
 
 ## F16 — `READER_SLOP` was derived from the wrong half of the reader: `BsEndCavlc`'s prime reaches past it, without bound
 
-**Status: resolved inside T3.1b** (the seam that surfaced it). Recorded because the
-*derivation* was wrong for a whole session and the same mistake is available to T3.2
-and T3.3, which both re-derive readable extents.
+**Status: resolved inside T3.1b** (the seam that surfaced it); **its second instance,
+and the whole stored-extent class, closed at T3.3 2026-08-11** — see "The second
+instance" below. Recorded because the *derivation* was wrong for a whole session and
+the same mistake was available to T3.2 and T3.3, which both re-derive readable extents.
 
 ### What T3.1a wrote down
 
@@ -147,12 +178,37 @@ computes it — the `pHead..pEnd` boundary helper the phase brief specifies. The
 now sees precisely the bytes the raw reader saw, so the 2316 golden rows hold
 unchanged. T3.3 deletes both when the owned buffer makes the extent a slice length.
 
-### For T3.2 and T3.3
+### The second instance, and its closure at T3.3
+
+A second instance of the same class was found by inspection at T3.1b rather than by a
+gate: `ExpandBsBuffer` grows the raw buffer, so a rebased reader's stored `avail` went
+**stale and too small**. It was repaired in place then (the rebase recomputed it), with
+the *class* left live — a stored extent that some future growth could invalidate again.
+
+**Closed at T3.3 (2026-08-11), by construction rather than by repair.** The owned
+`RawDataBuffer` stores the `Vec` and one write position and nothing else; every
+readable extent is derived from it at call time (`window_from(start)` /
+`rbsp_window(reader)`), and a reader stores an *offset*, which a reallocation cannot
+invalidate. `ExpandBsBuffer` was deleted rather than converted, taking the rebase and
+the stale-`avail` repair with it. There is no stored extent left in the decoder read
+path to go stale, so this class is now unrepresentable rather than guarded against —
+which is the standard the seam was judged by, and the reason `avail` and
+`readable_from` do not appear in the tree any more.
+
+The permanent test for the hazard is `bit_stream.rs`'s
+`p5_reader_survives_growth_mid_au` (the plan's **P5**, owed since rev 1): a reader
+mid-read across two buffer growths decodes values identical to a no-growth control.
+Nothing in the battery exercised mid-AU growth before it.
+
+### For T3.2 and T3.3 (historical)
 
 The CABAC engine's end ladder (`cabac_decoder.rs:732-784`) selects a 4/3/2/1-byte final
 load from `pBuffEnd - pBuffCurr`, and its init primes 5 bytes. **Do not re-derive its
 readable extent from `len` plus a constant** — take it from the same helper, which is
-also why the brief wants exactly one slice-reconstruction site.
+also why the brief wants exactly one slice-reconstruction site. T3.2's audit found the
+ladder never reads past the RBSP at all (only the init prime does); T3.3 replaced the
+helper with derivation from the owning buffer, and the rule survives in that form:
+`window_from` is the single authority, and the engine computes no extent of its own.
 
 [`BsCursor::end_cavlc`]: ../crates/openh264-rs/src/safe/bits.rs
 

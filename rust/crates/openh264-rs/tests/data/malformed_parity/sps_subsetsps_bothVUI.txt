@@ -61,7 +61,7 @@ trunc.b004+04                  68     6     0    0 -          -                 
 trunc.b004+05                  69     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
 trunc.b004+06                  70     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
 trunc.b004+07                  71     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
-trunc.b004+08                  72  WITHHELD  F15: slice-ext NAL strips to header + extension (nalu.rs:762)
+trunc.b004+08                  72     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
 trunc.coarse01                667     6     0    0 -          -                                        0x0*5,0x4                  0*6
 trunc.coarse02               1334     6     0    0 -          -                                        0x0*5,0x4                  0*6
 trunc.coarse03               2001     6     0    0 -          -                                        0x0*5,0x4                  0*6
@@ -83,7 +83,7 @@ tail.zzz                       67     5     0    0 -          -                 
 tail.epb                       67     5     0    0 -          -                                        0x0*5                      0*5
 tail.sc3                       67     6     0    0 -          -                                        0x0*6                      0*6
 tail.sc4                       68     6     0    0 -          -                                        0x0*6                      0*6
-tail.sc3_byte                  68  WITHHELD  F15: VCL NAL strips to a bare header byte (nalu.rs:762)
+tail.sc3_byte                  68     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
 hdr0.00                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
 hdr0.05                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
 hdr0.07                        64     5     0    0 -          -                                        0x0*5                      0*5
