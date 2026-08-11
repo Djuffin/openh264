@@ -198,7 +198,6 @@ pub const CABAC_LOW_WIDTH: usize = 64;
 
 
 
-pub use crate::common::wels_common_defs::SBitStringAux;
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;

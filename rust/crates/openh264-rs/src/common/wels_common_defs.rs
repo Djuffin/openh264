@@ -13,65 +13,25 @@
 
 use std::ffi::c_void;
 
-/// Bit-stream auxiliary reading / writing state.
-///
-/// Matches `TagBitStringAux` in `codec/common/inc/wels_common_defs.h:232`. The field
-/// order is load-bearing — this is `#[repr(C)]` and the layout must match the C++
-/// struct byte for byte:
-///
-/// ```text
-/// pStartBuf, pEndBuf, iBits, iIndex, pCurBuf, uiCurBits, iLeftBits
-/// ```
-///
-/// `iIndex` is `intX_t` in C++ (`codec/common/inc/typedefs.h:52`), i.e. `int64_t` on
-/// LP64 / Win64 and `int32_t` otherwise — pointer-width, hence `isize`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagBitStringAux {
-    /// Buffer start position.
-    pub pStartBuf: *mut u8,
-    /// Buffer end boundary (`pStartBuf + length`).
-    pub pEndBuf: *mut u8,
-    /// Count of bits of overall bitstream input.
-    pub iBits: i32,
+// `TagBitStringAux` / `SBitStringAux` / `PBitStringAux` were declared here — the
+// pointer-triple bitstream cursor of `codec/common/inc/wels_common_defs.h:232`
+// (`pStartBuf`/`pEndBuf`/`pCurBuf` plus `iBits`, `iIndex` and the 32-bit
+// accumulator), and Phase 3's emblem: the type its §1.2 taxonomy named as the
+// thing the phase existed to remove.
+//
+// It has no users left. T3.1b and T3.2 moved the decoder's read side onto
+// `safe::bits::BsCursor`, T3.3 gave the decoder an owned buffer, and T3.4 moved
+// the encoder's write side onto `BsWriter`; what remained by then was a handful of
+// `pub use` re-exports and two `pub type PBitStringAux = *mut SBitStringAux`
+// aliases that nothing named. The inventory that licensed this deletion is in the
+// commit message.
+//
+// Nothing crossed a C ABI with this layout — it appears in no header under
+// `codec/api/wels/`, and `api/abi_guard.rs` guards the public surface separately.
+// The encoder CABAC writer keeps its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd`
+// triple inside `SCabacCtx`; converting that is T3.5's, and it never used this
+// struct.
 
-    /// Only for CAVLC usage.
-    pub iIndex: isize,
-    /// Current reading/writing position.
-    pub pCurBuf: *mut u8,
-    /// 32-bit accumulator of unwritten/unconsumed bits.
-    pub uiCurBits: u32,
-    /// Number of available bits left in the accumulator.
-    pub iLeftBits: i32,
-}
-
-pub type SBitStringAux = TagBitStringAux;
-pub type PBitStringAux = *mut SBitStringAux;
-
-impl TagBitStringAux {
-    /// Zero-initialized, matching C's `memset`/aggregate zero-initialization.
-    ///
-    /// Note `iLeftBits` is **0**, not 32: C++ never zero-inits this struct into a
-    /// usable state, it calls `InitBits` (`codec/common/inc/golomb_common.h:67`) for
-    /// writing or `DecInitBits` for reading, and those set `iLeftBits` themselves.
-    pub const fn new() -> Self {
-        Self {
-            pStartBuf: std::ptr::null_mut(),
-            pEndBuf: std::ptr::null_mut(),
-            iBits: 0,
-            iIndex: 0,
-            pCurBuf: std::ptr::null_mut(),
-            uiCurBits: 0,
-            iLeftBits: 0,
-        }
-    }
-}
-
-impl Default for TagBitStringAux {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// NAL Unit Type (5 bits) per ITU-T H.264 / AVC and Annex G (SVC).
 #[repr(C)]

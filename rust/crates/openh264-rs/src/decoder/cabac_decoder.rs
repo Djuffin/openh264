@@ -666,10 +666,7 @@ pub struct SWelsCabacDecEngine {
 
 pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
 
-pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer, SBitStringAux};
-
-
-pub type PBitStringAux = *mut SBitStringAux;
+pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 

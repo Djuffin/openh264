@@ -13,9 +13,6 @@
 //! - `codec/decoder/core/inc/dec_golomb.h`
 //! - Associated documentation in `rust/docs/dec_golomb.h.md`
 
-use crate::decoder::bit_stream::{
-    PBitStringAux, SBitStringAux, TagBitStringAux,
-};
 use crate::safe::bits::BsCursor;
 use crate::safe::err::ErrInfo;
 
