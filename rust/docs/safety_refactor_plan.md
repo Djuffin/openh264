@@ -1188,10 +1188,32 @@ in the log's Phase 4a entry).
 
 ### Phase 3 — bitstream layer
 
-**Next.** Brief written at 4a's exit: [`prompts/phase3.md`](prompts/phase3.md).
-First action per the log's hand-off: read F4/F5/F7, F2, and F13's `InitBits` site,
-then **write the malformed-stream error-code parity test against the unconverted
-reader before touching `bit_stream.rs`**.
+**In progress** (session A, 2026-08-10: `d7bc0ac3`, `96fb04a4`). Brief:
+[`prompts/phase3.md`](prompts/phase3.md); seam numbering T3.0–T3.6 is that brief's.
+
+- [x] **T3.0 — the malformed-stream error-code parity test.** 2316 golden rows over 11
+      base streams plus a degenerate set, generated in-test, byte-identical in both
+      profiles (36 s debug / 2.4 s release). Runs the corpus in a child process because a
+      decoder panic crosses an `extern "C"` thunk and *aborts*; the parent names the
+      entry that died. **Found [`phase3_findings.md`](phase3_findings.md) F15 on its
+      first run** — `nalu.rs:762`/`:675` index one byte before the payload when a NAL
+      strips to its header byte, debug aborting where release does out-of-bounds pointer
+      arithmetic. Those entries are `WITHHELD` rows until T3.3 fixes the sites.
+- [x] **T3.1a — the read side's bodies become `BsCursor`**, behind unchanged raw
+      signatures. **P6 resolved** (F4): not zeroed guard bytes and not `get()` fallbacks
+      but a declared `READER_SLOP = 3` over the real allocation — byte-identical by
+      construction. **F7 fixed**, both sites, with both differential accommodations
+      deleted in the same commit and the comparisons widened to their whole ranges.
+      Decode +0.45% (3 pairs), from shim field-marshalling that T3.1b deletes.
+- [ ] **T3.1b** — `ctx.sBs` and `SVclNal::sSliceBitsRead` become `BsCursor` + a buffer
+      at the call site; ~20 consumer functions move from `pBs` to `(buf, &mut cursor)`;
+      `SDqLayer::pBitStringAux` gets its Phase 5 shell. Blocked on one plan gap: §2.2.2's
+      `[P1]` claim that `iIndex` has no consumer is **wrong** — `BsStartCavlc`/`BsEndCavlc`
+      (`parse_mb_syn_cavlc.rs:2230-2248`) use it on the CAVLC residual path, so `BsCursor`
+      needs the field or a bit-position seek first.
+- [ ] T3.2 CABAC engine · T3.3 `SDataBuffer` → owned buffer + `nalu.rs` ranges (F15 dies
+      here) · T3.4 writer dedupe + `BsWriter` (F2, F5, F13's `InitBits` site) · T3.5
+      encoder CABAC triple + rollback · T3.6 `nal_encap.rs` + exit
 
 ### Phases 4b–9
 
