@@ -158,9 +158,11 @@ also why the brief wants exactly one slice-reconstruction site.
 
 ## F17 — The Miri gate cannot fail: `gates.sh` tests a pipeline's last command, and that command is `tail`
 
-**Status: open. This is a gate defect, not a code defect, and it invalidates every
-"Miri green" claim made through `gates.sh` since the gate was widened at Phase 2's
-exit.** Found at T3.1b by reading a baseline log that said, four lines apart:
+**Status: FIXED 2026-08-10 (Phase 3 session C), and the fix is proven by a known-red
+run rather than asserted — see Resolution.** It was a gate defect, not a code defect,
+and it invalidated every "Miri green" claim made through `gates.sh` between the gate's
+widening at Phase 2's exit and that commit. Found at T3.1b by reading a baseline log
+that said, four lines apart:
 
 ```
 error: test failed, to rerun pass `--lib`
@@ -211,3 +213,57 @@ would start failing the battery whenever a bench legitimately prints nothing mat
 
 Until that lands, treat "Miri green" in a log entry as meaning *someone ran it by
 hand*, and say so in the entry.
+
+### Resolution
+
+Both Miri steps now go through one `run_miri` helper built on `run_cargo_test`'s
+shape: `${PIPESTATUS[0]}` for the verdict, libtest's own `test result:` totals parsed
+out of the log to corroborate it, and a **zero-test clause** — `passed == 0` fails —
+because this script's own header already names that trap for `cargo test` ("a test
+that stops being compiled in looks exactly like a test that passes") and a mistyped
+`--skip` or a renamed module walks through everything else.
+
+The audit was wider than the two Miri steps. Also fixed in the same commit:
+
+* **Both bench steps.** They took their verdict from a display `grep`, so a bench that
+  printed clean rows and *then* died was a `PASS`. Now: `PIPESTATUS[0]` (cargo's own
+  status, previously discarded) **and** `PIPESTATUS[2]` (the grep matched something —
+  the one signal the old form did carry, kept rather than traded away) **and** the
+  existing `MISMATCH`/`DIFFER` log check.
+* **The sweep step's missing-tally path.** Its verdict was already sound —
+  `sweep_gate` captured `${PIPESTATUS[0]}` all along, so the session-C brief's table
+  was wrong about this row, corrected there. What was unsound: when `sweep.sh` died
+  before printing `PASS=n FAIL=n`, the display fell back to `tail -3` text, which
+  reads like a result. That path is now an explicit `fail`.
+* **The phase-exit differential-Miri loop** iterated a discovered file list, so an
+  empty list was a step that silently reported nothing. Empty now fails loudly.
+* **`OVERALL: PASS` / `OVERALL: FAIL (N steps failed)`** as the last line, matching the
+  exit code — session B misread a wrapper's exit status for the script's, and there is
+  now one unmissable string and nothing else to mistake for it.
+
+The full pipeline audit is a comment block at the bottom of `gates.sh`, listing every
+verdict in the script and where its status comes from. `set -o pipefail` stays
+rejected, with the reason recorded there.
+
+**The proof it can fail.** A fixed gate is plausible; this makes it proven. The
+`--lib` step was run once with the **F12 skip deleted** — a real known-red input, not
+an injected fake — and Miri found `wels_thread_pool`'s retag race
+(`error: Undefined Behavior: Data race detected between (1) retag read on thread
+CWelsThreadPool and (2) retag write … at alloc630943`, `wels_thread_pool.rs:435`).
+`gates.sh` printed `FAIL  miri --lib (whole library, minus the F12/F13 skips): 0
+passed / 0 failed, rc=1`, then `OVERALL: FAIL (1 steps failed)`, and exited 1. Note
+the totals: Miri aborts the binary before libtest prints a `test result:` line, so the
+`rc` clause is what carried this verdict and the totals clause is genuine
+belt-and-braces.
+
+That run also failed the *fix* on its first attempt, which is the argument for running
+it at all: `bench_rc=${PIPESTATUS[0]}; bench_matched=${PIPESTATUS[2]}` is broken,
+because the first assignment is itself a command and replaces `PIPESTATUS` before the
+second expansion reads it — under `set -u` that aborted the whole battery at the
+decode-bench step. The array must be captured in one shot
+(`st=("${PIPESTATUS[@]}")`).
+
+**What this does not invalidate.** Every finding attributed to Miri stands: F10, F12,
+F13 and session B's 285/0 were all read out of the logs by hand by the session that
+found them. What was never true is that the battery would have *stopped* a session on
+a Miri regression. The gate starts existing on this commit.
