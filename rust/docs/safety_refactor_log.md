@@ -3042,3 +3042,240 @@ boundary. Then:
 * **One straggler is queued for S18**, not fixed: `md.rs` carries a fifth copy of the
   *size* pair (`BsSizeUE`/`BsSizeSE`) over a **third** name for the Golomb length table
   (`G_KUI_GOLOMB_UE_LENGTH`). Different family, different owner; F2's entry records it.
+
+## 2026-08-11 — Phase 3, session F (T3.5, T3.6, and the phase exit — Phase 3 is complete)
+
+**Goal:** [`prompts/phase3_session_f.md`](prompts/phase3_session_f.md) — T3.5 (reduced),
+T3.6, and the exit. All three landed. The brief's fallback ("if T3.6 runs long, the exit
+becomes session G") was **not** taken, by direction: the exit ran in full.
+
+**Started at** `bcdb1d8b` with two uncommitted doc items (the S20/S21 plan additions and
+this session's brief, committed first as `ceaf1d56`); **ended at** the commit carrying
+this entry. Tree clean at both ends.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `ceaf1d56` | the inherited S20/S21 additions to plan §7.6, plus the session brief |
+| `f828a55c` | **T3.5 face 1** — the CABAC arithmetic engine's *second* transliteration is deleted; nine functions and five tables; zero bytes of output move |
+| `45ab079c` | **T3.5 face 2** — the cursor triple → three `usize` offsets; the write-extent audit; `BsWriter::set_pos` → `BsWriter::at` |
+| `32b73efb` | **T3.6** — `SWelsEncoderOutput`'s three allocations become `Vec`s; one constructor, one `drop`, the first encoder free-cascade entries to fall |
+| `e3fc68e8` | **S18 straggler sweep** — the last 112 `BitStringAux` identifiers renamed |
+
+### Gates
+
+| | inherited (`bcdb1d8b`) | final |
+|---|---|---|
+| tests | 431 / 425 / 20 | **431 / 425 / 20**, unchanged all session |
+| T3.0 goldens | 2316 rows, 0 `WITHHELD` | **2316 rows across 12 files, 0 `WITHHELD`**, unmoved |
+| sweeps | 341/341 both | 341/341 both, with three F3 episodes (§5) — all acquitted |
+| benches | bit-identical | bit-identical, both, throughout |
+| Miri `--lib` | 291 | **291**, no new skip |
+| ratchet | 1296 / 5034 / 157 | **1286 `unsafe_fn` / 5001 `raw_ptr` / 616 `unsafe_block` / 157 `SHIM(`** |
+
+**The milestone.** The bitstream layer contains no pointer cursor on either side, and
+the encoder's frame output owns its buffers. What is left raw in this layer is one
+struct, `SWelsSliceBs`, excluded on purpose and fenced to Phase 6.
+
+### 1. The write-extent audit found a second engine, which is why T3.5 had two faces
+
+F16's procedure says enumerate every write before converting. Doing that to the CABAC
+coder turned up something the brief did not anticipate: **there were two copies of the
+arithmetic engine**, and the live path used both. `svc_set_mb_syn_cabac.rs` carried its
+own transliteration of nine core functions and five tables; because a module-local item
+beats a `use`, that file's syntax layer ran the local copy for every macroblock while
+`WelsWriteSliceEndSyn` flushed the *same* `SCabacCtx` through the canonical copy in
+`set_mb_syn_cabac.rs`. Two engines, one slice, split at flush time.
+
+Upstream has no such duplication — `set_mb_syn_cabac.cpp` owns the engine and
+`svc_set_mb_syn_cabac.cpp` owns only the macroblock syntax — so this was a port
+artifact, and the canonical copy is the one matching upstream's file.
+
+**All nine divergences were enumerated per copy, not by representative** (S21's second
+clause, which exists because F2's table compared one function and missed another). Eight
+were equivalent. The ninth had teeth: `BypassOne` used upstream's branchless
+`kuiBinBitmask = -uiBin` in one copy and an `if uiBin != 0` in the other, and **those
+differ for `uiBin ∉ {0,1}`**. All six reachable call sites were checked rather than
+assumed — literals, `(iSufS >> k) & 1`, and three `if x < 0 { 1 } else { 0 }` — all in
+`{0,1}`, so the divergence is unreachable.
+
+**The corroboration was four lines below the deleted block.** A comment in that same
+file records a local `BsAlign` that was missing its trailing `BsFlush`, beat the import,
+and started the arithmetic coder on top of already-written slice-header bytes. Same
+mechanism, same file, second occurrence, and the first one shipped a real defect. The
+shadowing cannot recur now.
+
+### 2. `m_pBufEnd` was assigned and read by nothing
+
+The audit's load-bearing result, and the reason the F16 procedure keeps earning its
+place. The CABAC cursor is a triple, and the third element — the buffer end — is written
+by `WelsCabacEncodeInit` and **read at no write site, in this port or upstream**. The
+bound the field names has never been enforced.
+
+So the honest form of "every write is bounded" here is two clauses, not one:
+
+* **bounded below** by `m_iBufStart`, enforced, in `PropagateCarry`'s `while pos > start`
+  — and that comparison is doing double duty, because it is also what stops `pos - 1`
+  wrapping a `usize`. This is session C's wrap class arriving from the write side.
+  The bound is the *slice's* first byte, not `0`: the carry must not walk into a
+  previous slice's bytes. Three unit tests pin exactly that, including `cur == start`.
+* **bounded above** by nothing at all, until this seam — slice indexing is what finally
+  supplies it. A panic there is a pre-existing sizing bug surfacing (§2.2.2), not a
+  regression the conversion introduced.
+
+The field is kept rather than deleted (it still records caller intent, and removing it
+would move the layout for nothing) and its deadness is now written down at the site.
+
+`PropagateCarry` came out of this a **safe `fn`**.
+
+### 3. Two corrections to the brief, and one fence that broke
+
+* **`safe/bits.rs:238` is not `BsWriter::set_pos`.** It is the decoder's
+  `BsCursor::set_pos`, live for the I_PCM seek and out of scope. The writer's `set_pos`
+  was the one the brief described, and it is gone — replaced by `BsWriter::at(pos)`, a
+  constructor. That is not cosmetic: `set_pos` had to `debug_assert!(left_bits == 32)`
+  because moving an existing writer's position with bits pending drops them, and a
+  constructor cannot have pending bits. The invariant became structural.
+* **The phase-entry baseline is `5e5c9196`, not `b308f7d5`.** The brief called the
+  latter "the phase-entry baseline"; it is session *E*'s start. Both spans are measured
+  in `perf_baseline.md`, which matters because they say different things.
+* **4b's fence held twice and broke once.** `GetBsPosCabac` needs no buffer (offset
+  arithmetic) and `WelsSpatialWriteMbSynCabac` derives one via `slice_bs_buffer` — the
+  second application of session E's "derive from the state that recorded the decision"
+  rule. But `StashMBStatusCabac` copies emitted bytes, because `PropagateCarry` rewrites
+  bytes behind the cursor and restoring the cursor alone would leave the output wrong;
+  it cannot reach the buffer from `pDss`/`pSlice`. `PStashMBStatus`/`PStashPopMBStatus`
+  gained `buf`. Documented at the type, with what 4b should do with it — and 4b's brief
+  says the CAVLC arm can drop the parameter once the slot becomes an enum, which is the
+  first concrete win banked for that phase.
+
+### 4. T3.6: the closure was small, and the same fact discharged S21
+
+`SWelsEncoderOutput` is reached only through `sWelsEncCtx::pOut`, **a pointer**. That one
+structural fact did two jobs:
+
+* **S20**: nothing embeds the struct by value, so flipping three fields propagated no
+  layout change and forced no `abi_guard` deletion. Contrast T3.4, where by-value
+  embedding pulled four structs and four asserts into one commit. *The closure is a
+  property of how a struct is reached, not of how big it is.*
+* **S21**: the encoder context is `mem::zeroed()`, and zero is a valid null
+  `*mut SWelsEncoderOutput` where it would **not** be a valid `Vec`. Because `pOut` is a
+  pointer rather than a member, the wholesale zeroing never reaches the new owned
+  fields — so no `MaybeUninit` shell was needed here, unlike the decoder context, which
+  embeds its buffers directly and needs one for exactly that reason.
+
+`uiSize` and `iCountNals` were **deleted rather than converted**, per T3.3's standard.
+Four `WelsMallocz` calls became one constructor; four `WelsFree` entries became one
+`drop`; `FrameBsRealloc` became two `resize` calls.
+
+**Two scoping findings, both against the brief's assumption.** `SWelsNalRaw.pRawData`
+stays raw: `SWelsEncoderOutput.sNalList` and `SWelsSliceBs.sNalList` are separate lists
+sharing one struct type, and the second points into the MT-aliased slice buffer this
+phase excludes — one type cannot hold offsets into two owners. And the exclusion itself
+was verified rather than inherited: `SetOneSliceBsBufferUnderMultithread` binds
+`pBsBuffer` to `pThreadBsBuffer[kiThreadIdx]`, so a `Vec` there would mean two owners of
+one allocation. Both reasons are written at their sites, naming Phase 6.
+
+### 5. F3's thirteenth and fourteenth measurements — and the first tie
+
+**Thirteenth:** the opening control battery drew a hit on a tree with not one line
+changed, on the exact commit session E signed off as a clean `OVERALL: PASS`. Third
+consecutive session this has happened. Re-ran 5/5 clean.
+
+**Fourteenth:** T3.6's battery drew **two** release hits, which is what escalates the
+retry rule from re-run to alternation. Control `45ab079c`, both binaries built once and
+swapped inside one loop, 20 rounds × two configurations per side:
+**HEAD 2/40, control 2/40.** The two sides tied exactly — the first of four alternations
+that did not come back with the control worse, and a *stronger* acquittal for it: a
+difference in either direction on that sample would need explaining, and there is none.
+
+New breadth datapoint: `Static_152_100` appeared in an F3 hit for the first time. The
+signature is not confined to the two Cisco clips.
+
+**Fifteenth, at the exit battery**, and the cleanest instance yet of the
+two-batteries-one-tree shape: a single release hit (`mt CiscoVT2people_160x96_6fps t=4
+sm=3 n=600 cabac=1 rc=1`, **short**, 41681 vs 42281), re-run 5/5 clean. The immediately
+preceding exit battery scored 341/341 release on the same tree, and **the only edit in
+between was a `#[cfg_attr(miri, ignore)]` attribute on a test** — which is not compiled
+into the encoder binary the sweep runs. Same library code, opposite verdicts, with an
+intervening diff that provably cannot reach the binary under test.
+
+Running total: **fifteen measurements, four alternations, four acquittals.**
+
+### 6. Perf: the measurement lesson is worth more than the numbers
+
+Full protocol, both benches, against the true phase entry. **Three interleaved pairs did
+not converge on this machine today**, and that is the finding:
+
+* whole-phase decode went **+0.68% at 3 pairs → −1.93% at 5 pairs** — a 2.6-point swing
+  that changed the sign;
+* the encoder-only span's decode median went **+1.21% → +0.16%**, with the Main row
+  going **+1.36% → −0.03%**.
+
+The session's null floor said why: the encode band was −1.53% … **+22.57%**, one row
+over +5%, *the same binary against itself*. Taken at face value, the 3-pair +1.21% would
+have been written up as a real cost of three seams that touch no decoder code.
+
+**No ledger row opens.** Every median is far inside the ≤5%-per-phase gate and nowhere
+near the +25% cumulative tripwire, and two measurements of one span disagreeing in sign
+is direct evidence the true effect is below the measurement error — D-perf-4's
+disposition for that is diagnostic-only. The two defensible statements: the **encoder is
+unmoved** (`+0.00%` at both pair counts on the span that could have moved it, cumulative
+≈ +8.9% intact) and **decode did not regress and probably improved** (best-converged
+−1.93%, consistent with T3.1b's expectation). Full tables in `perf_baseline.md`.
+
+The rule to carry: **when a median lands outside the null band, the first move is more
+pairs, not a diagnosis.**
+
+### 7. The exit's own inventory
+
+* **S18 straggler sweep.** `SBitStringAux`/`PBitStringAux`/`TagBitStringAux`,
+  `pStartBuf`/`pCurBuf`/`pEndBuf`, `InitBits`, `uiCurBits`: **zero code occurrences**.
+  Every surviving mention is prose recording what the type was. The 112 identifiers that
+  outlived the type — `pBitStringAux`/`pLocalBitStringAux` parameters and locals whose
+  type was already `BsWriter` — are renamed. (`rc.rs` has nine `iLeftBits`; that is a
+  rate-control slice budget sharing only the spelling.) **One name survives, listed with
+  its owner**: the decoder's `SDqLayer::pBitStringAux`, type already `*mut BsReader`,
+  pointer-ness Phase 5's.
+* **`SHIM(phase3)` ends at 2, enumerated**: `bs_buffer` and `slice_bs_buffer`, both
+  **narrowed** by this session rather than merely surviving — they now guard the
+  MT-aliased slice buffer *alone* — and both retire with the thread pool in Phase 6.
+* **Miri: 291 `--lib` tests**, three skips unchanged (F12's thread pool, F13's
+  `manage_dec_ref` and `encoder_ext`). The widened gate — Miri over the differential
+  integration tests — ran at the exit level **and caught something, which is the
+  point of it: [F18](phase3_findings.md)**. `kernels_differential_phase2`'s
+  `encoder_deblocking_table_installs_the_common_shims` compares reified function
+  pointers, and Miri mints a fresh synthetic address for each one (two runs gave
+  `43215773 vs 43216036` and `1789169 vs 1789457`). Verified pre-existing — the
+  identical failure reproduces at the phase-entry commit in a scratch worktree — and
+  fixed the documented way, `#[cfg_attr(miri, ignore)]` with the reason, matching
+  `common/mc.rs`'s `init_mc_func_ignores_the_cpu_flag`. The property is symbol
+  identity, which Miri does not model; it is unrepresentable there rather than
+  untested. **Why it hid for four phases is the reusable part**: the test predates
+  F17's fix, F17 meant the Miri gate could not fail at all, and only the `exit` level
+  runs Miri over integration tests — so this is the first battery since F17's repair
+  that could both fail *and* look at it. **A repaired gate has a backlog.** Session E
+  recorded the negative of this; F18 is the positive case. Miri
+  `--test kernels_differential_phase2` now 20 passed / 0 failed / 1 ignored.
+* **Differential retirement.** `safe_bits_differential.rs` is down to **one** real
+  `unsafe` block; its raw reader side retired at T3.1b and its raw writer side at T3.4,
+  and what remains is properties, golden tables, the frozen CAVLC parity pair, and the
+  writer-to-reader loop. (`safe_plane_differential.rs` still has its 12 — that is Phase
+  1's plane work, not this phase's.)
+* **T3.0's standing**: **2316 rows over 12 files, 0 `WITHHELD`, dual-profile, unmoved
+  this session.** It is the phase's permanent instrument and goes on gating Phases 5
+  and 8.
+* **S19**: [`prompts/phase4b.md`](prompts/phase4b.md) written. The 4a/4b fence is lifted.
+  One correction folded in from measurement: `IWelsParametersetStrategyVtbl` has **20**
+  entries, not the 16 the session-F brief carried; `IWelsReferenceStrategyVtbl` is 7 as
+  stated.
+
+### Hand-off: Phase 4b
+
+Start from a clean full battery, and **expect an F3 hit on it** — three sessions running
+now, on unchanged trees. The brief is written and its §1 has the whole of the first seam
+mapped: one boolean in `encoder_context.rs:752-766` selects four `Option<fn>` slots, and
+that is an `enum EntropyCoder` with four methods. The thunk deletes itself; the CAVLC
+arm sheds the `buf` parameter T3.5 was forced to add. `transmute` is still 23 and has
+not moved since Phase 0 — 4b's §3 names it explicitly so it stops not moving.

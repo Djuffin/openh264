@@ -13,17 +13,18 @@ proposal and its accumulated history, and stays as written.*
 
 | | |
 |---|---|
-| **Phase 4a complete** | 2026-08-10. Kernel-dispatch de-virtualization + the recovery/unpark checkpoint. `SMcFunc`, the decoder's `SDeblockingFunc`, and F13's `pfMdCost`/`pfMeCost` self-reference are gone; **49 dispatch sites now name their kernels directly** |
-| **Next** | **Phase 3 — the bitstream layer, T3.5 then T3.6.** Brief: [`prompts/phase3.md`](prompts/phase3.md). **The layer no longer contains a pointer cursor of any kind**: T3.0–T3.3 closed the decoder read side, T3.4 closed the encoder write side, and `SBitStringAux` — §1.2's emblem for T3 — is **deleted**. What is left is T3.5 (the CABAC coder's own `m_pBufStart/Cur/End` triple, which never used that struct) and T3.6 (owned output buffers). Then Phase 4b, which waits for Phase 3 by the 4a/4b fence |
+| **Phase 3 complete** | 2026-08-11, sessions A–F. **The bitstream layer contains no pointer cursor on either side.** T3.0–T3.3 closed the decoder read side, T3.4 closed the encoder write side and deleted `SBitStringAux` (§1.2's emblem for T3), T3.5 converted the CABAC coder's own triple — the last one — and T3.6 gave the frame output owned `Vec` buffers, retiring the first encoder free-cascade entries. Brief: [`prompts/phase3.md`](prompts/phase3.md), superseded-historical |
+| **Next** | **Phase 4b — config-dispatch enums, the two strategy vtables, and 4a's leftovers.** Brief written: [`prompts/phase4b.md`](prompts/phase4b.md). **The 4a/4b fence is lifted**: those tables name the bitstream writer, and the writer is now one family with a stable signature. Order per D-seq-1: 4b → 5 → 6 → 7 → 8 → 9 |
 | **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, +25% median cumulative tripwire, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a ran before Phase 3 — done. **D-perf-3's fallback is now spent, on the decode side only** (see the finding below) |
 | **The checkpoint's result** | **Encoder -5.11% median, all 28 usable rows faster or flat, none regressed**; decode -0.19% (flat). Cumulative vs Phase 2's start is now ≈ **+8.9% encoder** (was +14.73% — back under 10% for the first time since T4) and ≈ +17.8 / +10.1 / +9.6% decode (unmoved). [`perf_baseline.md`](perf_baseline.md) §Phase 4a |
+| **Phase 3's perf, and its lesson** | **Nothing measurable, on a phase that added bounds checking to both bitstream hot paths.** Encoder **+0.00%** at both pair counts on the span that could have moved it; decode's best-converged number is **−1.93%** (5 pairs, whole phase). **No ledger row opens.** The lesson is bigger than the numbers and is now **S2b**: 3 → 5 pairs moved whole-phase decode from +0.68% to −1.93%, *changing the sign*, on a session whose null floor ran to +22.57% on one encode row. When a median lands outside the null band, **re-run at more pairs before reaching for a mechanism** |
 | **The finding that governs Phases 5/6** | **Direct dispatch recovers per-call scaffolding only where the caller supplies constant dimensions.** Encoder call sites pass literal block sizes and recovered; the decoder's arrive as parameters through `BaseMC` (~1300 instructions, not inlinable) and recovered nothing. Measured on two families in both codecs, with the `#[inline]` fixes built and reverted rather than reasoned about. **Every remaining decode ledger row is downgraded to Phase 5**, which is the phase that makes those dimensions static |
 | **Ledger** | **No row is `pending`.** Two closed as noise, two downgraded to Phase 5 with the reason, four carried into the aggregate ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
 | **Parked** | `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7) — **re-attempted and re-parked 2026-08-10**, second dated verdict, on a rebuilt harness (1.41x–4.94x against a ≤1.05x bar). One debt owed: SATD still has no measurement of its own |
-| **Ratchet** | *(T3.4 exit, 2026-08-11)* `unsafe_fn` **1296**, `raw_ptr` **5034**, `SHIM(` **157**, `no_mangle` 24, **`transmute` 23 — unchanged, and that is 4a's main unfinished business**. T3.4 took the phase's biggest `unsafe_fn` drop (1327 → 1296) as the raw writer bodies went; `SHIM(` rose by the two named buffer helpers, both owned by T3.6. Baseline regenerated once at `13912ffd` per S16. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
-| **Gates** | *(T3.4 exit)* **431 debug / 425 release / 20 ignored** — five writer differentials retired with the code they compared against, two `safe::bits` tests added; T3.0's **2316 malformed-stream golden rows** are part of the battery, and since T3.3 **none of them is `WITHHELD`** — F15's 105 blanked rows carry real outcomes in both profiles. Sweeps 341/341 both profiles, and T3.4 ends on a **clean `OVERALL: PASS` full battery with nothing explained away** (F3 per S14; its **twelfth** measurement is session E's alternation, control 3/80 vs HEAD 1/80 — three alternations run, three acquittals, and the first observed *long* wrong-length output). Miri **291 tests**, same three skips (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`) — `au_set.rs`'s two F13 accommodations are deleted and Miri runs the honest code. **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration, ends with an `OVERALL: PASS/FAIL` line matching its exit code, and was shown to actually fail on a known-red input (the F12 skip removed) before the session-C baseline was taken |
-| **Standing rules** | **§7.6** below. Phase 3+ briefs cite it rather than copying rules forward. New instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
-| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 has a **twelfth** measurement and a third alternation, control 3/80 vs HEAD 1/80 — all three alternations have acquitted the tree under test), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended; three sites remain), [`phase3_findings.md`](phase3_findings.md) F15–F17. **All three of Phase 3's own findings are now closed**: **F15 FIXED at T3.3** (empty RBSP → bit size 0 → the existing error path; both profiles agree; the 105 withheld golden rows came back as its proof), **F16 resolved at T3.1b with its second instance and whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`) |
+| **Ratchet** | *(Phase 3 exit, 2026-08-11)* `unsafe_fn` **1286**, `raw_ptr` **5001**, `unsafe_block` **616**, `SHIM(` **157** (of which **`SHIM(phase3)` is 2**, both enumerated and both owned by Phase 6), `no_mangle` 24, `mem_zeroed` 26, **`transmute` 23 — still unchanged, and it is the one metric no phase has moved**; it is 4b's, explicitly, in that brief's §3. Across Phase 3: `unsafe_fn` 1372 → 1286, `raw_ptr` 5106 → 5001. Baseline regenerated twice per S16, at `13912ffd` and at T3.6 — the second for **one prose match**, the string `mem::zeroed()` inside the doc comment explaining why `SWelsEncoderOutput` does *not* need a zeroed shell. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Gates** | *(Phase 3 exit)* **431 debug / 425 release / 20 ignored**. T3.0's **2316 malformed-stream golden rows over 12 files** are part of the battery and **none is `WITHHELD`** since T3.3 — it is the phase's permanent instrument and goes on gating Phases 5 and 8. Sweeps 341/341 both profiles. Miri **291 `--lib` tests**, same three skips (F12 thread pool, F13's `manage_dec_ref` and `encoder_ext`), plus the widened `exit`-level run over the differential integration tests; `safe_bits_differential.rs` is down to **one** real `unsafe` block, its raw reader side retired at T3.1b and its raw writer side at T3.4. F3 per S14 — **fifteen measurements, four alternations, four acquittals**, the fourth a tie (2/40 each side); **expect a hit on the session-start control battery**, which has now happened three sessions running on unchanged trees. **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration and was shown to actually fail on a known-red input before the session-C baseline was taken |
+| **Standing rules** | **§7.6** below, now S1–S22. Phase 3+ briefs cite it rather than copying rules forward. **S20** (a struct conversion's decomposable unit is the signature-reachability closure, not one struct) and **S21** (the construction audit, and a duplicate-family finding must inventory every function per copy) were hoisted out of Phase 3 and are what Phases 5 and 6 are made of; **S22** (a repaired instrument has a backlog — run everything it covers at every level, the session it is repaired) is F17 → F18's lesson, hoisted at the exit. Instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 now has **fifteen** measurements and **four alternations, four acquittals**, the fourth a *tie* — 2/40 each side — which is a stronger acquittal than a lopsided one; the fifteenth is the cleanest instance yet of *two batteries on one tree disagreeing*, the only intervening edit being a test attribute that cannot reach the encoder binary), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended; three sites remain), [`phase3_findings.md`](phase3_findings.md) F15–F18. **All four of Phase 3's own findings are closed**: **F15 FIXED at T3.3**, **F16 resolved at T3.1b with its second instance and the whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`), and **F18** — an address-comparison test that had been failing the Miri gate since *before* F17 made that gate capable of failing — found and fixed at the exit. **F18's lesson: a repaired gate has a backlog, and it surfaces only at the level and moment the repaired gate first runs**; the `exit` level runs once per phase. **F3's standing advice, earned three sessions running: expect a hit on the session-start control battery, before a line is changed.** |
 | **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, F14, and F3's eighth measurement** — re-raising T7 is Eugene's call |
 
 **Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
@@ -438,7 +439,7 @@ Callers keep calling through R7 shims where tables still exist; tables themselve
 
 1. Decoder read side: `bit_stream.rs`, `dec_golomb.rs` (guard-byte design P6), `cabac_decoder.rs` (offset engine + handoff), `SDataBuffer` → `RawDataBuffer`, `nalu.rs` payload ranges, delete `ExpandBsBuffer` rebasing.
 2. Encoder write side: `vlc_encoder.rs` → safe `BsWriter`; `set_mb_syn_cabac.rs` cursor triple; `svc_set_mb_syn_cavlc.rs` rollback snapshots + `pEndBuf - pCurBuf` space checks → `len - pos`; `nal_encap.rs` owned buffers.
-3. `SBitStringAux` itself remains as a compat shell only where still-unconverted structs embed it (`SDqLayer::pBitStringAux` waits for Phase 5); the shell is deleted in Phase 5/6.
+3. `SBitStringAux` itself remains as a compat shell only where still-unconverted structs embed it (`SDqLayer::pBitStringAux` waits for Phase 5); the shell is deleted in Phase 5/6. *(Outcome, 2026-08-11: the shell was never needed — T3.4's inventory came back empty and the type was deleted outright. `SDqLayer::pBitStringAux` had already been retyped `*mut BsReader` at T3.1b; only its pointer-ness remains, and that is Phase 5's.)*
 
 *Exit gate: battery + a dedicated malformed-stream error-code parity test (systematic truncations, EPB edges, degenerate NALs — exact error codes and cursor/frame-count behaviour). The originally-specified fuzz burn-in is removed from this gate (2026-08-10, by direction — T7 stays deferred; §0's "absent instrument" row tracks the tally), which is why the parity test's corpus must carry the malformed-input burden alone. Risk: the P6 slop and CABAC end-ladder byte counting — both have precise existing tests (truncated streams in conformance set).*
 
@@ -458,13 +459,13 @@ Tier 1 deletions (tables → direct calls; the Phase 0/2 work makes this mostly 
 Order inside the phase (each step lands with shims + full gates):
 
 1. **5.1 Picture & DPB**: `Picture` re-struct (PaddedPlanes + Vecs), `PicPool`, `pic_queue.rs` recycling predicate, `manage_dec_ref.rs` (near-mechanical per survey), `error_concealment.rs` identity sites, P3 regression tests first.
-2. **5.2 MbGrid**: kill `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned `MbGrid`; re-point `parse_mb_syn_*` cache fills (their 30-entry scratch caches become `&mut` locals passed down — ~40 signatures, mechanical).
+2. **5.2 MbGrid**: kill `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned `MbGrid`; re-point `parse_mb_syn_*` cache fills (their 30-entry scratch caches become `&mut` locals passed down — ~40 signatures, mechanical). *(Added at Phase 3's exit: size every commit here by the **S20 closure, computed first** — `SDqLayer` is embedded and asserted widely, and T3.4 proved a signature change forces every reachable struct into one commit. Phase 3's one surviving straggler name, `SDqLayer::pBitStringAux` — type already `*mut BsReader` — retires in this step, and `cabac_decoder.rs`'s `SHIM(phase5)` rbsp accessor dies with it.)*
 3. **5.3 Neighbor & MV machinery**: `mv_pred.rs` (punning → byte ops, `SetRectBlock` → typed generic on the grid), colocated reads via `cur_and_ref`.
 4. **5.4 Deblocking driver** (`decoder/deblocking.rs`): `SDeblockingFilter` holds `PicId`s + plane cursors built per-MB; identity compare per P3.
-5. **5.5 `decoder_core.rs`**: allocation → constructors (`AllocPicture` dies into `Picture::new`), paramset store (P4), context decomposition per §2.2.6, `Drop` teardown, `Default` derives.
-6. **5.6 `decode_slice.rs`** last (P1), including EC MC paths; delete the last decoder shims and `SBitStringAux` shell; decoder modules get `#![deny(unsafe_code)]` one by one.
+5. **5.5 `decoder_core.rs`**: allocation → constructors (`AllocPicture` dies into `Picture::new`), paramset store (P4), context decomposition per §2.2.6, `Drop` teardown, `Default` derives. *(Added at Phase 3's exit: **S21 applies with force** — unlike the encoder's `pOut`, which is reached through a pointer, the decoder context embeds its buffers **by value**, so every owned field lands inside `mem::zeroed` reach. The `MaybeUninit` shell + `new_boxed()` already exists at `decoder_context.rs:769` from T3.3; this step extends it per owned field and is the step that eventually replaces the shell with a real constructor.)*
+6. **5.6 `decode_slice.rs`** last (P1), including EC MC paths; delete the last decoder shims *(2026-08-11: there is no `SBitStringAux` shell to delete — the type died outright at T3.4; what remains for this step is the decoder's `SHIM(phase2)` kernel adapters, whose callers convert in 5.2–5.4)*; decoder modules get `#![deny(unsafe_code)]` one by one.
 
-*Exit gate: battery with special attention to frame-count parity and the `#[ignore]` set; long fuzz run; decoder src/ is unsafe-free; **every §7.4 deficit-ledger entry whose shims died in this phase must clear** (the ledger empties as the scaffolding it measures is deleted). Risk: highest of the plan — this is where borrow-splits are designed for real. Mitigation: strict step order above, each step's shims keep the tree green, and any step can pause for a session boundary without leaving broken state.*
+*Exit gate: battery with special attention to frame-count parity and the `#[ignore]` set; ~~long fuzz run~~ *(2026-08-11: T7 remains deferred by direction — in its place, T3.0's 2316-row malformed-stream golden table gates this phase in both profiles, per Phase 3's exit)*; decoder src/ is unsafe-free; **every §7.4 deficit-ledger entry whose shims died in this phase must clear** (the ledger empties as the scaffolding it measures is deleted) — *and this is the phase that collects Phase 4a's downgraded decode rows: direct dispatch recovered nothing there because `BaseMC` passes runtime dimensions, and 5.x is what makes those dimensions static (≈ +17.8 / +10.1 / +9.6% cumulative decode is the debt; the ~7-point CB headroom under the tripwire is this phase's to spend)*. Risk: highest of the plan — this is where borrow-splits are designed for real. Mitigation: strict step order above, each step's shims keep the tree green, and any step can pause for a session boundary without leaving broken state.*
 
 ### Phase 6 — Encoder structural rewrite *(10–14 sessions)* — the second pivot
 
@@ -472,8 +473,8 @@ Same playbook, informed by Phase 5's patterns:
 
 1. **6.1** `ref_list_mgr_svc.rs` → `PicId` lists (survey: zero identity comparisons, pure index conversion) + `RefStrategy` trait from Phase 4.
 2. **6.2** Picture pool ownership out of `wels_preprocess.rs` (P8 inversion); `SVAACalcResult` → out-views (P9); `processing/` fully safe here.
-3. **6.3** `SMbCache` → owned fixed arrays; plane cursors in MD/ME (`md.rs`, `svc_base_layer_md.rs`, `svc_mode_decision.rs`, `svc_motion_estimate.rs` incl. P11, `svc_encode_mb.rs`) — the hot path; watch the bench budget per-PR.
-4. **6.4** Slice/layer structures: `Vec<SliceState>` + indices (P10), `svc_enc_slice_segment.rs` maps → `Vec<u16>`, `encoder/deblocking.rs` finishing its half-done slice conversion.
+3. **6.3** `SMbCache` → owned fixed arrays; plane cursors in MD/ME (`md.rs`, `svc_base_layer_md.rs`, `svc_mode_decision.rs`, `svc_motion_estimate.rs` incl. P11, `svc_encode_mb.rs`) — the hot path; watch the bench budget per-PR. *(Added 2026-08-10/11: this step owes the **third attempt at the parked families** — `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7), twice parked on dated verdicts (1.41x–4.94x vs a ≤1.05x bar) — re-tried here because caller conversion is what changes their calling convention; SATD still owes a measurement of its own before any verdict.)*
+4. **6.4** Slice/layer structures: `Vec<SliceState>` + indices (P10), `svc_enc_slice_segment.rs` maps → `Vec<u16>`, `encoder/deblocking.rs` finishing its half-done slice conversion. *(Added at Phase 3's exit — this step inherits Phase 3's two deliberate exclusions: **`SWelsSliceBs.pBsBuffer`**, left raw because `SetOneSliceBsBufferUnderMultithread` aliases it to `pThreadBsBuffer[kiThreadIdx]` — the port's last two `SHIM(phase3)` markers guard exactly this and retire when the thread-buffer ownership is redesigned here/Phase 7 — and **`SWelsNalRaw.pRawData`**, left raw because one struct type serves both the frame-level NAL list (owner now a `Vec`, T3.6) and the slice-level list pointing into the MT-aliased buffer: one type cannot hold offsets into two owners until both owners are real.)*
 5. **6.5** R1 sweeps: `rc.rs`, `au_set.rs`, `paraset_strategy` remnants, `wels_encoder_ext.rs` internals.
 6. **6.6** The pivot: `encoder_context.rs` + `encoder_ext.rs` — `RequestMemorySvc` → constructors, free cascade → `Drop`, field taxonomy applied (§2.2.6), `encoder/abi_guard.rs` asserts deleted struct-by-struct in the same commits that de-`repr(C)` them.
 
@@ -484,6 +485,8 @@ Same playbook, informed by Phase 5's patterns:
 §2.2.7: scoped fork/join for fixed slicing; channel work-queue for SM_SIZELIMITED; safe persistent pool only if spawn cost shows up in benches; delete `TaskPtr`, laundering, `void*` mutexes, `static mut` singleton, all 5 `unsafe impl` pairs; `wels_task_management.rs`/`slice_multi_threading.rs`/`wels_thread_pool.rs` collapse to a fraction of their size.
 
 *Exit gate: MT determinism (MT bitstream == today's MT bitstream, across thread counts), loom-style stress not required — the model is fork/join with owned splits. Risk: SM_SIZELIMITED work distribution must not change slice boundaries; it's index-driven, keep the claiming order identical.*
+
+*(Added at Phase 3's exit: **this phase is F3's experiment, and F3 closes here one way or the other.** Fourteen measurements, four alternations, four acquittals of the trees under test; the signature — nondeterministic wrong-length MT output at `sm=3, t∈{2,4}`, now seen on a third input beyond the two Cisco clips — has survived every phase unchanged, which points at the pool/claiming machinery this phase deletes (F12 and P10 are the candidate mechanisms on record). If the fork/join rewrite makes it vanish, that is the mechanism confirmed by ablation; if it persists on the rewritten pool, it is a pre-existing defect upstream of the pool and finally has a small surface to corner it in. Either exit is a resolution; carrying the signature past Phase 7 unexplained is not.)*
 
 ### Phase 8 — C-ABI boundary hardening *(3–4 sessions)*
 
@@ -657,6 +660,18 @@ findable.*
   -11% and +226% between runs of one binary — but record what it says, because
   gradient content is the per-block-scaffolding path at its purest and Phase 4a's
   checkpoint wants that datapoint.
+- **S2b — when a median lands outside the null band, the first move is more pairs,
+  not a diagnosis** (Phase 3 exit, 2026-08-11). Three interleaved pairs is a floor,
+  not a guarantee of convergence. At Phase 3's exit, going 3 → 5 pairs moved
+  whole-phase decode from **+0.68% to −1.93%** — a 2.6-point swing that changed the
+  *sign* — and moved a second span's decode median from +1.21% to +0.16%, one row
+  going +1.36% → −0.03%. That session's null had already said why: the encode band
+  was −1.53% … **+22.57%**, same binary against itself. The +1.21% figure, taken at
+  face value, was about to be written up as a real cost of three seams that touch no
+  decoder code. **Two measurements of one span disagreeing in sign is evidence the
+  effect is below the measurement error**, and D-perf-4's disposition for that is
+  diagnostic-only — but you only get that evidence by re-running at a higher pair
+  count before reaching for a mechanism.
 - **S3 (was R-j) — a microbenchmark's working set is part of its correctness.**
   T5's SAD bench at a 1984-byte stride over 190 KB reported 0.82-1.33x where the
   encoder reported +16.8%; the same bench L1-resident reported 1.0-2.0x and agreed.
@@ -817,6 +832,17 @@ findable.*
   finding, relatedly, must inventory **every function of the family per copy**,
   not one representative — F2's table compared `BsWriteBits` alone and missed
   `nal_encap.rs`'s divergent `BsFlush` store width for three phases.
+- **S22 — a repaired instrument has a backlog, and it surfaces only at the level
+  and moment the repaired gate first runs** (Phase 3 exit, F17 → F18). F18 sat red
+  for four phases because three conditions stacked: the test predates F17's fix,
+  F17 meant the Miri gate could not fail at all, and only the once-per-phase
+  `exit` battery level runs Miri over the integration tests — so the first
+  `exit`-level run after the repair was the first moment the defect *could*
+  surface, and it did, immediately. Whoever repairs a gate must, in the same
+  session, deliberately run everything the gate covers at every level it covers,
+  rather than waiting for the next scheduled run: "the gate starts existing on
+  this commit" (F17's line) implies everything it watches is unaudited until it
+  has actually run there.
 
 
 ---
@@ -1219,8 +1245,10 @@ in the log's Phase 4a entry).
 
 ### Phase 3 — bitstream layer
 
-**In progress** (session A, 2026-08-10: `d7bc0ac3`, `96fb04a4`). Brief:
-[`prompts/phase3.md`](prompts/phase3.md); seam numbering T3.0–T3.6 is that brief's.
+**COMPLETE**, 2026-08-11, sessions A–F. Brief:
+[`prompts/phase3.md`](prompts/phase3.md) (superseded-historical); seam numbering
+T3.0–T3.6 is that brief's. **The layer contains no pointer cursor on either side, and
+no raw output allocation the encoder owns alone.**
 
 - [x] **T3.0 — the malformed-stream error-code parity test.** 2316 golden rows over 11
       base streams plus a degenerate set, generated in-test, byte-identical in both
@@ -1287,10 +1315,64 @@ in the log's Phase 4a entry).
       else moved** (classified mechanically). Ratchet `raw_ptr` **5106 → 5076**, the
       phase's biggest drop, and `SHIM(` **158 → 155**, its first fall. Pair: decode
       −0.43/+0.36/+0.32 against a ±0.6% floor; encoder median +0.00%. No ledger row.
-- [ ] T3.4 writer dedupe + `BsWriter` (F2, F5, F13's `InitBits` site) · T3.5
-      encoder CABAC triple + rollback · T3.6 `nal_encap.rs` + exit
+- [x] **T3.4 — the encoder write side, and `SBitStringAux` dies** (session E,
+      2026-08-11: `13912ffd`, `5bd19deb`, `fb4e7c29`). Face 1 collapsed **F2's four
+      writer copies** onto the canonical family (fifteen functions and four dead
+      transliterations deleted, zero bytes of output moved) and found F2's own
+      inventory one divergence short — `nal_encap.rs` also carried a `BsFlush` storing
+      only the bytes it advanced over where the canonical always stores a full 32-bit
+      word; every gate was blind to it because the next write overwrites those bytes.
+      Faces 2+3 could not separate and landed as one commit — **S20 was hoisted from
+      exactly this** — taking the encoder onto `BsWriter`, deleting `InitBits`
+      (**F13 site 3 closed**: it declared `*const u8`, stored `*mut u8`, and wrote
+      through it, so every honest caller was UB), deleting `au_set.rs`'s two Miri
+      accommodations, and **closing F5** by deletion exactly where its "who fixes it"
+      line predicted. Then `SBitStringAux` — §1.2's emblem for T3 — is deleted, with
+      the inventory that licensed it. Ratchet `unsafe_fn` 1327 → 1296.
+- [x] **T3.5 — the CABAC coder's own triple** (session F, 2026-08-11: `f828a55c`,
+      `45ab079c`). **Step 0's write-extent audit found two engines, not one**:
+      `svc_set_mb_syn_cabac.rs` carried a second transliteration of nine core
+      functions and five tables, and because a module-local item beats a `use`, the
+      syntax layer ran the local copy while the slice-tail flush ran the canonical one
+      — two engines, one `SCabacCtx`, split at flush time. Upstream has no such
+      duplication; face 1 deleted it, with all nine divergences enumerated per copy
+      and `BypassOne`'s mask-vs-branch form (which differs for `uiBin ∉ {0,1}`) checked
+      at all six call sites rather than assumed. Face 2 converted
+      `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` to three `usize` offsets. **The audit's
+      load-bearing finding: `m_pBufEnd` was assigned and read by nothing, here or
+      upstream** — writes are bounded *below* by `m_iBufStart` in `PropagateCarry`'s
+      comparison (which is also what stops `pos - 1` wrapping a `usize`) and bounded
+      *above* only by the slice indexing this seam introduced. `PropagateCarry` is a
+      safe `fn` now. `BsWriter::set_pos` is deleted for `BsWriter::at`, making the
+      empty-accumulator invariant structural instead of asserted. 4b's fence held for
+      `pfGetBsPosition` and `pfWelsSpatialWriteMbSyn` and **broke for the stash pair**,
+      whose byte copy genuinely needs the buffer.
+- [x] **T3.6 — the frame output owns its buffers** (session F: `32b73efb`).
+      `SWelsEncoderOutput.{pBsBuffer, sNalList, pNalLen}` → `Vec<u8>` /
+      `Vec<SWelsNalRaw>` / `Vec<i32>`, with `uiSize` and `iCountNals` **deleted rather
+      than converted** per T3.3's standard. Four `WelsMallocz` calls → one `new_boxed`
+      constructor; **four `WelsFree` cascade entries → one `drop`, the first encoder
+      cascade entries to fall (R4 in miniature)**; `FrameBsRealloc`'s
+      allocate-copy-free pair → two `resize` calls. **S20's closure was small because
+      `pOut` is a pointer**, so nothing embeds the struct by value; **S21 discharged on
+      the same fact** — the encoder context is `mem::zeroed()`, and zero is a valid
+      null pointer where it would not be a valid `Vec`, so no `MaybeUninit` shell was
+      needed. Scoped deliberately: `SWelsSliceBs.pBsBuffer` is **excluded** because
+      `SetOneSliceBsBufferUnderMultithread` aliases it to `pThreadBsBuffer[idx]`
+      (verified, not survey-vintage), and `SWelsNalRaw.pRawData` stays raw because that
+      struct is shared with the excluded list. Both reasons written at their sites,
+      naming Phase 6.
+- [x] **Phase 3 exit** (session F: `e3fc68e8` + the exit commits). S18 straggler sweep:
+      the era's names are **zero in code** — the last 112 `BitStringAux` identifiers
+      were vestigial parameter names on `*mut BsWriter` and are renamed; one field,
+      the decoder's `SDqLayer::pBitStringAux`, is listed with its owner (Phase 5).
+      `SHIM(phase3)` ends at **2, both enumerated and both owned by Phase 6**. Full
+      3-pair-then-5-pair medians both benches; **S19**: [`prompts/phase4b.md`](prompts/phase4b.md)
+      written.
 
 ### Phases 4b–9
 
-Not started. Order per **D-seq-1**: Phase 3 → 4b (config-dispatch enums, strategy
-vtables, and 4a's leftover de-virtualization scope) → 5 → 6 → 7 → 8 → 9.
+**Phase 4b is next** per **D-seq-1** (Phase 3 → 4b → 5 → 6 → 7 → 8 → 9), and its brief
+is written: [`prompts/phase4b.md`](prompts/phase4b.md). The 4a/4b fence is **lifted** —
+the config-dispatch tables name the bitstream writer, and the writer is now one family
+with a stable signature. Phases 5–9 not started.

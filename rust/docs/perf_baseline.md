@@ -1093,6 +1093,85 @@ Three readings, in order of how much they generalise:
 
 ---
 
+## Phase 3 exit — the cumulative measurement, and a measurement lesson
+
+**Commits.** Phase entry `5e5c9196` (session A's start) → exit `e3fc68e8`. Note the
+session-F brief named `b308f7d5` as "the phase-entry baseline"; **it is not** — it is
+session *E*'s start, after T3.0–T3.3 had already landed. Both spans are reported below
+because the second isolates the three encoder-side seams.
+
+**This session's floor (S2, null run — the same binary in both slots, 3 pairs):**
+
+| bench | median | band | rows over +5% |
+|---|---|---|---|
+| decode | +0.04% | −0.33% … +0.40% | 0 |
+| encode | +0.01% | −1.53% … **+22.57%** | **1** |
+
+That encode row at +22.57% is the same binary against itself. **The machine was noisy
+today**, and the rest of this section has to be read against that fact rather than
+around it.
+
+### The numbers, at both pair counts
+
+**Whole phase, `5e5c9196` → `e3fc68e8`:**
+
+| bench | 3 pairs | 5 pairs |
+|---|---|---|
+| decode median | **+0.68%** | **−1.93%** |
+| decode rows | CB −0.47 / Main +0.68 / High +0.70 | CB −1.93 / Main −2.40 / High +0.46 |
+| encode median | **+0.00%** (−1.38 … +1.45) | **+0.79%** (−1.20 … +2.94) |
+
+**The three encoder-side seams only (T3.4+T3.5+T3.6), `b308f7d5` → `e3fc68e8`:**
+
+| bench | 3 pairs | 5 pairs |
+|---|---|---|
+| decode median | **+1.21%** | **+0.16%** |
+| decode rows | CB +0.11 / Main +1.36 / High +1.21 | CB +0.54 / Main **−0.03** / High +0.16 |
+| encode median | **+0.00%** (−2.25 … +1.94) | **+0.00%** (−0.91 … +1.45) |
+
+### What this says, and what it does not
+
+**The lesson is the disagreement, and it is worth more than any single row here.**
+Going from 3 pairs to 5 pairs moved whole-phase decode from **+0.68% to −1.93%** — a
+2.6-point swing that *changed the sign* — and moved the encoder-only decode median from
++1.21% to +0.16%, with the Main row going +1.36% → −0.03%. **Three interleaved pairs
+did not converge on this machine today.** The protocol's 3-pair default is a floor, not
+a guarantee; when a median lands outside the null band, the first move is more pairs,
+not a diagnosis. That cost this exit two extra runs and saved it a fabricated
+regression: the +1.21% decode figure, taken at face value, would have been written up
+as a real cost of encoder-side seams that touch no decoder code.
+
+**No ledger row opens.** Every median is far inside the ≤5%-per-phase gate and nowhere
+near the +25% median cumulative tripwire. Two measurements of the same span at
+different pair counts disagree in sign, which is direct evidence that the true effect
+is smaller than the measurement error — the D-perf-4 disposition for that is
+diagnostic-only, and this paragraph is the diagnosis.
+
+**The two defensible statements:**
+
+1. **The encoder is unmoved.** `+0.00%` at both pair counts on the encoder-only span,
+   and the encoder-side seams are the only ones that could have touched it. Cumulative
+   encoder stays ≈ **+8.9%** vs Phase 2's start, as it has since Phase 4a's checkpoint.
+2. **Decode did not regress, and probably improved.** The best-converged whole-phase
+   number is −1.93% (5 pairs), consistent with T3.1b's recorded expectation that the
+   decoder seams would return about a point. Cumulative decode is therefore **no worse
+   than ≈ +17.8 / +10.1 / +9.6%** (CB / Main / High) and likely a point or two better;
+   the phase's ~7-point CB headroom under the tripwire is intact and is Phase 5's to
+   spend.
+
+`Spatial Ramps` printed −42.17% / −43.04% and is **EXCLUDED** per S2 — the same rows
+the null run has shown at ±38%, −11% and +226% across runs of one binary.
+
+### What Phase 3 cost, structurally
+
+Nothing measurable, on a phase that added bounds checking to *both* bitstream hot
+paths and moved three encoder allocations from `CMemoryAlign` to `Vec`. The T3.4
+disassembly explains the writer half (bounds checks are out-of-line; `WRITE_BE_32`'s
+four byte-stores became one 32-bit store via `copy_from_slice`, so the seam came out
+*smaller*), and T3.6's allocations happen once per encoder init rather than per frame.
+
+---
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
