@@ -13,6 +13,27 @@
 //!
 //! Running this under Miri additionally checks the old implementations for UB; see
 //! `rust/docs/phase1_findings.md`.
+//!
+//! # What the *reader* half proves after T3.1a (plan §2, differential retirement)
+//!
+//! `bit_stream.rs` and `dec_golomb.rs` now run [`BsCursor`] behind their raw
+//! signatures, so the reader comparisons below are no longer two independent
+//! implementations. What they still prove — and what nothing else does — is that the
+//! **shim is faithful**: that `SBitStringAux`'s pointer triple survives the round trip
+//! through `cursor_of`/`store_cursor` at every truncation and after every operation,
+//! including the error paths where the raw refill left `uiCurBits`/`iLeftBits`
+//! mutated. They fail if a write-back is dropped or a field transposed.
+//!
+//! The *C*-consistency of the cursor arithmetic itself passes to
+//! `tests/malformed_stream_parity.rs` (T3.0), whose 2316 golden rows were recorded
+//! against the raw reader and still hold byte for byte, and to the 53 conformance
+//! hashes. That handover is why T3.0 was built before this conversion rather than
+//! after it. When T3.1b deletes the shim, these reader tests delete with it.
+//!
+//! Two F7 accommodations were **deleted** here in T3.1a, because the conversion
+//! deleted the UB they were accommodating — see the comments in
+//! `reader_init_matches_dec_init_bits` and `init_read_bits_matches_at_every_end_offset`.
+//! The writer half is untouched: it still compares two implementations, until T3.4.
 
 #![allow(non_snake_case)]
 
@@ -42,11 +63,18 @@ fn scale(n: usize) -> usize {
 
 /// The RBSP plus the slack the C++ reader relies on. See `phase1_findings.md` §F4:
 /// `dump_bits_aux` may sit one byte past the logical end and read two bytes there,
-/// so the *allocation* must extend at least 3 bytes beyond it for the old reader to
-/// be in bounds at all. Four keeps the initial 4-byte prime in bounds too.
+/// so the *allocation* must extend at least `READER_SLOP` = 3 bytes beyond the
+/// declared RBSP for the old reader to be in bounds at all.
+///
+/// Eight, not three, because `reader_init_matches_dec_init_bits` deliberately declares
+/// RBSP lengths **longer than the payload** (up to `payload + 2` bytes) to probe the
+/// `(kiSize + 7) >> 3` edge, and the contract is `declared + READER_SLOP` readable —
+/// not `payload + READER_SLOP`. Since T3.1a that requirement is checked rather than
+/// implied: `DecInitBits` builds the reader's slice eagerly, so Miri flags a buffer
+/// that is short of it, where the raw reader would merely not have reached that far.
 fn rbsp_with_slack(payload: &[u8]) -> Vec<u8> {
     let mut v = payload.to_vec();
-    v.extend_from_slice(&[0u8; 4]);
+    v.extend_from_slice(&[0u8; 8]);
     v
 }
 
@@ -84,21 +112,14 @@ fn reader_init_matches_dec_init_bits() {
         // Every bit size in and around the payload, including sizes that are not a
         // whole number of bytes and the degenerate non-positive ones.
         //
-        // Below -7, `(kiSize + 7) >> 3` goes negative and `DecInitBits` evaluates
-        // `pStartBuf.offset(kiSizeBuf)` — a pointer before the start of the
-        // allocation, which is undefined behaviour rather than a wrong value. Miri
-        // catches it; `phase1_findings.md` §F7 records it and the invariant that keeps
-        // it unreachable. The safe side is checked over the whole range regardless.
+        // Below -7, `(kiSize + 7) >> 3` goes negative, and until T3.1a `DecInitBits`
+        // evaluated `pStartBuf.offset(kiSizeBuf)` with it — a pointer before the start
+        // of the allocation, undefined behaviour rather than a wrong value
+        // (`phase1_findings.md` §F7). That accommodation is **deleted**: the old side
+        // now rejects the length before computing anything, so both sides are compared
+        // over the whole range.
         for size_bits in -9i32..=(payload_len as i32 * 8 + 9) {
             let new = BsCursor::init(&buf, size_bits).map(|c| new_state(&c));
-            if size_bits < -7 {
-                assert_eq!(
-                    new,
-                    Err(ErrInfo::INVALID_ACCESS),
-                    "payload {payload_len}, kiSize {size_bits}: F7, new side only"
-                );
-                continue;
-            }
             let (bs, err) = old_init(&buf, size_bits);
             let old = as_result(err, ()).map(|()| old_state(&bs));
             assert_eq!(old, new, "payload {payload_len} bytes, kiSize {size_bits}");
@@ -111,13 +132,12 @@ fn init_read_bits_matches_at_every_end_offset() {
     // `InitReadBits` is called with 1 by the CABAC init (`parse_mb_syn_cabac.rs:3312`)
     // and 0 by `decode_slice.rs:2474`.
     //
-    // The comparison stops at `end_offset <= payload_len` because past that the *old*
-    // side is undefined behaviour, not merely wrong: it evaluates
-    // `pEndBuf.offset(-iEndOffset)`, which walks the pointer before the start of the
-    // allocation. Miri catches it, and `phase1_findings.md` §F7 records both the
-    // hazard and the invariant that keeps it unreachable in the codec. The safe
-    // cursor does the same comparison in `isize` arithmetic, where there is nothing
-    // to get wrong, so it is exercised over the whole range below.
+    // Until T3.1a this comparison stopped at `end_offset <= payload_len`, because past
+    // that the *old* side was undefined behaviour rather than merely wrong: it
+    // evaluated `pEndBuf.offset(-iEndOffset)`, a pointer before the start of the
+    // allocation (`phase1_findings.md` §F7). That accommodation is **deleted**: the
+    // comparison now runs over the whole range, because both sides do the same
+    // comparison in offset arithmetic.
     let mut rng = Prng::new(0x8B17_0002);
     for payload_len in 1..12usize {
         let payload = rng.bytes(payload_len);
@@ -125,15 +145,6 @@ fn init_read_bits_matches_at_every_end_offset() {
         let size_bits = payload_len as i32 * 8;
         for end_offset in 0..4isize {
             let mut c = BsCursor::init(&buf, size_bits).unwrap();
-
-            if end_offset as usize > payload_len {
-                assert_eq!(
-                    c.init_read_bits(&buf, end_offset),
-                    Err(ErrInfo::INVALID_ACCESS),
-                    "payload {payload_len}, end_offset {end_offset}: F7, new side only"
-                );
-                continue;
-            }
 
             let (mut bs, err) = old_init(&buf, size_bits);
             assert_eq!(err, ERR_NONE);

@@ -943,6 +943,42 @@ not a coincidence.
 
 ---
 
+## Phase 3 — the bitstream layer (2026-08-10 →)
+
+### T3.1a — the decoder read side's bodies become `BsCursor` (shim at the raw signature)
+
+Instrument: `perfpair.py`, A = `p4a_exit` (`25a8e287`), B = `t31a` (`d7bc0ac3` plus the
+uncommitted seam), `FFMPEG` set. Session floor from `null t31a`, 1 pair: **decode
+±0.2%** (median +0.04%, min -0.06%, max +0.18%), encode median +0.13% with one -6.85%
+outlier, so the encode floor is the usual ≈±3%.
+
+| | 1 pair | **3 pairs (medians)** |
+|---|---|---|
+| decode Constrained Baseline (CAVLC) | +1.41% | **+0.77%** |
+| decode Main (CABAC) | -0.02% | **-0.26%** |
+| decode High (CABAC, 8×8) | +0.24% | **+0.45%** |
+| decode median | +0.24% | **+0.45%** |
+| encoder median, 28 rows | -0.34% | **+0.00%** |
+
+Read it as **+0.45% decode, encoder untouched**, and the cost sitting where the work
+is: Constrained Baseline is the CAVLC stream, so it is the one that pulls every syntax
+element through `BsGetBits`/`BsGetUe`, and it is the only row above the floor. The two
+CABAC rows read far fewer elements through this family — their bit-level work is in
+`cabac_decoder.rs`, which T3.2 converts.
+
+The cost is the shim, not the cursor: every call now loads five fields out of
+`SBitStringAux`, runs the safe body on a `BsCursor`, and stores three back, where the
+raw version mutated the struct in place. **T3.1b deletes exactly that** by moving the
+cursor into the structs that own the buffers, so this is a ledger row with a named
+deletion point one seam away, not a carried deficit. No `#[inline]` change was needed:
+the widths at the call sites are still literals, which is the property Phase 4a's
+finding says to protect.
+
+Cumulative decode after T3.1a: ≈ **+18.3 / +9.8 / +10.1%** (CB / Main / High) — the
+tripwire is +25% median cumulative, so the phase still has ~7 points of headroom on CB.
+
+---
+
 ## How to use this in later phases
 
 1. **Compare medians, not single runs**, and check the per-row spread column first.
