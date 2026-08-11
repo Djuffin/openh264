@@ -2045,3 +2045,280 @@ the shell and the sync layer is `SHIM(phase3)` with Phase 5 named as its deleter
 `iIndex` gap above has to be closed first. Deleting `cursor_of`/`store_cursor`/`read_with`
 and `BsCursor::from_parts` is the seam's completion signal, and the ledger row from item 6
 should clear with them.
+
+## 2026-08-10 — Phase 3, session B (T3.1b; T3.1 closes)
+
+**Goal:** [`prompts/phase3_session_b.md`](prompts/phase3_session_b.md) — finish T3.1,
+then T3.2 only if T3.1b gated with a third of the session left. It did not, and T3.2
+was not started: see "Next session's first action".
+
+**Started at** `033b6258`; **ended at** `773a91ac`. Working tree clean at both ends.
+
+One bookkeeping deviation from the brief's §0.1, which expected the [P3] doc edits to
+arrive uncommitted and asked for them to be committed in house style: they were already
+committed, as `033b6258 "phase 3 doc update"`. The content is exactly what §0.1
+describes and is correct; only the message is terse. Fixing it would mean amending an
+existing commit, which this environment declines, so it stands as-is rather than being
+worked around.
+
+### What landed
+
+| commit | what |
+|---|---|
+| `1bf5a235` | **T3.1b step 0** — `BsCursor` gains the CAVLC mode, differential-proven before any consumer moved |
+| `773a91ac` | **T3.1b steps 1–4** — the ownership move; the marshalling layer deleted; **F16** |
+
+### Gates
+
+| | inherited (`033b6258`) | final |
+|---|---|---|
+| tests | 423 debug / 421 release / 20 ignored | **430 / 424 / 20** |
+| T3.0 goldens | 2316 rows | **2316, unchanged, both profiles** — the gate that found F16 |
+| conformance | 53 hashes | 53 hashes, unchanged throughout |
+| sweeps | 341/341 both profiles | release **341/341**; debug **340/341**, twice, F3 signature — see below |
+| decode bench | — | all 3 streams **bit-identical** (SHA-1 `0fba9a4e…`, `d8c07c43…`, `8b081cce…`) |
+| encoder bench | — | all rows **bit-identical** |
+| Miri `--lib` | 275 tests | **285 passed, 0 failed** — read from the log, not from the gate's verdict (**F17**) |
+| ratchet | 1349 `unsafe_fn` / 5172 `raw_ptr` / 158 `SHIM(` | **1334 / 5109 / 157** — regenerated, shape below |
+
+The test count is net **−6** against the peak of 436/430 reached at step 0: the CAVLC
+mode added 10 unit + 3 differential tests, and the ownership move deleted the 6 retired
+reader differentials and `from_parts`'s test while adding one for the null-base helper.
+Against the session's *inherited* baseline it is +7 debug / +3 release, the gap being
+the four `#[cfg(debug_assertions)]` mode-guard tests.
+
+**Ratchet shape** (S16 — read the shape, not the sign). `raw_ptr` **−63**, `unsafe_fn`
+**−15**, `unsafe_block` **−11**: the six-function reader family in `dec_golomb.rs` is
+now *safe fns* — no `unsafe`, no raw pointers, `&mut u32` out-params — and the
+marshalling layer is gone. `SHIM(` −1: four markers deleted
+(`readable`/`cursor_of`/`cursor_and_buf`/`store_cursor`/`read_with`), three added
+(`BsReader`, its `buf()`, `readable_from`). One increase, and it is the one S16
+sanctions: `decoder/bit_stream.rs` `raw_ptr` 9 → 11, for `BsReader::base` and
+`readable_from`'s pointer parameters — "a shared helper may legitimately add one or
+two, and paying that beats N copies of the span arithmetic". Baseline regenerated with
+that reason in the commit message.
+
+### 1. The mode was built and proven first, and that ordering paid
+
+The brief made step 0 a separate, fully-proven commit before any of the 255 call sites
+moved. That is not ceremony: a mode that is subtly wrong, with 255 mechanically-edited
+call sites depending on it, is a bisect through a 1000-line diff. Ten unit tests
+(including an 8×4 sweep of every bit phase), three differential tests against the raw
+pair with **all six fields** compared, and three deliberate mutations killed — the
+dropped `left_bits` phase, the 16→32 half-window, and an unshifted prime — took about
+a fifth of the session and made the rest mechanical.
+
+The one design judgement inside it: `PartialEq` is **hand-written** over the six
+C-mirrored fields, excluding the `cfg(debug_assertions)` mode flag. A derived impl
+would compare the flag in debug and not in release, so two cursors could be equal in
+one profile and unequal in the other — the skew S16 exists to prevent, and the same
+call D1 made for the pool's generation counter.
+
+### 2. F16: `READER_SLOP` was derived from the wrong half of the reader
+
+**T3.0 caught this, and nothing else would have.** T3.1a wrote `READER_SLOP = 3` with
+the claim that three bytes "covers every read the family can make, at any position, for
+any operation". That was derived from `dump_bits_aux` and is false for `BsEndCavlc`,
+which primes **four** bytes at `iIndex >> 3` — and `iIndex` is advanced by the residual
+decoder by whatever each symbol consumed, so on a truncated stream it runs past the
+RBSP without bound. The raw reader was measured reaching `len + 5` and beyond; it never
+faulted because `sRawData` is 4 MiB.
+
+Handing the cursor `len + READER_SLOP` therefore gave it a **narrower** window than the
+raw code had, and 13 corpus entries across 6 streams aborted on the slice index. **All
+53 conformance hashes were green throughout** — well-formed streams never take the
+residual decoder past the RBSP, so only T3.0's corpus sees this. Second time in this
+phase that building the malformed-stream gate before the conversion it judges has paid
+for itself.
+
+Worth being precise about what this was *not*: not a pre-existing panic to record and
+quarantine per S12, but **the conversion narrowing a window** — a bug in the boundary
+helper. The distinction matters because the test's own failure message suggests the S12
+path, and taking it would have quarantined 13 rows to hide a regression.
+
+Resolution: `BsReader::avail` carries the real distance to the end of the allocation,
+computed by the single `readable_from(pHead, pEnd, …)` helper — which is the
+`pHead..pEnd` boundary helper the brief specified, arrived at from the other direction.
+Written up as `phase3_findings.md` §F16, with a warning for T3.2, whose end ladder and
+5-byte init prime must take their extent from the same place rather than re-deriving
+one.
+
+A second instance of the same class was then found by inspection rather than by a gate:
+`ExpandBsBuffer` grows the raw buffer, so a rebased reader's `avail` goes **stale and
+too small**. Fixed in the same commit. Nothing in the battery exercises mid-AU buffer
+growth — that is P5's unit test, and it is T3.3's to write.
+
+### 3. The deviation: `BsReader`, not a bare `*mut BsCursor`
+
+The brief's default shape for `SDqLayer::pBitStringAux` was `*mut BsCursor`, deviation
+allowed with a written reason. Taken, and here is the reason: `BsCursor` is detached by
+design (§2.1.3), so it cannot produce the bytes; `decode_slice.rs` reads *through* that
+pointer. The alternative is a base pointer and a readable extent as loose fields beside
+every cursor, kept coherent by hand — which is the exact shape §2.2.2 [P3] rejected for
+`iIndex`, and F16 is what happens when one of those two numbers is wrong.
+
+So `BsReader { base, avail, cursor }`: one `SHIM(phase3)` type, one `buf()` that
+reconstructs the slice, one `split()` that hands consumers the `(buf, &mut cursor)` pair
+the plan specifies, and **one thing for T3.3 to delete**. The consumers' signatures are
+exactly the plan's shape; only the storage differs. Recorded in §2.2.2 as a [P3] note.
+
+### 4. The consumer inventory, bucketed as the brief asked
+
+Session A's "~20 consumer functions" was right; the recount found **20**, plus 255 call
+sites (not the ~136 a `grep sBs` suggests — `sBs` appears three times in the whole
+decoder, because everything reaches the reader through parameters).
+
+* **Direct users (11 + 4)** — `nalu.rs`: `ParseNalHeader`, `ParseNonVclNal`, `ParseSps`,
+  `ParsePps`, `ParseVui`, `ParseScalingList`, `SetScalingListValue`, `DecodeSpsSvcExt`,
+  `ParsePrefixNalUnit`, `ParseRefBasePicMarking`, `ParseSei` (a stub);
+  `decoder_core.rs`: `ParseSliceHeaderSyntaxs`, `ParseDecRefPicMarking`,
+  `ParsePredWeightedTable`, `ParseRefPicListReordering`. Converted outright.
+* **The CAVLC residual path (5)** — `WelsResidualBlockCavlc`, `…8x8`,
+  `WelsParseMbCavlcResidual`, `ParseInterInfo`, `ParseInterBInfo`. Converted
+  *mechanically onto the mode*: `(*pBs).iIndex` → `cavlc_bit_pos()`, `+= iUsedBits` →
+  `advance_cavlc_bits()`, and the `BsStartCavlc`/`BsEndCavlc` call sites in
+  `decode_slice.rs` → `cursor.start_cavlc()` / `cursor.end_cavlc(buf)`. The residual
+  loop itself is untouched — that is Phase 5's.
+* **Through `SDqLayer::pBitStringAux` (9 binding sites in `decode_slice.rs`, plus the
+  CABAC I_PCM path)** — one `split()` per function, then the call sites take `buf`.
+
+Two paths needed more than a signature change, both `pEndBuf`-arithmetic per the
+brief's step 3, both kept in their exact shape: the two I_PCM byte-copy paths
+(`pCurBuf ± n` → `pos ± n` via a new `BsCursor::set_pos`, and `pEndBuf - pCurBuf` →
+`len - pos`), and the CAVLC↔CABAC handoff, which got two *named* operations
+(`hand_off_to_cabac`, `restore_from_cabac`) rather than loose `set_cur_bits`/
+`set_left_bits` setters — every one of those writes is only coherent as part of a whole
+handoff, and T3.2 folds them into the engine conversion.
+
+### 5. What died, and the differential retirement
+
+`cursor_of`, `cursor_and_buf`, `store_cursor`, `read_with`, `readable`, and
+`BsCursor::from_parts` are all **deleted** — the marshalling layer T3.1a's +0.45% paid
+for. The reader family in `dec_golomb.rs` is now six **safe** functions: no `unsafe`,
+no raw pointers, `&mut u32` out-params.
+
+The differential file's reader half is **deleted**, not retired in place again. T3.1a
+retired it once (it stopped comparing two implementations and began proving the shim
+faithful); with the shim gone there is no second implementation, and a test that
+compares a thing to itself reads as coverage while proving nothing. Its burden passes
+to T3.0's 2316 goldens, the 53 conformance hashes, and `safe/bits.rs`'s unit tests —
+which is the handover T3.0 was built first to enable.
+
+What stayed, because it still compares two live things: `GetLeadingZeroBits` and
+`BsGetTrailingBits` against their table-driven originals; the whole writer half (until
+T3.4); and the three CAVLC tests, now against a **frozen transliteration** of
+`BsStartCavlc`/`BsEndCavlc` kept in the test file. That copy is deliberately not built
+on `SBitStringAux` — pinning the reference to a struct that T3.3/T3.4 are dismantling
+would let it drift with the refactor it is judging.
+
+Also deleted: the F10-class accommodation in `parse_mb_syn_cavlc.rs`'s residual unit
+test (three `as_mut_ptr()` calls whose tags Stacked Borrows had already popped). There
+are no pointers left to reborrow. The test now sets up the way production does —
+`init` then `start_cavlc` — which the mode's guard *forced*, since the residual path
+asserts it is inside a CAVLC region.
+
+### 6. `ExpandBsBuffer`'s rebase collapsed, one seam early
+
+Three pointer rebases became one. `pEndBuf` and `pCurBuf` are the cursor's `len` and
+`pos` — offsets, which survive a reallocation by definition. That is P5's prediction
+arriving at T3.1b instead of T3.3; what is left is the base and (per F16) its extent,
+and T3.3 deletes both.
+
+### 7. F17: the Miri gate cannot fail, and has not been able to since Phase 2's exit
+
+Found by reading a baseline log that said `error: test failed, to rerun pass \`--lib\``
+and, four lines later, `PASS  miri --lib`. `gates.sh` sets `set -u` but not `pipefail`,
+and both Miri steps are written `if (cargo miri …) | tee … | tail -5; then` — so the
+`if` sees `tail`'s exit status and `cargo miri`'s is discarded. The bench steps use the
+same shape but end in `grep`, which at least fails when nothing matched; the steps that
+do it right (`run_cargo_test`, `sweep_gate`) capture `${PIPESTATUS[0]}`.
+
+Written up as `phase3_findings.md` §F17. **Not fixed here** — it is a change to the
+gate every remaining seam is judged by, and making it mid-seam means this seam's
+verdict comes from a different instrument than the one that judged T3.1a. It is
+session C's first action, before T3.2.
+
+The practical consequence for this entry: **Miri's result above was read out of
+`.gates/miri_lib.log` by hand** (285 passed, 0 failed), not taken from the battery's
+`PASS` line. Prior entries' "Miri green" claims are believable — every session also ran
+Miri by hand while developing, which is how F10/F12/F13 were found — but what was never
+true is that the battery would have *stopped* a session on a regression.
+
+### 8. The two debug sweep hits, and the S14 alternation
+
+Two `mt sm=3 t=4` zero-byte failures across the session's debug sweeps, on two
+different inputs (`CiscoVT2people_160x96_6fps cabac=1 rc=0`, then
+`CiscoVT2people_320x192_12fps cabac=0 rc=1`). Both are F3's signature exactly; release
+was 341/341 both times.
+
+S14 says more than one hit in a session means alternating both trees inside one loop
+rather than arguing, *because* sequential sampling of a load-sensitive race misleads —
+and the tempting argument here is a strong one: this seam changes **zero bytes** of
+`src/encoder/` and `src/common/` (`git diff --stat` over both is empty), so it cannot
+have touched the encoder's slice-list race except through code layout. The rule
+distrusts exactly that reasoning, so the alternation was run: **6 rounds × 120 `mt`
+configurations per side, alternating the two `rust_enc` binaries inside one loop**
+(control = `1bf5a235`, built in a separate worktree so both binaries were on disk at
+once, per S1's discipline applied to correctness rather than timing).
+
+| | encodes | `sm=3` zero-byte failures |
+|---|---|---|
+| control (`1bf5a235`) | 720 | **2** (rounds 5 and 6) |
+| HEAD | 720 | **0** |
+
+The control side failed *more*. That settles it: F3, not a regression, and the two
+in-battery hits are the natural rate on a machine that spent the session running
+batteries. Appended to F3's measurement history. Note the alternation also cost two
+gate-battery hits' worth of doubt to resolve — cheap, and the reason the rule is
+unconditional.
+
+### 9. Perf
+
+**The +0.45% ledger row T3.1a opened is cleared.** Null first (S2): this session's
+decode floor is median +0.08%, range −0.39%..+0.26%, so **±0.4%**. Then two interleaved
+pairs, control = `1bf5a235` (the marshalling still in) vs HEAD:
+
+| row | pair 1 | pair 2 | T3.1a had |
+|---|---|---|---|
+| Constrained Baseline (CAVLC) | **−0.93%** | **−1.07%** | +0.77% |
+| Main (CABAC, B-frames) | +0.23% | −0.24% | −0.26% |
+| High (CABAC, 8x8) | +0.21% | −0.17% | +0.45% |
+| median | +0.21% | **−0.24%** | +0.45% |
+
+Read the CB row, not the median. It is the one that pulls every syntax element through
+this family, it moved ≈**−1%** in both pairs — two to three times the floor, same sign,
+consistent magnitude — and that is exactly the shim field-marshalling T3.1a's entry said
+would come back here. The two CABAC rows sit inside the floor and flip sign between
+pairs, which is what "no signal" looks like; their bit work is in `cabac_decoder.rs` and
+belongs to T3.2. Encoder: median +0.34% over 28 rows against a null floor of
+−2.76%..+1.49% — a wash, as it must be for a seam that changes zero encoder bytes.
+
+Cumulative decode after both halves of T3.1, on the CAVLC row: +0.77% then −1.07%, i.e.
+**net negative**. The phase's ~7-point decode allowance on CB is untouched going into
+T3.2, which is the seam that will actually spend it.
+
+### Next session's first action
+
+**Not T3.2 yet — two things first, both small, both cheap to do cold:**
+
+1. **Fix F17** (`gates.sh`'s two Miri steps → `${PIPESTATUS[0]}`, no global `pipefail`
+   — the bench steps' `grep` filters would start failing the battery). Deliberately
+   left undone here so this seam and T3.1a were judged by the same instrument; doing it
+   first means T3.2 is the first seam gated by a Miri step that can actually fail.
+2. **Re-run the battery on the fixed gate** to establish what "green" now means.
+
+**Then T3.2**, the CABAC engine, from a standing start — it is the phase's perf-critical
+seam and the brief is explicit that beginning it late is the order-deviation trap. Two
+things this session leaves it:
+
+* `InitCabacDecEngineFromBS`/`RestoreCabacDecEngineToBS` already take `&mut BsReader`,
+  and the reader's side of the handoff is two named methods (`hand_off_to_cabac`,
+  `restore_from_cabac`) with `restore_from_cabac(pos)` already being the single `usize`
+  assignment the brief describes. The engine's own pointer triple is untouched.
+* **F16 is a live trap for it.** The end ladder (`cabac_decoder.rs:732-784`) selects a
+  4/3/2/1-byte final load from `pBuffEnd - pBuffCurr`, and init primes 5 bytes. Take the
+  readable extent from `BsReader::avail` / `readable_from` — do **not** re-derive one
+  from `len` plus a constant, which is the mistake F16 records.
+
+S1 before conversion, per the brief: `DecodeBinCabac` was 4a's largest single decode
+consumer (544 self-samples), so disassemble the current raw hot path before touching it.

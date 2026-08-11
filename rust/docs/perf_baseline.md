@@ -977,6 +977,35 @@ finding says to protect.
 Cumulative decode after T3.1a: ≈ **+18.3 / +9.8 / +10.1%** (CB / Main / High) — the
 tripwire is +25% median cumulative, so the phase still has ~7 points of headroom on CB.
 
+### T3.1b — the ownership move: the shim above is deleted, and its cost comes back
+
+Instrument: `perfpair.py`, A = `ctrl` (`1bf5a235`, the marshalling still in), B = `t31b`
+(`773a91ac`), `FFMPEG` set. Session floor from `null t31b`, 3 pairs: **decode ±0.4%**
+(median +0.08%, min −0.39%, max +0.26%); encode median +0.00% over 28 rows, min −2.76%,
+max +1.49%, i.e. the usual ≈±3%.
+
+| | pair set 1 | pair set 2 |
+|---|---|---|
+| decode Constrained Baseline (CAVLC) | **−0.93%** | **−1.07%** |
+| decode Main (CABAC) | +0.23% | −0.24% |
+| decode High (CABAC, 8×8) | +0.21% | −0.17% |
+| decode median | +0.21% | **−0.24%** |
+| encoder median, 28 rows | — | **+0.34%** |
+
+**Read the CB row, not the median.** Two independent 3-pair sets put it at ≈−1%, same
+sign, consistent magnitude, two to three times the floor — the shim field-marshalling
+T3.1a predicted would return. The two CABAC rows sit inside the floor and change sign
+between sets, which is what no signal looks like; their bit work is in
+`cabac_decoder.rs` and belongs to T3.2. The encoder is a wash because this seam changes
+zero bytes of `src/encoder/`.
+
+**The T3.1a ledger row is closed, not carried.** Cumulative decode on the CAVLC row
+across both halves of T3.1: +0.77% then ≈−1.0%, i.e. net slightly negative, so
+cumulative decode returns to about its Phase-4a-exit level ≈ **+17.8 / +9.6 / +10.1%**.
+The phase's ~7-point CB allowance is intact going into T3.2, which is the seam that will
+actually spend it (`DecodeBinCabac` was 4a's largest single decode consumer at 544
+self-samples).
+
 ---
 
 ## How to use this in later phases
