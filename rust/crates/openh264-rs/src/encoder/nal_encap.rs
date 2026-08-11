@@ -68,8 +68,9 @@ pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
 // ============================================================================
 
 pub use crate::common::wels_common_defs::{
-    EWelsNalRefIdc, EWelsNalUnitType, SBitStringAux, SNalUnitHeader, SNalUnitHeaderExt,
+    EWelsNalRefIdc, EWelsNalUnitType, SNalUnitHeader, SNalUnitHeaderExt,
 };
+pub use crate::safe::bits::BsWriter;
 
 /// Raw payload data descriptor for a NAL unit before encapsulation.
 #[repr(C)]
@@ -92,13 +93,32 @@ impl Default for SWelsNalRaw {
     }
 }
 
+/// The one place that turns an encoder output buffer back into a slice.
+///
+/// SHIM(phase3) -> the raw `pBsBuffer` allocations. `BsWriter` is a position and
+/// nothing else, so the buffer has to be expressed at each write; until **T3.6**
+/// gives `SWelsEncoderOutput` and `SWelsSliceBs` owned buffers, that means
+/// rebuilding a slice from a `WelsMallocz`'d pointer and the `uiSize` recorded
+/// beside it. One helper does that arithmetic and nothing else does it, exactly as
+/// T3.1b's reader-side helper did until T3.3 deleted it.
+///
+/// # Safety
+/// `ptr` must be non-null and point to `len` writable bytes that outlive `'a`, with
+/// no other live reference to them — which is what `pBsBuffer` plus its own
+/// `uiSize` is, and what the task-claiming invariant gives per thread.
+#[inline]
+pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
+    debug_assert!(!ptr.is_null(), "a writer's buffer must be allocated first");
+    unsafe { core::slice::from_raw_parts_mut(ptr, len as usize) }
+}
+
 /// Top-level frame bitstream output container and NAL descriptor list manager.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsEncoderOutput {
     pub pBsBuffer: *mut u8,
     pub uiSize: u32,
-    pub sBsWrite: SBitStringAux,
+    pub sBsWrite: BsWriter,
     pub sNalList: *mut SWelsNalRaw,
     pub pNalLen: *mut i32,
     pub iCountNals: i32,
@@ -111,7 +131,7 @@ impl Default for SWelsEncoderOutput {
         Self {
             pBsBuffer: core::ptr::null_mut(),
             uiSize: 0,
-            sBsWrite: SBitStringAux::default(),
+            sBsWrite: BsWriter::new(),
             sNalList: core::ptr::null_mut(),
             pNalLen: core::ptr::null_mut(),
             iCountNals: 0,
@@ -130,7 +150,7 @@ pub struct SWelsSliceBs {
     pub uiBsPos: u32,
     pub pBsBuffer: *mut u8,
     pub uiSize: u32,
-    pub sBsWrite: SBitStringAux,
+    pub sBsWrite: BsWriter,
     pub sNalList: [SWelsNalRaw; 2],
     pub iNalLen: [i32; 2],
     pub iNalIndex: i32,
@@ -144,7 +164,7 @@ impl Default for SWelsSliceBs {
             uiBsPos: 0,
             pBsBuffer: core::ptr::null_mut(),
             uiSize: 0,
-            sBsWrite: SBitStringAux::default(),
+            sBsWrite: BsWriter::new(),
             sNalList: [SWelsNalRaw::default(), SWelsNalRaw::default()],
             iNalLen: [0, 0],
             iNalIndex: 0,
@@ -382,17 +402,20 @@ pub unsafe extern "C" fn WelsEncodeNal(
 /// Writes the RBSP payload for an SVC Prefix NAL unit (NAL unit type 14).
 ///
 /// # Safety
-/// - `pBitStringAux` must point to a valid `SBitStringAux` structure.
+/// - `pBitStringAux` must point to a valid `BsWriter`, and `buf` must be the
+///   buffer that writer is positioned in.
 #[inline]
-pub unsafe extern "C" fn WelsWriteSVCPrefixNal(
-    pBitStringAux: *mut SBitStringAux,
+pub unsafe fn WelsWriteSVCPrefixNal(
+    buf: &mut [u8],
+    pBitStringAux: *mut BsWriter,
     kiNalRefIdc: i32,
     _kbIdrFlag: bool,
 ) -> i32 {
     if kiNalRefIdc > 0 {
-        BsWriteOneBit(pBitStringAux, 0); // bStoreRefBasePicFlag = false
-        BsWriteOneBit(pBitStringAux, 0); // additional_prefix_nal_unit_extension_flag = false
-        BsRbspTrailingBits(pBitStringAux);
+        let pBs = &mut *pBitStringAux;
+        BsWriteOneBit(buf, pBs, 0); // bStoreRefBasePicFlag = false
+        BsWriteOneBit(buf, pBs, 0); // additional_prefix_nal_unit_extension_flag = false
+        BsRbspTrailingBits(buf, pBs);
     }
     0
 }
@@ -526,10 +549,7 @@ mod tests {
         let mut slice_bs = SWelsSliceBs::default();
         slice_bs.pBsBuffer = bs_buf.as_mut_ptr();
         slice_bs.uiSize = 1024;
-        slice_bs.sBsWrite.pStartBuf = bs_buf.as_mut_ptr();
-        slice_bs.sBsWrite.pCurBuf = bs_buf.as_mut_ptr();
-        slice_bs.sBsWrite.pEndBuf = unsafe { bs_buf.as_mut_ptr().add(1024) };
-        slice_bs.sBsWrite.iLeftBits = 32;
+        slice_bs.sBsWrite = BsWriter::new();
 
         unsafe {
             WelsLoadNalForSlice(
@@ -540,8 +560,8 @@ mod tests {
             assert_eq!(slice_bs.sNalList[0].iStartPos, 0);
 
             // Simulate writing 16 bits (2 bytes)
-            BsWriteBits(&mut slice_bs.sBsWrite, 16, 0xABCD);
-            BsFlush(&mut slice_bs.sBsWrite);
+            BsWriteBits(&mut bs_buf, &mut slice_bs.sBsWrite, 16, 0xABCD);
+            BsFlush(&mut bs_buf, &mut slice_bs.sBsWrite);
 
             WelsUnloadNalForSlice(&mut slice_bs);
             assert_eq!(slice_bs.sNalList[0].iPayloadSize, 2);

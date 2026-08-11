@@ -31,11 +31,14 @@ pub enum ECtxBlockCat {
     CHROMA_AC = 4,
 }
 
-/// Bitstream auxiliary state for CAVLC/Exp-Golomb serialization.
+/// The encoder's write position.
 ///
-/// Single definition in [`crate::common::wels_common_defs`] — `SBitStringAux` is a
-/// common-layer type (`codec/common/inc/wels_common_defs.h:232`), not an encoder one.
-pub use crate::common::wels_common_defs::{PBitStringAux, SBitStringAux, TagBitStringAux};
+/// `BsWriter` is a detached cursor — `{pos, cur_bits, left_bits}`, no buffer
+/// reference (plan §2.1.3). The buffer belongs to whoever allocated it and arrives
+/// as `&mut [u8]` on every call, which is what took `pStartBuf`/`pCurBuf`/`pEndBuf`
+/// out of this module. See `safe::bits` for the semantics and the differential
+/// tests that pin them.
+pub use crate::safe::bits::BsWriter;
 
 /// CAVLC codeword table item.
 /// Matches `TagCavlcTableItem` in `codec/encoder/core/inc/set_mb_syn_cavlc.h`.
@@ -345,71 +348,44 @@ pub const g_kuiVlcRunBefore: [[[u8; 2]; 15]; 8] = [
 // Bitstream Helper Functions
 // ============================================================================
 
-/// Write a 32-bit big-endian integer to memory buffer.
-#[inline(always)]
-pub unsafe fn WRITE_BE_32(ptr: *mut u8, val: u32) {
-    unsafe {
-        *ptr.add(0) = (val >> 24) as u8;
-        *ptr.add(1) = (val >> 16) as u8;
-        *ptr.add(2) = (val >> 8) as u8;
-        *ptr.add(3) = val as u8;
-    }
-}
-
-/// Initialize bitstream writing auxiliary structure.
-#[inline(always)]
-pub unsafe fn InitBits(pBs: *mut SBitStringAux, kpBuf: *const u8, kiSize: i32) -> i32 {
-    unsafe {
-        let ptr = kpBuf as *mut u8;
-        (*pBs).pStartBuf = ptr;
-        (*pBs).pCurBuf = ptr;
-        (*pBs).pEndBuf = ptr.add(kiSize as usize);
-        (*pBs).iLeftBits = 32;
-        (*pBs).uiCurBits = 0;
-        kiSize
-    }
-}
+// The five pointer fields `SBitStringAux` carried are gone from this module. What
+// was `WRITE_BE_32(pCurBuf, …); pCurBuf += 4` is now a store into
+// `buf[pos..pos + 4]`, which is where the bounds come from: the C++ writer has no
+// end-of-buffer check at all, sizing being the caller's contract, so a panic here
+// is a pre-existing sizing bug made loud rather than new behaviour on any
+// in-contract path (plan §2.2.2). Note the contract includes four bytes of
+// headroom at the write position — both the accumulator flush and `BsFlush` store
+// a full word even when they advance by one byte.
+//
+// `InitBits` is **deleted** rather than converted. It declared `kpBuf: *const u8`,
+// stored it as `pStartBuf: *mut u8`, and the writer wrote through it, so every
+// honest caller produced a pointer with no write provenance and the first
+// `BsFlush` was Undefined Behaviour — `phase2_findings.md` F13's third site, the
+// one that is a signature lying about what the function does rather than a caller
+// mistake. There is nothing to amend: the buffer is now a `&mut [u8]` the caller
+// already holds, and the only state left to initialise is `BsWriter::new()`.
+//
+// `WRITE_BE_32` goes with it; its only callers were the two writer bodies.
 
 /// Write `iLen` bits of `kuiValue` into the bitstream.
 #[inline(always)]
-pub unsafe fn BsWriteBits(pBs: *mut SBitStringAux, mut iLen: i32, kuiValue: u32) -> i32 {
-    unsafe {
-        if iLen < (*pBs).iLeftBits {
-            (*pBs).uiCurBits = ((*pBs).uiCurBits << iLen) | kuiValue;
-            (*pBs).iLeftBits -= iLen;
-        } else {
-            iLen -= (*pBs).iLeftBits;
-            (*pBs).uiCurBits = ((*pBs).uiCurBits << (*pBs).iLeftBits) | (kuiValue >> iLen);
-            WRITE_BE_32((*pBs).pCurBuf, (*pBs).uiCurBits);
-            (*pBs).pCurBuf = (*pBs).pCurBuf.add(4);
-            (*pBs).uiCurBits = kuiValue & ((1u32 << iLen) - 1);
-            (*pBs).iLeftBits = 32 - iLen;
-        }
-        0
-    }
+pub fn BsWriteBits(buf: &mut [u8], pBs: &mut BsWriter, iLen: i32, kuiValue: u32) -> i32 {
+    pBs.write_bits(buf, iLen, kuiValue);
+    0
 }
 
 /// Write a single bit into the bitstream.
 #[inline(always)]
-pub unsafe fn BsWriteOneBit(pBs: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    unsafe {
-        BsWriteBits(pBs, 1, kuiValue);
-        0
-    }
+pub fn BsWriteOneBit(buf: &mut [u8], pBs: &mut BsWriter, kuiValue: u32) -> i32 {
+    pBs.write_one_bit(buf, kuiValue);
+    0
 }
 
 /// Flush remaining bits in the 32-bit bit accumulator to the output buffer.
 #[inline(always)]
-pub unsafe fn BsFlush(pBs: *mut SBitStringAux) -> i32 {
-    unsafe {
-        if (*pBs).iLeftBits < 32 {
-            WRITE_BE_32((*pBs).pCurBuf, (*pBs).uiCurBits << (*pBs).iLeftBits);
-            (*pBs).pCurBuf = (*pBs).pCurBuf.add(4 - ((*pBs).iLeftBits as usize / 8));
-            (*pBs).iLeftBits = 32;
-            (*pBs).uiCurBits = 0;
-        }
-        0
-    }
+pub fn BsFlush(buf: &mut [u8], pBs: &mut BsWriter) -> i32 {
+    pBs.flush(buf);
+    0
 }
 
 /// Calculate the bit length of an unsigned Exp-Golomb code.
@@ -448,92 +424,48 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
 }
 
 /// Write an unsigned Exp-Golomb code (`ue(v)`).
+///
+/// The C++ takes the code length from `g_kuiGolombUELength` below 256 and from a
+/// two-step reduction above it; both compute `2 * floor(log2(value + 1)) + 1`,
+/// which is what `BsWriter::write_ue` reaches directly. Differential-proven since
+/// Phase 1, and `BsSizeUE` above still spells the table form out for the
+/// mode-decision cost functions that want the length without writing anything.
 #[inline(always)]
-pub unsafe fn BsWriteUE(pBs: *mut SBitStringAux, kuiValue: u32) -> i32 {
-    unsafe {
-        let mut iTmpValue = kuiValue + 1;
-        if kuiValue < 256 {
-            BsWriteBits(
-                pBs,
-                g_kuiGolombUELength[kuiValue as usize] as i32,
-                kuiValue + 1,
-            );
-        } else {
-            let mut n: u32 = 0;
-            if (iTmpValue & 0xffff0000) != 0 {
-                iTmpValue >>= 16;
-                n += 16;
-            }
-            if (iTmpValue & 0xff00) != 0 {
-                iTmpValue >>= 8;
-                n += 8;
-            }
-            n += g_kuiGolombUELength[(iTmpValue - 1) as usize] >> 1;
-            BsWriteBits(pBs, ((n << 1) + 1) as i32, kuiValue + 1);
-        }
-        0
-    }
+pub fn BsWriteUE(buf: &mut [u8], pBs: &mut BsWriter, kuiValue: u32) -> i32 {
+    pBs.write_ue(buf, kuiValue);
+    0
 }
 
 /// Write a signed Exp-Golomb code (`se(v)`).
 #[inline(always)]
-pub unsafe fn BsWriteSE(pBs: *mut SBitStringAux, kiValue: i32) -> i32 {
-    unsafe {
-        if kiValue == 0 {
-            BsWriteOneBit(pBs, 1);
-        } else if kiValue > 0 {
-            let iTmpValue = ((kiValue as u32) << 1) - 1;
-            BsWriteUE(pBs, iTmpValue);
-        } else {
-            let iTmpValue = ((-kiValue) as u32) << 1;
-            BsWriteUE(pBs, iTmpValue);
-        }
-        0
-    }
+pub fn BsWriteSE(buf: &mut [u8], pBs: &mut BsWriter, kiValue: i32) -> i32 {
+    pBs.write_se(buf, kiValue);
+    0
 }
 
 /// Write a truncated Exp-Golomb code (`te(v)`).
 #[inline(always)]
-pub unsafe fn BsWriteTE(pBs: *mut SBitStringAux, kiX: i32, kuiValue: u32) {
-    unsafe {
-        if kiX == 1 {
-            BsWriteOneBit(pBs, if kuiValue == 0 { 1 } else { 0 });
-        } else {
-            BsWriteUE(pBs, kuiValue);
-        }
-    }
+pub fn BsWriteTE(buf: &mut [u8], pBs: &mut BsWriter, kiX: i32, kuiValue: u32) {
+    pBs.write_te(buf, kiX, kuiValue);
 }
 
 /// Get the current bitstream write cursor position in bits.
 #[inline(always)]
-pub unsafe fn BsGetBitsPos(pBs: *const SBitStringAux) -> i32 {
-    unsafe {
-        ((((*pBs).pCurBuf as isize - (*pBs).pStartBuf as isize) as i32) << 3) + 32 - (*pBs).iLeftBits
-    }
+pub fn BsGetBitsPos(pBs: &BsWriter) -> i32 {
+    pBs.bits_pos()
 }
 
 /// Write RBSP trailing stop bit and flush to byte alignment.
 #[inline(always)]
-pub unsafe fn BsRbspTrailingBits(pBs: *mut SBitStringAux) -> i32 {
-    unsafe {
-        BsWriteOneBit(pBs, 1);
-        BsFlush(pBs);
-        0
-    }
+pub fn BsRbspTrailingBits(buf: &mut [u8], pBs: &mut BsWriter) -> i32 {
+    pBs.rbsp_trailing_bits(buf);
+    0
 }
 
-/// Align bitstream to byte boundary.
+/// Align bitstream to byte boundary, padding with one bits.
 #[inline(always)]
-pub unsafe fn BsAlign(pBs: *mut SBitStringAux) {
-    unsafe {
-        let rem = (*pBs).iLeftBits & 7;
-        if rem != 0 {
-            (*pBs).uiCurBits <<= rem;
-            (*pBs).uiCurBits |= (1 << rem) - 1;
-            (*pBs).iLeftBits &= !7;
-        }
-        BsFlush(pBs);
-    }
+pub fn BsAlign(buf: &mut [u8], pBs: &mut BsWriter) {
+    pBs.align(buf);
 }
 
 // ============================================================================
@@ -542,80 +474,73 @@ pub unsafe fn BsAlign(pBs: *mut SBitStringAux) {
 
 /// Write coeff_token for Luma and Chroma AC residual blocks.
 #[inline(always)]
-pub unsafe fn WriteTotalCoeffTrailingones(
-    pBs: *mut SBitStringAux,
+pub fn WriteTotalCoeffTrailingones(
+    buf: &mut [u8],
+    pBs: &mut BsWriter,
     uiNc: u8,
     uiTotalCoeff: u8,
     uiTrailingOnes: u8,
 ) -> i32 {
-    unsafe {
-        let kuiNcIdx = g_kuiEncNcMapTable[uiNc as usize] as usize;
-        let kpCoeffToken =
-            &g_kuiVlcCoeffToken[kuiNcIdx][uiTotalCoeff as usize][uiTrailingOnes as usize];
-        BsWriteBits(pBs, kpCoeffToken[1] as i32, kpCoeffToken[0] as u32)
-    }
+    let kuiNcIdx = g_kuiEncNcMapTable[uiNc as usize] as usize;
+    let kpCoeffToken =
+        &g_kuiVlcCoeffToken[kuiNcIdx][uiTotalCoeff as usize][uiTrailingOnes as usize];
+    BsWriteBits(buf, pBs, kpCoeffToken[1] as i32, kpCoeffToken[0] as u32)
 }
 
 /// Write coeff_token for 2x2 Chroma DC residual blocks.
 #[inline(always)]
-pub unsafe fn WriteTotalcoeffTrailingonesChroma(
-    pBs: *mut SBitStringAux,
+pub fn WriteTotalcoeffTrailingonesChroma(
+    buf: &mut [u8],
+    pBs: &mut BsWriter,
     uiTotalCoeff: u8,
     uiTrailingOnes: u8,
 ) -> i32 {
-    unsafe {
-        let kpCoeffToken = &g_kuiVlcCoeffToken[4][uiTotalCoeff as usize][uiTrailingOnes as usize];
-        BsWriteBits(pBs, kpCoeffToken[1] as i32, kpCoeffToken[0] as u32)
-    }
+    let kpCoeffToken = &g_kuiVlcCoeffToken[4][uiTotalCoeff as usize][uiTrailingOnes as usize];
+    BsWriteBits(buf, pBs, kpCoeffToken[1] as i32, kpCoeffToken[0] as u32)
 }
 
 /// Write level_prefix unary codeword.
 #[inline(always)]
-pub unsafe fn WriteLevelPrefix(pBs: *mut SBitStringAux, kuiZeroCount: u32) -> i32 {
-    unsafe {
-        BsWriteBits(pBs, (kuiZeroCount + 1) as i32, 1);
-        0
-    }
+pub fn WriteLevelPrefix(buf: &mut [u8], pBs: &mut BsWriter, kuiZeroCount: u32) -> i32 {
+    BsWriteBits(buf, pBs, (kuiZeroCount + 1) as i32, 1);
+    0
 }
 
 /// Write total_zeros for 4x4 residual blocks.
 #[inline(always)]
-pub unsafe fn WriteTotalZeros(
-    pBs: *mut SBitStringAux,
+pub fn WriteTotalZeros(
+    buf: &mut [u8],
+    pBs: &mut BsWriter,
     uiTotalCoeff: u32,
     uiTotalZeros: u32,
 ) -> i32 {
-    unsafe {
-        let kpTotalZeros = &g_kuiVlcTotalZeros[uiTotalCoeff as usize][uiTotalZeros as usize];
-        BsWriteBits(pBs, kpTotalZeros[1] as i32, kpTotalZeros[0] as u32)
-    }
+    let kpTotalZeros = &g_kuiVlcTotalZeros[uiTotalCoeff as usize][uiTotalZeros as usize];
+    BsWriteBits(buf, pBs, kpTotalZeros[1] as i32, kpTotalZeros[0] as u32)
 }
 
 /// Write total_zeros for 2x2 Chroma DC blocks.
 #[inline(always)]
-pub unsafe fn WriteTotalZerosChromaDc(
-    pBs: *mut SBitStringAux,
+pub fn WriteTotalZerosChromaDc(
+    buf: &mut [u8],
+    pBs: &mut BsWriter,
     uiTotalCoeff: u32,
     uiTotalZeros: u32,
 ) -> i32 {
-    unsafe {
-        let kpTotalZerosChromaDc =
-            &g_kuiVlcTotalZerosChromaDc[uiTotalCoeff as usize][uiTotalZeros as usize];
-        BsWriteBits(pBs, kpTotalZerosChromaDc[1] as i32, kpTotalZerosChromaDc[0] as u32)
-    }
+    let kpTotalZerosChromaDc =
+        &g_kuiVlcTotalZerosChromaDc[uiTotalCoeff as usize][uiTotalZeros as usize];
+    BsWriteBits(buf, pBs, kpTotalZerosChromaDc[1] as i32, kpTotalZerosChromaDc[0] as u32)
 }
 
 /// Write run_before zero run length.
 #[inline(always)]
-pub unsafe fn WriteRunBefore(
-    pBs: *mut SBitStringAux,
+pub fn WriteRunBefore(
+    buf: &mut [u8],
+    pBs: &mut BsWriter,
     uiZeroLeft: u8,
     uiRunBefore: u8,
 ) -> i32 {
-    unsafe {
-        let kpRunBefore = &g_kuiVlcRunBefore[uiZeroLeft as usize][uiRunBefore as usize];
-        BsWriteBits(pBs, kpRunBefore[1] as i32, kpRunBefore[0] as u32)
-    }
+    let kpRunBefore = &g_kuiVlcRunBefore[uiZeroLeft as usize][uiRunBefore as usize];
+    BsWriteBits(buf, pBs, kpRunBefore[1] as i32, kpRunBefore[0] as u32)
 }
 
 // ============================================================================

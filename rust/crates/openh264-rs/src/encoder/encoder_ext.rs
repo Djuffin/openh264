@@ -2169,11 +2169,12 @@ pub unsafe fn StackBackEncoderStatus(pEncCtx: *mut sWelsEncCtx, keFrameType: EVi
     (*(*pEncCtx).pOut).iNalIndex = 0; // reset NAL index
     (*(*pEncCtx).pOut).iLayerBsIndex = 0; // reset index of Layer Bs
 
-    crate::encoder::vlc_encoder::InitBits(
-        &mut (*(*pEncCtx).pOut).sBsWrite,
-        (*(*pEncCtx).pOut).pBsBuffer,
-        (*(*pEncCtx).pOut).uiSize as i32,
-    );
+    // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`. The buffer and
+    // its length stay on `pOut` where they already were; the writer is a position,
+    // and resetting it is the whole of what `InitBits` did that still means
+    // anything (F13's third site: the `*const`-declared, `*mut`-stored, written-
+    // through buffer parameter is gone, not amended).
+    (*(*pEncCtx).pOut).sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
 
     if keFrameType == EVideoFrameType::videoFrameTypeP
         || keFrameType == EVideoFrameType::videoFrameTypeI
@@ -2329,6 +2330,7 @@ pub unsafe fn AddPrefixNal(
         );
 
         crate::encoder::nal_encap::WelsWriteSVCPrefixNal(
+            crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize),
             &mut (*pOut).sBsWrite,
             keNalRefIdc as i32,
             keNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR,
@@ -2372,12 +2374,14 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     *iSize = 0;
     let pOut = (*pCtx).pOut;
     let iNal = (*pOut).iNalIndex;
-    // SBitStringAux instance for non-VCL NALs
+    // The frame-level writer, for non-VCL NALs.
+    let buf = crate::encoder::nal_encap::bs_buffer((*pOut).pBsBuffer, (*pOut).uiSize);
     let pBs = &mut (*pOut).sBsWrite;
 
-    if ((*pBs).pEndBuf as isize - (*pBs).pCurBuf as isize) < iLen as isize
-        || iNal >= (*pOut).iCountNals
-    {
+    // `pEndBuf - pCurBuf < iLen` in comparison form; `iLen` is non-negative here
+    // and a `usize` `len - pos` cannot wrap because `pos <= len` always holds for a
+    // writer that has not overrun, which the write below would panic on anyway.
+    if (buf.len() - pBs.pos()) < iLen as usize || iNal >= (*pOut).iCountNals {
         return ENC_RETURN_MEMOVERFLOWFOUND;
     }
 
@@ -2388,10 +2392,10 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     );
 
     for _ in 0..iLen {
-        crate::encoder::vlc_encoder::BsWriteBits(pBs, 8, 0xff);
+        crate::encoder::vlc_encoder::BsWriteBits(buf, pBs, 8, 0xff);
     }
 
-    crate::encoder::vlc_encoder::BsRbspTrailingBits(pBs);
+    crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, pBs);
 
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 

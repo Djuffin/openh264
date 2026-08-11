@@ -13,7 +13,7 @@ use crate::api::codec_api::ESampleAspectRatio::ASP_EXT_SAR;
 use crate::api::codec_api::EProfileIdc::*;
 use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
 use crate::api::codec_api::EUsageType::*;
-use crate::common::wels_common_defs::SBitStringAux;
+use crate::safe::bits::BsWriter;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::decoder::parameter_sets::SLevelLimits;
 use crate::encoder::encoder_context::SCropOffset;
@@ -324,52 +324,56 @@ pub unsafe fn WelsCheckRefFrameLimitationLevelIdcFirst(
 ///
 /// # Safety
 /// Both pointers must be non-null and `pBitStringAux` must have room for the VUI.
-pub unsafe fn WelsWriteVUI(pSps: *mut SWelsSPS, pBitStringAux: *mut SBitStringAux) -> i32 {
-    let pLocalBitStringAux = pBitStringAux;
+pub unsafe fn WelsWriteVUI(
+    buf: &mut [u8],
+    pSps: *mut SWelsSPS,
+    pBitStringAux: *mut BsWriter,
+) -> i32 {
+    let pLocalBitStringAux = &mut *pBitStringAux;
     debug_assert!(!pSps.is_null() && !pBitStringAux.is_null());
 
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bAspectRatioPresent as u32); // aspect_ratio_info_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bAspectRatioPresent as u32); // aspect_ratio_info_present_flag
     if (*pSps).bAspectRatioPresent {
-        BsWriteBits(pLocalBitStringAux, 8, (*pSps).eAspectRatio as u32); // aspect_ratio_idc
+        BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).eAspectRatio as u32); // aspect_ratio_idc
         if (*pSps).eAspectRatio == ASP_EXT_SAR as i32 {
-            BsWriteBits(pLocalBitStringAux, 16, (*pSps).sAspectRatioExtWidth as u32); // sar_width
-            BsWriteBits(pLocalBitStringAux, 16, (*pSps).sAspectRatioExtHeight as u32); // sar_height
+            BsWriteBits(buf, pLocalBitStringAux, 16, (*pSps).sAspectRatioExtWidth as u32); // sar_width
+            BsWriteBits(buf, pLocalBitStringAux, 16, (*pSps).sAspectRatioExtHeight as u32); // sar_height
         }
     }
-    BsWriteOneBit(pLocalBitStringAux, 0); // overscan_info_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // overscan_info_present_flag
 
     // See codec_app_def.h and parameter_sets.h for more info about members
     // bVideoSignalTypePresent through uiColorMatrix.
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bVideoSignalTypePresent as u32); // video_signal_type_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bVideoSignalTypePresent as u32); // video_signal_type_present_flag
     if (*pSps).bVideoSignalTypePresent {
         // write video signal type info to header
-        BsWriteBits(pLocalBitStringAux, 3, (*pSps).uiVideoFormat as u32);
-        BsWriteOneBit(pLocalBitStringAux, (*pSps).bFullRange as u32);
-        BsWriteOneBit(pLocalBitStringAux, (*pSps).bColorDescriptionPresent as u32);
+        BsWriteBits(buf, pLocalBitStringAux, 3, (*pSps).uiVideoFormat as u32);
+        BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bFullRange as u32);
+        BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bColorDescriptionPresent as u32);
 
         if (*pSps).bColorDescriptionPresent {
             // write color description info to header
-            BsWriteBits(pLocalBitStringAux, 8, (*pSps).uiColorPrimaries as u32);
-            BsWriteBits(pLocalBitStringAux, 8, (*pSps).uiTransferCharacteristics as u32);
-            BsWriteBits(pLocalBitStringAux, 8, (*pSps).uiColorMatrix as u32);
+            BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).uiColorPrimaries as u32);
+            BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).uiTransferCharacteristics as u32);
+            BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).uiColorMatrix as u32);
         }
     }
 
-    BsWriteOneBit(pLocalBitStringAux, 0); // chroma_loc_info_present_flag
-    BsWriteOneBit(pLocalBitStringAux, 0); // timing_info_present_flag
-    BsWriteOneBit(pLocalBitStringAux, 0); // nal_hrd_parameters_present_flag
-    BsWriteOneBit(pLocalBitStringAux, 0); // vcl_hrd_parameters_present_flag
-    BsWriteOneBit(pLocalBitStringAux, 0); // pic_struct_present_flag
-    BsWriteOneBit(pLocalBitStringAux, 1); // bitstream_restriction_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // chroma_loc_info_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // timing_info_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // nal_hrd_parameters_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // vcl_hrd_parameters_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // pic_struct_present_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, 1); // bitstream_restriction_flag
 
-    BsWriteOneBit(pLocalBitStringAux, 1); // motion_vectors_over_pic_boundaries_flag
-    BsWriteUE(pLocalBitStringAux, 0); // max_bytes_per_pic_denom
-    BsWriteUE(pLocalBitStringAux, 0); // max_bits_per_mb_denom
-    BsWriteUE(pLocalBitStringAux, 16); // log2_max_mv_length_horizontal
-    BsWriteUE(pLocalBitStringAux, 16); // log2_max_mv_length_vertical
+    BsWriteOneBit(buf, pLocalBitStringAux, 1); // motion_vectors_over_pic_boundaries_flag
+    BsWriteUE(buf, pLocalBitStringAux, 0); // max_bytes_per_pic_denom
+    BsWriteUE(buf, pLocalBitStringAux, 0); // max_bits_per_mb_denom
+    BsWriteUE(buf, pLocalBitStringAux, 16); // log2_max_mv_length_horizontal
+    BsWriteUE(buf, pLocalBitStringAux, 16); // log2_max_mv_length_vertical
 
-    BsWriteUE(pLocalBitStringAux, 0); // max_num_reorder_frames
-    BsWriteUE(pLocalBitStringAux, (*pSps).iNumRefFrames as u32); // max_dec_frame_buffering
+    BsWriteUE(buf, pLocalBitStringAux, 0); // max_num_reorder_frames
+    BsWriteUE(buf, pLocalBitStringAux, (*pSps).iNumRefFrames as u32); // max_dec_frame_buffering
 
     0
 }
@@ -386,37 +390,37 @@ pub unsafe fn WelsWriteVUI(pSps: *mut SWelsSPS, pBitStringAux: *mut SBitStringAu
 /// `pSps` and `pBitStringAux` must be non-null; `pSpsIdDelta` must point to an array
 /// indexable by `pSps->uiSpsId`.
 pub unsafe fn WelsWriteSpsSyntax(
+    buf: &mut [u8],
     pSps: *mut SWelsSPS,
-    pBitStringAux: *mut SBitStringAux,
+    pBitStringAux: *mut BsWriter,
     pSpsIdDelta: *mut i32,
     bBaseLayer: bool,
 ) -> i32 {
-    let pLocalBitStringAux = pBitStringAux;
+    let pLocalBitStringAux = &mut *pBitStringAux;
 
     debug_assert!(!pSps.is_null() && !pBitStringAux.is_null());
 
-    BsWriteBits(pLocalBitStringAux, 8, (*pSps).uiProfileIdc as u32);
+    BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).uiProfileIdc as u32);
 
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bConstraintSet0Flag as u32);
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bConstraintSet1Flag as u32);
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bConstraintSet2Flag as u32);
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bConstraintSet3Flag as u32);
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bConstraintSet0Flag as u32);
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bConstraintSet1Flag as u32);
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bConstraintSet2Flag as u32);
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bConstraintSet3Flag as u32);
     if PRO_HIGH as u8 == (*pSps).uiProfileIdc
         || PRO_EXTENDED as u8 == (*pSps).uiProfileIdc
         || PRO_MAIN as u8 == (*pSps).uiProfileIdc
     {
         // constraint_set4_flag: with profile_idc 77/88/100, 1 means frame_mbs_only_flag is 1
-        BsWriteOneBit(pLocalBitStringAux, 1);
+        BsWriteOneBit(buf, pLocalBitStringAux, 1);
         // constraint_set5_flag: with profile_idc 77/88/100, 1 means no B slices
-        BsWriteOneBit(pLocalBitStringAux, 1);
-        BsWriteBits(pLocalBitStringAux, 2, 0); // reserved_zero_2bits, equal to 0
+        BsWriteOneBit(buf, pLocalBitStringAux, 1);
+        BsWriteBits(buf, pLocalBitStringAux, 2, 0); // reserved_zero_2bits, equal to 0
     } else {
-        BsWriteBits(pLocalBitStringAux, 4, 0); // reserved_zero_4bits, equal to 0
+        BsWriteBits(buf, pLocalBitStringAux, 4, 0); // reserved_zero_4bits, equal to 0
     }
-    BsWriteBits(pLocalBitStringAux, 8, (*pSps).iLevelIdc as u32); // iLevelIdc
+    BsWriteBits(buf, pLocalBitStringAux, 8, (*pSps).iLevelIdc as u32); // iLevelIdc
     // seq_parameter_set_id
-    BsWriteUE(
-        pLocalBitStringAux,
+    BsWriteUE(buf, pLocalBitStringAux,
         (*pSps)
             .uiSpsId
             .wrapping_add(*pSpsIdDelta.add((*pSps).uiSpsId as usize) as u32),
@@ -431,17 +435,17 @@ pub unsafe fn WelsWriteSpsSyntax(
         || PRO_CAVLC444 as u8 == (*pSps).uiProfileIdc
         || 44 == (*pSps).uiProfileIdc
     {
-        BsWriteUE(pLocalBitStringAux, 1); // uiChromaFormatIdc, now should be 1
-        BsWriteUE(pLocalBitStringAux, 0); // uiBitDepthLuma
-        BsWriteUE(pLocalBitStringAux, 0); // uiBitDepthChroma
-        BsWriteOneBit(pLocalBitStringAux, 0); // qpprime_y_zero_transform_bypass_flag
-        BsWriteOneBit(pLocalBitStringAux, 0); // seq_scaling_matrix_present_flag
+        BsWriteUE(buf, pLocalBitStringAux, 1); // uiChromaFormatIdc, now should be 1
+        BsWriteUE(buf, pLocalBitStringAux, 0); // uiBitDepthLuma
+        BsWriteUE(buf, pLocalBitStringAux, 0); // uiBitDepthChroma
+        BsWriteOneBit(buf, pLocalBitStringAux, 0); // qpprime_y_zero_transform_bypass_flag
+        BsWriteOneBit(buf, pLocalBitStringAux, 0); // seq_scaling_matrix_present_flag
     }
 
-    BsWriteUE(pLocalBitStringAux, (*pSps).uiLog2MaxFrameNum.wrapping_sub(4)); // log2_max_frame_num_minus4
-    BsWriteUE(pLocalBitStringAux, (*pSps).uiPocType); // pic_order_cnt_type
+    BsWriteUE(buf, pLocalBitStringAux, (*pSps).uiLog2MaxFrameNum.wrapping_sub(4)); // log2_max_frame_num_minus4
+    BsWriteUE(buf, pLocalBitStringAux, (*pSps).uiPocType); // pic_order_cnt_type
     if (*pSps).uiPocType == 0 {
-        BsWriteUE(pLocalBitStringAux, ((*pSps).iLog2MaxPocLsb - 4) as u32); // log2_max_pic_order_cnt_lsb_minus4
+        BsWriteUE(buf, pLocalBitStringAux, ((*pSps).iLog2MaxPocLsb - 4) as u32); // log2_max_pic_order_cnt_lsb_minus4
     } else if (*pSps).uiPocType == 1 {
         // C++: `assert (0)` under a "TODO: implement".
         return 1;
@@ -449,27 +453,27 @@ pub unsafe fn WelsWriteSpsSyntax(
         // no-op for uiPocType 2.
     }
 
-    BsWriteUE(pLocalBitStringAux, (*pSps).iNumRefFrames as u32); // max_num_ref_frames
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bGapsInFrameNumValueAllowedFlag as u32); // gaps_in_frame_num_value_allowed_flag
-    BsWriteUE(pLocalBitStringAux, ((*pSps).iMbWidth as i32 - 1) as u32); // pic_width_in_mbs_minus1
-    BsWriteUE(pLocalBitStringAux, ((*pSps).iMbHeight as i32 - 1) as u32); // pic_height_in_map_units_minus1
-    BsWriteOneBit(pLocalBitStringAux, 1); // bFrameMbsOnlyFlag, hardcoded true in C++
+    BsWriteUE(buf, pLocalBitStringAux, (*pSps).iNumRefFrames as u32); // max_num_ref_frames
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bGapsInFrameNumValueAllowedFlag as u32); // gaps_in_frame_num_value_allowed_flag
+    BsWriteUE(buf, pLocalBitStringAux, ((*pSps).iMbWidth as i32 - 1) as u32); // pic_width_in_mbs_minus1
+    BsWriteUE(buf, pLocalBitStringAux, ((*pSps).iMbHeight as i32 - 1) as u32); // pic_height_in_map_units_minus1
+    BsWriteOneBit(buf, pLocalBitStringAux, 1); // bFrameMbsOnlyFlag, hardcoded true in C++
 
     let d8x8: u8 = if (*pSps).iLevelIdc >= 30 { 1 } else { 0 };
-    BsWriteOneBit(pLocalBitStringAux, d8x8 as u32); // direct_8x8_inference_flag
+    BsWriteOneBit(buf, pLocalBitStringAux, d8x8 as u32); // direct_8x8_inference_flag
 
-    BsWriteOneBit(pLocalBitStringAux, (*pSps).bFrameCroppingFlag as u32); // bFrameCroppingFlag
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pSps).bFrameCroppingFlag as u32); // bFrameCroppingFlag
     if (*pSps).bFrameCroppingFlag {
-        BsWriteUE(pLocalBitStringAux, (*pSps).sFrameCrop.iCropLeft as u32); // frame_crop_left_offset
-        BsWriteUE(pLocalBitStringAux, (*pSps).sFrameCrop.iCropRight as u32); // frame_crop_right_offset
-        BsWriteUE(pLocalBitStringAux, (*pSps).sFrameCrop.iCropTop as u32); // frame_crop_top_offset
-        BsWriteUE(pLocalBitStringAux, (*pSps).sFrameCrop.iCropBottom as u32); // frame_crop_bottom_offset
+        BsWriteUE(buf, pLocalBitStringAux, (*pSps).sFrameCrop.iCropLeft as u32); // frame_crop_left_offset
+        BsWriteUE(buf, pLocalBitStringAux, (*pSps).sFrameCrop.iCropRight as u32); // frame_crop_right_offset
+        BsWriteUE(buf, pLocalBitStringAux, (*pSps).sFrameCrop.iCropTop as u32); // frame_crop_top_offset
+        BsWriteUE(buf, pLocalBitStringAux, (*pSps).sFrameCrop.iCropBottom as u32); // frame_crop_bottom_offset
     }
     if bBaseLayer {
-        BsWriteOneBit(pLocalBitStringAux, 1); // vui_parameters_present_flag
-        WelsWriteVUI(pSps, pBitStringAux);
+        BsWriteOneBit(buf, pLocalBitStringAux, 1); // vui_parameters_present_flag
+        WelsWriteVUI(buf, pSps, pLocalBitStringAux);
     } else {
-        BsWriteOneBit(pLocalBitStringAux, 0);
+        BsWriteOneBit(buf, pLocalBitStringAux, 0);
     }
     0
 }
@@ -479,13 +483,14 @@ pub unsafe fn WelsWriteSpsSyntax(
 /// # Safety
 /// See [`WelsWriteSpsSyntax`].
 pub unsafe fn WelsWriteSpsNal(
+    buf: &mut [u8],
     pSps: *mut SWelsSPS,
-    pBitStringAux: *mut SBitStringAux,
+    pBitStringAux: *mut BsWriter,
     pSpsIdDelta: *mut i32,
 ) -> i32 {
-    WelsWriteSpsSyntax(pSps, pBitStringAux, pSpsIdDelta, true);
+    WelsWriteSpsSyntax(buf, pSps, pBitStringAux, pSpsIdDelta, true);
 
-    BsRbspTrailingBits(pBitStringAux);
+    BsRbspTrailingBits(buf, &mut *pBitStringAux);
 
     0
 }
@@ -495,42 +500,43 @@ pub unsafe fn WelsWriteSpsNal(
 /// # Safety
 /// See [`WelsWriteSpsSyntax`].
 pub unsafe fn WelsWriteSubsetSpsSyntax(
+    buf: &mut [u8],
     pSubsetSps: *mut SSubsetSps,
-    pBitStringAux: *mut SBitStringAux,
+    pBitStringAux: *mut BsWriter,
     pSpsIdDelta: *mut i32,
 ) -> i32 {
     let pSps = &mut (*pSubsetSps).pSps as *mut SWelsSPS;
 
-    WelsWriteSpsSyntax(pSps, pBitStringAux, pSpsIdDelta, false);
+    WelsWriteSpsSyntax(buf, pSps, pBitStringAux, pSpsIdDelta, false);
 
     if (*pSps).uiProfileIdc == PRO_SCALABLE_BASELINE as u8
         || (*pSps).uiProfileIdc == PRO_SCALABLE_HIGH as u8
     {
         let pSubsetSpsExt = &mut (*pSubsetSps).sSpsSvcExt;
 
-        BsWriteOneBit(pBitStringAux, 1); // bInterLayerDeblockingFilterCtrlPresentFlag
-        BsWriteBits(pBitStringAux, 2, pSubsetSpsExt.iExtendedSpatialScalability as u32);
-        BsWriteOneBit(pBitStringAux, 0); // uiChromaPhaseXPlus1Flag
-        BsWriteBits(pBitStringAux, 2, 1); // uiChromaPhaseYPlus1
+        BsWriteOneBit(buf, &mut *pBitStringAux, 1); // bInterLayerDeblockingFilterCtrlPresentFlag
+        BsWriteBits(buf, &mut *pBitStringAux, 2, pSubsetSpsExt.iExtendedSpatialScalability as u32);
+        BsWriteOneBit(buf, &mut *pBitStringAux, 0); // uiChromaPhaseXPlus1Flag
+        BsWriteBits(buf, &mut *pBitStringAux, 2, 1); // uiChromaPhaseYPlus1
         if pSubsetSpsExt.iExtendedSpatialScalability == 1 {
-            BsWriteOneBit(pBitStringAux, 0); // uiSeqRefLayerChromaPhaseXPlus1Flag
-            BsWriteBits(pBitStringAux, 2, 1); // uiSeqRefLayerChromaPhaseYPlus1
-            BsWriteSE(pBitStringAux, 0); // sSeqScaledRefLayer.left_offset
-            BsWriteSE(pBitStringAux, 0); // sSeqScaledRefLayer.top_offset
-            BsWriteSE(pBitStringAux, 0); // sSeqScaledRefLayer.right_offset
-            BsWriteSE(pBitStringAux, 0); // sSeqScaledRefLayer.bottom_offset
+            BsWriteOneBit(buf, &mut *pBitStringAux, 0); // uiSeqRefLayerChromaPhaseXPlus1Flag
+            BsWriteBits(buf, &mut *pBitStringAux, 2, 1); // uiSeqRefLayerChromaPhaseYPlus1
+            BsWriteSE(buf, &mut *pBitStringAux, 0); // sSeqScaledRefLayer.left_offset
+            BsWriteSE(buf, &mut *pBitStringAux, 0); // sSeqScaledRefLayer.top_offset
+            BsWriteSE(buf, &mut *pBitStringAux, 0); // sSeqScaledRefLayer.right_offset
+            BsWriteSE(buf, &mut *pBitStringAux, 0); // sSeqScaledRefLayer.bottom_offset
         }
-        BsWriteOneBit(pBitStringAux, pSubsetSpsExt.bSeqTcoeffLevelPredFlag as u32);
+        BsWriteOneBit(buf, &mut *pBitStringAux, pSubsetSpsExt.bSeqTcoeffLevelPredFlag as u32);
         if pSubsetSpsExt.bSeqTcoeffLevelPredFlag {
-            BsWriteOneBit(pBitStringAux, pSubsetSpsExt.bAdaptiveTcoeffLevelPredFlag as u32);
+            BsWriteOneBit(buf, &mut *pBitStringAux, pSubsetSpsExt.bAdaptiveTcoeffLevelPredFlag as u32);
         }
-        BsWriteOneBit(pBitStringAux, pSubsetSpsExt.bSliceHeaderRestrictionFlag as u32);
+        BsWriteOneBit(buf, &mut *pBitStringAux, pSubsetSpsExt.bSliceHeaderRestrictionFlag as u32);
 
-        BsWriteOneBit(pBitStringAux, 0); // bSvcVuiParamPresentFlag
+        BsWriteOneBit(buf, &mut *pBitStringAux, 0); // bSvcVuiParamPresentFlag
     }
-    BsWriteOneBit(pBitStringAux, 0); // bAdditionalExtension2Flag
+    BsWriteOneBit(buf, &mut *pBitStringAux, 0); // bAdditionalExtension2Flag
 
-    BsRbspTrailingBits(pBitStringAux);
+    BsRbspTrailingBits(buf, &mut *pBitStringAux);
 
     0
 }
@@ -545,21 +551,20 @@ pub unsafe fn WelsWriteSubsetSpsSyntax(
 /// `pPps` and `pBitStringAux` must be non-null; `pParametersetStrategy` must be a live
 /// strategy from `paraset_strategy::CreateParametersetStrategy`.
 pub unsafe fn WelsWritePpsSyntax(
+    buf: &mut [u8],
     pPps: *mut SWelsPPS,
-    pBitStringAux: *mut SBitStringAux,
+    pBitStringAux: *mut BsWriter,
     pParametersetStrategy: *mut IWelsParametersetStrategy,
 ) -> i32 {
-    let pLocalBitStringAux = pBitStringAux;
+    let pLocalBitStringAux = &mut *pBitStringAux;
 
-    BsWriteUE(
-        pLocalBitStringAux,
+    BsWriteUE(buf, pLocalBitStringAux,
         (*pPps).iPpsId.wrapping_add(IWelsParametersetStrategy::GetPpsIdOffset(
             pParametersetStrategy,
             (*pPps).iPpsId as i32,
         ) as u32),
     );
-    BsWriteUE(
-        pLocalBitStringAux,
+    BsWriteUE(buf, pLocalBitStringAux,
         (*pPps).iSpsId.wrapping_add(IWelsParametersetStrategy::GetSpsIdOffset(
             pParametersetStrategy,
             (*pPps).iPpsId as i32,
@@ -567,30 +572,29 @@ pub unsafe fn WelsWritePpsSyntax(
         ) as u32),
     );
 
-    BsWriteOneBit(pLocalBitStringAux, (*pPps).bEntropyCodingModeFlag as u32);
-    BsWriteOneBit(pLocalBitStringAux, 0); // bPicOrderPresentFlag
+    BsWriteOneBit(buf, pLocalBitStringAux, (*pPps).bEntropyCodingModeFlag as u32);
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // bPicOrderPresentFlag
 
     // DISABLE_FMO_FEATURE branch, au_set.cpp:417.
-    BsWriteUE(pLocalBitStringAux, 0); // uiNumSliceGroups - 1
+    BsWriteUE(buf, pLocalBitStringAux, 0); // uiNumSliceGroups - 1
 
-    BsWriteUE(pLocalBitStringAux, 0); // uiNumRefIdxL0Active - 1
-    BsWriteUE(pLocalBitStringAux, 0); // uiNumRefIdxL1Active - 1
+    BsWriteUE(buf, pLocalBitStringAux, 0); // uiNumRefIdxL0Active - 1
+    BsWriteUE(buf, pLocalBitStringAux, 0); // uiNumRefIdxL1Active - 1
 
-    BsWriteOneBit(pLocalBitStringAux, 0); // bWeightedPredFlag
-    BsWriteBits(pLocalBitStringAux, 2, 0); // uiWeightedBiPredIdc
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // bWeightedPredFlag
+    BsWriteBits(buf, pLocalBitStringAux, 2, 0); // uiWeightedBiPredIdc
 
-    BsWriteSE(pLocalBitStringAux, (*pPps).iPicInitQp as i32 - 26);
-    BsWriteSE(pLocalBitStringAux, (*pPps).iPicInitQs as i32 - 26);
+    BsWriteSE(buf, pLocalBitStringAux, (*pPps).iPicInitQp as i32 - 26);
+    BsWriteSE(buf, pLocalBitStringAux, (*pPps).iPicInitQs as i32 - 26);
 
-    BsWriteSE(pLocalBitStringAux, (*pPps).uiChromaQpIndexOffset as i32);
-    BsWriteOneBit(
-        pLocalBitStringAux,
+    BsWriteSE(buf, pLocalBitStringAux, (*pPps).uiChromaQpIndexOffset as i32);
+    BsWriteOneBit(buf, pLocalBitStringAux,
         (*pPps).bDeblockingFilterControlPresentFlag as u32,
     );
-    BsWriteOneBit(pLocalBitStringAux, 0); // bConstainedIntraPredFlag
-    BsWriteOneBit(pLocalBitStringAux, 0); // bRedundantPicCntPresentFlag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // bConstainedIntraPredFlag
+    BsWriteOneBit(buf, pLocalBitStringAux, 0); // bRedundantPicCntPresentFlag
 
-    BsRbspTrailingBits(pLocalBitStringAux);
+    BsRbspTrailingBits(buf, pLocalBitStringAux);
 
     0
 }
@@ -832,7 +836,6 @@ pub unsafe fn WelsInitPps(
 mod tests {
     use super::*;
     use crate::api::codec_api::EProfileIdc;
-    use crate::encoder::vlc_encoder::InitBits;
 
     /// The 160x96 / 6fps / baseline case the differential harness drives.
     fn gate_layer() -> (SSpatialLayerConfig, SSpatialLayerInternal) {
@@ -894,21 +897,18 @@ mod tests {
         let (mut lp, mut li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut buf = [0u8; 512];
-        let mut bs = SBitStringAux::default();
+        let mut bs = BsWriter::new();
         let mut delta = [0i32; 32];
 
+        // The `as_mut_ptr() as *const u8` accommodation that used to stand here is
+        // gone with `InitBits` (F13's third site): the buffer is a `&mut [u8]` the
+        // test already owns, so there is no provenance to launder and nothing to
+        // explain. Deleting it is a named deliverable of Phase 3 — see the module
+        // header of `tests/safe_bits_differential.rs`.
         let written = unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-            // `as_mut_ptr() as *const u8`, not `as_ptr()`: `InitBits` declares
-            // `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer
-            // writes through it. A pointer derived from `as_ptr()` carries no write
-            // provenance, so the first `BsFlush` is Undefined Behaviour. The
-            // const-declared-but-written parameter is the real defect and belongs to
-            // Phase 3's write side (F2's family); the test carries the accommodation,
-            // per F10's precedent.
-            InitBits(&mut bs, buf.as_mut_ptr() as *const u8, buf.len() as i32);
-            WelsWriteSpsNal(&mut sps, &mut bs, delta.as_mut_ptr());
-            bs.pCurBuf.offset_from(bs.pStartBuf) as usize
+            WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, delta.as_mut_ptr());
+            bs.pos()
         };
 
         assert_eq!(
@@ -954,24 +954,18 @@ mod tests {
         let mut sps = SWelsSPS::default();
         let mut pps = SWelsPPS::default();
         let mut buf = [0u8; 256];
-        let mut bs = SBitStringAux::default();
+        let mut bs = BsWriter::new();
 
+        // Second of the two F13 accommodations deleted at T3.4 — see the sibling
+        // test above.
         let written = unsafe {
             WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
             WelsInitPps(&mut pps, &mut sps, std::ptr::null_mut(), 0, true, false, false);
 
             let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1);
             assert!(!st.is_null());
-            // `as_mut_ptr() as *const u8`, not `as_ptr()`: `InitBits` declares
-            // `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer
-            // writes through it. A pointer derived from `as_ptr()` carries no write
-            // provenance, so the first `BsFlush` is Undefined Behaviour. The
-            // const-declared-but-written parameter is the real defect and belongs to
-            // Phase 3's write side (F2's family); the test carries the accommodation,
-            // per F10's precedent.
-            InitBits(&mut bs, buf.as_mut_ptr() as *const u8, buf.len() as i32);
-            WelsWritePpsSyntax(&mut pps, &mut bs, st);
-            let n = bs.pCurBuf.offset_from(bs.pStartBuf) as usize;
+            WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, st);
+            let n = bs.pos();
             DestroyParametersetStrategy(st);
             n
         };

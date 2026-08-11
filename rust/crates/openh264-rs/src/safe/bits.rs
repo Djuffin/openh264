@@ -637,6 +637,28 @@ impl BsWriter {
         self.left_bits
     }
 
+    /// Moves the byte position without touching the accumulator.
+    ///
+    /// This exists for exactly one caller: the CABAC slice tail, where the
+    /// arithmetic coder has written bytes through its *own* cursor and hands the
+    /// position back (`WelsWriteSliceEndSyn`'s `pBs->pCurBuf =
+    /// WelsCabacEncodeGetPtr(…)`). It is not a seek — the accumulator is not
+    /// re-primed, because on that path it is empty: the slice header was flushed by
+    /// `BsAlign` before CABAC started.
+    ///
+    /// # Panics
+    /// In a debug build, if the accumulator is not empty — the invariant that makes
+    /// leaving it alone correct.
+    #[inline]
+    pub fn set_pos(&mut self, pos: usize) {
+        debug_assert!(
+            self.left_bits == 32,
+            "set_pos with {} bits pending would drop them",
+            32 - self.left_bits
+        );
+        self.pos = pos;
+    }
+
     /// The write position in bits.
     ///
     /// Mirrors `BsGetBitsPos` (`encoder/vlc_encoder.rs:501`).
@@ -747,6 +769,37 @@ impl BsWriter {
     #[inline]
     pub fn rbsp_trailing_bits(&mut self, buf: &mut [u8]) {
         self.write_one_bit(buf, 1);
+        self.flush(buf);
+    }
+
+    /// Writes a truncated Exp-Golomb code, `te(v)`.
+    ///
+    /// Mirrors `BsWriteTE` (`encoder/vlc_encoder.rs:489`): at `x == 1` the range is
+    /// binary and the code is the *inverted* single bit; otherwise it is `ue(v)`.
+    #[inline]
+    pub fn write_te(&mut self, buf: &mut [u8], x: i32, value: u32) {
+        if x == 1 {
+            self.write_one_bit(buf, u32::from(value == 0));
+        } else {
+            self.write_ue(buf, value);
+        }
+    }
+
+    /// Pads to the next byte boundary with **one** bits, then flushes.
+    ///
+    /// Mirrors `BsAlign` (`codec/encoder/core/inc/svc_enc_golomb.h:112`) — note the
+    /// padding differs from [`flush`](Self::flush)'s, which pads with zeros: this is
+    /// `cabac_alignment_one_bit`, and the ones are normative. Widening the
+    /// accumulator to a byte boundary before flushing is what makes the flush's own
+    /// zero padding unreachable.
+    #[inline]
+    pub fn align(&mut self, buf: &mut [u8]) {
+        let rem = self.left_bits & 7;
+        if rem != 0 {
+            self.cur_bits <<= rem;
+            self.cur_bits |= (1 << rem) - 1;
+            self.left_bits &= !7;
+        }
         self.flush(buf);
     }
 }
@@ -1211,6 +1264,56 @@ mod tests {
         let mut out = vec![0u8; 3];
         let mut w = BsWriter::new();
         w.write_bits(&mut out, 32, 0);
+    }
+
+    #[test]
+    fn write_te_is_ue_except_at_x_equals_one() {
+        let mut out = vec![0u8; 16];
+        let mut w = BsWriter::new();
+        // x == 1: the bit is inverted — 0 writes a 1, anything else writes a 0.
+        w.write_te(&mut out, 1, 0);
+        w.write_te(&mut out, 1, 1);
+        assert_eq!(w.bits_pos(), 2);
+        w.flush(&mut out);
+        assert_eq!(out[0], 0b1000_0000);
+
+        // x != 1: plain ue(v), whatever x is.
+        for x in [0, 2, 7] {
+            let mut a = vec![0u8; 16];
+            let mut b = vec![0u8; 16];
+            let (mut wa, mut wb) = (BsWriter::new(), BsWriter::new());
+            wa.write_te(&mut a, x, 5);
+            wb.write_ue(&mut b, 5);
+            assert_eq!((wa, a), (wb, b), "te(v) at x={x} must be ue(v)");
+        }
+    }
+
+    #[test]
+    fn align_pads_with_ones_where_flush_pads_with_zeros() {
+        // `cabac_alignment_one_bit`: the padding value is normative, and it is the
+        // one place the writer does not pad with zeros.
+        let mut out = vec![0u8; 16];
+        let mut w = BsWriter::new();
+        w.write_bits(&mut out, 3, 0b101);
+        w.align(&mut out);
+        assert_eq!(out[0], 0b1011_1111, "five pad bits, all ones");
+        assert_eq!(w.pos(), 1);
+        assert_eq!(w.left_bits(), 32);
+
+        // Already aligned: align is then exactly flush, and adds no byte.
+        let mut out = vec![0u8; 16];
+        let mut w = BsWriter::new();
+        w.write_bits(&mut out, 8, 0xC3);
+        w.align(&mut out);
+        assert_eq!(&out[..2], &[0xC3, 0x00]);
+        assert_eq!(w.pos(), 1);
+
+        // Empty accumulator: nothing to pad and nothing to flush.
+        let mut out = vec![0u8; 16];
+        let mut w = BsWriter::new();
+        w.align(&mut out);
+        assert_eq!(w.pos(), 0);
+        assert_eq!(out[0], 0);
     }
 
     #[test]

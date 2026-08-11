@@ -18,9 +18,9 @@
 
 use std::mem::size_of;
 
-use crate::common::wels_common_defs::{SBitStringAux, SNalUnitHeader, SNalUnitHeaderExt};
+use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};
 use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
-use crate::encoder::nal_encap::{SWelsEncoderOutput, SWelsNalRaw, SWelsSliceBs};
+use crate::encoder::nal_encap::SWelsNalRaw;
 use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::expand_pic::SExpandPicFunc;
 use crate::common::mc::SMcFunc;
@@ -52,14 +52,23 @@ macro_rules! assert_size {
 }
 
 // codec/common/inc/wels_common_defs.h
-assert_size!(SBitStringAux, 48);
+//
+// `assert_size!(SBitStringAux, 48)` was here. The type is a pointer-triple cursor
+// (`pStartBuf`/`pCurBuf`/`pEndBuf` plus the accumulator), and T3.4 replaced the
+// encoder's use of it with `safe::bits::BsWriter`, which is `{pos, cur_bits,
+// left_bits}` — 16 bytes, no pointers, and no correspondence to a C++ layout to
+// assert. The plan's rule (§Phase 6.6) is that each assert dies in the commit that
+// de-C-ifies its struct rather than the struct being contorted to keep it green.
 assert_size!(SNalUnitHeader, 12);
 assert_size!(SNalUnitHeaderExt, 24);
 
 // codec/encoder/core/inc/nal_encap.h
+//
+// `SWelsSliceBs` (176) and `SWelsEncoderOutput` (96) went the same way in the same
+// commit: each embedded an `SBitStringAux` by value and now embeds a `BsWriter`,
+// which is 32 bytes smaller. `SSlice` (1584, below) embeds `SWelsSliceBs` in turn,
+// so it lost the same 32.
 assert_size!(SWelsNalRaw, 40);
-assert_size!(SWelsSliceBs, 176);
-assert_size!(SWelsEncoderOutput, 96);
 
 // codec/encoder/core/inc/picture.h
 assert_size!(SPicture, 136);
@@ -142,8 +151,8 @@ assert_size!(SMbCache, 576);
 assert_size!(SMB, 152);
 assert_size!(SLayerInfo, 48);
 
-// codec/encoder/core/inc/slice.h
-assert_size!(SSlice, 1584);
+// codec/encoder/core/inc/slice.h. `assert_size!(SSlice, 1584)` was here — see the
+// `SWelsSliceBs` note above; `SSlice` embeds it by value.
 
 // codec/encoder/core/inc/svc_enc_frame.h
 assert_size!(SSliceBufferInfo, 16);

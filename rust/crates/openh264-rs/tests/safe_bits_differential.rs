@@ -27,15 +27,47 @@
 //!
 //! That handover is why T3.0 was built before the conversion rather than after it.
 //!
-//! # What is still a genuine two-implementation comparison
-//!
 //! * **`GetLeadingZeroBits` and `BsGetTrailingBits`** — the table-driven originals are
 //!   still in `dec_golomb.rs` and still used, so these compare real alternatives.
 //! * **The CAVLC mode** (plan §2.2.2 [P3]) — against a *frozen transliteration* of
 //!   `BsStartCavlc`/`BsEndCavlc`, kept below because it is the only executable
 //!   statement of what parity means for that pair now that the port's copy is gone.
-//! * **The whole writer half** — `vlc_encoder.rs`'s canonical writer is untouched
-//!   until T3.4, so those tests compare two live implementations as before.
+//! # The writer half retired at T3.4 (plan §2, differential retirement)
+//!
+//! T3.4 face 2 moved `vlc_encoder.rs`'s writer family onto [`BsWriter`] and deleted
+//! the raw bodies, so the same rule that retired the reader half applies: with one
+//! implementation left there is nothing to compare, and a test that compares a thing
+//! to itself reads as coverage it does not provide. `writer_op_sequences_are_byte_
+//! identical`, `writer_matches_at_the_accumulator_boundary`,
+//! `writer_snapshot_and_rollback_matches_the_cursor_stash`, `rbsp_trailing_bits_
+//! matches` and `writer_and_the_32_bit_word` are deleted here, in the commit that
+//! deletes what they tested. Their burden passes to:
+//!
+//! * the **encoder sweeps**, 341 configurations in both build profiles, which are
+//!   byte-exactness against the C++ encoder itself — a stronger referee for the
+//!   writer than any in-tree comparison, and the one F2 named;
+//! * `src/safe/bits.rs`'s own unit tests, which keep the properties: the
+//!   accumulator boundary, the whole-word flush, the snapshot/rollback round trip,
+//!   `te(v)`, `align`'s one-bit padding, and the out-of-space panic;
+//! * `written_streams_read_back_through_the_old_reader` below, which still closes
+//!   the writer-to-reader loop.
+//!
+//! **F5 closed with them** (`phase1_findings.md`). The finding was that the
+//! canonical writer's `uiCurBits << iLeftBits` panics in a debug build when
+//! `iLeftBits == 32`, and its own "who fixes it" line named this commit: *"Phase
+//! 3.2, in the commit that collapses the four writer copies (F2) — the fix is the
+//! same one `BsWriter` already carries."* Nothing was repaired; the expression was
+//! deleted along with the body holding it, and the replacement already folded the
+//! shift away. The path was unreachable (no `BsWriteBits` width in `src/encoder/`
+//! reaches 32), which is why the sweeps cannot tell the difference and why this is
+//! a deletion rather than a behaviour change.
+//!
+//! # What is still a genuine two-implementation comparison
+//!
+//! * **`BsSizeUE`/`BsSizeSE`** — the table-driven originals survive in
+//!   `vlc_encoder.rs` because the mode-decision cost functions want a code length
+//!   without writing anything, so `exp_golomb_sizes_match_the_table_driven_versions`
+//!   still compares real alternatives.
 
 #![allow(non_snake_case)]
 
@@ -47,10 +79,7 @@ use openh264_rs::decoder::bit_stream::SBitStringAux;
 use openh264_rs::decoder::dec_golomb::{
     BsGetBits, BsGetOneBit, BsGetSe, BsGetTrailingBits, BsGetUe, GetLeadingZeroBits, ERR_NONE,
 };
-use openh264_rs::encoder::vlc_encoder::{
-    BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsSizeSE, BsSizeUE, BsWriteBits, BsWriteOneBit,
-    BsWriteSE, BsWriteUE, InitBits,
-};
+use openh264_rs::encoder::vlc_encoder::{BsSizeSE, BsSizeUE};
 use openh264_rs::safe::bits::{size_se, size_ue, trailing_bits, BsCursor, BsWriter};
 
 /// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
@@ -334,16 +363,11 @@ fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
 }
 
 // ===========================================================================
-// BsWriter vs. the canonical vlc_encoder writer  (plan §2.2.2, F2)
+// What survives of the writer half  (see the module header)
 // ===========================================================================
 
-/// One operation of a randomised write sequence, in-contract for the canonical
-/// writer: `1 <= n <= 31` and no bits set above bit `n-1`.
-///
-/// 32 is excluded because the canonical writer cannot survive it in a debug build —
-/// see `writer_and_the_32_bit_word` and `phase1_findings.md` §F5. No encoder call
-/// site asks for it (the widths in `src/encoder/` top out at 16 plus computed
-/// Exp-Golomb lengths).
+/// One operation of a randomised write sequence, sized for the writer's contract:
+/// `1 <= n <= 32` and no bits set above bit `n-1`.
 #[derive(Clone, Copy, Debug)]
 enum WriteOp {
     Bits(i32, u32),
@@ -353,37 +377,6 @@ enum WriteOp {
 }
 
 impl WriteOp {
-    fn random(rng: &mut Prng) -> Self {
-        match rng.below(4) {
-            0 => {
-                let n = rng.range_i32(1, 31);
-                WriteOp::Bits(n, rng.next_u32() & ((1u32 << n) - 1))
-            }
-            1 => WriteOp::OneBit(rng.below(2)),
-            2 => WriteOp::Ue(rng.below(1 << 16)),
-            _ => WriteOp::Se(rng.range_i32(-30000, 30000)),
-        }
-    }
-
-    fn apply_old(self, bs: &mut SBitStringAux) {
-        unsafe {
-            match self {
-                WriteOp::Bits(n, v) => {
-                    BsWriteBits(bs, n, v);
-                }
-                WriteOp::OneBit(v) => {
-                    BsWriteOneBit(bs, v);
-                }
-                WriteOp::Ue(v) => {
-                    BsWriteUE(bs, v);
-                }
-                WriteOp::Se(v) => {
-                    BsWriteSE(bs, v);
-                }
-            }
-        }
-    }
-
     fn apply_new(self, w: &mut BsWriter, buf: &mut [u8]) {
         match self {
             WriteOp::Bits(n, v) => w.write_bits(buf, n, v),
@@ -391,211 +384,6 @@ impl WriteOp {
             WriteOp::Ue(v) => w.write_ue(buf, v),
             WriteOp::Se(v) => w.write_se(buf, v),
         }
-    }
-}
-
-/// Runs one op sequence through both writers and asserts byte- and position-parity.
-///
-/// Note the old side is primed with `as_mut_ptr()`, not `as_ptr()`: `InitBits` takes
-/// a `*const u8` and casts it to `*mut`, and `BsWriteBits` then writes through it, so
-/// the pointer has to carry mutable provenance or the *test* is the UB.
-fn assert_writers_agree(ops: &[WriteOp], flush: bool, label: &str) {
-    const CAP: usize = 8192;
-    let mut old_buf = vec![0u8; CAP];
-    let mut new_buf = vec![0u8; CAP];
-
-    let mut bs = SBitStringAux::default();
-    unsafe { InitBits(&mut bs, old_buf.as_mut_ptr(), CAP as i32) };
-    let mut w = BsWriter::new();
-
-    for (i, op) in ops.iter().enumerate() {
-        op.apply_old(&mut bs);
-        op.apply_new(&mut w, &mut new_buf);
-        assert_eq!(
-            unsafe { BsGetBitsPos(&bs) },
-            w.bits_pos(),
-            "{label}: bit position after op {i} ({op:?})"
-        );
-        assert_eq!(
-            (bs.pCurBuf as usize) - (bs.pStartBuf as usize),
-            w.pos(),
-            "{label}: byte position after op {i} ({op:?})"
-        );
-        assert_eq!(bs.iLeftBits, w.left_bits(), "{label}: iLeftBits after op {i}");
-    }
-
-    if flush {
-        unsafe { BsFlush(&mut bs) };
-        w.flush(&mut new_buf);
-        assert_eq!(
-            (bs.pCurBuf as usize) - (bs.pStartBuf as usize),
-            w.pos(),
-            "{label}: byte position after flush"
-        );
-    }
-    assert_eq!(old_buf, new_buf, "{label}: output bytes");
-}
-
-#[test]
-fn writer_op_sequences_are_byte_identical() {
-    let mut rng = Prng::new(0x77E1_0001);
-    for round in 0..scale(300) {
-        let n_ops = rng.below(48) as usize + 1;
-        let ops: Vec<WriteOp> = (0..n_ops).map(|_| WriteOp::random(&mut rng)).collect();
-        assert_writers_agree(&ops, round % 2 == 0, &format!("round {round}"));
-    }
-}
-
-#[test]
-fn writer_matches_at_the_accumulator_boundary() {
-    // `iLen == iLeftBits` is where the four writer copies (F2) take different
-    // branches to the same state. Hit it deliberately from every fill level. `fill`
-    // starts at 1 because filling 0 bits and then writing 32 is the F5 case below.
-    for fill in 1..32i32 {
-        for extra in 0..3i32 {
-            let mut ops = vec![WriteOp::Bits(fill, 0xFFFF_FFFF >> (32 - fill))];
-            let left = 32 - fill;
-            ops.push(WriteOp::Bits(
-                left,
-                0xA5A5_A5A5 & (0xFFFF_FFFFu32 >> (32 - left)),
-            ));
-            for _ in 0..extra {
-                ops.push(WriteOp::Bits(9, 0x155));
-            }
-            assert_writers_agree(&ops, true, &format!("fill {fill}, extra {extra}"));
-        }
-    }
-}
-
-/// A full 32-bit write into an empty accumulator — `phase1_findings.md` §F5.
-///
-/// The canonical writer evaluates `uiCurBits << iLeftBits` with `iLeftBits == 32`,
-/// which is UB in C++ and, in this port, a **debug-build panic**. `BsWriter` folds
-/// that shift away (it can only be reached with an empty accumulator, where it
-/// contributes nothing) and so produces the C++'s intended output in both profiles.
-/// No encoder call site writes 32 bits at once today, which is why the gates never
-/// saw this.
-#[test]
-fn writer_and_the_32_bit_word() {
-    const CAP: usize = 64;
-    let mut new_buf = vec![0u8; CAP];
-    let mut w = BsWriter::new();
-    w.write_bits(&mut new_buf, 32, 0xDEAD_BEEF);
-    assert_eq!(&new_buf[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
-    assert_eq!(w.pos(), 4);
-    assert_eq!(w.left_bits(), 32);
-    assert_eq!(w.bits_pos(), 32);
-
-    let mut old_buf = vec![0u8; CAP];
-    let mut bs = SBitStringAux::default();
-    unsafe { InitBits(&mut bs, old_buf.as_mut_ptr(), CAP as i32) };
-    let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        BsWriteBits(&mut bs, 32, 0xDEAD_BEEF);
-    }));
-
-    if cfg!(debug_assertions) {
-        assert!(
-            old.is_err(),
-            "F5: the canonical writer is expected to panic on a 32-bit write in a \
-             debug build; if this now passes, re-check the finding"
-        );
-    } else {
-        assert!(old.is_ok(), "release: the shift is masked, not checked");
-        assert_eq!(&old_buf[..4], &new_buf[..4], "release output parity");
-        assert_eq!((bs.pCurBuf as usize) - (bs.pStartBuf as usize), w.pos());
-    }
-}
-
-#[test]
-fn writer_snapshot_and_rollback_matches_the_cursor_stash() {
-    // The safe replacement for StashMBStatus/StashPopMBStatus
-    // (`svc_set_mb_syn_cavlc.rs:1057-1076`): the old code saves and restores
-    // `pCurBuf`/`uiCurBits`/`iLeftBits`; the new one saves the whole `Copy` value.
-    const CAP: usize = 4096;
-    let mut rng = Prng::new(0x77E1_0002);
-
-    for round in 0..scale(100) {
-        let mut old_buf = vec![0u8; CAP];
-        let mut new_buf = vec![0u8; CAP];
-        let mut bs = SBitStringAux::default();
-        unsafe { InitBits(&mut bs, old_buf.as_mut_ptr(), CAP as i32) };
-        let mut w = BsWriter::new();
-
-        let prefix: Vec<WriteOp> = (0..rng.below(12) + 1)
-            .map(|_| WriteOp::random(&mut rng))
-            .collect();
-        let discarded: Vec<WriteOp> = (0..rng.below(12) + 1)
-            .map(|_| WriteOp::random(&mut rng))
-            .collect();
-        let kept: Vec<WriteOp> = (0..rng.below(12) + 1)
-            .map(|_| WriteOp::random(&mut rng))
-            .collect();
-
-        for op in &prefix {
-            op.apply_old(&mut bs);
-            op.apply_new(&mut w, &mut new_buf);
-        }
-
-        // Stash.
-        let saved_old = (bs.pCurBuf, bs.uiCurBits, bs.iLeftBits);
-        let saved_old_bytes = old_buf.clone();
-        let saved_new = w;
-        let saved_new_bytes = new_buf.clone();
-
-        for op in &discarded {
-            op.apply_old(&mut bs);
-            op.apply_new(&mut w, &mut new_buf);
-        }
-
-        // Pop.
-        bs.pCurBuf = saved_old.0;
-        bs.uiCurBits = saved_old.1;
-        bs.iLeftBits = saved_old.2;
-        old_buf.copy_from_slice(&saved_old_bytes);
-        w = saved_new;
-        new_buf.copy_from_slice(&saved_new_bytes);
-
-        for op in &kept {
-            op.apply_old(&mut bs);
-            op.apply_new(&mut w, &mut new_buf);
-        }
-        unsafe { BsFlush(&mut bs) };
-        w.flush(&mut new_buf);
-
-        assert_eq!(
-            (bs.pCurBuf as usize) - (bs.pStartBuf as usize),
-            w.pos(),
-            "round {round}: position after rollback"
-        );
-        assert_eq!(old_buf, new_buf, "round {round}: bytes after rollback");
-    }
-}
-
-#[test]
-fn rbsp_trailing_bits_matches() {
-    let mut rng = Prng::new(0x77E1_0003);
-    const CAP: usize = 1024;
-    for round in 0..scale(100) {
-        let mut old_buf = vec![0u8; CAP];
-        let mut new_buf = vec![0u8; CAP];
-        let mut bs = SBitStringAux::default();
-        unsafe { InitBits(&mut bs, old_buf.as_mut_ptr(), CAP as i32) };
-        let mut w = BsWriter::new();
-
-        for _ in 0..rng.below(24) + 1 {
-            let op = WriteOp::random(&mut rng);
-            op.apply_old(&mut bs);
-            op.apply_new(&mut w, &mut new_buf);
-        }
-        unsafe { BsRbspTrailingBits(&mut bs) };
-        w.rbsp_trailing_bits(&mut new_buf);
-
-        assert_eq!(old_buf, new_buf, "round {round}");
-        assert_eq!(
-            (bs.pCurBuf as usize) - (bs.pStartBuf as usize),
-            w.pos(),
-            "round {round}: position"
-        );
     }
 }
 
