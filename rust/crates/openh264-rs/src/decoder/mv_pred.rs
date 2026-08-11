@@ -184,30 +184,6 @@ pub const g_kuiCache30ScanIdx: [u8; 16] = [
     21, 22, 27, 28,
 ];
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPartMbInfo {
-    pub iMbType: u32,
-    pub iPartCount: i8,
-    pub iPartWidth: i8,
-}
-
-pub const g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
-    SPartMbInfo { iMbType: MB_TYPE_DIRECT, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iMbType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
-];
-
 // ============================================================================
 // Data Structures matching C++ Dec Core
 // ============================================================================
@@ -225,6 +201,7 @@ pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 pub use crate::decoder::parameter_sets::SSps;
+pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
 
 
 // ============================================================================

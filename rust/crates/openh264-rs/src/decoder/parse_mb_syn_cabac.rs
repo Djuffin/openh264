@@ -253,37 +253,6 @@ pub const g_kuiIdx2CtxLastSignificantCoeffFlag8x8: [u8; 64] = [
     8, 8,
 ];
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPartMbInfo {
-    pub iType: u32,
-    pub iPartCount: i8,
-    pub iPartWidth: i8,
-}
-
-pub const g_ksInterPSubMbTypeInfo: [SPartMbInfo; 4] = [
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4, iPartCount: 4, iPartWidth: 1 },
-];
-
-pub const g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
-    SPartMbInfo { iType: MB_TYPE_DIRECT, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
-];
-
 pub const g_kuiDequantCoeff: [[u16; 8]; 52] = [
     /* 0*/ [  10,   13,   10,   13,   13,   16,   13,   16],
     /* 1*/ [  11,   14,   11,   14,   14,   18,   14,   18],
@@ -703,6 +672,7 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 // Used by the B-slice motion-info branches ported from ParseInterBMotionInfoCabac.
 pub use crate::decoder::mv_pred::{SubMbType, FillSpatialDirect8x8Mv, FillTemporalDirect8x8Mv};
 pub use crate::decoder::decode_slice::WELS_MIN;
+pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 
 #[inline(always)]
 pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCavlc: bool) {

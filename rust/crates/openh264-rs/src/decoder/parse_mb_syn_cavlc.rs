@@ -299,14 +299,6 @@ pub struct SI4PredInfo {
     pub iLeftTopAvail: i8,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SPartMbInfo {
-    pub iType: u32,
-    pub iPartCount: i8,
-    pub iPartWidth: i8,
-}
-
 /// VLC lookup table pointers.
 /// Matches `SVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`:
 /// `const uint8_t (*kpCoeffTokenVlcTable[4][8])[2];` etc. Each pointer refers
@@ -389,6 +381,7 @@ pub use crate::decoder::decoder_core::{
     SDqLayer, PDqLayer, SWelsDecoderContext, PWelsDecoderContext,
     SSlice, PSlice, SLayerInfo, PLayerInfo,
 };
+pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 
 // ============================================================================
 // Raw Memory Access Helpers
@@ -540,29 +533,6 @@ pub static g_ksI4PredInfo: [SI4PredInfo; 9] = [
     SI4PredInfo { iPredMode: I4_PRED_HD, iLeftAvail: 1, iTopAvail: 1, iLeftTopAvail: 1 },
     SI4PredInfo { iPredMode: I4_PRED_VL, iLeftAvail: 0, iTopAvail: 1, iLeftTopAvail: 0 },
     SI4PredInfo { iPredMode: I4_PRED_HU, iLeftAvail: 1, iTopAvail: 0, iLeftTopAvail: 0 },
-];
-
-pub static g_ksInterPSubMbTypeInfo: [SPartMbInfo; 4] = [
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4, iPartCount: 4, iPartWidth: 1 },
-];
-
-pub static g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
-    SPartMbInfo { iType: MB_TYPE_DIRECT, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 1, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_8x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 2 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x8 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 2, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
-    SPartMbInfo { iType: SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1, iPartCount: 4, iPartWidth: 1 },
 ];
 
 pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
