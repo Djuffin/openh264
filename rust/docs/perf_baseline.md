@@ -1227,6 +1227,43 @@ brief's "one interleaved pair per bench per seam" buys a median, not a row.
 **No ledger row opens** for either seam. Cumulative is unchanged at ≈ +8.9%
 encoder and ≈ +17.8 / +10.1 / +9.6% decode.
 
+### Session B — T4b.2a, T4b.2b, T4b.3a (three seams, one floor)
+
+Session floor from `null t4b2a_ctl`, 3 pairs: decode median **-0.50%**
+(-1.02% … +1.68%), encode median **+0.22%** (-2.68% … +2.75%). The encode band is
+wider than session A's ±1.45% because a `cargo build` overlapped the null's last two
+pairs; the interleave puts that load on both slots, so it widens the band rather than
+biasing the median, and a wider floor is the conservative error.
+
+**Every seam ran 3 pairs from the start**, not one. That is S2b applied in advance
+rather than after a scare: T4b.1b's `640x480 [4t]` row read +22.91% at one pair and
+-0.49% at three, and the cost of three pairs is minutes.
+
+| seam | pair | decode median | encode median |
+|---|---|---|---|
+| T4b.2a (paraset strategy) | `t4b2a_ctl` → `t4b2a_head` | **+0.12%** (+0.05% … +0.31%) | **+0.47%** (-1.45% … +3.07%) |
+| T4b.2b (reference strategy) | `t4b2a_head` → `t4b2b_head` | **+0.38%** (+0.15% … +0.64%) | **-0.04%** (-1.81% … +1.45%) |
+| T4b.3a (intra-pred constraint) | `t4b2b_head` → `t4b3a_head` | **+0.17%** (-0.27% … +0.19%) | **+0.00%** (-1.06% … +2.97%) |
+
+**No ledger row opens for any of the three.** Cumulative unchanged at ≈ +8.9% encoder
+and ≈ +17.8 / +10.1 / +9.6% decode.
+
+Two readings worth keeping:
+
+1. **Each seam's "own" bench is the flat one, and its other bench is the wash.**
+   T4b.2a and T4b.2b are encoder-only and read +0.47% / -0.04% there; T4b.3a is
+   decoder-only and reads +0.17% there. The off-side figures are floor samples and
+   nothing else — worth stating because a reader scanning the decode column will see
+   +0.12 / +0.38 / +0.17 and could mistake a trend for a cost. Two of those three
+   numbers come from code that was not touched.
+2. **Three de-virtualizations in a row bought no measurable time, as predicted.** 4a's
+   finding says direct dispatch recovers per-call scaffolding only where the caller
+   supplies constant dimensions. Every arm here is runtime-selected — from a parameter
+   set, a usage type, a PPS flag — so there was nothing to recover, and the session
+   spent its measurement budget confirming that rather than discovering it. What the
+   three seams bought is in the ratchet: `raw_ptr` -164, `unsafe_fn` -39,
+   **`transmute` 23 → 5**.
+
 ---
 
 ## How to use this in later phases

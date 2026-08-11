@@ -3422,3 +3422,144 @@ The `SWelsFuncPtrList` size assert is the phase's running tally and is now at
 **1184** from 1280. Every remaining de-virtualization moves it, and the comment
 above it records why each time — that comment is the cheapest place to see how
 much of Phase 4 is actually done.
+
+---
+
+## 2026-08-11 — Phase 4b, session B (T4b.2a, T4b.2b, T4b.3a — both strategy objects and the transmute family)
+
+**Commits:** `87a89d31` (inherited doc tail + the rewritten session-B brief),
+`d6c78c1b` (T4b.2a, the parameter-set strategy), `be67a754` (T4b.2b, the reference
+strategy), `489b95d5` (T4b.3a, the intra-pred constraint family). Perf entry for the
+session is `3e583b9a`.
+
+### What landed
+
+The brief's §2 in full and the headline half of its §3. Three dispatch families, one
+commit each:
+
+* **T4b.2a** — `IWelsParametersetStrategy`'s 20-entry vtable, two static instances and
+  25 thunks → `enum ParasetIdKind` carried inside one merged
+  `CWelsParametersetIdStrategyObj`, with the 20 entries as inherent methods (five
+  `match`, fifteen with one body). The field became
+  `Option<Box<CWelsParametersetIdStrategyObj>>`.
+* **T4b.2b** — `IWelsReferenceStrategy`'s 7-entry vtable, three static instances and 13
+  thunks → `enum RefStrategyKind`, with `pCtx` as a parameter instead of a stored
+  back-pointer. `Init`, `Destroy`, both factories and a free-cascade entry all deleted
+  rather than converted.
+* **T4b.3a** — the three `SWelsDecoderContext` intra-pred slots → one
+  `enum IntraPredConstraint`, deleting **19 of the crate's 21 `transmute` calls**.
+
+Tests **431 → 435** debug, **425 → 429** release, ignored **20** throughout. Miri
+**291 → 295**. Sweeps 341/341 both profiles on every battery. Decode goldens and both
+benches bit-identical at every seam. Ratchet across the session: `unsafe_fn` 1298 →
+**1259**, `raw_ptr` 4998 → **4834**, `unsafe_block` 616 → **613**, `mem_zeroed` 28 →
+**32**, **`transmute` 23 → 5**.
+
+### 1. Two of the brief's three scouted premises were wrong, and both mattered
+
+This is the session's reusable result, and it is uncomfortable: **the brief's §1 and
+§3 were each built on a fact read out of a comment rather than out of the code.**
+
+* **§1 said the paraset strategy had one ported implementor**, so the face was
+  "deletion, not design". It has **two** — `CONSTANT_ID` and `INCREASING_ID`, two
+  static vtables, three overriding thunks — and `INCREASING_ID` is `FillDefault`'s
+  value, so it is what an unconfigured encoder runs. The stale "only CONSTANT_ID"
+  claim lived in the module doc *and* at the construction site; only the factory's own
+  doc comment was right, and session A's scouting had read one of the wrong two.
+  Recorded as **F20**. Converting on the brief's plan would have deleted
+  `ID_INCREASING_VTBL`'s three overrides and encoded every default-configured stream
+  with constant parameter-set ids.
+* **§3 said `decode_slice.rs`'s transmutes were data puns**, replaceable with
+  `from_ne_bytes` per P7/T7. **None of the 19 is.** All are fn-pointer type erasure on
+  three slots whose typedefs declared `*mut c_void` and `extern "C"` where the stored
+  functions had concrete types and, for two of them, no `extern "C"` at all. The
+  brief also said `transmute` was 23; **two of those are prose**, so the real figure
+  was 21 — part of "the metric no phase has moved" was a number that cannot move.
+
+Only §2's scouting held up exactly. **The rule this earns**: a count that decides a
+conversion's *shape* — how many implementors, what kind of pun — gets taken from a
+`grep` over the definitions at the moment of converting, never from a doc, a brief, or
+a prior session's hand-off. Session A's own S23 says to read the update paths rather
+than the summary; this is the same rule pointed at prose about the code.
+
+### 2. F19: a leak that no gate in this project could have caught
+
+`encoder_ext.cpp:1995` deletes the parameter-set strategy before freeing the function
+table. The port had the outer `if` and the `WelsFree` and **not the delete**, so
+`InitFunctionPointers`'s `Box::into_raw` had no matching `from_raw` on any production
+path — `DestroyParametersetStrategy`'s only four callers were tests. ~1.2 KB per
+encoder destroyed, and once more per `WelsEncoderParamAdjust` reset.
+
+A leak fails no byte-exactness test, no sweep, and no Miri `--lib` run. The instrument
+that found it was the ownership audit the `Option<Box<_>>` conversion forces: *which
+line frees this?* **The vtable made that question harder to ask, because `Destroy`
+looked like an answer** — a correct destructor, wired into a static vtable, that
+nothing live ever called. Full write-up in
+[`phase4b_findings.md`](phase4b_findings.md).
+
+### 3. Two things S20's closure caught that a field-type reading would not
+
+* **`SWelsFuncPtrList` derived `Copy, Clone`.** An owned field makes that impossible.
+  Removing it broke nothing — nothing ever copied the table by value — which means the
+  derive had been licensing a silent second owner of the strategy pointer since the
+  day it was allocated. A closure computed as "every struct reachable from the changed
+  signature" finds this; one computed as "what size is the field" does not.
+* **`sWelsEncCtx`'s size does not move, and that is the fortunate answer.** The brief
+  said T4b.2b would change it and the assert would update in the same commit. In
+  `#[repr(C)]`, an 8-byte pointer becoming a 1-byte discriminant between two
+  8-byte-aligned neighbours costs 7 bytes of padding — exactly what it gave up. Had it
+  moved, four of the fifteen `assert_ctx_offset!` pins sit *after* that field and
+  encode unmodified C++ `offsetof` values; "update the assert" would have been the
+  wrong fix.
+
+### 4. The aliasing hazard the vtable was hiding (T4b.2a)
+
+`WelsWriteParameterSets` held a `*mut` to the strategy across calls to
+`WelsWriteOneSPS`/`WelsWriteOnePPS`, which reach the same object again through
+`pCtx->pFuncList`. `InitDqLayers` did the same around `GenerateNewSps`/`InitPps`. As
+raw pointers this was invisible; as `&mut` it is UB, and the conversion could not
+compile until it was faced. Every site now re-acquires through one
+`ParasetStrategy(pCtx)` helper and no borrow outlives one expression.
+
+**The general form**: converting a raw pointer to a borrow does not *introduce* an
+aliasing question, it *surfaces* one that was already there. Phases 5 and 6 are made
+of these conversions, so expect the re-entrancy audit to be part of the work rather
+than a surprise in it.
+
+### 5. S21 got a test instead of a sentence
+
+Every prior S21 discharge this phase has been a doc comment (and each one moved
+`mem_zeroed` by prose, three times). T4b.2b wrote
+`ref_strategy_zero_is_the_default_arm` instead — asserting `default()`, the
+discriminant value, and an actual `mem::zeroed()` all agree. It costs one real
+`mem::zeroed` call in the ratchet and proves what the other three only asserted in
+English. Prefer the test.
+
+### 6. F3: nineteenth measurement — zero hits, across eight sweeps
+
+Four full batteries this session (control, and one per seam), **eight 341-configuration
+sweeps, both profiles, and not one hit**. Against session A's measured rate of ~1 in
+800 that is ~2728 configurations with ~3.4 expected, so P(0) ≈ 3%: a mild surprise, not
+a contradiction — and it points the same way S23b does. Session A's hits came out of a
+loop hammering the machine with back-to-back sweeps; these batteries interleave sweeps
+with compiles and benches and leave the machine idle between steps. **The load is part
+of the signature.** Session-start advice stays where session A left it: a tendency, not
+a rule, and this session is the second running where the opening battery was clean.
+
+### Hand-off: Phase 4b, session C
+
+§2 is closed. §3 is *started*, at its highest-value item, and stops at a seam boundary
+per the brief's own instruction. What remains:
+
+* **T4b.3 items 3-5**: `sBlockFunc` (the deblocking block-dispatch pair), the expand
+  fn-pointer re-wraps — **which now own the crate's last two `transmute` calls**, at
+  `decoder_core.rs:893-894` — and the ~55-member CPU-dispatch filler, still explicitly
+  last and still not allowed to displace anything.
+* **The phase exit, whole and uncompressed**, per the brief's §4: straggler sweep
+  (S18), the full 3-pair interleaved perf protocol over the phase (**entry
+  `6e15c907`**), bookkeeping, and **S19 — `prompts/phase5.md`**.
+
+The `SWelsFuncPtrList` assert stayed at **1184** all session and its comment now says
+why: `Option<Box<_>>` is pointer-sized, so a 20-entry vtable left the crate without
+moving the number. **Size was the wrong instrument for this session; the ratchet was
+the right one**, and `transmute` 23 → 5 is the line to read.
