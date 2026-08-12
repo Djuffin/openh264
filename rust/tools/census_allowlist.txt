@@ -21,7 +21,6 @@
 # ---------------------------------------------------------------------------
 type SDqLayer x2                    # dec_frame.h:50 + svc_enc_frame.h:56
 type SPicture x2                    # decoder/picture.h:51 + encoder/picture.h:121
-type SMbCache x2                    # encoder/mb_cache.h:137; the decoder's is its own scratch
 type SLayerInfo x2                  # dec_frame.h:58 + svc_enc_frame.h:82
 type SMmcoRef x2                    # encoder/slice.h:74; the decoder parses its own
 type SReorderingSyntax x2           # encoder/slice.h:61; ditto
