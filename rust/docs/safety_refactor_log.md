@@ -4024,7 +4024,7 @@ Session B starts 5.1 from the closure in §5. What it inherits:
 ## 2026-08-11 — Phase 5, session B (5.1's first two steps: F21's pin, the S25 audit)
 
 **Commits:** `1745b5ca` (inherited doc tail — the prompt archive move and ~30 links),
-`0fd0c9cc` (T5.B1, the narrow-frame assets), `T5B2SHA` (T5.B2, the S25 audit and
+`0fd0c9cc` (T5.B1, the narrow-frame assets), `ff12e966` (T5.B2, the S25 audit and
 F13's decoder site), and this entry.
 
 ### The session in one line

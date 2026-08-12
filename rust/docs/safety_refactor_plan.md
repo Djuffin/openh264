@@ -1550,7 +1550,7 @@ Brief: [`prompts/phase5.md`](prompts/phase5.md), live. Findings:
       one call site is `WelsInitRefList`'s concealment prefetch and no cleanly-decoding
       stream reaches it. Coverage proven by reverting `d1c1a7d4` in a scratch worktree.
       Rows **53 → 56**, none moved; tests **440 → 443** / **434 → 437**.
-- [x] **T5.B2 — the S25 audit, and F13's decoder site** *(session B)*. The brief's
+- [x] **T5.B2 — the S25 audit, and F13's decoder site** *(session B, `ff12e966`)*. The brief's
       named hazard, `SPicture::unref`, was **dead** — one caller, its own unit test,
       and no C++ counterpart — so it is deleted rather than restructured. The audit it
       was supposed to support found **nine live functions** in `manage_dec_ref.rs`
