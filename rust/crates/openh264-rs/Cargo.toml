@@ -17,3 +17,45 @@ harness = false
 [[bench]]
 name = "sad_bodies_bench"
 harness = false
+
+# `cargo test` in debug was spending minutes decoding a handful of large assets:
+# `test_asset_vid_1280x720_cabac_temporal_direct` alone ran **62.3s**, and the six
+# `VID_*_temporal_direct` conformance streams (2.6-4.7 MB each) were the whole of the
+# suite's tail. This manifest declared no `[profile]`, so they ran at Cargo's default
+# `opt-level = 0`. It is a DSP codec; unoptimised it runs like one. Same finding, same
+# fix, and near-identical numbers to `rust/tools/diffharness/rust_enc/Cargo.toml` —
+# read the long comment there, it is the primary write-up.
+#
+# Measured here on the 1280x720 CABAC asset (two rounds, interleaved with rotating
+# order after letting the machine settle, per `diffharness_perf.md`'s methodology
+# warning), against the cold `cargo test --no-run` for the same binary:
+#
+#   opt-level = 0   62.3s   1.0x    build  5.3s   <- was
+#   opt-level = 1    5.3s  11.7x    build  7.6s
+#   opt-level = 2    4.7s  13.3x    build  8.0s
+#   opt-level = 3    4.5s  13.9x    build  8.9s   <- is
+#   release          3.3s  18.9x
+#
+# The residual 1.4x to release is the arithmetic checks, which is cost to keep.
+#
+# **Both check flags are the reason a debug test run exists and both stay on.**
+# `overflow-checks` turns a C++ signed overflow into a loud Rust panic (the F8/F9 class
+# in `phase2_findings.md`); `debug-assertions` keeps the port's `debug_assert!` sites
+# live. Verified, not assumed: `cargo test --no-run -v` passes `-C debug-assertions=on`
+# and `-C opt-level=3` to rustc, and the `attempt to add with overflow` panic string is
+# present in the resulting test binaries and absent from the release ones.
+# **Never trade these two away for speed** — the `opt-level` is a free 14x, dropping
+# the checks buys 1.4x and deletes the reason this run exists.
+#
+# `[profile.bench]` inherits from `release`, not from here, so the benchmarks and every
+# number in `perf_baseline.md` are untouched. `rust_enc` is its own workspace root and
+# carries its own identical profile, so it is unaffected either way.
+#
+# **The consequence to watch**, exactly as `rust_enc` hit it: a debug build running at
+# near-release speed widens every thread window, so any load-sensitive race the old
+# 62s-per-asset pace was holding shut can now appear here too. `multithread_decoder_test`
+# is the exposed surface. The full suite was re-run green after this landed.
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
