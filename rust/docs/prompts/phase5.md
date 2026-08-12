@@ -22,10 +22,14 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded: **449 debug / 443 release / 20 ignored**, Miri **309**,
-   census **60**, decode goldens **56**, ratchet `raw_ptr` **4548**; sweeps 341/341
-   release, and the debug sweep now draws F3 (see §8).
+   verdict. Last recorded: **451 debug / 445 release / 20 ignored**, Miri **312**,
+   census **60**, decode goldens **56**, ratchet `raw_ptr` **4604**; sweeps 341/341
+   both profiles, and the debug sweep can draw F3 (see §8).
 3. Recount every number you are about to rely on.
+
+**Budget the Miri step at ~7 minutes, not ~1.** Since T5.G1 the aliasing probe runs
+un-ignored inside `--lib`, and it decodes a real stream under the interpreter. That is
+the coverage the whole phase has been buying; it is not a regression to investigate.
 
 The census gate runs at commit level (`rust/tools/census.sh` against
 `rust/tools/census_allowlist.txt`): a new duplicate declaration or inferred-target
@@ -267,15 +271,22 @@ this brief historical.
   `SMbCache` and the one-element dimensions died) → **4589** (session F: +8 for the
   allocator's two new tests, +33 as F28's fix traded `&mut` bindings for `*mut`
   annotations — removing a retag costs a pointer type, which is the same trade
-  T5.E1 made in the other direction), `unsafe_block` 613 → 618 → 616 →
+  T5.E1 made in the other direction) → **4604** (session G: +15, the same trade again —
+  11 `&mut *pCtx` bindings and 13 nested borrows became raw derivations, and each one
+  costs a pointer type annotation; T5.G2 was flat), `unsafe_block` 613 → 618 → 616 →
   613 → 614 → 614 → **619**, `unsafe_fn` 1250 → 1249 → 1248 → 1247
-  (`InitCurDqLayerData` deleted) → **1248** (`cabac_ctx_base`). S16's warning was collected twice at session C:
-  prose inflates `raw_ptr` and `SHIM(`, and both were reworded rather than baselined.
-- Gates: **451 / 445 / 20**, Miri **311** (session F: +2 both, the allocator's
-  address-pin and full-reach tests), sweeps 341/341 both profiles, decode
-  goldens **56 rows**. The debug sweep now reproduces F3 (`rust_enc`'s
+  (`InitCurDqLayerData` deleted) → 1248 (`cabac_ctx_base`) → **1249** (`bytes_copy`).
+  **S16's prose floor has now been collected four times** — `raw_ptr` and `SHIM(` at
+  session C, `mem_zeroed` at T5.G1 (a doc comment naming the zeroing intrinsic, which
+  would have corrupted S21's live construction-audit count) and `raw_ptr` again at
+  T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
+  totals: a one-line prose delta and a real conversion look identical in the total.
+- Gates: **451 / 445 / 20**, Miri **312** (session G: +1, the aliasing probe now runs
+  un-ignored — see §2), sweeps 341/341 both profiles, decode
+  goldens **56 rows**. The debug sweep can reproduce F3 (`rust_enc`'s
   `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29
-  is the cleanest evidence the finding has.
+  is the cleanest evidence the finding has. **Session G drew zero F3 hits** across four
+  full batteries — a clean sweep is a sample, not a signal (S14 step 4).
 - **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
   (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
 - Census gate state: inferred-target double casts 0, duplicate-body groups 198

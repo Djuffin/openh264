@@ -1001,3 +1001,58 @@ Also worth noting for the frequency record: this hit is the **debug** sweep, who
 susceptibility is documented in `rust_enc/Cargo.toml` as a deliberate consequence of the
 `[profile.dev] opt-level = 3` change — the build is now fast enough to lose the race,
 which F3's own write-up predicted. The release sweep in the same battery was 341/341.
+
+---
+
+### Measurements 30–32 (Phase 5, session F, 2026-08-12) — recovered into this ledger at session G
+
+**These three were measured and adjudicated at session F and written into that session's
+log entry, but never appended here.** S14 step 4 says *append every measurement to F3*,
+and the ledger is the instrument's memory — a measurement that lives only in a session
+log is invisible to whoever greps this file for the rate. Recovered verbatim from the
+session F entry (`safety_refactor_log.md`, its §6) rather than re-run.
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 30 | `mt … t=4 sm=3 n=600 cabac=1 rc=0` (release) | — | 0 |
+| 31 | `mt … t=4 sm=3 n=600 cabac=1 rc=0` (release, second stream) | — | 28537 |
+| 32 | `mt … t=4 sm=3 n=600 cabac=1 rc=1` (**debug**) | — | 0 |
+
+Each re-run 5× in isolation per S14 step 1. 30 and 31 came back 5/5 byte-identical.
+**32 came back 4× byte-identical and 1× zero bytes** — S14 step 1's race criterion met
+directly, the second time this project has had that quality of evidence (measurement 29
+was the first).
+
+Rate over five back-to-back release sweeps at that session: **2 / 1705 ≈ 1/850**, against
+F3's measured ≈1/800.
+
+**Eleventh alternation** (S14 step 2, owed by 30+31 being two hits): 12 `mt` presets per
+side in one loop, 1440 configurations each, **base 1 / head 1**. Even, and not 0/0
+(S23b). Acquitted.
+
+Also from that session, worth keeping with the protocol rather than the log: **step 0 was
+checked and declined for the first time.** T5.F2 touched `common/memory_align.rs`, which
+the encoder links, so the two `rust_enc` binaries genuinely differed (`ed3b2622` base,
+`5ab0ac61` head) and the hash shortcut did not apply. Every prior use of step 0 in this
+project had been an acquittal; this was the first time it was run and came back "no".
+
+Running total: **thirty-two measurements, eleven alternations, eleven acquittals.**
+
+---
+
+### Phase 5, session G (2026-08-12) — zero hits, and that is a sample
+
+No numbered measurement: this ledger numbers *hits*, and there were none.
+
+Four sweeps of 341 configurations — two `gates.sh full` batteries × two profiles, 1364
+configurations — **all PASS, both profiles**. Nothing to adjudicate; S14's protocol
+starts at a hit.
+
+Recorded anyway because S14 step 4's other half matters here: **a clean sweep is a
+sample, not a signal.** F3's measured rate is ≈1/800 under sustained load and ≈1/100–150
+on susceptible configurations, so 1364 configurations drawing zero is an ordinary
+outcome and says nothing about whether the finding is still live. The session's changes
+were 100% decoder-side; the sweep exercises the encoder.
+
+Running total unchanged: **thirty-two measurements, eleven alternations, eleven
+acquittals.**
