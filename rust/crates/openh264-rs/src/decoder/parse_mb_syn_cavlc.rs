@@ -1216,8 +1216,8 @@ pub unsafe fn ParseInterInfo(
                 (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
                 iSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount as i32;
                 iPartWidth[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth as i32;
-                let flag = *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy);
-                *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = flag && (uiSubMbType == 0);
+                let flag = *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy);
+                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = flag && (uiSubMbType == 0);
             }
 
             if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
@@ -1657,7 +1657,7 @@ pub unsafe fn ParseInterBInfo(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = false;
+                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
