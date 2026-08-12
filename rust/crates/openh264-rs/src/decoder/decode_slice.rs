@@ -2630,7 +2630,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+    *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
@@ -3102,12 +3102,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *(*dq).pResidualPredFlag.add(iMbXy) = uiCode as i8;
+            *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = uiCode as i8;
         } else {
-            *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
-        if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
+        if *(*dq).grid.residual_pred_flag.get(iMbXy) == 0 {
             // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
             // which nothing in either tree reads. The `if` stays: its `else` is the error.
         } else {
@@ -3444,12 +3444,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *(*dq).pResidualPredFlag.add(iMbXy) = uiCode as i8;
+            *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = uiCode as i8;
         } else {
-            *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
-        if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
+        if *(*dq).grid.residual_pred_flag.get(iMbXy) == 0 {
             // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
             // which nothing in either tree reads. The `if` stays: its `else` is the error.
         } else {
@@ -4525,7 +4525,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
-    *(*dq).pResidualPredFlag.add(iMbXy) =
+    *(*dq).grid.residual_pred_flag.get_mut(iMbXy) =
         (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
