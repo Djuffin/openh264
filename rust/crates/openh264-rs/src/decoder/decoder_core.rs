@@ -355,7 +355,6 @@ pub struct SDqLayer {
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pRefIndex: [*mut [i8; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
-    pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
     pub pTransformSize8x8Flag: *mut bool,
     pub pChromaQp: *mut [i8; 2],
     pub pCbp: *mut i8,
@@ -2790,7 +2789,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pRefIndex[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pRefIndex[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pNoSubMbPartSizeLessThan8x8Flag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pDq).pTransformSize8x8Flag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2844,10 +2842,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pDirect.is_null() {
             WelsFreeHelper(pMa, (*pDq).pDirect as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
             (*pDq).pDirect = std::ptr::null_mut();
-        }
-        if !(*pDq).pNoSubMbPartSizeLessThan8x8Flag.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pNoSubMbPartSizeLessThan8x8Flag as *mut u8, numMb * std::mem::size_of::<bool>());
-            (*pDq).pNoSubMbPartSizeLessThan8x8Flag = std::ptr::null_mut();
         }
         if !(*pDq).pTransformSize8x8Flag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pTransformSize8x8Flag as *mut u8, numMb * std::mem::size_of::<bool>());

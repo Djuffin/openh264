@@ -2038,8 +2038,11 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount;
                 pPartW[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
 
-                let flag_ptr = (*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy);
-                *flag_ptr = *flag_ptr && (uiSubMbType == 0);
+                let flag = (*pCurDqLayer)
+                    .grid
+                    .no_sub_mb_part_size_less_than8x8_flag
+                    .get_mut(iMbXy);
+                *flag = *flag && (uiSubMbType == 0);
             }
 
             for i in 0..4 {
@@ -2419,7 +2422,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *(*pCurDqLayer).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = false;
+                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
