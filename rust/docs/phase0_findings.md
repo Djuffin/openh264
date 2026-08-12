@@ -786,3 +786,51 @@ check that only runs at a phase exit — came back **clean on all four targets**
 (295 `--lib`, 20, 7, 3), so Phase 4b leaves no such backlog behind.
 
 Running total: **twenty measurements, eight alternations, eight acquittals.**
+
+---
+
+### Measurements 21–22 (Phase 5, session A, 2026-08-11) — six hits, and the first even alternation
+
+**Six hits across the session's batteries**, every one inside the narrowed signature —
+`mt`, `sm=3`, **`n=600`**, `t∈{2,4}`, wrong-length output — on all three clips and in
+both profiles:
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 21a | `320x192 t=4 sm=3 n=600 cabac=1 rc=0` (release) | 39981 | 37837 |
+| 21b | `160x96 t=4 sm=3 n=600 cabac=0 rc=0` (release) | 42538 | 0 |
+| 21c | `160x96 t=4 sm=3 n=600 cabac=0 rc=1` (release) | 42538 | 40857 |
+| 21d | `320x192 t=2 sm=3 n=600 cabac=0 rc=1` (release) | 40809 | 0 |
+| 21e | `160x96 t=4 sm=3 n=600 cabac=1 rc=0` (**debug**) | 42281 | 0 |
+
+Each of 21a, 21b and 21e was retried in isolation immediately: **5/5 byte-identical**
+every time. 21c and 21d were folded into the alternation below rather than retried.
+
+**Measurement 22 — the alternation, and it is the first even one.** Two-plus hits
+triggers the whole-preset protocol: 12 `mt` sweeps per side, 120 configurations each,
+both release binaries built once and swapped inside one loop, machine otherwise idle.
+Base = the session's entry tree (`17167c81`); head = after T5.A4.
+
+**Base 4 / head 4**, 1440 configurations per side. Two details beyond the count:
+
+1. **The head side met this finding's own race criterion.** It hit
+   `320x192 t=4 sm=3 n=600 cabac=1 rc=0` **twice with two different wrong lengths** —
+   0 bytes at pair 1, 37837 at pair 3, against a stable C++ 39981. A deterministic port
+   bug repeats its bytes; this does not. Same shape session C recorded, now on a
+   different tree.
+2. **The base side reproduced session C's exact numbers.** `Static_152_100 t=4 sm=3
+   n=600 cabac=1 rc=1` came back **28537 against C++ 30190** — the same pair session C
+   logged for the same configuration on a different tree three commits earlier. The
+   signature is stable across trees, sessions and profiles.
+
+**Rate: 8 hits / 2880 alternated configurations ≈ 1 in 360**, roughly double the ~1/800
+baseline. Consistent with the load hypothesis in both directions now: session B saw
+zero across eight sweeps on an idle machine, session C and this session — both of which
+ran batteries back to back for hours — see it at two to three times the baseline rate.
+**Load is not a modifier of the signature, it is part of it.**
+
+One further acquittal that costs nothing to state: **every commit in this session
+changes decoder code or tests, and these sweeps compare encoders.** There is no path
+from the tree under test to an encoder output difference.
+
+Running total: **twenty-two measurements, nine alternations, nine acquittals.**

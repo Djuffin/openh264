@@ -37,21 +37,21 @@ this?*
 
 Three instruments, none currently in `gates.sh`:
 
-- `sh rust/tools/find_dup_types.sh` — currently a **252-line report**: 17 duplicate
-  types, 34 aliases, **27 tables**, **37 value-divergent constants**. The
-  within-decoder type duplicates sit on this phase's own targets:
-  `SPartMbInfo` ×4 (`decode_slice.rs:467`, `mv_pred.rs:189`,
-  `parse_mb_syn_cabac.rs:258`, `parse_mb_syn_cavlc.rs:304`), `SMbCache` ×2 in the
-  decoder (`decoder_context.rs:546`, `decoder_core.rs:445`), `SPpsBsInfo` ×2,
-  `SLastDecPicInfo` ×2, `SLayerInfo`, `SLogContext`, `SNalUnitHeader(Ext)`,
-  `EWelsSliceType` ×3, `SDeblockingFunc` ×2.
-- `python3 rust/tools/find_stub_bodies.py --dups` — duplicate fn bodies under one
-  name.
-- `grep -rn 'as \*mut _ as \*mut' src/` — **121** double casts (type laundering the
-  `transmute` metric cannot see).
+**DONE at session A** — all three run, every hit classified, and all three wired into
+`gates.sh` at `commit` level as `rust/tools/census.sh` against
+`rust/tools/census_allowlist.txt` (61 entries, each with its class and owning step,
+plus three counted budgets). A new duplicate now fails the build. Exit state: type
+duplicates 17 → **10**, aliases 34 → **31**, tables 27 → **17**, inferred-target
+double casts 94 → **0**, duplicate-body groups **198** (ratchet).
 
-Do:
-1. Run all three. Classify every hit:
+Two of this section's original figures were wrong and are corrected here for the
+record: `grep 'as \*mut _ as \*mut' src/` reads **100**, not 121 — the other 21 are
+`as *const _ as *const`; and `find_stub_bodies.py` reported 51 groups with **none** in
+the decoder only because its `RUST_DIRS`/`CPP_DIRS` never listed the decoder. Widened,
+it reads 198 with 156 decoder-touching, and produced **F22** on its first run.
+
+Reference for the classification, kept because 5.2–5.6 add to the allowlist:
+1. Classes:
    - **(a)** cross-codec namesake matching C++ (`SDqLayer` etc.) → allowlist. No
      renames (P14).
    - **(b)** within-codec duplicate declaration of one entity → unify. One commit
@@ -61,19 +61,23 @@ Do:
      reads today and preserve per-consumer behaviour (S6). A naive merge changes
      output.
    - **(d)** legitimate same-name fns → allowlist.
-2. Wire all three checks into `gates.sh`, zero-or-allowlisted (S22).
-3. Zero bytes of output move in this face, or the commit that moved them reverts.
+2. Zero bytes of output move in this face, or the commit that moved them reverts.
 
-### Face 2 — P3 regression tests
+### Face 2 — P3 regression tests — **DONE at session A** (`888f7aa7`)
 
-One targeted test per decoder pointer-identity site, before any identity
-conversion: boundary strength on a stream with duplicate-POC refs; EC self-copy;
-the third site per plan §3 P3. Test additions only.
+Five tests over the three sites (`deblocking.rs` ×3, `error_concealment.rs` ×2), each
+giving the two pictures the **same POC** so a POC-based rewrite fails them. Read them
+before touching either file.
 
-### Face 3 — 5.1 closure
+### Face 3 — 5.1 closure — **computed and recorded at session A**, no code
 
-Compute and record 5.1's S20 closure. First strangler commits only from a standing
-start.
+The closure is in the session-A log entry §5. Headlines: nothing embeds the decoder's
+`SPicture` by value; it has **no** `assert_size!` and no offset pins; its fourth plane
+slot is dead (`iPlanes = 3`, nothing in `src/decoder` reads index 3); F19's check on
+`AllocPicture`/`FreePicture` is clean on all eight allocations. **One S25 hazard, to be
+faced first rather than at compile time**: `SPicture::unref(&mut self)`
+(`picture.rs:292`) hands `self as *mut SPicture` to `SetUnRef`
+(`manage_dec_ref.rs:100`), which re-borrows it `&mut`.
 
 ## 2. The steps (plan §5 order stands)
 
@@ -140,6 +144,17 @@ instrument that moves. S19 at exit: refresh §0, write `prompts/phase6.md`, stam
 this brief historical.
 
 ## 4. Metrics inherited
+
+*(Refreshed at session A's exit; the figures below the line are Phase 4b's entry
+state and are kept because §7.4's ledger is written against them.)*
+
+- Ratchet at session A's exit: `raw_ptr` **4597** (−218 in one session, all from
+  deleting duplicate declarations), `unsafe_block` **618**, `unsafe_fn` **1250**,
+  `SHIM(` 157, `transmute` 4, `mem_zeroed` 32.
+- Gates: **440 debug / 434 release / 20 ignored**, Miri **300 `--lib`**.
+- F3: **twenty-two measurements, nine alternations, nine acquittals**; session A's is
+  the first even split (base 4 / head 4). Signature unchanged and narrowed to `n=600`.
+
 
 - `transmute` reads **4: all prose, zero calls**. Don't chase it.
 - `assert_size!(SWelsFuncPtrList)` cannot see dispatch leave (`Option<Box<_>>` is
