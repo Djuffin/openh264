@@ -911,3 +911,70 @@ byte-wise, so they stay as they are (S6: parity, not a sweep). **The general rul
 leaves for 5.5 and Phase 6**: a struct that is ever compared or hashed as bytes must
 only ever be *stored* as bytes, and the two halves are usually written in different
 functions by different people.
+
+---
+
+## F32 — two of the grid's 24 arrays declare a scalar pointee and allocate a per-MB array
+
+**Status: FIXED 2026-08-12 (Phase 5 session G, T5.G2). Owner 5.2**, and it is a
+precondition of 5.2's own conversion rather than a defect in the running code — nothing
+misbehaves today. Found by cross-checking every grid field's declared pointee against
+its allocation size before starting the flip, which took one script and no round trips.
+
+### The mismatch
+
+```text
+field                 declared      allocated per mb            element really is
+pIntraPredMode        *mut i8       numMb * 8  * sizeof(i8)     [i8; 8]
+pIntra4x4FinalMode    *mut i8       numMb * 16 * sizeof(i8)     [i8; 16]
+```
+
+The other 22 agree with their allocations exactly. Both of these are indexed as arrays
+at every use — `pIntraPredMode.add(iMbXy * 8 + 7)`, `pIntra4x4FinalMode.add(iMbXy * 16 +
+g_kuiScan4[i])` — so the code has always known the stride; only the type did not.
+
+**And the C++ types are right, so this is a translation loss rather than a design
+choice** (`codec/decoder/core/inc/dec_frame.h:85-86`):
+
+```c
+  int8_t (*pIntraPredMode)[8];   //0~3 top4x4 ; 4~6 left 4x4; 7 intra16x16
+  int8_t (*pIntra4x4FinalMode)[MB_BLOCK4x4_NUM];
+```
+
+Pointer-to-array-of-8 became pointer-to-`i8` on the way across, and the comment naming
+the slot layout came across as nothing at all. The fix restores both.
+
+### Why it matters, given nothing is broken
+
+5.2 turns these 24 fields into owned `MbArray<T>`s, and `T` comes from the declared
+pointee. Read mechanically — which is how a 700-site conversion has to be read — these
+two become `MbArray<i8>` and allocate **8× and 16× too little**, with the overrun landing
+in whatever the allocator hands out next. The natural gates would not catch it quickly:
+the writes are to `[7]` and to scan-order slots, so a small stream can touch only the
+first element of each and pass.
+
+This is the closure's own arithmetic disagreeing with itself. `phase5.md` §2 records
+"F19's check discharges clean at **field** level — 24 arrays against 24 frees"; that is
+true and it is a check of *pairing*, not of *size*. **Pairing an allocation with its free
+does not check that either one agrees with the type** — the two frees here are as wrong
+as the two allocations, in the same direction, which is exactly why they pair.
+
+### The fix
+
+Declarations corrected to `*mut [i8; 8]` and `*mut [i8; 16]`, and the 24 sites re-spelled
+to match: allocation and free by `size_of::<[i8; N]>()`, indexed uses as
+`(*p.add(iMbXy))[k]`, and the flat-pointer consumers (`LD32`/`ST32` over four modes, the
+4x4/8x8 predictor walks) taking `.add(iMbXy).cast::<i8>()` — a pointer cast, no reference,
+same address, provenance still the whole allocation. One S29 escaping borrow went with
+it: `let pMode = &mut *(*dq).pIntraPredMode.add(iMbXy * 8 + 7)` is now `addr_of_mut!`.
+
+Zero bytes moved. Done *before* the flip rather than inside it, so that 5.2 reads the
+element types off honest declarations.
+
+### The instrument, which is the reusable part
+
+Cross-check declared pointee size against allocation expression, per field, mechanically.
+It is a dozen lines of script over the struct definition and the allocation block, it
+runs in a second, and it is worth doing on **any** struct about to become owned — the
+encoder's `SDqLayer`/`SMbCache` in 6.3 have the same shape and have never been checked
+this way. S24's law, aimed at types instead of counts.

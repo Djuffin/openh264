@@ -2196,7 +2196,7 @@ pub unsafe fn RecI4x4Luma(
     let pPred = (*pDqLayer).pPred[0];
     let iLumaStride = (*pDqLayer).iLumaStride;
     let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra4x4PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMBXY as usize * 16);
+    let pIntra4x4PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMBXY as usize).cast::<i8>();
     let pRS = pScoeffLevel;
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc;
 
@@ -2258,7 +2258,7 @@ pub unsafe fn RecI8x8Luma(
     let pPred = (*pDqLayer).pPred[0];
     let iLumaStride = (*pDqLayer).iLumaStride;
     let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra8x8PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMbXy as usize * 16);
+    let pIntra8x8PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMbXy as usize).cast::<i8>();
     let pRS = pScoeffLevel;
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc8x8;
 
@@ -2317,7 +2317,7 @@ pub unsafe fn RecI16x16Mb(
     pScoeffLevel: *mut i16,
     pDqLayer: *mut SDqLayer,
 ) -> i32 {
-    let iI16x16PredMode = *(*pDqLayer).pIntraPredMode.add(iMBXY as usize * 8 + 7) as usize;
+    let iI16x16PredMode = (*(*pDqLayer).pIntraPredMode.add(iMBXY as usize))[7] as usize;
     let iChromaPredMode = *(*pDqLayer).pChromaPredMode.add(iMBXY as usize) as usize;
     let iUVStride = (*(*pCtx).pCurDqLayer).iChromaStride;
     let iYStride = (*pDqLayer).iLumaStride;
@@ -2701,7 +2701,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
         *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
         *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-        *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+        (*(*dq).pIntraPredMode.add(iMbXy))[7] = ((uiMbType - 1) & 3) as i8;
         *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
         uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
             (*(*dq).pCbp.add(iMbXy) as u32) >> 4
@@ -3156,7 +3156,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
             *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
             *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-            *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+            (*(*dq).pIntraPredMode.add(iMbXy))[7] = ((uiMbType - 1) & 3) as i8;
             *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
             uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 (*(*dq).pCbp.add(iMbXy) as u32) >> 4
@@ -3499,7 +3499,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
             *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
             *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-            *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+            (*(*dq).pIntraPredMode.add(iMbXy))[7] = ((uiMbType - 1) & 3) as i8;
             *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
             uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 (*(*dq).pCbp.add(iMbXy) as u32) >> 4
@@ -3849,13 +3849,13 @@ pub unsafe fn ParseIntra4x4Mode(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I4x4_PRED_MODE);
         }
 
-        *(*dq).pIntra4x4FinalMode.add(iMbXy * 16 + g_kuiScan4[i as usize] as usize) =
+        (*(*dq).pIntra4x4FinalMode.add(iMbXy))[g_kuiScan4[i as usize] as usize] =
             iFinalMode as i8;
         *pIntraPredMode.add(g_kuiScan8[i as usize] as usize) = iBestMode;
         iSampleAvail[g_kCache30ScanIdx[i as usize] as usize] = 1;
     }
 
-    let dst_modes = (*dq).pIntraPredMode.add(iMbXy * 8);
+    let dst_modes = (*dq).pIntraPredMode.add(iMbXy).cast::<i8>();
     *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
     *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
     *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
@@ -3985,7 +3985,7 @@ pub unsafe fn ParseIntra8x8Mode(
         }
 
         for j in 0..4usize {
-            *(*dq).pIntra4x4FinalMode.add(iMbXy * 16 + g_kuiScan4[(i << 2) + j] as usize) =
+            (*(*dq).pIntra4x4FinalMode.add(iMbXy))[g_kuiScan4[(i << 2) + j] as usize] =
                 iFinalMode as i8;
             *pIntraPredMode.add(g_kuiScan8[(i << 2) + j] as usize) = iBestMode;
             iSampleAvail[g_kCache30ScanIdx[(i << 2) + j] as usize] = 1;
@@ -3995,7 +3995,7 @@ pub unsafe fn ParseIntra8x8Mode(
     // `ST32 (&pIntraPredMode[iMbXy][0], LD32 (&pIntraPredMode[1 + 8 * 4]))` copies
     // four modes, not one; entries 1..3 feed the left-neighbour cache of the next
     // macroblock (WelsFillCacheConstrain0IntraNxN reads [3]).
-    let dst_modes = (*dq).pIntraPredMode.add(iMbXy * 8);
+    let dst_modes = (*dq).pIntraPredMode.add(iMbXy).cast::<i8>();
     *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
     *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
     *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
@@ -4064,7 +4064,7 @@ pub unsafe fn ParseIntra16x16Mode(
         .eIntraPredConstraint
         .Map16x16NeighToSample(pNeighAvail, &mut uiNeighAvail);
 
-    let pMode = &mut *(*dq).pIntraPredMode.add(iMbXy * 8 + 7);
+    let pMode = std::ptr::addr_of_mut!((*(*dq).pIntraPredMode.add(iMbXy))[7]);
     if crate::decoder::parse_mb_syn_cavlc::CheckIntra16x16PredMode(uiNeighAvail, pMode) != 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I16x16_PRED_MODE);
     }
@@ -4158,7 +4158,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
         *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
         *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-        *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType as i32 - 1) & 3) as i8;
+        (*(*dq).pIntraPredMode.add(iMbXy))[7] = ((uiMbType as i32 - 1) & 3) as i8;
         *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
             pNeighAvail,

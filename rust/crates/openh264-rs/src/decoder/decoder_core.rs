@@ -351,8 +351,15 @@ pub struct SDqLayer {
     pub pMbCorrectlyDecodedFlag: *mut bool,
     pub pMbRefConcealedFlag: *mut bool,
     pub pScaledTCoeff: *mut [i16; 384],
-    pub pIntraPredMode: *mut i8,
-    pub pIntra4x4FinalMode: *mut i8,
+    /// **Per-MB array of 8, not a scalar** — allocated `numMb * 8` and indexed
+    /// `[iMbXy][k]`; only `[7]` (the I16x16 mode) and `[0..4]` (the next
+    /// macroblock's left-neighbour cache) are ever read. T5.G2 made the
+    /// declaration say so; it named the element as a bare `i8` for the port's whole
+    /// life, while `dec_frame.h:85` had it as pointer-to-array all along (F32).
+    pub pIntraPredMode: *mut [i8; 8],
+    /// **Per-MB array of 16, not a scalar** — allocated `numMb * 16` and indexed
+    /// `[iMbXy][g_kuiScan4[i]]`. Same correction as `pIntraPredMode` (T5.G2).
+    pub pIntra4x4FinalMode: *mut [i8; 16],
     pub pIntraNxNAvailFlag: *mut u8,
     pub pChromaPredMode: *mut i8,
     pub pSubMbType: *mut [u32; 4],
@@ -2699,8 +2706,8 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pNzcRs = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
-        (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * 8 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pIntra4x4FinalMode = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
+        (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
+        (*pDq).pIntra4x4FinalMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 16]>()) as *mut _;
         (*pDq).pIntraNxNAvailFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u8>()) as *mut _;
         (*pDq).pChromaPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pCbp = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
@@ -2785,11 +2792,11 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
             (*pDq).pScaledTCoeff = std::ptr::null_mut();
         }
         if !(*pDq).pIntraPredMode.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * 8 * std::mem::size_of::<i8>());
+            WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
             (*pDq).pIntraPredMode = std::ptr::null_mut();
         }
         if !(*pDq).pIntra4x4FinalMode.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pIntra4x4FinalMode as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
+            WelsFreeHelper(pMa, (*pDq).pIntra4x4FinalMode as *mut u8, numMb * std::mem::size_of::<[i8; 16]>());
             (*pDq).pIntra4x4FinalMode = std::ptr::null_mut();
         }
         if !(*pDq).pIntraNxNAvailFlag.is_null() {
