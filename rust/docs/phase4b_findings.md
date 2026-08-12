@@ -115,9 +115,11 @@ enum-vs-deletion get taken from `grep` over the vtable instances, every time.
 
 ## F21 — One C++ function translated three times, and two copies drifted: sub-16 chroma was expanded three different ways
 
-**Status: FIXED 2026-08-11 (Phase 4b session C, T4b.3b), by unification.** Found while
-computing T4b.3b's S20 closure — the closure asked "who else implements this?" and the
-answer was three files.
+**Status: FIXED 2026-08-11 (Phase 4b session C, T4b.3b), by unification; PINNED
+2026-08-11 (Phase 5 session B, T5.B1).** Found while computing T4b.3b's S20 closure —
+the closure asked "who else implements this?" and the answer was three files. The pin
+is `test_asset_narrow_16x16_idr_lost` and §The pin below says why it is one row and not
+three.
 
 ### The divergence
 
@@ -164,6 +166,49 @@ by construction, not by luck.
 golden movement, so it is not this phase's. Recorded for whoever adds a narrow-frame
 stream; the arithmetic is now identical to the C++'s in the single copy, so such a test
 would be pinning correct behaviour rather than repairing it.
+
+### The pin (Phase 5 session B, T5.B1)
+
+Golden movement authorized 2026-08-11. Three additive rows, C++ decoder goldens as
+everywhere in that file, regenerable by `rust/tools/make_narrow_assets.py`:
+
+| row | frame | what it covers |
+|---|---|---|
+| `test_asset_narrow_16x16` | 16x16 | the minimum legal width; `iWidthUV` 8 |
+| `test_asset_narrow_24x18` | 24x18, coded 32x32 + cropped | `iWidthUV` exactly 16 — the branch's other side |
+| `test_asset_narrow_16x16_idr_lost` | 16x16, concealed | **the F21 pin** |
+
+**Only the third row covers this finding, and that is the fact worth carrying
+forward.** Coverage was proven the way F17's lesson requires — reverting `d1c1a7d4` in
+a scratch worktree, resolving the two conflicts to *keep* the later deletions so that
+only the expand copies came back — and under the revert the third row goes red while
+the first two stay green. They stay green because the pre-fix `decoder_core` path
+forwarded to `error_concealment`'s copy, which had the sub-16 arm; **only
+`manage_dec_ref`'s copy lacked it, and its only call site is `WelsInitRefList`'s
+concealment prefetch.** A narrow-frame stream that decodes cleanly cannot reach it. The
+first two rows are worth having — nothing else in the corpus decodes a frame narrower
+than 176px, and 5.1 rewrites the plane geometry those two rows measure — but a session
+that added them alone would have believed it had pinned F21 and pinned nothing.
+
+Two properties the concealing stream needed, each found by a row that passed when it
+should not have:
+
+* **A recycled picture.** The prefetch memsets the picture it takes to 128 over the
+  active area only (`iLinesize[1] * iHeightInPixel / 2` bytes from `pData[1]`, which
+  covers the picture rows and their left/right padding but not the top and bottom
+  border). `AllocPicture` also fills the whole buffer with 128, so a stream that
+  conceals from a *fresh* pool reads 128 in the border whether it was expanded or not,
+  and is silent on the defect. The asset therefore decodes a full 24-frame sequence
+  first, then loses an IDR — the prefetched slot still holds that sequence's samples
+  where the memset does not reach.
+* **Motion.** The 16x16 source is a window *panned* across the clip, so the MVs are
+  non-zero; on a one-macroblock frame any non-zero vertical MV reads outside the plane,
+  which is the only way the border reaches the output at all.
+
+The lost IDR itself is a second sequence whose SPS differs from the first (CAVLC
+`profile_idc` 66 then CABAC `profile_idc` 100 — the decoder's `memcmp` against the
+stored SPS is what makes it a new sequence, which clears the reference lists) with its
+IDR NAL removed, so the first slice arriving with empty lists is a P slice.
 
 ### Why the fix is unification and not three patches
 
