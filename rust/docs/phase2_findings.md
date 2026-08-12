@@ -392,7 +392,7 @@ immediately.
 
 | site | shape | owner phase |
 |---|---|---|
-| `decoder/manage_dec_ref.rs:476` `AddLongTermToList` | `ptr::copy(list.as_ptr().add(i), list.as_mut_ptr().add(i+1), n)` — the `as_mut_ptr()` argument is evaluated after the `as_ptr()` one and invalidates it, so the copy reads through a dead tag. Fix is `copy_within`. | **Phase 5** (decoder structural rewrite owns the ref lists) |
+| ~~`decoder/manage_dec_ref.rs:476` `AddLongTermToList`~~ | `ptr::copy(list.as_ptr().add(i), list.as_mut_ptr().add(i+1), n)` — the `as_mut_ptr()` argument is evaluated after the `as_ptr()` one and invalidates it, so the copy reads through a dead tag. Fix is `copy_within`. | **CLOSED 2026-08-11**, T5.B2 — see below |
 | `encoder/encoder_ext.rs:820` `InitDqLayers` | takes `&mut (*(*pCtx).pSvcParam).sSpatialLayers[i].sSliceArgument` while another live reference into the same parameter struct is in scope | **Phase 6** (encoder context restructuring) |
 | ~~`encoder/vlc_encoder.rs:353` `InitBits`~~ | declares `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`, and the writer writes through it. A caller that honestly passes `as_ptr()` produces a pointer with no write provenance, and the first `BsFlush` is UB. | **CLOSED 2026-08-11**, T3.4 (`5bd19deb`) — see below |
 | `encoder/encoder_ext.rs:2418`, `:2427` `SetFastCodingFunc` / `SetNormalCodingFunc` | **`SWelsFuncPtrList` is self-referential.** `sdf.pfMdCost = sdf.pfSampleSad.as_mut_ptr()` stores a pointer into the struct's own `pfSampleSad` array; `SetNormalCodingFunc` does the same with `pfSampleSatd`. Every later `&mut SWelsFuncPtrList` — and the encoder takes one constantly — reborrows the whole struct and pops that interior pointer's tag, so the next `(*pFuncList).sSampleDealingFuncs.pfMdCost.add(BLOCK_16x16)` read is UB. | **Phase 4a** (it owns `SWelsFuncPtrList` and the dispatch tables) |
@@ -420,7 +420,8 @@ the *other* one (`InitDqLayers`, Phase 6's).
 Recorded them, and **widened the gate around them**: `gates.sh`'s Miri step now
 runs the whole library with `--skip wels_thread_pool --skip manage_dec_ref
 --skip encoder_ext --skip svc_mode_decision`, each skip commented with the finding
-that owns it. The skip
+that owns it. *(Two of those four are gone since: `svc_mode_decision` at Phase 4a,
+`manage_dec_ref` at Phase 5 T5.B2.)* The skip
 list is a work queue — deleting a line from it is part of fixing the thing it
 names, and no skip may be added without a finding.
 
@@ -431,6 +432,26 @@ operands), `decoder/error_concealment.rs` (array written through its binding whi
 a derived pointer was still live), `decoder/parse_mb_syn_cavlc.rs` (three
 derivations for one `SBitStringAux`), and F10's third instance in `sad_common`'s
 buffer sizes.
+
+### The `manage_dec_ref` site, closed at T5.B2 (Phase 5 session B)
+
+`copy_within` was the fix, as predicted — but the site was not one, it was **six**.
+`AddLongTermToList` is the one this finding named because it is the one Miri reached
+first; `WelsDelShortFromList`, `WelsDelLongFromList`, `AddShortTermToList` and both
+arms of `WelsReorderRefList` had been written the same way. All six are now one
+`shift_dpb_entries` helper, which is also where the array bound the C's `memmove`
+never checked is written down (not fixed — bounding `uiShortRefCount` and
+`iMaxRefIdx` at their source is the F8/F9/F11 class).
+
+**And the production site was not what the skip was mostly hiding.** With it fixed,
+Miri still failed `manage_dec_ref` — in three *tests*, each taking `&mut picN as
+*mut _` a second time in an assertion after the list already held that picture, so
+the assertion's Unique retag popped the tag the list was carrying and the next call
+read through it. Same class as the four test-side instances below, found three
+phases later because a skip is not a passing test. That is F18's lesson a second
+time and the second half of S22: **the backlog behind a skip is not confined to the
+code the skip was written for.** The skip is deleted; Miri `--lib` runs
+`manage_dec_ref` from this commit on.
 
 ### Why this matters more than the count suggests
 
