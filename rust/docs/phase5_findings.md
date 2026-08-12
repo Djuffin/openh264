@@ -1022,3 +1022,98 @@ Count reads and writes separately, per field, over both trees. Comment-strip fir
 `pInterPredictionDoneFlag`'s naive count is 19, of which 5 are lifecycle and several
 more sit in prose (S16's floor, and it lands on inventories as readily as on metrics).
 The encoder's `SDqLayer`/`SMbCache` in 6.3 have never been read this way either.
+
+---
+
+## F34 — `ParseTransformSize8x8FlagCabac` reads its own array while holding the `&mut` its caller handed it
+
+**Status: OPEN as of discovery, FIXED in the same session (Phase 5 session I, T5.I2).
+Owner 5.2.** Pre-existing at `75188044`: T5.H8 flipped `pTransformSize8x8Flag` onto the
+grid, which turned the parameter from `*mut bool` into `&mut bool`, and a `&mut`
+argument is *strongly protected* for the duration of the call. Found by the window
+analysis T5.I1 needed — not by a gate — and then **proved rather than asserted**, on a
+standalone twenty-line reproduction under Miri.
+
+### The shape
+
+`decode_slice.rs:4198` and `:4312` hand the callee a window into the current
+macroblock's entry:
+
+```rust
+ParseTransformSize8x8FlagCabac(pCtx, pNeighAvail, (*dq).grid.transform_size8x8_flag.get_mut(iMbXy))
+```
+
+and the callee (`parse_mb_syn_cabac.rs:1228`) reads the **same array** at the left and
+top addresses before writing through that argument:
+
+```rust
+let iIdxA = if (*pNeighAvail).iLeftAvail != 0 {
+    *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy - 1) as i32
+} else { 0 };
+...
+*bTransformSize8x8Flag = uiCode != 0;
+```
+
+The two addresses are different, which is why this looks fine and is not. `MbArray::get`
+is `&self.data[i]`, `data` is a `Vec`, and `Vec`'s `Index` goes through `Deref` —
+`slice::from_raw_parts(self.as_ptr(), self.len)` — which builds a shared reference over
+the **whole buffer**. That retag removes the protected `Unique` above it, and the write
+two lines later goes through a dead tag.
+
+### The proof
+
+Twenty lines, no crate involved, `cargo +nightly miri run`:
+
+```text
+error: Undefined Behavior: not granting access to tag <630> because that would remove
+       [Unique for <720>] which is strongly protected
+    --> alloc/src/vec/mod.rs:1865:13
+     |
+1865 |   &*core::intrinsics::aggregate_raw_ptr::<*const [T], _, _>(self.as_ptr(), self.len)
+help: <720> is this argument
+    --> src/main.rs:12:18  |  unsafe fn callee(flag: &mut bool) {
+```
+
+### Why every gate was green on it
+
+Two conditions have to hold together, and the probe's stream meets neither. The parse
+needs `bTransform8x8ModeFlag` — a High-profile feature — and the neighbour reads are
+gated on `iLeftAvail`/`iTopAvail`. `decode_slice_loop_runs_under_the_aliasing_checker`
+decodes `narrow_16x16.264`, which is **one macroblock per frame** (the test's own
+comment says so), so both availability flags are 0 and neither read executes. Miri ran
+this function and returned green because the two lines that make it UB were never
+reached. The byte gates cannot see it at all: the C++ does the identical thing and the
+output is identical.
+
+**S22's law, aimed at a stream instead of at a scope list.** The aliasing probe's
+coverage is its *asset*, not its target list — and a 711-byte one-macroblock stream
+cannot exercise a neighbour-dependent path. Every conclusion of the form "the probe is
+green, so the flip is sound" is bounded by what that stream decodes.
+
+### It is not a port divergence
+
+`parse_mb_syn_cabac.cpp:391` takes `bool& bTransformSize8x8Flag` and reads
+`pTransformSize8x8Flag[iMbXyIndex - 1]` in the same body. In C++ that is well-defined:
+references carry no exclusivity and the two elements are distinct objects. The port is
+**faithful**; what changed is that `&mut` means something stronger than `&`. This is the
+class to expect wherever the flip turns a `T*` out-parameter into `&mut T` on an array
+the callee also reads — and the grep for it is narrow: exactly two call sites pass a
+grid window as an argument, both to this function. `CheckIntraChromaPredMode` is the
+other `&mut` into a flipped family and is clean by signature — it takes a `u8` and the
+borrow, and never reaches the layer.
+
+### The fix
+
+The caller keeps the value in a local and stores it through the window afterwards, so
+no borrow into the array is live across the call:
+
+```rust
+let mut bTransformSize8x8Flag = false;
+let ret = ParseTransformSize8x8FlagCabac(pCtx, pNeighAvail, &mut bTransformSize8x8Flag);
+if ret != ERR_NONE { return ret; }
+*(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = bTransformSize8x8Flag;
+```
+
+Byte-exact by construction, including on the error path: the callee returns before its
+write, so the grid entry keeps its prior value either way, and both call sites propagate
+the error immediately.
