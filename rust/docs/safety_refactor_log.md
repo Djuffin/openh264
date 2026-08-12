@@ -4018,3 +4018,189 @@ Session B starts 5.1 from the closure in §5. What it inherits:
 * **The census gate runs at `commit` level now.** A new duplicate fails the build with
   the file:line pair. When a step legitimately introduces one, add it to
   `census_allowlist.txt` *with its class and owner*, not with a bare name.
+
+---
+
+## 2026-08-11 — Phase 5, session B (5.1's first two steps: F21's pin, the S25 audit)
+
+**Commits:** `1745b5ca` (inherited doc tail — the prompt archive move and ~30 links),
+`0fd0c9cc` (T5.B1, the narrow-frame assets), `T5B2SHA` (T5.B2, the S25 audit and
+F13's decoder site), and this entry.
+
+### The session in one line
+
+Both of the brief's first two steps turned out to be one step wider than the brief
+knew, and in both cases the extra width was the part that mattered.
+
+### Control battery and recount
+
+`gates.sh full` at entry: **OVERALL: FAIL (1 step)**, and the one step is F3 —
+`mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0`, C++ 42538 bytes against
+Rust **0**, the signature exactly. Re-run 5x in isolation per §0: **5/5
+byte-identical at 42538**. Acquitted; tenth alternation not needed for a single hit.
+Everything else confirmed the brief: **440 / 434 / 20**, Miri **300**, release sweep
+341/341, census 61 allowlisted, both benches bit-identical, ratchet clean.
+
+Three counts re-greped before use (S24). One held, two did not:
+
+* The session-A closure's pointer-holder table — 17 / 13 / 10 / 7 / 6 / 3 / 1 / 1 / 1
+  across the ten files — **holds exactly**.
+* **`SPicture::unref` has one caller in the crate and it is its own unit test.** The
+  brief named this function as 5.1's first hazard and asked for a restructure. The
+  C++ `SPicture` has no such member — `picture.h:73` declares the `pSetUnRef`
+  callback and nothing else — and the live unreference path is that callback,
+  invoked directly from `api/codec_api.rs:1607` and from `manage_dec_ref.rs`'s seven
+  `SetUnRef` calls. Its `else` arm was a port invention that *disagreed* with
+  `SetUnRef`: it decremented `iRefCount`, which `SetUnRef` never touches. So the
+  restructure is a deletion, and the hazard the brief named was never on a live path.
+* **`iPlanes` is written and never read** — `pic_queue.rs:210` writes 3, nothing in
+  the crate reads it, and the same is true of the C++ (`picture.h:56` declares it,
+  `pic_queue.cpp:105` writes it, no decoder source reads it). The brief's "fix the
+  count at three" stands; what it fixes is a field that is dead on both sides.
+
+### 1. T5.B1 — the pin, and the two rows that would have been mistaken for one
+
+Three assets, additive, C++ decoder goldens, regenerable by
+`rust/tools/make_narrow_assets.py`: `narrow_16x16` (minimum legal width, `iWidthUV`
+8), `narrow_24x18` (coded 32x32 and cropped, `iWidthUV` exactly 16), and
+`narrow_16x16_idr_lost`.
+
+**Only the third pins F21, and the first two are green under a revert of the fix.**
+That is not a weakness of the assets, it is the finding's actual shape: pre-fix,
+`decoder_core`'s expand path forwarded to `error_concealment`'s copy, which had the
+sub-16 arm. Only `manage_dec_ref`'s copy lacked it, and its single call site is
+`WelsInitRefList`'s concealment prefetch — **unreachable by any stream that decodes
+cleanly**. A session that added the two obvious narrow rows would have closed F21 and
+pinned nothing.
+
+Two properties the concealing asset needed, each discovered by a row that passed when
+it should not have:
+
+* **A recycled picture.** The prefetch memsets to 128 over the active area only —
+  `iLinesize[1] * iHeightInPixel / 2` bytes from `pData[1]`, which covers the picture
+  rows and their left/right padding but not the top and bottom border — and
+  `AllocPicture` fills the whole buffer with 128 as well. Concealment from a *fresh*
+  pool therefore reads 128 in the border whether it was expanded or not. The asset
+  decodes a full 24-frame sequence first so the pool has cycled.
+* **Motion.** The source is a window *panned* across the clip. A static crop encodes
+  to zero MVs, and on a one-macroblock frame it takes a non-zero vertical MV to read
+  outside the plane at all.
+
+The lost IDR is a second sequence whose SPS differs from the first (CAVLC
+`profile_idc` 66 then CABAC `profile_idc` 100 — `memcmp` against the stored SPS is
+what makes the decoder call it a new sequence and clear the reference lists) with its
+IDR NAL removed. **The first ordering of that pair was rejected**: CABAC-then-CAVLC
+left two buffered pictures sharing a `uiDecodingTimeStamp`, and the port and upstream
+break that tie in opposite directions — frames 22 and 46 came out swapped. A real
+divergence, already recorded against `test_scalinglist_jm`, but not this one, and it
+would have failed the row at HEAD for the wrong reason.
+
+Coverage proven rather than asserted (F17's lesson): `d1c1a7d4` reverted in a scratch
+worktree with the two conflicts resolved so only the expand copies came back — T5.A1's
+dead-declaration deletions and T4b.3c's `sBlockFunc` stay deleted, because reverting
+more than F21 would prove less. Under it, `narrow_16x16_idr_lost` goes red and the
+other two stay green.
+
+`asset_test_concealed!` is a second macro over the *same* harness body with one
+parameter added: an asset that deliberately conceals must be judged by `h264dec`'s own
+output rule (`iBufferStatus == 1`), because this file's rule drops every frame whose
+state is not `dsErrorFree` — on this stream, precisely the concealed ones. Under the
+default rule the row compared its clean prefix and nothing else. The 53 existing rows
+keep the default and none moves.
+
+### 2. T5.B2 — the S25 audit, and what "who else reaches this object" answered
+
+The brief's hazard was dead code. The audit that was supposed to be its supporting
+work is where the live ones were:
+
+**`pRefPic` is not a second object.** Every caller passes `&mut ctx.sRefPic` or
+`&mut ctx.sTmpRefPic` (`WelsMarkAsRef:1321`), so `&mut *pCtx` and `&mut *pRefPic`
+are two `&mut` to overlapping memory, the inner one not derived from the outer.
+**Nine functions** in `manage_dec_ref.rs` held one or both across calls that re-enter
+through the same raw pointers — `SlidingWindow`, `RemainOneBufferInDpbForEC`,
+`MMCOProcess`, `MMCO`, `MarkAsLongTerm`, `WelsCheckAndRecoverForFutureDecoding`,
+`WelsInitRefList`, `WelsInitBSliceRefList`, `WelsMarkAsRef`.
+
+Two of them are worth stating individually, because they are not "stale in principle":
+
+* **`MMCOProcess`'s `MMCO_SET_MAX_LONG` loop terminates on a count the re-entrant
+  call decrements.** `while i < ref_pic.uiLongRefCount[LIST_0]` around
+  `WelsDelLongFromListSetUnref(pRefPic, ..)`. The loop is *correct only because* the
+  callee's write through its own `&mut` is visible to the outer binding — which is
+  the same fact that makes reading the outer binding UB.
+* **`WelsMarkAsRef` holds `&mut *pDec`** across `MMCO`, whose `MMCO_LONG` arm reaches
+  the same picture through `AddLongTermToList(pRefPic, (*pCtx).pDec, ..)`, and then
+  writes `dec.iFrameNum = 0` afterwards.
+
+Fixed as S25 prescribes — no borrow outlives one expression — by naming `(*pCtx)` and
+`(*pRefPic)` at each use. Worth noting that this is also the **C++'s own spelling**
+(`pCtx->iFrameNum`): the ergonomic `let ctx = &mut *pCtx` shorthand is what the port
+added, and it is what introduced the hazard.
+
+Behaviour is unchanged by construction: a field access through a `&mut` and one
+through a raw pointer read and write the same memory in the same order. Nothing here
+is a byte-level change and the goldens say so.
+
+### 3. F13's `manage_dec_ref` site, and what the skip was really holding
+
+F13 named `AddLongTermToList:476` and gave the fix (`copy_within`). Both were right
+and both were smaller than the truth.
+
+**The site was six.** `WelsDelShortFromList`, `WelsDelLongFromList`,
+`AddShortTermToList`, `AddLongTermToList` and *both arms* of `WelsReorderRefList` were
+all written `ptr::copy(list.as_ptr().add(a), list.as_mut_ptr().add(b), n)`. One
+`shift_dpb_entries` helper now carries all six, and carries the array bound the C's
+`memmove` never checked — written down, not fixed, because bounding `uiShortRefCount`
+and `iMaxRefIdx` at their source is the F8/F9/F11 class and §9 excludes it.
+
+**And with the production site fixed, Miri still failed** — in three *tests*, each
+taking `&mut picN as *mut _` a second time in an assertion after the list already held
+that picture. The assertion's Unique retag pops the tag the list is carrying, and the
+next call reads `(*cur).iFrameNum` through it. The list was right; the test made it
+UB. Same class as the four test-side instances F13 fixed outright in Phase 2, found
+three phases later because **a skipped test is not a passing test**. F18's lesson a
+second time, and the sharper form of S22: *the backlog behind a skip is not confined
+to the code the skip was written for.*
+
+`--skip manage_dec_ref` is deleted from `gates.sh`. Miri `--lib` runs this module from
+this commit on, which matters more for what comes next than for what it caught: the
+plane conversion is the next thing to touch these files, and it now has an instrument
+watching it. Two of F13's four skips are gone (`svc_mode_decision` at 4a, this one);
+`wels_thread_pool` (F12, Phase 7) and `encoder_ext` (Phase 6) remain.
+
+### 4. F3
+
+One hit, at session start, inside the narrowed signature; 5/5 byte-identical on
+re-run in isolation. **Twenty-third measurement, and as in session A every commit
+this session is decoder-side or test-side while the sweep compares encoders.**
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 440 / 434 / 20 | **443 / 437 / 20** |
+| Miri `--lib` | 300 | **304** (+4: `manage_dec_ref`'s, no longer skipped) |
+| `raw_ptr` | 4597 | **4597** (+0) |
+| `unsafe_block` | 618 | **616** (−2) |
+| `unsafe_fn` | 1250 | **1249** (−1) |
+| Miri skips | 3 | **2** |
+| decode goldens | 53 rows | **56 rows**, none moved |
+
+### Hand-off: Phase 5, session C
+
+5.1's steps 1 and 2 are done. **Step 3, the plane conversion, is not started in
+code** — it is the whole of session C.
+
+* **Start from session A's §5 closure**, which this session re-greped and which holds
+  except for the two corrections in §Control battery above (`unref` is gone;
+  `iPlanes` is dead on both sides, so the three-plane fix is subtraction).
+* **The S25 audit is done for `manage_dec_ref.rs` and its rule is written at
+  `SetUnRef`.** `pic_queue.rs`, `deblocking.rs` and `error_concealment.rs` have not
+  been audited — do them with their conversion, not before it.
+* **Miri now covers `manage_dec_ref`.** Expect it to have opinions about the pool
+  conversion, and read that as the instrument working.
+* **The narrow-frame rows are part of the decode goldens now**, including one that
+  exercises concealment on a recycled picture — which is a path the plane conversion
+  touches directly. If a plane change moves `narrow_16x16_idr_lost` alone, the
+  border expansion is where to look.
+* F22 is still 5.3's, its reachability question still 5.2's.

@@ -285,23 +285,16 @@ impl SPicture {
         !self.bUsedAsRef && self.iRefCount <= 0
     }
 
-    /// Unreferences the picture, releasing reference marks or invoking the `pSetUnRef` callback.
-    ///
-    /// # Safety
-    /// Must only be called with a valid pointer / mutable reference to an initialized picture.
-    pub unsafe fn unref(&mut self) {
-        if let Some(func) = self.pSetUnRef {
-            unsafe {
-                func(self as *mut SPicture);
-            }
-        } else {
-            self.bUsedAsRef = false;
-            self.bIsLongRef = false;
-            if self.iRefCount > 0 {
-                self.iRefCount -= 1;
-            }
-        }
-    }
+    // T5.B2: `unsafe fn unref(&mut self)` sat here. It handed `self as *mut SPicture`
+    // to the `pSetUnRef` callback, which immediately re-borrowed it `&mut` — the S25
+    // shape, and the one Phase 5's brief named as 5.1's first hazard. Two facts
+    // settled it: the C++ `SPicture` has no such member (`picture.h:73` declares the
+    // callback and nothing else), and the port's only caller was this file's own unit
+    // test. Its `else` arm — decrement and clear — was a port invention with no C++
+    // counterpart, and it disagreed with `SetUnRef`, which clears the marks *without*
+    // touching `iRefCount` and reinstalls itself when the count is still positive.
+    // The live unreferencing path is the callback, invoked directly at
+    // `api/codec_api.rs:1607` and by `manage_dec_ref.rs`'s seven `SetUnRef` calls.
 
     /// Calculates active `pData[0..2]` plane start pointers from physical `pBuffer[0..2]` bases
     /// and line strides using the standard OpenH264 border padding formula.
@@ -342,19 +335,23 @@ mod tests {
         assert_eq!(pic.pBuffer[0], std::ptr::null_mut());
     }
 
+    /// The recycling predicate `PrefetchPic` scans on, in its own right — the test
+    /// that used to stand here drove it through `SPicture::unref`, which is gone
+    /// (see the note at the deletion), and so tested a port invention rather than
+    /// the predicate. `SetUnRef`'s own effects are pinned in `manage_dec_ref.rs`.
     #[test]
-    fn test_picture_unref() {
+    fn test_picture_is_free_predicate() {
         let mut pic = SPicture::new();
+        assert!(pic.is_free());
+
         pic.bUsedAsRef = true;
-        pic.iRefCount = 1;
         assert!(!pic.is_free());
 
-        unsafe {
-            pic.unref();
-        }
+        pic.bUsedAsRef = false;
+        pic.iRefCount = 1;
+        assert!(!pic.is_free(), "a held picture is not recyclable even when unmarked");
 
+        pic.iRefCount = 0;
         assert!(pic.is_free());
-        assert_eq!(pic.bUsedAsRef, false);
-        assert_eq!(pic.iRefCount, 0);
     }
 }

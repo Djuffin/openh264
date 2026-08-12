@@ -295,8 +295,6 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   #
   #   wels_thread_pool  F12  every worker takes `&mut` to the one shared pool
   #                          (data race on the retag; Phase 7 owns it)
-  #   manage_dec_ref    F13  `AddLongTermToList` copies through an `as_ptr()` the
-  #                          following `as_mut_ptr()` has already invalidated
   #   encoder_ext       F13  `InitDqLayers` holds `&mut` into `sSpatialLayers`
   #                          across an aliasing use
   #
@@ -305,7 +303,13 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # same struct. Phase 4a de-virtualized those two slots into `CostFamily` tags,
   # so there is no interior pointer left for a `&mut` reborrow to invalidate, and
   # the skip is deleted rather than carried.
-  MIRI_SKIPS=(--skip wels_thread_pool --skip manage_dec_ref --skip encoder_ext)
+  #
+  # `manage_dec_ref` was here for F13's first site, the `as_ptr()`/`as_mut_ptr()`
+  # list shifts. Phase 5 T5.B2 replaced all six with `copy_within` and repaired
+  # the three tests that took a second `&mut` to a picture the list already held
+  # — which is what the skip had been hiding, and is F18's lesson again: the
+  # backlog behind a skip is not confined to the code the skip was written for.
+  MIRI_SKIPS=(--skip wels_thread_pool --skip encoder_ext)
   hdr "miri (--lib, minus the F12/F13 skips)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
