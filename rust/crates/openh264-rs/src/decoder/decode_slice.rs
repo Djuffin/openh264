@@ -4192,14 +4192,23 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
         let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
         if pps.bTransform8x8ModeFlag {
+            // T5.I2 (F34): the callee reads *this array* at the left and top
+            // addresses, and `Vec`'s `Index` builds a shared slice over the whole
+            // buffer — which removes the strongly-protected `&mut` it was handed.
+            // Proved under Miri on a standalone reproduction; unreachable by the
+            // aliasing probe, whose stream is one macroblock per frame, so both
+            // availability flags are 0 and neither read runs. Keeping the value in
+            // a local and storing it after the call has no borrow live across it.
+            let mut bTransformSize8x8Flag = false;
             let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
                 pCtx,
                 pNeighAvail,
-                (*dq).grid.transform_size8x8_flag.get_mut(iMbXy),
+                &mut bTransformSize8x8Flag,
             );
             if ret != ERR_NONE {
                 return ret;
             }
+            *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = bTransformSize8x8Flag;
         }
         (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             pNeighAvail,
@@ -4306,14 +4315,18 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 && pps_layer.bTransform8x8ModeFlag;
 
             if bNeedParseTransformSize8x8Flag {
+                // T5.I2 (F34) — as above; the callee reads the same array at the
+                // neighbour addresses while holding this borrow.
+                let mut bTransformSize8x8Flag = false;
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
                     pCtx,
                     pNeighAvail,
-                    (*dq).grid.transform_size8x8_flag.get_mut(iMbXy),
+                    &mut bTransformSize8x8Flag,
                 );
                 if ret != ERR_NONE {
                     return ret;
                 }
+                *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = bTransformSize8x8Flag;
             }
         }
 
