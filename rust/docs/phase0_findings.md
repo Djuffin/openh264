@@ -896,3 +896,28 @@ are the one decoder symbol the encoder reaches, through
 either commit — only that function's decoder-side *call sites* are.
 
 Running total: **twenty-five measurements, ten alternations, ten acquittals.**
+
+---
+
+### Measurement 26 (Phase 5, session D, 2026-08-11) — one hit, on a tree with no encoder change to blame
+
+One hit at the session-open battery, `mt CiscoVT2people_320x192_12fps t=4 sm=3
+n=600 cabac=1 rc=1` (**release**), C++ 39981 against Rust **0**. Inside the
+signature on every axis. Re-run 5× in isolation per S14 step 1: **5/5
+byte-identical**. The full release sweep re-run immediately after: **341/341**.
+One hit, so no alternation is owed.
+
+What makes this one worth its own entry is what the tree contained. The only change
+between session C's exit (`d551e828`, whose battery was `OVERALL: PASS` with
+341/341 both profiles) and this battery is **`ec29b339`, docs, and `b0632555`, a
+`[profile.dev]` block in `rust/crates/openh264-rs/Cargo.toml`.** The sweep does not
+build through that manifest — `rust/tools/diffharness/rust_enc` is its own workspace
+root with its own identical profile — and this hit is on the **release** sweep
+besides. So there is no candidate mechanism at all: the same source, the same
+binary, 341/341 the second time.
+
+That is the cleanest form of the standing acquittal the last three sessions have
+been recording in a weaker version. Previous entries said *the commits are
+decoder-side and the sweeps compare encoders*; this one says *there are no commits*.
+
+Running total: **twenty-six measurements, ten alternations, ten acquittals.**

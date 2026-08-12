@@ -104,10 +104,16 @@ scratch caches become `&mut` locals passed down).
 
 `mv_pred.rs`: punning → byte ops; `SetRectBlock` → typed generic on the grid;
 colocated reads via `cur_and_ref`.
-- **F22 unifies here**: `parse_mb_syn_cabac.rs` re-translated six `mv_pred`
-  functions and dropped every `pDec` null guard (28 vs 0). Unify onto one copy
-  with divergences enumerated per copy (S21); which guard semantics survive
-  depends on 5.2's reachability answer.
+- **F22 unifies here**, and its reachability question is **answered** (T5.D1):
+  `pCurDqLayer->pDec` cannot be null on the CABAC parse path — one writer, one call
+  site, dominated by a prefetch-or-return, and the same in the C++. So the guard is
+  dead code in both trees and this is a divergence, not a latent crash. Two things
+  follow for the unification, both from session D's S24 re-grep of the C++ side:
+  the divergence is **three** functions (`UpdateP16x16MotionInfo`,
+  `UpdateP16x8MotionInfo`, `UpdateP8x16MotionInfo`), which unify onto `mv_pred.rs`'s
+  guarded shape; and `Update8x8RefIdx` runs the other way — C++ has no guard, the
+  CABAC copy is faithful, and `mv_pred.rs`'s added guard comes off. Per-function, not
+  per-module (S21).
 
 ## 4. Step 5.4 — Deblocking driver
 
