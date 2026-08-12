@@ -53,6 +53,7 @@ use super::cabac_decoder::{
     DecodeBinCabac, DecodeBypassCabac, DecodeTerminateCabac, DecodeUEGLevelCabac, DecodeUEGMvCabac,
     DecodeUnaryBinCabac, InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, PWelsCabacCtx,
     cabac_rbsp_window,
+    cabac_ctx_base,
     PWelsCabacDecEngine, SWelsCabacCtx, SWelsCabacDecEngine,
 };
 
@@ -748,7 +749,7 @@ pub unsafe fn DecodeCabacIntraMbType(
     let mut uiCode: u32 = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(ctx_base as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(ctx_base as usize);
 
     if DecodeBinCabac(cabac_win, pCabacDecEngine, pBinCtx, &mut uiCode) != ERR_NONE {
         return 0;
@@ -969,7 +970,7 @@ pub unsafe fn ParseSkipFlagCabac(
     if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
         iCtxInc += 13;
     }
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(iCtxInc as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(iCtxInc as usize);
     let err = DecodeBinCabac(cabac_win, (*pCtx).pCabacDecEngine, pBinCtx, uiSkip);
     if err != ERR_NONE {
         return err;
@@ -986,7 +987,7 @@ pub unsafe fn ParseMBTypeISliceCabac(
     *uiBinVal = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_MB_TYPE_I as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_MB_TYPE_I as usize);
 
     let iIdxA = ((*pNeighAvail).iLeftAvail != 0
         && ((*pNeighAvail).iLeftType as u32 != MB_TYPE_INTRA4x4
@@ -1056,7 +1057,7 @@ pub unsafe fn ParseMBTypePSliceCabac(
     *uiMbType = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_SKIP as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_SKIP as usize);
 
     let mut err = DecodeBinCabac(cabac_win, pCabacDecEngine, pBinCtx.offset(3), &mut uiCode);
     if err != ERR_NONE {
@@ -1152,7 +1153,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
     *uiMbType = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(27);
+    let pBinCtx = cabac_ctx_base(pCtx).add(27);
 
     let iIdxA = ((*pNeighAvail).iLeftAvail != 0 && !IS_DIRECT((*pNeighAvail).iLeftType as u32)) as i32;
     let iIdxB = ((*pNeighAvail).iTopAvail != 0 && !IS_DIRECT((*pNeighAvail).iTopType as u32)) as i32;
@@ -1232,7 +1233,7 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
     let mut uiCode: u32 = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_TS_8x8_FLAG as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_TS_8x8_FLAG as usize);
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iMbWidth = (*pCurDqLayer).iMbWidth as usize;
@@ -1265,7 +1266,7 @@ pub unsafe fn ParseSubMBTypeCabac(
     let mut uiCode: u32 = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_SUBMB_TYPE as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_SUBMB_TYPE as usize);
 
     let mut err = DecodeBinCabac(cabac_win, pCabacDecEngine, pBinCtx, &mut uiCode);
     if err != ERR_NONE {
@@ -1299,7 +1300,7 @@ pub unsafe fn ParseBSubMBTypeCabac(
     let mut uiCode: u32 = 0;
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_B_SUBMB_TYPE as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_B_SUBMB_TYPE as usize);
 
     let mut err = DecodeBinCabac(cabac_win, pCabacDecEngine, pBinCtx, &mut uiCode);
     if err != ERR_NONE {
@@ -1364,7 +1365,7 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
     *iBinVal = 0;
     let mut err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_IPR as usize),
+        cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_IPR as usize),
         &mut uiCode,
     );
     if err != ERR_NONE {
@@ -1373,7 +1374,7 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
     if uiCode == 1 {
         *iBinVal = -1;
     } else {
-        let pCtx1 = (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_IPR + 1) as usize);
+        let pCtx1 = cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_IPR + 1) as usize);
         err = DecodeBinCabac(cabac_win, (*pCtx).pCabacDecEngine, pCtx1, &mut uiCode);
         if err != ERR_NONE {
             return err;
@@ -1429,7 +1430,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 
     let mut err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CIPR + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + iCtxInc) as usize),
         &mut uiCode,
     );
     if err != ERR_NONE {
@@ -1441,7 +1442,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
         let mut iSym: u32 = 0;
         err = DecodeBinCabac(cabac_win, 
             (*pCtx).pCabacDecEngine,
-            (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CIPR + 3) as usize),
+            cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + 3) as usize),
             &mut iSym,
         );
         if err != ERR_NONE {
@@ -1455,7 +1456,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
         loop {
             err = DecodeBinCabac(cabac_win, 
                 (*pCtx).pCabacDecEngine,
-                (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CIPR + 3) as usize),
+                cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + 3) as usize),
                 &mut uiCode,
             );
             if err != ERR_NONE {
@@ -1567,7 +1568,7 @@ pub unsafe fn ParseRefIdxCabac(
 
     let mut err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_REF_NO + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_REF_NO + iCtxInc) as usize),
         &mut uiCode,
     );
     if err != ERR_NONE {
@@ -1576,7 +1577,7 @@ pub unsafe fn ParseRefIdxCabac(
     if uiCode != 0 {
         err = DecodeUnaryBinCabac(cabac_win, 
             (*pCtx).pCabacDecEngine,
-            (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_REF_NO + 4) as usize),
+            cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_REF_NO + 4) as usize),
             1,
             &mut uiCode,
         );
@@ -1602,7 +1603,7 @@ pub unsafe fn ParseMvdInfoCabac(
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
     let mut iIdxA: i32 = 0;
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(
+    let pBinCtx = cabac_ctx_base(pCtx).add(
         (NEW_CTX_OFFSET_MVD + (iMvComp as i32) * CTX_NUM_MVD) as usize,
     );
     *iMvdVal = 0;
@@ -2685,7 +2686,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iCtxInc = pALeftMb[0] + (pBTopMb[0] << 1);
     let mut err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
         &mut pCbpBit[0],
     );
     if err != ERR_NONE {
@@ -2700,7 +2701,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iCtxInc = iIdxA + (pBTopMb[1] << 1);
     err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
         &mut pCbpBit[1],
     );
     if err != ERR_NONE {
@@ -2715,7 +2716,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iCtxInc = pALeftMb[1] + (iIdxB << 1);
     err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
         &mut pCbpBit[2],
     );
     if err != ERR_NONE {
@@ -2731,7 +2732,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iCtxInc = iIdxA + (iIdxB << 1);
     err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize),
         &mut pCbpBit[3],
     );
     if err != ERR_NONE {
@@ -2756,7 +2757,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iCtxInc = iIdxA + (iIdxB << 1);
     err = DecodeBinCabac(cabac_win, 
         (*pCtx).pCabacDecEngine,
-        (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + CTX_NUM_CBP + iCtxInc) as usize),
+        cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + CTX_NUM_CBP + iCtxInc) as usize),
         &mut pCbpBit[4],
     );
     if err != ERR_NONE {
@@ -2773,7 +2774,7 @@ pub unsafe fn ParseCbpInfoCabac(
         iCtxInc = iIdxA + (iIdxB << 1);
         err = DecodeBinCabac(cabac_win, 
             (*pCtx).pCabacDecEngine,
-            (*pCtx).pCabacCtx.as_mut_ptr().add((NEW_CTX_OFFSET_CBP + 2 * CTX_NUM_CBP + iCtxInc) as usize),
+            cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + 2 * CTX_NUM_CBP + iCtxInc) as usize),
             &mut pCbpBit[5],
         );
         if err != ERR_NONE {
@@ -2790,7 +2791,7 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, iQpDelta: &mut i32) -
     let mut uiCode: u32 = 0;
     let pCurrSlice = &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sSliceInLayer;
     *iQpDelta = 0;
-    let pBinCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(NEW_CTX_OFFSET_DELTA_QP as usize);
+    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_DELTA_QP as usize);
     let iCtxInc = (pCurrSlice.iLastDeltaQp != 0) as i32;
 
     let mut err = DecodeBinCabac(cabac_win, (*pCtx).pCabacDecEngine, pBinCtx.add(iCtxInc as usize), &mut uiCode);
@@ -2845,7 +2846,7 @@ pub unsafe fn ParseCbfInfoCabac(
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
         let err = DecodeBinCabac(cabac_win, 
             (*pCtx).pCabacDecEngine,
-            (*pCtx).pCabacCtx.as_mut_ptr().add(ctx_offset as usize),
+            cabac_ctx_base(pCtx).add(ctx_offset as usize),
             uiCbfBit,
         );
         if err != ERR_NONE {
@@ -2873,7 +2874,7 @@ pub unsafe fn ParseCbfInfoCabac(
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
         let err = DecodeBinCabac(cabac_win, 
             (*pCtx).pCabacDecEngine,
-            (*pCtx).pCabacCtx.as_mut_ptr().add(ctx_offset as usize),
+            cabac_ctx_base(pCtx).add(ctx_offset as usize),
             uiCbfBit,
         );
         if err != ERR_NONE {
@@ -2902,13 +2903,9 @@ pub unsafe fn ParseSignificantMapCabac(
         NEW_CTX_OFFSET_LAST
     };
 
-    let pMapCtx = (*pCtx)
-        .pCabacCtx
-        .as_mut_ptr()
+    let pMapCtx = cabac_ctx_base(pCtx)
         .add((map_base + g_kBlockCat2CtxOffsetMap[iResProperty as usize] as i32) as usize);
-    let pLastCtx = (*pCtx)
-        .pCabacCtx
-        .as_mut_ptr()
+    let pLastCtx = cabac_ctx_base(pCtx)
         .add((last_base + g_kBlockCat2CtxOffsetLast[iResProperty as usize] as i32) as usize);
 
     *uiCoeffNum = 0;
@@ -2973,13 +2970,9 @@ pub unsafe fn ParseSignificantCoeffCabac(
         NEW_CTX_OFFSET_ABS
     };
 
-    let pOneCtx = (*pCtx)
-        .pCabacCtx
-        .as_mut_ptr()
+    let pOneCtx = cabac_ctx_base(pCtx)
         .add((one_base + g_kBlockCat2CtxOffsetOne[iResProperty as usize] as i32) as usize);
-    let pAbsCtx = (*pCtx)
-        .pCabacCtx
-        .as_mut_ptr()
+    let pAbsCtx = cabac_ctx_base(pCtx)
         .add((abs_base + g_kBlockCat2CtxOffsetAbs[iResProperty as usize] as i32) as usize);
 
     let iMaxType = g_kMaxC2[iResProperty as usize] as i32;
@@ -3020,7 +3013,14 @@ pub unsafe fn ParseSignificantCoeffCabac(
                 *pCoff = -*pCoff;
             }
         }
-        pCoff = pCoff.offset(-1);
+        // `wrapping_offset`, not `offset` (F30). The C++ is `pCoff--`
+        // (`parse_mb_syn_cabac.cpp:1394`) and its last iteration lands one element
+        // *before* `pSignificant`, which `i` then ends the loop on without ever
+        // dereferencing. In C that is a benign idiom; in Rust `offset` past the start
+        // is UB by the arithmetic alone — F7's class, the one T3.3 deleted from
+        // `InitReadBits`. `wrapping_offset` computes the same address and removes the
+        // UB, so this is S6 parity and not a repair.
+        pCoff = pCoff.wrapping_offset(-1);
         i -= 1;
     }
     ERR_NONE
@@ -3029,7 +3029,6 @@ pub unsafe fn ParseSignificantCoeffCabac(
 pub unsafe fn ParseResidualBlockCabac8x8(
     _pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCountCache: *mut u8,
-    _pBsAux: &mut BsCursor,
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
@@ -3092,7 +3091,6 @@ pub unsafe fn ParseResidualBlockCabac8x8(
 pub unsafe fn ParseResidualBlockCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCountCache: *mut u8,
-    _pBsAux: &mut BsCursor,
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
