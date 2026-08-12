@@ -5346,6 +5346,116 @@ mod tests {
             assert_eq!(res_p, ERR_NONE);
         }
     }
+
+    /// The smallest legal stream this repository has, decoded through the real
+    /// path — and the **only** `--lib` test that reaches `WelsDecodeSlice`'s
+    /// macroblock loop.
+    ///
+    /// It exists for Miri, not for its assertion. Every other test in this module
+    /// calls one function with null arguments; the integration tests that decode
+    /// real streams are not Miri targets (`gates.sh`'s exit level runs Miri over
+    /// `tests/*differential*.rs`, which are kernel-, plane- and bits-level). So
+    /// until this test, **no Miri-covered code path had ever entered the slice
+    /// decode loop** — and that loop holds three overlapping `&mut` borrows across
+    /// a re-entrant call:
+    ///
+    /// ```text
+    /// let ctx = &mut *pCtx;                    // the context
+    /// let dq  = &mut *ctx.pCurDqLayer;         // the layer
+    /// let pSlice = &mut dq.sLayerInfo…;        // a reborrow of the layer
+    /// …
+    /// pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);   // re-enters through pCtx and
+    ///                                              // reaches the same layer
+    /// …dq.pMbRefConcealedFlag…  ctx.bMbRefConcealed…  pSlice.iTotalMbInCurSlice…
+    /// ```
+    ///
+    /// That is S25's shape (plan §7.6) in code that predates Phase 5, and 5.2 —
+    /// which converts these very fields — cannot decide whether it must be fixed
+    /// without a gate that can see it. This test is that gate. The stream is
+    /// embedded rather than read from `res/` because Miri isolates filesystem
+    /// access and the gate does not pass `-Zmiri-disable-isolation`.
+    ///
+    /// `narrow_16x16.264` is 711 bytes: one macroblock per frame, which is what
+    /// makes a full `Initialize` + decode tractable under an interpreter. It is
+    /// also a decode-goldens row (`test_asset_narrow_16x16`), so its output is
+    /// pinned elsewhere; here we only require that a frame comes out, because the
+    /// instrument is Miri's verdict on the path, not the bytes.
+    ///
+    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
+    /// convenience methods, and that is deliberate — see F23.** The first draft
+    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
+    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
+    /// over a struct that is **one pointer wide**, and the thunk immediately casts
+    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
+    /// eight bytes the borrow covers. That is a real defect on the public API path
+    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
+    /// spelling the call the way a C caller does keeps this test measuring the
+    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
+    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
+    /// whole implementation object, so the raw-pointer spelling is sound.
+    ///
+    /// **`#[cfg_attr(miri, ignore)]` is a debt, not a design.** With the API-layer
+    /// defect routed around, Miri gets as far as `ParseSliceHeaderSyntaxs` and
+    /// rejects **F24** — three overlapping `&mut` borrows of nested fields of one NAL
+    /// unit, 141 uses across a 576-line function, owner 5.5. Until F23 and F24 are
+    /// fixed this test cannot run under Miri, and the honest thing is to say so here
+    /// rather than let a green gate imply coverage that does not exist. Under
+    /// `cargo test` it runs in both profiles and does earn its keep: it is the only
+    /// unit test that decodes a real stream, so a regression in the slice loop fails
+    /// here without waiting for the integration suite. **Delete the attribute the
+    /// moment F24 closes** — that is when the decode path finally acquires an
+    /// aliasing gate.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn decode_slice_loop_runs_under_the_aliasing_checker() {
+        use crate::api::codec_api::*;
+
+        const NARROW_16X16: &[u8] = include_bytes!("../../../../../res/narrow_16x16.264");
+
+        unsafe {
+            let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
+            assert_eq!(
+                i64::from(WelsCreateDecoder(&mut p_decoder)),
+                CM_RESULT_SUCCESS as i64
+            );
+            assert!(!p_decoder.is_null());
+            let vtbl = (*p_decoder).lpVtbl;
+
+            let mut dec_param = SDecodingParam::default();
+            dec_param.uiTargetDqLayer = u8::MAX;
+            dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+            dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+            assert_eq!(
+                i64::from(((*vtbl).Initialize)(p_decoder, &dec_param as *const SDecodingParam)),
+                CM_RESULT_SUCCESS as i64
+            );
+
+            let mut frames = 0;
+            for unit in crate::split_annexb_units(NARROW_16X16) {
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                ((*vtbl).DecodeFrame2)(
+                    p_decoder,
+                    unit.as_ptr(),
+                    unit.len() as i32,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                );
+                if buf_info.iBufferStatus == 1 {
+                    frames += 1;
+                }
+            }
+
+            assert!(
+                frames > 0,
+                "no frame came out of narrow_16x16.264 — the slice loop was never entered, \
+                 so this test is not measuring what it claims to"
+            );
+
+            ((*vtbl).Uninitialize)(p_decoder);
+            WelsDestroyDecoder(p_decoder);
+        }
+    }
 }
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that

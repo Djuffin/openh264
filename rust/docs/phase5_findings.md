@@ -186,3 +186,197 @@ decoder phase and its brief names this instrument as one of three to run. Widene
 session A: duplicate-body groups **51 → 198**, of which **156** touch `src/decoder`.
 S22's shape exactly — the backlog surfaces the moment the instrument first covers what
 it claims to.
+
+---
+
+## F23 — every `&mut self` method on the public vtable structs is UB: the borrow is 8 bytes wide and the thunk writes past it
+
+**Status: OPEN. Owner: Phase 8 (the API boundary work, plan §2.2.8/T10).** Found at
+Phase 5 session D (T5.D2) by the first Miri-covered test that ever called the public
+API, written to answer a *different* question (5.2's S25 re-entrancy audit).
+
+### The defect
+
+`ISVCDecoder` and `ISVCEncoder` are one-pointer structs — the C++ base class, vtable
+pointer only:
+
+```rust
+#[repr(C)] pub struct ISVCDecoder { pub lpVtbl: *const ISVCDecoderVtbl }
+```
+
+Each is the **first field** of a much larger implementation object, which is what the
+thunks actually operate on:
+
+```rust
+#[repr(C)] pub struct CWelsDecoderImpl { pub base: ISVCDecoder, pub pVtbl: …, pub pCtx: …, pub align: …, pub param: …, … }
+```
+
+The crate offers 19 convenience methods that forward to the vtable, and every one of
+them takes `&mut self`:
+
+```rust
+pub unsafe fn Initialize(&mut self, pParam: *const SDecodingParam) -> c_long {
+    unsafe { ((*self.lpVtbl).Initialize)(self, pParam) }     // self coerces to *mut ISVCDecoder
+}
+```
+
+`&mut self` here is a borrow of **`ISVCDecoder`, eight bytes**. The pointer handed to
+the thunk inherits exactly that provenance, and `decoder_init_c` then does the
+base-to-derived cast every C++ port does and writes through it:
+
+```rust
+let dec_impl = this as *mut CWelsDecoderImpl;
+(*dec_impl).param = *pParam;          // offset 0x20 — outside the borrow
+```
+
+Miri's verdict, on the very first run, before the decoder was initialized:
+
+```text
+error: Undefined Behavior: attempting a write access using <960729> at alloc251625[0x20],
+       but that tag does not exist in the borrow stack for this location
+  --> src/api/codec_api.rs:1425:9
+    |
+1425 |         (*dec_impl).param = *pParam;
+    |         this error occurs as part of an access at alloc251625[0x20..0x40]
+help: <960729> was created by a SharedReadWrite retag at offsets [0x0..0x8]
+  --> src/api/codec_api.rs:1181:46
+```
+
+`[0x0..0x8]` against an access at `[0x20..0x40]` is the whole finding.
+
+**It is not the cast that is wrong** — `WelsCreateDecoder` hands out
+`Box::into_raw(dec) as *mut ISVCDecoder`, a pointer with provenance over the entire
+implementation object, and casting *that* back up is sound. It is the `&mut self`
+signature narrowing it on the way in. Proved by construction: the same call spelled
+`((*vtbl).Initialize)(p_decoder, &param)` through the raw pointer runs clean, and
+that is how `decode_slice_loop_runs_under_the_aliasing_checker` now spells it.
+
+### Scope
+
+**19 methods, both codecs** (`impl ISVCEncoder` at `codec_api.rs:1044`, 8 of them;
+`impl ISVCDecoder` at `:1177`, 4 plus the frame-decode family). Both implementation
+structs have the identical `base:` shape. Every one of the crate's **11 integration
+test files** drives the codecs through this spelling, as would every Rust consumer.
+
+### Why no gate has ever seen it
+
+The same reason F18 sat red for four phases, and the same reason `data_ptr`'s
+provenance defect survived nine gates at T5.C3: **the level that could see it had
+never run there.** `gates.sh` runs Miri over `--lib` and, at the once-per-phase `exit`
+level, over `tests/*differential*.rs` — which are the kernel, plane and bits
+differentials, all of which call internal functions directly. The tests that use the
+public API are the conformance and lifecycle suites, and **Miri has never been pointed
+at them**. It is not a byte-visible defect either: the address is right, the write
+lands where C++ lands it, and all 448/442 tests, 56 golden rows, 2316 malformed rows,
+both benches and 341/341 sweeps agree with it.
+
+S22's "an instrument's scope list is part of the instrument", third instance in this
+project after `find_stub_bodies.py`'s directory list and `find_dup_types.sh`'s.
+
+### The fix, and why it is not Phase 5's
+
+One line per method: take `*mut Self` instead of `&mut self`, or re-derive with
+`addr_of_mut!`. Cheap — and `api/codec_api.rs` is T10/§2.2.8, the drop-in ABI contract
+that plan §1.2 says **stays** and is rewired at the API boundary work. Phase 5 converts
+the decoder's internals; touching the public signatures mid-phase would change the
+crate's Rust-facing API in a phase whose exit criterion is decoder `src/` unsafe-free.
+Recorded, owner named, not fixed here — F19's precedent.
+
+**What Phase 8 should not conclude** is that this is only a Rust-caller problem. C and
+C++ callers reach the thunks directly and are unaffected; the defect is entirely in the
+convenience layer. But the convenience layer is what every test in this repository
+uses, which means the whole integration suite is running UB today and no gate says so.
+
+### Owed work, cheaper than the fix
+
+Point the Miri gate at one test that uses the public API, so the boundary stops being
+unobserved. `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`) is
+now that test for the decode path, and it is in `--lib`, so it runs on every full
+battery rather than once per phase — but it deliberately spells the calls the C way, so
+it does **not** cover the `&mut self` layer. Covering that needs a test that is expected
+to fail until F23 is fixed, which is Phase 8's to add with the fix.
+
+---
+
+## F24 — `ParseSliceHeaderSyntaxs` holds three overlapping `&mut` borrows of one NAL unit, and the outer one invalidates the inner
+
+**Status: OPEN. Owner: 5.5**, which owns the slice-header/paramset family — the census
+allowlist already assigns `PSliceHeader`, `PSliceHeaderExt` and
+`PRefPicListReorderSyn` to it. Found at Phase 5 session D (T5.D2) by the same test
+that found F23, on the run after F23 was routed around.
+
+### The defect
+
+`decoder_core.rs:2018-2021`:
+
+```rust
+let pNalHeaderExt = &mut (*kpCurNal).sNalHeaderExt;
+let pSliceHead    = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+let eNalType      = pNalHeaderExt.sNalUnitHeader.eNalUnitType;
+let pSliceHeadExt = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt;
+```
+
+`pSliceHeadExt` borrows the struct that **contains** what `pSliceHead` borrows, so
+creating it invalidates `pSliceHead`. `pSliceHead` is then used 74 times, starting 13
+lines later. Miri, with byte-exact offsets:
+
+```text
+error: Undefined Behavior: attempting a write access using <34592640> at alloc252357[0x28],
+       but that tag does not exist in the borrow stack for this location
+  --> src/decoder/decoder_core.rs:2034:5
+    |
+2034 |     (*pSliceHead).iFirstMbInSlice = uiCode as i32;
+help: <34592640> was created by a Unique retag at offsets [0x28..0xf00]      (:2019)
+help: <34592640> was later invalidated at offsets [0x28..0x1350]
+      by a Unique retag                                                     (:2021)
+```
+
+`[0x28..0xf00]` nested inside `[0x28..0x1350]` is the finding. There is a third
+invalidation in the same region: `:2023` writes
+`(*kpCurNal).sNalData.sVclNal.bSliceHeaderExtFlag` through the raw pointer while both
+borrows are live.
+
+**Scale**: the function spans `decoder_core.rs:2000-2576` and uses `pSliceHead` 74
+times, `pSliceHeadExt` 50, `pNalHeaderExt` 17. `pNalHeaderExt` is a *sibling* field
+(`sNalHeaderExt` vs `sNalData`) and does not overlap the other two; the defect is the
+`pSliceHead` / `pSliceHeadExt` pair plus the raw write.
+
+### Why this is S25 and not new
+
+Identical shape to T5.B2's nine functions in `manage_dec_ref.rs`, where `pRefPic` is a
+*subfield* of the context that a second borrow also covered, and to T4b.2a's
+`WelsWriteParameterSets`. The established fix is the same: **no borrow outlives one
+expression** — name `(*kpCurNal).sNalData.sVclNal.sSliceHeaderExt…` per use, the shape
+written at `SetUnRef`. 141 sites in one function, mechanical, and it wants its own
+commit rather than a corner of a conversion.
+
+### Why it was invisible
+
+Same answer as F23 and the same answer as `data_ptr` at T5.C3: no Miri-covered test had
+ever entered this code. It is not byte-visible — the addresses are all correct, the
+writes land where C++ lands them, and the whole battery agrees. It took a 711-byte
+stream decoded under an interpreter, and it is the *second* defect that stream found.
+
+### What this means for 5.2, which is why session D stopped here
+
+5.2's closure (session D's log §1) converts `SDqLayer`'s per-MB arrays to an owned
+`MbGrid`, and S25 makes the re-entrancy audit part of that conversion. **The audit now
+has a gate for the first time, and the gate says the decode path has pre-existing
+aliasing UB in front of 5.2's own work.** Converting raw pointers to borrows on top of
+that means every new `&mut` inherits an already-invalid stack, and a Miri failure after
+the conversion would be unattributable — exactly the bisect problem T5.C2's
+three-face split was designed to avoid.
+
+So the order the closure licenses is **F24 first, then 5.2** — and F24 is 5.5's file but
+5.2's blocker, which is a dependency the plan's step order does not currently express.
+Session D's hand-off names it.
+
+### Queue depth is unknown
+
+The probe fails at the *first* defect it reaches each run. F23 was first, F24 second, and
+the slice loop this test was written to examine — three overlapping `&mut`s across the
+re-entrant `pDecMbFunc` call, enumerated in session D's log §2 — **has still not been
+reached.** Nobody should assume F24 is the last one. Each round trip is one ~8-minute
+Miri run, and the instrument is already in the tree
+(`decode_slice_loop_runs_under_the_aliasing_checker`, `#[cfg_attr(miri, ignore)]` until
+F24 closes).

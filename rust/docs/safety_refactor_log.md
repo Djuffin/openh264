@@ -4503,3 +4503,355 @@ What to carry regardless:
   is worse than committing it with the close. A later batch (S27, the session-open
   check that lets a `docs/`-only tail skip the full battery) arrived after that
   commit and is **still uncommitted** — it is Eugene's, not this session's.
+
+---
+
+## 2026-08-11 — Phase 5, session D (the 5.2 closure, F22's answer, and two defects the closure's instrument found)
+
+**Commits:** `ec29b339` (inherited doc tail — S27, S28, the session brief), `b0632555`
+(Eugene's `[profile.dev]`), `2ed04ff9` (T5.D1, F22's answer and its S24 correction),
+T5.D2 (the closure's instrument, F23 and F24), and this entry.
+
+### The session in one line
+
+The closure computed cleanly and then said *not yet*: the instrument written to answer
+its S25 question found two pre-existing aliasing defects in front of 5.2's own work, so
+no conversion landed and the reason is the deliverable.
+
+### Control battery, and why it was the full one
+
+The inherited tail was `rust/docs/`-only and session C ended `OVERALL: PASS`, so **S27's
+first live use should have been the cheap subset** — and it was, for about four minutes.
+Eugene then added `[profile.dev]` (`opt-level = 3`, both check flags kept) to the port
+crate's `Cargo.toml`, which moves a gate: `cargo test` in debug had been running the
+codec unoptimised, one asset taking 62.3s. That fails S27's docs-only condition, so the
+open ran the **full** battery behind it, which is what the rule says to do.
+
+One instrument claim verified rather than trusted, because the debug run's whole purpose
+rests on it: `cargo test --no-run -v` passes `-C debug-assertions=on` and
+`-C opt-level=3`, and `attempt to add with overflow` is present in the resulting test
+binary. The 14x does not cost the F8/F9 tripwire.
+
+`gates.sh full`: **OVERALL: FAIL**, one step — `sweep (release) PASS=340 FAIL=1`.
+Everything else green: 448/442/20, Miri **309**, census 61 allowlisted, both benches
+bit-identical, ratchet clean, decode goldens 56, debug sweep 341/341.
+
+**F3, measurement 26.** `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1`,
+C++ 39981 against Rust 0 — signature on every axis. S14 step 1: **5/5 byte-identical**
+in isolation; the release sweep **341/341** on re-run. One hit, no alternation owed.
+It is the cleanest acquittal the finding has, because the tree has nothing to blame:
+the only changes since session C's PASS are docs and a `[profile.dev]` block that the
+sweep does not build through (`rust_enc` is its own workspace root) on a *release*
+sweep. Previous sessions could say *the commits are decoder-side and the sweeps compare
+encoders*; this one says *there are no commits*. Appended to `phase0_findings.md`.
+
+### 1. F22's reachability answer (T5.D1)
+
+**`pCurDqLayer->pDec` cannot be null on the CABAC parse path.** Five links, all
+greppable, none of them a test — no gate can distinguish the readings because every
+corpus stream decodes with a picture attached:
+
+1. `SDqLayer::pDec` has **one writer in the crate**: `decoder_core.rs:3444`, inside
+   `InitDqLayerInfo`, writing its fourth argument.
+2. `InitDqLayerInfo` has **one call site**: `decoder_core.rs:3682`, passing
+   `(*pCtx).pDec`.
+3. That site is dominated, in the same loop iteration, by the prefetch-or-return at
+   `:3589-3597` — null goes to `PrefetchPic`, and a null *result* returns
+   `ERR_INFO_REF_COUNT_OVERFLOW`.
+4. Nothing between them can undo it. `pCtx->pCurDqLayer` has one production writer and
+   it runs before the loop (the other two are in `mod tests`), and the six
+   `(*pCtx).pDec = null` sites write the **context's** field where CABAC reads the
+   **layer's** copy.
+5. `GetThreadCount` returns `0` unconditionally, so `iThreadCount > 1` is dead and
+   `WelsDecodeSlice` is the only parse entry.
+
+The same five hold in the C++ (`decoder_core.cpp:2386`, `:2674`, `:2542-2575`), and the
+prefetch there is **not** conditional on `bParseOnly`. So `mv_pred.cpp`'s guards are
+defensive branches no stream reaches, in both trees.
+
+**And the finding's own comparison had never been greped (S24).** F22's four Rust counts
+are exact. The C++ side is not what it assumed, because `mv_pred.cpp` mostly spells the
+test as a **ternary** (`pCurDqLayer->pDec ? A : B`) and a search for `NULL` misses it:
+
+| module | C++ null tests | Rust |
+|---|---|---|
+| `mv_pred` | **20** (4 if-form + 16 ternary) | 28 |
+| `parse_mb_syn_cabac` | **0** | 0 |
+| `parse_mb_syn_cavlc` | **0** | 4 |
+| `decode_slice` | **2** | 13 |
+
+Two consequences. `parse_mb_syn_cabac.rs`'s zero is **faithful** — the C++ CABAC file has
+28 unguarded `pCurDqLayer->pDec` dereferences of its own. And the divergence is **three**
+functions, not six: `UpdateP16x16MotionInfo`, `UpdateP16x8MotionInfo`,
+`UpdateP8x16MotionInfo` are guarded in C++ and not in the CABAC copy, while
+`Update8x8RefIdx` runs the *other* way — C++ unguarded, CABAC copy faithful, and
+**`mv_pred.rs` is the copy that added a guard**. `PredMv` and the two `PredInter*Mv`
+never touch `pDec` at all. So 5.3 unifies per function, not per module; deciding from the
+28-vs-0 headline would have added a guard the reference does not have. S21's "inventory
+every function per copy", earned again.
+
+### 2. The S20 closure for 5.2, as computed
+
+**Field types: no reachability.** All 24 changing fields are `*mut [primitive; N]` or
+`*mut primitive` — leaves. Nothing follows them, unlike `SPicture`'s planes reaching
+`PaddedPlane` at T5.C3.
+
+**Layout asserts: none, and this is worth checking before assuming otherwise.**
+`assert_size!(SDqLayer, 512)` and `assert_size!(SMbCache, 576)` exist, in
+`encoder/abi_guard.rs`, and both pin the **encoder's** namesakes (imported from
+`encoder::md` and `encoder::svc_encode_slice`). The decoder's two have no size assert and
+no offset pin — `SWelsDecoderContext`'s situation, which phase5.md §5 already records. So
+T3.4's "const ABI asserts leave no intermediate green state" does not apply here.
+
+**Embeddings: one.** `SWelsDecoderContext` holds `sMb: SMbCache` **by value**
+(`decoder_context.rs:623`) plus `pDqLayersList` and `pCurDqLayer`. Nothing embeds
+`SDqLayer` by value — checked with the compiler's own view, not by reading.
+
+**Signatures: 66 functions over six files**, and the split that decides the shape:
+
+| file | fns taking a DqLayer ptr |
+|---|---|
+| `decode_slice.rs` | 19 |
+| `mv_pred.rs` | 14 |
+| `deblocking.rs` | 12 |
+| `parse_mb_syn_cabac.rs` | 12 |
+| `parse_mb_syn_cavlc.rs` | 7 |
+| `decoder_core.rs` | 2 |
+
+**16 take both `pCtx` and the layer. 50 take the layer only.**
+
+**The double path, measured — and it is not two live paths.** `InitCurDqLayerData`
+(`decoder_core.rs:3523`) copies 27 pointers from `(*pCtx).sMb.*[0]` into `(*pCurDq).*`.
+Accesses: **130 via `sMb`, 316 via the layer**. Of the 130, **129 are lifecycle** —
+declaration, `Default`, the 27 allocations at `:2651-2678`, the frees at `:2697+`, the
+alias copy — and the *one* live consumer is the per-picture `pSliceIdc` `0xff` memset at
+`:3610`, with `sMb.iMbWidth`/`iMbHeight` supplying the count at `:3608`. (`pic_queue.rs`'s
+two `sMb.pRefIndex[]` hits are **log strings**. S16's prose warning, third session
+running.) So `SMbCache` is an owner with no readers and `SDqLayer` is an alias with all
+of them.
+
+**Two things the closure deletes rather than converts**, T5.C1's shape both:
+
+* `LAYER_NUM_EXCHANGEABLE` is **1** (`decoder_context.rs:72`). Every
+  `[…; LAYER_NUM_EXCHANGEABLE]` dimension on all 25 `SMbCache` fields, on
+  `pDqLayersList`, and every `for i in 0..LAYER_NUM_EXCHANGEABLE` is a one-element,
+  one-iteration construct.
+* `SMbCache::pMotionPredFlag` (`:543`) has **exactly two mentions crate-wide**: its
+  declaration and its `Default` init. Never allocated, never aliased, never read, never
+  written.
+
+**The shape this licenses, with the number that decides it.** `MbGrid` goes **inside the
+layer**, not on the context — which is what plan §5.2 already prescribes, and here is why
+it is the only sane option. Put the grid where `SMbCache` is today and all **50**
+layer-only functions need a new parameter, atomically, because S20 forbids deleting
+`pMbType` from `SDqLayer` in one file and not another. Put it in the layer and those 50
+signatures **do not change at all** — `(*dq).pMbType` becomes `(*dq).grid.mb_type(…)` —
+and `SMbCache` dies whole, its 129 lifecycle sites stopping being needed and its one
+consumer moving onto the grid as a method.
+
+**S21, which is where the work actually is.** `SDqLayer` comes from
+`WelsMalloczHelper(pMa, size_of::<SDqLayer>())` at `decoder_core.rs:2650` — a zeroed
+malloc, cast to `PDqLayer`. An owned `MbGrid` there is S21's exact hazard. Two proven
+patterns: T5.C3's heap constructor (`Box::new` + `Box::into_raw`, freed by
+`Box::from_raw`), preferred here because the layer is one allocation with one alloc site
+and one free site; or the `MaybeUninit` shell + `make_zeroed_shell_valid`
+(`decoder_context.rs:744`), which already carries `sRawData`/`sSavedData`. `SDqLayer`'s
+`Default` (`decoder_core.rs:402`, `mem::zeroed` + two fixups) has test consumers and needs
+a real one either way.
+
+**F19's check, per allocation, and it discharges clean** — but only at field level.
+`InitialDqLayersContext` makes **28** `WelsMalloczHelper` calls against
+`UninitialDqLayersContext`'s **25** `WelsFreeHelper` plus one for the layer, which reads
+like a two-array leak and is not: allocation unrolls the three `LIST_A` pairs
+(`pMv`, `pMvd`, `pRefIndex`) while freeing loops over them. Diffed by **field name** it is
+24 against 24, balanced. Worth recording because the raw call-count comparison is the one
+a reviewer would reach for and it gives the wrong answer.
+
+**Census: zero allowlist entries name 5.2**, against the brief's expectation that some
+would unify here. `type SDqLayer x2` and `type SMbCache x2` are class **(a)** —
+cross-codec namesakes matching C++, permanent under P14. What 5.2 owes the allowlist is a
+different thing: renaming the decoder's types to `DqLayerState`/`MbGrid` takes both keys
+from `x2` to `x1`, and the count is part of the key *on purpose*, so both lines must be
+edited or removed or the gate goes red on a rename that is the conversion's whole point.
+`alias PDeblockingFilterMbFunc x2`'s comment cites `*mut SDqLayer` and goes stale (5.4's).
+
+**Scratch caches: 28 signatures, not ~40, over three files** — `parse_mb_syn_cabac.rs` 15,
+`mv_pred.rs` 8, `parse_mb_syn_cavlc.rs` 5. The owners are two stack locals in
+`decode_slice.rs` (`:4632`, `:4836`), so the conversion to `&mut` locals is as mechanical
+as the brief says. The two families disagree on the shape — `*mut [[i16; 2]; 30]` per-list
+in `mv_pred.rs` against `*mut [[[i16; 2]; 30]; LIST_A]` both-lists in the CABAC copy —
+which is F22's observation and why the re-point is 5.3's, after the owner flip.
+
+**`pBitStringAux`: 24 sites, one writer.** `decoder_core.rs:3669` sets it to
+`&mut (*pNalCur).sNalData.sVclNal.sSliceBitsRead` — it points **into the NAL unit**, so it
+is not an owned field but a borrow of another object outliving its source. 17 of the
+readers are in `decode_slice.rs`; one is `cabac_decoder.rs:855`, the `SHIM(phase5)`
+accessor that dies with it.
+
+### 3. The S25 enumeration — and the instrument it needed (T5.D2)
+
+The question S25 asks is *who reaches this object while I hold a borrow?* Read from the
+code, `WelsDecodeSlice` (`decode_slice.rs:5063`) answers it badly:
+
+```rust
+let ctx = &mut *pCtx;
+let dq  = &mut *ctx.pCurDqLayer;
+let pSlice = &mut dq.sLayerInfo.sSliceInLayer;   // reborrow of dq
+…
+let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);   // re-enters via pCtx,
+                                                       // reaches the same layer
+if !dq.pMbRefConcealedFlag.is_null() { … ctx.bMbRefConcealed … }
+pSlice.iTotalMbInCurSlice += 1;
+```
+
+Three overlapping `&mut`s live across a re-entrant call, all three used after it. That is
+T4b.2a's and T5.B2's shape, in code that predates Phase 5 — so it is not something the
+conversion introduces, it is something the conversion inherits.
+
+**And nothing could see it.** `gates.sh` runs Miri over `--lib` and, once per phase, over
+`tests/*differential*.rs` — the kernel, plane and bits differentials, all of which call
+internal functions directly. The tests that decode real streams are the conformance and
+lifecycle suites, and **Miri has never been pointed at them.** So the audit had no gate,
+which is the same hole `data_ptr` sat in one session ago, and S28's lesson generalizes:
+*the test is the instrument.*
+
+So the session wrote one. `decode_slice_loop_runs_under_the_aliasing_checker`
+(`decode_slice.rs`) decodes `narrow_16x16.264` — 711 bytes, one macroblock per frame,
+which is what makes a full `Initialize` + decode tractable under an interpreter — through
+the real public path, with the stream `include_bytes!`'d because the Miri gate does not
+pass `-Zmiri-disable-isolation`. It is a `--lib` test, so it would run on **every** full
+battery rather than once per phase.
+
+It found two defects, neither of them the one it was written for, and it has **not yet
+reached the loop above.**
+
+**F23 — the public API's `&mut self` methods are UB, both codecs.** Miri failed before the
+decoder was initialized. `ISVCDecoder` is a one-pointer struct and the first field of the
+much larger `CWelsDecoderImpl`; `Initialize(&mut self, …)` borrows **eight bytes**, hands
+that provenance to the thunk, and `decoder_init_c` casts base-to-derived and writes at
+offset `0x20`:
+
+```text
+attempting a write access using <960729> at alloc251625[0x20], but that tag does not
+exist in the borrow stack for this location            → src/api/codec_api.rs:1425
+help: <960729> was created by a SharedReadWrite retag at offsets [0x0..0x8]
+```
+
+Not the cast — `WelsCreateDecoder` hands out `Box::into_raw(dec) as *mut ISVCDecoder`,
+which has provenance over the whole object, and casting *that* up is sound. It is the
+`&mut self` signature narrowing it on the way in. **19 methods across both vtable
+structs**, and all **11** of the crate's integration test files drive the codecs that way,
+as would every Rust consumer. Owner **Phase 8** (T10/§2.2.8 — the ABI contract that
+stays); recorded, not fixed, F19's precedent. Proved by construction: the same call
+spelled `((*vtbl).Initialize)(p_decoder, &param)` runs clean, and that is how the test now
+spells it.
+
+**F24 — `ParseSliceHeaderSyntaxs` invalidates its own borrow.** With F23 routed around,
+Miri got as far as `decoder_core.rs:2034`:
+
+```rust
+let pSliceHead    = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;  // [0x28..0xf00]
+let pSliceHeadExt = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt;               // [0x28..0x1350]
+…
+(*pSliceHead).iFirstMbInSlice = uiCode as i32;                                       // UB
+```
+
+The outer borrow **contains** the inner, so creating it invalidates the inner, which is
+then used 74 times. `:2023` adds a third invalidation by writing
+`bSliceHeaderExtFlag` through the raw pointer while both are live. 141 uses across a
+576-line function; the fix is T5.B2's, *no borrow outlives one expression*. Owner **5.5**,
+which already owns `PSliceHeader`/`PSliceHeaderExt` in the census allowlist.
+
+**Both are recorded in `phase5_findings.md`. Neither is byte-visible**: every address is
+correct, every write lands where C++ lands it, and 448/442 tests, 56 golden rows, 2316
+malformed rows, both benches and 341/341 sweeps agree with all of it.
+
+### 4. Why no conversion landed, which is the closure's actual output
+
+The closure is clean and the shape is decided. What stopped 5.2 is what the instrument
+said: **S25 makes the re-entrancy audit part of the conversion, and the audit's first gate
+reports pre-existing aliasing UB in front of 5.2's own work.** Converting raw pointers to
+borrows on top of an already-invalid borrow stack means every new `&mut` inherits it, and
+a Miri failure after the conversion would be unattributable — precisely the bisect problem
+T5.C2's three-face split existed to avoid. The one thing session C proved is that a Miri
+failure is cheap to fix when it lands in one place and expensive when it lands in a
+hundred-site diff.
+
+So the order is **F24, then 5.2** — and F24 is 5.5's file but 5.2's blocker, a dependency
+the plan's step order does not currently express. That is the finding, and it is the kind
+the brief's own §1 anticipated when it said the written closure is a deliverable in its
+own right.
+
+The test ships `#[cfg_attr(miri, ignore)]`, which is a debt and is labelled one at the
+site. It cannot run under Miri until F23 and F24 close, and pretending otherwise would let
+a green gate imply coverage that does not exist. Under `cargo test` it does earn its keep:
+it is the only unit test that decodes a real stream. **The attribute comes off when F24
+closes**, and that is the moment the decode path acquires an aliasing gate.
+
+### 5. Face 4 — already done
+
+The brief asked to re-scope `SPicture::data_ptr`'s `SHIM(phase5)` marker to name its
+surviving consumer. **T5.C3 already wrote it**: `picture.rs:391-395` names the public
+output path at `decoder_core.rs:1087` and says it outlives Phase 5. Re-greped per S24 —
+`:1087-1089` is exactly the `*ppDst.add(i) = data_ptr(i)` fill beside the `iStride`
+writes, so the cite is current. No change; recorded so the next session does not go
+looking for work that is finished.
+
+### 6. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 448 / 442 / 20 | **449 / 443 / 20** (+1, the aliasing probe) |
+| Miri `--lib` | 309 | **309** (the probe is `cfg_attr(miri, ignore)` — F23/F24) |
+| `raw_ptr` | 4595 | **4600** (+5) |
+| `unsafe_block` | 613 | **614** (+1) |
+| `unsafe_fn` | 1248 | **1248** (+0) |
+| `SHIM(` | 158 | **158** (+0) |
+| decode goldens | 56 rows | **56 rows**, none moved |
+| census | 61 allowlisted | unchanged |
+| Miri skips | 2 | 2 |
+| findings open | F22 (reachability open) | **F22 answered; F23, F24 new** |
+
+Ratchet regenerated per S16, and the delta is one file and two metrics:
+`decoder/decode_slice.rs` `raw_ptr` 194 → **199** and `unsafe_block` 5 → **6**. Both are
+the aliasing probe — the `*mut ISVCDecoder`, the `[*mut u8; 3]` destination array and the
+vtable pointer it reads, inside one `unsafe {}`. Nothing else in the crate moved, and the
++5/+1 buys the only unit test that decodes a real stream.
+
+**T5.D2's battery: three FAILs, all three adjudicated.** `unsafe ratchet` (regenerated
+above, delta named). `sweep (debug)` and `sweep (release)`, one row each, both F3's
+signature — measurements 27–28, both **5/5 byte-identical** in isolation, and the
+alternation S14 step 2 would ask for was replaced by a hash: the `rust_enc` release
+binary is **byte-identical** with the test present and stashed
+(`fa59e2a5…d771844` both ways), because `#[cfg(test)]` code is not compiled into a
+dependency build. Base and head are the same binary in the only artifact the sweep
+exercises, so an alternation could not produce information. Everything else green:
+449/443/20, Miri **309/0**, census 61, both benches bit-identical, decode goldens 56.
+
+### Hand-off: Phase 5, session E
+
+**The closure is computed and written (§2 above); do not recompute it, and do not start
+5.2 before F24.**
+
+* **Next unit is F24**, not 5.2. `ParseSliceHeaderSyntaxs` (`decoder_core.rs:2000-2576`),
+  141 uses of three overlapping borrows, mechanical, T5.B2's shape, its own commit. Then
+  **delete `#[cfg_attr(miri, ignore)]`** from
+  `decode_slice_loop_runs_under_the_aliasing_checker` and re-run — the queue depth past
+  F24 is unknown, and the probe reports one defect per run. Budget ~8 minutes per Miri
+  round trip.
+* **The loop that started this has still not been examined by the gate**:
+  `WelsDecodeSlice`'s three overlapping `&mut`s across `pDecMbFunc`, §3 above. Read it as
+  a prediction, not a finding, until Miri gets there.
+* **When 5.2 does start**: grid in the layer, not the context (50 signatures against 0);
+  `SMbCache` dies whole; `LAYER_NUM_EXCHANGEABLE` and `pMotionPredFlag` are pure
+  subtraction and make a clean first commit that converts nothing; then the owner flip,
+  then 5.3's per-function guard unification (three onto `mv_pred.rs`'s shape,
+  `Update8x8RefIdx` onto the CABAC one).
+* **The allowlist needs editing in the same commit as the rename**, not after: both
+  `type SDqLayer x2` and `type SMbCache x2` go to `x1`, and the count is part of the key.
+* **F23 is Phase 8's and should be said out loud at the phase exit**, alongside
+  `data_ptr`'s surviving shim: the crate's entire Rust-facing API is UB today and the
+  integration suite runs it.
+* **S27 got its first live use and its first exception in the same session.** The tail was
+  docs-only for four minutes; a build-config change arrived and the rule correctly
+  escalated to the full battery. Worth keeping as the example.

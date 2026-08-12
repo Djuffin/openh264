@@ -80,25 +80,64 @@ Order inside the step:
    and its `pair_mut`. Nothing in 5.1 blocks 5.2, so the order is a judgement call
    — see session C's hand-off.
 
-## 2. Step 5.2 — MbGrid
+## 2. Step 5.2 — MbGrid (**closure computed and written, session D log §2 — do not
+recompute it. Not started in code, and blocked: F24 first.**)
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
-`MbGrid`; re-point `parse_mb_syn_*` cache fills (~40 signatures; the 30-entry
-scratch caches become `&mut` locals passed down).
-- Expect the phase's largest closure; `SDqLayer` is embedded and asserted widely.
-- `SDqLayer::pBitStringAux` (`*mut BsReader`) retires here; `cabac_decoder.rs`'s
-  `SHIM(phase5)` accessor dies with it.
+`MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over
+`parse_mb_syn_*`: `parse_mb_syn_cabac.rs` 15, `mv_pred.rs` 8, `parse_mb_syn_cavlc.rs`
+5; the 30-entry scratch caches become `&mut` locals passed down, and their owners are
+two stack locals at `decode_slice.rs:4632` and `:4836`).
+
+**Blocked on F24** (`phase5_findings.md`): `ParseSliceHeaderSyntaxs` holds three
+overlapping `&mut` borrows of one NAL unit and the outer invalidates the inner, so the
+decode path has aliasing UB in front of 5.2's work. Convert on top of that and every new
+`&mut` inherits an invalid stack and the next Miri failure is unattributable. F24 is
+5.5's file and 5.2's blocker; fix it first, then delete
+`#[cfg_attr(miri, ignore)]` from `decode_slice_loop_runs_under_the_aliasing_checker`.
+
+The closure's conclusions, so they are not re-derived:
+- **The grid goes inside the layer, not on the context.** Of 66 functions taking a
+  DqLayer pointer, **50 take the layer only** and would each need a new parameter —
+  atomically, per S20 — if the grid lived where `sMb` is. In the layer, those 50
+  signatures do not change at all.
+- **`SMbCache` dies whole rather than converting.** 130 accesses, of which 129 are
+  lifecycle and one is a live consumer (the `pSliceIdc` `0xff` memset,
+  `decoder_core.rs:3610`); the layer alias carries all 316 real accesses.
+- **Two pure subtractions, and they make a first commit that converts nothing**:
+  `LAYER_NUM_EXCHANGEABLE` is **1**, so every `[…; LAYER_NUM_EXCHANGEABLE]` dimension and
+  `0..LAYER_NUM_EXCHANGEABLE` loop is a one-element construct; and
+  `SMbCache::pMotionPredFlag` has exactly two mentions crate-wide (declaration and
+  `Default`).
+- **No layout assert blocks this.** `assert_size!(SDqLayer, 512)` / `(SMbCache, 576)` in
+  `encoder/abi_guard.rs` pin the **encoder's** namesakes. The decoder's two have no size
+  assert and no offset pin.
+- **S21 is where the work is**: `SDqLayer` is `WelsMallocz`-allocated at
+  `decoder_core.rs:2650`, so an owned field wants T5.C3's heap constructor (one alloc
+  site, one free site) or the `make_zeroed_shell_valid` shell. F19's check discharges
+  clean at **field** level — 24 arrays against 24 frees; the raw call counts (28 vs 25+1)
+  differ only because allocation unrolls the three `LIST_A` pairs and freeing loops.
+- **The census needs editing in the rename's own commit**: zero allowlist entries name
+  5.2, and `type SDqLayer x2` / `type SMbCache x2` are class (a). The rename takes both
+  keys to `x1`, and the count is part of the key.
+- `SDqLayer::pBitStringAux` (`*mut BsReader`) retires here — 24 sites, **one writer**
+  (`decoder_core.rs:3669`, pointing *into* the NAL unit), 17 readers in
+  `decode_slice.rs`; `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor dies with it.
 - The decoder's `SHIM(phase2)` kernel adapters retire as 5.2–5.4 convert their
   callers (154 markers crate-wide; the decoder share goes here).
-- **Answer F22's reachability question here**, while the cache-fill closure is
-  open: can `pDec` be null on the CABAC parse path? The answer decides whether
-  5.3's guard divergence (28 null guards in `mv_pred.rs`, 0 in the CABAC copies)
-  is a latent crash or dead code. Record it in the log either way.
+- ~~Answer F22's reachability question here.~~ **Answered, T5.D1**: it cannot be null —
+  one writer, one call site, dominated by a prefetch-or-return, and the same in the C++.
+  The guard is dead code in both trees. See §3 for what that does to the unification.
 - **Every new accessor obeys S28** (derive from the allocation root, never through
   a narrowing slice; Miri test reading the full legal reach) — `MbGrid`'s
   accessors are exactly the shape that earned the rule. And nothing caches a
   pointer beside its owner: `SDeblockingFilter.pCsData` is the one live mirror
   left, 5.4's to delete.
+- **The S25 enumeration has a gate now, and it is not clean.**
+  `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`) decodes
+  `narrow_16x16.264` under Miri and found F23 and F24 before reaching the loop it was
+  written for — `WelsDecodeSlice`'s three overlapping `&mut`s across `pDecMbFunc`
+  (session D log §3), which remains a prediction until Miri gets past F24.
 
 ## 3. Step 5.3 — Neighbor & MV
 
