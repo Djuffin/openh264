@@ -345,9 +345,13 @@ pub struct SDqLayer {
     pub pCbp: *mut i8,
     pub pCbfDc: *mut u16,
     pub pNzc: *mut [i8; 24],
-    pub pNzcRs: *mut [i8; 24],
+    // T5.H1: `pNzcRs` (`*mut [i8; 24]`) and `pInterPredictionDoneFlag` (`*mut i8`)
+    // sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
+    // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
+    // `pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp`
+    // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
+    // 27 allocations before 5.2 carries either into a safe container.
     pub pResidualPredFlag: *mut i8,
-    pub pInterPredictionDoneFlag: *mut i8,
     pub pMbCorrectlyDecodedFlag: *mut bool,
     pub pMbRefConcealedFlag: *mut bool,
     pub pScaledTCoeff: *mut [i16; 384],
@@ -2704,7 +2708,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pMvd[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pCbfDc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u16>()) as *mut _;
         (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pNzcRs = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
         (*pDq).pIntra4x4FinalMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 16]>()) as *mut _;
@@ -2714,7 +2717,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pSubMbType = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
         (*pDq).pResidualPredFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pInterPredictionDoneFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pDq).pMbRefConcealedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
@@ -2783,10 +2785,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
             WelsFreeHelper(pMa, (*pDq).pNzc as *mut u8, numMb * 24 * std::mem::size_of::<i8>());
             (*pDq).pNzc = std::ptr::null_mut();
         }
-        if !(*pDq).pNzcRs.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pNzcRs as *mut u8, numMb * 24 * std::mem::size_of::<i8>());
-            (*pDq).pNzcRs = std::ptr::null_mut();
-        }
         if !(*pDq).pScaledTCoeff.is_null() {
             WelsFreeHelper(pMa, (*pDq).pScaledTCoeff as *mut u8, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>());
             (*pDq).pScaledTCoeff = std::ptr::null_mut();
@@ -2822,10 +2820,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pResidualPredFlag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pResidualPredFlag as *mut u8, numMb * std::mem::size_of::<i8>());
             (*pDq).pResidualPredFlag = std::ptr::null_mut();
-        }
-        if !(*pDq).pInterPredictionDoneFlag.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pInterPredictionDoneFlag as *mut u8, numMb * std::mem::size_of::<i8>());
-            (*pDq).pInterPredictionDoneFlag = std::ptr::null_mut();
         }
         if !(*pDq).pMbCorrectlyDecodedFlag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pMbCorrectlyDecodedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
