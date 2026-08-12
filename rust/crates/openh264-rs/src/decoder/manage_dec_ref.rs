@@ -621,31 +621,30 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)
                     && !prev_pic.is_null()
                 {
-                    let prev = &*prev_pic;
-                    bCopyPrevious = (*pRef).iWidthInPixel == prev.iWidthInPixel
-                        && (*pRef).iHeightInPixel == prev.iHeightInPixel;
+                    bCopyPrevious = (*pRef).iWidthInPixel == (*prev_pic).iWidthInPixel
+                        && (*pRef).iHeightInPixel == (*prev_pic).iHeightInPixel;
                 }
 
                 if !bCopyPrevious {
-                    if !(*pRef).pData[0].is_null() {
+                    if !(*pRef).data_ptr(0).is_null() {
                         std::ptr::write_bytes(
-                            (*pRef).pData[0],
+                            (*pRef).data_ptr(0),
                             128,
-                            ((*pRef).iLinesize[0] * (*pRef).iHeightInPixel) as usize,
+                            ((*pRef).linesize(0) * (*pRef).iHeightInPixel) as usize,
                         );
                     }
-                    if !(*pRef).pData[1].is_null() {
+                    if !(*pRef).data_ptr(1).is_null() {
                         std::ptr::write_bytes(
-                            (*pRef).pData[1],
+                            (*pRef).data_ptr(1),
                             128,
-                            ((*pRef).iLinesize[1] * (*pRef).iHeightInPixel / 2) as usize,
+                            ((*pRef).linesize(1) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
-                    if !(*pRef).pData[2].is_null() {
+                    if !(*pRef).data_ptr(2).is_null() {
                         std::ptr::write_bytes(
-                            (*pRef).pData[2],
+                            (*pRef).data_ptr(2),
                             128,
-                            ((*pRef).iLinesize[2] * (*pRef).iHeightInPixel / 2) as usize,
+                            ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
                 } else if pRef == prev_pic {
@@ -655,26 +654,32 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                         "WelsInitRefList()::EC memcpy overlap.",
                     );
                 } else {
-                    let prev = &*prev_pic;
-                    if !(*pRef).pData[0].is_null() && !prev.pData[0].is_null() {
+                    // S25: `pRef` and `prev_pic` are two slots of the same
+                    // `SPicBuff.ppPic`, and the `pRef == prev_pic` arm above is what
+                    // makes them provably distinct here — which is also what makes
+                    // `copy_nonoverlapping` legal. Both are named through their raw
+                    // pointers per use; the `let prev = &*prev_pic` binding that used
+                    // to span this block was a borrow held across three writes into
+                    // the other picture.
+                    if !(*pRef).data_ptr(0).is_null() && !(*prev_pic).data_ptr(0).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            prev.pData[0],
-                            (*pRef).pData[0],
-                            ((*pRef).iLinesize[0] * (*pRef).iHeightInPixel) as usize,
+                            (*prev_pic).data_ptr(0),
+                            (*pRef).data_ptr(0),
+                            ((*pRef).linesize(0) * (*pRef).iHeightInPixel) as usize,
                         );
                     }
-                    if !(*pRef).pData[1].is_null() && !prev.pData[1].is_null() {
+                    if !(*pRef).data_ptr(1).is_null() && !(*prev_pic).data_ptr(1).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            prev.pData[1],
-                            (*pRef).pData[1],
-                            ((*pRef).iLinesize[1] * (*pRef).iHeightInPixel / 2) as usize,
+                            (*prev_pic).data_ptr(1),
+                            (*pRef).data_ptr(1),
+                            ((*pRef).linesize(1) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
-                    if !(*pRef).pData[2].is_null() && !prev.pData[2].is_null() {
+                    if !(*pRef).data_ptr(2).is_null() && !(*prev_pic).data_ptr(2).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            prev.pData[2],
-                            (*pRef).pData[2],
-                            ((*pRef).iLinesize[2] * (*pRef).iHeightInPixel / 2) as usize,
+                            (*prev_pic).data_ptr(2),
+                            (*pRef).data_ptr(2),
+                            ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
                 }
@@ -685,10 +690,10 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                 (*pRef).eSliceType = (*pCtx).eSliceType;
 
                 crate::common::expand_pic::ExpandReferencingPicture(
-                    &(*pRef).pData,
+                    &[(*pRef).data_ptr(0), (*pRef).data_ptr(1), (*pRef).data_ptr(2)],
                     (*pRef).iWidthInPixel,
                     (*pRef).iHeightInPixel,
-                    &(*pRef).iLinesize,
+                    &[(*pRef).linesize(0), (*pRef).linesize(1), (*pRef).linesize(2)],
                 );
                 AddShortTermToList(&mut (*pCtx).sRefPic, pRef);
             } else {

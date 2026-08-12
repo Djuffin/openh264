@@ -223,6 +223,38 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
 // ============================================================================
 // Core Error Concealment Functions
 // ============================================================================
+//
+// S25 for this file (T5.C2, enumerated with the conversion as plan §7.6 asks):
+// *who else reaches this `SPicture` while a borrow of it is held?*
+//
+// This is the one decoder file whose whole job is to hold **two** pictures at once —
+// conceal the destination from a source — so the question has a real answer here
+// rather than a vacuous one. Four functions derive plane pointers from two pictures:
+//
+// | function | the pair | the guard, and where |
+// |---|---|---|
+// | `DoErrorConFrameCopy` | `pDec` / `pPreviousDecodedPictureInDpb` | `pSrcPic == pDstPic` (:348) |
+// | `DoErrorConSliceCopy` | same pair | `pSrcPic == pDstPic` (:405) |
+// | `DoErrorConSliceMVCopy` | same pair | `pDstPic == pSrcPic` (:830) |
+// | `DoMbECMvCopy` | `pDec` / one reference | `pDec == pRef` (:530) |
+//
+// **Every one of them returns before the first derivation.** That is not a property
+// this conversion added — the C++ has all four, because a `memcpy` from a picture
+// into itself is wrong arithmetic before it is aliasing — and it is exactly what
+// makes the two `&mut` borrows here provably disjoint. Two of the four guards are
+// pinned by the P3 identity tests at the bottom of this file, which fail if the
+// comparison ever becomes POC-based; the pin was written at session A for the
+// `PicId` conversion and it holds this argument up too.
+//
+// Within one picture, the three planes are three allocations after T5.C3, so
+// deriving `data_ptr(0..2)` in sequence does not invalidate the earlier results.
+//
+// Nothing here holds a plane pointer across a call that could reach the same picture
+// a second time: `sCopyFunc`'s kernels and `sMcFunc`'s take the pointers by value,
+// and `sMCRefMember` is a per-call scratch that dies with the frame's concealment.
+//
+// The remaining site, `MarkECFrameAsRef`, derives all three planes of `pCtx->pDec`
+// for `ExpandReferencingPicture` and reaches no other picture at all.
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
 pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
@@ -282,8 +314,8 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
     };
 
     let uiHeightInPixelY = ((*(*pCtx).pSps).iMbHeight as u32) << 4;
-    let iStrideY = (*pDstPic).iLinesize[0];
-    let iStrideUV = (*pDstPic).iLinesize[1];
+    let iStrideY = (*pDstPic).linesize(0);
+    let iStrideUV = (*pDstPic).linesize(1);
     (*pDstPic).iMbEcedNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
 
     if !(*pCtx).pParam.is_null() && !(*pCtx).pCurDqLayer.is_null() {
@@ -296,19 +328,19 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
 
     if pSrcPic.is_null() {
         // Fill planes with neutral gray (128)
-        if !(*pDstPic).pData[0].is_null() {
-            ptr::write_bytes((*pDstPic).pData[0], 128, (uiHeightInPixelY as usize) * (iStrideY as usize));
+        if !(*pDstPic).data_ptr(0).is_null() {
+            ptr::write_bytes((*pDstPic).data_ptr(0), 128, (uiHeightInPixelY as usize) * (iStrideY as usize));
         }
-        if !(*pDstPic).pData[1].is_null() {
+        if !(*pDstPic).data_ptr(1).is_null() {
             ptr::write_bytes(
-                (*pDstPic).pData[1],
+                (*pDstPic).data_ptr(1),
                 128,
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
-        if !(*pDstPic).pData[2].is_null() {
+        if !(*pDstPic).data_ptr(2).is_null() {
             ptr::write_bytes(
-                (*pDstPic).pData[2],
+                (*pDstPic).data_ptr(2),
                 128,
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
@@ -316,24 +348,24 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
     } else if pSrcPic == pDstPic {
         // Prevent self-copy overlap
     } else {
-        if !(*pDstPic).pData[0].is_null() && !(*pSrcPic).pData[0].is_null() {
+        if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr(0).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).pData[0],
-                (*pDstPic).pData[0],
+                (*pSrcPic).data_ptr(0),
+                (*pDstPic).data_ptr(0),
                 (uiHeightInPixelY as usize) * (iStrideY as usize),
             );
         }
-        if !(*pDstPic).pData[1].is_null() && !(*pSrcPic).pData[1].is_null() {
+        if !(*pDstPic).data_ptr(1).is_null() && !(*pSrcPic).data_ptr(1).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).pData[1],
-                (*pDstPic).pData[1],
+                (*pSrcPic).data_ptr(1),
+                (*pDstPic).data_ptr(1),
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
-        if !(*pDstPic).pData[2].is_null() && !(*pSrcPic).pData[2].is_null() {
+        if !(*pDstPic).data_ptr(2).is_null() && !(*pSrcPic).data_ptr(2).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).pData[2],
-                (*pDstPic).pData[2],
+                (*pSrcPic).data_ptr(2),
+                (*pDstPic).data_ptr(2),
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
@@ -368,7 +400,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iDstStride = (*pDstPic).iLinesize[0] as usize;
+    let iDstStride = (*pDstPic).linesize(0) as usize;
 
     if !pSrcPic.is_null() && pSrcPic == pDstPic {
         return;
@@ -380,18 +412,18 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
             if !*pMbCorrectlyDecodedFlag.add(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
-                    let iSrcStride = (*pSrcPic).iLinesize[0] as usize;
+                    let iSrcStride = (*pSrcPic).linesize(0) as usize;
 
                     // Y Component
-                    let pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
-                    let pSrcData = (*pSrcPic).pData[0].add(iMbY * 16 * iSrcStride + iMbX * 16);
+                    let pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
+                    let pSrcData = (*pSrcPic).data_ptr(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
                         f(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
                     }
 
                     // U Component
-                    let pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataU = (*pSrcPic).pData[1].add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataU = (*pSrcPic).data_ptr(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataU,
@@ -402,8 +434,8 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
                     }
 
                     // V Component
-                    let pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataV = (*pSrcPic).pData[2].add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataV = (*pSrcPic).data_ptr(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataV,
@@ -414,19 +446,19 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
                     }
                 } else {
                     // Fill lost MB with neutral gray (128)
-                    let mut pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
+                    let mut pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
                         ptr::write_bytes(pDstData, 128, 16);
                         pDstData = pDstData.add(iDstStride);
                     }
 
-                    let mut pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let mut pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataU, 128, 8);
                         pDstDataU = pDstDataU.add(iDstStride / 2);
                     }
 
-                    let mut pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let mut pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataV, 128, 8);
                         pDstDataV = pDstDataV.add(iDstStride / 2);
@@ -504,9 +536,9 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     let iMbYInPix = iMbY << 4;
     let iCurrPoc = (*pDec).iFramePoc;
 
-    let pDst0 = (*pDec).pData[0].add((iMbXInPix + iMbYInPix * (*pMCRefMem).iDstLineLuma) as usize);
-    let pDst1 = (*pDec).pData[1].add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
-    let pDst2 = (*pDec).pData[2].add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
+    let pDst0 = (*pDec).data_ptr(0).add((iMbXInPix + iMbYInPix * (*pMCRefMem).iDstLineLuma) as usize);
+    let pDst1 = (*pDec).data_ptr(1).add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
+    let pDst2 = (*pDec).data_ptr(2).add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
 
     if (*pDec).bIdrFlag || (*pCtx).pECRefPic[0].is_null() {
         let pSrcY = (*pMCRefMem).pSrcY.add((iMbY * 16 * (*pMCRefMem).iSrcLineLuma + iMbX * 16) as usize);
@@ -781,17 +813,17 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let iDstStride = (*pDstPic).iLinesize[0] as usize;
+    let iDstStride = (*pDstPic).linesize(0) as usize;
     let mut sMCRefMem = TagMCRefMember::default();
 
     if !pSrcPic.is_null() {
-        sMCRefMem.iSrcLineLuma = (*pSrcPic).iLinesize[0];
-        sMCRefMem.iSrcLineChroma = (*pSrcPic).iLinesize[1];
-        sMCRefMem.pSrcY = (*pSrcPic).pData[0];
-        sMCRefMem.pSrcU = (*pSrcPic).pData[1];
-        sMCRefMem.pSrcV = (*pSrcPic).pData[2];
-        sMCRefMem.iDstLineLuma = (*pDstPic).iLinesize[0];
-        sMCRefMem.iDstLineChroma = (*pDstPic).iLinesize[1];
+        sMCRefMem.iSrcLineLuma = (*pSrcPic).linesize(0);
+        sMCRefMem.iSrcLineChroma = (*pSrcPic).linesize(1);
+        sMCRefMem.pSrcY = (*pSrcPic).data_ptr(0);
+        sMCRefMem.pSrcU = (*pSrcPic).data_ptr(1);
+        sMCRefMem.pSrcV = (*pSrcPic).data_ptr(2);
+        sMCRefMem.iDstLineLuma = (*pDstPic).linesize(0);
+        sMCRefMem.iDstLineChroma = (*pDstPic).linesize(1);
         sMCRefMem.iPicWidth = (*pDstPic).iWidthInPixel;
         sMCRefMem.iPicHeight = (*pDstPic).iHeightInPixel;
 
@@ -808,19 +840,19 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
                 if !pSrcPic.is_null() {
                     DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
                 } else {
-                    let mut pDstData = (*pDstPic).pData[0].add(iMbY * 16 * iDstStride + iMbX * 16);
+                    let mut pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
                         ptr::write_bytes(pDstData, 128, 16);
                         pDstData = pDstData.add(iDstStride);
                     }
 
-                    let mut pDstDataU = (*pDstPic).pData[1].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let mut pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataU, 128, 8);
                         pDstDataU = pDstDataU.add(iDstStride / 2);
                     }
 
-                    let mut pDstDataV = (*pDstPic).pData[2].add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let mut pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
                     for _ in 0..8 {
                         ptr::write_bytes(pDstDataV, 128, 8);
                         pDstDataV = pDstDataV.add(iDstStride / 2);
@@ -844,11 +876,12 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
     }
 
     if !pCtx.is_null() && !(*pCtx).pDec.is_null() {
+        let pDec = (*pCtx).pDec;
         crate::common::expand_pic::ExpandReferencingPicture(
-            &(*(*pCtx).pDec).pData,
-            (*(*pCtx).pDec).iWidthInPixel,
-            (*(*pCtx).pDec).iHeightInPixel,
-            &(*(*pCtx).pDec).iLinesize,
+            &[(*pDec).data_ptr(0), (*pDec).data_ptr(1), (*pDec).data_ptr(2)],
+            (*pDec).iWidthInPixel,
+            (*pDec).iHeightInPixel,
+            &[(*pDec).linesize(0), (*pDec).linesize(1), (*pDec).linesize(2)],
         );
     }
 

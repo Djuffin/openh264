@@ -291,6 +291,47 @@ impl SPicture {
         !self.bUsedAsRef && self.iRefCount <= 0
     }
 
+    // =========================================================================
+    // Plane accessors — the one way in
+    //
+    // T5.C2 moved every read of `pData[i]` / `iLinesize[i]` in `src/decoder` onto
+    // this pair, so that T5.C3's change of representation (three owned
+    // `PaddedPlane`s in place of the pointer/stride arrays) touches this file and
+    // `pic_queue.rs` and nothing else. The signatures here are already the ones the
+    // owned form needs — `&mut self` to hand out a writable raw pointer, `&self` for
+    // a stride — so this commit is where the borrow shapes land and where the S25
+    // enumerations for the files it touches are written.
+    //
+    // Deliberately *not* a stored mirror: nothing caches a `pData` beside the plane
+    // that owns it. That is the F16/T5 class — two fields that can disagree about
+    // one buffer — and the whole point of the conversion is to have one.
+    // =========================================================================
+
+    /// Bytes per row of plane `i` — the C++ `iLinesize[i]`.
+    ///
+    /// # Panics
+    /// If `i > 2`. There are three planes; the C's fourth slot was deleted at T5.C1.
+    #[inline]
+    pub fn linesize(&self, i: usize) -> i32 {
+        self.iLinesize[i]
+    }
+
+    /// SHIM(phase5) — logical `(0, 0)` of plane `i` as a raw pointer, for the kernels
+    /// that still take a pointer and a stride.
+    ///
+    /// Null when the picture has no sample memory: `AllocPicture`'s `bParseOnly` arm
+    /// builds a picture that carries strides and no bytes, and every caller here
+    /// tests for that with `.is_null()` exactly as the C does.
+    ///
+    /// This is the shim the decoder's still-raw callers stand on, and it dies as
+    /// 5.2-5.6 convert them — except at one caller, which is not a kernel: the
+    /// public output path (`decoder_core.rs:1087`) hands these pointers to the API
+    /// consumer, where they outlive the call by contract. That one outlives Phase 5.
+    #[inline]
+    pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
+        self.pData[i]
+    }
+
     // T5.B2: `unsafe fn unref(&mut self)` sat here. It handed `self as *mut SPicture`
     // to the `pSetUnRef` callback, which immediately re-borrowed it `&mut` — the S25
     // shape, and the one Phase 5's brief named as 5.1's first hazard. Two facts

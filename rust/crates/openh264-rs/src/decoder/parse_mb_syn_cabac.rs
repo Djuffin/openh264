@@ -3187,8 +3187,8 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pBsAux = &mut *(*pCurDqLayer).pBitStringAux;
-    let iDstStrideLuma = (*(*pCurDqLayer).pDec).iLinesize[0];
-    let iDstStrideChroma = (*(*pCurDqLayer).pDec).iLinesize[1];
+    let iDstStrideLuma = (*(*pCurDqLayer).pDec).linesize(0);
+    let iDstStrideChroma = (*(*pCurDqLayer).pDec).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
@@ -3196,9 +3196,9 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let iMbOffsetLuma = (iMbX + iMbY * iDstStrideLuma) << 4;
     let iMbOffsetChroma = (iMbX + iMbY * iDstStrideChroma) << 3;
 
-    let mut pMbDstY = (*(*pCtx).pDec).pData[0].add(iMbOffsetLuma as usize);
-    let mut pMbDstU = (*(*pCtx).pDec).pData[1].add(iMbOffsetChroma as usize);
-    let mut pMbDstV = (*(*pCtx).pDec).pData[2].add(iMbOffsetChroma as usize);
+    let mut pMbDstY = (*(*pCtx).pDec).data_ptr(0).add(iMbOffsetLuma as usize);
+    let mut pMbDstU = (*(*pCtx).pDec).data_ptr(1).add(iMbOffsetChroma as usize);
+    let mut pMbDstV = (*(*pCtx).pDec).data_ptr(2).add(iMbOffsetChroma as usize);
 
     *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux);

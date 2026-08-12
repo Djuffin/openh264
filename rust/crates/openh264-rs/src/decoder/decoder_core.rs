@@ -1084,29 +1084,29 @@ pub unsafe fn DecodeFrameConstruction(
     (*pCtx).iTotalNumMbRec = 0;
 
     (*pDstInfo).uiOutYuvTimeStamp = (*pPic).uiTimeStamp;
-    *ppDst.add(0) = (*pPic).pData[0];
-    *ppDst.add(1) = (*pPic).pData[1];
-    *ppDst.add(2) = (*pPic).pData[2];
+    *ppDst.add(0) = (*pPic).data_ptr(0);
+    *ppDst.add(1) = (*pPic).data_ptr(1);
+    *ppDst.add(2) = (*pPic).data_ptr(2);
 
     (*pDstInfo).UsrData.sSystemBuffer.iFormat = videoFormatI420;
     (*pDstInfo).UsrData.sSystemBuffer.iWidth = kiActualWidth;
     (*pDstInfo).UsrData.sSystemBuffer.iHeight = kiActualHeight;
-    (*pDstInfo).UsrData.sSystemBuffer.iStride[0] = (*pPic).iLinesize[0];
-    (*pDstInfo).UsrData.sSystemBuffer.iStride[1] = (*pPic).iLinesize[1];
+    (*pDstInfo).UsrData.sSystemBuffer.iStride[0] = (*pPic).linesize(0);
+    (*pDstInfo).UsrData.sSystemBuffer.iStride[1] = (*pPic).linesize(1);
 
     if !(*ppDst.add(0)).is_null() {
         *ppDst.add(0) = (*ppDst.add(0)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * 2 * (*pPic).iLinesize[0] + (*pCtx).sFrameCrop.iLeftOffset * 2) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * 2 * (*pPic).linesize(0) + (*pCtx).sFrameCrop.iLeftOffset * 2) as usize
         );
     }
     if !(*ppDst.add(1)).is_null() {
         *ppDst.add(1) = (*ppDst.add(1)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * (*pPic).iLinesize[1] + (*pCtx).sFrameCrop.iLeftOffset) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * (*pPic).linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
         );
     }
     if !(*ppDst.add(2)).is_null() {
         *ppDst.add(2) = (*ppDst.add(2)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * (*pPic).iLinesize[1] + (*pCtx).sFrameCrop.iLeftOffset) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * (*pPic).linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
         );
     }
 
@@ -3633,8 +3633,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
         if !(*pCtx).pDec.is_null() {
             GetI4LumaIChromaAddrTable(
                 (*pCtx).iDecBlockOffsetArray.as_mut_ptr(),
-                (*(*pCtx).pDec).iLinesize[0],
-                (*(*pCtx).pDec).iLinesize[1],
+                (*(*pCtx).pDec).linesize(0),
+                (*(*pCtx).pDec).linesize(1),
             );
         }
 
@@ -3826,11 +3826,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         }
                     }
                     if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && !(*pCtx).pDec.is_null() {
+                        let pDec = (*pCtx).pDec;
                         crate::common::expand_pic::ExpandReferencingPicture(
-                            &(*(*pCtx).pDec).pData,
-                            (*(*pCtx).pDec).iWidthInPixel,
-                            (*(*pCtx).pDec).iHeightInPixel,
-                            &(*(*pCtx).pDec).iLinesize,
+                            &[(*pDec).data_ptr(0), (*pDec).data_ptr(1), (*pDec).data_ptr(2)],
+                            (*pDec).iWidthInPixel,
+                            (*pDec).iHeightInPixel,
+                            &[(*pDec).linesize(0), (*pDec).linesize(1), (*pDec).linesize(2)],
                         );
                     }
                 }
