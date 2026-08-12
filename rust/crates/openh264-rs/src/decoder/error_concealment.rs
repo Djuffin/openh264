@@ -184,6 +184,7 @@ impl Default for TagMCRefMember {
 // ============================================================================
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
+pub use crate::safe::plane::PaddedPlane;
 
 
 
@@ -1001,30 +1002,28 @@ mod tests {
         // and did.
         const PLANE: usize = STRIDE * (H * 16 + 1);
 
-        // `dst` is filled with a marker; a real copy overwrites it with `src`'s.
-        let mut dst_y = vec![0xAAu8; PLANE];
-        let mut dst_u = vec![0xAAu8; PLANE];
-        let mut dst_v = vec![0xAAu8; PLANE];
-        let mut src_y = vec![0x11u8; PLANE];
-        let mut src_u = vec![0x11u8; PLANE];
-        let mut src_v = vec![0x11u8; PLANE];
+        // T5.C3: the fixture's planes are the picture's own now, so each `run` builds
+        // them rather than resetting a Vec the picture borrowed. Unpadded (`origin`
+        // 0) and `STRIDE`-wide, exactly the geometry the pointer form had — the
+        // function derives the chroma stride as `iDstStride / 2` from luma and never
+        // reads `linesize(1)`, which is why the old fixture could leave it at zero;
+        // the planes carry the real value because a plane that owns bytes has one.
+        let planes = |fill: u8| {
+            [
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE, 0, W * 16, H * 16),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+            ]
+        };
 
         let mut run = |same_object: bool| -> u8 {
-            dst_y.iter_mut().for_each(|b| *b = 0xAA);
-            let mut dst = SPicture::default();
-            dst.pData[0] = dst_y.as_mut_ptr();
-            dst.pData[1] = dst_u.as_mut_ptr();
-            dst.pData[2] = dst_v.as_mut_ptr();
-            dst.iLinesize[0] = STRIDE as i32;
+            // `dst` carries a marker; a real copy overwrites it with `src`'s.
+            let mut dst = SPicture::with_planes(planes(0xAA));
             dst.iWidthInPixel = (W * 16) as i32;
             dst.iHeightInPixel = (H * 16) as i32;
             dst.iFramePoc = 7;
 
-            let mut src = SPicture::default();
-            src.pData[0] = src_y.as_mut_ptr();
-            src.pData[1] = src_u.as_mut_ptr();
-            src.pData[2] = src_v.as_mut_ptr();
-            src.iLinesize[0] = STRIDE as i32;
+            let mut src = SPicture::with_planes(planes(0x11));
             src.iFramePoc = 7; // duplicate POC on purpose
 
             let mut sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
@@ -1049,7 +1048,7 @@ mod tests {
                 // nothing and the test vacuous.
                 ctx.sCopyFunc = SCopyFunc::default();
                 DoErrorConSliceCopy(&mut *ctx);
-                *dst_y.as_ptr()
+                dst.plane(0).at(0, 0)
             }
         };
 
@@ -1070,9 +1069,16 @@ mod tests {
         let mut u = vec![0xAAu8; STRIDE * 16];
         let mut v = vec![0xAAu8; STRIDE * 16];
 
-        let mut pic = SPicture::default();
+        // The picture needs its strides and no samples: the guard under test returns
+        // before `data_ptr` is ever called, and the destination the assertion watches
+        // is `mc`'s, not the picture's. `empty` says exactly that — the pointer form
+        // said it with three null `pData` entries beside three non-zero strides.
+        let mut pic = SPicture::with_planes([
+            PaddedPlane::empty(STRIDE),
+            PaddedPlane::empty(STRIDE / 2),
+            PaddedPlane::empty(STRIDE / 2),
+        ]);
         pic.iFramePoc = 3;
-        pic.iLinesize = [STRIDE as i32, (STRIDE / 2) as i32, (STRIDE / 2) as i32];
         pic.iWidthInPixel = 32;
         pic.iHeightInPixel = 32;
 

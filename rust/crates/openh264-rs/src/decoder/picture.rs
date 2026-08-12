@@ -80,6 +80,8 @@ pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 /// Base H.264 slice types matching `EWelsSliceType` in `wels_common_defs.h`.
 pub use crate::decoder::slice::EWelsSliceType;
 
+pub use crate::safe::plane::PaddedPlane;
+
 
 /// Reconstructed Picture definition.
 ///
@@ -87,27 +89,42 @@ pub use crate::decoder::slice::EWelsSliceType;
 /// and temporal motion vector caches for direct-mode B-slice decoding.
 ///
 /// Matches C++ `struct SPicture` from `codec/decoder/core/inc/picture.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+///
+/// **Not `#[repr(C)]` since T5.C3**, and not `Copy`. The planes are owned Rust
+/// values, so a C layout would be a claim the struct can no longer honour; the
+/// decoder's `SPicture` crosses no FFI boundary and carries no `assert_size!` or
+/// offset pin (`assert_size!(SPicture, 136)` in `encoder/abi_guard.rs` is the
+/// encoder's same-named struct, allowlist class (a)). Dropping `Copy` cost nothing:
+/// the compiler was asked first, and nothing in the crate copied one by value.
+/// `RawDataBuffer` (`decoder/bit_stream.rs`, T3.4) set both precedents.
+#[derive(Debug, Clone)]
 pub struct SPicture {
     // =========================================================================
     // Payload Pixel Buffers & Geometries
     // =========================================================================
 
-    /// Pointer to the first allocated byte for each plane buffer (including padding border margins).
-    /// Index 0: Y (Luma), 1: Cb (Chroma U), 2: Cr (Chroma V).
+    /// The three owned sample planes: 0 Y (luma), 1 Cb, 2 Cr.
     ///
-    /// **Three, not four.** C++ `picture.h:53-55` declares these arrays `[4]` and
-    /// `AllocPicture` writes indices 0-2 only; nothing in either decoder reads index 3.
-    /// The four `pData[3]` writes elsewhere in this crate are on `SSourcePicture`, the
-    /// public API type, which keeps its fourth slot.
-    pub pBuffer: [*mut u8; 3],
-
-    /// Pointer to the top-left visible pixel (0, 0) for each color plane respectively.
-    pub pData: [*mut u8; 3],
-
-    /// Memory line stride (bytes per row) for each picture plane.
-    pub iLinesize: [i32; 3],
+    /// **T5.C3 replaced the `pBuffer[i]` / `pData[i]` / `iLinesize[i]` triple with
+    /// this one field.** C++ `picture.h:53-55` declares three parallel arrays whose
+    /// agreement nothing enforces: `pBuffer[i]` the allocation, `pData[i]` a pointer
+    /// `pad` rows and `pad` bytes into it, `iLinesize[i]` the stride that relates
+    /// them. [`PaddedPlane`] is those three as one value that owns its bytes, so the
+    /// two call sites that could disagree about a size no longer exist — F1's shape,
+    /// and the reason `safe/plane.rs` was written in Phase 2 for this moment.
+    ///
+    /// Reached through [`plane`](Self::plane) / [`plane_mut`](Self::plane_mut) by
+    /// converted callers, and through [`data_ptr`](Self::data_ptr) /
+    /// [`linesize`](Self::linesize) by the ones 5.2-5.6 have yet to convert.
+    ///
+    /// **Three, not four.** C++ declares the arrays `[4]`; `AllocPicture` writes
+    /// 0-2 and nothing in either decoder reads index 3 (T5.C1). The four `pData[3]`
+    /// writes elsewhere in this crate are on `SSourcePicture`, the public API type,
+    /// which keeps its fourth slot.
+    ///
+    /// A picture with **no** sample memory — `AllocPicture`'s `bParseOnly` arm, and
+    /// [`Default`] — carries three [`PaddedPlane::empty`] planes: strides, no bytes.
+    planes: [PaddedPlane; 3],
 
     // T5.C1: `pub iPlanes: i32` sat here, written `3` once by `AllocPicture` and read
     // nowhere — in this port *and* in the C++ decoder, where `picture.h:56` declares it
@@ -236,9 +253,15 @@ pub type PPicture = *mut SPicture;
 impl Default for SPicture {
     fn default() -> Self {
         Self {
-            pBuffer: [std::ptr::null_mut(); 3],
-            pData: [std::ptr::null_mut(); 3],
-            iLinesize: [0; 3],
+            // `empty(0)` rather than a plane with a nominal stride: the pointer form's
+            // zeroed state reported `iLinesize == 0` and a null `pData`, and both are
+            // reproduced exactly. Every `SPicture::default()` in the crate is a test
+            // fixture; the live allocation path is `with_planes`.
+            planes: [
+                PaddedPlane::empty(0),
+                PaddedPlane::empty(0),
+                PaddedPlane::empty(0),
+            ],
             bIdrFlag: false,
             iWidthInPixel: 0,
             iHeightInPixel: 0,
@@ -282,6 +305,41 @@ impl SPicture {
         Self::default()
     }
 
+    /// The picture `AllocPicture` used to hand back from a zeroing `WelsMallocz`,
+    /// carrying the three planes it then built and filled.
+    ///
+    /// **`eSliceType` is `P_SLICE`, not [`Default`]'s `UNKNOWN_SLICE`.** The two have
+    /// always disagreed, and this is the arm that matters: the live path was a
+    /// *zeroing* allocation and `P_SLICE == 0`, so reproducing the zero is what makes
+    /// this constructor a substitution rather than a change. Nothing observes either
+    /// value — a picture's `eSliceType` is written at `decoder_core.rs:3661` and
+    /// `manage_dec_ref.rs:685` and read nowhere in the decoder, `iPlanes`'s situation
+    /// one field over — but a constructor replacing a memset does not get to pick.
+    pub fn with_planes(planes: [PaddedPlane; 3]) -> Self {
+        Self {
+            planes,
+            eSliceType: EWelsSliceType::P_SLICE,
+            ..Default::default()
+        }
+    }
+
+    /// Plane `i` — 0 Y, 1 Cb, 2 Cr. The destination the phase-5 shim accessors below
+    /// are strangling towards: a converted caller takes the plane and walks it with
+    /// cursors, and never sees a pointer.
+    ///
+    /// # Panics
+    /// If `i > 2`.
+    #[inline]
+    pub fn plane(&self, i: usize) -> &PaddedPlane {
+        &self.planes[i]
+    }
+
+    /// Mutable form of [`plane`](Self::plane).
+    #[inline]
+    pub fn plane_mut(&mut self, i: usize) -> &mut PaddedPlane {
+        &mut self.planes[i]
+    }
+
     /// Checks if the picture buffer is free and available for recycling in the DPB pool.
     ///
     /// A picture node in `SPicBuff` is eligible for reuse if and only if:
@@ -307,29 +365,60 @@ impl SPicture {
     // one buffer — and the whole point of the conversion is to have one.
     // =========================================================================
 
-    /// Bytes per row of plane `i` — the C++ `iLinesize[i]`.
+    /// Bytes per row of plane `i` — the C++ `iLinesize[i]`, derived from the plane
+    /// that owns those bytes rather than stored beside it.
     ///
     /// # Panics
     /// If `i > 2`. There are three planes; the C's fourth slot was deleted at T5.C1.
     #[inline]
     pub fn linesize(&self, i: usize) -> i32 {
-        self.iLinesize[i]
+        self.planes[i].stride() as i32
     }
 
     /// SHIM(phase5) — logical `(0, 0)` of plane `i` as a raw pointer, for the kernels
     /// that still take a pointer and a stride.
     ///
+    /// This is `pBuffer[i] + origin` computed on demand. It is the whole reason the
+    /// conversion needs no mirror field: the pointer the C stored is a *function* of
+    /// the plane, so it can be derived at each use and cannot go stale.
+    ///
     /// Null when the picture has no sample memory: `AllocPicture`'s `bParseOnly` arm
     /// builds a picture that carries strides and no bytes, and every caller here
-    /// tests for that with `.is_null()` exactly as the C does.
+    /// tests for that with `.is_null()` exactly as the C does. An empty `Vec`'s
+    /// `as_mut_ptr()` is dangling-but-non-null, so the emptiness is checked rather
+    /// than leaned on.
     ///
     /// This is the shim the decoder's still-raw callers stand on, and it dies as
-    /// 5.2-5.6 convert them — except at one caller, which is not a kernel: the
-    /// public output path (`decoder_core.rs:1087`) hands these pointers to the API
-    /// consumer, where they outlive the call by contract. That one outlives Phase 5.
+    /// 5.2-5.6 convert them onto [`plane_mut`](Self::plane_mut) — except at one
+    /// caller, which is not a kernel: the public output path
+    /// (`decoder_core.rs:1087`) hands these pointers to the API consumer, where they
+    /// outlive the call by contract. That one outlives Phase 5.
+    ///
+    /// # The provenance, which is the whole subtlety
+    ///
+    /// The returned pointer must be able to reach the **padding behind it**:
+    /// `ExpandPictureLuma_c` does `pDst.sub(pad * stride + pad)` to recover the
+    /// allocation, motion compensation reads at negative coordinates after clamping,
+    /// and `pData[i]` was `pBuffer[i].add(origin)` — a pointer into the middle of an
+    /// allocation it is entitled to all of. So this derives from the **whole**
+    /// buffer and then moves the address, with `wrapping_add`, which does not narrow
+    /// provenance and needs no `unsafe`.
+    ///
+    /// The obvious spelling, `plane.as_mut_slice()[origin..].as_mut_ptr()`, is
+    /// **wrong**, and wrong in the way that costs a phase: it is safe code, it
+    /// produces the same address, every golden row and both benches stay
+    /// bit-identical — and it is UB at the first read into the top or left border,
+    /// because the slicing hands out provenance over `[origin..]` only. Miri named
+    /// it here on the first run against the test below. S15's sentence, collected in
+    /// the commit that quotes it: byte-exactness does not imply soundness.
     #[inline]
     pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
-        self.pData[i]
+        let plane = &mut self.planes[i];
+        if plane.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let origin = plane.origin();
+        plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
     }
 
     // T5.B2: `unsafe fn unref(&mut self)` sat here. It handed `self as *mut SPicture`
@@ -343,29 +432,12 @@ impl SPicture {
     // The live unreferencing path is the callback, invoked directly at
     // `api/codec_api.rs:1607` and by `manage_dec_ref.rs`'s seven `SetUnRef` calls.
 
-    /// Calculates active `pData[0..2]` plane start pointers from physical `pBuffer[0..2]` bases
-    /// and line strides using the standard OpenH264 border padding formula.
-    ///
-    /// - Luma Y: `pData[0] = pBuffer[0] + (1 + iLinesize[0]) * padding_length`
-    /// - Chroma Cb: `pData[1] = pBuffer[1] + ((1 + iLinesize[1]) * padding_length) / 2`
-    /// - Chroma Cr: `pData[2] = pBuffer[2] + ((1 + iLinesize[2]) * padding_length) / 2`
-    ///
-    /// # Safety
-    /// Requires `pBuffer[0..2]` to point to allocated memory buffers of sufficient size.
-    pub unsafe fn calculate_data_pointers(&mut self, padding_length: i32) {
-        if !self.pBuffer[0].is_null() {
-            let offset_y = (1 + self.iLinesize[0]) * padding_length;
-            self.pData[0] = unsafe { self.pBuffer[0].offset(offset_y as isize) };
-        }
-        if !self.pBuffer[1].is_null() {
-            let offset_cb = ((1 + self.iLinesize[1]) * padding_length) / 2;
-            self.pData[1] = unsafe { self.pBuffer[1].offset(offset_cb as isize) };
-        }
-        if !self.pBuffer[2].is_null() {
-            let offset_cr = ((1 + self.iLinesize[2]) * padding_length) / 2;
-            self.pData[2] = unsafe { self.pBuffer[2].offset(offset_cr as isize) };
-        }
-    }
+    // T5.C3: `unsafe fn calculate_data_pointers(&mut self, padding_length: i32)` sat
+    // here, recomputing `pData[i]` from `pBuffer[i]` and `iLinesize[i]` with the
+    // border formula. It had **no callers** — `AllocPicture` writes the same
+    // arithmetic inline — and the plane now holds that offset as its `origin`, so it
+    // is both dead and subsumed. `data_ptr` above is what is left of it: the same
+    // expression, evaluated at each use instead of cached into a field.
 }
 
 #[cfg(test)]
@@ -374,12 +446,81 @@ mod tests {
     
     #[test]
     fn test_picture_initialization() {
-        let pic = SPicture::new();
+        let mut pic = SPicture::new();
         assert!(pic.is_free());
         assert_eq!(pic.bUsedAsRef, false);
         assert_eq!(pic.iRefCount, 0);
         assert_eq!(pic.eSliceType, EWelsSliceType::UNKNOWN_SLICE);
-        assert_eq!(pic.pBuffer[0], std::ptr::null_mut());
+        // The all-null, all-zero plane state, in the terms that replaced it.
+        assert!(pic.plane(0).is_empty());
+        assert_eq!(pic.linesize(0), 0);
+        assert_eq!(pic.data_ptr(0), std::ptr::null_mut());
+    }
+
+    /// `with_planes` reproduces the *zeroed* allocation, and `Default` does not: the
+    /// two disagree on `eSliceType` and always have. `AllocPicture` used a zeroing
+    /// malloc, so the live value is `P_SLICE`, and a constructor standing in for a
+    /// memset has to say so out loud or the substitution is a change.
+    #[test]
+    fn with_planes_reproduces_the_zeroed_allocation_not_default() {
+        let pic = SPicture::with_planes([
+            PaddedPlane::empty(0),
+            PaddedPlane::empty(0),
+            PaddedPlane::empty(0),
+        ]);
+        assert_eq!(pic.eSliceType, EWelsSliceType::P_SLICE);
+        assert_eq!(SPicture::default().eSliceType, EWelsSliceType::UNKNOWN_SLICE);
+        assert_eq!(EWelsSliceType::P_SLICE as i32, 0, "the zero is what makes it the live value");
+    }
+
+    /// `data_ptr` is `pBuffer[i] + origin` computed on demand — the offset
+    /// `AllocPicture` used to bake into a stored `pData[i]` — **and it can reach
+    /// backwards.**
+    ///
+    /// The second half is the part with teeth, and it must be run under Miri to mean
+    /// anything: the samples are in the allocation either way, so a `data_ptr` that
+    /// narrowed provenance to `[origin..]` would read the right bytes and pass every
+    /// golden row while being UB at the first border read. The first draft of
+    /// `data_ptr` did exactly that and Miri failed here immediately.
+    ///
+    /// Both backward reaches the decoder actually performs are exercised: one sample
+    /// diagonally behind the origin (motion compensation past the picture edge) and
+    /// the full `pDst.sub(pad * stride + pad)` that `expand_shim_span`
+    /// (`decoder_core.rs`) uses to recover the whole allocation from `pData[i]`.
+    #[test]
+    fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
+        let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
+        let mut pic = SPicture::with_planes([
+            PaddedPlane::new(w, h, pad, stride),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+        ]);
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        pic.plane_mut(0).set(-1, -1, 0xC3);
+        pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
+
+        let base = pic.plane(0).as_slice().as_ptr();
+        let origin = pic.plane(0).origin();
+        let len = pic.plane(0).as_slice().len();
+        assert_eq!(origin, (1 + stride) * pad, "the C's (1 + iLinesize[0]) * PADDING_LENGTH");
+
+        let p = pic.data_ptr(0);
+        assert_eq!(unsafe { p.offset_from(base) } as usize, origin);
+        assert_eq!(unsafe { *p }, 0x5A);
+        assert_eq!(
+            unsafe { *p.sub(stride + 1) },
+            0xC3,
+            "one sample diagonally behind the origin — an MV past the picture edge"
+        );
+        // `expand_shim_span`'s reconstruction, byte for byte.
+        let whole = unsafe {
+            std::slice::from_raw_parts(p.sub(pad * stride + pad), (h + 2 * pad) * stride)
+        };
+        assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
+        assert_eq!(whole.len(), len, "the padded picture is the whole allocation here");
+
+        assert_eq!(pic.linesize(0), stride as i32);
+        assert_eq!(pic.linesize(1), (stride / 2) as i32);
     }
 
     /// The recycling predicate `PrefetchPic` scans on, in its own right — the test
