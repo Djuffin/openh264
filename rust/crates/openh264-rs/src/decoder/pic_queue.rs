@@ -74,6 +74,7 @@ pub const MV_A: usize = 2;
 // ============================================================================
 
 pub use crate::decoder::picture::{SPicture, PPicture};
+pub use crate::safe::plane::PaddedPlane;
 
 /// Recycled picture buffer queue container.
 ///
@@ -119,9 +120,63 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 // ============================================================================
 // Picture Memory Lifecycle Functions
 // ============================================================================
+//
+// S25 for this file (T5.C3, enumerated with the conversion as plan §7.6 asks):
+// *who else reaches this `SPicture` while a borrow of it is held?*
+//
+// The pool is where the question is sharpest, because `SPicBuff.ppPic` is
+// `*mut *mut SPicture` and `pCtx->pDec` points **into that array** — the picture the
+// decoder is writing is one of the slots the recycling scan walks. Four answers:
+//
+// 1. **`PrefetchPic` holds no borrow of a picture.** It reads `bUsedAsRef` and
+//    `iRefCount` through the slot pointer, one field per expression, and writes
+//    `iPicBuffIdx` on the winner after the scan has stopped. The two other prefetch
+//    functions are shorter still. Nothing in this file takes a `&mut SPicture` that
+//    spans a call, so the conversion introduces no borrow here at all: an owned
+//    plane changes `AllocPicture`/`FreePicture` and leaves the scan untouched.
+// 2. **The scan cannot see a half-built picture.** `CreatePicBuff` fills `ppPic`
+//    before it sets `iCapacity`, and every prefetch returns early on `iCapacity == 0`
+//    — so a picture is either absent from the pool or fully constructed. That was
+//    true before and it is what lets `AllocPicture` hand back a `Box::into_raw`.
+// 3. **The re-entrancy that does exist is one level up**, in `manage_dec_ref.rs`,
+//    where `WelsInitRefList`'s concealment prefetch takes a slot from this pool and
+//    copies into it from `pPreviousDecodedPictureInDpb` — another slot of the same
+//    array. That pair is enumerated at its own site (T5.C2), guarded by
+//    `pRef == prev_pic`, and pinned by the `narrow_16x16_idr_lost` golden row.
+// 4. **`FreePicture` is the one place ownership actually moves**, and it is
+//    reachable only from `DestroyPicBuff` (which nulls the slot it just freed) and
+//    from `decoder_core.rs:1899` for `pTempDec` (which nulls `pCtx->pTempDec`). No
+//    other pointer to a freed picture survives either path — which is the same
+//    property `Box::from_raw` needs and the reason it can be used here.
 
-/// Allocates and initializes an [`SPicture`] container with SIMD-aligned sample
-/// planes and macroblock tracking metadata arrays.
+
+
+/// `len` bytes of `fill`, or `None` if the allocation fails.
+///
+/// The C's `WelsMallocz` returned null on failure and `AllocPicture`'s callers all
+/// test for it; `vec![fill; len]` would abort the process instead. `try_reserve_exact`
+/// keeps the C's contract, which is `RawDataBuffer::try_new_zeroed`'s answer to the
+/// same question at T3.4 — and it matters more here, because a plane is megabytes.
+fn try_filled(len: usize, fill: u8) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(len).ok()?;
+    buf.resize(len, fill);
+    Some(buf)
+}
+
+/// Allocates and initializes an [`SPicture`] container with its three owned sample
+/// planes and its macroblock tracking metadata arrays.
+///
+/// **T5.C3: the picture is heap-constructed, not `WelsMallocz`'d.** A struct with
+/// owned fields cannot come out of a zeroing malloc (S21/F19), so the header is a
+/// `Box` and the planes are [`PaddedPlane`]s. What has *not* moved is the geometry:
+/// every expression below is `AllocPicture`'s own arithmetic, because the kernels'
+/// output depends on it byte for byte and the goldens are the referee.
+///
+/// The per-macroblock metadata (`pMbCorrectlyDecodedFlag`, `pMbType`, `pMv`,
+/// `pRefIndex`) is *still* raw and still allocated through `pMemAlign`; it is not
+/// planes and it is not this session's. [`FreePicture`] frees it, and F19's check —
+/// which line frees this? — is answered per allocation there.
 ///
 /// # Safety
 /// - `pCtx` must point to a valid [`SWelsDecoderContext`] containing a valid `pMemAlign`.
@@ -136,16 +191,6 @@ pub unsafe fn AllocPicture(
     }
     let pMa = unsafe { (*pCtx).pMemAlign };
     if pMa.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    let pPic = unsafe {
-        (*pMa).WelsMallocz(
-            std::mem::size_of::<SPicture>() as u32,
-            b"PPicture\0".as_ptr() as *const c_char,
-        ) as PPicture
-    };
-    if pPic.is_null() {
         return std::ptr::null_mut();
     }
 
@@ -165,46 +210,61 @@ pub unsafe fn AllocPicture(
         }
     };
 
-    if bParseOnly {
-        unsafe {
-            (*pPic).pBuffer[0] = std::ptr::null_mut();
-            (*pPic).pBuffer[1] = std::ptr::null_mut();
-            (*pPic).pBuffer[2] = std::ptr::null_mut();
-            (*pPic).pData[0] = std::ptr::null_mut();
-            (*pPic).pData[1] = std::ptr::null_mut();
-            (*pPic).pData[2] = std::ptr::null_mut();
-            (*pPic).iLinesize[0] = iPicWidth;
-            (*pPic).iLinesize[1] = iPicChromaWidth;
-            (*pPic).iLinesize[2] = iPicChromaWidth;
-        }
+    let planes: [PaddedPlane; 3] = if bParseOnly {
+        // The C set `iLinesize[i]` from the geometry and left `pData[i]`/`pBuffer[i]`
+        // null: a parse-only decode reconstructs nothing. Strides, no bytes.
+        [
+            PaddedPlane::empty(iPicWidth as usize),
+            PaddedPlane::empty(iPicChromaWidth as usize),
+            PaddedPlane::empty(iPicChromaWidth as usize),
+        ]
     } else {
-        let total_size = (iLumaSize + (iChromaSize << 1)) as u32;
-        let pBuf0 = unsafe {
-            (*pMa).WelsMallocz(
-                total_size,
-                b"_pic->buffer[0]\0".as_ptr() as *const c_char,
-            ) as *mut u8
-        };
-        if pBuf0.is_null() {
-            unsafe { FreePicture(pPic, pMa) };
+        // One `WelsMallocz` of `iLumaSize + 2*iChromaSize` filled with 128, carved
+        // into three by pointer arithmetic, became three allocations each filled with
+        // 128. Nothing walks from one plane into the next — `pBuffer[1]` and
+        // `pBuffer[2]` were only ever bases for their own plane's `pData` — so the
+        // contiguity was incidental, and every plane's own bytes are unchanged.
+        let (Some(y), Some(u), Some(v)) = (
+            try_filled(iLumaSize as usize, 128),
+            try_filled(iChromaSize as usize, 128),
+            try_filled(iChromaSize as usize, 128),
+        ) else {
             return std::ptr::null_mut();
-        }
+        };
+        // `AllocPicture`'s own origin expressions, kept verbatim. Both are
+        // `pad*stride + pad` — luma at pad 32, chroma at pad 16 — and `from_parts`
+        // recovers the pad by division, so it *checks* that identity rather than
+        // assuming it. It also checks that the C's allocation is tall enough for the
+        // padded picture, which the row-count alignment makes true with room over.
+        let origin_y = ((1 + iPicWidth) * PADDING_LENGTH) as usize;
+        let origin_c = (((1 + iPicChromaWidth) * PADDING_LENGTH) >> 1) as usize;
+        [
+            PaddedPlane::from_parts(
+                y,
+                iPicWidth as usize,
+                origin_y,
+                kiPicWidth as usize,
+                kiPicHeight as usize,
+            ),
+            PaddedPlane::from_parts(
+                u,
+                iPicChromaWidth as usize,
+                origin_c,
+                (kiPicWidth >> 1) as usize,
+                (kiPicHeight >> 1) as usize,
+            ),
+            PaddedPlane::from_parts(
+                v,
+                iPicChromaWidth as usize,
+                origin_c,
+                (kiPicWidth >> 1) as usize,
+                (kiPicHeight >> 1) as usize,
+            ),
+        ]
+    };
+    let _ = iPicChromaHeight;
 
-        unsafe {
-            std::ptr::write_bytes(pBuf0, 128u8, total_size as usize);
-            (*pPic).pBuffer[0] = pBuf0;
-            (*pPic).iLinesize[0] = iPicWidth;
-            (*pPic).iLinesize[1] = iPicChromaWidth;
-            (*pPic).iLinesize[2] = iPicChromaWidth;
-
-            (*pPic).pBuffer[1] = pBuf0.add(iLumaSize as usize);
-            (*pPic).pBuffer[2] = (*pPic).pBuffer[1].add(iChromaSize as usize);
-
-            (*pPic).pData[0] = (*pPic).pBuffer[0].add(((1 + (*pPic).iLinesize[0]) * PADDING_LENGTH) as usize);
-            (*pPic).pData[1] = (*pPic).pBuffer[1].add((((1 + (*pPic).iLinesize[1]) * PADDING_LENGTH) >> 1) as usize);
-            (*pPic).pData[2] = (*pPic).pBuffer[2].add((((1 + (*pPic).iLinesize[2]) * PADDING_LENGTH) >> 1) as usize);
-        }
-    }
+    let pPic: PPicture = Box::into_raw(Box::new(SPicture::with_planes(planes)));
 
     unsafe {
         (*pPic).iWidthInPixel = kiPicWidth;
@@ -254,24 +314,30 @@ pub unsafe fn AllocPicture(
     pPic
 }
 
-/// Deallocates an [`SPicture`] instance and all its associated buffers and event primitives.
+/// Deallocates an [`SPicture`] instance and all its associated buffers.
+///
+/// **T5.C3: the matching half of [`AllocPicture`]'s heap construction.** The three
+/// planes are freed by the `Box`'s drop glue — there is no `pBuffer[0]` arm any more,
+/// and no way to forget one. The per-macroblock metadata arrays are still raw and are
+/// still freed here, through the allocator that made them.
+///
+/// F19, per allocation, after the change: the `Box` at [`AllocPicture`]'s
+/// `Box::into_raw` by the `Box::from_raw` at the bottom of this function; the three
+/// plane `Vec`s by that same drop; the six metadata arrays by the six `WelsFree`
+/// calls between here and there. Balanced, and two of the three groups are now
+/// balanced by the type system rather than by inspection.
 ///
 /// # Safety
-/// - `pPic` must point to an [`SPicture`] allocated by [`AllocPicture`] or be null.
-/// - `pMa` must point to the [`CMemoryAlign`] allocator used to allocate `pPic`.
+/// - `pPic` must point to an [`SPicture`] produced by [`AllocPicture`] and not yet
+///   freed, or be null. It is reclaimed with `Box::from_raw`, so it must have come
+///   from that function's `Box::into_raw` and from nowhere else.
+/// - `pMa` must point to the [`CMemoryAlign`] allocator used to allocate the
+///   macroblock metadata arrays.
 pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
     if pPic.is_null() || pMa.is_null() {
         return;
     }
     unsafe {
-        if !(*pPic).pBuffer[0].is_null() {
-            (*pMa).WelsFree(
-                (*pPic).pBuffer[0] as *mut c_void,
-                b"pPic->pBuffer[0]\0".as_ptr() as *const c_char,
-            );
-            (*pPic).pBuffer[0] = std::ptr::null_mut();
-        }
-
         if !(*pPic).pMbCorrectlyDecodedFlag.is_null() {
             (*pMa).WelsFree(
                 (*pPic).pMbCorrectlyDecodedFlag as *mut c_void,
@@ -305,10 +371,8 @@ pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
             }
         }
 
-        (*pMa).WelsFree(
-            pPic as *mut c_void,
-            b"pPic\0".as_ptr() as *const c_char,
-        );
+        // The picture header and, with it, the three plane allocations.
+        drop(Box::from_raw(pPic));
     }
 }
 
@@ -574,9 +638,53 @@ mod tests {
             assert!(!p_pic.is_null());
             assert_eq!((*p_pic).iWidthInPixel, 160);
             assert_eq!((*p_pic).iHeightInPixel, 120);
-            assert!(!(*p_pic).pBuffer[0].is_null());
-            assert!(!(*p_pic).pData[0].is_null());
+            assert!(!(*p_pic).data_ptr(0).is_null());
 
+            // T5.C3: the geometry the C computed is now the plane's, and pinning it
+            // here is what makes "same arithmetic" a check rather than a claim.
+            // stride = WELS_ALIGN(160 + 64, 32) = 224, rows = WELS_ALIGN(120 + 64, 32)
+            // = 192, so the luma allocation is 224*192 and the padded picture needs
+            // 224*(120+64) — the alignment leaves eight spare rows, and `from_parts`
+            // accepts that.
+            assert_eq!((*p_pic).linesize(0), 224);
+            assert_eq!((*p_pic).linesize(1), 112);
+            assert_eq!((*p_pic).plane(0).pad(), 32);
+            assert_eq!((*p_pic).plane(1).pad(), 16);
+            assert_eq!((*p_pic).plane(0).origin(), (1 + 224) * 32);
+            assert_eq!((*p_pic).plane(1).origin(), ((1 + 112) * 32) >> 1);
+            assert_eq!((*p_pic).plane(0).as_slice().len(), 224 * 192);
+            assert_eq!((*p_pic).plane(1).as_slice().len(), 112 * 96);
+            // The 128 fill covers the whole allocation, corners included — the EC
+            // prefetch and `narrow_16x16_idr_lost` both depend on it.
+            assert!((*p_pic).plane(0).as_slice().iter().all(|&b| b == 128));
+            assert_eq!((*p_pic).plane(0).at(-32, -32), 128);
+
+            FreePicture(p_pic, &mut ma as *mut CMemoryAlign);
+        }
+        assert_eq!(ma.WelsGetMemoryUsage(), 0);
+    }
+
+    /// The `bParseOnly` arm: strides from the geometry, no sample memory, and a null
+    /// `data_ptr` — the three properties the C's null `pData[i]` beside a non-zero
+    /// `iLinesize[i]` encoded, which every caller still tests with `.is_null()`.
+    #[test]
+    fn test_alloc_picture_parse_only_carries_strides_and_no_bytes() {
+        let mut ma = CMemoryAlign::new(32);
+        let mut param = SDecodingParam { bParseOnly: true, ..Default::default() };
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
+
+        unsafe {
+            let p_pic = AllocPicture(&mut *ctx as *mut SWelsDecoderContext, 160, 120);
+            assert!(!p_pic.is_null());
+            assert_eq!((*p_pic).linesize(0), 224);
+            assert_eq!((*p_pic).linesize(1), 112);
+            assert_eq!((*p_pic).linesize(2), 112);
+            assert!((*p_pic).plane(0).is_empty());
+            assert!((*p_pic).data_ptr(0).is_null());
+            assert!((*p_pic).data_ptr(1).is_null());
+            assert!((*p_pic).data_ptr(2).is_null());
             FreePicture(p_pic, &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);

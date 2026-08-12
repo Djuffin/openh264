@@ -156,6 +156,35 @@ impl PaddedPlane {
         }
     }
 
+    /// A plane with a stride and no bytes.
+    ///
+    /// `AllocPicture`'s `bParseOnly` arm builds exactly this: it sets `iLinesize[i]`
+    /// from the picture geometry and leaves `pData[i]` null, because a parse-only
+    /// decode never reconstructs a sample. Every coordinate accessor panics on an
+    /// empty plane — there is no addressable byte — which is the same "nothing here"
+    /// the null pointer meant, reported at the access rather than at the crash.
+    ///
+    /// `stride` may be zero **here and nowhere else**: with no bytes to index it is
+    /// metadata, not geometry, and [`from_parts`](Self::from_parts) would have to
+    /// divide by it to recover the padding. `SPicture::default()` uses `empty(0)` to
+    /// go on reporting the `iLinesize` of zero that its all-null pointer form had.
+    pub fn empty(stride: usize) -> Self {
+        Self {
+            buf: Vec::new(),
+            stride,
+            origin: 0,
+            width: 0,
+            height: 0,
+            pad: 0,
+        }
+    }
+
+    /// Whether this plane owns no bytes — true exactly for [`empty`](Self::empty).
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
     /// Picture width in pixels, excluding padding.
     #[inline]
     pub fn width(&self) -> usize {
@@ -538,6 +567,27 @@ mod tests {
         assert_eq!(p.pad(), pad);
         assert_eq!(p.at(0, 0), 9);
         assert_eq!(p.at(-32, -32), 9);
+    }
+
+    #[test]
+    fn empty_carries_a_stride_and_owns_nothing() {
+        // The `bParseOnly` picture: `iLinesize[0]` set from the geometry, `pData[0]`
+        // null. Both halves of that state have to survive the conversion.
+        let p = PaddedPlane::empty(224);
+        assert!(p.is_empty());
+        assert_eq!(p.stride(), 224);
+        assert_eq!(p.as_slice().len(), 0);
+        assert_eq!(p.origin(), 0);
+        // And the zero-stride form, which only `SPicture::default()` builds.
+        assert_eq!(PaddedPlane::empty(0).stride(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn empty_addresses_no_coordinate_at_all() {
+        // Not even (0, 0): there is no byte to read, and the slice index says so
+        // rather than handing back whatever the null pointer used to point at.
+        PaddedPlane::empty(224).at(0, 0);
     }
 
     #[test]
