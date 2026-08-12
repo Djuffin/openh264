@@ -250,6 +250,21 @@ pub fn WELS_MIN_POSITIVE(a: i8, b: i8) -> i8 {
 // ============================================================================
 // Memory & Block Manipulation Primitives
 // ============================================================================
+//
+// **Every wide access below is unaligned, and that is F35** (Phase 5 session J).
+// These two helpers take byte pointers and write 2 and 4 bytes at a time into
+// arrays of `i8` and `i16`. That was legal only because every one of those arrays
+// came from `WelsMallocz`, which returns 16-byte-aligned memory — an accident of
+// the allocator, not a property of the data. `pRefIndex` is `[i8; 16]` (align 1)
+// and `pMv`/`pMvd` are `[[i16; 2]; 16]` (align 2), so the moment 5.2 moves them
+// into the grid's `Vec`s the allocation's alignment becomes the element's and
+// every one of these becomes UB.
+//
+// `read_unaligned`/`write_unaligned` is the same load or store on both targets
+// this project builds; what it drops is the alignment *precondition*, which is
+// the only thing the aligned spelling was buying. The same rewrite fixed the 13
+// direct-mode sites that were already UB — those punned stack `[i16; 2]`s, where
+// no allocator was rounding the address up.
 
 #[inline(always)]
 pub unsafe fn SetRectBlock(
@@ -282,77 +297,77 @@ pub unsafe fn SetRectBlock(
         *p.offset(2 * stride as isize) = v8;
         *p.offset(3 * stride as isize) = v8;
     } else if w == 2 && h == 2 {
-        *(p.offset(0 * stride as isize) as *mut u16) = v16;
-        *(p.offset(1 * stride as isize) as *mut u16) = v16;
+        (p.offset(0 * stride as isize) as *mut u16).write_unaligned(v16);
+        (p.offset(1 * stride as isize) as *mut u16).write_unaligned(v16);
     } else if w == 2 && h == 4 {
-        *(p.offset(0 * stride as isize) as *mut u16) = v16;
-        *(p.offset(1 * stride as isize) as *mut u16) = v16;
-        *(p.offset(2 * stride as isize) as *mut u16) = v16;
-        *(p.offset(3 * stride as isize) as *mut u16) = v16;
+        (p.offset(0 * stride as isize) as *mut u16).write_unaligned(v16);
+        (p.offset(1 * stride as isize) as *mut u16).write_unaligned(v16);
+        (p.offset(2 * stride as isize) as *mut u16).write_unaligned(v16);
+        (p.offset(3 * stride as isize) as *mut u16).write_unaligned(v16);
     } else if w == 4 && h == 2 {
-        *(p.offset(0 * stride as isize) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize) as *mut u32) = v32;
+        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
     } else if w == 4 && h == 4 {
-        *(p.offset(0 * stride as isize) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize) as *mut u32) = v32;
+        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize) as *mut u32).write_unaligned(v32);
     } else if w == 8 && h == 1 {
-        *(p.offset(0 * stride as isize) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
+        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
     } else if w == 8 && h == 2 {
-        *(p.offset(0 * stride as isize) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 4) as *mut u32) = v32;
+        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
     } else if w == 8 && h == 4 {
-        *(p.offset(0 * stride as isize) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize + 4) as *mut u32) = v32;
+        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize + 4) as *mut u32).write_unaligned(v32);
     } else if w == 16 && h == 2 {
-        *(p.offset(0 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 12) as *mut u32) = v32;
+        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
     } else if w == 16 && h == 3 {
-        *(p.offset(0 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 12) as *mut u32) = v32;
+        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 12) as *mut u32).write_unaligned(v32);
     } else if w == 16 && h == 4 {
-        *(p.offset(0 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(0 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(1 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(2 * stride as isize + 12) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize + 0) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize + 4) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize + 8) as *mut u32) = v32;
-        *(p.offset(3 * stride as isize + 12) as *mut u32) = v32;
+        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(2 * stride as isize + 12) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize + 0) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize + 4) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize + 8) as *mut u32).write_unaligned(v32);
+        (p.offset(3 * stride as isize + 12) as *mut u32).write_unaligned(v32);
     }
 }
 
@@ -374,23 +389,23 @@ pub unsafe fn CopyRectBlock4Cols(
         *dst.offset(stride_dst as isize * 2) = *src.offset(stride_src as isize * 2);
         *dst.offset(stride_dst as isize * 3) = *src.offset(stride_src as isize * 3);
     } else if w == 2 {
-        *(dst.offset(stride_dst as isize * 0) as *mut u16) =
-            *(src.offset(stride_src as isize * 0) as *const u16);
-        *(dst.offset(stride_dst as isize * 1) as *mut u16) =
-            *(src.offset(stride_src as isize * 1) as *const u16);
-        *(dst.offset(stride_dst as isize * 2) as *mut u16) =
-            *(src.offset(stride_src as isize * 2) as *const u16);
-        *(dst.offset(stride_dst as isize * 3) as *mut u16) =
-            *(src.offset(stride_src as isize * 3) as *const u16);
+        (dst.offset(stride_dst as isize * 0) as *mut u16)
+            .write_unaligned((src.offset(stride_src as isize * 0) as *const u16).read_unaligned());
+        (dst.offset(stride_dst as isize * 1) as *mut u16)
+            .write_unaligned((src.offset(stride_src as isize * 1) as *const u16).read_unaligned());
+        (dst.offset(stride_dst as isize * 2) as *mut u16)
+            .write_unaligned((src.offset(stride_src as isize * 2) as *const u16).read_unaligned());
+        (dst.offset(stride_dst as isize * 3) as *mut u16)
+            .write_unaligned((src.offset(stride_src as isize * 3) as *const u16).read_unaligned());
     } else if w == 4 {
-        *(dst.offset(stride_dst as isize * 0) as *mut u32) =
-            *(src.offset(stride_src as isize * 0) as *const u32);
-        *(dst.offset(stride_dst as isize * 1) as *mut u32) =
-            *(src.offset(stride_src as isize * 1) as *const u32);
-        *(dst.offset(stride_dst as isize * 2) as *mut u32) =
-            *(src.offset(stride_src as isize * 2) as *const u32);
-        *(dst.offset(stride_dst as isize * 3) as *mut u32) =
-            *(src.offset(stride_src as isize * 3) as *const u32);
+        (dst.offset(stride_dst as isize * 0) as *mut u32)
+            .write_unaligned((src.offset(stride_src as isize * 0) as *const u32).read_unaligned());
+        (dst.offset(stride_dst as isize * 1) as *mut u32)
+            .write_unaligned((src.offset(stride_src as isize * 1) as *const u32).read_unaligned());
+        (dst.offset(stride_dst as isize * 2) as *mut u32)
+            .write_unaligned((src.offset(stride_src as isize * 2) as *const u32).read_unaligned());
+        (dst.offset(stride_dst as isize * 3) as *mut u32)
+            .write_unaligned((src.offset(stride_src as isize * 3) as *const u32).read_unaligned());
     } else if w == 16 {
         std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 0), dst.offset(stride_dst as isize * 0), 16);
         std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 1), dst.offset(stride_dst as isize * 1), 16);
@@ -1002,7 +1017,7 @@ pub unsafe fn PredMvBDirectSpatial(
     let bIsLongRef = if !colocPic.is_null() { (*colocPic).bIsLongRef } else { false };
 
     if IS_INTER_16x16(mbType) {
-        if (*(iMvp[LIST_0].as_ptr() as *const i32) | *(iMvp[LIST_1].as_ptr() as *const i32)) != 0 {
+        if (LD32(iMvp[LIST_0].as_ptr()) | LD32(iMvp[LIST_1].as_ptr())) != 0 {
             if 0 == (*pCurDqLayer).iColocIntra[0]
                 && !bIsLongRef
                 && (((*pCurDqLayer).iColocRefIndex[LIST_0][0] == 0
@@ -1014,10 +1029,10 @@ pub unsafe fn PredMvBDirectSpatial(
                         && ((*pCurDqLayer).iColocMv[LIST_1][0][1] + 1) as u32 <= 2))
             {
                 if 0 >= ref_idx[0] {
-                    *(iMvp[LIST_0].as_mut_ptr() as *mut u32) = 0;
+                    ST32(iMvp[LIST_0].as_mut_ptr(), 0);
                 }
                 if 0 >= ref_idx[1] {
-                    *(iMvp[LIST_1].as_mut_ptr() as *mut u32) = 0;
+                    ST32(iMvp[LIST_1].as_mut_ptr(), 0);
                 }
             }
         }
@@ -1531,7 +1546,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 
         let mut pMV = [0i16; 4];
         if IS_SUB_8x8(subMbType) {
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect.add(LIST_0) as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_0) as *const i16));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
@@ -1554,7 +1569,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(mvd_cache_l0.add(iCacheIdx + 6) as *mut i16, 0);
             }
 
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect.add(LIST_1) as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_1) as *const i16));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
@@ -1577,7 +1592,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(mvd_cache_l1.add(iCacheIdx + 6) as *mut i16, 0);
             }
         } else {
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect.add(LIST_0) as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_0) as *const i16));
             if !pDec.is_null() {
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
@@ -1595,7 +1610,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST32(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
             }
 
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect.add(LIST_1) as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_1) as *const i16));
             if !pDec.is_null() {
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
@@ -1614,7 +1629,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
             }
         }
 
-        if (*(pMvDirect.add(LIST_0) as *const i32) | *(pMvDirect.add(LIST_1) as *const i32)) != 0 {
+        if (LD32(pMvDirect.add(LIST_0) as *const i16) | LD32(pMvDirect.add(LIST_1) as *const i16)) != 0 {
             let uiColZeroFlag = (0 == (*pCurDqLayer).iColocIntra[iColocIdx]) && !bIsLongRef &&
                 ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] == 0 ||
                  ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] < 0 && (*pCurDqLayer).iColocRefIndex[LIST_1][iColocIdx] == 0));
@@ -1751,7 +1766,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 pMvDirect[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
                 pMvDirect[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
             }
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect[LIST_0].as_ptr() as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_0].as_ptr()));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
@@ -1778,7 +1793,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - *mv.add(0);
                 pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - *mv.add(1);
             }
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect[LIST_1].as_ptr() as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_1].as_ptr()));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
@@ -1807,7 +1822,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 pMvDirect[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
                 pMvDirect[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
             }
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect[LIST_0].as_ptr() as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_0].as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
@@ -1829,7 +1844,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - *mv.add(0);
                 pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - *mv.add(1);
             }
-            *(pMV.as_mut_ptr() as *mut u32) = *(pMvDirect[LIST_1].as_ptr() as *const u32);
+            ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_1].as_ptr()));
             if !pDec.is_null() {
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));

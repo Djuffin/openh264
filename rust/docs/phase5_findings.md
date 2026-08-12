@@ -1117,3 +1117,72 @@ if ret != ERR_NONE { return ret; }
 Byte-exact by construction, including on the error path: the callee returns before its
 write, so the grid entry keeps its prior value either way, and both call sites propagate
 the error immediately.
+
+---
+
+## F35 — the B-direct MV paths read a stack `[i16; 2]` as an `i32`, and the block helpers only work because `WelsMallocz` over-aligns
+
+**Status: OPEN as of discovery, FIXED in the same commit (Phase 5 session J, T5.J1).
+Owner 5.2.** Pre-existing for the port's whole life. **Found by the second probe
+stream on its first run** — the run that exists because F34 showed every Miri verdict
+this phase issued was bounded by a one-macroblock stream.
+
+```text
+error: Undefined Behavior: accessing memory based on pointer with alignment 2,
+       but alignment 4 is required
+    --> src/decoder/mv_pred.rs:1005:13
+     |
+1005 | if (*(iMvp[LIST_0].as_ptr() as *const i32) | *(iMvp[LIST_1].as_ptr() as *const i32)) != 0 {
+     |
+             0: decoder::mv_pred::PredMvBDirectSpatial
+             1: decoder::decode_slice::WelsDecodeMbCabacBSlice
+```
+
+### Two halves, and only one of them was UB yet
+
+**Half one — 13 sites that were already UB.** `PredMvBDirectSpatial`,
+`FillSpatialDirect8x8Mv`, `FillTemporalDirect8x8Mv` and their 8x8 variants pun
+*stack locals* — `iMvp: &mut [[i16; 2]; 2]`, `pMV: [i16; 4]`, `pMvDirect: [[i16; 2]; 2]`
+— through `*const i32` / `*mut u32`. An `i16` array is 2-aligned and nothing rounds a
+stack slot up to 4, so these were unconditionally UB on every B slice that reached
+them. The same file has had `LD32`/`ST32` — `read_unaligned`/`write_unaligned` wrappers
+— since the port was written; these sites simply never used them.
+
+**Half two — `SetRectBlock` and `CopyRectBlock4Cols`, which are UB *the moment 5.2
+flips their arrays*.** Both take `*mut u8`/`*const u8` and store 2 and 4 bytes at a
+time into `pRefIndex` (`[i8; 16]`, align 1) and the MV arrays (`[[i16; 2]; 16]`,
+align 2). Today the addresses happen to be 16-byte aligned because every one of those
+arrays comes from `WelsMallocz`. That is a property of the allocator, not of the data:
+`MbArray<[i8; 16]>` is a `Vec`, its allocation is align 1, and the first family commit
+that moves `pRefIndex`, `pMv` or `pMvd` onto the grid makes all 78 accesses UB at once.
+
+### Why no gate saw it
+
+The same reason F34 was invisible, one step further out. `PredMvBDirectSpatial` needs a
+**B slice** *and* a neighbouring macroblock; `narrow_16x16.264` has neither — the C++
+encoder that builds it emits no B slices at all, and its frames are one macroblock. So
+the direct-mode family had never executed under Miri in any form. The byte gates cannot
+see it either: on aarch64 and x86-64 an unaligned 4-byte load is the same instruction as
+an aligned one, so the output is byte-identical and always has been. This is a
+soundness defect with no observable behaviour — the class the whole Miri gate exists
+for.
+
+### The fix
+
+Every wide access in the family goes through the unaligned spelling: the 13 direct-mode
+sites through the file's own `LD32`/`ST32`, and the two block helpers through
+`read_unaligned`/`write_unaligned` directly. Byte-exact by construction — same bytes,
+same order, same width; what is dropped is the alignment precondition, which was the
+only thing the aligned spelling ever bought. Half two is a fix ahead of its defect, and
+it is in this commit rather than in the family commit that would trip it because that
+family commit would otherwise carry two unrelated things, and because S13 says to run a
+rule everywhere it can apply in the session that first applies it.
+
+### What it says about the remaining flip
+
+**A family's alignment is part of its conversion.** `WelsMallocz` returns 16-byte
+alignment to every raw array in the layer; `MbArray<T>` returns `align_of::<T>()`.
+For the eleven families still to flip that is a drop from 16 to 1 (`pRefIndex`,
+`pDirect`, `pNzc`, `pIntraPredMode`), to 2 (`pMv`, `pMvd`, `pScaledTCoeff`,
+`pChromaQp`) and to 4 (`pMbType`, `pSliceIdc`). Every family commit greps its arrays'
+consumers for a wider-than-element access before it flips them, and this finding is why.
