@@ -943,6 +943,129 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // P3 sites 2 and 3 of 3 — error concealment refuses to conceal a picture
+    // **from itself**, and it decides that by object identity.
+    //
+    // Same reasoning as the deblocking tests: plan §3 P3 replaces these
+    // `*mut SPicture` comparisons with `PicId` equality, which is
+    // behaviour-preserving only if the comparison means "the same picture
+    // object". Both tests give the two pictures the **same POC** so a POC-based
+    // rewrite would take the wrong arm and the test would say so.
+    // -----------------------------------------------------------------------
+
+    /// Site 2 — `DoErrorConSliceCopy`: when the previous decoded picture *is* the
+    /// destination, the function returns before writing anything. A second picture
+    /// with the same POC is a different picture and must be copied from.
+    #[test]
+    fn p3_slice_copy_self_copy_guard_is_by_identity() {
+        const W: usize = 2;
+        const H: usize = 2;
+        const STRIDE: usize = W * 16;
+        // S12: a kernel transliterated from C bumps its row pointer *after* the
+        // last row, so a test buffer sized exactly `h * stride` is UB at the final
+        // `offset`. One spare row on every plane — Miri catches this immediately,
+        // and did.
+        const PLANE: usize = STRIDE * (H * 16 + 1);
+
+        // `dst` is filled with a marker; a real copy overwrites it with `src`'s.
+        let mut dst_y = vec![0xAAu8; PLANE];
+        let mut dst_u = vec![0xAAu8; PLANE];
+        let mut dst_v = vec![0xAAu8; PLANE];
+        let mut src_y = vec![0x11u8; PLANE];
+        let mut src_u = vec![0x11u8; PLANE];
+        let mut src_v = vec![0x11u8; PLANE];
+
+        let mut run = |same_object: bool| -> u8 {
+            dst_y.iter_mut().for_each(|b| *b = 0xAA);
+            let mut dst = SPicture::default();
+            dst.pData[0] = dst_y.as_mut_ptr();
+            dst.pData[1] = dst_u.as_mut_ptr();
+            dst.pData[2] = dst_v.as_mut_ptr();
+            dst.iLinesize[0] = STRIDE as i32;
+            dst.iWidthInPixel = (W * 16) as i32;
+            dst.iHeightInPixel = (H * 16) as i32;
+            dst.iFramePoc = 7;
+
+            let mut src = SPicture::default();
+            src.pData[0] = src_y.as_mut_ptr();
+            src.pData[1] = src_u.as_mut_ptr();
+            src.pData[2] = src_v.as_mut_ptr();
+            src.iLinesize[0] = STRIDE as i32;
+            src.iFramePoc = 7; // duplicate POC on purpose
+
+            let mut sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
+            let mut mb_flags = [false; W * H];   // every MB lost, so EC has work to do
+            let mut dq_layer = SDqLayer {
+                pMbCorrectlyDecodedFlag: mb_flags.as_mut_ptr(),
+                ..Default::default()
+            };
+            let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
+            let mut ctx = SWelsDecoderContext::new_boxed();
+
+            unsafe {
+                let dst_ptr: *mut SPicture = &mut dst;
+                last.pPreviousDecodedPictureInDpb =
+                    if same_object { dst_ptr } else { &mut src as *mut SPicture };
+                ctx.pSps = &mut sps as *mut _;
+                ctx.pDec = dst_ptr;
+                ctx.pCurDqLayer = &mut dq_layer as *mut _;
+                ctx.pLastDecPicInfo = &mut last as *mut _;
+                // The copy itself goes through the context's copy-function pair;
+                // `new_boxed()` leaves it zeroed, which would make both arms write
+                // nothing and the test vacuous.
+                ctx.sCopyFunc = SCopyFunc::default();
+                DoErrorConSliceCopy(&mut *ctx);
+                *dst_y.as_ptr()
+            }
+        };
+
+        assert_eq!(run(true), 0xAA, "src == dst must return before any write");
+        assert_eq!(
+            run(false),
+            0x11,
+            "a distinct picture with the same POC is a valid concealment source"
+        );
+    }
+
+    /// Site 3 — `DoMbECMvCopy`'s first guard, `pDec == pRef`. The motion-compensated
+    /// path must not conceal a macroblock from the picture it is writing into.
+    #[test]
+    fn p3_mb_ec_mv_copy_self_reference_guard_is_by_identity() {
+        const STRIDE: usize = 32;
+        let mut y = vec![0xAAu8; STRIDE * 32];
+        let mut u = vec![0xAAu8; STRIDE * 16];
+        let mut v = vec![0xAAu8; STRIDE * 16];
+
+        let mut pic = SPicture::default();
+        pic.iFramePoc = 3;
+        pic.iLinesize = [STRIDE as i32, (STRIDE / 2) as i32, (STRIDE / 2) as i32, 0];
+        pic.iWidthInPixel = 32;
+        pic.iHeightInPixel = 32;
+
+        let mut mc = sMCRefMember {
+            pDstY: y.as_mut_ptr(),
+            pDstU: u.as_mut_ptr(),
+            pDstV: v.as_mut_ptr(),
+            iDstLineLuma: STRIDE as i32,
+            iDstLineChroma: (STRIDE / 2) as i32,
+            iPicWidth: 32,
+            iPicHeight: 32,
+            ..Default::default()
+        };
+        let mut ctx = SWelsDecoderContext::new_boxed();
+
+        unsafe {
+            let p: *mut SPicture = &mut pic;
+            DoMbECMvCopy(&mut *ctx, p, p, 0, 0, 0, &mut mc);
+        }
+
+        assert!(
+            y.iter().all(|&b| b == 0xAA),
+            "pDec == pRef must return before touching the destination planes"
+        );
+    }
+
     #[test]
     fn test_implement_error_con_disable() {
         let mut param = SDecodingParam {

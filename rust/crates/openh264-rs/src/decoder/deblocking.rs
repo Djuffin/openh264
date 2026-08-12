@@ -2198,6 +2198,105 @@ pub unsafe fn DeblockingInit(pFunc: *mut SDeblockingFunc, iCpu: i32) {
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // P3 site 1 of 3 — boundary strength is decided by reference-picture
+    // **identity**, never by picture order count.
+    //
+    // Plan §3 P3 converts `*mut SPicture` to `PicId` and compares ids. That is
+    // behaviour-preserving only if today's comparison means "the same picture
+    // object", not "a picture with the same POC" — and the two differ exactly when
+    // the DPB holds two distinct pictures with a duplicate POC, which a stream can
+    // produce (an IDR resets the POC counter; MMCO 5 does too). These tests pin the
+    // distinction *before* the conversion, because after it the property is a
+    // property of `PicId` and can no longer be observed here.
+    //
+    // Each test therefore holds the MVs equal and varies only the reference, so the
+    // MV term cannot mask the identity term.
+    // -----------------------------------------------------------------------
+
+    /// Two distinct pictures carrying the **same POC** are still different
+    /// references: `MB_BS_MV` must return 1 even though every motion vector agrees.
+    #[test]
+    fn p3_mb_bs_mv_separates_duplicate_poc_pictures() {
+        let mut a = SPicture::default();
+        let mut b = SPicture::default();
+        a.iFramePoc = 4;
+        b.iFramePoc = 4; // duplicate POC, distinct objects
+        let mut mvs = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
+
+        unsafe {
+            let mv = mvs.as_mut_ptr();
+            assert_eq!(
+                MB_BS_MV(&mut a, &mut b, mv, 0, 1, 0, 0),
+                1,
+                "distinct pictures with equal POC must read as different references"
+            );
+            assert_eq!(
+                MB_BS_MV(&mut a, &mut a, mv, 0, 1, 0, 0),
+                0,
+                "one picture against itself falls through to the MV comparison"
+            );
+        }
+    }
+
+    /// The same property one level down, where the reference is already erased to
+    /// `*mut c_void` in the 8x8 edge path.
+    #[test]
+    fn p3_smb_edge_mv_separates_duplicate_poc_pictures() {
+        let mut a = SPicture::default();
+        let mut b = SPicture::default();
+        a.iFramePoc = 9;
+        b.iFramePoc = 9;
+        let mut mvs = [[0i16; MV_A]; MB_BLOCK4x4_NUM];
+
+        unsafe {
+            let mut refs: [*mut std::ffi::c_void; MB_BLOCK4x4_NUM] =
+                [&mut a as *mut SPicture as *mut std::ffi::c_void; MB_BLOCK4x4_NUM];
+            assert_eq!(SMB_EDGE_MV(&refs, &mut mvs, 0, 1), 0, "same object, equal MVs");
+
+            refs[1] = &mut b as *mut SPicture as *mut std::ffi::c_void;
+            assert_eq!(
+                SMB_EDGE_MV(&refs, &mut mvs, 0, 1),
+                1,
+                "duplicate POC does not make two pictures one reference"
+            );
+        }
+    }
+
+    /// B-slice edge: `ON_MB_BS` picks between the "lists agree" and "lists crossed"
+    /// arms by comparing `ref_p0` with `ref_p1` and then `ref_p0` with `ref_q0`.
+    /// With all four MV sets equal, the arm chosen is visible in the result, so this
+    /// pins that the choice is made on identity.
+    #[test]
+    fn p3_on_mb_bs_arm_selection_is_by_identity() {
+        let mut a = SPicture::default();
+        let mut b = SPicture::default();
+        a.iFramePoc = 2;
+        b.iFramePoc = 2;
+        // Chosen so the two arms disagree: straight comparisons (l0 vs l0, l1 vs l1)
+        // exceed the 4-quarter-pel threshold, crossed ones (l0 vs l1) do not. That
+        // makes the `ref_p0 == ref_p1` arm — an AND of both — false while the
+        // `ref_p0 != ref_p1, ref_p0 == ref_q0` arm is true.
+        let mut mv_l0 = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
+        let mut mv_l1 = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
+        mv_l0[0][0][0] = 64; // current MB, list 0
+        mv_l1[1][0][0] = 64; // neighbour MB, list 1
+
+        unsafe {
+            let m0 = mv_l0.as_mut_ptr();
+            let m1 = mv_l1.as_mut_ptr();
+
+            // All four references are one picture object.
+            let same = ON_MB_BS(&mut a, &mut a, &mut a, &mut a, m0, m1, 0, 1, 0, 0);
+
+            // p0/q0 are that object; p1/q1 are a *different* object with the same POC.
+            let distinct = ON_MB_BS(&mut a, &mut a, &mut b, &mut b, m0, m1, 0, 1, 0, 0);
+
+            assert_eq!(same, 0, "one object in every slot takes the lists-agree arm");
+            assert_eq!(distinct, 1, "a second object with a duplicate POC is a different reference");
+        }
+    }
+
     #[test]
     fn test_deblocking_init() {
         unsafe {
