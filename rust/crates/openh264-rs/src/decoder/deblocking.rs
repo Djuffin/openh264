@@ -1578,7 +1578,7 @@ unsafe fn DeblockingInterMb(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
 
-    let iCurLumaQp = *(*pCurDqLayer).pLumaQp.add(iMbXyIndex as usize) as i32;
+    let iCurLumaQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
     let pCurChromaQp = *(*pCurDqLayer).pChromaQp.add(iMbXyIndex as usize);
     let iLineSize = (*pFilter).iCsStride[0];
     let iLineSizeUV = (*pFilter).iCsStride[1];
@@ -1591,7 +1591,7 @@ unsafe fn DeblockingInterMb(
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
         let iLeftXyIndex = (iMbXyIndex - 1) as usize;
         (*pFilter).iLumaQP =
-            ((iCurLumaQp + *(*pCurDqLayer).pLumaQp.add(iLeftXyIndex) as i32 + 1) >> 1) as i8;
+            ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iLeftXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
                 + (*(*pCurDqLayer).pChromaQp.add(iLeftXyIndex))[i] as i32
@@ -1643,7 +1643,7 @@ unsafe fn DeblockingInterMb(
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         let iTopXyIndex = (iMbXyIndex - (*pCurDqLayer).iMbWidth) as usize;
         (*pFilter).iLumaQP =
-            ((iCurLumaQp + *(*pCurDqLayer).pLumaQp.add(iTopXyIndex) as i32 + 1) >> 1) as i8;
+            ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iTopXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
                 + (*(*pCurDqLayer).pChromaQp.add(iTopXyIndex))[i] as i32
@@ -1721,7 +1721,7 @@ pub unsafe fn FilteringEdgeLumaHV(
     let iLineSize = (*pFilter).iCsStride[0];
 
     let pDestY = (*pFilter).pCsData[0].add(((iMbY * iLineSize + iMbX) << 4) as usize);
-    let iCurQp = *(*pCurDqLayer).pLumaQp.add(iMbXyIndex as usize) as i32;
+    let iCurQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
 
     let mut iTc = [0i8; 4];
     let uiBSx4 = [3u8; 4];
@@ -1729,7 +1729,7 @@ pub unsafe fn FilteringEdgeLumaHV(
     // Luma V
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
         (*pFilter).iLumaQP = ((iCurQp
-            + *(*pCurDqLayer).pLumaQp.add((iMbXyIndex - 1) as usize) as i32
+            + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
             + 1)
             >> 1) as i8;
         FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize, std::ptr::null());
@@ -1768,7 +1768,7 @@ pub unsafe fn FilteringEdgeLumaHV(
     // Luma H
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         (*pFilter).iLumaQP = ((iCurQp
-            + *(*pCurDqLayer).pLumaQp.add((iMbXyIndex - iMbWidth) as usize) as i32
+            + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
             + 1)
             >> 1) as i8;
         FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize, std::ptr::null());

@@ -2598,7 +2598,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     pBs.cursor.set_pos(iPcmStart + 384);
 
     // step 3: update QP and non-zero counts (Rec. 9.2.1: for PCM, nzc = 16)
-    *(*dq).pLumaQp.add(iMbXy) = 0;
+    *(*dq).grid.luma_qp.get_mut(iMbXy) = 0;
     (*(*dq).pChromaQp.add(iMbXy))[0] = 0;
     (*(*dq).pChromaQp.add(iMbXy))[1] = 0;
     let pNzc = &mut *(*dq).pNzc.add(iMbXy);
@@ -2728,10 +2728,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     if *(*dq).pCbp.add(iMbXy) == 0 && IS_INTRANxN(*(*(*dq).pDec).pMbType.add(iMbXy)) {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
-        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
@@ -2752,7 +2752,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
@@ -2822,7 +2822,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
             g_kuiLumaDcZigzagScan.as_ptr(),
             I16_LUMA_DC,
             scaled_tcoeff_mb.as_mut_ptr(),
-            *(*dq).pLumaQp.add(iMbXy) as u8,
+            *(*dq).grid.luma_qp.get(iMbXy) as u8,
             pCtx,
         );
         if ret != ERR_NONE {
@@ -2843,7 +2843,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     g_kuiZigzagScan.as_ptr().add(max_idx),
                     I16_LUMA_AC,
                     scaled_tcoeff_mb.as_mut_ptr().add(i << 4),
-                    *(*dq).pLumaQp.add(iMbXy) as u8,
+                    *(*dq).grid.luma_qp.get(iMbXy) as u8,
                     pCtx,
                 );
                 if ret != ERR_NONE {
@@ -2875,7 +2875,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add(iId8x8 << 6),
                             iId4x4,
-                            *(*dq).pLumaQp.add(iMbXy) as u8,
+                            *(*dq).grid.luma_qp.get(iMbXy) as u8,
                             pCtx,
                         );
                         if ret != ERR_NONE {
@@ -2913,7 +2913,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             g_kuiZigzagScan.as_ptr().add(iScanIdxStart),
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add((iIndex as usize) << 4),
-                            *(*dq).pLumaQp.add(iMbXy) as u8,
+                            *(*dq).grid.luma_qp.get(iMbXy) as u8,
                             pCtx,
                         );
                         if ret != ERR_NONE {
@@ -3233,10 +3233,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     if *(*dq).pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
-        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
@@ -3257,7 +3257,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
@@ -3341,7 +3341,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         }
 
         let iLastMbQp = (*pSlice).iLastMbQp;
-        *(*dq).pLumaQp.add(iMbXy) = iLastMbQp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
         let pps_ptr = (*pSliceHeaderExt).sSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
         for i in 0..2 {
             let offset = if !pps_ptr.is_null() {
@@ -3575,10 +3575,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     if *(*dq).pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
-        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
@@ -3599,7 +3599,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
@@ -3724,11 +3724,11 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
                 && (*pNalCur).sNalHeaderExt.uiDependencyId == 0)
         {
             let iLastMbQp = (*pSlice).iLastMbQp;
-            *(*dq).pLumaQp.add(iMbXy) = iLastMbQp as i8;
+            *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
             let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
             for i in 0..2 {
                 let idx = WELS_CLIP3(
-                    *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                    *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                     0,
                     51,
                 );
@@ -4272,7 +4272,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         for i in 0..2 {
             let idx =
@@ -4289,7 +4289,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 g_kuiLumaDcZigzagScan.as_ptr(),
                 I16_LUMA_DC,
                 scaled_tcoeff_mb.as_mut_ptr(),
-                *(*dq).pLumaQp.add(iMbXy) as u8,
+                *(*dq).grid.luma_qp.get(iMbXy) as u8,
                 pCtx,
             );
             if ret != ERR_NONE {
@@ -4309,7 +4309,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         scan_ptr,
                         I16_LUMA_AC,
                         coeff_ptr,
-                        *(*dq).pLumaQp.add(iMbXy) as u8,
+                        *(*dq).grid.luma_qp.get(iMbXy) as u8,
                         pCtx,
                     );
                     if ret != ERR_NONE {
@@ -4350,7 +4350,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             scan_ptr,
                             res_prop,
                             coeff_ptr,
-                            *(*dq).pLumaQp.add(iMbXy) as u8,
+                            *(*dq).grid.luma_qp.get(iMbXy) as u8,
                             pCtx,
                         );
                         if ret != ERR_NONE {
@@ -4390,7 +4390,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                                 scan_ptr,
                                 res_prop,
                                 coeff_ptr,
-                                *(*dq).pLumaQp.add(iMbXy) as u8,
+                                *(*dq).grid.luma_qp.get(iMbXy) as u8,
                                 pCtx,
                             );
                             if ret != ERR_NONE {
@@ -4498,7 +4498,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         }
     } else {
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
-        *(*dq).pLumaQp.add(iMbXy) = last_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
         let pps_sh = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
         for i in 0..2 {
             let idx =
@@ -4801,7 +4801,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
         }
 
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
-        *(*dq).pLumaQp.add(iMbXy) = last_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
         let pps = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
         for i in 0..2 {
             let idx =
@@ -5046,7 +5046,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         }
 
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
-        *(*dq).pLumaQp.add(iMbXy) = last_qp as i8;
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
         let pps = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
         for i in 0..2 {
             let idx =

@@ -357,7 +357,6 @@ pub struct SDqLayer {
     pub pDirect: *mut [i8; 16],
     pub pNoSubMbPartSizeLessThan8x8Flag: *mut bool,
     pub pTransformSize8x8Flag: *mut bool,
-    pub pLumaQp: *mut i8,
     pub pChromaQp: *mut [i8; 2],
     pub pCbp: *mut i8,
     pub pNzc: *mut [i8; 24],
@@ -753,7 +752,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
     let kiMbNum = ((*pCurDq).iMbWidth * (*pCurDq).iMbHeight) as usize;
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
         for iMb in 0..kiMbNum {
-            iTotalQp += *(*pCurDq).pLumaQp.add(iMb) as i64;
+            iTotalQp += *(*pCurDq).grid.luma_qp.get(iMb) as i64;
         }
         if kiMbNum > 0 {
             iTotalQp /= kiMbNum as i64;
@@ -769,7 +768,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
                 0i64
             };
             iCorrectMbNum += correct;
-            iTotalQp += (*(*pCurDq).pLumaQp.add(iMb) as i64) * correct;
+            iTotalQp += (*(*pCurDq).grid.luma_qp.get(iMb) as i64) * correct;
         }
         if iCorrectMbNum == 0 {
             iTotalQp = (*pDecStat).iAvgLumaQp as i64;
@@ -2793,7 +2792,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pNoSubMbPartSizeLessThan8x8Flag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pDq).pTransformSize8x8Flag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
-        (*pDq).pLumaQp = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pMvd[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2854,10 +2852,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pTransformSize8x8Flag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pTransformSize8x8Flag as *mut u8, numMb * std::mem::size_of::<bool>());
             (*pDq).pTransformSize8x8Flag = std::ptr::null_mut();
-        }
-        if !(*pDq).pLumaQp.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pLumaQp as *mut u8, numMb * std::mem::size_of::<i8>());
-            (*pDq).pLumaQp = std::ptr::null_mut();
         }
         if !(*pDq).pChromaQp.is_null() {
             WelsFreeHelper(pMa, (*pDq).pChromaQp as *mut u8, numMb * 2 * std::mem::size_of::<i8>());
