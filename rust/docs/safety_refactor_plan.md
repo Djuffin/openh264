@@ -494,7 +494,7 @@ Same playbook, informed by Phase 5's patterns:
 §2.2.8. The externally visible API does not change at all; this phase moves the safety line up to it and makes the drop-in story real:
 
 1. Carve the safe core `Decoder`/`Encoder` types out of what phases 5–7 produced (mostly naming/visibility — the subsystems already exist); assert `Send` via compile tests; export the safe API for Rust consumers.
-2. Rewire the boundary: `CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` hold the safe types; each of the 24 thunks becomes translate-in → safe call → translate-out with a written `# Safety` contract; the vtable structs, slot order (including `DecodeParser`/`DecodeFrameEx` stubs), factories, and version functions are untouched. Trace-callback plumbing lands here (raw C pair stored at the boundary, wrapped as the internal `Logger` sink).
+2. Rewire the boundary: `CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` hold the safe types; each of the 24 thunks becomes translate-in → safe call → translate-out with a written `# Safety` contract; the vtable structs, slot order (including `DecodeParser`/`DecodeFrameEx` stubs), factories, and version functions are untouched. *(Added 2026-08-11, Phase 5 session D: this rewire owns **F23** — all 19 `&mut self` convenience methods on the 8-byte vtable base structs are UB today, the borrow narrowed to `ISVCDecoder` while the thunk writes the impl object at offset 0x20; every integration test and Rust consumer hits it. The receivers become raw-pointer-based or move to the impl object — S28's provenance law at the ABI layer.)* Trace-callback plumbing lands here (raw C pair stored at the boundary, wrapped as the internal `Logger` sink).
 3. `crate-type = ["rlib", "cdylib", "staticlib"]`; extend `api/abi_guard.rs` to pin every boundary-crossing struct (add `SParserBsInfo`, `OpenH264Version`, capability struct if missing).
 4. Build the **external-ABI harness**: a small C++ driver compiled against upstream `codec_api.h` that `dlopen`s the Rust cdylib and runs the decoder-conformance and loopback flows; its hashes must equal the in-process results. Stretch, high-value: point upstream's gtest API suites at the Rust dylib — the repo already contains the gtest tree and the `gtest_repro` flow.
 5. Scoped-lint endgame for the module: `api/` gets `#[allow(unsafe_code)]`; crate root gets `#![deny(unsafe_code)]` (this flips in Phase 9 once stragglers are gone).
@@ -768,6 +768,10 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   back-to-back load, ≈ 1/100–150 on susceptible configurations; a battery's
   interleaved sweeps often draw zero — load density is part of the signature.
   **Protocol:**
+  0. **Hash shortcut** (session D, tenth-plus acquittal): if the two trees under
+     comparison build byte-identical `rust_enc` binaries (e.g. the diff is
+     docs/tests-only), base and head are *one binary* — record the hash equality
+     and acquit by construction; no re-run or alternation can say more.
   1. One hit → re-run that configuration 5×. A reproduction in isolation is valid
      evidence. Two *different* wrong lengths from one binary+configuration = race,
      not divergence — a deterministic port bug repeats its bytes.
