@@ -368,7 +368,6 @@ pub struct SDqLayer {
     // `pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp`
     // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
     // 27 allocations before 5.2 carries either into a safe container.
-    pub pResidualPredFlag: *mut i8,
     pub pMbCorrectlyDecodedFlag: *mut bool,
     pub pMbRefConcealedFlag: *mut bool,
     pub pScaledTCoeff: *mut [i16; 384],
@@ -2808,7 +2807,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pCbp = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pSubMbType = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
-        (*pDq).pResidualPredFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
         (*pDq).pMbRefConcealedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
@@ -2900,10 +2898,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pSliceIdc.is_null() {
             WelsFreeHelper(pMa, (*pDq).pSliceIdc as *mut u8, numMb * std::mem::size_of::<i32>());
             (*pDq).pSliceIdc = std::ptr::null_mut();
-        }
-        if !(*pDq).pResidualPredFlag.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pResidualPredFlag as *mut u8, numMb * std::mem::size_of::<i8>());
-            (*pDq).pResidualPredFlag = std::ptr::null_mut();
         }
         if !(*pDq).pMbCorrectlyDecodedFlag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pMbCorrectlyDecodedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
