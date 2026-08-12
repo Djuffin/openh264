@@ -725,7 +725,7 @@ pub unsafe fn WelsCabacContextInit(
         let model_idx = iIdx;
         std::ptr::copy_nonoverlapping(
             (*pCtx).sWelsCabacContexts[model_idx][qp_idx].as_ptr(),
-            (*pCtx).pCabacCtx.as_mut_ptr(),
+            cabac_ctx_base(pCtx),
             WELS_CONTEXT_COUNT,
         );
     }
@@ -834,6 +834,25 @@ pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux:
         (*pDecEngine).iBitsLeft = 0;
         pBsAux.cursor.restore_from_cabac((*pDecEngine).pos);
     }
+}
+
+/// The CABAC context array as a raw base pointer, with **no reference in between**.
+///
+/// `cabac_ctx_base(pCtx)` takes `&mut` of the array first, which retags
+/// `Unique` over the whole of it and kills every pointer previously derived from it.
+/// `ParseSignificantMapCabac` keeps **two** live at once (`pMapCtx` and `pLastCtx`),
+/// so the second derivation invalidated the first and every read through it was UB —
+/// F13's `as_mut_ptr()` shape, the one T5.B2 found six times in `manage_dec_ref.rs`,
+/// here in the CABAC parser. `addr_of_mut!` creates no reference, so every pointer
+/// this hands out carries the context allocation's own provenance and none can
+/// invalidate another (S29).
+///
+/// # Safety
+/// `pCtx` must be a live decoder context; the caller indexes within
+/// `WELS_CONTEXT_COUNT`, exactly as the `as_mut_ptr().add(..)` spelling did.
+#[inline(always)]
+pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
+    unsafe { std::ptr::addr_of_mut!((*pCtx).pCabacCtx).cast::<SWelsCabacCtx>() }
 }
 
 /// The RBSP window the CABAC engine reads, for a context mid-slice.

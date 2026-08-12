@@ -9,6 +9,7 @@
 )]
 
 use crate::safe::bits::BsCursor;
+use crate::decoder::bit_stream::BsReader;
 use std::ffi::c_void;
 
 // ============================================================================
@@ -663,10 +664,10 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
         return false;
     }
     let pCurSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pCurSlice.sSliceHeaderExt.sSliceHeader;
+    let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
-    if pSliceHeader.iDirectSpatialMvPredFlag == 0 {
-        let uiRefCount = pSliceHeader.uiRefCount[LIST_0];
+    if (*pSliceHeader).iDirectSpatialMvPredFlag == 0 {
+        let uiRefCount = (*pSliceHeader).uiRefCount[LIST_0];
         let pRefList1 = &ctx.sRefPic.pRefList[LIST_1];
         let pRefList0 = &ctx.sRefPic.pRefList[LIST_0];
         if !pRefList1[0].is_null() {
@@ -674,14 +675,14 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
                 if !pRefList0[i as usize].is_null() {
                     let poc0 = (*pRefList0[i as usize]).iFramePoc;
                     let poc1 = (*pRefList1[0]).iFramePoc;
-                    let poc = pSliceHeader.iPicOrderCntLsb;
+                    let poc = (*pSliceHeader).iPicOrderCntLsb;
                     let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                     if td == 0 {
-                        pCurSlice.iMvScale[LIST_0][i as usize] = 1 << 8;
+                        (*pCurSlice).iMvScale[LIST_0][i as usize] = 1 << 8;
                     } else {
                         let tb = WELS_CLIP3(poc - poc0, -128, 127);
                         let tx = (16384 + (td.abs() >> 1)) / td;
-                        pCurSlice.iMvScale[LIST_0][i as usize] =
+                        (*pCurSlice).iMvScale[LIST_0][i as usize] =
                             WELS_CLIP3((tb * tx + 32) >> 6, -1024, 1023) as i16;
                     }
                 }
@@ -1076,11 +1077,11 @@ pub unsafe fn WelsMbInterSampleConstruction(
     }
     let ctx = &*pCtx;
     let dq = &*pCurDqLayer;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let iMbXy = (*dq).iMbXyIndex as usize;
 
-    let pTransformSize8x8 = *dq.pTransformSize8x8Flag.add(iMbXy);
-    let pNzc = *dq.pNzc.add(iMbXy);
-    let pScaledTCoeff = dq.pScaledTCoeff.add(iMbXy) as *mut i16;
+    let pTransformSize8x8 = *(*dq).pTransformSize8x8Flag.add(iMbXy);
+    let pNzc = *(*dq).pNzc.add(iMbXy);
+    let pScaledTCoeff = (*dq).pScaledTCoeff.add(iMbXy) as *mut i16;
 
 
     if pTransformSize8x8 {
@@ -2054,14 +2055,14 @@ pub unsafe fn WelsMbInterConstruction(
         return ERR_NONE;
     }
     let ctx = &mut *pCtx;
-    let dq = &mut *pCurDqLayer;
-    let iMbX = dq.iMbX;
-    let iMbY = dq.iMbY;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbX = (*dq).iMbX;
+    let iMbY = (*dq).iMbY;
 
-    if dq.pDec.is_null() {
+    if (*dq).pDec.is_null() {
         return ERR_NONE;
     }
-    let pDec = &mut *dq.pDec;
+    let pDec = &mut *(*dq).pDec;
     let iLumaStride = pDec.linesize(0);
     let iChromaStride = pDec.linesize(1);
 
@@ -2093,7 +2094,7 @@ pub unsafe fn WelsMbInterConstruction(
     // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
     // so the guard is always true and is not transcribed.
     crate::common::deblocking_common::WelsNonZeroCount_c(
-        (*dq.pNzc.add(dq.iMbXyIndex as usize)).as_mut_ptr(),
+        (*(*dq).pNzc.add((*dq).iMbXyIndex as usize)).as_mut_ptr(),
     );
 
     ERR_NONE
@@ -2108,10 +2109,10 @@ pub unsafe fn WelsMbInterPrediction(
     if pCtx.is_null() || pCurDqLayer.is_null() || (*pCurDqLayer).pDec.is_null() {
         return ERR_NONE;
     }
-    let dq = &mut *pCurDqLayer;
-    let iMbX = dq.iMbX;
-    let iMbY = dq.iMbY;
-    let pDec = &mut *dq.pDec;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbX = (*dq).iMbX;
+    let iMbY = (*dq).iMbY;
+    let pDec = &mut *(*dq).pDec;
     let iLumaStride = pDec.linesize(0);
     let iChromaStride = pDec.linesize(1);
 
@@ -2386,13 +2387,13 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
-    let dq = &mut *pCurDqLayer;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbXy = (*dq).iMbXyIndex as usize;
 
-    if dq.pDec.is_null() || (*dq.pDec).pMbType.is_null() {
+    if (*dq).pDec.is_null() || (*(*dq).pDec).pMbType.is_null() {
         return ERR_NONE;
     }
-    let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+    let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
 
     if mb_type == MB_TYPE_INTRA_PCM {
         ERR_NONE
@@ -2400,10 +2401,10 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
         WelsMbIntraPredictionConstruction(pCtx, pCurDqLayer, true);
         ERR_NONE
     } else if IS_INTER(mb_type) {
-        if dq.pCbp.is_null() {
+        if (*dq).pCbp.is_null() {
             return ERR_INFO_MB_RECON_FAIL;
         }
-        let cbp = *dq.pCbp.add(iMbXy);
+        let cbp = *(*dq).pCbp.add(iMbXy);
         if cbp == 0 {
             if !CheckRefPics(pCtx) {
                 return ERR_INFO_MB_RECON_FAIL;
@@ -2427,41 +2428,41 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
-    let dq = &mut *pCurDqLayer;
-    let pCurSlice = &mut dq.sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pCurSlice.sSliceHeaderExt.sSliceHeader;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+    let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
-    if pSliceHeader.pSps.is_null() {
+    if (*pSliceHeader).pSps.is_null() {
         return ERR_NONE;
     }
-    let iTotalMbTargetLayer = (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32;
+    let iTotalMbTargetLayer = (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32;
 
 
-    let iCurLayerWidth = dq.iMbWidth << 4;
-    let iCurLayerHeight = dq.iMbHeight << 4;
+    let iCurLayerWidth = (*dq).iMbWidth << 4;
+    let iCurLayerHeight = (*dq).iMbHeight << 4;
 
-    let mut iNextMbXyIndex = pSliceHeader.iFirstMbInSlice;
-    let iTotalNumMb = pCurSlice.iTotalMbInCurSlice;
+    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
+    let iTotalNumMb = (*pCurSlice).iTotalMbInCurSlice;
     let mut iCountNumMb = 0;
 
     if !ctx.sSpsPpsCtx.bAvcBasedFlag && iCurLayerWidth != ctx.iCurSeqIntervalMaxPicWidth {
         return ERR_INFO_WIDTH_MISMATCH;
     }
 
-    if dq.iMbWidth > 0 {
-        dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-        dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+    if (*dq).iMbWidth > 0 {
+        (*dq).iMbX = iNextMbXyIndex % (*dq).iMbWidth;
+        (*dq).iMbY = iNextMbXyIndex / (*dq).iMbWidth;
     }
-    dq.iMbXyIndex = iNextMbXyIndex;
+    (*dq).iMbXyIndex = iNextMbXyIndex;
 
-    if iNextMbXyIndex == 0 && !dq.pDec.is_null() {
+    if iNextMbXyIndex == 0 && !(*dq).pDec.is_null() {
         if !ctx.pSps.is_null() {
-            (*dq.pDec).iSpsId = (*ctx.pSps).iSpsId;
+            (*(*dq).pDec).iSpsId = (*ctx.pSps).iSpsId;
         }
         if !ctx.pPps.is_null() {
-            (*dq.pDec).iPpsId = (*ctx.pPps).iPpsId;
+            (*(*dq).pDec).iPpsId = (*ctx.pPps).iPpsId;
         }
-        (*dq.pDec).uiQualityId = dq.sLayerInfo.sNalHeaderExt.uiQualityId;
+        (*(*dq).pDec).uiQualityId = (*dq).sLayerInfo.sNalHeaderExt.uiQualityId;
     }
 
     loop {
@@ -2479,11 +2480,11 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 
         iCountNumMb += 1;
         let idx = iNextMbXyIndex as usize;
-        if !dq.pMbCorrectlyDecodedFlag.is_null() && !*dq.pMbCorrectlyDecodedFlag.add(idx) {
-            *dq.pMbCorrectlyDecodedFlag.add(idx) = true;
-            if !dq.pMbRefConcealedFlag.is_null() && *dq.pMbRefConcealedFlag.add(idx) {
-                if !dq.pDec.is_null() {
-                    (*dq.pDec).iMbEcedPropNum += 1;
+        if !(*dq).pMbCorrectlyDecodedFlag.is_null() && !*(*dq).pMbCorrectlyDecodedFlag.add(idx) {
+            *(*dq).pMbCorrectlyDecodedFlag.add(idx) = true;
+            if !(*dq).pMbRefConcealedFlag.is_null() && *(*dq).pMbRefConcealedFlag.add(idx) {
+                if !(*dq).pDec.is_null() {
+                    (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
             }
             ctx.iTotalNumMbRec += 1;
@@ -2493,7 +2494,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
             return ERR_INFO_MB_NUM_EXCEED_FAIL;
         }
 
-        if !pSliceHeader.pPps.is_null() && (*(pSliceHeader.pPps as *mut crate::decoder::parameter_sets::SPps)).uiNumSliceGroups > 1 {
+        if !(*pSliceHeader).pPps.is_null() && (*((*pSliceHeader).pPps as *mut crate::decoder::parameter_sets::SPps)).uiNumSliceGroups > 1 {
             iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(ctx.pFmo, iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
@@ -2501,21 +2502,21 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
         if iNextMbXyIndex == -1 || iNextMbXyIndex >= iTotalMbTargetLayer {
             break;
         }
-        if dq.iMbWidth > 0 {
-            dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-            dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+        if (*dq).iMbWidth > 0 {
+            (*dq).iMbX = iNextMbXyIndex % (*dq).iMbWidth;
+            (*dq).iMbY = iNextMbXyIndex / (*dq).iMbWidth;
         }
-        dq.iMbXyIndex = iNextMbXyIndex;
+        (*dq).iMbXyIndex = iNextMbXyIndex;
     }
 
-    if !dq.pDec.is_null() {
-        (*dq.pDec).iWidthInPixel = iCurLayerWidth;
-        (*dq.pDec).iHeightInPixel = iCurLayerHeight;
+    if !(*dq).pDec.is_null() {
+        (*(*dq).pDec).iWidthInPixel = iCurLayerWidth;
+        (*(*dq).pDec).iHeightInPixel = iCurLayerHeight;
     }
 
-    if pCurSlice.eSliceType != EWelsSliceType::I_SLICE as u8
-        && pCurSlice.eSliceType != EWelsSliceType::P_SLICE as u8
-        && pCurSlice.eSliceType != EWelsSliceType::B_SLICE as u8
+    if (*pCurSlice).eSliceType != EWelsSliceType::I_SLICE as u8
+        && (*pCurSlice).eSliceType != EWelsSliceType::P_SLICE as u8
+        && (*pCurSlice).eSliceType != EWelsSliceType::B_SLICE as u8
     {
         return ERR_NONE;
     }
@@ -2525,7 +2526,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
         return ERR_NONE;
     }
 
-    if pSliceHeader.uiDisableDeblockingFilterIdc == 1 || pCurSlice.iTotalMbInCurSlice <= 0 {
+    if (*pSliceHeader).uiDisableDeblockingFilterIdc == 1 || (*pCurSlice).iTotalMbInCurSlice <= 0 {
         return ERR_NONE;
     } else {
         crate::decoder::deblocking::WelsDeblockingFilterSlice(
@@ -2546,26 +2547,26 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 /// Matches the `25 == uiMbType` branch of `WelsActualDecodeMbCavlcISlice` /
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let pBs = &mut *(*dq).pBitStringAux;
     let buf = (*pCtx).sRawData.window_from(pBs.start);
-    let iMbX = dq.iMbX;
-    let iMbY = dq.iMbY;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let iMbX = (*dq).iMbX;
+    let iMbY = (*dq).iMbY;
+    let iMbXy = (*dq).iMbXyIndex as usize;
 
-    let iDecStrideL = (*dq.pDec).linesize(0);
-    let iDecStrideC = (*dq.pDec).linesize(1);
+    let iDecStrideL = (*(*dq).pDec).linesize(0);
+    let iDecStrideC = (*(*dq).pDec).linesize(1);
 
     let iOffsetL = ((iMbX + iMbY * iDecStrideL) << 4) as isize;
     let iOffsetC = ((iMbX + iMbY * iDecStrideC) << 3) as isize;
 
-    let mut pDecY = (*dq.pDec).data_ptr(0).offset(iOffsetL);
-    let mut pDecU = (*dq.pDec).data_ptr(1).offset(iOffsetC);
-    let mut pDecV = (*dq.pDec).data_ptr(2).offset(iOffsetC);
+    let mut pDecY = (*(*dq).pDec).data_ptr(0).offset(iOffsetL);
+    let mut pDecU = (*(*dq).pDec).data_ptr(1).offset(iOffsetC);
+    let mut pDecV = (*(*dq).pDec).data_ptr(2).offset(iOffsetC);
 
     let iIndex = ((-pBs.cursor.left_bits()) >> 3) + 2;
 
-    *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
+    *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
 
     // step 1: locate the bit-stream position (must align to an integer byte).
     // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
@@ -2599,10 +2600,10 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     pBs.cursor.set_pos(iPcmStart + 384);
 
     // step 3: update QP and non-zero counts (Rec. 9.2.1: for PCM, nzc = 16)
-    *dq.pLumaQp.add(iMbXy) = 0;
-    (*dq.pChromaQp.add(iMbXy))[0] = 0;
-    (*dq.pChromaQp.add(iMbXy))[1] = 0;
-    let pNzc = &mut *dq.pNzc.add(iMbXy);
+    *(*dq).pLumaQp.add(iMbXy) = 0;
+    (*(*dq).pChromaQp.add(iMbXy))[0] = 0;
+    (*(*dq).pChromaQp.add(iMbXy))[1] = 0;
+    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
     pNzc.fill(16);
     let ret = crate::decoder::bit_stream::InitReadBits(buf, &mut pBs.cursor, 0);
     if ret != 0 {
@@ -2614,14 +2615,14 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
 
-    let iMbXy = dq.iMbXyIndex as usize;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
     let mut uiCbp;
@@ -2631,11 +2632,11 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
-    *dq.pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
+    *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
-    *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-    *dq.pTransformSize8x8Flag.add(iMbXy) = false;
+    *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
+    *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
 
     let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
@@ -2655,15 +2656,15 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         return DecodeMbCavlcPcm(pCtx);
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
-        *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+        *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
         if (*(*pCtx).pPps).bTransform8x8ModeFlag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
-            *dq.pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
+            *(*dq).pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
             if uiCode != 0 {
-                *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
                 uiMbType = MB_TYPE_INTRA8x8;
             }
         }
@@ -2673,7 +2674,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
-        let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
+        let ret = if !*(*dq).pTransformSize8x8Flag.add(iMbXy) {
             ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
         } else {
             ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
@@ -2698,21 +2699,21 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         } else {
             crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
         };
-        *dq.pCbp.add(iMbXy) = uiCbp as i8;
+        *(*dq).pCbp.add(iMbXy) = uiCbp as i8;
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
     } else {
-        *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
-        *dq.pTransformSize8x8Flag.add(iMbXy) = false;
-        *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-        *dq.pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
-        *dq.pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
+        *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+        *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
+        *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
+        *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+        *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
         uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
-            (*dq.pCbp.add(iMbXy) as u32) >> 4
+            (*(*dq).pCbp.add(iMbXy) as u32) >> 4
         } else {
             0
         };
-        uiCbpL = (*dq.pCbp.add(iMbXy) as u32) & 15;
+        uiCbpL = (*(*dq).pCbp.add(iMbXy) as u32) & 15;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
             &mut sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -2724,25 +2725,25 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    let pNzc = &mut *dq.pNzc.add(iMbXy);
+    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
     pNzc.fill(0);
 
-    if *dq.pCbp.add(iMbXy) == 0 && IS_INTRANxN(*(*dq.pDec).pMbType.add(iMbXy)) {
+    if *(*dq).pCbp.add(iMbXy) == 0 && IS_INTRANxN(*(*(*dq).pDec).pMbType.add(iMbXy)) {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
-        *dq.pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *dq.pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
     }
 
-    if *dq.pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*dq.pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
+    if *(*dq).pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
+        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -2754,13 +2755,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *dq.pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
         pBs.start_cavlc();
@@ -2797,12 +2798,12 @@ unsafe fn WelsDecodeMbCavlcResidual(
     uiCbpL: u32,
     uiCbpC: u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let iMbXy = dq.iMbXyIndex as usize;
-    let pNzc = &mut *dq.pNzc.add(iMbXy);
-    let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
-    let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+    let iMbXy = (*dq).iMbXyIndex as usize;
+    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+    let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
     let is_intra = IS_INTRA(mb_type);
 
     let copy4 = |dst: *mut i8, src: *const u8| {
@@ -2824,7 +2825,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
             g_kuiLumaDcZigzagScan.as_ptr(),
             I16_LUMA_DC,
             scaled_tcoeff_mb.as_mut_ptr(),
-            *dq.pLumaQp.add(iMbXy) as u8,
+            *(*dq).pLumaQp.add(iMbXy) as u8,
             pCtx,
         );
         if ret != ERR_NONE {
@@ -2845,7 +2846,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     g_kuiZigzagScan.as_ptr().add(max_idx),
                     I16_LUMA_AC,
                     scaled_tcoeff_mb.as_mut_ptr().add(i << 4),
-                    *dq.pLumaQp.add(iMbXy) as u8,
+                    *(*dq).pLumaQp.add(iMbXy) as u8,
                     pCtx,
                 );
                 if ret != ERR_NONE {
@@ -2859,7 +2860,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
         }
     } else {
         // non-INTRA16x16
-        if *dq.pTransformSize8x8Flag.add(iMbXy) {
+        if *(*dq).pTransformSize8x8Flag.add(iMbXy) {
             let iMbResProperty = if is_intra { LUMA_DC_AC_INTRA_8 } else { LUMA_DC_AC_INTER_8 };
             for iId8x8 in 0..4usize {
                 if (uiCbpL & (1 << iId8x8)) != 0 {
@@ -2877,7 +2878,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add(iId8x8 << 6),
                             iId4x4,
-                            *dq.pLumaQp.add(iMbXy) as u8,
+                            *(*dq).pLumaQp.add(iMbXy) as u8,
                             pCtx,
                         );
                         if ret != ERR_NONE {
@@ -2915,7 +2916,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             g_kuiZigzagScan.as_ptr().add(iScanIdxStart),
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add((iIndex as usize) << 4),
-                            *dq.pLumaQp.add(iMbXy) as u8,
+                            *(*dq).pLumaQp.add(iMbXy) as u8,
                             pCtx,
                         );
                         if ret != ERR_NONE {
@@ -2958,7 +2959,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 g_kuiChromaDcScan.as_ptr(),
                 iMbResProperty,
                 scaled_tcoeff_mb.as_mut_ptr().add(256 + (i << 6)),
-                (*dq.pChromaQp.add(iMbXy))[i] as u8,
+                (*(*dq).pChromaQp.add(iMbXy))[i] as u8,
                 pCtx,
             );
             if ret != ERR_NONE {
@@ -2988,7 +2989,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     g_kuiZigzagScan.as_ptr().add(max_idx),
                     iMbResProperty,
                     scaled_tcoeff_mb.as_mut_ptr().add(iIndex << 4),
-                    (*dq.pChromaQp.add(iMbXy))[i] as u8,
+                    (*(*dq).pChromaQp.add(iMbXy))[i] as u8,
                     pCtx,
                 );
                 if ret != ERR_NONE {
@@ -3019,7 +3020,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
         return ERR_INFO_INVALID_PTR;
     }
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSliceHeaderExt = &mut (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let pSliceHeaderExt = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt);
     let mut uiCode = 0u32;
     let iBaseModeFlag;
     if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
@@ -3052,14 +3053,14 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
 
-    let iMbXy = dq.iMbXyIndex as usize;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
     let mut uiCbp;
@@ -3069,7 +3070,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
+    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
@@ -3080,7 +3081,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         // inter MB type
         let mut iMotionVector = [[[0i16; 2]; 30]; 2];
         let mut iRefIndex = [[0i8; 30]; 2];
-        *(*dq.pDec).pMbType.add(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
+        *(*(*dq).pDec).pMbType.add(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -3105,13 +3106,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *dq.pResidualPredFlag.add(iMbXy) = uiCode as i8;
+            *(*dq).pResidualPredFlag.add(iMbXy) = uiCode as i8;
         } else {
-            *dq.pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
-        if *dq.pResidualPredFlag.add(iMbXy) == 0 {
-            *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
+        if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
+            *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         } else {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
         }
@@ -3131,15 +3132,15 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return DecodeMbCavlcPcm(pCtx);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
-            *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+            *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
-                *dq.pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
+                *(*dq).pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
                 if uiCode != 0 {
-                    *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                    *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
@@ -3148,7 +3149,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
-            let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
+            let ret = if !*(*dq).pTransformSize8x8Flag.add(iMbXy) {
                 ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
                 ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
@@ -3157,17 +3158,17 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                 return ret;
             }
         } else {
-            *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
-            *dq.pTransformSize8x8Flag.add(iMbXy) = false;
-            *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-            *dq.pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
-            *dq.pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
+            *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+            *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
+            *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
+            *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+            *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
             uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
-                (*dq.pCbp.add(iMbXy) as u32) >> 4
+                (*(*dq).pCbp.add(iMbXy) as u32) >> 4
             } else {
                 0
             };
-            uiCbpL = (*dq.pCbp.add(iMbXy) as u32) & 15;
+            uiCbpL = (*(*dq).pCbp.add(iMbXy) as u32) & 15;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
                 pNonZeroCount.as_mut_ptr(),
@@ -3180,7 +3181,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if MB_TYPE_INTRA16x16 != *(*dq.pDec).pMbType.add(iMbXy) {
+    if MB_TYPE_INTRA16x16 != *(*(*dq).pDec).pMbType.add(iMbXy) {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
@@ -3192,7 +3193,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+        let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
             if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3207,13 +3208,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             }
         };
 
-        *dq.pCbp.add(iMbXy) = uiCbp as i8;
+        *(*dq).pCbp.add(iMbXy) = uiCbp as i8;
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
 
-        let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+        let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
         let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
-            || *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy))
+            || *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy))
             && mb_type != MB_TYPE_INTRA8x8
             && mb_type != MB_TYPE_INTRA4x4
             && uiCbpL > 0
@@ -3224,30 +3225,30 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *dq.pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
+            *(*dq).pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
         }
     }
 
-    let pNzc = &mut *dq.pNzc.add(iMbXy);
+    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
     pNzc.fill(0);
 
-    let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
-    if *dq.pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
+    let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
+    if *(*dq).pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
-        *dq.pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *dq.pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
     }
 
-    if *dq.pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*dq.pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
+    if *(*dq).pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
+        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -3259,13 +3260,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *dq.pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
         pBs.start_cavlc();
@@ -3302,8 +3303,8 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         return ERR_INFO_INVALID_PTR;
     }
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
-    let pSliceHeaderExt = &mut (*pSlice).sSliceHeaderExt;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+    let pSliceHeaderExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
 
@@ -3395,14 +3396,14 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = &mut dq.sLayerInfo.sSliceInLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
 
-    let iMbXy = dq.iMbXyIndex as usize;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
     let mut uiCbp;
@@ -3412,7 +3413,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
+    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
@@ -3423,7 +3424,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         // inter MB type
         let mut iMotionVector = [[[0i16; 2]; 30]; 2];
         let mut iRefIndex = [[0i8; 30]; 2];
-        *(*dq.pDec).pMbType.add(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
+        *(*(*dq).pDec).pMbType.add(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -3448,13 +3449,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *dq.pResidualPredFlag.add(iMbXy) = uiCode as i8;
+            *(*dq).pResidualPredFlag.add(iMbXy) = uiCode as i8;
         } else {
-            *dq.pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
-        if *dq.pResidualPredFlag.add(iMbXy) == 0 {
-            *dq.pInterPredictionDoneFlag.add(iMbXy) = 0;
+        if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
+            *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         } else {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
         }
@@ -3474,15 +3475,15 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return DecodeMbCavlcPcm(pCtx);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
-            *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+            *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
-                *dq.pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
+                *(*dq).pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
                 if uiCode != 0 {
-                    *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                    *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
@@ -3491,7 +3492,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
-            let ret = if !*dq.pTransformSize8x8Flag.add(iMbXy) {
+            let ret = if !*(*dq).pTransformSize8x8Flag.add(iMbXy) {
                 ParseIntra4x4Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
             } else {
                 ParseIntra8x8Mode(pCtx, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
@@ -3500,17 +3501,17 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                 return ret;
             }
         } else {
-            *(*dq.pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
-            *dq.pTransformSize8x8Flag.add(iMbXy) = false;
-            *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
-            *dq.pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
-            *dq.pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
+            *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+            *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
+            *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
+            *(*dq).pIntraPredMode.add(iMbXy * 8 + 7) = ((uiMbType - 1) & 3) as i8;
+            *(*dq).pCbp.add(iMbXy) = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
             uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
-                (*dq.pCbp.add(iMbXy) as u32) >> 4
+                (*(*dq).pCbp.add(iMbXy) as u32) >> 4
             } else {
                 0
             };
-            uiCbpL = (*dq.pCbp.add(iMbXy) as u32) & 15;
+            uiCbpL = (*(*dq).pCbp.add(iMbXy) as u32) & 15;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
                 pNonZeroCount.as_mut_ptr(),
@@ -3523,7 +3524,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if MB_TYPE_INTRA16x16 != *(*dq.pDec).pMbType.add(iMbXy) {
+    if MB_TYPE_INTRA16x16 != *(*(*dq).pDec).pMbType.add(iMbXy) {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
@@ -3535,7 +3536,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+        let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
             if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3550,13 +3551,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             }
         };
 
-        *dq.pCbp.add(iMbXy) = uiCbp as i8;
+        *(*dq).pCbp.add(iMbXy) = uiCbp as i8;
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
 
-        let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
+        let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
         let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
-            || *dq.pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy))
+            || *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy))
             && mb_type != MB_TYPE_INTRA8x8
             && mb_type != MB_TYPE_INTRA4x4
             && uiCbpL > 0
@@ -3567,30 +3568,30 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             if ret != 0 {
                 return ret as i32;
             }
-            *dq.pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
+            *(*dq).pTransformSize8x8Flag.add(iMbXy) = uiCode != 0;
         }
     }
 
-    let pNzc = &mut *dq.pNzc.add(iMbXy);
+    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
     pNzc.fill(0);
 
-    let mb_type = *(*dq.pDec).pMbType.add(iMbXy);
-    if *dq.pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
+    let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
+    if *(*dq).pCbp.add(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
-        *dq.pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        *(*dq).pLumaQp.add(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
-                *dq.pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
+                *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
                 0,
                 51,
             );
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
     }
 
-    if *dq.pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*dq.pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *dq.pScaledTCoeff.add(iMbXy);
+    if *(*dq).pCbp.add(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
+        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -3602,13 +3603,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
-        *dq.pLumaQp.add(iMbXy) = new_qp as i8;
+        *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pSliceHeader.pPps as *const SPps);
+        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
-            (*dq.pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
+            (*(*dq).pChromaQp.add(iMbXy))[i] = g_kuiChromaQpTable[idx as usize] as i8;
         }
 
         pBs.start_cavlc();
@@ -3646,7 +3647,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         return ERR_INFO_INVALID_PTR;
     }
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
     let ppRefPicL0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
     let ppRefPicL1 = (*pCtx).sRefPic.pRefList[LIST_1][0];
@@ -3697,7 +3698,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 
         // predict iMv
         let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
-        if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+        if (*pSliceHeader).iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx,
@@ -3729,7 +3730,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         {
             let iLastMbQp = (*pSlice).iLastMbQp;
             *(*dq).pLumaQp.add(iMbXy) = iLastMbQp as i8;
-            let pps_sh = &*(pSliceHeader.pPps as *const SPps);
+            let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
             for i in 0..2 {
                 let idx = WELS_CLIP3(
                     *(*dq).pLumaQp.add(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -3782,11 +3783,15 @@ pub unsafe fn ParseIntra4x4Mode(
     pNeighAvail: *mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
     buf: &[u8],
-    pBsAux: &mut BsCursor,
+    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
+    // whole duration, and the CABAC arm below re-reaches this very cursor through
+    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // — S29's spelling, S25's rule that no borrow outlives one expression.
+    pBsAux: *mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
-    let dq = &mut *pCurDqLayer;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut iSampleAvail = [0i32; 30];
     let uiNeighAvail;
     let mut uiCode = 0u32;
@@ -3798,7 +3803,7 @@ pub unsafe fn ParseIntra4x4Mode(
 
     uiNeighAvail = ((iSampleAvail[6] << 2) | (iSampleAvail[0] << 1) | (iSampleAvail[1])) as u8;
 
-    let pps = &*(dq.sLayerInfo.pPps as *const SPps);
+    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
     for i in 0..16 {
         let iPrevIntra4x4PredMode;
         if pps.bEntropyCodingModeFlag {
@@ -3811,7 +3816,7 @@ pub unsafe fn ParseIntra4x4Mode(
             }
             iPrevIntra4x4PredMode = iCode;
         } else {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBsAux, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, &mut *pBsAux, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3831,7 +3836,7 @@ pub unsafe fn ParseIntra4x4Mode(
             if iPrevIntra4x4PredMode != 0 {
                 iBestMode = kiPredMode as i8;
             } else {
-                let ret = crate::decoder::dec_golomb::BsGetBits(buf, pBsAux, 3, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetBits(buf, &mut *pBsAux, 3, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -3882,7 +3887,7 @@ pub unsafe fn ParseIntra4x4Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -3908,11 +3913,15 @@ pub unsafe fn ParseIntra8x8Mode(
     pNeighAvail: *mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
     buf: &[u8],
-    pBsAux: &mut BsCursor,
+    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
+    // whole duration, and the CABAC arm below re-reaches this very cursor through
+    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // — S29's spelling, S25's rule that no borrow outlives one expression.
+    pBsAux: *mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
-    let dq = &mut *pCurDqLayer;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut iSampleAvail = [0i32; 30];
     let uiNeighAvail;
     let mut uiCode = 0u32;
@@ -3928,7 +3937,7 @@ pub unsafe fn ParseIntra8x8Mode(
         | (iSampleAvail[1])) as u8;
     *(*dq).pIntraNxNAvailFlag.add(iMbXy) = uiNeighAvail;
 
-    let pps = &*(dq.sLayerInfo.pPps as *const SPps);
+    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
     for i in 0..4usize {
         let iPrevIntra4x4PredMode;
         if pps.bEntropyCodingModeFlag {
@@ -3941,7 +3950,7 @@ pub unsafe fn ParseIntra8x8Mode(
             }
             iPrevIntra4x4PredMode = iCode;
         } else {
-            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBsAux, &mut uiCode);
+            let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, &mut *pBsAux, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -3962,7 +3971,7 @@ pub unsafe fn ParseIntra8x8Mode(
             if iPrevIntra4x4PredMode != 0 {
                 iBestMode = kiPredMode as i8;
             } else {
-                let ret = crate::decoder::dec_golomb::BsGetBits(buf, pBsAux, 3, &mut uiCode);
+                let ret = crate::decoder::dec_golomb::BsGetBits(buf, &mut *pBsAux, 3, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -4018,7 +4027,7 @@ pub unsafe fn ParseIntra8x8Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -4043,11 +4052,15 @@ pub unsafe fn ParseIntra16x16Mode(
     pCtx: *mut SWelsDecoderContext,
     pNeighAvail: *mut SWelsNeighAvail,
     buf: &[u8],
-    pBsAux: &mut BsCursor,
+    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
+    // whole duration, and the CABAC arm below re-reaches this very cursor through
+    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // — S29's spelling, S25's rule that no borrow outlives one expression.
+    pBsAux: *mut BsCursor,
     pCurDqLayer: *mut SDqLayer,
 ) -> i32 {
-    let dq = &mut *pCurDqLayer;
-    let iMbXy = dq.iMbXyIndex as usize;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiNeighAvail = 0u8;
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
@@ -4064,7 +4077,7 @@ pub unsafe fn ParseIntra16x16Mode(
         return ERR_NONE;
     }
 
-    let pps = &*(dq.sLayerInfo.pPps as *const SPps);
+    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
     if pps.bEntropyCodingModeFlag {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx,
@@ -4079,7 +4092,7 @@ pub unsafe fn ParseIntra16x16Mode(
         }
         *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
     } else {
-        let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBsAux, &mut uiCode);
+        let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
             return ret as i32;
         }
@@ -4107,8 +4120,17 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     pIntraPredMode: *mut i8,
     uiMbType: u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBsAux) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
+    // function then passes down as a strongly protected argument — while the CABAC
+    // engine underneath reaches the *same* `BsReader` whole through
+    // `pCtx->pCurDqLayer->pBitStringAux` (`cabac_rbsp_window`). Two live paths to one
+    // object, one of them exclusive. `addr_of_mut!` creates no reference, so there is
+    // no retag to conflict and the CAVLC leaves re-derive per use. Both paths die in
+    // 5.2 with `pBitStringAux` itself; until then this is S29's spelling.
+    let pBsRd: *mut BsReader = (*dq).pBitStringAux;
+    let buf = (*pCtx).sRawData.window_from((*pBsRd).start);
+    let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     if uiMbType == 0 {
@@ -4159,11 +4181,20 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
-    let (buf, pBsAux) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
-    let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
-    let pps_sh = &*(pSliceHeader.pPps as *const SPps);
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
+    // function then passes down as a strongly protected argument — while the CABAC
+    // engine underneath reaches the *same* `BsReader` whole through
+    // `pCtx->pCurDqLayer->pBitStringAux` (`cabac_rbsp_window`). Two live paths to one
+    // object, one of them exclusive. `addr_of_mut!` creates no reference, so there is
+    // no retag to conflict and the CAVLC leaves re-derive per use. Both paths die in
+    // 5.2 with `pBitStringAux` itself; until then this is S29's spelling.
+    let pBsRd: *mut BsReader = (*dq).pBitStringAux;
+    let buf = (*pCtx).sRawData.window_from((*pBsRd).start);
+    let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
+    let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
     let pps_layer = &*((*dq).sLayerInfo.pPps as *const SPps);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
@@ -4189,7 +4220,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         }
         *(*dq).pCbp.add(iMbXy) = uiCbp as i8;
         if uiCbp == 0 {
-            pSlice.iLastDeltaQp = 0;
+            (*pSlice).iLastDeltaQp = 0;
         }
         uiCbpChroma = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
             uiCbp >> 4
@@ -4245,9 +4276,9 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         if iQpDelta > 25 || iQpDelta < -26 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
-        let new_qp = (pSlice.iLastMbQp + iQpDelta + 52) % 52;
+        let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
         *(*dq).pLumaQp.add(iMbXy) = new_qp as i8;
-        pSlice.iLastMbQp = new_qp;
+        (*pSlice).iLastMbQp = new_qp;
         for i in 0..2 {
             let idx =
                 WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
@@ -4258,7 +4289,6 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                 pNeighAvail,
                 pNonZeroCount,
-                pBsAux,
                 0,
                 16,
                 g_kuiLumaDcZigzagScan.as_ptr(),
@@ -4279,8 +4309,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail,
                         pNonZeroCount,
-                        pBsAux,
-                        i as i32,
+                                i as i32,
                         len,
                         scan_ptr,
                         I16_LUMA_AC,
@@ -4321,8 +4350,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac8x8(
                             pNeighAvail,
                             pNonZeroCount,
-                            pBsAux,
-                            iIdx as i32,
+                                        iIdx as i32,
                             len,
                             scan_ptr,
                             res_prop,
@@ -4362,8 +4390,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                                 pNeighAvail,
                                 pNonZeroCount,
-                                pBsAux,
-                                iIdx as i32,
+                                                iIdx as i32,
                                 len,
                                 scan_ptr,
                                 res_prop,
@@ -4411,8 +4438,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                     pNeighAvail,
                     pNonZeroCount,
-                    pBsAux,
-                    16 + (i as i32 * 4),
+                        16 + (i as i32 * 4),
                     4,
                     g_kuiChromaDcScan.as_ptr(),
                     res_prop,
@@ -4450,8 +4476,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail,
                         pNonZeroCount,
-                        pBsAux,
-                        index as i32,
+                                index as i32,
                         len,
                         scan_ptr,
                         res_prop,
@@ -4494,7 +4519,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     pCtx: *mut SWelsDecoderContext,
     uiEosFlag: *mut u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4609,7 +4634,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     pNeighAvail: *mut SWelsNeighAvail,
     uiEosFlag: *mut u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4733,7 +4758,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
     pNalCur: *mut SNalUnit,
     uiEosFlag: *mut u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut uiCode = 0u32;
@@ -4813,7 +4838,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     pNeighAvail: *mut SWelsNeighAvail,
     uiEosFlag: *mut u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4944,9 +4969,9 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     pNalCur: *mut SNalUnit,
     uiEosFlag: *mut u32,
 ) -> i32 {
-    let dq = &mut *(*pCtx).pCurDqLayer;
-    let pSlice = &mut (*dq).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut uiCode = 0u32;
@@ -5203,24 +5228,24 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
-    let dq = &mut *pCurDqLayer;
-    let pSlice = &mut dq.sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    let dq: *mut SDqLayer = pCurDqLayer;
+    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 
-    pSlice.iTotalMbInCurSlice = 0;
+    (*pSlice).iTotalMbInCurSlice = 0;
 
     let pDecMbFunc: PWelsDecMbFunc = if !ctx.pPps.is_null() && (*ctx.pPps).bEntropyCodingModeFlag {
-        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
+        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
+        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -5230,23 +5255,23 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
+    let pPpsForIntra = (*pSliceHeader).pPps as *const crate::decoder::parameter_sets::SPps;
     ctx.eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
-    ctx.eSliceType = pSliceHeader.eSliceType;
+    ctx.eSliceType = (*pSliceHeader).eSliceType;
     WelsCalcDeqCoeffScalingList(pCtx);
 
-    let mut iNextMbXyIndex = pSliceHeader.iFirstMbInSlice;
-    if dq.iMbWidth > 0 {
-        dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-        dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
+    if (*dq).iMbWidth > 0 {
+        (*dq).iMbX = iNextMbXyIndex % (*dq).iMbWidth;
+        (*dq).iMbY = iNextMbXyIndex / (*dq).iMbWidth;
     }
-    dq.iMbXyIndex = iNextMbXyIndex;
+    (*dq).iMbXyIndex = iNextMbXyIndex;
 
-    let kiCountNumMb = if !pSliceHeader.pSps.is_null() {
-        (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*pSliceHeader).pSps.is_null() {
+        (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5260,8 +5285,8 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
 
         ctx.bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
-        if !dq.pMbRefConcealedFlag.is_null() {
-            *dq.pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = ctx.bMbRefConcealed;
+        if !(*dq).pMbRefConcealedFlag.is_null() {
+            *(*dq).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = ctx.bMbRefConcealed;
         }
         if iRet != ERR_NONE {
             return iRet;
@@ -5273,27 +5298,27 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
         }
 
         let idx = iNextMbXyIndex as usize;
-        if !dq.pMbCorrectlyDecodedFlag.is_null() && !*dq.pMbCorrectlyDecodedFlag.add(idx) {
-            *dq.pMbCorrectlyDecodedFlag.add(idx) = true;
-            if !dq.pMbRefConcealedFlag.is_null() && *dq.pMbRefConcealedFlag.add(idx) {
-                if !dq.pDec.is_null() {
-                    (*dq.pDec).iMbEcedPropNum += 1;
+        if !(*dq).pMbCorrectlyDecodedFlag.is_null() && !*(*dq).pMbCorrectlyDecodedFlag.add(idx) {
+            *(*dq).pMbCorrectlyDecodedFlag.add(idx) = true;
+            if !(*dq).pMbRefConcealedFlag.is_null() && *(*dq).pMbRefConcealedFlag.add(idx) {
+                if !(*dq).pDec.is_null() {
+                    (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
             }
             ctx.iTotalNumMbRec += 1;
         }
 
-        pSlice.iTotalMbInCurSlice += 1;
+        (*pSlice).iTotalMbInCurSlice += 1;
         if uiEosFlag != 0 {
             break;
         }
 
         iNextMbXyIndex += 1;
-        if dq.iMbWidth > 0 {
-            dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-            dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+        if (*dq).iMbWidth > 0 {
+            (*dq).iMbX = iNextMbXyIndex % (*dq).iMbWidth;
+            (*dq).iMbY = iNextMbXyIndex / (*dq).iMbWidth;
         }
-        dq.iMbXyIndex = iNextMbXyIndex;
+        (*dq).iMbXyIndex = iNextMbXyIndex;
     }
 
     ERR_NONE
@@ -5379,11 +5404,11 @@ mod tests {
     /// ```text
     /// let ctx = &mut *pCtx;                    // the context
     /// let dq  = &mut *ctx.pCurDqLayer;         // the layer
-    /// let pSlice = &mut dq.sLayerInfo…;        // a reborrow of the layer
+    /// let pSlice = &mut (*dq).sLayerInfo…;        // a reborrow of the layer
     /// …
     /// pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);   // re-enters through pCtx and
     ///                                              // reaches the same layer
-    /// …dq.pMbRefConcealedFlag…  ctx.bMbRefConcealed…  pSlice.iTotalMbInCurSlice…
+    /// …(*dq).pMbRefConcealedFlag…  ctx.bMbRefConcealed…  (*pSlice).iTotalMbInCurSlice…
     /// ```
     ///
     /// That is S25's shape (plan §7.6) in code that predates Phase 5, and 5.2 —
@@ -5411,26 +5436,30 @@ mod tests {
     /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
     /// whole implementation object, so the raw-pointer spelling is sound.
     ///
-    /// **`#[cfg_attr(miri, ignore)]` is still a debt, and it is now a much smaller
-    /// one.** T5.E1 paid down three of the four things behind it, one Miri round trip
-    /// each, and the attribute stays only for the fourth:
+    /// **`#[cfg_attr(miri, ignore)]` is down to one item, and it is a named pattern
+    /// rather than an unknown.** T5.E1 closed F24 and F25; T5.F2 closed F26 (the
+    /// allocator no longer launders provenance, so the whole decoder heap carries
+    /// tracked tags and this test is the first thing in the project's history that can
+    /// see borrow structure on top of it); T5.F3 worked the backlog that un-blinding
+    /// released and closed F27–F30. What is left:
     ///
-    /// * **F24** (`ParseSliceHeaderSyntaxs`) — fixed, and it was never one function;
-    ///   the same nested-borrow shape sat in four more places in `decoder_core.rs`.
-    /// * **F25** (`WelsDecodeSlice`, this file) — fixed. The defect this test was
-    ///   *written* for: three overlapping `&mut`s across the re-entrant `pDecMbFunc`.
-    ///   Session D predicted it by reading; Miri confirmed it byte-for-byte.
-    /// * **F26** (`cabac_decoder.rs:855`) — **open, and the reason this line is still
-    ///   here.** Not a borrow defect at all: `CMemoryAlign::WelsMalloc` launders every
-    ///   allocation's provenance through `usize` (`memory_align.rs:49-50`), so the NAL
-    ///   units and the layer are *wildcard*-tagged, and Miri will not grant a wildcard
-    ///   access that would disable a strongly-protected `&mut` argument. Owner and the
-    ///   experiment that settles its one open question are in `phase5_findings.md`.
+    /// * **F25's `&mut *pCtx` inventory** — **12 bindings decoder-side, 7 in this
+    ///   file** (`manage_dec_ref.rs` holds the other 5). The retag covers the *whole*
+    ///   context (`[0x0..0x8ad10]`), so any re-entrant callee that borrows the context
+    ///   kills every outer borrow of it. Round 6 of T5.F3 landed on exactly this:
+    ///   `WelsTargetSliceConstruction:2426`'s `ctx`, invalidated by
+    ///   `WelsTargetMbConstruction:2385`'s own, then written through. That is not a new
+    ///   finding — F25 named the pattern and the count — and its fix is the spelling
+    ///   S29 prescribes, applied per file with that file's conversion. This file is
+    ///   **5.6's**.
     ///
     /// So this still cannot run under Miri, and saying so here is the point — a green
     /// gate must not imply coverage that does not exist (S17). Under `cargo test` it
     /// runs in both profiles and earns its keep: it is the only unit test that decodes
-    /// a real stream. **Delete the attribute when F26 closes.**
+    /// a real stream. **Delete the attribute when the 7 `&mut *pCtx` bindings in this
+    /// file are converted** — nothing else is known to be in the way, and every round
+    /// trip since T5.D2 has found something, so expect the queue behind them to be
+    /// non-empty.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn decode_slice_loop_runs_under_the_aliasing_checker() {

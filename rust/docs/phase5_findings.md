@@ -476,8 +476,9 @@ invalidate. Zero bytes moved: 56 golden rows and 449 tests green either way.
 
 ## F26 — `CMemoryAlign::WelsMalloc` launders every allocation's provenance through `usize`, so the whole decoder heap is wildcard-tagged
 
-**Status: OPEN. Owner: 5.2 for the accessor that surfaces it; the allocator itself is
-cross-cutting and wants a decision before 5.3.** Found at Phase 5 session E (T5.E1) by
+**Status: FIXED 2026-08-12 (Phase 5 session F, T5.F2).** Owner was 5.2 for the accessor
+that surfaced it; the allocator itself was cross-cutting and got its own face. Found at
+Phase 5 session E (T5.E1) by
 the probe, on the third round trip, once F24's family and F25 stopped failing first.
 **This is the finding that stopped session E's queue** — the brief's bound is three
 defects beyond F24, and this is the third.
@@ -587,8 +588,9 @@ translation. So the repair is S6 arithmetic parity, not a repair of the algorith
 
 ## F27 — the CABAC path reaches the NAL's whole `BsReader` while holding a `&mut` to the `BsCursor` inside it
 
-**Status: OPEN. Owner: 5.2 — `pBitStringAux` retires there and
-`cabac_decoder.rs:855`'s `SHIM(phase5)` accessor dies with it.** Split out of F26 at
+**Status: FIXED 2026-08-12 (Phase 5 session F, T5.F3).** Owner was 5.2 — `pBitStringAux`
+retires there and `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor dies with it; the fix
+here removes the *conflict* without waiting for the field. Split out of F26 at
 Phase 5 session F (T5.F1) by the experiment F26's entry specified: it is the defect that
 site was actually reporting, and it is provenance-independent.
 
@@ -665,3 +667,137 @@ Same class as F24/F25: no byte moves. The battery agreed with it through the por
 whole life — 449/443 tests, 56 golden rows, 2316 malformed rows, 341/341 sweeps in both
 profiles — and it took a Miri run through the public API and the slice loop, which is
 the instrument T5.D2 built and F26's experiment pointed at this site.
+
+### The fix (T5.F3)
+
+Three parts, because the conflict has two ends and one of the ends turned out to be
+decoration:
+
+* **Two of the cursor parameters were already dead.** `ParseResidualBlockCabac` and
+  `ParseResidualBlockCabac8x8` take `_pBsAux: &mut BsCursor` — underscore-prefixed,
+  never read, because the CABAC engine reads through `pCabacDecEngine` and
+  `cabac_rbsp_window`. They were minting a strongly protected borrow over the very
+  object the engine reads, for nothing. **Deleted**, with their 6 arguments.
+* **The three live ones are `*mut BsCursor` now** (`ParseIntra4x4Mode`,
+  `ParseIntra8x8Mode`, `ParseIntra16x16Mode`), with `&mut *pBsAux` re-derived at each of
+  the 7 `BsGet*` uses — S25's "no borrow outlives one expression", S29's spelling. The
+  CAVLC callers are unchanged: `&mut T` coerces to `*mut T` at the call.
+* **The two CABAC helpers stop calling `split()`.** `WelsDecodeMbCabacIntraModeHelper`
+  and `WelsDecodeMbCabacResidualHelper` derive `addr_of_mut!((*pBsRd).cursor)` and take
+  the byte window straight from `sRawData` — no reference to the reader, so nothing for
+  `cabac_rbsp_window`'s `&BsReader` to conflict with.
+
+---
+
+## F28 — the layer is borrowed across calls that reach it again through the context, in 20 functions of `decode_slice.rs`
+
+**Status: FIXED 2026-08-12 (Phase 5 session F, T5.F3).** Owner was 5.6 by file and
+5.2 by subject; fixed here because the probe stopped on it. **This is the first item of
+F26's S22 backlog** — the defect existed before T5.F2 and Miri could not see it, because
+the layer came from `WelsMalloc` and a wildcard read does not pop a `Unique`.
+
+### The defect
+
+```text
+error: Undefined Behavior: attempting a write access using <tag>, but that tag does not
+       exist in the borrow stack for this location
+  --> src/decoder/decode_slice.rs:3888   *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
+help: <tag> was created by a Unique retag        (ParseIntra4x4Mode's `let dq = &mut *pCurDqLayer`)
+help: … invalidated by a read through the parent (parse_mb_syn_cabac.rs:1410,
+                                                  ParseIntraPredModeChromaCabac)
+```
+
+`ParseIntraPredModeChromaCabac` re-reaches the layer the ordinary way — `let pCurDqLayer
+= (*pCtx).pCurDqLayer;` then reads through it. That read is *through the parent tag*,
+and a read pops `Unique` items above it, so the caller's `&mut` dies and the caller's
+next write through it is UB. **F25's law, one level down**: it is not only the god
+context: any object reachable from `pCtx` behaves this way, and the layer is reachable
+from `pCtx` by construction.
+
+### Scale, greped once Miri named the shape (S24, and the technique from session E)
+
+**20 functions in `decode_slice.rs`** bind the layer as `&mut` — 8 as
+`&mut *pCurDqLayer`, 12 as `&mut *(*pCtx).pCurDqLayer` — and **10 of them derive a
+further borrow that outlives an expression** (`&mut (*dq).sLayerInfo.sSliceInLayer`,
+which several store into a `*mut SSlice` local and read for the rest of the function),
+with 6 more nested one level below that (`&mut (*pSlice).sSliceHeaderExt.sSliceHeader`).
+Those are S29's escaping class, the half that "hurts everything downstream".
+
+### The fix
+
+`dq` becomes `*mut SDqLayer` in all 20; 207 uses re-spelled `(*dq).`; the 16 nested
+borrows re-derived with `addr_of_mut!`; their uses re-spelled the same way. Zero bytes
+moved. Three of the 20 already bound `dq` raw and only their null checks needed
+restoring — worth saying because the mechanical pass rewrote `dq.is_null()` into
+`(*dq).is_null()` and only the compiler caught it.
+
+---
+
+## F29 — 30 CABAC context pointers are derived through `&mut` of the array, and four of them are live in pairs
+
+**Status: FIXED 2026-08-12 (Phase 5 session F, T5.F3).** Owner 5.5 by rights
+(`pCabacCtx` is a context field), fixed here because the spelling is a standing rule
+(S29) and the probe cannot proceed past it. **Second item of F26's backlog.**
+
+### The defect
+
+`(*pCtx).pCabacCtx.as_mut_ptr()` takes `&mut` of the array first, so it retags `Unique`
+over the whole of it (`[0x7e479..0x7e811]`) and invalidates every pointer previously
+derived from it. `ParseSignificantMapCabac` and `ParseSignificantCoeffCabac` each keep
+**two** live at once:
+
+```rust
+let pMapCtx  = (*pCtx).pCabacCtx.as_mut_ptr().add(map_base  + …);
+let pLastCtx = (*pCtx).pCabacCtx.as_mut_ptr().add(last_base + …);   // kills pMapCtx
+…
+DecodeBinCabac(…, pMapCtx.offset(iCtx), …)                          // UB
+```
+
+This is **F13's `as_mut_ptr()` shape**, the one T5.B2 found six times in
+`manage_dec_ref.rs`, in a file nobody had looked at for it.
+
+### The S24 instance worth keeping
+
+The first fix pass re-pointed **25 sites and missed the 4 that mattered**, because those
+four are formatted across three lines each — `(*pCtx)` / `.pCabacCtx` / `.as_mut_ptr()`
+— and a line-anchored `grep 'pCabacCtx.*as_mut_ptr'` cannot see them. Miri had *named*
+two of them in its diagnostic and the next round trip reported the identical error at
+the identical line. **The count came from a grep of the code and was still a summary of
+the fact**: the grep's unit was the line, and the code's unit was the expression. Cost:
+one 8-minute round trip.
+
+### The fix
+
+One helper, `cabac_decoder::cabac_ctx_base`, returning
+`addr_of_mut!((*pCtx).pCabacCtx).cast::<SWelsCabacCtx>()` — no reference anywhere in the
+derivation, so every pointer carries the context allocation's own provenance and none
+can invalidate another. All 30 sites route through it (29 in `parse_mb_syn_cabac.rs`,
+1 in `cabac_decoder.rs`).
+
+---
+
+## F30 — `ParseSignificantCoeffCabac` walks its coefficient pointer one element before the array
+
+**Status: FIXED 2026-08-12 (Phase 5 session F, T5.F3). Owner 5.6.** Third item of F26's
+backlog, and the first one that is not an aliasing defect at all.
+
+### The defect
+
+```text
+error: Undefined Behavior: in-bounds pointer arithmetic failed: attempting to offset
+       pointer by -4 bytes, but got alloc… which is at the beginning of the allocation
+  --> src/decoder/parse_mb_syn_cabac.rs:3016   pCoff = pCoff.offset(-1);
+```
+
+The C++ is `pCoff--` (`parse_mb_syn_cabac.cpp:1394`) at the bottom of a `while (i >= 0)`
+loop, so the last iteration lands one element *before* `pSignificant` and the loop then
+exits on `i`. The value is never dereferenced. In C that is a benign idiom; in Rust
+`offset` past the start of an allocation is UB **by the arithmetic alone** — which is
+[`phase1_findings.md`](phase1_findings.md) **F7's class**, the one T3.3 deleted from
+`InitReadBits` rather than preserved.
+
+### The fix
+
+`wrapping_offset(-1)`: same address, no UB, no behaviour change — S6 parity rather than
+repair. Greped for siblings: no other negative `offset` remains in
+`parse_mb_syn_cabac.rs`, `decode_slice.rs` or `cabac_decoder.rs`.
