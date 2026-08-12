@@ -594,6 +594,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSlic
 
 pub use crate::decoder::decoder_core::{
     SDqLayer, PDqLayer, SLayerInfo, ERR_INFO_INVALID_PTR, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM,
+    mb_grid_ptr,
 };
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
@@ -2196,7 +2197,8 @@ pub unsafe fn RecI4x4Luma(
     let pPred = (*pDqLayer).pPred[0];
     let iLumaStride = (*pDqLayer).iLumaStride;
     let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra4x4PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMBXY as usize).cast::<i8>();
+    let pIntra4x4PredMode =
+        mb_grid_ptr(&mut (*pDqLayer).grid.intra4x4_final_mode, iMBXY as usize) as *mut i8;
     let pRS = pScoeffLevel;
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc;
 
@@ -2258,7 +2260,8 @@ pub unsafe fn RecI8x8Luma(
     let pPred = (*pDqLayer).pPred[0];
     let iLumaStride = (*pDqLayer).iLumaStride;
     let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra8x8PredMode = (*pDqLayer).pIntra4x4FinalMode.add(iMbXy as usize).cast::<i8>();
+    let pIntra8x8PredMode =
+        mb_grid_ptr(&mut (*pDqLayer).grid.intra4x4_final_mode, iMbXy as usize) as *mut i8;
     let pRS = pScoeffLevel;
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc8x8;
 
@@ -3846,7 +3849,7 @@ pub unsafe fn ParseIntra4x4Mode(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I4x4_PRED_MODE);
         }
 
-        (*(*dq).pIntra4x4FinalMode.add(iMbXy))[g_kuiScan4[i as usize] as usize] =
+        (*(*dq).grid.intra4x4_final_mode.get_mut(iMbXy))[g_kuiScan4[i as usize] as usize] =
             iFinalMode as i8;
         *pIntraPredMode.add(g_kuiScan8[i as usize] as usize) = iBestMode;
         iSampleAvail[g_kCache30ScanIdx[i as usize] as usize] = 1;
@@ -3982,7 +3985,7 @@ pub unsafe fn ParseIntra8x8Mode(
         }
 
         for j in 0..4usize {
-            (*(*dq).pIntra4x4FinalMode.add(iMbXy))[g_kuiScan4[(i << 2) + j] as usize] =
+            (*(*dq).grid.intra4x4_final_mode.get_mut(iMbXy))[g_kuiScan4[(i << 2) + j] as usize] =
                 iFinalMode as i8;
             *pIntraPredMode.add(g_kuiScan8[(i << 2) + j] as usize) = iBestMode;
             iSampleAvail[g_kCache30ScanIdx[(i << 2) + j] as usize] = 1;
