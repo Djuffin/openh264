@@ -5068,29 +5068,38 @@ pub unsafe fn WelsDecodeSlice(
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
-    let pCurDqLayer = ctx.pCurDqLayer;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
-    let dq = &mut *pCurDqLayer;
-    let pSlice = &mut dq.sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    // **The loop this function's aliasing probe was written for, and the prediction
+    // session D read out of the code is now a Miri finding (T5.E1).** This held
+    // `ctx = &mut *pCtx`, `dq = &mut *pCurDqLayer` and two reborrows of `dq` across
+    // `pDecMbFunc(pCtx, …)`, which re-enters through `pCtx` and reaches the same layer:
+    // the callee's own `&mut *pCtx` (`:698`) invalidated the outer `[0x0..0x8ae00]`
+    // retag, and `ctx.bMbRefConcealed = false` on the next iteration wrote through the
+    // dead tag. Nothing is a borrow now — `(*pCtx)` / `(*pCurDqLayer)` per use, and the
+    // two nested pointers derive from the layer without retagging, so re-entry cannot
+    // invalidate them. S25's shape (plan §7.6), T5.B2's fix.
+    let pSlice = std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer);
+    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 
-    pSlice.iTotalMbInCurSlice = 0;
+    (*pSlice).iTotalMbInCurSlice = 0;
 
-    let pDecMbFunc: PWelsDecMbFunc = if !ctx.pPps.is_null() && (*ctx.pPps).bEntropyCodingModeFlag {
-        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
+    let pDecMbFunc: PWelsDecMbFunc = if !(*pCtx).pPps.is_null()
+        && (*(*pCtx).pPps).bEntropyCodingModeFlag
+    {
+        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if pSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
+        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -5100,17 +5109,24 @@ pub unsafe fn WelsDecodeSlice(
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
-    ctx.eIntraPredConstraint = IntraPredConstraint::from_flag(
+    let pPpsForIntra = (*pSliceHeader).pPps as *const crate::decoder::parameter_sets::SPps;
+    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
-    ctx.eSliceType = pSliceHeader.eSliceType;
-    if !dq.sLayerInfo.pPps.is_null() && (*dq.sLayerInfo.pPps).bEntropyCodingModeFlag {
-        let iQp = pSliceHeader.iSliceQp;
-        let iCabacInitIdc = pSliceHeader.iCabacInitIdc;
-        crate::decoder::cabac_decoder::WelsCabacContextInit(pCtx, pSlice.eSliceType, iCabacInitIdc, iQp);
-        pSlice.iLastDeltaQp = 0;
+    (*pCtx).eSliceType = (*pSliceHeader).eSliceType;
+    if !(*pCurDqLayer).sLayerInfo.pPps.is_null()
+        && (*(*pCurDqLayer).sLayerInfo.pPps).bEntropyCodingModeFlag
+    {
+        let iQp = (*pSliceHeader).iSliceQp;
+        let iCabacInitIdc = (*pSliceHeader).iCabacInitIdc;
+        crate::decoder::cabac_decoder::WelsCabacContextInit(
+            pCtx,
+            (*pSlice).eSliceType,
+            iCabacInitIdc,
+            iQp,
+        );
+        (*pSlice).iLastDeltaQp = 0;
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
             (*pCtx).pCabacDecEngine,
             &mut *(*(*pCtx).pCurDqLayer).pBitStringAux,
@@ -5122,17 +5138,17 @@ pub unsafe fn WelsDecodeSlice(
     }
     WelsCalcDeqCoeffScalingList(pCtx);
 
-    let mut iNextMbXyIndex = pSliceHeader.iFirstMbInSlice;
-    if dq.iMbWidth > 0 {
-        dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-        dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
+    if (*pCurDqLayer).iMbWidth > 0 {
+        (*pCurDqLayer).iMbX = iNextMbXyIndex % (*pCurDqLayer).iMbWidth;
+        (*pCurDqLayer).iMbY = iNextMbXyIndex / (*pCurDqLayer).iMbWidth;
     }
-    dq.iMbXyIndex = iNextMbXyIndex;
-    pSlice.iMbSkipRun = -1;
-    let iSliceIdc = (pSliceHeader.iFirstMbInSlice << 7) + dq.uiLayerDqId as i32;
+    (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
+    (*pSlice).iMbSkipRun = -1;
+    let iSliceIdc = ((*pSliceHeader).iFirstMbInSlice << 7) + (*pCurDqLayer).uiLayerDqId as i32;
 
-    let kiCountNumMb = if !pSliceHeader.pSps.is_null() {
-        (*(pSliceHeader.pSps as *mut SSps)).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*pSliceHeader).pSps.is_null() {
+        (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5144,33 +5160,34 @@ pub unsafe fn WelsDecodeSlice(
             break;
         }
 
-        if !dq.pSliceIdc.is_null() {
-            *dq.pSliceIdc.add(iNextMbXyIndex as usize) = iSliceIdc;
+        if !(*pCurDqLayer).pSliceIdc.is_null() {
+            *(*pCurDqLayer).pSliceIdc.add(iNextMbXyIndex as usize) = iSliceIdc;
         }
-        ctx.bMbRefConcealed = false;
+        (*pCtx).bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
-        if !dq.pMbRefConcealedFlag.is_null() {
-            *dq.pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = ctx.bMbRefConcealed;
+        if !(*pCurDqLayer).pMbRefConcealedFlag.is_null() {
+            *(*pCurDqLayer).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) =
+                (*pCtx).bMbRefConcealed;
         }
         if iRet != ERR_NONE {
             return iRet;
         }
 
-        pSlice.iTotalMbInCurSlice += 1;
+        (*pSlice).iTotalMbInCurSlice += 1;
         if uiEosFlag != 0 {
             break;
         }
 
-        if !ctx.pPps.is_null() && (*ctx.pPps).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(ctx.pFmo, iNextMbXyIndex);
+        if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).uiNumSliceGroups > 1 {
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }
-        if dq.iMbWidth > 0 {
-            dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-            dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
+        if (*pCurDqLayer).iMbWidth > 0 {
+            (*pCurDqLayer).iMbX = iNextMbXyIndex % (*pCurDqLayer).iMbWidth;
+            (*pCurDqLayer).iMbY = iNextMbXyIndex / (*pCurDqLayer).iMbWidth;
         }
-        dq.iMbXyIndex = iNextMbXyIndex;
+        (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
     }
 
     ERR_NONE
@@ -5394,17 +5411,26 @@ mod tests {
     /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
     /// whole implementation object, so the raw-pointer spelling is sound.
     ///
-    /// **`#[cfg_attr(miri, ignore)]` is a debt, not a design.** With the API-layer
-    /// defect routed around, Miri gets as far as `ParseSliceHeaderSyntaxs` and
-    /// rejects **F24** — three overlapping `&mut` borrows of nested fields of one NAL
-    /// unit, 141 uses across a 576-line function, owner 5.5. Until F23 and F24 are
-    /// fixed this test cannot run under Miri, and the honest thing is to say so here
-    /// rather than let a green gate imply coverage that does not exist. Under
-    /// `cargo test` it runs in both profiles and does earn its keep: it is the only
-    /// unit test that decodes a real stream, so a regression in the slice loop fails
-    /// here without waiting for the integration suite. **Delete the attribute the
-    /// moment F24 closes** — that is when the decode path finally acquires an
-    /// aliasing gate.
+    /// **`#[cfg_attr(miri, ignore)]` is still a debt, and it is now a much smaller
+    /// one.** T5.E1 paid down three of the four things behind it, one Miri round trip
+    /// each, and the attribute stays only for the fourth:
+    ///
+    /// * **F24** (`ParseSliceHeaderSyntaxs`) — fixed, and it was never one function;
+    ///   the same nested-borrow shape sat in four more places in `decoder_core.rs`.
+    /// * **F25** (`WelsDecodeSlice`, this file) — fixed. The defect this test was
+    ///   *written* for: three overlapping `&mut`s across the re-entrant `pDecMbFunc`.
+    ///   Session D predicted it by reading; Miri confirmed it byte-for-byte.
+    /// * **F26** (`cabac_decoder.rs:855`) — **open, and the reason this line is still
+    ///   here.** Not a borrow defect at all: `CMemoryAlign::WelsMalloc` launders every
+    ///   allocation's provenance through `usize` (`memory_align.rs:49-50`), so the NAL
+    ///   units and the layer are *wildcard*-tagged, and Miri will not grant a wildcard
+    ///   access that would disable a strongly-protected `&mut` argument. Owner and the
+    ///   experiment that settles its one open question are in `phase5_findings.md`.
+    ///
+    /// So this still cannot run under Miri, and saying so here is the point — a green
+    /// gate must not imply coverage that does not exist (S17). Under `cargo test` it
+    /// runs in both profiles and earns its keep: it is the only unit test that decodes
+    /// a real stream. **Delete the attribute when F26 closes.**
     #[test]
     #[cfg_attr(miri, ignore)]
     fn decode_slice_loop_runs_under_the_aliasing_checker() {

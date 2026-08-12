@@ -300,10 +300,17 @@ to fail until F23 is fixed, which is Phase 8's to add with the fix.
 
 ## F24 — `ParseSliceHeaderSyntaxs` holds three overlapping `&mut` borrows of one NAL unit, and the outer one invalidates the inner
 
-**Status: OPEN. Owner: 5.5**, which owns the slice-header/paramset family — the census
-allowlist already assigns `PSliceHeader`, `PSliceHeaderExt` and
-`PRefPicListReorderSyn` to it. Found at Phase 5 session D (T5.D2) by the same test
-that found F23, on the run after F23 was routed around.
+**Status: FIXED 2026-08-12 (Phase 5 session E, T5.E1), and the fix is proven by the
+instrument that found it** — the probe now runs past `ParseSliceHeaderSyntaxs` under
+Miri, which is the only evidence that could exist for it (see *Why it was invisible*).
+Found at Phase 5 session D (T5.D2) by the same test that found F23, on the run after
+F23 was routed around; owner was 5.5, taken early because it blocked 5.2.
+
+**It was never one function.** Fixing the named site let Miri walk further and the same
+shape appeared again immediately, so the finding's real scope is the *family* below —
+five sites, one file, one rule. That is recorded here rather than as a new finding
+because the diagnosis, the byte offsets and the fix are identical at each; the one the
+probe reached under its own steam and could not have been predicted is **F25**.
 
 ### The defect
 
@@ -371,12 +378,163 @@ So the order the closure licenses is **F24 first, then 5.2** — and F24 is 5.5'
 5.2's blocker, which is a dependency the plan's step order does not currently express.
 Session D's hand-off names it.
 
-### Queue depth is unknown
+### Queue depth was unknown, and the answer was "not one" (T5.E1)
 
-The probe fails at the *first* defect it reaches each run. F23 was first, F24 second, and
-the slice loop this test was written to examine — three overlapping `&mut`s across the
-re-entrant `pDecMbFunc` call, enumerated in session D's log §2 — **has still not been
-reached.** Nobody should assume F24 is the last one. Each round trip is one ~8-minute
-Miri run, and the instrument is already in the tree
-(`decode_slice_loop_runs_under_the_aliasing_checker`, `#[cfg_attr(miri, ignore)]` until
-F24 closes).
+The probe fails at the *first* defect it reaches each run. F23 was first, F24 second,
+and session D warned that nobody should assume F24 was the last. It was not. Fixing the
+named site moved the probe forward by one function, where the identical shape was
+waiting; greping that shape rather than paying another ~8-minute round trip per site
+found the rest of the family in one pass.
+
+**The family, all `decoder_core.rs`, all fixed at T5.E1:**
+
+| site | shape | how found |
+|---|---|---|
+| `ParseSliceHeaderSyntaxs:2018` | `sSliceHeader` inside `sSliceHeaderExt`, 141 uses | Miri (T5.D2) |
+| same fn, `:2091-2098` | `pSps` inside a re-borrowed `pSubsetSps` entry | reading — **no gate reaches it**, see below |
+| `DecodeCurrentAccessUnit:3684` | the same nested pair, byte-identical diagnosis | Miri, run 1 after the fix |
+| `InitDqLayerInfo:3471` | `pSh` nested in `pShExt`, plus four borrows that *escape* into the layer | grep of the shape |
+| `WelsDqLayerDecodeStart:3526` | escapes into `(*pCtx).pSliceHeader` for the whole slice decode | grep of the shape |
+
+The escaping ones are worth separating out: `InitDqLayerInfo` stores
+`pRefPicListReordering`, `pRefPicMarking`, `pPredWeightTable` and `pRefPicBaseMarking`
+into the layer, and `WelsDqLayerDecodeStart` stores `pSliceHeader` into the context.
+As `&mut`-derived pointers those died at the *next* use of their parent and were read
+for the rest of the decode. Same rule, larger blast radius.
+
+**The paramset pair is the one no instrument can see.** `pSps` was `&mut (*pSubsetSps).sSps`
+with three later `&mut` re-borrows of the same subset-SPS entry popping it. It is UB on
+every `kbExtensionFlag` path — and `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
+(`nalu.rs:684`), so it needs an SVC stream. The corpus has none and the probe decodes
+AVC. Found by reading while fixing the pair above; fixed in the same commit rather than
+left for a test that does not exist. **S22's shape again**: an instrument's reach is part
+of the instrument, and this sits outside it.
+
+The fix everywhere is the same and it is not a `&mut` at all: `addr_of_mut!` derives from
+the allocation root without creating a reference, so every pointer carries the parent's
+provenance and none can invalidate another. That is T5.B2's rule (*no borrow outlives one
+expression*) reached by removing the borrows rather than by shortening them.
+
+---
+
+## F25 — `WelsDecodeSlice` holds three overlapping `&mut`s across the re-entrant `pDecMbFunc`, and the callee's own `&mut *pCtx` kills them
+
+**Status: FIXED 2026-08-12 (Phase 5 session E, T5.E1).** Owner was 5.2/5.6 jointly; taken
+here because the probe reached it. **This is the defect
+`decode_slice_loop_runs_under_the_aliasing_checker` was written for** — session D
+enumerated it by reading (log §3) and explicitly labelled it *a prediction, not a
+finding, until Miri gets there*. Miri got there on the second round trip of this session
+and confirmed it byte-for-byte.
+
+### The defect
+
+`decode_slice.rs:5071-5078`, before the fix:
+
+```rust
+let ctx = &mut *pCtx;                                    // Unique over [0x0..0x8ae00]
+let dq  = &mut *pCurDqLayer;
+let pSlice = &mut dq.sLayerInfo.sSliceInLayer;           // reborrow of dq
+let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+…
+ctx.bMbRefConcealed = false;
+let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);    // re-enters through pCtx
+```
+
+Miri:
+
+```text
+error: Undefined Behavior: attempting a write access using <35266369> at alloc251880[0x7e92c],
+       but that tag does not exist in the borrow stack for this location
+  --> src/decoder/decode_slice.rs:5150:9   ctx.bMbRefConcealed = false;
+help: <35266369> was created by a Unique retag at offsets [0x0..0x8ae00]   (:5071)
+help: <35266369> was later invalidated at offsets [0x0..0x8ae00] by a Unique retag
+  --> src/decoder/decode_slice.rs:698:15   let ctx = &mut *pCtx;
+```
+
+The invalidator is **inside the callee** — `pDecMbFunc` re-enters and takes its own
+`&mut *pCtx` at `:698`. The loop then writes through the dead outer tag on the next
+iteration. Whole-context retags (`[0x0..0x8ae00]`) mean *any* re-entrant callee that
+borrows the context kills *every* outer borrow of it.
+
+### Why it matters beyond this function
+
+**~30 live `&mut *pCtx` sites remain in `src/decoder/`.** Each is fine alone and UB the
+moment it is held across a call that re-enters through `pCtx` — which the decoder does
+constantly, through `pDecMbFunc`, `pFuncList` and the deblocking callbacks. This is not
+a list of independent defects; it is one systemic pattern, and 5.2–5.6 convert exactly
+this code. The rule those conversions inherit: **the god-context is never held as a
+borrow across a call.** `(*pCtx)` per use, or an `addr_of_mut!` pointer if a name is
+wanted.
+
+### The fix
+
+`(*pCtx)` / `(*pCurDqLayer)` named per use — 43 sites — and the two nested pointers
+derived with `addr_of_mut!` so they carry the layer's provenance and no retag exists to
+invalidate. Zero bytes moved: 56 golden rows and 449 tests green either way.
+
+---
+
+## F26 — `CMemoryAlign::WelsMalloc` launders every allocation's provenance through `usize`, so the whole decoder heap is wildcard-tagged
+
+**Status: OPEN. Owner: 5.2 for the accessor that surfaces it; the allocator itself is
+cross-cutting and wants a decision before 5.3.** Found at Phase 5 session E (T5.E1) by
+the probe, on the third round trip, once F24's family and F25 stopped failing first.
+**This is the finding that stopped session E's queue** — the brief's bound is three
+defects beyond F24, and this is the third.
+
+### The defect
+
+`memory_align.rs:49-50`:
+
+```rust
+let addr = pAlignedBuffer as usize;
+pAlignedBuffer = (addr - (addr & (kiAlignedBytes as usize))) as *mut u8;
+```
+
+An integer→pointer round trip, so the returned pointer has **exposed** provenance. Every
+`WelsMalloc`/`WelsMallocz` object in the port inherits it — the NAL unit list, the access
+unit, `SDqLayer`, the per-MB arrays. Miri calls such pointers `<wildcard>` and will not
+grant an access through one if doing so would disable a **strongly protected** tag (a
+`&mut` live as a function argument):
+
+```text
+error: Undefined Behavior: not granting access to tag <wildcard> because that would
+       remove [Unique for <36614846>] which is strongly protected
+  --> src/decoder/cabac_decoder.rs:855:25
+855 |     raw.rbsp_window(&*(*(*pCtx).pCurDqLayer).pBitStringAux)
+```
+
+reached from `ParseIntraPredModeLumaCabac`, whose own `iBinVal: &mut i32` is one such
+protected argument.
+
+### The one open question, and the experiment that settles it
+
+The accessor is reached through `pBitStringAux`, which T5.E1 changed from a `&mut`
+coercion to `addr_of_mut!`. A `&mut` *retags* — it would have minted a tracked tag from
+the wildcard parent — where `addr_of_mut!` inherits the wildcard. So it is not yet proven
+whether F26 was reachable before T5.E1 or whether that one line is what exposes it.
+**The experiment is one probe run**: restore `(*dq_cur).pBitStringAux = &mut …`
+(`decoder_core.rs`, the `DecodeCurrentAccessUnit` store) alone, keep everything else, and
+see which error Miri reports. Either answer is useful — if the `&mut` spelling passes,
+the allocator fix is optional for 5.2 and F26 is a latent finding; if it fails the same
+way, F26 is live today and the escaping-borrow defect T5.E1 fixed was merely masking it.
+
+Do not settle this by reasoning. Both spellings have a defensible story and the
+instrument is eight minutes away.
+
+### Why no other gate can see it
+
+The addresses are all correct and the arithmetic is right — this is a *provenance*
+property, invisible to every byte-level gate, and the whole battery agrees with it:
+449/443 tests, 56 golden rows, 2316 malformed rows, both benches, 341/341 sweeps. Fourth
+instance in this project of "the level that could see it had never run there" (F18,
+`data_ptr` at T5.C3, F23/F24 at T5.D2).
+
+### What the fix probably is
+
+Compute the alignment without leaving pointer-land: `pBuf.add(offset)` then
+`byte_sub(addr & mask)` — or `align_offset` — so provenance is never exposed. It is a few
+lines in one function, and it is **not** a mechanical change: restoring tracked
+provenance crate-wide will let Miri see borrow structure it has been silently permitting,
+which is S22's backlog shape and should be expected to surface more. That is why it wants
+its own session and a decision, not a corner of a conversion commit.
