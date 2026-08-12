@@ -962,3 +962,42 @@ encoder-side one.
 
 Running total: **twenty-eight measurements, ten alternations, ten acquittals** — and one
 acquittal that needed no alternation.
+
+---
+
+### Measurement 29 (Phase 5, session E, 2026-08-12) — one hit, and the first time one configuration produced three different answers
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 29 | `320x192 t=4 sm=3 n=600 cabac=1 rc=0` (**debug**) | 39981 | 0 |
+
+Re-run 5× in isolation per S14 step 1, and the result is not the usual 5/5:
+
+```text
+run 1  BYTE-IDENTICAL
+run 2  BYTE-IDENTICAL
+run 3  BYTE-IDENTICAL
+run 4  BYTE-IDENTICAL
+run 5  C++ 39981   Rust 37837
+```
+
+**One binary, one configuration, three different Rust outputs across six runs**: 0 bytes
+in the sweep, 37837 in isolation run 5, and byte-identical 39981 four times. S14 step 1's
+own criterion is that two different wrong lengths from one binary+configuration is a race
+rather than a divergence, *because a deterministic port bug repeats its bytes*. This is
+the first measurement to satisfy that test directly rather than by inference from
+frequency — every prior isolation re-run came back 5/5 identical, which proved only that
+the race was hard to reproduce in isolation.
+
+**No alternation owed** (one hit, S14 step 1). The hash shortcut this session added as
+S14 step 0 does **not** apply — `rust_enc` depends on `openh264-rs` by path, so a
+decoder-side commit does rebuild it, and the shortcut is only for trees that produce a
+byte-identical binary. Recorded because the temptation to reach for it is real: the
+session's changes are 100% decoder-side and the sweep exercises the *encoder*, which is
+a good argument and is **not** the same thing as a matching hash. The measurement was
+taken instead of the argument.
+
+Also worth noting for the frequency record: this hit is the **debug** sweep, whose F3
+susceptibility is documented in `rust_enc/Cargo.toml` as a deliberate consequence of the
+`[profile.dev] opt-level = 3` change — the build is now fast enough to lose the race,
+which F3's own write-up predicted. The release sweep in the same battery was 341/341.

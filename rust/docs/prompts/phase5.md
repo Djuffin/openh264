@@ -81,7 +81,8 @@ Order inside the step:
    — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid (**closure computed and written, session D log §2 — do not
-recompute it. Not started in code, and blocked: F24 first.**)
+recompute it. The subtraction has landed (T5.E2); the grid conversion is still blocked,
+now on F26 rather than F24.**)
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
 `MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over
@@ -89,26 +90,52 @@ Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with o
 5; the 30-entry scratch caches become `&mut` locals passed down, and their owners are
 two stack locals at `decode_slice.rs:4632` and `:4836`).
 
-**Blocked on F24** (`phase5_findings.md`): `ParseSliceHeaderSyntaxs` holds three
-overlapping `&mut` borrows of one NAL unit and the outer invalidates the inner, so the
-decode path has aliasing UB in front of 5.2's work. Convert on top of that and every new
-`&mut` inherits an invalid stack and the next Miri failure is unattributable. F24 is
-5.5's file and 5.2's blocker; fix it first, then delete
-`#[cfg_attr(miri, ignore)]` from `decode_slice_loop_runs_under_the_aliasing_checker`.
+~~**Blocked on F24.**~~ **F24 is fixed (T5.E1) and it was never one function** — the same
+nested-borrow shape sat in four more places in `decoder_core.rs`, including four borrows
+that escape into the layer and one into the context. **F25** (`WelsDecodeSlice`'s three
+overlapping `&mut`s across the re-entrant `pDecMbFunc`) went from session D's prediction
+to a Miri finding and is fixed too.
+
+**The blocker is now F26**, and it is a different animal: `CMemoryAlign::WelsMalloc`
+launders every allocation's provenance through `usize` (`memory_align.rs:49-50`), so the
+whole decoder heap is *wildcard*-tagged and Miri will not grant a wildcard access that
+would disable a strongly-protected `&mut`. The reason to care is unchanged from F24's —
+convert raw pointers to borrows on top of a path Miri cannot clear and the next failure
+is unattributable — but the fix is an allocator decision, not a mechanical one, and
+restoring tracked provenance crate-wide should be expected to surface more (S22).
+`#[cfg_attr(miri, ignore)]` therefore stays on
+`decode_slice_loop_runs_under_the_aliasing_checker`, labelled with all four items; it
+comes off at F26.
+
+**And the systemic finding that outranks all three**: F25's retag is whole-context
+(`[0x0..0x8ae00]`), and **~30 `&mut *pCtx` sites remain in `src/decoder/`**. Each is
+sound alone and UB held across a call that re-enters through `pCtx` — which this decoder
+does constantly. That is one pattern, not a list, and it is the rule every remaining
+conversion in 5.2–5.6 inherits: **the god-context is never held as a borrow across a
+call.**
 
 The closure's conclusions, so they are not re-derived:
 - **The grid goes inside the layer, not on the context.** Of 66 functions taking a
   DqLayer pointer, **50 take the layer only** and would each need a new parameter —
   atomically, per S20 — if the grid lived where `sMb` is. In the layer, those 50
   signatures do not change at all.
-- **`SMbCache` dies whole rather than converting.** 130 accesses, of which 129 are
-  lifecycle and one is a live consumer (the `pSliceIdc` `0xff` memset,
-  `decoder_core.rs:3610`); the layer alias carries all 316 real accesses.
-- **Two pure subtractions, and they make a first commit that converts nothing**:
-  `LAYER_NUM_EXCHANGEABLE` is **1**, so every `[…; LAYER_NUM_EXCHANGEABLE]` dimension and
-  `0..LAYER_NUM_EXCHANGEABLE` loop is a one-element construct; and
-  `SMbCache::pMotionPredFlag` has exactly two mentions crate-wide (declaration and
-  `Default`).
+- ~~**`SMbCache` dies whole rather than converting.**~~ **Done, T5.E2** — the 27 arrays
+  are allocated straight into the layer, `InitCurDqLayerData`'s 27-pointer re-alias is
+  deleted, and the struct, its `Default` and the context field are gone.
+  **S24 correction to the closure**: it named *one* live consumer (the `pSliceIdc`
+  `0xff` memset). There were **three** — the memset and both `numMb` computations, in
+  `InitialDqLayersContext` and `UninitialDqLayersContext`. The free path's is the one
+  that matters: it needs the **allocation's** dimensions, and the layer's
+  `iMbWidth`/`iMbHeight` are the *current slice's*, smaller on any stream decoding below
+  the negotiated maximum. Acting on the closure verbatim would have freed with the wrong
+  size. The context already keeps what is needed (`iPicWidthReq`/`iPicHeightReq`, set in
+  the same function), so it stayed pure subtraction — but only because someone looked.
+- ~~**Two pure subtractions…**~~ **Done, T5.E2.** `LAYER_NUM_EXCHANGEABLE` was **1** and
+  is deleted, both definitions (it had two: `decoder_context.rs:72` and
+  `decoder_core.rs:54`); `pDqLayersList` is a scalar and the three one-iteration loops
+  are straight-line. `pMotionPredFlag` died with the struct. Census: the
+  `type SMbCache x2` line is **removed**, not re-keyed — with the decoder's copy gone it
+  is not a duplicate at all. 61 → **60** allowlisted.
 - **No layout assert blocks this.** `assert_size!(SDqLayer, 512)` / `(SMbCache, 576)` in
   `encoder/abi_guard.rs` pin the **encoder's** namesakes. The decoder's two have no size
   assert and no offset pin.
@@ -133,11 +160,14 @@ The closure's conclusions, so they are not re-derived:
   accessors are exactly the shape that earned the rule. And nothing caches a
   pointer beside its owner: `SDeblockingFilter.pCsData` is the one live mirror
   left, 5.4's to delete.
-- **The S25 enumeration has a gate now, and it is not clean.**
-  `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`) decodes
-  `narrow_16x16.264` under Miri and found F23 and F24 before reaching the loop it was
-  written for — `WelsDecodeSlice`'s three overlapping `&mut`s across `pDecMbFunc`
-  (session D log §3), which remains a prediction until Miri gets past F24.
+- **The S25 enumeration has a gate, it has now been run three times, and it is still not
+  clean.** `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`)
+  decodes `narrow_16x16.264` under Miri. It found F23 and F24 at session D; at session E
+  it found the `DecodeCurrentAccessUnit` pair, then **F25** — the loop it was written
+  for, no longer a prediction — then **F26**, which is where session E's bound stopped
+  it. One defect per run, ~8 minutes per run; the way to beat that rate is to grep the
+  *shape* of each defect once Miri names it, which is how four of the six sites were
+  found without paying for a round trip.
 
 ## 3. Step 5.3 — Neighbor & MV
 
