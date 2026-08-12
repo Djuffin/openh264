@@ -5063,3 +5063,196 @@ criterion directly instead of by inference.
   `SHIM(phase5)` accessor die with the fields that hold them — and that accessor is
   where F26 surfaces, so the two may resolve together.
 * **F23 remains Phase 8's** and should still be said out loud at the phase exit.
+
+---
+
+## 2026-08-12 — Phase 5, session F (F26's experiment answers with a fourth option; the allocator stops laundering provenance; the backlog that releases closes four defects and stops on a named one)
+
+**Commits:** `6527bcf2` (inherited doc tail — S29, S20's lifecycle clause, S27's
+clarified predicate, the session brief), `e770ea77` (T5.F1, the experiment and F27),
+`154e912c` (T5.F2, the allocator), `bd65b8d4` (T5.F3, the backlog), and this entry.
+
+### The session in one line
+
+The experiment F26's entry demanded returned an answer neither of its two branches
+predicted — the site it was found at fails with a *tracked* tag, so it was never the
+allocator's defect — and once the allocator was fixed anyway, the backlog that
+un-blinding released came up in exactly the shape S22 says it does: four defects in six
+round trips, three of them new, the fourth already named by F25.
+
+### Control battery
+
+Docs-only tail, session E accepted (its one FAIL was F3-adjudicated, measurement 29),
+`rust/tools/` and the toolchain unchanged — S27's cheap subset, and this time the
+predicate it was clarified with in the same tail applied cleanly rather than by
+interpretation. **OVERALL: PASS**, 449/443/20, ratchet 4548, census 60.
+
+### 1. The experiment, and why it is worth doing experiments (T5.F1)
+
+F26 named a one-run experiment and forbade settling it by reasoning: restore the `&mut`
+spelling at the `pBitStringAux` store, run the probe once, revert. It named two possible
+answers — passes, so F26 is latent; fails identically, so F26 is live. **It did neither.**
+
+```text
+not granting access to tag <35268364> because that would remove [Unique for <36617218>]
+which is strongly protected              → cabac_decoder.rs:855
+<35268364> created by a SharedReadWrite retag at offsets [0x1350..0x1380]
+                                         → decoder_core.rs:3694  (the &mut store)
+<36617218> is this argument   pBsAux: &mut BsCursor
+                                         → decode_slice.rs:3785
+```
+
+The tag is no longer `<wildcard>` and Miri refuses the access anyway. **That difference
+is the whole result.** A wildcard refusal is conservative — *this access might disable a
+protected tag*. A refusal against a concrete tag over a named 0x30-byte range is a
+conviction — *this access does overlap a live, strongly protected `&mut`*. So F26 was
+live before T5.E1 (that line exposed nothing), **and F26 was not what the probe was
+stopping on**. The site is F27's: `WelsDecodeMbCabacIntraModeHelper` splits the NAL's
+`BsReader` into `(buf, &mut BsCursor)` and passes the cursor down as a protected
+argument, while `cabac_rbsp_window` underneath reaches the same `BsReader` *whole*
+through `pCtx->pCurDqLayer->pBitStringAux`.
+
+Reasoning would not have got here. Both stories on offer were defensible and both were
+wrong, and the instrument was eight minutes away. **Two outcomes were enumerated and the
+answer was a third** — which is the general case for "do not settle this by reasoning",
+not a special one.
+
+### 2. The allocator (T5.F2)
+
+`memory_align.rs:49-50`'s integer round trip becomes `addr()` + `byte_sub`. It is **S6
+parity, not repair**: `memory_align.cpp:92` is
+`pAlignedBuffer -= ((uintptr_t) pAlignedBuffer & kiAlignedBytes)`, pointer arithmetic
+with the integer used only as the mask, and the round trip was introduced in translation.
+
+Two things worth carrying:
+
+* **S18, per consumer.** The alignment arithmetic exists in exactly one place and
+  everything else delegates — so this un-blinds **19 consumer files, 8 decoder and 10
+  encoder and 1 processing**, not the decoder's heap. The encoder's Miri skips are
+  untouched and stay (F12's pool, F13's `encoder_ext`).
+* **The instrument was proven red before it was trusted green.** With the old formula
+  restored, `-Zmiri-strict-provenance` refuses the cast; with the fix, all five
+  `memory_align` tests pass under it. The library gate does not pass that flag, so the
+  claim is stronger than what CI asserts. The two new tests are the address pin (7
+  alignments × 2 periods of offsets, against the old formula transcribed in integers)
+  and the full-legal-reach read — **S28's rule aimed at the allocator that hands out the
+  pointers**, and the downward half is the point: the header words live *below* the
+  returned pointer and `WelsFree` reads them from there.
+
+Perf at the allocation seam, 3 interleaved pairs against a null taken the same hour:
+decode median **+0.08%** (band +0.04 … +0.48) against a null of +0.41% (−0.94 … +0.54);
+encode median **+0.00%** (−3.32 … +0.40) against a null of +0.00% (−6.48 … +1.49). The
+effect is smaller than the floor, which is what "same arithmetic, same addresses"
+predicts.
+
+### 3. The backlog (T5.F3) — six round trips, and the bound doing its job again
+
+| round | defect | disposition |
+|---|---|---|
+| 1 | **F27** — protected `&mut BsCursor` vs `cabac_rbsp_window`'s `&BsReader` | fixed; **2 of the 5 cursor parameters were dead** (`_pBsAux`, never read) and were deleted outright |
+| 2 | **F28** — the layer borrowed across calls that re-reach it through `pCtx` | fixed, 20 functions + 16 nested borrows in `decode_slice.rs` |
+| 3–4 | **F29** — `pCabacCtx.as_mut_ptr()`, 30 sites, 4 live in pairs | fixed via one `cabac_ctx_base` helper — **after round 4 reported the identical error**, see below |
+| 5 | **F30** — `pCoff.offset(-1)` one element before the array | fixed, `wrapping_offset`, F7's class |
+| 6 | **F25's `&mut *pCtx` inventory**, 12 bindings, 7 in this file | **not new** — the bound stops here |
+
+Three things this face taught that are not in the table.
+
+**F28 is F25's law one level down.** F25 said *the god-context is never held as a borrow
+across a call*. F28 is the same defect with the **layer** in the context's place, and it
+generalizes: any object reachable from `pCtx` behaves this way, because a re-entrant
+callee reaching it through `pCtx` reads through the parent tag, and a read pops a
+`Unique`. It is not a rule about `pCtx`; it is a rule about anything `pCtx` can reach.
+
+**F29 cost a round trip to an S24 failure inside a grep.** The first pass re-pointed 25
+sites and missed 4 — and the 4 it missed were the only ones live in pairs, i.e. the only
+ones that mattered. They are formatted across three lines (`(*pCtx)` / `.pCabacCtx` /
+`.as_mut_ptr()`), so a line-anchored grep cannot see them, and Miri had already *named*
+two of them in the diagnostic being fixed. **The count came from a grep of the code and
+was still a summary of the fact**: the grep's unit was the line and the code's unit was
+the expression. S24 is usually about trusting prose; this is the same failure with no
+prose in it.
+
+**Round 6 is the good kind of stop.** It is not a new finding — F25 named both the
+pattern and the count — so the queue ends on something with an owner (5.6), a spelling
+(S29's), and a number (12 decoder-side, 7 in `decode_slice.rs`). The probe's
+`#[cfg_attr(miri, ignore)]` label went from four unknowns this morning to one known
+item, which is the difference between a debt and a task.
+
+### 4. Face 4 did not start, and that was the brief's own gate
+
+The grid conversion was scoped **"only from a standing start"**. The start is not
+standing: the probe still stops at `WelsTargetSliceConstruction:2426`. Because the probe
+reports **one defect per run**, converting the grid on top of that would not produce an
+unattributable failure so much as *no measurement at all* — the run would keep reporting
+F25's site and say nothing about the grid. The precondition exists for exactly this and
+it was applied rather than argued with.
+
+What it costs: 5.2's conversion is one session further out. What it buys: the conversion
+lands on a path where its own Miri verdict means something, which is the reason the gate
+was written after F24.
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 449 / 443 / 20 | **451 / 445 / 20** (+2, `memory_align`) |
+| Miri `--lib` | 309 | **311** (+2, the same two) |
+| decode goldens | 56 rows | **56 rows, none moved** (both code faces) |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4548 | **4589** (+8 tests at T5.F2, +33 at T5.F3) |
+| `unsafe_block` | 614 | **619** |
+| `unsafe_fn` | 1247 | **1248** (`cabac_ctx_base`) |
+| `SHIM(` | 158 | **158** |
+| Miri skips | 2 | 2 |
+| findings | F26 open | **F26 FIXED; F27–F30 new, all FIXED** |
+
+The `raw_ptr` rise is what removing retags costs — 20 `*mut SDqLayer` annotations, 9
+`*mut SSlice`, 5 `*mut BsCursor`, 2 `*mut BsReader` against 8 removed. T5.E1 made the
+same trade in the other direction when its fix collapsed double casts; S16's instruction
+to read the shape rather than the sign covers both.
+
+Batteries: T5.F2 and T5.F3 each `gates.sh full` with **two FAILs, both adjudicated** —
+the ratchet, regenerated in its own commit per S16, and one sweep row per face.
+
+### 6. F3 — measurements 30, 31 and 32, and the first alternation that could have said something
+
+**Step 0 was checked and declined, which is new.** T5.F2 is the phase's first commit to
+touch a `common/` module the encoder links, so the two `rust_enc` binaries genuinely
+differ (`ed3b2622` base, `5ab0ac61` head) and the hash shortcut does not apply. Every
+prior use of step 0 in this project has been an acquittal; this is the first time it was
+run and came back "no".
+
+* **30 and 31** (T5.F2, release): `mt … t=4 sm=3 n=600 cabac=1 rc=0` on two different
+  streams, wrong lengths 0 and 28537. Each 5/5 byte-identical in isolation. Rate over
+  five back-to-back release sweeps: **2 / 1705 ≈ 1/850**, against F3's measured ≈1/800.
+* **Step 2 alternation**, 12 `mt` presets per side in one loop, 1440 configurations each:
+  **base 1 / head 1**. Even, and not 0/0 (S23b).
+* **32** (T5.F3, debug): `mt … t=4 sm=3 n=600 cabac=1 rc=1`, zero-length. Isolation gave
+  **4× byte-identical and 1× zero bytes from one binary and one configuration** — S14
+  step 1's race criterion met *directly*, the second time this project has had that
+  quality of evidence (measurement 29 was the first). A deterministic port bug does not
+  produce identical bytes four times out of five.
+
+Twenty-eight measurements, eleven alternations, eleven acquittals.
+
+### Hand-off: Phase 5, session G
+
+* **The next unit is F25's inventory, and it is now a task rather than a debt.** 12
+  `&mut *pCtx` bindings decoder-side — **7 in `decode_slice.rs`**, 5 in
+  `manage_dec_ref.rs`. The spelling is S29's and T5.E1 did 43 sites of it in one commit.
+  This is what stands between the tree and a green probe, and it is the thing to do
+  first because everything after it wants the probe.
+* **Expect the queue behind them to be non-empty.** Every round trip since T5.D2 has
+  found something, and F28 widened the class: it is not the ~30 `&mut *pCtx` sites, it is
+  every `&mut` of anything reachable from `pCtx` held across a re-entrant call. Budget
+  for a bound again.
+* **Then the grid, from the standing start this session did not have.** The closure is
+  unchanged (session D §2 as corrected by T5.E2): grid in the layer, 50 signatures
+  against 0; `DqLayerState`/`MbGrid` must keep the **allocation's** dimensions reachable
+  for teardown; S28 accessors with full-reach Miri tests; S21 for the `WelsMallocz`-reached
+  construction; the census keys re-keyed in the rename's own commit.
+* **`pBitStringAux`'s second path is narrowed but not gone.** T5.F3 removed the
+  *conflict* (no reference to the reader is created on the CABAC path); the field still
+  exists and `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor still reaches the layer.
+  Both die in 5.2, as planned — F27's entry says why a local patch was not preferred.
+* **F23 remains Phase 8's.**

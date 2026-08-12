@@ -83,7 +83,8 @@ Order inside the step:
 
 ## 2. Step 5.2 — MbGrid (**closure computed and written, session D log §2 — do not
 recompute it. The subtraction has landed (T5.E2); the grid conversion is still blocked,
-now on F26 rather than F24.**)
+now on F25's `&mut *pCtx` inventory — F26 closed at T5.F2 and the four defects that
+un-blinding released closed at T5.F3.**)
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
 `MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over
@@ -97,16 +98,29 @@ that escape into the layer and one into the context. **F25** (`WelsDecodeSlice`'
 overlapping `&mut`s across the re-entrant `pDecMbFunc`) went from session D's prediction
 to a Miri finding and is fixed too.
 
-**The blocker is now F26**, and it is a different animal: `CMemoryAlign::WelsMalloc`
-launders every allocation's provenance through `usize` (`memory_align.rs:49-50`), so the
-whole decoder heap is *wildcard*-tagged and Miri will not grant a wildcard access that
-would disable a strongly-protected `&mut`. The reason to care is unchanged from F24's —
-convert raw pointers to borrows on top of a path Miri cannot clear and the next failure
-is unattributable — but the fix is an allocator decision, not a mechanical one, and
-restoring tracked provenance crate-wide should be expected to surface more (S22).
-`#[cfg_attr(miri, ignore)]` therefore stays on
-`decode_slice_loop_runs_under_the_aliasing_checker`, labelled with all four items; it
-comes off at F26.
+~~**The blocker is now F26**~~ **F26 is fixed (T5.F2)** — `memory_align.rs:49-50`'s
+integer round trip is `addr()` + `byte_sub` now, which is what `memory_align.cpp:92`
+always was, so **both codecs' heaps carry tracked provenance** (19 consumer files, 10 of
+them the encoder's; S18). Two corrections to how it was written up here, both from
+T5.F1's one-run experiment:
+
+* **F26 was live before T5.E1** — the `addr_of_mut!` line exposed nothing.
+* **F26 was never what the probe was stopping on.** `cabac_decoder.rs:855` fails with a
+  *tracked* tag too, which is a conviction rather than a conservative refusal, and that
+  defect is **F27** — a protected `&mut BsCursor`, split out of the NAL's `BsReader`,
+  live while `cabac_rbsp_window` reaches the same reader whole.
+
+S22's backlog then arrived as predicted: **F27, F28, F29 and F30 all closed at T5.F3**
+over six probe round trips (the aliasing family in the CABAC path, the layer borrowed
+across re-entrant calls in 20 functions, 30 `pCabacCtx.as_mut_ptr()` derivations, and one
+`offset(-1)` before an array). **The blocker is now F25's own inventory**: 12
+`&mut *pCtx` bindings decoder-side, **7 in `decode_slice.rs`** and 5 in
+`manage_dec_ref.rs`. The reason to care is unchanged from F24's — convert raw pointers to
+borrows on top of a path Miri cannot clear and the next failure is unattributable, and
+worse, the probe reports one defect per run so the conversion gets *no* measurement at
+all. `#[cfg_attr(miri, ignore)]` therefore stays on
+`decode_slice_loop_runs_under_the_aliasing_checker`, **relabelled to that one item**; it
+comes off when those bindings are converted.
 
 **And the systemic finding that outranks all three**: F25's retag is whole-context
 (`[0x0..0x8ae00]`), and **~30 `&mut *pCtx` sites remain in `src/decoder/`**. Each is
@@ -236,13 +250,17 @@ this brief historical.
 - `transmute` reads **4: all prose, zero calls**. Don't chase it.
 - The **ratchet** is the instrument, not struct sizes. Phase 5 so far:
   `raw_ptr` 4815 → 4597 (session A, by deletion; session B flat) → 4595
-  (session C) → 4600 (session D, +5 for the aliasing probe) → **4548** (session E:
+  (session C) → 4600 (session D, +5 for the aliasing probe) → 4548 (session E:
   −4 as F24's fix collapsed the `as *mut T as *mut c_void` double casts, −48 as
-  `SMbCache` and the one-element dimensions died), `unsafe_block` 613 → 618 → 616 →
-  613 → 614 → **614**, `unsafe_fn` 1250 → 1249 → 1248 → **1247**
-  (`InitCurDqLayerData` deleted). S16's warning was collected twice at session C:
+  `SMbCache` and the one-element dimensions died) → **4589** (session F: +8 for the
+  allocator's two new tests, +33 as F28's fix traded `&mut` bindings for `*mut`
+  annotations — removing a retag costs a pointer type, which is the same trade
+  T5.E1 made in the other direction), `unsafe_block` 613 → 618 → 616 →
+  613 → 614 → 614 → **619**, `unsafe_fn` 1250 → 1249 → 1248 → 1247
+  (`InitCurDqLayerData` deleted) → **1248** (`cabac_ctx_base`). S16's warning was collected twice at session C:
   prose inflates `raw_ptr` and `SHIM(`, and both were reworded rather than baselined.
-- Gates: **449 / 443 / 20**, Miri **309**, sweeps 341/341 both profiles, decode
+- Gates: **451 / 445 / 20**, Miri **311** (session F: +2 both, the allocator's
+  address-pin and full-reach tests), sweeps 341/341 both profiles, decode
   goldens **56 rows**. The debug sweep now reproduces F3 (`rust_enc`'s
   `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29
   is the cleanest evidence the finding has.
