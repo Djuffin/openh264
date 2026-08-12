@@ -2026,6 +2026,16 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             let mut pPartW = [0i8; 4];
             let mut uiSubMbType: u32 = 0;
 
+            // T5.I1: two window borrows for the whole arm. `ParseSubMBTypeCabac`,
+            // `ParseRefIdxCabac` and `UpdateP8x8RefIdxCabac` reach the layer but
+            // neither of these arrays; the eight per-partition checks below become
+            // two.
+            let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+            let pNoSubMbPartSizeLessThan8x8Flag = (*pCurDqLayer)
+                .grid
+                .no_sub_mb_part_size_less_than8x8_flag
+                .get_mut(iMbXy);
+
             for i in 0..4 {
                 let err = ParseSubMBTypeCabac(pCtx, pNeighAvail, &mut uiSubMbType);
                 if err != ERR_NONE {
@@ -2034,15 +2044,12 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 if uiSubMbType >= 4 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
                 }
-                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                pSubMbType[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
                 pSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount;
                 pPartW[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
 
-                let flag = (*pCurDqLayer)
-                    .grid
-                    .no_sub_mb_part_size_less_than8x8_flag
-                    .get_mut(iMbXy);
-                *flag = *flag && (uiSubMbType == 0);
+                *pNoSubMbPartSizeLessThan8x8Flag =
+                    *pNoSubMbPartSizeLessThan8x8Flag && (uiSubMbType == 0);
             }
 
             for i in 0..4 {
@@ -2080,7 +2087,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
             for i in 0..4 {
                 let iPartCount = pSubPartCount[i] as usize;
-                uiSubMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                uiSubMbType = pSubMbType[i];
                 let iBlockW = pPartW[i] as usize;
                 let mut iCacheIdx = g_kuiCache30ScanIdx[i << 2] as usize;
 
@@ -2408,6 +2415,16 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         let mut has_direct_called = false;
         let mut directSubMbType: SubMbType = 0;
 
+        // T5.I1: one window borrow for the flag across the parse loop. `pSubMbType`
+        // cannot take one here — `PredMvBDirectSpatial` and `PredBDirectTemporal`
+        // write `grid.sub_mb_type[iMbXy]` themselves (`mv_pred.rs:1035`, `:1130`) —
+        // so its window is per iteration below, and one shared window covers the
+        // read-only loops after.
+        let pNoSubMbPartSizeLessThan8x8Flag = (*pCurDqLayer)
+            .grid
+            .no_sub_mb_part_size_less_than8x8_flag
+            .get_mut(iMbXy);
+
         for i in 0..4usize {
             let err = ParseBSubMBTypeCabac(pCtx, pNeighAvail, &mut uiSubMbType);
             if err != ERR_NONE {
@@ -2422,7 +2439,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = false;
+                *pNoSubMbPartSizeLessThan8x8Flag = false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
@@ -2451,8 +2468,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     }
                     has_direct_called = true;
                 }
-                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = directSubMbType;
-                if IS_SUB_4x4((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
+                let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+                pSubMbType[i] = directSubMbType;
+                if IS_SUB_4x4(pSubMbType[i]) {
                     pSubPartCount[i] = 4;
                     pPartW[i] = 1;
                 }
@@ -2462,10 +2480,15 @@ pub unsafe fn ParseInterBMotionInfoCabac(
             }
         }
 
+        // T5.I1: nothing below writes this family, and `FillSpatialDirect8x8Mv`,
+        // `FillTemporalDirect8x8Mv`, `Update8x8RefIdx` and `PredMv` reach the layer
+        // but not this array. One shared window for the three loops that follow.
+        let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
+
         for i in 0..4usize {
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
-            if IS_DIRECT((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
+            if IS_DIRECT(pSubMbType[i]) {
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     FillSpatialDirect8x8Mv(
                         pCurDqLayer,
@@ -2521,7 +2544,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         for listIdx in LIST_0..LIST_A {
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
-                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                let subMbType = pSubMbType[i];
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
@@ -2558,7 +2581,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         for listIdx in LIST_0..LIST_A {
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
-                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                let subMbType = pSubMbType[i];
                 if IS_DIRECT(subMbType) && pSliceHeader.iDirectSpatialMvPredFlag == 0 {
                     continue;
                 }
