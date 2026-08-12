@@ -373,7 +373,6 @@ pub struct SDqLayer {
     pub pIntraPredMode: *mut [i8; 8],
     /// **Per-MB array of 16, not a scalar** — allocated `numMb * 16` and indexed
     /// `[iMbXy][g_kuiScan4[i]]`. Same correction as `pIntraPredMode` (T5.G2).
-    pub pSubMbType: *mut [u32; 4],
     pub iLumaStride: i32,
     pub iChromaStride: i32,
     pub pPred: [*mut u8; 3],
@@ -2792,7 +2791,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
-        (*pDq).pSubMbType = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
@@ -2852,10 +2850,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pIntraPredMode.is_null() {
             WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
             (*pDq).pIntraPredMode = std::ptr::null_mut();
-        }
-        if !(*pDq).pSubMbType.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pSubMbType as *mut u8, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>());
-            (*pDq).pSubMbType = std::ptr::null_mut();
         }
         if !(*pDq).pSliceIdc.is_null() {
             WelsFreeHelper(pMa, (*pDq).pSliceIdc as *mut u8, numMb * std::mem::size_of::<i32>());

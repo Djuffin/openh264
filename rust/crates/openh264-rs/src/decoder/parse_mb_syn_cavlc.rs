@@ -1213,7 +1213,7 @@ pub unsafe fn ParseInterInfo(
                 if uiSubMbType >= 4 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
                 }
-                (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
                 iSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount as i32;
                 iPartWidth[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth as i32;
                 let flag = *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy);
@@ -1271,7 +1271,7 @@ pub unsafe fn ParseInterInfo(
 
             for i in 0..4 {
                 let iPartCount = iSubPartCount[i];
-                let uiSubMbType = (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i];
+                let uiSubMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
                 let iBlockWidth = iPartWidth[i];
                 let iIdx = (i as i32) << 2;
                 let uiIdx4Cache = g_kuiCache30ScanIdx[iIdx as usize] as usize;
@@ -1686,20 +1686,20 @@ pub unsafe fn ParseInterBInfo(
                     }
                     has_direct_called = true;
                 }
-                (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] = directSubMbType;
-                if IS_SUB_4x4((*(*pCurDqLayer).pSubMbType.add(iMbXy))[i]) {
+                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = directSubMbType;
+                if IS_SUB_4x4((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
                     pSubPartCount[i] = 4;
                     pPartW[i] = 1;
                 }
             } else {
-                (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i] =
+                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] =
                     g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType;
             }
         }
         if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..4usize {
-                    let is_dir = IS_DIR((*(*pCurDqLayer).pSubMbType.add(iMbXy))[i], 0, listIdx);
+                    let is_dir = IS_DIR((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i], 0, listIdx);
                     if is_dir {
                         let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
@@ -1713,7 +1713,7 @@ pub unsafe fn ParseInterBInfo(
         for i in 0..4usize {
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
-            if IS_DIRECT((*(*pCurDqLayer).pSubMbType.add(iMbXy))[i]) {
+            if IS_DIRECT((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         pCurDqLayer as *mut _,
@@ -1775,7 +1775,7 @@ pub unsafe fn ParseInterBInfo(
         for listIdx in LIST_0..LIST_A {
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
-                let subMbType = (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i];
+                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
@@ -1829,7 +1829,7 @@ pub unsafe fn ParseInterBInfo(
                 (*iRefIdxArray)[listIdx][uiCacheIdx + 6] = iref;
                 (*iRefIdxArray)[listIdx][uiCacheIdx + 7] = iref;
 
-                let subMbType = (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i];
+                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
                 if IS_DIRECT(subMbType) {
                     continue;
                 }

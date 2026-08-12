@@ -1032,9 +1032,7 @@ pub unsafe fn PredMvBDirectSpatial(
             let mut pPartW = [0i8; 4];
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
-                if !(*pCurDqLayer).pSubMbType.is_null() {
-                    (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i as usize] = *subMbType;
-                }
+                (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
                 UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                 UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
@@ -1129,9 +1127,7 @@ pub unsafe fn PredBDirectTemporal(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
                 let iScan4Idx = g_kuiScan4[iIdx8 as usize] as usize;
-                if !(*pCurDqLayer).pSubMbType.is_null() {
-                    (*(*pCurDqLayer).pSubMbType.add(iMbXy))[i as usize] = *subMbType;
-                }
+                (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
                 let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
 
                 ref_idx[LIST_1] = 0;
