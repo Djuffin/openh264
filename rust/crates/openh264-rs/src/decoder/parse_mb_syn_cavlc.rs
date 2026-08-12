@@ -1204,6 +1204,14 @@ pub unsafe fn ParseInterInfo(
                 iRefCount[1] = 1;
             }
 
+            // T5.I1: two window borrows for the whole arm. Nothing it calls —
+            // `BsGet*`, `PredMv` — reaches either array, and the picture's
+            // `pRefIndex`/`pMv` below are a different allocation. Twelve checks
+            // across the first loop alone become two.
+            let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+            let pNoSubMbPartSizeLessThan8x8Flag =
+                (*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
+
             for i in 0..4 {
                 let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
                 if ret != 0 {
@@ -1213,11 +1221,11 @@ pub unsafe fn ParseInterInfo(
                 if uiSubMbType >= 4 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
                 }
-                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                pSubMbType[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
                 iSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount as i32;
                 iPartWidth[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth as i32;
-                let flag = *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy);
-                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = flag && (uiSubMbType == 0);
+                *pNoSubMbPartSizeLessThan8x8Flag =
+                    *pNoSubMbPartSizeLessThan8x8Flag && (uiSubMbType == 0);
             }
 
             if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
@@ -1271,7 +1279,7 @@ pub unsafe fn ParseInterInfo(
 
             for i in 0..4 {
                 let iPartCount = iSubPartCount[i];
-                let uiSubMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                let uiSubMbType = pSubMbType[i];
                 let iBlockWidth = iPartWidth[i];
                 let iIdx = (i as i32) << 2;
                 let uiIdx4Cache = g_kuiCache30ScanIdx[iIdx as usize] as usize;
@@ -1641,6 +1649,13 @@ pub unsafe fn ParseInterBInfo(
         let mut has_direct_called = false;
         let mut directSubMbType: crate::decoder::mv_pred::SubMbType = 0;
 
+        // T5.I1: one window borrow for the flag across the parse loop. `pSubMbType`
+        // gets no loop-level borrow here and cannot: `PredMvBDirectSpatial` and
+        // `PredBDirectTemporal` write `grid.sub_mb_type[iMbXy]` themselves
+        // (`mv_pred.rs:1035`, `:1130`), so the window is per iteration below.
+        let pNoSubMbPartSizeLessThan8x8Flag =
+            (*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
+
         // uiSubMbType, partition
         for i in 0..4usize {
             let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
@@ -1657,7 +1672,7 @@ pub unsafe fn ParseInterBInfo(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = false;
+                *pNoSubMbPartSizeLessThan8x8Flag = false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
@@ -1686,8 +1701,9 @@ pub unsafe fn ParseInterBInfo(
                     }
                     has_direct_called = true;
                 }
-                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = directSubMbType;
-                if IS_SUB_4x4((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
+                let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+                pSubMbType[i] = directSubMbType;
+                if IS_SUB_4x4(pSubMbType[i]) {
                     pSubPartCount[i] = 4;
                     pPartW[i] = 1;
                 }
@@ -1696,10 +1712,15 @@ pub unsafe fn ParseInterBInfo(
                     g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType;
             }
         }
+        // T5.I1: the parse loop is done writing, and every remaining reader of this
+        // family is a read — `FillSpatialDirect8x8Mv`, `FillTemporalDirect8x8Mv`,
+        // `Update8x8RefIdx` and `PredMv` reach the layer but not this array. One
+        // shared window covers all four loops below.
+        let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
         if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..4usize {
-                    let is_dir = IS_DIR((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i], 0, listIdx);
+                    let is_dir = IS_DIR(pSubMbType[i], 0, listIdx);
                     if is_dir {
                         let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
@@ -1713,7 +1734,7 @@ pub unsafe fn ParseInterBInfo(
         for i in 0..4usize {
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
-            if IS_DIRECT((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
+            if IS_DIRECT(pSubMbType[i]) {
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         pCurDqLayer as *mut _,
@@ -1775,7 +1796,7 @@ pub unsafe fn ParseInterBInfo(
         for listIdx in LIST_0..LIST_A {
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
-                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                let subMbType = pSubMbType[i];
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
@@ -1829,7 +1850,7 @@ pub unsafe fn ParseInterBInfo(
                 (*iRefIdxArray)[listIdx][uiCacheIdx + 6] = iref;
                 (*iRefIdxArray)[listIdx][uiCacheIdx + 7] = iref;
 
-                let subMbType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i];
+                let subMbType = pSubMbType[i];
                 if IS_DIRECT(subMbType) {
                     continue;
                 }
