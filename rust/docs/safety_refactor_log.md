@@ -5256,3 +5256,264 @@ Twenty-eight measurements, eleven alternations, eleven acquittals.
   exists and `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor still reaches the layer.
   Both die in 5.2, as planned — F27's entry says why a local patch was not preferred.
 * **F23 remains Phase 8's.**
+
+## 2026-08-12 — Phase 5, session G (F25's inventory closes; the probe runs un-ignored and green; the queue's last defect was not an aliasing defect; 5.2's flip is sized and one landmine lighter)
+
+**Commits:** `14d63d1a` (inherited doc tail — S24's multiline clause, the session brief),
+`b4e60a66` (T5.G1, the inventory + the un-ignore + F31), `8455dd56` (ratchet, S16),
+`5a71afe3` (T5.G2, F32), and this entry.
+
+### The session in one line
+
+The blocker that has stood since session E is gone — `decode_slice_loop_runs_under_the_aliasing_checker` runs un-ignored, green, inside the `--lib`
+Miri gate — and the one defect standing behind it was not an aliasing defect at all,
+which is better evidence the seam is clean than another quiet run would have been.
+
+### Control battery
+
+Docs-only tail, session F accepted (two FAILs, both adjudicated: the S16 ratchet and
+one F3 sweep row per face), toolchain unchanged — S27's cheap subset. **OVERALL: PASS**,
+451/445/20, ratchet 4589, census 60.
+
+One judgement call in the predicate, recorded because it will recur every session from
+here: `rust/tools/` **did** change in the tail — `unsafe_baseline.json`, regenerated at
+T5.F3. No script changed. A regenerated baseline is the gate recording an accepted new
+state, not a repaired gate, so it owes no S22 backlog run; read literally, S27's
+"`rust/tools/` unchanged" would never hold again after any ratchet-moving session.
+
+### 1. Face 1 — the `&mut *pCtx` inventory, and it was 11 (T5.G1)
+
+F25, `phase5.md` §2, S29, the probe's own `#[cfg_attr]` label and session F's hand-off
+all carried **12 bindings, 7 in `decode_slice.rs`, 5 in `manage_dec_ref.rs`**. Recounted
+before acting, as S24 requires:
+
+```
+grep 'let ctx = &mut \*pCtx;' decode_slice.rs   ->  7 lines
+  :661 :699 :2057 :2385 :2426 :5225              6 code
+  :5405                                          1 `///`, inside the probe's doc
+                                                   comment, illustrating the defect
+```
+
+**Eleven, not twelve.** The seventh was prose. That is S16's standing warning about
+`raw_ptr` — prose inflates a count — arriving in a place S24 was already watching, and
+the instrument that separates them is one comment-stripping pass before counting.
+
+The correction changed nothing about the work, and that is the part worth keeping. The
+task's shape was *convert every `&mut *pCtx` binding*, not *convert twelve things*, so a
+wrong count could not misdirect it. F29 cost a round trip last session on a count that
+was wrong by four, because there the count **was** load-bearing — it decided which sites
+got fixed. **A wrong count is harmless exactly when it is not load-bearing, and there is
+no way to know which kind you are holding without checking.**
+
+Converted: 11 bindings, 97 uses re-spelled `(*pCtx).`, and **13 nested borrows** that
+hung off them — `pCurSlice`, two `pDec`, two `pRefPic`, three `pCurDqLayer`, three
+`pSliceHeader`, one `pic` — re-derived with `addr_of_mut!` or taken raw.
+
+Two of those were not `&mut *` shapes and would have survived any grep for one:
+
+* `WelsMarkAsRef`'s `&mut (*pCtx).sTmpRefPic as *mut SRefPic` — **S29's forbidden
+  derivation with the cast already written.** The reference exists and retags before the
+  cast discards it, so the site reads as raw-pointer code and behaves as a borrow. S29
+  now names the shape.
+* `manage_dec_ref.rs`'s four `&mut *(*pCtx).pCurDqLayer` — F28's exact class in a file
+  F28's 20-function sweep did not cover, because F28 was scoped to `decode_slice.rs`.
+
+Result: `src/decoder/` holds **zero** `&mut *pCtx`, and **no function in the port takes
+`&mut SWelsDecoderContext`**. The god-context is never a borrow anywhere.
+
+### 2. Face 2 — the probe comes off ignore, and the queue was one deep (T5.G1)
+
+**F31**, and it is the first thing this probe has found that is not an aliasing defect.
+
+```text
+error: Undefined Behavior: reading memory at alloc253221[0x1fe0..0x2378], but memory is
+       uninitialized at [0x231d..0x2320], and this operation requires initialized memory
+     3: decoder::nalu::bytes_equal::<decoder::parameter_sets::TagSps>
+     4: decoder::nalu::ParseSps
+```
+
+`alloc253221` is the decoder context, so the uninitialized operand is the **stored** SPS.
+The three bytes are `sVui + 1`: `TagVui` opens with a `bool` and its next field is a
+4-aligned `u32`.
+
+`au_parser.cpp` runs a three-legged idiom that only works whole — `memset` the source,
+`memcpy` it in, `memcmp` it back. The port translated leg 2 as
+`copy_nonoverlapping::<SSps>(src, dst, 1)`, a **typed** copy, which does not carry
+padding. Leg 1 had the same hole: a zeroing initializer produces a zeroed *value* and
+moving it into the binding is a typed copy too.
+
+The detail worth carrying: **`ParseSps`'s own comment has explained since the function
+was written** that the zeroing exists so the comparison is meaningful, and that stale
+padding "would read as a changed SPS and force a spurious new sequence, resetting the
+DPB mid-stream". The comment was right about the mechanism and right about the stakes,
+and the code discarded the zeroing one line later. S24 is usually about trusting someone
+else's prose; here the prose and the fact were written by the same hand in the same
+function.
+
+Fixed as S6 parity in the strong sense — the fix makes the Rust do what the C++ does,
+and the defect was introduced in translation: one `bytes_copy<T>` that *is* `memcpy`, all
+**10** paramset stores routed through it, `write_bytes(.., 0, size_of::<T>())` over both
+temps' own storage. Owner 5.5; fixed here because it is what the probe stopped on and it
+is three lines of mechanism.
+
+**The probe then passed**: 1 passed, 0 failed, 377s. The bound was three defects beyond
+the first and the queue stopped at one.
+
+Three consequences, all of them permanent:
+
+* **The slice-decode loop is under the aliasing checker end to end**, for the first time
+  in this project's history. Every 5.2–5.6 conversion from here gets a Miri verdict that
+  means something — which is the precondition session E wrote the gate for.
+* **The Miri gate costs ~6 minutes more per run.** That is the price of the coverage.
+* **Re-adding `#[cfg_attr(miri, ignore)]` now requires a finding that owns it** (S15),
+  with the label naming what it waits on. The label was rewritten to say so.
+
+**Why the shape of the stop matters.** Ten defects over eleven round trips since T5.D2
+were aliasing defects, and the queue had produced one every single time. The obvious
+reading of another aliasing find would have been "the class is not exhausted". Getting a
+*different* class instead, and then nothing, is the first positive evidence that the
+aliasing seam is actually clean rather than merely not yet re-probed.
+
+### 3. Face 3 — sized, not landed, and one landmine defused (T5.G2)
+
+The standing start existed, so face 3 was in scope. It was measured before it was
+started, and the measurement is the reason it did not land:
+
+| quantity | measured |
+|---|---|
+| `*mut SDqLayer` signature positions | **75**, over 6 decoder files |
+| grid fields / allocations / frees | **24 / 27 / 24** |
+| grid field accesses, decoder-side | **~697** |
+
+That is not one session's work, and a half-flipped closure is the state S20 exists to
+forbid. What *was* in scope was the check that must precede it.
+
+**F32 — two of the 24 arrays declare a scalar pointee and allocate a per-MB array.**
+Cross-checking every field's declared type against its allocation expression is a dozen
+lines of script and one second:
+
+```
+pIntraPredMode       *mut i8    numMb * 8  * sizeof(i8)    really [i8; 8]
+pIntra4x4FinalMode   *mut i8    numMb * 16 * sizeof(i8)    really [i8; 16]
+```
+
+The other 22 agree exactly. 5.2 derives each `MbArray<T>`'s `T` from the declared
+pointee — the only way to read 700 sites — and read that way these two allocate **8× and
+16× too little**. The writes land on `[7]` and on scan-order slots, so a small stream can
+touch one element of each and pass every gate in the battery.
+
+`dec_frame.h:85-86` settles what it is: `int8_t (*pIntraPredMode)[8];  //0~3 top4x4 ;
+4~6 left 4x4; 7 intra16x16`. Pointer-to-array became pointer-to-scalar in translation and
+the comment naming the slot layout came across as nothing. The fix restores both — 24
+sites, zero bytes moved, and one S29 escaping borrow retired with them.
+
+**The lesson against `phase5.md` §2's own text.** It records "F19's check discharges
+clean at **field** level — 24 arrays against 24 frees". True, and it is a check of
+*pairing*, not of *size*. Both frees here are wrong in the same direction as both
+allocations, which is precisely why they paired. A pairing check cannot see a
+consistently wrong size, and the encoder's `SDqLayer`/`SMbCache` in 6.3 have never been
+checked the other way.
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 451 / 445 / 20 | **451 / 445 / 20** |
+| Miri `--lib` | 311 | **312** (the probe, un-ignored) |
+| decode goldens | 56 rows | **56 rows, none moved** (both code faces) |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4589 | **4604** (+15 at T5.G1; T5.G2 flat) |
+| `unsafe_block` | 619 | **619** |
+| `unsafe_fn` | 1248 | **1249** (`bytes_copy`) |
+| `SHIM(` | 158 | **158** |
+| Miri skips | 2 | 2 |
+| findings | — | **F31, F32 — both new, both FIXED**; F25's inventory closed |
+
+`raw_ptr` +15 is the trade session F named, in the same direction: 11 bindings and 13
+nested borrows became raw derivations, and each costs a pointer type annotation. Read the
+shape, not the sign.
+
+**S16's prose floor was collected twice more, and both would have corrupted a live
+instrument.** At T5.G1 a doc comment naming the zeroing intrinsic pushed `mem_zeroed`
+2 → 3 in `nalu.rs` with no new call site — and `mem_zeroed` is S21's construction-audit
+count, still in use. At T5.G2 a doc comment quoting the old pointer type pushed `raw_ptr`
++1. Both reworded, not baselined, as session C did. Four instances now; the operational
+form of the rule is **read per-file deltas, never the total** — in a total, a one-line
+prose delta and a real conversion are the same number.
+
+Batteries: `gates.sh full` twice, `gates.sh commit` three times. Every step PASS except
+the ratchet at T5.G1 (regenerated in its own commit per S16) and a first ratchet reading
+at T5.G2 that the prose reword cleared.
+
+### 5. Perf, and what was not measured (S17)
+
+Decode bench, the two full batteries, same three streams and identical SHA-1s
+(`0fba9a4e…`, `d8c07c43…`, `8b081cce…`): CB 386.88 → 384.19 fps (−0.70%), Main
+159.13 → 159.02 (−0.07%), High 158.09 → 157.70 (−0.25%). Encoder rows bit-identical.
+
+**No interleaved 3-pair median and no S2 null were run**, and saying so is the point.
+Those readings are sequential singles, which S1 puts at ~3% drift, so they establish
+nothing tighter than "nothing large happened". The brief asked for 3-pair medians per
+seam; the judgement made was that this session has no seam that could plausibly move —
+every change is a pointer *spelling* change with byte-identical output, no kernel, no
+allocation path and no dispatch was touched, and no shim died, so §7.4's ledger is
+unmoved too.
+
+The one genuinely new instruction cost is F31's: two redundant `write_bytes` of ~920 and
+~600 bytes, once per SPS and once per PPS NAL. It is redundant with the zeroing
+initializer that precedes it, kept because the pair is what makes the invariant legible.
+**5.5 should collapse it** into a `MaybeUninit` + `write_bytes` construction when it
+rewrites the paramset store; it is not worth a separate commit now.
+
+### 6. F3 — zero hits, and a gap in the ledger that the zero exposed
+
+**Zero hits.** Four sweeps of 341 configurations (two full batteries × two profiles) =
+1364 configurations, all PASS, both profiles. Nothing to adjudicate: S14's protocol
+starts at a hit and there was none. Per S14 step 4 this is a **sample, not a signal** —
+F3's measured rate is ≈1/800 under sustained load, so 1364 configurations drawing zero
+is an ordinary outcome and says nothing about whether the finding is still live.
+
+**The useful part was going to write it down.** The brief said "measurements 33+
+append", so the first move was to find measurement 32 in `phase0_findings.md` — and F3's
+ledger there **ends at 29**. Session F's measurements 30, 31 and 32, its 5× isolation
+re-runs, its 2/1705 rate and its eleventh alternation were all written into that
+session's *log entry* and none of them into F3. S14 step 4 says append every measurement
+to F3, and the ledger is what the next session greps for the rate; a measurement that
+lives only in a session log is invisible to it. Session F's own closing tally read
+"twenty-eight measurements, eleven alternations", which is the arithmetic of a ledger
+that stopped being updated.
+
+Recovered verbatim from the log entry rather than re-run, and appended to F3 with the
+zero-hit sample behind it. **Running total: thirty-two measurements, eleven alternations,
+eleven acquittals.**
+
+This is S22's law aimed at a record instead of a gate: an instrument's history is part of
+the instrument, and the only reason the gap surfaced is that a *zero* forced a look at
+where the numbering had got to. Four sessions of hits would have kept writing them into
+log entries.
+
+### Hand-off: Phase 5, session H
+
+* **The next unit is 5.2's grid flip, and it is now the only thing in front of the
+  phase.** Blocker: none. The closure is unchanged (session D §2 as corrected by T5.E2):
+  grid in the layer, 50 signatures against 0; `DqLayerState`/`MbGrid` must keep the
+  **allocation's** dimensions reachable for teardown; S28 accessors with full-reach Miri
+  tests; S21 for the `WelsMallocz`-reached construction; census keys re-keyed in the
+  rename's own commit.
+* **Start from the sizing in §3, not from the closure's prose**: 75 signature positions,
+  24 fields, ~697 accesses. It is bigger than one session. Split it as S20 allows —
+  pure addition first (`MbGrid` as a struct of the Phase-1 `MbArray<T>`s, its field union
+  read off the allocation block, proven with S28 full-reach Miri tests before anything
+  flips onto it), then the flip, then the ~28 cache-fill signature re-points behind it.
+* **`MbGrid`'s field union is mechanical now.** All 24 element types agree with their
+  allocations as of T5.G2 — that was F32's whole point — so the union can be read off
+  `InitialDqLayersContext` without judgement. Note `safe/mb_grid.rs` is
+  `#![forbid(unsafe_code)]`: the safe grid goes there, S28's raw accessors do not, and
+  T5.C3's `SPicture::data_ptr` is the precedent for where they do go.
+* **The probe is a gate now, not a probe.** If the flip turns it red, that is the flip's
+  own defect and it is attributable — which is the entire reason the last three sessions
+  went the way they did. Budget ~7 minutes for the Miri step.
+* **`pBitStringAux`'s second path is narrowed but not gone** — unchanged from session F.
+  The field still exists and `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor still
+  reaches the layer. Both die with the flip.
+* **F23 remains Phase 8's. F31's redundant memset is 5.5's** (see §5).
