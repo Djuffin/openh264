@@ -2,14 +2,14 @@
 
 > **SUPERSEDED — HISTORICAL.** Phase 3 completed 2026-08-11 (sessions A–F). This
 > brief is kept as the record of what was asked, not as instructions. The phase's
-> outcome is in [`../safety_refactor_log.md`](../safety_refactor_log.md) (entries
+> outcome is in [`../safety_refactor_log.md`](../../safety_refactor_log.md) (entries
 > for sessions A–F) and plan §0; the next phase's brief is
 > [`phase4b.md`](phase4b.md).
 
-You are starting **Phase 3** of [`safety_refactor_plan.md`](../safety_refactor_plan.md).
+You are starting **Phase 3** of [`safety_refactor_plan.md`](../../safety_refactor_plan.md).
 Phase 4a closed on 2026-08-10; **D-seq-1** is discharged and Phase 3 is next.
 
-**Read the plan's [§0 status preamble](../safety_refactor_plan.md) first** — one
+**Read the plan's [§0 status preamble](../../safety_refactor_plan.md) first** — one
 screen, maintained. Then **§7.6 Standing working rules (S1–S19)**: the durable rules
 live there, this brief cites them by tag and does not repeat them, and where this
 brief and §7.6 disagree, §7.6 wins. **Fuzzing is not part of this phase** — removed
@@ -41,21 +41,21 @@ early and the next is small.
 **Read first, in this order** (each entry is load-bearing; line numbers are
 2026-08-07-survey vintage — re-verify before relying on them):
 
-1. **[`phase1_findings.md`](../phase1_findings.md) F4** — the reader's slop is a read
+1. **[`phase1_findings.md`](../../phase1_findings.md) F4** — the reader's slop is a read
    *past the buffer*: the refill predicate allows the cursor 1 byte past the RBSP end
    and then loads bytes, and the initial prime reads 4 bytes from the start
    regardless of NAL length, so soundness today is a property of the 4 MiB `sRawData`
    allocation, not of the NAL. `BsCursor` reproduces the *predicate* exactly and is
    byte-identical given ≥3 bytes of slack. **T3.1 owns the guard-byte decision.**
-2. **[`phase1_findings.md`](../phase1_findings.md) F5** — the canonical writer panics
+2. **[`phase1_findings.md`](../../phase1_findings.md) F5** — the canonical writer panics
    in debug on a 32-bit write into an empty accumulator (C++ UB, unreachable
    in-contract); `BsWriter` doesn't, and a Phase 1 test pins both. Don't "fix" the
    old one while deduping (S6).
-3. **[`phase1_findings.md`](../phase1_findings.md) F7** — two out-of-bounds pointer
+3. **[`phase1_findings.md`](../../phase1_findings.md) F7** — two out-of-bounds pointer
    computations in the raw reader, unreachable only via unwritten invariants. Your
    conversion deletes them; the parity test must cover the inputs that *approach*
    them.
-4. **[`phase2_findings.md`](../phase2_findings.md) F2** — **the writer exists four
+4. **[`phase2_findings.md`](../../phase2_findings.md) F2** — **the writer exists four
    times and the copies are not identical**: `vlc_encoder.rs:367` is canonical
    (matches C++ `bit_stream.h`); `svc_set_mb_syn_cavlc.rs:157` is equivalent with a
    hand-rolled 4-byte store; `nal_encap.rs:169` is equivalent with an explicit
@@ -64,7 +64,7 @@ early and the next is small.
    uses `wrapping_add` in `BsWriteUE`. All four agree on in-contract inputs (that's
    why 341/341 holds). **T3.4 dedupes before converting**, and the dedupe commit
    documents which guard semantics die.
-5. **[`phase2_findings.md`](../phase2_findings.md) F13, the `InitBits` site** —
+5. **[`phase2_findings.md`](../../phase2_findings.md) F13, the `InitBits` site** —
    `vlc_encoder.rs:353` takes `kpBuf: *const u8`, stores it as `pStartBuf: *mut u8`,
    and the writer writes through it: a signature that lies about mutability, making
    **every honest caller UB**. `au_set.rs`'s two tests carry the accommodation

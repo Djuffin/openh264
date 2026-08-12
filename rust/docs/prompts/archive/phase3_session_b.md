@@ -2,7 +2,7 @@
 
 > **SUPERSEDED — HISTORICAL.** Phase 3 completed 2026-08-11 (sessions A–F). This
 > brief is kept as the record of what was asked, not as instructions. The phase's
-> outcome is in [`../safety_refactor_log.md`](../safety_refactor_log.md) (entries
+> outcome is in [`../safety_refactor_log.md`](../../safety_refactor_log.md) (entries
 > for sessions A–F) and plan §0; the next phase's brief is
 > [`phase4b.md`](phase4b.md).
 

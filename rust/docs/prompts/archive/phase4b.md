@@ -4,8 +4,8 @@
 > **T4b.3b** (`d1c1a7d4`) and §1b as **T4b.3c** (`f2e3c5af`); §1c (the CPU-dispatch
 > filler) was deliberately not started, exactly as this brief instructed when the exit
 > was the alternative. The exit ran whole. The successor is
-> [`phase5.md`](phase5.md); the session record is the 2026-08-11 session C entry in
-> [`safety_refactor_log.md`](../safety_refactor_log.md).
+> [`phase5.md`](../phase5.md); the session record is the 2026-08-11 session C entry in
+> [`safety_refactor_log.md`](../../safety_refactor_log.md).
 >
 > **Two of this brief's own scouted premises were wrong, and it warned about both in
 > advance.** §1a predicted that some erased fn-pointer types would lack `extern "C"`
@@ -24,7 +24,7 @@
 > T4b.2b and T4b.3a are done** (`08b7c29d`, `3e583b9a`, `d6c78c1b`, `be67a754`,
 > `33b1f0f3`). This session is **T4b.3 items 3–5** and the **phase exit**.
 
-**Governing:** [`safety_refactor_plan.md`](../safety_refactor_plan.md) — §0 for where
+**Governing:** [`safety_refactor_plan.md`](../../safety_refactor_plan.md) — §0 for where
 the port stands, **§7.6 for S1–S25** (S20/S21 govern every struct edit; **S24 and
 S25 are session B's, and S24 is aimed squarely at this brief**), §7.4 for D-perf-4.
 Read the **session-B log entry** in full before converting anything — its §1 (two wrong
