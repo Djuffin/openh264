@@ -1076,3 +1076,26 @@ the first reading that would mean something.
 
 Running total unchanged: **thirty-two measurements, eleven alternations, eleven
 acquittals.**
+
+### Phase 5, session I (2026-08-12) — zero hits across six sweeps
+
+No numbered measurement: this ledger numbers *hits*, and there were none.
+
+**Six sweeps of 341 configurations** — one `gates.sh family` and two `gates.sh full`
+batteries, × two profiles, 2046 configurations — **all PASS, both profiles**.
+
+Third consecutive zero-hit session; 1364 + 2046 + 2046 = **5456 configurations** across
+sessions G, H and I. Session H's entry asked whether session I would be the reading that
+means something. **It is not**, and the reason is the same one: `git diff --stat
+75188044..HEAD -- rust/crates` is three files, all under `src/decoder/`, while the sweep
+compares encoders. Three zero-hit sessions running on decoder-only work is a statement
+about what the sweep is pointed at, not about the race.
+
+S14's step-0 hash shortcut is **not** claimed here and was not run: `rust_enc` is built
+from this same crate, so a decoder-only source diff does not by itself imply a
+byte-identical encoder binary, and the shortcut is an acquittal only when the hashes are
+actually compared. Nothing needed acquitting this session — there was no hit — so the
+question did not arise. It will the first time an encoder-touching session draws one.
+
+Running total unchanged: **thirty-two measurements, eleven alternations, eleven
+acquittals.**

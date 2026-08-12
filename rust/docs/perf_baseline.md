@@ -1321,3 +1321,64 @@ Three readings worth keeping.
    `transmute` 23 → **4, all prose, zero calls**, two vtables and 25 thunks deleted, two
    duplicate families collapsed and two findings fixed. Phase 5 is where the decode
    numbers are supposed to move, because 5.x is what makes `BaseMC`'s dimensions static.
+
+---
+
+## Phase 5 — the decoder structural rewrite (2026-08-12 →)
+
+### 5.2's flip, and D-perf-5's retrofit: what a per-macroblock bounds check actually costs
+
+Three spans, all 7 interleaved pairs, all on one machine, `perfpair.py` (S1/S2). The
+session-I null floor, measured the same day: decode **±0.6%** (3 rows, median +0.19%,
+−0.21%…+0.60%); encode 28 rows, median −1.34%, −12.07%…+8.14%.
+
+| span | CB (CAVLC) | Main (CABAC) | High (8x8) | decode median |
+|---|---|---|---|---|
+| the flip, session H (`3c4c6f4e` → `1438d762`) | +2.05% | +0.49% | +1.32% | **+1.32%** |
+| **the same span, re-run session I** | **+1.18%** | **+0.65%** | **+0.33%** | **+0.65%** |
+| the window retrofit (`c51f802d` → `17e5b7ba`) | −0.08% | +0.22% | +0.14% | **+0.14%** |
+
+Two results, and the second is the one to carry.
+
+**1. The window idiom works mechanically and buys nothing.** Opcode histograms over the
+six CAVLC per-macroblock functions — an `MbArray` index is exactly `ldr` (the length),
+`cmp`, `b.ls`, so `b.ls` counts them:
+
+| | instructions | `b.ls` |
+|---|---|---|
+| pre-flip | 2937 | **2** |
+| post-flip | 3199 | **78** |
+| post-retrofit | 3331 | **38** |
+
+The flip added **76 bounds checks per macroblock** at three instructions each — ~228 of
+the 262 instructions it added, so session H's attribution of the cost to bounds checking
+was right. The retrofit removed **40 of the 76**, exactly as designed, and the bench
+cannot see it: every row is inside the null band. The checks are perfectly predicted and
+the length they load sits in L1 beside the pointer.
+
+The hoist also **costs** code size. `WelsDecodeMbCavlcResidual` went 703 → **961**
+instructions, because lifting the QP load out of the residual loop made the body simple
+enough for LLVM to unroll far harder (`WelsResidualBlockCavlc` call sites 16 → 31). Net
+across the six functions: −40 branches, +132 instructions.
+
+`/usr/bin/sample` over the CB portion, self time, the harness's SHA-1 excluded, gives the
+magnitude directly: `DecodeBinCabac` 4.9%, `deblock_luma_lt4` 4.7%, `McChroma_c` 3.4%,
+`deblock_chroma_lt4` 3.0%, `ParseSignificantCoeffCabac` 2.4%, `BaseMC` 2.4%, and the
+highest-placed function this retrofit touched is `WelsDecodeMbCavlcPSlice` at **1.2%**.
+**A 2% whole-stream recovery was never available from this code.**
+
+**2. One span, two seven-pair readings, a factor of two apart.** The flip's own span
+re-ran today from the same two stashed binaries at +0.65% median where session H recorded
++1.32%, and the row carrying the median swapped ends. The cost is real — every row is
+positive in both readings — and its magnitude is not stable across days at seven pairs.
+S2b says three pairs is a floor and not a guarantee of convergence; **seven is not one
+either**, and a decision resting on a single span number wants a second reading on a
+different day rather than more pairs on the same one.
+
+**What this does not say.** The eleven families measured here are one scalar per
+macroblock, so a window only ever amortises repeat visits to the same entry. The eleven
+still to flip are not that shape — `pNzc` is `[i8; 24]`, `pMv`/`pMvd` are
+`[[i16; 2]; 16]`, `pScaledTCoeff` is `[i16; 384]` — and are indexed *inside* the record
+in inner loops, where the element re-type makes the inner index const-bounded and
+check-free. **That is a different mechanism and it is untested. This null result does not
+transfer to them in either direction.**

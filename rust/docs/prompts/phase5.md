@@ -22,9 +22,9 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded: **451 debug / 445 release / 20 ignored**, Miri **312**,
-   census **60**, decode goldens **56**, ratchet `raw_ptr` **4604**; sweeps 341/341
-   both profiles, and the debug sweep can draw F3 (see §8).
+   verdict. Last recorded (session I exit): **463 debug / 457 release / 20 ignored**,
+   Miri **324** (~524s), census **60**, decode goldens **56**, ratchet `raw_ptr`
+   **4570**; sweeps 341/341 both profiles, and the debug sweep can draw F3 (see §8).
 3. Recount every number you are about to rely on.
 
 **Budget the Miri step at ~7 minutes, not ~1.** Since T5.G1 the aliasing probe runs
@@ -86,12 +86,34 @@ Order inside the step:
    — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid (**IN PROGRESS. `MbGrid` exists, is proven and is owned by the
-layer (T5.H2/T5.H3); 11 of the 22 array families have flipped (T5.H4–T5.H14). Blocker:
-none. Closure computed and written, session D log §2 — do not recompute it. The
-subtraction has landed (T5.E2). Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at
-T5.F3, F25's inventory and F31 at T5.G1, and the probe is green un-ignored.**)
+layer (T5.H2/T5.H3); 11 of the 22 array families have flipped (T5.H4–T5.H14), and the
+eleven are retrofitted with per-MB window accessors (T5.I1). Blocker: none technical —
+but the remaining eleven are gated on Eugene, see the perf note below. Closure computed
+and written, session D log §2 — do not recompute it. The subtraction has landed (T5.E2).
+Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory and F31 at
+T5.G1, and the probe is green un-ignored.**)
 
-**Where the flip stands (session H).** The arithmetic is **22 arrays, not 24** — F33
+**The perf question D-perf-5 asked is answered, and the answer is negative** (session I
+log §2–§4; `perf_baseline.md` §Phase 5). The window retrofit does mechanically what it
+claims — 76 bounds checks per macroblock on the CAVLC path become 38 — and recovers
+**nothing**: decode median +0.14% at 7 pairs against a bar of −0.66%. Disassembly and
+profile say why: those functions are 1–3% of decode time, so a 2% recovery was never
+there. Two further facts belong to whoever plans the next flip:
+
+* **The flip's cost re-measured at half.** The same two stashed binaries, same 7-pair
+  protocol, a different day: +0.65% decode median / +1.18% CB, against session H's
+  +1.32% / +2.05%. Real on every row in both readings; unstable in magnitude. D-perf-5's
+  cumulative arithmetic (CB ≈ +19.9%) is high by roughly a factor of two.
+* **This null result does not transfer to the remaining eleven.** Those retrofitted here
+  are one scalar per macroblock. `pNzc` (`[i8; 24]`), `pMv`/`pMvd` (`[[i16; 2]; 16]`) and
+  `pScaledTCoeff` (`[i16; 384]`) are indexed *inside* the record in inner loops, where the
+  element re-type — already built at T5.H2 — makes the inner index const-bounded. Different
+  mechanism, untested.
+
+**Do not flip a hot family on the strength of the window idiom.** Session I stopped at
+§3.4's instruction; what happens next is Eugene's call on the numbers above.
+
+**Where the flip stands (sessions H and I).** The arithmetic is **22 arrays, not 24** — F33
 deleted `pNzcRs` and `pInterPredictionDoneFlag` at T5.H1, neither of which has a reader
 in either tree. **Flipped:** `pIntraNxNAvailFlag`, `pIntra4x4FinalMode`,
 `pResidualPredFlag`, `pChromaPredMode`, `pCbfDc`, `pLumaQp`,
@@ -100,7 +122,8 @@ in either tree. **Flipped:** `pIntraNxNAvailFlag`, `pIntra4x4FinalMode`,
 `pMv`, `pMvd`, `pRefIndex` (the three `LIST_A` pairs), `pDirect`, `pChromaQp`, `pNzc`,
 `pScaledTCoeff`, `pIntraPredMode`, `pMbCorrectlyDecodedFlag`. Each is one commit; the
 seat and the accessor are already in place, so a family commit is now the flip and
-nothing else.
+nothing else. **All eleven flipped families carry per-MB window accessors as of T5.I1**,
+and F34 — the one defect the retrofit's analysis turned up — is fixed at T5.I2.
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
 `MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over
@@ -294,6 +317,9 @@ this brief historical.
   **1248** (`CheckIntraChromaPredMode`, retired *by the flip* — its `*mut i8` became a
   `&mut i8` and its body stopped needing `unsafe`). **`mem_zeroed` 32 → 31** at T5.H3:
   the decoder's layer stopped being constructible by zeroing.
+  **Session I is flat** — every metric and every per-file row unmoved, which is what
+  accessor reshaping looks like: it converts safe indexing into safe borrows and deletes
+  no pointer.
   **S16's prose floor has now been collected seven times** (session H added three, two of
   them on `mem_zeroed` again and one putting `raw_ptr` at 1 in a `forbid(unsafe_code)`
   file); before session H it had been collected four times — `raw_ptr` and `SHIM(` at
@@ -301,7 +327,7 @@ this brief historical.
   would have corrupted S21's live construction-audit count) and `raw_ptr` again at
   T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
   totals: a one-line prose delta and a real conversion look identical in the total.
-- Gates: **463 / 457 / 20**, Miri **324** (session G: +1, the aliasing probe now runs
+- Gates: **463 / 457 / 20**, Miri **324** — unchanged across session I (session G: +1, the aliasing probe now runs
   un-ignored — see §2; session H: +12, `MbGrid` and S28's reach tests), sweeps 341/341
   both profiles, decode goldens **56 rows**. The debug sweep can reproduce F3 (`rust_enc`'s
   `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29

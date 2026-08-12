@@ -5810,3 +5810,297 @@ measurements, eleven alternations, eleven acquittals**.
 * **Face 3 has not started.** The ~28 cache-fill signature re-points wait on the
   families that carry them; none of the eleven is one. F23 remains Phase 8's, F31's
   redundant memset 5.5's.
+
+---
+
+## 2026-08-12 — Phase 5, session I (D-perf-5's retrofit lands, recovers nothing, and the disassembly says exactly why)
+
+**Commits:** `c51f802d` (inherited doc tail — D-perf-5, §0's two rows, the brief),
+`17e5b7ba` (T5.I1, the retrofit across all eleven families), `a5aabacd` (T5.I2, F34), and
+this entry. **No ratchet commit**: every metric and every per-file row is unmoved, which
+is what the brief predicted for accessor reshaping.
+
+### The session in one line
+
+The per-macroblock window accessor is retrofitted across all eleven flipped families, it
+does mechanically exactly what D-perf-5 asked — **76 bounds checks per macroblock on the
+CAVLC path become 38** — and it recovers **nothing**: decode median **+0.14%** at 7 pairs
+against a bar of **−0.66%**. The hour §3.4 budgets for a look found why, and it is not a
+defect in the retrofit: those checks live in functions that are **1–3% of decode time**,
+so there was never a 2% there to take back.
+
+### Control battery
+
+Docs-only tail, session H accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 463/457/20, ratchet 4570, census 60.
+Every figure matched session H's exit; second session running that the open needed no
+correction.
+
+**The S2 null, run at open because every verdict here is a perf verdict** (3 pairs, same
+binary in both slots): decode **±0.6%** (3 rows, median +0.19%, −0.21%…+0.60%); encode 28
+rows, median −1.34%, −12.07%…+8.14%. The decode floor is the tight one and it is the one
+that binds — this is a decoder-only change.
+
+### 0. The sizing (S24), and half the brief's idiom was already built
+
+The brief's §1 names two halves: re-type each family's element so the per-MB record *is*
+the element, then hoist the window borrow to the loop head. Re-greped before acting:
+
+```
+family                            element        per-MB width   sites (comment-stripped)
+pIntraNxNAvailFlag                u8                  1              2
+pIntra4x4FinalMode                [i8; 16]           16              4
+pResidualPredFlag                 i8                  1              8
+pChromaPredMode                   i8                  1             18
+pCbfDc                            u16                 1              8
+pLumaQp                           i8                  1             39
+pNoSubMbPartSizeLessThan8x8Flag   bool                1             17
+pTransformSize8x8Flag             bool                1             34
+pCbp                              i8                  1             32
+pSubMbType                        [u32; 4]            4             22
+pMbRefConcealedFlag               bool                1              5
+                                                                  ---
+                                                                   189
+```
+
+**All eleven are already `MbArray<[T; K]>` with a constant K**, because T5.H2 transcribed
+the union off the allocation block rather than off the struct declaration — and the two
+multi-element families are declared the same way in the C++ (`dec_frame.h:86`, `:90`:
+`int8_t (*pIntra4x4FinalMode)[MB_BLOCK4x4_NUM]`,
+`uint32_t (*pSubMbType)[MB_SUB_PARTITION_SIZE]`). So the first half needed no work, no
+family reaches S9's variable-width fallback, and the whole session is the second half.
+
+### 1. The retrofit (T5.I1)
+
+One window borrow per macroblock per array, hoisted to the head of the region that uses
+it — where the C++ hoists its pointer. Checks executed per macroblock, on the path that
+pays most:
+
+| family | before | after | where the window lands |
+|---|---|---|---|
+| `pIntra4x4FinalMode` | 16 | 1 | the `0..16` and `0..4 × 0..4` mode loops |
+| `pLumaQp` | 16 | 1 | read once per residual block, both coders |
+| `pSubMbType` | 8–32 | 1–5 | six partition loops over five functions |
+| `pNoSubMbPartSizeLessThan8x8Flag` | 8 | 1 | the four 8x8 parse loops |
+| `pCbp` | 5 | 1 | the three CAVLC actual-decode functions |
+| `pTransformSize8x8Flag` | 4 | 1 | the same three |
+| `pResidualPredFlag` | 3 | 1 | the CAVLC P/B write-then-test |
+| `pChromaPredMode` | 3 | 2 | the three intra-mode parsers' final check |
+| `pCbfDc`, `pIntraNxNAvailFlag`, `pMbRefConcealedFlag` | 1 | 1 | already one per access |
+
+Static sites 189 → 141, which understates it: the four largest wins are loop-nested.
+`deblocking.rs` is deliberately untouched — its `pLumaQp` and `pTransformSize8x8Flag`
+reads are all at *distinct* addresses (current plus a neighbour) and were already one
+check each.
+
+**What bounds a window is the family's own neighbour reads, not the call graph.**
+`MbArray::get` is `&self.data[i]`, `data` is a `Vec`, and `Vec`'s `Index` goes through
+`Deref` — `slice::from_raw_parts(self.as_ptr(), self.len)` — which builds a shared
+reference over the **whole buffer**. Any other access to the same array ends the window,
+including a read at a *different* macroblock. Three boundaries come straight from that:
+`GetNeighborAvailMbType` reads `pCbp` at the left and top addresses, so `pCbp`'s window
+opens after it; `ParseIntraPredModeChromaCabac` reads `pChromaPredMode` at the top and
+left, so that window opens after it; and `PredMvBDirectSpatial`/`PredBDirectTemporal`
+write `pSubMbType[iMbXy]` themselves (`mv_pred.rs:1035`, `:1130`), so the B-slice parse
+loop keeps a per-iteration window and only the read-only loops after it share one.
+
+Full battery on the settled tree: **OVERALL PASS** — 463/457/20, Miri **324** (524s, the
+aliasing probe included), sweeps 341/341 both profiles, decode goldens 56 rows none moved,
+both benches bit-identical, census 60, ratchet flat.
+
+### 2. The measurement — the session's deliverable
+
+Whole-retrofit span, **7 interleaved pairs**, both benches, `i_ctrl` (`c51f802d`, which is
+`75188044` plus the doc tail) vs `i_head` (`17e5b7ba`):
+
+```
+Constrained Baseline (CAVLC)   2.6060 -> 2.6040   -0.08%
+Main (CABAC, B-frames)         6.2550 -> 6.2690   +0.22%
+High (CABAC, 8x8)              6.3140 -> 6.3230   +0.14%
+  decode: rows 3, median +0.14%, min -0.08%, max +0.22%
+  encode: rows 28, median -0.25%   (decoder-only change; unaffected, as expected)
+```
+
+**Every row is inside this session's null band.** D-perf-5's bar was recovery ≥ half the
+spent cost — decode median ≤ −0.66%, the CB row ≤ −1.03%. The measured recovery is zero on
+all three rows. **The idiom is not proven, and §3.4 applies: the look, then stop.**
+
+### 3. §3.4's look — the disassembly first, and it corrected me once
+
+S1 says disassemble before theorising. It also, this time, says *use a second instrument*,
+because the first one was wrong.
+
+**The first count was wrong.** Walking basic blocks back from each `bl panic_bounds_check`
+to find landing pads reported 5, 1, 4 and 10 check branches in four functions and made the
+checks look like a minority of what the flip added. That undercounts badly: LLVM merges
+the landing pads and most of the guard branches leave the function body entirely to a
+shared thunk, so a walk confined to the body never sees them. The **opcode histogram** is
+the instrument that works — an `MbArray` index compiles to exactly `ldr` (the length),
+`cmp`, `b.ls`, and those three deltas move together and are countable.
+
+Across the six CAVLC per-macroblock functions, `b.ls` count and total instructions:
+
+| function | pre-flip | post-flip | post-retrofit |
+|---|---|---|---|
+| `WelsActualDecodeMbCavlcISlice` | 405 / 2 | 465 / 19 | 442 / 11 |
+| `WelsActualDecodeMbCavlcPSlice` | 525 / 0 | 574 / 19 | 546 / 9 |
+| `WelsActualDecodeMbCavlcBSlice` | 525 / 0 | 574 / 19 | 546 / 9 |
+| `WelsDecodeMbCavlcResidual` | 680 / 0 | 703 / 11 | **961** / 2 |
+| `ParseIntra4x4Mode` | 380 / 0 | 414 / 3 | 399 / 3 |
+| `ParseIntra8x8Mode` | 422 / 0 | 469 / 7 | 437 / 4 |
+| **total** | **2937 / 2** | **3199 / 78** | **3331 / 38** |
+
+Three things fall out of that table, and they are the session's actual result.
+
+**Session H's mechanism attribution was right.** The flip added **76 bounds checks** per
+macroblock here, at three instructions each — ~228 of the 262 instructions it added.
+`WelsActualDecodeMbCavlcISlice` is the clean isolate: `ldr` +17, `cmp` +17, `b.ls` +17,
+total +60. The flip is bounds checks and almost nothing else.
+
+**The retrofit did what it claimed.** 78 → 38, a bit over half, which is the design: one
+check per macroblock per array instead of one per access.
+
+**And removing 40 checks per macroblock is worth 0.00%.** They are perfectly predicted and
+the length they load is in L1 beside the pointer. Worse, the hoist *paid* for itself in
+code size: `WelsDecodeMbCavlcResidual` went 703 → **961** instructions because lifting the
+QP load out of the residual loop made the body simple enough for LLVM to unroll it much
+harder — `WelsResidualBlockCavlc` call sites went 16 → 31. Net across the six functions the
+retrofit removed 40 branches and added 132 instructions.
+
+**The profile agrees and explains the magnitude.** `/usr/bin/sample`, 3s over the
+Constrained Baseline portion, self time, hashing excluded (the harness's SHA-1 is 57% of
+raw samples and is byte-exactness verification, not decode): `DecodeBinCabac` 4.9%,
+`deblock_luma_lt4` 4.7%, `McChroma_c` 3.4%, `deblock_chroma_lt4` 3.0%,
+`ParseSignificantCoeffCabac` 2.4%, `BaseMC` 2.4%, `DeblockingBsMarginalMBAvcbase` 1.9%,
+`BiWeightPrediction` 1.8%, `CavlcGetLevelVal` 1.3%, `WelsResidualBlockCavlc` 1.2%,
+**`WelsDecodeMbCavlcPSlice` 1.2%**. The whole family of functions this session edited is
+low single digits of decode time; the checks inside them are a fraction of that. **A 2%
+whole-stream recovery was never available from this code.**
+
+### 4. Then where is the flip's cost? — the same binaries, re-run
+
+Session H's two builds are still stashed, so the flip's own span was re-run today at 7
+pairs, same protocol, same machine:
+
+```
+                              session H (7 pairs)   today (7 pairs)
+Constrained Baseline (CAVLC)        +2.05%              +1.18%
+Main (CABAC, B-frames)              +0.49%              +0.65%
+High (CABAC, 8x8)                   +1.32%              +0.33%
+  decode median                     +1.32%              +0.65%
+```
+
+**The cost is real and it is about half what was recorded**, and the row that carried the
+median swapped ends — High went from the median to the smallest. Same two binaries, same
+seven pairs, same machine, a different day. Nothing about the tree changed between the two
+readings.
+
+So both of session H's claims survive in weakened form: the flip does cost something, on
+every row, in both readings; and the magnitude that D-perf-5's arithmetic was built on
+(**+2.05% CB, cumulative ≈ +19.9%**) is high by roughly a factor of two. S2b said three
+pairs is a floor, not a guarantee of convergence. **Seven is not one either** — that is
+this session's addition to it, and it is the more useful half of the result.
+
+### 5. F34 — the flip turned a `bool&` into a `&mut bool`, and one callee reads its own array
+
+Found by the window analysis, not by a gate; **proved rather than asserted**, on a
+standalone twenty-line reproduction under Miri. `ParseTransformSize8x8FlagCabac`
+(`parse_mb_syn_cabac.rs:1228`) is handed `grid.transform_size8x8_flag.get_mut(iMbXy)` and
+then reads the same array at `iMbXy - 1` and `iMbXy - iMbWidth` before writing through the
+argument. A `&mut` argument is strongly protected; `Vec`'s `Index` builds a shared slice
+over the whole buffer; the write goes through a dead tag.
+
+```text
+error: Undefined Behavior: not granting access to tag <630> because that would remove
+       [Unique for <720>] which is strongly protected
+```
+
+**Why every gate was green.** It needs `bTransform8x8ModeFlag` *and* a left or top
+neighbour. `decode_slice_loop_runs_under_the_aliasing_checker` decodes `narrow_16x16.264`,
+which is one macroblock per frame — both availability flags are 0, so neither read runs.
+Miri executed this function and returned green because the two lines that make it UB were
+never reached. **S22's law aimed at a stream instead of at a scope list: the probe's
+coverage is its asset, not its target list, and every "the probe is green, so the flip is
+sound" conclusion is bounded by what a 711-byte one-macroblock stream decodes.**
+
+It is not a divergence: `parse_mb_syn_cabac.cpp:391` takes `bool&` and does the identical
+thing, which is well-defined in C++. The port is faithful; `&mut` is stronger than `&`.
+Fixed at T5.I2 by keeping the value in a local and storing it after the call — byte-exact
+including on the error path, since the callee returns before its write. The grep for the
+class is narrow and was run: exactly two call sites hand a grid window to a function, both
+to this one, and `CheckIntraChromaPredMode` — the other `&mut` into a flipped family — is
+clean by signature.
+
+### 6. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 463 / 457 / 20 | **463 / 457 / 20** |
+| Miri `--lib` | 324 | **324** |
+| decode goldens | 56 rows | **56 rows, none moved** |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4570 | **4570** |
+| `unsafe_block` | 622 | **622** |
+| `unsafe_fn` | 1248 | **1248** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+| findings | — | **F34, new and FIXED** |
+
+**Every metric is flat, and so is every per-file row** — checked per S16 by
+regenerating the baseline into a copy and diffing the `files` map, not by reading the
+totals. Zero deltas in either direction, in any file, for any metric. That is the honest
+shape of this session: it moved no unsafe and deleted no pointer, because window hoisting
+reshapes safe accessors and F34's fix trades one `&mut` argument for a local.
+
+Batteries: `gates.sh full` twice, `gates.sh family` once. Every step PASS both times.
+
+### 7. F3 — zero across six sweeps, and the third consecutive decoder-only session
+
+Six sweeps of 341 configurations (one `family` + two `full` batteries × two profiles) =
+2046 configurations, all PASS. Nothing to adjudicate; S14's protocol starts at a hit.
+Appended to F3 as a sample per S14 step 4.
+
+Session H's entry asked whether a third zero would mean something. It does not, for the
+same reason as the last two: `git diff --stat 75188044..HEAD -- rust/crates` is three
+files, all under `src/decoder/`, and the sweep compares encoders. Running total unchanged
+at **thirty-two measurements, eleven alternations, eleven acquittals**. The step-0 hash
+shortcut is *not* claimed — `rust_enc` builds from this same crate, so a decoder-only
+source diff does not by itself make the encoder binary identical, and nothing needed
+acquitting anyway.
+
+### Hand-off: Phase 5, session J — this goes to Eugene before it goes to a session
+
+**§3.4's instruction is stop, and this is the stop.** The window idiom is not proven and
+session J must not be planned as though it were. What the next session does is Eugene's
+call, on these numbers:
+
+* **The idiom works and does not pay.** 76 checks per macroblock become 38; the bench
+  cannot see it. Do not spend another session on call-site hoisting anywhere in this
+  decoder.
+* **But the *other* half of the idiom is still the right thing, and it is already
+  built.** The eleven families retrofitted here are one scalar per macroblock, so a
+  window only ever amortises *repeat visits*. The remaining eleven are not like that:
+  `pNzc` is `[i8; 24]`, `pMv`/`pMvd` are `[[i16; 2]; 16]`, `pScaledTCoeff` is `[i16; 384]`,
+  and those are indexed **inside** the record, in inner loops. There the element re-type
+  T5.H2 already did is what makes the inner index const-bounded and check-free — a
+  different mechanism from this session's, and untested. **This session's null result does
+  not transfer to them, in either direction.**
+* **The tripwire arithmetic D-perf-5 rests on is high by ~2x.** CB's flip cost is +1.18%
+  today, not +2.05%; cumulative CB is nearer +19% than +19.9%. Whether that changes the
+  parking question is Eugene's call — the deferred tripwire-vs-S20 question is untouched
+  here, per the brief's §6.
+* **Two readings of one span, seven pairs each, disagreed by a factor of two.** Before any
+  future decision rests on a single span number, it wants a second reading on a different
+  day, not more pairs on the same one.
+* **F34's class is open in principle.** The grep found two sites and both are fixed, but
+  the shape — a `&mut` into a flipped family handed to a callee that reads that family —
+  is a new hazard the flip creates, and the remaining eleven families have far more
+  call sites that pass per-MB data down. Grep for it per family as they flip.
+* **The probe's stream is the limit on every Miri verdict this phase has issued.**
+  `narrow_16x16.264` is one macroblock per frame: no neighbour is ever available, so no
+  neighbour-dependent path has ever been under the checker. A second probe stream with a
+  real macroblock grid would be worth more than the next family flip.
+* **Unchanged:** `pBitStringAux` and `cabac_decoder.rs:855`'s `SHIM(phase5)` are untouched;
+  face 3's ~28 cache-fill re-points have not started; F23 is Phase 8's, F31's redundant
+  memset 5.5's.
