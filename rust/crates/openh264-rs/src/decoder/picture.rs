@@ -95,17 +95,24 @@ pub struct SPicture {
     // =========================================================================
 
     /// Pointer to the first allocated byte for each plane buffer (including padding border margins).
-    /// Index 0: Y (Luma), 1: Cb (Chroma U), 2: Cr (Chroma V), 3: Reserved.
-    pub pBuffer: [*mut u8; 4],
+    /// Index 0: Y (Luma), 1: Cb (Chroma U), 2: Cr (Chroma V).
+    ///
+    /// **Three, not four.** C++ `picture.h:53-55` declares these arrays `[4]` and
+    /// `AllocPicture` writes indices 0-2 only; nothing in either decoder reads index 3.
+    /// The four `pData[3]` writes elsewhere in this crate are on `SSourcePicture`, the
+    /// public API type, which keeps its fourth slot.
+    pub pBuffer: [*mut u8; 3],
 
     /// Pointer to the top-left visible pixel (0, 0) for each color plane respectively.
-    pub pData: [*mut u8; 4],
+    pub pData: [*mut u8; 3],
 
     /// Memory line stride (bytes per row) for each picture plane.
-    pub iLinesize: [i32; 4],
+    pub iLinesize: [i32; 3],
 
-    /// Number of planes introduced by the color space format (typically 3 for YUV 4:2:0).
-    pub iPlanes: i32,
+    // T5.C1: `pub iPlanes: i32` sat here, written `3` once by `AllocPicture` and read
+    // nowhere — in this port *and* in the C++ decoder, where `picture.h:56` declares it
+    // and `pic_queue.cpp:105` writes it with no source reading it back. Fixing the plane
+    // count at three is therefore subtraction on both sides, not a decision.
 
     // =========================================================================
     // Error Concealment & Syntax Flags
@@ -229,10 +236,9 @@ pub type PPicture = *mut SPicture;
 impl Default for SPicture {
     fn default() -> Self {
         Self {
-            pBuffer: [std::ptr::null_mut(); 4],
-            pData: [std::ptr::null_mut(); 4],
-            iLinesize: [0; 4],
-            iPlanes: 0,
+            pBuffer: [std::ptr::null_mut(); 3],
+            pData: [std::ptr::null_mut(); 3],
+            iLinesize: [0; 3],
             bIdrFlag: false,
             iWidthInPixel: 0,
             iHeightInPixel: 0,

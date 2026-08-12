@@ -1039,7 +1039,7 @@ mod tests {
 
         let mut pic = SPicture::default();
         pic.iFramePoc = 3;
-        pic.iLinesize = [STRIDE as i32, (STRIDE / 2) as i32, (STRIDE / 2) as i32, 0];
+        pic.iLinesize = [STRIDE as i32, (STRIDE / 2) as i32, (STRIDE / 2) as i32];
         pic.iWidthInPixel = 32;
         pic.iHeightInPixel = 32;
 
