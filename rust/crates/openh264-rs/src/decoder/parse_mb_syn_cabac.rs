@@ -1239,12 +1239,12 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
     let iMbWidth = (*pCurDqLayer).iMbWidth as usize;
 
     let iIdxA = if (*pNeighAvail).iLeftAvail != 0 {
-        *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy - 1) as i32
+        *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy - 1) as i32
     } else {
         0
     };
     let iIdxB = if (*pNeighAvail).iTopAvail != 0 {
-        *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy - iMbWidth) as i32
+        *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy - iMbWidth) as i32
     } else {
         0
     };
