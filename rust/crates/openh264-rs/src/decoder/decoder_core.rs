@@ -364,7 +364,6 @@ pub struct SDqLayer {
     // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
     // 27 allocations before 5.2 carries either into a safe container.
     pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pMbRefConcealedFlag: *mut bool,
     pub pScaledTCoeff: *mut [i16; 384],
     /// **Per-MB array of 8, not a scalar** — allocated `numMb * 8` and indexed
     /// `[iMbXy][k]`; only `[7]` (the I16x16 mode) and `[0..4]` (the next
@@ -2796,7 +2795,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pSubMbType = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
-        (*pDq).pMbRefConcealedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
 
     (*pCtx).bInitialDqLayersMem = true;
@@ -2866,10 +2864,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pMbCorrectlyDecodedFlag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pMbCorrectlyDecodedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
             (*pDq).pMbCorrectlyDecodedFlag = std::ptr::null_mut();
-        }
-        if !(*pDq).pMbRefConcealedFlag.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pMbRefConcealedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
-            (*pDq).pMbRefConcealedFlag = std::ptr::null_mut();
         }
         // T5.H3: the matching half of `InitialDqLayersContext`'s heap construction.
         // The grid's 22 `Vec`s go with the `Box`'s drop glue — there is no way to
@@ -3679,9 +3673,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     if !(*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag.is_null() {
                         std::ptr::write_bytes((*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag, 0, iMbNum);
                     }
-                    if !(*(*pCtx).pCurDqLayer).pMbRefConcealedFlag.is_null() {
-                        std::ptr::write_bytes((*(*pCtx).pCurDqLayer).pMbRefConcealedFlag, 0, iMbNum);
-                    }
+                    // The C's `memset(.., 0, iMbWidth * iMbHeight)` over the
+                    // **SPS's** dimensions, which are the current sequence's and can
+                    // be smaller than the grid's negotiated maximum (T5.E2). As a
+                    // slice the bound is checked; as a `write_bytes` it was not.
+                    (*(*pCtx).pCurDqLayer).grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum]
+                        .fill(false);
                 }
                 (*(*pCtx).pDec).iMbNum = iMbNum as i32;
             }
