@@ -482,6 +482,14 @@ the probe, on the third round trip, once F24's family and F25 stopped failing fi
 **This is the finding that stopped session E's queue** — the brief's bound is three
 defects beyond F24, and this is the third.
 
+> **Correction, session F (2026-08-12), from the experiment §"The one open question"
+> below asked for.** The laundering described here is real and the fix stands. But the
+> *evidence* it was found on is not evidence of it: the refusal at `cabac_decoder.rs:855`
+> reproduces with a fully tracked tag, so that site is a genuine aliasing conflict and
+> not a consequence of wildcard provenance. It is written up separately as **F27**. Read
+> this entry as "the allocator blinds Miri crate-wide" — which is true, and which no
+> single site demonstrates — and F27 as "what the probe was actually stopping on".
+
 ### The defect
 
 `memory_align.rs:49-50`:
@@ -507,20 +515,51 @@ error: Undefined Behavior: not granting access to tag <wildcard> because that wo
 reached from `ParseIntraPredModeLumaCabac`, whose own `iBinVal: &mut i32` is one such
 protected argument.
 
-### The one open question, and the experiment that settles it
+### The one open question — ANSWERED, T5.F1 (2026-08-12), and the answer was a fourth option
 
 The accessor is reached through `pBitStringAux`, which T5.E1 changed from a `&mut`
-coercion to `addr_of_mut!`. A `&mut` *retags* — it would have minted a tracked tag from
-the wildcard parent — where `addr_of_mut!` inherits the wildcard. So it is not yet proven
-whether F26 was reachable before T5.E1 or whether that one line is what exposes it.
-**The experiment is one probe run**: restore `(*dq_cur).pBitStringAux = &mut …`
-(`decoder_core.rs`, the `DecodeCurrentAccessUnit` store) alone, keep everything else, and
-see which error Miri reports. Either answer is useful — if the `&mut` spelling passes,
-the allocator fix is optional for 5.2 and F26 is a latent finding; if it fails the same
-way, F26 is live today and the escaping-borrow defect T5.E1 fixed was merely masking it.
+coercion to `addr_of_mut!`. A `&mut` *retags* — it would mint a tracked tag from the
+wildcard parent — where `addr_of_mut!` inherits the wildcard. So it was not proven
+whether F26 was reachable before T5.E1 or whether that one line exposed it. The
+experiment: restore `(*dq_cur).pBitStringAux = &mut …` (`decoder_core.rs`, the
+`DecodeCurrentAccessUnit` store) alone, keep everything else, one probe run, revert.
 
-Do not settle this by reasoning. Both spellings have a defensible story and the
-instrument is eight minutes away.
+**It was run. The `&mut` spelling fails at the same site, in the same words, with a
+tracked tag:**
+
+```text
+error: Undefined Behavior: not granting access to tag <35268364> because that would
+       remove [Unique for <36617218>] which is strongly protected
+    --> src/decoder/cabac_decoder.rs:855:25
+help: <35268364> was created by a SharedReadWrite retag at offsets [0x1350..0x1380]
+    --> src/decoder/decoder_core.rs:3694:39
+3694 |  (*dq_cur).pBitStringAux = &mut (*pNalCur).sNalData.sVclNal.sSliceBitsRead;
+help: <36617218> is this argument
+    --> src/decoder/decode_slice.rs:3785:5
+3785 |     pBsAux: &mut BsCursor,
+```
+
+The finding anticipated two outcomes — passes (F26 latent) or fails identically (F26
+live). It did neither, and the difference is the whole result. **The tag is not
+`<wildcard>` any more and Miri refuses the access anyway.** A wildcard refusal is
+conservative: *this access might disable a protected tag, so it is not granted.* A
+refusal against a concrete tag over `[0x1350..0x1380]` is a finding: *this access does
+overlap a live, strongly protected `&mut`.* The experiment therefore converted "Miri
+cannot clear this path" into "Miri has convicted this path", and the conviction has
+nothing to do with the allocator.
+
+**Both halves of the answer:**
+
+1. **F26 was live before T5.E1.** That one line exposed nothing; the allocator has
+   laundered every allocation's provenance for the port's whole life. `addr_of_mut!`
+   stays.
+2. **F26 is not what the probe was stopping on.** The site is F27's, and fixing the
+   allocator will not make `cabac_decoder.rs:855` pass — it will change the diagnostic
+   from a wildcard refusal to exactly the tracked-tag error above. Anyone who expected
+   the allocator commit to turn the probe green should read F27 first.
+
+The finding declined to settle this by reasoning, and it was right to: the reasoning on
+offer covered two outcomes and the instrument returned a third.
 
 ### Why no other gate can see it
 
@@ -538,3 +577,91 @@ lines in one function, and it is **not** a mechanical change: restoring tracked
 provenance crate-wide will let Miri see borrow structure it has been silently permitting,
 which is S22's backlog shape and should be expected to surface more. That is why it wants
 its own session and a decision, not a corner of a conversion commit.
+
+**And the C++ does not do this.** `memory_align.cpp:92` is
+`pAlignedBuffer -= ((uintptr_t) pAlignedBuffer & kiAlignedBytes);` — pointer arithmetic
+with the integer used only as the mask. The round trip is the port's, introduced in
+translation. So the repair is S6 arithmetic parity, not a repair of the algorithm.
+
+---
+
+## F27 — the CABAC path reaches the NAL's whole `BsReader` while holding a `&mut` to the `BsCursor` inside it
+
+**Status: OPEN. Owner: 5.2 — `pBitStringAux` retires there and
+`cabac_decoder.rs:855`'s `SHIM(phase5)` accessor dies with it.** Split out of F26 at
+Phase 5 session F (T5.F1) by the experiment F26's entry specified: it is the defect that
+site was actually reporting, and it is provenance-independent.
+
+### The defect
+
+`decode_slice.rs:4111`, `WelsDecodeMbCabacIntraModeHelper`:
+
+```rust
+let (buf, pBsAux) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+```
+
+`BsReader::split` (`bit_stream.rs:280`) returns `(&'a [u8], &'a mut BsCursor)`, and the
+cursor half is `&mut self.cursor` — a borrow of a **field inside** the NAL unit's
+`BsReader`. It is then passed down as an argument (`ParseIntra4x4Mode`'s `pBsAux`,
+`decode_slice.rs:3785`), which makes it *strongly protected* for that call's whole
+duration.
+
+Inside that call, the CABAC arm reaches the same object by the other route:
+
+```rust
+// cabac_decoder.rs:855, cabac_rbsp_window
+raw.rbsp_window(&*(*(*pCtx).pCurDqLayer).pBitStringAux)
+```
+
+`&*pBitStringAux` is a shared reference to the **whole** `BsReader` — `start` *and*
+`cursor`, `[0x1350..0x1380]`, 0x30 bytes — so it covers the bytes the protected `&mut
+BsCursor` owns. Two live paths to one object, one of them a protected `&mut`: S25's
+shape, and the reason it is invisible without Miri is that neither path writes through
+the other.
+
+The call chain, from the probe's backtrace:
+
+```text
+WelsDecodeMbCabacIntraModeHelper:4111   let (buf, pBsAux) = (*(*dq).pBitStringAux).split(…)
+  ParseIntra4x4Mode:3785                pBsAux: &mut BsCursor        ← strongly protected
+    ParseIntraPredModeLumaCabac:1362
+      cabac_rbsp_window → cabac_decoder.rs:855   &*(…).pBitStringAux  ← refused
+```
+
+### Inventory, greped rather than reasoned (S24)
+
+Ten `.split(&…)` sites reach a `BsReader` in `src/decoder/`. Nine are in
+`decode_slice.rs`; the tenth (`parse_mb_syn_cabac.rs:3240`, `ParseIPCMInfoCabac`) ends
+its cursor borrow before the next use and is not this shape. Of the nine, **seven are
+`WelsDecodeMbCavlcResidual`/`DecodeMbCavlcPcm`** — CAVLC reads through the `(buf,
+cursor)` pair itself and never re-enters through `pCtx->pCurDqLayer->pBitStringAux`, so
+they are clean. **Two are live F27 sites, both `decode_slice.rs`, both CABAC:**
+
+| site | function |
+|---|---|
+| `:4111` | `WelsDecodeMbCabacIntraModeHelper` — the one Miri reported |
+| `:4163` | `WelsDecodeMbCabacResidualHelper` — same shape, same file |
+
+The other end is `cabac_rbsp_window`, **19 use sites** across `parse_mb_syn_cabac.rs`
+and `cabac_decoder.rs`, all reading through the one accessor.
+
+### Why it matters, and why the fix is 5.2's rather than a patch
+
+The conflict exists because one object has two owners: the NAL unit holds the
+`BsReader`, and the layer holds a pointer to it that outlives every borrow anyone takes.
+That is exactly what `pBitStringAux` is — session D's closure calls it "not an owned
+field but a borrow of another object outliving its source" — and 5.2 deletes it. Once
+the CABAC engine takes its window from the same `(buf, cursor)` pair its caller already
+split, rather than re-deriving it through the layer, there is one path and no conflict.
+
+A local patch is possible (hand `cabac_rbsp_window` the `start` it needs instead of a
+`&BsReader`, so the shared reference never covers the cursor) and it is a smaller change
+than 5.2. It is not obviously right: it would leave the second path in place and make
+the accessor's contract subtler at exactly the moment 5.2 is due to delete it.
+
+### Why no other gate can see it
+
+Same class as F24/F25: no byte moves. The battery agreed with it through the port's
+whole life — 449/443 tests, 56 golden rows, 2316 malformed rows, 341/341 sweeps in both
+profiles — and it took a Miri run through the public API and the slice loop, which is
+the instrument T5.D2 built and F26's experiment pointed at this site.
