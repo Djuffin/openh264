@@ -1404,7 +1404,6 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pChromaPredMode = (*pCurDqLayer).pChromaPredMode;
     let pMbType = (*(*pCurDqLayer).pDec).pMbType;
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
@@ -1414,14 +1413,14 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 
     let iIdxB = if iTopAvail != 0 {
         let top_idx = (iMbXy - (*pCurDqLayer).iMbWidth) as usize;
-        let mode = *pChromaPredMode.add(top_idx);
+        let mode = *(*pCurDqLayer).grid.chroma_pred_mode.get(top_idx);
         (mode > 0 && mode <= 3 && *pMbType.add(top_idx) != MB_TYPE_INTRA_PCM) as i32
     } else {
         0
     };
     let iIdxA = if iLeftAvail != 0 {
         let left_idx = (iMbXy - 1) as usize;
-        let mode = *pChromaPredMode.add(left_idx);
+        let mode = *(*pCurDqLayer).grid.chroma_pred_mode.get(left_idx);
         (mode > 0 && mode <= 3 && *pMbType.add(left_idx) != MB_TYPE_INTRA_PCM) as i32
     } else {
         0
