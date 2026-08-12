@@ -61,7 +61,19 @@ fn test_decoder_capability_query() {
     }
 }
 
-fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
+/// Decodes one asset and compares the SHA-1 of its output planes against the
+/// C++ decoder's.
+///
+/// `hash_concealed` selects which frames count. The default (`false`) is this
+/// file's long-standing rule — only frames returned `dsErrorFree` — and it
+/// agrees with `h264dec` on every stream that decodes without concealment,
+/// which is all of them above. `true` is `h264dec`'s own rule, every frame it
+/// writes out (`iBufferStatus == 1`, whatever the decoding state), and it is
+/// what an asset that *deliberately* conceals has to be judged by: under the
+/// default rule the concealed frames would drop out of the hash silently, and a
+/// stream whose whole purpose is a concealment path would compare only its
+/// clean prefix.
+fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_concealed: bool) {
     let mut repo_root = std::path::PathBuf::from("../../../");
     if !repo_root.join("res").exists() {
         repo_root = std::path::PathBuf::from("../../");
@@ -103,7 +115,7 @@ fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
                 p_dst.as_mut_ptr(),
                 &mut buf_info,
             );
-            if dec_ret == DECODING_STATE::dsErrorFree && buf_info.iBufferStatus == 1 {
+            if (hash_concealed || dec_ret == DECODING_STATE::dsErrorFree) && buf_info.iBufferStatus == 1 {
                 update_hash_from_frame(&mut hasher, p_dst, &buf_info);
                 decoded_frames += 1;
             }
@@ -124,7 +136,7 @@ fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
             p_dst.as_mut_ptr(),
             &mut buf_info,
         );
-        if dec_ret == DECODING_STATE::dsErrorFree && buf_info.iBufferStatus == 1 {
+        if (hash_concealed || dec_ret == DECODING_STATE::dsErrorFree) && buf_info.iBufferStatus == 1 {
             update_hash_from_frame(&mut hasher, p_dst, &buf_info);
             decoded_frames += 1;
         }
@@ -139,7 +151,7 @@ fn test_single_bitstream_asset(file_name: &str, expected_hash: &str) {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let flush_ret = (*p_decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
-            if flush_ret == DECODING_STATE::dsErrorFree && buf_info.iBufferStatus == 1 {
+            if (hash_concealed || flush_ret == DECODING_STATE::dsErrorFree) && buf_info.iBufferStatus == 1 {
                 update_hash_from_frame(&mut hasher, p_dst, &buf_info);
                 decoded_frames += 1;
             }
@@ -162,7 +174,18 @@ macro_rules! asset_test {
     ($test_name:ident, $filename:expr, $hash:expr) => {
         #[test]
         fn $test_name() {
-            test_single_bitstream_asset(concat!("res/", $filename), $hash);
+            test_single_bitstream_asset_ex(concat!("res/", $filename), $hash, false);
+        }
+    };
+}
+
+/// As [`asset_test!`], for a stream that conceals: every frame the decoder
+/// outputs counts, which is what the C++ golden contains.
+macro_rules! asset_test_concealed {
+    ($test_name:ident, $filename:expr, $hash:expr) => {
+        #[test]
+        fn $test_name() {
+            test_single_bitstream_asset_ex(concat!("res/", $filename), $hash, true);
         }
     };
 }
@@ -226,3 +249,38 @@ asset_test!(test_asset_vid_1920x1080_cabac_temporal_direct, "VID_1920x1080_cabac
 asset_test!(test_asset_vid_1280x544_cavlc_temporal_direct, "VID_1280x544_cavlc_temporal_direct.264", "33bfa44b4a3c87fe28354cace1d4b99a03d2967d");
 asset_test!(test_asset_vid_1280x720_cavlc_temporal_direct, "VID_1280x720_cavlc_temporal_direct.264", "4face6b5d73a378b6e564a831b49311c230158e4");
 asset_test!(test_asset_vid_1920x1080_cavlc_temporal_direct, "VID_1920x1080_cavlc_temporal_direct.264", "b35dc99604ea2a1fda5b84d1b9098cb7565dec8f");
+
+// ---------------------------------------------------------------------------
+// Narrow frames — the F21 trigger class (`phase4b_findings.md`).
+//
+// `ExpandReferencingPicture` takes a different arm for `iWidth >> 1 < 16`, i.e.
+// a frame narrower than 32 luma pixels, and one of the port's three copies of
+// that function had no such arm at all. Nothing above pinned it: every prior
+// asset here is 176x144 or wider, the diffharness inputs start at 152x100, and
+// the malformed corpus inherits the conformance streams' SPS dimensions, so the
+// narrow arm was unreachable by construction rather than by luck.
+//
+// The three streams below are encoded by the C++ encoder from a window panned
+// across `CiscoVT2people_320x192_12fps.yuv` — panned so the MVs are non-zero and
+// point outside a 16-pixel frame, which is the only way an expanded border
+// reaches the output. Goldens are the C++ decoder's, as everywhere in this file.
+//
+//  * 16x16 — the minimum legal frame width; `iWidthUV` 8, the divergent arm.
+//  * 24x18 — coded 32x32 and cropped, so `iWidthUV` is exactly 16: the other
+//    side of the same branch, one step away, plus frame cropping.
+//  * 16x16 with a lost IDR — reaches `WelsInitRefList`'s error-concealment
+//    prefetch, which is the call site the divergent copy served. See the
+//    header comment on `test_asset_narrow_16x16_idr_lost` for its construction.
+asset_test!(test_asset_narrow_16x16, "narrow_16x16.264", "6299ce8a7dc8a86d367dca65ca123eb499fc5ca8");
+asset_test!(test_asset_narrow_24x18, "narrow_24x18.264", "f6197477215d8847b570982d3c2747da2911f047");
+// Two 16x16 encodes concatenated, the second one's IDR NAL removed: a CAVLC
+// (profile_idc 66) sequence of 24 frames, then a CABAC (profile_idc 100) SPS,
+// which differs from the stored one and so begins a new sequence, and then that
+// sequence's P slices with no IDR to open them. The new sequence clears the
+// reference lists, the first P slice therefore finds them empty, and
+// `WelsCheckAndRecoverForFutureDecoding` prefetches a *recycled* picture — one
+// still holding the first sequence's samples outside the area it memsets to 128
+// — and expands its border. That recycled content is what makes the missing
+// chroma arm observable; a stream that concealed from a fresh pool would find
+// 128 on both sides of the fix and prove nothing.
+asset_test_concealed!(test_asset_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264", "754db24b395cc7aff338e036a416a9b5bb409c81");
