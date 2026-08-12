@@ -85,10 +85,22 @@ Order inside the step:
    and its `pair_mut`. Nothing in 5.1 blocks 5.2, so the order is a judgement call
    — see session C's hand-off.
 
-## 2. Step 5.2 — MbGrid (**closure computed and written, session D log §2 — do not
-recompute it. The subtraction has landed (T5.E2). The grid conversion is
-`unblocked as of T5.G1`: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory and
-F31 at T5.G1, and the probe is green un-ignored. Blocker: none.**)
+## 2. Step 5.2 — MbGrid (**IN PROGRESS. `MbGrid` exists, is proven and is owned by the
+layer (T5.H2/T5.H3); 11 of the 22 array families have flipped (T5.H4–T5.H14). Blocker:
+none. Closure computed and written, session D log §2 — do not recompute it. The
+subtraction has landed (T5.E2). Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at
+T5.F3, F25's inventory and F31 at T5.G1, and the probe is green un-ignored.**)
+
+**Where the flip stands (session H).** The arithmetic is **22 arrays, not 24** — F33
+deleted `pNzcRs` and `pInterPredictionDoneFlag` at T5.H1, neither of which has a reader
+in either tree. **Flipped:** `pIntraNxNAvailFlag`, `pIntra4x4FinalMode`,
+`pResidualPredFlag`, `pChromaPredMode`, `pCbfDc`, `pLumaQp`,
+`pNoSubMbPartSizeLessThan8x8Flag`, `pTransformSize8x8Flag`, `pCbp`,
+`pMbRefConcealedFlag`, `pSubMbType`. **Remaining, by name:** `pMbType`, `pSliceIdc`,
+`pMv`, `pMvd`, `pRefIndex` (the three `LIST_A` pairs), `pDirect`, `pChromaQp`, `pNzc`,
+`pScaledTCoeff`, `pIntraPredMode`, `pMbCorrectlyDecodedFlag`. Each is one commit; the
+seat and the accessor are already in place, so a family commit is now the flip and
+nothing else.
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
 `MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over

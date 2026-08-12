@@ -1056,3 +1056,23 @@ were 100% decoder-side; the sweep exercises the encoder.
 
 Running total unchanged: **thirty-two measurements, eleven alternations, eleven
 acquittals.**
+
+### Phase 5, session H (2026-08-12) — zero hits across six sweeps
+
+No numbered measurement: this ledger numbers *hits*, and there were none.
+
+**Six sweeps of 341 configurations** — three `gates.sh full` batteries × two profiles,
+2046 configurations — **all PASS, both profiles**. Nothing to adjudicate; S14's protocol
+starts at a hit, and appending at adjudication time (S14 step 4, as amended at session
+G) means there was nothing to append as the session went.
+
+Second consecutive zero-hit session, and the sample is now larger: 1364 + 2046 = 3410
+configurations across sessions G and H. At F3's measured ≈1/800 rate that is roughly
+four expected hits, so drawing zero twice is on the unlikely side of ordinary rather
+than evidence of anything — but two sessions is not a trend, and both sessions'
+changes were 100% decoder-side while the sweep exercises the encoder. **A clean sweep
+is still a sample.** If session I also draws zero on encoder-touching work, that is
+the first reading that would mean something.
+
+Running total unchanged: **thirty-two measurements, eleven alternations, eleven
+acquittals.**
