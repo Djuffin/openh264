@@ -323,9 +323,25 @@ impl Default for SLayerInfo {
 
 
 
+/// `Copy` came off at **T5.H3**, for the reason it came off `SPicture` at T5.C3:
+/// the struct owns heap now. `#[repr(C)]` stays because every other field is still
+/// the C's, but nothing pins this struct's layout — the `assert_size!(SDqLayer,
+/// 512)` in `encoder/abi_guard.rs` is the encoder's same-named struct, census
+/// allowlist class (a). The compiler was asked first: nothing in the crate copied a
+/// decoder `SDqLayer` by value.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct SDqLayer {
+    /// **The grid** (5.2). Every per-macroblock array the layer owns, with one set
+    /// of dimensions — the **allocation's**, fixed when the layer is constructed
+    /// (T5.E2) — and indexing that panics rather than running off the end.
+    ///
+    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer. The
+    /// raw `p*` arrays below flip onto it one family per commit; each family's
+    /// `WelsMallocz` and its `WelsFree` die in the same commit as its accesses.
+    /// When the last one has flipped, this struct becomes `DqLayerState` and the
+    /// census entry `type SDqLayer x2` re-keys to `x1`.
+    pub grid: MbGrid,
     pub sLayerInfo: SLayerInfo,
     /// The slice's reader. `*mut BsReader`, not the brief's default `*mut BsCursor`:
     /// `decode_slice.rs` reads *through* this pointer and a detached cursor cannot
@@ -410,12 +426,39 @@ pub struct SDqLayer {
     pub bUseRefBasePicFlag: bool,
 }
 
-impl Default for SDqLayer {
-    fn default() -> Self {
-        let mut layer: Self = unsafe { std::mem::zeroed() };
-        layer.uiRefLayerDqId = 255;
-        layer.uiRefLayerChromaPhaseYPlus1 = 1;
-        layer
+impl SDqLayer {
+    /// A layer whose [`grid`](Self::grid) covers `dims`, and whose every other field
+    /// is what `WelsMallocz`'s zeroing left it — plus the two the C++ constructor
+    /// overwrites (`uiRefLayerDqId = 255`, `uiRefLayerChromaPhaseYPlus1 = 1`).
+    ///
+    /// # S21, and why `Default` is gone
+    ///
+    /// `impl Default for SDqLayer` zeroed the whole struct through the intrinsic, and
+    /// `InitialDqLayersContext` reached the same state the other way, through
+    /// `WelsMallocz`. Both stopped being legal the moment the struct owned a `Vec`:
+    /// a zeroed `Vec` is a null pointer where a dangling-aligned one is required,
+    /// and the value is invalid before anything reads it. T5.F2 made the allocator
+    /// carry provenance, which is what lets Miri *see* that heap — it does not make
+    /// a zeroed `Vec` valid.
+    ///
+    /// The shape is `SWelsDecoderContext::new_boxed`'s, from T3.3: zero a
+    /// `MaybeUninit` shell, write the owning fields through it with
+    /// `addr_of_mut!` (S29 — no `&mut` to a field of a not-yet-valid struct), and
+    /// only then materialize. There is no shell left over to delete afterwards,
+    /// because the grid is the only owning field and it is written here.
+    ///
+    /// `Default` is not reinstated on top of this: a layer cannot be constructed
+    /// without dimensions any more, and a `Default` that invented some would be the
+    /// same lie the wholesale zeroing was.
+    pub fn for_grid(dims: MbDims) -> Self {
+        let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
+        unsafe {
+            std::ptr::addr_of_mut!((*shell.as_mut_ptr()).grid).write(MbGrid::new(dims));
+            let mut layer = shell.assume_init();
+            layer.uiRefLayerDqId = 255;
+            layer.uiRefLayerChromaPhaseYPlus1 = 1;
+            layer
+        }
     }
 }
 
@@ -2719,7 +2762,15 @@ pub unsafe fn InitialDqLayersContext(
     UninitialDqLayersContext(pCtx);
 
     let pMa = (*pCtx).pMemAlign;
-    let numMb = (((kiMaxWidth + 15) >> 4) * ((kiMaxHeight + 15) >> 4)) as usize;
+    // The grid's dimensions and the raw arrays' `numMb` are the same arithmetic,
+    // written once. This is the **allocation's** size, from the negotiated maximum
+    // — the layer's `iMbWidth`/`iMbHeight` are the current slice's and are smaller
+    // on any stream decoding below it (T5.E2).
+    let dims = MbDims::new(
+        ((kiMaxWidth + 15) >> 4) as usize,
+        ((kiMaxHeight + 15) >> 4) as usize,
+    );
+    let numMb = dims.count();
 
     // One layer, and these 27 arrays are now allocated *into* it. They used to be
     // allocated into `SWelsDecoderContext::sMb` and re-aliased onto the layer once per
@@ -2728,10 +2779,15 @@ pub unsafe fn InitialDqLayersContext(
     // readers and it is gone. The block scopes `pDq`; it was a
     // `for i in 0..LAYER_NUM_EXCHANGEABLE` loop, and that constant was 1.
     {
-        let pDq = WelsMalloczHelper(pMa, std::mem::size_of::<SDqLayer>()) as PDqLayer;
-        if pDq.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
+        // T5.H3: the layer is heap-*constructed* now, not zero-allocated — it owns
+        // a `MbGrid` and a zeroed `Vec` is an invalid value (S21). `AllocPicture`'s
+        // `Box::into_raw(Box::new(...))` at T5.C3 is the same move, and F19's check
+        // pairs it with the `Box::from_raw` in `UninitialDqLayersContext`. The
+        // allocation cannot fail by returning null, so the `ERR_INFO_OUT_OF_MEMORY`
+        // arm that guarded `WelsMallocz` is gone with it; the 25 array allocations
+        // below still go through the C's allocator and are still checked where they
+        // were.
+        let pDq: PDqLayer = Box::into_raw(Box::new(SDqLayer::for_grid(dims)));
         (*pCtx).pDqLayersList = pDq;
 
         (*pDq).pMbType = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut _;
@@ -2869,7 +2925,11 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
             WelsFreeHelper(pMa, (*pDq).pMbRefConcealedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
             (*pDq).pMbRefConcealedFlag = std::ptr::null_mut();
         }
-        WelsFreeHelper(pMa, pDq as *mut u8, std::mem::size_of::<SDqLayer>());
+        // T5.H3: the matching half of `InitialDqLayersContext`'s heap construction.
+        // The grid's 22 `Vec`s go with the `Box`'s drop glue — there is no way to
+        // forget one, and no size to get wrong, which is the arithmetic T5.E2 had
+        // to correct for the raw arrays above.
+        drop(Box::from_raw(pDq));
         (*pCtx).pDqLayersList = std::ptr::null_mut();
     }
     (*pCtx).iPicWidthReq = 0;
@@ -4222,6 +4282,54 @@ mod tests {
     fn mb_grid_ptr_rejects_an_index_past_one_past_the_end() {
         let mut g = MbGrid::new(MbDims::new(2, 2));
         mb_grid_ptr(&mut g.cbp, 5);
+    }
+
+    /// **S21's discharge for T5.H3.** The layer's construction is a zeroed shell
+    /// with the one owning field written through it, so: every C-defaulted field
+    /// still reads zero, the two the C++ constructor overwrites read their
+    /// overwritten values, and the grid is a real grid rather than 22 null `Vec`s.
+    ///
+    /// Under Miri this is also the test that would fail if the shell were ever
+    /// materialized before the grid was written into it.
+    #[test]
+    fn for_grid_constructs_a_layer_whose_grid_is_valid_and_whose_rest_is_zero() {
+        let dims = MbDims::new(5, 3);
+        let layer = SDqLayer::for_grid(dims);
+
+        // the owned field
+        assert_eq!(layer.grid.dims(), dims);
+        assert_eq!(layer.grid.mb_type.as_slice().len(), dims.count());
+        assert!(layer.grid.scaled_tcoeff.as_slice().iter().all(|mb| mb.iter().all(|&c| c == 0)));
+
+        // the two the C++ constructor overwrites
+        assert_eq!(layer.uiRefLayerDqId, 255);
+        assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
+
+        // and a sample of what `WelsMallocz`'s zeroing used to leave behind
+        assert!(layer.pBitStringAux.is_null());
+        assert!(layer.pMbType.is_null());
+        assert!(layer.pDec.is_null());
+        assert_eq!(layer.iMbWidth, 0);
+        assert_eq!(layer.iMbHeight, 0);
+        assert!(!layer.bUseWeightPredictionFlag);
+        assert_eq!(layer.uiRefLayerChromaPhaseXPlus1Flag, 0);
+    }
+
+    /// The grid is sized from the **allocation's** dimensions, and the layer's
+    /// `iMbWidth`/`iMbHeight` are the current slice's — T5.E2's correction, now
+    /// structural rather than a comment on a `numMb` expression.
+    #[test]
+    fn the_grid_outlives_a_narrower_slice() {
+        let mut layer = SDqLayer::for_grid(MbDims::from_pixels(1920, 1080));
+        assert_eq!(layer.grid.dims().count(), 120 * 68);
+        // a stream decoding below the negotiated maximum
+        layer.iMbWidth = 11;
+        layer.iMbHeight = 9;
+        assert_eq!(
+            layer.grid.mb_type.as_slice().len(),
+            120 * 68,
+            "the grid is the allocation's, not the slice's"
+        );
     }
 
     #[test]

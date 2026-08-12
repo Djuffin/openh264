@@ -189,7 +189,7 @@ pub use crate::safe::plane::PaddedPlane;
 
 
 pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
-pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo, MbDims};
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SRefPic};
 
 
@@ -962,9 +962,12 @@ mod tests {
             iMbHeight: 2,
             ..Default::default()
         };
+        // T5.H3: `..Default::default()` zeroed the whole struct, which stopped
+        // being legal when the layer gained an owned grid. `for_grid` replaced it,
+        // and the dimensions are the ones the SPS above states.
         let mut dq_layer = SDqLayer {
             pMbCorrectlyDecodedFlag: flags,
-            ..Default::default()
+            ..SDqLayer::for_grid(MbDims::new(2, 2))
         };
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pCurDqLayer = &mut dq_layer as *mut _;
@@ -1030,7 +1033,7 @@ mod tests {
             let mut mb_flags = [false; W * H];   // every MB lost, so EC has work to do
             let mut dq_layer = SDqLayer {
                 pMbCorrectlyDecodedFlag: mb_flags.as_mut_ptr(),
-                ..Default::default()
+                ..SDqLayer::for_grid(MbDims::new(W, H))
             };
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
