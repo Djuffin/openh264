@@ -22,10 +22,10 @@ proposal and its accumulated history, and stays as written.*
 | **The finding that governs Phases 5/6** | **Direct dispatch recovers per-call scaffolding only where the caller supplies constant dimensions.** Encoder call sites pass literal block sizes and recovered; the decoder's arrive as parameters through `BaseMC` (~1300 instructions, not inlinable) and recovered nothing. Measured on two families in both codecs, with the `#[inline]` fixes built and reverted rather than reasoned about. **Every remaining decode ledger row is downgraded to Phase 5**, which is the phase that makes those dimensions static |
 | **Ledger** | **No row is `pending`.** Two closed as noise, two downgraded to Phase 5 with the reason, four carried into the aggregate ([`perf_baseline.md`](perf_baseline.md) §Ledger) |
 | **Parked** | `common/sad_common.rs` (14) and `encoder/sample.rs` SATD (7) — **re-attempted and re-parked 2026-08-10**, second dated verdict, on a rebuilt harness (1.41x–4.94x against a ≤1.05x bar). One debt owed: SATD still has no measurement of its own |
-| **Ratchet** | *(Phase 5 session B, 2026-08-11)* `unsafe_fn` **1249**, `raw_ptr` **4597**, `unsafe_block` **616** *(session A read 1250 / 4597 / 618; its −218 `raw_ptr` came from deleting duplicate declarations rather than converting anything)*, `SHIM(` **157** (of which **`SHIM(phase3)` is 2**, both enumerated and both owned by Phase 6; 154 are `SHIM(phase2)` and 1 is `SHIM(phase5)`), `no_mangle` 24, `mem_zeroed` **32**, **`transmute` 4 — and this number has a floor: all four matches are prose and the crate contains zero calls.** Do not chase it. The metric never covered the whole population either: T4b.3c found `as *mut _ as *mut _` doing a transmute's job, and a double cast does not match the grep — for the rest of that family use `find_dup_types.sh`, not this metric. *(Phase 4b exit read: `unsafe_fn` 1250, `raw_ptr` 4815, `unsafe_block` 613.)* **A second census now covers what the ratchet cannot**: `rust/tools/census.sh` (duplicate declarations, double-cast laundering, duplicate function bodies), allowlisted in `census_allowlist.txt`, run at `commit` level. Baseline regenerated per S16 at every seam. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
-| **Gates** | *(Phase 5 session B, 2026-08-11)* **443 debug / 437 release / 20 ignored** (+3: T5.B1's narrow-frame rows). Miri **304 `--lib`** (+4: `manage_dec_ref`'s, no longer skipped). **Decode goldens 53 → 56 rows**, additive, none moved: three narrow-frame assets at T5.B1, of which only `narrow_16x16_idr_lost` covers F21 — the other two are green under a revert of its fix, because the divergent copy's one call site is a concealment path. *(Session A's reading was 440/434/20 and Miri 300.)* **New gate at `commit` level: the duplicate census** (`census.sh`, 61 allowlisted entries + three budgets), proven red on both a planted duplicate declaration and a planted double cast before being trusted. Prior reading was — unchanged across session C, which deleted a test *arm* rather than a test (`nonzero_count_duplicates_agree` lost the decoder copy it guarded, because T4b.3c deleted that copy). T3.0's **2316 malformed-stream golden rows over 12 files** are part of the battery and **none is `WITHHELD`** since T3.3 — it goes on gating Phases 5 and 8. Sweeps 341/341 both profiles. **Two Miri skips, not three** — F13's `manage_dec_ref` site was closed at Phase 5 T5.B2 (six `as_ptr()`/`as_mut_ptr()` list shifts, not the one the finding named, plus three test-side instances the skip had been hiding); F12's thread pool (Phase 7) and F13's `encoder_ext` (Phase 6) remain. **The phase-exit level ran and its widened Miri is clean on all four targets** (295 / 20 / 7 / 3) — F18's backlog class, checked at the one level that can see it. F3 per S14 — **twenty-two measurements, nine alternations, nine acquittals**; session A's is the first **even** split (base 4 / head 4 over 12 `mt` sweeps per side, 1440 configurations each), on a session whose every commit is decoder-only while the sweep compares encoders. **Session C's contribution is the first alternation that is not 0/0**: 12 `mt` sweeps per side, 1440 configurations each, base 2 hits / head 3, and the head side hit one configuration twice with two *different* wrong lengths — the finding's own race criterion met on the tree under suspicion, which is a stronger acquittal than a rate comparison. It also narrows the signature to **`n=600`, not `sm=3` generally** (all nine of the session's hits). **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration |
-| **Standing rules** | **§7.6** below, now S1–S26. Phase 3+ briefs cite it rather than copying rules forward. **S20** (a struct conversion's decomposable unit is the signature-reachability closure, not one struct) and **S21** (the construction audit, and a duplicate-family finding must inventory every function per copy) were hoisted out of Phase 3 and are what Phases 5 and 6 are made of; **S22** (a repaired instrument has a backlog — run everything it covers at every level, the session it is repaired) is F17 → F18's lesson; **S23** (a cached table becomes a derived value only if the source cannot change behind the cache — a property of the *update paths*, read one field at a time) and **S23b** (an alternation that returns 0/0 has not run yet — alternate at the level the hits occur) are 4b session A's; **S24** (a count that decides a conversion's *shape* comes from a grep over the definitions, never from a doc or a brief) is 4b session B's, earned by two wrong premises in one brief; **S25** (a raw-to-borrow conversion surfaces pre-existing aliasing — the re-entrancy audit is part of the conversion, enumerated with the S20 closure) is session B's second, hoisted from its log §4, and Phases 5/6 inherit it by name; **S26** (a brief is an execution document — facts, order, gates, non-goals; cite rules by tag, no history retelling, no provenance narration) is Eugene's direction at Phase 5's open. Instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
-| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 now has **twenty-two** measurements and **nine alternations, nine acquittals**, and session C's is the first that produced hits on both sides — it also narrowed the signature to `sm=3` **`n=600`**; measurements 16-18 are Phase 4b session A's — the ones that finally measured its *rate*, ~1 in 800 configurations under load, by alternating whole sweeps instead of single configurations — and the nineteenth is session B's **zero across eight sweeps** (P(0) ≈ 3% at the measured rate), which sharpened the signature: the load must be *sustained*, back-to-back sweeps, not a battery's interleaved ones), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended — and **its first, `manage_dec_ref`, CLOSED at T5.B2**, where it turned out to be six sites and to have three test-side instances behind its Miri skip; **two remain**, `encoder_ext` for Phase 6 and F12's pool for Phase 7), [`phase3_findings.md`](phase3_findings.md) F15–F18, [`phase4b_findings.md`](phase4b_findings.md) **F19–F21, all FIXED in-phase**, [`phase5_findings.md`](phase5_findings.md) **F22, OPEN, owner 5.3** — `parse_mb_syn_cabac.rs` re-translated six `mv_pred` functions and **dropped every `pDec` null guard** (28 in `mv_pred.rs`, 0 in the CABAC copy), F21's class again, found by widening `find_stub_bodies.py` to `src/decoder`, which it had never scanned in three phases of running. **F21 (FIXED at T4b.3b, PINNED at T5.B1)** is the class to carry forward: the port had translated one C++ function (`expand_pic.cpp:388`) **three times**, and two copies had drifted in the sub-16-chroma case — `manage_dec_ref`'s had no `else` at all, so a frame narrower than 32 pixels kept an unexpanded chroma border. Unreachable by any gate here **by construction**, not by luck: the smallest legal frame is 16 pixels wide and every corpus stream is 176x144 or larger. Fixed by unification, not by patching the missing branch — *a duplicate family is a divergence that has not happened yet.* **Pinned at T5.B1** by three narrow-frame assets, of which — and this is the part to carry — **only the one that conceals covers it**: the two clean narrow rows pass with the fix reverted, because the divergent copy served exactly one call site and it is `WelsInitRefList`'s concealment prefetch. F19 and F20 are T4b.2a's: F19 is a leak of the parameter-set strategy on every encoder teardown (C++ deletes it at `encoder_ext.cpp:1995`; the port did not) that **no gate in this project could catch** — found by the ownership audit an `Option<Box<_>>` conversion forces, not by a test; F20 is three stale comments claiming one ported paraset strategy where there are two, which had propagated into a session brief and nearly into a conversion. **All four of Phase 3's own findings are closed**: **F15 FIXED at T3.3**, **F16 resolved at T3.1b with its second instance and the whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`), and **F18** — an address-comparison test that had been failing the Miri gate since *before* F17 made that gate capable of failing — found and fixed at the exit. **F18's lesson: a repaired gate has a backlog, and it surfaces only at the level and moment the repaired gate first runs**; the `exit` level runs once per phase. **F3's session-start advice, revised again at 4b session C: a start-of-session hit is a tendency, not a rule — three of the last six. Apply S14 to whatever arrives; a single-configuration re-run that *does* reproduce is evidence and is cheap, so run it first, and escalate at sweep level with nothing between the sweeps (S23b).** |
+| **Ratchet** | *(Phase 5 session C, 2026-08-11)* `unsafe_fn` **1248**, `raw_ptr` **4595**, `unsafe_block` **613** *(session B read 1249 / 4597 / 616; session A read 1250 / 4597 / 618, and its −218 `raw_ptr` came from deleting duplicate declarations rather than converting anything)*, `SHIM(` **158** (of which **`SHIM(phase3)` is 2**, both enumerated and both owned by Phase 6; 154 are `SHIM(phase2)` and **2 are `SHIM(phase5)`** — `cabac_decoder.rs`'s, which dies in 5.2, and `SPicture::data_ptr`, which dies as 5.2–5.6 convert the kernels *except* at `decoder_core.rs:1087`, where the public output contract hands the pointers to the API consumer and they outlive the call), `no_mangle` 24, `mem_zeroed` **32**, **`transmute` 4 — and this number has a floor: all four matches are prose and the crate contains zero calls.** Do not chase it. The metric never covered the whole population either: T4b.3c found `as *mut _ as *mut _` doing a transmute's job, and a double cast does not match the grep — for the rest of that family use `find_dup_types.sh`, not this metric. *(Phase 4b exit read: `unsafe_fn` 1250, `raw_ptr` 4815, `unsafe_block` 613.)* **A second census now covers what the ratchet cannot**: `rust/tools/census.sh` (duplicate declarations, double-cast laundering, duplicate function bodies), allowlisted in `census_allowlist.txt`, run at `commit` level. Baseline regenerated per S16 at every seam. Run `bash rust/tools/unsafe_ratchet.sh check`; never trust a remembered number |
+| **Gates** | *(Phase 5 session C, 2026-08-11)* **448 debug / 442 release / 20 ignored** (+5 at T5.C3: two on `PaddedPlane::empty`, two on `SPicture`'s plane accessors, one on `AllocPicture`'s parse-only arm). Miri **309 `--lib`** (+5, the same tests) — **and one of them is the session's whole point**: `data_ptr`'s first draft narrowed provenance to `[origin..]` and was UB at the first read into the picture's padding, while 448/442 tests, all 56 golden rows, both benches and 341/341 sweeps agreed with it. Nine gates passed a soundness defect on the mainline decode path; Miri failed on the first run. S15 is not a formality. *(Session B's reading was 443/437/20 and Miri 304.)* **Decode goldens 53 → 56 rows**, additive, none moved: three narrow-frame assets at T5.B1, of which only `narrow_16x16_idr_lost` covers F21 — the other two are green under a revert of its fix, because the divergent copy's one call site is a concealment path. *(Session A's reading was 440/434/20 and Miri 300.)* **New gate at `commit` level: the duplicate census** (`census.sh`, 61 allowlisted entries + three budgets), proven red on both a planted duplicate declaration and a planted double cast before being trusted. Prior reading was — unchanged across session C, which deleted a test *arm* rather than a test (`nonzero_count_duplicates_agree` lost the decoder copy it guarded, because T4b.3c deleted that copy). T3.0's **2316 malformed-stream golden rows over 12 files** are part of the battery and **none is `WITHHELD`** since T3.3 — it goes on gating Phases 5 and 8. Sweeps 341/341 both profiles. **Two Miri skips, not three** — F13's `manage_dec_ref` site was closed at Phase 5 T5.B2 (six `as_ptr()`/`as_mut_ptr()` list shifts, not the one the finding named, plus three test-side instances the skip had been hiding); F12's thread pool (Phase 7) and F13's `encoder_ext` (Phase 6) remain. **The phase-exit level ran and its widened Miri is clean on all four targets** (295 / 20 / 7 / 3) — F18's backlog class, checked at the one level that can see it. F3 per S14 — **twenty-five measurements, ten alternations, ten acquittals**; session A's is the first **even** split (base 4 / head 4 over 12 `mt` sweeps per side, 1440 configurations each), on a session whose every commit is decoder-only while the sweep compares encoders. **Session C's contribution is the first alternation that is not 0/0**: 12 `mt` sweeps per side, 1440 configurations each, base 2 hits / head 3, and the head side hit one configuration twice with two *different* wrong lengths — the finding's own race criterion met on the tree under suspicion, which is a stronger acquittal than a rate comparison. It also narrows the signature to **`n=600`, not `sm=3` generally** (all nine of the session's hits). **F17 is fixed and proven**: `gates.sh` takes every verdict from `${PIPESTATUS[0]}` plus log corroboration |
+| **Standing rules** | **§7.6** below, now S1–S26. Phase 3+ briefs cite it rather than copying rules forward. **S20** (a struct conversion's decomposable unit is the signature-reachability closure, not one struct) and **S21** (the construction audit, and a duplicate-family finding must inventory every function per copy) were hoisted out of Phase 3 and are what Phases 5 and 6 are made of; **S22** (a repaired instrument has a backlog — run everything it covers at every level, the session it is repaired) is F17 → F18's lesson; **S23** (a cached table becomes a derived value only if the source cannot change behind the cache — a property of the *update paths*, read one field at a time) and **S23b** (an alternation that returns 0/0 has not run yet — alternate at the level the hits occur) are 4b session A's; **S24** (a count that decides a conversion's *shape* comes from a grep over the definitions, never from a doc or a brief) is 4b session B's, earned by two wrong premises in one brief; **S25** (a raw-to-borrow conversion surfaces pre-existing aliasing — the re-entrancy audit is part of the conversion, enumerated with the S20 closure) is session B's second, hoisted from its log §4, and Phases 5/6 inherit it by name; **S26** (a brief is an execution document — facts, order, gates, non-goals; cite rules by tag, no history retelling, no provenance narration) is Eugene's direction at Phase 5's open. **Section revised 2026-08-11** (Eugene's direction): R-letter tags moved to the preamble map, **S14 refreshed to the measured protocol** (briefs now cite it instead of restating F3), **S17 generalized** — its specific check is automated in `gates.sh` — and S3–S5/S10–S11 tagged **[dormant: kernel work]** until 6.3's re-attempt. Instrument: `rust/tools/perfpair.py`, which implements S1/S2/S17 |
+| **Open findings** | [`phase0_findings.md`](phase0_findings.md) F1, F3 (**F2 RESOLVED at T3.4** — one writer, zero bytes of output moved, and the finding's own inventory turned out to be one divergence short; F3 now has **twenty-five** measurements and **ten alternations, ten acquittals**, and session C's is the first that produced hits on both sides — it also narrowed the signature to `sm=3` **`n=600`**; measurements 16-18 are Phase 4b session A's — the ones that finally measured its *rate*, ~1 in 800 configurations under load, by alternating whole sweeps instead of single configurations — and the nineteenth is session B's **zero across eight sweeps** (P(0) ≈ 3% at the measured rate), which sharpened the signature: the load must be *sustained*, back-to-back sweeps, not a battery's interleaved ones), [`phase1_findings.md`](phase1_findings.md) F4, F6, F7 (**F5 RESOLVED at T3.4**, by deletion, exactly where its "who fixes it" line predicted), [`phase2_findings.md`](phase2_findings.md) F8–F14 (**F13's third site CLOSED at T3.4** — `InitBits` deleted rather than amended — and **its first, `manage_dec_ref`, CLOSED at T5.B2**, where it turned out to be six sites and to have three test-side instances behind its Miri skip; **two remain**, `encoder_ext` for Phase 6 and F12's pool for Phase 7), [`phase3_findings.md`](phase3_findings.md) F15–F18, [`phase4b_findings.md`](phase4b_findings.md) **F19–F21, all FIXED in-phase**, [`phase5_findings.md`](phase5_findings.md) **F22, OPEN, owner 5.3** — `parse_mb_syn_cabac.rs` re-translated six `mv_pred` functions and **dropped every `pDec` null guard** (28 in `mv_pred.rs`, 0 in the CABAC copy), F21's class again, found by widening `find_stub_bodies.py` to `src/decoder`, which it had never scanned in three phases of running. **F21 (FIXED at T4b.3b, PINNED at T5.B1)** is the class to carry forward: the port had translated one C++ function (`expand_pic.cpp:388`) **three times**, and two copies had drifted in the sub-16-chroma case — `manage_dec_ref`'s had no `else` at all, so a frame narrower than 32 pixels kept an unexpanded chroma border. Unreachable by any gate here **by construction**, not by luck: the smallest legal frame is 16 pixels wide and every corpus stream is 176x144 or larger. Fixed by unification, not by patching the missing branch — *a duplicate family is a divergence that has not happened yet.* **Pinned at T5.B1** by three narrow-frame assets, of which — and this is the part to carry — **only the one that conceals covers it**: the two clean narrow rows pass with the fix reverted, because the divergent copy served exactly one call site and it is `WelsInitRefList`'s concealment prefetch. F19 and F20 are T4b.2a's: F19 is a leak of the parameter-set strategy on every encoder teardown (C++ deletes it at `encoder_ext.cpp:1995`; the port did not) that **no gate in this project could catch** — found by the ownership audit an `Option<Box<_>>` conversion forces, not by a test; F20 is three stale comments claiming one ported paraset strategy where there are two, which had propagated into a session brief and nearly into a conversion. **All four of Phase 3's own findings are closed**: **F15 FIXED at T3.3**, **F16 resolved at T3.1b with its second instance and the whole stored-extent class closed at T3.3** (nothing stores an extent any more, so it is unrepresentable rather than repaired), **F17 fixed and proven red** at session C's start (`eae61b94`), and **F18** — an address-comparison test that had been failing the Miri gate since *before* F17 made that gate capable of failing — found and fixed at the exit. **F18's lesson: a repaired gate has a backlog, and it surfaces only at the level and moment the repaired gate first runs**; the `exit` level runs once per phase. **F3's session-start advice, revised again at 4b session C: a start-of-session hit is a tendency, not a rule — three of the last six. Apply S14 to whatever arrives; a single-configuration re-run that *does* reproduce is evidence and is cheap, so run it first, and escalate at sweep level with nothing between the sweeps (S23b).** |
 | **The absent instrument** | Phase 0's T7 (fuzzing) was deferred by direction and there is still no corpus net. The tally of findings a fuzzer would plausibly have reached first now stands at **F8, F9, F10 (×3), F11, F12, F13, F14, and F3's eighth measurement** — re-raising T7 is Eugene's call |
 
 **Where the live documents are:** the phase brief in [`prompts/`](prompts/) is what a
@@ -638,22 +638,23 @@ until T7 lands.
 
 ### 7.6 Standing working rules
 
-*Hoisted from `prompts/archive/phase2_continue.md` §2 at Phase 2's exit. The criterion for
-being here is that a Phase 3+ session needs the rule **verbatim**; phase-2-only
-carry-ins (shim-span specifics, per-family traps) stayed in that brief and archive
-with it. Briefs from Phase 4a on cite this section instead of copying rules forward.
-Each rule keeps the tag it was derived under, so the log entry that paid for it is
-findable.*
+*The criterion for being here is that a current session needs the rule **verbatim**.
+Briefs cite this section by tag instead of copying rules forward (S26). Rules marked
+**[dormant: kernel work]** apply only when kernel conversion or a kernel microbench
+is in scope — next expected use is 6.3's parked-family re-attempt. Section revised
+2026-08-11: S14 refreshed to the measured protocol; S17 automated. Pre-Phase-3 logs
+cite these rules by their original R-letters: S1=R-h, S2=R-l, S3=R-j, S4=R-m, S5=R-k,
+S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
 
 #### Measurement
 
-- **S1 (was R-h) — measure with interleaved pairs, never sequential runs.** Two runs
+- **S1 — measure with interleaved pairs, never sequential runs.** Two runs
   of the *same* binary drift ~3%. Keep both binaries on disk, alternate them inside
   one loop, take medians over 3+ pairs. An unpaired reading of T4 said +5.1% where
   the paired one said +8.7%, and the session acted on the wrong number for a while.
   Profile with `/usr/bin/sample` and **disassemble before theorising** — T4's and
   T5's first two theories were each wrong and cost a build-bench cycle.
-- **S2 (was R-l) — run a null before calling anything noise.** Same binary in both
+- **S2 — run a null before calling anything noise.** Same binary in both
   slots, same harness, fresh **per session**: the floor is not a constant (session D
   ±1.8%, session E ±5.4%, sessions F and G ≈±2.5-3%). It costs one pass of a bench
   that is already built, and in T8 it converted a suspected artefact into a real
@@ -673,7 +674,7 @@ findable.*
   effect is below the measurement error**, and D-perf-4's disposition for that is
   diagnostic-only — but you only get that evidence by re-running at a higher pair
   count before reaching for a mechanism.
-- **S3 (was R-j) — a microbenchmark's working set is part of its correctness.**
+- **S3 [dormant: kernel work] — a microbenchmark's working set is part of its correctness.**
   T5's SAD bench at a 1984-byte stride over 190 KB reported 0.82-1.33x where the
   encoder reported +16.8%; the same bench L1-resident reported 1.0-2.0x and agreed.
   Size the working set from the real caller, state it beside the numbers, and
@@ -683,19 +684,19 @@ findable.*
   kernel while the opaque `extern "C"` call keeps computing it — a 4x handicap
   pointing the wrong way); a `const` stride where the kernel takes a runtime `i32`;
   and variants timed in blocks rather than interleaved.
-- **S4 (was R-m) — after a swap, the "raw" side of a microbench is the shim.**
+- **S4 [dormant: kernel work] — after a swap, the "raw" side of a microbench is the shim.**
   Calling `WelsFoo_c` post-swap measures the safe kernel wrapped in a shim against
   the safe kernel. T8's first table read 0.99-1.07x for exactly this reason; the
   true figures were 0.69-1.47x. Measure bodies **before** commit B, or recover them
   with `git show <commit-A>:<file>` into the bench crate.
-- **S5 (was R-k) — bisect a swap by file before optimising it.** T5 read as +13.9%
+- **S5 [dormant: kernel work] — bisect a swap by file before optimising it.** T5 read as +13.9%
   overall; one extra build and two bench runs split it into a +16.8% half and a
   +0.57% half, turning a wholesale revert into a narrow one. The two-commit-per-family
   discipline makes the unswap cheap; a per-file bisect makes it small.
 
 #### Conversion
 
-- **S6 (was R-e) — arithmetic parity, not repair.** When a kernel's intermediates can
+- **S6 — arithmetic parity, not repair.** When a kernel's intermediates can
   overflow, the safe kernel reproduces the **old Rust port's exact behaviour**: same
   widths, same operations, the same debug-panic exposure and the same release
   wrapping. Never widen, never add a `wrapping_*` the old code lacked, never "fix" it
@@ -704,14 +705,14 @@ findable.*
   the range where the old code does not panic, and write the derivation next to the
   bound. A newly *noticed* overflow-capable intermediate gets an F-finding and
   nothing else (F8, F9, F11).
-- **S7 (was R-c) — one span helper per family, and the contract sentence is the
+- **S7 — one span helper per family, and the contract sentence is the
   deliverable.** Shims are not derivable from the signature alone. One helper
   computes the slice span and *nothing else does that arithmetic*. The sentence
   naming **why** a negative reach is legal (`PADDING_LENGTH`, an MV clamp, an
   availability gate) is what Phase 5 converts callers against. Prefer **per-kernel**
   reaches to a family union — a shared parameter makes each kernel's contract claim
   its neighbour's reach.
-- **S8 (was R-i) — the fast-idiom catalog, and its binding negative results.**
+- **S8 — the fast-idiom catalog, and its binding negative results.**
   Bounds checks land per *row*, not per sample: one `row_mut` per output row
   amortises over the row's arithmetic. `copy_from_slice` on a **runtime** length is a
   `memmove` call — use const-generic widths (`copy_rows::<16>`), as the C++ dispatches
@@ -724,7 +725,7 @@ findable.*
   `perf_baseline.md` §Phase 2 T4 first:** by-value cursors (wash),
   dispatch-over-shims (wash), `chunks()`-based row walkers (**worse everywhere**).
   `get_unchecked` is banned — restructure the loop instead.
-- **S9 (was R-o) — the exact-span trim is the per-row-bounds-check fix that works.**
+- **S9 — the exact-span trim is the per-row-bounds-check fix that works.**
   Handed an open tail (`&plane[origin..]`) LLVM cannot relate `k * stride + W` to the
   length and re-checks every row; handed a window it knows is `(H-1)*stride + W` long,
   the checks fold. It took T8's walk from 1.82x to 1.02x. Try it first on any kernel
@@ -733,13 +734,13 @@ findable.*
 
 #### Proof
 
-- **S10 (was R-d) — differential discipline.** Sweep selector/availability flags
+- **S10 [dormant: kernel work] — differential discipline.** Sweep selector/availability flags
   **exhaustively**, never randomly: T3 found kernels that ignore a flag they take, and
   a random sweep blurs exactly what a conversion gets wrong. Anchor test blocks at
   **random legal offsets** — kernels written around unaligned stores must be exercised
   unaligned. Compare **every written byte of the destination surface**, not the
   nominal block. Kill at least one deliberate mutation per family before commit A.
-- **S11 (session E) — every span probe gets a golden direct run.** Span size, touch
+- **S11 [dormant: kernel work] (Phase 2 session E) — every span probe gets a golden direct run.** Span size, touch
   set, and anchor must be pinned by three *independent* mechanisms: an exact-span
   allocation under Miri, a touch-set assertion, and the shim's output compared against
   the safe kernel invoked directly at the contract's own geometry. A +1-anchor
@@ -750,23 +751,35 @@ findable.*
   composite's sub-blocks bump from their **own** anchors. Any test handing an
   exactly-sized buffer to a raw kernel must size it **`(h + 1) * stride`**. Exact
   spans are for the *safe* side; restore them on the raw side only at re-landing.
-- **S13 (session G) — an accommodation is only as wide as the instrument that found
+- **S13 (Phase 2 session G) — an accommodation is only as wide as the instrument that found
   it.** F10 was recorded twice and fixed only in the differential file, because that
   was the only file Miri ran; the same UB sat in the kernels' own unit tests for three
   sessions. When a rule is first applied, **run the instrument everywhere it could
-  apply**, not only where it fired.
+  apply**, not only where it fired. (S22 is this same law aimed at the instruments
+  themselves and their scope lists.)
 
 #### Instruments and gates
 
-- **S14 (was R-g) — the F3 protocol.** Signature: `mt`, `sm=3`, `t` in {2, 4}, output
-  of **any** wrong length (zero, short, or long), **either** profile. One hit → re-run
-  that configuration rather than argue. **More than one hit in a session → alternate
-  both trees inside one loop and compare counts**; sequential sampling of a
-  load-sensitive race actively misleads. Append every such measurement to F3. Any
-  other configuration, any `st`/`def` hit, anything outside the signature: real —
-  stop, revert, investigate. The natural rate is 1/400-1000 and rises an order of
-  magnitude on a loaded machine, so a single clean `mt` sweep is **not** a 341/341
-  signal.
+- **S14 — the F3 protocol** (text refreshed 2026-08-11 to the measured facts;
+  history in `phase0_findings.md` F3 — twenty-two measurements, nine alternations,
+  nine acquittals). **Signature:** `mt`, `sm=3`, `n=600` (never observed at
+  `n=1500`), `t∈{2,4}`, output of **any** wrong length — zero, short, or long —
+  in **either** profile. **Measured rate:** ≈ 1/800 configurations under sustained
+  back-to-back load, ≈ 1/100–150 on susceptible configurations; a battery's
+  interleaved sweeps often draw zero — load density is part of the signature.
+  **Protocol:**
+  1. One hit → re-run that configuration 5×. A reproduction in isolation is valid
+     evidence. Two *different* wrong lengths from one binary+configuration = race,
+     not divergence — a deterministic port bug repeats its bytes.
+  2. Two or more hits → alternate **whole `mt` presets back to back**, 12 per
+     side, both binaries built once and swapped inside one loop, machine otherwise
+     idle. Expect hits on both sides; the verdict is whether HEAD is *worse*, and
+     S23b applies — a 0/0 alternation has not run, and a sweep inside a battery is
+     not an alternation.
+  3. Anything outside the signature — `st`/`def`, other configurations, wrong
+     *bytes* rather than wrong length — is **real**: stop, revert, investigate.
+  4. Append every measurement to F3. A clean sweep is a sample, not a 341/341
+     signal; a session-start hit is a tendency, not a rule.
 - **S15 — the Miri gate, and its skip list.** `gates.sh` runs Miri over the **whole
   library** (`--lib`, `-Zmiri-ignore-leaks`) plus the differential integration files
   at phase exits. The skips in that step are a **work queue, not a settled state**:
@@ -775,7 +788,7 @@ findable.*
   skip may be added without a finding**. Byte-exactness does not imply soundness —
   341/341 identical sweeps ran on top of F1's stack overflow for the port's whole
   life, and the widened gate found seven more defects in one afternoon.
-- **S16 (was R-f, R-p) — read the ratchet's shape, not its sign.** `raw_ptr` counts
+- **S16 — read the ratchet's shape, not its sign.** `raw_ptr` counts
   *occurrences* — signatures, casts, **and pointer types written in prose**, so
   documenting a contract inflates it. A shim keeping its raw signature keeps its
   count; a shared helper may legitimately add one or two, and paying that beats N
@@ -784,11 +797,17 @@ findable.*
   `no_mangle` non-increasing; `unsafe_fn` ~flat until raw bodies are *deleted* rather
   than strangled, and then it falls hard. **Never fold shims into a macro** — it makes
   `unsafe_fn` report a drop that did not happen and hides the `SHIM(` markers. Commit
-  B regenerates the baseline, with the reason in the commit message.
-- **S17 — `FFMPEG` must be set on every gate run.** It was unset for two whole
-  sessions, so `c_vs_rust_bench` skipped and the encoder went unmeasured across three
-  families; T5's +16.8% regression reached a commit before anything noticed. An
-  instrument that silently skips because of an unset variable is not an instrument.
+  B regenerates the baseline, with the reason in the commit message. **A metric can
+  have a prose floor**: `transmute` reads 4 with zero calls behind it (all doc
+  comments, since T4b.3b) — when a metric's remaining count is prose, say so
+  wherever the metric is quoted, or the next phase chases a number that cannot move.
+- **S17 — an instrument may skip only loudly, naming what goes unmeasured.**
+  The incident: `FFMPEG` was unset for two whole sessions, `c_vs_rust_bench`
+  silently skipped, and T5's +16.8% encoder regression reached a commit before
+  anything noticed. **The specific check is now automated** — `gates.sh` falls back
+  to ffmpeg on PATH and, when absent, prints an UNMEASURED banner instead of
+  skipping silently — so this rule's live content is the general law, applied to
+  every new gate step and instrument.
 
 #### Phase exits
 
@@ -821,7 +840,7 @@ findable.*
   addition (the proven new API). A session brief that draws a commit boundary
   through the middle of a closure is wrong before it starts, and the correction
   protocol applies to it.
-- **S21 — the construction audit (was session D §2's rule).** Any struct gaining
+- **S21 — the construction audit (Phase 3 session D).** Any struct gaining
   an owned field gets its construction paths audited *in the same commit*:
   `mem::zeroed` construction — 26 sites at Phase 0's count, the encoder and
   decoder god-contexts included — makes field-type changes UB at a distance, and
