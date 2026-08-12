@@ -22,8 +22,9 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded: **448 debug / 442 release / 20 ignored**, Miri **309**,
-   sweeps 341/341 both profiles.
+   verdict. Last recorded: **449 debug / 443 release / 20 ignored**, Miri **309**,
+   census **60**, decode goldens **56**, ratchet `raw_ptr` **4548**; sweeps 341/341
+   release, and the debug sweep now draws F3 (see §8).
 3. Recount every number you are about to rely on.
 
 The census gate runs at commit level (`rust/tools/census.sh` against
@@ -234,19 +235,24 @@ this brief historical.
 
 - `transmute` reads **4: all prose, zero calls**. Don't chase it.
 - The **ratchet** is the instrument, not struct sizes. Phase 5 so far:
-  `raw_ptr` 4815 → 4597 (session A, by deletion; session B flat) → **4595**
-  (session C: +1 for the new accessor, −4 as the pointer arrays and
-  `calculate_data_pointers` died), `unsafe_block` 613 → 618 → 616 → **613**,
-  `unsafe_fn` 1250 → 1249 → **1248**. S16's warning was collected twice this
-  session: prose inflates `raw_ptr` and `SHIM(`, and both were reworded rather
-  than baselined.
-- Gates: **448 / 442 / 20**, Miri **309**, sweeps 341/341 both profiles, decode
-  goldens **56 rows**.
+  `raw_ptr` 4815 → 4597 (session A, by deletion; session B flat) → 4595
+  (session C) → 4600 (session D, +5 for the aliasing probe) → **4548** (session E:
+  −4 as F24's fix collapsed the `as *mut T as *mut c_void` double casts, −48 as
+  `SMbCache` and the one-element dimensions died), `unsafe_block` 613 → 618 → 616 →
+  613 → 614 → **614**, `unsafe_fn` 1250 → 1249 → 1248 → **1247**
+  (`InitCurDqLayerData` deleted). S16's warning was collected twice at session C:
+  prose inflates `raw_ptr` and `SHIM(`, and both were reworded rather than baselined.
+- Gates: **449 / 443 / 20**, Miri **309**, sweeps 341/341 both profiles, decode
+  goldens **56 rows**. The debug sweep now reproduces F3 (`rust_enc`'s
+  `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29
+  is the cleanest evidence the finding has.
 - **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
   (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
-- Census gate state: duplicate types 10, aliases 31, tables 17, inferred-target
-  double casts 0, duplicate-body groups 198 (ratcheted), 61 allowlisted entries.
-  Remaining within-decoder entries are allowlisted with their owning steps.
+- Census gate state: inferred-target double casts 0, duplicate-body groups 198
+  (ratcheted), **60** allowlisted entries (session E: the decoder's `SMbCache` was
+  deleted, so its class-(a) line is gone — a deletion removes the entry where a
+  rename would only re-key it). Remaining within-decoder entries are allowlisted
+  with their owning steps.
 - `SHIM(` **158**: `phase3` = 2 (Phase 6's), `phase5` = **2** — `cabac_decoder.rs`'s
   (dies in 5.2) and `SPicture::data_ptr` (dies as 5.2–5.6 convert the kernels,
   *except* at `decoder_core.rs:1087`, where the public output contract hands the

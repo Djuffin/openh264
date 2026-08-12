@@ -4855,3 +4855,211 @@ exercises, so an alternation could not produce information. Everything else gree
 * **S27 got its first live use and its first exception in the same session.** The tail was
   docs-only for four minutes; a build-config change arrived and the rule correctly
   escalated to the full battery. Worth keeping as the example.
+
+---
+
+## 2026-08-12 — Phase 5, session E (F24 closes and takes four siblings with it; F25 stops being a prediction; F26 stops the queue; 5.2's subtraction lands)
+
+**Commits:** `cd05829c` (inherited doc tail — S14's hash shortcut, F23's Phase 8 owner,
+the session brief), `975b1a59` (T5.E1, the aliasing family), `db5bafdb` (T5.E2, 5.2's subtraction),
+and this entry.
+
+### The session in one line
+
+F24 was the blocker and it was not one function: fixing it moved the probe forward twice
+more, which turned session D's prediction into F25 and then hit F26 — a provenance defect
+in the allocator that no amount of borrow discipline will fix — and the brief's bound of
+three stopped the hunt exactly where it should have.
+
+### Control battery — S27's second live use, and its first clean one
+
+The inherited tail was `rust/docs/`-only, `rust/tools/` carried nothing but the
+regenerated ratchet baseline, and the toolchain was unchanged, so the open ran the cheap
+subset: **OVERALL: PASS**, 449/443/20, ratchet clean, census 61.
+
+One honest note on the precondition. S27 asks that the previous session ended
+`OVERALL: PASS`; session D ended `OVERALL: FAIL` with **three adjudicated** failures (a
+ratchet it regenerated in the same commit, and two sweeps that were F3). Read literally
+that is a condition failing and the rule says full battery. Read as intended — *was the
+tree accepted green?* — it holds. The cheap subset was run, and it re-verified the
+ratchet that had been the first of those three FAILs. Worth writing down because the rule
+will meet this case again: **"ended PASS" and "ended accepted" are not the same
+predicate**, and S27 does not currently say which one it means.
+
+### 1. F24, and the discovery that it was never one function (T5.E1)
+
+The fix is the one T5.B2 established, arrived at from the other side. T5.B2 shortened
+borrows; this shortens them to nothing. `addr_of_mut!` creates no reference, so every
+derived pointer carries the parent allocation's provenance, none can invalidate another,
+and the question *whose retag is on top* stops existing.
+
+```rust
+let pNalHeaderExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*kpCurNal).sNalHeaderExt);
+let pSliceHead: PSliceHeader =
+    std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
+let pSliceHeadExt: PSliceHeaderExt =
+    std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt);
+```
+
+Because the 74 `(*pSliceHead)` and 50 `(*pSliceHeadExt)` sites already spelled the
+dereference, **141 uses cost four changed lines and 14 re-spellings of `pNalHeaderExt.`**.
+The brief budgeted a mechanical 141-site rewrite; it wasn't one, and that is worth
+knowing before the next such fix is sized.
+
+**Then Miri found the same shape one function further on**, in `DecodeCurrentAccessUnit`,
+with a byte-identical diagnosis — `[0x28..0xf00]` created, invalidated by `[0x28..0x1350]`.
+At ~8 minutes per round trip, discovering the family one site at a time was not the way
+to do it, so the shape got greped instead. Four more sites, all `decoder_core.rs`, all in
+one pass:
+
+| site | shape |
+|---|---|
+| `DecodeCurrentAccessUnit:3684` | the nested pair Miri reported |
+| `InitDqLayerInfo:3471` | `pSh` nested in `pShExt`, **plus four borrows that escape into the layer** |
+| `WelsDqLayerDecodeStart:3526` | escapes into `(*pCtx).pSliceHeader` for the whole slice decode |
+| the `pBitStringAux` store, `CheckAccessUnitBoundaryExt`'s arguments | escaping `&mut` |
+
+The escaping ones are the interesting half. `InitDqLayerInfo` stores
+`pRefPicListReordering`, `pRefPicMarking`, `pPredWeightTable` and `pRefPicBaseMarking`
+*into the layer*; as `&mut`-derived pointers they died at the next use of their parent
+and were then read for the rest of the decode. A nested borrow hurts one function; an
+escaping one hurts everything downstream of it.
+
+**And one pair no instrument in this repository can reach.** `pSps` was
+`&mut (*pSubsetSps).sSps`, nested inside a `&mut` of a subset-SPS buffer entry that three
+later bindings re-borrowed. UB on every `kbExtensionFlag` path — and `bExtensionFlag` is
+`eType == NAL_UNIT_CODED_SLICE_EXT` (`nalu.rs:684`), so reaching it needs an SVC stream.
+The corpus has none; the probe decodes AVC. It was found by reading while fixing the pair
+above and fixed in the same commit, because the alternative is leaving a known defect
+behind a commit whose message says the function is clean. **S22's shape, fourth
+instance**: an instrument's reach is part of the instrument.
+
+### 2. F25 — the prediction the probe was written for, confirmed (T5.E1)
+
+Session D read `WelsDecodeSlice` and enumerated three overlapping `&mut`s across the
+re-entrant `pDecMbFunc`, and was careful to label it *a prediction, not a finding, until
+Miri gets there*. Miri got there on run 2:
+
+```text
+attempting a write access using <35266369> at alloc251880[0x7e92c], but that tag does not
+exist in the borrow stack        → decode_slice.rs:5150   ctx.bMbRefConcealed = false;
+help: <35266369> was created by a Unique retag at offsets [0x0..0x8ae00]      (:5071)
+help: <35266369> was later invalidated … by a Unique retag                   (:698)
+```
+
+The invalidator is **inside the callee**: `pDecMbFunc` re-enters and takes its own
+`&mut *pCtx` at `:698`. Fixed the same way — 43 sites named `(*pCtx)` / `(*pCurDqLayer)`
+per use.
+
+**The systemic part, which outranks the fix.** That retag covers `[0x0..0x8ae00]` — the
+*whole context*. So any re-entrant callee that borrows the context kills every outer
+borrow of it, and **~30 `&mut *pCtx` sites remain in `src/decoder/`**. Each is sound
+alone and UB the moment it is held across a call that re-enters through `pCtx`, which
+this decoder does constantly via `pDecMbFunc`, `pFuncList` and the deblocking callbacks.
+This is not a queue of independent defects; it is one pattern, and 5.2–5.6 convert
+exactly this code. The rule they inherit: **the god-context is never held as a borrow
+across a call.**
+
+### 3. F26 — the third defect beyond F24, and the bound doing its job
+
+Run 3 got past F25 and stopped somewhere else entirely:
+
+```text
+not granting access to tag <wildcard> because that would remove [Unique for <36614846>]
+which is strongly protected        → cabac_decoder.rs:855
+```
+
+Not a borrow defect. `CMemoryAlign::WelsMalloc` computes its alignment by round-tripping
+through an integer (`memory_align.rs:49-50`), which **exposes the provenance of every
+allocation in the port** — NAL units, access units, `SDqLayer`, the per-MB arrays. Miri
+calls those pointers wildcards and refuses any access through one that would disable a
+strongly-protected `&mut` argument.
+
+The brief's bound is three defects beyond F24 and this is the third, so the hunt stopped.
+That is the right outcome twice over: the bound exists to prevent an unbounded hunt, and
+this particular defect is not the mechanical fix the other five were — it is an allocator
+decision, and restoring tracked provenance crate-wide should be expected to let Miri see
+borrow structure it has been silently permitting, which is S22's backlog shape.
+
+**One question is genuinely open and the finding says so rather than guessing.** T5.E1
+changed the `pBitStringAux` store from a retagging `&mut` to a wildcard-inheriting
+`addr_of_mut!`. A `&mut` mints a tracked tag even from a wildcard parent. So it is not
+proven whether F26 was reachable before T5.E1 or whether that one line exposes it. Both
+stories are defensible and the instrument is eight minutes away, so `phase5_findings.md`
+names the experiment — restore that one store, keep everything else, run the probe — and
+declines to settle it by reasoning.
+
+`#[cfg_attr(miri, ignore)]` therefore **stays**, labelled with all four items and what
+remains. S17: an instrument may skip only loudly. It comes off at F26.
+
+### 4. 5.2's subtraction (T5.E2), and an S24 correction to the closure
+
+The closure's "first commit that converts nothing" landed as written. `SMbCache` dies
+whole: the 27 arrays are allocated straight into the layer, `InitCurDqLayerData`'s
+27-pointer re-alias is deleted, and the struct, its `Default` and the context field are
+gone. `LAYER_NUM_EXCHANGEABLE` is deleted — **both definitions of it**, which the closure
+did not mention it had (`decoder_context.rs:72` and `decoder_core.rs:54`) — `pDqLayersList`
+is a scalar, and the three one-iteration loops are straight-line. `pMotionPredFlag` died
+with the struct without needing its own step.
+
+**The correction, and it is the load-bearing part of this section.** The closure says
+`SMbCache` has *one* live consumer, the `pSliceIdc` `0xff` memset. It has **three**: the
+memset and both `numMb` computations, in `InitialDqLayersContext` and
+`UninitialDqLayersContext`. The free path's is the one that matters, because
+`sMb.iMbWidth`/`iMbHeight` are the **allocation's** dimensions
+(`(kiMaxWidth + 15) >> 4`) while the layer's are the **current slice's**, set per-slice
+from the slice header and smaller on any stream decoding below the negotiated maximum.
+A session following the closure verbatim would have moved that read onto the layer and
+freed with the wrong size.
+
+It stayed pure subtraction only because the context already keeps what was needed —
+`iPicWidthReq`/`iPicHeightReq`, set in the same function that allocates and zeroed after
+the frees. No field was added. But the closure's count was a summary of a fact, and S24
+is about exactly that: **"129 of 130 are lifecycle" was true and still hid a consumer**,
+because "lifecycle" quietly included the arithmetic that sizes the free.
+
+Census: the `type SMbCache x2` line is **removed rather than re-keyed**. Session D's
+hand-off predicted `x2 → x1` because it was planning a *rename*; a deletion is different
+— with the decoder's copy gone the name is not duplicated at all, so the entry has
+nothing left to describe. 61 → **60**.
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 449 / 443 / 20 | **449 / 443 / 20** |
+| Miri `--lib` | 309 | **309** (the probe is still `cfg_attr(miri, ignore)` — F26) |
+| decode goldens | 56 rows | **56 rows, none moved** (both faces) |
+| census | 61 allowlisted | **60** (decoder `SMbCache` deleted) |
+| `raw_ptr` | 4600 | **4548** (−52: −4 at T5.E1, −48 at T5.E2, all deletion) |
+| `unsafe_fn` | 1248 | **1247** (`InitCurDqLayerData` deleted) |
+| `unsafe_block` / `SHIM(` | 614 / 158 | **614 / 158** (+0) |
+| Miri skips | 2 | 2 |
+| findings open | F22 answered, F23, F24 | **F24 fixed; F25 fixed; F26 new and open** |
+
+Batteries: T5.E1 `gates.sh full` **OVERALL: PASS**, everything green including sweeps
+341/341 in *both* profiles. T5.E2 **one FAIL, adjudicated** — `sweep (debug)` 340/1, F3,
+measurement 29, the first hit whose isolation re-runs produced a *second* wrong length
+(4× byte-identical, 1× 37837 against C++'s 39981) and so satisfied S14 step 1's race
+criterion directly instead of by inference.
+
+### Hand-off: Phase 5, session F
+
+* **The next unit is F26, and it is a decision before it is a fix.** Settle the open
+  question first with the one-run experiment in `phase5_findings.md` — it costs eight
+  minutes and it determines whether F26 is live today or was exposed by T5.E1. Then
+  decide whether to de-launder `CMemoryAlign::WelsMalloc`. Expect S22's backlog: tracked
+  provenance means Miri starts seeing structure it has been permitting.
+* **Do not start the grid conversion before that.** The reason is F24's, unchanged: new
+  `&mut`s on a path Miri cannot clear make the next failure unattributable. The
+  subtraction is done, so the conversion now starts from a genuinely standing start the
+  moment the path is clean.
+* **The ~30 `&mut *pCtx` sites are the real inventory**, and they are cheaper to fix by
+  grep than by Miri round trip — that technique found four of this session's six sites.
+  Whoever converts a decoder file should sweep its `&mut *pCtx` / `&mut *pCurDqLayer`
+  bindings in the same commit.
+* **The closure is still good** apart from §4's correction. Grid in the layer, not the
+  context (50 signatures against 0); `pBitStringAux` and `cabac_decoder.rs:855`'s
+  `SHIM(phase5)` accessor die with the fields that hold them — and that accessor is
+  where F26 surfaces, so the two may resolve together.
+* **F23 remains Phase 8's** and should still be said out loud at the phase exit.
