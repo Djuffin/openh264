@@ -46,8 +46,23 @@ pub unsafe fn WelsMalloc(
     let mut pAlignedBuffer = unsafe {
         pBuf.add((kiAlignedBytes + kiSizeOfVoidPointer + kiSizeOfInt) as usize)
     };
-    let addr = pAlignedBuffer as usize;
-    pAlignedBuffer = (addr - (addr & (kiAlignedBytes as usize))) as *mut u8;
+    // Round down to the alignment **without leaving pointer-land** (F26). This used to
+    // be `let addr = p as usize; p = (addr - (addr & mask)) as *mut u8` — same address,
+    // but the integer→pointer cast gives the result *exposed* provenance, so Miri tags
+    // every `WelsMalloc` object in the port `<wildcard>` and cannot check borrow
+    // structure on top of any of it. `memory_align.cpp:92` never did this either; it is
+    // `pAlignedBuffer -= ((uintptr_t) pAlignedBuffer & kiAlignedBytes)`, pointer
+    // arithmetic with the integer used only as the mask, and this is that (S6).
+    //
+    // `addr()` reads the address without exposing it and `byte_sub` keeps `pBuf`'s
+    // provenance — which the two header writes below need, since they land *under*
+    // the returned pointer and `WelsFree` reads them back from there.
+    //
+    // In bounds by construction: the offset above adds `kiAlignedBytes` before this
+    // subtracts at most `kiAlignedBytes`, so the result never precedes
+    // `pBuf + kiSizeOfVoidPointer + kiSizeOfInt`.
+    let misalignment = pAlignedBuffer.addr() & (kiAlignedBytes as usize);
+    pAlignedBuffer = unsafe { pAlignedBuffer.byte_sub(misalignment) };
 
     unsafe {
         let pVoidPtrLocation = pAlignedBuffer.sub(kiSizeOfVoidPointer as usize) as *mut *mut u8;
@@ -260,6 +275,83 @@ mod tests {
 
             ma.WelsFree(ptr, std::ptr::null());
             assert_eq!(ma.WelsGetMemoryUsage(), 0);
+        }
+    }
+
+    /// The alignment round-down, pinned against the formula it replaced (F26).
+    ///
+    /// The fix is a provenance change and **must not be an address change**, so this
+    /// sweeps every offset across two alignment periods and requires the two formulas
+    /// to agree byte for byte. The old one is transcribed in integers rather than
+    /// re-run as written: `(addr - (addr & mask)) as *mut u8` differs from the new
+    /// spelling *only* in the cast back, which is the whole defect, so the address
+    /// arithmetic is what there is to compare.
+    ///
+    /// The sweep starts at `mask`, not at 0, because that is the guarantee the caller
+    /// provides — `WelsMalloc` adds `kiAlignedBytes` before subtracting at most
+    /// `kiAlignedBytes` — and starting lower would walk `byte_sub` off the front of
+    /// the allocation. `kiAlign == 1` (mask 0) covers the degenerate case and every
+    /// offset that is already aligned covers the no-op subtraction.
+    #[test]
+    fn wels_malloc_alignment_is_the_old_formula_without_the_round_trip() {
+        let mut scratch = vec![0u8; 1024];
+        let base = scratch.as_mut_ptr();
+
+        for kiAlign in [1u32, 2, 4, 16, 32, 64, 128] {
+            let mask = (kiAlign - 1) as usize;
+            for off in mask..(mask + 2 * kiAlign as usize) {
+                let p = unsafe { base.add(off) };
+
+                let addr = p.addr();
+                let old_addr = addr - (addr & mask); // the shipped formula, pre-F26
+                let new = unsafe { p.byte_sub(addr & mask) };
+
+                assert_eq!(
+                    new.addr(),
+                    old_addr,
+                    "align {kiAlign}, offset {off}: {} != {old_addr}",
+                    new.addr()
+                );
+                assert_eq!(new.addr() % kiAlign as usize, 0, "align {kiAlign}, offset {off}");
+                assert!(new.addr() >= base.addr(), "walked off the front");
+            }
+        }
+    }
+
+    /// The returned pointer's full legal reach, in both directions — S28's rule aimed
+    /// at the allocator that hands out the pointers.
+    ///
+    /// Upward is the payload; **downward is the point**. The two header words live
+    /// *below* the returned pointer and `WelsFree` and `CMemoryAlign` read them back
+    /// from there, so a spelling that narrowed provenance to the payload — S28's
+    /// class, and what `align_offset`-from-the-payload would have produced — is UB
+    /// here and nowhere else. Under the old wildcard provenance this test could not
+    /// have failed; it means something only now, and it runs under Miri with `--lib`.
+    #[test]
+    fn wels_malloc_pointer_reaches_its_payload_and_its_header() {
+        const HEADER: usize = std::mem::size_of::<*mut c_void>() + std::mem::size_of::<i32>();
+        const SIZE: u32 = 300;
+
+        for kiAlign in [16u32, 32, 64] {
+            unsafe {
+                let p = WelsMalloc(SIZE, std::ptr::null(), kiAlign) as *mut u8;
+                assert!(!p.is_null());
+                assert_eq!(p.addr() % kiAlign as usize, 0, "align {kiAlign}");
+
+                // Up: every byte of the payload, written then read back.
+                std::ptr::write_bytes(p, 0xa5, SIZE as usize);
+                assert!((0..SIZE as usize).all(|i| *p.add(i) == 0xa5), "align {kiAlign}");
+
+                // Down: the payload size, then the raw `malloc` pointer `WelsFree`
+                // takes its argument from.
+                let payload = *(p.sub(HEADER) as *const i32);
+                assert_eq!(payload, SIZE as i32, "align {kiAlign}");
+                let pRaw = *(p.sub(std::mem::size_of::<*mut c_void>()) as *const *mut u8);
+                assert!(!pRaw.is_null());
+                assert!(pRaw.addr() <= p.addr() - HEADER, "header sits outside the allocation");
+
+                WelsFree(p as *mut c_void, std::ptr::null());
+            }
         }
     }
 }
