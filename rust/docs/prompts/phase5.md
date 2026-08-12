@@ -1,12 +1,13 @@
 # Phase 5 — decoder structural rewrite
 
-Scope: plan §5's steps 5.1–5.6, in order. **Session A (duplicate census, P3 identity
-tests, 5.1 closure) is done — work starts at 5.1.** Rules: plan §7.6 — S20/S21/S24/S25
+Scope: plan §5's steps 5.1–5.6, in order. **Sessions A (duplicate census, P3 identity
+tests, 5.1 closure) and B (5.1's F21 pin and S25 audit) are done — work starts at
+5.1's plane conversion, §1 step 3.** Rules: plan §7.6 — S20/S21/S24/S25
 bind every struct edit here. Perf: §7.4 (D-perf-4, S2b). Before starting, read the
 Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
-disagreement; fix disagreements in place. Counts below measured at `946fbfba`;
-re-grep before acting on any of them (S24). Estimated 8–11 sessions remain.
+disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
+re-grep before acting on any of them (S24). Estimated 7–10 sessions remain.
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this
@@ -17,8 +18,8 @@ run F19's check per allocation: *which line frees this?*
 
 1. Commit any inherited doc tail first.
 2. Control battery: `bash rust/tools/gates.sh full` **from the repo root**.
-   `OVERALL:` is the verdict. Expected: **440 debug / 434 release / 20 ignored**,
-   Miri **300**, sweeps 341/341 both profiles.
+   `OVERALL:` is the verdict. Expected: **443 debug / 437 release / 20 ignored**,
+   Miri **304**, sweeps 341/341 both profiles.
 3. Recount every number you are about to rely on.
 
 The census gate runs at commit level (`rust/tools/census.sh` against
@@ -40,7 +41,7 @@ owning step.
   built once and swapped inside one loop, machine otherwise idle. Expect hits on
   both sides; the question is whether HEAD is worse.
 
-## 1. Step 5.1 — Picture & DPB (next)
+## 1. Step 5.1 — Picture & DPB (steps 1–2 done at session B; the conversion is next)
 
 `SPicture`'s planes become owned (`PaddedPlanes` + `Vec`s); `PicPool`;
 `pic_queue.rs` recycling predicate; `manage_dec_ref.rs`; `error_concealment.rs`
@@ -49,23 +50,33 @@ identity sites. Five P3 identity tests exist (`deblocking.rs` ×3,
 
 Order inside the step:
 
-1. **F21 pin first — authorized 2026-08-11.** Trigger class: frame width < 32px
-   (unexpanded chroma border pre-fix); no existing corpus stream is narrower than
-   176px. Generate narrow-frame streams with the C++ encoder — at least 16×16 and
-   24×18, one at the minimum legal width — decode in both profiles, add as new
-   decode assets with new golden rows. Additive only: zero existing goldens move.
-   Prove coverage: revert F21's unification commit in a scratch worktree and
-   confirm the new rows go red.
-2. **The S25 hazard, before the plane conversion**: `SPicture::unref(&mut self)`
-   (`picture.rs:292`) hands `self as *mut SPicture` to `SetUnRef`
-   (`manage_dec_ref.rs:100`), which re-borrows it `&mut`. Restructure so no borrow
-   outlives one expression.
-3. The conversion, per the closure in the session-A log §5. Headlines: nothing
-   embeds the decoder's `SPicture` by value (every holder is a pointer); it has no
-   `assert_size!` and no offset pins; the fourth plane slot is dead (`iPlanes = 3`,
-   nothing in `src/decoder` reads index 3) — fix the count at three; F19's check is
-   clean on all eight allocations today — keep it true as `AllocPicture`/
-   `FreePicture` become `Picture::new`/`Drop`.
+1. ~~F21 pin first.~~ **Done, T5.B1 (`0fd0c9cc`).** Three assets, goldens 53 → 56,
+   regenerable by `rust/tools/make_narrow_assets.py --check`. **Only
+   `narrow_16x16_idr_lost` covers F21** — the two clean narrow rows are green under
+   a revert of the fix, because the divergent copy's one call site is
+   `WelsInitRefList`'s concealment prefetch, which no cleanly-decoding stream
+   reaches. Coverage proven by that revert, not asserted.
+2. ~~The S25 hazard.~~ **Done, T5.B2 (`ff12e966`) — and this brief was wrong about
+   what it was.** `SPicture::unref` had one caller, its own unit test, and no C++
+   counterpart: deleted, not restructured. The audit found **nine live functions**
+   in `manage_dec_ref.rs` holding `&mut *pCtx` / `&mut *pRefPic` across re-entrant
+   calls (`pRefPic` is `&mut ctx.sRefPic`, a *subfield* of the context, so the two
+   overlap); all now name `(*pCtx)` / `(*pRefPic)` per use, with the rule written at
+   `SetUnRef`. **F13's `manage_dec_ref` Miri skip is gone** — six
+   `as_ptr()`/`as_mut_ptr()` list shifts behind it, and three test defects.
+3. **The conversion — session C's whole job.** Per the closure in the session-A log
+   §5, corrected by session B's recount: nothing embeds the decoder's `SPicture` by
+   value (every holder is a pointer; the ten-file table re-greped and unchanged); it
+   has no `assert_size!` and no offset pins; **`iPlanes` is written-never-read in
+   the port *and* in the C++ decoder**, so fixing the count at three is subtraction;
+   F19's check is clean on all eight allocations today — keep it true as
+   `AllocPicture`/`FreePicture` become `Picture::new`/`Drop`. `PaddedPlane::new` /
+   `from_parts` (`safe/plane.rs`) are the constructors, and `new`'s doc already
+   names the `128` fill `AllocPicture` does. Miri watches `manage_dec_ref` now.
+4. **Not audited yet, and each is its own S25 enumeration**: `pic_queue.rs`
+   (`SPicBuff.ppPic` is `*mut *mut SPicture` and the recycling predicate walks it
+   while `pCtx->pDec` points into the same array), `deblocking.rs`,
+   `error_concealment.rs`. Do them with their conversion, not before it.
 
 ## 2. Step 5.2 — MbGrid
 
@@ -132,12 +143,19 @@ this brief historical.
 
 ## 8. Metrics inherited
 
+*(Re-greped at session B's exit. S24 still binds — recount before acting.)*
+
 - `transmute` reads **4: all prose, zero calls**. Don't chase it.
 - The **ratchet** is the instrument, not struct sizes. Phase 5 so far:
-  `raw_ptr` 4815 → **4597** (session A, by deletion).
+  `raw_ptr` 4815 → **4597** (session A, by deletion; session B flat),
+  `unsafe_block` 613 → 618 → **616**, `unsafe_fn` 1250 → **1249**.
+- Gates: **443 / 437 / 20**, Miri **304**, sweeps 341/341 both profiles, decode
+  goldens **56 rows**.
+- **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
+  (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
 - Census gate state: duplicate types 10, aliases 31, tables 17, inferred-target
-  double casts 0, duplicate-body groups 198 (ratcheted). Remaining within-decoder
-  entries are allowlisted with their owning steps.
+  double casts 0, duplicate-body groups 198 (ratcheted), 61 allowlisted entries.
+  Remaining within-decoder entries are allowlisted with their owning steps.
 - `SHIM(` 157: `phase3` = 2 (Phase 6's), `phase5` = 1 (dies in 5.2), rest
   `phase2`.
 
