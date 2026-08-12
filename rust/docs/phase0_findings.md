@@ -2,7 +2,8 @@
 
 Things found while executing Phase 0 of [`safety_refactor_plan.md`](safety_refactor_plan.md)
 that are *not* Phase 0's job to fix. Recorded here so no later session has to rediscover
-them. Fuzzer crash artifacts live separately in [`fuzz_findings.md`](fuzz_findings.md).
+them. (A separate fuzz-findings file was planned; T7 is deferred by direction and no
+fuzz corpus exists — plan §0's "absent instrument" row tracks it.)
 
 ---
 

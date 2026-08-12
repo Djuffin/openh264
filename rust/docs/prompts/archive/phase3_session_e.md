@@ -2,13 +2,13 @@
 
 > **SUPERSEDED — HISTORICAL.** Phase 3 completed 2026-08-11 (sessions A–F). This
 > brief is kept as the record of what was asked, not as instructions. The phase's
-> outcome is in [`../safety_refactor_log.md`](../safety_refactor_log.md) (entries
+> outcome is in [`../safety_refactor_log.md`](../../safety_refactor_log.md) (entries
 > for sessions A–F) and plan §0; the next phase's brief is
 > [`phase4b.md`](phase4b.md).
 
 **Governing:** [`phase3.md`](phase3.md) §T3.4 + §2, plan §7.6, and — read in full
-before converting anything — [`phase2_findings.md`](../phase2_findings.md) **F2 and
-F5**, [`phase2_findings.md`](../phase2_findings.md) **F13's `InitBits` site**, and
+before converting anything — [`phase2_findings.md`](../../phase2_findings.md) **F2 and
+F5**, [`phase2_findings.md`](../../phase2_findings.md) **F13's `InitBits` site**, and
 the **session D log entry** (its §2 zeroed-struct hazard and its hand-off section
 are this brief's sources). This file scopes the session and supersedes on
 disagreement; fix disagreements in place.

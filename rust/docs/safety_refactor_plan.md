@@ -13,8 +13,8 @@ proposal and its accumulated history, and stays as written.*
 
 | | |
 |---|---|
-| **Phase 4b complete** | 2026-08-11, sessions A–C. **Every dispatch family this phase set out to convert is converted.** Session A: T4b.1 (`08b7c29d`), T4b.1b (`3e583b9a`) — thirteen `Option<fn>` slots became two enums. Session B: T4b.2a (`d6c78c1b`), T4b.2b (`be67a754`) deleted both strategy vtables (27 entries, 5 static instances, 38 thunks); T4b.3a (`33b1f0f3`) deleted the intra-pred constraint family and 19 of the crate's 21 `transmute` calls. Session C: T4b.3b (`d1c1a7d4`) took **the last two** — which turned out to reinterpret a type into itself — and with them the whole `SExpandPicFunc` table across *both* codecs (S18); T4b.3c (`f2e3c5af`) took `sBlockFunc`, a struct the port had **declared twice** and bridged with a double cast doing the same job as the transmutes. **Read the ratchet, not the size assert**: `assert_size!(SWelsFuncPtrList)` 1272 → 1184 → **1160**, and it sat unmoved through three seams that deleted two vtables and 25 thunks, because `Option<Box<_>>` is pointer-sized — it moved only when an embedded 24-byte struct left. Across the phase: `raw_ptr` 5001 → **4815**, `unsafe_fn` 1286 → **1250**, **`transmute` 23 → 4, and all four are prose — the crate contains zero calls**. Two findings fixed (F19, F21). Brief: [`prompts/phase4b.md`](prompts/phase4b.md), superseded-historical |
-| **Phase 3 complete** | 2026-08-11, sessions A–F. **The bitstream layer contains no pointer cursor on either side.** T3.0–T3.3 closed the decoder read side, T3.4 closed the encoder write side and deleted `SBitStringAux` (§1.2's emblem for T3), T3.5 converted the CABAC coder's own triple — the last one — and T3.6 gave the frame output owned `Vec` buffers, retiring the first encoder free-cascade entries. Brief: [`prompts/phase3.md`](prompts/phase3.md), superseded-historical |
+| **Phase 4b complete** | 2026-08-11, sessions A–C. **Every dispatch family this phase set out to convert is converted.** Session A: T4b.1 (`08b7c29d`), T4b.1b (`3e583b9a`) — thirteen `Option<fn>` slots became two enums. Session B: T4b.2a (`d6c78c1b`), T4b.2b (`be67a754`) deleted both strategy vtables (27 entries, 5 static instances, 38 thunks); T4b.3a (`33b1f0f3`) deleted the intra-pred constraint family and 19 of the crate's 21 `transmute` calls. Session C: T4b.3b (`d1c1a7d4`) took **the last two** — which turned out to reinterpret a type into itself — and with them the whole `SExpandPicFunc` table across *both* codecs (S18); T4b.3c (`f2e3c5af`) took `sBlockFunc`, a struct the port had **declared twice** and bridged with a double cast doing the same job as the transmutes. **Read the ratchet, not the size assert**: `assert_size!(SWelsFuncPtrList)` 1272 → 1184 → **1160**, and it sat unmoved through three seams that deleted two vtables and 25 thunks, because `Option<Box<_>>` is pointer-sized — it moved only when an embedded 24-byte struct left. Across the phase: `raw_ptr` 5001 → **4815**, `unsafe_fn` 1286 → **1250**, **`transmute` 23 → 4, and all four are prose — the crate contains zero calls**. Two findings fixed (F19, F21). Brief: [`prompts/archive/phase4b.md`](prompts/archive/phase4b.md), superseded-historical |
+| **Phase 3 complete** | 2026-08-11, sessions A–F. **The bitstream layer contains no pointer cursor on either side.** T3.0–T3.3 closed the decoder read side, T3.4 closed the encoder write side and deleted `SBitStringAux` (§1.2's emblem for T3), T3.5 converted the CABAC coder's own triple — the last one — and T3.6 gave the frame output owned `Vec` buffers, retiring the first encoder free-cascade entries. Brief: [`prompts/archive/phase3.md`](prompts/archive/phase3.md), superseded-historical |
 | **Next** | **Phase 5 — the decoder structural rewrite, the plan's first pivot** (9–12 sessions). Brief written at 4b's exit per S19: [`prompts/phase5.md`](prompts/phase5.md). Per-session scope is **the S20 closure, not the file**. The three rules it inherits by name are **S24** (re-grep every shape-deciding count), **S25** (Phase 5 *is* raw-to-borrow conversion, so the re-entrancy audit is planned work) and **F19's class** (a `Box::into_raw` with no live `from_raw` is a leak no gate here can see — 5.5 runs that check decoder-side). Order per D-seq-1: 4b → 5 → 6 → 7 → 8 → 9 |
 | **Governing decisions** | **D-perf-4** (§7.4 v3): swap-and-ledger by default, +25% median cumulative tripwire, no optimization boxes, byte-exactness never traded. **D-seq-1**: 4a ran before Phase 3 — done. **D-perf-3's fallback is now spent, on the decode side only** (see the finding below) |
 | **The checkpoint's result** | **Encoder -5.11% median, all 28 usable rows faster or flat, none regressed**; decode -0.19% (flat). Cumulative vs Phase 2's start is now ≈ **+8.9% encoder** (was +14.73% — back under 10% for the first time since T4) and ≈ +17.8 / +10.1 / +9.6% decode (unmoved). [`perf_baseline.md`](perf_baseline.md) §Phase 4a |
@@ -638,7 +638,7 @@ until T7 lands.
 
 ### 7.6 Standing working rules
 
-*Hoisted from `prompts/phase2_continue.md` §2 at Phase 2's exit. The criterion for
+*Hoisted from `prompts/archive/phase2_continue.md` §2 at Phase 2's exit. The criterion for
 being here is that a Phase 3+ session needs the rule **verbatim**; phase-2-only
 carry-ins (shim-span specifics, per-family traps) stayed in that brief and archive
 with it. Briefs from Phase 4a on cite this section instead of copying rules forward.
@@ -843,7 +843,11 @@ findable.*
   session, deliberately run everything the gate covers at every level it covers,
   rather than waiting for the next scheduled run: "the gate starts existing on
   this commit" (F17's line) implies everything it watches is unaudited until it
-  has actually run there.
+  has actually run there. **An instrument's scope list is part of the instrument**
+  (Phase 5 session A, F22): `find_stub_bodies.py` reported "none found" for three
+  phases because its directory list omitted `src/decoder`, and
+  `find_dup_types.sh` read the encoder only until 4b session C — before trusting
+  a tool's silence, read what it actually scans.
 - **S23 — a cached table becomes a derived value only if the source cannot
   change behind the cache, and that is a property of the update paths, not of
   the dispatch** (Phase 4b session A, T4b.1/T4b.1b). De-virtualizing a
@@ -1271,7 +1275,7 @@ Findings from this phase are in [`phase2_findings.md`](phase2_findings.md).
         Miri owns five of the eight, and the case for T7 now rests on **F3** and the
         F8/F11 arithmetic class — the input-space instrument that is still missing.
       * **Consolidation deliverables** — §0 (status preamble), §7.6 (standing rules
-        S1–S19), `prompts/phase4a.md`. Both Phase 2 briefs stamped
+        S1–S19), `prompts/archive/phase4a.md`. Both Phase 2 briefs stamped
         superseded-historical. No renumbering; phase numbers stay permanent
         identifiers and execution order is owned by this appendix and §8.
 
@@ -1304,7 +1308,7 @@ in the log's Phase 4a entry).
 ### Phase 3 — bitstream layer
 
 **COMPLETE**, 2026-08-11, sessions A–F. Brief:
-[`prompts/phase3.md`](prompts/phase3.md) (superseded-historical); seam numbering
+[`prompts/archive/phase3.md`](prompts/archive/phase3.md) (superseded-historical); seam numbering
 T3.0–T3.6 is that brief's. **The layer contains no pointer cursor on either side, and
 no raw output allocation the encoder owns alone.**
 
@@ -1425,7 +1429,7 @@ no raw output allocation the encoder owns alone.**
       were vestigial parameter names on `*mut BsWriter` and are renamed; one field,
       the decoder's `SDqLayer::pBitStringAux`, is listed with its owner (Phase 5).
       `SHIM(phase3)` ends at **2, both enumerated and both owned by Phase 6**. Full
-      3-pair-then-5-pair medians both benches; **S19**: [`prompts/phase4b.md`](prompts/phase4b.md)
+      3-pair-then-5-pair medians both benches; **S19**: [`prompts/archive/phase4b.md`](prompts/archive/phase4b.md)
       written. The first `exit`-level Miri run since F17's repair caught **F18** (a
       Phase 4a address-comparison test, red since birth behind the broken gate; test
       defect, `#[cfg_attr(miri, ignore)]` with the write-up at the site) — the lesson
@@ -1433,7 +1437,7 @@ no raw output allocation the encoder owns alone.**
 
 ### Phase 4b — configuration dispatch, the strategy vtables, 4a's leftovers
 
-Brief: [`prompts/phase4b.md`](prompts/phase4b.md), live. Per **D-seq-1**
+Brief: [`prompts/archive/phase4b.md`](prompts/archive/phase4b.md), live. Per **D-seq-1**
 (Phase 3 → 4b → 5 → 6 → 7 → 8 → 9). The 4a/4b fence was **lifted** at Phase 3's exit —
 the config-dispatch tables name the bitstream writer, and the writer is one family with
 a stable signature.

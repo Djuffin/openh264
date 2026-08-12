@@ -9,7 +9,7 @@ from this file and the plan's Progress appendix alone.
 
 ## 2026-08-07 — Phase 0, session A (T1–T5b)
 
-**Goal:** Phase 0 tasks T1–T8 per `prompts/phase0.md`. Got through T1–T4, T5a and T5b;
+**Goal:** Phase 0 tasks T1–T8 per `prompts/archive/phase0.md`. Got through T1–T4, T5a and T5b;
 T5d resolved as a recorded finding rather than a deletion. T5c, T5e and T6–T8 remain.
 
 **Started at** `353791f7`, **ended at** `dc8487cb`. Working tree clean at both ends.
@@ -127,7 +127,7 @@ the sweep result.
 
 ## 2026-08-07 — Phase 1, session A (T1–T9, complete)
 
-**Goal:** Phase 1 per `prompts/phase1.md` — build the safe vocabulary types in
+**Goal:** Phase 1 per `prompts/archive/phase1.md` — build the safe vocabulary types in
 `src/safe/`, fully unit- and differential-tested, Miri-clean, wired into nothing.
 All nine tasks landed; Phase 1 is complete.
 
@@ -288,7 +288,7 @@ literal `0`, not `1`.
 
 ## 2026-08-07 — Phase 2, session A (preconditions, T1, the pilot)
 
-**Goal:** `prompts/phase2.md`'s session-A split — the preconditions (Phase 0's T6,
+**Goal:** `prompts/archive/phase2.md`'s session-A split — the preconditions (Phase 0's T6,
 optionally T5c/T5e), the control run, and the pilot conversion of
 `decoder/decode_mb_aux.rs` with its retro. All of it landed, with T5c/T5e taken *after*
 the pilot rather than before (reasoning below). **Phase 0 is complete except T7.**
@@ -697,7 +697,7 @@ be a gate change mid-phase), but a candidate for T9.
 ### Next session's first action
 
 **Phase 2 T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`**, per
-`prompts/phase2.md` §T5 and the continuation brief. Carry-ins unchanged: the `Four` SAD
+`prompts/archive/phase2.md` §T5 and the continuation brief. Carry-ins unchanged: the `Four` SAD
 kernels read **outside** the nominal block (`-stride`, `-1`, `+1`) so they take plane
 cursors and the differential must cover the edge reads; the three pre-existing unused
 `sample_sad_*` safe wrappers get absorbed rather than left as a second SAD API;
@@ -1444,7 +1444,7 @@ R-f's strangler shape, twice regenerated with reasons in the commit messages.
 
 **Session G: T7 part 2 — `encoder/get_intra_predictor.rs` (27 kernels by the
 finishing brief's recount; recount again at session start), then T9 in full** per
-`prompts/phase2_finish.md` §3 — the brief's order is binding, T9 never compresses.
+`prompts/archive/phase2_finish.md` §3 — the brief's order is binding, T9 never compresses.
 Carry-ins: two surfaces per kernel with different rules (reference side
 availability-gated PADDING-legal reads at `-1`/`-stride` — T3's span-helper shape;
 destination side **packed** prediction buffers, T5-intra's lesson); name-collision
@@ -1484,7 +1484,7 @@ session control), **ended at** the commit carrying this entry. Tree clean at bot
 
 Plus `phase0_findings.md` F3's seventh measurement, `phase2_findings.md` F10's third
 instance, plan §0 (the status preamble) and §7.6 (standing rules S1–S19),
-`prompts/phase4a.md`, and this entry.
+`prompts/archive/phase4a.md`, and this entry.
 
 ### Gates
 
@@ -1741,13 +1741,13 @@ repaired; the ledger open, measured, and validated. `unsafe_fn` 1346, `raw_ptr` 
 
 The three consolidation artifacts are in place: plan **§0** (the status preamble,
 refreshed at every phase exit from now on), plan **§7.6** (standing rules S1–S19,
-hoisted from `prompts/phase2_continue.md` §2 — briefs from here on cite it instead of
-copying rules forward), and **`prompts/phase4a.md`**. Both Phase 2 briefs are stamped
+hoisted from `prompts/archive/phase2_continue.md` §2 — briefs from here on cite it instead of
+copying rules forward), and **`prompts/archive/phase4a.md`**. Both Phase 2 briefs are stamped
 superseded-historical.
 
 ### Next session's first action
 
-**Phase 4a — read [`prompts/phase4a.md`](prompts/phase4a.md)**, then plan §0 and §7.6.
+**Phase 4a — read [`prompts/archive/phase4a.md`](prompts/archive/phase4a.md)**, then plan §0 and §7.6.
 `mc.rs`'s consumers first under the preserved D-perf-3 protocol, because it is the
 largest ledger row and because if direct dispatch does not recover *it* the recovery
 thesis is wrong and the first session should be what discovers that. Then the decoder
@@ -1763,7 +1763,7 @@ table is 4a's to fix and de-virtualizing it is the fix.
 
 ## 2026-08-10 — Phase 4a, session A (dispatch de-virtualization + the recovery checkpoint)
 
-**Goal:** `prompts/phase4a.md` — de-virtualize kernel dispatch, then run the recovery
+**Goal:** `prompts/archive/phase4a.md` — de-virtualize kernel dispatch, then run the recovery
 and unpark checkpoint five sessions of ledgered deficits had been waiting for. The
 brief allowed cutting de-virtualization scope to keep the checkpoint whole; that
 allowance was used, deliberately, and §3 below says where.
@@ -1784,7 +1784,7 @@ carrying this entry. Tree clean at both ends.
 | `25a8e287` | the rebuilt SAD body harness, and the parked families' second verdict |
 
 Plus `perf_baseline.md` §Phase 4a, the ledger's checkpoint column, plan §0, and
-`prompts/phase3.md`.
+`prompts/archive/phase3.md`.
 
 ### Gates
 
@@ -1912,7 +1912,7 @@ matched the signature exactly. Eighth measurement appended to F3.
 
 ### Next session's first action
 
-Phase 3, per [`prompts/phase3.md`](prompts/phase3.md): read F4/F5/F7, F2, and F13's
+Phase 3, per [`prompts/archive/phase3.md`](prompts/archive/phase3.md): read F4/F5/F7, F2, and F13's
 `InitBits` site, then **write the malformed-stream error-code parity test against the
 unconverted reader** before touching `bit_stream.rs`. That test is the phase's real
 gate and it is worthless if written after the conversion it is meant to judge.
@@ -1921,7 +1921,7 @@ gate and it is worthless if written after the conversion it is meant to judge.
 
 ## 2026-08-10 — Phase 3, session A (T3.0 + T3.1a)
 
-**Goal:** Phase 3 per [`prompts/phase3.md`](prompts/phase3.md), session 1 = T3.0 + T3.1.
+**Goal:** Phase 3 per [`prompts/archive/phase3.md`](prompts/archive/phase3.md), session 1 = T3.0 + T3.1.
 Landed T3.0 in full and the first half of T3.1; the seam's second half (T3.1b, the
 storage and call-site conversion) is next.
 
@@ -2048,7 +2048,7 @@ should clear with them.
 
 ## 2026-08-10 — Phase 3, session B (T3.1b; T3.1 closes)
 
-**Goal:** [`prompts/phase3_session_b.md`](prompts/phase3_session_b.md) — finish T3.1,
+**Goal:** [`prompts/archive/phase3_session_b.md`](prompts/archive/phase3_session_b.md) — finish T3.1,
 then T3.2 only if T3.1b gated with a third of the session left. It did not, and T3.2
 was not started: see "Next session's first action".
 
@@ -2325,7 +2325,7 @@ consumer (544 self-samples), so disassemble the current raw hot path before touc
 
 ## 2026-08-10 — Phase 3, session C (F17 fixed and proven; T3.2)
 
-**Goal:** [`prompts/phase3_session_c.md`](prompts/phase3_session_c.md) — (1) make
+**Goal:** [`prompts/archive/phase3_session_c.md`](prompts/archive/phase3_session_c.md) — (1) make
 `gates.sh` able to fail, prove it, re-baseline; (2) T3.2 from a standing start. Both
 landed. T3.3 was not touched, per the brief's non-goals — the surplus went where the
 brief said to spend it: the audit prose and the disassembly comparison.
@@ -2523,7 +2523,7 @@ malformed row could catch it is the cheap form of the session-B disambiguation t
 
 ## 2026-08-11 — Phase 3, session D (T3.3; the decoder read side closes)
 
-**Goal:** [`prompts/phase3_session_d.md`](prompts/phase3_session_d.md) — seam T3.3
+**Goal:** [`prompts/archive/phase3_session_d.md`](prompts/archive/phase3_session_d.md) — seam T3.3
 whole, four faces in dependency order. All four landed, plus the seam close. T3.4 was
 not touched, per the brief's non-goals.
 
@@ -2777,7 +2777,7 @@ Three things this seam leaves T3.4:
 
 ## 2026-08-11 — Phase 3, session E (T3.4; the encoder write side, and `SBitStringAux` dies)
 
-**Goal:** [`prompts/phase3_session_e.md`](prompts/phase3_session_e.md) — seam T3.4 in
+**Goal:** [`prompts/archive/phase3_session_e.md`](prompts/archive/phase3_session_e.md) — seam T3.4 in
 three faces. All three landed, plus the headline the brief made conditional. T3.5 was
 not started: faces 2 and 3 merged into one large conversion and there was no standing
 start left, which is the rule working rather than a shortfall.
@@ -3045,7 +3045,7 @@ boundary. Then:
 
 ## 2026-08-11 — Phase 3, session F (T3.5, T3.6, and the phase exit — Phase 3 is complete)
 
-**Goal:** [`prompts/phase3_session_f.md`](prompts/phase3_session_f.md) — T3.5 (reduced),
+**Goal:** [`prompts/archive/phase3_session_f.md`](prompts/archive/phase3_session_f.md) — T3.5 (reduced),
 T3.6, and the exit. All three landed. The brief's fallback ("if T3.6 runs long, the exit
 becomes session G") was **not** taken, by direction: the exit ran in full.
 
@@ -3266,7 +3266,7 @@ pairs, not a diagnosis.**
 * **T3.0's standing**: **2316 rows over 12 files, 0 `WITHHELD`, dual-profile, unmoved
   this session.** It is the phase's permanent instrument and goes on gating Phases 5
   and 8.
-* **S19**: [`prompts/phase4b.md`](prompts/phase4b.md) written. The 4a/4b fence is lifted.
+* **S19**: [`prompts/archive/phase4b.md`](prompts/archive/phase4b.md) written. The 4a/4b fence is lifted.
   One correction folded in from measurement: `IWelsParametersetStrategyVtbl` has **20**
   entries, not the 16 the session-F brief carried; `IWelsReferenceStrategyVtbl` is 7 as
   stated.
