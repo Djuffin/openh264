@@ -658,18 +658,17 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
     if pCtx.is_null() {
         return false;
     }
-    let ctx = &mut *pCtx;
-    let pCurDqLayer = ctx.pCurDqLayer;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
     if pCurDqLayer.is_null() {
         return false;
     }
-    let pCurSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
+    let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
     if (*pSliceHeader).iDirectSpatialMvPredFlag == 0 {
         let uiRefCount = (*pSliceHeader).uiRefCount[LIST_0];
-        let pRefList1 = &ctx.sRefPic.pRefList[LIST_1];
-        let pRefList0 = &ctx.sRefPic.pRefList[LIST_0];
+        let pRefList1 = &(*pCtx).sRefPic.pRefList[LIST_1];
+        let pRefList0 = &(*pCtx).sRefPic.pRefList[LIST_0];
         if !pRefList1[0].is_null() {
             for i in 0..uiRefCount {
                 if !pRefList0[i as usize].is_null() {
@@ -696,43 +695,42 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
-    if ctx.pSps.is_null() || ctx.pPps.is_null() {
+    if (*pCtx).pSps.is_null() || (*pCtx).pPps.is_null() {
         return ERR_NONE;
     }
-    if (*ctx.pSps).bSeqScalingMatrixPresentFlag || (*ctx.pPps).bPicScalingMatrixPresentFlag {
-        ctx.bUseScalingList = true;
+    if (*(*pCtx).pSps).bSeqScalingMatrixPresentFlag || (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
+        (*pCtx).bUseScalingList = true;
 
-        if !ctx.bDequantCoeff4x4Init || ctx.iDequantCoeffPpsid != (*ctx.pPps).iPpsId {
+        if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != (*(*pCtx).pPps).iPpsId {
             for i in 0..6 {
-                ctx.pDequant_coeff4x4[i] = ctx.pDequant_coeff_buffer4x4[i].as_mut_ptr();
-                ctx.pDequant_coeff8x8[i] = ctx.pDequant_coeff_buffer8x8[i].as_mut_ptr();
+                (*pCtx).pDequant_coeff4x4[i] = (*pCtx).pDequant_coeff_buffer4x4[i].as_mut_ptr();
+                (*pCtx).pDequant_coeff8x8[i] = (*pCtx).pDequant_coeff_buffer8x8[i].as_mut_ptr();
                 for q in 0..51 {
                     for x in 0..16 {
-                        let scale4 = if (*ctx.pPps).bPicScalingMatrixPresentFlag {
-                            (*ctx.pPps).iScalingList4x4[i][x] as u32
+                        let scale4 = if (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
+                            (*(*pCtx).pPps).iScalingList4x4[i][x] as u32
                         } else {
-                            (*ctx.pSps).iScalingList4x4[i][x] as u32
+                            (*(*pCtx).pSps).iScalingList4x4[i][x] as u32
                         };
-                        ctx.pDequant_coeff_buffer4x4[i][q][x] =
+                        (*pCtx).pDequant_coeff_buffer4x4[i][q][x] =
                             (scale4 * (g_kuiDequantCoeff[q][x & 0x07] as u32)) as u16;
                     }
                     for y in 0..64 {
-                        let scale8 = if (*ctx.pPps).bPicScalingMatrixPresentFlag {
-                            (*ctx.pPps).iScalingList8x8[i][y] as u32
+                        let scale8 = if (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
+                            (*(*pCtx).pPps).iScalingList8x8[i][y] as u32
                         } else {
-                            (*ctx.pSps).iScalingList8x8[i][y] as u32
+                            (*(*pCtx).pSps).iScalingList8x8[i][y] as u32
                         };
-                        ctx.pDequant_coeff_buffer8x8[i][q][y] =
+                        (*pCtx).pDequant_coeff_buffer8x8[i][q][y] =
                             (scale8 * (g_kuiMatrixV[q % 6][y / 8][y % 8] as u32)) as u16;
                     }
                 }
             }
-            ctx.bDequantCoeff4x4Init = true;
-            ctx.iDequantCoeffPpsid = (*ctx.pPps).iPpsId;
+            (*pCtx).bDequantCoeff4x4Init = true;
+            (*pCtx).iDequantCoeffPpsid = (*(*pCtx).pPps).iPpsId;
         }
     } else {
-        ctx.bUseScalingList = false;
+        (*pCtx).bUseScalingList = false;
     }
     ERR_NONE
 }
@@ -2054,7 +2052,6 @@ pub unsafe fn WelsMbInterConstruction(
     if pCtx.is_null() || pCurDqLayer.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
     let dq: *mut SDqLayer = pCurDqLayer;
     let iMbX = (*dq).iMbX;
     let iMbY = (*dq).iMbY;
@@ -2062,15 +2059,15 @@ pub unsafe fn WelsMbInterConstruction(
     if (*dq).pDec.is_null() {
         return ERR_NONE;
     }
-    let pDec = &mut *(*dq).pDec;
-    let iLumaStride = pDec.linesize(0);
-    let iChromaStride = pDec.linesize(1);
+    let pDec: *mut SPicture = (*dq).pDec;
+    let iLumaStride = (*pDec).linesize(0);
+    let iChromaStride = (*pDec).linesize(1);
 
-    let pDstY = pDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-    let pDstCb = pDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-    let pDstCr = pDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstY = (*pDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
+    let pDstCb = (*pDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstCr = (*pDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
 
-    if ctx.eSliceType == EWelsSliceType::P_SLICE {
+    if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
         let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx);
         if ret != ERR_NONE {
             return ret;
@@ -2112,13 +2109,13 @@ pub unsafe fn WelsMbInterPrediction(
     let dq: *mut SDqLayer = pCurDqLayer;
     let iMbX = (*dq).iMbX;
     let iMbY = (*dq).iMbY;
-    let pDec = &mut *(*dq).pDec;
-    let iLumaStride = pDec.linesize(0);
-    let iChromaStride = pDec.linesize(1);
+    let pDec: *mut SPicture = (*dq).pDec;
+    let iLumaStride = (*pDec).linesize(0);
+    let iChromaStride = (*pDec).linesize(1);
 
-    let pDstY = pDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-    let pDstCb = pDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-    let pDstCr = pDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstY = (*pDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
+    let pDstCb = (*pDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstCr = (*pDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
         let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx);
@@ -2382,8 +2379,7 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
-    let pCurDqLayer = ctx.pCurDqLayer;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
@@ -2423,8 +2419,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
-    let pCurDqLayer = ctx.pCurDqLayer;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
@@ -2445,7 +2440,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     let iTotalNumMb = (*pCurSlice).iTotalMbInCurSlice;
     let mut iCountNumMb = 0;
 
-    if !ctx.sSpsPpsCtx.bAvcBasedFlag && iCurLayerWidth != ctx.iCurSeqIntervalMaxPicWidth {
+    if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && iCurLayerWidth != (*pCtx).iCurSeqIntervalMaxPicWidth {
         return ERR_INFO_WIDTH_MISMATCH;
     }
 
@@ -2456,11 +2451,11 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
     (*dq).iMbXyIndex = iNextMbXyIndex;
 
     if iNextMbXyIndex == 0 && !(*dq).pDec.is_null() {
-        if !ctx.pSps.is_null() {
-            (*(*dq).pDec).iSpsId = (*ctx.pSps).iSpsId;
+        if !(*pCtx).pSps.is_null() {
+            (*(*dq).pDec).iSpsId = (*(*pCtx).pSps).iSpsId;
         }
-        if !ctx.pPps.is_null() {
-            (*(*dq).pDec).iPpsId = (*ctx.pPps).iPpsId;
+        if !(*pCtx).pPps.is_null() {
+            (*(*dq).pDec).iPpsId = (*(*pCtx).pPps).iPpsId;
         }
         (*(*dq).pDec).uiQualityId = (*dq).sLayerInfo.sNalHeaderExt.uiQualityId;
     }
@@ -2470,7 +2465,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
             break;
         }
 
-        let bParseOnly = if !ctx.pParam.is_null() { (*ctx.pParam).bParseOnly } else { false };
+        let bParseOnly = if !(*pCtx).pParam.is_null() { (*(*pCtx).pParam).bParseOnly } else { false };
         if !bParseOnly {
             let ret = WelsTargetMbConstruction(pCtx);
             if ret != ERR_NONE {
@@ -2487,15 +2482,15 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
                     (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
             }
-            ctx.iTotalNumMbRec += 1;
+            (*pCtx).iTotalNumMbRec += 1;
         }
 
-        if ctx.iTotalNumMbRec > iTotalMbTargetLayer {
+        if (*pCtx).iTotalNumMbRec > iTotalMbTargetLayer {
             return ERR_INFO_MB_NUM_EXCEED_FAIL;
         }
 
         if !(*pSliceHeader).pPps.is_null() && (*((*pSliceHeader).pPps as *mut crate::decoder::parameter_sets::SPps)).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(ctx.pFmo, iNextMbXyIndex);
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }
@@ -2521,7 +2516,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
         return ERR_NONE;
     }
 
-    let bParseOnly = if !ctx.pParam.is_null() { (*ctx.pParam).bParseOnly } else { false };
+    let bParseOnly = if !(*pCtx).pParam.is_null() { (*(*pCtx).pParam).bParseOnly } else { false };
     if bParseOnly {
         return ERR_NONE;
     }
@@ -5101,11 +5096,13 @@ pub unsafe fn WelsDecodeSlice(
     // session D read out of the code is now a Miri finding (T5.E1).** This held
     // `ctx = &mut *pCtx`, `dq = &mut *pCurDqLayer` and two reborrows of `dq` across
     // `pDecMbFunc(pCtx, …)`, which re-enters through `pCtx` and reaches the same layer:
-    // the callee's own `&mut *pCtx` (`:698`) invalidated the outer `[0x0..0x8ae00]`
-    // retag, and `ctx.bMbRefConcealed = false` on the next iteration wrote through the
-    // dead tag. Nothing is a borrow now — `(*pCtx)` / `(*pCurDqLayer)` per use, and the
-    // two nested pointers derive from the layer without retagging, so re-entry cannot
-    // invalidate them. S25's shape (plan §7.6), T5.B2's fix.
+    // the callee's own `&mut *pCtx` invalidated the outer `[0x0..0x8ae00]` retag, and
+    // `ctx.bMbRefConcealed = false` on the next iteration wrote through the dead tag.
+    // Nothing is a borrow now — `(*pCtx)` / `(*pCurDqLayer)` per use, and the two nested
+    // pointers derive from the layer without retagging, so re-entry cannot invalidate
+    // them. T5.G1 removed the last of the invalidators: there is no `&mut *pCtx` left in
+    // `src/decoder/`, so no callee can retag the context out from under a caller.
+    // S25's shape (plan §7.6); S29 is the spelling.
     let pSlice = std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 
@@ -5222,9 +5219,8 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    let ctx = &mut *pCtx;
-    let pNalCur = ctx.pNalCur;
-    let pCurDqLayer = ctx.pCurDqLayer;
+    let pNalCur = (*pCtx).pNalCur;
+    let pCurDqLayer = (*pCtx).pCurDqLayer;
     if pCurDqLayer.is_null() {
         return ERR_NONE;
     }
@@ -5234,7 +5230,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
 
     (*pSlice).iTotalMbInCurSlice = 0;
 
-    let pDecMbFunc: PWelsDecMbFunc = if !ctx.pPps.is_null() && (*ctx.pPps).bEntropyCodingModeFlag {
+    let pDecMbFunc: PWelsDecMbFunc = if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).bEntropyCodingModeFlag {
         if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
         } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
@@ -5256,11 +5252,11 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
     let pPpsForIntra = (*pSliceHeader).pPps as *const crate::decoder::parameter_sets::SPps;
-    ctx.eIntraPredConstraint = IntraPredConstraint::from_flag(
+    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
-    ctx.eSliceType = (*pSliceHeader).eSliceType;
+    (*pCtx).eSliceType = (*pSliceHeader).eSliceType;
     WelsCalcDeqCoeffScalingList(pCtx);
 
     let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
@@ -5283,10 +5279,10 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
             break;
         }
 
-        ctx.bMbRefConcealed = false;
+        (*pCtx).bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
         if !(*dq).pMbRefConcealedFlag.is_null() {
-            *(*dq).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = ctx.bMbRefConcealed;
+            *(*dq).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = (*pCtx).bMbRefConcealed;
         }
         if iRet != ERR_NONE {
             return iRet;
@@ -5305,7 +5301,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
                     (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
             }
-            ctx.iTotalNumMbRec += 1;
+            (*pCtx).iTotalNumMbRec += 1;
         }
 
         (*pSlice).iTotalMbInCurSlice += 1;
@@ -5436,32 +5432,25 @@ mod tests {
     /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
     /// whole implementation object, so the raw-pointer spelling is sound.
     ///
-    /// **`#[cfg_attr(miri, ignore)]` is down to one item, and it is a named pattern
-    /// rather than an unknown.** T5.E1 closed F24 and F25; T5.F2 closed F26 (the
-    /// allocator no longer launders provenance, so the whole decoder heap carries
-    /// tracked tags and this test is the first thing in the project's history that can
-    /// see borrow structure on top of it); T5.F3 worked the backlog that un-blinding
-    /// released and closed F27–F30. What is left:
+    /// **`#[cfg_attr(miri, ignore)]` is gone (T5.G1), and this test is a Miri gate.**
+    /// T5.E1 closed F24 and F25's loop; T5.F2 closed F26 (the allocator no longer
+    /// launders provenance, so the whole decoder heap carries tracked tags and this
+    /// test is the first thing in the project's history that can see borrow structure
+    /// on top of it); T5.F3 worked the backlog that un-blinding released and closed
+    /// F27–F30; T5.G1 cleared F25's own inventory — **11 `&mut *pCtx` bindings, 6 in
+    /// this file and 5 in `manage_dec_ref.rs`**, plus the 13 nested borrows that hung
+    /// off them.
     ///
-    /// * **F25's `&mut *pCtx` inventory** — **12 bindings decoder-side, 7 in this
-    ///   file** (`manage_dec_ref.rs` holds the other 5). The retag covers the *whole*
-    ///   context (`[0x0..0x8ad10]`), so any re-entrant callee that borrows the context
-    ///   kills every outer borrow of it. Round 6 of T5.F3 landed on exactly this:
-    ///   `WelsTargetSliceConstruction:2426`'s `ctx`, invalidated by
-    ///   `WelsTargetMbConstruction:2385`'s own, then written through. That is not a new
-    ///   finding — F25 named the pattern and the count — and its fix is the spelling
-    ///   S29 prescribes, applied per file with that file's conversion. This file is
-    ///   **5.6's**.
+    /// **The inventory was recorded as 12/7/5 and the seventh was this doc comment.**
+    /// `grep 'let ctx = &mut \*pCtx;'` over this file returns seven lines and one of
+    /// them is the illustration above — prose inflating a count of code, which is
+    /// S16's warning about `raw_ptr` arriving at a place S24 was already watching.
+    /// The code count is six.
     ///
-    /// So this still cannot run under Miri, and saying so here is the point — a green
-    /// gate must not imply coverage that does not exist (S17). Under `cargo test` it
-    /// runs in both profiles and earns its keep: it is the only unit test that decodes
-    /// a real stream. **Delete the attribute when the 7 `&mut *pCtx` bindings in this
-    /// file are converted** — nothing else is known to be in the way, and every round
-    /// trip since T5.D2 has found something, so expect the queue behind them to be
-    /// non-empty.
+    /// Whatever this test stops on next is a **finding**, not a known item: nothing is
+    /// left on the queue that has been named. Add the attribute back only with a
+    /// finding that owns it (S15), and say in the label exactly what it is waiting on.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn decode_slice_loop_runs_under_the_aliasing_checker() {
         use crate::api::codec_api::*;
 

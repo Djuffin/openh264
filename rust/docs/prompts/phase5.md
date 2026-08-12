@@ -82,9 +82,9 @@ Order inside the step:
    — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid (**closure computed and written, session D log §2 — do not
-recompute it. The subtraction has landed (T5.E2); the grid conversion is still blocked,
-now on F25's `&mut *pCtx` inventory — F26 closed at T5.F2 and the four defects that
-un-blinding released closed at T5.F3.**)
+recompute it. The subtraction has landed (T5.E2). The grid conversion is
+`unblocked as of T5.G1`: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory and
+F31 at T5.G1, and the probe is green un-ignored. Blocker: none.**)
 
 Kill the `sMb`/`SDqLayer` double path (P2); `SDqLayer` → `DqLayerState` with owned
 `MbGrid`; re-point the cache fills (**28** signatures over three files, not ~40 over
@@ -113,21 +113,28 @@ T5.F1's one-run experiment:
 S22's backlog then arrived as predicted: **F27, F28, F29 and F30 all closed at T5.F3**
 over six probe round trips (the aliasing family in the CABAC path, the layer borrowed
 across re-entrant calls in 20 functions, 30 `pCabacCtx.as_mut_ptr()` derivations, and one
-`offset(-1)` before an array). **The blocker is now F25's own inventory**: 12
-`&mut *pCtx` bindings decoder-side, **7 in `decode_slice.rs`** and 5 in
-`manage_dec_ref.rs`. The reason to care is unchanged from F24's — convert raw pointers to
-borrows on top of a path Miri cannot clear and the next failure is unattributable, and
-worse, the probe reports one defect per run so the conversion gets *no* measurement at
-all. `#[cfg_attr(miri, ignore)]` therefore stays on
-`decode_slice_loop_runs_under_the_aliasing_checker`, **relabelled to that one item**; it
-comes off when those bindings are converted.
+`offset(-1)` before an array). F25's own inventory closed at **T5.G1** — **11 bindings,
+not the 12 recorded** (the seventh in `decode_slice.rs` was the probe's own doc comment;
+see F25's S24 note), plus the 13 nested borrows hanging off them.
 
-**And the systemic finding that outranks all three**: F25's retag is whole-context
-(`[0x0..0x8ae00]`), and **~30 `&mut *pCtx` sites remain in `src/decoder/`**. Each is
-sound alone and UB held across a call that re-enters through `pCtx` — which this decoder
-does constantly. That is one pattern, not a list, and it is the rule every remaining
-conversion in 5.2–5.6 inherits: **the god-context is never held as a borrow across a
-call.**
+**There is no blocker. `decode_slice_loop_runs_under_the_aliasing_checker` runs
+un-ignored and green** (T5.G1), so the slice-decode loop is under the aliasing checker
+end to end and every conversion from here gets a Miri verdict that means something. Two
+things this changes for everyone downstream:
+
+* **The Miri gate costs ~6 minutes more per run** and that is the price of the coverage;
+  it is not a regression to investigate.
+* **Adding `#[cfg_attr(miri, ignore)]` back needs a finding that owns it** (S15), and the
+  label must name what it waits on. The queue behind the un-ignore was **one** defect,
+  **F31**, and it was not an aliasing defect at all — the SPS/PPS `memcpy` translated as a
+  typed copy, so the `memcmp` beside it read uninitialized padding. Owner 5.5, fixed in
+  the same commit.
+
+**The systemic rule stands and is now the wider one.** F25's retag is whole-context
+(`[0x0..0x8ae00]`); `src/decoder/` now holds zero `&mut *pCtx` and no function in the
+port takes `&mut SWelsDecoderContext`. What 5.2–5.6 still convert per file touched is
+F28's generalization: **nothing reachable from `pCtx` is held as a borrow across a
+call** — not the context, not the layer, not the picture.
 
 The closure's conclusions, so they are not re-derived:
 - **The grid goes inside the layer, not on the context.** Of 66 functions taking a
@@ -175,14 +182,19 @@ The closure's conclusions, so they are not re-derived:
   accessors are exactly the shape that earned the rule. And nothing caches a
   pointer beside its owner: `SDeblockingFilter.pCsData` is the one live mirror
   left, 5.4's to delete.
-- **The S25 enumeration has a gate, it has now been run three times, and it is still not
-  clean.** `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`)
+- **The S25 enumeration has a gate, and as of T5.G1 the gate is green and part of the
+  battery.** `decode_slice_loop_runs_under_the_aliasing_checker` (`decode_slice.rs`)
   decodes `narrow_16x16.264` under Miri. It found F23 and F24 at session D; at session E
-  it found the `DecodeCurrentAccessUnit` pair, then **F25** — the loop it was written
-  for, no longer a prediction — then **F26**, which is where session E's bound stopped
-  it. One defect per run, ~8 minutes per run; the way to beat that rate is to grep the
-  *shape* of each defect once Miri names it, which is how four of the six sites were
-  found without paying for a round trip.
+  the `DecodeCurrentAccessUnit` pair, then **F25** — the loop it was written for, no
+  longer a prediction — then **F26**; at session F, F27–F30 over six round trips; at
+  session G, **F31** and then nothing. **Ten defects over eleven round trips**, and the
+  last one was not an aliasing defect, which is the sign the aliasing seam is actually
+  clean rather than merely quiet.
+  One defect per run, ~6–8 minutes per run; the way to beat that rate is to grep the
+  *shape* of each defect once Miri names it, which is how four of F27–F30's sites were
+  found without paying for a round trip. **Comment-strip before you count** — twice now
+  a count over this file has included its own doc comments (F29's four missed sites,
+  F25's phantom seventh binding).
 
 ## 3. Step 5.3 — Neighbor & MV
 
