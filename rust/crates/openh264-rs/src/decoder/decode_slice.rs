@@ -4582,7 +4582,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
     nzc_mb.fill(0);
-    *(*dq).pCbfDc.add(iMbXy) = 0;
+    *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
     ret = WelsDecodeMbCabacResidualHelper(
         pCtx,
@@ -4716,7 +4716,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
 
     let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
     nzc_mb.fill(0);
-    *(*dq).pCbfDc.add(iMbXy) = 0;
+    *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
     ret = WelsDecodeMbCabacResidualHelper(
         pCtx,
@@ -4756,7 +4756,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
     let mut uiCode = 0u32;
 
     *(*dq).pCbp.add(iMbXy) = 0;
-    *(*dq).pCbfDc.add(iMbXy) = 0;
+    *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
     *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = C_PRED_DC as i8;
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
@@ -4924,7 +4924,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
 
     let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
     nzc_mb.fill(0);
-    *(*dq).pCbfDc.add(iMbXy) = 0;
+    *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
     ret = WelsDecodeMbCabacResidualHelper(
         pCtx,
@@ -4966,7 +4966,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     let mut uiCode = 0u32;
 
     *(*dq).pCbp.add(iMbXy) = 0;
-    *(*dq).pCbfDc.add(iMbXy) = 0;
+    *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
     *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = C_PRED_DC as i8;
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;

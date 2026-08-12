@@ -2812,11 +2812,15 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, iQpDelta: &mut i32) -
     ERR_NONE
 }
 
+/// T5.H8: `pCbfDc: *mut u16` and `pMbType: *const u32` were parameters here, and
+/// both were shadowed four lines into the body by locals re-deriving the same two
+/// expressions the caller had just evaluated to pass them. Dead since the function
+/// was written. `pCbfDc`'s had to go with the flip — its only source is a grid
+/// array now — and `pMbType`'s went with it because it is the same dead expression
+/// at the same call.
 pub unsafe fn ParseCbfInfoCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNzcCache: *const u8,
-    pCbfDc: *mut u16,
-    pMbType: *const u32,
     pCtx: PWelsDecoderContext,
     iZIndex: i32,
     iResProperty: i32,
@@ -2826,7 +2830,6 @@ pub unsafe fn ParseCbfInfoCabac(
     let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex;
     let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
-    let pCbfDc = (*(*pCtx).pCurDqLayer).pCbfDc;
     let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
     *uiCbfBit = 0;
     let mut nA: i8 = IS_INTRA(*pMbType.add(iCurrBlkXy as usize)) as i8;
@@ -2835,11 +2838,13 @@ pub unsafe fn ParseCbfInfoCabac(
     if iResProperty == I16_LUMA_DC || iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
         if (*pNeighAvail).iTopAvail != 0 {
             nB = (*pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM
-                || ((*pCbfDc.add(iTopBlkXy as usize) >> iResProperty) & 1) != 0) as i8;
+                || ((*(*(*pCtx).pCurDqLayer).grid.cbf_dc.get(iTopBlkXy as usize) >> iResProperty) & 1) != 0)
+                as i8;
         }
         if (*pNeighAvail).iLeftAvail != 0 {
             nA = (*pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM
-                || ((*pCbfDc.add(iLeftBlkXy as usize) >> iResProperty) & 1) != 0) as i8;
+                || ((*(*(*pCtx).pCurDqLayer).grid.cbf_dc.get(iLeftBlkXy as usize) >> iResProperty) & 1) != 0)
+                as i8;
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
@@ -2852,7 +2857,7 @@ pub unsafe fn ParseCbfInfoCabac(
             return err;
         }
         if *uiCbfBit != 0 {
-            *pCbfDc.add(iCurrBlkXy as usize) |= 1 << iResProperty;
+            *(*(*pCtx).pCurDqLayer).grid.cbf_dc.get_mut(iCurrBlkXy as usize) |= 1 << iResProperty;
         }
     } else {
         let top_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 8) as usize;
@@ -3113,9 +3118,7 @@ pub unsafe fn ParseResidualBlockCabac(
         g_kuiDequantCoeff[uiQp as usize].as_ptr()
     };
 
-    let pCbfDc = (*(*pCtx).pCurDqLayer).pCbfDc;
-    let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
-    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCbfDc, pMbType, pCtx, iIndex, iResProp, &mut uiCbpBit);
+    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCtx, iIndex, iResProp, &mut uiCbpBit);
     if err != ERR_NONE {
         return err;
     }
