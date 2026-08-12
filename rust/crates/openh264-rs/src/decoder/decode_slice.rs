@@ -5454,8 +5454,8 @@ mod tests {
     }
 
     /// The smallest legal stream this repository has, decoded through the real
-    /// path — and the **only** `--lib` test that reaches `WelsDecodeSlice`'s
-    /// macroblock loop.
+    /// path — and, until session J added the grid probe below, the **only**
+    /// `--lib` test that reached `WelsDecodeSlice`'s macroblock loop.
     ///
     /// It exists for Miri, not for its assertion. Every other test in this module
     /// calls one function with null arguments; the integration tests that decode
@@ -5487,18 +5487,13 @@ mod tests {
     /// pinned elsewhere; here we only require that a frame comes out, because the
     /// instrument is Miri's verdict on the path, not the bytes.
     ///
-    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
-    /// convenience methods, and that is deliberate — see F23.** The first draft
-    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
-    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
-    /// over a struct that is **one pointer wide**, and the thunk immediately casts
-    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
-    /// eight bytes the borrow covers. That is a real defect on the public API path
-    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
-    /// spelling the call the way a C caller does keeps this test measuring the
-    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
-    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
-    /// whole implementation object, so the raw-pointer spelling is sound.
+    /// **One macroblock per frame is also this test's ceiling, and F34 is what it
+    /// cost.** It stays as the cheap probe — every path that does not need a
+    /// neighbour gets its verdict here in a quarter of the grid probe's time —
+    /// but "the probe is green" now means the pair, not this test.
+    ///
+    /// The vtable calls are spelled the way a C caller spells them, for F23's
+    /// reason — see [`drive_decoder_over`], which both probes share.
     ///
     /// **`#[cfg_attr(miri, ignore)]` is gone (T5.G1), and this test is a Miri gate.**
     /// T5.E1 closed F24 and F25's loop; T5.F2 closed F26 (the allocator no longer
@@ -5520,9 +5515,78 @@ mod tests {
     /// finding that owns it (S15), and say in the label exactly what it is waiting on.
     #[test]
     fn decode_slice_loop_runs_under_the_aliasing_checker() {
-        use crate::api::codec_api::*;
-
         const NARROW_16X16: &[u8] = include_bytes!("../../../../../res/narrow_16x16.264");
+        let (frames, dims) = drive_decoder_over(NARROW_16X16);
+        assert!(
+            frames > 0,
+            "no frame came out of narrow_16x16.264 — the slice loop was never entered, \
+             so this test is not measuring what it claims to"
+        );
+        assert_eq!(dims, Some((16, 16)), "narrow_16x16.264 is one macroblock per frame");
+    }
+
+    /// The same gate over a stream that has **neighbours** — Phase 5 session J,
+    /// D-perf-5's "probe first, then flip".
+    ///
+    /// The test above bounds every Miri verdict this phase issued, and F34 is what
+    /// that cost: a real UB in `WelsDecodeMbCabacIntraModeHelper` that Miri
+    /// *executed* and returned green on, because `narrow_16x16.264` is one
+    /// macroblock per frame — `iLeftAvail` and `iTopAvail` are 0 at every
+    /// macroblock in it, so the two lines that make the function UB were
+    /// unreachable. S22's law aimed at a stream instead of at a scope list.
+    ///
+    /// `grid_48x32.264` is 3x2 macroblocks, so MB(1,1) has all four neighbours,
+    /// MB(0,1) is missing only its left and MB(2,1) only its top-right: every
+    /// availability combination the neighbour paths branch on. It is CABAC, High
+    /// profile with `transform_8x8_mode_flag` set, carries I, P **and** B slices,
+    /// and its source window pans so the MVs are non-zero. Built by
+    /// `rust/tools/make_narrow_assets.py`, which explains at length why this one
+    /// asset comes from libx264 and not from the C++ encoder: **OpenH264's encoder
+    /// has no `transform_8x8_mode_flag` to write**, and F34 sits behind it.
+    ///
+    /// **Coverage is proven, not asserted** (the F21 rule): with T5.I2's fix
+    /// reverted in a scratch worktree, this test goes red under Miri at
+    /// `parse_mb_syn_cabac.rs:1242` — the callee's own left-neighbour read —
+    /// while `decode_slice_loop_runs_under_the_aliasing_checker` stays green.
+    /// Session J's log records the run.
+    ///
+    /// The dimension assertion is not decoration. A regenerated asset that
+    /// silently came out 16x16 would still pass "a frame came out" while covering
+    /// nothing this test exists for, which is exactly how F34 survived.
+    #[test]
+    fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
+        const GRID_48X32: &[u8] = include_bytes!("../../../../../res/grid_48x32.264");
+        let (frames, dims) = drive_decoder_over(GRID_48X32);
+        assert!(
+            frames > 0,
+            "no frame came out of grid_48x32.264 — the slice loop was never entered, \
+             so this test is not measuring what it claims to"
+        );
+        assert_eq!(
+            dims,
+            Some((48, 32)),
+            "grid_48x32.264 must decode as a 3x2 macroblock grid; a stream without \
+             neighbours covers nothing this test exists for"
+        );
+    }
+
+    /// Decodes `stream` through the C ABI and returns `(frames out, last frame's
+    /// dimensions)`.
+    ///
+    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
+    /// convenience methods, and that is deliberate — see F23.** The first draft
+    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
+    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
+    /// over a struct that is **one pointer wide**, and the thunk immediately casts
+    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
+    /// eight bytes the borrow covers. That is a real defect on the public API path
+    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
+    /// spelling the call the way a C caller does keeps these tests measuring the
+    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
+    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
+    /// whole implementation object, so the raw-pointer spelling is sound.
+    fn drive_decoder_over(stream: &[u8]) -> (usize, Option<(i32, i32)>) {
+        use crate::api::codec_api::*;
 
         unsafe {
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
@@ -5543,7 +5607,8 @@ mod tests {
             );
 
             let mut frames = 0;
-            for unit in crate::split_annexb_units(NARROW_16X16) {
+            let mut dims = None;
+            for unit in crate::split_annexb_units(stream) {
                 let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
                 ((*vtbl).DecodeFrame2)(
@@ -5555,17 +5620,14 @@ mod tests {
                 );
                 if buf_info.iBufferStatus == 1 {
                     frames += 1;
+                    let sys = buf_info.UsrData.sSystemBuffer;
+                    dims = Some((sys.iWidth, sys.iHeight));
                 }
             }
 
-            assert!(
-                frames > 0,
-                "no frame came out of narrow_16x16.264 — the slice loop was never entered, \
-                 so this test is not measuring what it claims to"
-            );
-
             ((*vtbl).Uninitialize)(p_decoder);
             WelsDestroyDecoder(p_decoder);
+            (frames, dims)
         }
     }
 }

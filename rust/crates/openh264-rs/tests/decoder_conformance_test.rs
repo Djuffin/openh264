@@ -284,3 +284,24 @@ asset_test!(test_asset_narrow_24x18, "narrow_24x18.264", "f6197477215d8847b57098
 // chroma arm observable; a stream that concealed from a fresh pool would find
 // 128 on both sides of the fix and prove nothing.
 asset_test_concealed!(test_asset_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264", "754db24b395cc7aff338e036a416a9b5bb409c81");
+
+// ---------------------------------------------------------------------------
+// The macroblock-grid probe — Phase 5 session J, F34.
+//
+// `decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`
+// (`src/decoder/decode_slice.rs`) is why this stream exists: the phase's Miri gate
+// on the slice-decode loop decoded `narrow_16x16.264` and nothing else, that is
+// one macroblock per frame, and so no neighbour-reading path had ever run under
+// the aliasing checker. F34 is what that cost.
+//
+// 48x32 is 3x2 macroblocks — the smallest grid holding a macroblock with all four
+// neighbours as well as one missing only its left and one missing only its
+// top-right. CABAC, High profile with the 8x8 transform, I/P/B slices, and a
+// panned source window so the MVs are non-zero.
+//
+// It is the one asset here built by ffmpeg/libx264 rather than by the C++
+// encoder, and `rust/tools/make_narrow_assets.py` carries the reason: **OpenH264's
+// encoder has no `transform_8x8_mode_flag` to write** and F34 sits behind it, so
+// no stream that encoder can produce re-finds the miss. The golden below is the
+// C++ *decoder*'s output, exactly as every other row here.
+asset_test!(test_asset_grid_48x32, "grid_48x32.264", "a56242a64a22edee058cd9cd14179f54bcd79b97");
