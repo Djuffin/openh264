@@ -353,16 +353,6 @@ pub static g_kuiChromaDcScan: [u8; 4] = [
 
 pub static g_kuiI16CbpTable: [u8; 6] = [0, 16, 32, 15, 31, 47];
 
-pub static g_kuiIntra4x4CbpTable: [u8; 48] = [
-    47, 31, 15, 0, 23, 27, 29, 30, 7, 11, 13, 14, 39, 43, 45, 46,
-    16, 3, 5, 10, 12, 19, 21, 26, 28, 35, 37, 42, 44, 1, 2, 4,
-    8, 17, 18, 20, 24, 6, 9, 22, 25, 32, 33, 34, 36, 40, 38, 41,
-];
-
-pub static g_kuiIntra4x4CbpTable400: [u8; 16] = [
-    15, 0, 7, 11, 13, 14, 3, 5, 10, 12, 1, 2, 4, 8, 6, 9,
-];
-
 pub static g_kuiChromaQpTable: [u8; 52] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
     12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
@@ -5362,3 +5352,4 @@ mod tests {
 // used to live in this module disagreed with cpu_core.h and with each other --
 // WELS_CPU_NEON alone had seven distinct values across eight modules.
 pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
+pub use crate::decoder::dec_golomb::{g_kuiIntra4x4CbpTable, g_kuiIntra4x4CbpTable400};

@@ -168,22 +168,6 @@ pub fn IS_SUB_4x4(sub_mb_type: u32) -> bool {
 // Lookup Tables
 // ============================================================================
 
-/// 4x4 sub-block raster scan mapping array.
-pub const g_kuiScan4: [u8; 16] = [
-    0, 1, 4, 5,
-    2, 3, 6, 7,
-    8, 9, 12, 13,
-    10, 11, 14, 15,
-];
-
-/// 30-element macroblock motion cache index mapping array.
-pub const g_kuiCache30ScanIdx: [u8; 16] = [
-    7, 8, 13, 14,
-    9, 10, 15, 16,
-    19, 20, 25, 26,
-    21, 22, 27, 28,
-];
-
 // ============================================================================
 // Data Structures matching C++ Dec Core
 // ============================================================================
@@ -202,6 +186,7 @@ pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
+pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiScan4};
 
 
 // ============================================================================

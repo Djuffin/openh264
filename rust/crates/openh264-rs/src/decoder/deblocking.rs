@@ -158,15 +158,6 @@ pub static g_kuiTableB8x8Idx: [[u8; 16]; 2] = [
     ],
 ];
 
-pub static g_kuiMbCountScan4Idx: [u8; 24] = [
-    0, 1, 4, 5,
-    2, 3, 6, 7,
-    8, 9, 12, 13,
-    10, 11, 14, 15,
-    16, 17, 20, 21,
-    18, 19, 22, 23,
-];
-
 #[inline(always)]
 pub fn alpha_table(x: i32) -> u8 {
     let idx = (x + 12) as usize;
@@ -2232,3 +2223,4 @@ mod tests {
 // used to live in this module disagreed with cpu_core.h and with each other --
 // WELS_CPU_NEON alone had seven distinct values across eight modules.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};
+pub use crate::decoder::decode_slice::{g_kuiMbCountScan4Idx};
