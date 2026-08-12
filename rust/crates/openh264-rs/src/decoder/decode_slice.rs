@@ -1516,7 +1516,7 @@ pub unsafe fn GetInterPred(
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
             for i in 0..4usize {
-                let iSubMBType = (*(*pCurDqLayer).pSubMbType.add(iMBXY))[i];
+                let iSubMBType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMBXY))[i];
                 let iBlk8X = ((i & 1) << 3) as i32;
                 let iBlk8Y = ((i >> 1) << 3) as i32;
                 let iXOffset = iMBOffsetX + iBlk8X;
@@ -1798,7 +1798,7 @@ pub unsafe fn GetInterBPred(
         }
     } else if IS_Inter_8x8(iMBType) {
         for i in 0..4usize {
-            let iSubMBType = (*(*pCurDqLayer).pSubMbType.add(iMBXY))[i];
+            let iSubMBType = (*(*pCurDqLayer).grid.sub_mb_type.get(iMBXY))[i];
             let iBlk8X = ((i & 1) << 3) as i32;
             let iBlk8Y = ((i >> 1) << 3) as i32;
             let iXOffset = iMBOffsetX + iBlk8X;

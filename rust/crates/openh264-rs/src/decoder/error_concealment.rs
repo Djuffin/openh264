@@ -730,11 +730,14 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             }
                         }
                         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
-                            if !(*pCurDqLayer).pSubMbType.is_null()
-                                && !(*pDec).pRefIndex[0].is_null()
+                            // T5.H14: the `pSubMbType.is_null()` conjunct went with
+                            // the flip; `error_concealment.cpp:319` indexes it
+                            // unguarded. The two picture arrays keep theirs — they
+                            // are still raw and 5.1/5.4 own them.
+                            if !(*pDec).pRefIndex[0].is_null()
                                 && !(*pDec).pMv[0].is_null()
                             {
-                                let sub_types = *(*pCurDqLayer).pSubMbType.add(iMbXyIndex);
+                                let sub_types = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXyIndex);
                                 let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
                                 let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
                                 for i in 0..4 {
