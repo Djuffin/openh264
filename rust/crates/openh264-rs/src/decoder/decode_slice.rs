@@ -1140,11 +1140,11 @@ unsafe fn GetRefPic(
     if iRefIdx >= 0 {
         let pRefPic = (*pCtx).sRefPic.pRefList[listIdx][iRefIdx as usize];
         if !pRefPic.is_null() {
-            pMCRefMem.iSrcLineLuma = (*pRefPic).iLinesize[0];
-            pMCRefMem.iSrcLineChroma = (*pRefPic).iLinesize[1];
-            pMCRefMem.pSrcY = (*pRefPic).pData[0];
-            pMCRefMem.pSrcU = (*pRefPic).pData[1];
-            pMCRefMem.pSrcV = (*pRefPic).pData[2];
+            pMCRefMem.iSrcLineLuma = (*pRefPic).linesize(0);
+            pMCRefMem.iSrcLineChroma = (*pRefPic).linesize(1);
+            pMCRefMem.pSrcY = (*pRefPic).data_ptr(0);
+            pMCRefMem.pSrcU = (*pRefPic).data_ptr(1);
+            pMCRefMem.pSrcV = (*pRefPic).data_ptr(2);
             if pMCRefMem.pSrcY.is_null() || pMCRefMem.pSrcU.is_null() || pMCRefMem.pSrcV.is_null() {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
             }
@@ -1432,8 +1432,8 @@ pub unsafe fn GetInterPred(
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
 
-    let iDstLineLuma = (*(*pCtx).pDec).iLinesize[0];
-    let iDstLineChroma = (*(*pCtx).pDec).iLinesize[1];
+    let iDstLineLuma = (*(*pCtx).pDec).linesize(0);
+    let iDstLineChroma = (*(*pCtx).pDec).linesize(1);
 
     let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
     let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
@@ -1633,8 +1633,8 @@ pub unsafe fn GetInterBPred(
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
 
-    let iDstLineLuma = (*(*pCtx).pDec).iLinesize[0];
-    let iDstLineChroma = (*(*pCtx).pDec).iLinesize[1];
+    let iDstLineLuma = (*(*pCtx).pDec).linesize(0);
+    let iDstLineChroma = (*(*pCtx).pDec).linesize(1);
 
     let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
     let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
@@ -2040,9 +2040,9 @@ unsafe fn GetTempPredPlanes(
     }
     let pTempDec = (*pCtx).pTempDec;
     Some([
-        (*pTempDec).pData[0].offset(((iMbY * iLumaStride + iMbX) << 4) as isize),
-        (*pTempDec).pData[1].offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
-        (*pTempDec).pData[2].offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
+        (*pTempDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize),
+        (*pTempDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
+        (*pTempDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
     ])
 }
 
@@ -2062,12 +2062,12 @@ pub unsafe fn WelsMbInterConstruction(
         return ERR_NONE;
     }
     let pDec = &mut *dq.pDec;
-    let iLumaStride = pDec.iLinesize[0];
-    let iChromaStride = pDec.iLinesize[1];
+    let iLumaStride = pDec.linesize(0);
+    let iChromaStride = pDec.linesize(1);
 
-    let pDstY = pDec.pData[0].offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-    let pDstCb = pDec.pData[1].offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-    let pDstCr = pDec.pData[2].offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstY = pDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
+    let pDstCb = pDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstCr = pDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
 
     if ctx.eSliceType == EWelsSliceType::P_SLICE {
         let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx);
@@ -2112,12 +2112,12 @@ pub unsafe fn WelsMbInterPrediction(
     let iMbX = dq.iMbX;
     let iMbY = dq.iMbY;
     let pDec = &mut *dq.pDec;
-    let iLumaStride = pDec.iLinesize[0];
-    let iChromaStride = pDec.iLinesize[1];
+    let iLumaStride = pDec.linesize(0);
+    let iChromaStride = pDec.linesize(1);
 
-    let pDstY = pDec.pData[0].offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-    let pDstCb = pDec.pData[1].offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-    let pDstCr = pDec.pData[2].offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstY = pDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
+    let pDstCb = pDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
+    let pDstCr = pDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
 
     if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
         let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx);
@@ -2150,18 +2150,18 @@ pub unsafe fn WelsFillRecNeededMbInfo(
     if pCurPic.is_null() {
         return;
     }
-    let iLumaStride = (*pCurPic).iLinesize[0];
-    let iChromaStride = (*pCurPic).iLinesize[1];
+    let iLumaStride = (*pCurPic).linesize(0);
+    let iChromaStride = (*pCurPic).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
 
     (*pCurDqLayer).iLumaStride = iLumaStride;
     (*pCurDqLayer).iChromaStride = iChromaStride;
 
-    if bOutput && !(*pCurPic).pData[0].is_null() {
-        (*pCurDqLayer).pPred[0] = (*pCurPic).pData[0].add(((iMbY * iLumaStride + iMbX) << 4) as usize);
-        (*pCurDqLayer).pPred[1] = (*pCurPic).pData[1].add(((iMbY * iChromaStride + iMbX) << 3) as usize);
-        (*pCurDqLayer).pPred[2] = (*pCurPic).pData[2].add(((iMbY * iChromaStride + iMbX) << 3) as usize);
+    if bOutput && !(*pCurPic).data_ptr(0).is_null() {
+        (*pCurDqLayer).pPred[0] = (*pCurPic).data_ptr(0).add(((iMbY * iLumaStride + iMbX) << 4) as usize);
+        (*pCurDqLayer).pPred[1] = (*pCurPic).data_ptr(1).add(((iMbY * iChromaStride + iMbX) << 3) as usize);
+        (*pCurDqLayer).pPred[2] = (*pCurPic).data_ptr(2).add(((iMbY * iChromaStride + iMbX) << 3) as usize);
     }
 }
 
@@ -2553,15 +2553,15 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     let iMbY = dq.iMbY;
     let iMbXy = dq.iMbXyIndex as usize;
 
-    let iDecStrideL = (*dq.pDec).iLinesize[0];
-    let iDecStrideC = (*dq.pDec).iLinesize[1];
+    let iDecStrideL = (*dq.pDec).linesize(0);
+    let iDecStrideC = (*dq.pDec).linesize(1);
 
     let iOffsetL = ((iMbX + iMbY * iDecStrideL) << 4) as isize;
     let iOffsetC = ((iMbX + iMbY * iDecStrideC) << 3) as isize;
 
-    let mut pDecY = (*dq.pDec).pData[0].offset(iOffsetL);
-    let mut pDecU = (*dq.pDec).pData[1].offset(iOffsetC);
-    let mut pDecV = (*dq.pDec).pData[2].offset(iOffsetC);
+    let mut pDecY = (*dq.pDec).data_ptr(0).offset(iOffsetL);
+    let mut pDecU = (*dq.pDec).data_ptr(1).offset(iOffsetC);
+    let mut pDecV = (*dq.pDec).data_ptr(2).offset(iOffsetC);
 
     let iIndex = ((-pBs.cursor.left_bits()) >> 3) + 2;
 

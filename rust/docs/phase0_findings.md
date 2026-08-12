@@ -835,3 +835,64 @@ changes decoder code or tests, and these sweeps compare encoders.** There is no 
 from the tree under test to an encoder output difference.
 
 Running total: **twenty-two measurements, nine alternations, nine acquittals.**
+
+---
+
+### Measurement 23 (Phase 5, session B, 2026-08-11) — one hit, recorded late
+
+One hit at that session's entry battery, `mt CiscoVT2people_160x96_6fps t=4 sm=3
+n=600 cabac=0 rc=0`, C++ 42538 against Rust **0**; re-run 5× in isolation, **5/5
+byte-identical**. Acquitted under S14 step 1; no alternation, one hit.
+
+It was written into the session log and the plan's Gates cell but **never reached
+this file**, which is where S14 step 4 says every measurement goes. Backfilled here
+by session C, and worth one sentence of its own: the ledger a rule points at is only
+as good as the sessions that append to it.
+
+---
+
+### Measurements 24–25 (Phase 5, session C, 2026-08-11) — three hits, and the tenth alternation
+
+**Three hits in one battery**, all inside the signature — `mt`, `sm=3`, **`n=600`**,
+`t∈{2,4}`, wrong-length output:
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 24a | `320x192 t=4 sm=3 n=600 cabac=0 rc=1` (**debug**) | 40992 | 0 |
+| 24b | `320x192 t=4 sm=3 n=600 cabac=1 rc=0` (**debug**) | 39981 | 37837 |
+| 24c | `160x96 t=2 sm=3 n=600 cabac=0 rc=0` (release) | 41938 | 0 |
+
+All three re-run 5× in isolation per S14 step 1: **5/5 byte-identical, every one.**
+24b is the pair session A logged as 21a on a different tree — third appearance of
+`39981 / 37837` for that configuration.
+
+**Measurement 25 — the alternation.** Three hits triggers step 2: 12 `mt` sweeps per
+side, 120 configurations each, both release binaries built once and swapped inside
+one loop, machine otherwise idle. Base = the session's entry tree (`272c3b79`); head
+= T5.C2.
+
+**Base 4 / head 3**, 1440 configurations per side. HEAD is not worse. Three things
+this measurement adds:
+
+1. **The race criterion is met across the isolation runs rather than inside the
+   sweep.** The head binary produced 37837 for `320x192 t=4 sm=3 n=600 cabac=1 rc=0`
+   in the battery and in alternation sweep 9, and the *correct* 39981 five times out
+   of five for the same binary and configuration in isolation. One binary, one
+   configuration, two outputs: a race. A deterministic port defect cannot decode
+   correctly five times.
+2. **Both sides hit the same configuration with different lengths.** Base sweep 8 and
+   head sweep 5 both hit `160x96 t=4 sm=3 n=600 cabac=1 rc=0`; base returned 0 bytes,
+   head returned 41989, against a stable C++ 42281.
+3. **The rate is back to baseline on an idle machine.** 7 hits / 2880 alternated
+   configurations ≈ **1 in 410**, against session A's 1/360 and the ~1/800 quiet
+   baseline. This alternation ran with nothing else on the machine, which is the
+   condition S14 step 2 asks for and which session A's did not have.
+
+And the standing acquittal, which holds a third session running: **every commit in
+this session is decoder-side, and these sweeps compare encoders.** T5.C1 and T5.C2
+touch `src/decoder/*` only. The two `ExpandPicture*_c` kernels in `decoder_core.rs`
+are the one decoder symbol the encoder reaches, through
+`common/expand_pic.rs::ExpandReferencingPicture`, and neither kernel is edited by
+either commit — only that function's decoder-side *call sites* are.
+
+Running total: **twenty-five measurements, ten alternations, ten acquittals.**

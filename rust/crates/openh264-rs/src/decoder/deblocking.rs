@@ -2057,6 +2057,30 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // ============================================================================
 // Slice-Level In-Loop Deblocking Filter Pipelines
 // ============================================================================
+//
+// S25 for this file (T5.C2, enumerated with the conversion as plan §7.6 asks):
+// *who else reaches this `SPicture` while a borrow of it is held?*
+//
+// The borrow is `(*(*pCtx).pDec).data_ptr(i)`, taken three times at each of the two
+// filter-initialisation sites below, and the three results are copied into
+// `SDeblockingFilter.pCsData[0..2]`, where they live for the whole macroblock loop.
+// Three answers, and none of them is a hazard:
+//
+// 1. **The three derivations do not invalidate each other.** They address three
+//    planes, which after T5.C3 are three separate allocations; the accessor's
+//    `&mut self` covers the picture's own fields, not the sample bytes.
+// 2. **Nothing inside the loop reaches `pCtx->pDec` again.** The only pictures the
+//    loop touches are the ones behind `pFilter.pRefPics[l]`, and it touches them for
+//    identity, `pMv` and `pRefIndex` only — `SMB_EDGE_MV` compares the erased
+//    pointers, `DeblockingBSCalc*` reads the motion caches. No second plane pointer
+//    is derived from any picture, so the question does not arise even if a reference
+//    list slot were to hold `pDec` itself.
+// 3. **`pCsData` is a stored mirror, and it is not `SPicture`'s.** A cached plane
+//    pointer beside the plane that owns it is the F16/T5 class, which is why the
+//    conversion refuses to put one back in `SPicture` — but `SDeblockingFilter` is a
+//    per-slice scratch struct whose whole job is to carry the raw pair to the still-
+//    raw kernels. It retires at 5.4, which gives the filter `PicId`s and per-MB plane
+//    cursors; until then this is the phase-5 shim accessor doing what it is for.
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
@@ -2077,12 +2101,12 @@ pub unsafe fn WelsDeblockingFilterSlice(
     let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
     // Step 1: Initialize filter parameters
-    pFilter.pCsData[0] = (*(*pCtx).pDec).pData[0];
-    pFilter.pCsData[1] = (*(*pCtx).pDec).pData[1];
-    pFilter.pCsData[2] = (*(*pCtx).pDec).pData[2];
+    pFilter.pCsData[0] = (*(*pCtx).pDec).data_ptr(0);
+    pFilter.pCsData[1] = (*(*pCtx).pDec).data_ptr(1);
+    pFilter.pCsData[2] = (*(*pCtx).pDec).data_ptr(2);
 
-    pFilter.iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
-    pFilter.iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
+    pFilter.iCsStride[0] = (*(*pCtx).pDec).linesize(0);
+    pFilter.iCsStride[1] = (*(*pCtx).pDec).linesize(1);
 
     pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
@@ -2142,12 +2166,12 @@ pub unsafe fn WelsDeblockingInitFilter(
     *pFilter = SDeblockingFilter::default();
     *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
-    (*pFilter).pCsData[0] = (*(*pCtx).pDec).pData[0];
-    (*pFilter).pCsData[1] = (*(*pCtx).pDec).pData[1];
-    (*pFilter).pCsData[2] = (*(*pCtx).pDec).pData[2];
+    (*pFilter).pCsData[0] = (*(*pCtx).pDec).data_ptr(0);
+    (*pFilter).pCsData[1] = (*(*pCtx).pDec).data_ptr(1);
+    (*pFilter).pCsData[2] = (*(*pCtx).pDec).data_ptr(2);
 
-    (*pFilter).iCsStride[0] = (*(*pCtx).pDec).iLinesize[0];
-    (*pFilter).iCsStride[1] = (*(*pCtx).pDec).iLinesize[1];
+    (*pFilter).iCsStride[0] = (*(*pCtx).pDec).linesize(0);
+    (*pFilter).iCsStride[1] = (*(*pCtx).pDec).linesize(1);
 
     (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
