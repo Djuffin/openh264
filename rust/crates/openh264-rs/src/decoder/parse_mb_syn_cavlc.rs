@@ -549,7 +549,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iLeftXy = iCurXy - 1;
             let iLeftSliceIdc = *dq.pSliceIdc.add(iLeftXy as usize);
             na.iLeftAvail = if iLeftSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.pCbp.add(iLeftXy as usize) as u8 } else { 0 };
+            na.iLeftCbp = if na.iLeftAvail != 0 { *dq.grid.cbp.get(iLeftXy as usize) as u8 } else { 0 };
         } else {
             na.iLeftAvail = 0;
             na.iLeftTopAvail = 0;
@@ -560,7 +560,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             iTopXy = iCurXy - dq.iMbWidth;
             let iTopSliceIdc = *dq.pSliceIdc.add(iTopXy as usize);
             na.iTopAvail = if iTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
-            na.iTopCbp = if na.iTopAvail != 0 { *dq.pCbp.add(iTopXy as usize) as u8 } else { 0 };
+            na.iTopCbp = if na.iTopAvail != 0 { *dq.grid.cbp.get(iTopXy as usize) as u8 } else { 0 };
 
             if iCurX != 0 {
                 iLeftTopXy = iTopXy - 1;
