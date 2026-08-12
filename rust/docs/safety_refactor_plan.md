@@ -674,6 +674,14 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   effect is below the measurement error**, and D-perf-4's disposition for that is
   diagnostic-only — but you only get that evidence by re-running at a higher pair
   count before reaching for a mechanism.
+- **S2c — a seam that cannot plausibly move may waive its per-seam medians**
+  (Phase 5 session G, adopted 2026-08-12). Conditions, all required: the face's
+  output is byte-identical (the battery's goldens/sweeps/bench-identity are the
+  proof, not an argument); it touches no kernel, allocation path, dispatch, or
+  shim retirement; and the waiver is stated in the log with those conditions
+  checked off. Pointer-spelling and prose-only faces qualify; anything structural
+  does not. The phase exit's whole-span 3-pair protocol still runs regardless —
+  the waiver skips a measurement that cannot inform, never the one that can.
 - **S3 [dormant: kernel work] — a microbenchmark's working set is part of its correctness.**
   T5's SAD bench at a 1984-byte stride over 190 KB reported 0.82-1.33x where the
   encoder reported +16.8%; the same bench L1-resident reported 1.0-2.0x and agreed.
@@ -782,7 +790,11 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
      not an alternation.
   3. Anything outside the signature — `st`/`def`, other configurations, wrong
      *bytes* rather than wrong length — is **real**: stop, revert, investigate.
-  4. Append every measurement to F3. A clean sweep is a sample, not a 341/341
+  4. Append every measurement to F3 **at adjudication time, not at session
+     close** — and the close reconciles `phase0_findings.md`'s running total
+     against the log entry's claims. (Phase 5 session G found the ledger four
+     sessions in arrears; it surfaced only because a zero-hit session had to look
+     up where the numbering stood.) A clean sweep is a sample, not a 341/341
      signal; a session-start hit is a tendency, not a rule.
 - **S15 — the Miri gate, and its skip list.** `gates.sh` runs Miri over the **whole
   library** (`--lib`, `-Zmiri-ignore-leaks`) plus the differential integration files
@@ -805,6 +817,11 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   have a prose floor**: `transmute` reads 4 with zero calls behind it (all doc
   comments, since T4b.3b) — when a metric's remaining count is prose, say so
   wherever the metric is quoted, or the next phase chases a number that cannot move.
+  **Read per-file deltas, never the total** (Phase 5 session G): in a total, a
+  one-line prose mention cancels against a real deletion elsewhere and both go
+  unexamined — the ratchet's own regeneration caught one prose delta only because
+  the per-file table was read; `mem_zeroed` is S21's live construction-audit count
+  and has drifted by prose twice.
 - **S17 — an instrument may skip only loudly, naming what goes unmeasured.**
   The incident: `FFMPEG` was unset for two whole sessions, `c_vs_rust_bench`
   silently skipped, and T5's +16.8% encoder regression reached a commit before
