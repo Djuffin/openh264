@@ -3748,3 +3748,273 @@ otherwise be chased.
 * **S19.** [`prompts/phase5.md`](prompts/phase5.md) written — the hand-off for the
   plan's first pivot, carrying S24, S25 and F19's class by name, and stating that
   per-session scope is the S20 closure rather than the file.
+
+---
+
+## 2026-08-11 — Phase 5, session A (Face 1 duplicate census, Face 2 P3 tests, Face 3 the 5.1 closure)
+
+**Commits:** `17167c81` (inherited doc tail + S26), `126af95c` (T5.A1, the dead shadow
+declarations), `40c489f6` (T5.A2, the double-cast census and `SDeblockingFunc`),
+`2ae87d9a` (T5.A3, `SPartMbInfo`), `31312084` (T5.A4, twelve tables), `2aa51ddb`
+(T5.A5, the census gate and F22), `888f7aa7` (T5.A6, the P3 tests), and this entry.
+
+### The session in one line
+
+The brief said the duplicate census was a survey; it was a defect hunt, and the
+instrument the phase most needed had never looked at the decoder.
+
+### Control battery and recount
+
+`gates.sh full` at entry: **OVERALL: PASS**, 435 debug / 429 release / 20 ignored,
+Miri **295**, sweeps 341/341 both profiles, both benches bit-identical, ratchet clean.
+Every number in the brief's §0 confirmed. No F3 hit at session start — the third
+running.
+
+### 1. Face 1, and what a name census is actually for
+
+Three instruments, re-greped rather than trusted (S24). Two of the brief's three
+figures were wrong, in the brief's own favour:
+
+* `find_dup_types.sh` reported **252 lines / 17 types / 34 aliases / 27 tables / 37
+  value-divergent constants** — the brief's numbers exactly. This is the one that held.
+* `grep 'as \*mut _ as \*mut' src/` reads **100**, not 121. The other 21 are
+  `as *const _ as *const`, which that command cannot match. 121 is the family; the
+  brief quoted a family total against a command that sees 83% of it.
+* `find_stub_bodies.py --dups` reported 51 groups, **none** in the decoder — because
+  its `RUST_DIRS` and `CPP_DIRS` never listed the decoder. Phase 5 is the decoder
+  phase. Widened: **51 → 198** groups, **156** decoder-touching.
+
+Four commits of unification came out of it, and they split cleanly by how the
+duplicate was *found*:
+
+**Nothing referenced it (T5.A1).** Nine dead shadow declarations, of which
+`manage_dec_ref.rs` held an island of nine names referencing only each other — its
+`SPps` had **two** fields where `parameter_sets::SPps` has forty. `nalu.rs`
+glob-imports that module, so the shadow was in scope there; what kept it from being
+selected is a hand-maintained explicit-import list under the comment "Explicit imports
+to resolve glob ambiguities". Inert by a name-resolution rule and a comment. 216 lines
+deleted, type duplicates 17 → 12.
+
+**The compiler found it (T5.A2).** The 94 double casts with *both* targets inferred
+are the only ones that can launder silently, so the probe was to delete them all and
+let rustc type-check each argument exactly. **93 compiled** — they had been
+reinterpreting a type into itself, T4b.3b's finding in T4b.3c's spelling. The 94th did
+not, and named the defect itself:
+
+```
+note: `decoder_context::SDeblockingFunc` and `deblocking_common::SDeblockingFunc`
+      have similar names, but are actually distinct types
+```
+
+One struct declared twice, field for field identical, bridged by a double cast on the
+decoder's init path — and its six kernel-pointer aliases duplicated the same way,
+differing **only in parameter names** (`pPixY`/`iSampleY`). That is what made two
+identical types distinct to the compiler, and the cast is what hid it.
+
+**The values had to be compared (T5.A3, T5.A4).** A name census proves nothing about a
+table. Thirteen decoder tables were flattened to token sequences and compared element
+by element before any merge; twelve were identical and were unified, and
+`g_ksInterBSubMbTypeInfo`'s three copies differed **only in a field name** —
+`mv_pred.rs` spells `SPartMbInfo`'s first field `iMbType` where C++ and the other
+three spell it `iType`. A structural diff calls those copies identical; a value diff
+calls them different; neither is right on its own.
+
+**And three tables that must not be merged.** `g_kuiAlphaTable`, `g_kiBetaTable`,
+`g_kiTc0Table`: the decoder's are `[52+24]` read through a `+12` bias, the encoder's
+`[52+12]` read unbiased — 76 vs 64, 76 vs 64, 304 vs 256 elements, **divergent in the
+C++ too**. The port is faithful and the shared name is the trap. This is the (c) class
+the brief predicted, and it is the reason the allowlist records values rather than
+verdicts.
+
+### 2. F22, and what a blind instrument costs
+
+Widening `find_stub_bodies.py` to the decoder immediately produced a finding of F21's
+exact class. C++ has **one** `UpdateP16x8MotionInfo` (`mv_pred.cpp:871`) and
+`parse_mb_syn_cabac.cpp` calls it. The port translated it — and five neighbours — a
+second time inside `parse_mb_syn_cabac.rs`, and the second copy **dropped the
+`pDec != NULL` branch**. Guard counts per decoder module: `mv_pred.rs` 28,
+`decode_slice.rs` 13, `parse_mb_syn_cavlc.rs` 4, `parse_mb_syn_cabac.rs` **0**. The
+CABAC path calls the local copies.
+
+Whether `pDec` can be null there is 5.2's question; either way the two copies disagree
+on the mainline CABAC path and no gate here can tell, because every corpus stream
+decodes with `pDec` attached. Written up in
+[`phase5_findings.md`](phase5_findings.md), owner 5.3.
+
+**The general form, and it is not comfortable.** F21 was found by a closure asking
+"who else implements this?". F22 was found by an instrument that had been running for
+three phases while blind to a quarter of the crate. Both are the same defect class,
+and the second one was *reachable by an instrument this project already had*. S22 says
+a repaired gate has a backlog; the corollary is that an instrument's scope is part of
+its result, and "none found" from a tool that does not look is not a measurement.
+
+### 3. The census is a gate now (T5.A5)
+
+`rust/tools/census.sh` + `census_allowlist.txt`, wired into `gates.sh` at **commit**
+level. 61 allowlisted entries keyed `<kind> <name> x<count>` — the count is in the key
+so a *new* copy of an allowed name fails — each carrying its class ((a) cross-codec
+namesake, (b) to-unify with the owning step, (c) do-not-merge with the values, (d)
+legitimate) and its reason. Two budgets instead of lists: inferred-target double casts
+**0**, named-target **25**; duplicate-body groups a ratchet at **198**.
+
+Proven red before being trusted (F17's lesson): a second `SPartMbInfo` makes the
+declaration arm fail with the file:line pair; a `p as *mut _ as *mut _` makes the cast
+arm fail and print the instruction to delete the cast and let rustc name the two types.
+
+### 4. Face 2 — the P3 tests, and the one that proved nothing
+
+Five tests over the three identity sites, each giving the two pictures **the same POC**
+so a POC-based rewrite takes the wrong arm and fails.
+
+The `ON_MB_BS` test is worth recording as a near miss. Its first draft asserted only
+that the same-object and distinct-object calls *differ*; with the MVs first chosen, all
+three of the function's arms returned 1 and the test failed for the right reason. The
+fix was to choose MVs where straight comparisons exceed the threshold and crossed ones
+do not, which makes the `ref_p0 == ref_p1` arm (an AND of both) false and the other
+arm true — 0 vs 1. **An identity test whose MV configuration cannot separate the arms
+tests nothing**, and it will pass just as happily after the conversion that breaks it.
+
+S12 collected again: `WelsCopy16x16_c` bumps its row pointer after the last row, so
+the exactly-sized plane the EC test first allocated is an out-of-bounds `offset`. Miri
+caught it on the first run; the planes carry a spare row with the rule named at the
+allocation.
+
+Tests **435 → 440** debug, **429 → 434** release, Miri **295 → 300**.
+
+### 5. Face 3 — 5.1's S20 closure, computed and recorded
+
+`SPicture`'s plane fields become owned (`PaddedPlanes` + `Vec`s). The closure:
+
+**Reachability.** Nothing embeds the decoder's `SPicture` **by value** — every holder
+is a pointer, which is the fortunate answer and the reason 5.1 is the right first step.
+The pointer holders, by count of mentions:
+
+| file | `*mut SPicture` / `PPicture` | role in the closure |
+|---|---|---|
+| `manage_dec_ref.rs` | 17 | DPB lists, marking, MMCO — converts with 5.1 |
+| `pic_queue.rs` | 13 | the pool itself; `SPicBuff.ppPic` is `*mut *mut SPicture` |
+| `deblocking.rs` | 10 | `pRefPics` — **P3 site 1, now pinned** |
+| `error_concealment.rs` | 7 | **P3 sites 2 and 3, now pinned** |
+| `picture.rs` | 6 | `pRefPic[[; 17]; LIST_A]` and `pSetUnRef` |
+| `decoder_core.rs` | 3 | `pDec`, `pPreviousDecodedPictureInDpb` |
+| `decoder_context.rs` | 1 | `SRefPic`'s three `[[*mut Picture; MAX_DPB_COUNT]; LIST_A]` |
+| `decode_slice.rs`, `mv_pred.rs`, `parse_mb_syn_cavlc.rs` | 1 each | MC and colocated reads — **5.3/5.6, not 5.1** |
+
+**Layout pins: none.** The decoder's `SPicture` has no `assert_size!` and no offset
+pins. `assert_size!(SPicture, 136)` in `encoder/abi_guard.rs` is the **encoder's**
+same-named struct (allowlist class (a)) and does not move. Compare T4b.2b, where the
+pins sat after the changed field and "update the assert" would have been the wrong fix
+— here there is nothing to update, and that is a fact worth having before the first
+commit rather than after it.
+
+**The fourth plane is dead.** C++ `picture.h:53-55` declares `pBuffer[4]`, `pData[4]`,
+`iLinesize[4]`; `AllocPicture` sets `iPlanes = 3` and writes indices 0-2 only, and
+**nothing in `src/decoder` reads index 3** of any of the three arrays. The four
+`pData[3]` writes in the crate are on `SSourcePicture`, the public API type. 5.1 may
+fix the count at three.
+
+**F19's check, per allocation.** `AllocPicture` (`pic_queue.rs:129`) makes eight
+allocations and `FreePicture` (`:263`) has a matching free for every one:
+
+| allocated | at | freed at |
+|---|---|---|
+| `pPic` itself | :143 | :309 |
+| `pBuffer[0]` (one block; `[1]`/`[2]` are interior offsets) | :183 | :269 |
+| `pMbCorrectlyDecodedFlag` | :223 | :277 |
+| `pMbType` | :228 | :285 |
+| `pMv[LIST_0]`, `pMv[LIST_1]` | :234, :238 | :294 (loop) |
+| `pRefIndex[LIST_0]`, `pRefIndex[LIST_1]` | :244, :248 | :301 (loop) |
+
+The `bParseOnly` arm allocates nothing (every plane pointer set null), so the two arms
+are balanced too. **No F19-class leak here** — recorded because the check was run, not
+because it found nothing.
+
+**S25 re-entrancy, enumerated with the closure — one real hazard.**
+`SPicture::unref(&mut self)` (`picture.rs:292`) does `func(self as *mut SPicture)`, and
+the installed `SetUnRef` (`manage_dec_ref.rs:100`) immediately does
+`let ref_pic = &mut *pRef`. Two `&mut` paths to one picture, one derived from the
+other. It is legal today only because the outer borrow is dead after the call; a
+`&mut Picture`-based pool makes it the exact shape S25 describes, and it must be faced
+before the pool conversion rather than discovered at compile time. The fix shape is
+S25's own: no borrow outlives one expression — `unref` becomes a free function taking
+the pool and an id, or the callback goes away with the strategy it encodes.
+
+The second, milder one: `SPicBuff.ppPic` is `*mut *mut SPicture` and the recycling
+predicate walks it while `pCtx->pDec` points into the same array.
+
+**Consequence for session B's sizing.** The closure is wide (ten files) but *shallow*
+— no by-value embedding, no layout asserts, no `mem::zeroed` reach into the picture
+itself. That is the opposite of 5.2's `SDqLayer`, and it means 5.1 can be strangled
+file by file behind `PicId` rather than landing as one commit. `deblocking.rs` and
+`error_concealment.rs` are the two files whose behaviour the conversion could silently
+change, and both are pinned now.
+
+### 6. F3: the twenty-first and twenty-second measurements, and the first even alternation
+
+**Six hits this session**, every one inside the narrowed signature (`mt`, `sm=3`,
+**`n=600`**, `t∈{2,4}`, wrong length), across all three clips and both profiles. The
+first five were retried in isolation **5/5 byte-identical each time**.
+
+Then the alternation the brief prescribes for two or more hits: 12 `mt` sweeps per
+side, 120 configurations each, both release binaries built once and swapped inside one
+loop. Base = the session's entry tree (`17167c81`), head = after T5.A4.
+
+**Base 4 hits / head 4 hits**, 1440 configurations per side. The first even split the
+instrument has produced. Two details beyond the count:
+
+* The head side hit one configuration **twice with two different wrong lengths** (0
+  bytes at sweep 1, 37837 at sweep 3, against a stable C++ 39981) — this finding's own
+  race criterion, met on the tree under suspicion, exactly as in session C.
+* The base side reproduced `Static_152_100 t=4 sm=3 n=600 cabac=1 rc=1` at **28537
+  against C++ 30190** — the same two numbers session C recorded for the same
+  configuration on a different tree. The signature is stable across trees and sessions.
+
+Rate this session: 8 hits / 2880 alternated configurations ≈ **1 in 360**, against the
+~1/800 baseline — consistent with session B's "the load is part of the signature" and
+session C's "the variable is recent load, not isolation". This session ran batteries
+back to back for hours.
+
+Also worth stating plainly: **every commit this session changes decoder code or tests,
+and these sweeps compare encoders.** The causal link is not merely unlikely, it does
+not exist. Ninth alternation, ninth acquittal.
+
+### 7. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 435 / 429 / 20 | **440 / 434 / 20** |
+| Miri `--lib` | 295 | **300** |
+| `raw_ptr` | 4815 | **4597** (−218) |
+| `unsafe_block` | 613 | **618** (+5, all in the new tests) |
+| `unsafe_fn`, `SHIM(`, `transmute`, `mem_zeroed` | 1250, 157, 4, 32 | unchanged |
+| duplicate types / aliases / tables | 17 / 34 / 27 | **10 / 31 / 17** |
+| inferred-target double casts | 94 | **0** |
+| duplicate-body groups (instrument widened) | 51 (blind) | **198** (seeing) |
+
+Ratchet regenerated per S16; the only increases are the five `unsafe {}` blocks in
+T5.A6's tests, in the two files those tests live in.
+
+### Hand-off: Phase 5, session B
+
+Face 1 and Face 2 are closed. Face 3 is recorded above and **not started in code** —
+the brief's "first strangler commits only from a standing start" was not met with the
+time left, deliberately rather than by accident.
+
+Session B starts 5.1 from the closure in §5. What it inherits:
+
+* **The closure is shallow.** No by-value embedding of `SPicture`, no layout asserts on
+  it, no `mem::zeroed` reach. Strangle file by file behind `PicId`; do not size this
+  like 5.2.
+* **The S25 hazard is `unref`/`SetUnRef`, and it is the first thing to face**, not the
+  last. It is enumerated in §5 with its fix shape.
+* **The three P3 sites are pinned** by five tests that fail if identity becomes POC.
+  Read them before touching `deblocking.rs` or `error_concealment.rs`.
+* **F21's fix is still unpinned** — the sub-32px chroma expand lives in 5.1's files and
+  no corpus stream is narrower than 176px. Pinning it needs a narrow-frame decode asset
+  and new golden rows, which is Eugene's call and was not sought this session. The
+  exposure stands, recorded here and in the brief.
+* **F22 is 5.3's**, but 5.2 answers its reachability question as a side effect. If the
+  answer arrives early, put it in the finding.
+* **The census gate runs at `commit` level now.** A new duplicate fails the build with
+  the file:line pair. When a step legitimately introduces one, add it to
+  `census_allowlist.txt` *with its class and owner*, not with a bare name.
