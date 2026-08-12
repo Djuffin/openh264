@@ -2069,8 +2069,13 @@ pub unsafe fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: *mut i8) -> i32 
     }
 }
 
-pub unsafe fn CheckIntraChromaPredMode(uiSampleAvail: u8, pMode: *mut i8) -> i32 {
-    unsafe {
+/// T5.H5's family took this signature with it: `pMode` had exactly three callers,
+/// all of them `pChromaPredMode[iMbXy]`, so when that array became a grid entry the
+/// parameter's only possible source became a `&mut i8`. The body then needs no
+/// `unsafe` at all — it reads and writes one `i8` — so the function stops being an
+/// `unsafe fn`.
+pub fn CheckIntraChromaPredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
+    {
         let iLeftAvail = (uiSampleAvail & 0x04) as i32;
         let bLeftTopAvail = (uiSampleAvail & 0x02) as i32;
         let iTopAvail = (uiSampleAvail & 0x01) as i32;

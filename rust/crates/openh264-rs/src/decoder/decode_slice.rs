@@ -2228,7 +2228,7 @@ pub unsafe fn RecI4x4Chroma(
     pDqLayer: *mut SDqLayer,
 ) -> i32 {
     let iChromaStride = (*(*pCtx).pCurDqLayer).iChromaStride;
-    let iChromaPredMode = *(*pDqLayer).pChromaPredMode.add(iMBXY as usize) as usize;
+    let iChromaPredMode = *(*pDqLayer).grid.chroma_pred_mode.get(iMBXY as usize) as usize;
 
     if let Some(func) = (*pCtx).pGetIChromaPredFunc[iChromaPredMode] {
         let pPred1 = (*pDqLayer).pPred[1];
@@ -2321,7 +2321,7 @@ pub unsafe fn RecI16x16Mb(
     pDqLayer: *mut SDqLayer,
 ) -> i32 {
     let iI16x16PredMode = (*(*pDqLayer).pIntraPredMode.add(iMBXY as usize))[7] as usize;
-    let iChromaPredMode = *(*pDqLayer).pChromaPredMode.add(iMBXY as usize) as usize;
+    let iChromaPredMode = *(*pDqLayer).grid.chroma_pred_mode.get(iMBXY as usize) as usize;
     let iUVStride = (*(*pCtx).pCurDqLayer).iChromaStride;
     let iYStride = (*pDqLayer).iLumaStride;
     let pRS = pScoeffLevel;
@@ -3880,7 +3880,7 @@ pub unsafe fn ParseIntra4x4Mode(
         if iCode > MAX_PRED_MODE_ID_CHROMA {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = iCode as i8;
     } else {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
@@ -3889,13 +3889,13 @@ pub unsafe fn ParseIntra4x4Mode(
         if uiCode > MAX_PRED_MODE_ID_CHROMA as u32 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = uiCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    if *(*dq).pChromaPredMode.add(iMbXy) == -1
+    if *(*dq).grid.chroma_pred_mode.get(iMbXy) == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
             uiNeighAvail,
-            (*dq).pChromaPredMode.add(iMbXy),
+            (*dq).grid.chroma_pred_mode.get_mut(iMbXy),
         ) != 0
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
@@ -4020,7 +4020,7 @@ pub unsafe fn ParseIntra8x8Mode(
         if iCode > MAX_PRED_MODE_ID_CHROMA {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = iCode as i8;
     } else {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
@@ -4029,13 +4029,13 @@ pub unsafe fn ParseIntra8x8Mode(
         if uiCode > MAX_PRED_MODE_ID_CHROMA as u32 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = uiCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    if *(*dq).pChromaPredMode.add(iMbXy) == -1
+    if *(*dq).grid.chroma_pred_mode.get(iMbXy) == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
             uiNeighAvail,
-            (*dq).pChromaPredMode.add(iMbXy),
+            (*dq).grid.chroma_pred_mode.get_mut(iMbXy),
         ) != 0
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
@@ -4085,7 +4085,7 @@ pub unsafe fn ParseIntra16x16Mode(
         if iCode > MAX_PRED_MODE_ID_CHROMA {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = iCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = iCode as i8;
     } else {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, &mut *pBsAux, &mut uiCode);
         if ret != 0 {
@@ -4094,13 +4094,13 @@ pub unsafe fn ParseIntra16x16Mode(
         if uiCode > MAX_PRED_MODE_ID_CHROMA as u32 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
         }
-        *(*dq).pChromaPredMode.add(iMbXy) = uiCode as i8;
+        *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    if *(*dq).pChromaPredMode.add(iMbXy) == -1
+    if *(*dq).grid.chroma_pred_mode.get(iMbXy) == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
             uiNeighAvail,
-            (*dq).pChromaPredMode.add(iMbXy),
+            (*dq).grid.chroma_pred_mode.get_mut(iMbXy),
         ) != 0
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I_CHROMA_PRED_MODE);
@@ -4757,7 +4757,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
     *(*dq).pCbp.add(iMbXy) = 0;
     *(*dq).pCbfDc.add(iMbXy) = 0;
-    *(*dq).pChromaPredMode.add(iMbXy) = C_PRED_DC as i8;
+    *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = C_PRED_DC as i8;
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
 
@@ -4967,7 +4967,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 
     *(*dq).pCbp.add(iMbXy) = 0;
     *(*dq).pCbfDc.add(iMbXy) = 0;
-    *(*dq).pChromaPredMode.add(iMbXy) = C_PRED_DC as i8;
+    *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = C_PRED_DC as i8;
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
 
