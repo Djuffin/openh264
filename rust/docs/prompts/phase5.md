@@ -285,17 +285,25 @@ this brief historical.
   annotations — removing a retag costs a pointer type, which is the same trade
   T5.E1 made in the other direction) → **4604** (session G: +15, the same trade again —
   11 `&mut *pCtx` bindings and 13 nested borrows became raw derivations, and each one
-  costs a pointer type annotation; T5.G2 was flat), `unsafe_block` 613 → 618 → 616 →
-  613 → 614 → 614 → **619**, `unsafe_fn` 1250 → 1249 → 1248 → 1247
-  (`InitCurDqLayerData` deleted) → 1248 (`cabac_ctx_base`) → **1249** (`bytes_copy`).
-  **S16's prose floor has now been collected four times** — `raw_ptr` and `SHIM(` at
+  costs a pointer type annotation; T5.G2 was flat) → **4570** (session H: **−34, and the
+  first decrease of the phase that comes from conversion rather than deletion** — 22
+  field declarations, 22 allocations and 22 frees against two new S28 bridges, which cost
+  +1 `raw_ptr` each), `unsafe_block` 613 → 618 → 616 →
+  613 → 614 → 614 → 619 → **622**, `unsafe_fn` 1250 → 1249 → 1248 → 1247
+  (`InitCurDqLayerData` deleted) → 1248 (`cabac_ctx_base`) → 1249 (`bytes_copy`) →
+  **1248** (`CheckIntraChromaPredMode`, retired *by the flip* — its `*mut i8` became a
+  `&mut i8` and its body stopped needing `unsafe`). **`mem_zeroed` 32 → 31** at T5.H3:
+  the decoder's layer stopped being constructible by zeroing.
+  **S16's prose floor has now been collected seven times** (session H added three, two of
+  them on `mem_zeroed` again and one putting `raw_ptr` at 1 in a `forbid(unsafe_code)`
+  file); before session H it had been collected four times — `raw_ptr` and `SHIM(` at
   session C, `mem_zeroed` at T5.G1 (a doc comment naming the zeroing intrinsic, which
   would have corrupted S21's live construction-audit count) and `raw_ptr` again at
   T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
   totals: a one-line prose delta and a real conversion look identical in the total.
-- Gates: **451 / 445 / 20**, Miri **312** (session G: +1, the aliasing probe now runs
-  un-ignored — see §2), sweeps 341/341 both profiles, decode
-  goldens **56 rows**. The debug sweep can reproduce F3 (`rust_enc`'s
+- Gates: **463 / 457 / 20**, Miri **324** (session G: +1, the aliasing probe now runs
+  un-ignored — see §2; session H: +12, `MbGrid` and S28's reach tests), sweeps 341/341
+  both profiles, decode goldens **56 rows**. The debug sweep can reproduce F3 (`rust_enc`'s
   `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29
   is the cleanest evidence the finding has. **Session G drew zero F3 hits** across four
   full batteries — a clean sweep is a sample, not a signal (S14 step 4).
@@ -306,8 +314,10 @@ this brief historical.
   deleted, so its class-(a) line is gone — a deletion removes the entry where a
   rename would only re-key it). Remaining within-decoder entries are allowlisted
   with their owning steps.
-- `SHIM(` **158**: `phase3` = 2 (Phase 6's), `phase5` = **2** — `cabac_decoder.rs`'s
-  (dies in 5.2) and `SPicture::data_ptr` (dies as 5.2–5.6 convert the kernels,
+- `SHIM(` **159**: `phase3` = 2 (Phase 6's), `phase5` = **3** — `cabac_decoder.rs`'s
+  (dies in 5.2), `decoder_core.rs`'s `mb_grid_ptr` (T5.H2, S28's raw bridge; dies as the
+  families that hand a pointer to a kernel convert) and `SPicture::data_ptr` (dies as
+  5.2–5.6 convert the kernels,
   *except* at `decoder_core.rs:1087`, where the public output contract hands the
   pointers to the API consumer and they outlive the call; that one outlives the
   phase). Rest `phase2`.

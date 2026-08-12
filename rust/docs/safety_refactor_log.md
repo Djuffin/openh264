@@ -5517,3 +5517,296 @@ log entries.
   The field still exists and `cabac_decoder.rs:855`'s `SHIM(phase5)` accessor still
   reaches the layer. Both die with the flip.
 * **F23 remains Phase 8's. F31's redundant memset is 5.5's** (see §5).
+
+## 2026-08-12 — Phase 5, session H (the grid exists, the layer owns one, and half the families have flipped onto it — and the first honest perf reading of what that costs)
+
+**Commits:** `95a9cb1d` (inherited doc tail — S2c, S14, S16), `f4afe9ac` (T5.H1, F33),
+`0b3753e5` (T5.H2, `MbGrid`), `83e94d4a` (ratchet), `4168ebdc` (T5.H3, the seat),
+`3c4c6f4e` (ratchet), `25d3f048` → `1438d762` (T5.H4–T5.H14, eleven families, one
+commit each), `24053df1` (docs — F33, 5.2's marks, F3), `353f5b7a` (ratchet), and
+this entry.
+
+### The session in one line
+
+5.2's flip is half done: `MbGrid` exists and is proven, `SDqLayer` owns one and can no
+longer be constructed by zeroing, eleven of the twenty-two array families have flipped
+onto it with the aliasing probe green throughout — and a 7-pair median says the safe
+indexing costs **+1.3% decode, +2.05% on Constrained Baseline**, which is the first
+number in this phase that is a real cost rather than a wash.
+
+### Control battery
+
+Docs-only tail, session G accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 451/445/20, ratchet 4604, census 60.
+Every figure matched what session G recorded, which is the first time this phase the
+open needed no correction.
+
+### 0. The sizing, recounted (S24)
+
+The brief's governing numbers were **75 signature positions, 24 fields, ~697 accesses**.
+Re-greped before acting:
+
+```
+*mut SDqLayer / PDqLayer mentions          92   (comment-stripped)
+  of which: fn parameter positions         66   over 6 files
+            `let` bindings                 24   decode_slice 20, manage_dec_ref 4
+            struct fields                   2   SWelsDecoderContext
+grid field accesses (`.pField`)           697   exactly the brief's figure
+```
+
+**66, not 75** — and 66 is corroborated by `phase5.md` §2's own independent count from
+session D ("of 66 functions taking a DqLayer pointer, 50 take the layer only"), which is
+the second instrument S24 asks for. The 75 was session G's, measured with a shape that
+also caught the 24 local bindings and some of the struct fields. It changed nothing: the
+work is *convert every access*, not *convert 75 things*, so the wrong count was not
+load-bearing — the same disposition T5.G1 reached about F25's twelfth binding, and the
+same warning attaches. You cannot tell which kind you are holding without checking.
+
+The **~697** was exact.
+
+### 1. F33 — two of the twenty-four arrays have no reader (T5.H1)
+
+Before transcribing the field union off the allocation block, both directions of the
+inventory were counted: writes and reads, per field, over both trees.
+
+```text
+field                       writes   reads
+pNzcRs                        0        0
+pInterPredictionDoneFlag     14        0
+```
+
+Both dead in the **C++** too — `pNzcRs` is allocated, aliased and freed with no other
+mention in `codec/`; `pInterPredictionDoneFlag` is written `= 0` at 14 sites in
+`decode_slice.cpp` and read nowhere. The port is faithful at all 14. Deleted: 24 arrays
+became 22, 27 allocations became 25.
+
+**The half worth carrying is that the two are not the same kind of dead.** `pNzcRs`
+would fall out of any "is this mentioned" sweep. `pInterPredictionDoneFlag` would not:
+14 live writes make every reference-counting instrument call it used, and only counting
+reads and writes *separately* shows it. An unread write hides from exactly the tools
+that find unused fields — and this one costs a store per macroblock on every parse path
+in both entropy coders.
+
+### 2. Face 1 — `MbGrid`, and proving S28 rather than asserting it (T5.H2)
+
+The union is a **transcription** of `InitialDqLayersContext`'s allocation block, in that
+block's order, because that is the one place an element type and an element count are
+stated together. Reading it off the struct declaration would have been a judgement about
+what each pointer meant, and F32 is what that judgement was worth for the port's whole
+life. T5.G2 and T5.H1 are why the transcription is mechanical.
+
+The raw bridge, `mb_grid_ptr`, went to `decoder_core.rs` with the consumers and **not**
+into `safe/mb_grid.rs`, which stays `#![forbid(unsafe_code)]` — `SPicture::data_ptr`'s
+precedent, and the brief was explicit about it.
+
+**S28's tests were proven to be instruments.** The rule is only worth writing down if
+something can fail against it, so the derivation was temporarily swapped for the
+narrowing spelling — same address, still safe code — and Miri named it on the first run:
+
+```text
+error: Undefined Behavior: attempting a write access using <654221> at
+       alloc308545[0xefe], but that tag does not exist in the borrow stack
+```
+
+Both reach tests fail narrowed and pass rooted; under the ordinary runner both pass.
+Coverage proven by reversion, as T5.B1 proved F21's and T5.C3 proved its own.
+
+### 3. Face 1 — the seat, and S21 with the allocator watching (T5.H3)
+
+`SDqLayer` gained `grid: MbGrid` **by value**, and that forced its whole lifecycle in one
+commit (S20): `Copy` off, `Default` deleted, `WelsMallocz` replaced by
+`Box::into_raw(Box::new(SDqLayer::for_grid(dims)))`, `WelsFree` by `Box::from_raw`.
+
+The alternative — a `*mut MbGrid` in the layer — was considered and rejected. It would
+have kept `Copy` and `mem::zeroed` valid and made every family commit smaller, at the
+price of a second path to the same data and a shim to delete later. That is P2's disease
+by name, in the step whose whole job is killing P2's instance of it.
+
+**S21 discharged the way T3.3 wrote it**: zeroed `MaybeUninit` shell,
+`addr_of_mut!((*p).grid).write(MbGrid::new(dims))` (S29 — no `&mut` to a field of a
+not-yet-valid struct), materialize last. No shell survives, because the grid is the only
+owning field. `Default` was **not** reinstated: a layer without dimensions is not a
+thing, and a `Default` that invented some would be the same lie the zeroing was. The
+compiler found `Default`'s complete user list — two test fixtures, both of which state
+their dimensions two lines above.
+
+**T5.E2's landmine became unrepresentable rather than fixed.** The grid is sized from the
+negotiated maximum, its dimensions travel inside every `MbArray`, and the free path that
+T5.E2 caught reading the *slice's* dimensions has no arithmetic left: dropping a `Vec`
+reads nothing.
+
+Miri verdict on this face: **324 passed, 524s**, the probe included — a real stream
+decoded through a heap-constructed layer owning 22 `Vec`s.
+
+### 4. Face 2 — eleven families (T5.H4–T5.H14)
+
+| # | family | accesses | files |
+|---|---|---|---|
+| 1 | `pIntraNxNAvailFlag` | 2 | 1 |
+| 2 | `pIntra4x4FinalMode` | 4 | 1 |
+| 3 | `pResidualPredFlag` | 8 | 1 |
+| 4 | `pChromaPredMode` | 19 | 2 |
+| 5 | `pCbfDc` | 8 | 2 |
+| 6 | `pLumaQp` | 34 | 4 |
+| 7 | `pNoSubMbPartSizeLessThan8x8Flag` | 17 | 3 |
+| 8 | `pTransformSize8x8Flag` | 36 | 3 |
+| 9 | `pCbp` | 29 | 2 |
+| 10 | `pMbRefConcealedFlag` | 8 | 2 |
+| 11 | `pSubMbType` | 22 | 5 |
+
+**Remaining, by name**: `pMbType`, `pSliceIdc`, `pMv`, `pMvd`, `pRefIndex` (the three
+`LIST_A` pairs), `pDirect`, `pChromaQp`, `pNzc`, `pScaledTCoeff`, `pIntraPredMode`,
+`pMbCorrectlyDecodedFlag`. Stopped at a family boundary, per the brief's §6.
+
+Four things the flip turned up that were not in the plan for it:
+
+**Eight port-invented null guards came out.** `pCbp` had one, `pMbRefConcealedFlag` four,
+`pSubMbType` three. None of them exists in the C++ — `decode_slice.cpp:334`, `:132`,
+`:1596`, `:1711`, `:1743`, `mv_pred.cpp:593`, `:669`, `error_concealment.cpp:319` all
+index unguarded. They are F22's class (a test on one side of the translation only) but
+harmless in the safe direction, and the flip does not argue them away, it makes them
+unrepresentable. One of the eight was a **conjunct**: `error_concealment.rs` tested
+`pSubMbType`, `pDec->pRefIndex[0]` and `pDec->pMv[0]` together, and only the first came
+out — the other two are the *picture's* arrays, still raw, still nullable, 5.1/5.4's.
+
+**A dead parameter pair.** `ParseCbfInfoCabac` declared `pCbfDc: *mut u16` and
+`pMbType: *const u32` and shadowed both, four lines in, with locals re-deriving the same
+expressions its caller had just evaluated to pass them. Dead since it was written, in
+the port and in the C++. `pCbfDc`'s could not survive the flip; `pMbType`'s came out
+with it because leaving half a dead pair is worse than leaving both.
+
+**One signature retired on the flip itself.** `CheckIntraChromaPredMode(u8, *mut i8)` had
+three callers and every one passed `pChromaPredMode[iMbXy]`, so when the array became a
+grid entry the parameter's only possible source became `&mut i8`. Its body then needs no
+`unsafe` at all: `unsafe_fn` −1. That is inside the family's closure (S20), not a
+face-3 signature re-point.
+
+**A memset became a checked fill, and it is T5.E2's hazard in miniature.**
+`write_bytes(pMbRefConcealedFlag, 0, iMbNum)` used the **SPS's** dimensions, smaller than
+the grid's negotiated maximum on any stream below it. As `as_mut_slice()[..iMbNum]
+.fill(false)` the relationship is checked at the point of use rather than assumed.
+
+**The type system corrected the rewrite three times, and all three were the same class:**
+an access whose *direction* a textual rule got wrong — a write whose `=` sat on the next
+line (F29's multiline clause, in a rewrite instead of a count), a read-modify-write
+(`*flag = *flag && ..`), and two `&mut *ptr` argument sites. `get` and `get_mut` are
+different methods, so every one was a compile error. A count would have carried all
+three in silently. A fourth correction was mine and worse: the file list for `pLumaQp`
+came from a `grep` that `head -90` had truncated, and three sites in two unnamed files
+survived it. **S24 with a pager in it.** The helper now sweeps every decoder file rather
+than a named list; that is the fix, not "read more carefully".
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 451 / 445 / 20 | **463 / 457 / 20** |
+| Miri `--lib` | 312 | **324** |
+| decode goldens | 56 rows | **56 rows, none moved** |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4604 | **4570** (−34) |
+| `unsafe_block` | 619 | **622** |
+| `unsafe_fn` | 1249 | **1248** (`CheckIntraChromaPredMode`) |
+| `mem_zeroed` | 32 | **31** (the layer stopped being zero-constructible) |
+| `SHIM(` | 158 | **159** — `phase5` is now **3** |
+| Miri skips | 2 | 2 |
+| findings | — | **F33, new and FIXED** |
+
+`raw_ptr` −34 is the first real *decrease* of the phase that comes from conversion rather
+than deletion: 22 field declarations, 22 allocations and 22 frees against two new S28
+bridges. The +2 in `decode_slice.rs` is those bridges, and it is the trade sessions F and
+G both named — an honest derivation costs a pointer type annotation.
+
+**S16's prose floor collected three more times, all in this session's own commits**, and
+two of them on `mem_zeroed`, which is S21's live construction-audit count and the one
+number a prose delta would have hidden the real movement in. A third put `raw_ptr` at 1
+in `safe/mb_grid.rs` — a `forbid(unsafe_code)` file, where any nonzero `raw_ptr` is a
+lie. All reworded, none baselined. Seven instances now; the operational form is
+unchanged and was what caught them: **read per-file deltas, never the total.**
+
+Batteries: `gates.sh full` three times, `gates.sh commit` eleven times. Every step PASS
+except two ratchet readings, each regenerated in its own commit per S16.
+
+### 6. Perf — the first reading in this phase that is a cost
+
+S2c does **not** apply: the flip touches allocation and layout, which the brief said in
+advance and the measurement bears out.
+
+**The seat (T5.H3), 3 pairs against the S2 null:** decode median **−0.21%** (3 rows,
+−0.79%..−0.19%), encode median −0.05%. This session's null band, measured the same day
+on the same machine, is **±1.55%** (28 rows, median −0.22%). Flat, as an allocation-shape
+change with no per-access change should be.
+
+**The eleven families, 3 pairs:** decode median **+0.82%**, and all three rows positive
+— +0.38%, +0.82%, +1.37%. Inside the null band, but monotone, which a band does not
+account for. S2b's instruction for exactly this is more pairs before a mechanism, so:
+
+**The eleven families, 7 pairs:**
+
+```
+Constrained Baseline (CAVLC)   2.6370 -> 2.6910   +2.05%
+Main (CABAC, B-frames)         6.3640 -> 6.3950   +0.49%
+High (CABAC, 8x8)              6.3590 -> 6.4430   +1.32%
+  decode: rows 3, median +1.32%, min +0.49%, max +2.05%
+  encode: rows 28, median −0.08%   (decoder-only change; unaffected, as expected)
+```
+
+**More pairs firmed it up rather than washing it out**, and CB is now outside the null
+band. The mechanism is not mysterious: eleven families' per-macroblock accesses are
+slice indexes with a bounds check where they were `ptr.add(i)`, and CB is the stream with
+the most macroblocks per second, so it pays the most. S8 forbids `get_unchecked` this
+phase and nothing here reaches for it.
+
+**What this means for the phase, stated plainly rather than left for arithmetic.**
+`phase5.md` §7 budgets ~7 points of CB headroom under the tripwire and says flat
+mid-phase readings are expected because the payoff — constant dimensions reaching the
+kernels — arrives at the ledger, not the bench. Half the flip has now spent **~2 of
+those 7 points**, and the eleven families remaining include the largest ones: `pNzc`
+(75 sites), `pMv`/`pMvd`/`pRefIndex` (hundreds, and read in the motion-compensation
+inner loops). A linear extrapolation is not warranted from three streams, but the
+direction is not in doubt and the remaining families are the hotter half. **This is the
+session's most important result and it is a question for the next one, not a defect in
+this one.**
+
+### 7. F3 — zero across six sweeps
+
+Six sweeps of 341 configurations (three full batteries × two profiles) = 2046
+configurations, all PASS, both profiles. Nothing to adjudicate; S14's protocol starts at
+a hit. Appended to F3 as a sample per S14 step 4 — and appended *when it was known*,
+which is the clause session G added after finding the ledger four sessions in arrears.
+
+Second consecutive zero-hit session. Sessions G and H together are 3410 configurations
+against a ≈1/800 rate — about four expected hits, so zero twice running is on the
+unlikely side of ordinary. It is still not a signal: both sessions were 100%
+decoder-side and the sweep exercises the encoder. Running total unchanged at **thirty-two
+measurements, eleven alternations, eleven acquittals**.
+
+### Hand-off: Phase 5, session I
+
+* **The unit is the same one: 5.2's flip, second half.** Eleven families remain, named
+  in §4 and in `phase5.md` §2. The seat, the accessor and the pattern are all in place,
+  so a family commit is now the flip and nothing else — the four classes of surprise
+  this session met (invented null guards, dead parameters, a signature inside the
+  closure, a memset with the wrong dimensions) are all worth expecting again.
+* **Read §6 before sizing the session.** The safe indexing costs ~1.3% decode and ~2% CB
+  for the *first* eleven families, measured at 7 pairs, and the remaining eleven are the
+  hot ones — `pNzc`, `pMv`, `pMvd`, `pRefIndex`, `pScaledTCoeff`. Two courses, and
+  choosing between them is a judgement the next session should make **before** it flips
+  the motion-vector families rather than after: take the cost and bank it against §7.4's
+  ledger, or measure per family and decide where the line is. What is not available is
+  `get_unchecked` (S8) or not measuring.
+* **The three big families are not like the eleven.** `pMv`/`pMvd`/`pRefIndex` are
+  `[MbArray<_>; LIST_A]` pairs, they are read through `pDec` as well as through the
+  layer — `(*(*dq).pDec).pMv[..]` is the **picture's**, not the layer's, and a
+  mechanical rewrite must not touch it — and `pScaledTCoeff`'s consumers hold
+  `&mut [i16; 384]` across calls that re-enter the layer through `pCtx`. That last one
+  is F28's shape and is the first family in this flip where the probe has a real chance
+  to go red. Budget a round trip for it.
+* **The probe is a gate and it held.** Three full batteries, three green Miri runs, 324
+  tests, ~524s each. Every family that flipped got a verdict that means something.
+* **`pBitStringAux` and `cabac_decoder.rs:855`'s `SHIM(phase5)` are untouched** — they
+  die with the family that carries them, which is none of the eleven flipped. Unchanged
+  from session G's hand-off.
+* **Face 3 has not started.** The ~28 cache-fill signature re-points wait on the
+  families that carry them; none of the eleven is one. F23 remains Phase 8's, F31's
+  redundant memset 5.5's.
