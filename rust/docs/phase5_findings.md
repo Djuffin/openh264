@@ -978,3 +978,47 @@ It is a dozen lines of script over the struct definition and the allocation bloc
 runs in a second, and it is worth doing on **any** struct about to become owned — the
 encoder's `SDqLayer`/`SMbCache` in 6.3 have the same shape and have never been checked
 this way. S24's law, aimed at types instead of counts.
+
+## F33 — two of the grid's arrays have no reader in either tree, and one of them has no writer either
+
+**Status: FIXED 2026-08-12 (Phase 5 session H, T5.H1). Owner 5.2**, and like F32 it is a
+precondition of the flip rather than a defect in running code: nothing misbehaves, and
+nothing ever could, because nothing reads what they hold. Found the same way F32 was —
+by inventorying the 24 arrays before converting them, not by a gate.
+
+### The inventory
+
+```text
+field                       writes   reads   allocation
+pNzcRs                        0        0     numMb * 24 * sizeof(i8)
+pInterPredictionDoneFlag     14        0     numMb * sizeof(i8)
+```
+
+`pNzcRs` is allocated (`decoder_core.cpp:1552`), aliased onto the layer (`:2471`) and
+freed (`:1711`), and no other line in `codec/` mentions it. It has been an allocation
+with neither a reader nor a writer for the whole life of both trees.
+
+`pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp` — once per
+macroblock on every parse path, in both entropy coders — and read at none. Write-only,
+also in both trees. The port is faithful to the C++ at all 14.
+
+### Why it matters, given nothing is broken
+
+Same reason as F32, and it is the other half of the same job. `MbGrid`'s field union is
+transcribed off the allocation block, so an array that survives into the union survives
+into a **safe** API, where it becomes a thing future readers reasonably assume something
+reads. Deleting them before the transcription costs 2 of 24 arrays and 2 of 27
+allocations, and removes 14 stores per macroblock from the parse path.
+
+The two are not the same kind of dead, and the difference is worth keeping. `pNzcRs`
+would be found by any "is this ever mentioned" sweep. `pInterPredictionDoneFlag` would
+not: it has 14 live writes, so every reference-counting instrument reports it as used,
+and only a read/write **split** shows it. An unread write is invisible to exactly the
+tools that find unused fields.
+
+### The instrument
+
+Count reads and writes separately, per field, over both trees. Comment-strip first —
+`pInterPredictionDoneFlag`'s naive count is 19, of which 5 are lifecycle and several
+more sit in prose (S16's floor, and it lands on inventories as readily as on metrics).
+The encoder's `SDqLayer`/`SMbCache` in 6.3 have never been read this way either.
