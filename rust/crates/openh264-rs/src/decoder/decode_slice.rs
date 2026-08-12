@@ -2482,7 +2482,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
         let idx = iNextMbXyIndex as usize;
         if !(*dq).pMbCorrectlyDecodedFlag.is_null() && !*(*dq).pMbCorrectlyDecodedFlag.add(idx) {
             *(*dq).pMbCorrectlyDecodedFlag.add(idx) = true;
-            if !(*dq).pMbRefConcealedFlag.is_null() && *(*dq).pMbRefConcealedFlag.add(idx) {
+            if *(*dq).grid.mb_ref_concealed_flag.get(idx) {
                 if !(*dq).pDec.is_null() {
                     (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
@@ -5182,10 +5182,8 @@ pub unsafe fn WelsDecodeSlice(
         }
         (*pCtx).bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
-        if !(*pCurDqLayer).pMbRefConcealedFlag.is_null() {
-            *(*pCurDqLayer).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) =
-                (*pCtx).bMbRefConcealed;
-        }
+        *(*pCurDqLayer).grid.mb_ref_concealed_flag.get_mut(iNextMbXyIndex as usize) =
+            (*pCtx).bMbRefConcealed;
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -5276,9 +5274,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
 
         (*pCtx).bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
-        if !(*dq).pMbRefConcealedFlag.is_null() {
-            *(*dq).pMbRefConcealedFlag.add(iNextMbXyIndex as usize) = (*pCtx).bMbRefConcealed;
-        }
+        *(*dq).grid.mb_ref_concealed_flag.get_mut(iNextMbXyIndex as usize) = (*pCtx).bMbRefConcealed;
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -5291,7 +5287,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
         let idx = iNextMbXyIndex as usize;
         if !(*dq).pMbCorrectlyDecodedFlag.is_null() && !*(*dq).pMbCorrectlyDecodedFlag.add(idx) {
             *(*dq).pMbCorrectlyDecodedFlag.add(idx) = true;
-            if !(*dq).pMbRefConcealedFlag.is_null() && *(*dq).pMbRefConcealedFlag.add(idx) {
+            if *(*dq).grid.mb_ref_concealed_flag.get(idx) {
                 if !(*dq).pDec.is_null() {
                     (*(*dq).pDec).iMbEcedPropNum += 1;
                 }
