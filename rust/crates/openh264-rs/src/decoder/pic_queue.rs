@@ -207,7 +207,6 @@ pub unsafe fn AllocPicture(
     }
 
     unsafe {
-        (*pPic).iPlanes = 3;
         (*pPic).iWidthInPixel = kiPicWidth;
         (*pPic).iHeightInPixel = kiPicHeight;
         (*pPic).iFrameNum = -1;
