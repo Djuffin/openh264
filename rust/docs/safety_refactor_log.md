@@ -5904,6 +5904,14 @@ left, so that window opens after it; and `PredMvBDirectSpatial`/`PredBDirectTemp
 write `pSubMbType[iMbXy]` themselves (`mv_pred.rs:1035`, `:1130`), so the B-slice parse
 loop keeps a per-iteration window and only the read-only loops after it share one.
 
+**It landed as one commit, not eleven.** The brief allowed one per family *or per tight
+cluster*, and this is at the outer edge of that: the families interleave in the same
+functions (`pCbp` and `pTransformSize8x8Flag` share the three CAVLC decoders, `pSubMbType`
+and `pNoSubMbPartSizeLessThan8x8Flag` share the four partition loops), the idiom is one
+edit applied once, and the measurement is a whole-span number by construction. The cost of
+that choice is bisection granularity, and it did not bind — the revert branch of §3.4 is
+"stop and report", not "unswap".
+
 Full battery on the settled tree: **OVERALL PASS** — 463/457/20, Miri **324** (524s, the
 aliasing probe included), sweeps 341/341 both profiles, decode goldens 56 rows none moved,
 both benches bit-identical, census 60, ratchet flat.
@@ -6068,6 +6076,15 @@ at **thirty-two measurements, eleven alternations, eleven acquittals**. The step
 shortcut is *not* claimed — `rust_enc` builds from this same crate, so a decoder-only
 source diff does not by itself make the encoder binary identical, and nothing needed
 acquitting anyway.
+
+### 8. What went into the rules
+
+**S8 gains its fourth binding negative result** — the brief asked for a catalog addendum
+"if the idiom proves out", and the symmetric entry is the one this session earned:
+*hoisting a per-macroblock window over an array that is already one scalar per macroblock
+is a wash*, with the mechanism (checks are predicted, the length is in L1, and the
+functions are 1–3% of decode) and the code-size cost written next to it. It carries the
+counting lesson too: **opcode histogram, not landing-pad walk.**
 
 ### Hand-off: Phase 5, session J — this goes to Eugene before it goes to a session
 
