@@ -523,7 +523,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
         }
     }
 
-    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let pMv = (*pDec).pMv[LIST_0].add(iMbXy as usize);
     let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
 
@@ -658,7 +658,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     }
 
     let pMv = &(*(*pCurDqLayer).pDec).pMv;
-    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
+    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
 
     if is_8x8 {
@@ -805,8 +805,8 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
         (*pCurDqLayer).pRefIndex[LIST_0] as *mut _
     };
 
-    let is_8x8_curr = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
-    let is_8x8_neigh = *(*pCurDqLayer).pTransformSize8x8Flag.add(iNeighMb as usize);
+    let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     let pMvArr = if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pMv[LIST_0]
@@ -998,8 +998,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb) as *const u8;
 
-    let is_8x8_curr = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXy as usize);
-    let is_8x8_neigh = *(*pCurDqLayer).pTransformSize8x8Flag.add(iNeighMb as usize);
+    let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
+    let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     if is_8x8_curr && is_8x8_neigh {
         for i in 0..2 {
@@ -1615,7 +1615,7 @@ unsafe fn DeblockingInterMb(
     (*pFilter).iChromaQP[0] = pCurChromaQp[0];
     (*pFilter).iChromaQP[1] = pCurChromaQp[1];
 
-    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXyIndex as usize);
+    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXyIndex as usize);
 
     let bs_01 = (nBS[0][1].as_ptr() as *const u32).read_unaligned();
     if bs_01 != 0 && !is_8x8 {
@@ -1749,7 +1749,7 @@ pub unsafe fn FilteringEdgeLumaHV(
         &mut iBeta,
     );
 
-    let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add(iMbXyIndex as usize);
+    let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXyIndex as usize);
 
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
@@ -2025,7 +2025,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 (nBS[1][2].as_mut_ptr() as *mut u32).write_unaligned(0);
                 (nBS[1][3].as_mut_ptr() as *mut u32).write_unaligned(0);
             } else if IS_INTER_16x16(iCurMbType) {
-                let is_8x8 = *(*pCurDqLayer).pTransformSize8x8Flag.add((*pCurDqLayer).iMbXyIndex as usize);
+                let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get((*pCurDqLayer).iMbXyIndex as usize);
                 if !is_8x8 {
                     DeblockingBSInsideMBAvsbase(GetPNzc(pCurDqLayer, iMbXyIndex), &mut nBS, 1);
                 } else {
