@@ -917,7 +917,12 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   session that acts on them. A brief, a hand-off, a module doc and a prior session's
   scouting are all leads, never evidence. This is S23 pointed at prose instead of at
   cached configuration, and it comes from the same failure mode: reading a summary of
-  a fact instead of the fact.
+  a fact instead of the fact. **And the grep's unit must match the code's** (F29):
+  a line-anchored grep counted 25 of 29 sites because the four that mattered were
+  formatted across three lines each — a count from a grep of the code is *still a
+  summary* when the code's unit is the expression. Match multiline, normalize
+  whitespace first, or confirm the count with a second instrument; the miss cost an
+  8-minute Miri round trip that had already named two of the four.
 - **S25 — converting a raw pointer to a borrow does not introduce an aliasing
   question, it surfaces one that was already there** (Phase 4b session B, T4b.2a —
   the log entry's §4). `WelsWriteParameterSets` held a `*mut` to the strategy across
