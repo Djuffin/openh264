@@ -2262,7 +2262,7 @@ pub unsafe fn RecI8x8Luma(
     let pRS = pScoeffLevel;
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc8x8;
 
-    let avail = *(*pDqLayer).pIntraNxNAvailFlag.add(iMbXy as usize);
+    let avail = *(*pDqLayer).grid.intra_nxn_avail_flag.get(iMbXy as usize);
     let bTLAvail: [bool; 4] = [
         (avail & 0x02) != 0,
         (avail & 0x01) != 0,
@@ -3927,7 +3927,7 @@ pub unsafe fn ParseIntra8x8Mode(
         | (iSampleAvail[6] << 2)
         | (iSampleAvail[0] << 1)
         | (iSampleAvail[1])) as u8;
-    *(*dq).pIntraNxNAvailFlag.add(iMbXy) = uiNeighAvail;
+    *(*dq).grid.intra_nxn_avail_flag.get_mut(iMbXy) = uiNeighAvail;
 
     let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
     for i in 0..4usize {
