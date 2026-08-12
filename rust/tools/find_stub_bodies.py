@@ -31,11 +31,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CPP_DIRS = [
     ROOT / "codec/encoder/core/src",
+    ROOT / "codec/decoder/core/src",
     ROOT / "codec/common/src",
     ROOT / "codec/processing/src",
 ]
 RUST_DIRS = [
     ROOT / "rust/crates/openh264-rs/src/encoder",
+    ROOT / "rust/crates/openh264-rs/src/decoder",
     ROOT / "rust/crates/openh264-rs/src/processing",
     ROOT / "rust/crates/openh264-rs/src/common",
 ]

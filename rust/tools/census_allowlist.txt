@@ -1,0 +1,122 @@
+# Duplicate census allowlist — consumed by rust/tools/census.sh (plan §7.2, Phase 5
+# session A). Every line is a duplicate that is *allowed to exist*, with the class it
+# was put in and the reason. Anything the instruments report that is not listed here
+# fails the gate.
+#
+# Classes, per the Phase 5 brief's Face 1:
+#   (a) cross-codec namesake matching C++ — the two codecs really do declare a type of
+#       this name, so there is nothing to unify. No renames (P14).
+#   (b) within-codec duplicate declaration of one entity — must be unified. Anything
+#       still listed under (b) carries the phase step that owns it.
+#   (c) value-divergent constant/table — each consumer reads its own values today and a
+#       naive merge changes output (S6). The divergence is recorded, not repaired.
+#   (d) legitimately same-named functions / opaque-boundary casts.
+#
+# Key is `<kind> <name> x<count>`; the count is part of the key on purpose, so a *new*
+# copy of an already-allowed name fails the gate. File:line is not part of the key —
+# it moves with every edit.
+
+# ---------------------------------------------------------------------------
+# (a) cross-codec namesakes. C++ declares each of these in both codecs.
+# ---------------------------------------------------------------------------
+type SDqLayer x2                    # dec_frame.h:50 + svc_enc_frame.h:56
+type SPicture x2                    # decoder/picture.h:51 + encoder/picture.h:121
+type SMbCache x2                    # encoder/mb_cache.h:137; the decoder's is its own scratch
+type SLayerInfo x2                  # dec_frame.h:58 + svc_enc_frame.h:82
+type SMmcoRef x2                    # encoder/slice.h:74; the decoder parses its own
+type SReorderingSyntax x2           # encoder/slice.h:61; ditto
+type Reach x2                       # port-local shim helper, private per module (T2/T4)
+
+# ---------------------------------------------------------------------------
+# (b) within-codec duplicates still standing, each with the step that owns it
+# ---------------------------------------------------------------------------
+type SLogContext x2                 # common/utils.h:57 declares one; 6.6 folds the encoder's
+type EWelsNalUnitType x2            # wels_common_defs.h:83; decoder/nalu.rs uses the
+                                    # commented-out alternative names (RESV_16/RESV_21) and
+                                    # spells FILLER "FILER". Values identical at every
+                                    # position — verified. Owner: 5.6 (nalu.rs is 5.6's).
+type EWelsSliceType x2              # wels_common_defs.h:163; all discriminants identical
+                                    # (verified). Owner: 5.6.
+alias PNalUnitHeaderExt x2          # decoder_core.rs re-declares nalu.rs's. Owner: 5.5.
+alias PSliceHeader x2               # decoder_core.rs vs slice.rs. Owner: 5.5.
+alias PSliceHeaderExt x2            # ditto
+alias PRefPicListReorderSyn x2      # ditto
+alias PRefPicMarking x2             # ditto
+alias PRefBasePicMarking x2         # ditto
+alias PPps x2                       # parameter_sets.rs vs slice.rs. Owner: 5.5 (P4).
+alias PSps x2                       # ditto
+alias PSubsetSps x2                 # ditto
+alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut SDqLayer, ..)`,
+                                    # decoder_context.rs:212 is `Option<fn(*mut c_void, ..)>`
+                                    # — a REAL type divergence, the T4b.3a shape. Owner: 5.4.
+alias PIdctResAddPredFunc x3        # decode_mb_aux/decode_slice/decoder_context. Owner: 5.6.
+alias PIdctFourResAddPredFunc x2    # Owner: 5.6.
+alias PCopyFunc x3                  # decoder_context + two encoder modules. Owner: 5.6/6.3.
+alias PGetIntraPredFunc x4          # decoder_context, both get_intra_predictor, func_ptr_def
+alias PGetIntraPred8x8Func x2       # Owner: 5.6 decoder-side, 6.3 encoder-side.
+
+# encoder-side only — Phase 6 owns every line below
+alias PCalculateSingleCtrFunc x2    # 6.3
+alias PDctFunc x2                   # 6.3
+alias PGetNoneZeroCountFunc x2      # 6.3
+alias PQuantizationFunc x2          # 6.3
+alias PQuantizationDcFunc x2        # 6.3
+alias PQuantizationMaxFunc x2       # 6.3
+alias PQuantizationHadamardFunc x2  # 6.3
+alias PScanFunc x2                  # 6.3
+alias PTransformHadamard4x4Func x2  # 6.3
+alias PSampleSadSatdCostFunc x2     # 6.3 — one copy had the wrong constness once; watch it
+alias PWelsLumaHalfpelMcFunc x2     # 6.3
+alias PWelsSampleAveragingFunc x2   # 6.3
+alias PLumaDeblockingLT4Func x2     # encoder/deblocking.rs is non-`Option`, common's is
+alias PLumaDeblockingEQ4Func x2     # `Option<..>` — two C++ types (encoder/deblocking.cpp:793
+alias PChromaDeblockingLT4Func x2   # vs decoder/deblocking.cpp:1338). (a), really, but
+alias PChromaDeblockingEQ4Func x2   # listed here because the names invite a merge. 6.4.
+
+# ---------------------------------------------------------------------------
+# (c) value-divergent tables — DO NOT MERGE. Each consumer reads its own.
+# ---------------------------------------------------------------------------
+table g_kuiAlphaTable x2            # decoder [52+24] read at +12 bias, encoder [52+12]
+                                    # unbiased: 76 vs 64 elements. C++ decoder/deblocking.cpp
+                                    # :54,144 vs encoder/deblocking.cpp:46,72.
+table g_kiBetaTable x2              # 76 vs 64, same mechanism
+table g_kiTc0Table x2               # 304 vs 256, same mechanism
+table g_kuiTableBIdx x2             # decoder vs encoder deblocking, 16 elems, same values
+
+# ---------------------------------------------------------------------------
+# cross-codec tables with identical values — Phase 6 collapses them onto common/
+# ---------------------------------------------------------------------------
+table g_kiCabacGlobalContextIdx x2  # 3680 elems, identical. 6.x
+table g_kuiCabacRangeLps x2         # 256, identical. 6.x
+table g_kuiStateTransTable x2       # 128, identical. 6.x
+table g_kuiChromaQpTable x6         # 52, identical. 6.x
+table g_kuiDequantCoeff x2          # 416, identical. 6.x
+table g_kuiMbCountScan4Idx x5       # 24, identical. 6.x
+table g_kuiCache30ScanIdx x2        # 16, identical. 6.x
+table g_kuiCache48CountScan4Idx x3  # 24, identical. 6.x
+table g_kiMapModeI16x16 x4          # 7, identical, encoder-internal. 6.3
+table g_kiMapModeIntraChroma x3     # 7, identical, encoder-internal. 6.3
+table g_kiQpCostTable x2            # 52, identical, encoder-internal. 6.3
+table g_kiQuantInterFF x2           # 464, identical, encoder-internal. 6.3
+table g_kiQuantMF x2                # 416, identical, encoder-internal. 6.3
+
+# ---------------------------------------------------------------------------
+# (d) counted budgets rather than named entries
+# ---------------------------------------------------------------------------
+# Double casts with a NAMED target type: `as *mut _ as *mut c_void` and friends. These
+# are opaque-boundary conventions, not laundering: 15 in wels_preprocess.rs, 5 in
+# encoder_ext.rs, 2 in decoder_core.rs (P4's `pSubsetSps` stored as `c_void` — 5.5's),
+# and one each in nal_encap.rs, slice_multi_threading.rs, codec_api.rs. The inferred form (`as *mut _ as *mut _`) must stay at ZERO:
+# it is the spelling that reinterprets a type into itself, and T5.A2 proved 93 of 94 were
+# doing exactly that while the 94th bridged two declarations of `SDeblockingFunc`.
+budget named_double_casts 25
+budget inferred_double_casts 0
+
+# Duplicate function *bodies* under one name (`find_stub_bodies.py --dups`). A ratchet,
+# not a list: the instrument was blind to `src/decoder` until Phase 5 session A widened
+# it, and the count went 51 -> 198 (156 of them decoder-touching). Most are the port's
+# per-module transliteration of C++ header macros (`WELS_CLIP3` x9, `IS_INTRA` x8,
+# `WelsClip1` x8, `ST32`/`LD32`, ...) or `decoder_core.rs` forwarding wrappers. F22 is
+# the one that turned out to be a real divergence. Phases 5 and 6 drive this down;
+# it may not rise.
+budget duplicate_fn_bodies 198

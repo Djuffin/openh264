@@ -119,6 +119,25 @@ else
   fail "unsafe ratchet: a file x metric increased"
 fi
 
+# ---------------------------------------------------------------------------
+# 2b. The duplicate census (plan §7.2, added Phase 5 session A).
+#
+# Three instruments, zero-or-allowlisted: duplicate declarations, type laundering
+# by double cast, and duplicate function bodies. It runs at `commit` level because
+# a second declaration of one entity is cheap to introduce and expensive to find
+# later — F21 was a drifted third copy of one C++ function, F22 a second copy that
+# dropped a null guard, and neither moved a byte on any stream this project owns.
+# The allowlist is rust/tools/census_allowlist.txt and it carries the reason and
+# the owning phase step per entry.
+# ---------------------------------------------------------------------------
+hdr "duplicate census"
+if bash "$HERE/census.sh" > "$LOGS/census.log" 2>&1; then
+  pass "duplicate census: $(grep -cE '^(type|alias|table|budget) ' "$HERE/census_allowlist.txt") allowlisted, nothing new"
+else
+  sed -n '1,60p' "$LOGS/census.log"
+  fail "duplicate census: a new duplicate or a budget increase — see $LOGS/census.log"
+fi
+
 [ "$LEVEL" = commit ] && { LEVEL_DONE=1; }
 
 # ---------------------------------------------------------------------------
