@@ -12,18 +12,6 @@
     unused_unsafe
 )]
 
-/// Global 4x4 sub-block raster scan lookup table (24 elements: 16 Luma + 4 Cb + 4 Cr).
-pub const g_kuiScan8: [u8; 24] = [
-    9, 10, 17, 18, // Luma 4x4 Block 0..3
-    11, 12, 19, 20, // Luma 4x4 Block 4..7
-    25, 26, 33, 34, // Luma 4x4 Block 8..11
-    27, 28, 35, 36, // Luma 4x4 Block 12..15
-    14, 15,         // Chroma Cb Block 0..1 / Cr Block 0..1
-    22, 23,         // Chroma Cb Block 2..3 / Cr Block 2..3
-    38, 39,
-    46, 47,
-];
-
 /// Pixel clipping / saturation helper function clamping values to [0, 255].
 #[inline(always)]
 pub fn WelsClip1(iX: i32) -> u8 {
@@ -48,6 +36,7 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // ---------------------------------------------------------------------------
 
 use crate::safe::plane::PlaneCursorMut;
+pub use crate::decoder::decode_slice::{g_kuiScan8};
 
 /// 4x4 inverse integer DCT of `rs`, added to the prediction block at `pred` and
 /// saturated to `[0, 255]` in place.
