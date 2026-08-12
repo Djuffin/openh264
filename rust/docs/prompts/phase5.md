@@ -17,9 +17,13 @@ run F19's check per allocation: *which line frees this?*
 ## 0. Session start
 
 1. Commit any inherited doc tail first.
-2. Control battery: `bash rust/tools/gates.sh full` **from the repo root**.
-   `OVERALL:` is the verdict. Expected: **443 debug / 437 release / 20 ignored**,
-   Miri **304**, sweeps 341/341 both profiles.
+2. Session-open check, per **S27**: if the tail was `rust/docs/`-only, the previous
+   session ended `OVERALL: PASS`, and `rust/tools/` and the toolchain are
+   unchanged — build both profiles, tests, ratchet, census only, and run the S2
+   null when the first perf verdict needs it. Otherwise (or if in doubt):
+   `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
+   verdict. Last recorded: **448 debug / 442 release / 20 ignored**, Miri **309**,
+   sweeps 341/341 both profiles.
 3. Recount every number you are about to rely on.
 
 The census gate runs at commit level (`rust/tools/census.sh` against
@@ -34,7 +38,7 @@ owning step.
 text is current (signature, measured rates, isolation re-runs, sweep-level
 alternation). Anything outside S14's signature is real: stop, revert, investigate.
 
-## 1. Step 5.1 — Picture & DPB (steps 1–3 done; step 4 done per file; **`PicPool` and identity remain**)
+## 1. Step 5.1 — Picture & DPB (steps 1–3 done; step 4 done per file; **`PicPool` and identity remain — deferred until after 5.2**, accepted 2026-08-11: `pCtx->pDec` stays a pointer either way, 5.2 owns F22's reachability, and the callers that would hold a `PicId` convert in 5.2; the five P3 tests keep either order safe)
 
 `SPicture`'s planes become owned (`PaddedPlanes` + `Vec`s); `PicPool`;
 `pic_queue.rs` recycling predicate; `manage_dec_ref.rs`; `error_concealment.rs`
@@ -90,6 +94,11 @@ scratch caches become `&mut` locals passed down).
   open: can `pDec` be null on the CABAC parse path? The answer decides whether
   5.3's guard divergence (28 null guards in `mv_pred.rs`, 0 in the CABAC copies)
   is a latent crash or dead code. Record it in the log either way.
+- **Every new accessor obeys S28** (derive from the allocation root, never through
+  a narrowing slice; Miri test reading the full legal reach) — `MbGrid`'s
+  accessors are exactly the shape that earned the rule. And nothing caches a
+  pointer beside its owner: `SDeblockingFilter.pCsData` is the one live mirror
+  left, 5.4's to delete.
 
 ## 3. Step 5.3 — Neighbor & MV
 
@@ -131,7 +140,12 @@ median outside the null band gets more pairs before it gets a mechanism); Miri;
 ratchet regenerated per S16 with deltas named.
 
 Exit: frame-count parity and the `#[ignore]` set unchanged; T3.0's 2316-row golden
-table green in both profiles (T7 stays deferred); decoder `src/` unsafe-free;
+table green in both profiles (T7 stays deferred); decoder `src/` unsafe-free.
+**One named shim survives the phase**: `SPicture::data_ptr`'s consumer at
+`decoder_core.rs:~1087` fills the public output contract (`pointer, stride`) and is
+not a kernel adapter — 5.6 cannot delete it; it retires with the API boundary work
+(Phase 8). The straggler sweep expects exactly this one; its marker text names the
+owner.
 **every §7.4 ledger entry whose shims died in this phase must clear**. This phase
 collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative; ~7 points of
 CB headroom under the tripwire). The mechanism is constant dimensions reaching the
