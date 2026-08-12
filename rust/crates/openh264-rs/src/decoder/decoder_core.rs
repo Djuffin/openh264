@@ -2015,10 +2015,24 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         return ERR_INFO_OUT_OF_MEMORY;
     }
 
-    let pNalHeaderExt = &mut (*kpCurNal).sNalHeaderExt;
-    let pSliceHead = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-    let eNalType = pNalHeaderExt.sNalUnitHeader.eNalUnitType;
-    let pSliceHeadExt = &mut (*kpCurNal).sNalData.sVclNal.sSliceHeaderExt;
+    // **S25 (F24) — none of these three is a borrow, and that is the fix.**
+    // `sSliceHeader` sits *inside* `sSliceHeaderExt`, so taking `&mut` of each puts the
+    // outer's Unique retag on top of the inner's and every later write through the inner
+    // is UB — Miri, byte-exact: `[0x28..0xf00]` created here, invalidated by the retag at
+    // `[0x28..0x1350]`, caught at the `iFirstMbInSlice` store 13 lines down. `pSliceHead`
+    // is used 74 times after that point and `pSliceHeadExt` 50, so the whole 576-line
+    // function ran on an invalid borrow stack. `addr_of_mut!` creates no reference: all
+    // three pointers carry `kpCurNal`'s own provenance, none can invalidate another, and
+    // the raw `bSliceHeaderExtFlag` write below is no longer racing two live borrows.
+    // `pNalHeaderExt` is a sibling field and was never part of the defect; it moves with
+    // them so the rule reads uniformly. T5.B2's shape (`manage_dec_ref.rs`, `SetUnRef`):
+    // no borrow outlives one expression. Anything added here inherits it.
+    let pNalHeaderExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*kpCurNal).sNalHeaderExt);
+    let pSliceHead: PSliceHeader =
+        std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
+    let eNalType = (*pNalHeaderExt).sNalUnitHeader.eNalUnitType;
+    let pSliceHeadExt: PSliceHeaderExt =
+        std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt);
 
     (*kpCurNal).sNalData.sVclNal.bSliceHeaderExtFlag = kbExtensionFlag;
 
@@ -2074,17 +2088,30 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_PPS_ID);
     }
 
-    let pPps = &mut (*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize];
+    // The same rule, for the paramset side — a second live instance of F24's shape,
+    // not a precaution. `pSps` was `&mut (*pSubsetSps).sSps`, nested inside a `&mut` of
+    // the subset SPS entry, and the three later `let pSubsetSps` bindings each took
+    // `&mut` of that *same* entry again — popping the nested tag, after which every
+    // `(*pSps)` read is UB (`uiLog2MaxFrameNum`, `uiTotalMbCount`, `bFrameMbsOnlyFlag`,
+    // the POC block, and on). Every `kbExtensionFlag` path, which means every SVC
+    // stream. **No gate reaches it**: `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
+    // (`nalu.rs:684`) and the probe decodes AVC, so it was found by reading while fixing
+    // the pair above and dies in the same commit rather than waiting for a test that
+    // does not exist. The stored `(*pSliceHead).pPps` / `pSps` pointers get the
+    // context's provenance for free, which is what S28 asks of a pointer that outlives
+    // the expression that made it.
+    let pPps: PPps = std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize]);
     if (*pPps).uiNumSliceGroups == 0 {
         (*pCtx).iErrorCode |= dsNoParamSets;
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
     }
 
-    let pSps = if kbExtensionFlag {
-        let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
-        &mut (*pSubsetSps).sSps
+    let pSps: PSps = if kbExtensionFlag {
+        std::ptr::addr_of_mut!(
+            (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize].sSps
+        )
     } else {
-        &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[(*pPps).iSpsId as usize]
+        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSpsBuffer[(*pPps).iSpsId as usize])
     };
 
     if (*pSps).iNumRefFrames == 0
@@ -2096,15 +2123,16 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     (*pSliceHead).iPpsId = iPpsId;
     (*pSliceHead).iSpsId = (*pPps).iSpsId;
-    (*pSliceHead).pPps = pPps as *mut SPps as *mut c_void;
-    (*pSliceHead).pSps = pSps as *mut SSps as *mut c_void;
+    (*pSliceHead).pPps = pPps as *mut c_void;
+    (*pSliceHead).pSps = pSps as *mut c_void;
     if kbExtensionFlag {
-        let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
-        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut _ as *mut c_void;
+        let pSubsetSps: PSubsetSps =
+            std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]);
+        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut c_void;
     }
 
     let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
-        || (kbExtensionFlag && pNalHeaderExt.bIdrFlag);
+        || (kbExtensionFlag && (*pNalHeaderExt).bIdrFlag);
     (*pSliceHead).bIdrFlag = bIdrFlag;
 
     if (*pSps).uiLog2MaxFrameNum == 0 {
@@ -2176,7 +2204,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
             (*pSliceHead).iPicOrderCntLsb += (*pSliceHead).iDeltaPicOrderCntBottom;
         }
-        if !(*pCtx).pLastDecPicInfo.is_null() && pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
+        if !(*pCtx).pLastDecPicInfo.is_null() && (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
         }
@@ -2226,7 +2254,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     let mut bReadNumRefFlag = (*pSliceHead).eSliceType == P_SLICE
         || (*pSliceHead).eSliceType == B_SLICE;
     if kbExtensionFlag {
-        bReadNumRefFlag &= pNalHeaderExt.uiQualityId == BASE_QUALITY_ID;
+        bReadNumRefFlag &= (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID;
     }
     if bReadNumRefFlag {
         if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
@@ -2264,7 +2292,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_REF_COUNT_OVERFLOW);
     }
 
-    if pNalHeaderExt.uiQualityId == BASE_QUALITY_ID {
+    if (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID {
         let iRet = ParseRefPicListReordering(buf, pBs, pSliceHead);
         if iRet != ERR_NONE {
             return iRet;
@@ -2284,23 +2312,24 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
         if kbExtensionFlag {
             (*pSliceHeadExt).bBasePredWeightTableFlag =
-                !(pNalHeaderExt.bNoInterLayerPredFlag || pNalHeaderExt.uiQualityId > 0);
+                !((*pNalHeaderExt).bNoInterLayerPredFlag || (*pNalHeaderExt).uiQualityId > 0);
         }
 
-        if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
+        if (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
             let iRet = ParseDecRefPicMarking(pCtx, buf, pBs, pSliceHead, pSps, bIdrFlag);
             if iRet != ERR_NONE {
                 return iRet;
             }
             if kbExtensionFlag {
-                let pSubsetSps =
-                    &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
+                let pSubsetSps: PSubsetSps = std::ptr::addr_of_mut!(
+                    (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]
+                );
                 if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
                     if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
-                    if (pNalHeaderExt.bUseRefBasePicFlag
+                    if ((*pNalHeaderExt).bUseRefBasePicFlag
                         || (*pSliceHeadExt).bStoreRefBasePicFlag)
                         && !bIdrFlag
                     {
@@ -2380,7 +2409,8 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         && (*pPps).uiSliceGroupMapType >= 3
         && (*pPps).uiSliceGroupMapType <= 5;
     if kbExtensionFlag && bSgChangeCycleInvolved {
-        bSgChangeCycleInvolved = bSgChangeCycleInvolved && (pNalHeaderExt.uiQualityId == BASE_QUALITY_ID);
+        bSgChangeCycleInvolved =
+            bSgChangeCycleInvolved && ((*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID);
     }
     if bSgChangeCycleInvolved {
         if (*pPps).uiSliceGroupChangeRate > 0 {
@@ -2402,10 +2432,13 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     } else {
         // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
         // the slice header, so skipping them desynchronises the slice-data parse.
-        let pSubsetSps = &mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize];
-        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut _ as *mut c_void;
+        let pSubsetSps: PSubsetSps =
+            std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]);
+        (*pSliceHeadExt).pSubsetSps = pSubsetSps as *mut c_void;
 
-        if !pNalHeaderExt.bNoInterLayerPredFlag && BASE_QUALITY_ID == pNalHeaderExt.uiQualityId {
+        if !(*pNalHeaderExt).bNoInterLayerPredFlag
+            && BASE_QUALITY_ID == (*pNalHeaderExt).uiQualityId
+        {
             if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
@@ -2478,7 +2511,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     ((*pSliceHead).iMbHeight << 4)
                         - (iTopOffset + iBottomOffset) / (1 + (*pSliceHead).bFieldPicFlag as i32);
             }
-        } else if pNalHeaderExt.uiQualityId > BASE_QUALITY_ID {
+        } else if (*pNalHeaderExt).uiQualityId > BASE_QUALITY_ID {
             // MGS not supported.
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
         } else {
@@ -2492,13 +2525,13 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         (*pSliceHeadExt).bDefaultMotionPredFlag = false;
         (*pSliceHeadExt).bAdaptiveResidualPredFlag = false;
         (*pSliceHeadExt).bDefaultResidualPredFlag = false;
-        (*pSliceHeadExt).bTCoeffLevelPredFlag = if pNalHeaderExt.bNoInterLayerPredFlag {
+        (*pSliceHeadExt).bTCoeffLevelPredFlag = if (*pNalHeaderExt).bNoInterLayerPredFlag {
             false
         } else {
             (*pSubsetSps).sSpsSvcExt.bSeqTCoeffLevelPredFlag
         };
 
-        if !pNalHeaderExt.bNoInterLayerPredFlag {
+        if !(*pNalHeaderExt).bNoInterLayerPredFlag {
             if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
@@ -3435,18 +3468,25 @@ pub unsafe fn InitDqLayerInfo(
     if pDqLayer.is_null() || pLayerInfo.is_null() || pNalUnit.is_null() {
         return;
     }
-    let pNalHdrExt = &mut (*pNalUnit).sNalHeaderExt;
-    let pShExt = &mut (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt;
-    let pSh = &mut (*pShExt).sSliceHeader;
-    let kuiQualityId = pNalHdrExt.uiQualityId;
+    // F24's shape, third site (T5.E1). `pSh` was a `&mut` *inside* `pShExt`'s `&mut`,
+    // so every `(*pShExt)` read below popped it and every later `(*pSh)` read was UB;
+    // worse, the four escaping borrows in the `kuiQualityId` block store pointers into
+    // the layer that outlive this function, and as `&mut` they died at the next use of
+    // their parent. Raw derivations from `pNalUnit` carry the NAL unit's provenance and
+    // nothing pops anything.
+    let pNalHdrExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*pNalUnit).sNalHeaderExt);
+    let pShExt: PSliceHeaderExt =
+        std::ptr::addr_of_mut!((*pNalUnit).sNalData.sVclNal.sSliceHeaderExt);
+    let pSh: PSliceHeader = std::ptr::addr_of_mut!((*pShExt).sSliceHeader);
+    let kuiQualityId = (*pNalHdrExt).uiQualityId;
 
     (*pDqLayer).sLayerInfo = *pLayerInfo;
     (*pDqLayer).pDec = pPicDec;
     (*pDqLayer).iMbWidth = (*pSh).iMbWidth;
     (*pDqLayer).iMbHeight = (*pSh).iMbHeight;
     (*pDqLayer).iSliceIdcBackup = ((*pSh).iFirstMbInSlice << 7)
-        | ((pNalHdrExt.uiDependencyId as i32) << 4)
-        | (pNalHdrExt.uiQualityId as i32);
+        | (((*pNalHdrExt).uiDependencyId as i32) << 4)
+        | ((*pNalHdrExt).uiQualityId as i32);
 
     if !(*pLayerInfo).pPps.is_null() {
         (*pDqLayer).uiPpsId = (*(*pLayerInfo).pPps).iPpsId as u32;
@@ -3465,20 +3505,20 @@ pub unsafe fn InitDqLayerInfo(
     (*pDqLayer).bUseWeightedBiPredIdc = false;
 
     if kuiQualityId == BASE_QUALITY_ID {
-        (*pDqLayer).pRefPicListReordering = &mut (*pSh).pRefPicListReordering;
-        (*pDqLayer).pRefPicMarking = &mut (*pSh).sRefMarking;
+        (*pDqLayer).pRefPicListReordering = std::ptr::addr_of_mut!((*pSh).pRefPicListReordering);
+        (*pDqLayer).pRefPicMarking = std::ptr::addr_of_mut!((*pSh).sRefMarking);
         if !(*pSh).pPps.is_null() {
             let pPps = (*pSh).pPps as *mut SPps;
             (*pDqLayer).bUseWeightPredictionFlag = (*pPps).bWeightedPredFlag;
             (*pDqLayer).bUseWeightedBiPredIdc = (*pPps).uiWeightedBipredIdc != 0;
             if (*pPps).bWeightedPredFlag || (*pPps).uiWeightedBipredIdc != 0 {
-                (*pDqLayer).pPredWeightTable = &mut (*pSh).sPredWeightTable;
+                (*pDqLayer).pPredWeightTable = std::ptr::addr_of_mut!((*pSh).sPredWeightTable);
             }
         }
-        (*pDqLayer).pRefPicBaseMarking = &mut (*pShExt).sRefBasePicMarking;
+        (*pDqLayer).pRefPicBaseMarking = std::ptr::addr_of_mut!((*pShExt).sRefBasePicMarking);
     }
-    (*pDqLayer).uiLayerDqId = pNalHdrExt.uiLayerDqId;
-    (*pDqLayer).bUseRefBasePicFlag = pNalHdrExt.bUseRefBasePicFlag;
+    (*pDqLayer).uiLayerDqId = (*pNalHdrExt).uiLayerDqId;
+    (*pDqLayer).bUseRefBasePicFlag = (*pNalHdrExt).bUseRefBasePicFlag;
 }
 
 pub unsafe fn WelsDqLayerDecodeStart(
@@ -3490,7 +3530,12 @@ pub unsafe fn WelsDqLayerDecodeStart(
     if pCtx.is_null() || pCurNal.is_null() {
         return;
     }
-    let pSh = &mut (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+    // F24's shape, fourth site — and the one that escapes furthest: `(*pCtx).pSliceHeader`
+    // outlives this call by the whole slice decode, so as a `&mut`-derived pointer it
+    // was dead the moment any other borrow of this NAL unit was taken (which
+    // `InitDqLayerInfo` does, immediately after, at the same call site).
+    let pSh: PSliceHeader =
+        std::ptr::addr_of_mut!((*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
     (*pCtx).eSliceType = (*pSh).eSliceType;
     (*pCtx).pSliceHeader = pSh;
     (*pCtx).bUsedAsRef = false;
@@ -3648,8 +3693,14 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
             let iCurrIdQ = (*pNalCur).sNalHeaderExt.uiQualityId as i16;
             let iCurrIdD = (*pNalCur).sNalHeaderExt.uiDependencyId as i16;
-            let pSh = &mut (*pNalCur).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-            let pShExt = &mut (*pNalCur).sNalData.sVclNal.sSliceHeaderExt;
+            // F24's shape, second site — this is the pair Miri reported once the
+            // `ParseSliceHeaderSyntaxs` fix let it get this far. Byte-identical
+            // diagnosis: `[0x28..0xf00]` created here, invalidated by the retag at
+            // `[0x28..0x1350]` on the next line, caught at the `iFrameNum` read below.
+            let pSh: PSliceHeader =
+                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
+            let pShExt: PSliceHeaderExt =
+                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt);
             (*pCtx).bRPLRError = false;
             let bReconstructSlice = CheckSliceNeedReconstruct((*pNalCur).sNalHeaderExt.uiLayerDqId, kuiTargetLayerDqId);
 
@@ -3666,7 +3717,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
             pLayerInfo.sSliceInLayer.eSliceType = (*pSh).eSliceType as u8;
 
             pLayerInfo.sSliceInLayer.iLastMbQp = (*pSh).iSliceQp;
-            (*dq_cur).pBitStringAux = &mut (*pNalCur).sNalData.sVclNal.sSliceBitsRead;
+            // Sibling field, so it never overlapped the two above — but it escapes into
+            // the layer and is read all through `decode_slice.rs`, so a `&mut`-derived
+            // pointer here dies at the next borrow of this NAL unit. It retires with
+            // `pBitStringAux` in 5.2; until then it obeys the same rule.
+            (*dq_cur).pBitStringAux =
+                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceBitsRead);
 
             (*pCtx).uiNalRefIdc = (*pNalCur).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc;
             let iPpsId = (*pSh).iPpsId;
@@ -3862,10 +3918,12 @@ pub unsafe fn CheckAndFinishLastPic(
         if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && CheckAccessUnitBoundaryExt(
-                    &mut (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt,
-                    &mut (*pCurNal).sNalHeaderExt,
-                    &mut (*(*pCtx).pLastDecPicInfo).sLastSliceHeader,
-                    &mut (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader,
+                    std::ptr::addr_of_mut!((*(*pCtx).pLastDecPicInfo).sLastNalHdrExt),
+                    std::ptr::addr_of_mut!((*pCurNal).sNalHeaderExt),
+                    std::ptr::addr_of_mut!((*(*pCtx).pLastDecPicInfo).sLastSliceHeader),
+                    std::ptr::addr_of_mut!(
+                        (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader
+                    ),
                 );
         }
     } else {
