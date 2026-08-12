@@ -770,6 +770,23 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   `perf_baseline.md` §Phase 2 T4 first:** by-value cursors (wash),
   dispatch-over-shims (wash), `chunks()`-based row walkers (**worse everywhere**).
   `get_unchecked` is banned — restructure the loop instead.
+  **Fourth negative result, and it is the expensive one to re-propose (Phase 5 session I,
+  D-perf-5): hoisting a per-macroblock window over an array that is already one scalar
+  per macroblock is a wash.** The retrofit turned 76 bounds checks per macroblock into 38
+  across the decoder's CAVLC per-MB functions — the reduction is real and countable in the
+  opcode histogram — and moved the bench **+0.14% decode median at 7 pairs**, inside the
+  null band. Two reasons, both general: the checks are perfectly predicted and the length
+  they load is in L1 beside the pointer; and the functions holding them were **1–3% of
+  decode time** by profile, so the amortisation had nothing to amortise. It also *costs*
+  code size — lifting a load out of a loop made one body simple enough for LLVM to unroll
+  it much harder, 703 → 961 instructions. **Bounds-check amortisation pays per *sample*,
+  as the row-level idiom above does; it does not pay per *macroblock*.** Check where the
+  time is before hoisting: `/usr/bin/sample` first, histogram second.
+  **And count the checks with an opcode histogram, not a landing-pad walk** — an index is
+  `ldr`+`cmp`+`b.ls` and those three deltas move together, whereas walking back from
+  `bl panic_bounds_check` undercounts badly, because LLVM merges the pads and most guard
+  branches leave the function body for a shared thunk. The walk said the checks were a
+  minority of the flip's cost; the histogram said ~87%.
 - **S9 — the exact-span trim is the per-row-bounds-check fix that works.**
   Handed an open tail (`&plane[origin..]`) LLVM cannot relate `k * stride + W` to the
   length and re-checks every row; handed a window it knows is `(H-1)*stride + W` long,
