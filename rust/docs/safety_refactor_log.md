@@ -4204,3 +4204,302 @@ code** — it is the whole of session C.
   touches directly. If a plane change moves `narrow_16x16_idr_lost` alone, the
   border expansion is where to look.
 * F22 is still 5.3's, its reachability question still 5.2's.
+
+---
+
+## 2026-08-11 — Phase 5, session C (5.1 step 3: `SPicture`'s planes become owned)
+
+**Commits:** `272c3b79` (inherited doc tail — the session brief), `79588684` (T5.C1,
+the dead members), `999f300b` (T5.C2, the call-site bridge and two S25
+enumerations), `7a28e620` (T5.C3, the owned planes), and this entry.
+
+### The session in one line
+
+The conversion went in behind three faces and moved no bytes — and the one defect
+it made was invisible to every gate that measures bytes.
+
+### Control battery and recount
+
+`gates.sh full` at entry: **OVERALL: PASS**, 443 / 437 / 20, Miri **304**, sweeps
+341/341 both profiles, census 61 allowlisted, both benches bit-identical, ratchet
+clean (`raw_ptr` 4597, `SHIM(` 157, `unsafe_block` 616, `unsafe_fn` 1249), decode
+goldens **56**. Every number in the brief's §0 confirmed. No F3 hit at entry.
+
+Three closure facts re-greped before use (S24), all three of which the brief either
+asserted or left open:
+
+* **Nothing copies an `SPicture` by value.** The brief did not say this and it
+  decides whether owned fields are possible at all. Measured by asking the compiler:
+  `Copy` removed from the derive, `cargo check --all-targets` clean.
+* **`pBuffer` is read in two files.** `pic_queue.rs` (alloc/free) and `picture.rs`.
+  Every other site reads `pData`, so the physical base could disappear into the
+  plane without touching a caller.
+* **`calculate_data_pointers` has no callers.** A method that recomputes `pData[i]`
+  from `pBuffer[i]` and the stride — dead, and subsumed by the plane's `origin`.
+
+### 1. The S20 closure, as computed
+
+Wide and shallow, as session A predicted, and one field narrower than its own field
+list suggested:
+
+| what | count | where it went |
+|---|---|---|
+| `iPlanes` | 1 write, 0 reads | deleted, T5.C1 |
+| plane slot 3 | 0 reads | deleted, T5.C1 |
+| `pData[i]` / `iLinesize[i]` reads | **123** over six files | accessors, T5.C2 |
+| `pData[i]` / `iLinesize[i]` writes | `AllocPicture` + 3 test fixtures | the constructor, T5.C3 |
+| `pBuffer[i]` | `pic_queue.rs`, `picture.rs` | the plane's own buffer, T5.C3 |
+| whole-array reads | 3 `ExpandReferencingPicture` call sites | built from the accessors, T5.C2 |
+| layout pins | **none** | — |
+| by-value holders | **none** | — |
+
+The three-face split follows from it. The field change is atomic — you cannot own
+`pData` in one file and not another — but the *call sites* are not, so introducing
+the accessors with their final signatures first makes T5.C3 a change to two files.
+That is what made the provenance defect below a two-line fix in one place instead of
+a bisect over a hundred-site diff.
+
+### 2. What Miri found, and what nine other gates said about it
+
+`data_ptr` returns logical `(0, 0)` of a plane as a raw pointer. The obvious
+spelling is
+
+```rust
+plane.as_mut_slice()[origin..].as_mut_ptr()
+```
+
+which is safe code, computes the correct address, and is **undefined behaviour at
+the first read into the top or left border** — slicing narrows provenance to
+`[origin..]`, and the padding behind `pData[i]` is the entire reason a padded plane
+exists. `ExpandPictureLuma_c` recovers the whole allocation with
+`pDst.sub(pad*stride + pad)`; motion compensation reads negative coordinates after
+clamping the vector.
+
+The battery's verdict on that draft: **448 debug / 442 release tests passing, all 56
+golden rows bit-identical, both benches bit-identical, sweeps 341/341, census clean.
+Nine gates, nine passes.** Miri failed on the first run, on the one test that reads
+backwards through the shim pointer.
+
+Two things worth keeping from that:
+
+* **S15's sentence, earned rather than quoted.** *Byte-exactness does not imply
+  soundness.* This is the cleanest instance the project has produced: not a latent
+  bug in old code that the gates never reached, but a new one, on the mainline
+  decode path, that the gates reached constantly and could not see. The bytes were
+  right because the memory is there; only the *permission* was wrong.
+* **The test is the instrument, not Miri.** Miri can only fail on a read that
+  happens. `data_ptr_reaches_the_padding_behind_the_logical_origin` exercises both
+  backward reaches the decoder performs — one sample diagonally behind the origin,
+  and `expand_shim_span`'s full reconstruction of the allocation. Without that test
+  the whole `--lib` suite is silent, because no unit test had ever taken a picture's
+  plane pointer and walked behind it. The fix is
+  `as_mut_ptr().wrapping_add(origin)`: same address, unnarrowed provenance, no
+  `unsafe`, and it is what `pBuffer[i].add(offset)` always meant.
+
+### 3. Byte-exactness, kept by construction
+
+The brief named three invariants. Each is now checked rather than argued:
+
+* **The 128 fill.** One `WelsMallocz` of `iLumaSize + 2*iChromaSize` filled with 128
+  became three allocations each filled with 128. The contiguity was incidental —
+  `pBuffer[1]` and `pBuffer[2]` were bases for their own plane's `pData` and nothing
+  walked between planes — and `test_alloc_and_free_picture` asserts the fill covers
+  the whole luma allocation, corner included.
+* **Stride arithmetic.** Every expression is `AllocPicture`'s own, including
+  `(1 + iLinesize[0]) * PADDING_LENGTH` and `((1 + iLinesize[1]) * PADDING_LENGTH)
+  >> 1`. `PaddedPlane::from_parts` recovers the padding by dividing the origin by
+  the stride, so it *checks* that both are square paddings (32 and 16) and that the
+  allocation is tall enough for the padded picture — the row-count alignment leaves
+  eight spare luma rows at 160x120, and the type accepts that explicitly.
+* **The EC prefetch.** Untouched: it still memsets the active area only, and
+  `narrow_16x16_idr_lost` is green across all three faces.
+
+`bParseOnly` needed a new shape. It sets `iLinesize[i]` from the geometry and leaves
+`pData[i]` null, and the strides are read (`GetI4LumaIChromaAddrTable`), so the
+planes cannot simply be absent. `PaddedPlane::empty(stride)` is that state: a stride,
+no bytes, and every coordinate accessor panicking because there is no addressable
+byte. It is the only constructor where a zero stride is legal — with nothing to
+index, the stride is metadata — and `SPicture::default()` uses `empty(0)` to go on
+reporting exactly the `iLinesize == 0` and null `pData` its zeroed form had.
+
+### 4. F19 and S21, per allocation
+
+`AllocPicture`'s eight allocations became ten, and the audit is not the same audit:
+
+| allocated | freed by |
+|---|---|
+| the picture (`Box::into_raw`) | `Box::from_raw` in `FreePicture` |
+| plane 0, 1, 2 (`Vec<u8>`) | that same `Box`'s drop glue |
+| `pMbCorrectlyDecodedFlag`, `pMbType`, `pMv[0..1]`, `pRefIndex[0..1]` | six `WelsFree` calls in `FreePicture` |
+
+Four of the ten are now balanced by the type system rather than by inspection, and
+`FreePicture` has no `pBuffer[0]` arm left to forget. Session A's table counted
+allocations *inside* `AllocPicture`; the check also has to cover calls *to* it, and
+there are two — `CreatePicBuff` (freed by `DestroyPicBuff`) and
+`decode_slice.rs:2032`'s lazy `pTempDec` (freed at `decoder_core.rs:1899`). Both
+balance.
+
+Plane allocation is **fallible**. `vec![128; n]` aborts the process on failure where
+the C returned null and every caller tests for it, so the buffers come from
+`try_reserve_exact` — `RawDataBuffer::try_new_zeroed`'s answer at T3.4, and it
+matters more here because a plane is megabytes. The picture header itself is
+`Box::new` and aborts; that is ~700 bytes and the same deviation `new_boxed` already
+carries.
+
+**One divergence the constructor had to decide.** `SPicture::default()` sets
+`eSliceType: UNKNOWN_SLICE` (5); `AllocPicture`'s `WelsMallocz` zeroed it, and
+`P_SLICE == 0`. The two have always disagreed, and the live path is the zeroing one,
+so `with_planes` reproduces `P_SLICE` and a test says so. Nothing observes it — a
+picture's `eSliceType` has two writers and no readers in the decoder, `iPlanes`'s
+situation one field over — but a constructor replacing a memset does not get to pick
+which zero it reproduces.
+
+### 5. The S25 enumerations, one per file
+
+Written into the commit that converted each file, per plan §7.6.
+
+**`deblocking.rs` (T5.C2).** The three `pCsData` pointers are derived from
+`pCtx->pDec` and live for the whole macroblock loop. Nothing in that loop reaches
+that picture again: the only other pictures it touches are behind
+`pFilter.pRefPics[l]`, and it reads them for identity, `pMv` and `pRefIndex` and
+never for planes — so no second plane pointer exists to conflict, and the answer
+holds even if a reference slot were `pDec` itself. `pCsData` *is* a stored mirror,
+which the conversion refuses to put back into `SPicture`; it is `SDeblockingFilter`'s
+per-slice scratch and it retires at 5.4.
+
+**`error_concealment.rs` (T5.C2).** The one decoder file whose job is to hold two
+pictures at once. Four functions do, and every one returns on `src == dst` before
+the first derivation: `DoErrorConFrameCopy`, `DoErrorConSliceCopy`,
+`DoErrorConSliceMVCopy`, `DoMbECMvCopy`. Not something this session added — the C++
+has all four, because a memcpy from a picture into itself is wrong arithmetic before
+it is aliasing — and two of the four are pinned by session A's P3 identity tests.
+The guards that make `PicId` safe to introduce later are the same guards that make
+the two `&mut` borrows disjoint now.
+
+**`pic_queue.rs` (T5.C3).** The sharpest form of the question, because
+`SPicBuff.ppPic` is `*mut *mut SPicture` and `pCtx->pDec` points into that array.
+The answer is that **no function in this file holds a borrow of a picture across
+anything**: `PrefetchPic` reads `bUsedAsRef` and `iRefCount` per slot and writes
+`iPicBuffIdx` after the scan has stopped. `CreatePicBuff` fills `ppPic` before it
+sets `iCapacity`, and every prefetch returns early on `iCapacity == 0`, so the scan
+cannot see a half-built picture — which is what lets `AllocPicture` hand back a
+`Box::into_raw`. The re-entrancy that does exist is one level up, in
+`WelsInitRefList`'s concealment prefetch, and it is enumerated at its own site.
+
+That site also produced this session's only S25 *fix*: `let prev = &*prev_pic` held
+a borrow across three writes into the other picture. Named `(*prev_pic)` per use,
+session B's shape.
+
+### 6. F3
+
+Two batteries hit it, and the second one triggered the alternation.
+
+**Three hits at T5.C2** — `320x192 t=4 sm=3 n=600 cabac=0 rc=1` (debug, 0 bytes),
+`320x192 t=4 sm=3 n=600 cabac=1 rc=0` (debug, 37837 against 39981), `160x96 t=2
+sm=3 n=600 cabac=0 rc=0` (release, 0 bytes). All three **5/5 byte-identical** on
+re-run in isolation. Three hits triggers S14 step 2: 12 `mt` sweeps per side, both
+release binaries built once and swapped inside one loop, machine idle. Base =
+`272c3b79`, head = T5.C2. **Base 4 / head 3** over 1440 configurations each — tenth
+alternation, tenth acquittal, and the rate is back to the quiet baseline (1/410
+against session A's 1/360 on a machine that had been running batteries for hours).
+
+**One hit at T5.C3**, `Static_152_100 t=4 sm=3 n=600 cabac=1 rc=0`, 28537 against
+30190 — the third tree on which that configuration has produced *those two exact
+numbers*. 5/5 byte-identical in isolation; one hit, no alternation.
+
+Appended to `phase0_findings.md` as measurements 24–25, together with **measurement
+23**, session B's single hit, which had been written into the log and the plan's
+Gates cell but never into the finding S14 step 4 points at. Small thing, worth
+naming: a ledger is only as good as the sessions that append to it.
+
+The standing acquittal holds a third session running: every commit here is
+decoder-side and the sweeps compare encoders. The one decoder symbol the encoder
+reaches is `decoder_core.rs`'s `ExpandPicture*_c` pair, through
+`common/expand_pic.rs`, and neither kernel is edited — only that function's
+decoder-side call sites.
+
+### 7. Perf at the allocation seam
+
+The brief predicted flat and it is flat. 3-pair interleaved medians, `pre_conv`
+(`272c3b79`) against `post_conv` (`7a28e620`), both benches, with this session's
+null run first (S2):
+
+| bench | null floor | pre_conv → post_conv |
+|---|---|---|
+| decode | median −0.02%, −0.04% … +0.10% | **median +0.00%**, −0.22% … +0.03% |
+| encode | median +0.33%, −0.51% … +1.47% | **median +0.17%**, −1.45% … +2.36% |
+
+Decode is the surface this session changed and it is inside the floor on every row.
+Encode's one row at +2.36% (720p SMPTE Bars, 4t) is a whisker outside the floor's
+max at n=3 while the median sits well inside it, on a bench whose code path this
+session does not touch — S2b's "more pairs before a mechanism" applies, and there is
+no mechanism to look for.
+
+Worth stating because it is the more interesting null result: **three separate
+`Vec`s replaced one aligned `WelsMallocz` block, and nothing moved.** The planes
+went from 32-byte-aligned and contiguous to `Vec<u8>`'s alignment and disjoint, and
+neither the decode bench nor the 56 golden rows can tell.
+
+### 8. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 443 / 437 / 20 | **448 / 442 / 20** |
+| Miri `--lib` | 304 | **309** |
+| `raw_ptr` | 4597 | **4595** (−2) |
+| `unsafe_block` | 616 | **613** (−3) |
+| `unsafe_fn` | 1249 | **1248** (−1) |
+| `SHIM(` | 157 | **158** (+1: `data_ptr`) |
+| decode goldens | 56 rows | **56 rows**, none moved |
+| census | 61 allowlisted | unchanged |
+
+Ratchet regenerated per S16 at T5.C2 and T5.C3. The metric behaved exactly as S16
+warns: the *first* draft of each commit inflated `raw_ptr` and `SHIM(` with **prose**
+— a doc comment naming `*mut u8`, a code comment containing the literal marker text
+— and those were reworded rather than baselined. What was baselined is three real
+increases: `data_ptr`'s return type, its `SHIM(phase5)` marker, and one `unsafe {}`
+in the provenance test. `raw_ptr`'s fall is modest and honestly so: the pointers the
+conversion deleted are the two array declarations, while the ~120 call sites still
+receive a raw pointer *from* the shim. Those come off in 5.2–5.6.
+
+### Hand-off: Phase 5, session D
+
+**5.1's step 3 is done. What is left of 5.1 is `PicPool` and identity**, and it is
+not obviously the next thing to do — read this before choosing.
+
+* **The next closure, if it is 5.1's**: `PicPool` + the recycling predicate as a
+  method + `PicId` for the three identity sites. `safe/pool.rs` already has the
+  handle type, `pair_mut`, and a generation check; the five P3 tests exist to fail
+  if identity becomes POC. The S25 work is *done in advance* for it — `pic_queue.rs`
+  holds no borrows, and the one re-entrant pair is enumerated and guarded.
+* **The argument for going to 5.2 first**: 5.2 is the phase's largest closure
+  (`SDqLayer` is embedded and asserted widely), it owns **F22's reachability
+  question**, and the decoder's `SHIM(phase2)` adapters start retiring there. 5.1's
+  remainder blocks nothing — `pCtx->pDec` stays a `*mut SPicture` either way, which
+  is T3.1b's precedent and what this session relied on.
+* **The tree argues for 5.2**, on balance: the plane conversion made every picture
+  *reachable* through a safe type, and the callers that would use it are 5.2's and
+  5.3's. Converting the pool before the callers means `PicId` lands with nothing
+  holding one. But it is a judgement call, and the P3 tests keep either order safe.
+
+What to carry regardless:
+
+* **`data_ptr` is `wrapping_add`, and the reason is in its doc comment.** Any future
+  accessor that hands a mid-allocation pointer out of a `Vec` has the same trap. The
+  general form: *a slice index narrows provenance; only the caller's reach tells you
+  whether that is a bug, and no byte-level gate can see it.*
+* **Nothing may cache a plane pointer beside the plane.** `SDeblockingFilter`'s
+  `pCsData` is the one live mirror and it is 5.4's to delete.
+* **`SPicture` is no longer `repr(C)` and no longer `Copy`.** Both were checked with
+  the compiler rather than by reading; do the same before assuming it for the next
+  struct.
+* **`decoder_core.rs:1087` is the shim that outlives Phase 5.** The public output
+  contract is `(pointer, stride)`; `data_ptr` there is not a kernel adapter and 5.6
+  cannot delete it. Say so in the phase-exit ledger rather than discovering it.
+* **Eugene revised `prompts/phase5.md` and `safety_refactor_plan.md` in the working
+  tree while this session ran** — the §7.6 R-letter move, S14 refreshed to the
+  measured F3 protocol, S17 generalized, S3–S5/S10–S11 marked dormant. That batch is
+  in `754c7a04` alongside this entry, because leaving it dirty at a session boundary
+  is worse than committing it with the close. A later batch (S27, the session-open
+  check that lets a `docs/`-only tail skip the full battery) arrived after that
+  commit and is **still uncommitted** — it is Eugene's, not this session's.

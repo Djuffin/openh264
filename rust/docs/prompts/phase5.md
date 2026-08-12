@@ -30,18 +30,11 @@ P14; b: within-codec duplicate — unify, divergences per copy, S21; c: value-di
 constant/table — preserve per-consumer behaviour, S6; d: legitimate same-name fn) and
 owning step.
 
-**F3** — known encoder MT race, not this phase's to fix; acquit and move on:
-- Signature: `mt sm=3 n=600 t∈{2,4}`, wrong-length output (zero, short, long all
-  count). Rate ≈ 1/800 configs under sustained load, ≈ 1/100–150 on susceptible
-  configs.
-- One hit → re-run that configuration 5×; a reproduction in isolation is valid
-  evidence. Two different wrong lengths from one binary+config = race, not
-  divergence.
-- Two hits → alternate whole `mt` presets back to back, 12 per side, both binaries
-  built once and swapped inside one loop, machine otherwise idle. Expect hits on
-  both sides; the question is whether HEAD is worse.
+**F3** — known encoder MT race, not this phase's to fix. Apply **S14** — its §7.6
+text is current (signature, measured rates, isolation re-runs, sweep-level
+alternation). Anything outside S14's signature is real: stop, revert, investigate.
 
-## 1. Step 5.1 — Picture & DPB (steps 1–2 done at session B; the conversion is next)
+## 1. Step 5.1 — Picture & DPB (steps 1–3 done; step 4 done per file; **`PicPool` and identity remain**)
 
 `SPicture`'s planes become owned (`PaddedPlanes` + `Vec`s); `PicPool`;
 `pic_queue.rs` recycling predicate; `manage_dec_ref.rs`; `error_concealment.rs`
@@ -64,19 +57,24 @@ Order inside the step:
    overlap); all now name `(*pCtx)` / `(*pRefPic)` per use, with the rule written at
    `SetUnRef`. **F13's `manage_dec_ref` Miri skip is gone** — six
    `as_ptr()`/`as_mut_ptr()` list shifts behind it, and three test defects.
-3. **The conversion — session C's whole job.** Per the closure in the session-A log
-   §5, corrected by session B's recount: nothing embeds the decoder's `SPicture` by
-   value (every holder is a pointer; the ten-file table re-greped and unchanged); it
-   has no `assert_size!` and no offset pins; **`iPlanes` is written-never-read in
-   the port *and* in the C++ decoder**, so fixing the count at three is subtraction;
-   F19's check is clean on all eight allocations today — keep it true as
-   `AllocPicture`/`FreePicture` become `Picture::new`/`Drop`. `PaddedPlane::new` /
-   `from_parts` (`safe/plane.rs`) are the constructors, and `new`'s doc already
-   names the `128` fill `AllocPicture` does. Miri watches `manage_dec_ref` now.
-4. **Not audited yet, and each is its own S25 enumeration**: `pic_queue.rs`
-   (`SPicBuff.ppPic` is `*mut *mut SPicture` and the recycling predicate walks it
-   while `pCtx->pDec` points into the same array), `deblocking.rs`,
-   `error_concealment.rs`. Do them with their conversion, not before it.
+3. ~~The conversion.~~ **Done, session C**, in three faces: `79588684` (T5.C1,
+   `iPlanes` and the fourth slot deleted), `999f300b` (T5.C2, every plane read onto
+   `SPicture::linesize` / `SPicture::data_ptr`, the latter marked `SHIM(phase5)`),
+   `7a28e620` (T5.C3, `planes: [PaddedPlane; 3]`, `AllocPicture` heap-constructing
+   and `FreePicture` dropping). Goldens 56, none moved; perf flat at the allocation
+   seam. **The one thing to carry: `data_ptr` must not narrow provenance.**
+   `plane.as_mut_slice()[origin..].as_mut_ptr()` is safe code with the right
+   address, passes all nine gates, and is UB at the first read into the padding —
+   Miri caught it, nothing else could. It is `as_mut_ptr().wrapping_add(origin)`.
+4. ~~Each file's S25 enumeration.~~ **Done, written into the commit that converted
+   each**: `deblocking.rs` and `error_concealment.rs` at T5.C2, `pic_queue.rs` at
+   T5.C3. The pool's answer is that nothing in it holds a borrow across anything;
+   the re-entrant pair is `WelsInitRefList`'s and is enumerated at its own site.
+5. **Still open in 5.1, and it is the next closure**: `PicPool`, the recycling
+   predicate as a method on it, and `PicId` for the three identity sites. The five
+   P3 tests exist to gate exactly this; `safe/pool.rs` already has the handle type
+   and its `pair_mut`. Nothing in 5.1 blocks 5.2, so the order is a judgement call
+   — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid
 
@@ -143,21 +141,28 @@ this brief historical.
 
 ## 8. Metrics inherited
 
-*(Re-greped at session B's exit. S24 still binds — recount before acting.)*
+*(Re-greped at session C's exit. S24 still binds — recount before acting.)*
 
 - `transmute` reads **4: all prose, zero calls**. Don't chase it.
 - The **ratchet** is the instrument, not struct sizes. Phase 5 so far:
-  `raw_ptr` 4815 → **4597** (session A, by deletion; session B flat),
-  `unsafe_block` 613 → 618 → **616**, `unsafe_fn` 1250 → **1249**.
-- Gates: **443 / 437 / 20**, Miri **304**, sweeps 341/341 both profiles, decode
+  `raw_ptr` 4815 → 4597 (session A, by deletion; session B flat) → **4595**
+  (session C: +1 for the new accessor, −4 as the pointer arrays and
+  `calculate_data_pointers` died), `unsafe_block` 613 → 618 → 616 → **613**,
+  `unsafe_fn` 1250 → 1249 → **1248**. S16's warning was collected twice this
+  session: prose inflates `raw_ptr` and `SHIM(`, and both were reworded rather
+  than baselined.
+- Gates: **448 / 442 / 20**, Miri **309**, sweeps 341/341 both profiles, decode
   goldens **56 rows**.
 - **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
   (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
 - Census gate state: duplicate types 10, aliases 31, tables 17, inferred-target
   double casts 0, duplicate-body groups 198 (ratcheted), 61 allowlisted entries.
   Remaining within-decoder entries are allowlisted with their owning steps.
-- `SHIM(` 157: `phase3` = 2 (Phase 6's), `phase5` = 1 (dies in 5.2), rest
-  `phase2`.
+- `SHIM(` **158**: `phase3` = 2 (Phase 6's), `phase5` = **2** — `cabac_decoder.rs`'s
+  (dies in 5.2) and `SPicture::data_ptr` (dies as 5.2–5.6 convert the kernels,
+  *except* at `decoder_core.rs:1087`, where the public output contract hands the
+  pointers to the API consumer and they outlive the call; that one outlives the
+  phase). Rest `phase2`.
 
 ## 9. Non-goals
 
