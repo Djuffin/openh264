@@ -458,7 +458,7 @@ borrows the context kills *every* outer borrow of it.
 
 ### Why it matters beyond this function
 
-**~30 live `&mut *pCtx` sites remain in `src/decoder/`.** Each is fine alone and UB the
+Every live `&mut *pCtx` site in `src/decoder/` is fine alone and UB the
 moment it is held across a call that re-enters through `pCtx` — which the decoder does
 constantly, through `pDecMbFunc`, `pFuncList` and the deblocking callbacks. This is not
 a list of independent defects; it is one systemic pattern, and 5.2–5.6 convert exactly
@@ -471,6 +471,35 @@ wanted.
 `(*pCtx)` / `(*pCurDqLayer)` named per use — 43 sites — and the two nested pointers
 derived with `addr_of_mut!` so they carry the layer's provenance and no retag exists to
 invalidate. Zero bytes moved: 56 golden rows and 449 tests green either way.
+
+### The inventory this left behind — CLOSED at T5.G1, and its count was wrong (2026-08-12)
+
+This entry left the pattern's *other* sites for the files that own them, and named the
+remainder as **12 bindings decoder-side, 7 in `decode_slice.rs` and 5 in
+`manage_dec_ref.rs`**. That number was carried verbatim into the probe's `#[cfg_attr]`
+label, `phase5.md` §2, S29 and session F's hand-off.
+
+**The real count is 11: 6 and 5.** `grep 'let ctx = &mut \*pCtx;' decode_slice.rs`
+returns seven lines and the seventh is `:5405` — a `///` line inside the probe's own doc
+comment, illustrating the defect. Prose inflating a count of code is exactly S16's
+standing warning about `raw_ptr`, arriving in a place S24 was already watching, and the
+instrument that separates them is one comment-stripping pass before the count.
+
+Nothing about the work changed — the shape was "convert every `&mut *pCtx` binding", not
+"convert twelve things" — which is the reason this cost nothing and the F29 miss cost a
+round trip. **A wrong count is harmless exactly when it is not load-bearing**, and there
+is no way to know which kind you have without checking.
+
+The prior claim here that "**~30** live `&mut *pCtx` sites remain" was never measured
+either: at T5.D2, before the fix above, the decoder held **14** occurrences across two
+files, 12 of them bindings. The number that turned out to matter was F28's, and it was
+larger and about a different object.
+
+**Disposition (T5.G1):** all 11 converted, with the 13 nested borrows that hung off them
+(2 in `decode_slice.rs`, 11 in `manage_dec_ref.rs`, `WelsMarkAsRef`'s
+`&mut (*pCtx).sTmpRefPic as *mut SRefPic` among them — S29's forbidden derivation with
+the cast already in place). `src/decoder/` now contains **zero** `&mut *pCtx`, and no
+function in the port takes `&mut SWelsDecoderContext`.
 
 ---
 
@@ -801,3 +830,84 @@ exits on `i`. The value is never dereferenced. In C that is a benign idiom; in R
 `wrapping_offset(-1)`: same address, no UB, no behaviour change — S6 parity rather than
 repair. Greped for siblings: no other negative `offset` remains in
 `parse_mb_syn_cabac.rs`, `decode_slice.rs` or `cabac_decoder.rs`.
+
+---
+
+## F31 — the SPS/PPS `memcpy` was translated as a typed copy, so the `memcmp` beside it reads uninitialized padding
+
+**Status: FIXED 2026-08-12 (Phase 5 session G, T5.G1). Owner 5.5** (`nalu.rs`'s paramset
+store is P4/§2.2.6), fixed here because it is what the probe stopped on and the fix is
+three lines. **Not an aliasing defect** — the first thing this probe has found that
+isn't, and the first defect it found after F25's inventory closed.
+
+### The defect
+
+```text
+error: Undefined Behavior: reading memory at alloc253221[0x1fe0..0x2378], but memory is
+       uninitialized at [0x231d..0x2320], and this operation requires initialized memory
+  --> core/src/slice/cmp.rs:157   compare_bytes(lhs as _, rhs as _, size) == 0
+     3: decoder::nalu::bytes_equal::<decoder::parameter_sets::TagSps>  (nalu.rs:436)
+     4: decoder::nalu::ParseSps                                        (nalu.rs:1593)
+```
+
+`alloc253221` is the decoder context (568,592 bytes = `0x8ad10`), so the uninitialized
+operand is the **stored** SPS, not the freshly parsed one. The three bytes are
+`sVui + 1`: `TagVui` opens with `bAspectRatioInfoPresentFlag: bool` and the next field is
+a 4-aligned `u32`, so `[0x33d..0x340]` inside `SSps` is interior padding.
+
+### Why it was uninitialized, which is the whole finding
+
+`au_parser.cpp` runs a three-legged idiom and it only works whole:
+
+```c
+memset (pSubsetSps, 0, sizeof (SSubsetSps));                       // 1: zero, padding included
+memcpy (&pCtx->sSpsPpsCtx.sSpsBuffer[iSpsId], pSps, sizeof (SSps)); // 2: byte copy, padding carried
+memcmp (&pCtx->sSpsPpsCtx.sSpsBuffer[iSpsId], pSps, sizeof (SSps)); // 3: byte compare
+```
+
+The port translated leg 2 as `copy_nonoverlapping::<SSps>(src, dst, 1)` — a **typed**
+copy. A typed copy does not carry padding: Rust leaves the destination's padding
+uninitialized no matter how initialized the source was. Leg 3 then reads exactly those
+bytes. Leg 1 had the same hole: `let mut s: SSubsetSps = std::mem::zeroed()` produces a
+zeroed *value* and then **moves** it into the binding, and a move is a typed copy too, so
+the binding's padding is uninitialized before the parse even starts.
+
+`ParseSps`'s own comment has explained since the function was written that the zeroing
+exists so the byte comparison is meaningful, and that leftover padding "would read as a
+changed SPS and force a spurious new sequence, resetting the DPB mid-stream". The
+comment was right about the stakes and the code discarded the zeroing one line later.
+**The prose was not wrong, and it was not evidence** — S24's failure mode with the
+summary and the fact written by the same hand.
+
+### Why no other gate could see it
+
+Byte-identical output proves nothing here: on this compiler the padding happens to be
+carried by the memcpy LLVM emits for a typed copy, so the comparison reads the same
+zeros it would have read anyway. 341/341 sweeps, 56 golden rows and the 1080p bench all
+pass on top of it, and would keep passing until an optimizer decided to skip the padding
+— at which point the symptom is a DPB reset on a stream that never changed its SPS.
+This is F30's class (an idiom benign in C, UB in Rust by the operation alone) reached
+from the opposite direction: F30's arithmetic was visibly odd, this looks like ordinary
+translation.
+
+### The fix
+
+One helper, `nalu::bytes_copy<T>` — `copy_nonoverlapping` at `*mut u8` over
+`size_of::<T>()`, which *is* `memcpy` — and all **10** paramset stores route through it
+(6 SPS/subset-SPS, 2 more subset, 2 PPS). Both `mem::zeroed()` temps get a
+`write_bytes(.., 0, size_of::<T>())` over their own storage, which is the `memset`. The
+`bytes_equal` doc comment now states the contract it depends on, and names `bytes_copy`
+as the half that keeps it true.
+
+S6 parity, not repair, in the strong sense: the fix makes the Rust do what the C++ does,
+and the defect was introduced in translation.
+
+### Sibling check (S13 — run the instrument everywhere it could apply)
+
+`bytes_equal` has exactly three call sites, all in `nalu.rs`, all covered. The two
+remaining typed `copy_nonoverlapping` of whole structs in the file — `ExpandAuList`'s
+`SNalUnit` copy and the scaling-list array copies — feed nothing that is compared
+byte-wise, so they stay as they are (S6: parity, not a sweep). **The general rule this
+leaves for 5.5 and Phase 6**: a struct that is ever compared or hashed as bytes must
+only ever be *stored* as bytes, and the two halves are usually written in different
+functions by different people.

@@ -969,9 +969,15 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   stops being a question — F24's 141 use sites cost four changed lines because the
   sites already spelled the dereference. Classify by escape: a nested borrow hurts
   one function; a borrow **stored into another struct** (`= &mut (*p).field`
-  shapes — grep-able) hurts everything downstream. ~30 `&mut *pCtx` sites remain
-  decoder-side; 5.2–5.6 convert them per file touched, not as a mass sweep. This is
+  shapes — grep-able) hurts everything downstream. **The decoder's `&mut *pCtx`
+  inventory is closed** (T5.G1: 11 bindings and 13 nested borrows; `src/decoder/`
+  now holds zero, and no function in the port takes `&mut SWelsDecoderContext`) —
+  what 5.2–5.6 still convert per file touched is the *wider* class F28 named: any
+  `&mut` of anything reachable from `pCtx`, held across a call. This is
   S25's complement: S25 finds the overlaps, S29 is the spelling that removes them.
+  **`&mut X as *mut T` is the same defect with the cast already written** — the
+  reference exists and retags before the cast discards it; `addr_of_mut!` is the
+  fix, and the shape hides from a grep for `&mut *`.
 
 
 ---
