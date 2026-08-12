@@ -356,7 +356,6 @@ pub struct SDqLayer {
     pub pRefIndex: [*mut [i8; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     pub pChromaQp: *mut [i8; 2],
-    pub pCbp: *mut i8,
     pub pNzc: *mut [i8; 24],
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
@@ -2794,7 +2793,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
-        (*pDq).pCbp = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pSubMbType = WelsMalloczHelper(pMa, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
@@ -2856,10 +2854,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pIntraPredMode.is_null() {
             WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
             (*pDq).pIntraPredMode = std::ptr::null_mut();
-        }
-        if !(*pDq).pCbp.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pCbp as *mut u8, numMb * std::mem::size_of::<i8>());
-            (*pDq).pCbp = std::ptr::null_mut();
         }
         if !(*pDq).pSubMbType.is_null() {
             WelsFreeHelper(pMa, (*pDq).pSubMbType as *mut u8, numMb * MB_PARTITION_SIZE * std::mem::size_of::<u32>());
