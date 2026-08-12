@@ -2627,7 +2627,6 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
     *(*dq).pResidualPredFlag.add(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
@@ -3065,7 +3064,6 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
@@ -3107,7 +3105,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
-            *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
+            // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
+            // which nothing in either tree reads. The `if` stays: its `else` is the error.
         } else {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
         }
@@ -3326,7 +3325,6 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         for j in 0..24 {
             *(*(*dq).pNzc.add(iMbXy)).as_mut_ptr().add(j) = 0;
         }
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         if !(*dq).pDec.is_null() {
             for j in 0..16 {
                 *(*(*(*dq).pDec).pRefIndex[0].add(iMbXy)).as_mut_ptr().add(j) = 0;
@@ -3408,7 +3406,6 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq);
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
     if ret != 0 {
@@ -3450,7 +3447,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if *(*dq).pResidualPredFlag.add(iMbXy) == 0 {
-            *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
+            // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
+            // which nothing in either tree reads. The `if` stays: its `else` is the error.
         } else {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
         }
@@ -3678,7 +3676,6 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
         nzc_mb.fill(0);
 
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         (&mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy)).fill(0);
         (&mut *(*(*dq).pDec).pRefIndex[LIST_1].add(iMbXy)).fill(0);
 
@@ -4525,7 +4522,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     *(*dq).pNoSubMbPartSizeLessThan8x8Flag.add(iMbXy) = true;
     *(*dq).pTransformSize8x8Flag.add(iMbXy) = false;
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
     *(*dq).pResidualPredFlag.add(iMbXy) =
         (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
@@ -4637,7 +4633,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     let mut pIntraPredMode = [0i8; 48];
     let mut uiMbType = 0u32;
 
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseMBTypePSliceCabac(
         pCtx,
@@ -4672,7 +4667,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         if ret != ERR_NONE {
             return ret;
         }
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
     } else {
         let intra_type = uiMbType - 5;
         if intra_type > 25 {
@@ -4782,7 +4776,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
         let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
         nzc_mb.fill(0);
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         let ref_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy);
         ref_slice.fill(0);
 
@@ -4841,7 +4834,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     let mut pIntraPredMode = [0i8; 48];
     let mut uiMbType = 0u32;
 
-    *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
 
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseMBTypeBSliceCabac(
         pCtx,
@@ -4883,7 +4875,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         if ret != ERR_NONE {
             return ret;
         }
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
     } else {
         let intra_type = uiMbType - 23;
         if intra_type > 25 {
@@ -5005,7 +4996,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
         let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
         nzc_mb.fill(0);
-        *(*dq).pInterPredictionDoneFlag.add(iMbXy) = 0;
         let ref0_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy);
         let ref1_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_1].add(iMbXy);
         ref0_slice.fill(0);
