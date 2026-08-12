@@ -921,3 +921,44 @@ been recording in a weaker version. Previous entries said *the commits are
 decoder-side and the sweeps compare encoders*; this one says *there are no commits*.
 
 Running total: **twenty-six measurements, ten alternations, ten acquittals.**
+
+---
+
+### Measurements 27–28 (Phase 5, session D, 2026-08-11) — two hits, and the alternation replaced by a hash
+
+Two hits in one battery, one per profile, both inside the signature:
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 27 | `160x96 t=2 sm=3 n=600 cabac=0 rc=1` (**debug**) | 41938 | 0 |
+| 28 | `160x96 t=4 sm=3 n=600 cabac=1 rc=0` (release) | 42281 | 41681 |
+
+Both re-run 5× in isolation per S14 step 1: **5/5 byte-identical, both.**
+
+**Two hits triggers step 2's alternation, and this session did not run one — because
+something cheaper and stronger was available.** The tree's only change since the last
+341/341 is a `#[cfg(test)]` unit test inside the *library*. `#[cfg(test)]` code is not
+compiled when the crate is built as a dependency, so the sweep's binary should be
+unaffected — and rather than assert that, it was measured. Built both ways with the test
+present and stashed:
+
+```text
+HEAD  rust_enc: fa59e2a591fe2178ca8949f55f119e435788f0cdd0f523d60f5716581d771844
+BASE  rust_enc: fa59e2a591fe2178ca8949f55f119e435788f0cdd0f523d60f5716581d771844
+```
+
+**Byte-identical.** An alternation compares base against head to answer *is HEAD worse*;
+here base and head are the same binary in the only artifact the sweep exercises, so the
+comparison is vacuous by construction and 24 sweeps would have measured the harness.
+This is S23b's principle at its limit — *a result that cannot distinguish the trees is a
+statement about the harness* — reached from the opposite direction: not "no reproduction
+on either side" but "there are not two sides."
+
+**Worth adding to the protocol**: before running S14 step 2, hash the sweep binary
+against the base's. If they match, the alternation cannot produce information and the
+hash *is* the acquittal — cheaper than 24 sweeps and not probabilistic. Step 2 stays
+exactly as written for any session whose commits reach `rust_enc`, which is every
+encoder-side one.
+
+Running total: **twenty-eight measurements, ten alternations, ten acquittals** — and one
+acquittal that needed no alternation.
