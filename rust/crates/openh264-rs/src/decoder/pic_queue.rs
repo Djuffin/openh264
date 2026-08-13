@@ -844,16 +844,22 @@ mod tests {
             assert!(same_picture(a, a));
 
             // A picture outside the pool has no slot and is its own identity only.
+            // Both writes happen before either address is taken, and the addresses
+            // come from `addr_of!` rather than from `&loose` — S29's spelling for
+            // S29's reason. The first draft of this test took `&loose`, then wrote
+            // `iFramePoc`, then read through the raw pointer: the write invalidated
+            // the shared tag the reads were using. Miri convicted it and nothing
+            // else in the battery could have.
             let mut loose = SPicture::default();
             let mut loose2 = SPicture::default();
-            let (l, l2): (*const SPicture, *const SPicture) = (&loose, &loose2);
-            assert_eq!(loose.pic_id(), None);
-            assert!(same_picture(l, l));
-            assert!(!same_picture(l, l2));
-            assert!(!same_picture(l, a));
             loose.iFramePoc = 4;
-            loose2.iFramePoc = 4;
-            assert!(!same_picture(l, l2), "and POC does not join them either");
+            loose2.iFramePoc = 4; // same POC as each other and as the pooled pair
+            let l: *const SPicture = std::ptr::addr_of!(loose);
+            let l2: *const SPicture = std::ptr::addr_of!(loose2);
+            assert_eq!((*l).pic_id(), None);
+            assert!(same_picture(l, l));
+            assert!(!same_picture(l, l2), "and POC joins nothing");
+            assert!(!same_picture(l, a));
 
             assert!(same_picture(std::ptr::null(), std::ptr::null()));
             assert!(!same_picture(std::ptr::null(), a));
