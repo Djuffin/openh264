@@ -1531,9 +1531,10 @@ its decode median (+0.08%) sits *below* the null's floor.
 #### The cumulative position, and the correction it forces
 
 **Cumulative CB ≈ +20.2%** — Phase 4a's exit position (+17.8%, unmoved by Phases 3 and
-4b, both of which measured flat end to end) plus this session's directly-measured whole-
-flip span — against the ≈**+23%** stop-line. **≈2.8 points of headroom for the remaining
-seven families.**
+4b, both of which measured flat end to end) plus this directly-measured whole-flip span —
+against the ≈**+23%** stop-line. **≈2.8 points of headroom for the remaining seven
+families**, which is the position Face 2 started from; the same span re-measured after
+all seven had flipped reads +2.93% and puts the cumulative at ≈ +20.7% (below).
 
 **The summed estimate was not high; it was slightly low.** ≈+19.2…+20.1% summed against
 ≈+20.2% measured. Session I's "the sum is high by roughly a factor of two" was a
@@ -1543,9 +1544,52 @@ summed range, not at half of it. The instrument change stands on its own merits 
 reading above the floor beats fifteen below it — but the headroom it buys is what the
 plan already assumed, not more.
 
-**This reading owes a day-two confirmation** (S2b) and the decision it carries — whether
-the remaining seven flip — rests on it, so the confirmation is the next session's first
-item, from `.perfpair/seat_head` and `.perfpair/l_head`, which stay stashed.
+**The whole-flip reading owes a day-two confirmation** (S2b) — the decision it carries
+is how much of the ≈+23% stop-line 5.2's remaining work and 5.3–5.6 may spend — so the
+confirmation is the next session's first item, run against the **final** span
+(`.perfpair/seat_head` → `.perfpair/l_c2`, both stashed) rather than this morning's.
+
+#### The last seven families, and the first cluster reading that is outside the floor
+
+Measured after Face 2, same day, same null:
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.L1–L7 — the last seven families** (`a4670ef6` → `f63e8ef6`) | 7 | **+1.27%** | +0.41% | +0.52% | **+0.52%** | +0.00% |
+| **the whole 5.2 flip, all 22 families** (`3c4c6f4e` → `f63e8ef6`) | 7 | **+2.93%** | +0.97% | +1.01% | **+1.01%** | +0.00% |
+
+**Every row of the seven-family span is above the null band's ceiling** (+0.31%), and the
+CB row is four times the band's width. This is the first family-cluster reading of the
+whole flip that lands unambiguously outside the floor, and it is the same lesson Face 1
+taught, running the other way: **the per-family readings were not merely noisy, they were
+systematically under-reporting.** T5.J3 read +0.24% CB, T5.K1 +0.04%, T5.K2+K3 +0.04% —
+each "free" — and seven families measured together read +1.27%. An effect at the
+resolution limit does not average out to nothing; it hides, one family at a time.
+
+**Cumulative CB is now ≈ +20.7%** — Phase 4a's +17.8% plus the whole-flip +2.93% —
+against the ≈**+23%** stop-line. **≈2.3 points of headroom** for everything 5.2 has left
+(the `DqLayerState` rename, 32 scratch-cache re-points, `pBitStringAux`) plus 5.3–5.6.
+
+Two notes on the arithmetic, both of which matter more than the third decimal:
+
+* **The spans are not perfectly additive at this resolution.** The flip through session K
+  read +2.36% CB this morning and the seven families read +1.27% this evening, which
+  would sum to +3.63%; the direct whole-flip span reads **+2.93%**. Half a point of slop
+  across three 7-pair readings taken hours apart is the honest error bar on any
+  *composed* figure — which is the argument for measuring the whole span directly rather
+  than adding, and this section does both so the gap is visible instead of assumed.
+* **The machine moved during the session and the protocol absorbed it.** `seat_head`'s CB
+  column read 2.5460 ms this morning and 2.4920 ms this evening — 2% faster — while the
+  span it carries barely moved. That is interleaved pairs (S1) doing exactly the job they
+  exist for; an unpaired reading taken twelve hours apart would have reported the
+  machine's afternoon instead of the port's.
+
+Per family the flip costs **≈0.13% CB averaged over 22**, below the ≈0.3% the plan's
+arithmetic assumed and above the "nothing" the per-family readings kept reporting.
+**Encode is flat at +0.00% median on both spans**, as a decoder-only change should be.
+**No ledger row opens**: the cost is not scaffolding that a later phase deletes — it is
+the bounds check the safe container exists to have — so it belongs in the cumulative
+position rather than in a deficit ledger that promises a recovery.
 
 #### The absolute deficit against the C++ dylib, and why it is not this number
 
@@ -1553,11 +1597,12 @@ Read off the decode bench's own two columns, best of 3 interleaved passes per la
 both labels against the same dylib (so the C++ column is the control — it moved 0.2–0.4%
 between labels, which bounds the drift):
 
-| stream | `seat_head` Rust vs C++ | HEAD Rust vs C++ |
+| stream | `seat_head` Rust vs C++ | `l_head` (mid-session HEAD) Rust vs C++ |
 |---|---|---|
 | Constrained Baseline | +54.0% | **+56.8%** |
 | Main | +2.5% | +3.1% |
 | High | +3.2% | +4.2% |
+
 
 **This is not the cumulative deficit and must not be quoted as one: the dylib dispatches
 NEON.** The bench prints it — `C++ SIMD : ACTIVE (WelsCPUFeatureDetect = 0x000006)`, and

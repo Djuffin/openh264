@@ -1188,11 +1188,14 @@ For the eleven families still to flip that is a drop from 16 to 1 (`pRefIndex`,
 consumers for a wider-than-element access before it flips them, and this finding is why.
 
 
-## F36 — the port's multi-threaded slice loop never writes `pSliceIdc`, and that is the array the neighbour-availability test compares
+## F36 — the port's multi-threaded slice loop is a partial translation; `pSliceIdc` was the first symptom
 
 **Status: OPEN, dormant.** Owner: whoever ports decoder threading (the T5c
 "decoder threading scaffolding" entry; F12's neighbourhood). It must be fixed
 **before** `GetThreadCount` returns anything greater than 1, not after.
+**Widened at session L** — see the last section: two more families' writer greps
+(T5.L1's `pNzc`, T5.L6's `pMbCorrectlyDecodedFlag`) landed in the same function, and
+it is missing five statements, not one.
 
 Noticed at T5.K3 while re-greping `pSliceIdc`'s writers to flip the family (S24) —
 the C++ has two and the port has one.
@@ -1249,3 +1252,37 @@ family's bytes are unchanged. Fixing it here would be a behaviour change on a pa
 this session cannot measure, inside a commit whose contract is that it moves no
 bytes (S6). The finding is recorded in the commit that noticed it, which is the
 rule F35 established.
+### Widened at session L: it is not one dropped line, it is a partial function (T5.L1, T5.L6)
+
+Two more families' writer greps landed in the same place, so the finding is
+restated: **the port's `WelsDecodeAndConstructSlice` is a partial translation of
+the C++'s, and `pSliceIdc` was the first symptom rather than the whole of it.**
+
+| C++ `WelsDecodeAndConstructSlice`, per macroblock | port |
+|---|---|
+| `pCurDqLayer->pSliceIdc[iNextMbXyIndex] = iSliceIdc` (`decode_slice.cpp:1708`) | absent (T5.K3) |
+| `memcpy (pCtx->pDec->pNzc[iMbXy], pCurDqLayer->pNzc[iMbXy], 24)` (`:1722`) | absent (T5.L1) |
+| `pWelsSetNonZeroCountFunc (pCtx->pDec->pNzc[iMbXy])` for non-I slices (`:1724`) | absent (T5.L1) |
+| `WelsDeblockingFilterMB (pCurDqLayer, pFilter, iFilterIdc, pDeblockMb)` (`:1727`) | absent |
+| the `uiNalRefIdc > 0` border-padding block (`:1729`) | absent |
+
+The C++ function is 162 lines (`decode_slice.cpp:1620-1782`); the port's is 101
+(`decode_slice.rs:5286-5387`) and its per-macroblock loop stops after
+`pDecMbFunc`, the `pMbCorrectlyDecodedFlag` update and the EC bookkeeping.
+
+A third site belongs to the same class and is not in that function:
+`decoder_core.cpp:2595` re-points the layer's flag array at the picture's
+(`pCurDqLayer->pMbCorrectlyDecodedFlag = pCtx->pDec->pMbCorrectlyDecodedFlag`)
+**when `pThreadCtx != NULL`**, which is how the C++'s MT path gives each thread
+its own per-picture copy. The port has no live `pThreadCtx` at all
+(`decoder_core.rs:687` records the field as never ported), so the layer's array is
+always the layer's own — which is *why* T5.L6 could make it an owned `MbArray`
+without changing anything, and equally why whoever ports threading cannot simply
+turn the arm back on.
+
+**What this does not change:** the owner, the dormancy, and the deadline. The arm
+runs only when `GetThreadCount` exceeds 1 and it returns 0 unconditionally. What
+changes is the size of the job: the fix is not "add the missing `pSliceIdc`
+write", it is "translate the rest of the function, and decide where the
+per-picture arrays live when more than one thread has one". Both flips left the
+divergence exactly as they found it (S6).

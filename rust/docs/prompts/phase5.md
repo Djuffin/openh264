@@ -22,10 +22,11 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded (session K exit): **468 debug / 462 release / 20 ignored**,
-   Miri **328** (~910s), census **60**, decode goldens **57**, ratchet `raw_ptr`
-   **4540**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
-   session K drew two hits in each and alternated both).
+   verdict. Last recorded (session L exit): **468 debug / 462 release / 20 ignored**,
+   Miri **328** (~908s), census **60**, decode goldens **57**, ratchet `raw_ptr`
+   **4507**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
+   session K drew two hits in each and alternated both; session L drew one in the debug
+   sweep and reproduced it in isolation, measurement 35).
 3. Recount every number you are about to rely on.
 
 **Budget the Miri step at ~13 minutes, not ~1.** Since T5.G1 the aliasing probe runs
@@ -89,11 +90,16 @@ Order inside the step:
    — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid (**IN PROGRESS. `MbGrid` exists, is proven and is owned by the
-layer (T5.H2/T5.H3); **15 of the 22 array families have flipped** (T5.H4–T5.H14, T5.J3,
-T5.K1–T5.K3), and the first eleven carry per-MB window accessors (T5.I1). Blocker: none. Closure
+layer (T5.H2/T5.H3); **all 22 array families have flipped** (T5.H4–T5.H14, T5.J3,
+T5.K1–T5.K3, T5.L1–T5.L7) and **`SDqLayer` holds no per-macroblock array pointer at all**,
+and the first eleven carry per-MB window accessors (T5.I1). Blocker: none. Closure
 computed and written, session D log §2 — do not recompute it. The subtraction has landed
 (T5.E2). Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory
-and F31 at T5.G1. **Two probe streams are green un-ignored as of T5.J2.**)
+and F31 at T5.G1. **Two probe streams are green un-ignored as of T5.J2.**
+**What remains in 5.2**: the `SDqLayer` → `DqLayerState` rename with its census re-key,
+the **32** scratch-cache re-points (re-greped at session L — `parse_mb_syn_cabac.rs` 19,
+`parse_mb_syn_cavlc.rs` 8, `mv_pred.rs` 5, not the ~28 this brief recorded), and
+`pBitStringAux` with `cabac_decoder.rs`'s `SHIM(phase5)`.)
 
 **The perf question D-perf-5 asked is answered, and the answer is negative** (session I
 log §2–§4; `perf_baseline.md` §Phase 5). The window retrofit does mechanically what it
@@ -114,10 +120,15 @@ there. Two further facts:
 **No window hoisting** (S8's fourth negative result). Flip as `MbArray<[T; K]>` from the
 start and hoist nothing that is not already the C++'s shape.
 
-**The hot families are flipping and none of them costs anything the bench can see.**
-`pRefIndex` (T5.J3) read +0.03% decode median at 7 pairs; `pMv` (T5.K1, the hottest
-family at 3.9% of decode self time) read **−0.13%**, rows −0.20%…+0.04%. Encode flat both
-times, as a decoder-only change should be.
+~~**The hot families are flipping and none of them costs anything the bench can see.**~~
+**Corrected at session L, and this is the correction to read before quoting any
+per-family number.** `pRefIndex` (T5.J3) read +0.03% decode median at 7 pairs, `pMv`
+(T5.K1) **−0.13%**, `pMbType`+`pSliceIdc` +0.04% — each written up as free. Session L's
+last **seven** families, measured as one span, read **+1.27% CB / +0.52% decode median**,
+every row above the null band's ceiling. The per-family readings were not merely noisy,
+they were **systematically under-reporting**: an effect at the resolution limit hides one
+family at a time rather than averaging out. Encode is flat on every span, as a
+decoder-only change should be.
 
 **But the day-two confirmation session K ran is the result to carry, and it is about the
 instrument rather than about `pRefIndex`.** Three 7-pair readings of T5.J3's one span, on
@@ -134,42 +145,56 @@ consequences, all binding on what follows:
   count fixes it.** The number that decides the plan is ≈0.3% CB per family — 3 points of
   headroom over ten families — and that is the size of the noise.
 * **So measure the aggregate.** The stop-line gates on *cumulative* CB, not on a sum of
-  per-family numbers each below the floor; session I already found that sum high by a
-  factor of two. One 7-pair span from the pre-flip base (`seat_head` 3c4c6f4e /
-  `flip_head` 1438d762, both stashed) to HEAD measures a ~20% effect, which this harness
-  resolves easily. **That measurement is not yet run and it is the next session's.**
+  per-family numbers each below the floor. **Session L ran it** (`perf_baseline.md`
+  §Session L): the whole 22-family flip, `seat_head` 3c4c6f4e → `l_c2` f63e8ef6, both
+  stashed, **CB +2.93% at 7 pairs** against a null band 0.16 points wide — resolved
+  without difficulty, exactly as predicted, and it is the number every later reading
+  should be composed against rather than summed into.
 
-Cumulative CB is ≈ **+19.2…+20.1%** against the ≈+23% stop-line — the figure is session
-H's and I's readings of the earlier span and nothing since has moved it measurably.
+**Cumulative CB is ≈ +20.7%** against the ≈+23% stop-line — Phase 4a's +17.8% plus the
+directly measured whole-flip span — leaving **≈2.3 points of headroom** for 5.2's
+remaining work and all of 5.3–5.6. The old summed figure (+19.2…+20.1%) was **not** high
+by a factor of two, as session I's one re-read suggested; measured whole, the flip lands
+slightly above it. The whole-flip reading owes a day-two confirmation (S2b) and it is
+session M's first item.
 
-**Where the flip stands (sessions H, I and J).** The arithmetic is **22 arrays, not 24** —
-F33 deleted `pNzcRs` and `pInterPredictionDoneFlag` at T5.H1, neither of which has a reader
-in either tree. **Flipped:** `pIntraNxNAvailFlag`, `pIntra4x4FinalMode`,
-`pResidualPredFlag`, `pChromaPredMode`, `pCbfDc`, `pLumaQp`,
+**Where the flip stands: it is done (session L).** The arithmetic is **22 arrays, not
+24** — F33 deleted `pNzcRs` and `pInterPredictionDoneFlag` at T5.H1, neither of which has
+a reader in either tree. **All 22 are flipped**: `pIntraNxNAvailFlag`,
+`pIntra4x4FinalMode`, `pResidualPredFlag`, `pChromaPredMode`, `pCbfDc`, `pLumaQp`,
 `pNoSubMbPartSizeLessThan8x8Flag`, `pTransformSize8x8Flag`, `pCbp`,
-`pMbRefConcealedFlag`, `pSubMbType`, **`pRefIndex`** (T5.J3), **`pMv`** (T5.K1),
-**`pMbType`** (T5.K2), **`pSliceIdc`** (T5.K3). **Remaining, seven, hottest first** (heat
-re-derived at session K — 25s of `/usr/bin/sample` over the decode bench, 3917 self
-samples, the bench's own SHA-1 excluded from the denominator — as summed self time of the
-functions holding each family's *layer-qualified* accesses; `SPicture`'s namesakes are
-5.1/5.3's and excluded). **Re-derive again before acting: the order moved between
-sessions J and K** — `pSliceIdc` went 1.6% → 2.5% and overtook `pNzc`, because the heat is
-attributed to functions and the functions do not change when a family leaves them.
+`pMbRefConcealedFlag`, `pSubMbType` (session H), **`pRefIndex`** (T5.J3), **`pMv`**
+(T5.K1), **`pMbType`** (T5.K2), **`pSliceIdc`** (T5.K3), **`pNzc`** (T5.L1),
+**`pChromaQp`** (T5.L2), **`pMvd`** (T5.L3), **`pDirect`** (T5.L4), **`pScaledTCoeff`**
+(T5.L5), **`pMbCorrectlyDecodedFlag`** (T5.L6), **`pIntraPredMode`** (T5.L7).
 
-| family | heat | layer sites | align after flip |
-|---|---|---|---|
-| `pNzc` | 1.9% | 32 | 1 |
-| `pChromaQp` | 1.9% | 29 | 1 |
-| `pMvd` | 1.4% | 40 | 2 |
-| `pDirect` | 0.8% | 16 | 1 |
-| `pMbCorrectlyDecodedFlag` | 0.6% | 18 | 1 |
-| `pScaledTCoeff` | 0.3% | 11 | 2 |
-| `pIntraPredMode` | 0.0% | 16 | 1 |
+Session L's heat re-derivation, kept because the *method* is what the next family-shaped
+job reuses (25s of `/usr/bin/sample` over the decode bench, 18098 self samples, the
+bench's own SHA-1 excluded; a family's heat is the summed self time of the functions
+holding its **layer-qualified** accesses, `SPicture`'s namesakes excluded):
 
-**The site counts are session K's own greps and several disagree with session J's table**
-(`pNzc` 30 → 32, `pMvd` 36 → 40, `pDirect` 12 → 16, `pIntraPredMode` 12 → 16). The rule
-that reproduces both `pRefIndex`'s 17 and `pMv`'s 18 exactly is: **occurrences of
-`.pXxx` whose receiver is not a picture**, comments stripped. Re-grep per family (S24).
+| family | heat | layer sites | align after flip | bridge? |
+|---|---|---|---|---|
+| `pNzc` | 2.17% | 32 | 1 | no — shared borrow |
+| `pChromaQp` | 1.88% | 29 | 1 | no |
+| `pMvd` | 1.36% | 40 | 2 | no |
+| `pDirect` | 0.76% | 16 | 1 | no |
+| `pScaledTCoeff` | 0.45% | 11 | 2 | no |
+| `pMbCorrectlyDecodedFlag` | 0.40% | **16, not 18** | 1 | no |
+| `pIntraPredMode` | 0.10% | 16 | 1 | no |
+
+**Two of session K's numbers were wrong and the S24 re-grep caught both**: the #5/#6
+order (`pScaledTCoeff` is above `pMbCorrectlyDecodedFlag`, not below) and
+`pMbCorrectlyDecodedFlag`'s site count, whose extra two were `SPicture`'s namesake in
+`pic_queue.rs`. The counting rule that reproduces every family exactly is: **occurrences
+of `.pXxx` whose receiver is not a picture**, comments stripped.
+
+**Not one of the seven needed an S28 raw bridge**, which is the fact to carry into 6.3's
+equivalent: a family needs `mb_grid_ptr` only when a consumer indexes the base at
+*another macroblock's* address (`GetMbType`, `pCbfDc`), and none of these do — they index
+inside their own record, and the two that hand out a base (`GetPNzc`,
+`error_concealment.rs`'s flag loops) were read-only, where a shared borrow or per-use
+indexing serves.
 
 Each is one commit; the seat and the accessor are already in place, so a family commit is
 the flip and nothing else. **All eleven of session H's families carry per-MB window
@@ -367,8 +392,10 @@ not a kernel adapter — 5.6 cannot delete it; it retires with the API boundary 
 (Phase 8). The straggler sweep expects exactly this one; its marker text names the
 owner.
 **every §7.4 ledger entry whose shims died in this phase must clear**. This phase
-collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative; ~7 points of
-CB headroom under the tripwire). The mechanism is constant dimensions reaching the
+collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative at 4a's exit).
+**Measured position after 5.2's flip (session L): CB ≈ +20.7%** — ~4.3 points under the
++25% tripwire and **~2.3 under the ≈+23% stop-line**, which is what everything left in
+5.2 and all of 5.3–5.6 spend against. The mechanism is constant dimensions reaching the
 kernels, so flat mid-phase bench readings are expected — the ledger is the
 instrument that moves. S19 at exit: refresh §0, write `prompts/phase6.md`, stamp
 this brief historical.
@@ -413,7 +440,17 @@ this brief historical.
   written*. Both `unsafe_block` increases are the S28 full-reach tests T5.K1 and T5.K2
   owe; no production `unsafe {}` was added. T5.K3 is the first family of the flip that
   leaves **no raw derivation at all** and so owes no test.
-  **S16's prose floor has now been collected seven times** (session H added three, two of
+  **Session L: `raw_ptr` 4540 → 4507 (−33), everything else flat.** Per file:
+  `decoder_core.rs` −22 (seven field declarations, eight allocations, seven free blocks),
+  `parse_mb_syn_cabac.rs` −5, `parse_mb_syn_cavlc.rs` −4, `decode_slice.rs` −2 — and
+  `mv_pred.rs` **flat at 274 across 25 converted sites**, `deblocking.rs` flat,
+  `error_concealment.rs` flat across four deleted base-pointer bindings, for the reason
+  session K recorded. `unsafe_block` **625, unchanged**: no production `unsafe {}` for a
+  third session, and for the first time no S28 test was owed either, because none of the
+  seven families needed a raw bridge.
+  **S16's prose floor has now been collected eight times** (session L's was a doc comment
+  in `test_need_error_con` naming the pointer type its own flip had just deleted, which
+  the per-file map caught and the total would have hidden; session H added three, two of
   them on `mem_zeroed` again and one putting `raw_ptr` at 1 in a `forbid(unsafe_code)`
   file); before session H it had been collected four times — `raw_ptr` and `SHIM(` at
   session C, `mem_zeroed` at T5.G1 (a doc comment naming the zeroing intrinsic, which
@@ -439,6 +476,12 @@ this brief historical.
   first `n=1500` hit in 34 measurements, explained by `sm=3`'s `n` being the per-slice
   byte budget, so a smaller `n` cuts more slices and performs more of the slice-list
   growths the race lives in.
+  **Session L drew one** (debug, measurement 35) and its isolation re-run **reproduced it
+  twice in ten** — the second reproduction in the finding's history and the same
+  configuration and wrong length as measurement 29's, so `320x192 t=4 sm=3 n=600 cabac=1`
+  in the debug profile is *the* susceptible configuration. One hit, so no alternation
+  (S14 step 1); acquitted. Miri **328** unchanged across the session: seven families and
+  not one new test, because not one needed a bridge.
 - **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
   (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
 - Census gate state: inferred-target double casts 0, duplicate-body groups 198
