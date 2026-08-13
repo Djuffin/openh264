@@ -340,19 +340,26 @@ impl Default for TagNalUnit {
 /// layout, the struct crosses no FFI boundary, and it carries no `assert_size!` or
 /// offset pin — T5.N4's reasoning for `SDeblockingFilter`, unchanged.
 pub struct TagAccessUnits {
-    /// The NAL nodes, **owned** — replacing `pNalUnitsList: *mut *mut SNalUnit` and
-    /// the `uiCountUnitsNum` that was supposed to describe it (T5.O4, F39).
+    /// The NAL nodes — replacing `pNalUnitsList: *mut *mut SNalUnit` and the
+    /// `uiCountUnitsNum` that was supposed to describe it (T5.O4, F39).
     ///
     /// The count and the contents are one fact now, which is the same move T5.N1 made
     /// for the picture pool and for the same reason: the port had **two** allocators
     /// for this list, of different shapes, and a growth path that mixed them.
     ///
-    /// `Box` per node rather than `Vec<SNalUnit>`: `pCtx->pNalCur` and the local
-    /// `pNalCur`s hold pointers *into* this list across a growth, so the node
-    /// addresses have to be stable. The C++ moves them (`ExpandNalUnitList` copies
-    /// into a new block and frees the old), which is P5's hazard in its original
-    /// habitat; boxing makes it unrepresentable rather than repaired.
-    pub nal_units: Vec<Box<SNalUnit>>,
+    /// **Slots are raw, and the ownership is in [`Drop`], exactly as `PicPool`'s
+    /// are** — the design session N reached for the picture pool, re-derived here by
+    /// Miri. `Vec<Box<SNalUnit>>` was the obvious spelling and it is *unsound in this
+    /// consumer*: handing out a node pointer means `&mut *the_box`, whose Unique retag
+    /// covers the whole node, and `ParseSliceHeaderSyntaxs` is already holding a
+    /// `&mut BsCursor` **into that same node** as a strongly-protected argument. The
+    /// aliases have to go before the container may lend.
+    ///
+    /// One node per `Box::into_raw`, stable across a growth. The C++ moves the nodes
+    /// (`ExpandNalUnitList` copies into a new block and frees the old), which dangles
+    /// every outstanding `SNalUnit*` — P5's hazard in its original habitat; pushing
+    /// onto a `Vec` makes it unrepresentable rather than repaired.
+    pub nal_units: Vec<PNalUnit>,
     pub uiAvailUnitsNum: u32,
     pub uiActualUnitsNum: u32,
     pub uiStartPos: u32,
@@ -387,7 +394,7 @@ impl TagAccessUnits {
         let mut au = Box::new(Self::default());
         au.nal_units.reserve_exact(count);
         for _ in 0..count {
-            au.nal_units.push(Box::new(SNalUnit::default()));
+            au.nal_units.push(Box::into_raw(Box::new(SNalUnit::default())));
         }
         au
     }
@@ -399,29 +406,37 @@ impl TagAccessUnits {
         self.nal_units.len() as u32
     }
 
-    /// A raw pointer to node `i`, for the consumers 5.5 has not converted.
+    /// The pointer to node `i`.
     ///
-    /// S28: derived from the node's own `Box` allocation, whose legal reach is exactly
-    /// one `SNalUnit` — the pointer is not walked off, and every consumer reads fields
-    /// of the node it asked for.
+    /// This **copies a stored pointer**; it does not derive one. That is the whole
+    /// difference between this and the `Vec<Box<_>>` version Miri rejected: a
+    /// container that lends `&mut` to a node invalidates every raw alias into it, and
+    /// this list has live ones (`pCtx->pNalCur`, and the `&mut BsCursor` arguments the
+    /// slice-header parser holds into a node's bitstream). Same reasoning as
+    /// `PicPool`'s slots (T5.N1), reached the same way — by a probe.
     ///
     /// # Panics
     /// If `i` is out of range. The C indexed `pNalUnitsList[i]` unchecked and the port
     /// paired every index with a hand-written `i < MAX_NAL_UNIT_NUM_IN_AU` test; this
     /// is the same check, in one place (P13).
     #[inline]
-    pub fn nal(&mut self, i: usize) -> *mut SNalUnit {
+    pub fn nal(&self, i: usize) -> *mut SNalUnit {
         let len = self.nal_units.len();
         assert!(i < len, "NAL unit {i} outside an access unit of {len}");
-        &mut *self.nal_units[i] as *mut SNalUnit
+        self.nal_units[i]
     }
+}
 
-    /// [`nal`](Self::nal) where the index may be past the end — the shape of the
-    /// port's `i < MAX_NAL_UNIT_NUM_IN_AU && !…is_null()` guards, which existed
-    /// because the list could hold null slots. It cannot now.
-    #[inline]
-    pub fn nal_opt(&mut self, i: usize) -> Option<*mut SNalUnit> {
-        (i < self.nal_units.len()).then(|| self.nal(i))
+impl Drop for TagAccessUnits {
+    /// F19's answer for every node, in one place: the nodes are `Box::into_raw`'d at
+    /// construction and reclaimed here. `MemFreeNalList`'s `Box::from_raw` on the
+    /// access unit runs this.
+    fn drop(&mut self) {
+        for &pNal in &self.nal_units {
+            if !pNal.is_null() {
+                drop(unsafe { Box::from_raw(pNal) });
+            }
+        }
     }
 }
 
@@ -2240,7 +2255,7 @@ pub unsafe fn ExpandNalUnitList(
         return ERR_INFO_OUT_OF_MEMORY;
     }
     while (*pAu).nal_units.len() < want {
-        (*pAu).nal_units.push(Box::new(SNalUnit::default()));
+        (*pAu).nal_units.push(Box::into_raw(Box::new(SNalUnit::default())));
     }
     ERR_NONE
 }

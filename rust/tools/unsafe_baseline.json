@@ -1,5 +1,5 @@
 {
-  "commit": "9aca95e9",
+  "commit": "61816091",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -29,7 +29,7 @@
     "decoder/manage_dec_ref.rs": { "unsafe_fn": 23, "unsafe_block": 4, "raw_ptr": 53, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/mv_pred.rs": { "unsafe_fn": 27, "unsafe_block": 0, "raw_ptr": 264, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "decoder/nalu.rs": { "unsafe_fn": 26, "unsafe_block": 3, "raw_ptr": 92, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
+    "decoder/nalu.rs": { "unsafe_fn": 26, "unsafe_block": 4, "raw_ptr": 90, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
     "decoder/parameter_sets.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 6, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/parse_mb_syn_cabac.rs": { "unsafe_fn": 34, "unsafe_block": 0, "raw_ptr": 44, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/parse_mb_syn_cavlc.rs": { "unsafe_fn": 32, "unsafe_block": 21, "raw_ptr": 95, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
