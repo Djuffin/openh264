@@ -110,7 +110,7 @@ Also: commit `eb463dbd` deleted the port's handoff/status docs and the diffharne
 3. **Detached cursors.** State structs store positions (`usize`), never references into buffers. Long-lived structs holding `&'a` borrows are forbidden in the design — that's how a C port stays refactorable and how self-reference dies.
 4. **Convert leaves first, gods last.** DSP kernels and bitstream cursors have thousands of call sites but trivial contracts; the context structs have trivial call counts but decide the ownership model. Do the mechanical mass early, the pivot late, with strangler shims (R7) so every PR compiles and passes gates.
 5. **Zero new runtime dependencies.** The crate currently depends on `libc` alone (and only from benches); the end state depends on nothing. `std` threads, `std::sync`, `std::alloc` suffice. Dev-dependencies (fuzzing) are fine.
-6. **Keep the C++ diffability until the end.** Wels names, function granularity, and comment headers stay through the structural phases; renaming is a separate, optional, final phase (§10 D5).
+6. ~~**Keep the C++ diffability until the end.**~~ *(Retired by D-fid-1, 2026-08-13 — §7.4.)* Wels names, function granularity, and comment headers stay through the structural phases; renaming is a separate, optional, final phase (§10 D5).
 
 ### 2.2 Core vocabulary types
 
@@ -385,7 +385,7 @@ Most of the 85k lines convert mechanically once §2.2 exists. These are the plac
 - **P11 — `pMvdCost` mid-table pointer with negative indexing.** Resolution: `(table: &[u16], bias: usize)` pair; accessor `mvd_cost(d: i32) = table[(bias as i32 + d) as usize]`.
 - **P12 — `struct_bytes_eq` memcmp equality on SPS/PPS** (padding-sensitive). Resolution: derived `PartialEq` on value structs; padding is deterministically zero today (structs are zero-initialized), so field-wise equality is behavior-preserving; keep one test comparing overwrite-detection behavior on the SPS-switch conformance streams.
 - **P13 — panic policy.** Decoder: bitstream-derived values must reach error codes, never panics — the C++ error paths already exist and are ported; slice-index panics are reserved for port bugs (they'd be silent corruption in C). Fuzzing (§7.3) enforces "no panics on arbitrary input" continuously *(2026-08-11: T7 remains deferred by direction, so nothing enforces this continuously yet — T3.0's 2316-row malformed-stream golden corpus is the standing approximation, and §0's "absent instrument" row keeps the tally of what a fuzzer would have caught first)*. Encoder: API-boundary validation as today; internal panics = bugs.
-- **P14 — losing C++ diffability mid-refactor.** Resolution: function names/granularity preserved until the final optional rename; every converted fn keeps its `/// C++: codec/decoder/core/src/foo.cpp WelsFoo` header; module docs keep the source-file mapping; byte-gates at every merge mean h264dec triangulation stays available throughout.
+- **P14 — losing C++ diffability mid-refactor** *(retired by D-fid-1, 2026-08-13: diffability is no longer a constraint; the C++ is reference, not template — §7.4)*.** Resolution: function names/granularity preserved until the final optional rename; every converted fn keeps its `/// C++: codec/decoder/core/src/foo.cpp WelsFoo` header; module docs keep the source-file mapping; byte-gates at every merge mean h264dec triangulation stays available throughout.
 
 ---
 
@@ -494,7 +494,7 @@ Same playbook, informed by Phase 5's patterns:
 §2.2.8. The externally visible API does not change at all; this phase moves the safety line up to it and makes the drop-in story real:
 
 1. Carve the safe core `Decoder`/`Encoder` types out of what phases 5–7 produced (mostly naming/visibility — the subsystems already exist); assert `Send` via compile tests; export the safe API for Rust consumers.
-2. Rewire the boundary: `CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` hold the safe types; each of the 24 thunks becomes translate-in → safe call → translate-out with a written `# Safety` contract; the vtable structs, slot order (including `DecodeParser`/`DecodeFrameEx` stubs), factories, and version functions are untouched. *(Added 2026-08-11, Phase 5 session D: this rewire owns **F23** — all 19 `&mut self` convenience methods on the 8-byte vtable base structs are UB today, the borrow narrowed to `ISVCDecoder` while the thunk writes the impl object at offset 0x20; every integration test and Rust consumer hits it. The receivers become raw-pointer-based or move to the impl object — S28's provenance law at the ABI layer.)* Trace-callback plumbing lands here (raw C pair stored at the boundary, wrapped as the internal `Logger` sink).
+2. Rewire the boundary: `CWelsDecoderImpl`/`CWelsH264SVCEncoderImpl` hold the safe types; each of the 24 thunks becomes translate-in → safe call → translate-out with a written `# Safety` contract; the vtable structs, slot order (including `DecodeParser`/`DecodeFrameEx` stubs), factories, and version functions are untouched. *(Added 2026-08-11, Phase 5 session D: this rewire owns **F23** — all 19 `&mut self` convenience methods on the 8-byte vtable base structs are UB today, the borrow narrowed to `ISVCDecoder` while the thunk writes the impl object at offset 0x20; every integration test and Rust consumer hits it. The receivers become raw-pointer-based or move to the impl object — S28's provenance law at the ABI layer.)* *(Added 2026-08-13, Phase 5 session O: this phase also inherits **eight of the decoder context's raw fields, which are `CWelsDecoderImpl` members** — 5.5's closure excluded them by ownership — plus **F41** (the context's `pParam` aliasing the API object's live parameter block; same ownership question as F38's back-pointers, fixed with them). And **Phase 8 opens with the `src/api/` inventory**: the census, dup, double-cast and stub-body sweeps have never scanned the module, because its `deny(unsafe_code)` exemption silently propagated into every instrument's scope — S22's clause, F38 the proof. Run them all over `api/` before rewiring anything.)* Trace-callback plumbing lands here (raw C pair stored at the boundary, wrapped as the internal `Logger` sink).
 3. `crate-type = ["rlib", "cdylib", "staticlib"]`; extend `api/abi_guard.rs` to pin every boundary-crossing struct (add `SParserBsInfo`, `OpenH264Version`, capability struct if missing).
 4. Build the **external-ABI harness**: a small C++ driver compiled against upstream `codec_api.h` that `dlopen`s the Rust cdylib and runs the decoder-conformance and loopback flows; its hashes must equal the in-process results. Stretch, high-value: point upstream's gtest API suites at the Rust dylib — the repo already contains the gtest tree and the `gtest_repro` flow.
 5. Scoped-lint endgame for the module: `api/` gets `#[allow(unsafe_code)]`; crate root gets `#![deny(unsafe_code)]` (this flips in Phase 9 once stragglers are gone).
@@ -614,6 +614,19 @@ eleven flip **one family per commit under D-perf-4's normal swap-and-ledger**,
 Stop-line: cumulative CB ≈ **+23%** — stop at a family boundary and escalate with
 the data. Parking, if it comes to that, is family-granular and S20-coherent; its
 cost is phase-exit debt, not a broken tree.
+
+**D-fid-1 (Eugene, 2026-08-13): structural fidelity to the C++ is retired; the C++
+remains the reference for correctness, optimization, and inspiration.** The safe
+rewrite has already diverged structurally (ids for pointers, owned containers,
+constructors, `Drop`), so function-level correspondence stops being a constraint:
+functions may merge, split, restructure, and take Rust-shaped names where that
+serves the safe design. **What does not change**: output equivalence stays the
+correctness definition — the goldens, sweeps, and conformance hashes *are* the
+C++-as-reference, and D2's drop-in guarantee stands. Behavioral divergence from
+the C++ is still a finding or a decision, never a side effect. Consequences:
+§2.1.6 and P14 are retired as constraints (provenance headers become optional
+documentation); D5's rename question is unlocked early where naming serves
+clarity; S6 is rescoped in place (see its note).
 
 **Session I stopped there, per the direction's own §3.4.** Whether the hot families flip,
 and on what basis, is Eugene's call on these numbers. The tripwire-vs-S20 question stays
@@ -794,7 +807,7 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
 
 #### Conversion
 
-- **S6 — arithmetic parity, not repair.** When a kernel's intermediates can
+- **S6 — arithmetic parity, not repair** *(rescoped by D-fid-1, 2026-08-13: structural faithfulness is retired; behavioral faithfulness remains the gate. A fix restoring C++ behavior lands as a finding with a test — F21/F37/F40 precedent. A change diverging from both trees is a decision, not a session's call. On ungated paths — malformed input the corpus misses — the never-widen default below stands, because there the gates cannot referee)*.** When a kernel's intermediates can
   overflow, the safe kernel reproduces the **old Rust port's exact behaviour**: same
   widths, same operations, the same debug-panic exposure and the same release
   wrapping. Never widen, never add a `wrapping_*` the old code lacked, never "fix" it
@@ -1007,7 +1020,13 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   (Phase 5 session A, F22): `find_stub_bodies.py` reported "none found" for three
   phases because its directory list omitted `src/decoder`, and
   `find_dup_types.sh` read the encoder only until 4b session C — before trusting
-  a tool's silence, read what it actually scans.
+  a tool's silence, read what it actually scans. **And an exemption in one
+  instrument propagates to every instrument that copied its scope** (Phase 5
+  session O, F38): `src/api/` is exempt from `deny(unsafe_code)` by design, and
+  that exemption had silently become exemption from the census, the dup scan, and
+  every inventory the phase ran — F38 lived there the whole time. A module exempt
+  from a *lint* must be listed explicitly in every *other* instrument's scope, or
+  it leaves all of them.
 - **S23 — a cached table becomes a derived value only if the source cannot
   change behind the cache, and that is a property of the update paths, not of
   the dispatch** (Phase 4b session A, T4b.1/T4b.1b). De-virtualizing a
@@ -1114,7 +1133,11 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   S25's complement: S25 finds the overlaps, S29 is the spelling that removes them.
   **`&mut X as *mut T` is the same defect with the cast already written** — the
   reference exists and retags before the cast discards it; `addr_of_mut!` is the
-  fix, and the shape hides from a grep for `&mut *`.
+  fix, and the shape hides from a grep for `&mut *`. **The spelling's boundary**
+  (session O, T5.O8): `addr_of_mut!` rescues derivations through a *raw parent* —
+  a write through an **owned local** pops borrows regardless of spelling, and only
+  *ordering* fixes that. Reaching for the spelling where the invalidator is the
+  local itself is the misfire to avoid.
 - **S30 — a brief freezes when its session starts** (2026-08-12, from session N's
   collision). Mid-session changes of direction reach the session from its operator,
   in the session, with the decision recorded in §7.4/§0 — never as an edit to the
