@@ -90,7 +90,7 @@ Every unsafe use in the crate falls into one of ten categories. Each has a stand
 2. **The external ABI is a commitment, not a constraint inherited by accident.** Today the crate is rlib-only, so nothing outside the repo can call it — every consumer is in-repo Rust, which means the refactor can rewire the *inside* of the API layer freely, with the tests as the witness. But the decided end state (D2, resolved 2026-08-07) is a **drop-in `libopenh264` replacement**: the vtable emulation, the 7 upstream exports, and the `#[repr(C)]` structs pinned by `api/abi_guard.rs` are permanent public surface. Upstream's own header design is what makes this sound: the C++ interfaces have **no virtual destructors** and pin `EXTAPI` (`__cdecl` on Windows), precisely so that the C struct-of-function-pointers view and the C++ Itanium/MSVC vtable view coincide — the port's existing `lpVtbl` emulation is already that shape. All 7 exports upstream ships already exist in the port (`WelsCreateSVCEncoder`, `WelsDestroySVCEncoder`, `WelsCreateDecoder`, `WelsDestroyDecoder`, `WelsGetDecoderCapability` in `codec_api.rs`; `WelsGetCodecVersion`, `WelsGetCodecVersionEx` in `wels_encoder_ext.rs`). Known fidelity gap to carry, not fix, in this plan: `DecodeParser`/`DecodeFrameEx` are real upstream vtable slots that the port stubs — the slots stay (layout!), the stub behavior is documented as a limitation.
 3. **The C++ tree is the permanent reference**: every phase keeps function-level correspondence with `codec/` so divergences can still be triangulated with h264dec ground truth and the gtest repro flow.
 
-Known verification caveats (from prior sessions, they still apply): a Rust decoder error silently drops frames from the conformance hash — **always compare frame counts, not just hashes**; JVT/ffmpeg golds can't judge B-slice streams where upstream C++ itself diverges (the `#[ignore]`s in e2e are permanent fixtures, their set must not change — measured 2026-08-07 as **20** tests, all in `tests/e2e_conformance_test.rs`, not the 13 earlier revisions of this plan claimed; `cargo test --test e2e_conformance_test -- --ignored --list` is the authority); all C++-vs-Rust perf numbers are scalar-vs-scalar because the C++ dylib never dispatches NEON.
+Known verification caveats (from prior sessions, they still apply): a Rust decoder error silently drops frames from the conformance hash — **always compare frame counts, not just hashes**; JVT/ffmpeg golds can't judge B-slice streams where upstream C++ itself diverges (the `#[ignore]`s in e2e are permanent fixtures, their set must not change — measured 2026-08-07 as **20** tests, all in `tests/e2e_conformance_test.rs`, not the 13 earlier revisions of this plan claimed; `cargo test --test e2e_conformance_test -- --ignored --list` is the authority); all C++-vs-Rust perf numbers were long believed scalar-vs-scalar — **corrected at Phase 5 session L**: the checked-in dylib dispatches NEON (`WelsCPUFeatureDetect = 0x000006`), so that ratio compares scalar Rust against NEON C++; §7.4's measurement-doctrine note is the authority. Every cumulative figure in this plan is a Rust-vs-Rust chain and is unaffected.
 
 Two sharper caveats about the *encoder's* evidence were measured 2026-08-07 at `eb463dbd`; both were resolved later the same day, with one loose end that Phase 0 owns:
 
@@ -739,6 +739,12 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   count decides it; measure something bigger.** For 5.2 that means the cumulative span
   rather than the per-family one: the stop-line gates on cumulative CB, which is ~20%
   and far above the floor, not on a sum of per-family numbers each below it.
+  **And at the resolution limit, per-unit readings under-report *systematically*,
+  not just noisily** (session L's proof): fifteen families each measured "free" —
+  +0.24%, +0.04%, +0.04% CB — while the whole-flip span read **+2.93% CB**; an
+  effect at the resolution limit hides one unit at a time, and the units' sum is
+  not the span. A string of at-the-limit "free" verdicts is a prompt to measure
+  the span, never a conclusion.
 - **S2c — a seam that cannot plausibly move may waive its per-seam medians**
   (Phase 5 session G, adopted 2026-08-12). Conditions, all required: the face's
   output is byte-identical (the battery's goldens/sweeps/bench-identity are the
