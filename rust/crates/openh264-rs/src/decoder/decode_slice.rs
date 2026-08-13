@@ -4873,7 +4873,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
         crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq, &mut pMv);
         let mv_slice = &mut *(*(*dq).pDec).pMv[LIST_0].add(iMbXy);
-        let mvd_slice = &mut *(*dq).pMvd[LIST_0].add(iMbXy);
+        let mvd_slice = (*dq).grid.mvd[LIST_0].get_mut(iMbXy);
         for i in 0..16 {
             mv_slice[i] = pMv;
             mvd_slice[i] = [0, 0];

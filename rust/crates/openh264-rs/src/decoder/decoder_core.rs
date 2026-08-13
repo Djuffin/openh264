@@ -349,7 +349,6 @@ pub struct SDqLayer {
     /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
     pub pBitStringAux: *mut BsReader,
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
-    pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
@@ -2781,8 +2780,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pCtx).pDqLayersList = pDq;
 
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
-        (*pDq).pMvd[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
@@ -2806,12 +2803,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
 
     let pDq = (*pCtx).pDqLayersList;
     if !pDq.is_null() {
-        for list in 0..LIST_A {
-            if !(*pDq).pMvd[list].is_null() {
-                WelsFreeHelper(pMa, (*pDq).pMvd[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
-                (*pDq).pMvd[list] = std::ptr::null_mut();
-            }
-        }
         if !(*pDq).pDirect.is_null() {
             WelsFreeHelper(pMa, (*pDq).pDirect as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
             (*pDq).pDirect = std::ptr::null_mut();

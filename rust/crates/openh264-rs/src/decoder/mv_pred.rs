@@ -1505,12 +1505,11 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut SDqLayer, pMvd: *const i16,
     ST32(pMvd32.as_mut_ptr() as *mut i16, LD32(pMvd));
     ST32((pMvd32.as_mut_ptr() as *mut i16).add(2), LD32(pMvd));
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pMvdTarget = (*pCurDqLayer).pMvd[iListIdx as usize];
-    if !pMvdTarget.is_null() {
-        let mvd_ptr = (*pMvdTarget.add(iMbXy)).as_mut_ptr();
-        for i in (0..16).step_by(2) {
-            ST64(mvd_ptr.add(i) as *mut i16, LD64(pMvd32.as_ptr() as *const i16));
-        }
+    let mvd_ptr = (*pCurDqLayer).grid.mvd[iListIdx as usize]
+        .get_mut(iMbXy)
+        .as_mut_ptr();
+    for i in (0..16).step_by(2) {
+        ST64(mvd_ptr.add(i) as *mut i16, LD64(pMvd32.as_ptr() as *const i16));
     }
 }
 
@@ -1549,8 +1548,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
             }
@@ -1572,8 +1571,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
             }
@@ -1593,8 +1592,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
             }
             if !pMotionVector.is_null() {
@@ -1611,8 +1610,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
             }
             if !pMotionVector.is_null() {
@@ -1645,8 +1644,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, 0);
                             ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, 0);
                         }
-                        if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                            let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+                        {
+                            let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                             ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
                         }
@@ -1668,8 +1667,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, 0);
                             ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, 0);
                         }
-                        if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                            let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+                        {
+                            let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                             ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
                         }
@@ -1692,8 +1691,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
                             ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, 0);
                         }
-                        if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                            let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+                        {
+                            let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                         }
                         if !pMotionVector.is_null() {
@@ -1710,8 +1709,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
                             ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, 0);
                         }
-                        if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                            let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+                        {
+                            let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                         }
                         if !pMotionVector.is_null() {
@@ -1769,8 +1768,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
             }
@@ -1796,8 +1795,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
             }
@@ -1823,8 +1822,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_0].is_null() {
-                let mvd_l0 = (*(*pCurDqLayer).pMvd[LIST_0].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
             }
             if !pMotionVector.is_null() {
@@ -1845,8 +1844,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !(*pCurDqLayer).pMvd[LIST_1].is_null() {
-                let mvd_l1 = (*(*pCurDqLayer).pMvd[LIST_1].add(iMbXy)).as_mut_ptr();
+            {
+                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
             }
             if !pMotionVector.is_null() {
