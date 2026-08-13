@@ -802,7 +802,10 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pRefIdxArr = if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pRefIndex[LIST_0]
     } else {
-        (*pCurDqLayer).pRefIndex[LIST_0] as *mut _
+        // T5.J3: the grid's array, derived from the allocation root (S28) — the
+        // consumer indexes it by macroblock address, so it must reach the whole
+        // array and a narrowing slice would be UB at the second index.
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.ref_index[LIST_0], 0)
     };
 
     let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);

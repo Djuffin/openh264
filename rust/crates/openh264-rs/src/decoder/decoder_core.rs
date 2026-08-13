@@ -353,7 +353,6 @@ pub struct SDqLayer {
     pub pSliceIdc: *mut i32,
     pub pMv: [*mut [[i16; 2]; 16]; LIST_A],
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
-    pub pRefIndex: [*mut [i8; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     pub pChromaQp: *mut [i8; 2],
     pub pNzc: *mut [i8; 24],
@@ -2782,8 +2781,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pMbType = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pMv[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pMv[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
-        (*pDq).pRefIndex[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pRefIndex[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2821,10 +2818,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
             if !(*pDq).pMv[list].is_null() {
                 WelsFreeHelper(pMa, (*pDq).pMv[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
                 (*pDq).pMv[list] = std::ptr::null_mut();
-            }
-            if !(*pDq).pRefIndex[list].is_null() {
-                WelsFreeHelper(pMa, (*pDq).pRefIndex[list] as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
-                (*pDq).pRefIndex[list] = std::ptr::null_mut();
             }
             if !(*pDq).pMvd[list].is_null() {
                 WelsFreeHelper(pMa, (*pDq).pMvd[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
@@ -4200,6 +4193,40 @@ mod tests {
         }
         assert_eq!(g.nzc.get(1), &[2i8; 24]);
         assert_eq!(g.nzc.get(0), &[3i8; 24]);
+    }
+
+    /// The reach `pRefIndex`'s one surviving raw consumer actually takes (T5.J3).
+    ///
+    /// `DeblockingBsMarginalMBAvcbase` keeps the array **base** and then indexes it
+    /// by macroblock address for the current macroblock *and* its neighbour —
+    /// `(*pRefIdxArr.add(iMbXy))[k]`, `(*pRefIdxArr.add(iNeighMb))[k]` — so the
+    /// legal reach of the pointer taken at 0 is every macroblock in the array, and a
+    /// derivation narrowed to `[0..]`-of-something-shorter would die at the first
+    /// neighbour. It also pins the element type: this bridge stays `*mut [i8; 16]`
+    /// rather than flattening, because the consumer indexes inside the record with a
+    /// scan-order index of its own.
+    #[test]
+    fn mb_grid_ptr_reaches_every_macroblock_of_ref_index_from_the_base() {
+        let dims = MbDims::new(4, 3);
+        let n = dims.count();
+        let mut g = MbGrid::new(dims);
+
+        let base = mb_grid_ptr(&mut g.ref_index[LIST_1], 0);
+        unsafe {
+            for mb in 0..n {
+                for k in 0..16 {
+                    (*base.add(mb))[k] = ((mb * 16 + k) % 128) as i8;
+                }
+            }
+            // and read back across a neighbour pair, the consumer's own shape
+            assert_eq!((*base.add(n - 1))[15], (((n - 1) * 16 + 15) % 128) as i8);
+            assert_eq!((*base.add(n - 2))[0], (((n - 2) * 16) % 128) as i8);
+        }
+        assert_eq!(g.ref_index[LIST_1].get(0)[0], 0);
+        assert_eq!(g.ref_index[LIST_1].get(n - 1)[15], (((n - 1) * 16 + 15) % 128) as i8);
+        // LIST_0 is untouched: two arrays of one grid are two values, which the raw
+        // pair of pointers this replaces could only promise by inspection.
+        assert!(g.ref_index[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|&r| r == 0)));
     }
 
     /// One past the end is a pointer you may form and not one you may read —
