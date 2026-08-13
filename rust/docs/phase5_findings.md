@@ -1480,3 +1480,55 @@ the plan exempts from `deny(unsafe_code)` forever (§2.2.8), and exempting it fr
 *lint* quietly exempted it from the *sweep*: eight instances of the phase's signature
 defect sat in the file that is supposed to be "a few hundred lines of pure
 translation". Phase 8 inherits the module; it does not inherit an audit.
+
+---
+
+## F39 — two `MemInitNalList`/`MemFreeNalList` pairs of different shapes, and the growth path mixes them
+
+*Found Phase 5 session O (2026-08-13), reading `decoder_core.rs`'s allocations for
+5.5's F19 inventory. **Fixed in the same session** (T5.O4). Class: the census's (b),
+within-codec duplicate — and it is the first one this instrument could not have
+caught, because the two bodies are not duplicates, they are rivals.*
+
+The port declares the access-unit allocator twice:
+
+| | `decoder_core.rs:924/955` | `nalu.rs:2118/2162` |
+|---|---|---|
+| shape | three `WelsMallocz` blocks: the AU, a `[*mut SNalUnit; N]`, then N nodes | one `alloc_zeroed` holding all three |
+| free | three `WelsFreeHelper` calls | one `std::alloc::dealloc` with a recomputed layout |
+| `MAX_NAL_UNIT_NUM_IN_AU` | **1024**, declared in that file | **32**, the C++'s (`wels_const.h:59`) |
+| live? | **yes** — `WelsInitStaticMemory:2017`, `WelsFreeStaticMemory:2035` | only through `ExpandNalUnitList` |
+
+`MemGetNextNal` (`nalu.rs`) grows a full list:
+
+```rust
+ExpandNalUnitList(ppAu, …)  ->  MemInitNalList(&mut pTmp, …)   // nalu.rs's shape
+                                MemFreeNalList(ppAu, pMa)      // nalu.rs's free …
+                                                               // … on decoder_core's AU
+```
+
+so the first expansion hands three `CMemoryAlign` blocks to `std::alloc::dealloc` with
+a size computed from `uiCountUnitsNum` — heap corruption, and the pointer array and
+the 1024 nodes leak beside it. The reciprocal follows at teardown: `pAccessUnitList`
+now points at a single block that `WelsFreeStaticMemory` frees as three.
+
+**Reachability.** `MemGetNextNal` expands when `uiAvailUnitsNum >= uiCountUnitsNum`,
+so it needs an access unit with more NAL units than the list holds. At the port's 1024
+that is a malformed or adversarial stream; at the C++'s 32 it is an ordinary
+multi-slice frame. **The port's inflated constant is what kept the defect quiet** —
+which makes it the second finding this phase (after F34) where a port-side value
+larger than the C++'s hid the path that would have exposed a defect.
+
+**Why no gate saw it.** The census reports duplicate *type* declarations and duplicate
+*bodies*; these two bodies are entirely different code under one name, which is
+neither. Miri would have convicted the deallocation instantly — the probes never reach
+32 NAL units in one access unit, let alone 1024.
+
+**The fix (T5.O4) is ownership rather than a repair.** `SAccessUnit` holds
+`nal_units: Vec<Box<SNalUnit>>`; the count is `len()`; `decoder_core.rs`'s pair is
+deleted and re-exports `nalu.rs`'s, which is `Box::into_raw`/`Box::from_raw` over one
+constructor. Two allocators of different shapes cannot exist for a value with one
+owner. The constant divergence is deleted with the duplicate, so the growth path is
+live under every gate for the first time, and boxed nodes make it *safer* than the
+C++'s — which copies the nodes into a new block, dangling every outstanding
+`SNalUnit*` (plan P5's hazard, in the module P5 was named after).
