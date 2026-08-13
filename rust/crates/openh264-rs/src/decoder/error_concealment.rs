@@ -938,7 +938,7 @@ mod tests {
     }
 
     /// **T5.L6 deleted this test's hazard rather than its subject.** The flag array
-    /// used to be a `*mut bool` the layer held, so the test had to mutate it
+    /// used to be a raw pointer the layer held, so the test had to mutate it
     /// *through that pointer*: writing `mb_flags[2]` directly would reborrow the
     /// array, pop the layer's tag off the borrow stack, and leave the next
     /// `NeedErrorCon` reading through a pointer Stacked Borrows had already
@@ -1008,7 +1008,7 @@ mod tests {
             ]
         };
 
-        let mut run = |same_object: bool| -> u8 {
+        let run = |same_object: bool| -> u8 {
             // `dst` carries a marker; a real copy overwrites it with `src`'s.
             let mut dst = SPicture::with_planes(planes(0xAA));
             dst.iWidthInPixel = (W * 16) as i32;
