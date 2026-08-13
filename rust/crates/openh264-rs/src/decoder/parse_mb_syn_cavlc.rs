@@ -763,7 +763,7 @@ pub unsafe fn WelsFillCacheInterCabac(
     for listIdx in 0..listCount {
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
-            let pMvd = &(*dq.pMvd[listIdx].add(iLeftXy));
+            let pMvd = dq.grid.mvd[listIdx].get(iLeftXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
             (*iMvArray)[listIdx][6] = pMv[3];
             (*iMvArray)[listIdx][12] = pMv[7];
@@ -799,7 +799,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
-            let pMvd = &(*dq.pMvd[listIdx].add(iLeftTopXy));
+            let pMvd = dq.grid.mvd[listIdx].get(iLeftTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
             (*iMvArray)[listIdx][0] = pMv[15];
             (*iMvdCache)[listIdx][0] = pMvd[15];
@@ -813,7 +813,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
-            let pMvd = &(*dq.pMvd[listIdx].add(iTopXy));
+            let pMvd = dq.grid.mvd[listIdx].get(iTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
             (*iMvArray)[listIdx][1] = pMv[12];
             (*iMvArray)[listIdx][2] = pMv[13];
@@ -849,7 +849,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
-            let pMvd = &(*dq.pMvd[listIdx].add(iRightTopXy));
+            let pMvd = dq.grid.mvd[listIdx].get(iRightTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
             (*iMvArray)[listIdx][5] = pMv[12];
             (*iMvdCache)[listIdx][5] = pMvd[12];

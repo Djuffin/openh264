@@ -871,7 +871,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut SDqLayer, pMvd: *const i16,
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mvd_x = *pMvd;
     let mvd_y = *pMvd.add(1);
-    let pMvdTarget = &mut *(*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy);
+    let pMvdTarget = (*pCurDqLayer).grid.mvd[iListIdx as usize].get_mut(iMbXy);
     for i in 0..16 {
         pMvdTarget[i] = [mvd_x, mvd_y];
     }
@@ -892,7 +892,7 @@ pub unsafe fn UpdateP16x8MvdCabac(
         let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
         let iCacheIdx6 = 6 + iCacheIdx;
 
-        let pMvdTarget = &mut *(*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy);
+        let pMvdTarget = (*pCurDqLayer).grid.mvd[iListIdx as usize].get_mut(iMbXy);
         for off in 0..2 {
             pMvdTarget[iScan4Idx + off] = mvd_pair;
             pMvdTarget[iScan4Idx4 + off] = mvd_pair;
@@ -918,7 +918,7 @@ pub unsafe fn UpdateP8x16MvdCabac(
         let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
         let iCacheIdx6 = 6 + iCacheIdx;
 
-        let pMvdTarget = &mut *(*pCurDqLayer).pMvd[iListIdx as usize].add(iMbXy);
+        let pMvdTarget = (*pCurDqLayer).grid.mvd[iListIdx as usize].get_mut(iMbXy);
         for off in 0..2 {
             pMvdTarget[iScan4Idx + off] = mvd_pair;
             pMvdTarget[iScan4Idx4 + off] = mvd_pair;
@@ -2111,7 +2111,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     pMv[1] += pMvd[1];
 
                     let pDecMv = &mut *(*(*pCurDqLayer).pDec).pMv[0].add(iMbXy);
-                    let pMvdTarget = &mut *(*pCurDqLayer).pMvd[0].add(iMbXy);
+                    let pMvdTarget = (*pCurDqLayer).grid.mvd[0].get_mut(iMbXy);
 
                     if SUB_MB_TYPE_8x8 == uiSubMbType {
                         pDecMv[iScan4Idx] = pMv;
@@ -2616,7 +2616,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     }
 
                     let pDecMv = (*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy) as *mut [i16; 2];
-                    let pLayerMvd = (*pCurDqLayer).pMvd[listIdx].add(iMbXy) as *mut [i16; 2];
+                    let pLayerMvd = (*pCurDqLayer).grid.mvd[listIdx].get_mut(iMbXy).as_mut_ptr();
                     let mv2: [i16; 2] = [pMv[0], pMv[1]];
                     let mvd2: [i16; 2] = [pMvd[0], pMvd[1]];
 
