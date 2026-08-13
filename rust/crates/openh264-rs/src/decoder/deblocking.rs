@@ -1601,12 +1601,15 @@ unsafe fn DeblockingInterMb(
 
     let iCurLumaQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
     let pCurChromaQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
-    let iLineSize = (*pFilter).iCsStride[0];
-    let iLineSizeUV = (*pFilter).iCsStride[1];
+    // T5.N3: the picture, not the filter's copy of three of its pointers. See the
+    // note at `WelsDeblockingFilterSlice` for why the layer's `pDec` is the route.
+    let pDec = (*pCurDqLayer).pDec;
+    let iLineSize = (*pDec).linesize(0);
+    let iLineSizeUV = (*pDec).linesize(1);
 
-    let pDestY = (*pFilter).pCsData[0].add(((iMbY * iLineSize + iMbX) << 4) as usize);
-    let pDestCb = (*pFilter).pCsData[1].add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
-    let pDestCr = (*pFilter).pCsData[2].add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
+    let pDestY = (*pDec).data_ptr(0).add(((iMbY * iLineSize + iMbX) << 4) as usize);
+    let pDestCb = (*pDec).data_ptr(1).add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
+    let pDestCr = (*pDec).data_ptr(2).add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
 
     // Vertical margin
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
@@ -1739,9 +1742,10 @@ pub unsafe fn FilteringEdgeLumaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let iLineSize = (*pFilter).iCsStride[0];
+    let pDec = (*pCurDqLayer).pDec;
+    let iLineSize = (*pDec).linesize(0);
 
-    let pDestY = (*pFilter).pCsData[0].add(((iMbY * iLineSize + iMbX) << 4) as usize);
+    let pDestY = (*pDec).data_ptr(0).add(((iMbY * iLineSize + iMbX) << 4) as usize);
     let iCurQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
 
     let mut iTc = [0i8; 4];
@@ -1836,10 +1840,11 @@ pub unsafe fn FilteringEdgeChromaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let iLineSize = (*pFilter).iCsStride[1];
+    let pDec = (*pCurDqLayer).pDec;
+    let iLineSize = (*pDec).linesize(1);
 
-    let pDestCb = (*pFilter).pCsData[1].add(((iMbY * iLineSize + iMbX) << 3) as usize);
-    let pDestCr = (*pFilter).pCsData[2].add(((iMbY * iLineSize + iMbX) << 3) as usize);
+    let pDestCb = (*pDec).data_ptr(1).add(((iMbY * iLineSize + iMbX) << 3) as usize);
+    let pDestCr = (*pDec).data_ptr(2).add(((iMbY * iLineSize + iMbX) << 3) as usize);
     let pCurQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
 
     let mut iTc = [0i8; 4];
@@ -2079,29 +2084,30 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // Slice-Level In-Loop Deblocking Filter Pipelines
 // ============================================================================
 //
-// S25 for this file (T5.C2, enumerated with the conversion as plan §7.6 asks):
+// S25 for this file (T5.C2, enumerated with the conversion as plan §7.6 asks;
+// re-enumerated at T5.N3, where the shape it described stopped existing):
 // *who else reaches this `SPicture` while a borrow of it is held?*
 //
-// The borrow is `(*(*pCtx).pDec).data_ptr(i)`, taken three times at each of the two
-// filter-initialisation sites below, and the three results are copied into
-// `SDeblockingFilter.pCsData[0..2]`, where they live for the whole macroblock loop.
-// Three answers, and none of them is a hazard:
+// The borrow used to be `(*(*pCtx).pDec).data_ptr(i)`, taken three times at each of
+// the two filter-initialisation sites and stored into `SDeblockingFilter.pCsData` for
+// the whole macroblock loop. **There is no stored derivation now**: each reader takes
+// `pCurDqLayer`, derives from `(*pCurDqLayer).pDec` inside its own body, and the
+// result dies with the macroblock. Three answers, and none of them is a hazard:
 //
-// 1. **The three derivations do not invalidate each other.** They address three
-//    planes, which after T5.C3 are three separate allocations; the accessor's
-//    `&mut self` covers the picture's own fields, not the sample bytes.
-// 2. **Nothing inside the loop reaches `pCtx->pDec` again.** The only pictures the
-//    loop touches are the ones behind `pFilter.pRefPics[l]`, and it touches them for
+// 1. **The derivations do not invalidate each other.** They address three planes,
+//    which after T5.C3 are three separate allocations; the accessor's `&mut self`
+//    covers the picture's own fields, not the sample bytes.
+// 2. **Nothing else in the loop reaches `pDec`.** The only other pictures the loop
+//    touches are the ones behind `pFilter.pRefPics[l]`, and it touches them for
 //    identity, `pMv` and `pRefIndex` only — `SMB_EDGE_MV` compares the erased
-//    pointers, `DeblockingBSCalc*` reads the motion caches. No second plane pointer
-//    is derived from any picture, so the question does not arise even if a reference
+//    pointers, `DeblockingBSCalc*` reads the motion caches. No plane pointer is
+//    derived from any of them, so the question does not arise even if a reference
 //    list slot were to hold `pDec` itself.
-// 3. **`pCsData` is a stored mirror, and it is not `SPicture`'s.** A cached plane
-//    pointer beside the plane that owns it is the F16/T5 class, which is why the
-//    conversion refuses to put one back in `SPicture` — but `SDeblockingFilter` is a
-//    per-slice scratch struct whose whole job is to carry the raw pair to the still-
-//    raw kernels. It retires at 5.4, which gives the filter `PicId`s and per-MB plane
-//    cursors; until then this is the phase-5 shim accessor doing what it is for.
+// 3. **The mirror is gone, and it was the decoder's last** (§2's named class, of
+//    which `pBitStringAux` was the previous one, T5.M3). A cached plane pointer
+//    beside the plane that owns it is the F16/T5 class — two fields that can
+//    disagree about one buffer — and `SDeblockingFilter` carried five of them.
+//    What replaces them is nothing: the plane is asked each time.
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
@@ -2121,13 +2127,25 @@ pub unsafe fn WelsDeblockingFilterSlice(
     let mut iBoundryFlag: i32;
     let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
-    // Step 1: Initialize filter parameters
-    pFilter.pCsData[0] = (*(*pCtx).pDec).data_ptr(0);
-    pFilter.pCsData[1] = (*(*pCtx).pDec).data_ptr(1);
-    pFilter.pCsData[2] = (*(*pCtx).pDec).data_ptr(2);
-
-    pFilter.iCsStride[0] = (*(*pCtx).pDec).linesize(0);
-    pFilter.iCsStride[1] = (*(*pCtx).pDec).linesize(1);
+    // Step 1: Initialize filter parameters.
+    //
+    // **T5.N3: the five mirrored fields are gone and nothing replaces them.** The
+    // three plane pointers and two strides used to be copied out of `pCtx->pDec`
+    // here and read for the whole macroblock loop; every reader takes
+    // `pCurDqLayer`, which already carries the picture, so each derives what it
+    // needs per use and no cached copy can disagree with the plane that owns it.
+    //
+    // T5.M3's lesson, applied rather than restated: *check that the route you
+    // replace the mirror with is as fresh as the mirror was.* The mirror's source
+    // was `pCtx->pDec` and the route is `pCurDqLayer->pDec`, so the two must be the
+    // same picture here. They are, by control flow —
+    // `decoder_core.rs:3707`'s `InitDqLayerInfo(dq_cur, .., (*pCtx).pDec)` runs
+    // immediately before the slice decode this filter belongs to, in the same
+    // block — and the assert makes the battery say so rather than the argument.
+    debug_assert!(
+        std::ptr::eq((*pCurDqLayer).pDec, (*pCtx).pDec),
+        "the layer's picture is the context's; the deblocking reads assume it"
+    );
 
     pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
@@ -2186,13 +2204,6 @@ pub unsafe fn WelsDeblockingInitFilter(
 
     *pFilter = SDeblockingFilter::default();
     *iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
-
-    (*pFilter).pCsData[0] = (*(*pCtx).pDec).data_ptr(0);
-    (*pFilter).pCsData[1] = (*(*pCtx).pDec).data_ptr(1);
-    (*pFilter).pCsData[2] = (*(*pCtx).pDec).data_ptr(2);
-
-    (*pFilter).iCsStride[0] = (*(*pCtx).pDec).linesize(0);
-    (*pFilter).iCsStride[1] = (*(*pCtx).pDec).linesize(1);
 
     (*pFilter).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
