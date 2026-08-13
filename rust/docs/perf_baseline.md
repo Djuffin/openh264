@@ -1498,3 +1498,73 @@ rebuilt from the refs at any time if a reason appears; the measurement is not pe
 
 **Cumulative CB after fifteen families: ≈ +19.2…+20.1%**, unmoved — every span since
 session H has read inside a null band, which is exactly the state that makes §1's point.
+*(Superseded by session L's direct reading below: **≈ +20.2%**, measured as one span
+rather than summed.)*
+
+### Session L — the cumulative span, measured instead of summed (2026-08-12)
+
+Session-L null floor, 7 pairs, matched to the verdicts' pair count (S2b):
+
+| bench | median | band | rows over +5% |
+|---|---|---|---|
+| decode (3 rows) | **+0.22%** | +0.15% … +0.31% | 0 |
+| encode (28 rows) | **+0.00%** | −2.80% … +1.94% | 0 |
+
+#### The two spans
+
+| span | pairs | CB (CAVLC) | Main (CABAC) | High (8x8) | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **the whole 5.2 flip** — pre-flip seat → HEAD (`3c4c6f4e` → `a4670ef6`) | 7 | **+2.36%** | +0.61% | +0.27% | **+0.61%** | +0.18% |
+| sessions I+J+K only — post-session-H → HEAD (`1438d762` → `a4670ef6`) | 7 | +0.46% | −0.30% | +0.08% | **+0.08%** | +0.00% |
+
+**The whole-flip CB row is the first Phase 5 reading that is unambiguously above the
+floor**: +2.36% against a null band 0.16 points wide, seven times the band's width. That
+is the point of measuring the aggregate — the same harness that cannot resolve 0.3% per
+family resolves 2.4% across fifteen of them without difficulty.
+
+**The two spans are consistent with the per-session record.** Subtracting them gives
+session H's eleven families at **+1.90% CB**, between session H's own +2.05% (day one)
+and session I's +1.18% (day two) readings of that exact span. Everything since session H
+— the window retrofit, F35's spellings, and the four hot families — is **+0.46% CB**, and
+its decode median (+0.08%) sits *below* the null's floor.
+
+#### The cumulative position, and the correction it forces
+
+**Cumulative CB ≈ +20.2%** — Phase 4a's exit position (+17.8%, unmoved by Phases 3 and
+4b, both of which measured flat end to end) plus this session's directly-measured whole-
+flip span — against the ≈**+23%** stop-line. **≈2.8 points of headroom for the remaining
+seven families.**
+
+**The summed estimate was not high; it was slightly low.** ≈+19.2…+20.1% summed against
+≈+20.2% measured. Session I's "the sum is high by roughly a factor of two" was a
+statement about *one span read twice on two days* (+2.05% → +1.18%), and it does not
+generalise to the sum: read as one span, the flip's cost lands at the **top** of the
+summed range, not at half of it. The instrument change stands on its own merits — one
+reading above the floor beats fifteen below it — but the headroom it buys is what the
+plan already assumed, not more.
+
+**This reading owes a day-two confirmation** (S2b) and the decision it carries — whether
+the remaining seven flip — rests on it, so the confirmation is the next session's first
+item, from `.perfpair/seat_head` and `.perfpair/l_head`, which stay stashed.
+
+#### The absolute deficit against the C++ dylib, and why it is not this number
+
+Read off the decode bench's own two columns, best of 3 interleaved passes per label,
+both labels against the same dylib (so the C++ column is the control — it moved 0.2–0.4%
+between labels, which bounds the drift):
+
+| stream | `seat_head` Rust vs C++ | HEAD Rust vs C++ |
+|---|---|---|
+| Constrained Baseline | +54.0% | **+56.8%** |
+| Main | +2.5% | +3.1% |
+| High | +3.2% | +4.2% |
+
+**This is not the cumulative deficit and must not be quoted as one: the dylib dispatches
+NEON.** The bench prints it — `C++ SIMD : ACTIVE (WelsCPUFeatureDetect = 0x000006)`, and
+`0x4` is `WELS_CPU_NEON` — so the CB row compares scalar Rust against hand-written NEON
+deblocking and MC, which is why it is 56% where the CABAC-bound rows are 3–4%. §7.4's
+parenthetical that "the C++ dylib never dispatches SIMD" is stale for this build and is
+corrected in place; the project's cumulative figures are chains of **Rust-vs-Rust** spans
+anchored at Phase 0 and are unaffected. What the table does add is a check on direction:
+the whole-flip span reads +1.5% CB here against +2.36% paired, same sign, same order of
+magnitude, on an instrument that shares nothing with `perfpair` but the binaries.
