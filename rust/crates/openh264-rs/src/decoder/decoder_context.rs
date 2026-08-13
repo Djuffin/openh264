@@ -553,7 +553,59 @@ pub use crate::api::codec_api::SDecodingParam;
 pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo};
 
 
-pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
+pub use crate::decoder::nalu::SAccessUnit;
+
+/// The access unit under construction, borrowed for the expression that asks.
+///
+/// The one way to reach [`SWelsDecoderContext::access_unit`], and the reason it is
+/// a function rather than a field read: every call derives a fresh `&mut` through
+/// the owning `Box`, which retags the access unit and pops whatever the last
+/// derivation handed out. Bind the result only across code that cannot derive
+/// again — which in practice means "across no call that takes `pCtx`".
+///
+/// The autoref is on the *field*, so the retag covers one word of the context and
+/// not the context (S29); writes to other fields through `pCtx` while this borrow
+/// is live are what the field-precise spelling exists to allow.
+///
+/// `None` before `WelsInitStaticMemory` and after `WelsFreeStaticMemory` — the
+/// two states the old `.is_null()` guards were testing for.
+#[inline]
+pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUnit> {
+    if pCtx.is_null() {
+        return None;
+    }
+    (*pCtx).access_unit.as_deref_mut()
+}
+
+/// Whether an access unit exists and has at least one NAL queued in it.
+///
+/// The `!pCurAu.is_null() && pCurAu->uiAvailUnitsNum > 0` guard, which the port
+/// spelled at eight sites and which is the actual question every one of them asks.
+#[inline]
+pub unsafe fn au_has_nals(pCtx: PWelsDecoderContext) -> bool {
+    matches!(cur_au(pCtx), Some(au) if au.uiAvailUnitsNum > 0)
+}
+
+/// Ends the access unit at the last NAL parsed and flags it ready for decode.
+///
+/// The C++ writes `pCurAu->uiEndPos = pCurAu->uiAvailUnitsNum - 1; pCtx->bAuReadyFlag
+/// = true;` at five sites in `nalu.rs` alone, each behind its own spelling of
+/// [`au_has_nals`]. Returns whether there was an access unit to end.
+///
+/// The two stores are to disjoint fields with nothing read between them, so their
+/// order is not observable; this one writes the access unit first, which is the
+/// ordering discipline T5.O8 cost a Miri round trip to learn.
+#[inline]
+pub unsafe fn mark_au_ready(pCtx: PWelsDecoderContext) -> bool {
+    match cur_au(pCtx) {
+        Some(au) if au.uiAvailUnitsNum > 0 => {
+            au.uiEndPos = au.uiAvailUnitsNum - 1;
+            (*pCtx).bAuReadyFlag = true;
+            true
+        }
+        _ => false,
+    }
+}
 
 
 // ---------------------------------------------------------------------------
@@ -597,7 +649,21 @@ pub struct SWelsDecoderContext {
     pub pSliceHeader: *mut SSliceHeader,
     pub pPicBuff: *mut SPicBuff,
     pub iPicQueueNumber: i32,
-    pub pAccessUnitList: *mut SAccessUnit,
+    /// The access unit under construction — owned since T5.P1.
+    ///
+    /// **Reach it with [`cur_au`], never by hoisting.** The `Box` means each
+    /// derivation retags the access unit, so a borrow (or a pointer taken from
+    /// one) held across a second derivation is popped: T5.O7's conviction, one
+    /// level up from where it convicted. The nodes are unaffected — they are
+    /// their own allocations since T5.O4, which is the only reason this field
+    /// could own at all while `pNalCur` and the slice parser's `&mut BsCursor`
+    /// still point into them.
+    ///
+    /// F19: dropped by the context's own drop glue. `WelsFreeStaticMemory`'s
+    /// explicit `MemFreeNalList` is gone with the raw pointer, and R4's
+    /// equivalence argument holds by construction — that cascade ran on the
+    /// line before `drop(Box::from_raw(pCtx))` at both of its call sites.
+    pub access_unit: Option<Box<SAccessUnit>>,
     pub pSps: *mut SSps,
     pub pPps: *mut SPps,
     pub pCurDqLayer: *mut DqLayerState,
@@ -729,6 +795,11 @@ impl SWelsDecoderContext {
         unsafe {
             std::ptr::addr_of_mut!((*p).sRawData).write(RawDataBuffer::default());
             std::ptr::addr_of_mut!((*p).sSavedData).write(RawDataBuffer::default());
+            // S21, T5.P1. `Option<Box<T>>`'s `None` *is* all-zero via the null-pointer
+            // niche, so this write is redundant today — and it is here anyway, because
+            // the alternative is a field whose validity rests on a layout guarantee
+            // that no test states and no reader of the shell can see.
+            std::ptr::addr_of_mut!((*p).access_unit).write(None);
         }
     }
 
