@@ -7133,3 +7133,332 @@ Running total: **thirty-six measurements, thirteen alternations, fifteen acquitt
 7. **Unchanged**: F23 is Phase 8's, F31's redundant memset 5.5's, **F36
    decoder-threading's** (a partial *function*, and session M added the stale `pCtx.pNalCur`
    write to its inventory). **F22 is closed.**
+
+## 2026-08-13 — Phase 5, session N (the `PicId` cluster: the pool, picture identity, and the decoder's last plane-pointer mirror)
+
+**Commits:** `8db7340b` (inherited doc tail), `6bfe0090` (T5.N1, `PicPool`), `9da4bede`
+(T5.N2, `PicId` on the picture), `a9fe5673` (F3 measurement 37), `459013d8` (T5.N3,
+`pCsData` dies), `ee29d7e0` (T5.N4, the filter holds ids), `aeacb4f7` (T5.N5, the
+colocated S25 check), `d0b7f399` (ratchet), and this entry.
+
+### The session in one line
+
+**5.1 closes** — the pool exists, pictures carry their slot, and P3's identity predicate
+is slot equality — **5.4's driver closes with it**, because `pCsData` was the last plane
+mirror and its readers already had the picture; and **Face 2 did not land**, for a reason
+that is a finding rather than a shortfall: the split borrow it was briefed against cannot
+exist while `pCtx->pDec` is a raw alias into a pool slot.
+
+### Control battery
+
+Docs-only tail, session M accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 468/462/20, ratchet 4460, census 59,
+matching session M's exit on every figure. Seventh consecutive session whose open needed
+no correction.
+
+### 1. Face 1 — the pool (T5.N1), and why its slots are still pointers
+
+`SPicBuff`'s `ppPic` / `iCapacity` / `iCurrentIdx` triple — a `WelsMallocz`'d array of
+picture pointers plus a length nothing related to it — becomes a `Pool<PPicture>` and a
+cursor. Four scans that each bounds-checked by hand now index one container. The recycling
+predicate is a method (`PicPool::is_recyclable`), and it is one place where it was two:
+both prefetch scans spelled `!pPic.is_null() && !bUsedAsRef && iRefCount <= 0` inline.
+
+**F19's check, per allocation, is what decided the design.** The pool addresses; it does
+not own. `AllocPicture`'s `Box::into_raw` is still the constructor and `FreePicture`'s
+`Box::from_raw` still the dropper, unchanged since T5.C3, so the answer to *which line
+frees this?* is the answer it already had.
+
+**The obvious alternative — `Pool<Box<SPicture>>` — is what plan §2.2.3 describes, and it
+is not available yet.** Owning the pictures is what would make `Pool::mut_and_rest` prove
+the current-vs-reference split in safe code. But `pCtx->pDec` and `pCurDqLayer->pDec` are
+live raw pointers *into* slots, and a `&mut` handed out by the pool invalidates them under
+stacked borrows — F24/F25/F28's shape exactly, introduced deliberately, with nothing able
+to discharge it until `pDec` carries a `PicId`. So the slots stay pointers, the reason is
+written at the type, and **this is also why Face 2 could not land** (§5).
+
+**One divergence fixed on the way, and it is parity rather than repair.** C++
+`decoder.cpp:91` sets `pPicBuf->iCapacity = iPicIdx` before calling `DestroyPicBuff` on the
+partial-allocation-failure path — its comment says "init capacity first for free memory" —
+and the port set no capacity at all, so that `DestroyPicBuff`'s loop ran zero times and
+every picture allocated before the failure leaked. With a `Vec` the count and the contents
+are one fact and the arm cannot disagree with itself.
+
+### 2. Face 1 — identity (T5.N2), and the field that is not `iPicBuffIdx`
+
+`SPicture` gains `slot: Option<PicId>`, stamped once by the pool at construction;
+`picture.rs::same_picture` is plan P3's predicate over it. Six comparisons convert —
+error concealment's four self-copy guards, its `pECRefPic[0] == pRef` scaling arm, and
+`manage_dec_ref.rs`'s EC prefetch overlap test.
+
+**Why not `iPicBuffIdx`, which is already a slot index.** Because of *when* it is written.
+The C writes it in `PrefetchPic`, so a picture that has never been prefetched reports slot
+0 and is indistinguishable from slot 0's occupant. It is also read — `codec_api.rs:1569`
+takes it off `pPreviousDecodedPictureInDpb` for the reordering output path — so moving its
+write would be a behaviour change, not a tidy-up. It keeps its timing exactly.
+
+**The address fallback in `same_picture` is a definition, not a hedge.** It names the
+population with no slot: `pCtx->pTempDec`, allocated outside the pool and compared with
+nothing, and test fixtures. A picture with no slot is the same picture as nothing but
+itself — so the predicate is sound with no invariant to maintain, which is worth more than
+the branch costs on a path that runs once per concealed frame. The arm is dead wherever a
+caller already holds ids, which after T5.N4 is the hot one.
+
+**The five P3 tests pass unchanged and that is a fact about their coverage, not their
+health.** Their fixtures have no slot, so they exercise the address arm only. The slot arm
+— two *pooled* pictures with one POC are still two references — needed a new test, in
+`pic_queue.rs`. The two together cover both arms, and the P3 comments now say so.
+
+### 3. Face 3 — `pCsData` dies (T5.N3), and the mirror's replacement is nothing
+
+`SDeblockingFilter` carried three plane pointers and two strides copied out of
+`pCtx->pDec` at filter init and read for the whole macroblock loop: §2's named class, the
+decoder's last one after `pBitStringAux` went at T5.M3.
+
+**T5.M3 needed one accessor to replace its mirror. This needed none.** All three readers
+already take `pCurDqLayer`, which carries `pDec`, so each derives `data_ptr(i)` /
+`linesize(i)` in its own body and the result dies with the macroblock. Five fields out,
+zero in.
+
+**T5.M3's lesson was the work, not the quote.** *Check that the route you replace the
+mirror with is as fresh as the mirror was* — `pCtx.pNalCur` was not, and five phases had
+not noticed. Here the mirror's source is `pCtx->pDec` and the route is
+`pCurDqLayer->pDec`. They agree by control flow: `decoder_core.rs:3707` calls
+`InitDqLayerInfo(dq_cur, .., (*pCtx).pDec)` immediately before the slice decode this filter
+belongs to, inside the only block that reaches deblocking. A `debug_assert!` at filter init
+makes the battery say it instead of the paragraph — the goldens and both sweeps run debug.
+
+### 4. Face 3 — the filter holds ids (T5.N4), and P3 arrives where it was aimed
+
+`pRefPics` was a raw pointer per list *into* `pCtx->sRefPic.pRefList`, held across the
+whole macroblock loop — F28's shape with the borrow spelled as a pointer, so nothing had to
+face it. It becomes `ref_ids: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A]`, snapshotted at
+filter init.
+
+Boundary strength asks these entries one question and it is P3's. An id answers it, so
+`MB_BS_MV`, `SMB_EDGE_MV`, `BS_EDGE`, `IN_SMB_EDGE_MV`, `IN_BS_EDGE` and `ON_MB_BS` take
+`Option<PicId>`, **the `c_void` erasure the 4x4 paths used is gone**, and 30 dereferences
+become array indexing.
+
+`None` is the C's null slot, and exactly so rather than approximately: every non-null entry
+of a reference list is a pool picture, because `WelsInitRefList` fills these lists from
+`pPicBuff` and nowhere else. `snapshot_ref_ids` is the one writer and asserts that rather
+than assuming it.
+
+**This is where the three P3 deblocking tests change character, and the change is a
+strengthening.** The POC half of what they pinned is now structural: these functions no
+longer receive a picture, so a rewrite that consulted a POC could not compile. What they
+still pin — that the reference term is consulted and the MV term does not mask it — is
+what they now say they pin.
+
+**Miri convicted one of this session's own tests and nothing else could have.** T5.N2's new
+test took a `*const SPicture` from `&loose`, wrote `loose.iFramePoc`, then read through the
+raw pointer: the write invalidated the shared tag. Writes now happen first and the
+addresses come from `addr_of!` — S29's spelling, for S29's reason, in a test rather than in
+production, which is the third time this phase that the aliasing gate has caught a defect
+in the instrument rather than in the instrumented.
+
+### 5. Face 2 — not landed, and the reason is structural
+
+The brief fences the colocated reads out of session M "at the site, because colocated
+access borrows two pictures at once and needs Face 1's split-borrow API", and expects Face
+1 to supply it. **Face 1 cannot supply it, and the reason is the same one that decided
+T5.N1's slot type** (§1): `Pool::mut_and_rest` hands out a `&mut` to a slot, and every raw
+`pDec` alias in the decoder dies at that retag. Using it would install the exact defect
+class F24/F25/F28 closed.
+
+So the API's precondition is that `pDec` stops being a raw pointer, and that is 5.1's
+remaining half sized honestly: **236 `.pDec` sites, every one of them in `src/decoder/`** — 77 in
+`decode_slice.rs` (5.6's by P1) and 55 in `decoder_core.rs` (5.5's). Plus 94 decoder
+`pRefList` sites and 209 `pRefPic` sites for the reference graph. This is a step of its
+own, not a face — the same disposition session M gave the `*mut u8` cache family, and for
+the same reason: the centre of gravity is another step's.
+
+**What did land is the face's S25 enumeration, as a check (T5.N5).** `GetColocatedMb` reads
+`pRefList[LIST_1][0]` while both its callers go on to write `pCurDqLayer->pDec`'s `pMv` and
+`pRefIndex` for the same macroblock — if the colocated picture were `pDec`, the read and
+the write would be one buffer, and the "two pictures at once" the brief describes would be
+a self-alias. It cannot be: `pDec` comes from `PrefetchPic`, which returns only a slot with
+`!bUsedAsRef && iRefCount <= 0`, and `InitRefPicList` fills list 1 from pictures marked as
+references. That is precisely the kind of argument S25 exists to distrust, so it is a
+`debug_assert!` over `same_picture` now, green across 341/341 in both profiles and every
+golden. It is also the precondition the split borrow will need, so it is not throwaway.
+
+### 6. A finding: `DestroyPicBuff` does not reset the reordering buffers (F37)
+
+C++ `decoder.cpp:260`'s `DestroyPicBuff` begins with
+`ResetReorderingPictureBuffers (pCtx->pPictReoderingStatus, pCtx->pPictInfoList, false)`.
+The port's does not, and the port calls `ResetReorderingPictureBuffers` in exactly one
+place: decoder *creation* (`codec_api.rs:2023`). So across an uninit/re-init cycle
+`sPictInfoList` keeps POCs and `iPicBuffIdx` values that name slots of a pool that has been
+freed and rebuilt, and `EmitBufferedPicture` indexes the new pool with the old picture's
+index. Found by reading `CreatePicBuff`/`DestroyPicBuff` against the C++ for T5.N1's
+rewrite; **not fixed here** — the reset is `decoder_core.rs`'s function and the lifecycle
+is `codec_api.rs`'s, which makes it 5.5's or Phase 8's, and this session's brief fences
+both. Recorded with its owner per S18.
+
+### 7. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 468 / 462 / 20 | **470 / 464 / 20** |
+| Miri `--lib` | 328 | **330** |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| census duplicate-body budget | 195 | **195** |
+| `raw_ptr` | 4460 | **4436** |
+| `unsafe_block` | 625 | **622** |
+| `unsafe_fn` | 1241 | **1247** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+
+Per-file `raw_ptr` (S16): `deblocking.rs` **−13**, `pic_queue.rs` **−13**,
+`decoder_context.rs` −4, `error_concealment.rs` −1, `picture.rs` **+2**
+(`same_picture`'s two parameters), `mv_pred.rs` flat.
+
+**S16's prose floor, collected for the ninth time, and this one was the session's own.**
+The first count read −17 with four files flagged as increases. Seven of those occurrences
+were pointer types written in comments added by these very commits, describing the fields
+those commits had just deleted — `[*mut u8; 3]` in the note explaining that `pCsData` is
+gone, `[*mut *mut Picture; LIST_A]` in the note explaining that `pRefPics` is gone.
+Rewording them took the total to **−24** and left four increases, all real. S16 says read
+per-file deltas rather than the total; the sharper form is that **a comment mourning a
+deleted pointer type reinstates it in the metric**, and the file where a deletion just
+happened is the likeliest place to write one.
+
+`unsafe_fn` **+6** is S16's trade running the other way from session M's −8: bodies moved
+out of unsafe free functions into six named unsafe methods (`is_recyclable`,
+`prefetch_free`, `next_for_thread`, `stamp_slots`, `snapshot_ref_ids`, `same_picture`).
+Nothing is double-counted — the free functions stay — and what changed is that the raw work
+sits behind contracts instead of inline in four scans. `unsafe_block` **−3**, and **no S28
+test is owed for a third session**: the pool derives no pointer from a safe container, it
+stores ones it did not make.
+
+Miri **+2**, the two new tests. Closing battery: **OVERALL: FAIL(1)**, the one failing step being the release sweep's F3 hit, adjudicated and acquitted below — every other gate green, Miri **330 / 0**, ratchet clean, census 59, both benches bit-identical, debug sweep 341/341.
+
+### 8. Perf — the session as one span, and the first Phase 5 session that is not free
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.N1–T5.N5** (`16a6130c` → `d0b7f399`) | 7 | **+1.24%** | **+1.90%** | **+0.75%** | **+1.24%** | −0.04% |
+| session null | 7 | — | — | — | +0.03%, band **−0.14% … +0.34%** | +0.00% |
+
+**Every decode row clears the null band's ceiling**, the lowest of them by more than twice,
+judged by exactly the standard that made session L's +2.93% real and session M's −0.77%
+real. Encode flat, as a decoder-only session should be.
+
+**Cumulative CB ≈ +21.6…+21.9%** against the ≈+23% stop-line — **≈1.1…1.4 points of
+headroom** where session M left ≈2.3, and 5.5 and 5.6 are the phase's two largest remaining
+steps. Plan against the conservative end.
+
+**This reading owes a day-two confirmation, and it is session O's first item** — the same
+debt session L owed session M, for the same reason: it changes what the rest of the phase
+can afford. `.perfpair/` holds `n_base` (`16a6130c`), `n_mid` (`9da4bede`) and `n_head`
+(`d0b7f399`).
+
+**The bisect (S5), which is where D-perf-4's one short look went**: one extra build at the
+Face 1/Face 3 boundary and one 7-pair run.
+
+| half | CB | Main | High | decode median |
+|---|---|---|---|---|
+| Face 1 — pool + identity (`16a6130c` → `9da4bede`) | **−0.72%** | +0.11% | +0.13% | **+0.11%** |
+| Face 3 — the deblocking driver (`9da4bede` → `d0b7f399`) | **+1.17%** | **+2.25%** | **+2.06%** | **+2.06%** |
+
+**Face 1 is free; Face 3 owns all of it.** Face 1's CABAC rows are inside the band and its
+CB row below the floor. The halves do not sum to the whole (CB +0.45 against +1.24), which
+is session K's lesson restated — the yardstick moves as much as a half does — so the whole
+span's number is the one carried and the halves are used only for attribution.
+
+**Which half of Face 3, hypothesis, unverified and labelled so.** CB costs +1.17% while
+Main and High cost roughly double. T5.N3's per-macroblock plane derivation is
+slice-type-agnostic and should cost the same everywhere; T5.N4's extra work is not — the
+two-list `iRefs` fill and the `IN_SMB_EDGE_MV`/`ON_MB_BS` paths that compare six ids per
+edge run on **B slices**, which is what separates Main and High from CB. If that is right
+the mechanism is representation: `Id` is `{ index: u32 }` in release, so `Option<Id>` is
+eight bytes with a separate discriminant and `==` compares two fields where a pointer
+compared one. A niche (`index: NonZeroU32` holding `slot + 1`) makes it one word and one
+compare, in `safe/pool.rs` and nowhere else — §7.4's fast-by-construction clause, not an
+optimisation box. **Not measured.** One observation, written down so session O settles it
+with one build; S1 stands, disassemble before believing it.
+
+### 9. F3 — one hit, acquitted, and the last stream clause falls
+
+`mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=1`, **release**, C++ 42538 vs
+Rust **42296** (short). Inside S14's signature on every axis. Step 1's isolation re-run:
+**5× byte-identical**. One hit, so step 2 does not fire. **Acquitted**, appended as
+measurement 37 at adjudication time.
+
+It widens the signature a third time. Measurements 29, 35 and 36 all landed on `320x192`
+and 36 concluded that was the susceptible stream; this is the other clip at a quarter of
+the pixels with everything else the same shape. What survives all thirty-seven measurements
+is `mt` + `sm=3` + `t∈{2,4}` — every other clause has turned out to be a rate artifact.
+**The closing battery drew a second hit** — `mt CiscoVT2people_320x192_12fps t=2 sm=3
+n=600 cabac=1 rc=0`, release, C++ 39884 vs Rust **0**, the first `t=2` hit since
+measurement 30. Also signature, also **5× byte-identical** in isolation, also one hit and
+so no alternation. **Acquitted**, measurement 38. Two hits over 1364 swept configurations
+is ≈1/682, consistent with the ≈1/800 battery rate.
+Running total: **thirty-eight measurements, thirteen alternations, seventeen acquittals.**
+
+**A protocol note that cost more than either measurement, because the same trap caught
+this session twice in two different forms.** Measurement 37's first isolation attempt
+reported C++ **0** bytes five times and read as a reproduction of something worse:
+`compare.sh` `cd`s to the repo root before invoking either encoder, so a relative `<yuv>`
+argument resolves against the wrong directory, and because the output tag is derived from
+the arguments, `stat` then reported the **stale** `.264` the failing sweep had just left —
+two artefacts agreeing on a false result. Measurement 38's first attempt reported
+`C++ 0 / Rust -1`, which looks worse still, and was a *frame count*: `sweep.sh` loops each
+clip to at least `SWEEP_FRAMES=16` and the two clips have different source lengths, so
+`160x96` loops to **20** frames and `320x192` to **18**. Reusing the other clip's count
+names a file that does not exist.
+
+**The rule that covers both, and it is one line**: two encoders failing *identically* is a
+statement about the harness, never about the trees — S23b's law, one level down from the
+alternation it was written for. Read both sizes in an isolation run before reading either.
+
+### 10. What went into the rules
+
+* **Nothing new, again**, and the tags that carried the session were S16 (the prose floor,
+  ninth collection, and this time the prose was the session's own), S24 (the `.pDec` and
+  `pRefList` counts that sized Face 2 out of scope), S25 twice (the pool's answer, and the
+  colocated check), S29 (in a test, via Miri), S5 (the bisect), S2b (null at the verdict's
+  pair count, and the day-two debt), S14, S18 (F37 listed with its owner), S21 and F19.
+* **S16 gained a sharper form without gaining text.** The rule says read per-file deltas
+  rather than the total. The session's own experience says why in one sentence: *a comment
+  mourning a deleted pointer type reinstates it in the metric*, and the file where a
+  deletion just happened is the likeliest place to write one. Seven of this session's
+  apparent increases were exactly that.
+* **The brief's Face 2 was impossible as specified, and the reason generalises.** A
+  split-borrow API over a pool cannot be used while raw aliases into the pool are live; the
+  API is not the blocker, the aliases are. Any future brief that schedules "convert X to
+  use the safe container's borrow API" has to schedule the removal of X's raw aliases in
+  the same closure — which is S20 pointed at a container rather than at a struct.
+
+### Hand-off: Phase 5, session O — 5.5 (`decoder_core.rs`), and a perf debt to settle first
+
+1. **The day-two confirmation of this session's span, before anything else** (S2b). Both
+   binaries are stashed: `.perfpair/n_base` (`16a6130c`) and `n_head` (`d0b7f399`), plus
+   `n_mid` (`9da4bede`) for the bisect. The figure it confirms or moves is the headroom —
+   **≈1.1…1.4 points** — and 5.5 spends against it.
+2. **Settle Face 3's mechanism in the same sitting**, since the binaries are already built:
+   split T5.N3 from T5.N4, and try `Id`'s niche (`index: NonZeroU32`, `slot + 1`) in
+   `safe/pool.rs`. §7 above has the hypothesis and the one observation behind it. If the
+   niche recovers the B-slice asymmetry, most of the +1.24% comes back; if it does not,
+   ledger the span and move on — D-perf-4 allows one look, and this is it.
+3. **5.5 — `decoder_core.rs`**: allocation → constructors, the paramset store (P4), context
+   decomposition (§2.2.6), `Drop` teardown. The phase's largest remaining step, expected to
+   want two sessions. S21 with force (the context embeds its buffers by value, so every
+   owned field lands inside `mem::zeroed` reach; the `MaybeUninit` shell + `new_boxed()` is
+   at `decoder_context.rs:769`), F19 per allocation.
+4. **F37 is 5.5's if it is anyone's** (§6): `DestroyPicBuff` does not reset the reordering
+   picture buffers where the C++ does, so an uninit/re-init cycle leaves `sPictInfoList`
+   naming slots of a freed pool. The reset function is `decoder_core.rs`'s.
+5. **What 5.1 still implies, and it is not 5.1's any more** (§5): the pool's slots stay
+   `PPicture` until `pCtx->pDec` carries a `PicId` — **236 `.pDec` sites, 77 in
+   `decode_slice.rs` and 55 in `decoder_core.rs`**, plus 94 `pRefList` and 209 `pRefPic`.
+   5.5 touches the second-largest share of them and should decide whether to take it.
+   **5.3's colocated face and 5.3b sit behind it.**
+6. **What 5.2 still owes**, unchanged: the straggler sweep, and the `*mut u8`
+   non-zero-count cache family (167 uses, 96 in `decode_slice.rs`, 5.6's by P1).
+7. **Unchanged**: F23 is Phase 8's, F31's redundant memset 5.5's, **F36
+   decoder-threading's**. **F22 is closed. 5.1 and 5.4 are closed.**

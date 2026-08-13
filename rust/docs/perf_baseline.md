@@ -1681,3 +1681,83 @@ duplicate function bodies. It is **not** a claim that the port got faster — on
 three-row bench, a 0.17-point null, and no second day. The honest statement is the one the
 headroom rests on: **this session cost nothing**, and cumulative CB stays at
 **≈ +20.4…+20.7%** against the ≈+23% stop-line.
+
+### Session N — the `PicId` cluster, and the first Phase 5 session that is not free (2026-08-13)
+
+Session-N null floor, 7 pairs, matched to the verdict's pair count (S2b):
+
+| bench | median | band | rows over +5% |
+|---|---|---|---|
+| decode (3 rows) | **+0.03%** | −0.14% … +0.34% | 0 |
+| encode (28 rows) | **+0.00%** | −1.45% … +1.47% | 0 |
+
+#### The session's span, measured whole
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.N1–T5.N5** (`16a6130c` → `d0b7f399`) | 7 | **+1.24%** | **+1.90%** | **+0.75%** | **+1.24%** | −0.04% |
+| session null (same binary both slots) | 7 | — | — | — | +0.03%, band −0.14% … +0.34% | +0.00% |
+
+**Every decode row is above the null band's ceiling**, the lowest of them (+0.75%) by more
+than twice, judged by exactly the standard that made session L's +2.93% real and session
+M's −0.77% real. Encode is flat, as a decoder-only session should be. **This session cost
+something**, and it is the first Phase 5 session since the flip itself of which that is
+true.
+
+#### What it does to the position
+
+Cumulative CB ≈ **+21.6…+21.9%** against the ≈**+23%** stop-line — **≈1.1…1.4 points of
+headroom** where session M left ≈2.3, for all of 5.5 and 5.6, which are the phase's two
+largest remaining steps. The conservative end is the one to plan against.
+
+**This reading owes a day-two confirmation and it is session O's first item** (S2b: a
+reading a decision rests on gets a second day, not more pairs on the same one). It is the
+same debt session L owed session M, and the reason is the same — the number changes what
+the remaining phase can afford. Three stashed binaries are in `.perfpair/`: `n_base`
+(`16a6130c`), `n_mid` (`9da4bede`) and `n_head` (`d0b7f399`).
+
+#### The bisect — D-perf-4's one short look, spent on S5 rather than on a theory
+
++1.24% CB is over half the headroom session M left, so the cost is worth locating before
+it is ledgered. S5's move is to split the span by commit before optimising anything, and
+one extra build plus one 7-pair run does it. The mid-point is `9da4bede`, the end of Face 1:
+
+| half | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|
+| **Face 1** — the pool and picture identity (`16a6130c` → `9da4bede`) | **−0.72%** | +0.11% | +0.13% | **+0.11%** | +0.08% |
+| **Face 3** — the deblocking driver (`9da4bede` → `d0b7f399`) | **+1.17%** | **+2.25%** | **+2.06%** | **+2.06%** | +0.00% |
+| session null | — | — | — | +0.03%, band −0.14% … +0.34% | +0.00% |
+
+**Face 1 is free and Face 3 owns all of it.** Face 1's two CABAC rows sit inside the null
+band and its CB row below the floor; every Face 3 row clears the ceiling by 3–6×. (The
+halves do not sum to the whole — CB −0.72 + 1.17 = +0.45 against the span's +1.24, High
++2.19 against +0.75. Two 7-pair halves and one 7-pair whole disagree by about a point,
+which is session K's result restated: the *yardstick* moves. The direction is not in doubt;
+the magnitude of either half is worth less than the whole span's number, and the whole
+span's is the one to carry.)
+
+#### Which half of Face 3, and the hypothesis — **unverified, and named as such**
+
+Face 3 is two conversions: T5.N3 (the plane mirror dies, so three plane pointers and two
+strides are derived per macroblock instead of read from the filter struct) and T5.N4 (the
+reference lists become `Option<PicId>`, so boundary strength compares ids).
+
+**The profile asymmetry points at T5.N4.** Constrained Baseline costs +1.17% while Main and
+High cost +2.25% and +2.06% — roughly double. T5.N3's derivation is slice-type-agnostic:
+every macroblock of every profile deblocks, so it should cost the same everywhere. T5.N4's
+extra work is not: the two-list `iRefs` fill and the `IN_SMB_EDGE_MV` / `ON_MB_BS` paths
+that compare six ids per edge run on **B slices**, which is exactly what separates Main and
+High from CB.
+
+If that is right, the mechanism is the representation and the fix is structural rather than
+an optimisation box: `Id` is `{ index: u32 }` in release, so `Option<Id>` is eight bytes
+with a separate discriminant and `==` compares two fields where the pointer form compared
+one. A niche — `index: NonZeroU32` holding `slot + 1` — makes `Option<Id>` one word and its
+equality one compare, in `safe/pool.rs` and nowhere else. §7.4's "fast-by-construction"
+clause covers picking the right representation; this is not a box.
+
+**None of that is measured.** It is a hypothesis with one supporting observation, written
+down so session O can settle it with one build rather than rediscover it — and S1's rule
+stands: disassemble before believing it. The three-way experiment session O owes is: the
+day-two confirmation of the whole span, the T5.N3/T5.N4 split, and the niche.
+

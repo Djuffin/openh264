@@ -1347,3 +1347,49 @@ changes is the size of the job: the fix is not "add the missing `pSliceIdc`
 write", it is "translate the rest of the function, and decide where the
 per-picture arrays live when more than one thread has one". Both flips left the
 divergence exactly as they found it (S6).
+
+---
+
+## F37 — `DestroyPicBuff` does not reset the reordering picture buffers, so a re-init leaves `sPictInfoList` naming slots of a freed pool
+
+*Found Phase 5 session N (2026-08-13), reading `CreatePicBuff`/`DestroyPicBuff`
+against the C++ for T5.N1's rewrite. **Not fixed here.** Owner: 5.5, or Phase 8 if
+5.5 does not reach the lifecycle.*
+
+C++ `decoder.cpp:260` opens `DestroyPicBuff` with
+
+```c
+ResetReorderingPictureBuffers (pCtx->pPictReoderingStatus, pCtx->pPictInfoList, false);
+```
+
+before it frees a single picture. The port's `DestroyPicBuff`
+(`pic_queue.rs`) does not, and takes its `pCtx` parameter as `_pCtx`.
+
+The port calls `ResetReorderingPictureBuffers` in exactly **one** place, and it is
+decoder *creation*: `codec_api.rs:2023`, inside `WelsCreateDecoder`. So the reset
+never runs on teardown.
+
+**What that costs.** `CWelsDecoderImpl::sPictInfoList` holds, per buffered
+picture, an `iPOC` and an `iPicBuffIdx` — an index into `pPicBuff->ppPic`.
+`EmitBufferedPicture` (`codec_api.rs`) reads that index back and decrements the
+named picture's `iRefCount`, calling its `pSetUnRef`. Across an uninit/re-init
+cycle — `WelsFreeDynamicMemory` runs `DestroyPicBuff`, and a later
+`InitialDqLayersContext` builds a new pool — the list keeps its old POCs and old
+indices, and the emit path indexes the **new** pool with the **old** pool's index.
+The entries are not stale pointers (the port stores an index, and T5.N1's
+`slot_at` bounds-checks it), so this is a wrong-picture bug rather than a
+use-after-free: a POC of `IMinInt32` is what marks a slot empty, and a surviving
+non-sentinel POC makes a stale slot look occupied.
+
+**Why no gate sees it.** Every decode gate in the battery creates a decoder,
+decodes, and destroys it. Nothing re-initialises a live decoder, which is the
+only way to reach the state — the same shape as F31 and F36, defects behind a
+transition no asset exercises.
+
+**Why it is not fixed at session N.** The reset function is `decoder_core.rs`'s
+and the list it resets is `codec_api.rs`'s; the session's brief fences both, and
+the fix is one line in a file whose whole lifecycle 5.5 rewrites. Adding the call
+without the surrounding conversion would put a `pCtx`-reaching call inside a
+function that currently ignores its `pCtx` — S20's "atomically, per closure"
+argument running the wrong way. Listed with its owner per S18.
+

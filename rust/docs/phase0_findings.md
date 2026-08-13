@@ -1304,3 +1304,32 @@ neither tree. S1's "disassemble before theorising" has a cheaper cousin here: ch
 instrument reported on the run you think it did.
 
 Running total: **thirty-seven measurements, thirteen alternations, sixteen acquittals.**
+
+### Measurement 38 (Phase 5, session N, 2026-08-13) — one hit on the closing battery, and the harness trap bites a second time
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 38 | `mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=1 rc=0` (**release**) | 39884 | **0** |
+
+Drawn by session N's closing full battery; `PASS=340 FAIL=1` on the release sweep, debug
+341/341, everything else green (Miri 330, both benches bit-identical). Inside S14's
+signature on every axis — `mt`, `sm=3`, **`t=2`** (the first `t=2` hit since measurement
+30), wrong length (zero), release profile.
+
+**Step 1's isolation re-run, 5× on an idle machine: 5 byte-identical**, both encoders
+39884. No reproduction. One hit, so step 2 does not fire. **Acquitted as F3.**
+
+Two hits in one session (37 and 38) over 1364 swept configurations is ≈1/682, consistent
+with the ≈1/800 battery rate and well under the ≈1/307 sustained-preset rate.
+
+**The harness trap from measurement 37 caught the same session twice, in a second form.**
+There the mistake was a relative path; here it was the frame count. `sweep.sh` builds its
+input by looping the source clip to at least `SWEEP_FRAMES=16`, and the two clips have
+different source lengths — `CiscoVT2people_160x96_6fps` loops to **20** frames,
+`CiscoVT2people_320x192_12fps` to **18**. Reusing 20 for the 320x192 clip names a file that
+does not exist, and `compare.sh` then reports `C++ 0 / Rust -1`, which reads like a
+catastrophic divergence rather than a missing input. **Take the frame count from the
+`out/*_loopN.yuv` file that exists, not from the other clip's**, and read the isolation
+run's *both* sizes: two encoders failing identically is a harness result, never a finding.
+
+Running total: **thirty-eight measurements, thirteen alternations, seventeen acquittals.**
