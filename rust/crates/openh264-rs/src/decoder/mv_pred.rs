@@ -423,7 +423,11 @@ pub unsafe fn GetMbType(pCurDqLayer: *mut SDqLayer) -> *mut u32 {
     if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pMbType
     } else {
-        (*pCurDqLayer).pMbType
+        // T5.K2: the grid's array, derived from the allocation root (S28). Every
+        // caller keeps this base and indexes it at *neighbour* addresses — left,
+        // top, top-left, top-right — so the legal reach is the whole array and a
+        // narrowing slice would be UB at the first neighbour.
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.mb_type, 0)
     }
 }
 

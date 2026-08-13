@@ -349,7 +349,6 @@ pub struct SDqLayer {
     /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
     pub pBitStringAux: *mut BsReader,
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
-    pub pMbType: *mut u32,
     pub pSliceIdc: *mut i32,
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
@@ -2777,7 +2776,6 @@ pub unsafe fn InitialDqLayersContext(
         let pDq: PDqLayer = Box::into_raw(Box::new(SDqLayer::for_grid(dims)));
         (*pCtx).pDqLayersList = pDq;
 
-        (*pDq).pMbType = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut _;
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2807,10 +2805,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
 
     let pDq = (*pCtx).pDqLayersList;
     if !pDq.is_null() {
-        if !(*pDq).pMbType.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pMbType as *mut u8, numMb * std::mem::size_of::<u32>());
-            (*pDq).pMbType = std::ptr::null_mut();
-        }
         for list in 0..LIST_A {
             if !(*pDq).pMvd[list].is_null() {
                 WelsFreeHelper(pMa, (*pDq).pMvd[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
@@ -4262,6 +4256,38 @@ mod tests {
         assert!(g.mv[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|v| v == &[0, 0])));
     }
 
+    /// The reach `pMbType`'s one surviving raw consumer actually takes (T5.K2).
+    ///
+    /// `GetMbType` hands its caller the array **base**, and every caller then
+    /// indexes it at *neighbour* addresses — `*pMbType.add(iLeftXy)`,
+    /// `.add(iTopXy)`, `.add(iLeftTopXy)`, `.add(iRightTopXy)` — around a current
+    /// macroblock that may be anywhere in the picture. So the pointer taken at 0
+    /// must reach every macroblock in both directions, and the element stays a
+    /// plain `u32`: this is the one family of the twenty-two whose record *is* a
+    /// scalar, so there is nothing inside it to index.
+    #[test]
+    fn mb_grid_ptr_reaches_every_macroblock_of_mb_type_from_the_base() {
+        let dims = MbDims::new(4, 3);
+        let n = dims.count();
+        let mut g = MbGrid::new(dims);
+
+        let base = mb_grid_ptr(&mut g.mb_type, 0);
+        unsafe {
+            for mb in 0..n {
+                *base.add(mb) = 0xDEAD_0000 | mb as u32;
+            }
+            // the caller's own shape: a current macroblock and its four neighbours,
+            // read backwards from the interior through the pointer taken at 0
+            let cur = dims.mb_xy(2, 2);
+            assert_eq!(*base.add(cur), 0xDEAD_0000 | cur as u32);
+            for nb in [dims.left(cur), dims.top(cur), dims.top_left(cur), dims.top_right(cur)] {
+                let nb = nb.expect("interior macroblock has all four neighbours");
+                assert_eq!(*base.add(nb), 0xDEAD_0000 | nb as u32);
+            }
+        }
+        assert_eq!(*g.mb_type.get(n - 1), 0xDEAD_0000 | (n as u32 - 1));
+    }
+
     /// One past the end is a pointer you may form and not one you may read —
     /// exactly what `base + numMb` meant in the C. Past *that* is the F32 shape
     /// and it is a panic now.
@@ -4304,7 +4330,6 @@ mod tests {
 
         // and a sample of what `WelsMallocz`'s zeroing used to leave behind
         assert!(layer.pBitStringAux.is_null());
-        assert!(layer.pMbType.is_null());
         assert!(layer.pDec.is_null());
         assert_eq!(layer.iMbWidth, 0);
         assert_eq!(layer.iMbHeight, 0);
