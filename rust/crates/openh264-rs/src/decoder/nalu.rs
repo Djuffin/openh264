@@ -335,13 +335,26 @@ impl Default for TagNalUnit {
 /// Container structure for an entire Access Unit (AU).
 ///
 /// Matches `TagAccessUnits` / `SAccessUnit` in `codec/decoder/core/inc/nalu.h`.
-#[repr(C)]
-#[derive(Copy, Clone)]
+///
+/// **Not `#[repr(C)]` and not `Copy` since T5.O4**: `nal_units` is a `Vec` with no C
+/// layout, the struct crosses no FFI boundary, and it carries no `assert_size!` or
+/// offset pin — T5.N4's reasoning for `SDeblockingFilter`, unchanged.
 pub struct TagAccessUnits {
-    pub pNalUnitsList: *mut *mut SNalUnit,
+    /// The NAL nodes, **owned** — replacing `pNalUnitsList: *mut *mut SNalUnit` and
+    /// the `uiCountUnitsNum` that was supposed to describe it (T5.O4, F39).
+    ///
+    /// The count and the contents are one fact now, which is the same move T5.N1 made
+    /// for the picture pool and for the same reason: the port had **two** allocators
+    /// for this list, of different shapes, and a growth path that mixed them.
+    ///
+    /// `Box` per node rather than `Vec<SNalUnit>`: `pCtx->pNalCur` and the local
+    /// `pNalCur`s hold pointers *into* this list across a growth, so the node
+    /// addresses have to be stable. The C++ moves them (`ExpandNalUnitList` copies
+    /// into a new block and frees the old), which is P5's hazard in its original
+    /// habitat; boxing makes it unrepresentable rather than repaired.
+    pub nal_units: Vec<Box<SNalUnit>>,
     pub uiAvailUnitsNum: u32,
     pub uiActualUnitsNum: u32,
-    pub uiCountUnitsNum: u32,
     pub uiStartPos: u32,
     pub uiEndPos: u32,
     pub bCompletedAuFlag: bool,
@@ -353,14 +366,62 @@ pub type PAccessUnit = *mut SAccessUnit;
 impl Default for TagAccessUnits {
     fn default() -> Self {
         Self {
-            pNalUnitsList: std::ptr::null_mut(),
+            nal_units: Vec::new(),
             uiAvailUnitsNum: 0,
             uiActualUnitsNum: 0,
-            uiCountUnitsNum: 0,
             uiStartPos: 0,
             uiEndPos: 0,
             bCompletedAuFlag: false,
         }
+    }
+}
+
+impl TagAccessUnits {
+    /// An access unit with `count` zeroed NAL nodes — the constructor both of the
+    /// port's two `MemInitNalList`s used to be.
+    ///
+    /// F19: every node here is dropped by this struct's own drop glue, and the struct
+    /// by the `Box::from_raw` in [`MemFreeNalList`]. There is no size to recompute at
+    /// the free, which is what the deleted pair got wrong in opposite directions.
+    pub fn with_nodes(count: usize) -> Box<Self> {
+        let mut au = Box::new(Self::default());
+        au.nal_units.reserve_exact(count);
+        for _ in 0..count {
+            au.nal_units.push(Box::new(SNalUnit::default()));
+        }
+        au
+    }
+
+    /// Number of nodes — the old `uiCountUnitsNum`, which is now a derived value and
+    /// so cannot disagree with the list.
+    #[inline]
+    pub fn count(&self) -> u32 {
+        self.nal_units.len() as u32
+    }
+
+    /// A raw pointer to node `i`, for the consumers 5.5 has not converted.
+    ///
+    /// S28: derived from the node's own `Box` allocation, whose legal reach is exactly
+    /// one `SNalUnit` — the pointer is not walked off, and every consumer reads fields
+    /// of the node it asked for.
+    ///
+    /// # Panics
+    /// If `i` is out of range. The C indexed `pNalUnitsList[i]` unchecked and the port
+    /// paired every index with a hand-written `i < MAX_NAL_UNIT_NUM_IN_AU` test; this
+    /// is the same check, in one place (P13).
+    #[inline]
+    pub fn nal(&mut self, i: usize) -> *mut SNalUnit {
+        let len = self.nal_units.len();
+        assert!(i < len, "NAL unit {i} outside an access unit of {len}");
+        &mut *self.nal_units[i] as *mut SNalUnit
+    }
+
+    /// [`nal`](Self::nal) where the index may be past the end — the shape of the
+    /// port's `i < MAX_NAL_UNIT_NUM_IN_AU && !…is_null()` guards, which existed
+    /// because the list could hold null slots. It cannot now.
+    #[inline]
+    pub fn nal_opt(&mut self, i: usize) -> Option<*mut SNalUnit> {
+        (i < self.nal_units.len()).then(|| self.nal(i))
     }
 }
 
@@ -769,7 +830,7 @@ pub unsafe fn ParseNalHeader(
                 (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag = true;
             }
 
-            let pBs = &mut (*(*(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize)))
+            let pBs = &mut (*((*pCurAu).nal((uiAvailNalNum - 1) as usize)))
                 .sNalData
                 .sVclNal
                 .sSliceBitsRead;
@@ -805,14 +866,14 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            let p_last_nal = *(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 1) as usize);
+            let p_last_nal = (*pCurAu).nal((uiAvailNalNum - 1) as usize);
             let p_last_sps = (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
 
             if uiAvailNalNum == 1 && CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps) {
                 crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
             }
             if uiAvailNalNum > 1 {
-                let p_prev_nal = *(*pCurAu).pNalUnitsList.add((uiAvailNalNum - 2) as usize);
+                let p_prev_nal = (*pCurAu).nal((uiAvailNalNum - 2) as usize);
                 if CheckAccessUnitBoundary(pCtx, p_last_nal, p_prev_nal, p_last_sps) {
                     (*pCurAu).uiEndPos = uiAvailNalNum - 2;
                     (*pCtx).bAuReadyFlag = true;
@@ -1307,7 +1368,7 @@ pub unsafe fn CheckSpsActive(
             if !pCurAu.is_null() && (*pCurAu).uiAvailUnitsNum > 0 {
                 let iNum = (*pCurAu).uiAvailUnitsNum as usize;
                 for i in 0..iNum {
-                    let pNalUnit = *(*pCurAu).pNalUnitsList.add(i);
+                    let pNalUnit = (*pCurAu).nal(i);
                     if !pNalUnit.is_null() && (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
                         let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
@@ -1326,7 +1387,7 @@ pub unsafe fn CheckSpsActive(
             if !pCurAu.is_null() && (*pCurAu).uiAvailUnitsNum > 0 {
                 let iNum = (*pCurAu).uiAvailUnitsNum as usize;
                 for i in 0..iNum {
-                    let pNalUnit = *(*pCurAu).pNalUnitsList.add(i);
+                    let pNalUnit = (*pCurAu).nal(i);
                     if !pNalUnit.is_null() && !(*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
                         let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
@@ -2113,104 +2174,74 @@ pub unsafe fn ResetFmoList(pCtx: *mut SWelsDecoderContext) -> i32 {
 // Access Unit List Dynamic Memory Management
 // ============================================================================
 
-/// Allocates a single contiguous memory buffer holding [`SAccessUnit`],
-/// the NAL unit pointer array, and all [`SNalUnit`] storage nodes.
+/// Builds an access unit with `kuiSize` zeroed NAL nodes.
+///
+/// **T5.O4 collapsed two of these into one (F39).** The port had a second
+/// `MemInitNalList` in `decoder_core.rs` — three separate `WelsMallocz` blocks where
+/// this one made a single `alloc_zeroed` — and `MemGetNextNal`'s growth path used
+/// *this* file's `MemFreeNalList` on whichever the context happened to hold. The two
+/// shapes are one owned `Vec<Box<SNalUnit>>` now, so the mismatch is not a bug that is
+/// fixed, it is a bug that cannot be written.
 pub unsafe fn MemInitNalList(
     ppAu: *mut *mut SAccessUnit,
     kuiSize: u32,
     _pMa: *mut CMemoryAlign,
 ) -> i32 {
+    if ppAu.is_null() {
+        return crate::decoder::decoder_context::ERR_INFO_INVALID_PTR;
+    }
     if kuiSize == 0 {
         return ERR_INVALID_PARAMETERS;
     }
-
-    let kuiSizeAu = std::mem::size_of::<SAccessUnit>();
-    let kuiSizeNalUnitPtr = kuiSize as usize * std::mem::size_of::<*mut SNalUnit>();
-    let kuiSizeNalUnit = std::mem::size_of::<SNalUnit>();
-    let kuiCountSize = kuiSizeAu + kuiSizeNalUnitPtr + kuiSize as usize * kuiSizeNalUnit;
-
-    let layout = match std::alloc::Layout::from_size_align(kuiCountSize, 16) {
-        Ok(l) => l,
-        Err(_) => return ERR_INFO_OUT_OF_MEMORY,
-    };
-
-    let pBase = std::alloc::alloc_zeroed(layout);
-    if pBase.is_null() {
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-
-    *ppAu = pBase as *mut SAccessUnit;
-    let mut pPtr = pBase.add(kuiSizeAu);
-    (**ppAu).pNalUnitsList = pPtr as *mut *mut SNalUnit;
-    pPtr = pPtr.add(kuiSizeNalUnitPtr);
-
-    for uiIdx in 0..kuiSize as usize {
-        *(**ppAu).pNalUnitsList.add(uiIdx) = pPtr as *mut SNalUnit;
-        pPtr = pPtr.add(kuiSizeNalUnit);
-    }
-
-    (**ppAu).uiCountUnitsNum = kuiSize;
-    (**ppAu).uiAvailUnitsNum = 0;
-    (**ppAu).uiActualUnitsNum = 0;
-    (**ppAu).uiStartPos = 0;
-    (**ppAu).uiEndPos = 0;
-    (**ppAu).bCompletedAuFlag = false;
-
+    *ppAu = Box::into_raw(SAccessUnit::with_nodes(kuiSize as usize));
     ERR_NONE
 }
 
-/// Frees the contiguous memory buffer allocated for an [`SAccessUnit`].
+/// Drops the access unit and every node in it.
+///
+/// F19's answer for all three of the old allocation's pieces, in one line: the `Box`'s
+/// drop glue runs the `Vec`'s, which runs each node's. Nothing recomputes a size.
 pub unsafe fn MemFreeNalList(ppAu: *mut *mut SAccessUnit, _pMa: *mut CMemoryAlign) -> i32 {
-    if !ppAu.is_null() {
-        let pAu = *ppAu;
-        if !pAu.is_null() {
-            let kuiSize = (*pAu).uiCountUnitsNum;
-            let kuiSizeAu = std::mem::size_of::<SAccessUnit>();
-            let kuiSizeNalUnitPtr = kuiSize as usize * std::mem::size_of::<*mut SNalUnit>();
-            let kuiSizeNalUnit = std::mem::size_of::<SNalUnit>();
-            let kuiCountSize = kuiSizeAu + kuiSizeNalUnitPtr + kuiSize as usize * kuiSizeNalUnit;
-
-            if let Ok(layout) = std::alloc::Layout::from_size_align(kuiCountSize, 16) {
-                std::alloc::dealloc(pAu as *mut u8, layout);
-            }
-            *ppAu = std::ptr::null_mut();
-        }
+    if ppAu.is_null() {
+        return ERR_NONE;
+    }
+    let pAu = *ppAu;
+    if !pAu.is_null() {
+        drop(Box::from_raw(pAu));
+        *ppAu = std::ptr::null_mut();
     }
     ERR_NONE
 }
 
-/// Expands the capacity of an [`SAccessUnit`] list by reallocating the contiguous buffer.
+/// Grows the node list, keeping every existing node **at its address**.
+///
+/// The C++ (`memmgr_nal_unit.cpp:120`) allocates a second contiguous block, `memcpy`s
+/// the nodes into it and frees the first — so every outstanding `SNalUnit*` (the
+/// context's `pNalCur`, `DecodeCurrentAccessUnit`'s local, the slice header's
+/// back-pointers) dangles the moment an access unit outgrows its list. That is P5's
+/// hazard in the habitat it was named for. Pushing boxed nodes onto a `Vec` keeps the
+/// old nodes exactly where they were, so the growth is invisible to anything holding
+/// one.
 pub unsafe fn ExpandNalUnitList(
     ppAu: *mut *mut SAccessUnit,
     kiOrgSize: i32,
     kiExpSize: i32,
-    pMa: *mut CMemoryAlign,
+    _pMa: *mut CMemoryAlign,
 ) -> i32 {
     if kiExpSize <= kiOrgSize {
         return ERR_INVALID_PARAMETERS;
     }
-
-    let mut pTmp: *mut SAccessUnit = std::ptr::null_mut();
-    let iRet = MemInitNalList(&mut pTmp, kiExpSize as u32, pMa);
-    if iRet != ERR_NONE {
-        return iRet;
+    let pAu = *ppAu;
+    if pAu.is_null() {
+        return crate::decoder::decoder_context::ERR_INFO_INVALID_PTR;
     }
-
-    for iIdx in 0..kiOrgSize as usize {
-        let src = *(*(*ppAu)).pNalUnitsList.add(iIdx);
-        let dst = *(*pTmp).pNalUnitsList.add(iIdx);
-        std::ptr::copy_nonoverlapping(src, dst, 1);
+    let want = kiExpSize as usize;
+    if (*pAu).nal_units.try_reserve(want - (*pAu).nal_units.len()).is_err() {
+        return ERR_INFO_OUT_OF_MEMORY;
     }
-
-    (*pTmp).uiCountUnitsNum = kiExpSize as u32;
-    (*pTmp).uiAvailUnitsNum = (*(*ppAu)).uiAvailUnitsNum;
-    (*pTmp).uiActualUnitsNum = (*(*ppAu)).uiActualUnitsNum;
-    (*pTmp).uiEndPos = (*(*ppAu)).uiEndPos;
-    (*pTmp).bCompletedAuFlag = (*(*ppAu)).bCompletedAuFlag;
-
-    MemFreeNalList(ppAu, pMa);
-    *ppAu = pTmp;
-
+    while (*pAu).nal_units.len() < want {
+        (*pAu).nal_units.push(Box::new(SNalUnit::default()));
+    }
     ERR_NONE
 }
 
@@ -2219,19 +2250,20 @@ pub unsafe fn MemGetNextNal(
     ppAu: *mut *mut SAccessUnit,
     pMa: *mut CMemoryAlign,
 ) -> *mut SNalUnit {
-    let mut pAu = *ppAu;
+    let pAu = *ppAu;
 
-    if (*pAu).uiAvailUnitsNum >= (*pAu).uiCountUnitsNum {
-        let kuiExpandingSize = (*pAu).uiCountUnitsNum + (MAX_NAL_UNIT_NUM_IN_AU as u32 >> 1);
-        if ExpandNalUnitList(ppAu, (*pAu).uiCountUnitsNum as i32, kuiExpandingSize as i32, pMa) != ERR_NONE {
+    if (*pAu).uiAvailUnitsNum >= (*pAu).count() {
+        let kuiExpandingSize = (*pAu).count() + (MAX_NAL_UNIT_NUM_IN_AU as u32 >> 1);
+        if ExpandNalUnitList(ppAu, (*pAu).count() as i32, kuiExpandingSize as i32, pMa) != ERR_NONE {
             return std::ptr::null_mut();
         }
-        pAu = *ppAu;
+        // No re-read of `*ppAu`: growth no longer moves the access unit, which is the
+        // whole point of T5.O4's ownership (the C++ replaces the block here).
     }
 
     let idx = (*pAu).uiAvailUnitsNum as usize;
     (*pAu).uiAvailUnitsNum += 1;
-    let pNu = *(*pAu).pNalUnitsList.add(idx);
+    let pNu = (*pAu).nal(idx);
 
     std::ptr::write_bytes(pNu, 0, 1);
     pNu
@@ -2272,6 +2304,83 @@ pub unsafe fn ResetActiveSPSForEachLayer(pCtx: *mut SWelsDecoderContext) {
     if !pCtx.is_null() && (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
             (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = std::ptr::null_mut();
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod au_list_tests {
+    use super::*;
+
+    /// T5.O4/F39: growing the node list keeps every existing node where it was, and
+    /// keeps what was in it.
+    ///
+    /// The C++ this replaces (`memmgr_nal_unit.cpp:120`) allocates a second block,
+    /// copies the nodes and frees the first, so every outstanding `SNalUnit*` dangles
+    /// — plan P5's hazard, in the code it was named after. Nothing in the battery
+    /// reached the growth path before this session, because the port's live allocator
+    /// started the list at 1024 entries instead of the C++'s 32; it starts at 32 now,
+    /// and this pins the property directly rather than hoping a stream reaches it.
+    #[test]
+    fn growing_the_nal_list_moves_no_node() {
+        unsafe {
+            let mut pAu: *mut SAccessUnit = std::ptr::null_mut();
+            assert_eq!(
+                MemInitNalList(&mut pAu, MAX_NAL_UNIT_NUM_IN_AU as u32, std::ptr::null_mut()),
+                ERR_NONE
+            );
+            assert_eq!((*pAu).count(), MAX_NAL_UNIT_NUM_IN_AU as u32);
+
+            // Fill the list through the path the parser uses, stamping each node so a
+            // move would be visible, and remember where every node lives.
+            let mut addrs = Vec::new();
+            for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
+                let pNu = MemGetNextNal(&mut pAu, std::ptr::null_mut());
+                assert!(!pNu.is_null());
+                (*pNu).uiTimeStamp = 1000 + i as u64;
+                addrs.push(pNu);
+            }
+            assert_eq!((*pAu).uiAvailUnitsNum, MAX_NAL_UNIT_NUM_IN_AU as u32);
+
+            // One past the end: this is the growth.
+            let pGrown = MemGetNextNal(&mut pAu, std::ptr::null_mut());
+            assert!(!pGrown.is_null());
+            assert_eq!(
+                (*pAu).count(),
+                (MAX_NAL_UNIT_NUM_IN_AU + (MAX_NAL_UNIT_NUM_IN_AU >> 1)) as u32,
+                "expansion size is the C++'s: count + (MAX >> 1)"
+            );
+
+            for (i, &p) in addrs.iter().enumerate() {
+                assert_eq!((*pAu).nal(i), p, "node {i} moved across the growth");
+                assert_eq!((*p).uiTimeStamp, 1000 + i as u64, "node {i} lost its contents");
+            }
+            // `MemGetNextNal` zeroes the node it hands out.
+            assert_eq!((*pGrown).uiTimeStamp, 0);
+
+            assert_eq!(MemFreeNalList(&mut pAu, std::ptr::null_mut()), ERR_NONE);
+            assert!(pAu.is_null());
+        }
+    }
+
+    /// The reordering swaps `ResetCurrentAccessUnit`/`ForceResetCurrentAccessUnit` do
+    /// used to exchange two entries of a pointer array; they exchange owned nodes now.
+    #[test]
+    fn swapping_two_nodes_exchanges_their_contents_and_nothing_else() {
+        unsafe {
+            let mut pAu: *mut SAccessUnit = std::ptr::null_mut();
+            assert_eq!(MemInitNalList(&mut pAu, 4, std::ptr::null_mut()), ERR_NONE);
+            for i in 0..4usize {
+                (*(*pAu).nal(i)).uiTimeStamp = i as u64;
+            }
+            (*pAu).nal_units.swap(0, 3);
+            let seen: Vec<u64> = (0..4).map(|i| (*(*pAu).nal(i)).uiTimeStamp).collect();
+            assert_eq!(seen, vec![3, 1, 2, 0]);
+            assert_eq!(MemFreeNalList(&mut pAu, std::ptr::null_mut()), ERR_NONE);
         }
     }
 }

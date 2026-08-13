@@ -48,7 +48,12 @@ use crate::common::memory_align::CMemoryAlign;
 pub const MIN_ACCESS_UNIT_CAPACITY: usize = 262144;
 pub const MAX_ACCESS_UNIT_CAPACITY: usize = 4194304;
 pub const MAX_BUFFERED_NUM: usize = 8;
-pub const MAX_NAL_UNIT_NUM_IN_AU: usize = 1024;
+// `MAX_NAL_UNIT_NUM_IN_AU` was declared **here** as 1024 and in `nalu.rs` as the
+// C++'s 32 (`wels_const.h:59`), and the two allocators that disagreed about it are
+// gone (T5.O4). The C++'s value is re-exported: it is the argument
+// `WelsInitStaticMemory` passes, exactly as `decoder_core.cpp:763` passes it, and the
+// growth path `MemGetNextNal` owns is what covers an access unit that needs more.
+pub use crate::decoder::nalu::MAX_NAL_UNIT_NUM_IN_AU;
 pub const MAX_NAL_UNITS_IN_LAYER: usize = 128;
 pub const MAX_MB_SIZE: i32 = 36864;
 pub const MAX_REF_PIC_COUNT: usize = 16;
@@ -920,55 +925,15 @@ pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {
 
 pub use crate::decoder::pic_queue::{PrefetchPic, PrefetchLastPicForThread};
 
-#[inline]
-pub unsafe fn MemInitNalList(
-    ppNalList: *mut PAccessUnit,
-    uiCount: usize,
-    pMa: *mut CMemoryAlign,
-) -> i32 {
-    if ppNalList.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let pAu = WelsMalloczHelper(pMa, std::mem::size_of::<SAccessUnit>()) as PAccessUnit;
-    if pAu.is_null() {
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-    (*pAu).pNalUnitsList = WelsMalloczHelper(pMa, std::mem::size_of::<PNalUnit>() * MAX_NAL_UNIT_NUM_IN_AU) as *mut PNalUnit;
-    if (*pAu).pNalUnitsList.is_null() {
-        WelsFreeHelper(pMa, pAu as *mut u8, std::mem::size_of::<SAccessUnit>());
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-    for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
-        let pNal = WelsMalloczHelper(pMa, std::mem::size_of::<SNalUnit>()) as PNalUnit;
-        if pNal.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-        *(*pAu).pNalUnitsList.add(i) = pNal;
-    }
-    (*pAu).uiCountUnitsNum = MAX_NAL_UNIT_NUM_IN_AU as u32;
-    (*pAu).uiAvailUnitsNum = 0;
-    *ppNalList = pAu;
-    ERR_NONE
-}
-
-#[inline]
-pub unsafe fn MemFreeNalList(ppNalList: *mut PAccessUnit, pMa: *mut CMemoryAlign) {
-    if ppNalList.is_null() || (*ppNalList).is_null() {
-        return;
-    }
-    let pAu = *ppNalList;
-    if !(*pAu).pNalUnitsList.is_null() {
-        for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
-            let pNal = *(*pAu).pNalUnitsList.add(i);
-            if !pNal.is_null() {
-                WelsFreeHelper(pMa, pNal as *mut u8, std::mem::size_of::<SNalUnit>());
-            }
-        }
-        WelsFreeHelper(pMa, (*pAu).pNalUnitsList as *mut u8, std::mem::size_of::<PNalUnit>() * MAX_NAL_UNIT_NUM_IN_AU);
-    }
-    WelsFreeHelper(pMa, pAu as *mut u8, std::mem::size_of::<SAccessUnit>());
-    *ppNalList = std::ptr::null_mut();
-}
+// `MemInitNalList` and `MemFreeNalList` were **duplicated** here, in a different
+// shape from `nalu.rs`'s: three `WelsMallocz` blocks against one `alloc_zeroed`, and
+// `MAX_NAL_UNIT_NUM_IN_AU` = 1024 against 32. This file's pair was the live one
+// (`WelsInitStaticMemory`/`WelsFreeStaticMemory` call it), and `nalu.rs`'s
+// `MemGetNextNal` grew *that* allocation through `nalu.rs`'s free — F39. Both are
+// deleted; the re-export below is the single implementation, over an owned
+// `Vec<Box<SNalUnit>>` (T5.O4). The constant divergence goes with them: the size is
+// the caller's argument, and `WelsInitStaticMemory` passes what the C++ passes.
+pub use crate::decoder::nalu::{MemInitNalList, MemFreeNalList};
 
 #[inline]
 pub unsafe fn NeedErrorCon(pCtx: PWelsDecoderContext) -> bool {
@@ -1096,8 +1061,8 @@ pub unsafe fn DecodeFrameConstruction(
                 let mut pDstBuf = (*pParser).pDstBuff.add(iTotalNalLen as usize);
                 let mut iIdx = (*pCurAu).uiStartPos as i32;
                 let iEndIdx = (*pCurAu).uiEndPos as i32;
-                if !(*(*pCurAu).pNalUnitsList.add(iIdx as usize)).is_null() {
-                    (*pParser).uiOutBsTimeStamp = (*(*(*pCurAu).pNalUnitsList.add(iIdx as usize))).uiTimeStamp;
+                if !((*pCurAu).nal(iIdx as usize)).is_null() {
+                    (*pParser).uiOutBsTimeStamp = (*((*pCurAu).nal(iIdx as usize))).uiTimeStamp;
                 }
                 if !(*pCtx).pSps.is_null() {
                     let pSps = (*pCtx).pSps as *mut SSps;
@@ -1112,7 +1077,7 @@ pub unsafe fn DecodeFrameConstruction(
                 }
 
                 while iIdx <= iEndIdx {
-                    let pCurNal = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
+                    let pCurNal = (*pCurAu).nal(iIdx as usize);
                     if !pCurNal.is_null() {
                         let iNalLen = (*pCurNal).sNalData.sVclNal.iNalLength;
                         if !(*pParser).pNalLenInByte.is_null() {
@@ -2013,7 +1978,7 @@ pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
         return ERR_INFO_INVALID_PTR;
     }
     WelsOpenDecoder(pCtx, std::ptr::null_mut());
-    if MemInitNalList(&mut (*pCtx).pAccessUnitList, MAX_NAL_UNIT_NUM_IN_AU, (*pCtx).pMemAlign) != 0 {
+    if MemInitNalList(&mut (*pCtx).pAccessUnitList, MAX_NAL_UNIT_NUM_IN_AU as u32, (*pCtx).pMemAlign) != 0 {
         (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
@@ -2090,7 +2055,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     if (*pCurAu).uiAvailUnitsNum == 0 {
         return ERR_INFO_OUT_OF_MEMORY;
     }
-    let kpCurNal = *(*pCurAu).pNalUnitsList.add(((*pCurAu).uiAvailUnitsNum - 1) as usize);
+    let kpCurNal = (*pCurAu).nal(((*pCurAu).uiAvailUnitsNum - 1) as usize);
     if kpCurNal.is_null() {
         return ERR_INFO_OUT_OF_MEMORY;
     }
@@ -2722,8 +2687,8 @@ pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
     }
     let pCurAu = (*pCtx).pAccessUnitList;
     let iIdx = (*pCurAu).uiEndPos as usize;
-    if iIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(iIdx)).is_null() {
-        (*pCtx).uiTargetDqId = (*(*(*pCurAu).pNalUnitsList.add(iIdx))).sNalHeaderExt.uiLayerDqId;
+    if (iIdx as usize) < (*pCurAu).count() as usize {
+        (*pCtx).uiTargetDqId = (*((*pCurAu).nal(iIdx))).sNalHeaderExt.uiLayerDqId;
     }
     (*pCurAu).uiActualUnitsNum = (*pCurAu).uiEndPos + 1;
     (*pCurAu).bCompletedAuFlag = true;
@@ -2822,9 +2787,9 @@ pub unsafe fn ResetCurrentAccessUnit(pCtx: PWelsDecoderContext) {
         let kuiAvailNum = (*pCurAu).uiAvailUnitsNum;
         let kuiLeftNum = if kuiAvailNum > kuiActualNum { kuiAvailNum - kuiActualNum } else { 0 };
         for iIdx in 0..kuiLeftNum as usize {
-            let t = *(*pCurAu).pNalUnitsList.add(kuiActualNum as usize + iIdx);
-            *(*pCurAu).pNalUnitsList.add(kuiActualNum as usize + iIdx) = *(*pCurAu).pNalUnitsList.add(iIdx);
-            *(*pCurAu).pNalUnitsList.add(iIdx) = t;
+            // The C swapped two entries of the pointer array; the nodes are owned
+            // now, so the same rotation is a `Vec` swap and no node moves.
+            (*pCurAu).nal_units.swap(kuiActualNum as usize + iIdx, iIdx);
         }
         (*pCurAu).uiActualUnitsNum = kuiLeftNum;
         (*pCurAu).uiAvailUnitsNum = kuiLeftNum;
@@ -2838,9 +2803,7 @@ pub unsafe fn ForceResetCurrentAccessUnit(pAu: PAccessUnit) {
     let mut uiSucAuIdx = (*pAu).uiEndPos + 1;
     let mut uiCurAuIdx = 0;
     while uiSucAuIdx < (*pAu).uiAvailUnitsNum {
-        let t = *(*pAu).pNalUnitsList.add(uiSucAuIdx as usize);
-        *(*pAu).pNalUnitsList.add(uiSucAuIdx as usize) = *(*pAu).pNalUnitsList.add(uiCurAuIdx as usize);
-        *(*pAu).pNalUnitsList.add(uiCurAuIdx as usize) = t;
+        (*pAu).nal_units.swap(uiSucAuIdx as usize, uiCurAuIdx as usize);
         uiSucAuIdx += 1;
         uiCurAuIdx += 1;
     }
@@ -2888,12 +2851,12 @@ pub unsafe fn CheckAvailNalUnitsListContinuity(
         return;
     }
     let pCurAu = (*pCtx).pAccessUnitList;
-    let mut uiLastNuDependencyId = (*(*(*pCurAu).pNalUnitsList.add(iStartIdx as usize))).sNalHeaderExt.uiDependencyId;
-    let mut uiLastNuLayerDqId = (*(*(*pCurAu).pNalUnitsList.add(iStartIdx as usize))).sNalHeaderExt.uiLayerDqId;
+    let mut uiLastNuDependencyId = (*((*pCurAu).nal(iStartIdx as usize))).sNalHeaderExt.uiDependencyId;
+    let mut uiLastNuLayerDqId = (*((*pCurAu).nal(iStartIdx as usize))).sNalHeaderExt.uiLayerDqId;
     let mut iCurNalUnitIdx = iStartIdx + 1;
 
     while iCurNalUnitIdx <= iEndIdx {
-        let pNal = *(*pCurAu).pNalUnitsList.add(iCurNalUnitIdx as usize);
+        let pNal = (*pCurAu).nal(iCurNalUnitIdx as usize);
         let uiCurNuDependencyId = (*pNal).sNalHeaderExt.uiDependencyId;
         let uiCurNuQualityId = (*pNal).sNalHeaderExt.uiQualityId;
         let uiCurNuLayerDqId = (*pNal).sNalHeaderExt.uiLayerDqId;
@@ -2918,7 +2881,7 @@ pub unsafe fn CheckAvailNalUnitsListContinuity(
     }
     iCurNalUnitIdx -= 1;
     (*pCurAu).uiEndPos = iCurNalUnitIdx as u32;
-    (*pCtx).uiTargetDqId = (*(*(*pCurAu).pNalUnitsList.add(iCurNalUnitIdx as usize))).sNalHeaderExt.uiLayerDqId;
+    (*pCtx).uiTargetDqId = (*((*pCurAu).nal(iCurNalUnitIdx as usize))).sNalHeaderExt.uiLayerDqId;
 }
 
 pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPred: *mut i32) {
@@ -2926,7 +2889,7 @@ pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPre
         return;
     }
     let idx = *pIdxNoInterLayerPred as usize;
-    let pNal = *(*pCurAu).pNalUnitsList.add(idx);
+    let pNal = (*pCurAu).nal(idx);
     if pNal.is_null() {
         return;
     }
@@ -2942,7 +2905,7 @@ pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: PAccessUnit, pIdxNoInterLayerPre
     let mut iCurIdx = (*pIdxNoInterLayerPred) - 1;
 
     while iCurIdx >= 0 {
-        let pCurNal = *(*pCurAu).pNalUnitsList.add(iCurIdx as usize);
+        let pCurNal = (*pCurAu).nal(iCurIdx as usize);
         if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag {
             let iCurNalDependId = (*pCurNal).sNalHeaderExt.uiDependencyId;
             let iCurNalQualityId = (*pCurNal).sNalHeaderExt.uiQualityId;
@@ -2979,7 +2942,7 @@ pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: PAccessUnit, pIdxNoInterLayerPr
         return false;
     }
     let iEndIdx = (*pCurAu).uiEndPos as i32;
-    let iCurAuPoc = (*(*(*pCurAu).pNalUnitsList.add(pIdxNoInterLayerPred as usize)))
+    let iCurAuPoc = (*((*pCurAu).nal(pIdxNoInterLayerPred as usize)))
         .sNalData
         .sVclNal
         .sSliceHeaderExt
@@ -2987,7 +2950,7 @@ pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: PAccessUnit, pIdxNoInterLayerPr
         .iPicOrderCntLsb;
 
     for i in (pIdxNoInterLayerPred + 1)..iEndIdx {
-        let iTmpPoc = (*(*(*pCurAu).pNalUnitsList.add(i as usize)))
+        let iTmpPoc = (*((*pCurAu).nal(i as usize)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
@@ -3015,7 +2978,7 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
         (*pCurAu).uiStartPos = 0;
         let mut iIdxNoInterLayerPred = kiEndPos;
         while iIdxNoInterLayerPred >= 0 {
-            if (*(*(*pCurAu).pNalUnitsList.add(iIdxNoInterLayerPred as usize))).sNalHeaderExt.bNoInterLayerPredFlag {
+            if (*((*pCurAu).nal(iIdxNoInterLayerPred as usize))).sNalHeaderExt.bNoInterLayerPredFlag {
                 break;
             }
             iIdxNoInterLayerPred -= 1;
@@ -3030,15 +2993,15 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
             return false;
         }
         let endIdx = (*pCurAu).uiEndPos as usize;
-        (*pCtx).iCurSeqIntervalTargetDependId = (*(*(*pCurAu).pNalUnitsList.add(endIdx))).sNalHeaderExt.uiDependencyId as i32;
-        (*pCtx).iCurSeqIntervalMaxPicWidth = (*(*(*pCurAu).pNalUnitsList.add(endIdx)))
+        (*pCtx).iCurSeqIntervalTargetDependId = (*((*pCurAu).nal(endIdx))).sNalHeaderExt.uiDependencyId as i32;
+        (*pCtx).iCurSeqIntervalMaxPicWidth = (*((*pCurAu).nal(endIdx)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
             .sSliceHeader
             .iMbWidth
             << 4;
-        (*pCtx).iCurSeqIntervalMaxPicHeight = (*(*(*pCurAu).pNalUnitsList.add(endIdx)))
+        (*pCtx).iCurSeqIntervalMaxPicHeight = (*((*pCurAu).nal(endIdx)))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
@@ -3056,9 +3019,9 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
     let pCurAu = (*pCtx).pAccessUnitList;
     let iEndIdx = (*pCurAu).uiEndPos as usize;
     let mut iCurIdx = (*pCurAu).uiStartPos as usize;
-    let uiDId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiDependencyId;
-    let uiQId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiQualityId;
-    let uiTId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiTemporalId;
+    let uiDId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiDependencyId;
+    let uiQId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiQualityId;
+    let uiTId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiTemporalId;
 
     (*pCtx).bOnlyOneLayerInCurAuFlag = true;
     if iEndIdx == iCurIdx {
@@ -3066,9 +3029,9 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
     }
     iCurIdx += 1;
     while iCurIdx <= iEndIdx {
-        let uiCurDId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiDependencyId;
-        let uiCurQId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiQualityId;
-        let uiCurTId = (*(*(*pCurAu).pNalUnitsList.add(iCurIdx))).sNalHeaderExt.uiTemporalId;
+        let uiCurDId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiDependencyId;
+        let uiCurQId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiQualityId;
+        let uiCurTId = (*((*pCurAu).nal(iCurIdx))).sNalHeaderExt.uiTemporalId;
         if uiDId != uiCurDId || uiQId != uiCurQId || uiTId != uiCurTId {
             (*pCtx).bOnlyOneLayerInCurAuFlag = false;
             return;
@@ -3099,8 +3062,8 @@ pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: PWelsDecoderContext) {
     }
     let pCurAu = (*pCtx).pAccessUnitList;
     let endIdx = (*pCurAu).uiEndPos as usize;
-    if endIdx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(endIdx)).is_null() {
-        let pCurNal = *(*pCurAu).pNalUnitsList.add(endIdx);
+    if (endIdx as usize) < (*pCurAu).count() as usize {
+        let pCurNal = (*pCurAu).nal(endIdx);
         if !(*pCtx).pLastDecPicInfo.is_null() {
             (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt = (*pCurNal).sNalHeaderExt;
             (*(*pCtx).pLastDecPicInfo).sLastSliceHeader =
@@ -3118,8 +3081,8 @@ pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: PWelsDecoderContext)
     let start = (*pCurAu).uiStartPos as usize;
     let end = (*pCurAu).uiEndPos as usize;
     for i in start..=end {
-        if i < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(i)).is_null() {
-            let pNal = *(*pCurAu).pNalUnitsList.add(i);
+        if (i as usize) < (*pCurAu).count() as usize {
+            let pNal = (*pCurAu).nal(i);
             let uiDid = (*pNal).sNalHeaderExt.uiDependencyId as usize;
             if uiDid < MAX_LAYER_NUM {
                 pTmpLayerSps[uiDid] = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
@@ -3244,8 +3207,8 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     }
 
     let startPos = (*pCurAu).uiStartPos as usize;
-    if startPos < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pCurAu).pNalUnitsList.add(startPos)).is_null() {
-        let pNal = *(*pCurAu).pNalUnitsList.add(startPos);
+    if (startPos as usize) < (*pCurAu).count() as usize {
+        let pNal = (*pCurAu).nal(startPos);
         (*pCtx).pSps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
         (*pCtx).pPps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pPps as *mut SPps;
     }
@@ -3564,7 +3527,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
         (*pCtx).pCurDqLayer = (*pCtx).pDqLayersList;
     }
 
-    let mut pNalCur = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
+    let mut pNalCur = (*pCurAu).nal(iIdx as usize);
     (*pCtx).pNalCur = pNalCur;
 
     while iIdx <= iEndIdx {
@@ -3766,7 +3729,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
             iIdx += 1;
             if iIdx <= iEndIdx {
-                pNalCur = *(*pCurAu).pNalUnitsList.add(iIdx as usize);
+                pNalCur = (*pCurAu).nal(iIdx as usize);
             } else {
                 pNalCur = std::ptr::null_mut();
             }
@@ -3881,7 +3844,7 @@ pub unsafe fn CheckAndFinishLastPic(
     let mut bAuBoundaryFlag = false;
 
     if IS_VCL_NAL((*pCtx).sCurNalHead.eNalUnitType, 1) {
-        let pCurNal = *(*pAu).pNalUnitsList.add((*pAu).uiEndPos as usize);
+        let pCurNal = (*pAu).nal((*pAu).uiEndPos as usize);
         if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && CheckAccessUnitBoundaryExt(
@@ -3953,8 +3916,8 @@ pub unsafe fn CheckAndFinishLastPic(
         }
         (*pCtx).pDec = std::ptr::null_mut();
         let start_idx = (*pAu).uiStartPos as usize;
-        if start_idx < MAX_NAL_UNIT_NUM_IN_AU && !(*(*pAu).pNalUnitsList.add(start_idx)).is_null() {
-            let pStartNal = *(*pAu).pNalUnitsList.add(start_idx);
+        if (start_idx as usize) < (*pAu).count() as usize {
+            let pStartNal = (*pAu).nal(start_idx);
             if (*pStartNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0
                 && !(*pCtx).pLastDecPicInfo.is_null()
             {
