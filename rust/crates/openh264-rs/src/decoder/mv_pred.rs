@@ -731,6 +731,27 @@ pub unsafe fn GetColocatedMb(
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
     }
 
+    // S25 for 5.3's colocated reads: *who else reaches this picture while the read
+    // is in flight?* Exactly one candidate, and it is the current picture. Both
+    // callers of this function — `PredMvBDirectSpatial` and `PredBDirectTemporal` —
+    // go on to write `pCurDqLayer->pDec`'s `pMv` and `pRefIndex` for the same
+    // macroblock, so if the colocated picture were `pDec` the read below and that
+    // write would be one buffer, and the two-picture split this code is supposed to
+    // want would be a self-alias instead.
+    //
+    // It cannot be. `pDec` comes from `PrefetchPic`, which returns only a slot with
+    // `!bUsedAsRef && iRefCount <= 0`; `InitRefPicList` fills list 1 from pictures
+    // marked as references. The two populations are disjoint by construction — but
+    // that is the kind of argument S25 exists to distrust, so the assert makes the
+    // battery say it instead. It is `same_picture`, so it is asking about slots
+    // (T5.N2), which is the same question the split-borrow API will ask when 5.1's
+    // remaining half gives `pDec` a `PicId` and this becomes provable rather than
+    // checked.
+    debug_assert!(
+        !crate::decoder::picture::same_picture(colocPic, (*pCurDqLayer).pDec),
+        "the colocated picture is never the picture being decoded"
+    );
+
     let mut coloc_mbType = *(*colocPic).pMbType.add(iMbXy);
     if coloc_mbType == MB_TYPE_SKIP {
         coloc_mbType |= MB_TYPE_16x16 | MB_TYPE_P0L0 | MB_TYPE_P1L0;
