@@ -4646,7 +4646,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         }
         if *uiEosFlag != 0 {
             crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-                (*pCtx).pCabacDecEngine,
+                std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
                 &mut *slice_bit_reader(pCtx),
             );
         }
@@ -4688,7 +4688,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     }
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-            (*pCtx).pCabacDecEngine,
+            std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
             &mut *slice_bit_reader(pCtx),
         );
     }
@@ -4779,7 +4779,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             }
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-                    (*pCtx).pCabacDecEngine,
+                    std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
                     &mut *slice_bit_reader(pCtx),
                 );
             }
@@ -4822,7 +4822,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     }
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-            (*pCtx).pCabacDecEngine,
+            std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
             &mut *slice_bit_reader(pCtx),
         );
     }
@@ -4987,7 +4987,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             }
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-                    (*pCtx).pCabacDecEngine,
+                    std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
                     &mut *slice_bit_reader(pCtx),
                 );
             }
@@ -5030,7 +5030,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     }
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
-            (*pCtx).pCabacDecEngine,
+            std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
             &mut *slice_bit_reader(pCtx),
         );
     }
@@ -5227,7 +5227,7 @@ pub unsafe fn WelsDecodeSlice(
         );
         (*pSlice).iLastDeltaQp = 0;
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
-            (*pCtx).pCabacDecEngine,
+            std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine),
             &mut *slice_bit_reader(pCtx),
             &(*pCtx).sRawData,
         );

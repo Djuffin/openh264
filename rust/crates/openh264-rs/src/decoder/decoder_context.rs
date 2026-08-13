@@ -663,7 +663,21 @@ pub struct SWelsDecoderContext {
     pub sWelsCabacContexts: [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub bCabacInited: bool,
     pub pCabacCtx: [SWelsCabacCtx; WELS_CONTEXT_COUNT],
-    pub pCabacDecEngine: *mut SWelsCabacDecEngine,
+    /// The arithmetic decoding engine, **by value** (T5.O2).
+    ///
+    /// It was a lazily `WelsMallocz`'d 32-byte allocation of four scalars, made on
+    /// the first access unit, freed by `WelsFreeDynamicMemory`, and null-checked at
+    /// every one of its ~45 derivation sites. Nothing about it was dynamic: one per
+    /// decoder, for the decoder's whole life, sized at compile time. F19's question —
+    /// *which line frees this?* — has the best possible answer when there is no
+    /// allocation to free.
+    ///
+    /// Its zero is its initial state in both spellings: `WelsMallocz` zeroed the
+    /// block, the context's shell zeroes the field, and the lazy arm re-zeroed
+    /// nothing after the first AU either. Consumers take `*mut SWelsCabacDecEngine`
+    /// and derive it per use with `addr_of_mut!` (S29), so no borrow of it is ever
+    /// live across a call.
+    pub sCabacDecEngine: SWelsCabacDecEngine,
     pub dDecTime: f64,
     pub pDecoderStatistics: *mut SDecoderStatistics,
     pub iMbEcedNum: i32,
