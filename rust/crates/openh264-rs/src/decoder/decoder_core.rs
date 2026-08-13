@@ -351,11 +351,10 @@ pub struct DqLayerState {
     /// bought.
     pub grid: MbGrid,
     pub sLayerInfo: SLayerInfo,
-    /// The slice's reader. `*mut BsReader`, not the brief's default `*mut BsCursor`:
-    /// `decode_slice.rs` reads *through* this pointer and a detached cursor cannot
-    /// produce the buffer, so the base pointer travels with it (see [`BsReader`]).
-    /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
-    pub pBitStringAux: *mut BsReader,
+    // T5.M3: `pBitStringAux: *mut BsReader` sat here, mirroring
+    // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` beside its owner for 43 readers.
+    // `bit_stream::slice_bit_reader(pCtx)` derives it instead; the NAL unit owns the
+    // reader and nothing else holds its address.
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
@@ -3670,12 +3669,29 @@ pub unsafe fn DecodeCurrentAccessUnit(
             pLayerInfo.sSliceInLayer.eSliceType = (*pSh).eSliceType as u8;
 
             pLayerInfo.sSliceInLayer.iLastMbQp = (*pSh).iSliceQp;
-            // Sibling field, so it never overlapped the two above — but it escapes into
-            // the layer and is read all through `decode_slice.rs`, so a `&mut`-derived
-            // pointer here dies at the next borrow of this NAL unit. It retires with
-            // `pBitStringAux` in 5.2; until then it obeys the same rule.
-            (*dq_cur).pBitStringAux =
-                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceBitsRead);
+            // **T5.M3 — where `dq_cur->pBitStringAux` was written.** The layer mirrored
+            // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` here and every reader in
+            // `decode_slice.rs` and `parse_mb_syn_cabac.rs` went through the mirror;
+            // `bit_stream::slice_bit_reader` derives it from `pNalCur` instead, so the
+            // one thing that has to be true is that **this** field is as fresh as the
+            // mirror was.
+            //
+            // It was not. `(*pCtx).pNalCur` was written **once**, before the loop
+            // (`:3573`), while `pNalCur` itself is re-read at the bottom of the inner
+            // loop — so from the second slice NAL of any access unit onward the
+            // context's copy pointed at the first NAL while the layer's mirror pointed
+            // at the right one. Nothing read the stale copy (its one reader is
+            // `WelsDecodeAndConstructSlice`, F36's dead `iThreadCount > 1` arm), which
+            // is why five phases of byte-exact gates never saw it. The write moves
+            // here, to the statement the mirror occupied, and the field is now correct
+            // by the same construction the mirror was.
+            //
+            // The C++ has no counterpart to correct: `decoder_core.cpp:2491` sets
+            // `pCtx->pNalCur = NULL` and never writes it again, so its own
+            // `decode_slice.cpp:1621` reader — the same dead MT arm — reads NULL. The
+            // port already diverged by writing the first NAL; this makes the divergence
+            // *useful* instead of merely different, and F36 owns the arm either way.
+            (*pCtx).pNalCur = pNalCur;
 
             (*pCtx).uiNalRefIdc = (*pNalCur).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc;
             let iPpsId = (*pSh).iPpsId;
@@ -4302,7 +4318,6 @@ mod tests {
         assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
 
         // and a sample of what `WelsMallocz`'s zeroing used to leave behind
-        assert!(layer.pBitStringAux.is_null());
         assert!(layer.pDec.is_null());
         assert_eq!(layer.iMbWidth, 0);
         assert_eq!(layer.iMbHeight, 0);

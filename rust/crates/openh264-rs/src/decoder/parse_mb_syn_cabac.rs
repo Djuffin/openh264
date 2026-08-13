@@ -3216,7 +3216,7 @@ pub unsafe fn ParseResidualBlockCabac(
 pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let pCabacDecEngine = (*pCtx).pCabacDecEngine;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pBsAux = &mut *(*pCurDqLayer).pBitStringAux;
+    let pBsAux = &mut *crate::decoder::bit_stream::slice_bit_reader(pCtx);
     let iDstStrideLuma = (*(*pCurDqLayer).pDec).linesize(0);
     let iDstStrideChroma = (*(*pCurDqLayer).pDec).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;

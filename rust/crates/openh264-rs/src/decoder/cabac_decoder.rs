@@ -859,19 +859,24 @@ pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
 ///
 /// One deref chain, once per parsing function rather than once per bin, and the
 /// window is derived from the owning [`RawDataBuffer`] at call time
-/// ([`RawDataBuffer::rbsp_window`] is the single authority). `SHIM(phase5)` — the
-/// `pBitStringAux` pointer it walks is Phase 5's to remove, and the accessor dies
-/// with it.
+/// ([`RawDataBuffer::rbsp_window`] is the single authority).
+///
+/// `SHIM(phase5)`, and **the marker's reason changed at T5.M3 rather than expiring**:
+/// the layer's `pBitStringAux` mirror it used to walk is deleted, so what it walks now
+/// is [`slice_bit_reader`](crate::decoder::bit_stream::slice_bit_reader) — one raw
+/// derivation from `pCtx.pNalCur` instead of one from a cached duplicate. It retires
+/// when 5.6 converts `parse_mb_syn_cabac.rs`'s 18 callers, not before, and saying so
+/// beats retiring a marker whose pointer is still there.
 ///
 /// # Safety
-/// `pCtx` must be a live decoder context inside slice decoding, so `pCurDqLayer` and
-/// its `pBitStringAux` are set — the same precondition every caller in
-/// `parse_mb_syn_cabac.rs` already relies on for `pCabacDecEngine`.
+/// `pCtx` must be a live decoder context inside slice decoding, so `pNalCur` is the
+/// NAL being parsed — the same precondition every caller in `parse_mb_syn_cabac.rs`
+/// already relies on for `pCabacDecEngine`.
 #[inline(always)]
 pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
     unsafe {
         let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
-        raw.rbsp_window(&*(*(*pCtx).pCurDqLayer).pBitStringAux)
+        raw.rbsp_window(&*crate::decoder::bit_stream::slice_bit_reader(pCtx))
     }
 }
 

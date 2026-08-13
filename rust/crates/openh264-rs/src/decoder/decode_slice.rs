@@ -9,7 +9,7 @@
 )]
 
 use crate::safe::bits::BsCursor;
-use crate::decoder::bit_stream::BsReader;
+use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
 use std::ffi::c_void;
 
 // ============================================================================
@@ -2559,7 +2559,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     let dq: *mut DqLayerState = (*pCtx).pCurDqLayer;
-    let pBs = &mut *(*dq).pBitStringAux;
+    let pBs = &mut *slice_bit_reader(pCtx);
     let buf = (*pCtx).sRawData.window_from(pBs.start);
     let iMbX = (*dq).iMbX;
     let iMbY = (*dq).iMbY;
@@ -2627,7 +2627,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq: *mut DqLayerState = (*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2816,7 +2816,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     uiCbpC: u32,
 ) -> i32 {
     let dq: *mut DqLayerState = (*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
@@ -3042,7 +3042,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSliceHeaderExt = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt);
     let mut uiCode = 0u32;
     let iBaseModeFlag;
@@ -3077,7 +3077,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq: *mut DqLayerState = (*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3334,7 +3334,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeaderExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -3428,7 +3428,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
     let dq: *mut DqLayerState = (*pCtx).pCurDqLayer;
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3686,7 +3686,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     if dq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
+    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
     let ppRefPicL0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
@@ -3824,7 +3824,7 @@ pub unsafe fn ParseIntra4x4Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
@@ -3963,7 +3963,7 @@ pub unsafe fn ParseIntra8x8Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
@@ -4109,7 +4109,7 @@ pub unsafe fn ParseIntra16x16Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `pCtx->pCurDqLayer->pBitStringAux` (F27). Raw in, `&mut` re-derived per use
+    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
@@ -4184,11 +4184,11 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
     // function then passes down as a strongly protected argument — while the CABAC
     // engine underneath reaches the *same* `BsReader` whole through
-    // `pCtx->pCurDqLayer->pBitStringAux` (`cabac_rbsp_window`). Two live paths to one
-    // object, one of them exclusive. `addr_of_mut!` creates no reference, so there is
-    // no retag to conflict and the CAVLC leaves re-derive per use. Both paths die in
-    // 5.2 with `pBitStringAux` itself; until then this is S29's spelling.
-    let pBsRd: *mut BsReader = (*dq).pBitStringAux;
+    // `cabac_rbsp_window`. Two live paths to one object, one of them exclusive —
+    // and since T5.M3 both start at the same `slice_bit_reader` derivation rather
+    // than at a mirror of it. `addr_of_mut!` creates no reference, so there is no
+    // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
+    let pBsRd: *mut BsReader = slice_bit_reader(pCtx);
     let buf = (*pCtx).sRawData.window_from((*pBsRd).start);
     let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4254,11 +4254,11 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
     // function then passes down as a strongly protected argument — while the CABAC
     // engine underneath reaches the *same* `BsReader` whole through
-    // `pCtx->pCurDqLayer->pBitStringAux` (`cabac_rbsp_window`). Two live paths to one
-    // object, one of them exclusive. `addr_of_mut!` creates no reference, so there is
-    // no retag to conflict and the CAVLC leaves re-derive per use. Both paths die in
-    // 5.2 with `pBitStringAux` itself; until then this is S29's spelling.
-    let pBsRd: *mut BsReader = (*dq).pBitStringAux;
+    // `cabac_rbsp_window`. Two live paths to one object, one of them exclusive —
+    // and since T5.M3 both start at the same `slice_bit_reader` derivation rather
+    // than at a mirror of it. `addr_of_mut!` creates no reference, so there is no
+    // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
+    let pBsRd: *mut BsReader = slice_bit_reader(pCtx);
     let buf = (*pCtx).sRawData.window_from((*pBsRd).start);
     let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
@@ -4647,7 +4647,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         if *uiEosFlag != 0 {
             crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                 (*pCtx).pCabacDecEngine,
-                &mut *(*dq).pBitStringAux,
+                &mut *slice_bit_reader(pCtx),
             );
         }
         return ERR_NONE;
@@ -4689,7 +4689,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine,
-            &mut *(*dq).pBitStringAux,
+            &mut *slice_bit_reader(pCtx),
         );
     }
     ERR_NONE
@@ -4780,7 +4780,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                     (*pCtx).pCabacDecEngine,
-                    &mut *(*dq).pBitStringAux,
+                    &mut *slice_bit_reader(pCtx),
                 );
             }
             return ERR_NONE;
@@ -4823,7 +4823,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine,
-            &mut *(*dq).pBitStringAux,
+            &mut *slice_bit_reader(pCtx),
         );
     }
     ERR_NONE
@@ -4988,7 +4988,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             if *uiEosFlag != 0 {
                 crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
                     (*pCtx).pCabacDecEngine,
-                    &mut *(*dq).pBitStringAux,
+                    &mut *slice_bit_reader(pCtx),
                 );
             }
             return ERR_NONE;
@@ -5031,7 +5031,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     if *uiEosFlag != 0 {
         crate::decoder::cabac_decoder::RestoreCabacDecEngineToBS(
             (*pCtx).pCabacDecEngine,
-            &mut *(*dq).pBitStringAux,
+            &mut *slice_bit_reader(pCtx),
         );
     }
     ERR_NONE
@@ -5228,7 +5228,7 @@ pub unsafe fn WelsDecodeSlice(
         (*pSlice).iLastDeltaQp = 0;
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
             (*pCtx).pCabacDecEngine,
-            &mut *(*(*pCtx).pCurDqLayer).pBitStringAux,
+            &mut *slice_bit_reader(pCtx),
             &(*pCtx).sRawData,
         );
         if err != ERR_NONE {
