@@ -8,6 +8,7 @@
     unused_mut
 )]
 
+use crate::decoder::decoder_context::dec_pic;
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
 use std::ffi::c_void;
@@ -1437,8 +1438,8 @@ pub unsafe fn GetInterPred(
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
 
-    let iDstLineLuma = (*(*pCtx).pDec).linesize(0);
-    let iDstLineChroma = (*(*pCtx).pDec).linesize(1);
+    let iDstLineLuma = (*dec_pic(pCtx)).linesize(0);
+    let iDstLineChroma = (*dec_pic(pCtx)).linesize(1);
 
     let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
     let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
@@ -1642,8 +1643,8 @@ pub unsafe fn GetInterBPred(
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
 
-    let iDstLineLuma = (*(*pCtx).pDec).linesize(0);
-    let iDstLineChroma = (*(*pCtx).pDec).linesize(1);
+    let iDstLineLuma = (*dec_pic(pCtx)).linesize(0);
+    let iDstLineChroma = (*dec_pic(pCtx)).linesize(1);
 
     let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
     let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
@@ -2156,7 +2157,7 @@ pub unsafe fn WelsFillRecNeededMbInfo(
     if pCtx.is_null() || pCurDqLayer.is_null() {
         return;
     }
-    let pCurPic = (*pCtx).pDec;
+    let pCurPic = dec_pic(pCtx);
     if pCurPic.is_null() {
         return;
     }

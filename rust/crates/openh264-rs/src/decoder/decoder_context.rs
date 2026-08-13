@@ -577,6 +577,32 @@ pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUni
     (*pCtx).access_unit.as_deref_mut()
 }
 
+/// The picture being decoded into, or null when there is none.
+///
+/// **Copies a stored slot pointer; it does not derive one.** Same contract as
+/// [`TagAccessUnits::nal`](crate::decoder::nalu::TagAccessUnits::nal), and the
+/// reason is the one T5.N1 wrote at `PicPool`'s type: the pool addresses, it does
+/// not own, so the pointer this returns carries `AllocPicture`'s provenance and no
+/// later borrow of the pool touches it. When W3 flips the slots to
+/// `Box<SPicture>`, this is the single site that becomes a pool borrow — which is
+/// the whole reason the field stopped being a pointer first.
+#[inline]
+pub unsafe fn dec_pic(pCtx: PWelsDecoderContext) -> PPicture {
+    match (*pCtx).pDec {
+        Some(id) if !(*pCtx).pPicBuff.is_null() => (*(*pCtx).pPicBuff).slot(id),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// [`dec_pic`]'s counterpart for the concealment reference list.
+#[inline]
+pub unsafe fn ec_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+    match (*pCtx).pECRefPic[i] {
+        Some(id) if !(*pCtx).pPicBuff.is_null() => (*(*pCtx).pPicBuff).slot(id),
+        _ => std::ptr::null_mut(),
+    }
+}
+
 /// Whether an access unit exists and has at least one NAL queued in it.
 ///
 /// The `!pCurAu.is_null() && pCurAu->uiAvailUnitsNum > 0` guard, which the port
@@ -637,7 +663,22 @@ pub struct SWelsDecoderContext {
     pub pFmo: PFmo,
     pub iActiveFmoNum: i32,
     pub iDecBlockOffsetArray: [i32; 24],
-    pub pDec: *mut Picture,
+    /// The pool slot being decoded into — a [`PicId`] since T5.P2, reached with
+    /// [`dec_pic`].
+    ///
+    /// It was `*mut Picture`, and it was the alias plan §2.2.3's split-borrow API has
+    /// been waiting on since session N: a pointer *into* a pool slot, live for a whole
+    /// access unit, so a pool that owned its pictures could never lend one. A slot
+    /// handle is not an alias, and `dec_pic` copies the stored pointer at the use.
+    ///
+    /// `None` is the C's null — "no picture in flight" — and it is the same three-state
+    /// control flow (`is_null` tests before a prefetch, after a construction failure,
+    /// at reset) with the state named instead of encoded.
+    pub pDec: Option<PicId>,
+    /// The B-slice temporal-direct scratch picture. **Not a pool slot**: it is
+    /// `AllocPicture`d on its own at `decode_slice.rs`'s first B macroblock and freed
+    /// by `WelsFreeDynamicMemory`, so it has no `PicId` and cannot take one. W3 owns
+    /// it (`Option<Box<SPicture>>`), not this step.
     pub pTempDec: *mut Picture,
     pub sRefPic: SRefPic,
     pub sTmpRefPic: SRefPic,
@@ -758,7 +799,11 @@ pub struct SWelsDecoderContext {
     pub bMbRefConcealed: bool,
     pub bRPLRError: bool,
     pub iECMVs: [[i32; 2]; 16],
-    pub pECRefPic: [*mut Picture; 16],
+    /// The concealment reference list — pool slots, so [`PicId`]s since T5.P2 for the
+    /// same reason as [`pDec`](Self::pDec): every entry is a picture from
+    /// `sRefPic.pRefList`, and holding pointers to sixteen of them is sixteen more
+    /// aliases the pool would have to outlive.
+    pub pECRefPic: [Option<PicId>; 16],
     pub uiTimeStamp: u64,
     pub uiDecodingTimeStamp: u32,
     pub pDequant_coeff_buffer4x4: [[[u16; 16]; 52]; 6],

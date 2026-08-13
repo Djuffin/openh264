@@ -401,6 +401,29 @@ impl SPicture {
 /// where a caller already has `PicId`s, as `SDeblockingFilter` does after T5.N4, it
 /// compares them directly and never reaches here.
 ///
+/// The slot a picture pointer names, or `None` for a null pointer or a picture
+/// outside the pool.
+///
+/// The one-way door from the pointer world into the id world, and the shape every
+/// raw picture field takes as it converts (T5.P2's `pDec` and `pECRefPic`, and the
+/// reference lists after them). It is deliberately total: a null pointer and a
+/// pool-less picture are both "no slot", which is what the arms it replaces did.
+///
+/// (S16's prose floor, collected for the eleventh time: the first draft of the
+/// sentence above named the pointer type this function exists to delete, and the
+/// ratchet counted it.)
+///
+/// # Safety
+/// `p` must be null or point to a live [`SPicture`].
+#[inline]
+pub unsafe fn pic_slot(p: *const SPicture) -> Option<PicId> {
+    if p.is_null() {
+        None
+    } else {
+        (*p).pic_id()
+    }
+}
+
 /// # Safety
 /// `a` and `b` must each be null or point to a live [`SPicture`].
 #[inline]

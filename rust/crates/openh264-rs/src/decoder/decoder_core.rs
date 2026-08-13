@@ -302,7 +302,8 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 // `nalu::SNalUnit`, whose own definitions are the ones the decoder uses.
 
 pub use crate::decoder::nalu::SAccessUnit;
-use crate::decoder::decoder_context::{cur_au, au_has_nals};
+use crate::decoder::decoder_context::{cur_au, au_has_nals, dec_pic, ec_ref_pic};
+use crate::decoder::picture::pic_slot;
 
 
 #[repr(C)]
@@ -737,13 +738,13 @@ unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStati
 pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
     if pCtx.is_null()
         || (*pCtx).pCurDqLayer.is_null()
-        || (*pCtx).pDec.is_null()
+        || (*pCtx).pDec.is_none()
         || (*pCtx).pDecoderStatistics.is_null()
     {
         return;
     }
     let pCurDq = (*pCtx).pCurDqLayer;
-    let pPic = (*pCtx).pDec;
+    let pPic = dec_pic(pCtx);
     let pDecStat = (*pCtx).pDecoderStatistics;
 
     if (*pDecStat).iAvgLumaQp == -1 {
@@ -1010,7 +1011,7 @@ pub unsafe fn DecodeFrameConstruction(
         return ERR_INFO_INVALID_PTR;
     }
     let pCurDq = (*pCtx).pCurDqLayer;
-    let pPic = (*pCtx).pDec;
+    let pPic = dec_pic(pCtx);
     if pCurDq.is_null() || pPic.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -1100,7 +1101,7 @@ pub unsafe fn DecodeFrameConstruction(
                     (*pCtx).bFrameFinish = true;
                 } else if (*pCtx).iTotalNumMbRec != 0 {
                     (*pCtx).bFramePending = true;
-                    (*(*pCtx).pDec).bIsComplete = false;
+                    (*dec_pic(pCtx)).bIsComplete = false;
                     (*pCtx).bFrameFinish = false;
                     (*pCtx).iErrorCode |= dsFramePending;
                     return ERR_INFO_PARSEONLY_PENDING;
@@ -1125,7 +1126,7 @@ pub unsafe fn DecodeFrameConstruction(
             return ERR_INFO_MB_NUM_INADEQUATE;
         }
     } else if (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag && (*pCtx).iErrorCode == dsErrorFree {
-        (*(*pCtx).pDec).bIsComplete = true;
+        (*dec_pic(pCtx)).bIsComplete = true;
         (*pCtx).bFreezeOutput = false;
     }
 
@@ -1837,7 +1838,7 @@ pub unsafe fn WelsDecoderDefaults(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_vo
         (*(*pCtx).pLastDecPicInfo).iPrevFrameNum = -1;
     }
     (*pCtx).iErrorCode = ERR_NONE;
-    (*pCtx).pDec = std::ptr::null_mut();
+    (*pCtx).pDec = None;
     (*pCtx).pTempDec = std::ptr::null_mut();
     WelsResetRefPic(pCtx);
     (*pCtx).iActiveFmoNum = 0;
@@ -3564,21 +3565,25 @@ pub unsafe fn DecodeCurrentAccessUnit(
     while iIdx <= iEndIdx {
         let dq_cur = (*pCtx).pCurDqLayer;
         let mut pLayerInfo = SLayerInfo::default();
-        let isNewFrame = (*pCtx).pDec.is_null();
+        let isNewFrame = (*pCtx).pDec.is_none();
 
-        if (*pCtx).pDec.is_null() {
-            (*pCtx).pDec = PrefetchPic((*pCtx).pPicBuff) as PPicture;
-            if (*pCtx).pDec.is_null() {
+        if (*pCtx).pDec.is_none() {
+            // The prefetch still hands back a pointer; the context stores the slot it
+            // came from. A picture without a slot cannot be prefetched — `CreatePicBuff`
+            // stamps every one of them (T5.N2) — so `pic_slot` returning `None` here is
+            // the pool being empty, which is the arm below.
+            (*pCtx).pDec = pic_slot(PrefetchPic((*pCtx).pPicBuff));
+            if (*pCtx).pDec.is_none() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return ERR_INFO_REF_COUNT_OVERFLOW;
             }
-            (*(*pCtx).pDec).bNewSeqBegin = (*pCtx).bNewSeqBegin;
+            (*dec_pic(pCtx)).bNewSeqBegin = (*pCtx).bNewSeqBegin;
         }
 
         if !pNalCur.is_null() {
-            (*(*pCtx).pDec).uiTimeStamp = (*pNalCur).uiTimeStamp;
+            (*dec_pic(pCtx)).uiTimeStamp = (*pNalCur).uiTimeStamp;
         }
-        (*(*pCtx).pDec).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u32;
+        (*dec_pic(pCtx)).uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u32;
 
 
         if (*pCtx).iTotalNumMbRec == 0 {
@@ -3608,22 +3613,22 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     (*(*pCtx).pCurDqLayer).grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum]
                         .fill(false);
                 }
-                (*(*pCtx).pDec).iMbNum = iMbNum as i32;
+                (*dec_pic(pCtx)).iMbNum = iMbNum as i32;
             }
-            (*(*pCtx).pDec).pRefPic[LIST_0] = [std::ptr::null_mut(); MAX_DPB_COUNT];
-            (*(*pCtx).pDec).pRefPic[LIST_1] = [std::ptr::null_mut(); MAX_DPB_COUNT];
-            (*(*pCtx).pDec).iMbEcedNum = 0;
-            (*(*pCtx).pDec).iMbEcedPropNum = 0;
+            (*dec_pic(pCtx)).pRefPic[LIST_0] = [std::ptr::null_mut(); MAX_DPB_COUNT];
+            (*dec_pic(pCtx)).pRefPic[LIST_1] = [std::ptr::null_mut(); MAX_DPB_COUNT];
+            (*dec_pic(pCtx)).iMbEcedNum = 0;
+            (*dec_pic(pCtx)).iMbEcedPropNum = 0;
         }
 
         (*pCtx).bRPLRError = false;
-        if !(*pCtx).pDec.is_null() {
+        if (*pCtx).pDec.is_some() {
             GetI4LumaIChromaAddrTable(
                 // F38/S29: `as_mut_ptr()` takes a `&mut [i32; 24]` of a field of a
                 // raw-reached struct first; `addr_of_mut!` derives from `pCtx`.
                 std::ptr::addr_of_mut!((*pCtx).iDecBlockOffsetArray) as *mut i32,
-                (*(*pCtx).pDec).linesize(0),
-                (*(*pCtx).pDec).linesize(1),
+                (*dec_pic(pCtx)).linesize(0),
+                (*dec_pic(pCtx)).linesize(1),
             );
         }
 
@@ -3649,11 +3654,11 @@ pub unsafe fn DecodeCurrentAccessUnit(
             let bReconstructSlice = CheckSliceNeedReconstruct((*pNalCur).sNalHeaderExt.uiLayerDqId, kuiTargetLayerDqId);
 
             pLayerInfo.sNalHeaderExt = (*pNalCur).sNalHeaderExt;
-            if !(*pCtx).pDec.is_null() {
-                (*(*pCtx).pDec).iFrameNum = (*pSh).iFrameNum;
-                (*(*pCtx).pDec).iFramePoc = (*pSh).iPicOrderCntLsb;
-                (*(*pCtx).pDec).bIdrFlag = (*pNalCur).sNalHeaderExt.bIdrFlag;
-                (*(*pCtx).pDec).eSliceType = (*pSh).eSliceType;
+            if (*pCtx).pDec.is_some() {
+                (*dec_pic(pCtx)).iFrameNum = (*pSh).iFrameNum;
+                (*dec_pic(pCtx)).iFramePoc = (*pSh).iPicOrderCntLsb;
+                (*dec_pic(pCtx)).bIdrFlag = (*pNalCur).sNalHeaderExt.bIdrFlag;
+                (*dec_pic(pCtx)).eSliceType = (*pSh).eSliceType;
             }
 
             pLayerInfo.sSliceInLayer.sSliceHeaderExt = *pShExt;
@@ -3696,7 +3701,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             WelsDqLayerDecodeStart(pCtx, pNalCur, pLayerInfo.pSps, pLayerInfo.pPps);
 
             if iLastIdD < 0 || iLastIdD == iCurrIdD {
-                InitDqLayerInfo(dq_cur, &mut pLayerInfo, pNalCur, (*pCtx).pDec);
+                InitDqLayerInfo(dq_cur, &mut pLayerInfo, pNalCur, dec_pic(pCtx));
 
                 if iCurrIdD == (kuiDependencyIdMax as i16) && iCurrIdQ == (BASE_QUALITY_ID as i16) && isNewFrame {
                     iRet = InitRefPicList(pCtx, (*pCtx).uiNalRefIdc, (*pSh).iPicOrderCntLsb);
@@ -3706,7 +3711,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         HandleReferenceLost(pCtx, pNalCur);
                         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
                             if (*pCtx).iTotalNumMbRec == 0 {
-                                (*pCtx).pDec = std::ptr::null_mut();
+                                (*pCtx).pDec = None;
                             }
                             return iRet;
                         }
@@ -3728,7 +3733,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     HandleReferenceLostL0(pCtx, pNalCur);
                     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
                         if (*pCtx).iTotalNumMbRec == 0 {
-                            (*pCtx).pDec = std::ptr::null_mut();
+                            (*pCtx).pDec = None;
                         }
                         return iRet;
                     }
@@ -3737,8 +3742,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 if iThreadCount <= 1 && bReconstructSlice {
                     iRet = WelsDecodeConstructSlice(pCtx, pNalCur);
                     if iRet != ERR_NONE {
-                        if !(*pCtx).pDec.is_null() {
-                            (*(*pCtx).pDec).bIsComplete = false;
+                        if (*pCtx).pDec.is_some() {
+                            (*dec_pic(pCtx)).bIsComplete = false;
                         }
                         return iRet;
                     }
@@ -3779,9 +3784,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
             break;
         }
 
-        if !(*pCtx).pDec.is_null() {
-            (*(*pCtx).pDec).bIsComplete = bAllRefComplete;
-            if !(*(*pCtx).pDec).bIsComplete {
+        if (*pCtx).pDec.is_some() {
+            (*dec_pic(pCtx)).bIsComplete = bAllRefComplete;
+            if !(*dec_pic(pCtx)).bIsComplete {
                 (*pCtx).iErrorCode |= dsDataErrorConcealed;
             }
         }
@@ -3793,12 +3798,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         ImplementErrorCon(pCtx);
                         if !(*pCtx).pSps.is_null() {
                             (*pCtx).iTotalNumMbRec = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
-                            if !(*pCtx).pDec.is_null() {
-                                (*(*pCtx).pDec).iSpsId = (*(*pCtx).pSps).iSpsId;
+                            if (*pCtx).pDec.is_some() {
+                                (*dec_pic(pCtx)).iSpsId = (*(*pCtx).pSps).iSpsId;
                             }
                         }
-                        if !(*pCtx).pPps.is_null() && !(*pCtx).pDec.is_null() {
-                            (*(*pCtx).pDec).iPpsId = (*(*pCtx).pPps).iPpsId;
+                        if !(*pCtx).pPps.is_null() && (*pCtx).pDec.is_some() {
+                            (*dec_pic(pCtx)).iPpsId = (*(*pCtx).pPps).iPpsId;
                         }
                     }
                 }
@@ -3810,7 +3815,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
 
             if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
+                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = dec_pic(pCtx);
             }
             (*pCtx).bUsedAsRef = (*pCtx).uiNalRefIdc > 0;
             if iThreadCount <= 1 {
@@ -3819,13 +3824,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     // MapColToList0 reads them back off the colocated picture when a
                     // later B slice uses temporal direct mode; without this the lookup
                     // always misses and every mapped ref index collapses to 0.
-                    if !(*pCtx).pDec.is_null() {
+                    if (*pCtx).pDec.is_some() {
                         for listIdx in LIST_0..LIST_A {
                             let mut i = 0usize;
                             while i < MAX_DPB_COUNT
                                 && !(*pCtx).sRefPic.pRefList[listIdx][i].is_null()
                             {
-                                (*(*pCtx).pDec).pRefPic[listIdx][i] =
+                                (*dec_pic(pCtx)).pRefPic[listIdx][i] =
                                     (*pCtx).sRefPic.pRefList[listIdx][i];
                                 i += 1;
                             }
@@ -3837,12 +3842,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
                             (*pCtx).iErrorCode |= dsBitstreamError;
                         }
                         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
-                            (*pCtx).pDec = std::ptr::null_mut();
+                            (*pCtx).pDec = None;
                             return iRet;
                         }
                     }
-                    if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && !(*pCtx).pDec.is_null() {
-                        let pDec = (*pCtx).pDec;
+                    if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && (*pCtx).pDec.is_some() {
+                        let pDec = dec_pic(pCtx);
                         crate::common::expand_pic::ExpandReferencingPicture(
                             &[(*pDec).data_ptr(0), (*pDec).data_ptr(1), (*pDec).data_ptr(2)],
                             (*pDec).iWidthInPixel,
@@ -3852,7 +3857,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     }
                 }
             }
-            (*pCtx).pDec = std::ptr::null_mut();
+            (*pCtx).pDec = None;
         }
 
         if pNalCur.is_null() {
@@ -3910,16 +3915,16 @@ pub unsafe fn CheckAndFinishLastPic(
             ImplementErrorCon(pCtx);
             if !(*pCtx).pSps.is_null() {
                 (*pCtx).iTotalNumMbRec = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
-                if !(*pCtx).pDec.is_null() {
-                    (*(*pCtx).pDec).iSpsId = (*(*pCtx).pSps).iSpsId;
+                if (*pCtx).pDec.is_some() {
+                    (*dec_pic(pCtx)).iSpsId = (*(*pCtx).pSps).iSpsId;
                 }
             }
-            if !(*pCtx).pPps.is_null() && !(*pCtx).pDec.is_null() {
-                (*(*pCtx).pDec).iPpsId = (*(*pCtx).pPps).iPpsId;
+            if !(*pCtx).pPps.is_null() && (*pCtx).pDec.is_some() {
+                (*dec_pic(pCtx)).iPpsId = (*(*pCtx).pPps).iPpsId;
             }
             DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
             if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
+                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = dec_pic(pCtx);
                 if (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
                     if MarkECFrameAsRef(pCtx) == ERR_INFO_INVALID_PTR {
                         (*pCtx).iErrorCode |= dsRefListNullPtrs;
@@ -3942,11 +3947,11 @@ pub unsafe fn CheckAndFinishLastPic(
                 } else {
                     (*pCtx).iErrorCode |= dsBitstreamError;
                 }
-                (*pCtx).pDec = std::ptr::null_mut();
+                (*pCtx).pDec = None;
                 return false;
             }
         }
-        (*pCtx).pDec = std::ptr::null_mut();
+        (*pCtx).pDec = None;
         // Re-derived: `ConstructAccessUnit` ran above, and it decodes.
         let pStartNal = match cur_au(pCtx) {
             Some(au) if (au.uiStartPos as usize) < au.count() as usize => {

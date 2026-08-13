@@ -188,6 +188,7 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
     }
 }
 
+use crate::decoder::decoder_context::dec_pic;
 pub use crate::common::deblocking_common::*;
 pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
@@ -2085,7 +2086,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // re-enumerated at T5.N3, where the shape it described stopped existing):
 // *who else reaches this `SPicture` while a borrow of it is held?*
 //
-// The borrow used to be `(*(*pCtx).pDec).data_ptr(i)`, taken three times at each of
+// The borrow used to be a `data_ptr(i)` off the context's picture, taken three times at each of
 // the two filter-initialisation sites and stored into `SDeblockingFilter.pCsData` for
 // the whole macroblock loop. **There is no stored derivation now**: each reader takes
 // `pCurDqLayer`, derives from `(*pCurDqLayer).pDec` inside its own body, and the
@@ -2162,11 +2163,11 @@ pub unsafe fn WelsDeblockingFilterSlice(
     // replace the mirror with is as fresh as the mirror was.* The mirror's source
     // was `pCtx->pDec` and the route is `pCurDqLayer->pDec`, so the two must be the
     // same picture here. They are, by control flow —
-    // `decoder_core.rs:3707`'s `InitDqLayerInfo(dq_cur, .., (*pCtx).pDec)` runs
+    // `decoder_core.rs:3707`'s `InitDqLayerInfo(dq_cur, .., dec_pic(pCtx))` runs
     // immediately before the slice decode this filter belongs to, in the same
     // block — and the assert makes the battery say so rather than the argument.
     debug_assert!(
-        std::ptr::eq((*pCurDqLayer).pDec, (*pCtx).pDec),
+        std::ptr::eq((*pCurDqLayer).pDec, dec_pic(pCtx)),
         "the layer's picture is the context's; the deblocking reads assume it"
     );
 

@@ -73,7 +73,7 @@ pub use crate::decoder::decoder_context::SLogContext;
 
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
-use crate::decoder::decoder_context::cur_au;
+use crate::decoder::decoder_context::{cur_au, dec_pic};
 
 
 // ============================================================================
@@ -804,7 +804,7 @@ pub unsafe fn MMCOProcess(
             }
             (*pCtx).bCurAuContainLtrMarkSeFlag = true;
             (*pCtx).iFrameNumOfAuMarkedLtr = (*pCtx).iFrameNum;
-            iRet = AddLongTermToList(pRefPic, (*pCtx).pDec, iLongTermFrameIdx, uiLongTermPicNum);
+            iRet = AddLongTermToList(pRefPic, dec_pic(pCtx), iLongTermFrameIdx, uiLongTermPicNum);
         }
         _ => {}
     }
@@ -1317,7 +1317,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
         pLastDec
     } else {
         isThreadCtx = false;
-        (*pCtx).pDec
+        dec_pic(pCtx)
     };
 
     if pDec.is_null() {

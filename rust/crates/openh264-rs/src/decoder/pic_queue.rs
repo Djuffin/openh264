@@ -223,6 +223,21 @@ impl PicPool {
         pPic
     }
 
+    /// A pool over pictures that already exist.
+    ///
+    /// [`CreatePicBuff`]'s tail, named — it is also the only way a fixture can put its
+    /// own pictures into a pool, which is what a `PicId` field asks of a test now that
+    /// `pCtx->pDec` is one (T5.P2).
+    ///
+    /// # Safety
+    /// Every slot must be null or a live [`SPicture`]; the pool addresses, it does not
+    /// own.
+    pub unsafe fn over(slots: Vec<PPicture>) -> Box<Self> {
+        let mut pool = Box::new(PicPool { slots: Pool::new(slots), cursor: 0 });
+        pool.stamp_slots();
+        pool
+    }
+
     /// Tells every picture which slot it is in.
     ///
     /// Called once, from [`CreatePicBuff`], before the pool is reachable from
@@ -645,12 +660,7 @@ pub unsafe fn CreatePicBuff(
             slots.push(pPic);
         }
 
-        let mut pool = Box::new(PicPool {
-            slots: Pool::new(slots),
-            cursor: 0,
-        });
-        pool.stamp_slots();
-        *ppPicBuf = Box::into_raw(pool);
+        *ppPicBuf = Box::into_raw(PicPool::over(slots));
     }
 
     0
