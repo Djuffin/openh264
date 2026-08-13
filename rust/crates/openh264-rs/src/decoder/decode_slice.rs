@@ -1079,7 +1079,7 @@ pub unsafe fn WelsMbInterSampleConstruction(
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     let pTransformSize8x8 = *(*dq).grid.transform_size8x8_flag.get(iMbXy);
-    let pNzc = *(*dq).pNzc.add(iMbXy);
+    let pNzc = *(*dq).grid.nzc.get(iMbXy);
     let pScaledTCoeff = (*dq).pScaledTCoeff.add(iMbXy) as *mut i16;
 
 
@@ -2098,7 +2098,7 @@ pub unsafe fn WelsMbInterConstruction(
     // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
     // so the guard is always true and is not transcribed.
     crate::common::deblocking_common::WelsNonZeroCount_c(
-        (*(*dq).pNzc.add((*dq).iMbXyIndex as usize)).as_mut_ptr(),
+        (*dq).grid.nzc.get_mut((*dq).iMbXyIndex as usize).as_mut_ptr(),
     );
 
     ERR_NONE
@@ -2186,7 +2186,7 @@ pub unsafe fn RecChroma(
             for i in 0..2 {
                 let pRS = pScoeffLevel.add(256 + (i << 6));
                 let pPred = (*pDqLayer).pPred[i + 1];
-                let pNzc = (*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr().add(16 + 2 * i) as *const i8;
+                let pNzc = (*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr().add(16 + 2 * i) as *const i8;
                 func(pPred, iChromaStride, pRS, pNzc);
             }
         }
@@ -2217,7 +2217,7 @@ pub unsafe fn RecI4x4Luma(
         }
 
         let nzc_idx = g_kuiMbCountScan4Idx[i] as usize;
-        if *((*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr().add(nzc_idx)) != 0 {
+        if *((*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr().add(nzc_idx)) != 0 {
             if let Some(idct_func) = pIdctResAddPredFunc {
                 let pRSI4x4 = pRS.add(i << 4);
                 idct_func(pPredI4x4, iLumaStride, pRSI4x4);
@@ -2294,7 +2294,7 @@ pub unsafe fn RecI8x8Luma(
         }
 
         let iIndex = g_kuiMbCountScan4Idx[i << 2] as usize;
-        let nzc_ptr = (*(*pDqLayer).pNzc.add(iMbXy as usize)).as_ptr();
+        let nzc_ptr = (*pDqLayer).grid.nzc.get(iMbXy as usize).as_ptr();
         if *nzc_ptr.add(iIndex) != 0
             || *nzc_ptr.add(iIndex + 1) != 0
             || *nzc_ptr.add(iIndex + 4) != 0
@@ -2339,7 +2339,7 @@ pub unsafe fn RecI16x16Mb(
     }
 
     if let Some(idct_func) = pIdctFourResAddPredFunc {
-        let pNzc = (*(*pDqLayer).pNzc.add(iMBXY as usize)).as_ptr() as *const i8;
+        let pNzc = (*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr() as *const i8;
         idct_func(pPredY.add(0 * iYStride as usize + 0), iYStride, pRS.add(0 * 64), pNzc.add(0));
         idct_func(pPredY.add(0 * iYStride as usize + 8), iYStride, pRS.add(1 * 64), pNzc.add(2));
         idct_func(pPredY.add(8 * iYStride as usize + 0), iYStride, pRS.add(2 * 64), pNzc.add(8));
@@ -2609,7 +2609,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
     *(*dq).grid.luma_qp.get_mut(iMbXy) = 0;
     (*(*dq).pChromaQp.add(iMbXy))[0] = 0;
     (*(*dq).pChromaQp.add(iMbXy))[1] = 0;
-    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(16);
     let ret = crate::decoder::bit_stream::InitReadBits(buf, &mut pBs.cursor, 0);
     if ret != 0 {
@@ -2737,7 +2737,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
     if *pCbp == 0 && IS_INTRANxN(*(*(*dq).pDec).pMbType.add(iMbXy)) {
@@ -2813,7 +2813,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     let dq: *mut SDqLayer = (*pCtx).pCurDqLayer;
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let iMbXy = (*dq).iMbXyIndex as usize;
-    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
     let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
     let is_intra = IS_INTRA(mb_type);
@@ -3256,7 +3256,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
     let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
@@ -3356,7 +3356,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
             *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
         }
         for j in 0..24 {
-            *(*(*dq).pNzc.add(iMbXy)).as_mut_ptr().add(j) = 0;
+            *(*dq).grid.nzc.get_mut(iMbXy).as_mut_ptr().add(j) = 0;
         }
         if !(*dq).pDec.is_null() {
             for j in 0..16 {
@@ -3607,7 +3607,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    let pNzc = &mut *(*dq).pNzc.add(iMbXy);
+    let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
     let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
@@ -3715,7 +3715,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         let mut iRef = [0i8; LIST_A];
 
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
-        let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+        let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
 
         (&mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy)).fill(0);
@@ -4397,14 +4397,14 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 }
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
-                let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+                let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
                 copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
                 copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
                 copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
                 copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
             } else {
                 // `ST32 (&pNzc[iMbXy][n], 0)` clears four counts per store.
-                let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+                let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
                 nzc_mb[0..16].fill(0);
             }
         } else {
@@ -4443,7 +4443,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 }
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
-                let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+                let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
                 copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
                 copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
                 copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
@@ -4485,7 +4485,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 }
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
-                let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+                let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
                 copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
                 copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
                 copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
@@ -4565,14 +4565,14 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 }
             }
             // `ST16 (&pNzc[iMbXy][n], LD16 (&pNonZeroCount[6 + 8 * k]))`: two counts each.
-            let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+            let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
             copy2(nzc_mb.as_mut_ptr().add(16), pNonZeroCount.add(6 + 8));
             copy2(nzc_mb.as_mut_ptr().add(20), pNonZeroCount.add(6 + 8 * 2));
             copy2(nzc_mb.as_mut_ptr().add(18), pNonZeroCount.add(6 + 8 * 4));
             copy2(nzc_mb.as_mut_ptr().add(22), pNonZeroCount.add(6 + 8 * 5));
         } else {
             // `ST16 (&pNzc[iMbXy][n], 0)` clears two counts per store.
-            let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+            let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
             nzc_mb[16..24].fill(0);
         }
     } else {
@@ -4659,7 +4659,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         return ret;
     }
 
-    let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+    let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
     nzc_mb.fill(0);
     *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
@@ -4793,7 +4793,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         }
     }
 
-    let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+    let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
     nzc_mb.fill(0);
     *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
@@ -4856,7 +4856,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
     if uiCode != 0 {
         let mut pMv = [0i16; 2];
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
-        let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+        let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
         let ref_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy);
         ref_slice.fill(0);
@@ -5001,7 +5001,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         }
     }
 
-    let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+    let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
     nzc_mb.fill(0);
     *(*dq).grid.cbf_dc.get_mut(iMbXy) = 0;
 
@@ -5076,7 +5076,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         let mut subMbType = 0u32;
 
         *(*(*dq).pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
-        let nzc_mb = &mut *(*dq).pNzc.add(iMbXy);
+        let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
         let ref0_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_0].add(iMbXy);
         let ref1_slice = &mut *(*(*dq).pDec).pRefIndex[LIST_1].add(iMbXy);

@@ -625,7 +625,7 @@ pub unsafe fn WelsFillCacheNonZeroCount(
 
         if na.iTopAvail != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
-            let pTopNzc = (*dq.pNzc.add(iTopXy as usize)).as_ptr();
+            let pTopNzc = dq.grid.nzc.get(iTopXy as usize).as_ptr();
             ST32(pNonZeroCount.add(1), LD32(pTopNzc.add(12) as *const u8));
             *pNonZeroCount.add(0) = 0;
             *pNonZeroCount.add(5) = 0;
@@ -643,7 +643,7 @@ pub unsafe fn WelsFillCacheNonZeroCount(
 
         if na.iLeftAvail != 0 {
             iLeftXy = iCurXy - 1;
-            let pLeftNzc = (*dq.pNzc.add(iLeftXy as usize)).as_ptr();
+            let pLeftNzc = dq.grid.nzc.get(iLeftXy as usize).as_ptr();
             *pNonZeroCount.add(8 * 1) = *pLeftNzc.add(3) as u8;
             *pNonZeroCount.add(8 * 2) = *pLeftNzc.add(7) as u8;
             *pNonZeroCount.add(8 * 3) = *pLeftNzc.add(11) as u8;
