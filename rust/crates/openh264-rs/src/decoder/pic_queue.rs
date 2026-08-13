@@ -856,13 +856,10 @@ mod tests {
         ctx.pMemAlign = &mut ma;
         ctx.pParam = &mut param;
 
-        // The decoder object's own members, as `decoder_init_c` wires them.
+        // The decoder object's own members, and a decode's leavings in them: two
+        // buffered pictures naming pool slots 2 and 3.
         let mut pict_info: [SPictInfo; 16] = [SPictInfo::default(); 16];
         let mut status = SPictReoderingStatus::default();
-        ctx.pPictInfoList = pict_info.as_mut_ptr();
-        ctx.pPictReoderingStatus = &mut status;
-
-        // A decode's leavings: two buffered pictures naming pool slots 2 and 3.
         status.iLargestBufferedPicIndex = 1;
         status.iNumOfPicts = 2;
         status.bHasBSlice = true;
@@ -870,6 +867,20 @@ mod tests {
         pict_info[0].iPicBuffIdx = 2;
         pict_info[1].iPOC = 8;
         pict_info[1].iPicBuffIdx = 3;
+
+        // Wired **after** the fixture is dirtied, and that ordering is the test's own
+        // brush with F38. Written the other way round, the stores retag `status` and
+        // `pict_info`, the writes above go through the *locals* and pop those retags,
+        // and `DestroyPicBuff`'s reset reads a dead tag. Miri convicted exactly that
+        // on the closing battery — in the test written to prove F37, by the session
+        // that had just found and fixed F38 in production. `addr_of_mut!` is **not**
+        // the fix at this site: it is what saves the production stores, where the
+        // invalidating write goes through the raw `dec_impl` rather than through a
+        // local, and a raw sibling does not pop a raw derivation. Here the write is
+        // through the local itself, so nothing but ordering helps. S13's law reaches
+        // the code you write while applying it.
+        ctx.pPictInfoList = pict_info.as_mut_ptr();
+        ctx.pPictReoderingStatus = &mut status;
 
         let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
