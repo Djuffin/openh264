@@ -10,14 +10,15 @@
 //! one owner, `Copy` handles, and the cyclic `pRefPic` graph becomes plain data,
 //! because a handle does not own what it names.
 //!
-//! **Identity is handle equality.** The three decoder pointer comparisons that carry
-//! real semantics — boundary strength "same reference picture?" (`deblocking.rs:258`),
-//! the self-copy guard (`manage_dec_ref.rs:739`), and `error_concealment.rs:599` —
-//! become `Id == Id`, which is the same predicate over the same slots (plan P3).
+//! **Identity is handle equality**, and as of T5.N2 the decoder's picture identity
+//! runs through it: `picture.rs`'s `same_picture` compares the slot each picture was
+//! allocated into (plan P3). The comparisons it serves are boundary strength's "same
+//! reference picture?" (`deblocking.rs`), error concealment's four self-copy guards,
+//! and `manage_dec_ref.rs`'s EC prefetch overlap test.
 //!
 //! This is generalised over `T` rather than written against `Picture`: the encoder
-//! needs the same shape for its own picture pool (Phase 6.1/6.2), and `PicId` becomes
-//! a newtype or alias over [`Id`] in Phase 5.1.
+//! needs the same shape for its own picture pool (Phase 6.1/6.2). `PicId` is an alias
+//! over [`Id`] (`pic_queue.rs`, T5.N1).
 
 // ---------------------------------------------------------------------------
 // Handles

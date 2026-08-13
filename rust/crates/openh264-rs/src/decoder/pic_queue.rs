@@ -223,6 +223,23 @@ impl PicPool {
         pPic
     }
 
+    /// Tells every picture which slot it is in.
+    ///
+    /// Called once, from [`CreatePicBuff`], before the pool is reachable from
+    /// anything else. A picture never moves between slots, so this is the only
+    /// assignment its [`PicId`] ever gets — which is what makes slot equality a
+    /// usable identity where `iPicBuffIdx`, written at prefetch, is not.
+    ///
+    /// # Safety
+    /// As [`is_recyclable`](Self::is_recyclable).
+    unsafe fn stamp_slots(&mut self) {
+        for (id, &pPic) in self.slots.iter() {
+            if !pPic.is_null() {
+                (*pPic).set_pic_id(id);
+            }
+        }
+    }
+
     /// `PrefetchPicForThread`'s round-robin step: the slot under the cursor, and the
     /// cursor advanced one with a wrap.
     ///
@@ -627,10 +644,12 @@ pub unsafe fn CreatePicBuff(
             slots.push(pPic);
         }
 
-        *ppPicBuf = Box::into_raw(Box::new(PicPool {
+        let mut pool = Box::new(PicPool {
             slots: Pool::new(slots),
             cursor: 0,
-        }));
+        });
+        pool.stamp_slots();
+        *ppPicBuf = Box::into_raw(pool);
     }
 
     0
@@ -788,6 +807,62 @@ mod tests {
             assert_eq!((*p_pic_buf).cursor(),2);
 
             DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+        }
+        assert_eq!(ma.WelsGetMemoryUsage(), 0);
+    }
+
+    /// T5.N2's half of the P3 identity property, and the half the five P3 tests
+    /// cannot reach: they build fixtures, which have no slot, so they exercise
+    /// `same_picture`'s address arm. This exercises the slot arm — two **pooled**
+    /// pictures carrying one POC are still two references.
+    #[test]
+    fn pooled_pictures_are_identified_by_slot_not_by_poc() {
+        use crate::decoder::picture::same_picture;
+
+        let mut ma = CMemoryAlign::new(32);
+        let mut param = SDecodingParam::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
+
+        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf, 2, 64, 64),
+                0
+            );
+            let pool = &*p_pic_buf;
+            let a = pool.slot(pool.id(0));
+            let b = pool.slot(pool.id(1));
+
+            assert_eq!((*a).pic_id(), Some(pool.id(0)), "a picture knows its slot");
+            assert_eq!((*b).pic_id(), Some(pool.id(1)));
+
+            (*a).iFramePoc = 4;
+            (*b).iFramePoc = 4; // duplicate POC, distinct slots
+            assert!(!same_picture(a, b), "two slots are two references");
+            assert!(same_picture(a, a));
+
+            // A picture outside the pool has no slot and is its own identity only.
+            let mut loose = SPicture::default();
+            let mut loose2 = SPicture::default();
+            let (l, l2): (*const SPicture, *const SPicture) = (&loose, &loose2);
+            assert_eq!(loose.pic_id(), None);
+            assert!(same_picture(l, l));
+            assert!(!same_picture(l, l2));
+            assert!(!same_picture(l, a));
+            loose.iFramePoc = 4;
+            loose2.iFramePoc = 4;
+            assert!(!same_picture(l, l2), "and POC does not join them either");
+
+            assert!(same_picture(std::ptr::null(), std::ptr::null()));
+            assert!(!same_picture(std::ptr::null(), a));
+
+            DestroyPicBuff(
+                &mut *ctx as *mut SWelsDecoderContext,
+                &mut p_pic_buf as *mut PPicBuff,
+                &mut ma as *mut CMemoryAlign,
+            );
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
