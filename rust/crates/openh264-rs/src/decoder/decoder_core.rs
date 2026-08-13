@@ -351,7 +351,6 @@ pub struct SDqLayer {
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
     pub pMbType: *mut u32,
     pub pSliceIdc: *mut i32,
-    pub pMv: [*mut [[i16; 2]; 16]; LIST_A],
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     pub pChromaQp: *mut [i8; 2],
@@ -2779,8 +2778,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pCtx).pDqLayersList = pDq;
 
         (*pDq).pMbType = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<u32>()) as *mut _;
-        (*pDq).pMv[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
-        (*pDq).pMv[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
@@ -2815,10 +2812,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
             (*pDq).pMbType = std::ptr::null_mut();
         }
         for list in 0..LIST_A {
-            if !(*pDq).pMv[list].is_null() {
-                WelsFreeHelper(pMa, (*pDq).pMv[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
-                (*pDq).pMv[list] = std::ptr::null_mut();
-            }
             if !(*pDq).pMvd[list].is_null() {
                 WelsFreeHelper(pMa, (*pDq).pMvd[list] as *mut u8, numMb * 16 * 2 * std::mem::size_of::<i16>());
                 (*pDq).pMvd[list] = std::ptr::null_mut();
@@ -4227,6 +4220,46 @@ mod tests {
         // LIST_0 is untouched: two arrays of one grid are two values, which the raw
         // pair of pointers this replaces could only promise by inspection.
         assert!(g.ref_index[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|&r| r == 0)));
+    }
+
+    /// The reach `pMv`'s one surviving raw consumer actually takes (T5.K1).
+    ///
+    /// `MB_BS_MV` is handed the array **base** and reads
+    /// `(*iMotionVector.add(iMbXy))[i]` beside `(*iMotionVector.add(iMbBn))[j]`, so —
+    /// exactly as for `pRefIndex` above — the legal reach of the pointer taken at 0
+    /// is every macroblock, and the element type must stay `[[i16; 2]; 16]` rather
+    /// than flattening, because the consumer indexes inside the record.
+    ///
+    /// It also pins the **alignment** this family lands on (F35): the `Vec` behind
+    /// `MbArray<[[i16; 2]; 16]>` is align **2** where `WelsMallocz` returned 16, so
+    /// every 4-byte access into a record through this pointer is unaligned and must
+    /// be spelled that way. The `ST32`/`LD32` round trip below is `mv_pred.rs`'s own
+    /// spelling and is what Miri checks here.
+    #[test]
+    fn mb_grid_ptr_reaches_every_macroblock_of_mv_from_the_base() {
+        use crate::decoder::mv_pred::{LD32, ST32};
+
+        let dims = MbDims::new(4, 3);
+        let n = dims.count();
+        let mut g = MbGrid::new(dims);
+
+        let base = mb_grid_ptr(&mut g.mv[LIST_1], 0);
+        unsafe {
+            for mb in 0..n {
+                let row = (*base.add(mb)).as_mut_ptr();
+                for k in 0..16 {
+                    // the 4-byte-at-a-time write the MV cache helpers do, at the
+                    // alignment the flip actually hands them
+                    ST32(row.add(k) as *mut i16, (mb as u32) << 16 | k as u32);
+                }
+            }
+            // read back across a neighbour pair, the consumer's own shape
+            assert_eq!(LD32((*base.add(n - 1))[15].as_ptr()), ((n as u32 - 1) << 16) | 15);
+            assert_eq!(LD32((*base.add(n - 2))[0].as_ptr()), (n as u32 - 2) << 16);
+        }
+        assert_eq!(g.mv[LIST_1].get(0)[0], [0, 0]);
+        // LIST_0 is untouched: two arrays of one grid are two values.
+        assert!(g.mv[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|v| v == &[0, 0])));
     }
 
     /// One past the end is a pointer you may form and not one you may read —
