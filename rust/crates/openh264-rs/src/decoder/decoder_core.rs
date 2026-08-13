@@ -351,7 +351,6 @@ pub struct SDqLayer {
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
-    pub pChromaQp: *mut [i8; 2],
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
     // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
@@ -2782,7 +2781,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pCtx).pDqLayersList = pDq;
 
         (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pMvd[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
@@ -2817,10 +2815,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pDirect.is_null() {
             WelsFreeHelper(pMa, (*pDq).pDirect as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
             (*pDq).pDirect = std::ptr::null_mut();
-        }
-        if !(*pDq).pChromaQp.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pChromaQp as *mut u8, numMb * 2 * std::mem::size_of::<i8>());
-            (*pDq).pChromaQp = std::ptr::null_mut();
         }
         if !(*pDq).pScaledTCoeff.is_null() {
             WelsFreeHelper(pMa, (*pDq).pScaledTCoeff as *mut u8, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>());
