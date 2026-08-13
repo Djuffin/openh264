@@ -505,8 +505,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
             ST32(iMvA.as_mut_ptr(), LD32(mv_ptr));
             iLeftRef = (*(*pDec).pRefIndex[0].add(iLeftXy as usize))[3];
         } else {
-            let mv_ptr = (*(*pCurDqLayer).pMv[0].add(iLeftXy as usize))[3].as_ptr();
-            ST32(iMvA.as_mut_ptr(), LD32(mv_ptr));
+            iMvA = (*pCurDqLayer).grid.mv[0].get(iLeftXy as usize)[3];
             iLeftRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftXy as usize)[3];
         }
     } else {
@@ -525,8 +524,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
             ST32(iMvB.as_mut_ptr(), LD32(mv_ptr));
             iTopRef = (*(*pDec).pRefIndex[0].add(iTopXy as usize))[12];
         } else {
-            let mv_ptr = (*(*pCurDqLayer).pMv[0].add(iTopXy as usize))[12].as_ptr();
-            ST32(iMvB.as_mut_ptr(), LD32(mv_ptr));
+            iMvB = (*pCurDqLayer).grid.mv[0].get(iTopXy as usize)[12];
             iTopRef = (*pCurDqLayer).grid.ref_index[0].get(iTopXy as usize)[12];
         }
     } else {
@@ -545,8 +543,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
             ST32(iMvC.as_mut_ptr(), LD32(mv_ptr));
             iRightTopRef = (*(*pDec).pRefIndex[0].add(iRightTopXy as usize))[12];
         } else {
-            let mv_ptr = (*(*pCurDqLayer).pMv[0].add(iRightTopXy as usize))[12].as_ptr();
-            ST32(iMvC.as_mut_ptr(), LD32(mv_ptr));
+            iMvC = (*pCurDqLayer).grid.mv[0].get(iRightTopXy as usize)[12];
             iRightTopRef = (*pCurDqLayer).grid.ref_index[0].get(iRightTopXy as usize)[12];
         }
     } else {
@@ -561,8 +558,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
             ST32(iMvD.as_mut_ptr(), LD32(mv_ptr));
             iLeftTopRef = (*(*pDec).pRefIndex[0].add(iLeftTopXy as usize))[15];
         } else {
-            let mv_ptr = (*(*pCurDqLayer).pMv[0].add(iLeftTopXy as usize))[15].as_ptr();
-            ST32(iMvD.as_mut_ptr(), LD32(mv_ptr));
+            iMvD = (*pCurDqLayer).grid.mv[0].get(iLeftTopXy as usize)[15];
             iLeftTopRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftTopXy as usize)[15];
         }
     } else {
@@ -914,8 +910,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 ST32(iMvA[listIdx].as_mut_ptr(), LD32(mv_ptr));
                 iLeftRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iLeftXy as usize))[3];
             } else {
-                let mv_ptr = (*(*pCurDqLayer).pMv[listIdx].add(iLeftXy as usize))[3].as_ptr();
-                ST32(iMvA[listIdx].as_mut_ptr(), LD32(mv_ptr));
+                iMvA[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftXy as usize)[3];
                 iLeftRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftXy as usize)[3];
             }
         } else {
@@ -929,8 +924,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 ST32(iMvB[listIdx].as_mut_ptr(), LD32(mv_ptr));
                 iTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iTopXy as usize))[12];
             } else {
-                let mv_ptr = (*(*pCurDqLayer).pMv[listIdx].add(iTopXy as usize))[12].as_ptr();
-                ST32(iMvB[listIdx].as_mut_ptr(), LD32(mv_ptr));
+                iMvB[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iTopXy as usize)[12];
                 iTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iTopXy as usize)[12];
             }
         } else {
@@ -944,8 +938,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 ST32(iMvC[listIdx].as_mut_ptr(), LD32(mv_ptr));
                 iRightTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iRightTopXy as usize))[12];
             } else {
-                let mv_ptr = (*(*pCurDqLayer).pMv[listIdx].add(iRightTopXy as usize))[12].as_ptr();
-                ST32(iMvC[listIdx].as_mut_ptr(), LD32(mv_ptr));
+                iMvC[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iRightTopXy as usize)[12];
                 iRightTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iRightTopXy as usize)[12];
             }
         } else {
@@ -959,8 +952,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 ST32(iMvD[listIdx].as_mut_ptr(), LD32(mv_ptr));
                 iLeftTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iLeftTopXy as usize))[15];
             } else {
-                let mv_ptr = (*(*pCurDqLayer).pMv[listIdx].add(iLeftTopXy as usize))[15].as_ptr();
-                ST32(iMvD[listIdx].as_mut_ptr(), LD32(mv_ptr));
+                iMvD[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftTopXy as usize)[15];
                 iLeftTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftTopXy as usize)[15];
             }
         } else {
@@ -1247,7 +1239,7 @@ pub unsafe fn UpdateP16x16MotionInfo(
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pCurDqLayer).pMv[listIdx as usize].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1298,7 +1290,7 @@ pub unsafe fn UpdateP16x16MotionOnly(
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4IdxPlus4) as *mut i16, kiMV32);
         } else {
-            let mv_ptr = (*(*pCurDqLayer).pMv[listIdx as usize].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1343,7 +1335,7 @@ pub unsafe fn UpdateP16x8MotionInfo(
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pCurDqLayer).pMv[listIdx as usize].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1404,7 +1396,7 @@ pub unsafe fn UpdateP8x16MotionInfo(
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pCurDqLayer).pMv[listIdx as usize].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);

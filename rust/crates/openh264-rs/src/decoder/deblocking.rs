@@ -814,7 +814,13 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pMvArr = if !(*pCurDqLayer).pDec.is_null() {
         (*(*pCurDqLayer).pDec).pMv[LIST_0]
     } else {
-        (*pCurDqLayer).pMv[LIST_0] as *mut _
+        // T5.K1: the grid's array, derived from the allocation root (S28) — `MB_BS_MV`
+        // indexes it by macroblock address for the current macroblock *and* its
+        // neighbour, so a narrowing slice would be UB at the second index. Same shape
+        // as `pRefIdxArr` above, and a second bridge in this function is sound for the
+        // same reason the first one is: the two `&mut`s are of different fields, whose
+        // `Vec`s are different allocations.
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.mv[LIST_0], 0)
     };
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
