@@ -724,9 +724,9 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
 pub unsafe fn WelsFillCacheInterCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCount: *mut u8,
-    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
-    iMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
-    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
+    iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: PDqLayer,
 ) {
     let na = &*pNeighAvail;
@@ -765,118 +765,118 @@ pub unsafe fn WelsFillCacheInterCabac(
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
             let pMvd = dq.grid.mvd[listIdx].get(iLeftXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
-            (*iMvArray)[listIdx][6] = pMv[3];
-            (*iMvArray)[listIdx][12] = pMv[7];
-            (*iMvArray)[listIdx][18] = pMv[11];
-            (*iMvArray)[listIdx][24] = pMv[15];
+            iMvArray[listIdx][6] = pMv[3];
+            iMvArray[listIdx][12] = pMv[7];
+            iMvArray[listIdx][18] = pMv[11];
+            iMvArray[listIdx][24] = pMv[15];
 
-            (*iMvdCache)[listIdx][6] = pMvd[3];
-            (*iMvdCache)[listIdx][12] = pMvd[7];
-            (*iMvdCache)[listIdx][18] = pMvd[11];
-            (*iMvdCache)[listIdx][24] = pMvd[15];
+            iMvdCache[listIdx][6] = pMvd[3];
+            iMvdCache[listIdx][12] = pMvd[7];
+            iMvdCache[listIdx][18] = pMvd[11];
+            iMvdCache[listIdx][24] = pMvd[15];
 
-            (*iRefIdxArray)[listIdx][6] = pRef[3];
-            (*iRefIdxArray)[listIdx][12] = pRef[7];
-            (*iRefIdxArray)[listIdx][18] = pRef[11];
-            (*iRefIdxArray)[listIdx][24] = pRef[15];
+            iRefIdxArray[listIdx][6] = pRef[3];
+            iRefIdxArray[listIdx][12] = pRef[7];
+            iRefIdxArray[listIdx][18] = pRef[11];
+            iRefIdxArray[listIdx][24] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][6] = [0, 0];
-            (*iMvArray)[listIdx][12] = [0, 0];
-            (*iMvArray)[listIdx][18] = [0, 0];
-            (*iMvArray)[listIdx][24] = [0, 0];
+            iMvArray[listIdx][6] = [0, 0];
+            iMvArray[listIdx][12] = [0, 0];
+            iMvArray[listIdx][18] = [0, 0];
+            iMvArray[listIdx][24] = [0, 0];
 
-            (*iMvdCache)[listIdx][6] = [0, 0];
-            (*iMvdCache)[listIdx][12] = [0, 0];
-            (*iMvdCache)[listIdx][18] = [0, 0];
-            (*iMvdCache)[listIdx][24] = [0, 0];
+            iMvdCache[listIdx][6] = [0, 0];
+            iMvdCache[listIdx][12] = [0, 0];
+            iMvdCache[listIdx][18] = [0, 0];
+            iMvdCache[listIdx][24] = [0, 0];
 
             let val = if na.iLeftAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][6] = val;
-            (*iRefIdxArray)[listIdx][12] = val;
-            (*iRefIdxArray)[listIdx][18] = val;
-            (*iRefIdxArray)[listIdx][24] = val;
+            iRefIdxArray[listIdx][6] = val;
+            iRefIdxArray[listIdx][12] = val;
+            iRefIdxArray[listIdx][18] = val;
+            iRefIdxArray[listIdx][24] = val;
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iLeftTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
-            (*iMvArray)[listIdx][0] = pMv[15];
-            (*iMvdCache)[listIdx][0] = pMvd[15];
-            (*iRefIdxArray)[listIdx][0] = pRef[15];
+            iMvArray[listIdx][0] = pMv[15];
+            iMvdCache[listIdx][0] = pMvd[15];
+            iRefIdxArray[listIdx][0] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][0] = [0, 0];
-            (*iMvdCache)[listIdx][0] = [0, 0];
+            iMvArray[listIdx][0] = [0, 0];
+            iMvdCache[listIdx][0] = [0, 0];
             let val = if na.iLeftTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][0] = val;
+            iRefIdxArray[listIdx][0] = val;
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
-            (*iMvArray)[listIdx][1] = pMv[12];
-            (*iMvArray)[listIdx][2] = pMv[13];
-            (*iMvArray)[listIdx][3] = pMv[14];
-            (*iMvArray)[listIdx][4] = pMv[15];
+            iMvArray[listIdx][1] = pMv[12];
+            iMvArray[listIdx][2] = pMv[13];
+            iMvArray[listIdx][3] = pMv[14];
+            iMvArray[listIdx][4] = pMv[15];
 
-            (*iMvdCache)[listIdx][1] = pMvd[12];
-            (*iMvdCache)[listIdx][2] = pMvd[13];
-            (*iMvdCache)[listIdx][3] = pMvd[14];
-            (*iMvdCache)[listIdx][4] = pMvd[15];
+            iMvdCache[listIdx][1] = pMvd[12];
+            iMvdCache[listIdx][2] = pMvd[13];
+            iMvdCache[listIdx][3] = pMvd[14];
+            iMvdCache[listIdx][4] = pMvd[15];
 
-            (*iRefIdxArray)[listIdx][1] = pRef[12];
-            (*iRefIdxArray)[listIdx][2] = pRef[13];
-            (*iRefIdxArray)[listIdx][3] = pRef[14];
-            (*iRefIdxArray)[listIdx][4] = pRef[15];
+            iRefIdxArray[listIdx][1] = pRef[12];
+            iRefIdxArray[listIdx][2] = pRef[13];
+            iRefIdxArray[listIdx][3] = pRef[14];
+            iRefIdxArray[listIdx][4] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][1] = [0, 0];
-            (*iMvArray)[listIdx][2] = [0, 0];
-            (*iMvArray)[listIdx][3] = [0, 0];
-            (*iMvArray)[listIdx][4] = [0, 0];
+            iMvArray[listIdx][1] = [0, 0];
+            iMvArray[listIdx][2] = [0, 0];
+            iMvArray[listIdx][3] = [0, 0];
+            iMvArray[listIdx][4] = [0, 0];
 
-            (*iMvdCache)[listIdx][1] = [0, 0];
-            (*iMvdCache)[listIdx][2] = [0, 0];
-            (*iMvdCache)[listIdx][3] = [0, 0];
-            (*iMvdCache)[listIdx][4] = [0, 0];
+            iMvdCache[listIdx][1] = [0, 0];
+            iMvdCache[listIdx][2] = [0, 0];
+            iMvdCache[listIdx][3] = [0, 0];
+            iMvdCache[listIdx][4] = [0, 0];
 
             let val = if na.iTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][1] = val;
-            (*iRefIdxArray)[listIdx][2] = val;
-            (*iRefIdxArray)[listIdx][3] = val;
-            (*iRefIdxArray)[listIdx][4] = val;
+            iRefIdxArray[listIdx][1] = val;
+            iRefIdxArray[listIdx][2] = val;
+            iRefIdxArray[listIdx][3] = val;
+            iRefIdxArray[listIdx][4] = val;
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iRightTopXy);
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
-            (*iMvArray)[listIdx][5] = pMv[12];
-            (*iMvdCache)[listIdx][5] = pMvd[12];
-            (*iRefIdxArray)[listIdx][5] = pRef[12];
+            iMvArray[listIdx][5] = pMv[12];
+            iMvdCache[listIdx][5] = pMvd[12];
+            iRefIdxArray[listIdx][5] = pRef[12];
         } else {
-            (*iMvArray)[listIdx][5] = [0, 0];
-            (*iMvdCache)[listIdx][5] = [0, 0];
+            iMvArray[listIdx][5] = [0, 0];
+            iMvdCache[listIdx][5] = [0, 0];
             let val = if na.iRightTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][5] = val;
+            iRefIdxArray[listIdx][5] = val;
         }
 
-        (*iMvArray)[listIdx][9] = [0, 0];
-        (*iMvArray)[listIdx][21] = [0, 0];
-        (*iMvArray)[listIdx][11] = [0, 0];
-        (*iMvArray)[listIdx][17] = [0, 0];
-        (*iMvArray)[listIdx][23] = [0, 0];
-        (*iMvdCache)[listIdx][9] = [0, 0];
-        (*iMvdCache)[listIdx][21] = [0, 0];
-        (*iMvdCache)[listIdx][11] = [0, 0];
-        (*iMvdCache)[listIdx][17] = [0, 0];
-        (*iMvdCache)[listIdx][23] = [0, 0];
+        iMvArray[listIdx][9] = [0, 0];
+        iMvArray[listIdx][21] = [0, 0];
+        iMvArray[listIdx][11] = [0, 0];
+        iMvArray[listIdx][17] = [0, 0];
+        iMvArray[listIdx][23] = [0, 0];
+        iMvdCache[listIdx][9] = [0, 0];
+        iMvdCache[listIdx][21] = [0, 0];
+        iMvdCache[listIdx][11] = [0, 0];
+        iMvdCache[listIdx][17] = [0, 0];
+        iMvdCache[listIdx][23] = [0, 0];
 
-        (*iRefIdxArray)[listIdx][9] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][21] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][11] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][17] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][23] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][9] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][21] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][11] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][17] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][23] = REF_NOT_AVAIL;
     }
 }
 
@@ -885,8 +885,8 @@ pub unsafe fn WelsFillCacheInterCabac(
 pub unsafe fn WelsFillCacheInter(
     pNeighAvail: *const SWelsNeighAvail,
     pNonZeroCount: *mut u8,
-    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
-    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: PDqLayer,
 ) {
     let na = &*pNeighAvail;
@@ -924,90 +924,90 @@ pub unsafe fn WelsFillCacheInter(
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
-            (*iMvArray)[listIdx][6] = pMv[3];
-            (*iMvArray)[listIdx][12] = pMv[7];
-            (*iMvArray)[listIdx][18] = pMv[11];
-            (*iMvArray)[listIdx][24] = pMv[15];
-            (*iRefIdxArray)[listIdx][6] = pRef[3];
-            (*iRefIdxArray)[listIdx][12] = pRef[7];
-            (*iRefIdxArray)[listIdx][18] = pRef[11];
-            (*iRefIdxArray)[listIdx][24] = pRef[15];
+            iMvArray[listIdx][6] = pMv[3];
+            iMvArray[listIdx][12] = pMv[7];
+            iMvArray[listIdx][18] = pMv[11];
+            iMvArray[listIdx][24] = pMv[15];
+            iRefIdxArray[listIdx][6] = pRef[3];
+            iRefIdxArray[listIdx][12] = pRef[7];
+            iRefIdxArray[listIdx][18] = pRef[11];
+            iRefIdxArray[listIdx][24] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][6] = [0, 0];
-            (*iMvArray)[listIdx][12] = [0, 0];
-            (*iMvArray)[listIdx][18] = [0, 0];
-            (*iMvArray)[listIdx][24] = [0, 0];
+            iMvArray[listIdx][6] = [0, 0];
+            iMvArray[listIdx][12] = [0, 0];
+            iMvArray[listIdx][18] = [0, 0];
+            iMvArray[listIdx][24] = [0, 0];
             let val = if na.iLeftAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][6] = val;
-            (*iRefIdxArray)[listIdx][12] = val;
-            (*iRefIdxArray)[listIdx][18] = val;
-            (*iRefIdxArray)[listIdx][24] = val;
+            iRefIdxArray[listIdx][6] = val;
+            iRefIdxArray[listIdx][12] = val;
+            iRefIdxArray[listIdx][18] = val;
+            iRefIdxArray[listIdx][24] = val;
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
-            (*iMvArray)[listIdx][0] = pMv[15];
-            (*iRefIdxArray)[listIdx][0] = pRef[15];
+            iMvArray[listIdx][0] = pMv[15];
+            iRefIdxArray[listIdx][0] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][0] = [0, 0];
+            iMvArray[listIdx][0] = [0, 0];
             let val = if na.iLeftTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][0] = val;
+            iRefIdxArray[listIdx][0] = val;
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
-            (*iMvArray)[listIdx][1] = pMv[12];
-            (*iMvArray)[listIdx][2] = pMv[13];
-            (*iMvArray)[listIdx][3] = pMv[14];
-            (*iMvArray)[listIdx][4] = pMv[15];
-            (*iRefIdxArray)[listIdx][1] = pRef[12];
-            (*iRefIdxArray)[listIdx][2] = pRef[13];
-            (*iRefIdxArray)[listIdx][3] = pRef[14];
-            (*iRefIdxArray)[listIdx][4] = pRef[15];
+            iMvArray[listIdx][1] = pMv[12];
+            iMvArray[listIdx][2] = pMv[13];
+            iMvArray[listIdx][3] = pMv[14];
+            iMvArray[listIdx][4] = pMv[15];
+            iRefIdxArray[listIdx][1] = pRef[12];
+            iRefIdxArray[listIdx][2] = pRef[13];
+            iRefIdxArray[listIdx][3] = pRef[14];
+            iRefIdxArray[listIdx][4] = pRef[15];
         } else {
-            (*iMvArray)[listIdx][1] = [0, 0];
-            (*iMvArray)[listIdx][2] = [0, 0];
-            (*iMvArray)[listIdx][3] = [0, 0];
-            (*iMvArray)[listIdx][4] = [0, 0];
+            iMvArray[listIdx][1] = [0, 0];
+            iMvArray[listIdx][2] = [0, 0];
+            iMvArray[listIdx][3] = [0, 0];
+            iMvArray[listIdx][4] = [0, 0];
             let val = if na.iTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][1] = val;
-            (*iRefIdxArray)[listIdx][2] = val;
-            (*iRefIdxArray)[listIdx][3] = val;
-            (*iRefIdxArray)[listIdx][4] = val;
+            iRefIdxArray[listIdx][1] = val;
+            iRefIdxArray[listIdx][2] = val;
+            iRefIdxArray[listIdx][3] = val;
+            iRefIdxArray[listIdx][4] = val;
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
             let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
             let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
-            (*iMvArray)[listIdx][5] = pMv[12];
-            (*iRefIdxArray)[listIdx][5] = pRef[12];
+            iMvArray[listIdx][5] = pMv[12];
+            iRefIdxArray[listIdx][5] = pRef[12];
         } else {
-            (*iMvArray)[listIdx][5] = [0, 0];
+            iMvArray[listIdx][5] = [0, 0];
             let val = if na.iRightTopAvail == 0 { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
-            (*iRefIdxArray)[listIdx][5] = val;
+            iRefIdxArray[listIdx][5] = val;
         }
 
         // right-top 4x4 block unavailable positions
-        (*iMvArray)[listIdx][9] = [0, 0];
-        (*iMvArray)[listIdx][21] = [0, 0];
-        (*iMvArray)[listIdx][11] = [0, 0];
-        (*iMvArray)[listIdx][17] = [0, 0];
-        (*iMvArray)[listIdx][23] = [0, 0];
-        (*iRefIdxArray)[listIdx][9] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][21] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][11] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][17] = REF_NOT_AVAIL;
-        (*iRefIdxArray)[listIdx][23] = REF_NOT_AVAIL;
+        iMvArray[listIdx][9] = [0, 0];
+        iMvArray[listIdx][21] = [0, 0];
+        iMvArray[listIdx][11] = [0, 0];
+        iMvArray[listIdx][17] = [0, 0];
+        iMvArray[listIdx][23] = [0, 0];
+        iRefIdxArray[listIdx][9] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][21] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][11] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][17] = REF_NOT_AVAIL;
+        iRefIdxArray[listIdx][23] = REF_NOT_AVAIL;
     }
 }
 
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn ParseInterInfo(
     pCtx: *mut SWelsDecoderContext,
-    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
-    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: &mut [[i8; 30]; LIST_A],
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
@@ -1125,8 +1125,8 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
-                    (*iMvArray).as_mut_ptr(),
-                    (*iRefIdxArray).as_mut_ptr(),
+                    Some(iMvArray),
+                    Some(iRefIdxArray),
                     0,
                     (i as i32) << 3,
                     iRefIdx[i] as i8,
@@ -1185,8 +1185,8 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
-                    (*iMvArray).as_mut_ptr(),
-                    (*iRefIdxArray).as_mut_ptr(),
+                    Some(iMvArray),
+                    Some(iRefIdxArray),
                     0,
                     (i as i32) << 2,
                     iRefIdx[i] as i8,
@@ -1284,10 +1284,10 @@ pub unsafe fn ParseInterInfo(
                 let iIdx = (i as i32) << 2;
                 let uiIdx4Cache = g_kuiCache30ScanIdx[iIdx as usize] as usize;
 
-                (*iRefIdxArray)[0][uiIdx4Cache] = iRefIdx[i] as i8;
-                (*iRefIdxArray)[0][uiIdx4Cache + 1] = iRefIdx[i] as i8;
-                (*iRefIdxArray)[0][uiIdx4Cache + 6] = iRefIdx[i] as i8;
-                (*iRefIdxArray)[0][uiIdx4Cache + 7] = iRefIdx[i] as i8;
+                iRefIdxArray[0][uiIdx4Cache] = iRefIdx[i] as i8;
+                iRefIdxArray[0][uiIdx4Cache + 1] = iRefIdx[i] as i8;
+                iRefIdxArray[0][uiIdx4Cache + 6] = iRefIdx[i] as i8;
+                iRefIdxArray[0][uiIdx4Cache + 7] = iRefIdx[i] as i8;
 
                 for j in 0..iPartCount {
                     let iPartIdx = iIdx + j * iBlockWidth;
@@ -1313,24 +1313,24 @@ pub unsafe fn ParseInterInfo(
                         mv_mb[uiScan4Idx + 1] = iMv;
                         mv_mb[uiScan4Idx + 4] = iMv;
                         mv_mb[uiScan4Idx + 5] = iMv;
-                        (*iMvArray)[0][uiCacheIdx] = iMv;
-                        (*iMvArray)[0][uiCacheIdx + 1] = iMv;
-                        (*iMvArray)[0][uiCacheIdx + 6] = iMv;
-                        (*iMvArray)[0][uiCacheIdx + 7] = iMv;
+                        iMvArray[0][uiCacheIdx] = iMv;
+                        iMvArray[0][uiCacheIdx + 1] = iMv;
+                        iMvArray[0][uiCacheIdx + 6] = iMv;
+                        iMvArray[0][uiCacheIdx + 7] = iMv;
                     } else if SUB_MB_TYPE_8x4 == uiSubMbType {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 1] = iMv;
-                        (*iMvArray)[0][uiCacheIdx] = iMv;
-                        (*iMvArray)[0][uiCacheIdx + 1] = iMv;
+                        iMvArray[0][uiCacheIdx] = iMv;
+                        iMvArray[0][uiCacheIdx + 1] = iMv;
                     } else if SUB_MB_TYPE_4x8 == uiSubMbType {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 4] = iMv;
-                        (*iMvArray)[0][uiCacheIdx] = iMv;
-                        (*iMvArray)[0][uiCacheIdx + 6] = iMv;
+                        iMvArray[0][uiCacheIdx] = iMv;
+                        iMvArray[0][uiCacheIdx + 6] = iMv;
                     } else {
                         // SUB_MB_TYPE_4x4
                         mv_mb[uiScan4Idx] = iMv;
-                        (*iMvArray)[0][uiCacheIdx] = iMv;
+                        iMvArray[0][uiCacheIdx] = iMv;
                     }
                 }
             }
@@ -1346,8 +1346,8 @@ pub unsafe fn ParseInterInfo(
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
 pub unsafe fn ParseInterBInfo(
     pCtx: *mut SWelsDecoderContext,
-    iMvArray: *mut [[[i16; 2]; 30]; LIST_A],
-    iRefIdxArray: *mut [[i8; 30]; LIST_A],
+    iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
+    iRefIdxArray: &mut [[i8; 30]; LIST_A],
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
@@ -1553,8 +1553,8 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
-                    (*iMvArray).as_mut_ptr(),
-                    (*iRefIdxArray).as_mut_ptr(),
+                    Some(iMvArray),
+                    Some(iRefIdxArray),
                     listIdx as i32,
                     iPartIdx,
                     iRefIdx,
@@ -1623,8 +1623,8 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
-                    (*iMvArray).as_mut_ptr(),
-                    (*iRefIdxArray).as_mut_ptr(),
+                    Some(iMvArray),
+                    Some(iRefIdxArray),
                     listIdx as i32,
                     iPartIdx,
                     iRefIdx,
@@ -1745,8 +1745,9 @@ pub unsafe fn ParseInterBInfo(
                         bIsLongRef,
                         pMvDirect.as_mut_ptr(),
                         iRef.as_mut_ptr(),
-                        (*iMvArray).as_mut_ptr(),
-                        std::ptr::null_mut(),
+                        Some(iMvArray),
+                        // CAVLC has no mvd cache — the C++ passes NULL here too.
+                        None,
                     );
                 } else {
                     let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
@@ -1786,8 +1787,9 @@ pub unsafe fn ParseInterBInfo(
                         directSubMbType,
                         iRef.as_mut_ptr(),
                         mvColoc,
-                        (*iMvArray).as_mut_ptr(),
-                        std::ptr::null_mut(),
+                        Some(iMvArray),
+                        // CAVLC has no mvd cache — the C++ passes NULL here too.
+                        None,
                     );
                 }
             }
@@ -1845,10 +1847,10 @@ pub unsafe fn ParseInterBInfo(
                 let uiCacheIdx = g_kuiCache30ScanIdx[i << 2] as usize;
 
                 let iref = ref_idx_list[listIdx][i];
-                (*iRefIdxArray)[listIdx][uiCacheIdx] = iref;
-                (*iRefIdxArray)[listIdx][uiCacheIdx + 1] = iref;
-                (*iRefIdxArray)[listIdx][uiCacheIdx + 6] = iref;
-                (*iRefIdxArray)[listIdx][uiCacheIdx + 7] = iref;
+                iRefIdxArray[listIdx][uiCacheIdx] = iref;
+                iRefIdxArray[listIdx][uiCacheIdx + 1] = iref;
+                iRefIdxArray[listIdx][uiCacheIdx + 6] = iref;
+                iRefIdxArray[listIdx][uiCacheIdx + 7] = iref;
 
                 let subMbType = pSubMbType[i];
                 if IS_DIRECT(subMbType) {
@@ -1891,24 +1893,24 @@ pub unsafe fn ParseInterBInfo(
                         mv_mb[uiScan4Idx + 1] = iMv;
                         mv_mb[uiScan4Idx + 4] = iMv;
                         mv_mb[uiScan4Idx + 5] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx + 1] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx + 6] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx + 7] = iMv;
+                        iMvArray[listIdx][uiCacheIdx] = iMv;
+                        iMvArray[listIdx][uiCacheIdx + 1] = iMv;
+                        iMvArray[listIdx][uiCacheIdx + 6] = iMv;
+                        iMvArray[listIdx][uiCacheIdx + 7] = iMv;
                     } else if IS_SUB_8x4(subMbType) {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 1] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx + 1] = iMv;
+                        iMvArray[listIdx][uiCacheIdx] = iMv;
+                        iMvArray[listIdx][uiCacheIdx + 1] = iMv;
                     } else if IS_SUB_4x8(subMbType) {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 4] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx + 6] = iMv;
+                        iMvArray[listIdx][uiCacheIdx] = iMv;
+                        iMvArray[listIdx][uiCacheIdx + 6] = iMv;
                     } else {
                         // SUB_MB_TYPE_4x4 == uiSubMbType
                         mv_mb[uiScan4Idx] = iMv;
-                        (*iMvArray)[listIdx][uiCacheIdx] = iMv;
+                        iMvArray[listIdx][uiCacheIdx] = iMv;
                     }
                 }
             }
@@ -1919,7 +1921,7 @@ pub unsafe fn ParseInterBInfo(
 
 pub unsafe fn WelsFillDirectCacheCabac(
     pNeighAvail: *const SWelsNeighAvail,
-    iDirect: *mut [i8; 30],
+    iDirect: &mut [i8; 30],
     pCurDqLayer: PDqLayer,
 ) {
     let na = &*pNeighAvail;
@@ -1943,28 +1945,28 @@ pub unsafe fn WelsFillDirectCacheCabac(
         iRightTopXy = iCurXy + 1 - dq.iMbWidth as usize;
     }
 
-    (*iDirect).fill(0);
+    iDirect.fill(0);
     if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
         let pDir = dq.grid.direct.get(iLeftXy).as_ptr();
-        (*iDirect)[6] = *pDir.add(3);
-        (*iDirect)[12] = *pDir.add(7);
-        (*iDirect)[18] = *pDir.add(11);
-        (*iDirect)[24] = *pDir.add(15);
+        iDirect[6] = *pDir.add(3);
+        iDirect[12] = *pDir.add(7);
+        iDirect[18] = *pDir.add(11);
+        iDirect[24] = *pDir.add(15);
     }
     if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
         let pDir = dq.grid.direct.get(iLeftTopXy).as_ptr();
-        (*iDirect)[0] = *pDir.add(15);
+        iDirect[0] = *pDir.add(15);
     }
     if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
         let pDir = dq.grid.direct.get(iTopXy).as_ptr();
-        (*iDirect)[1] = *pDir.add(12);
-        (*iDirect)[2] = *pDir.add(13);
-        (*iDirect)[3] = *pDir.add(14);
-        (*iDirect)[4] = *pDir.add(15);
+        iDirect[1] = *pDir.add(12);
+        iDirect[2] = *pDir.add(13);
+        iDirect[3] = *pDir.add(14);
+        iDirect[4] = *pDir.add(15);
     }
     if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
         let pDir = dq.grid.direct.get(iRightTopXy).as_ptr();
-        (*iDirect)[5] = *pDir.add(12);
+        iDirect[5] = *pDir.add(12);
     }
 }
 
