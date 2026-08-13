@@ -5,7 +5,7 @@ the return" is still the charter, and session J executed its first half — and 
 with its day-two clause; S8's fourth negative result stands: **no window hoisting**;
 S13/S14/S16/S20/S21/S24/S25/S28/S29 as always); the session-J log entry. This file scopes
 the session and supersedes on disagreement; fix disagreements in place. Counts measured at
-`<J-exit>`; re-grep before acting (S24).
+`abf24e9b`; re-grep before acting (S24).
 
 ## 0. Start
 
