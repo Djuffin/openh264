@@ -1363,3 +1363,54 @@ The rate: 1 in 341 configurations on this battery. Nothing new about the signatu
 already removed the stream, `n` and `t` clauses as conditions.
 
 Running total: **thirty-nine measurements, thirteen alternations, eighteen acquittals.**
+
+### Measurements 40–41 (Phase 5, session P, 2026-08-13) — the alternation where one binary gave one configuration two different wrong lengths
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 40 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**) | 39981 | **0** |
+| 41 | `mt CiscoVT2people_160x96_6fps  t=4 sm=3 n=600 cabac=0 rc=0` (**release**) | 42538 | **42616** |
+
+One hit per profile on the same closing battery — different clips, different `cabac`,
+one short-to-zero and one *long*. Both inside S14's signature on every axis.
+
+**Step 0 did not apply, and it is worth recording why.** The session's diff is
+decoder-only, which has been the hash shortcut's usual trigger — but the shortcut needs
+the two `rust_enc` binaries to be *byte-identical*, and it is production decoder code in
+the same lib, so base and head differ even though the sweep compares encoders. Session
+D's shortcut was earned by a `#[cfg(test)]`-only diff, which is a narrower condition than
+"decoder-only" and the two should not be conflated again.
+
+**Step 1: both configurations 5/5 byte-identical in isolation.** Neither reproduced.
+
+**Step 2 fired (two hits) and the alternation acquits.** Twelve whole `mt` presets per
+side, both debug binaries built once and swapped inside one loop, machine otherwise idle,
+240 configurations per sweep = **2880 per side**:
+
+| side | hits | sweeps | configurations |
+|---|---|---|---|
+| base (`4f6495dd`, session O's code) | **2** | 12 | 2880 |
+| head (`eef8a90b`) | **3** | 12 | 2880 |
+
+Not a difference (S23b is satisfied — this alternation is not 0/0). Two further facts,
+and the second is the strongest evidence in this finding's history:
+
+* **The base tree hits the battery's own debug configuration**, twice
+  (`320x192 t=4 sm=3 n=600 cabac=1 rc=0`, rounds 5 and 9) — on code that predates the
+  session entirely.
+* **One binary, one configuration, two different wrong lengths.** The head binary gave
+  that configuration **0 bytes** in the battery and **37837** in alternation round 10;
+  the base binary gave **37837** twice. Measurement 39 reached three distinct outcomes
+  across *fifteen isolation runs*; this reaches two across an ordinary alternation, on
+  both sides, which is S14 step 1's discriminator met without having to go looking:
+  *a deterministic port bug repeats its bytes.*
+
+Rate: 5 hits in 5760 alternation configurations ≈ **1/1150** under this loop's density,
+against ≈1/307 under session K's sustained back-to-back presets and ≈1/800 in a
+battery — consistent with load density being part of the signature. `cabac=0 rc=1`
+appears for the first time on this configuration, which is one more confirmation that
+session M was right to take `cabac`/`rc` out of the signature.
+
+**Acquitted as F3.**
+
+Running total: **forty-one measurements, fourteen alternations, twenty acquittals.**

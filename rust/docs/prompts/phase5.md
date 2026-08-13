@@ -9,9 +9,16 @@ log and git — this file carries only what remains.
 **The anti-circles contract.** This checklist is **closed**: work enters it only
 via an F-finding or Eugene. Every session's commits map to W-items in its log
 entry. The progress metric is monotone and grep-able — **decoder `raw_ptr`
-occurrences: 1283 now, → ~0 at exit** (excluding the named survivor and prose);
-a session that closes no W-item and moves no metric is a stall and says so.
-Sizes below were measured at `11903757` on 2026-08-13; re-grep at the face.
+occurrences 1267** (1283 at the re-plan), → ~0 at exit (excluding the named
+survivor and prose); a session that closes no W-item and moves no metric is a stall
+and says so — **and a W-item can close while the metric stands still**, which is
+what W2a did (85 sites, `raw_ptr` +0): two pointer fields became handles and four
+accessor signatures were born, and the instrument counts pointer *types written*
+(S16). Sizes below were re-measured at `eef8a90b` on 2026-08-13; re-grep at
+the face. **And a size carries the directory it was taken in** (session P §0): the
+re-plan's `pRefPic` and `pRefList` figures were taken at *different* scopes and said
+so nowhere — together they put **228 sites of `src/encoder/`** inside W2, which
+F12/P10 puts outside this phase entirely.
 
 ## The blocker class, named once
 
@@ -20,26 +27,45 @@ below W1 was sequenced by this one fact (T5.N1, T5.O7). The ordering rule:
 **aliases become ids/indices before their container owns.** W2 is the key; it
 unblocks W3–W5 and half of W6.
 
+**Session P used the rule forwards, and it is predictive.** W1 was available
+because T5.O4 had already given the NAL nodes their own allocations; W2a was
+available because `PicPool` never owned the pictures its slots address; W2b's layer
+copy is not available because its readers cannot reach the container at all. Three
+calls made from the rule, no probe needed to make any of them, and all three probe
+runs green on the first attempt. **Ask the rule before scheduling a conversion, not
+after Miri does.**
+
 ## The checklist
 
 | # | item | size (measured) | done when | unblocks |
 |---|---|---|---|---|
-| W1 | `pAccessUnitList` → `Option<Box<SAccessUnit>>` | 53 sites | no raw AU-list pointer; F19 clean; probe green | W3's first cascade entry |
-| W2 | **the `pDec` step**: `pDec`/`pECRefPic`/`pRefPic`/`pRefList` → `PicId`/indices | 261 `.pDec` + 191 `pRefPic` + 88 `pRefList` occurrences | greps read 0 outside `PicId` plumbing; probe green per file | W3, W4, W6's signature leg, 5.5's `Drop` |
+| ~~W1~~ | ~~`pAccessUnitList` → `Option<Box<SAccessUnit>>`~~ — **DONE, T5.P1** (`a3b68334`) | 54 sites | — | W3's first cascade entry, taken |
+| ~~W2a~~ | ~~the context's two pool aliases: `pDec`/`pECRefPic` → `PicId`~~ — **DONE, T5.P2** (`eef8a90b`) | 85 sites | — | `dec_pic`/`ec_ref_pic` are now the **only two sites** W3 has to convert |
+| W2b | **the layer's `pDec` + the reference lists** → `PicId`/indices | 159 layer `.pDec` (`decode_slice` 72, `parse_mb_syn_cavlc` 30, `deblocking` 27, `parse_mb_syn_cabac` 13, `mv_pred` 13, rest 4); `pRefList` 82 + `pShortRefList` 25 + `pLongRefList` 24; `pRefPic` 113; `ppRefPic` 24; `pPreviousDecodedPictureInDpb` 11 — all decoder-only | greps read 0 outside `PicId` plumbing; probe green per file | W3, W4, W6's signature leg, 5.5's `Drop` |
 | W3 | ownership cascade: `pDqLayersList`, `pPicBuff`, `pTempDec` owned; `Pool<Box<SPicture>>` + `mut_and_rest`; `Drop` teardown; shell extended per field (never deleted) | 3 containers + cascade fns | zero `WelsMallocz`/`WelsFree` in `src/decoder/`; cascade functions deleted; probe green per container | 5.5 closes |
-| W4 | colocated + 5.3b: `GetColocatedMb` on `cur_and_ref`; `SetRectBlock`/`CopyRectBlock4Cols` on the grid; punning → byte ops | 238 `LD*/ST*` tokens remaining | decoder `LD32\|ST32\|LD16\|ST16\|LD64\|ST64` grep reads 0 | `mv_pred.rs` deny-ready |
-| W5 | P4: `pSps`/`pPps` → active-paramset ids + lookup | 184 field occurrences, 4 carriers | `.pSps\|.pPps` greps read 0; no lookup borrow outlives its expression (F41's mistake, not repeated) | context sheds 2 raw fields |
+| W4 | colocated + 5.3b: `GetColocatedMb` on `cur_and_ref`; `SetRectBlock`/`CopyRectBlock4Cols` on the grid; punning → byte ops | 325 `LD*/ST*` tokens remaining | decoder `LD32\|ST32\|LD16\|ST16\|LD64\|ST64` grep reads 0 | `mv_pred.rs` deny-ready |
+| W5 | P4: `pSps`/`pPps` → active-paramset ids + lookup | 205 field occurrences (131 + 74), 4 carriers | `.pSps\|.pPps` greps read 0; no lookup borrow outlives its expression (F41's mistake, not repeated) | context sheds 2 raw fields |
 | W6 | 5.6: `decode_slice.rs` per P1 — EC MC paths, the NZC `*mut u8` cache family (~167 uses, re-grep), F31's memset, the signature leg (**D-fid-1: functions may merge — the 148-function count is an upper bound, not a target**), `cabac_rbsp_window` retirement | the phase's largest file | `decode_slice.rs` compiles under `#![deny(unsafe_code)]` | W7 |
 | W7 | closure of the instruments: 5.2's straggler sweep; **F40-class sweep crate-wide** (element-vs-byte in copies); decoder `SHIM(phase2)` 48 + `SHIM(phase5)` 3 → **1 named survivor** (`data_ptr`'s output-contract consumer, Phase 8's); `deny(unsafe_code)` on every decoder module, exceptions enumerated | sweeps + deletions | SHIM greps match the survivor list exactly; every decoder module deny-clean or on the exception list with its Phase 8 pointer | the exit |
 | W8 | **the exit — never compressed**: all D-gate-1-deferred measurement (session N's stashed binaries, the niche verdict, the ≈+23% stop-line, the recovery/ledger adjudication vs ≈+21.6–21.9% cumulative CB), 3-pair+day-two protocol, §0 refresh, `prompts/phase6.md` (S19), briefs stamped historical | one session | `OVERALL: PASS` at `exit` level; ledger reconciled or escalated with the table; phase6.md exists | Phase 6 |
 
 ## Session mapping
 
-**P** = W1 → W5 in order, drop-from-the-end at seam boundaries (brief:
-[`phase5_session_p.md`](phase5_session_p.md)). **P′** = whatever P dropped + W6 +
-W7. **Q** = W8. Two sessions if P reaches W5; three otherwise. A probe run per
-container/file converted (T5.O3's lesson), no perf measurement before W8
-(D-gate-1).
+**P** = W1 + W2a — **spent** (`a3b68334`, `eef8a90b`). **P′** = W2b → W5. **P″** =
+W6 + W7. **Q** = W8. A probe run per container/file converted (T5.O3's lesson, and
+session P's three were green first time), no perf measurement before W8 (D-gate-1).
+
+The re-plan's "two sessions if P reaches W5" **did not hold, and the reason is
+W2b's**: `pDec` is two carriers, not one, and the second is session O's
+148-function signature leg wearing a different hat. Count is **three work sessions
+plus the exit**.
+
+**W2b's open design question — settle it before the first edit.**
+`DqLayerState::pDec`'s 159 readers are layer-scoped: `pCurDqLayer` is in scope,
+`pCtx` is not, and a `PicId` is only a picture if you hold the pool. Either the
+layer carries the pool (a back-pointer of the kind this phase deletes) or its
+functions take it (session O §1(b)'s narrowing, arriving from the other side).
+Nothing else in W2b is hard; this is.
 
 ## Phase exit conditions (the definition of done)
 

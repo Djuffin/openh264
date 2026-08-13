@@ -7939,3 +7939,319 @@ rest of the phase is behind.
    since (D-gate-1). `.perfpair/n_base`, `n_mid`, `n_head` are still on disk. Session O
    added T5.O0's niche, T5.O3's field, and T5.O4's list as structure the exit's ledger
    row will be measuring through.
+
+## 2026-08-13 — Phase 5, session P (W1 whole, W2's first seam: the two containers whose aliases were removable)
+
+**Commits:** `4f6495dd` (inherited doc tail: D-fid-1, phase5.md as a closed checklist,
+the brief), `a3b68334` (T5.P1, W1), `eef8a90b` (T5.P2, W2 seam 1), and this entry.
+
+### The session in one line
+
+**The ordering rule works forwards, and it says which conversions are available**:
+`pAccessUnitList` could own because T5.O4 had already given its nodes their own
+allocations, and `pDec`/`pECRefPic` could become ids because the pool never owned the
+pictures they aliased — while the layer's copy of `pDec` could not, because its 159
+readers have no pool to look in. Two W-items' worth of container converted, four
+hoists that were legal only against a raw field removed, and **`raw_ptr` did not move
+for the second of them**.
+
+### Control battery
+
+Docs-only tail, session O ended `OVERALL: PASS`, `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 474/468/20, ratchet 4420, census
+59, matching session O's exit on every figure. Ninth consecutive session whose open
+needed no correction.
+
+**No perf measurement** (D-gate-1). The debt is unchanged and W8's.
+
+### 0. The count the brief got wrong, and it changes a face's size
+
+S24, at the open. The brief sized W2 as "236 `.pDec` sites, plus 94 `pRefList` and
+209 `pRefPic`". `.pDec` is right (233 at `a3b68334`, and decoder-only by construction
+— the field is the decoder's). The other two, re-greped comment-stripped:
+
+| token | tree-wide | `src/decoder/` | `src/encoder/` | the brief said |
+|---|---|---|---|---|
+| `pRefPic` | 214 | **113** | 101 | 209 |
+| `pRefList` | 209 | **82** | 127 | 94 |
+
+**Neither figure states its scope, and the two disagree about what it was.** 209 for
+`pRefPic` is the tree; 94 for `pRefList` is nearer the decoder's 82 than the tree's
+209. Taken at face value the pair sizes W2 at ~539 sites, of which **228 are in
+`src/encoder/`** — code F12/P10 puts outside this phase entirely, and which a
+decoder-side `PicId` conversion cannot touch.
+
+This is S24's failure mode one level up: not a stale count, but a count whose *unit*
+is right and whose *domain* was never written down. **A count that decides a
+conversion's shape carries the directory it was taken in**, and a brief that mixes
+two scopes in one sentence is harder to catch than one that is simply out of date —
+both numbers look plausible on their own, and only the sum is absurd.
+
+### 1. W1 — the access unit (T5.P1), and the four hoists that were free until it owned
+
+`pAccessUnitList: *mut SAccessUnit` → `access_unit: Option<Box<SAccessUnit>>`, 54
+comment-stripped sites over four files. It was available *only* because T5.O4/O7 boxed
+the nodes: an owning `Box` at the access-unit level retags the access unit's own bytes,
+and the nodes are their own allocations, so `pCtx->pNalCur` and the `&mut BsCursor`
+`ParseSliceHeaderSyntaxs` holds into a node are untouched. **The rule two convictions
+produced (T5.N1, T5.O7) used forwards for the first time.**
+
+**What the raw field was hiding.** Seven functions hoisted
+`let pCurAu = (*pCtx).pAccessUnitList;` and used it across calls that reach the access
+unit themselves. Against a raw field that is free — a copied pointer value cannot be
+invalidated. Against an owner it is T5.O7's defect one level up. Four of the seven are
+real and each re-derives now:
+
+| function | the call in between | what it does to the access unit |
+|---|---|---|
+| `CheckIntegrityNalUnitsList` | `CheckAvailNalUnitsListContinuity` | derives it, and writes `uiEndPos` through its own borrow |
+| `WelsDecodeInitAccessUnitStart` | `WelsDecodeAccessUnitStart` | moves `uiStartPos`, which the hoisted read is *after* |
+| `DecodeCurrentAccessUnit` | the whole slice loop | re-derives a node per iteration |
+| `CheckAndFinishLastPic` | `ConstructAccessUnit` | decodes |
+
+The other three hold across nothing and keep one borrow — which is the distinction
+worth keeping: *derive per use* is not a blanket rule, it is what you do when
+something between the derivations can derive again.
+
+`cur_au(pCtx) -> Option<&mut SAccessUnit>` is the only way in, and its autoref is on
+the **field**, so the retag covers one word of the context rather than the context
+(S29). That is what lets `mark_au_ready` write `bAuReadyFlag` through `pCtx` while the
+access-unit borrow is live. Two consumers of it — `au_has_nals` and `mark_au_ready` —
+absorb an eight-site guard and a five-site pair; the slice branch's four-site error
+tail is `discard_nal_and_close_au`.
+
+**F19, per allocation.** The access unit and its `Vec`: the context's drop glue. Each
+node: `TagAccessUnits::drop`. `MemInitNalList`/`MemFreeNalList` are **deleted** — the
+allocator is `SAccessUnit::with_nodes`, the deallocator is drop glue, and F39's
+rival-allocator shape has no names left to write in. R4's first cascade entry:
+`WelsFreeStaticMemory` sets the field to `None`, which is the same program as moving
+it into `Drop`, because both of its callers run `drop(Box::from_raw(pCtx))` on the
+next line.
+
+**A second rival pair, found by the conversion.** `decoder_core.rs` declared its own
+`ForceClearCurrentNal` beside `nalu.rs`'s, **with no caller at all**. F39 was the same
+shape with both copies live; this one was invisible to the census (which compares
+duplicate *bodies*, and these had diverged in signature) and to every gate (dead code
+runs nowhere). Deleted, with `PAccessUnit`, which lost its last referent.
+
+S21: `make_zeroed_shell_valid` writes `None` explicitly. `Option<Box<T>>`'s `None` *is*
+all-zero via the null-pointer niche, so the write is redundant today — and it is there
+because the alternative is a field whose validity rests on a layout guarantee that
+nothing in the tree states.
+
+**Ratchet**: `raw_ptr` 4420 → 4404 (−16), `unsafe_fn` −2 (the deleted allocator pair),
+`decoder_context.rs` `unsafe_fn` +3 (the accessor and its two consumers). Probes green
+un-ignored, 753s, mid-face — the budget T5.O3 earned and T5.O7/O8 paid for.
+
+### 2. W2 seam 1 — the context stops pointing into the pool (T5.P2)
+
+`pDec: *mut Picture` → `Option<PicId>`; `pECRefPic: [*mut Picture; 16]` →
+`[Option<PicId>; 16]`. 74 comment-stripped `.pDec` sites and 11 `pECRefPic` over six
+files. These are exactly the two fields session O's closure classified as **pool
+aliases**, and they are why `Pool<Box<SPicture>>` has been blocked since T5.N1.
+
+`dec_pic(pCtx)` and `ec_ref_pic(pCtx, i)` **copy a stored slot pointer**; they do not
+derive one. That is `TagAccessUnits::nal`'s contract for `PicPool`'s reason — the pool
+addresses, it does not own, so the pointer carries `AllocPicture`'s provenance and no
+borrow of the pool touches it. **It is also the whole point of the seam**: when W3
+flips the slots to `Box<SPicture>`, those two functions are the only sites that become
+pool borrows, and everything upstream of them is already in the id world.
+
+`pic_slot(p) -> Option<PicId>` is the one-way door from pointers to ids. Total by
+design: a null pointer and a picture outside the pool are both "no slot", which is what
+the arms it replaces did.
+
+**One identity comparison stops having a fallback.**
+`same_picture((*pCtx).pECRefPic[0], pRef)` is `(*pCtx).pECRefPic[0] == pic_slot(pRef)`
+— P3's predicate with a slot on both sides and no address arm to reach. Fourth of the
+five identity sites; the deblocking filter (T5.N4) was the third.
+
+**A stored dangling pointer stops being writable.** `WelsFreeDynamicMemory` destroys
+the pool without clearing `pDec`. Nothing read it afterwards, so the port held a
+dangling pointer it never dereferenced — F38's shape, in the lifecycle instead of in
+`api/`, and *unexercised* for the same reason. With a slot handle the same sequence
+makes `dec_pic` return null, because `pPicBuff` is null by then. Not a fix of an
+observed defect; a defect that can no longer be written.
+
+`PicPool::over(slots)` is `CreatePicBuff`'s tail, factored, because a fixture cannot
+otherwise put its own pictures into a pool and
+`p3_slice_copy_self_copy_guard_is_by_identity` now needs one. Its two pictures enter
+through `addr_of_mut!` — S29's spelling at exactly the fixture class T5.O8 was
+convicted on.
+
+**The ratchet is flat across 85 converted sites and that is the honest reading.**
+`raw_ptr` 4404 → 4404. Two pointer fields died; four accessor signatures were born.
+The metric counts pointer *types written*, never pointer *dereferences* — session K's
+observation for the fourth session running, and this is its cleanest instance, because
+the structural change (a field that was an alias is now a handle) is exactly the kind
+the metric cannot see. What did move: **decoder `raw_ptr` 1283 → 1267**, phase5.md's
+own monotone metric, all of it W1's.
+
+Probes and **all five P3 identity tests** green under Miri un-ignored, 756s.
+
+### 3. What W2 seam 1 could not take, and why it is a seam rather than an omission
+
+`DqLayerState::pDec` is the context's pointer copied into the layer at
+`InitDqLayerInfo`'s single call site. **159 sites remain** — `decode_slice.rs` 72,
+`parse_mb_syn_cavlc.rs` 30, `deblocking.rs` 27, `parse_mb_syn_cabac.rs` 13,
+`mv_pred.rs` 13, `decoder_core.rs` 3, `error_concealment.rs` 1 — and every one of them
+is in a **layer-scoped** function: `pCurDqLayer` is in scope, `pCtx` is not. A `PicId`
+is only a picture if you have the pool, so converting the layer's copy means giving
+159 sites a pool, which is session O's §1(b) signature leg (148 functions) arriving
+from the other side.
+
+That is not a reason to defer it forever; it is the reason it is a separate commit with
+a separate design question, and the question is now specific: **does the layer carry
+the pool, or do its functions take it?** The first is a back-pointer of the kind the
+phase is deleting. The second is the signature leg.
+
+The rest of W2, sized at `eef8a90b`: `SRefPic`'s three lists (`pRefList` 82,
+`pShortRefList` 25, `pLongRefList` 24 — 100 of them in `manage_dec_ref.rs`),
+`SPicture::pRefPic` (113 decoder-wide), `ppRefPic` (24), and
+`pPreviousDecodedPictureInDpb` (11).
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 474 / 468 / 20 | **474 / 468 / 20** |
+| Miri `--lib` | 334 | **334** (941.5s) |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| census duplicate-body budget | 195 | **192** |
+| `raw_ptr` (crate) | 4420 | **4404** |
+| decoder `raw_ptr` (phase5.md's metric) | 1283 | **1267** |
+| `unsafe_block` | 627 | **627** |
+| `unsafe_fn` | 1245 | **1247** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+
+**Two numbers moved and one of them is the point.** `raw_ptr` −16, *all of it W1's*:
+W2 seam 1 converted 85 sites and moved it by zero, because the metric counts pointer
+*types written* and the seam trades two pointer fields for four accessor signatures.
+That is session K's observation for the fourth session running, and this is its
+cleanest instance — the structural change is precisely the kind the instrument cannot
+see. The duplicate-body budget is **195 → 192**, its second decrease ever (session M's
+198 → 195 was the first): T5.P1's deleted allocator pair and the dead
+`ForceClearCurrentNal`. No test was added by either face, which is why Miri and the
+test totals are flat across a session that converted 139 sites.
+
+### 5. Perf
+
+**Not measured. D-gate-1.** W8 inherits everything session N and O left, unchanged.
+Two things this session did that the exit's ledger row will be measuring through, both
+structural: the access unit's guards became `Option` matches rather than null tests,
+and `dec_pic` turns what were field reads into pool lookups — a bounds-checked `Vec`
+index per use, at 74 sites, some of them per-macroblock. That last one is the first
+change in the phase whose *direction* is plausibly negative, and it is written here so
+the ledger does not have to guess.
+
+### 6. What went into the rules
+
+* **Nothing new.** The tags that carried the session were S24 (§0's directory-scope
+  miss), S29 (the spelling at every derivation, and `cur_au`'s field-precise autoref),
+  S25 (the four hoists, enumerated per function rather than per file), S20 (the closure
+  that split W2 at the carrier boundary), S16 (the prose floor, eleventh instance, and
+  the flat ratchet), S21, S27, R4, R7, F19.
+* **S24 gains a scope, exactly as S29 did last session.** Session O's F38 lesson was
+  that a module exempt from a lint leaves every instrument that copied the lint's
+  scope. This session's is the mirror: **a count carries the directory it was taken
+  in**, and a brief that omits it can move half a face's work into another phase's
+  code.
+* **The ordering rule is now predictive, not just diagnostic.** T5.N1 and T5.O7 each
+  reached "a safe container may not lend while raw aliases into it are live" from a
+  Miri conviction. This session used it to *choose*: W1 was available because its
+  aliases had already died, W2 seam 1 was available because its container never owned,
+  and the layer's `pDec` is not because its readers cannot reach the container. No
+  probe was needed to make any of the three calls, and all three probe runs were green
+  on the first attempt.
+
+### 7. F3 — two hits, one alternation, acquitted (measurements 40–41)
+
+The closing battery drew **one hit per profile**: debug
+`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (39981 → **0**) and
+release `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0` (42538 →
+**42616**). Different clips, different `cabac`, one short and one *long*; both inside
+S14's signature on every axis. Everything else in the battery was green.
+
+**Step 0 did not apply, and the reason is worth carrying.** A decoder-only diff has
+usually meant the hash shortcut — but the shortcut needs the two `rust_enc` binaries
+to be byte-identical, and this is production decoder code in the same lib, so base and
+head differ even though the sweep compares encoders. Session D's shortcut was earned
+by a `#[cfg(test)]`-only diff. "Decoder-only" is not "test-only", and the two should
+not be conflated again.
+
+**Step 1**: both configurations **5/5 byte-identical in isolation**. **Step 2** fired
+on two hits — twelve whole `mt` presets per side, both debug binaries built once and
+swapped inside one loop, 240 configurations per sweep, **2880 per side**:
+**base 2 hits, head 3**. Not a difference, and S23b is satisfied.
+
+**The alternation produced the finding's strongest evidence to date, on both sides.**
+The base tree — session O's code, predating this session entirely — hit the battery's
+own debug configuration twice. And the head binary gave *that same configuration* **0
+bytes in the battery and 37837 in alternation round 10**: one binary, one
+configuration, two different wrong lengths. Measurement 39 needed fifteen isolation
+runs to reach three distinct outcomes; this reached two in an ordinary alternation
+without looking. *A deterministic port bug repeats its bytes.*
+
+**Acquitted.** Running total: forty-one measurements, fourteen alternations, twenty
+acquittals. Recorded in `phase0_findings.md` at adjudication time per S14 step 4.
+
+### Hand-off: Phase 5, session P′ — W2b, then W3 → W5
+
+The estimate moves by one: **P′ (W2b → W5), P″ (W6 + W7), Q (W8)** — three work
+sessions plus the exit, where the re-plan said two. The reason is W2b's and it is
+structural, not slippage: `pDec` is **two carriers**, and the second is session O's
+148-function signature leg wearing a different hat.
+
+1. **W2b's design question, and it is the whole of W2b's difficulty. Settle it
+   before the first edit, in writing, the way session O's §1 closure was settled.**
+   `DqLayerState::pDec` is `pCtx->pDec` copied into the layer at `InitDqLayerInfo`'s
+   single call site (`decoder_core.rs:3701`). Its **159 remaining readers** —
+   `decode_slice.rs` 72, `parse_mb_syn_cavlc.rs` 30, `deblocking.rs` 27,
+   `parse_mb_syn_cabac.rs` 13, `mv_pred.rs` 13, `decoder_core.rs` 3,
+   `error_concealment.rs` 1 — are **layer-scoped**: `pCurDqLayer` is in scope and
+   `pCtx` is not. A `PicId` is only a picture if you hold the pool, so the choice is:
+   * the layer carries a pool pointer — a back-pointer of exactly the kind this phase
+     is deleting, on the struct 5.2 spent eleven commits emptying of pointers; or
+   * the readers take the pool — session O §1(b)'s narrowing sweep, bottom-up and
+     S25-gated per function, arriving from the other side.
+
+   Nothing else in W2b is hard. `SRefPic`'s three lists (`pRefList` 82,
+   `pShortRefList` 25, `pLongRefList` 24 — 100 of them in `manage_dec_ref.rs`, one
+   file), `SPicture::pRefPic` (113), `ppRefPic` (24) and
+   `pPreviousDecodedPictureInDpb` (11) are `pic_slot` at the write and `slot()` at the
+   read, which is T5.P2's shape repeated. **All counts are decoder-only** — see §0 for
+   why that qualifier is now mandatory.
+
+2. **W3 is one seam narrower than it was.** `dec_pic` and `ec_ref_pic` are the only
+   two sites in the tree that turn a slot handle into a picture pointer for the
+   context, so `Pool<Box<SPicture>>` + `mut_and_rest` changes those two functions and
+   whatever W2b leaves. The rest of W3 is unchanged: `pDqLayersList`/`pPicBuff`/
+   `pTempDec` owned, the cascade into `Drop` (R4 — `access_unit` is the first entry and
+   it is taken), the shell **extended per owned field, never deleted**.
+
+   `pTempDec` is **not** a pool slot and cannot take a `PicId`: it is `AllocPicture`d
+   on its own at `decode_slice.rs`'s first B macroblock. It is `Option<Box<SPicture>>`
+   directly, and that is W3's, not W2b's. Noted at the field.
+
+3. **Re-grep at every face, and record the directory.** Session P's §0 is the reason:
+   the brief's `pRefPic`/`pRefList` sizes were tree-wide and most of both was the
+   encoder's, which F12/P10 puts outside the phase. A count that decides a
+   conversion's shape carries the directory it was taken in.
+
+4. **Budget a probe run per container.** Session P ran three and all three were green
+   first time — the first session since the rule was written where the budget bought
+   confidence rather than a finding, which is what a budget is supposed to do.
+
+5. **Findings**: nothing new this session. Inherited unchanged — **F41** and the eight
+   `CWelsDecoderImpl` back-pointers and the `src/api/` inventory are **Phase 8's**;
+   **F23** Phase 8's; **F36** decoder-threading's; **F3** per S14.
+
+6. **Perf debt for W8**, unchanged and now with one addition to expect: `dec_pic`
+   turns 74 former field reads into pool lookups (a bounds-checked `Vec` index each),
+   some per-macroblock. It is the first change in the phase whose *direction* is
+   plausibly negative, and the exit's ledger row should look for it rather than be
+   surprised by it. Session N's `.perfpair/n_base`, `n_mid`, `n_head` are still on
+   disk.
