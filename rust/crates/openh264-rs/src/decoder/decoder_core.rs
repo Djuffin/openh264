@@ -2718,16 +2718,15 @@ pub unsafe fn InitialDqLayersContext(
 
     UninitialDqLayersContext(pCtx);
 
-    let pMa = (*pCtx).pMemAlign;
-    // The grid's dimensions and the raw arrays' `numMb` are the same arithmetic,
-    // written once. This is the **allocation's** size, from the negotiated maximum
-    // — the layer's `iMbWidth`/`iMbHeight` are the current slice's and are smaller
-    // on any stream decoding below it (T5.E2).
+    // The **allocation's** dimensions, from the negotiated maximum — the layer's
+    // `iMbWidth`/`iMbHeight` are the current slice's and are smaller on any stream
+    // decoding below it (T5.E2). `pMa` and a separate `numMb` were still declared
+    // here for the 25 raw array allocations that died at T5.H3; the grid is the only
+    // consumer of this arithmetic now.
     let dims = MbDims::new(
         ((kiMaxWidth + 15) >> 4) as usize,
         ((kiMaxHeight + 15) >> 4) as usize,
     );
-    let numMb = dims.count();
 
     // One layer, and these 27 arrays are now allocated *into* it. They used to be
     // allocated into `SWelsDecoderContext::sMb` and re-aliased onto the layer once per
@@ -2759,12 +2758,9 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
     if pCtx.is_null() {
         return;
     }
-    let pMa = (*pCtx).pMemAlign;
-    // The allocation's own dimensions, which is what these frees must use — the
-    // layer's `iMbWidth`/`iMbHeight` are the *current slice's* and are smaller
-    // whenever a stream decodes below the negotiated maximum.
-    let numMb = ((((*pCtx).iPicWidthReq + 15) >> 4) * (((*pCtx).iPicHeightReq + 15) >> 4)) as usize;
-
+    // T5.E2's `numMb` — the free path's copy of the allocation's dimensions, and the
+    // one the closure got wrong — is gone with the raw arrays it sized. The layer's
+    // drop glue needs no size at all, which is the whole argument for owning it.
     let pDq = (*pCtx).pDqLayersList;
     if !pDq.is_null() {
         // T5.H3: the matching half of `InitialDqLayersContext`'s heap construction.
