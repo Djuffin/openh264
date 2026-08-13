@@ -1600,7 +1600,7 @@ unsafe fn DeblockingInterMb(
     let iMbY = (*pCurDqLayer).iMbY;
 
     let iCurLumaQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
-    let pCurChromaQp = *(*pCurDqLayer).pChromaQp.add(iMbXyIndex as usize);
+    let pCurChromaQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
     let iLineSize = (*pFilter).iCsStride[0];
     let iLineSizeUV = (*pFilter).iCsStride[1];
 
@@ -1615,7 +1615,7 @@ unsafe fn DeblockingInterMb(
             ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iLeftXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
-                + (*(*pCurDqLayer).pChromaQp.add(iLeftXyIndex))[i] as i32
+                + (*pCurDqLayer).grid.chroma_qp.get(iLeftXyIndex)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1667,7 +1667,7 @@ unsafe fn DeblockingInterMb(
             ((iCurLumaQp + *(*pCurDqLayer).grid.luma_qp.get(iTopXyIndex) as i32 + 1) >> 1) as i8;
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurChromaQp[i] as i32
-                + (*(*pCurDqLayer).pChromaQp.add(iTopXyIndex))[i] as i32
+                + (*pCurDqLayer).grid.chroma_qp.get(iTopXyIndex)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1840,7 +1840,7 @@ pub unsafe fn FilteringEdgeChromaHV(
 
     let pDestCb = (*pFilter).pCsData[1].add(((iMbY * iLineSize + iMbX) << 3) as usize);
     let pDestCr = (*pFilter).pCsData[2].add(((iMbY * iLineSize + iMbX) << 3) as usize);
-    let pCurQp = *(*pCurDqLayer).pChromaQp.add(iMbXyIndex as usize);
+    let pCurQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
 
     let mut iTc = [0i8; 4];
     let uiBSx4 = [3u8; 4];
@@ -1849,7 +1849,7 @@ pub unsafe fn FilteringEdgeChromaHV(
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
-                + (*(*pCurDqLayer).pChromaQp.add((iMbXyIndex - 1) as usize))[i] as i32
+                + (*pCurDqLayer).grid.chroma_qp.get((iMbXyIndex - 1) as usize)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1909,7 +1909,7 @@ pub unsafe fn FilteringEdgeChromaHV(
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         for i in 0..2 {
             (*pFilter).iChromaQP[i] = ((pCurQp[i] as i32
-                + (*(*pCurDqLayer).pChromaQp.add((iMbXyIndex - iMbWidth) as usize))[i] as i32
+                + (*pCurDqLayer).grid.chroma_qp.get((iMbXyIndex - iMbWidth) as usize)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
