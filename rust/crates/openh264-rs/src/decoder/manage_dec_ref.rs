@@ -645,7 +645,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                             ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
-                } else if pRef == prev_pic {
+                } else if crate::decoder::picture::same_picture(pRef, prev_pic) {
                     WelsLog(
                         &(*pCtx).sLogCtx,
                         WELS_LOG_WARNING,

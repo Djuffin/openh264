@@ -184,6 +184,7 @@ impl Default for TagMCRefMember {
 // ============================================================================
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
+pub use crate::decoder::picture::same_picture;
 pub use crate::safe::plane::PaddedPlane;
 
 
@@ -234,10 +235,14 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
 //
 // | function | the pair | the guard, and where |
 // |---|---|---|
-// | `DoErrorConFrameCopy` | `pDec` / `pPreviousDecodedPictureInDpb` | `pSrcPic == pDstPic` (:348) |
-// | `DoErrorConSliceCopy` | same pair | `pSrcPic == pDstPic` (:405) |
-// | `DoErrorConSliceMVCopy` | same pair | `pDstPic == pSrcPic` (:830) |
-// | `DoMbECMvCopy` | `pDec` / one reference | `pDec == pRef` (:530) |
+// | `DoErrorConFrameCopy` | `pDec` / `pPreviousDecodedPictureInDpb` | `same_picture` (:345) |
+// | `DoErrorConSliceCopy` | same pair | `same_picture` (:398) |
+// | `DoErrorConSliceMVCopy` | same pair | `same_picture` (:822) |
+// | `DoMbECMvCopy` | `pDec` / one reference | `same_picture` (:523) |
+//
+// All four were `==` over `*mut SPicture` until T5.N2 and are slot comparisons now
+// (`picture.rs`'s `same_picture`, plan P3). The disjointness argument is unchanged,
+// because the predicate is: two pool slots are two pictures.
 //
 // **Every one of them returns before the first derivation.** That is not a property
 // this conversion added — the C++ has all four, because a `memcpy` from a picture
@@ -342,7 +347,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
-    } else if pSrcPic == pDstPic {
+    } else if same_picture(pSrcPic, pDstPic) {
         // Prevent self-copy overlap
     } else {
         if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr(0).is_null() {
@@ -395,7 +400,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
 
-    if !pSrcPic.is_null() && pSrcPic == pDstPic {
+    if !pSrcPic.is_null() && same_picture(pSrcPic, pDstPic) {
         return;
     }
 
@@ -520,7 +525,11 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     iMbY: i32,
     pMCRefMem: *mut sMCRefMember,
 ) {
-    if pDec == pRef || pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || pCtx.is_null() {
+    // The null tests move ahead of the identity test so `same_picture` is never
+    // handed a pointer it must not read. Both arms return, so the order is not
+    // observable; `pDec == pRef` with both null took the first arm before and takes
+    // the second now.
+    if pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || pCtx.is_null() || same_picture(pDec, pRef) {
         return;
     }
 
@@ -552,7 +561,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     }
 
     if !(*pCtx).pECRefPic[0].is_null() {
-        if (*pCtx).pECRefPic[0] == pRef {
+        if same_picture((*pCtx).pECRefPic[0], pRef) {
             iMVs[0] = (*pCtx).iECMVs[0][0] as i16;
             iMVs[1] = (*pCtx).iECMVs[0][1] as i16;
         } else {
@@ -819,7 +828,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
         sMCRefMem.iPicWidth = (*pDstPic).iWidthInPixel;
         sMCRefMem.iPicHeight = (*pDstPic).iHeightInPixel;
 
-        if pDstPic == pSrcPic {
+        if same_picture(pDstPic, pSrcPic) {
             return;
         }
     }
@@ -978,6 +987,12 @@ mod tests {
     // behaviour-preserving only if the comparison means "the same picture
     // object". Both tests give the two pictures the **same POC** so a POC-based
     // rewrite would take the wrong arm and the test would say so.
+    //
+    // **T5.N2 landed that replacement and these still pass unchanged**, because
+    // their fixtures are not pool pictures and so take `same_picture`'s address
+    // arm. The slot arm — two *pooled* pictures with one POC — is pinned by
+    // `pic_queue.rs`'s `pooled_pictures_are_identified_by_slot_not_by_poc`; the
+    // two tests together cover both arms of the predicate.
     // -----------------------------------------------------------------------
 
     /// Site 2 — `DoErrorConSliceCopy`: when the previous decoded picture *is* the

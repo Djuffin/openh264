@@ -82,6 +82,11 @@ pub use crate::decoder::slice::EWelsSliceType;
 
 pub use crate::safe::plane::PaddedPlane;
 
+/// A handle to one slot of the decoder's picture pool. Declared in `safe/pool.rs`
+/// and re-exported by `pic_queue.rs` as `PicId`; named here because [`SPicture`]
+/// carries one.
+pub use crate::safe::pool::Id as PicId;
+
 
 /// Reconstructed Picture definition.
 ///
@@ -206,6 +211,22 @@ pub struct SPicture {
     /// Index of this picture node inside the parent `SPicBuff` buffer pool.
     pub iPicBuffIdx: i32,
 
+    /// The pool slot this picture occupies — plan §2.2.3's `PicId` — or `None` for a
+    /// picture that is not in the pool at all (`pCtx->pTempDec`, and every test
+    /// fixture).
+    ///
+    /// **Not `iPicBuffIdx`, and the difference is when it is written.** The C sets
+    /// `iPicBuffIdx` in `PrefetchPic`, so a picture that has never been prefetched
+    /// reports slot 0 — which is fine for what the C reads it for (the reordering
+    /// path only ever looks at a picture that has been decoded into), and useless as
+    /// an identity, because it makes every fresh picture indistinguishable from slot
+    /// 0's. This is written once, by [`PicPool`](crate::decoder::pic_queue::PicPool)
+    /// at construction, and a picture never moves between slots. `iPicBuffIdx` keeps
+    /// its own timing exactly: it is read at `codec_api.rs:1569` off
+    /// `pPreviousDecodedPictureInDpb`, so moving its write would be a behaviour
+    /// change on the reordering output path.
+    slot: Option<PicId>,
+
     /// Primary slice type of the picture (`I_SLICE`, `P_SLICE`, `B_SLICE`, etc.).
     pub eSliceType: EWelsSliceType,
 
@@ -283,6 +304,7 @@ impl Default for SPicture {
             uiTimeStamp: 0,
             uiDecodingTimeStamp: 0,
             iPicBuffIdx: 0,
+            slot: None,
             eSliceType: EWelsSliceType::UNKNOWN_SLICE,
             bIsUngroupedMultiSlice: false,
             bNewSeqBegin: false,
@@ -348,6 +370,51 @@ impl SPicture {
     pub fn is_free(&self) -> bool {
         !self.bUsedAsRef && self.iRefCount <= 0
     }
+
+    /// The pool slot this picture occupies, or `None` if it is not in the pool.
+    #[inline]
+    pub fn pic_id(&self) -> Option<PicId> {
+        self.slot
+    }
+
+    /// Records the slot this picture was allocated into.
+    ///
+    /// The pool is the only caller and it calls once, from `CreatePicBuff`, before
+    /// the pool is reachable from anything else.
+    #[inline]
+    pub(crate) fn set_pic_id(&mut self, id: PicId) {
+        self.slot = Some(id);
+    }
+}
+
+/// Plan P3's identity predicate: **are these two the same picture?**
+///
+/// Slot equality, and where a slot exists that is the whole answer — which is the
+/// property the five P3 identity tests were written to pin, because the alternative
+/// reading ("a picture with the same POC") differs exactly when the DPB holds two
+/// pictures with a duplicate POC, and a stream can produce that.
+///
+/// The address fallback is not a hedge, it is the definition of the population that
+/// has no slot: `pCtx->pTempDec` (`decode_slice.rs:2043`, allocated outside the pool
+/// and never compared with anything) and test fixtures. A picture with no slot is the
+/// same picture as nothing but itself. The arm disappears as the holders convert —
+/// where a caller already has `PicId`s, as `SDeblockingFilter` does after T5.N4, it
+/// compares them directly and never reaches here.
+///
+/// # Safety
+/// `a` and `b` must each be null or point to a live [`SPicture`].
+#[inline]
+pub unsafe fn same_picture(a: *const SPicture, b: *const SPicture) -> bool {
+    if a.is_null() || b.is_null() {
+        return a == b;
+    }
+    match ((*a).pic_id(), (*b).pic_id()) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+impl SPicture {
 
     // =========================================================================
     // Plane accessors — the one way in
