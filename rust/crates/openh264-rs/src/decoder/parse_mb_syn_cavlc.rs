@@ -690,7 +690,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            let pTopMode = dq.pIntraPredMode.add(iTopXy as usize).cast::<i8>();
+            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
             ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
         } else {
             let iPred: u32 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
@@ -702,7 +702,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = dq.pIntraPredMode.add(iLeftXy as usize).cast::<i8>();
+            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
             *pIntraPredMode.add(0 + 8) = *pLeftMode.add(4);
             *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
             *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);
@@ -1991,7 +1991,7 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            let pTopMode = dq.pIntraPredMode.add(iTopXy as usize).cast::<i8>();
+            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
             ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
         } else {
             let iPred: u32 = if na.iTopAvail != 0 { 0x02020202 } else { 0xffffffff };
@@ -1999,7 +1999,7 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = dq.pIntraPredMode.add(iLeftXy as usize).cast::<i8>();
+            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
             *pIntraPredMode.add(0 + 8 * 1) = *pLeftMode.add(4);
             *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
             *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);
