@@ -1351,9 +1351,9 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
     if !(*pCtx).pAccessUnitList.is_null() {
         let au = &*(*pCtx).pAccessUnitList;
         for j in au.uiStartPos..=au.uiEndPos {
-            let pNal = *au.pNalUnitsList.add(j as usize);
-            if !pNal.is_null() {
-                let nal = &*pNal;
+            // T5.O4: the nodes are owned, so `get` is the whole guard — the null test
+            // this replaces could only ever fail past the end of the list.
+            if let Some(nal) = au.nal_units.get(j as usize) {
                 if nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
                     || nal.sNalHeaderExt.bIdrFlag
                 {

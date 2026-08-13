@@ -1333,3 +1333,33 @@ catastrophic divergence rather than a missing input. **Take the frame count from
 run's *both* sizes: two encoders failing identically is a harness result, never a finding.
 
 Running total: **thirty-eight measurements, thirteen alternations, seventeen acquittals.**
+
+### Measurement 39 (Phase 5, session O, 2026-08-13) — the first isolation run to reproduce a *third* distinct length
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 39 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**) | 39981 | **0** |
+
+Drawn by a mid-session `family` battery run to check an unrelated decoder change;
+`PASS=340 FAIL=1` on the debug sweep, release 341/341. Inside S14's signature on every
+axis — `mt`, `sm=3`, `t=4`, wrong length (zero), debug profile. The session's own diff was
+**decoder-only**, which is as close to the step-0 hash shortcut as a non-identical binary
+gets.
+
+**Step 1's isolation re-run reproduced, and the reproduction is the interesting part.**
+Fifteen runs of the hitting configuration on an idle machine: **fourteen byte-identical**
+at 39981, and **one that produced a 17-frame stream** where every other run produced 18
+(`1566720` against `1658880` bytes of decoded YUV). With the sweep's own zero-byte result
+that is **three distinct outcomes from one binary and one configuration** — which is
+S14 step 1's discriminator stated exactly: *a deterministic port bug repeats its bytes.*
+Every prior reproduction in this finding's history (29, 35) repeated the *same* wrong
+length; this is the first that did not, and it is the strongest single piece of evidence
+the finding has that the mechanism is a race rather than a divergence.
+
+One hit in the sweep, so step 2 does not fire. **Acquitted as F3.**
+
+The rate: 1 in 341 configurations on this battery. Nothing new about the signature —
+`320x192`, `n=600`, `t=4`, `cabac=1` have all appeared before, and measurements 36–38
+already removed the stream, `n` and `t` clauses as conditions.
+
+Running total: **thirty-nine measurements, thirteen alternations, eighteen acquittals.**
