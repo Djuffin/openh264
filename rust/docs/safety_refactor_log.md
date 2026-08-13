@@ -6871,3 +6871,265 @@ fourteen acquittals.**
 6. **Unchanged:** F23 is Phase 8's, F31's redundant memset 5.5's, F22's map 5.3's,
    **F36 decoder-threading's** (and it is a partial function, not a dropped line),
    `PicPool`/identity deferred.
+
+## 2026-08-13 — Phase 5, session M (5.2's last structural pieces, and F22 closes on the signatures they converged)
+
+**Commits:** `7cff94d5` (inherited doc tail), `c54b1067` (Face 1's confirmation),
+`27243703` (T5.M1, the rename), `cd8d7ae7` (T5.M2, the scratch caches), `0a8ea1a8`
+(T5.M3, `pBitStringAux`), `6e078a08` (ratchet), `d7b9e1e2` (F3 measurement 36),
+`16a6130c` (T5.M4, F22's unification), and this entry.
+
+### The session in one line
+
+The cumulative number survived its second day (**+2.57%** CB against session L's
++2.93%), **5.2's three remaining structural pieces landed** — the `DqLayerState` rename,
+45 scratch-cache parameters, and `pBitStringAux` — and then **F22 closed**, on exactly
+the signature convergence the cache conversion had produced six hours earlier.
+
+### Control battery
+
+Docs-only tail, session L accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 468/462/20, ratchet 4507, census 60,
+matching session L's exit on every figure. Sixth session running that the open needed no
+correction.
+
+### 1. Face 1 — the day-two confirmation, and what it settles
+
+| reading | day | CB | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| the whole 22-family 5.2 flip (`3c4c6f4e` → `f63e8ef6`) | L | +2.93% | +0.97% | +1.01% | +1.01% | +0.00% |
+| the same span, re-read | **M** | **+2.57%** | +0.65% | +0.79% | +0.79% | +0.03% |
+| session null, 7 pairs | M | — | — | — | +0.02%…+0.19%, median +0.03% | +0.00% |
+
+**It confirms on every axis S2b asks about**: same sign on all three decode rows, CB
+within **0.36 points** against a ~1-point criterion, every row above the null band's
+ceiling rather than just the median, encode flat.
+
+**The contrast with the per-family readings is the whole argument for aggregates, and it
+is now a two-sided result.** T5.J3's *one family*, read three times at 7 pairs, gave
++0.03%, +0.27%, −0.13% — disagreeing in sign. This span, read twice on two days, gives
++2.93% and +2.57% — agreeing row by row. Nothing about the harness changed between those
+experiments except the size of the thing measured.
+
+**Cumulative CB ≈ +20.4…+20.7%** against the ≈+23% stop-line, **≈2.3–2.6 points of
+headroom**, and the conservative end is what the rest of the phase spends against. The
+figure is settled; no later session re-derives it from per-family sums.
+
+### 2. Face 2 — `SDqLayer` → `DqLayerState` (T5.M1), and the census key the brief got wrong
+
+A rename, one commit, S20 satisfied by construction. 29 files name `SDqLayer` crate-wide
+and **11 are the decoder's** (10 in `src/decoder/` plus `safe/mb_grid.rs`'s prose, 101
+occurrences); the other 18 are the encoder's own declaration and its consumers, and the
+two populations never cross — every encoder file imports from `encoder::svc_encode_slice`,
+every decoder file from `decoder::decoder_core`, with rustc as the witness.
+`assert_size!(SDqLayer, 512)` pins the encoder's namesake and did not move.
+
+**The census line is removed, not re-keyed to `x1`.** The brief said re-key; the
+instrument says otherwise. `find_dup_types.sh`'s `dup_report` prints only names with
+`n > 1`, so after the rename `SDqLayer` is never reported and an `x1` entry would be text
+the gate never consults — the same disposition `type SMbCache x2` got at T5.E2, by
+deletion there and by rename here. **60 → 59 allowlisted**, and the brief is corrected in
+place. S24 is usually pointed at counts; this is it pointed at a *tool's semantics*, and
+the answer was in `census.sh`'s own source both times.
+
+`PDqLayer` keeps its C name deliberately, with the reason at the alias: it is a raw
+pointer *to* the layer and Phase 5 deletes it outright. One stale doc comment died on the
+way past — T5.G2's "Per-MB array of 16, not a scalar", orphaned onto `iLumaStride` when
+`pIntraPredMode` flipped at T5.L7, describing a stride as a per-macroblock array.
+
+### 3. Face 3 — the scratch caches (T5.M2), and a count that was 40% low
+
+**45 raw parameters, not the brief's 32** — `parse_mb_syn_cabac.rs` 26,
+`parse_mb_syn_cavlc.rs` 10, `mv_pred.rs` 9, against 19/8/5. The brief's grep missed
+`FillSpatialDirect8x8Mv`/`FillTemporalDirect8x8Mv`'s pairs and both `*const` spellings in
+`ParseMvdInfoCabac`. The owners are four stack locals in `decode_slice.rs` (`:3111`,
+`:3462`, `:4734`, `:4935`; §2's `:4632`/`:4836` are stale), and the callers were *already*
+passing `&mut` locals that Rust coerced at the boundary — the face makes the boundary say
+what the callers already meant.
+
+**The S25 answer is the same for all 22 functions and worth writing down rather than
+inferring**: nothing else can reach these objects. They are stack arrays, no site stores
+one anywhere, and the only path to one is the parameter. Held across calls that re-enter
+the layer — F28's shape for anything reachable from `pCtx` — they are still disjoint from
+it, because a stack array is not reachable from `pCtx` at all. That is why this face has
+no F28-class work in it.
+
+**Four parameters are legitimately nullable and became `Option`, and the distinction is
+session L's**: the C++ *does* test `pMotionVector != NULL` / `pMvdCache != NULL` in the
+two `Fill*Direct8x8Mv` functions, because the CAVLC path has no mvd cache;
+`ParseRefIdxCabac`'s `direct` is NULL on the four P-slice call sites and a cache on the
+four B-slice ones. Read-only consumers took `&`, writers `&mut`.
+
+### 4. Face 4 — `pBitStringAux` (T5.M3), and the mirror that was fresher than the field
+
+The layer held `*mut BsReader` = `&pNalCur->sNalData.sVclNal.sSliceBitsRead` — a pointer
+cached beside its owner, §2's named class, of which `SDeblockingFilter.pCsData` (5.4's) is
+now the last. 33 occurrences on the re-grep, not §2's 24. All 43 reads go through one
+accessor, `bit_stream::slice_bit_reader(pCtx)` (S7's one helper, S29's `addr_of_mut!`).
+
+**The route it needed already existed and was broken.** `pCtx.pNalCur` was written **once,
+before the loop** (`decoder_core.rs:3573`) while `pNalCur` is re-read at the bottom of the
+inner loop, so **from the second slice NAL of any access unit onward the context's copy
+pointed at the first NAL** while the layer's mirror pointed at the right one. Nothing read
+it — its one reader is `WelsDecodeAndConstructSlice`, F36's dead `iThreadCount > 1` arm —
+which is why five phases of byte-exact gates never saw it. The write moved to the statement
+the mirror occupied. The C++ has no counterpart to compare against: `decoder_core.cpp:2491`
+sets `pCtx->pNalCur = NULL` and never writes it again, so *its* reader (the same dead MT
+arm, `decode_slice.cpp:1621`) reads NULL. **F36's inventory grows by one, and this is the
+fourth thing found by looking at that arm sideways rather than by running it.**
+
+**What the brief expected and did not get: `SHIM(` does not move.**
+`cabac_decoder.rs`'s `cabac_rbsp_window` was to "die with" `pBitStringAux`; it does not.
+Its 18 callers in `parse_mb_syn_cabac.rs` take `pCtx` and nothing else, so it is still the
+only way they reach a window. What changed is the marker's *reason* — it walks one
+derivation now instead of a cached duplicate — and its doc comment says so. It retires
+when 5.6 converts those callers. Claiming the count fell would have been the easy write-up
+and the wrong one.
+
+### 5. Face 5 — F22 closes (T5.M4), and it closes because Face 3 happened first
+
+Eight names had two definitions each. **Home = the C++'s home**: `mv_pred.cpp` declares
+seven and `parse_mb_syn_cabac.cpp` calls them; `parse_mb_syn_cabac.cpp:141` declares
+`UpdateP8x8RefIdxCabac` and `mv_pred.cpp` calls *it*. Resolution **per function** (S21),
+and it differs by function — three keep `mv_pred.rs`'s `pDec` guard because the C++ has
+it, `Update8x8RefIdx` loses `mv_pred.rs`'s *added* guard because the C++ has none, and
+`UpdateP8x8RefIdxCabac` moves the other way entirely.
+
+**F22 predicted its own unblocking**: its "why it is 5.3's" names the blocker as the two
+modules' cache-array shapes differing — "exactly the signature the 5.2/5.3 `MbGrid`
+conversion changes". T5.M2 converged them that morning. The correct order showed up twice:
+T5.M2 preserved five port-added `is_null` guards *faithfully* as `Option<&mut …>`, and
+T5.M4 deleted them once the C++ comparison said they were additions. Convert faithfully,
+then unify — the divergence appears in one diff instead of being quietly dropped in
+another.
+
+**One dead parameter deleted.** `UpdateP8x8RefIdxCabac` takes `pRefIndex[LIST_A][30]` in
+the C++ and never reads it; both port copies marked it `_`; so each caller had to invent a
+value — `mv_pred.cpp` passes a cache, `mv_pred.rs` passed a null. **The dead parameter was
+the divergence.**
+
+**Zero bytes moved**, which was the commit's own condition: goldens unmoved, 341/341 both
+profiles, both benches bit-identical.
+
+**And the instrument under-reported the finding by five eighths.** Unifying all eight
+pairs moved the duplicate-body budget **198 → 195** — its first decrease since session A
+widened it — because `find_stub_bodies.py --dups` can only see pairs whose bodies stayed
+*identical*. The five that had **diverged**, the ones F22 is about, were invisible to it by
+construction. **A duplicate-body count is a floor on the duplication, never a measure of
+it**, and the copies it cannot see are exactly the ones worth finding.
+
+### 6. Face 6 — not started, and why
+
+5.3b (the punning, `SetRectBlock`) is the face the brief marks as first to drop, and it
+drops. Two S24 numbers say why it is not a tail-end job: **279 `LD*`/`ST*` punning sites in
+`mv_pred.rs` alone** (the survey's "92" predates five phases), which is six times T5.M2's
+converted population; and of `SetRectBlock`/`CopyRectBlock4Cols`'s 18 call sites, most are
+inside `GetColocatedMb` — the colocated code this brief explicitly fences out, because it
+borrows two pictures at once and needs `PicPool`'s split borrow. Converting the helper with
+its main consumer fenced off would have left a bridge to nowhere.
+
+**Also not done, and it is a scope correction rather than a drop**: Face 3's fourth cache
+type. The `*mut u8` non-zero-count caches are **167 uses across 18 functions, and 96 of
+them are in `decode_slice.rs`** — 5.6's file by P1, whose conversion order the plan fixes
+last. The 30-entry caches the brief describes, and the ones F22 needed, are done; this
+family is a separate closure whose centre of gravity is another step's, and it is listed
+here with its owner per S18 rather than half-converted.
+
+### 7. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 468 / 462 / 20 | **468 / 462 / 20** |
+| Miri `--lib` | 328 | **328** (~908s, both probes) |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 60 | **59** |
+| census duplicate-body budget | 198 | **195** |
+| `raw_ptr` | 4507 | **4460** |
+| `unsafe_block` | 625 | **625** |
+| `unsafe_fn` | 1248 | **1241** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+
+Per-file `raw_ptr` (S16): `parse_mb_syn_cabac.rs` **−27**, `parse_mb_syn_cavlc.rs` −10,
+`mv_pred.rs` −10, `decoder_core.rs` −2, `bit_stream.rs` **+2** (the accessor). **T5.M1 is
+invisible in this table and that is its evidence**: a rename writes no pointer type and
+deletes none.
+
+**`unsafe_fn` −8 is the number to notice.** It has been ~flat for the whole phase, and S16
+says why: it stays flat while raw bodies are *strangled* and falls hard when they are
+**deleted**. F22's eight duplicate definitions are the first deletions of that kind in
+Phase 5 (`parse_mb_syn_cabac.rs` −7, `mv_pred.rs` −1). `unsafe_block` unchanged for a
+fourth session, and no S28 test owed for a second — T5.M2's caches are stack arrays a
+borrow reaches whole, and T5.M3's one derivation replaces a field that was already raw and
+reaches the same object.
+
+### 8. Perf — the session as one span
+
+| span | pairs | CB | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.M1–T5.M4** (`f63e8ef6` → `16a6130c`) | 7 | **−0.77%** | −0.08% | −0.25% | **−0.25%** | +0.03% |
+| session null | 7 | — | — | — | +0.02%…+0.19% | +0.00% |
+
+**Every decode row lands below the null band's floor** — the first Phase 5 span to land
+negative outside the floor, judged by the standard that made session L's +2.93% real. The
+claim being made is the weak one: **this session cost nothing**, so the ≈2.3 points of
+headroom are untouched and cumulative CB stays ≈ +20.4…+20.7%. "The port got faster" is
+not claimed on one row of a three-row bench with no second day, however plausible the
+mechanism (45 parameters became borrows, so 167 dereferences became indexed reads of
+constant-length arrays; a pointer chase left every parsing prologue; eight function bodies
+died).
+
+### 9. F3 — one hit, acquitted, and the signature loses two more clauses
+
+`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0`, **release**, C++ 40992 vs
+Rust **0**. Inside S14's signature on every axis. Step 1's isolation re-run: **5×
+byte-identical**, no reproduction, the ordinary outcome. One hit, so step 2 does not fire.
+**Acquitted**, appended as measurement 36 at adjudication time.
+
+It **widens** the signature. Measurements 29 and 35 made
+`320x192 t=4 sm=3 n=600 cabac=1` in *debug* look like the susceptible configuration; this
+is the same stream, thread count, slice mode and `n` with `cabac=0`, `rc=0` and the other
+profile. So the susceptibility is `320x192 t=4 sm=3 n=600`, and the entropy coder and RC
+mode are no more part of it than `n=600` turned out to be at session K. The wrong length
+is a first for this configuration too: 29 and 35 were short, this is zero.
+Running total: **thirty-six measurements, thirteen alternations, fifteen acquittals.**
+
+### 10. What went into the rules
+
+* Nothing new, and that is worth stating after four faces. Every judgement this session
+  needed was already a tagged rule — S24 three times (a count 40% low, a count 38% low,
+  and a *tool's semantics* read from prose), S25 once with an answer that took one grep,
+  S16's per-file map twice, S14 once, S2b's aggregate clause twice.
+* **S24's third form is new in kind if not in rule**: twice this session the wrong premise
+  came not from a stale count but from a summary of what an *instrument* does — the census
+  key ("re-key to x1") and the duplicate-body budget ("198 groups" as a measure of the
+  duplication). Both were settled by reading the tool's source. S24 already says a brief is
+  a lead and never evidence; the tools are covered by the same sentence, and now have two
+  precedents under it.
+
+### Hand-off: Phase 5, session N — the `PicId` cluster
+
+1. **5.1's second half**: `PicPool`, the recycling predicate as a method on it, `PicId` for
+   the three identity sites. Five P3 tests exist to gate exactly this; `safe/pool.rs`
+   already has the handle type and its `pair_mut`. Read the tests before touching either
+   file.
+2. **5.3's colocated reads** on `cur_and_ref` — fenced out of session M at the site. They
+   borrow two pictures at once and need `PicPool`'s split-borrow API, which is item 1.
+3. **5.4's deblocking driver**: `SDeblockingFilter` holds `PicId`s; `pCsData`, **the last
+   plane-pointer mirror in the decoder**, dies with it. The three deblocking identity tests
+   gate it.
+4. **What 5.3 still owes after this session** (5.3b, not started): **279** `LD*`/`ST*`
+   punning sites in `mv_pred.rs` and 21 in `parse_mb_syn_cavlc.rs`;
+   `SetRectBlock`/`CopyRectBlock4Cols` → typed generics on the grid, whose call sites are
+   mostly inside `GetColocatedMb` and so want item 2 done first. Size it as its own face,
+   not a tail.
+5. **What 5.2 still owes**: the straggler sweep, and the `*mut u8` non-zero-count cache
+   family — 167 uses, 96 in `decode_slice.rs`, so **5.6's** by P1 unless a later session
+   decides otherwise.
+6. **Measure the session as one span** (S2b, and Face 1's rule): 7 pairs, a null at 7
+   pairs, never a per-face half. Headroom is **≈2.3 points** and the figure is settled —
+   do not re-derive it.
+7. **Unchanged**: F23 is Phase 8's, F31's redundant memset 5.5's, **F36
+   decoder-threading's** (a partial *function*, and session M added the stale `pCtx.pNalCur`
+   write to its inventory). **F22 is closed.**

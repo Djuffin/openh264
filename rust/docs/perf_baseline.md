@@ -1657,3 +1657,27 @@ rest of 5.2 (`DqLayerState`, the 32 scratch-cache re-points, `pBitStringAux`) pl
 The figure is no longer provisional. Session L measured it and this session confirmed it,
 which is what S2b's day-two clause exists to produce; no later session needs to re-derive
 it from per-family sums, and none should.
+
+#### The session's own span — 5.2's tail and 5.3a, measured whole
+
+Per Face 1's rule (cluster or whole-session span, never a per-face half — S2b, and
+session L §2's correction), the four code faces are one span:
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.M1–T5.M4** (`f63e8ef6` → `16a6130c`) | 7 | **−0.77%** | −0.08% | −0.25% | **−0.25%** | +0.03% |
+| session null (same binary both slots) | 7 | — | — | — | +0.02% … +0.19%, median **+0.03%** | +0.00% |
+
+**Every decode row lands below the null band's floor, and CB by four times the band's
+width.** This is the first Phase 5 span to land *negative* outside the floor, judged by
+exactly the standard that made session L's +2.93% real.
+
+Two things it is, and one it is not. It **is** a clean answer to the question the session
+had to ask — the ≈2.3 points of headroom are untouched, so 5.2's tail and 5.3's first half
+were free. It **is** mechanically plausible: T5.M2 turned 45 pointer parameters into
+borrows, so 167 dereferences became indexed reads of arrays whose length is a constant;
+T5.M3 deleted a pointer chase from every parsing function's prologue; T5.M4 deleted eight
+duplicate function bodies. It is **not** a claim that the port got faster — one row of a
+three-row bench, a 0.17-point null, and no second day. The honest statement is the one the
+headroom rests on: **this session cost nothing**, and cumulative CB stays at
+**≈ +20.4…+20.7%** against the ≈+23% stop-line.
