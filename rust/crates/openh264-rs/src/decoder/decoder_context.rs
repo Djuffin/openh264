@@ -736,6 +736,13 @@ impl SWelsDecoderContext {
     /// `Box::default()`'s by-value path overflows a 2 MiB test-thread stack. This is
     /// the replacement for the `Box::new_zeroed().assume_init()` idiom, which stopped
     /// being legal at T3.3 (a zeroed `Vec` is an invalid value).
+    ///
+    /// **This is the context's real constructor, and 5.5 does not replace it** (session
+    /// O's closure). The shell is here for the *size*, not for the owned fields —
+    /// `make_zeroed_shell_valid` writes two of 114 — so a by-value constructor is not
+    /// an option at any point in the phase, and "retire the shell" was never a step
+    /// anything could perform. What 5.5 owes is to keep the shell honest per owned
+    /// field (S21), which is what T5.O3 did when the CABAC engine moved in.
     pub fn new_boxed() -> Box<Self> {
         let mut shell = Box::<Self>::new_zeroed();
         Self::make_zeroed_shell_valid(shell.as_mut_ptr());
