@@ -1032,7 +1032,12 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   formatted across three lines each — a count from a grep of the code is *still a
   summary* when the code's unit is the expression. Match multiline, normalize
   whitespace first, or confirm the count with a second instrument; the miss cost an
-  8-minute Miri round trip that had already named two of the four.
+  8-minute Miri round trip that had already named two of the four. **A claim about
+  what an instrument does is settled by reading the instrument's source** (session
+  M): two of that session's three wrong premises were not stale counts but
+  summaries of tool behaviour — the census key's removal semantics, the SHIM
+  metric's fall prediction — and both were settled in minutes by reading the tool
+  rather than the summary.
 - **S25 — converting a raw pointer to a borrow does not introduce an aliasing
   question, it surfaces one that was already there** (Phase 4b session B, T4b.2a —
   the log entry's §4). `WelsWriteParameterSets` held a `*mut` to the strategy across
