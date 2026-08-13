@@ -1265,3 +1265,42 @@ for this configuration: 29 and 35 were both *short* (37837 of 39981); this one i
 growth story explains as well as a short stream does.
 
 Running total: **thirty-six measurements, thirteen alternations, fifteen acquittals.**
+
+### Measurement 37 (Phase 5, session N, 2026-08-13) — one hit, and the *stream* leaves the signature too
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 37 | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=1` (**release**) | 42538 | **42296** |
+
+Drawn by the T5.N2 `family` battery; `PASS=340 FAIL=1` on the release sweep, debug
+341/341. Inside S14's signature on every axis — `mt`, `sm=3`, `t=4`, wrong length
+(short, 242 bytes down), release profile.
+
+**Step 1's isolation re-run, 5× on an idle machine: 5 byte-identical**, C++ and Rust
+both 42538. No reproduction — the ordinary outcome. One hit, so step 2 does not fire.
+**Acquitted as F3.**
+
+**Step 0 does not apply**: `rust_enc` depends on `openh264-rs` by path, so the
+session's decoder commits rebuild it and the two trees are not one binary.
+
+**What it takes out of the signature is the stream.** Measurements 29, 35 and 36 all
+landed on `320x192` and the last of them concluded "the susceptibility is `320x192 t=4
+sm=3 n=600`". This is the **other** clip, at a quarter of the pixels, with everything
+else the same shape — so what survives across all thirty-seven measurements is
+`mt` + `sm=3` + `t∈{2,4}`, and `320x192`, `n=600`, `cabac` and `rc` are all rate
+artifacts of how much slice-list churn a configuration does, not conditions. That is
+the third clause this signature has shed (session K took `n=600`, session M took
+`cabac`/`rc`), and each time by the same mechanism: a hit that matched everything but
+the clause.
+
+**A protocol note worth more than the measurement.** The first isolation attempt
+reported C++ **0** bytes five times and looked like a reproduction of a *worse* defect.
+It was the harness: `compare.sh` `cd`s to the repo root before invoking either encoder,
+so a relative `<yuv>` path silently resolves against the wrong directory — and because
+the tag is derived from the arguments, `stat` then reported the **stale** `.264` from
+the sweep that had just failed. Two artefacts pointing the same way. Pass an absolute
+path, and set `RUST_ENC_PROFILE` to the profile the hit came from, or step 1 measures
+neither tree. S1's "disassemble before theorising" has a cheaper cousin here: check the
+instrument reported on the run you think it did.
+
+Running total: **thirty-seven measurements, thirteen alternations, sixteen acquittals.**
