@@ -1532,3 +1532,85 @@ owner. The constant divergence is deleted with the duplicate, so the growth path
 live under every gate for the first time, and boxed nodes make it *safer* than the
 C++'s — which copies the nodes into a new block, dangling every outstanding
 `SNalUnit*` (plan P5's hazard, in the module P5 was named after).
+
+---
+
+## F40 — `ExpandBsLenBuffer` copies four times what it should, because `copy_nonoverlapping` counts elements and `memcpy` counts bytes
+
+*Found Phase 5 session O (2026-08-13), reading `decoder_core.rs`'s allocations for
+5.5's F19 inventory. **Fixed in the same session** (T5.O5), as parity. Unreachable in
+the port today.*
+
+```rust
+std::ptr::copy_nonoverlapping(
+    (*pParser).pNalLenInByte,                                  // *mut i32
+    pNewLenBuffer,                                             // *mut i32
+    ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>(), // <- elements, not bytes
+);
+```
+
+The C++ is `memcpy (pNewLenBuffer, …, pCtx->iMaxNalNum * sizeof (int32_t))`, and the
+transliteration kept the `* sizeof` while changing the primitive to one whose count is
+in **elements**. It reads `4 * iMaxNalNum` `i32`s from a buffer holding `iMaxNalNum`,
+and writes them into a buffer holding `iNewLen` — an overread and an overwrite of the
+same factor.
+
+**Why nothing caught it.** `ExpandBsLenBuffer` has **no caller in the port**: it serves
+the parse-only NAL-length array, and the port's `DecodeParser` entry point is a
+documented stub (`codec_api.rs`, plan §2.2.8 keeps the vtable slot and not the
+behaviour). Nine gates, 2316 golden rows and two Miri probes cannot reach a function
+nothing calls.
+
+**The class, which is the reason to write it down.** This is the third element/byte
+confusion the port has produced (`WelsFreeHelper`'s size argument and
+`WelsMalloczHelper`'s are both bytes and correct, two lines away), and it is a
+transliteration hazard rather than a logic error: C's `memcpy`/`memset` take bytes and
+Rust's `copy_nonoverlapping`/`write_bytes` take elements, so a faithful-looking
+`* sizeof(T)` is exactly wrong. **Grep for `copy_nonoverlapping` and `write_bytes` with
+a `size_of` in the count whenever one appears.** Swept at this session: this is the
+only one in `src/decoder/`.
+
+---
+
+## F41 — the context's `pParam` aliases the API object's live parameter block, so the teardown reads a flag the caller can have changed
+
+*Found Phase 5 session O (2026-08-13), tracing `InitBsBuffer`'s allocations to the
+line that frees them. **Not fixed.** Owner: **Phase 8** (the C-ABI boundary's
+ownership), or 5.5's successor if it takes `pParam`.*
+
+`WelsFreeStaticMemory` frees the parse-only allocations under a runtime test:
+
+```rust
+if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
+    …free sSavedData, pParserBsInfo, pDstBuff, pNalLenInByte…
+}
+```
+
+The C++ has the same shape (`decoder_core.cpp:795`), but there `pCtx->pParam` is the
+context's **own allocation**, written only by `DecoderConfigParam`'s `memcpy`. The port
+points it at `CWelsDecoderImpl::param` instead — a member of the API object — and
+`decoder_init_c` overwrites that member on **every** `Initialize` call, before it
+checks whether a context already exists:
+
+```rust
+(*dec_impl).param = *pParam;            // codec_api.rs:1425, unconditional
+if (*dec_impl).pCtx.is_null() { … }     // :1427, so a second Initialize allocates nothing
+```
+
+So: `Initialize(bParseOnly = true)` allocates the three parse-only blocks;
+`Initialize(bParseOnly = false)` on the same decoder rewrites the flag the context
+reads and allocates nothing; `Uninitialize` then takes the `false` arm and **leaks all
+three**. The reverse order is worse in principle — the `true` arm freeing blocks a
+`false` initialisation never allocated — though the null guards inside absorb it.
+
+**This is S23 aimed at a lifecycle instead of a dispatch table.** The rule says a
+cached value may be re-derived only if the source cannot change behind it; the port did
+the opposite of caching — it replaced an owned copy with an alias to a live block — and
+the free path is a consumer of that block in exactly the sense S20's "name what the
+lifecycle arithmetic reads" means.
+
+**Why it is not fixed here.** The fix is for the context to own its `SDecodingParam`
+(97 `pParam` sites, and `SetOption` currently mutates the very block the decoder reads,
+so the copy has to be re-established on each option write). That is boundary ownership,
+which is §2.2.8's, and it belongs with the other eight back-pointers F38 found in the
+same file. Listed with its owner per S18.

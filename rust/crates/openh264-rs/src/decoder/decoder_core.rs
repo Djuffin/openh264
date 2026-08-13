@@ -1693,10 +1693,15 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
         (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
+    // F40: `copy_nonoverlapping`'s count is in **elements**; the C++'s `memcpy`
+    // (`decoder.cpp`) takes bytes, and the transliteration kept the `* sizeof(int32_t)`
+    // — so this copied four times the source and wrote four times the destination.
+    // Unreachable today (the port's `DecodeParser` is a stub, so nothing calls this
+    // function), which is why nine gates and two Miri probes never saw it.
     std::ptr::copy_nonoverlapping(
         (*pParser).pNalLenInByte,
         pNewLenBuffer,
-        ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>(),
+        (*pCtx).iMaxNalNum as usize,
     );
     WelsFreeHelper(pMa, (*pParser).pNalLenInByte as *mut u8, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>());
     (*pParser).pNalLenInByte = pNewLenBuffer;
