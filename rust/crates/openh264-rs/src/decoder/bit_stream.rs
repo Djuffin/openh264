@@ -261,9 +261,10 @@ impl RawDataBuffer {
 /// is derived from the owner at call time. Plan §2.1.3's split is unchanged: consumers
 /// take `(buf: &[u8], cursor: &mut BsCursor)`, produced by [`split`](Self::split).
 ///
-/// `DqLayerState::pBitStringAux` remains `*mut BsReader` (the pointer is Phase 5's to
-/// remove); what changed is that the thing behind it no longer holds a pointer or an
-/// extent of its own.
+/// **The NAL unit owns it, and nothing mirrors it** (T5.M3). `DqLayerState` used to
+/// carry a `pBitStringAux: *mut BsReader` pointing at
+/// `pNalCur->sNalData.sVclNal.sSliceBitsRead`; that field is gone and
+/// [`slice_bit_reader`] is the one route.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BsReader {
     /// Offset of this NAL's payload in the owning [`RawDataBuffer`].
@@ -280,6 +281,33 @@ impl BsReader {
     pub fn split<'a>(&'a mut self, raw: &'a RawDataBuffer) -> (&'a [u8], &'a mut BsCursor) {
         (raw.window_from(self.start), &mut self.cursor)
     }
+}
+
+/// The bit reader for the slice being parsed — **the one route to it** (T5.M3).
+///
+/// The NAL unit owns its reader (`sNalData.sVclNal.sSliceBitsRead`, initialized by
+/// `DecInitBits` at parse time) and nothing else does. `DqLayerState::pBitStringAux`
+/// used to mirror the address beside its owner, which is the class §2 keeps naming
+/// (`SDeblockingFilter.pCsData` is the last one left, 5.4's); this replaces the
+/// mirror with a derivation.
+///
+/// `pCtx.pNalCur` is re-pointed at **every** slice NAL, in the same statement of
+/// `DecodeCurrentAccessUnit` that used to re-point the layer's mirror, so this is
+/// exactly as fresh as the mirror was — see the note there for why it had to move.
+///
+/// **S29**: `addr_of_mut!` all the way down, so no `&mut SNalUnit` is created to
+/// retag and the returned pointer carries the NAL allocation's provenance, not a
+/// field borrow's.
+///
+/// # Safety
+/// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
+/// the NAL being parsed — the precondition every caller already relies on, and the
+/// same one the deleted field carried.
+#[inline(always)]
+pub unsafe fn slice_bit_reader(
+    pCtx: *mut crate::decoder::decoder_context::SWelsDecoderContext,
+) -> *mut BsReader {
+    std::ptr::addr_of_mut!((*(*pCtx).pNalCur).sNalData.sVclNal.sSliceBitsRead)
 }
 
 /// Initializes bitstream reading registers and performs buffer boundary checks.
