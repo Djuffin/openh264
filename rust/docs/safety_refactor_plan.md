@@ -857,9 +857,12 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
 #### Instruments and gates
 
 - **S14 — the F3 protocol** (text refreshed 2026-08-11 to the measured facts;
-  history in `phase0_findings.md` F3 — thirty-four measurements, thirteen
-  alternations, thirteen acquittals). **Signature:** `mt`, `sm=3`, `t∈{2,4}`, output
-  of **any** wrong length — zero, short, or long — in **either** profile.
+  history in `phase0_findings.md` F3 — thirty-seven measurements, thirteen
+  alternations, sixteen acquittals). **Signature:** `mt`, `sm=3`, `t∈{2,4}`, output
+  of **any** wrong length — zero, short, or long — in **either** profile, on
+  **either** bench clip (session N's measurement 37 took `320x192` out of it, as
+  session K took `n=600` and session M took `cabac`/`rc`; every clause that has ever
+  looked like a condition has turned out to be a rate artifact).
   `n=600` predominates and **is a rate artifact, not a condition** (corrected at
   Phase 5 session K, which drew the first `n=1500` hit in 34 measurements): `sm=3`'s
   `n` is the per-slice **byte budget**, so a smaller `n` cuts more slices per frame
