@@ -378,7 +378,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
 pub use crate::decoder::decoder_core::{
-    SDqLayer, PDqLayer, SWelsDecoderContext, PWelsDecoderContext,
+    DqLayerState, PDqLayer, SWelsDecoderContext, PWelsDecoderContext,
     SSlice, PSlice, SLayerInfo, PLayerInfo,
 };
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};

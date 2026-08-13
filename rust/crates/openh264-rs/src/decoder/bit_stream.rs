@@ -261,7 +261,7 @@ impl RawDataBuffer {
 /// is derived from the owner at call time. Plan §2.1.3's split is unchanged: consumers
 /// take `(buf: &[u8], cursor: &mut BsCursor)`, produced by [`split`](Self::split).
 ///
-/// `SDqLayer::pBitStringAux` remains `*mut BsReader` (the pointer is Phase 5's to
+/// `DqLayerState::pBitStringAux` remains `*mut BsReader` (the pointer is Phase 5's to
 /// remove); what changed is that the thing behind it no longer holds a pointer or an
 /// extent of its own.
 #[derive(Clone, Copy, Debug, Default)]

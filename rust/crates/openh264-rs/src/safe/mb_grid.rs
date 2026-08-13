@@ -13,7 +13,7 @@
 //!
 //! **Geometry only.** The field set of the real grid — `mb_type`, `mv`, `ref_index`,
 //! `nzc`, `slice_idc`, `scaled_tcoeff`, … — belongs to Phases 5.2 and 6.3, which
-//! know which of the `sMb`/`SDqLayer`/`SMB` fields survive. What can be built and
+//! know which of the `sMb`/`DqLayerState`/`SMB` fields survive. What can be built and
 //! proven now is the addressing those phases will share: [`MbDims`] for the index
 //! arithmetic and [`MbArray`] for one array over it.
 //!
@@ -25,7 +25,7 @@
 //! # The field set (Phase 5.2, T5.H2)
 //!
 //! [`MbGrid`] closes the "belongs to Phases 5.2 and 6.3" sentence above for the
-//! decoder. Its 22 arrays are the decoder's `SDqLayer` per-macroblock arrays, and
+//! decoder. Its 22 arrays are the decoder's `DqLayerState` per-macroblock arrays, and
 //! the union is **read off the allocation block** in `InitialDqLayersContext`
 //! (`decoder_core.rs`) rather than off the struct declaration, in that block's own
 //! order, so the derivation is checkable line by line. Two things made that
@@ -272,7 +272,7 @@ pub const LIST_COUNT: usize = 2;
 /// # Field order
 ///
 /// The order below is `InitialDqLayersContext`'s allocation order, not
-/// `SDqLayer`'s declaration order. That is deliberate: the allocation block is
+/// `DqLayerState`'s declaration order. That is deliberate: the allocation block is
 /// where the element type and the element count are stated together, so reading
 /// the union off it is a transcription that can be diffed, and reading it off the
 /// declaration is a judgement about what each pointer meant.

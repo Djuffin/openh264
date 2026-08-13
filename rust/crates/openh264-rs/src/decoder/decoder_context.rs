@@ -518,7 +518,7 @@ pub struct SVideoProperty {
 pub use crate::api::codec_api::SDecodingParam;
 
 
-pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo};
 
 
 pub use crate::decoder::nalu::{SAccessUnit, PAccessUnit};
@@ -568,8 +568,8 @@ pub struct SWelsDecoderContext {
     pub pAccessUnitList: *mut SAccessUnit,
     pub pSps: *mut SSps,
     pub pPps: *mut SPps,
-    pub pCurDqLayer: *mut SDqLayer,
-    pub pDqLayersList: *mut SDqLayer,
+    pub pCurDqLayer: *mut DqLayerState,
+    pub pDqLayersList: *mut DqLayerState,
     pub pNalCur: *mut SNalUnit,
     pub uiNalRefIdc: u8,
     pub iPicWidthReq: i32,

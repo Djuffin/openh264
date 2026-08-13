@@ -19,7 +19,11 @@
 # ---------------------------------------------------------------------------
 # (a) cross-codec namesakes. C++ declares each of these in both codecs.
 # ---------------------------------------------------------------------------
-type SDqLayer x2                    # dec_frame.h:50 + svc_enc_frame.h:56
+# `type SDqLayer x2` was here. **Removed, not re-keyed to x1, at T5.M1** — the same
+# disposition `SMbCache`'s line got at T5.E2 and for the same reason: the instrument
+# only reports names declared more than once, so an `x1` entry is text the gate never
+# consults. The decoder's copy is `DqLayerState` now (a rename, where SMbCache's was a
+# deletion); `SDqLayer` is the encoder's alone and is not a duplicate of anything.
 type SPicture x2                    # decoder/picture.h:51 + encoder/picture.h:121
 type SLayerInfo x2                  # dec_frame.h:58 + svc_enc_frame.h:82
 type SMmcoRef x2                    # encoder/slice.h:74; the decoder parses its own
@@ -45,7 +49,7 @@ alias PRefBasePicMarking x2         # ditto
 alias PPps x2                       # parameter_sets.rs vs slice.rs. Owner: 5.5 (P4).
 alias PSps x2                       # ditto
 alias PSubsetSps x2                 # ditto
-alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut SDqLayer, ..)`,
+alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut DqLayerState, ..)`,
                                     # decoder_context.rs:212 is `Option<fn(*mut c_void, ..)>`
                                     # — a REAL type divergence, the T4b.3a shape. Owner: 5.4.
 alias PIdctResAddPredFunc x3        # decode_mb_aux/decode_slice/decoder_context. Owner: 5.6.

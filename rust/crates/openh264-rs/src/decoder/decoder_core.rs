@@ -323,24 +323,32 @@ impl Default for SLayerInfo {
 
 
 
+/// The decoder's DQ-layer state.
+///
+/// **Named `SDqLayer` until T5.M1**, when the last of the 22 per-macroblock array
+/// families flipped onto [`MbGrid`] and the struct stopped holding a per-macroblock
+/// pointer at all. The `S`-prefix said "this is the C's `dec_frame.h:50` struct,
+/// field for field"; it is not one any more — it owns its heap, it is not `Copy`,
+/// and its per-macroblock state is one bounds-checked container rather than 22
+/// bare pointers. The encoder's namesake keeps the C's name and the C's shape.
+///
 /// `Copy` came off at **T5.H3**, for the reason it came off `SPicture` at T5.C3:
 /// the struct owns heap now. `#[repr(C)]` stays because every other field is still
 /// the C's, but nothing pins this struct's layout — the `assert_size!(SDqLayer,
-/// 512)` in `encoder/abi_guard.rs` is the encoder's same-named struct, census
-/// allowlist class (a). The compiler was asked first: nothing in the crate copied a
-/// decoder `SDqLayer` by value.
+/// 512)` in `encoder/abi_guard.rs` pins the **encoder's** same-named struct and is
+/// unaffected by this rename. The compiler was asked first: nothing in the crate
+/// copied a decoder layer by value.
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct SDqLayer {
+pub struct DqLayerState {
     /// **The grid** (5.2). Every per-macroblock array the layer owns, with one set
     /// of dimensions — the **allocation's**, fixed when the layer is constructed
     /// (T5.E2) — and indexing that panics rather than running off the end.
     ///
-    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer. The
-    /// raw `p*` arrays below flip onto it one family per commit; each family's
-    /// `WelsMallocz` and its `WelsFree` die in the same commit as its accesses.
-    /// When the last one has flipped, this struct becomes `DqLayerState` and the
-    /// census entry `type SDqLayer x2` re-keys to `x1`.
+    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer. **All 22
+    /// families are on it** (T5.H4–T5.L7); every one of their `WelsMallocz`/`WelsFree`
+    /// pairs died with its accesses, and the rename above is what that completion
+    /// bought.
     pub grid: MbGrid,
     pub sLayerInfo: SLayerInfo,
     /// The slice's reader. `*mut BsReader`, not the brief's default `*mut BsCursor`:
@@ -355,8 +363,6 @@ pub struct SDqLayer {
     // `pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp`
     // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
     // 27 allocations before 5.2 carries either into a safe container.
-    /// **Per-MB array of 16, not a scalar** — allocated `numMb * 16` and indexed
-    /// `[iMbXy][g_kuiScan4[i]]`. Same correction as `pIntraPredMode` (T5.G2).
     pub iLumaStride: i32,
     pub iChromaStride: i32,
     pub pPred: [*mut u8; 3],
@@ -399,14 +405,14 @@ pub struct SDqLayer {
     pub bUseRefBasePicFlag: bool,
 }
 
-impl SDqLayer {
+impl DqLayerState {
     /// A layer whose [`grid`](Self::grid) covers `dims`, and whose every other field
     /// is what `WelsMallocz`'s zeroing left it — plus the two the C++ constructor
     /// overwrites (`uiRefLayerDqId = 255`, `uiRefLayerChromaPhaseYPlus1 = 1`).
     ///
     /// # S21, and why `Default` is gone
     ///
-    /// `impl Default for SDqLayer` zeroed the whole struct through the intrinsic, and
+    /// `impl Default for DqLayerState` zeroed the whole struct through the intrinsic, and
     /// `InitialDqLayersContext` reached the same state the other way, through
     /// `WelsMallocz`. Both stopped being legal the moment the struct owned a `Vec`:
     /// a zeroed `Vec` is a null pointer where a dangling-aligned one is required,
@@ -604,7 +610,12 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
-pub type PDqLayer = *mut SDqLayer;
+/// The C's `typedef SDqLayer* PDqLayer`, kept under its C name deliberately: it is
+/// a *raw pointer to* the layer, not the layer, and it is Phase 5's to delete
+/// outright (5.5 constructs the layer, 5.6 converts the last callers that spell
+/// this). Renaming it alongside the struct at T5.M1 would have dressed a pointer
+/// the port is retiring in the name of the safe type that replaced its contents.
+pub type PDqLayer = *mut DqLayerState;
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SPicBuff};
 
@@ -2765,7 +2776,7 @@ pub unsafe fn InitialDqLayersContext(
         // arm that guarded `WelsMallocz` is gone with it; the 25 array allocations
         // below still go through the C's allocator and are still checked where they
         // were.
-        let pDq: PDqLayer = Box::into_raw(Box::new(SDqLayer::for_grid(dims)));
+        let pDq: PDqLayer = Box::into_raw(Box::new(DqLayerState::for_grid(dims)));
         (*pCtx).pDqLayersList = pDq;
 
     }
@@ -4279,7 +4290,7 @@ mod tests {
     #[test]
     fn for_grid_constructs_a_layer_whose_grid_is_valid_and_whose_rest_is_zero() {
         let dims = MbDims::new(5, 3);
-        let layer = SDqLayer::for_grid(dims);
+        let layer = DqLayerState::for_grid(dims);
 
         // the owned field
         assert_eq!(layer.grid.dims(), dims);
@@ -4304,7 +4315,7 @@ mod tests {
     /// structural rather than a comment on a `numMb` expression.
     #[test]
     fn the_grid_outlives_a_narrower_slice() {
-        let mut layer = SDqLayer::for_grid(MbDims::from_pixels(1920, 1080));
+        let mut layer = DqLayerState::for_grid(MbDims::from_pixels(1920, 1080));
         assert_eq!(layer.grid.dims().count(), 120 * 68);
         // a stream decoding below the negotiated maximum
         layer.iMbWidth = 11;
