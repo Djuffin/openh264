@@ -7,7 +7,11 @@ bind every struct edit here. Perf: §7.4 (D-perf-4, S2b). Before starting, read 
 Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
 disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
-re-grep before acting on any of them (S24). Estimated 7–10 sessions remain.
+re-grep before acting on any of them (S24). **Estimated 5–7 loaded sessions remain**
+(re-planned 2026-08-12 at session L's close, sessions loaded per Eugene: M = 5.2's
+tail + 5.3's core; N = the `PicId` cluster — 5.1's second half, colocated reads,
+5.4; O–P = 5.5 in two; Q = 5.6; R = the exit. The wire escalation or a deep Miri
+queue adds a session; 5.5 landing light removes one).
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this

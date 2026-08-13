@@ -1,4 +1,7 @@
-# Phase 5, session M — T5.M: 5.2's last structural pieces
+# Phase 5, session M — T5.M: 5.2's last structural pieces, then 5.3's core
+
+> Loaded per Eugene (2026-08-12): faces 5–6 add 5.3's grid-independent core. If wall
+> time runs out, faces drop from the end at seam boundaries — 6 first, then 5.
 
 Governing: [`phase5.md`](phase5.md) §0/§2 verbatim; plan §7.4 (D-perf-4; **D-perf-5 is
 answered and closed** — every hot family flipped and the cumulative span is measured
@@ -79,7 +82,37 @@ block in 5.2. Size it by the S20 closure and expect it to want more than one com
 readers in `decode_slice.rs`; `cabac_decoder.rs`'s `cabac_rbsp_window` accessor dies with
 it. Those counts are three sessions old — re-grep (S24). `SHIM(` should fall from 159.
 
-## 5. Gates
+## 5. Face 5 — 5.3a: F22's per-function unification
+
+The map is written (F22's entry + session D's log): the divergence is **three**
+functions — `UpdateP16x16MotionInfo`, `UpdateP16x8MotionInfo`, `UpdateP8x16MotionInfo`
+unify onto `mv_pred.rs`'s guarded shape — and **`Update8x8RefIdx` runs the other way**
+(C++ unguarded; `mv_pred.rs`'s added guard comes off). Per function, not per module
+(S21: divergences enumerated per copy in the commit message). The guard is dead code in
+both trees (T5.D1's reachability answer), so **zero bytes of output move, or the commit
+reverts**. F22 closes here; update its entry and §0's open-findings row in the same
+commit.
+
+## 6. Face 6 — 5.3b: the punning and `SetRectBlock`
+
+- **Punning → byte ops** (T7/P7): F35 already converted the 13 B-direct sites and the
+  block helpers; re-grep `mv_pred.rs` and the parse files for what remains of the
+  `LD32/ST32`-class accesses (the survey said 92 in `mv_pred.rs` alone — S24, that
+  number predates five phases). `from_ne_bytes`/`to_ne_bytes`/`copy_from_slice` on
+  slice windows; same codegen; S6 widths preserved.
+- **`SetRectBlock` → a typed generic on the grid** (plan 5.3's item): the fill-rect
+  helper takes the grid family's `MbArray<[T; K]>` and a const width instead of a raw
+  base + byte stride. S28 if any raw bridge remains; expect none (the pSliceIdc
+  precedent — read-only bases became shared borrows).
+- **Excluded, with the fence at the site: the colocated reads / `cur_and_ref`.**
+  Colocated access borrows *two pictures at once* and needs `PicPool`'s split-borrow
+  API — that is 5.1's second half, and it rides with the `PicId` cluster (next
+  session), not here.
+
+Measurement for faces 5–6 per face 1's own rule: **cluster or whole-session span**,
+7 pairs, never per-face halves.
+
+## 7. Gates
 
 Full battery per face or tight cluster (batch before the long Miri step — ~15 minutes,
 both probes); goldens frozen at **57**; sweeps 341/341 both profiles; F3 per S14 —
@@ -88,17 +121,20 @@ susceptible configuration (measurements 29 and 35, both reproduced in isolation)
 per S16 with per-file deltas; census green. **Do not edit the working tree while a
 battery is running.**
 
-## 6. Close
+## 8. Close
 
-Log entry, `perf_baseline.md` row, phase5.md §2 marks and §0's rows, hand-off. If Faces 2
-and 3 both land, 5.2 is done but for its straggler sweep, and the next brief is either
-5.3's (F22's per-function unification, the map is written) or 5.1's second half
-(`PicPool`/`PicId`, five P3 tests waiting) — still a judgement call, see session C's
-hand-off.
+Log entry, `perf_baseline.md` row, phase5.md §2 marks and §0's rows, hand-off. If faces 2–4 land, 5.2 is done but for its straggler sweep; if 5–6 land too,
+5.3 is done but for the colocated reads. **The next brief is the `PicId` cluster
+either way**: 5.1's second half (`PicPool`, recycling predicate, identity — five P3
+tests waiting), 5.3's colocated reads on `cur_and_ref`, and 5.4's deblocking driver
+(`SDeblockingFilter` holds `PicId`s; `pCsData`, the last plane-pointer mirror, dies) —
+one coherent closure over picture identity.
 
-## 7. Non-goals
+## 9. Non-goals
 
 No window hoisting (S8). No `get_unchecked` (S8). **No F36 fix** — decoder threading's,
 and session L established it is a partial *function*, not a dropped line. No
-`PicPool`/identity work unless Faces 2–4 finish early. No golden movement. No
+`PicPool`/identity/colocated/`cur_and_ref` work — the `PicId` cluster is the next
+session's whole job, and starting it from a tired tail violates the standing-start
+rule. No golden movement. No
 pool/threading (F12/P10). No re-litigating D-perf-5 or the probe's construction.
