@@ -288,13 +288,9 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext) -> bool {
     }
 
     let iMbNum = (*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight;
-    let pMbFlag = (*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag;
-    if pMbFlag.is_null() {
-        return false;
-    }
 
     for i in 0..iMbNum {
-        if !*pMbFlag.add(i as usize) {
+        if !*(*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.get(i as usize) {
             return true;
         }
     }
@@ -396,10 +392,6 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
         }
     }
 
-    let pMbCorrectlyDecodedFlag = (*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag;
-    if pMbCorrectlyDecodedFlag.is_null() {
-        return;
-    }
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
 
@@ -410,7 +402,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = iMbY * iMbWidth + iMbX;
-            if !*pMbCorrectlyDecodedFlag.add(iMbXyIndex) {
+            if !*(*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
                     let iSrcStride = (*pSrcPic).linesize(0) as usize;
@@ -645,10 +637,9 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
     let iMbWidth = (*(*pCtx).pSps).iMbWidth;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pMbCorrectlyDecodedFlag = (*pCurDqLayer).pMbCorrectlyDecodedFlag;
     let pDec = (*pCurDqLayer).pDec;
 
-    if pMbCorrectlyDecodedFlag.is_null() || pDec.is_null() {
+    if pDec.is_null() {
         return;
     }
 
@@ -663,7 +654,8 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
-            if *pMbCorrectlyDecodedFlag.add(iMbXyIndex) && !(*pDec).pMbType.is_null() {
+            if *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex)
+                && !(*pDec).pMbType.is_null() {
                 let iMBType = *(*pDec).pMbType.add(iMbXyIndex);
                 if IS_INTER(iMBType) {
                     match iMBType {
@@ -812,10 +804,6 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
         ptr::null_mut()
     };
 
-    let pMbCorrectlyDecodedFlag = (*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag;
-    if pMbCorrectlyDecodedFlag.is_null() {
-        return;
-    }
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
     let mut sMCRefMem = TagMCRefMember::default();
@@ -839,7 +827,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = iMbY * iMbWidth + iMbX;
-            if !*pMbCorrectlyDecodedFlag.add(iMbXyIndex) {
+            if !*(*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
                     DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
@@ -949,17 +937,17 @@ mod tests {
         }
     }
 
-    /// The flag array is mutated **through the pointer the layer holds**, not
-    /// through the array binding. Writing `mb_flags[2]` directly would reborrow the
-    /// array and pop `pMbCorrectlyDecodedFlag`'s tag off the borrow stack, so the
-    /// next `NeedErrorCon` would read through a pointer Stacked Borrows has already
-    /// invalidated — Undefined Behaviour in the *test*, not in `NeedErrorCon`.
-    /// Found when the Miri gate was widened to the port's unit tests at Phase 2's
-    /// exit; the same shape as `sad_common`'s twice-taken `as_mut_ptr`.
+    /// **T5.L6 deleted this test's hazard rather than its subject.** The flag array
+    /// used to be a `*mut bool` the layer held, so the test had to mutate it
+    /// *through that pointer*: writing `mb_flags[2]` directly would reborrow the
+    /// array, pop the layer's tag off the borrow stack, and leave the next
+    /// `NeedErrorCon` reading through a pointer Stacked Borrows had already
+    /// invalidated — Undefined Behaviour in the test, not in the function. (Found
+    /// when the Miri gate was widened to the port's unit tests at Phase 2's exit;
+    /// the same shape as `sad_common`'s twice-taken `as_mut_ptr`.) The array is the
+    /// grid's now, there is no second path to it, and the write is an ordinary one.
     #[test]
     fn test_need_error_con() {
-        let mut mb_flags = [true; 4];
-        let flags = mb_flags.as_mut_ptr();
         let mut sps = SSps {
             iMbWidth: 2,
             iMbHeight: 2,
@@ -968,17 +956,15 @@ mod tests {
         // T5.H3: `..Default::default()` zeroed the whole struct, which stopped
         // being legal when the layer gained an owned grid. `for_grid` replaced it,
         // and the dimensions are the ones the SPS above states.
-        let mut dq_layer = SDqLayer {
-            pMbCorrectlyDecodedFlag: flags,
-            ..SDqLayer::for_grid(MbDims::new(2, 2))
-        };
+        let mut dq_layer = SDqLayer::for_grid(MbDims::new(2, 2));
+        dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pCurDqLayer = &mut dq_layer as *mut _;
         ctx.pSps = &mut sps as *mut _;
 
         unsafe {
             assert_eq!(NeedErrorCon(&mut *ctx), false);
-            *flags.add(2) = false;
+            *(*ctx.pCurDqLayer).grid.mb_correctly_decoded_flag.get_mut(2) = false;
             assert_eq!(NeedErrorCon(&mut *ctx), true);
         }
     }
@@ -1033,11 +1019,10 @@ mod tests {
             src.iFramePoc = 7; // duplicate POC on purpose
 
             let mut sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
-            let mut mb_flags = [false; W * H];   // every MB lost, so EC has work to do
-            let mut dq_layer = SDqLayer {
-                pMbCorrectlyDecodedFlag: mb_flags.as_mut_ptr(),
-                ..SDqLayer::for_grid(MbDims::new(W, H))
-            };
+            // every MB lost, so EC has work to do. `MbGrid::new` zero-fills, and
+            // `false` is this array's zero, so the fill is the state the layer
+            // starts a sequence in rather than one the test invents (T5.L6).
+            let mut dq_layer = SDqLayer::for_grid(MbDims::new(W, H));
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
 

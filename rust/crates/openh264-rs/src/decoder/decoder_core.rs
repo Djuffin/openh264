@@ -355,13 +355,6 @@ pub struct SDqLayer {
     // `pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp`
     // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
     // 27 allocations before 5.2 carries either into a safe container.
-    pub pMbCorrectlyDecodedFlag: *mut bool,
-    /// **Per-MB array of 8, not a scalar** — allocated `numMb * 8` and indexed
-    /// `[iMbXy][k]`; only `[7]` (the I16x16 mode) and `[0..4]` (the next
-    /// macroblock's left-neighbour cache) are ever read. T5.G2 made the
-    /// declaration say so; it named the element as a bare `i8` for the port's whole
-    /// life, while `dec_frame.h:85` had it as pointer-to-array all along (F32).
-    pub pIntraPredMode: *mut [i8; 8],
     /// **Per-MB array of 16, not a scalar** — allocated `numMb * 16` and indexed
     /// `[iMbXy][g_kuiScan4[i]]`. Same correction as `pIntraPredMode` (T5.G2).
     pub iLumaStride: i32,
@@ -753,9 +746,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
     } else {
         let mut iCorrectMbNum = 0i64;
         for iMb in 0..kiMbNum {
-            let correct = if !(*pCurDq).pMbCorrectlyDecodedFlag.is_null()
-                && *(*pCurDq).pMbCorrectlyDecodedFlag.add(iMb)
-            {
+            let correct = if *(*pCurDq).grid.mb_correctly_decoded_flag.get(iMb) {
                 1i64
             } else {
                 0i64
@@ -2777,8 +2768,6 @@ pub unsafe fn InitialDqLayersContext(
         let pDq: PDqLayer = Box::into_raw(Box::new(SDqLayer::for_grid(dims)));
         (*pCtx).pDqLayersList = pDq;
 
-        (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
-        (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
 
     (*pCtx).bInitialDqLayersMem = true;
@@ -2799,14 +2788,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
 
     let pDq = (*pCtx).pDqLayersList;
     if !pDq.is_null() {
-        if !(*pDq).pIntraPredMode.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
-            (*pDq).pIntraPredMode = std::ptr::null_mut();
-        }
-        if !(*pDq).pMbCorrectlyDecodedFlag.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pMbCorrectlyDecodedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
-            (*pDq).pMbCorrectlyDecodedFlag = std::ptr::null_mut();
-        }
         // T5.H3: the matching half of `InitialDqLayersContext`'s heap construction.
         // The grid's 22 `Vec`s go with the `Box`'s drop glue — there is no way to
         // forget one, and no size to get wrong, which is the arithmetic T5.E2 had
@@ -3617,9 +3598,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
             if !(*pCtx).pSps.is_null() {
                 let iMbNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as usize;
                 if !(*pCtx).pCurDqLayer.is_null() {
-                    if !(*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag.is_null() {
-                        std::ptr::write_bytes((*(*pCtx).pCurDqLayer).pMbCorrectlyDecodedFlag, 0, iMbNum);
-                    }
+                    (*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.as_mut_slice()
+                        [..iMbNum]
+                        .fill(false);
                     // The C's `memset(.., 0, iMbWidth * iMbHeight)` over the
                     // **SPS's** dimensions, which are the current sequence's and can
                     // be smaller than the grid's negotiated maximum (T5.E2). As a
