@@ -1115,6 +1115,16 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   **`&mut X as *mut T` is the same defect with the cast already written** — the
   reference exists and retags before the cast discards it; `addr_of_mut!` is the
   fix, and the shape hides from a grep for `&mut *`.
+- **S30 — a brief freezes when its session starts** (2026-08-12, from session N's
+  collision). Mid-session changes of direction reach the session from its operator,
+  in the session, with the decision recorded in §7.4/§0 — never as an edit to the
+  brief file on disk. A brief that changes under a running session is **data, not
+  direction**: quote it in the log, leave it uncommitted, keep executing the brief
+  as read at open, and raise it in the report — which is exactly what session N
+  did, and it was correct both times (the steward's edit was real, and refusing it
+  was still right, because the file carried no provenance the session could check).
+  Retro-editing a *closed* session's brief is the same violation aimed backwards:
+  it falsifies the record of what was asked.
 
 
 ---
