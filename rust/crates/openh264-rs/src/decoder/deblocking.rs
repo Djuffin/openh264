@@ -416,9 +416,18 @@ pub unsafe fn IN_BS_EDGE(
 /// copy. That array was only ever allocated behind a thread-count gate that this port
 /// never opened, so the picture branch was unreachable for the port's whole life and
 /// died with the rest of the MT scaffolding (T5c). Only the layer source remains.
+///
+/// T5.L1: every one of the eight uses reads, and two of them
+/// (`DeblockingBsMarginalMBAvcbase`, `DeblockingBSliceBsMarginalMBAvcbase`) hold the
+/// current macroblock's row and its neighbour's **at the same time** — so this is a
+/// shared borrow of the owned array rather than a raw bridge. Two `&mut`s would have
+/// been F34's shape: the second retag pops the first. Every consumer stays inside the
+/// 24-byte record (`from_raw_parts(pNnzTab, 24)` at each of the four, and index tables
+/// `g_kuiTableB8x8Idx`/`g_kuiMbCountScan4Idx` whose entries are all < 24), so the
+/// per-element derivation reaches everything it is asked to reach.
 #[inline(always)]
-pub unsafe fn GetPNzc(pCurDqLayer: *mut SDqLayer, iMbXy: i32) -> *mut i8 {
-    (*(*pCurDqLayer).pNzc.add(iMbXy as usize)).as_mut_ptr()
+pub unsafe fn GetPNzc(pCurDqLayer: *mut SDqLayer, iMbXy: i32) -> *const i8 {
+    (*pCurDqLayer).grid.nzc.get(iMbXy as usize).as_ptr()
 }
 
 // ============================================================================

@@ -3261,7 +3261,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let pChromaQp = &mut *(*pCurDqLayer).pChromaQp.add(iMbXy);
     pChromaQp[0] = 0;
     pChromaQp[1] = 0;
-    ptr::write_bytes((*pCurDqLayer).pNzc.add(iMbXy) as *mut u8, 16, 24);
+    (*pCurDqLayer).grid.nzc.get_mut(iMbXy).fill(16);
 
     let (buf, cursor) = pBsAux.split(&(*pCtx).sRawData);
     let mut err = InitReadBits(buf, cursor, 1);

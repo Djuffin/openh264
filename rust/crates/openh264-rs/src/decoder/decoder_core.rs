@@ -352,7 +352,6 @@ pub struct SDqLayer {
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     pub pChromaQp: *mut [i8; 2],
-    pub pNzc: *mut [i8; 24],
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
     // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
@@ -463,9 +462,16 @@ impl SDqLayer {
 /// `a.as_mut_slice()[mb_xy..].as_mut_ptr()`, which produces the identical address,
 /// compiles under `forbid(unsafe_code)`, passes every byte gate in the battery, and
 /// is UB the moment a kernel walks backwards from it, because slicing narrows
-/// provenance to `[mb_xy..]`. That is not hypothetical here: `GetPNzc`'s callers
-/// read the *left* neighbour's non-zero counts through the pointer they were
-/// handed, and `pCbfDc`'s consumers take the array's base and index it later.
+/// provenance to `[mb_xy..]`. That is not hypothetical here: `pCbfDc`'s consumers
+/// take the array's base and index it later, and `GetMbType`'s seven callers index
+/// the base they are handed at *neighbour* addresses (T5.K2).
+///
+/// **`GetPNzc` was named here as a third example and it is not one** (checked at
+/// T5.L1, when the family actually converted): its callers read the neighbour's
+/// counts through a *second* `GetPNzc` call, never by walking off the first
+/// pointer, and all four consumers bound themselves with
+/// `from_raw_parts(pNnzTab, 24)`. It is a shared borrow now, not a bridge. A
+/// scouted claim about a family's reach is a lead until the family converts (S24).
 /// Miri is the only instrument that can see the difference — see the full-reach
 /// tests in this file's `mod tests`.
 ///
@@ -2779,7 +2785,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pChromaQp = WelsMalloczHelper(pMa, numMb * 2 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pMvd[LIST_0] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pMvd[LIST_1] = WelsMalloczHelper(pMa, numMb * 16 * 2 * std::mem::size_of::<i16>()) as *mut _;
-        (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
@@ -2816,10 +2821,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pChromaQp.is_null() {
             WelsFreeHelper(pMa, (*pDq).pChromaQp as *mut u8, numMb * 2 * std::mem::size_of::<i8>());
             (*pDq).pChromaQp = std::ptr::null_mut();
-        }
-        if !(*pDq).pNzc.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pNzc as *mut u8, numMb * 24 * std::mem::size_of::<i8>());
-            (*pDq).pNzc = std::ptr::null_mut();
         }
         if !(*pDq).pScaledTCoeff.is_null() {
             WelsFreeHelper(pMa, (*pDq).pScaledTCoeff as *mut u8, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>());
