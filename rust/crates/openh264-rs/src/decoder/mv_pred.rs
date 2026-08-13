@@ -445,7 +445,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
     let iCurXy = (*pCurDqLayer).iMbXyIndex;
     let iCurX = (*pCurDqLayer).iMbX;
     let iCurY = (*pCurDqLayer).iMbY;
-    let iCurSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iCurXy as usize);
+    let iCurSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iCurXy as usize);
 
     let mut iLeftXy = 0;
     let mut iTopXy = 0;
@@ -454,7 +454,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
 
     if iCurX != 0 {
         iLeftXy = iCurXy - 1;
-        let iLeftSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iLeftXy as usize);
+        let iLeftSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftXy as usize);
         bLeftAvail = iLeftSliceIdc == iCurSliceIdc;
     } else {
         bLeftAvail = false;
@@ -463,18 +463,18 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut SDqLayer, iMvp: &mut [i1
 
     if iCurY != 0 {
         iTopXy = iCurXy - (*pCurDqLayer).iMbWidth;
-        let iTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iTopXy as usize);
+        let iTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iTopXy as usize);
         bTopAvail = iTopSliceIdc == iCurSliceIdc;
         if iCurX != 0 {
             iLeftTopXy = iTopXy - 1;
-            let iLeftTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iLeftTopXy as usize);
+            let iLeftTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftTopXy as usize);
             bLeftTopAvail = iLeftTopSliceIdc == iCurSliceIdc;
         } else {
             bLeftTopAvail = false;
         }
         if iCurX != ((*pCurDqLayer).iMbWidth - 1) {
             iRightTopXy = iTopXy + 1;
-            let iRightTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iRightTopXy as usize);
+            let iRightTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iRightTopXy as usize);
             bRightTopAvail = iRightTopSliceIdc == iCurSliceIdc;
         } else {
             bRightTopAvail = false;
@@ -860,7 +860,7 @@ pub unsafe fn PredMvBDirectSpatial(
     let iCurXy = (*pCurDqLayer).iMbXyIndex;
     let iCurX = (*pCurDqLayer).iMbX;
     let iCurY = (*pCurDqLayer).iMbY;
-    let iCurSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iCurXy as usize);
+    let iCurSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iCurXy as usize);
 
     let mut iLeftXy = 0;
     let mut iTopXy = 0;
@@ -869,22 +869,22 @@ pub unsafe fn PredMvBDirectSpatial(
 
     if iCurX != 0 {
         iLeftXy = iCurXy - 1;
-        let iLeftSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iLeftXy as usize);
+        let iLeftSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftXy as usize);
         bLeftAvail = iLeftSliceIdc == iCurSliceIdc;
     }
 
     if iCurY != 0 {
         iTopXy = iCurXy - (*pCurDqLayer).iMbWidth;
-        let iTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iTopXy as usize);
+        let iTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iTopXy as usize);
         bTopAvail = iTopSliceIdc == iCurSliceIdc;
         if iCurX != 0 {
             iLeftTopXy = iTopXy - 1;
-            let iLeftTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iLeftTopXy as usize);
+            let iLeftTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftTopXy as usize);
             bLeftTopAvail = iLeftTopSliceIdc == iCurSliceIdc;
         }
         if iCurX != ((*pCurDqLayer).iMbWidth - 1) {
             iRightTopXy = iTopXy + 1;
-            let iRightTopSliceIdc = *(*pCurDqLayer).pSliceIdc.add(iRightTopXy as usize);
+            let iRightTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iRightTopXy as usize);
             bRightTopAvail = iRightTopSliceIdc == iCurSliceIdc;
         }
     }

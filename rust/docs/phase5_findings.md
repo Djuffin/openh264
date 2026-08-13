@@ -1186,3 +1186,66 @@ For the eleven families still to flip that is a drop from 16 to 1 (`pRefIndex`,
 `pDirect`, `pNzc`, `pIntraPredMode`), to 2 (`pMv`, `pMvd`, `pScaledTCoeff`,
 `pChromaQp`) and to 4 (`pMbType`, `pSliceIdc`). Every family commit greps its arrays'
 consumers for a wider-than-element access before it flips them, and this finding is why.
+
+
+## F36 — the port's multi-threaded slice loop never writes `pSliceIdc`, and that is the array the neighbour-availability test compares
+
+**Status: OPEN, dormant.** Owner: whoever ports decoder threading (the T5c
+"decoder threading scaffolding" entry; F12's neighbourhood). It must be fixed
+**before** `GetThreadCount` returns anything greater than 1, not after.
+
+Noticed at T5.K3 while re-greping `pSliceIdc`'s writers to flip the family (S24) —
+the C++ has two and the port has one.
+
+### The divergence
+
+`decode_slice.cpp` writes the slice id in **both** of its macroblock loops, in
+identical position — first statement inside the loop, immediately before
+`pCtx->bMbRefConcealed = false`:
+
+| | computes `iSliceIdc` | writes `pSliceIdc[iNextMbXyIndex]` |
+|---|---|---|
+| C++ `WelsDecodeSlice` | `decode_slice.cpp:1582` | `:1593` |
+| C++ `WelsDecodeAndConstructSlice` | `decode_slice.cpp:1689` | `:1708` |
+| port `WelsDecodeSlice` | `decode_slice.rs:5242` | `:5257` |
+| port `WelsDecodeAndConstructSlice` | **absent** | **absent** |
+
+`grep -c SliceIdc` over the port's `WelsDecodeAndConstructSlice` body returns
+**0** — it does not compute the value, let alone store it. The two C++ loops are
+otherwise line-for-line the same through that region, which is what makes this a
+dropped line rather than a design difference.
+
+### What it would do if the path ran
+
+`pSliceIdc` is reset to `0xff` bytes (i.e. `-1`) once per picture
+(`decoder_core.cpp:1623`, port `decoder_core.rs:3641`) and is then written per
+macroblock as each one is decoded. Every neighbour-availability predicate in the
+decoder is a comparison of two entries of this array — `mv_pred.rs` ×10,
+`parse_mb_syn_cavlc.rs` ×5, and `deblocking.rs`'s `iFilterIdc == 2` arm. With no
+per-macroblock write, every entry stays `-1`, every comparison reads equal, and
+**prediction and deblocking would cross slice boundaries as if the picture were a
+single slice**. On a single-slice stream it is invisible; on a multi-slice one it
+is wrong output, not a crash.
+
+### Why nothing has caught it, and why nothing would
+
+1. **The path is dead today.** `decoder_core.rs:3747` calls
+   `WelsDecodeAndConstructSlice` only when `iThreadCount > 1`, and
+   `GetThreadCount` (`decoder_core.rs:693`) returns **0** unconditionally — the
+   decoder half of T9 was never ported. F22's §5 already establishes this and uses
+   it to prove `WelsDecodeSlice` is the only parse entry.
+2. **Even if it were live, no gate in this battery reaches it.** The decode
+   goldens and `decode_1080p_bench` drive the single-threaded API path; the
+   diffharness sweeps multi-thread the **encoder**. The decoder's MT path has no
+   differential coverage at all. This is the general point worth carrying: a
+   stubbed-out subsystem's translation is unaudited *and* uncovered, and the two
+   conditions hide each other.
+
+### What T5.K3 did about it
+
+**Nothing, deliberately.** The flip preserves the divergence exactly: the write
+that exists still happens, the write that never existed still does not, and the
+family's bytes are unchanged. Fixing it here would be a behaviour change on a path
+this session cannot measure, inside a commit whose contract is that it moves no
+bytes (S6). The finding is recorded in the commit that noticed it, which is the
+rule F35 established.

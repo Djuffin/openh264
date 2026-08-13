@@ -538,7 +538,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
         let iCurXy = dq.iMbXyIndex;
         let iCurX = dq.iMbX;
         let iCurY = dq.iMbY;
-        let iCurSliceIdc = *dq.pSliceIdc.add(iCurXy as usize);
+        let iCurSliceIdc = *dq.grid.slice_idc.get(iCurXy as usize);
 
         let mut iLeftXy = 0;
         let mut iTopXy = 0;
@@ -547,7 +547,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
 
         if iCurX != 0 {
             iLeftXy = iCurXy - 1;
-            let iLeftSliceIdc = *dq.pSliceIdc.add(iLeftXy as usize);
+            let iLeftSliceIdc = *dq.grid.slice_idc.get(iLeftXy as usize);
             na.iLeftAvail = if iLeftSliceIdc == iCurSliceIdc { 1 } else { 0 };
             na.iLeftCbp = if na.iLeftAvail != 0 { *dq.grid.cbp.get(iLeftXy as usize) as u8 } else { 0 };
         } else {
@@ -558,13 +558,13 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
 
         if iCurY != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
-            let iTopSliceIdc = *dq.pSliceIdc.add(iTopXy as usize);
+            let iTopSliceIdc = *dq.grid.slice_idc.get(iTopXy as usize);
             na.iTopAvail = if iTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
             na.iTopCbp = if na.iTopAvail != 0 { *dq.grid.cbp.get(iTopXy as usize) as u8 } else { 0 };
 
             if iCurX != 0 {
                 iLeftTopXy = iTopXy - 1;
-                let iLeftTopSliceIdc = *dq.pSliceIdc.add(iLeftTopXy as usize);
+                let iLeftTopSliceIdc = *dq.grid.slice_idc.get(iLeftTopXy as usize);
                 na.iLeftTopAvail = if iLeftTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
             } else {
                 na.iLeftTopAvail = 0;
@@ -572,7 +572,7 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
 
             if iCurX != (dq.iMbWidth - 1) {
                 iRightTopXy = iTopXy + 1;
-                let iRightTopSliceIdc = *dq.pSliceIdc.add(iRightTopXy as usize);
+                let iRightTopSliceIdc = *dq.grid.slice_idc.get(iRightTopXy as usize);
                 na.iRightTopAvail = if iRightTopSliceIdc == iCurSliceIdc { 1 } else { 0 };
             } else {
                 na.iRightTopAvail = 0;

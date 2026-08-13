@@ -5254,9 +5254,7 @@ pub unsafe fn WelsDecodeSlice(
             break;
         }
 
-        if !(*pCurDqLayer).pSliceIdc.is_null() {
-            *(*pCurDqLayer).pSliceIdc.add(iNextMbXyIndex as usize) = iSliceIdc;
-        }
+        *(*pCurDqLayer).grid.slice_idc.get_mut(iNextMbXyIndex as usize) = iSliceIdc;
         (*pCtx).bMbRefConcealed = false;
         let iRet = pDecMbFunc(pCtx, pNalCur, &mut uiEosFlag);
         *(*pCurDqLayer).grid.mb_ref_concealed_flag.get_mut(iNextMbXyIndex as usize) =

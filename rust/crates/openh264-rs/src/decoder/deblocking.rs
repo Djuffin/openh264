@@ -1277,11 +1277,14 @@ pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut SDqLayer, iFilte
     let bTopFlag: bool;
 
     if 2 == iFilterIdc {
-        let pSliceIdc = (*pCurDqLayer).pSliceIdc;
-        bLeftFlag = (iMbX > 0) && (*pSliceIdc.add(iMbXy as usize) == *pSliceIdc.add((iMbXy - 1) as usize));
+        // T5.K3: shared indexing rather than a base pointer — this reads the
+        // current macroblock beside its left and top neighbours, which is an
+        // ordinary borrow of one owned array now.
+        let pSliceIdc = &(*pCurDqLayer).grid.slice_idc;
+        bLeftFlag = (iMbX > 0) && (*pSliceIdc.get(iMbXy as usize) == *pSliceIdc.get((iMbXy - 1) as usize));
         bTopFlag = (iMbY > 0)
-            && (*pSliceIdc.add(iMbXy as usize)
-                == *pSliceIdc.add((iMbXy - (*pCurDqLayer).iMbWidth) as usize));
+            && (*pSliceIdc.get(iMbXy as usize)
+                == *pSliceIdc.get((iMbXy - (*pCurDqLayer).iMbWidth) as usize));
     } else {
         bLeftFlag = iMbX > 0;
         bTopFlag = iMbY > 0;
