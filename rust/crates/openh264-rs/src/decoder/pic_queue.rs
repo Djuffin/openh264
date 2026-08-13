@@ -75,31 +75,175 @@ pub const MV_A: usize = 2;
 
 pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::safe::plane::PaddedPlane;
+pub use crate::safe::pool::Pool;
 
-/// Recycled picture buffer queue container.
+/// A handle to one slot of the decoder's [`PicPool`] — plan §2.2.3's `PicId`.
 ///
-/// Matches [`TagPicBuff`](file:///usr/local/google/home/ezemtsov/projects/openh264/codec/decoder/core/inc/pic_queue.h#L45-L49).
-#[repr(C)]
+/// Identity is slot equality, which is the predicate the P3 tests pin: two pictures
+/// are "the same reference" when they occupy the same pool slot, never when they
+/// merely share a POC.
+pub type PicId = crate::safe::pool::Id;
+
+/// The decoder's recycled picture pool — C++ `SPicBuff` (`pic_queue.h:45-49`).
+///
+/// **T5.N1: the pool addresses, it does not own.** The C's `ppPic`/`iCapacity` pair
+/// — a `WelsMallocz`'d array of `SPicture*` plus a length nothing related to it — is
+/// one [`Pool`] of slots, so a slot index is bounds-checked once by the container
+/// instead of by each of the four scans that walked it. What has **not** moved is
+/// ownership: [`AllocPicture`]'s `Box::into_raw` is still the constructor and
+/// [`FreePicture`]'s `Box::from_raw` still the dropper (T5.C3's pair), so F19's
+/// check — *which line frees this?* — has the same answer it had before, and the
+/// pool is not a second owner.
+///
+/// **Why the slots are `PPicture` rather than `Box<SPicture>`.** Owning the pictures
+/// here would let [`Pool::mut_and_rest`] prove the current-vs-reference split in safe
+/// code, which is the end state plan §2.2.3 describes. It cannot be done while
+/// `pCtx->pDec` is still a raw pointer *into* a slot (accepted 2026-08-11, phase5.md
+/// §1): a `&mut` handed out by the pool and a live raw alias to the same picture is
+/// precisely the S25 overlap, and nothing could discharge it until `pDec` carries a
+/// [`PicId`] instead. Slots stay pointers until then, and the borrow this pool can
+/// prove is the one over the *slot array*.
 #[derive(Debug)]
-pub struct TagPicBuff {
-    /// Array of pointers to [`SPicture`] objects (capacity: `iCapacity`).
-    pub ppPic: *mut *mut SPicture,
-    /// Total capacity size of the queue pool.
-    pub iCapacity: i32,
-    /// Current circular cursor index within the `ppPic` array.
-    pub iCurrentIdx: i32,
+pub struct PicPool {
+    /// One slot per pre-allocated picture. Never grows or shrinks: the C++ sizes the
+    /// queue once in [`CreatePicBuff`] and recycles thereafter.
+    slots: Pool<PPicture>,
+    /// The C's `iCurrentIdx` — the circular cursor both prefetch scans advance.
+    cursor: i32,
 }
 
-pub type SPicBuff = TagPicBuff;
-pub type PPicBuff = *mut SPicBuff;
+/// The C's name for [`PicPool`], kept at the raw-pointer alias for the same reason
+/// `PDqLayer` keeps its own (T5.M1): it is a pointer *to* the pool, and Phase 5's
+/// remaining steps delete it rather than convert it.
+pub type SPicBuff = PicPool;
+pub type PPicBuff = *mut PicPool;
 
-impl Default for TagPicBuff {
-    fn default() -> Self {
-        Self {
-            ppPic: std::ptr::null_mut(),
-            iCapacity: 0,
-            iCurrentIdx: 0,
+impl PicPool {
+    /// Slot count — the C's `iCapacity`.
+    #[inline]
+    pub fn capacity(&self) -> i32 {
+        self.slots.len() as i32
+    }
+
+    /// The circular cursor — the C's `iCurrentIdx`.
+    #[inline]
+    pub fn cursor(&self) -> i32 {
+        self.cursor
+    }
+
+    /// A handle to slot `index`.
+    ///
+    /// # Panics
+    /// If `index` is outside the pool.
+    #[inline]
+    pub fn id(&self, index: usize) -> PicId {
+        self.slots.id(index)
+    }
+
+    /// The picture in slot `id`, which may be null.
+    #[inline]
+    pub fn slot(&self, id: PicId) -> PPicture {
+        *self.slots.get(id)
+    }
+
+    /// The picture in slot `index`, or null if `index` is outside the pool.
+    ///
+    /// The out-of-range arm is the C's own: `PrefetchLastPicForThread` and
+    /// `welsDecoderExt.cpp`'s release paths both test the index against `iCapacity`
+    /// before indexing, and both mean "no picture" by a failed test.
+    #[inline]
+    pub fn slot_at(&self, index: i32) -> PPicture {
+        if index >= 0 && index < self.capacity() {
+            self.slot(self.id(index as usize))
+        } else {
+            std::ptr::null_mut()
         }
+    }
+
+    /// **The recycling predicate**, and the whole of what "free" means to this pool:
+    /// a slot holds a recyclable picture when it holds a picture at all and that
+    /// picture is [`SPicture::is_free`] — `!bUsedAsRef && iRefCount <= 0`.
+    ///
+    /// Both scans below used to spell this inline, which is why the null test and the
+    /// two flags could drift apart between them.
+    ///
+    /// # Safety
+    /// The pool holds pointers it does not own; every slot must be null or a live
+    /// picture from [`AllocPicture`].
+    #[inline]
+    unsafe fn is_recyclable(&self, index: usize) -> bool {
+        let pPic = self.slot(self.id(index));
+        !pPic.is_null() && (*pPic).is_free()
+    }
+
+    /// `PrefetchPic`'s two-pass circular scan for a recyclable slot.
+    ///
+    /// Pass 1 walks `cursor + 1 .. capacity`; pass 2 wraps and walks `0 ..= cursor`.
+    /// The cursor lands on the winning index, or — when pass 2 finds nothing — one
+    /// past where it stopped, which is the C's behaviour and the reason its own loop
+    /// can run off the end of `ppPic`: each failed prefetch leaves `iCurrentIdx` one
+    /// higher, so an exhausted DPB eventually indexes past `iCapacity`. The port
+    /// already guarded that with `iPicIdx < iCapacity`; here the bound is the pool's.
+    ///
+    /// # Safety
+    /// As [`is_recyclable`](Self::is_recyclable).
+    pub unsafe fn prefetch_free(&mut self) -> PPicture {
+        let capacity = self.capacity();
+        if capacity == 0 {
+            return std::ptr::null_mut();
+        }
+
+        // Pass 1: forward from cursor + 1.
+        let mut index = self.cursor + 1;
+        while index < capacity {
+            if self.is_recyclable(index as usize) {
+                self.cursor = index;
+                let pPic = self.slot_at(index);
+                (*pPic).iPicBuffIdx = index;
+                return pPic;
+            }
+            index += 1;
+        }
+
+        // Pass 2: wrap to 0 and walk up to and including the cursor.
+        index = 0;
+        let mut pPic: PPicture = std::ptr::null_mut();
+        while index <= self.cursor && index < capacity {
+            if self.is_recyclable(index as usize) {
+                pPic = self.slot_at(index);
+                break;
+            }
+            index += 1;
+        }
+
+        self.cursor = index;
+        if !pPic.is_null() {
+            (*pPic).iPicBuffIdx = index;
+        }
+        pPic
+    }
+
+    /// `PrefetchPicForThread`'s round-robin step: the slot under the cursor, and the
+    /// cursor advanced one with a wrap.
+    ///
+    /// # Safety
+    /// As [`is_recyclable`](Self::is_recyclable).
+    pub unsafe fn next_for_thread(&mut self) -> PPicture {
+        let capacity = self.capacity();
+        if capacity == 0 {
+            return std::ptr::null_mut();
+        }
+
+        let pPic = self.slot_at(self.cursor);
+        if !pPic.is_null() {
+            (*pPic).iPicBuffIdx = self.cursor;
+        }
+
+        self.cursor += 1;
+        if self.cursor >= capacity {
+            self.cursor = 0;
+        }
+        pPic
     }
 }
 
@@ -134,10 +278,16 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 //    functions are shorter still. Nothing in this file takes a `&mut SPicture` that
 //    spans a call, so the conversion introduces no borrow here at all: an owned
 //    plane changes `AllocPicture`/`FreePicture` and leaves the scan untouched.
-// 2. **The scan cannot see a half-built picture.** `CreatePicBuff` fills `ppPic`
-//    before it sets `iCapacity`, and every prefetch returns early on `iCapacity == 0`
-//    — so a picture is either absent from the pool or fully constructed. That was
-//    true before and it is what lets `AllocPicture` hand back a `Box::into_raw`.
+//    **T5.N1 re-checked this and the answer is unchanged**, because the borrow the
+//    pool now takes is of the *slot array*, not of a picture: `is_recyclable` reads
+//    one slot and derefs it inside one expression, and `prefetch_free`'s `&mut self`
+//    covers `cursor` and the slots — never the pictures those slots point at, which
+//    is exactly why the slots are still pointers (see [`PicPool`]).
+// 2. **The scan cannot see a half-built picture.** `CreatePicBuff` fills its slot
+//    `Vec` before the pool exists at all, so a picture is either absent from the pool
+//    or fully constructed — the C's "fill `ppPic`, then set `iCapacity`" ordering,
+//    now enforced by construction rather than by statement order. That is what lets
+//    `AllocPicture` hand back a `Box::into_raw`.
 // 3. **The re-entrancy that does exist is one level up**, in `manage_dec_ref.rs`,
 //    where `WelsInitRefList`'s concealment prefetch takes a slot from this pool and
 //    copies into it from `pPreviousDecodedPictureInDpb` — another slot of the same
@@ -382,129 +532,67 @@ pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
 
 /// Retrieves an available, recyclable [`SPicture`] node from the picture buffer pool.
 ///
-/// Performs a 2-pass circular scan:
-/// 1. Pass 1: Scans candidate indices from `iCurrentIdx + 1` to `iCapacity - 1`.
-/// 2. Pass 2: Wraps around and scans from `0` to `iCurrentIdx`.
-///
-/// A slot is eligible for recycling if `pPic != NULL && !pPic->bUsedAsRef && pPic->iRefCount <= 0`.
+/// The scan itself is [`PicPool::prefetch_free`]; this is the C's free-function
+/// spelling, kept for its two call sites (`decoder_core.rs:3580`,
+/// `manage_dec_ref.rs:590`) until they hold a pool rather than a pointer to one.
 ///
 /// # Safety
-/// `pPicBuf` must point to a valid [`SPicBuff`] pool structure.
+/// `pPicBuf` must be null or point to a valid [`PicPool`].
 pub unsafe fn PrefetchPic(pPicBuf: PPicBuff) -> PPicture {
     if pPicBuf.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe {
-        if (*pPicBuf).iCapacity == 0 || (*pPicBuf).ppPic.is_null() {
-            return std::ptr::null_mut();
-        }
-
-        let mut iPicIdx: i32;
-        let mut pPic: PPicture = std::ptr::null_mut();
-
-        // Pass 1: Scan forward from iCurrentIdx + 1 to iCapacity - 1
-        iPicIdx = (*pPicBuf).iCurrentIdx + 1;
-        while iPicIdx < (*pPicBuf).iCapacity {
-            let pCandidate = *(*pPicBuf).ppPic.add(iPicIdx as usize);
-            if !pCandidate.is_null()
-                && !(*pCandidate).bUsedAsRef
-                && (*pCandidate).iRefCount <= 0
-            {
-                pPic = pCandidate;
-                break;
-            }
-            iPicIdx += 1;
-        }
-
-        if !pPic.is_null() {
-            (*pPicBuf).iCurrentIdx = iPicIdx;
-            (*pPic).iPicBuffIdx = iPicIdx;
-            return pPic;
-        }
-
-        // Pass 2: Wrap around and scan from index 0 to iCurrentIdx.
-        // `iPicIdx < iCapacity` guards a read past `ppPic` that the C++ loop
-        // (`iPicIdx <= pPicBuf->iCurrentIdx`) does not: each failed prefetch leaves
-        // iCurrentIdx one higher, so once the DPB is exhausted it exceeds iCapacity
-        // and the next call loads a wild pointer. C++ never reaches that state.
-        iPicIdx = 0;
-        while iPicIdx <= (*pPicBuf).iCurrentIdx && iPicIdx < (*pPicBuf).iCapacity {
-            let pCandidate = *(*pPicBuf).ppPic.add(iPicIdx as usize);
-            if !pCandidate.is_null()
-                && !(*pCandidate).bUsedAsRef
-                && (*pCandidate).iRefCount <= 0
-            {
-                pPic = pCandidate;
-                break;
-            }
-            iPicIdx += 1;
-        }
-
-        (*pPicBuf).iCurrentIdx = iPicIdx;
-        if !pPic.is_null() {
-            (*pPic).iPicBuffIdx = iPicIdx;
-        }
-        pPic
-    }
+    (*pPicBuf).prefetch_free()
 }
 
 /// Retrieves the next circular picture node in round-robin FIFO sequence for multi-threaded decoding.
 ///
 /// # Safety
-/// `pPicBuf` must point to a valid [`SPicBuff`] pool structure.
+/// `pPicBuf` must be null or point to a valid [`PicPool`].
 pub unsafe fn PrefetchPicForThread(pPicBuf: PPicBuff) -> PPicture {
     if pPicBuf.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe {
-        if (*pPicBuf).iCapacity == 0 || (*pPicBuf).ppPic.is_null() {
-            return std::ptr::null_mut();
-        }
-
-        let cur_idx = (*pPicBuf).iCurrentIdx as usize;
-        let pPic = *(*pPicBuf).ppPic.add(cur_idx);
-        if !pPic.is_null() {
-            (*pPic).iPicBuffIdx = (*pPicBuf).iCurrentIdx;
-        }
-
-        (*pPicBuf).iCurrentIdx += 1;
-        if (*pPicBuf).iCurrentIdx >= (*pPicBuf).iCapacity {
-            (*pPicBuf).iCurrentIdx = 0;
-        }
-        pPic
-    }
+    (*pPicBuf).next_for_thread()
 }
 
 /// Retrieves an explicit picture node by its recorded buffer pool index (`iLastPicBuffIdx`).
 ///
 /// # Safety
-/// `pPicBuf` must point to a valid [`SPicBuff`] pool structure.
+/// `pPicBuf` must be null or point to a valid [`PicPool`].
 pub unsafe fn PrefetchLastPicForThread(pPicBuf: PPicBuff, iLastPicBuffIdx: i32) -> PPicture {
     if pPicBuf.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe {
-        if (*pPicBuf).iCapacity == 0 || (*pPicBuf).ppPic.is_null() {
-            return std::ptr::null_mut();
-        }
-
-        let mut pPic: PPicture = std::ptr::null_mut();
-        if iLastPicBuffIdx >= 0 && iLastPicBuffIdx < (*pPicBuf).iCapacity {
-            pPic = *(*pPicBuf).ppPic.add(iLastPicBuffIdx as usize);
-        }
-        pPic
-    }
+    (*pPicBuf).slot_at(iLastPicBuffIdx)
 }
 
 // ============================================================================
 // Buffer Pool Lifecycle Helpers (CreatePicBuff / DestroyPicBuff)
 // ============================================================================
 
-/// Allocates an [`SPicBuff`] queue pool structure and pre-allocates `kiSize` [`SPicture`] nodes.
+/// Allocates a [`PicPool`] and pre-allocates `kiSize` [`SPicture`] nodes into it.
+///
+/// **T5.N1: the pool and its slot array are one heap value, not two `WelsMallocz`
+/// blocks.** S21 asks what happens to a struct gaining an owned field: this one is
+/// `WelsMallocz`'d nowhere and comes out of `Box::new` fully built, so no zeroed
+/// shell exists to be valid or invalid.
+///
+/// F19, per allocation: the `Box<PicPool>` here by the `Box::from_raw` in
+/// [`DestroyPicBuff`]; the slot `Vec` by that same drop; each picture by the
+/// [`FreePicture`] call that same function makes for its slot. **The pool adds no
+/// owner** — every picture in it is still exactly one [`AllocPicture`] `Box`.
+///
+/// The partial-failure arm frees what it has already built, which is what the C++
+/// means by `decoder.cpp:91`'s `pPicBuf->iCapacity = iPicIdx;` and its comment
+/// "init capacity first for free memory". The port set no capacity before calling
+/// `DestroyPicBuff` there, so its loop ran zero times and every picture allocated
+/// before the failure leaked; with a `Vec` the count and the contents are the same
+/// fact and the arm cannot disagree with itself.
 ///
 /// # Safety
 /// - `pCtx` must point to a valid [`SWelsDecoderContext`] containing `pMemAlign`.
-/// - `ppPicBuf` must point to a writable `*mut SPicBuff` pointer variable.
+/// - `ppPicBuf` must point to a writable [`PPicBuff`] variable.
 pub unsafe fn CreatePicBuff(
     pCtx: PWelsDecoderContext,
     ppPicBuf: *mut PPicBuff,
@@ -520,53 +608,39 @@ pub unsafe fn CreatePicBuff(
         return 1;
     }
 
-    let pPicBuf = unsafe {
-        (*pMa).WelsMallocz(
-            std::mem::size_of::<SPicBuff>() as u32,
-            b"PPicBuff\0".as_ptr() as *const c_char,
-        ) as PPicBuff
-    };
-    if pPicBuf.is_null() {
-        return 1;
-    }
-
-    let ppPicArray = unsafe {
-        (*pMa).WelsMallocz(
-            (kiSize as usize * std::mem::size_of::<PPicture>()) as u32,
-            b"ppPic\0".as_ptr() as *const c_char,
-        ) as *mut PPicture
-    };
-    if ppPicArray.is_null() {
-        unsafe {
-            (*pMa).WelsFree(pPicBuf as *mut c_void, b"pPicBuf\0".as_ptr() as *const c_char);
-            *ppPicBuf = std::ptr::null_mut();
-        }
+    let mut slots: Vec<PPicture> = Vec::new();
+    if slots.try_reserve_exact(kiSize.max(0) as usize).is_err() {
+        unsafe { *ppPicBuf = std::ptr::null_mut() };
         return 1;
     }
 
     unsafe {
-        (*pPicBuf).ppPic = ppPicArray;
-        for i in 0..kiSize as usize {
+        for _ in 0..kiSize {
             let pPic = AllocPicture(pCtx, kiPicWidth, kiPicHeight);
             if pPic.is_null() {
-                DestroyPicBuff(pCtx, &mut (pPicBuf as PPicBuff), pMa);
+                for pBuilt in slots {
+                    FreePicture(pBuilt, pMa);
+                }
                 *ppPicBuf = std::ptr::null_mut();
                 return 1;
             }
-            *ppPicArray.add(i) = pPic;
+            slots.push(pPic);
         }
-        (*pPicBuf).iCapacity = kiSize;
-        (*pPicBuf).iCurrentIdx = 0;
-        *ppPicBuf = pPicBuf;
+
+        *ppPicBuf = Box::into_raw(Box::new(PicPool {
+            slots: Pool::new(slots),
+            cursor: 0,
+        }));
     }
 
     0
 }
 
-/// Releases all picture slots and deallocates the [`SPicBuff`] queue structure.
+/// Releases every picture the pool addresses, then the pool.
 ///
 /// # Safety
-/// - `ppPicBuf` must point to a valid `*mut SPicBuff` pointer variable.
+/// - `ppPicBuf` must point to a writable [`PPicBuff`] variable whose value is null or
+///   a pool produced by [`CreatePicBuff`] and not yet destroyed.
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
 pub unsafe fn DestroyPicBuff(
     _pCtx: PWelsDecoderContext,
@@ -582,24 +656,14 @@ pub unsafe fn DestroyPicBuff(
     }
 
     unsafe {
-        if !(*pPicBuf).ppPic.is_null() {
-            for i in 0..(*pPicBuf).iCapacity as usize {
-                let pPic = *(*pPicBuf).ppPic.add(i);
-                if !pPic.is_null() {
-                    FreePicture(pPic, pMa);
-                    *(*pPicBuf).ppPic.add(i) = std::ptr::null_mut();
-                }
+        // Reclaimed first, so the slot walk below reads through the `Box` that is
+        // about to drop rather than through a raw pointer beside it.
+        let pool = Box::from_raw(pPicBuf);
+        for (_, &pPic) in pool.slots.iter() {
+            if !pPic.is_null() {
+                FreePicture(pPic, pMa);
             }
-            (*pMa).WelsFree(
-                (*pPicBuf).ppPic as *mut c_void,
-                b"pPicBuf->ppPic\0".as_ptr() as *const c_char,
-            );
-            (*pPicBuf).ppPic = std::ptr::null_mut();
         }
-        (*pMa).WelsFree(
-            pPicBuf as *mut c_void,
-            b"pPicBuf\0".as_ptr() as *const c_char,
-        );
         *ppPicBuf = std::ptr::null_mut();
     }
 }
@@ -713,7 +777,7 @@ mod tests {
             // First prefetch gets index 1 (Pass 1 scan from iCurrentIdx + 1)
             let pic1 = PrefetchPic(p_pic_buf);
             assert!(!pic1.is_null());
-            assert_eq!((*p_pic_buf).iCurrentIdx, 1);
+            assert_eq!((*p_pic_buf).cursor(),1);
 
             // Mark pic1 as used as reference
             (*pic1).bUsedAsRef = true;
@@ -721,9 +785,63 @@ mod tests {
             // Second prefetch skips index 1, finds index 2
             let pic2 = PrefetchPic(p_pic_buf);
             assert!(!pic2.is_null());
-            assert_eq!((*p_pic_buf).iCurrentIdx, 2);
+            assert_eq!((*p_pic_buf).cursor(),2);
 
             DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+        }
+        assert_eq!(ma.WelsGetMemoryUsage(), 0);
+    }
+
+    /// Pass 2 and the cursor's exhausted state — the part of `PrefetchPic` that has
+    /// no C++ counterpart to compare against, because the C's loop runs off the end
+    /// of `ppPic` where this one stops at the pool's bound.
+    ///
+    /// With every slot held as a reference the scan finds nothing, and each failed
+    /// call leaves the cursor one higher until it reaches `capacity` and stays there.
+    /// Releasing a slot then has to be found by the wrap, since the cursor is past it.
+    #[test]
+    fn prefetch_wraps_and_survives_an_exhausted_pool() {
+        let mut ma = CMemoryAlign::new(32);
+        let mut param = SDecodingParam::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
+        ctx.pParam = &mut param as *mut SDecodingParam;
+
+        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf, 3, 64, 64),
+                0
+            );
+            let pool = &mut *p_pic_buf;
+            assert_eq!(pool.capacity(), 3);
+
+            // Every slot in use: the two passes both come up empty, and the cursor
+            // climbs one per call and then stops at the capacity rather than past it.
+            for i in 0..3 {
+                (*pool.slot(pool.id(i))).bUsedAsRef = true;
+            }
+            assert!(pool.prefetch_free().is_null());
+            assert_eq!(pool.cursor(), 1);
+            assert!(pool.prefetch_free().is_null());
+            assert_eq!(pool.cursor(), 2);
+            assert!(pool.prefetch_free().is_null());
+            assert_eq!(pool.cursor(), 3);
+            assert!(pool.prefetch_free().is_null());
+            assert_eq!(pool.cursor(), 3, "an exhausted cursor stays at the bound");
+
+            // Free slot 0 — behind the cursor, so only the wrap can reach it.
+            (*pool.slot(pool.id(0))).bUsedAsRef = false;
+            let got = pool.prefetch_free();
+            assert_eq!(got, pool.slot(pool.id(0)));
+            assert_eq!(pool.cursor(), 0);
+            assert_eq!((*got).iPicBuffIdx, 0, "the winner learns its slot");
+
+            DestroyPicBuff(
+                &mut *ctx as *mut SWelsDecoderContext,
+                &mut p_pic_buf as *mut PPicBuff,
+                &mut ma as *mut CMemoryAlign,
+            );
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -748,15 +866,15 @@ mod tests {
 
             let pic0 = PrefetchPicForThread(p_pic_buf);
             assert_eq!((*pic0).iPicBuffIdx, 0);
-            assert_eq!((*p_pic_buf).iCurrentIdx, 1);
+            assert_eq!((*p_pic_buf).cursor(),1);
 
             let pic1 = PrefetchPicForThread(p_pic_buf);
             assert_eq!((*pic1).iPicBuffIdx, 1);
-            assert_eq!((*p_pic_buf).iCurrentIdx, 2);
+            assert_eq!((*p_pic_buf).cursor(),2);
 
             let pic2 = PrefetchPicForThread(p_pic_buf);
             assert_eq!((*pic2).iPicBuffIdx, 2);
-            assert_eq!((*p_pic_buf).iCurrentIdx, 0); // Wraps around
+            assert_eq!((*p_pic_buf).cursor(),0); // Wraps around
 
             let pic_lookup = PrefetchLastPicForThread(p_pic_buf, 1);
             assert_eq!(pic_lookup, pic1);

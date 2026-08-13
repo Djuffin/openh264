@@ -348,7 +348,7 @@ pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
 
 
 
-pub use crate::decoder::pic_queue::{TagPicBuff, SPicBuff, PPicBuff};
+pub use crate::decoder::pic_queue::{PicPool, PicId, SPicBuff, PPicBuff};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -748,7 +748,7 @@ mod tests {
             let err = CreatePicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, 4, 64, 64);
             assert_eq!(err, ERR_NONE);
             assert!(!pic_buff.is_null());
-            assert_eq!((*pic_buff).iCapacity, 4);
+            assert_eq!((*pic_buff).capacity(), 4);
 
             DestroyPicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, ctx.pMemAlign);
             assert!(pic_buff.is_null());
