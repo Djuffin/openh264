@@ -7,17 +7,18 @@ bind every struct edit here. Perf: §7.4 (D-perf-4, S2b). Before starting, read 
 Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
 disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
-re-grep before acting on any of them (S24). **Estimated 5–7 loaded sessions remain**
-(re-planned 2026-08-12 at session L's close; **sessions M and N are spent, and 4–6
-remain**, because session N closed two steps and did not close the one it was scheduled
-to close third: **5.1 and 5.4 are done** (T5.N1–T5.N4), **5.3's colocated face is not**
-and is now blocked on `pDec` carrying a `PicId` — see §1 step 5 and §3. O–P = 5.5 in
-two, opening with session N's day-two perf debt; Q = 5.6, which owns **5.2's `*mut u8`
-cache family**, `cabac_rbsp_window`'s retirement, and the largest share of the 236
-`.pDec` sites; R = the exit. **5.3b and the colocated face are unscheduled and now
-sequenced behind the `pDec` conversion** — they are the likeliest reason this grows by
-one, and the `pDec` conversion is the likeliest reason it grows by two. A deep Miri queue
-adds a session; 5.5 landing light removes one.)
+re-grep before acting on any of them (S24). **Estimated 3 sessions remain, plan for 3–4**
+(re-planned 2026-08-12 after session N; sessions enlarged per Eugene under D-gate-1.
+**5.1 and 5.4 are done** (T5.N1–T5.N4); 5.3's colocated face is blocked on `pDec`
+carrying a `PicId` — see §1 step 5 and §3. **O** = 5.5 whole (the decomposition
+closure, constructors, P4, F37, `Drop`/shell retirement — session N's perf debt is
+D-gate-1-deferred to the exit, not O's); **P** = the `decode_slice` cluster in
+dependency order — the `pDec` step (236 sites) → `cur_and_ref` + colocated + 5.3b →
+5.6 whole, including the `*mut u8` cache family and `cabac_rbsp_window`'s
+retirement — faces ordered, drop-from-the-end at seam boundaries; **Q** = the exit,
+never compressed, carrying every measurement D-gate-1 deferred. P splitting once at
+a seam is the likely fourth session; a deep Miri queue at 5.5's constructors is the
+other.)
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this
@@ -437,12 +438,19 @@ T3.4).
 
 ## 7. Gates and exit
 
-Per face: full battery; decoder goldens frozen at **57** (the three F21 rows and
-session J's `grid_48x32` included — a new probe stream's row is additive and named in
-its own commit, nothing else moves); sweeps 341/341 both profiles; 3-pair interleaved
-medians per seam (S2b: a median outside the null band gets more pairs before it gets a
-mechanism, and a reading a decision rests on gets a **second day**, not more pairs on
-the same one); Miri; ratchet regenerated per S16 with deltas named.
+**D-gate-1 (sprint gating, from session O until the phase exit — §7.4 is the
+authority):**
+- Per commit (~3 min): build both profiles + tests + ratchet + census.
+- Once per session, at close: the full battery — decode goldens frozen at **57**
+  (the three F21 rows and session J's `grid_48x32` included; a new probe stream's
+  row is additive and named in its own commit, nothing else moves); sweeps 341/341
+  both profiles; benches bit-identical; Miri both probes. FAILs adjudicated per
+  S14/S16; a byte divergence bisects across the session's commits — keep them
+  small (S20).
+- **No mid-phase perf measurement.** Nulls, pairs, spans, and every S2/S2b verdict
+  move to the phase exit, which runs the full protocol against the ≈+23% stop-line.
+  (Sessions A–N predate this and ran per-face/per-session protocols; their numbers
+  stand as data.)
 
 **Do not edit the working tree while a battery is running** (session J's small
 self-inflicted lesson): `gates.sh` builds from the working tree, not from the commit,
