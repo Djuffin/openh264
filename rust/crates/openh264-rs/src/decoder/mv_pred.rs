@@ -1044,8 +1044,8 @@ pub unsafe fn PredMvBDirectSpatial(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
                 (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
-                UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, None, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, None, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
                 pSubPartCount[i as usize] = g_ksInterBSubMbTypeInfo[0].iPartCount;
@@ -1064,8 +1064,8 @@ pub unsafe fn PredMvBDirectSpatial(
                     bIsLongRef,
                     iMvp.as_mut_ptr() as *mut [i16; 2],
                     ref_idx.as_mut_ptr(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
+                    None,
+                    None,
                 );
             }
         }
@@ -1142,10 +1142,10 @@ pub unsafe fn PredBDirectTemporal(
                 let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
 
                 ref_idx[LIST_1] = 0;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, None, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 if (*pCurDqLayer).iColocIntra[iScan4Idx] != 0 {
                     ref_idx[LIST_0] = 0;
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(pCurDqLayer, None, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                     ST64(iMvp.as_mut_ptr() as *mut i16, 0);
                 } else {
                     ref_idx[LIST_0] = 0;
@@ -1155,7 +1155,7 @@ pub unsafe fn PredBDirectTemporal(
                     } else {
                         mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
                     }
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, std::ptr::null_mut(), iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(pCurDqLayer, None, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                 }
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
@@ -1174,8 +1174,8 @@ pub unsafe fn PredBDirectTemporal(
                     *subMbType,
                     ref_idx.as_mut_ptr(),
                     mvColoc as *mut [i16; 2],
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
+                    None,
+                    None,
                 );
             }
         }
@@ -1306,8 +1306,8 @@ pub unsafe fn UpdateP16x16MotionOnly(
 /// Updates reference index and motion vector caches for a 16x8 macroblock partition.
 pub unsafe fn UpdateP16x8MotionInfo(
     pCurDqLayer: *mut DqLayerState,
-    iMotionVector: *mut [[i16; 2]; 30],
-    iRefIndex: *mut [i8; 30],
+    mut iMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
+    mut iRefIndex: Option<&mut [[i8; 30]; LIST_A]>,
     listIdx: i32,
     mut iPartIdx: i32,
     iRef: i8,
@@ -1346,14 +1346,14 @@ pub unsafe fn UpdateP16x8MotionInfo(
             ST32(mv_ptr.add(1 + kuiScan4IdxPlus4) as *mut i16, kiMV32);
         }
 
-        if !iRefIndex.is_null() {
-            let ref_cache_ptr = (*iRefIndex.add(listIdx as usize)).as_mut_ptr();
+        if let Some(iRefIndex) = iRefIndex.as_deref_mut() {
+            let ref_cache_ptr = iRefIndex[listIdx as usize].as_mut_ptr();
             ST16(ref_cache_ptr.add(kuiCacheIdx), kiRef2);
             ST16(ref_cache_ptr.add(kuiCacheIdxPlus6), kiRef2);
         }
 
-        if !iMotionVector.is_null() {
-            let mv_cache_ptr = (*iMotionVector.add(listIdx as usize)).as_mut_ptr();
+        if let Some(iMotionVector) = iMotionVector.as_deref_mut() {
+            let mv_cache_ptr = iMotionVector[listIdx as usize].as_mut_ptr();
             ST32(mv_cache_ptr.add(kuiCacheIdx) as *mut i16, kiMV32);
             ST32(mv_cache_ptr.add(1 + kuiCacheIdx) as *mut i16, kiMV32);
             ST32(mv_cache_ptr.add(kuiCacheIdxPlus6) as *mut i16, kiMV32);
@@ -1367,8 +1367,8 @@ pub unsafe fn UpdateP16x8MotionInfo(
 /// Updates reference index and motion vector caches for an 8x16 macroblock partition.
 pub unsafe fn UpdateP8x16MotionInfo(
     pCurDqLayer: *mut DqLayerState,
-    iMotionVector: *mut [[i16; 2]; 30],
-    iRefIndex: *mut [i8; 30],
+    mut iMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
+    mut iRefIndex: Option<&mut [[i8; 30]; LIST_A]>,
     listIdx: i32,
     mut iPartIdx: i32,
     iRef: i8,
@@ -1407,14 +1407,14 @@ pub unsafe fn UpdateP8x16MotionInfo(
             ST32(mv_ptr.add(1 + kuiScan4IdxPlus4) as *mut i16, kiMV32);
         }
 
-        if !iRefIndex.is_null() {
-            let ref_cache_ptr = (*iRefIndex.add(listIdx as usize)).as_mut_ptr();
+        if let Some(iRefIndex) = iRefIndex.as_deref_mut() {
+            let ref_cache_ptr = iRefIndex[listIdx as usize].as_mut_ptr();
             ST16(ref_cache_ptr.add(kuiCacheIdx), kiRef2);
             ST16(ref_cache_ptr.add(kuiCacheIdxPlus6), kiRef2);
         }
 
-        if !iMotionVector.is_null() {
-            let mv_cache_ptr = (*iMotionVector.add(listIdx as usize)).as_mut_ptr();
+        if let Some(iMotionVector) = iMotionVector.as_deref_mut() {
+            let mv_cache_ptr = iMotionVector[listIdx as usize].as_mut_ptr();
             ST32(mv_cache_ptr.add(kuiCacheIdx) as *mut i16, kiMV32);
             ST32(mv_cache_ptr.add(1 + kuiCacheIdx) as *mut i16, kiMV32);
             ST32(mv_cache_ptr.add(kuiCacheIdxPlus6) as *mut i16, kiMV32);
@@ -1451,7 +1451,7 @@ pub unsafe fn Update8x8RefIdx(
 #[inline(always)]
 pub unsafe fn UpdateP8x8RefIdxCabac(
     pCurDqLayer: *mut DqLayerState,
-    _pRefIndex: *mut [i8; 30],
+    _pRefIndex: Option<&mut [[i8; 30]; LIST_A]>,
     iPartIdx: i32,
     iRef: i8,
     iListIdx: i8,
@@ -1527,8 +1527,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
     bIsLongRef: bool,
     pMvDirect: *mut [i16; 2],
     iRef: *mut i8,
-    pMotionVector: *mut [[i16; 2]; 30],
-    pMvdCache: *mut [[i16; 2]; 30],
+    mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
+    mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pDec = (*pCurDqLayer).pDec;
@@ -1553,13 +1553,13 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                 ST64(mv_cache_l0.add(iCacheIdx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(mv_cache_l0.add(iCacheIdx + 6) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                 ST64(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
                 ST64(mvd_cache_l0.add(iCacheIdx + 6) as *mut i16, 0);
             }
@@ -1576,13 +1576,13 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                 ST64(mv_cache_l1.add(iCacheIdx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(mv_cache_l1.add(iCacheIdx + 6) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                 ST64(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
                 ST64(mvd_cache_l1.add(iCacheIdx + 6) as *mut i16, 0);
             }
@@ -1596,12 +1596,12 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                 ST32(mv_cache_l0.add(iCacheIdx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                 ST32(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
             }
 
@@ -1614,12 +1614,12 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                 ST32(mv_cache_l1.add(iCacheIdx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                 ST32(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
             }
         }
@@ -1649,13 +1649,13 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                             ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
                         }
-                        if !pMotionVector.is_null() {
-                            let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+                        if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                            let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                             ST64(mv_cache_l0.add(iCacheIdx) as *mut i16, 0);
                             ST64(mv_cache_l0.add(iCacheIdx + 6) as *mut i16, 0);
                         }
-                        if !pMvdCache.is_null() {
-                            let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+                        if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                            let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                             ST64(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
                             ST64(mvd_cache_l0.add(iCacheIdx + 6) as *mut i16, 0);
                         }
@@ -1672,13 +1672,13 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                             ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
                         }
-                        if !pMotionVector.is_null() {
-                            let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+                        if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                            let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                             ST64(mv_cache_l1.add(iCacheIdx) as *mut i16, 0);
                             ST64(mv_cache_l1.add(iCacheIdx + 6) as *mut i16, 0);
                         }
-                        if !pMvdCache.is_null() {
-                            let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+                        if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                            let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                             ST64(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
                             ST64(mvd_cache_l1.add(iCacheIdx + 6) as *mut i16, 0);
                         }
@@ -1695,12 +1695,12 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                         }
-                        if !pMotionVector.is_null() {
-                            let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+                        if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                            let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                             ST32(mv_cache_l0.add(iCacheIdx) as *mut i16, 0);
                         }
-                        if !pMvdCache.is_null() {
-                            let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+                        if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                            let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                             ST32(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
                         }
                     }
@@ -1713,12 +1713,12 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                         }
-                        if !pMotionVector.is_null() {
-                            let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+                        if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                            let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                             ST32(mv_cache_l1.add(iCacheIdx) as *mut i16, 0);
                         }
-                        if !pMvdCache.is_null() {
-                            let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+                        if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                            let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                             ST32(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
                         }
                     }
@@ -1737,8 +1737,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
     subMbType: SubMbType,
     iRef: *mut i8,
     mvColoc: *mut [i16; 2],
-    pMotionVector: *mut [[i16; 2]; 30],
-    pMvdCache: *mut [[i16; 2]; 30],
+    mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
+    mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
@@ -1773,13 +1773,13 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 ST64(mvd_l0.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l0.add(iScan4Idx + 4) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                 ST64(mv_cache_l0.add(iCacheIdx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(mv_cache_l0.add(iCacheIdx + 6) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                 ST64(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
                 ST64(mvd_cache_l0.add(iCacheIdx + 6) as *mut i16, 0);
             }
@@ -1800,13 +1800,13 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 ST64(mvd_l1.add(iScan4Idx) as *mut i16, 0);
                 ST64(mvd_l1.add(iScan4Idx + 4) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                 ST64(mv_cache_l1.add(iCacheIdx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(mv_cache_l1.add(iCacheIdx + 6) as *mut i16, LD64(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                 ST64(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
                 ST64(mvd_cache_l1.add(iCacheIdx + 6) as *mut i16, 0);
             }
@@ -1826,12 +1826,12 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l0.add(iScan4Idx) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l0 = (*pMotionVector.add(LIST_0)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l0 = pMotionVector[LIST_0].as_mut_ptr();
                 ST32(mv_cache_l0.add(iCacheIdx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l0 = (*pMvdCache.add(LIST_0)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l0 = pMvdCache[LIST_0].as_mut_ptr();
                 ST32(mvd_cache_l0.add(iCacheIdx) as *mut i16, 0);
             }
 
@@ -1848,12 +1848,12 @@ pub unsafe fn FillTemporalDirect8x8Mv(
                 let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(mvd_l1.add(iScan4Idx) as *mut i16, 0);
             }
-            if !pMotionVector.is_null() {
-                let mv_cache_l1 = (*pMotionVector.add(LIST_1)).as_mut_ptr();
+            if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
+                let mv_cache_l1 = pMotionVector[LIST_1].as_mut_ptr();
                 ST32(mv_cache_l1.add(iCacheIdx) as *mut i16, LD32(pMV.as_ptr()));
             }
-            if !pMvdCache.is_null() {
-                let mvd_cache_l1 = (*pMvdCache.add(LIST_1)).as_mut_ptr();
+            if let Some(pMvdCache) = pMvdCache.as_deref_mut() {
+                let mvd_cache_l1 = pMvdCache[LIST_1].as_mut_ptr();
                 ST32(mvd_cache_l1.add(iCacheIdx) as *mut i16, 0);
             }
         }
