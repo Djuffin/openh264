@@ -7467,8 +7467,20 @@ alternation it was written for. Read both sizes in an isolation run before readi
 
 ## 2026-08-13 — Phase 5, session O (5.5 whole: the decomposition closure, the constructors, P4, and the shell's retirement)
 
-**Commits:** `44e02411` (inherited doc tail), `74d02058` (T5.O0, `Id`'s niche), and the
-faces below.
+**Commits:** `44e02411` (inherited doc tail), `74d02058` (T5.O0, `Id`'s niche),
+`03afc46f` (the closure), `49989496` (T5.O1, F37), `4336371a` (T5.O2, F38), `426e632d`
+(T5.O3, the CABAC engine), `2307e4df` (T5.O4, the access unit), `fffc6f60` (F39),
+`c0102d2f` (T5.O5, F40/F41), `9aca95e9` (T5.O6), `61816091` (ratchet), `b54c52ed`
+(T5.O7, the raw slots), `f4e42cce` (T5.O8), and this entry.
+
+### The session in one line
+
+**5.5's closure says the decomposition is not 5.5's** — the constructors never needed
+it and the signature narrowing behind it is 148 functions sequenced behind `pDec` —
+and the four constructor faces that *were* available produced **five findings**, four
+of them in code the phase had already swept: two in the module the plan exempts from
+`deny(unsafe_code)` forever, one hidden behind a port-side constant 32× the C++'s, and
+one in this session's own test.
 
 ### Control battery
 
@@ -7596,3 +7608,334 @@ conversions are lifecycle rather than per-macroblock. Three answers:
 3. **`Drop`.** A `Drop` impl on the context runs with no other reference live by
    definition — the `Box` is being consumed. The hazard is the opposite one: a cascade
    entry that reads *another* field while dropping one. The inventory above shows none do.
+
+### 2. Face 2 — F37's fix, and the defect that was waiting under it
+
+**T5.O1 restores the reset** C++ `decoder.cpp:260` opens `DestroyPicBuff` with, before
+its early returns. The two buffers it resets are `CWelsDecoderImpl`'s members, wired
+into the context by `decoder_init_c`, so they outlive the context: across an
+Initialize/Uninitialize/Initialize cycle `sPictInfoList` kept POCs and `iPicBuffIdx`
+values naming slots of a pool that had been freed and rebuilt. The test walks exactly
+that cycle and also pins the `fullReset = false` extent.
+
+**T5.O2 is what that one line found.** It was the first read the port had ever made
+through `pCtx->pPictReoderingStatus`, and the small probe convicted on the next run:
+
+```
+error: Undefined Behavior: attempting a read access using <1029891>,
+       but that tag does not exist in the borrow stack for this location
+  --> decoder_core.rs:1931  (ResetReorderingPictureBuffers)
+help: created by a SharedReadWrite retag at codec_api.rs:1440
+help: later invalidated by a write access at codec_api.rs:1672
+```
+
+**F38: all eight of `decoder_init_c`'s back-pointers were `&mut (*dec_impl).field`** —
+S29's worst class, a reference to a field of a raw-reached struct stored into another
+struct for the decoder's whole life. Each store retags that field's range; the next
+write through `dec_impl` itself pops it, and `codec_api.rs` makes such writes on the
+ordinary output path. `addr_of_mut!` at all eight, plus two more sites of the same
+shape found by grepping rather than by a second probe round trip
+(`deblocking.rs`'s `pLoopf` pair, held for the whole macroblock loop; and
+`decoder_core.rs`'s `iDecBlockOffsetArray.as_mut_ptr()`).
+
+**Why it had never fired is the part worth keeping.** The context's copy of
+`pPictReoderingStatus` had one reader in the whole port and it was dead code; every
+live use went through `(*dec_impl).sReoderingStatus` directly. The port stored eight
+invalidated pointers and dereferenced none of them. *A stored pointer that is never
+read is not a fixed defect, it is an unexercised one.*
+
+And the inventory lesson: T5.G1 closed the `&mut *pCtx` sweep for `src/decoder/`, and
+F28 generalised it — both scoped to the decoder's own modules. `src/api/` is the module
+the plan exempts from `deny(unsafe_code)` **forever** (§2.2.8), and exempting it from
+the lint quietly exempted it from the sweep. Eight instances of the phase's signature
+defect sat in the file that is meant to be "a few hundred lines of pure translation".
+Phase 8 inherits the module; it does not inherit an audit.
+
+### 3. Face 2 — the CABAC engine stops being an allocation (T5.O3)
+
+`SWelsCabacDecEngine` is four scalars. It was `WelsMallocz`'d lazily on the first access
+unit, freed by `WelsFreeDynamicMemory`, and null-checked at both ends of that lifetime
+plus each of its ~45 derivation sites. It is a field now.
+
+F19's question has its best possible answer when there is no allocation to free, and
+the equivalence argument is three sentences: `WelsMallocz` zeroed the block and the
+shell zeroes the field, so the initial state matches; the lazy arm ran once and
+re-zeroed nothing, so the steady state matches; and `WelsFreeDynamicMemory` is followed
+on the next line by the context's own drop at both call sites, so nothing could observe
+the freed-and-nulled window. The out-of-memory arm went with the allocation that could
+fail.
+
+The 45 consumers derive the pointer per use with `addr_of_mut!` — which matters more
+now that the engine lives *inside* the context and the CABAC path reaches `(*pCtx)` for
+other fields between engine writes. Both probes green.
+
+### 4. Face 2 — the access unit (T5.O4/T5.O7), and F39
+
+**F39: the port had two `MemInitNalList`/`MemFreeNalList` pairs of different shapes**,
+one per file, with `MAX_NAL_UNIT_NUM_IN_AU` declared 1024 in one and the C++'s 32 in
+the other. `decoder_core.rs`'s was live — three `WelsMallocz` blocks; `nalu.rs`'s was
+one `alloc_zeroed`. `MemGetNextNal`'s growth path calls `ExpandNalUnitList`, which
+builds a `nalu.rs`-shaped block and frees the old one with **`nalu.rs`'s**
+`MemFreeNalList` — `std::alloc::dealloc` over a recomputed layout, applied to three
+`CMemoryAlign` blocks. Heap corruption on the first expansion, and the reciprocal at
+teardown.
+
+**The port's inflated constant is what kept it quiet**, which makes it the second
+finding this phase (after F34) where a port-side value *larger* than the C++'s hid the
+path that would have exposed a defect. The census could not have caught it: it compares
+duplicate bodies, and these two are not duplicates but rivals.
+
+The fix is ownership. `SAccessUnit` holds its nodes; the count is `len()`;
+`decoder_core.rs`'s pair is deleted and re-exports the other. 51 consumer sites convert,
+the two pointer-array swaps become `Vec::swap`, and five
+`i < MAX_NAL_UNIT_NUM_IN_AU && !…is_null()` guards become `i < count()` — the null test
+could only ever have failed past the end. The constant divergence dies with the
+duplicate, so the growth path is live under every gate for the first time.
+
+**T5.O7 is the correction the close battery forced, and it is the session's second
+re-derivation of a session-N conclusion.** `Vec<Box<SNalUnit>>` was the obvious
+spelling; Miri convicted it on the grid probe:
+
+```
+not granting access to tag <3704576> because that would remove
+[Unique for <37350861>] which is strongly protected
+  --> nalu.rs:416    &mut *self.nal_units[i] as *mut SNalUnit
+help: <37350861> is this argument  --> decoder_core.rs:2053  pBs: &mut BsCursor,
+```
+
+Handing out a node pointer means `&mut *the_box`, retagging the whole node — while
+`ParseSliceHeaderSyntaxs` holds a `&mut BsCursor` *into that same node* as a
+strongly-protected argument. The slots are raw now and the ownership is a `Drop` impl,
+which is `Pool<PPicture>`'s design exactly (T5.N1) — chosen there for the same reason
+and written at the type. **The rule the two containers now share is session N's
+hand-off, stated generally: a safe container may not lend a borrow while raw aliases
+into it are live. The aliases are the blocker, never the API.**
+
+### 5. Face 2 — two more findings from reading the allocations (T5.O5)
+
+* **F40, fixed.** `ExpandBsLenBuffer` passed `iMaxNalNum * size_of::<i32>()` as
+  `copy_nonoverlapping`'s count. C's `memcpy` counts bytes, Rust's primitive counts
+  elements, so the faithful-looking `* sizeof` makes it read and write four times what
+  it should. Unreachable — the function has no caller, because the parse-only
+  `DecodeParser` entry point is a documented stub — which is why nine gates, 2316 golden
+  rows and two probes never saw it. The *class* is the reason to write it down, and the
+  sweep for it across `src/decoder/` found no second instance.
+* **F41, listed with its owner (Phase 8).** The parse-only allocations are freed under
+  `if (*(*pCtx).pParam).bParseOnly` at teardown. The C++ can do that because
+  `pCtx->pParam` is the context's own copy; the port points it at
+  `CWelsDecoderImpl::param`, which `decoder_init_c` overwrites on every Initialize
+  *before* it checks whether a context already exists. Initialize(parse-only) →
+  Initialize(not) → Uninitialize leaks all three. S23 aimed at a lifecycle: the port
+  replaced an owned copy with an alias to a live block, and the free path is a consumer
+  of it in exactly S20's "name what the lifecycle arithmetic reads" sense.
+
+### 6. Face 3 — not started, and the closure says why
+
+Face 3 is the free cascade into `Drop` (R4) and the `MaybeUninit` shell's retirement.
+Neither is available, and both for the reason §1(e) predicted:
+
+* **The cascade's remaining entries are `Option<Box<T>>` conversions, and each is
+  blocked by raw aliases into the value it would own.** `pDqLayersList` is aliased by
+  `pCurDqLayer` (85 sites); `pPicBuff` by `pDec` and `pECRefPic` (85); `pTempDec` by the
+  same. Making the field own the value means the field must lend a pointer to every
+  alias — the exact shape T5.O7 was just convicted for, and T5.N1 before it. **The one
+  entry that *is* available is `pAccessUnitList`, and only because T5.O4 boxed the
+  nodes**: a node pointer now comes from the node's own allocation, so an owning `Box`
+  at the AU level would not retag them. 53 sites; the next session's, at the head of the
+  same face.
+* **The shell cannot be "replaced with a real constructor" as the brief words it.** The
+  shell exists because the context is several MiB and a by-value constructor overflows a
+  2 MiB test-thread stack, not because of the owned fields — `make_zeroed_shell_valid`
+  writes exactly two. Retiring it means either every field valid-at-zero (which the
+  owned fields prevent) or heap-in-place construction, which is what `new_boxed` already
+  is. The honest statement is that **`new_boxed` *is* the real constructor** and what
+  5.5 owes is to keep the shell honest per owned field (S21), which T5.O3 did.
+  The brief's §4 says "its comment names this step as its deleter"; the comment does
+  not — the promise was phase5.md §5's ("replace it with a real constructor at the end
+  of this step"). Both corrected in place: phase5.md §5, and a note at `new_boxed`
+  saying why the shell stays.
+
+### 7. Face 2 — P4, not started
+
+The paramset store is **208 `.pSps`/`.pPps` occurrences over nine files and four
+carriers** — the context (134), `SSliceHeader` (48), `SLayerInfo` (14), and the rest —
+re-greped at the face's open per S24, comment-stripped. It is not one face; it is the
+signature-narrowing closure §1(b) sized, aimed at two fields instead of at the context.
+The S23 read it needs was done and is recorded above under F41, which is the same
+question asked of `pParam` and answered the wrong way.
+
+### 7b. The closing battery, which took three rounds and earned two of them
+
+Round one: everything green except Miri, which convicted **T5.O4's accessor** —
+`Vec<Box<SNalUnit>>`, described in §4. Round two, after T5.O7: everything green except
+Miri, which convicted **this session's own F37 test** (T5.O8). Round three: green.
+
+Both convictions are the same instrument finding the same class in two places the
+session had just been, and neither is visible to any other gate — the sweeps were
+341/341 in both profiles and the benches bit-identical through all three rounds,
+because nothing about either defect changes a byte.
+
+**The two extra rounds cost ~40 minutes of Miri and bought both findings.** D-gate-1's
+trade — one full battery at close, small commits so a divergence bisects cheaply — is
+written for *byte* divergence; this session is the case where the close battery caught
+what byte gates structurally cannot, twice. For the exit: a session that converts a
+*container* should budget a mid-session probe run per container, which is what T5.O3
+did and why its conversion needed no second round.
+
+### 8. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 470 / 464 / 20 | **474 / 468 / 20** |
+| Miri `--lib` | 330 | **334** |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| census duplicate-body budget | 195 | **195** |
+| `raw_ptr` | 4436 | **4420** |
+| `unsafe_block` | 622 | **627** |
+| `unsafe_fn` | 1247 | **1245** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+
+Per-file `raw_ptr` (S16): `decoder_core.rs` **−10**, `nalu.rs` **−5**,
+`decoder_context.rs` −1; `parse_mb_syn_cabac.rs`, `decode_slice.rs`, `deblocking.rs`
+and `codec_api.rs` **flat across 55 converted sites between them**, which is session
+K's observation for the third session running — these conversions delete pointer
+*dereferences* and the metric counts pointer *types written*.
+
+`unsafe_block` **+5**, and four of the five are tests (`nalu.rs`'s two AU-list tests,
+`pic_queue.rs`'s F37 cycle test, and the `Drop` impl's `Box::from_raw`); the fifth is
+`DestroyPicBuff`'s reset. `unsafe_fn` **−2**, the deleted duplicate allocator pair —
+S16's shape again, falling only when raw bodies are *deleted*.
+
+**S16's prose floor, collected for the tenth time — and three times inside this one
+session.** The CABAC engine's deleted field declaration would have come straight back
+as a comment describing it; the F37 test explained the metric using the very type it
+was avoiding; and so did the sentence explaining why not to. Session N's sharper form —
+*a comment mourning a deleted pointer type reinstates it* — now has a corollary: so
+does a comment explaining the rule.
+
+Miri **+4**: the two AU-list tests, the F37 cycle test, and the niche pin.
+
+Closing battery: **OVERALL: PASS**, every gate green — 474/468/20, Miri **334 / 0**
+(941.9s), sweeps 341/341 in both profiles, both benches bit-identical, ratchet clean at
+the regenerated baseline, census 59, goldens 57. It took three rounds; §7b.
+
+### 9. Perf
+
+**Not measured. D-gate-1.** Session N's +1.24% CB span, its Face 1/Face 3 bisect and
+the three stashed binaries (`.perfpair/n_base`, `n_mid`, `n_head`) stand for the phase
+exit. T5.O0's niche is the one thing this session did that session N's §8 named as a
+hypothesis; it lands as structure, and the exit's ledger row adjudicates it.
+
+Two things this session did that the exit should expect to see in the ledger, both
+structural rather than optimisation: the CABAC engine stops being a pointer chase on
+every one of its 45 uses, and `Option<PicId>` halves the deblocking filter's per-edge
+comparison arrays.
+
+### 10. F3
+
+**One hit, acquitted, measurement 39** — `mt CiscoVT2people_320x192_12fps t=4 sm=3
+n=600 cabac=1 rc=1`, debug, C++ 39981 vs Rust 0. Drawn by a mid-session `family` run,
+not by the close battery; the closing battery drew **zero** (341/341 in both profiles).
+
+Inside S14's signature on every axis, and the session's diff is decoder-only, which is
+as close to step 0's hash shortcut as a non-identical binary gets.
+
+**The isolation re-run reproduced, and the reproduction is the finding's best evidence
+to date.** Fifteen runs of the hitting configuration: fourteen byte-identical at 39981,
+and **one that produced a 17-frame stream** where every other run produced 18. With the
+sweep's own zero-byte result that is **three distinct outcomes from one binary and one
+configuration** — S14 step 1's discriminator stated exactly (*a deterministic port bug
+repeats its bytes*). Every prior reproduction in the finding's history (29, 35) repeated
+the *same* wrong length; this is the first that did not.
+
+One hit, so step 2 does not fire. Running total: thirty-nine measurements, thirteen
+alternations, eighteen acquittals.
+
+### 11. What went into the rules
+
+* **Nothing new**, and the tags that carried the session were S20 (the closure, §1),
+  S29 (three times, and it is the session's spine: F38's eight sites, T5.O3's 45
+  derivations, T5.O7's slots), S25 (the closure's enumeration, and F38 as its
+  counterexample), S24 (the 186/148/1343 counts and the 208 that sized P4 out), S16
+  (the prose floor, three times), S13 (the grep-everywhere sweep that found F38's extra
+  two sites and F40's zero), S18 (F39/F40/F41 listed with owners), S23 (F41), S14, S27,
+  F19.
+* **S29 gains a scope, not a sentence.** The rule and F28's generalisation were both
+  written against `src/decoder/`. F38 found eight instances in `src/api/` — the module
+  the plan exempts from `deny(unsafe_code)` forever. *A module exempted from the lint is
+  not exempted from the audit*, and the phase's inventories should say which directories
+  they swept.
+* **T5.N1's container conclusion is now a two-instance rule.** Session N wrote it at
+  `PicPool`'s type: the slots stay raw because a pool-issued `&mut` invalidates the raw
+  aliases into the pool. T5.O7 re-derived it for the NAL list, from a probe, having
+  first written the obvious `Vec<Box<_>>`. The general form is session N's own hand-off
+  sentence, and it belongs wherever a future brief schedules an ownership conversion:
+  **a safe container may not lend a borrow while raw aliases into it are live; schedule
+  the aliases' removal in the same closure, or keep the slots raw and put the ownership
+  in `Drop`.**
+* **A defect can be *stored* for years and only convict when something first reads it**
+  (F38), and a defect can be kept out of reach by a port-side constant that is larger
+  than the C++'s (F39, after F34). Both are arguments for reading allocation and
+  lifecycle code against the C++ line by line, which is what produced four of this
+  session's five findings.
+* **S13 gains its sharpest instance and no new text.** The rule says: when a rule is
+  first applied, run the instrument everywhere it could apply. This session grepped the
+  tree for F38's shape, found two more production sites, fixed them — and had written a
+  third instance into its own test fixture an hour earlier, which the closing battery
+  found (T5.O8). **Everywhere includes the code you are writing while you apply it.**
+* **`addr_of_mut!` is not a charm, and T5.O8 is where that mattered.** It rescues a
+  derivation whose invalidating write goes through a *raw* parent — a raw sibling does
+  not pop a raw derivation, which is why T5.O2's eight production stores are fixed by
+  spelling alone. It rescues nothing when the write goes through the **local** the
+  pointer was derived from, because the local's own tag sits below everything derived
+  from it. There the only fix is ordering. Reaching for the spelling first cost one
+  Miri round trip, and S1's "disassemble before theorising" has the obvious cousin:
+  *check which write is doing the invalidating before choosing the fix.*
+
+### Hand-off: Phase 5, session P — 5.5's remainder, then the `decode_slice` cluster
+
+The estimate does not move: **P and Q**, with P likely splitting once. What changed is
+*what P is*, because §1's closure re-sequenced 5.5's tail behind the same blocker the
+rest of the phase is behind.
+
+1. **`pAccessUnitList` → `Option<Box<SAccessUnit>>`, at the head of the session** (53
+   sites). It is the **only** free-cascade entry available, and only because T5.O4/O7
+   boxed the nodes: a node pointer now comes from the node's own allocation, so an
+   owning `Box` at the access-unit level retags nothing that is live. Every other entry
+   — `pDqLayersList` (aliased by `pCurDqLayer`, 85 sites), `pPicBuff` and `pTempDec`
+   (aliased by `pDec`/`pECRefPic`, 85) — is blocked by raw aliases into the value it
+   would own, which is T5.O7's conviction and T5.N1's before it.
+2. **The `pDec` step, and it now unblocks four things rather than two.** 236 `.pDec`
+   sites (77 `decode_slice.rs`, 55 `decoder_core.rs`), plus 94 `pRefList` and 209
+   `pRefPic`. Behind it: 5.3's colocated split borrow, 5.3b, `Pool<Box<SPicture>>` —
+   and now **5.5's own `Drop` teardown**, because the cascade entries above wait on the
+   same aliases. Do this before anything else structural.
+3. **P4, unstarted and honestly sized**: 208 `.pSps`/`.pPps` occurrences over nine files
+   and four carriers — the context 134, `SSliceHeader` 48, `SLayerInfo` 14. It is the
+   signature-narrowing closure aimed at two fields, not a face. S23's read of the update
+   paths is done and recorded (F41 is the same question asked of `pParam`, answered the
+   wrong way): `pSps` is written from the slice header at `decoder_core.rs:3250` and
+   from the SPS scan at `:3276`, and the buffer it points into is written on the
+   activation path — so the id + lookup must not hand out a borrow that outlives the
+   expression.
+4. **The `MaybeUninit` shell is not deletable and the brief should stop saying it is.**
+   It exists because the context is several MiB, not because of its owned fields;
+   `new_boxed` **is** the real constructor and what 5.5 owes is to keep extending
+   `make_zeroed_shell_valid` per owned field (S21). Corrected in place at
+   `decoder_context.rs` and in phase5.md §5.
+5. **Findings inherited, with owners**: **F41** (the context's `pParam` aliases the API
+   object's live parameter block, so the parse-only teardown reads a flag the caller can
+   change) — **Phase 8**, and it should travel with F38's eight back-pointers, which are
+   the same ownership question. **F40** fixed. **F39** fixed. **F37** fixed. **F38**
+   fixed.
+6. **What 5.2 still owes**, unchanged: the straggler sweep, and the `*mut u8`
+   non-zero-count cache family (167 uses, 96 in `decode_slice.rs`, 5.6's by P1).
+7. **Unchanged**: F23 is Phase 8's, F31's redundant memset 5.5's, F36
+   decoder-threading's. F22, 5.1 and 5.4 are closed.
+8. **Perf debt for the exit**: session N's +1.24% CB span and its bisect, unmeasured
+   since (D-gate-1). `.perfpair/n_base`, `n_mid`, `n_head` are still on disk. Session O
+   added T5.O0's niche, T5.O3's field, and T5.O4's list as structure the exit's ledger
+   row will be measuring through.

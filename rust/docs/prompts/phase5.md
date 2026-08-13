@@ -7,18 +7,20 @@ bind every struct edit here. Perf: §7.4 (D-perf-4, S2b). Before starting, read 
 Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
 disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
-re-grep before acting on any of them (S24). **Estimated 3 sessions remain, plan for 3–4**
-(re-planned 2026-08-12 after session N; sessions enlarged per Eugene under D-gate-1.
-**5.1 and 5.4 are done** (T5.N1–T5.N4); 5.3's colocated face is blocked on `pDec`
-carrying a `PicId` — see §1 step 5 and §3. **O** = 5.5 whole (the decomposition
-closure, constructors, P4, F37, `Drop`/shell retirement — session N's perf debt is
-D-gate-1-deferred to the exit, not O's); **P** = the `decode_slice` cluster in
-dependency order — the `pDec` step (236 sites) → `cur_and_ref` + colocated + 5.3b →
-5.6 whole, including the `*mut u8` cache family and `cabac_rbsp_window`'s
-retirement — faces ordered, drop-from-the-end at seam boundaries; **Q** = the exit,
-never compressed, carrying every measurement D-gate-1 deferred. P splitting once at
-a seam is the likely fourth session; a deep Miri queue at 5.5's constructors is the
-other.)
+re-grep before acting on any of them (S24). **Estimated 2 sessions remain, plan for 2–3**
+(re-planned 2026-08-13 at session O's close; **session O is spent** and the estimate
+holds, but its content moved. **5.1 and 5.4 are done** (T5.N1–T5.N4); 5.3's colocated
+face is blocked on `pDec` carrying a `PicId` — see §1 step 5 and §3. **O is spent**:
+the 5.5 closure, the constructors that did not need it, F37/F38/F39/F40 fixed, F41
+listed — see §5. **P** = the `decode_slice` cluster in dependency order, now carrying
+5.5's tail at its head — `pAccessUnitList`'s `Drop` (the one cascade entry T5.O4
+unblocked) → the `pDec` step (236 sites) → `cur_and_ref` + colocated + 5.3b → 5.6
+whole, including the `*mut u8` cache family and `cabac_rbsp_window`'s retirement —
+faces ordered, drop-from-the-end at seam boundaries; **Q** = the exit, never
+compressed, carrying every measurement D-gate-1 deferred. P splitting once at a seam
+is the likely third session. **The deep-Miri-queue risk was real and it was O's**: the
+closing battery convicted twice, so budget a probe run per *container* conversion
+rather than one at close.)
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this
@@ -33,9 +35,9 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded (session N exit): **470 debug / 464 release / 20 ignored**,
-   Miri **330** (~920s), census **59**, decode goldens **57**, ratchet `raw_ptr`
-   **4436**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
+   verdict. Last recorded (session O exit): **474 debug / 468 release / 20 ignored**,
+   Miri **334** (~942s), census **59**, decode goldens **57**, ratchet `raw_ptr`
+   **4420**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
    session K drew two hits in each and alternated both; session L drew one in the debug
    sweep and reproduced it in isolation, measurement 35; session M drew one in the
    *release* sweep, measurement 36, which took `cabac` and `rc` out of the signature).
@@ -418,15 +420,50 @@ POC half is **structural** (these helpers no longer receive a picture, so a POC-
 rewrite cannot compile), and what they assert is that the reference term is consulted and
 the MV term does not mask it.
 
-## 5. Step 5.5 — decoder_core.rs
+## 5. Step 5.5 — decoder_core.rs (**IN PROGRESS, session O.** The closure is computed
+and does not need recomputing — session O log §1)
 
 Allocation → constructors, paramset store (P4), context decomposition (§2.2.6),
 `Drop` teardown, `Default` derives.
+
+**The closure's verdict, so it is not re-derived: §2.2.6's decomposition is not 5.5's.**
+S20's two propagating legs are *empty* here — no decoder-internal struct carries an
+`assert_size!` or an offset pin (`api/abi_guard.rs` pins only public API types), and
+the context is never embedded by value — so an owned field on the context drags nothing
+with it and the constructors never waited on the decomposition. What binds is the
+signature leg: **186 `pCtx` parameter positions over 11 files, 148 distinct functions
+(59 leaves, 89 not), 1343 `(*pCtx).field` accesses over 13 files.** That is a bottom-up
+sweep gated per function by S25, and it is sequenced **behind the `pDec` step**, because
+`dec_state` and `dpb` cannot be split-borrowed while `pDec` aliases a pool slot. The
+context's 25 raw-pointer fields are classified by owner in the log; **eight of them are
+`CWelsDecoderImpl`'s members and are Phase 8's**, which is why the context cannot simply
+become `Decoder`.
+
+**Done at session O**: the CABAC engine stops being an allocation (T5.O3); the access
+unit owns its NAL nodes and one allocator replaces two (T5.O4/T5.O7, F39); **F37**
+fixed, **F38** fixed (eight `&mut`-derived back-pointers in `src/api/`), **F40** fixed,
+**F41** listed for Phase 8.
+
+**Left**: `pAccessUnitList` → `Option<Box<_>>` (53 sites — the one free-cascade entry
+T5.O4 unblocked, because a node pointer now comes from the node's own allocation);
+**P4**, sized at **208** `.pSps`/`.pPps` occurrences over nine files and four carriers
+(context 134, `SSliceHeader` 48, `SLayerInfo` 14); and the rest of the cascade, which
+waits on `pDec` with everything else.
+
 - S21 with force: the decoder context embeds its buffers **by value**, so every
   owned field lands inside `mem::zeroed` reach. The `MaybeUninit` shell +
-  `new_boxed()` exists at `decoder_context.rs:769`; extend it per owned field;
-  replace it with a real constructor at the end of this step.
-- F19's check runs here, per allocation.
+  `new_boxed()` is at `decoder_context.rs`; **extend it per owned field — and stop
+  expecting to delete it.** It exists because the context is several MiB and a by-value
+  constructor overflows a 2 MiB test-thread stack, not because of its owned fields
+  (`make_zeroed_shell_valid` writes exactly two). `new_boxed` **is** the real
+  constructor. Corrected at session O; the earlier text promised a deletion that
+  nothing in 5.5 can perform.
+- F19's check runs here, per allocation. Session O's inventory, with the line that
+  frees each, is in its log §1 — reuse it rather than re-deriving it.
+- **A container may not lend a borrow while raw aliases into it are live** (T5.N1,
+  re-derived at T5.O7 by a probe). Keep the slots raw and put the ownership in `Drop`,
+  or schedule the aliases' removal in the same closure. This is what blocks
+  `pDqLayersList`, `pPicBuff` and `pTempDec` from becoming owned.
 - `SWelsDecoderContext` has no `assert_size!` and no offset pins; don't look for
   an instrument that isn't there.
 
@@ -472,8 +509,12 @@ whole span at 7 pairs, every decode row above a null band of −0.14%…+0.34%. 
 **≈1.1…1.4 points under the ≈+23% stop-line** for 5.5 and 5.6, the phase's two largest
 remaining steps. Session M's own four faces read **−0.77% CB**, below the null floor on
 every row, so 5.2's tail and 5.3a cost nothing; **session N's are the first that did**.
-**Session N's reading owes a day-two confirmation (S2b) and it is session O's first
-item** — the binaries are stashed as `.perfpair/n_base`, `n_mid`, `n_head`. Its bisect
+**Session N's reading is D-gate-1-deferred to the exit** — the binaries are stashed as
+`.perfpair/n_base`, `n_mid`, `n_head`. (The day-two confirmation was session O's brief
+§0 item before D-gate-1 took every mid-phase measurement to the exit; session O ran
+none, per its brief's own §0.3.) **Session O added no perf reading and three structural
+changes the exit's ledger row measures through**: `Id`'s niche (T5.O0), the CABAC
+engine as a field (T5.O3), and the access unit's owned node list (T5.O4/O7). Its bisect
 puts the whole cost in Face 3 (the deblocking driver, +1.17% CB / +2.25% Main / +2.06%
 High) and none in Face 1 (−0.72% CB, CABAC rows inside the band); the unverified mechanism
 and the one-build experiment that settles it are in `perf_baseline.md` §Session N. The mechanism is constant dimensions reaching the
@@ -539,6 +580,20 @@ this brief historical.
   F22's eight duplicate definitions are the first such deletions here
   (`parse_mb_syn_cabac.rs` −7, `mv_pred.rs` −1). `unsafe_block` **625 for a fourth
   session**, no S28 test owed for a second.
+  **Session O: `raw_ptr` 4436 → 4420 (−16), `unsafe_fn` 1247 → 1245 (−2),
+  `unsafe_block` 622 → 627 (+5).** Per file: `decoder_core.rs` −10 (the deleted
+  duplicate allocator pair and the CABAC engine's alloc/free), `nalu.rs` −5,
+  `decoder_context.rs` −1 — and `parse_mb_syn_cabac.rs`, `decode_slice.rs`,
+  `deblocking.rs` and `codec_api.rs` **flat across 55 converted sites between them**,
+  session K's observation for a third session. `unsafe_fn`'s −2 is S16's shape: it
+  falls when raw bodies are *deleted*, and F39's duplicate pair is the deletion. Of the
+  five `unsafe_block` increases, **four are tests** and the fifth is `DestroyPicBuff`'s
+  reset.
+  **S16's prose floor has now been collected ten times, three of them inside session
+  O** — a deleted field's own explanatory comment, a test's explanation of the metric,
+  and the sentence explaining why not to write one. Session N's form (*a comment
+  mourning a deleted pointer type reinstates it*) now has a corollary: so does a
+  comment explaining the rule.
   **S16's prose floor has now been collected eight times** (session L's was a doc comment
   in `test_need_error_con` naming the pointer type its own flip had just deleted, which
   the per-file map caught and the total would have hidden; session H added three, two of
@@ -548,8 +603,10 @@ this brief historical.
   would have corrupted S21's live construction-audit count) and `raw_ptr` again at
   T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
   totals: a one-line prose delta and a real conversion look identical in the total.
-- Gates: **468 / 462 / 20**, Miri **328** — *unchanged across session M, which added no
-  test because no conversion in it needed one* — census **59** (session M: the
+- Gates: **474 / 468 / 20**, Miri **334** at session O's exit (session N +2, session O
+  +4: two AU-list tests, the F37 cycle test and the `Id` niche pin). Historic row below
+  is session M's: **468 / 462 / 20**, Miri **328** — *unchanged across session M, which
+  added no test because no conversion in it needed one* — census **59** (session M: the
   `type SDqLayer x2` line went away with the rename, and the duplicate-body budget fell
   **198 → 195** on F22's unification, its first decrease since the instrument was widened).
   Miri history (session G: +1, the aliasing probe now runs
