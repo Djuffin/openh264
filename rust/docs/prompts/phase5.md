@@ -22,9 +22,10 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded (session J exit): **466 debug / 460 release / 20 ignored**,
-   Miri **326** (~780s), census **60**, decode goldens **57**, ratchet `raw_ptr`
-   **4550**; sweeps 341/341 both profiles, and the debug sweep can draw F3 (see §8).
+   verdict. Last recorded (session K exit): **468 debug / 462 release / 20 ignored**,
+   Miri **328** (~910s), census **60**, decode goldens **57**, ratchet `raw_ptr`
+   **4540**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
+   session K drew two hits in each and alternated both).
 3. Recount every number you are about to rely on.
 
 **Budget the Miri step at ~13 minutes, not ~1.** Since T5.G1 the aliasing probe runs
@@ -88,8 +89,8 @@ Order inside the step:
    — see session C's hand-off.
 
 ## 2. Step 5.2 — MbGrid (**IN PROGRESS. `MbGrid` exists, is proven and is owned by the
-layer (T5.H2/T5.H3); **12 of the 22 array families have flipped** (T5.H4–T5.H14, T5.J3),
-and the first eleven carry per-MB window accessors (T5.I1). Blocker: none. Closure
+layer (T5.H2/T5.H3); **15 of the 22 array families have flipped** (T5.H4–T5.H14, T5.J3,
+T5.K1–T5.K3), and the first eleven carry per-MB window accessors (T5.I1). Blocker: none. Closure
 computed and written, session D log §2 — do not recompute it. The subtraction has landed
 (T5.E2). Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory
 and F31 at T5.G1. **Two probe streams are green un-ignored as of T5.J2.**)
@@ -113,36 +114,62 @@ there. Two further facts:
 **No window hoisting** (S8's fourth negative result). Flip as `MbArray<[T; K]>` from the
 start and hoist nothing that is not already the C++'s shape.
 
-**The first hot family is flipped and it is free.** `pRefIndex` (T5.J3, tied hottest at
-3.1% of decode self time) measured **+0.03% decode median at 7 pairs**, rows
-−0.03%…+0.24%, against a session null band of +0.13%…+0.45% — every row inside it, two of
-three below its floor. Encode flat, as a decoder-only change should be. **This is one
-reading and it owes a day-two confirmation** (S2b as extended); that confirmation is the
-first item of the next session. Cumulative CB is ≈ **+19.2…+20.1%** against the ≈+23%
-stop-line, so nothing is near it.
+**The hot families are flipping and none of them costs anything the bench can see.**
+`pRefIndex` (T5.J3) read +0.03% decode median at 7 pairs; `pMv` (T5.K1, the hottest
+family at 3.9% of decode self time) read **−0.13%**, rows −0.20%…+0.04%. Encode flat both
+times, as a decoder-only change should be.
+
+**But the day-two confirmation session K ran is the result to carry, and it is about the
+instrument rather than about `pRefIndex`.** Three 7-pair readings of T5.J3's one span, on
+two days, read **+0.03%, +0.27% and −0.13%** — they disagree in sign. The null bands they
+were judged against disagree at least as much: +0.13…+0.45% (session J, 3 pairs),
+−0.16…−0.02% (session K, 3 pairs), −0.22…+0.25% (session K, **7 pairs**, matched to the
+verdict). **Both the measurement and the yardstick move by more than the effect.** Three
+consequences, all binding on what follows:
+
+* **A verdict at N pairs must be judged against a null at N pairs.** Session K's 3-pair
+  null was 0.14 points wide and entirely on one side of zero; its 7-pair null is 0.47
+  points wide and straddles zero. Judged against the former, the confirmation read *fail*.
+* **Per-family perf attribution is below this harness's resolution and no reachable pair
+  count fixes it.** The number that decides the plan is ≈0.3% CB per family — 3 points of
+  headroom over ten families — and that is the size of the noise.
+* **So measure the aggregate.** The stop-line gates on *cumulative* CB, not on a sum of
+  per-family numbers each below the floor; session I already found that sum high by a
+  factor of two. One 7-pair span from the pre-flip base (`seat_head` 3c4c6f4e /
+  `flip_head` 1438d762, both stashed) to HEAD measures a ~20% effect, which this harness
+  resolves easily. **That measurement is not yet run and it is the next session's.**
+
+Cumulative CB is ≈ **+19.2…+20.1%** against the ≈+23% stop-line — the figure is session
+H's and I's readings of the earlier span and nothing since has moved it measurably.
 
 **Where the flip stands (sessions H, I and J).** The arithmetic is **22 arrays, not 24** —
 F33 deleted `pNzcRs` and `pInterPredictionDoneFlag` at T5.H1, neither of which has a reader
 in either tree. **Flipped:** `pIntraNxNAvailFlag`, `pIntra4x4FinalMode`,
 `pResidualPredFlag`, `pChromaPredMode`, `pCbfDc`, `pLumaQp`,
 `pNoSubMbPartSizeLessThan8x8Flag`, `pTransformSize8x8Flag`, `pCbp`,
-`pMbRefConcealedFlag`, `pSubMbType`, **`pRefIndex`** (T5.J3). **Remaining, ten, hottest
-first** (heat re-derived at session J from a fresh `sample` over the decode bench, as
-summed self time of the functions holding each family's *layer-qualified* accesses;
-`SPicture`'s namesakes are 5.1/5.3's and excluded):
+`pMbRefConcealedFlag`, `pSubMbType`, **`pRefIndex`** (T5.J3), **`pMv`** (T5.K1),
+**`pMbType`** (T5.K2), **`pSliceIdc`** (T5.K3). **Remaining, seven, hottest first** (heat
+re-derived at session K — 25s of `/usr/bin/sample` over the decode bench, 3917 self
+samples, the bench's own SHA-1 excluded from the denominator — as summed self time of the
+functions holding each family's *layer-qualified* accesses; `SPicture`'s namesakes are
+5.1/5.3's and excluded). **Re-derive again before acting: the order moved between
+sessions J and K** — `pSliceIdc` went 1.6% → 2.5% and overtook `pNzc`, because the heat is
+attributed to functions and the functions do not change when a family leaves them.
 
 | family | heat | layer sites | align after flip |
 |---|---|---|---|
-| `pMv` | 3.1% | 18 | 2 |
-| `pMbType` | 2.0% | 8 | 4 |
-| `pNzc` | 1.7% | 30 | 1 |
-| `pSliceIdc` | 1.6% | 19 | 4 |
-| `pChromaQp` | 1.3% | 29 | 1 |
-| `pMvd` | 1.2% | 36 | 2 |
-| `pDirect` | 0.7% | 12 | 1 |
-| `pMbCorrectlyDecodedFlag` | 0.5% | 18 | 1 |
-| `pScaledTCoeff` | 0.4% | 11 | 2 |
-| `pIntraPredMode` | 0.0% | 12 | 1 |
+| `pNzc` | 1.9% | 32 | 1 |
+| `pChromaQp` | 1.9% | 29 | 1 |
+| `pMvd` | 1.4% | 40 | 2 |
+| `pDirect` | 0.8% | 16 | 1 |
+| `pMbCorrectlyDecodedFlag` | 0.6% | 18 | 1 |
+| `pScaledTCoeff` | 0.3% | 11 | 2 |
+| `pIntraPredMode` | 0.0% | 16 | 1 |
+
+**The site counts are session K's own greps and several disagree with session J's table**
+(`pNzc` 30 → 32, `pMvd` 36 → 40, `pDirect` 12 → 16, `pIntraPredMode` 12 → 16). The rule
+that reproduces both `pRefIndex`'s 17 and `pMv`'s 18 exactly is: **occurrences of
+`.pXxx` whose receiver is not a picture**, comments stripped. Re-grep per family (S24).
 
 Each is one commit; the seat and the accessor are already in place, so a family commit is
 the flip and nothing else. **All eleven of session H's families carry per-MB window
@@ -378,6 +405,14 @@ this brief historical.
   (T5.J3's field, two allocations, free block, and the `as *mut _` fallback). **The one
   increase is a test** — the S28 full-reach test the new bridge owes; no production
   `unsafe {}` was added. Both decreases are conversion rather than deletion.
+  **Session K: `raw_ptr` 4550 → 4540 (−10), `unsafe_block` 623 → 625 (+2).** Per file,
+  and this is the whole story: **`decoder_core.rs` −9, `deblocking.rs` −1, and every
+  other touched file flat** — `mv_pred.rs`, `decode_slice.rs` and
+  `parse_mb_syn_cavlc.rs` are unmoved across **32 converted sites** between them, because
+  these conversions delete pointer *dereferences* and `raw_ptr` counts pointer *types
+  written*. Both `unsafe_block` increases are the S28 full-reach tests T5.K1 and T5.K2
+  owe; no production `unsafe {}` was added. T5.K3 is the first family of the flip that
+  leaves **no raw derivation at all** and so owes no test.
   **S16's prose floor has now been collected seven times** (session H added three, two of
   them on `mem_zeroed` again and one putting `raw_ptr` at 1 in a `forbid(unsafe_code)`
   file); before session H it had been collected four times — `raw_ptr` and `SHIM(` at
@@ -385,15 +420,25 @@ this brief historical.
   would have corrupted S21's live construction-audit count) and `raw_ptr` again at
   T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
   totals: a one-line prose delta and a real conversion look identical in the total.
-- Gates: **466 / 460 / 20**, Miri **326** (session G: +1, the aliasing probe now runs
+- Gates: **468 / 462 / 20**, Miri **328** (session G: +1, the aliasing probe now runs
   un-ignored — see §2; session H: +12, `MbGrid` and S28's reach tests; session I flat;
-  session J: +2, the grid probe and `pRefIndex`'s reach test), sweeps 341/341
+  session J: +2, the grid probe and `pRefIndex`'s reach test; session K: +2, `pMv`'s and
+  `pMbType`'s reach tests), sweeps 341/341
   both profiles, decode goldens **57 rows** (session J: +1, `grid_48x32`, additive and
   named in its own commit). The debug sweep can reproduce F3 (`rust_enc`'s
   `[profile.dev] opt-level = 3` made it fast enough to lose the race); measurement 29
   is the cleanest evidence the finding has. Sessions G–I drew **zero** F3 hits across
   5456 configurations and session J drew **one**, acquitted at measurement 33 — a clean
   sweep is a sample, not a signal, and so is a dirty one (S14 step 4).
+  **Session K drew four — two per battery, one battery per profile — and alternated
+  twice** (measurement 34): control 8 vs head 9 over 2880 configurations per side, so
+  HEAD is not worse. Two things it settled that outlive this session: **the rate under
+  sustained back-to-back presets is ≈1/307, not ≈1/800** (load is part of the
+  signature, and twenty-four presets with nothing between them is the most load the
+  sweep has run under), and **`n=600` is a rate artifact rather than a condition** — the
+  first `n=1500` hit in 34 measurements, explained by `sm=3`'s `n` being the per-slice
+  byte budget, so a smaller `n` cuts more slices and performs more of the slice-list
+  growths the race lives in.
 - **Miri skips are 2, not 3**: `wels_thread_pool` (F12, Phase 7) and `encoder_ext`
   (F13, Phase 6). `manage_dec_ref` came off at T5.B2.
 - Census gate state: inferred-target double casts 0, duplicate-body groups 198
