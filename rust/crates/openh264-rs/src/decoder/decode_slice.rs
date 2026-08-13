@@ -1075,12 +1075,17 @@ pub unsafe fn WelsMbInterSampleConstruction(
         return ERR_NONE;
     }
     let ctx = &*pCtx;
-    let dq = &*pCurDqLayer;
+    // T5.L5: a raw layer pointer, as every other function in this file spells it.
+    // It was `&*pCurDqLayer` while the coefficient array was reached through a
+    // pointer *field* — a `Copy` read that a shared borrow allows. Owned, the array
+    // is reached with `get_mut`, and taking a `&mut` of a subfield through a live
+    // `&SDqLayer` is the shape F28 names.
+    let dq: *mut SDqLayer = pCurDqLayer;
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     let pTransformSize8x8 = *(*dq).grid.transform_size8x8_flag.get(iMbXy);
     let pNzc = *(*dq).grid.nzc.get(iMbXy);
-    let pScaledTCoeff = (*dq).pScaledTCoeff.add(iMbXy) as *mut i16;
+    let pScaledTCoeff = (*dq).grid.scaled_tcoeff.get_mut(iMbXy).as_mut_ptr();
 
 
     if pTransformSize8x8 {
@@ -2372,7 +2377,7 @@ pub unsafe fn WelsMbIntraPredictionConstruction(
         return ERR_NONE;
     }
     let mb_type = *(*pDec).pMbType.add(iMbXy as usize);
-    let pScoeffLevel = (*pCurDqLayer).pScaledTCoeff.add(iMbXy as usize) as *mut i16;
+    let pScoeffLevel = (*pCurDqLayer).grid.scaled_tcoeff.get_mut(iMbXy as usize).as_mut_ptr();
 
     if IS_INTRA16x16(mb_type) {
         RecI16x16Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
@@ -2755,7 +2760,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     }
 
     if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+        let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -2814,7 +2819,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     let (buf, pBs) = (*(*dq).pBitStringAux).split(&(*pCtx).sRawData);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
-    let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+    let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
     let mb_type = *(*(*dq).pDec).pMbType.add(iMbXy);
     let is_intra = IS_INTRA(mb_type);
     // T5.I2: the QP is read once per residual block, so the four sites below sit
@@ -3275,7 +3280,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     }
 
     if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+        let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -3626,7 +3631,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     }
 
     if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*(*dq).pDec).pMbType.add(iMbXy) {
-        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+        let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
@@ -4330,7 +4335,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             }
         }
 
-        let scaled_tcoeff_mb = &mut *(*dq).pScaledTCoeff.add(iMbXy);
+        let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
         let mut iQpDelta = 0i32;
@@ -5066,7 +5071,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     // `memset (pCurDqLayer->pDirect[iMbXy], 0, sizeof (int8_t) * 16)`: pDirect is
     // `*mut [i8; 16]`, so the row index is iMbXy — scaling it by 16 walks 16 rows
     // per macroblock and writes past the allocation into the neighbouring buffers.
-    std::ptr::write_bytes((*dq).pDirect.add(iMbXy) as *mut i8, 0, 16);
+    (*dq).grid.direct.get_mut(iMbXy).fill(0);
 
     let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
 
