@@ -349,7 +349,6 @@ pub struct SDqLayer {
     /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
     pub pBitStringAux: *mut BsReader,
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
-    pub pSliceIdc: *mut i32,
     pub pMvd: [*mut [[i16; 2]; 16]; LIST_A],
     pub pDirect: *mut [i8; 16],
     pub pChromaQp: *mut [i8; 2],
@@ -2783,7 +2782,6 @@ pub unsafe fn InitialDqLayersContext(
         (*pDq).pNzc = WelsMalloczHelper(pMa, numMb * 24 * std::mem::size_of::<i8>()) as *mut _;
         (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
-        (*pDq).pSliceIdc = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<i32>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
 
@@ -2830,10 +2828,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
         if !(*pDq).pIntraPredMode.is_null() {
             WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
             (*pDq).pIntraPredMode = std::ptr::null_mut();
-        }
-        if !(*pDq).pSliceIdc.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pSliceIdc as *mut u8, numMb * std::mem::size_of::<i32>());
-            (*pDq).pSliceIdc = std::ptr::null_mut();
         }
         if !(*pDq).pMbCorrectlyDecodedFlag.is_null() {
             WelsFreeHelper(pMa, (*pDq).pMbCorrectlyDecodedFlag as *mut u8, numMb * std::mem::size_of::<bool>());
@@ -3638,8 +3632,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
             let iMbCacheNum =
                 ((((*pCtx).iPicWidthReq + 15) >> 4) * (((*pCtx).iPicHeightReq + 15) >> 4)) as usize;
             let pDq = (*pCtx).pDqLayersList;
-            if !pDq.is_null() && !(*pDq).pSliceIdc.is_null() {
-                std::ptr::write_bytes((*pDq).pSliceIdc, 0xff, iMbCacheNum);
+            if !pDq.is_null() {
+                // `memset(pSliceIdc, 0xff, numMb * sizeof(int32_t))` — 0xff bytes in
+                // an `i32` is -1. `iMbCacheNum` is computed from `iPicWidthReq`, which
+                // `InitialDqLayersContext` sets to the same `kiMaxWidth` the grid's
+                // dimensions come from, so the bound is an identity; spelling it as a
+                // slice makes it a checked one (P13), where the C had no bound at all.
+                (*pDq).grid.slice_idc.as_mut_slice()[..iMbCacheNum].fill(-1);
             }
             if !(*pCtx).pSps.is_null() {
                 let iMbNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as usize;
