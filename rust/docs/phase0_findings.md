@@ -1199,3 +1199,39 @@ condition. **S14's signature should read `sm=3`, `t∈{2,4}`, any wrong length, 
 `n=600` as the predominant but not exclusive slice budget.**
 
 Running total: **thirty-four measurements, thirteen alternations, thirteen acquittals.**
+
+### Measurement 35 (Phase 5, session L, 2026-08-12) — one hit, and the isolation re-run reproduced it twice
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 35 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**) | 39981 | 37837 |
+
+Drawn by the second of the session's two full batteries (the L4–L7 cluster);
+`PASS=340 FAIL=1` on the debug sweep, release 341/341. Inside S14's signature on every
+axis.
+
+**Step 1's isolation re-run, 10× on an idle machine: 8 byte-identical, 2 short
+streams.** That is the second time in the finding's history that the isolation re-run
+has reproduced anything — measurement 29 was the first — and it is the **same
+configuration and the same wrong length**, 37837 against the C++'s 39981, that
+measurement 29 produced. One binary, one configuration, two different outputs, so S14
+step 1's own criterion for *race rather than divergence* is met directly: a
+deterministic port bug repeats its bytes.
+
+**One hit, so step 2 does not fire** (S14 step 1; session J's measurement 33 is the
+precedent). **Acquitted as F3.** The session's commits are decoder-only and the sweep
+compares encoders, which is the weakest kind of prior — but the reproduction is the
+evidence, not the argument.
+
+**Step 0 does not apply**, for the reason measurement 29 recorded: `rust_enc` depends on
+`openh264-rs` by path, so a decoder-side commit rebuilds it and the two trees do not
+produce a byte-identical binary.
+
+Two things this adds to the finding. **`320x192 t=4 sm=3 n=600 cabac=1` is the
+susceptible configuration** — it is the one that produced measurements 29 and 35, both
+in the debug profile, both with the same short length. And **its isolation rate is
+~1/5**, far above the ~1/307 sustained-sweep rate and the ~1/100–150 S14 records for
+susceptible configurations; ten runs is a small sample, but it is the first time
+isolation has been the *cheaper* place to reproduce this rather than the harder one.
+
+Running total: **thirty-five measurements, thirteen alternations, fourteen acquittals.**

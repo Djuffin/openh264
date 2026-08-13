@@ -6641,3 +6641,233 @@ corrected in place.
    `cabac_decoder.rs:855`'s `SHIM(phase5)`) is not started; F23 is Phase 8's, F31's
    redundant memset 5.5's, F22's map 5.3's, **F36 decoder-threading's**,
    `PicPool`/identity deferred.
+
+## 2026-08-12 — Phase 5, session L (the cumulative number gets measured, and the flip finishes)
+
+**Commits:** `a4670ef6` (inherited doc tail), `a2be52ad` (Face 1's measurement),
+`9adcf4c3` (T5.L1, `pNzc`), `b039f135` (T5.L2, `pChromaQp`), `6cfa7163` (T5.L3, `pMvd`),
+`cea1f5f1` (T5.L4+T5.L5, `pDirect` and `pScaledTCoeff`), `cb6d0922` (T5.L6+T5.L7,
+`pMbCorrectlyDecodedFlag` and `pIntraPredMode`), `f63e8ef6` (ratchet), and this entry.
+
+### The session in one line
+
+The number the stop-line gates on was **measured instead of summed** — one 7-pair span
+across the whole 5.2 flip, **+2.36% CB**, seven times the null band's width — and it says
+the summed estimate was *slightly low*, not a factor of two high; then the **last seven
+array families flipped**, none of them needing a raw bridge, and `SDqLayer` ended the
+session holding no per-macroblock pointer at all.
+
+### Control battery
+
+Docs-only tail, session K accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 468/462/20, ratchet 4540, census 60,
+matching session K's exit on every figure. Fifth session running that the open needed no
+correction.
+
+### 1. Face 1 — the cumulative span, and what measuring it changed
+
+The brief made this item one because session K had just shown that a per-family cost of
+≈0.3% CB is below this harness's resolution at any reachable pair count. The instrument
+S2b's new clause points at is the aggregate, so:
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **the whole 5.2 flip** (`3c4c6f4e` → `a4670ef6`) | 7 | **+2.36%** | +0.61% | +0.27% | **+0.61%** | +0.18% |
+| sessions I+J+K only (`1438d762` → `a4670ef6`) | 7 | +0.46% | −0.30% | +0.08% | **+0.08%** | +0.00% |
+| null (same binary both slots) | 7 | — | — | — | +0.15%…+0.31%, median **+0.22%** | +0.00% |
+
+**The CB row is the first Phase 5 reading that is unambiguously above the floor.** The
+null band is 0.16 points wide; the reading is 2.36. That is the whole argument for
+measuring aggregates: the same instrument that cannot see one family sees fifteen without
+difficulty.
+
+**And the arithmetic it replaces was not high by a factor of two — it was slightly low.**
+Cumulative CB is **≈ +20.2%** (Phase 4a's +17.8%, unmoved by Phases 3 and 4b, plus this
+span) against the ≈+23% stop-line, where the sum of per-family estimates gave
++19.2…+20.1%. Session I's "high by roughly a factor of two" was a statement about *one
+span read on two different days* (+2.05% → +1.18%); it did not generalise to the sum, and
+this session is where that was checked rather than assumed. **≈2.8 points of headroom for
+the remaining seven families** was the position Face 2 started from.
+
+Subtracting the two spans puts session H's eleven families at **+1.90% CB**, between its
+own +2.05% and session I's +1.18% readings of exactly that span — the two measurements
+are consistent with each other and with the record.
+
+**A third instrument, and a correction to the plan.** The decode bench prints a
+Rust-vs-C++ ratio as well, and at HEAD it reads **+56.8% CB / +3.1% Main / +4.2% High**.
+That is *not* the cumulative deficit and the difference matters: the checked-in
+`libopenh264.2.6.0.dylib` reports `WelsCPUFeatureDetect = 0x000006` and the bench's own
+header prints `C++ SIMD : ACTIVE`, so that column compares scalar Rust against **NEON** C
+— which is why the CAVLC row, dominated by deblocking and MC, is 56% while the
+CABAC-bound rows are 3–4%. §7.4's claim that "the C++ dylib never dispatches SIMD" is
+stale for this build and is corrected in place. The project's cumulative figures are
+chains of Rust-vs-Rust spans and are unaffected; what the ratio adds is a cross-check on
+direction from an instrument sharing nothing with `perfpair` but the binaries, and it
+agrees (+1.5% CB across the same span, same sign).
+
+**The whole-flip reading owes a day-two confirmation** and it is session M's first item.
+The decision it carries is how much of the ≈+23% stop-line 5.2's remaining work and
+5.3–5.6 may spend, which is exactly S2b's trigger; it runs against the session's *final*
+span (`seat_head` → `l_c2`), not this morning's.
+
+### 2. Face 2 — the last seven families
+
+Heat re-derived at open (S24): 25s of `/usr/bin/sample` over `decode_1080p_bench`, 18098
+self samples, the bench's own SHA-1 (1304) excluded from the denominator.
+
+| # | family | heat | sites | commit | notes |
+|---|---|---|---|---|---|
+| 1 | `pNzc` | 2.17% | 32 | T5.L1 | `GetPNzc` becomes a shared borrow |
+| 2 | `pChromaQp` | 1.88% | 29 | T5.L2 | pure indexing, no wide access anywhere |
+| 3 | `pMvd` | 1.36% | 40 | T5.L3 | thirteen port-added null guards die |
+| 4 | `pDirect` | 0.76% | 16 | T5.L4 | two more port-added guards |
+| 5 | `pScaledTCoeff` | 0.45% | 11 | T5.L5 | reach is one record, not the flattened array |
+| 6 | `pMbCorrectlyDecodedFlag` | 0.40% | **16** | T5.L6 | four hoisted bases become per-use indexing |
+| 7 | `pIntraPredMode` | 0.10% | 16 | T5.L7 | F32's family; the type is the allocation now |
+
+**Two of the brief's numbers were wrong and the re-grep caught both** — the #5/#6 order
+(`pScaledTCoeff` is *above* `pMbCorrectlyDecodedFlag`, not below) and
+`pMbCorrectlyDecodedFlag`'s site count, whose extra two are `SPicture`'s namesake in
+`pic_queue.rs`. S24 is not a formality: both were session K's own greps, one session old.
+
+**Not one of the seven needed an S28 raw bridge, and that is the session's most reusable
+result.** A family needs `mb_grid_ptr` only when a consumer indexes the base at *another
+macroblock's* address — `GetMbType`'s seven callers do, `pCbfDc`'s consumers do — and
+none of these seven do. Two of them hand out a base pointer and both turned out to be
+**read-only**, where a shared borrow (`GetPNzc`) or per-use indexing
+(`error_concealment.rs`'s three flag loops) serves and no raw derivation survives. So the
+Miri count is unchanged at 328 across seven families: no bridge, no test owed.
+
+**`GetPNzc` is the one worth reading twice.** Two of its eight uses hold the current
+macroblock's row *and* its neighbour's at the same time, which two `&mut`s cannot do —
+the second retag pops the first, F34's shape exactly. Every use is a read, so it is
+`grid.nzc.get(iMbXy).as_ptr()` and the two live pointers are two shared borrows, which
+coexist.
+
+**Seventeen port-added null guards died across the session** (thirteen on `pMvd`, two on
+`pDirect`, five on `pMbCorrectlyDecodedFlag` — the C++ indexes all three unguarded at
+every one of those sites, and its only null tests on them are the allocation-failure
+checks in `InitialDqLayersContext`). F22's class in the added-guard direction, the same
+one T5.K3 found on `pSliceIdc`. What the C++ *does* guard, and the port goes on guarding,
+is the stack scratch caches (`pMvdCache`, `pMotionVector`), which are legitimately
+nullable parameters.
+
+**Measurements, 7 pairs, both benches** (tables in `perf_baseline.md`): the seven
+families as **one span, `a4670ef6` → `f63e8ef6`: CB +1.27%, decode median +0.52%**, every
+row above the session null's ceiling of +0.31%. The whole 22-family flip, measured
+directly at the end of the session: **CB +2.93%, decode median +1.01%**, putting
+cumulative CB at **≈ +20.7%** against the ≈+23% stop-line — **≈2.3 points of headroom**
+for the rest of 5.2 and all of 5.3–5.6. Encode flat at +0.00% median on both spans.
+
+**This is the first cluster reading of the whole flip that is outside the floor, and it
+corrects the record in the direction nobody was watching.** T5.J3 read +0.24% CB, T5.K1
++0.04%, T5.K2+K3 +0.04% — each written up as free — and seven families measured together
+read +1.27%. The per-family readings were not merely noisy; they were **systematically
+under-reporting**. An effect at the resolution limit does not average out to nothing, it
+hides one family at a time, and the only reason we can say so is that Face 1 changed the
+unit of measurement. No ledger row opens: the cost is the bounds check the safe container
+exists to have, not scaffolding a later phase deletes, so it belongs in the cumulative
+position rather than in a ledger that promises a recovery.
+
+**The spans do not add exactly and the section says so**: +2.36% (through session K, this
+morning) + +1.27% (the seven, this evening) = +3.63%, against a directly measured +2.93%.
+Half a point across three 7-pair readings hours apart is the honest error bar on a
+*composed* figure, and it is the argument for measuring the span you want rather than
+summing the ones you have. The machine itself moved 2% faster over the session —
+`seat_head`'s CB column read 2.5460 ms this morning and 2.4920 ms this evening — while
+the span it carries barely moved, which is interleaved pairs doing their job (S1).
+
+**Two scouted reach claims were refuted by the families themselves**, both in doc
+comments written before the family converted: `mb_grid_ptr`'s says "`GetPNzc`'s callers
+read the left neighbour's non-zero counts through the pointer they were handed" (they
+read it through a *second* `GetPNzc` call), and a full-reach test's says
+`pScaledTCoeff`'s consumers need the whole flattened array (they reach 384 `i16` from
+their own record, which is its length). Both corrected in the commit that converted the
+family. This is S24 pointed at prose, and it is the second time this phase.
+
+### 3. F36 widens: it is a partial function, not a dropped line
+
+T5.L1's and T5.L6's writer greps both landed in `WelsDecodeAndConstructSlice`, the dead
+`iThreadCount > 1` arm where T5.K3 found the missing `pSliceIdc` write. The C++'s copy is
+162 lines and the port's is 101; the per-macroblock loop is missing the `pNzc` copy into
+the picture, the `SetNonZeroCount` call, the per-MB deblocking call and the
+border-padding block, on top of the `pSliceIdc` write. A related site sits outside that
+function: `decoder_core.cpp:2595` re-points the layer's `pMbCorrectlyDecodedFlag` at the
+*picture's* when `pThreadCtx != NULL`, and the port has no live `pThreadCtx` at all —
+which is *why* T5.L6 could make that array an owned `MbArray`, and equally why whoever
+ports threading cannot simply switch the arm on. Recorded, not fixed (brief §6).
+
+The general point stands and is sharper: **a stubbed-out subsystem's translation is
+unaudited and uncovered at the same time**, and the only instrument that has found any of
+it is a per-family writer grep at conversion time.
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 468 / 462 / 20 | **468 / 462 / 20** |
+| Miri `--lib` | 328 | **328** (~908s) |
+| decode goldens | 57 rows | **57** |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4540 | **4507** |
+| `unsafe_block` | 625 | **625** |
+| `unsafe_fn` | 1248 | **1248** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+| array families flipped | 15 of 22 | **22 of 22** |
+
+Per-file `raw_ptr` deltas (S16): `decoder_core.rs` **−22**, `parse_mb_syn_cabac.rs` −5,
+`parse_mb_syn_cavlc.rs` −4, `decode_slice.rs` −2; `mv_pred.rs`, `deblocking.rs` and
+`error_concealment.rs` **flat**, across 25, 8 and 4 converted sites respectively. The
+prose floor was collected an eighth time — a doc comment naming the pointer type its own
+flip had just deleted — and it is only visible in the per-file map.
+
+### 5. F3 — one hit, and the isolation re-run reproduced it
+
+`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1`, debug, 340/341, C++ 39981
+vs Rust 37837. Inside S14's signature on every axis. Step 1's re-run, **10× on an idle
+machine: 8 byte-identical, 2 short streams** — one binary, one configuration, two
+different outputs, which is S14 step 1's own criterion for *race rather than divergence*
+met directly. One hit, so step 2 does not fire (session J's measurement 33 is the
+precedent). **Acquitted**, appended as measurement 35 at adjudication time.
+
+Two facts for the finding: this is the **second** isolation reproduction in its history
+and it is the **same configuration and the same wrong length** as measurement 29's, so
+`320x192 t=4 sm=3 n=600 cabac=1` in debug is *the* susceptible configuration; and its
+isolation rate here (~1/5 over ten runs) is far above both the ~1/307 sustained-sweep
+rate and the ~1/100–150 S14 records — the first time isolation has been the cheaper place
+to reproduce it. Running total: **thirty-five measurements, thirteen alternations,
+fourteen acquittals.**
+
+### 6. What went into the rules
+
+* Nothing new. S2b's pair-count clause was ratified in the inherited tail and its
+  "measure something bigger" conclusion is now a result rather than a proposal — Face 1
+  is the measurement it asked for.
+* **§7.4's scalar-vs-scalar claim is corrected in place**: the checked-in dylib
+  dispatches NEON, so the bench's Rust-vs-C++ column is not the plan's cumulative metric
+  and the "≤10% vs C++ scalar at Phase 9" target needs a scalar-only dylib to be
+  measurable at all. It has never been measured against this one.
+* S24 earned its keep twice on prose (two doc comments) and twice on counts (the heat
+  order and a site count).
+
+### Hand-off: Phase 5, session M
+
+1. **First: the day-two confirmation** of the whole-flip span (`seat_head` → `l_c2`, both
+   stashed, nothing to build), with the S2 null at 7 pairs. The cumulative position and
+   the ≈2.3 points of headroom rest on it.
+2. **`SDqLayer` → `DqLayerState`**, with the census key `type SDqLayer x2` → `x1` in the
+   same commit. Unblocked by this session; the struct's own doc comment names the flip's
+   completion as the trigger.
+3. **The 32 scratch-cache re-points** (re-greped: `parse_mb_syn_cabac.rs` 19,
+   `parse_mb_syn_cavlc.rs` 8, `mv_pred.rs` 5 — §2's "~28" is wrong). Stack arrays, not
+   the grid: a signature change plus an S25 question per function.
+4. **`pBitStringAux`** and `cabac_decoder.rs`'s `SHIM(phase5)`, whose counts are three
+   sessions old and want an S24 re-grep.
+5. **Measure clusters, not faces.** Session L's seven families read +1.27% CB together
+   and ≈0 apart; with ≈2.3 points of headroom left, a per-face half-measurement is worse
+   than none.
+6. **Unchanged:** F23 is Phase 8's, F31's redundant memset 5.5's, F22's map 5.3's,
+   **F36 decoder-threading's** (and it is a partial function, not a dropped line),
+   `PicPool`/identity deferred.
