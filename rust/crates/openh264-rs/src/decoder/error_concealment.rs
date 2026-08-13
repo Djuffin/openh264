@@ -44,6 +44,7 @@
     unused_unsafe
 )]
 
+use crate::decoder::decoder_context::{dec_pic, ec_ref_pic};
 use std::ptr;
 
 // ============================================================================
@@ -184,7 +185,7 @@ impl Default for TagMCRefMember {
 // ============================================================================
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
-pub use crate::decoder::picture::same_picture;
+pub use crate::decoder::picture::{same_picture, pic_slot};
 pub use crate::safe::plane::PaddedPlane;
 
 
@@ -304,11 +305,11 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext) -> bool {
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
 pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() || (*pCtx).pDec.is_null() || (*pCtx).pSps.is_null() {
+    if pCtx.is_null() || (*pCtx).pDec.is_none() || (*pCtx).pSps.is_null() {
         return;
     }
 
-    let pDstPic = (*pCtx).pDec;
+    let pDstPic = dec_pic(pCtx);
     let mut pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
     } else {
@@ -376,13 +377,13 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
 pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_none() || (*pCtx).pCurDqLayer.is_null() {
         return;
     }
 
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
-    let pDstPic = (*pCtx).pDec;
+    let pDstPic = dec_pic(pCtx);
     let mut pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
     } else {
@@ -542,7 +543,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     let pDst1 = (*pDec).data_ptr(1).add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
     let pDst2 = (*pDec).data_ptr(2).add(((iMbXInPix >> 1) + (iMbYInPix >> 1) * (*pMCRefMem).iDstLineChroma) as usize);
 
-    if (*pDec).bIdrFlag || (*pCtx).pECRefPic[0].is_null() {
+    if (*pDec).bIdrFlag || (*pCtx).pECRefPic[0].is_none() {
         let pSrcY = (*pMCRefMem).pSrcY.add((iMbY * 16 * (*pMCRefMem).iSrcLineLuma + iMbX * 16) as usize);
         if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
             f(pDst0, (*pMCRefMem).iDstLineLuma, pSrcY, (*pMCRefMem).iSrcLineLuma);
@@ -560,12 +561,15 @@ pub unsafe extern "C" fn DoMbECMvCopy(
         return;
     }
 
-    if !(*pCtx).pECRefPic[0].is_null() {
-        if same_picture((*pCtx).pECRefPic[0], pRef) {
+    if (*pCtx).pECRefPic[0].is_some() {
+        // Slot equality, direct: P3's predicate with both sides already handles.
+        // `same_picture`'s address fallback existed for pictures with no slot, and a
+        // `PicId` is a picture that has one.
+        if (*pCtx).pECRefPic[0] == pic_slot(pRef) {
             iMVs[0] = (*pCtx).iECMVs[0][0] as i16;
             iMVs[1] = (*pCtx).iECMVs[0][1] as i16;
         } else {
-            let iScale0 = (*(*pCtx).pECRefPic[0]).iFramePoc - iCurrPoc;
+            let iScale0 = (*ec_ref_pic(pCtx, 0)).iFramePoc - iCurrPoc;
             let iScale1 = (*pRef).iFramePoc - iCurrPoc;
             iMVs[0] = if iScale0 == 0 {
                 0
@@ -657,7 +661,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
     for r in 0..16 {
         (*pCtx).iECMVs[r][0] = 0;
         (*pCtx).iECMVs[r][1] = 0;
-        (*pCtx).pECRefPic[r] = ptr::null_mut();
+        (*pCtx).pECRefPic[r] = None;
     }
 
     for iMbY in 0..iMbHeight {
@@ -677,7 +681,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -692,7 +696,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv0 = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -701,7 +705,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv8 = mv_row[8];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv8[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv8[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -716,7 +720,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv0 = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -725,7 +729,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv2 = mv_row[2];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv2[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv2[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -746,7 +750,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
                                     let iRefIdx = ref_row[iIIdx] as usize;
                                     if iRefIdx < 16 {
-                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
+                                        (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
                                         match iSubMBType {
                                             SUB_MB_TYPE_8x8 => {
                                                 let mv = mv_row[iIIdx];
@@ -800,13 +804,13 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
 pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_none() || (*pCtx).pCurDqLayer.is_null() {
         return;
     }
 
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
-    let pDstPic = (*pCtx).pDec;
+    let pDstPic = dec_pic(pCtx);
     let pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
     } else {
@@ -876,8 +880,8 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
         return iRet;
     }
 
-    if !pCtx.is_null() && !(*pCtx).pDec.is_null() {
-        let pDec = (*pCtx).pDec;
+    if !pCtx.is_null() && (*pCtx).pDec.is_some() {
+        let pDec = dec_pic(pCtx);
         crate::common::expand_pic::ExpandReferencingPicture(
             &[(*pDec).data_ptr(0), (*pDec).data_ptr(1), (*pDec).data_ptr(2)],
             (*pDec).iWidthInPixel,
@@ -917,8 +921,8 @@ pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext) {
     }
 
     (*pCtx).iErrorCode |= dsDataErrorConcealed;
-    if !(*pCtx).pDec.is_null() {
-        (*(*pCtx).pDec).bIsComplete = false;
+    if (*pCtx).pDec.is_some() {
+        (*dec_pic(pCtx)).bIsComplete = false;
     }
 }
 
@@ -1042,11 +1046,19 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
 
             unsafe {
-                let dst_ptr: *mut SPicture = &mut dst;
-                last.pPreviousDecodedPictureInDpb =
-                    if same_object { dst_ptr } else { &mut src as *mut SPicture };
+                // S29: `addr_of_mut!`, not `&mut`, for both — the pool stores these for
+                // the whole call and a `&mut` retag here is one write through `dst` away
+                // from being popped (T5.O8's class, in the fixture where it bit).
+                let dst_ptr: *mut SPicture = std::ptr::addr_of_mut!(dst);
+                let src_ptr: *mut SPicture = std::ptr::addr_of_mut!(src);
+                // `pDec` is a slot handle now, so the fixture needs a pool. Both
+                // pictures go in: `PicPool::over` stamps each with its `PicId`, which is
+                // what makes the identity this test is about a slot comparison.
+                let mut pool = crate::decoder::pic_queue::PicPool::over(vec![dst_ptr, src_ptr]);
+                last.pPreviousDecodedPictureInDpb = if same_object { dst_ptr } else { src_ptr };
                 ctx.pSps = &mut sps as *mut _;
-                ctx.pDec = dst_ptr;
+                ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
+                ctx.pDec = (*dst_ptr).pic_id();
                 ctx.pCurDqLayer = &mut dq_layer as *mut _;
                 ctx.pLastDecPicInfo = &mut last as *mut _;
                 // The copy itself goes through the context's copy-function pair;

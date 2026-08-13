@@ -44,6 +44,7 @@
     unused_unsafe
 )]
 
+use crate::decoder::decoder_context::dec_pic;
 use std::ptr;
 
 
@@ -3040,9 +3041,9 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let iMbOffsetLuma = (iMbX + iMbY * iDstStrideLuma) << 4;
     let iMbOffsetChroma = (iMbX + iMbY * iDstStrideChroma) << 3;
 
-    let mut pMbDstY = (*(*pCtx).pDec).data_ptr(0).add(iMbOffsetLuma as usize);
-    let mut pMbDstU = (*(*pCtx).pDec).data_ptr(1).add(iMbOffsetChroma as usize);
-    let mut pMbDstV = (*(*pCtx).pDec).data_ptr(2).add(iMbOffsetChroma as usize);
+    let mut pMbDstY = (*dec_pic(pCtx)).data_ptr(0).add(iMbOffsetLuma as usize);
+    let mut pMbDstU = (*dec_pic(pCtx)).data_ptr(1).add(iMbOffsetChroma as usize);
+    let mut pMbDstV = (*dec_pic(pCtx)).data_ptr(2).add(iMbOffsetChroma as usize);
 
     *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux);
