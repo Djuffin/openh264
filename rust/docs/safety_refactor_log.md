@@ -7462,3 +7462,137 @@ alternation it was written for. Read both sizes in an isolation run before readi
    non-zero-count cache family (167 uses, 96 in `decode_slice.rs`, 5.6's by P1).
 7. **Unchanged**: F23 is Phase 8's, F31's redundant memset 5.5's, **F36
    decoder-threading's**. **F22 is closed. 5.1 and 5.4 are closed.**
+
+---
+
+## 2026-08-13 — Phase 5, session O (5.5 whole: the decomposition closure, the constructors, P4, and the shell's retirement)
+
+**Commits:** `44e02411` (inherited doc tail), `74d02058` (T5.O0, `Id`'s niche), and the
+faces below.
+
+### Control battery
+
+Docs-only tail, session N accepted (**FAIL(1)**, the one failing step adjudicated to F3
+and acquitted in its log entry — S27's predicate names this case explicitly),
+`rust/tools/` and the toolchain unchanged — S27's cheap subset. **OVERALL: PASS**,
+470/464/20, ratchet 4436, census 59, matching session N's exit on every figure. Eighth
+consecutive session whose open needed no correction.
+
+**No perf measurement this session** (D-gate-1). Session N's +1.24% CB span, its Face 1/
+Face 3 bisect and the three stashed binaries stand for the phase exit to adjudicate.
+
+### 0. Face 0 — `Id` gets a niche (T5.O0)
+
+`safe/pool.rs`'s handle now holds `slot + 1` in a `NonZeroU32`, so `Option<Id>` is one
+word with no discriminant — the representation the `*mut SPicture` it replaced already
+had. Session N's §8 named this as the one observation behind its unverified B-slice
+mechanism; it lands as a plain structural commit because it is the better representation
+either way (§7.4's fast-by-construction clause) and D-gate-1 defers the verdict.
+
+The field was already private and every read already went through `index()`, so nothing
+outside the module could tell. Two things fell out: `Pool::handle` factors a construction
+that `id()` and `iter()` spelled twice, and the niche is **pinned by a test**
+(`size_of::<Option<Id>>() == size_of::<Id>()`) — a niche nothing asserts is a niche the
+next field addition silently deletes.
+
+### 1. Face 1 — the 5.5 closure, computed before the first edit
+
+Plan §2.2.6 decomposes `SWelsDecoderContext` into subsystem structs. **The closure says
+that is not 5.5's, and that the constructors do not wait for it.** Five checked facts.
+
+**(a) The two propagating legs of S20's closure are empty here.** S20 exists because at
+T3.4 a signature change forced a struct's layout, by-value embedding propagated it
+transitively, and `const` ABI asserts left no intermediate green state. None of the three
+holds for the decoder context: `api/abi_guard.rs` pins **only public API types** — no
+decoder-internal struct has an `assert_size!` or an offset pin — and the context is
+**never embedded by value** anywhere in the tree (one `*mut` field on `CWelsDecoderImpl`,
+15 `new_boxed()` constructions in tests, zero by-value uses). So a field's type may change
+without dragging another struct with it, which is the opposite of T3.4's situation.
+
+**(b) What binds instead is the signature leg, and it is 148 functions.** `pCtx:
+PWelsDecoderContext` appears in **186 parameter positions over 11 files** —
+`decoder_core.rs` 61, `decode_slice.rs` 44, `parse_mb_syn_cabac.rs` 24, `nalu.rs` 13,
+`manage_dec_ref.rs` 13, `error_concealment.rs` 11, `parse_mb_syn_cavlc.rs` 6,
+`mv_pred.rs` 4, `cabac_decoder.rs` 4, `pic_queue.rs` 3, `deblocking.rs` 3 — which is
+**148 distinct functions** after the re-export shims are deduped. Of those, **59 are
+leaves** (they call no other `pCtx`-taking function) and **89 are not**. Field accesses
+behind them: **1343 `(*pCtx).field` occurrences over 13 files**, comment-stripped and
+whitespace-normalised per S24/F29.
+
+**(c) The decomposition's payoff is the narrowing, not the grouping.** Grouping fields
+into subsystem structs while every function still takes `*mut SWelsDecoderContext` costs
+all 1343 accesses and delivers no borrow-checking at all; it also makes each later
+narrowing *more* expensive, since the parameter to be extracted has moved. The two halves
+are separable, and doing the cheap one first is the wrong order.
+
+**(d) The narrowing is bottom-up and re-entrancy-gated, one function at a time.** A leaf
+converted to `f(&mut CabacState)` is called as `f(&mut (*pCtx).cabac)` from a caller that
+still holds the raw context — which is a borrow of something reachable from `pCtx` held
+across a call, F28's exact class. Whether that is legal is S25's question per function,
+not a property of the decomposition. So the 59 leaves are convertible where their S25
+answer clears them, and the 89 non-leaves each wait on their callees. That is a bottom-up
+sweep of 148 functions, and it is a step of its own — the same disposition session M gave
+the `*mut u8` cache family and session N gave `pDec`, for the same reason: the centre of
+gravity is another step's.
+
+**(e) `pDec` is inside this closure too.** `dec_state` and `dpb` (§2.2.6's names) cannot
+be separately borrowed while `pDec` and `pECRefPic` are raw aliases into pool slots — the
+finding session N closed §5 with. So the decomposition is sequenced **behind** the `pDec`
+step, not beside it.
+
+**What the closure leaves for this session**, and it is the whole of the rest of 5.5:
+constructors with their `Drop`s, the paramset store, F37, and the shell's retirement —
+all of which land on the monolith, because (a) says an owned field on the context drags
+nothing else with it.
+
+#### The context's 25 raw-pointer fields, classified — this is what 5.5 spends against
+
+| class | fields | accesses | owner |
+|---|---|---|---|
+| **owned heap** | `pAccessUnitList`, `pCabacDecEngine`, `pParserBsInfo`, `pDqLayersList`, `pPicBuff`, `pTempDec` | 135 | **5.5, this session** |
+| **self-references** | `pSps`, `pPps`, `pCurDqLayer`, `pSliceHeader`, `pNalCur`, `pDequant_coeff4x4/8x8` | 247 | **5.5 (P4), this session** |
+| **pool aliases** | `pDec`, `pECRefPic` | 85 | the `pDec` step (P) |
+| **back-pointers into `CWelsDecoderImpl`** | `pParam`, `pMemAlign`, `pLastDecPicInfo`, `pDecoderStatistics`, `pVlcTable`, `pPictInfoList`, `pPictReoderingStatus`, `pStreamSeqNum` | 209 | **Phase 8** — they are the API object's members, wired in by `decoder_init_c` mirroring `CWelsDecoder::InitDecoderCtx`; converting them means moving ownership across the C-ABI boundary |
+| **dead** | `pArgDec`, `pTraceHandle` | 1 | delete on sight |
+
+The back-pointer row is the one that surprises: **eight of the 25 raw fields are not the
+decoder's memory at all**, and no amount of 5.5 makes them owned. They are why the context
+cannot simply become `Decoder` in one step.
+
+#### F19, per allocation — the inventory, with the line that frees each
+
+| allocation | site | freed at | note |
+|---|---|---|---|
+| `SAccessUnit` + its `pNalUnitsList` + N×`SNalUnit` | `MemInitNalList`, `decoder_core.rs:932/936/942` | `MemFreeNalList`, called from `WelsFreeStaticMemory:2035` | three nested `WelsMallocz`, one partial-failure unwind |
+| `SParserBsInfo` | `InitBsBuffer:1676` | `WelsFreeStaticMemory:2055` | **`bParseOnly` only, both ends** |
+| `pDstBuff` | `InitBsBuffer:1681` | `:2052` | " |
+| `pNalLenInByte` | `InitBsBuffer:1693`, re-grown at `ExpandBsLenBuffer:1726` | `:2047`, old one at `:1736` | " |
+| `SWelsCabacDecEngine` | `ConstructAccessUnit:3315` | `WelsFreeDynamicMemory:1985` | allocated lazily on the first AU |
+| `DqLayerState` (+ its `MbGrid`) | `InitialDqLayersContext:2778` | `UninitialDqLayersContext:2805` | already a `Box` (T5.H3) |
+| `PicPool` (+ its pictures) | `CreatePicBuff` | `DestroyPicBuff` | already a `Box` (T5.N1) |
+| `pTempDec` | `AllocPicture` | `WelsFreeDynamicMemory:1980` | |
+| `sRawData` / `sSavedData` | `InitBsBuffer:1670/1687` | owned `Vec`s since T3.3 | `reset()` at `:2039/2042` |
+
+**The free cascade runs exactly once and immediately before the context's own drop.**
+`WelsFreeDynamicMemory` has one caller (`WelsEndDecoder:2003`); `WelsEndDecoder` has two
+(`decoder_uninit_c:1463`, `WelsDestroyDecoder:2061`) and both follow it with
+`drop(Box::from_raw(pCtx))` on the next line. That is what makes R4's conversion
+behaviour-preserving by construction rather than by argument: a cascade entry moved into
+`Drop` runs at the same point in the same order.
+
+#### S25, enumerated with the closure
+
+The re-entrancy question for this session's work is narrower than 5.2's was, because the
+conversions are lifecycle rather than per-macroblock. Three answers:
+
+1. **The constructors.** `MemInitNalList`, `InitBsBuffer` and the CABAC engine's
+   allocation run with no other live reference into the context (they are called from
+   `WelsInitStaticMemory` / `ConstructAccessUnit`'s head, before any decode borrow
+   exists). Nothing re-enters.
+2. **The paramset store.** `pSps` is read *while* `sSpsPpsCtx.sSpsBuffer` is written on
+   the SPS-activation path — that is the self-reference, and it is precisely what an id +
+   lookup removes. The lookup must not hand out a borrow that outlives the expression
+   (S29's spelling), because `WriteBackActiveParameters` writes the same buffer.
+3. **`Drop`.** A `Drop` impl on the context runs with no other reference live by
+   definition — the `Box` is being consumed. The hazard is the opposite one: a cascade
+   entry that reads *another* field while dropping one. The inventory above shows none do.
