@@ -122,4 +122,10 @@ budget inferred_double_casts 0
 # `WelsClip1` x8, `ST32`/`LD32`, ...) or `decoder_core.rs` forwarding wrappers. F22 is
 # the one that turned out to be a real divergence. Phases 5 and 6 drive this down;
 # it may not rise.
-budget duplicate_fn_bodies 198
+#
+# **198 -> 195 at T5.M4**, the first decrease since the instrument was widened, and it
+# is F22's unification: eight names had two copies each, and the three whose bodies had
+# stayed *identical* (`PredMv`, `PredInter16x8Mv`, `PredInter8x16Mv`) are the three this
+# instrument could see. The other five had **diverged** — which is exactly why a
+# duplicate-body count is a floor on the problem and never a measure of it.
+budget duplicate_fn_bodies 195

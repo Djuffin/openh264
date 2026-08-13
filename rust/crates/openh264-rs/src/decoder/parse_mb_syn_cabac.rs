@@ -605,7 +605,14 @@ pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
 
 pub use crate::decoder::decoder_core::GetThreadCount;
 // Used by the B-slice motion-info branches ported from ParseInterBMotionInfoCabac.
-pub use crate::decoder::mv_pred::{SubMbType, FillSpatialDirect8x8Mv, FillTemporalDirect8x8Mv};
+pub use crate::decoder::mv_pred::{
+    SubMbType, FillSpatialDirect8x8Mv, FillTemporalDirect8x8Mv,
+    // T5.M4 (F22): the seven that used to be re-translated below. `mv_pred.cpp` is
+    // the C++'s home for each; this module calls them there, as its C++ counterpart
+    // does.
+    PredMv, PredInter16x8Mv, PredInter8x16Mv, UpdateP16x16MotionInfo,
+    UpdateP16x8MotionInfo, UpdateP8x16MotionInfo, Update8x8RefIdx,
+};
 pub use crate::decoder::decode_slice::WELS_MIN;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::decode_slice::{g_kCacheNzcScanIdx, g_kuiCache30ScanIdx, g_kuiDequantCoeff, g_kuiScan4};
@@ -830,7 +837,6 @@ pub unsafe fn UpdateP8x16RefIdxCabac(
 
 pub unsafe fn UpdateP8x8RefIdxCabac(
     pCurDqLayer: PDqLayer,
-    _pRefIndex: &mut [[i8; 30]; LIST_A],
     iPartIdx: i32,
     iRef: i8,
     iListIdx: i8,
@@ -1643,217 +1649,25 @@ pub unsafe fn ParseMvdInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn PredMv(
-    iMotionVector: &[[[i16; 2]; 30]; LIST_A],
-    iRefIndex: &[[i8; 30]; LIST_A],
-    listIdx: usize,
-    iPartIdx: usize,
-    iPartWidth: usize,
-    iRef: i8,
-    iMVP: &mut [i16; 2],
-) {
-    let kuiLeftIdx = (g_kuiCache30ScanIdx[iPartIdx] - 1) as usize;
-    let kuiTopIdx = (g_kuiCache30ScanIdx[iPartIdx] - 6) as usize;
-    let kuiRightTopIdx = kuiTopIdx + iPartWidth;
-    let kuiLeftTopIdx = kuiTopIdx - 1;
+// ============================================================================
+// T5.M4 — F22's unification. Seven functions were re-translated here from
+// `mv_pred.cpp`, which is where the C++ declares each of them exactly once and
+// from which `parse_mb_syn_cabac.cpp` merely *calls* them (`:562`, `:592`,
+// `:797`, `:841`). The local copies are deleted; this module imports them, and a
+// local item no longer shadows the import.
+//
+//   PredMv, PredInter16x8Mv, PredInter8x16Mv   — never touch `pDec`, no guard
+//                                                question, bodies agreed
+//   UpdateP16x16MotionInfo                     — `mv_pred.rs`'s guard wins
+//   UpdateP16x8MotionInfo, UpdateP8x16MotionInfo — `mv_pred.rs`'s guard wins
+//   Update8x8RefIdx                            — **this copy won**: the C++ has
+//                                                no guard and `mv_pred.rs` had
+//                                                added one
+//
+// `UpdateP8x8RefIdxCabac` stays here, because `parse_mb_syn_cabac.cpp:141` is
+// where the C++ declares *it* and `mv_pred.cpp` is the caller.
+// ============================================================================
 
-    let kiLeftRef = iRefIndex[listIdx][kuiLeftIdx];
-    let kiTopRef = iRefIndex[listIdx][kuiTopIdx];
-    let kiRightTopRef = iRefIndex[listIdx][kuiRightTopIdx];
-    let kiLeftTopRef = iRefIndex[listIdx][kuiLeftTopIdx];
-    let mut iDiagonalRef = kiRightTopRef;
-
-    let iAMV = iMotionVector[listIdx][kuiLeftIdx];
-    let iBMV = iMotionVector[listIdx][kuiTopIdx];
-    let mut iCMV = iMotionVector[listIdx][kuiRightTopIdx];
-
-    if REF_NOT_AVAIL == iDiagonalRef {
-        iDiagonalRef = kiLeftTopRef;
-        iCMV = iMotionVector[listIdx][kuiLeftTopIdx];
-    }
-
-    let iMatchRef = (iRef == kiLeftRef) as i32 + (iRef == kiTopRef) as i32 + (iRef == iDiagonalRef) as i32;
-
-    if REF_NOT_AVAIL == kiTopRef && REF_NOT_AVAIL == iDiagonalRef && kiLeftRef >= REF_NOT_IN_LIST {
-        *iMVP = iAMV;
-        return;
-    }
-
-    if 1 == iMatchRef {
-        if iRef == kiLeftRef {
-            *iMVP = iAMV;
-        } else if iRef == kiTopRef {
-            *iMVP = iBMV;
-        } else {
-            *iMVP = iCMV;
-        }
-    } else {
-        iMVP[0] = WelsMedian(iAMV[0], iBMV[0], iCMV[0]);
-        iMVP[1] = WelsMedian(iAMV[1], iBMV[1], iCMV[1]);
-    }
-}
-
-pub unsafe fn PredInter16x8Mv(
-    iMotionVector: &[[[i16; 2]; 30]; LIST_A],
-    iRefIndex: &[[i8; 30]; LIST_A],
-    listIdx: usize,
-    iPartIdx: usize,
-    iRef: i8,
-    iMVP: &mut [i16; 2],
-) {
-    if 0 == iPartIdx {
-        let kiTopRef = iRefIndex[listIdx][1];
-        if iRef == kiTopRef {
-            *iMVP = iMotionVector[listIdx][1];
-            return;
-        }
-    } else {
-        let kiLeftRef = iRefIndex[listIdx][18];
-        if iRef == kiLeftRef {
-            *iMVP = iMotionVector[listIdx][18];
-            return;
-        }
-    }
-    PredMv(iMotionVector, iRefIndex, listIdx, iPartIdx, 4, iRef, iMVP);
-}
-
-pub unsafe fn PredInter8x16Mv(
-    iMotionVector: &[[[i16; 2]; 30]; LIST_A],
-    iRefIndex: &[[i8; 30]; LIST_A],
-    listIdx: usize,
-    iPartIdx: usize,
-    iRef: i8,
-    iMVP: &mut [i16; 2],
-) {
-    if 0 == iPartIdx {
-        let kiLeftRef = iRefIndex[listIdx][6];
-        if iRef == kiLeftRef {
-            *iMVP = iMotionVector[listIdx][6];
-            return;
-        }
-    } else {
-        let mut iDiagonalRef = iRefIndex[listIdx][5];
-        let mut index = 5;
-        if REF_NOT_AVAIL == iDiagonalRef {
-            iDiagonalRef = iRefIndex[listIdx][2];
-            index = 2;
-        }
-        if iRef == iDiagonalRef {
-            *iMVP = iMotionVector[listIdx][index];
-            return;
-        }
-    }
-    PredMv(iMotionVector, iRefIndex, listIdx, iPartIdx, 2, iRef, iMVP);
-}
-
-pub unsafe fn UpdateP16x16MotionInfo(
-    pCurDqLayer: PDqLayer,
-    listIdx: usize,
-    iRef: i8,
-    pMv: &[i16; 2],
-) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[listIdx].add(iMbXy);
-    let pDecMv = &mut *(*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy);
-
-    for i in (0..16).step_by(4) {
-        let kuiScan4Idx = g_kuiScan4[i] as usize;
-        let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
-
-        pDecRef[kuiScan4Idx] = iRef;
-        pDecRef[kuiScan4Idx + 1] = iRef;
-        pDecRef[kuiScan4IdxPlus4] = iRef;
-        pDecRef[kuiScan4IdxPlus4 + 1] = iRef;
-
-        pDecMv[kuiScan4Idx] = *pMv;
-        pDecMv[1 + kuiScan4Idx] = *pMv;
-        pDecMv[kuiScan4IdxPlus4] = *pMv;
-        pDecMv[1 + kuiScan4IdxPlus4] = *pMv;
-    }
-}
-
-pub unsafe fn UpdateP16x8MotionInfo(
-    pCurDqLayer: PDqLayer,
-    pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
-    pRefIndex: &mut [[i8; 30]; LIST_A],
-    listIdx: usize,
-    mut iPartIdx: usize,
-    iRef: i8,
-    pMv: &[i16; 2],
-) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    for _ in 0..2 {
-        let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
-        let iScan4Idx4 = 4 + iScan4Idx;
-        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
-        let iCacheIdx6 = 6 + iCacheIdx;
-
-        let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[listIdx].add(iMbXy);
-        let pDecMv = &mut *(*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy);
-
-        for off in 0..2 {
-            pDecRef[iScan4Idx + off] = iRef;
-            pDecRef[iScan4Idx4 + off] = iRef;
-            pDecMv[iScan4Idx + off] = *pMv;
-            pDecMv[iScan4Idx4 + off] = *pMv;
-
-            pRefIndex[listIdx][iCacheIdx + off] = iRef;
-            pRefIndex[listIdx][iCacheIdx6 + off] = iRef;
-            pMotionVector[listIdx][iCacheIdx + off] = *pMv;
-            pMotionVector[listIdx][iCacheIdx6 + off] = *pMv;
-        }
-        iPartIdx += 4;
-    }
-}
-
-pub unsafe fn UpdateP8x16MotionInfo(
-    pCurDqLayer: PDqLayer,
-    pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
-    pRefIndex: &mut [[i8; 30]; LIST_A],
-    listIdx: usize,
-    mut iPartIdx: usize,
-    iRef: i8,
-    pMv: &[i16; 2],
-) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    for _ in 0..2 {
-        let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
-        let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
-        let iScan4Idx4 = 4 + iScan4Idx;
-        let iCacheIdx6 = 6 + iCacheIdx;
-
-        let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[listIdx].add(iMbXy);
-        let pDecMv = &mut *(*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy);
-
-        for off in 0..2 {
-            pDecRef[iScan4Idx + off] = iRef;
-            pDecRef[iScan4Idx4 + off] = iRef;
-            pDecMv[iScan4Idx + off] = *pMv;
-            pDecMv[iScan4Idx4 + off] = *pMv;
-
-            pRefIndex[listIdx][iCacheIdx + off] = iRef;
-            pRefIndex[listIdx][iCacheIdx6 + off] = iRef;
-            pMotionVector[listIdx][iCacheIdx + off] = *pMv;
-            pMotionVector[listIdx][iCacheIdx6 + off] = *pMv;
-        }
-        iPartIdx += 8;
-    }
-}
-
-pub unsafe fn Update8x8RefIdx(
-    pCurDqLayer: PDqLayer,
-    iPartIdx: i16,
-    listIdx: usize,
-    iRef: i8,
-) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[listIdx].add(iMbXy);
-    pDecRef[iScan4Idx] = iRef;
-    pDecRef[iScan4Idx + 1] = iRef;
-    pDecRef[iScan4Idx + 4] = iRef;
-    pDecRef[iScan4Idx + 5] = iRef;
-}
 
 pub unsafe fn ParseInterPMotionInfoCabac(
     pCtx: PWelsDecoderContext,
@@ -1914,15 +1728,15 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 || !(pPic0.is_null() || (*pPic0).bIsComplete || bIsPending);
 
             PredMv(pMotionVector, pRefIndex, LIST_0, 0, 4, iRef[0], &mut pMv);
-            let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+            let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
             if err != ERR_NONE { return err; }
-            err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+            err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 1, &mut pMvd[1]);
             if err != ERR_NONE { return err; }
 
             pMv[0] += pMvd[0];
             pMv[1] += pMvd[1];
 
-            UpdateP16x16MotionInfo(pCurDqLayer, LIST_0, iRef[0], &pMv);
+            UpdateP16x16MotionInfo(pCurDqLayer, LIST_0, iRef[0], pMv.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i8);
         }
         MB_TYPE_16x8 => {
@@ -1961,17 +1775,17 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             }
             for i in 0..2 {
                 let iPartIdx = i << 3;
-                PredInter16x8Mv(pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &mut pMv);
-                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+                PredInter16x8Mv(pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], &mut pMv);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
                 if err != ERR_NONE { return err; }
-                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 1, &mut pMvd[1]);
                 if err != ERR_NONE { return err; }
 
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &pMv);
-                UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), LIST_0 as i8);
+                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
         MB_TYPE_8x16 => {
@@ -2011,16 +1825,16 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             for i in 0..2 {
                 let iPartIdx = i << 2;
                 PredInter8x16Mv(pMotionVector, pRefIndex, LIST_0, (i << 2) as usize, iRef[i as usize], &mut pMv);
-                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
                 if err != ERR_NONE { return err; }
-                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 1, &mut pMvd[1]);
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 1, &mut pMvd[1]);
                 if err != ERR_NONE { return err; }
 
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx as usize, iRef[i as usize], &pMv);
-                UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), LIST_0 as i8);
+                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
@@ -2086,7 +1900,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
-                UpdateP8x8RefIdxCabac(pCurDqLayer, pRefIndex, iIdx8, pRefIdx[i], LIST_0 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8, pRefIdx[i], LIST_0 as i8);
             }
 
             for i in 0..4 {
@@ -2102,8 +1916,8 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
                 for j in 0..iPartCount {
                     let iPartIdx = (i << 2) + j * iBlockW;
-                    let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
-                    iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
+                    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+                    iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
 
                     PredMv(pMotionVector, pRefIndex, LIST_0, iPartIdx, iBlockW, pRefIdx[i], &mut pMv);
                     let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
@@ -2283,9 +2097,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         for listIdx in LIST_0..LIST_A {
             if IS_DIR(mbType, 0, listIdx) {
                 PredMv(pMotionVector, pRefIndex, listIdx, 0, 4, iRef[listIdx], (&mut pMv[..2]).try_into().unwrap());
-                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 0, &mut pMvd[0]);
+                let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 0, &mut pMvd[0]);
                 if err != ERR_NONE { return err; }
-                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 1, &mut pMvd[1]);
+                err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 1, &mut pMvd[1]);
                 if err != ERR_NONE { return err; }
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
@@ -2294,7 +2108,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 pMvd[0] = 0; pMvd[1] = 0;
             }
             let mv2: [i16; 2] = [pMv[0], pMv[1]];
-            UpdateP16x16MotionInfo(pCurDqLayer, listIdx, iRef[listIdx], &mv2);
+            UpdateP16x16MotionInfo(pCurDqLayer, listIdx, iRef[listIdx], mv2.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i8);
         }
     } else if IS_INTER_16x8(mbType) {
@@ -2334,9 +2148,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     PredInter16x8Mv(pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mut mvp);
                     pMv[0] = mvp[0];
                     pMv[1] = mvp[1];
-                    let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 0, &mut pMvd[0]);
+                    let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 0, &mut pMvd[0]);
                     if err != ERR_NONE { return err; }
-                    err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 1, &mut pMvd[1]);
+                    err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 1, &mut pMvd[1]);
                     if err != ERR_NONE { return err; }
                     pMv[0] += pMvd[0];
                     pMv[1] += pMvd[1];
@@ -2345,8 +2159,8 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
-                UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), listIdx as i8);
+                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
     } else if IS_INTER_8x16(mbType) {
@@ -2386,9 +2200,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     PredInter8x16Mv(pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mut mvp);
                     pMv[0] = mvp[0];
                     pMv[1] = mvp[1];
-                    let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 0, &mut pMvd[0]);
+                    let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 0, &mut pMvd[0]);
                     if err != ERR_NONE { return err; }
-                    err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, listIdx as i8, 1, &mut pMvd[1]);
+                    err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 1, &mut pMvd[1]);
                     if err != ERR_NONE { return err; }
                     pMv[0] += pMvd[0];
                     pMv[1] += pMvd[1];
@@ -2397,8 +2211,8 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
-                UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx, pMvd.as_ptr(), listIdx as i8);
+                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
     } else if IS_Inter_8x8(mbType) {
@@ -2601,11 +2415,11 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let iBlockW = pPartW[i];
                 for j in 0..iPartCount as usize {
                     let iPartIdx = (i << 2) + j * iBlockW as usize;
-                    let iScan4Idx = g_kuiScan4[iPartIdx] as usize;
-                    let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
+                    let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
+                    let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
                     if is_dir {
                         let mut mvp: [i16; 2] = [0, 0];
-                        PredMv(pMotionVector, pRefIndex, listIdx, iPartIdx, iBlockW as usize, iref, &mut mvp);
+                        PredMv(pMotionVector, pRefIndex, listIdx, iPartIdx as usize, iBlockW as usize, iref, &mut mvp);
                         pMv[0] = mvp[0];
                         pMv[1] = mvp[1];
                         let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, listIdx as i8, 0, &mut pMvd[0]);
