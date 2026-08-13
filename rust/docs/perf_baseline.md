@@ -1613,3 +1613,47 @@ corrected in place; the project's cumulative figures are chains of **Rust-vs-Rus
 anchored at Phase 0 and are unaffected. What the table does add is a check on direction:
 the whole-flip span reads +1.5% CB here against +2.36% paired, same sign, same order of
 magnitude, on an instrument that shares nothing with `perfpair` but the binaries.
+
+### Session M — the day-two confirmation, and the cumulative position settles (2026-08-13)
+
+Session-M null floor, 7 pairs, matched to the verdict's pair count (S2b):
+
+| bench | median | band | rows over +5% |
+|---|---|---|---|
+| decode (3 rows) | **+0.03%** | +0.02% … +0.19% | 0 |
+| encode (28 rows) | **+0.00%** | −1.47% … +0.75% | 0 |
+
+#### The confirmation
+
+Same two stashed binaries, same 7-pair protocol, a different day — the reading session L's
+cumulative position and the whole phase's remaining headroom rest on:
+
+| reading | day | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| the whole 5.2 flip, all 22 families (`3c4c6f4e` → `f63e8ef6`) | L (08-12) | **+2.93%** | +0.97% | +1.01% | +1.01% | +0.00% |
+| the same span, re-read | **M (08-13)** | **+2.57%** | +0.65% | +0.79% | +0.79% | +0.03% |
+
+**It confirms on every axis S2b asks about.** Same sign on all three decode rows; CB within
+**0.36 points** of day one against a criterion of ~1 point; every decode row above the null
+band's ceiling (+0.19%) rather than merely the median; encode flat at +0.03% median, as a
+decoder-only change should be. The two readings bracket the flip's cost at
+**+2.6…+2.9% CB**.
+
+**This is the first Phase 5 span to survive a day-two confirmation intact, and the contrast
+with the per-family readings is the whole argument for aggregates.** T5.J3's one span, read
+three times at 7 pairs, gave +0.03%, +0.27% and −0.13% — disagreeing in *sign*. The
+22-family span, read twice on two days, gives +2.93% and +2.57% — agreeing in sign, in
+magnitude, and row by row. Nothing about the harness changed between those two experiments
+except the size of the thing being measured.
+
+#### The cumulative position, settled
+
+**Cumulative CB ≈ +20.4…+20.7%** — Phase 4a's exit position (+17.8%, unmoved by Phases 3
+and 4b) plus the two readings of the whole-flip span — against the ≈**+23%** stop-line.
+**≈2.3–2.6 points of headroom**, and the conservative end is the one to spend against: the
+rest of 5.2 (`DqLayerState`, the 32 scratch-cache re-points, `pBitStringAux`) plus all of
+5.3–5.6 live inside **≈2.3 points**.
+
+The figure is no longer provisional. Session L measured it and this session confirmed it,
+which is what S2b's day-two clause exists to produce; no later session needs to re-derive
+it from per-family sums, and none should.
