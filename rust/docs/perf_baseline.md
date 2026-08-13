@@ -1427,3 +1427,74 @@ verdict and S2b's escalation applies to medians outside the band, which this is 
 `read_unaligned`/`write_unaligned` compiles to the same instruction as an aligned access
 on both targets this project builds, which is what the number says and also why no byte
 gate could ever have caught the defect.
+
+### Session K — three more families, and the day-two confirmation that turned into a result about the instrument (2026-08-12)
+
+**Read this section for the second half.** The family rows are unremarkable and that is
+their point; the confirmation is the finding.
+
+Session-K null floors, both measured this session on the same machine, same harness,
+same binary in both slots:
+
+| null | decode band | decode median | encode (28 rows) |
+|---|---|---|---|
+| **3 pairs** | −0.16% … −0.02% | −0.04% | median +0.00%, −1.45%…+3.09% |
+| **7 pairs**, matched to the verdicts | **−0.22% … +0.25%** | +0.04% | median +0.02%, −1.43%…+3.36% |
+
+#### 1. The day-two confirmation of T5.J3 — three readings of one span
+
+| reading | CB (CAVLC) | Main (CABAC) | High (8x8) | decode median | encode median |
+|---|---|---|---|---|---|
+| day one (session J, 7 pairs) | +0.24% | +0.03% | −0.03% | **+0.03%** | +0.00% |
+| **day two #1** (7 pairs) | +0.27% | +0.32% | −0.11% | **+0.27%** | −0.05% |
+| **day two #2** (7 pairs) | −0.45% | −0.05% | −0.13% | **−0.13%** | +0.01% |
+
+**The two same-day readings disagree in sign, and so does the CB row across all three**
+(+0.24 / +0.27 / −0.45). S2b's own criterion for "the effect is below the measurement
+error" is met, twice over. The mechanism `perf_baseline`'s J section claims — one bounds
+check per macroblock *record*, in-record indices const-bounded — stands: nothing this
+instrument can see is being spent.
+
+**What made this worth the extra two runs is which way the answer flipped.** Judged
+against the **3-pair** null, day two #1's +0.27% sits *outside* the band and the session's
+brief would have stopped on it, escalating a non-result. Judged against the **7-pair**
+null run half an hour later on the same machine, it sits *inside*. A band is a
+min-to-max over three bench rows; it is a sample, and a 3-pair sample is not a floor for a
+7-pair verdict. That is now written into S2b.
+
+**And the larger conclusion, which is what the next session should act on.** Three
+readings spanning 0.4 points, three session nulls spanning 0.6 points between them, and
+an effect somewhere near zero: **the quantity the plan needs is the same size as the
+noise.** Ten families over ≈3 points of headroom to the ≈+23% stop-line is ≈0.3% CB per
+family — precisely the resolution limit demonstrated here. **No reachable pair count
+resolves a per-family cost.** The cumulative figure is ~20% and this harness resolves it
+trivially, so the instrument to use from here is **one 7-pair span from the pre-flip base
+(`seat_head` 3c4c6f4e / `flip_head` 1438d762, both stashed) to HEAD** — the number the
+stop-line actually gates on. Session I already found the per-family sum high by a factor
+of two, which is the same defect seen from the other end.
+
+#### 2. The three families
+
+| span | pairs | CB (CAVLC) | Main (CABAC) | High (8x8) | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.K1 — `pMv`**, the hottest family (3.9%) (`e207fdd9` → `31826d05`) | 7 | +0.04% | −0.13% | −0.20% | **−0.13%** | +0.09% |
+| **T5.K2+K3 — `pMbType` + `pSliceIdc`**, both scalars (`31826d05` → `135ebcb7`) | 7 | +0.04% | −0.65% | +0.24% | **+0.04%** | +0.00% |
+
+Every row of both spans is inside the 7-pair null band except Main's −0.65%, which is
+below its floor — noise in the favourable direction. **No ledger row opens for any of the
+three families.**
+
+`pMv` is the single hottest family in the whole flip by profile — 102 of 2610 non-SHA-1
+self samples, 3.9%, in `DeblockingBsMarginalMBAvcbase`, `PredMvBDirectSpatial` and
+`PredPSkipMvFromNeighbor` — and it is free, which is the third consecutive record-shaped
+family (`[T; K]` indexed inside the record) to come in at nothing. `pMbType` and
+`pSliceIdc` are **scalars**, the shape session H measured at +0.65…+1.32% for eleven of
+them, and two of them together also read nothing.
+
+**The two spans are measured per commit and per cluster respectively, and the cluster is
+deliberate**: after §1, splitting a ≈0.1% effect into two ≈0.05% halves is measuring
+below the floor twice instead of once. Both commits exist, so per-family spans can be
+rebuilt from the refs at any time if a reason appears; the measurement is not perishable.
+
+**Cumulative CB after fifteen families: ≈ +19.2…+20.1%**, unmoved — every span since
+session H has read inside a null band, which is exactly the state that makes §1's point.

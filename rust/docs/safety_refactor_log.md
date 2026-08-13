@@ -6416,3 +6416,228 @@ overnight. If it confirms, the remaining nine flip on D-perf-4's normal terms.
   and `cabac_decoder.rs:855`'s `SHIM(phase5)` are untouched; re-grep before acting (S24).
 * **Unchanged:** F23 is Phase 8's, F31's redundant memset 5.5's, F22's map 5.3's,
   `PicPool`/identity deferred.
+
+## 2026-08-12 — Phase 5, session K (the day-two confirmation, three more families, and a divergence found by a re-grep)
+
+**Commits:** `4b91c1a0` (inherited doc tail — the brief's S24 stamp), `4f9ed98d` (T5.K1,
+`pMv`), `31826d05` (ratchet), `f2990054` (T5.K2, `pMbType`), `d4a3fd8a` (T5.K3,
+`pSliceIdc`, and F36), `135ebcb7` (ratchet), and this entry.
+
+### The session in one line
+
+The day-two confirmation the brief made item one **confirmed the mechanism and
+disqualified the instrument**: three 7-pair readings of one span disagree in sign and the
+three null bands they were judged against disagree at least as much, so a per-family cost
+of ≈0.3% CB — the size that decides whether the remaining families fit under the
+stop-line — is not measurable here at any reachable pair count. Then `pMv`, `pMbType` and
+`pSliceIdc` flipped, all three free, and `pSliceIdc`'s re-grep turned up **F36**.
+
+### Control battery
+
+Docs-only tail, session J accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 466/460/20, ratchet 4550, census 60,
+every figure matching session J's exit. Fourth session running that the open needed no
+correction.
+
+### 1. Face 1 — the day-two confirmation, and the correction it forced
+
+`perfpair.py run j_face1 j_j3 --pairs 7`, the command the brief specifies, against the
+S2 null run at open (3 pairs, as session J ran it): **decode median +0.27%** against a
+band of **−0.16%…−0.02%**. Outside. By the brief's own criterion that is *does not
+confirm*, whose instruction is to stop and escalate.
+
+**This session adjudicated it as a confirmation before establishing that it was one, and
+that was the wrong order.** The reasoning offered — that a 7-pair verdict deserves a
+7-pair null — is correct, and the 7-pair null run afterwards does contain +0.27%. But it
+was reached after seeing the result, and the brief had fixed the test in advance
+precisely because a decision rests on it. The rule this pays for is not "never widen an
+instrument"; it is **fix the instrument before the reading, or treat what you learn
+afterwards as evidence rather than as a re-adjudication.**
+
+What the extra runs actually established, which is worth more than either verdict:
+
+| reading of T5.J3's span | CB | Main | High | decode median |
+|---|---|---|---|---|
+| day one (session J, 7 pairs) | +0.24% | +0.03% | −0.03% | **+0.03%** |
+| day two #1 (7 pairs) | +0.27% | +0.32% | −0.11% | **+0.27%** |
+| day two #2 (7 pairs) | −0.45% | −0.05% | −0.13% | **−0.13%** |
+
+| null | band | median |
+|---|---|---|
+| session J, 3 pairs | +0.13% … +0.45% | +0.35% |
+| session K, 3 pairs | −0.16% … −0.02% | −0.04% |
+| session K, 7 pairs | −0.22% … +0.25% | +0.04% |
+
+**Two same-day 7-pair readings of one span disagree in sign; so does the CB row across
+all three.** S2b's own test for "below the measurement error" is met twice. The mechanism
+in `perf_baseline.md`'s J section stands — nothing measurable is being spent — and §2
+proceeded on Eugene's call, taken on these numbers rather than on the brief's binary.
+
+**The result to carry:** ten families over ≈3 points of headroom to the ≈+23% stop-line
+is **≈0.3% CB per family**, which is exactly the resolution demonstrated here. The
+cumulative figure is ~20% and is resolved trivially. **The instrument for the rest of 5.2
+is the cumulative span, not the per-family one** — `seat_head`/`flip_head` to HEAD, one
+7-pair run, not yet done and the next session's first item.
+
+### 2. Face 2 — three families, hottest first
+
+Heat re-derived at open (S24): 25s of `/usr/bin/sample` over `decode_1080p_bench`, 3917
+self samples, the bench's own SHA-1 (1307) excluded from the denominator. **The order had
+moved since session J** — `pSliceIdc` went 1.6% → 2.5% and overtook `pNzc` — because heat
+is attributed to the functions holding a family's accesses and those functions do not
+change when a *different* family leaves them. The counting rule that reproduces session
+J's 17 for `pRefIndex` and this session's 18 for `pMv` exactly is **occurrences of
+`.pXxx` whose receiver is not a picture**, comments stripped.
+
+**T5.K1 — `pMv` (3.9%, 18 sites), the hottest family in the flip.** 8 neighbour reads
+lose their pointer entirely: `ST32(iMvA.as_mut_ptr(), LD32(mv_ptr))` moved four bytes out
+of a neighbour's record into a stack `[i16; 2]`, and with the array owned that is
+`iMvA = grid.mv[0].get(xy)[3]` — one typed copy of the same four bytes. 4 write sites
+become `grid.mv[l].get_mut(iMbXy).as_mut_ptr()`. `deblocking.rs` gets the family's one
+S28 bridge, and it is the **second** bridge in `DeblockingBsMarginalMBAvcbase`:
+`pRefIdxArr` (T5.J3) and `pMvArr` are `&mut`s of *different* fields whose `Vec`s are
+different allocations, so neither retag can pop the other's tag — which the grid probe
+then executed under Miri rather than leaving as an argument.
+
+**T5.K2 — `pMbType` (2.6%, 9 sites), and it is a bridge rather than a set of reads.**
+`GetMbType` hands its seven callers the array *base* and they index it at neighbour
+addresses, so the else-branch becomes `mb_grid_ptr(&mut grid.mb_type, 0)`. **F34's shape
+was checked at all seven and is absent at each** — two of them re-derive the base in the
+same function, which is exactly the invalidating shape, but no earlier pointer is live
+across either.
+
+**T5.K3 — `pSliceIdc` (2.5%, 24 sites), and no raw pointer survives it.**
+`deblocking.rs`'s base binding existed only to compare a macroblock with its left and top
+neighbours; it is a shared borrow now. First family of the flip that adds **no** raw
+derivation and therefore owes no full-reach test. The per-picture
+`memset(pSliceIdc, 0xff, …)` becomes `as_mut_slice()[..iMbCacheNum].fill(-1)`, and its
+bound is an identity rather than a hope: `InitialDqLayersContext` sets
+`iPicWidthReq`/`iPicHeightReq` to the same `kiMaxWidth`/`kiMaxHeight` the grid's `MbDims`
+come from, in that same function. **Two null guards die and both were the port's own
+additions** — the C++ is unguarded at `decode_slice.cpp:1593` and
+`decoder_core.cpp:1623` — so deleting them converges on upstream rather than changing
+behaviour. F22's class, running in the added-guard direction.
+
+**F35's grep ran before each of the three flips and all three are clean.** `pMv`: every
+wider-than-element access into a layer MV record already goes through
+`ST32`/`LD32`, i.e. `write_unaligned`/`read_unaligned` since T5.J1, and `MB_BS_MV` reads
+`[i16; 2]` values whose align-2 requirement a `Vec` meets. `pMbType` and `pSliceIdc`: no
+access wider than their `u32`/`i32` elements exists in either tree.
+
+**Measurements, 7 pairs, both benches** (details and the null bands in
+`perf_baseline.md`): T5.K1 decode median **−0.13%**; T5.K2+K3 as one cluster **+0.04%**.
+Every row inside the 7-pair null band but one, which is below its floor. **No ledger row
+opens.** The cluster is deliberate: after §1, splitting a ≈0.1% effect into two ≈0.05%
+halves measures below the floor twice instead of once. Both commits exist, so per-family
+spans remain rebuildable from the refs.
+
+### 3. F36 — the multi-threaded slice loop never writes `pSliceIdc`
+
+Found by T5.K3's re-grep, not by a gate: the C++ writes the slice id in **both** its
+macroblock loops (`decode_slice.cpp:1593` in `WelsDecodeSlice`, `:1708` in
+`WelsDecodeAndConstructSlice`), and the port's copy of the second writes it in neither —
+it does not compute `iSliceIdc` at all. `pSliceIdc` is what **every** neighbour
+availability predicate compares, so left at its −1 reset every neighbour would read as
+available and prediction would cross slice boundaries.
+
+**It is dormant, not live.** That loop is the `iThreadCount > 1` arm and `GetThreadCount`
+returns 0 unconditionally — F22 §5 already establishes that the arm is dead and
+`WelsDecodeSlice` is the only parse entry. Recorded as **OPEN, dormant**, owned by
+whoever ports decoder threading and to be fixed *before* `GetThreadCount` returns
+anything greater than 1.
+
+The general point is the one to carry: **a stubbed-out subsystem's translation is
+unaudited and uncovered at the same time, and the two conditions hide each other.** No
+gate here reaches the decoder's MT path — the goldens and the decode bench drive the
+single-threaded API, and the diffharness sweeps multi-thread the *encoder*.
+
+T5.K3 changed nothing about it: the write that exists still happens, the one that never
+existed still does not, and no byte moves (S6).
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 466 / 460 / 20 | **468 / 462 / 20** |
+| Miri `--lib` | 326 | **328** (~910s) |
+| decode goldens | 57 rows | **57** |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4550 | **4540** |
+| `unsafe_block` | 623 | **625** |
+| `unsafe_fn` | 1248 | **1248** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+| findings | — | **F36, new and OPEN (dormant)** |
+
+Per-file deltas, which is the only way to read the ratchet (S16): **`decoder_core.rs`
+−9, `deblocking.rs` −1, everything else flat** — `mv_pred.rs`, `decode_slice.rs` and
+`parse_mb_syn_cavlc.rs` are unmoved across **32 converted sites** between them, because
+these conversions delete pointer *dereferences* while `raw_ptr` counts pointer *types
+written*. Both `unsafe_block` increases are the S28 full-reach tests T5.K1 and T5.K2 owe;
+**no production `unsafe {}` was added anywhere**, for the second session running.
+
+### 5. F3 — four hits, two alternations, and the signature loses a clause
+
+Two hits per battery, one battery per profile, all four inside S14's signature. Step 0
+does not apply (the diff reaches lib code `rust_enc` links) — and a cross-path hash
+comparison was tried first and is **invalid as evidence either way**, because a control
+built in a `git worktree` embeds a different path and its binary differs regardless of
+the source. Step 1 on battery 1's two configurations: 5/5 byte-identical each. Step 2,
+run twice at the profile its hits occurred in, 12 whole `mt` presets per side inside one
+loop on an idle machine:
+
+| alternation | control (`4b91c1a0`) | head | per side |
+|---|---|---|---|
+| debug, vs T5.K1 | 4 | 3 | 1440 |
+| release, vs T5.K2+K3 | 4 | 6 | 1440 |
+| **combined** | **8** | **9** | **2880** |
+
+A 6-vs-4 split is p ≈ 0.38 under the null. **HEAD is not worse; acquitted**, and both
+alternations hit on both sides, so S23b is satisfied twice. Appended as measurement 34 at
+adjudication time (S14 step 4). Running total: **thirty-four measurements, thirteen
+alternations, thirteen acquittals.**
+
+Two facts outlive the acquittal. **The rate under sustained back-to-back presets is
+≈1/307**, not the recorded ≈1/800 — twenty-four presets with nothing between them is the
+most load this sweep has ever run under, and load is part of the signature. And **`n=600`
+is a rate artifact rather than a condition**: the first `n=1500` hit in 34 measurements
+landed here, and `sm=3`'s `n` is the per-slice *byte budget*, so a smaller `n` cuts more
+slices and performs more of the slice-list growths the race lives in. S14's signature is
+corrected in place.
+
+### 6. What went into the rules
+
+* **S2b gains the pair-count clause** — a verdict at N pairs is judged against a null at
+  N pairs — flagged in its own text as this session's proposal rather than Eugene's call,
+  with the three-reading/three-null evidence beside it and the "measure something bigger"
+  conclusion that follows from it.
+* **S14's signature is corrected**: `n=600` demoted from condition to predominant case,
+  and the measured rate now carries its load dependence explicitly.
+* Nothing else. F36 is an instance of F22's class and of S24 — it was found by re-greping
+  a family's writers at the moment of converting it, which is what S24 exists to make
+  happen.
+
+### Hand-off: Phase 5, session L
+
+1. **First: the cumulative span.** `perfpair.py run` from the pre-flip base to HEAD, 7
+   pairs, both benches — `seat_head` (3c4c6f4e) and `flip_head` (1438d762) are stashed,
+   and HEAD needs one build. This is the number the ≈+23% stop-line gates on, it is ~20%
+   rather than ~0.3%, and §1 is why the per-family rows cannot answer it. Run the S2 null
+   **at the same pair count**.
+2. **Then the remaining seven**, hottest first, re-deriving the heat first because it
+   moved between J and K: `pNzc` (1.9%, 32 sites), `pChromaQp` (1.9%, 29), `pMvd` (1.4%,
+   40), `pDirect` (0.8%, 16), `pMbCorrectlyDecodedFlag` (0.6%, 18), `pScaledTCoeff`
+   (0.3%, 11), `pIntraPredMode` (0.0%, 16). Site counts are session K's greps and several
+   disagree with the older table; re-grep each (S24).
+3. **`pMvd` carries a shape none of the flipped families had**: `mv_pred.rs` guards
+   fifteen of its accesses with `if !(*pCurDqLayer).pMvd[LIST_x].is_null()`. Check each
+   against the C++ before deleting it, as T5.K3 did for `pSliceIdc`'s two — the answer
+   there was that the port had added them, but that is a fact about `pSliceIdc`.
+4. **Expect the grid probe to keep earning its 260s.** It has now executed two new S28
+   bridges and a re-derived `GetMbType` without a finding, which is the first time this
+   phase it has been quiet across a whole session.
+5. **Unchanged:** Face 3 (the ~28 `parse_mb_syn_*` cache-fill re-points, `pBitStringAux`,
+   `cabac_decoder.rs:855`'s `SHIM(phase5)`) is not started; F23 is Phase 8's, F31's
+   redundant memset 5.5's, F22's map 5.3's, **F36 decoder-threading's**,
+   `PicPool`/identity deferred.

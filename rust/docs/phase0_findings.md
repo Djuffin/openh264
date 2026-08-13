@@ -1132,3 +1132,70 @@ the ambient rate, not this tree. That is the honest reading of a single hit in 1
 configurations either way — ≈1/800 is the measured rate and one hit is what it predicts.
 
 Running total: **thirty-three measurements, eleven alternations, twelve acquittals.**
+
+### Measurement 34 (Phase 5, session K, 2026-08-12) — four hits, two alternations, and the signature's `n=600` clause falls
+
+The session's two batteries drew **two hits each**, so S14 step 2 fired both times —
+the first alternations of the phase to run on consecutive trees.
+
+**Battery 1**, `gates.sh full` on T5.K1's tree (`pMv` flipped), **debug** sweep, 339/341:
+
+```
+mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=0 rc=0 ::  C++: 40809  Rust: 0 bytes
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1 ::  C++: 39981  Rust: 37837 bytes
+```
+
+**Battery 2**, `gates.sh full` on the T5.K2+T5.K3 cluster, **release** sweep, 339/341:
+
+```
+mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=0 ::  C++: 42281  Rust: 41989 bytes
+mt Static_152_100 t=4 sm=3 n=600 cabac=0 rc=0 ::              C++: 29375  Rust: 0 bytes
+```
+
+All four inside the signature on every field. Note the mix: two zero-length and two
+short, which is the signature's "any wrong length" doing its work.
+
+**Step 0 does not apply and was not claimed.** The shortcut wants a diff that cannot
+reach `rust_enc`; this session's reaches lib code the driver links. (A cross-path hash
+comparison was tried first and is *invalid* as evidence either way — a control built in
+a `git worktree` embeds a different path, so its binary differs regardless of the
+source. Build both sides in the same directory, or do not use the shortcut.)
+
+**Step 1, both configurations of battery 1, 5× each on an idle machine: 5/5
+BYTE-IDENTICAL each.** S23b's expected result.
+
+**Step 2, twice, each at the profile its hits occurred in** — 12 whole `mt` presets per
+side, 120 configurations each, both binaries built once and swapped inside one loop:
+
+| alternation | control (`4b91c1a0`) | head | configurations per side |
+|---|---|---|---|
+| debug, vs T5.K1 | **4** | **3** | 1440 |
+| release, vs T5.K2+K3 | **4** | **6** | 1440 |
+| **combined** | **8** | **9** | **2880** |
+
+A 6-vs-4 split is p ≈ 0.38 one-sided under the null (Binomial(10, ½)); 8-vs-9 combined
+is as balanced as this instrument gets. **HEAD is not worse. Acquitted as F3**, and both
+alternations produced hits on both sides, so S23b is satisfied in both.
+
+**The rate, measured across 5760 alternation configurations plus 682 battery ones:
+17 + 4 = 21 hits in 6442, ≈ 1/307.** That is higher than the recorded ≈1/800, and the
+difference is load: twenty-four back-to-back `mt` presets with nothing between them is
+the most sustained load this project has ever run the sweep under, and F3's rate is a
+function of exactly that.
+
+**The signature loses its `n=600` clause.** One of head's debug hits was
+
+```
+mt CiscoVT2people_320x192_12fps t=2 sm=3 n=1500 cabac=1 rc=0 ::  C++: 39627  Rust: 0 bytes
+```
+
+— the **first observation at `n=1500` in 34 measurements**, where S14's text reads
+"`n=600` (never observed at `n=1500`)". It was re-run 5× in isolation and was 5/5
+byte-identical, like every other hit. The mechanism explains the asymmetry rather than
+excusing it: `sm=3` is the size-limited slice mode and `n` is the **per-slice byte
+budget**, so `n=600` cuts more slices per frame than `n=1500` and therefore performs
+more of the slice-list growths the race lives in. `n=600` is a rate artifact, not a
+condition. **S14's signature should read `sm=3`, `t∈{2,4}`, any wrong length, `mt`, with
+`n=600` as the predominant but not exclusive slice budget.**
+
+Running total: **thirty-four measurements, thirteen alternations, thirteen acquittals.**
