@@ -658,15 +658,39 @@ pub unsafe fn CreatePicBuff(
 
 /// Releases every picture the pool addresses, then the pool.
 ///
+/// # The reordering reset (F37)
+///
+/// C++ `decoder.cpp:260` opens this function with
+/// `ResetReorderingPictureBuffers (pCtx->pPictReoderingStatus, pCtx->pPictInfoList,
+/// false)` and the port did not, calling it in exactly one place — decoder *creation*.
+/// The two buffers are `CWelsDecoderImpl`'s members, wired into the context by
+/// `decoder_init_c`, so they **outlive the context**: across an
+/// Initialize/Uninitialize/Initialize cycle `sPictInfoList` kept POCs and
+/// `iPicBuffIdx` values naming slots of a pool that had been freed and rebuilt, and
+/// `EmitBufferedPicture` indexed the new pool with the old picture's index. Restored
+/// here as parity, not as invention — the reset runs before the early returns, exactly
+/// where the C++ has it, and the `pCtx` null-guard is the port's own (the C++
+/// dereferences unconditionally).
+///
 /// # Safety
 /// - `ppPicBuf` must point to a writable [`PPicBuff`] variable whose value is null or
 ///   a pool produced by [`CreatePicBuff`] and not yet destroyed.
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
 pub unsafe fn DestroyPicBuff(
-    _pCtx: PWelsDecoderContext,
+    pCtx: PWelsDecoderContext,
     ppPicBuf: *mut PPicBuff,
     pMa: *mut CMemoryAlign,
 ) {
+    if !pCtx.is_null() {
+        unsafe {
+            crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+                (*pCtx).pPictReoderingStatus,
+                (*pCtx).pPictInfoList,
+                false,
+            );
+        }
+    }
+
     if ppPicBuf.is_null() || pMa.is_null() {
         return;
     }
@@ -810,6 +834,60 @@ mod tests {
             DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
+    }
+
+    /// F37: destroying the pool resets the reordering buffers, because they outlive it.
+    ///
+    /// The cycle this pins is the public one — Initialize, decode, Uninitialize,
+    /// Initialize — where the context is rebuilt but `CWelsDecoderImpl`'s
+    /// `sPictInfoList` and `sReoderingStatus` are not. Without the reset, the second
+    /// life starts with `iPicBuffIdx` values naming slots of the first life's pool.
+    #[test]
+    fn destroying_the_pool_resets_the_reordering_buffers() {
+        use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};
+
+        let mut ma = CMemoryAlign::new(32);
+        let mut param = SDecodingParam::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        // A mutable reference coerces to a raw pointer at an assignment or an
+        // argument, so this fixture spells no pointer type at all (S16: the metric
+        // counts types written, and a test that writes casts it does not need
+        // inflates it — including in a comment).
+        ctx.pMemAlign = &mut ma;
+        ctx.pParam = &mut param;
+
+        // The decoder object's own members, as `decoder_init_c` wires them.
+        let mut pict_info: [SPictInfo; 16] = [SPictInfo::default(); 16];
+        let mut status = SPictReoderingStatus::default();
+        ctx.pPictInfoList = pict_info.as_mut_ptr();
+        ctx.pPictReoderingStatus = &mut status;
+
+        // A decode's leavings: two buffered pictures naming pool slots 2 and 3.
+        status.iLargestBufferedPicIndex = 1;
+        status.iNumOfPicts = 2;
+        status.bHasBSlice = true;
+        pict_info[0].iPOC = 4;
+        pict_info[0].iPicBuffIdx = 2;
+        pict_info[1].iPOC = 8;
+        pict_info[1].iPicBuffIdx = 3;
+
+        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(CreatePicBuff(&mut *ctx, &mut p_pic_buf, 4, 64, 64), 0);
+            DestroyPicBuff(&mut *ctx, &mut p_pic_buf, &mut ma);
+        }
+        assert_eq!(ma.WelsGetMemoryUsage(), 0);
+
+        // `fullReset = false`, so the loop covers `iLargestBufferedPicIndex + 1` entries
+        // — the two that were written — and leaves the untouched tail alone.
+        assert_eq!(status.iNumOfPicts, 0);
+        assert_eq!(status.iLargestBufferedPicIndex, 0);
+        assert!(!status.bHasBSlice);
+        assert_eq!(status.iMinPOC, IMinInt32);
+        for i in 0..2 {
+            assert_eq!(pict_info[i].iPicBuffIdx, -1, "slot {i} still names the freed pool");
+            assert_eq!(pict_info[i].iPOC, IMinInt32, "slot {i}");
+        }
     }
 
     /// T5.N2's half of the P3 identity property, and the half the five P3 tests
