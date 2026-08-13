@@ -349,7 +349,6 @@ pub struct SDqLayer {
     /// The pointer itself is Phase 5's to remove; T3.3 removes the base inside it.
     pub pBitStringAux: *mut BsReader,
     pub pFmo: *mut crate::decoder::fmo::TagFmo,
-    pub pDirect: *mut [i8; 16],
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
     // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
@@ -357,7 +356,6 @@ pub struct SDqLayer {
     // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
     // 27 allocations before 5.2 carries either into a safe container.
     pub pMbCorrectlyDecodedFlag: *mut bool,
-    pub pScaledTCoeff: *mut [i16; 384],
     /// **Per-MB array of 8, not a scalar** — allocated `numMb * 8` and indexed
     /// `[iMbXy][k]`; only `[7]` (the I16x16 mode) and `[0..4]` (the next
     /// macroblock's left-neighbour cache) are ever read. T5.G2 made the
@@ -2779,8 +2777,6 @@ pub unsafe fn InitialDqLayersContext(
         let pDq: PDqLayer = Box::into_raw(Box::new(SDqLayer::for_grid(dims)));
         (*pCtx).pDqLayersList = pDq;
 
-        (*pDq).pDirect = WelsMalloczHelper(pMa, numMb * 16 * std::mem::size_of::<i8>()) as *mut _;
-        (*pDq).pScaledTCoeff = WelsMalloczHelper(pMa, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as *mut _;
         (*pDq).pIntraPredMode = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<[i8; 8]>()) as *mut _;
         (*pDq).pMbCorrectlyDecodedFlag = WelsMalloczHelper(pMa, numMb * std::mem::size_of::<bool>()) as *mut _;
     }
@@ -2803,14 +2799,6 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
 
     let pDq = (*pCtx).pDqLayersList;
     if !pDq.is_null() {
-        if !(*pDq).pDirect.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pDirect as *mut u8, numMb * 16 * std::mem::size_of::<i8>());
-            (*pDq).pDirect = std::ptr::null_mut();
-        }
-        if !(*pDq).pScaledTCoeff.is_null() {
-            WelsFreeHelper(pMa, (*pDq).pScaledTCoeff as *mut u8, numMb * MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>());
-            (*pDq).pScaledTCoeff = std::ptr::null_mut();
-        }
         if !(*pDq).pIntraPredMode.is_null() {
             WelsFreeHelper(pMa, (*pDq).pIntraPredMode as *mut u8, numMb * std::mem::size_of::<[i8; 8]>());
             (*pDq).pIntraPredMode = std::ptr::null_mut();
@@ -4128,9 +4116,17 @@ mod tests {
     }
 
     /// The same reach on a **composite** element, cast to the element type the
-    /// kernels take. `pScaledTCoeff`'s consumers spell it
-    /// `.add(iMbXy) as *mut i16` and then index 0..384 — so the legal reach is
-    /// the whole flattened array, not one macroblock's block.
+    /// kernels take: a pointer taken at one macroblock and walked over the whole
+    /// flattened array is what `mb_grid_ptr` promises, and this is where that
+    /// promise is checked.
+    ///
+    /// **The family it was written for turned out not to need it** (T5.L5):
+    /// `pScaledTCoeff`'s consumers spell `.add(iMbXy) as *mut i16` and then index
+    /// 0..384, which is the record's *own* length — `pScoeffLevel.add(256 + (i << 6))`
+    /// with `i < 2` is the furthest any of them reaches — so that family derives
+    /// per-record now and this test outlives it as the composite case of the
+    /// accessor's contract. The scouted claim was that those consumers needed the
+    /// flattened extent; walking them at conversion time said otherwise (S24).
     #[test]
     fn mb_grid_ptr_reaches_a_composite_arrays_flattened_extent() {
         let dims = MbDims::new(3, 2);

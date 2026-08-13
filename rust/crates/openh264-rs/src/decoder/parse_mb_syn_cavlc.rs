@@ -1945,25 +1945,25 @@ pub unsafe fn WelsFillDirectCacheCabac(
 
     (*iDirect).fill(0);
     if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-        let pDir = dq.pDirect.add(iLeftXy) as *const i8;
+        let pDir = dq.grid.direct.get(iLeftXy).as_ptr();
         (*iDirect)[6] = *pDir.add(3);
         (*iDirect)[12] = *pDir.add(7);
         (*iDirect)[18] = *pDir.add(11);
         (*iDirect)[24] = *pDir.add(15);
     }
     if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-        let pDir = dq.pDirect.add(iLeftTopXy) as *const i8;
+        let pDir = dq.grid.direct.get(iLeftTopXy).as_ptr();
         (*iDirect)[0] = *pDir.add(15);
     }
     if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-        let pDir = dq.pDirect.add(iTopXy) as *const i8;
+        let pDir = dq.grid.direct.get(iTopXy).as_ptr();
         (*iDirect)[1] = *pDir.add(12);
         (*iDirect)[2] = *pDir.add(13);
         (*iDirect)[3] = *pDir.add(14);
         (*iDirect)[4] = *pDir.add(15);
     }
     if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-        let pDir = dq.pDirect.add(iRightTopXy) as *const i8;
+        let pDir = dq.grid.direct.get(iRightTopXy).as_ptr();
         (*iDirect)[5] = *pDir.add(12);
     }
 }

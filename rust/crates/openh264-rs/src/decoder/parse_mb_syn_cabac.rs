@@ -847,7 +847,7 @@ pub unsafe fn UpdateP8x8RefIdxCabac(
 pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
+    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
     *pDirect.add(iScan4Idx) = 1;
     *pDirect.add(iScan4Idx + 1) = 1;
     *pDirect.add(iScan4Idx + 4) = 1;
@@ -856,7 +856,7 @@ pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
 
 pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
+    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
         let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
@@ -1503,7 +1503,7 @@ pub unsafe fn ParseRefIdxCabac(
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pRefIdxInMB = *(*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize].add(iMbXy);
-    let pDirect = (*pCurDqLayer).pDirect.add(iMbXy) as *mut i8;
+    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
 
     let scan_cache = g_kuiCache30ScanIdx[iZOrderIdx as usize] as usize;
 
