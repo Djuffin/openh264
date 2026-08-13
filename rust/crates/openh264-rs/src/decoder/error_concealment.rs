@@ -240,7 +240,7 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
 // | `DoErrorConSliceMVCopy` | same pair | `same_picture` (:822) |
 // | `DoMbECMvCopy` | `pDec` / one reference | `same_picture` (:523) |
 //
-// All four were `==` over `*mut SPicture` until T5.N2 and are slot comparisons now
+// All four were pointer equality over `SPicture` until T5.N2 and are slot comparisons now
 // (`picture.rs`'s `same_picture`, plan P3). The disjointness argument is unchanged,
 // because the predicate is: two pool slots are two pictures.
 //

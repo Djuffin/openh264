@@ -286,7 +286,8 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 // *who else reaches this `SPicture` while a borrow of it is held?*
 //
 // The pool is where the question is sharpest, because `SPicBuff.ppPic` is
-// `*mut *mut SPicture` and `pCtx->pDec` points **into that array** — the picture the
+// a pointer to an array of picture pointers, and `pCtx->pDec` points **into that
+// array** — the picture the
 // decoder is writing is one of the slots the recycling scan walks. Four answers:
 //
 // 1. **`PrefetchPic` holds no borrow of a picture.** It reads `bUsedAsRef` and

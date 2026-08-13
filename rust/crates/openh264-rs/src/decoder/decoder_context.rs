@@ -260,7 +260,7 @@ pub use crate::decoder::error_concealment::SCopyFunc;
 /// claim it cannot honour is worse than no claim.
 #[derive(Copy, Clone, Default)]
 pub struct SDeblockingFilter {
-    // T5.N3: `pCsData: [*mut u8; 3]` and `iCsStride: [i32; 2]` sat here — three plane
+    // T5.N3: `pCsData` and `iCsStride` sat here — three raw plane
     // pointers and two strides copied out of `pCtx->pDec` at filter init and read for
     // the whole macroblock loop. They were the decoder's last plane-pointer mirror
     // (the `pBitStringAux` class, T5.M3), and nothing replaces them: every reader
@@ -277,14 +277,14 @@ pub struct SDeblockingFilter {
 
     /// The two reference lists as **identities**, snapshotted at filter init.
     ///
-    /// **T5.N4 replaced `pRefPics: [*mut *mut Picture; LIST_A]`**, which was a raw
-    /// pointer *into* `pCtx->sRefPic.pRefList` held for the whole macroblock loop —
+    /// **T5.N4 replaced `pRefPics`**, one raw pointer per list aimed *into*
+    /// `pCtx->sRefPic.pRefList` and held for the whole macroblock loop —
     /// F28's shape (something reachable from `pCtx`, stored across calls) with the
     /// borrow spelled as a pointer so nothing had to face it.
     ///
     /// Boundary strength asks one question of these entries and it is plan P3's:
     /// *are these two the same reference picture?* A [`PicId`] answers it directly, so
-    /// the `*mut c_void` the 4x4 paths used to erase them to is gone as well.
+    /// the erased `c_void` slot the 4x4 paths used to carry them in is gone as well.
     ///
     /// `None` is the C's null slot. Every non-null entry of a reference list is a pool
     /// picture and therefore has a slot — `WelsInitRefList` fills these lists from
