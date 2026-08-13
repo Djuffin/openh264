@@ -1598,8 +1598,10 @@ unsafe fn EmitBufferedPicture(
     *ppDst.add(2) = (*pDstInfo).pDst[2];
     (*dec_impl).sPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
     let iPicBuffIdx = (*dec_impl).sPictInfoList[idx].iPicBuffIdx;
-    if !pPicBuff.is_null() && iPicBuffIdx >= 0 && iPicBuffIdx < (*pPicBuff).iCapacity {
-        let pPic = *(*pPicBuff).ppPic.add(iPicBuffIdx as usize);
+    if !pPicBuff.is_null() {
+        // `slot_at` carries the C's `>= 0 && < iCapacity` test, so the range check
+        // and the indexing are one expression instead of two that could disagree.
+        let pPic = (*pPicBuff).slot_at(iPicBuffIdx);
         if !pPic.is_null() {
             (*pPic).iRefCount -= 1;
             if (*pPic).iRefCount <= 0 {

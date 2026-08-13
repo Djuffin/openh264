@@ -904,7 +904,7 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
         }
     } else {
         // The buffer is not reallocated here, so report its real capacity.
-        (*pCtx).iPicQueueNumber = (*(*pCtx).pPicBuff).iCapacity;
+        (*pCtx).iPicQueueNumber = (*(*pCtx).pPicBuff).capacity();
     }
     let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
     if iErr != ERR_NONE {
