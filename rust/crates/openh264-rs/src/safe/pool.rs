@@ -20,6 +20,8 @@
 //! needs the same shape for its own picture pool (Phase 6.1/6.2). `PicId` is an alias
 //! over [`Id`] (`pic_queue.rs`, T5.N1).
 
+use std::num::NonZeroU32;
+
 // ---------------------------------------------------------------------------
 // Handles
 // ---------------------------------------------------------------------------
@@ -39,9 +41,19 @@
 /// slot, and two handles to one slot are equal — a debug build that answered
 /// differently would be a debug/release semantic split, which is the class of
 /// divergence finding F1 was made of.
+///
+/// # Representation
+///
+/// The field holds **`slot + 1`**, so `Id` has a niche and `Option<Id>` is one word
+/// with no separate discriminant — which is the representation the raw `*mut
+/// SPicture` it replaced already had. The consumers that make this worth spelling
+/// out are the reference-id arrays deblocking fills and compares per macroblock
+/// (`[[Option<PicId>; 16]; 2]`, `deblocking.rs`): a niche halves them and makes `==`
+/// one comparison instead of two. Plan §7.4's fast-by-construction clause.
 #[derive(Clone, Copy, Debug)]
 pub struct Id {
-    index: u32,
+    /// `slot + 1`. Never read directly — [`Id::index`] subtracts the bias.
+    index: NonZeroU32,
     #[cfg(debug_assertions)]
     generation: u32,
 }
@@ -50,7 +62,7 @@ impl Id {
     /// The slot this handle names.
     #[inline]
     pub fn index(self) -> usize {
-        self.index as usize
+        self.index.get() as usize - 1
     }
 }
 
@@ -117,8 +129,15 @@ impl<T> Pool<T> {
             "slot {index} outside a pool of {}",
             self.slots.len()
         );
+        self.handle(index)
+    }
+
+    /// [`id`](Self::id) without the range assert — for callers that have just read
+    /// the index out of the slot vector itself.
+    #[inline]
+    fn handle(&self, index: usize) -> Id {
         Id {
-            index: index as u32,
+            index: NonZeroU32::new(index as u32 + 1).expect("slot index + 1 is non-zero"),
             #[cfg(debug_assertions)]
             generation: self.generations[index],
         }
@@ -132,32 +151,27 @@ impl<T> Pool<T> {
 
     /// Every slot with its handle.
     pub fn iter(&self) -> impl Iterator<Item = (Id, &T)> + '_ {
-        self.slots.iter().enumerate().map(|(i, slot)| {
-            (
-                Id {
-                    index: i as u32,
-                    #[cfg(debug_assertions)]
-                    generation: self.generations[i],
-                },
-                slot,
-            )
-        })
+        self.slots
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| (self.handle(i), slot))
     }
 
     #[cfg(debug_assertions)]
     #[inline]
     fn check(&self, id: Id) {
         assert!(
-            (id.index as usize) < self.slots.len(),
+            id.index() < self.slots.len(),
             "handle {} outside a pool of {}",
-            id.index,
+            id.index(),
             self.slots.len()
         );
         assert_eq!(
-            self.generations[id.index as usize], id.generation,
+            self.generations[id.index()],
+            id.generation,
             "stale handle to slot {}: it has been recycled {} time(s) since",
-            id.index,
-            self.generations[id.index as usize] - id.generation
+            id.index(),
+            self.generations[id.index()] - id.generation
         );
     }
 
@@ -172,14 +186,14 @@ impl<T> Pool<T> {
     #[inline]
     pub fn get(&self, id: Id) -> &T {
         self.check(id);
-        &self.slots[id.index as usize]
+        &self.slots[id.index()]
     }
 
     /// Mutable form of [`get`](Self::get).
     #[inline]
     pub fn get_mut(&mut self, id: Id) -> &mut T {
         self.check(id);
-        &mut self.slots[id.index as usize]
+        &mut self.slots[id.index()]
     }
 
     /// Two slots mutably at once.
@@ -190,10 +204,10 @@ impl<T> Pool<T> {
     pub fn pair_mut(&mut self, a: Id, b: Id) -> (&mut T, &mut T) {
         self.check(a);
         self.check(b);
-        assert_ne!(a, b, "pair_mut on one slot ({})", a.index);
+        assert_ne!(a, b, "pair_mut on one slot ({})", a.index());
         let [x, y] = self
             .slots
-            .get_disjoint_mut([a.index as usize, b.index as usize])
+            .get_disjoint_mut([a.index(), b.index()])
             .expect("pool handles must be distinct and in range");
         (x, y)
     }
@@ -214,7 +228,7 @@ impl<T> Pool<T> {
     /// access pattern. Recorded in the plan.
     pub fn mut_and_rest(&mut self, cur: Id) -> (&mut T, PoolRest<'_, T>) {
         self.check(cur);
-        let index = cur.index as usize;
+        let index = cur.index();
         let (lo, rest) = self.slots.split_at_mut(index);
         let (slot, hi) = rest.split_first_mut().expect("index is in range");
         (
@@ -239,9 +253,9 @@ impl<T> Pool<T> {
         self.check(id);
         #[cfg(debug_assertions)]
         {
-            self.generations[id.index as usize] += 1;
+            self.generations[id.index()] += 1;
         }
-        std::mem::replace(&mut self.slots[id.index as usize], value)
+        std::mem::replace(&mut self.slots[id.index()], value)
     }
 }
 
@@ -266,7 +280,7 @@ impl<T> PoolRest<'_, T> {
     /// builds only — is stale.
     #[inline]
     pub fn get(&self, id: Id) -> &T {
-        let index = id.index as usize;
+        let index = id.index();
         assert_ne!(
             index, self.cur,
             "slot {index} is the one held mutably by this split"
@@ -306,6 +320,20 @@ mod tests {
             assert_eq!(*p.get(p.id(i)), i as i32 * 10);
             assert_eq!(p.id(i).index(), i);
         }
+    }
+
+    #[test]
+    fn an_optional_handle_costs_no_more_than_a_handle() {
+        // The niche, pinned: `Id`'s field is `slot + 1`, so `None` is the zero and
+        // `Option<Id>` needs no discriminant. `deblocking.rs` fills
+        // `[[Option<PicId>; 16]; 2]` per macroblock and compares six of them per
+        // edge; this is what keeps that one word and one comparison.
+        assert_eq!(
+            std::mem::size_of::<Option<Id>>(),
+            std::mem::size_of::<Id>()
+        );
+        // And the bias is invisible from outside: slot 0 round-trips.
+        assert_eq!(pool_of(1).id(0).index(), 0);
     }
 
     #[test]
@@ -370,7 +398,7 @@ mod tests {
         let (_slot, rest) = p.mut_and_rest(cur);
         for i in [0usize, 1, 3, 4] {
             let id = Id {
-                index: i as u32,
+                index: NonZeroU32::new(i as u32 + 1).unwrap(),
                 #[cfg(debug_assertions)]
                 generation: 0,
             };
