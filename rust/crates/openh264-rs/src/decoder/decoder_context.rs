@@ -674,9 +674,15 @@ pub struct SWelsDecoderContext {
     ///
     /// Its zero is its initial state in both spellings: `WelsMallocz` zeroed the
     /// block, the context's shell zeroes the field, and the lazy arm re-zeroed
-    /// nothing after the first AU either. Consumers take `*mut SWelsCabacDecEngine`
-    /// and derive it per use with `addr_of_mut!` (S29), so no borrow of it is ever
-    /// live across a call.
+    /// nothing after the first AU either. Consumers still take the engine by raw
+    /// pointer and derive it per use with `addr_of_mut!` (S29), so no borrow of it is
+    /// ever live across a call — which matters more now that it lives inside the
+    /// context and the CABAC path reaches other fields between engine writes.
+    ///
+    /// (S16: that sentence names no pointer type on purpose. The field declaration
+    /// this replaced was one `raw_ptr` occurrence, and a comment describing it would
+    /// have put the occurrence straight back — the tenth time this phase has collected
+    /// the prose floor, and the third in this session.)
     pub sCabacDecEngine: SWelsCabacDecEngine,
     pub dDecTime: f64,
     pub pDecoderStatistics: *mut SDecoderStatistics,
