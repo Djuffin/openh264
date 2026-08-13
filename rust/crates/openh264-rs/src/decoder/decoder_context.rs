@@ -254,8 +254,14 @@ pub use crate::decoder::error_concealment::SCopyFunc;
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct SDeblockingFilter {
-    pub pCsData: [*mut u8; 3],
-    pub iCsStride: [i32; 2],
+    // T5.N3: `pCsData: [*mut u8; 3]` and `iCsStride: [i32; 2]` sat here — three plane
+    // pointers and two strides copied out of `pCtx->pDec` at filter init and read for
+    // the whole macroblock loop. They were the decoder's last plane-pointer mirror
+    // (the `pBitStringAux` class, T5.M3), and nothing replaces them: every reader
+    // takes `pCurDqLayer`, which carries the picture, so the plane that owns the bytes
+    // is the only thing that says where they are. The encoder's same-named struct
+    // (`encoder/deblocking.rs:191`) keeps its own `pCsData`; it is a different struct
+    // with a different lifecycle and 6.4's to convert.
     pub eSliceType: i32,
     pub iSliceAlphaC0Offset: i8,
     pub iSliceBetaOffset: i8,

@@ -287,9 +287,10 @@ impl BsReader {
 ///
 /// The NAL unit owns its reader (`sNalData.sVclNal.sSliceBitsRead`, initialized by
 /// `DecInitBits` at parse time) and nothing else does. `DqLayerState::pBitStringAux`
-/// used to mirror the address beside its owner, which is the class §2 keeps naming
-/// (`SDeblockingFilter.pCsData` is the last one left, 5.4's); this replaces the
-/// mirror with a derivation.
+/// used to mirror the address beside its owner, which is the class §2 keeps naming;
+/// this replaces the mirror with a derivation. (`SDeblockingFilter.pCsData` was the
+/// last one left and died the same way at T5.N3 — with nothing, because its readers
+/// already had the layer that carries the picture.)
 ///
 /// `pCtx.pNalCur` is re-pointed at **every** slice NAL, in the same statement of
 /// `DecodeCurrentAccessUnit` that used to re-point the layer's mirror, so this is
