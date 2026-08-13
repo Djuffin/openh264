@@ -73,6 +73,7 @@ pub use crate::decoder::decoder_context::SLogContext;
 
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+use crate::decoder::decoder_context::cur_au;
 
 
 // ============================================================================
@@ -1348,8 +1349,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
     }
 
     let mut bIsIDRAU = false;
-    if !(*pCtx).pAccessUnitList.is_null() {
-        let au = &*(*pCtx).pAccessUnitList;
+    if let Some(au) = cur_au(pCtx) {
         for j in au.uiStartPos..=au.uiEndPos {
             // T5.O4: the list owns its nodes, so `get` is the whole guard — the null
             // test this replaces could only ever fail past the end of the list.
