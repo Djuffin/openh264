@@ -8,10 +8,14 @@ Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
 disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
 re-grep before acting on any of them (S24). **Estimated 5–7 loaded sessions remain**
-(re-planned 2026-08-12 at session L's close, sessions loaded per Eugene: M = 5.2's
-tail + 5.3's core; N = the `PicId` cluster — 5.1's second half, colocated reads,
-5.4; O–P = 5.5 in two; Q = 5.6; R = the exit. The wire escalation or a deep Miri
-queue adds a session; 5.5 landing light removes one).
+(re-planned 2026-08-12 at session L's close; **session M is spent, and 4–6 remain**:
+N = the `PicId` cluster — 5.1's second half, colocated reads, 5.4
+([`phase5_session_n.md`](phase5_session_n.md), written at M's close per S19); O–P = 5.5
+in two; Q = 5.6, which now also owns **5.2's `*mut u8` cache family** and
+`cabac_rbsp_window`'s retirement; R = the exit. **5.3b is unscheduled** — 279 punning
+sites in `mv_pred.rs` plus `SetRectBlock`, wanting the colocated reads first — and is the
+likeliest reason this grows by one. A deep Miri queue adds a session; 5.5 landing light
+removes one.)
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this
@@ -26,11 +30,12 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded (session L exit): **468 debug / 462 release / 20 ignored**,
-   Miri **328** (~908s), census **60**, decode goldens **57**, ratchet `raw_ptr`
-   **4507**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
+   verdict. Last recorded (session M exit): **468 debug / 462 release / 20 ignored**,
+   Miri **328** (~908s), census **59**, decode goldens **57**, ratchet `raw_ptr`
+   **4460**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
    session K drew two hits in each and alternated both; session L drew one in the debug
-   sweep and reproduced it in isolation, measurement 35).
+   sweep and reproduced it in isolation, measurement 35; session M drew one in the
+   *release* sweep, measurement 36, which took `cabac` and `rc` out of the signature).
 3. Recount every number you are about to rely on.
 
 **Budget the Miri step at ~13 minutes, not ~1.** Since T5.G1 the aliasing probe runs
@@ -100,10 +105,16 @@ and the first eleven carry per-MB window accessors (T5.I1). Blocker: none. Closu
 computed and written, session D log §2 — do not recompute it. The subtraction has landed
 (T5.E2). Unblocked as of T5.G1: F26 closed at T5.F2, F27–F30 at T5.F3, F25's inventory
 and F31 at T5.G1. **Two probe streams are green un-ignored as of T5.J2.**
-**What remains in 5.2**: the `SDqLayer` → `DqLayerState` rename with its census re-key,
-the **32** scratch-cache re-points (re-greped at session L — `parse_mb_syn_cabac.rs` 19,
-`parse_mb_syn_cavlc.rs` 8, `mv_pred.rs` 5, not the ~28 this brief recorded), and
-`pBitStringAux` with `cabac_decoder.rs`'s `SHIM(phase5)`.)
+**5.2's structural work is DONE (session M).** The rename landed at **T5.M1**
+(`SDqLayer` → `DqLayerState`; the census line was **removed**, not re-keyed to `x1` — the
+instrument only reports names declared more than once, so 60 → **59** allowlisted); the
+scratch-cache re-points at **T5.M2** (**45** parameters, not 32 — `parse_mb_syn_cabac.rs`
+26, `parse_mb_syn_cavlc.rs` 10, `mv_pred.rs` 9); `pBitStringAux` at **T5.M3**.
+**What 5.2 still owes: its straggler sweep, and one family** — the `*mut u8`
+non-zero-count caches, **167 uses across 18 functions, 96 of them in `decode_slice.rs`**,
+which makes it **5.6's** by P1 unless a later session decides otherwise. `SHIM(` did
+**not** fall: `cabac_decoder.rs`'s `cabac_rbsp_window` did not die with `pBitStringAux`,
+because its 18 callers take `pCtx` and nothing else; it retires when 5.6 converts them.)
 
 **The perf question D-perf-5 asked is answered, and the answer is negative** (session I
 log §2–§4; `perf_baseline.md` §Phase 5). The window retrofit does mechanically what it
@@ -341,7 +352,17 @@ The closure's conclusions, so they are not re-derived:
 
 `mv_pred.rs`: punning → byte ops; `SetRectBlock` → typed generic on the grid;
 colocated reads via `cur_and_ref`.
-- **F22 unifies here**, and its reachability question is **answered** (T5.D1):
+- ~~**F22 unifies here**~~ **F22 is CLOSED (T5.M4, session M)**: eight duplicate
+  function pairs became one each, home = the C++'s home, resolved per function — three
+  kept `mv_pred.rs`'s `pDec` guard, `Update8x8RefIdx` lost the one the port had *added*,
+  and `UpdateP8x8RefIdxCabac` moved to `parse_mb_syn_cabac.rs` (its C++ home) shedding two
+  more added guards and one dead parameter. Zero bytes moved. It was unblocked by T5.M2,
+  exactly as the finding predicted. **What 5.3 still owes**: 5.3b — **279** `LD*`/`ST*`
+  punning sites in `mv_pred.rs` plus 21 in `parse_mb_syn_cavlc.rs`, and
+  `SetRectBlock`/`CopyRectBlock4Cols` → typed generics on the grid, whose call sites are
+  mostly inside `GetColocatedMb`, so the colocated reads (5.1's split borrow) want doing
+  first. Historical detail below.
+- The reachability question is **answered** (T5.D1):
   `pCurDqLayer->pDec` cannot be null on the CABAC parse path — one writer, one call
   site, dominated by a prefetch-or-return, and the same in the C++. So the guard is
   dead code in both trees and this is a divergence, not a latent crash. Two things
@@ -397,9 +418,13 @@ not a kernel adapter — 5.6 cannot delete it; it retires with the API boundary 
 owner.
 **every §7.4 ledger entry whose shims died in this phase must clear**. This phase
 collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative at 4a's exit).
-**Measured position after 5.2's flip (session L): CB ≈ +20.7%** — ~4.3 points under the
-+25% tripwire and **~2.3 under the ≈+23% stop-line**, which is what everything left in
-5.2 and all of 5.3–5.6 spend against. The mechanism is constant dimensions reaching the
+**Measured position, confirmed on two days (sessions L and M): CB ≈ +20.4…+20.7%** —
+the whole-flip span read +2.93% and +2.57% on consecutive days against a null band 0.17
+points wide, so the figure is **settled and is not re-derived from per-family sums**. That
+is ~4.3 points under the +25% tripwire and **~2.3 under the ≈+23% stop-line**, which is
+what everything left in 5.2 and all of 5.3–5.6 spend against. Session M's own four faces
+measured as one span read **−0.77% CB**, below the null band's floor on every row: 5.2's
+tail and 5.3a cost nothing. The mechanism is constant dimensions reaching the
 kernels, so flat mid-phase bench readings are expected — the ledger is the
 instrument that moves. S19 at exit: refresh §0, write `prompts/phase6.md`, stamp
 this brief historical.
@@ -452,6 +477,16 @@ this brief historical.
   session K recorded. `unsafe_block` **625, unchanged**: no production `unsafe {}` for a
   third session, and for the first time no S28 test was owed either, because none of the
   seven families needed a raw bridge.
+  **Session M: `raw_ptr` 4507 → 4460 (−47), `unsafe_fn` 1248 → **1241** (−8),
+  everything else flat.** Per file: `parse_mb_syn_cabac.rs` −27, `parse_mb_syn_cavlc.rs`
+  −10, `mv_pred.rs` −10, `decoder_core.rs` −2, `bit_stream.rs` **+2** — the one increase is
+  T5.M3's `slice_bit_reader`, which replaces a deleted field, and T5.M1's rename is
+  **invisible in the table, which is its evidence**: a rename writes no pointer type and
+  deletes none. **`unsafe_fn`'s −8 is the shape S16 predicts and the first of the phase**:
+  it stays ~flat while raw bodies are strangled and falls hard when they are *deleted*, and
+  F22's eight duplicate definitions are the first such deletions here
+  (`parse_mb_syn_cabac.rs` −7, `mv_pred.rs` −1). `unsafe_block` **625 for a fourth
+  session**, no S28 test owed for a second.
   **S16's prose floor has now been collected eight times** (session L's was a doc comment
   in `test_need_error_con` naming the pointer type its own flip had just deleted, which
   the per-file map caught and the total would have hidden; session H added three, two of
@@ -461,7 +496,11 @@ this brief historical.
   would have corrupted S21's live construction-audit count) and `raw_ptr` again at
   T5.G2. Every one was reworded rather than baselined. Read per-file deltas, not
   totals: a one-line prose delta and a real conversion look identical in the total.
-- Gates: **468 / 462 / 20**, Miri **328** (session G: +1, the aliasing probe now runs
+- Gates: **468 / 462 / 20**, Miri **328** — *unchanged across session M, which added no
+  test because no conversion in it needed one* — census **59** (session M: the
+  `type SDqLayer x2` line went away with the rename, and the duplicate-body budget fell
+  **198 → 195** on F22's unification, its first decrease since the instrument was widened).
+  Miri history (session G: +1, the aliasing probe now runs
   un-ignored — see §2; session H: +12, `MbGrid` and S28's reach tests; session I flat;
   session J: +2, the grid probe and `pRefIndex`'s reach test; session K: +2, `pMv`'s and
   `pMbType`'s reach tests), sweeps 341/341
@@ -494,7 +533,10 @@ this brief historical.
   rename would only re-key it). Remaining within-decoder entries are allowlisted
   with their owning steps.
 - `SHIM(` **159**: `phase3` = 2 (Phase 6's), `phase5` = **3** — `cabac_decoder.rs`'s
-  (dies in 5.2), `decoder_core.rs`'s `mb_grid_ptr` (T5.H2, S28's raw bridge; dies as the
+  (**not** dead in 5.2, corrected at session M: `pBitStringAux` died at T5.M3 and
+  `cabac_rbsp_window` outlived it, because its 18 callers in `parse_mb_syn_cabac.rs` take
+  `pCtx` and nothing else; it retires when **5.6** converts them), `decoder_core.rs`'s
+  `mb_grid_ptr` (T5.H2, S28's raw bridge; dies as the
   families that hand a pointer to a kernel convert) and `SPicture::data_ptr` (dies as
   5.2–5.6 convert the kernels,
   *except* at `decoder_core.rs:1087`, where the public output contract hands the

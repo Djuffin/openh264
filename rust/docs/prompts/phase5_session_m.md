@@ -1,5 +1,9 @@
 # Phase 5, session M — T5.M: 5.2's last structural pieces, then 5.3's core
 
+> **EXECUTED 2026-08-13. Superseded-historical.** Faces 1–5 landed (T5.M1–T5.M4); face 6
+> dropped per this file's own rule. Three of its premises were wrong and are corrected in
+> place below, marked **[S24]**. The record is the session-M log entry.
+
 > Loaded per Eugene (2026-08-12): faces 5–6 add 5.3's grid-independent core. If wall
 > time runs out, faces drop from the end at seam boundaries — 6 first, then 5.
 
@@ -53,9 +57,10 @@ as a per-face half (S2b, and session L §2's correction).
 Unblocked: all 22 array families are flipped and the struct holds no per-macroblock
 pointer. The struct's own doc comment names this as the trigger.
 
-- The census key `type SDqLayer x2` (`rust/tools/census_allowlist.txt:22`) goes to `x1`
-  **in the rename's own commit** — the count is part of the key, and with the encoder's
-  namesake alone remaining it is class (a) with one member.
+- ~~The census key `type SDqLayer x2` goes to `x1`.~~ **[S24] Wrong: the line is
+  *removed*, not re-keyed.** `find_dup_types.sh`'s `dup_report` prints only names with
+  `n > 1`, so after the rename `SDqLayer` is never reported and an `x1` entry is text the
+  gate never consults — the disposition `type SMbCache x2` got at T5.E2. **60 → 59.**
 - `assert_size!(SDqLayer, 512)` in `encoder/abi_guard.rs` pins the **encoder's** namesake
   and does not move. The decoder's has no size assert and no offset pin (§2).
 - **29 files name `SDqLayer` crate-wide** (re-grep: the encoder's `svc_encode_slice.rs`
@@ -66,8 +71,12 @@ pointer. The struct's own doc comment names this as the trigger.
 
 ## 3. Face 3 — the scratch-cache re-points
 
-**Re-greped at session L: 32 raw scratch-cache parameters, not §2's ~28** —
-`parse_mb_syn_cabac.rs` 19, `parse_mb_syn_cavlc.rs` 8, `mv_pred.rs` 5. The 30-entry
+~~**Re-greped at session L: 32 raw scratch-cache parameters** — `parse_mb_syn_cabac.rs`
+19, `parse_mb_syn_cavlc.rs` 8, `mv_pred.rs` 5.~~ **[S24] It is 45** —
+`parse_mb_syn_cabac.rs` **26**, `parse_mb_syn_cavlc.rs` **10**, `mv_pred.rs` **9**. The
+brief's grep missed `FillSpatialDirect8x8Mv`/`FillTemporalDirect8x8Mv`'s pairs and both
+`*const` spellings in `ParseMvdInfoCabac`. A fourth cache type it names, the `*mut u8`
+non-zero-count family, is **167 uses with 96 in `decode_slice.rs`** and is 5.6's by P1. The 30-entry
 caches (`*mut [[[i16; 2]; 30]; LIST_A]`, `*mut [[i8; 30]; LIST_A]`, `*mut [i8; 30]`,
 `*mut u8`) become `&mut` locals passed down; their owners are two stack locals in
 `decode_slice.rs` (§2 records `:4632` and `:4836` — the line numbers have moved, re-grep).
@@ -80,7 +89,10 @@ block in 5.2. Size it by the S20 closure and expect it to want more than one com
 
 §2 records 24 sites, **one writer** (`decoder_core.rs`, pointing into the NAL unit) and 17
 readers in `decode_slice.rs`; `cabac_decoder.rs`'s `cabac_rbsp_window` accessor dies with
-it. Those counts are three sessions old — re-grep (S24). `SHIM(` should fall from 159.
+it. Those counts are three sessions old — re-grep (S24). ~~`SHIM(` should fall from 159.~~
+**[S24] It does not, and the accessor does not die**: 33 sites, not 24, and
+`cabac_rbsp_window`'s 18 callers in `parse_mb_syn_cabac.rs` take `pCtx` and nothing else,
+so it stays until **5.6** converts them. `SHIM(` **159**, unmoved.
 
 ## 5. Face 5 — 5.3a: F22's per-function unification
 
