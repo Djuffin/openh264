@@ -1235,3 +1235,33 @@ susceptible configurations; ten runs is a small sample, but it is the first time
 isolation has been the *cheaper* place to reproduce this rather than the harder one.
 
 Running total: **thirty-five measurements, thirteen alternations, fourteen acquittals.**
+
+### Measurement 36 (Phase 5, session M, 2026-08-13) — one hit, zero length, and the first `cabac=0` hit on the susceptible stream
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 36 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0` (**release**) | 40992 | **0** |
+
+Drawn by the T5.M3 cluster's `family` battery; `PASS=340 FAIL=1` on the release sweep,
+debug 341/341. Inside S14's signature on every axis — `mt`, `sm=3`, `t=4`, wrong length
+(**zero**, the extreme end of "zero, short, or long"), release profile.
+
+**Step 1's isolation re-run, 5× on an idle machine: 5 byte-identical.** No reproduction,
+which is the ordinary outcome — measurements 29 and 35 are the only two in thirty-six
+that have reproduced in isolation. One hit, so step 2 does not fire (S14 step 1;
+measurements 33 and 35 are the precedents). **Acquitted as F3.**
+
+**Step 0 does not apply**: `rust_enc` depends on `openh264-rs` by path, so this
+session's decoder-side commits rebuild it and the two trees are not one binary.
+
+One thing it adds, and it narrows nothing — it *widens*. Measurements 29 and 35 made
+`320x192 t=4 sm=3 n=600 **cabac=1**` look like *the* susceptible configuration; this is
+the same stream, the same thread count, the same slice mode and the same `n`, with
+**`cabac=0`, `rc=0`, and the other profile**. So the susceptibility is `320x192 t=4
+sm=3 n=600`, and the entropy coder and rate-control mode are no more part of the
+signature than `n=600` turned out to be at session K. The wrong length is also a first
+for this configuration: 29 and 35 were both *short* (37837 of 39981); this one is
+**zero bytes**, which S14's signature has always admitted and which the slice-list
+growth story explains as well as a short stream does.
+
+Running total: **thirty-six measurements, thirteen alternations, fifteen acquittals.**
