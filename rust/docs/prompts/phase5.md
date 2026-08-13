@@ -8,14 +8,16 @@ Phase 5 session-A log entry (the 5.1 closure is its §5) and
 [`phase5_findings.md`](../phase5_findings.md) F22. This file supersedes on
 disagreement; fix disagreements in place. Counts below measured at `f974e0e8`;
 re-grep before acting on any of them (S24). **Estimated 5–7 loaded sessions remain**
-(re-planned 2026-08-12 at session L's close; **session M is spent, and 4–6 remain**:
-N = the `PicId` cluster — 5.1's second half, colocated reads, 5.4
-([`phase5_session_n.md`](phase5_session_n.md), written at M's close per S19); O–P = 5.5
-in two; Q = 5.6, which now also owns **5.2's `*mut u8` cache family** and
-`cabac_rbsp_window`'s retirement; R = the exit. **5.3b is unscheduled** — 279 punning
-sites in `mv_pred.rs` plus `SetRectBlock`, wanting the colocated reads first — and is the
-likeliest reason this grows by one. A deep Miri queue adds a session; 5.5 landing light
-removes one.)
+(re-planned 2026-08-12 at session L's close; **sessions M and N are spent, and 4–6
+remain**, because session N closed two steps and did not close the one it was scheduled
+to close third: **5.1 and 5.4 are done** (T5.N1–T5.N4), **5.3's colocated face is not**
+and is now blocked on `pDec` carrying a `PicId` — see §1 step 5 and §3. O–P = 5.5 in
+two, opening with session N's day-two perf debt; Q = 5.6, which owns **5.2's `*mut u8`
+cache family**, `cabac_rbsp_window`'s retirement, and the largest share of the 236
+`.pDec` sites; R = the exit. **5.3b and the colocated face are unscheduled and now
+sequenced behind the `pDec` conversion** — they are the likeliest reason this grows by
+one, and the `pDec` conversion is the likeliest reason it grows by two. A deep Miri queue
+adds a session; 5.5 landing light removes one.)
 
 Per-session scope is the **S20 closure, not the file** — compute it first, write it
 down, size commits by it. Enumerate the S25 re-entrancy audit (who else reaches this
@@ -30,9 +32,9 @@ run F19's check per allocation: *which line frees this?*
    unchanged — build both profiles, tests, ratchet, census only, and run the S2
    null when the first perf verdict needs it. Otherwise (or if in doubt):
    `bash rust/tools/gates.sh full` **from the repo root**, `OVERALL:` is the
-   verdict. Last recorded (session M exit): **468 debug / 462 release / 20 ignored**,
-   Miri **328** (~908s), census **59**, decode goldens **57**, ratchet `raw_ptr`
-   **4460**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
+   verdict. Last recorded (session N exit): **470 debug / 464 release / 20 ignored**,
+   Miri **330** (~920s), census **59**, decode goldens **57**, ratchet `raw_ptr`
+   **4436**; sweeps 341/341 both profiles, and **either** profile can draw F3 (see §8 —
    session K drew two hits in each and alternated both; session L drew one in the debug
    sweep and reproduced it in isolation, measurement 35; session M drew one in the
    *release* sweep, measurement 36, which took `cabac` and `rc` out of the signature).
@@ -56,7 +58,7 @@ owning step.
 text is current (signature, measured rates, isolation re-runs, sweep-level
 alternation). Anything outside S14's signature is real: stop, revert, investigate.
 
-## 1. Step 5.1 — Picture & DPB (steps 1–3 done; step 4 done per file; **`PicPool` and identity remain — deferred until after 5.2**, accepted 2026-08-11: `pCtx->pDec` stays a pointer either way, 5.2 owns F22's reachability, and the callers that would hold a `PicId` convert in 5.2; the five P3 tests keep either order safe)
+## 1. Step 5.1 — Picture & DPB (**CLOSED, session N**: `PicPool` at T5.N1, `PicId` on the picture and P3's predicate at T5.N2. What was deferred from 2026-08-11 is done; what the deferral's own text assumed — "the callers that would hold a `PicId` convert in 5.2" — did **not** happen and is now sized, see step 5)
 
 `SPicture`'s planes become owned (`PaddedPlanes` + `Vec`s); `PicPool`;
 `pic_queue.rs` recycling predicate; `manage_dec_ref.rs`; `error_concealment.rs`
@@ -92,11 +94,25 @@ Order inside the step:
    each**: `deblocking.rs` and `error_concealment.rs` at T5.C2, `pic_queue.rs` at
    T5.C3. The pool's answer is that nothing in it holds a borrow across anything;
    the re-entrant pair is `WelsInitRefList`'s and is enumerated at its own site.
-5. **Still open in 5.1, and it is the next closure**: `PicPool`, the recycling
-   predicate as a method on it, and `PicId` for the three identity sites. The five
-   P3 tests exist to gate exactly this; `safe/pool.rs` already has the handle type
-   and its `pair_mut`. Nothing in 5.1 blocks 5.2, so the order is a judgement call
-   — see session C's hand-off.
+5. ~~`PicPool`, the recycling predicate, `PicId` for the identity sites.~~
+   **Done, session N.** `SPicBuff` is a `Pool<PPicture>` plus a cursor (T5.N1); the
+   recycling predicate is `PicPool::is_recyclable`; `SPicture` carries
+   `slot: Option<PicId>`, stamped once at pool construction, and
+   `picture.rs::same_picture` is P3's predicate over it (T5.N2). Six identity
+   comparisons converted, and T5.N4 took the deblocking filter's whole reference
+   list onto ids.
+   **The pool's slots are `PPicture`, not `Box<SPicture>`, and that is the step's
+   one open consequence.** Owning the pictures is what would make
+   `Pool::mut_and_rest` prove the current-vs-reference split in safe code (plan
+   §2.2.3's end state). It cannot be done while `pCtx->pDec` is a live raw pointer
+   *into* a slot: a pool-issued `&mut` invalidates it under stacked borrows, which
+   is F24/F25/F28's defect class installed deliberately. **So the split-borrow API
+   waits on `pDec` becoming a `PicId`**, and that is sized at **236 `.pDec` sites,
+   all in `src/decoder/`** (77 `decode_slice.rs`, 55 `decoder_core.rs`), plus
+   94 `pRefList` and 209 `pRefPic` sites — a step of its own, owned by 5.5/5.6 by
+   P1, not a face. The reason is written at `PicPool`'s type. See session N §5.
+   **What this blocks: 5.3's colocated split borrow** (§3), and nothing else — the
+   identity work it was also meant to unblock landed without it.
 
 ## 2. Step 5.2 — MbGrid (**IN PROGRESS. `MbGrid` exists, is proven and is owned by the
 layer (T5.H2/T5.H3); **all 22 array families have flipped** (T5.H4–T5.H14, T5.J3,
@@ -360,8 +376,17 @@ colocated reads via `cur_and_ref`.
   exactly as the finding predicted. **What 5.3 still owes**: 5.3b — **279** `LD*`/`ST*`
   punning sites in `mv_pred.rs` plus 21 in `parse_mb_syn_cavlc.rs`, and
   `SetRectBlock`/`CopyRectBlock4Cols` → typed generics on the grid, whose call sites are
-  mostly inside `GetColocatedMb`, so the colocated reads (5.1's split borrow) want doing
-  first. Historical detail below.
+  mostly inside `GetColocatedMb`, so the colocated reads want doing first. Historical
+  detail below.
+- **The colocated reads did not land at session N, and the reason is structural rather
+  than a shortfall.** They were fenced out of session M "because they borrow two pictures
+  at once and need `PicPool`'s split borrow", and `PicPool` landed — but it cannot supply
+  that borrow while `pCtx->pDec` is a raw alias into a slot (§1 step 5). **So 5.3's
+  colocated face is blocked on `pDec` carrying a `PicId`, which is 5.5/5.6-sized**, and
+  5.3b sits behind it. What did land is the face's S25 enumeration as a runtime check
+  (T5.N5): `GetColocatedMb`'s picture is never the picture being decoded, asserted rather
+  than argued, green across 341/341 in both profiles. That assert is also the split
+  borrow's precondition, so it is not throwaway.
 - The reachability question is **answered** (T5.D1):
   `pCurDqLayer->pDec` cannot be null on the CABAC parse path — one writer, one call
   site, dominated by a prefetch-or-return, and the same in the C++. So the guard is
@@ -373,10 +398,24 @@ colocated reads via `cur_and_ref`.
   CABAC copy is faithful, and `mv_pred.rs`'s added guard comes off. Per-function, not
   per-module (S21).
 
-## 4. Step 5.4 — Deblocking driver
+## 4. Step 5.4 — Deblocking driver (**CLOSED, session N**)
 
-`decoder/deblocking.rs`: `SDeblockingFilter` holds `PicId`s + per-MB plane
-cursors; identity compare per P3 (the three deblocking identity tests gate this).
+`SDeblockingFilter` holds `PicId`s (T5.N4: `ref_ids`, a snapshot of both reference
+lists, replacing a raw pointer per list held into `pCtx->sRefPic` for the whole
+macroblock loop — F28's shape). Identity compares per P3 in all six boundary-strength
+helpers, and the `*mut c_void` erasure the 4x4 paths used is gone with it.
+
+**No per-MB plane cursors were needed.** `pCsData` and `iCsStride` — the decoder's last
+plane-pointer mirror — died at **T5.N3** with *nothing* replacing them: all three readers
+take `pCurDqLayer`, which carries `pDec`, so each derives what it needs per use. T5.M3
+needed one accessor because its readers had only `pCtx`; this needed none. The freshness
+check T5.M3's lesson demands is a `debug_assert!` at filter init, green across both sweeps
+and every golden.
+
+The three deblocking identity tests gated it and now pin a narrower thing on purpose: the
+POC half is **structural** (these helpers no longer receive a picture, so a POC-based
+rewrite cannot compile), and what they assert is that the reference term is consulted and
+the MV term does not mask it.
 
 ## 5. Step 5.5 — decoder_core.rs
 
@@ -418,13 +457,18 @@ not a kernel adapter — 5.6 cannot delete it; it retires with the API boundary 
 owner.
 **every §7.4 ledger entry whose shims died in this phase must clear**. This phase
 collects 4a's downgraded decode rows (≈ +17.8/+10.1/+9.6% cumulative at 4a's exit).
-**Measured position, confirmed on two days (sessions L and M): CB ≈ +20.4…+20.7%** —
-the whole-flip span read +2.93% and +2.57% on consecutive days against a null band 0.17
-points wide, so the figure is **settled and is not re-derived from per-family sums**. That
-is ~4.3 points under the +25% tripwire and **~2.3 under the ≈+23% stop-line**, which is
-what everything left in 5.2 and all of 5.3–5.6 spend against. Session M's own four faces
-measured as one span read **−0.77% CB**, below the null band's floor on every row: 5.2's
-tail and 5.3a cost nothing. The mechanism is constant dimensions reaching the
+**Measured position: CB ≈ +21.6…+21.9%**, and it moved at session N. The 5.2 flip's
++20.4…+20.7% is settled (two days, +2.93% and +2.57%, null band 0.17 points wide) and is
+not re-derived from per-family sums; **session N added +1.24% CB on top of it** — its
+whole span at 7 pairs, every decode row above a null band of −0.14%…+0.34%. That leaves
+**≈1.1…1.4 points under the ≈+23% stop-line** for 5.5 and 5.6, the phase's two largest
+remaining steps. Session M's own four faces read **−0.77% CB**, below the null floor on
+every row, so 5.2's tail and 5.3a cost nothing; **session N's are the first that did**.
+**Session N's reading owes a day-two confirmation (S2b) and it is session O's first
+item** — the binaries are stashed as `.perfpair/n_base`, `n_mid`, `n_head`. Its bisect
+puts the whole cost in Face 3 (the deblocking driver, +1.17% CB / +2.25% Main / +2.06%
+High) and none in Face 1 (−0.72% CB, CABAC rows inside the band); the unverified mechanism
+and the one-build experiment that settles it are in `perf_baseline.md` §Session N. The mechanism is constant dimensions reaching the
 kernels, so flat mid-phase bench readings are expected — the ledger is the
 instrument that moves. S19 at exit: refresh §0, write `prompts/phase6.md`, stamp
 this brief historical.
