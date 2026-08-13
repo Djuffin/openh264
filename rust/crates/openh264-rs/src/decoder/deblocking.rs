@@ -195,7 +195,8 @@ pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
 pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState, PDqLayer};
 pub use crate::decoder::decoder_context::{
-    SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter,
+    SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter, PicId,
+    MAX_DPB_COUNT,
     PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
     PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
 };
@@ -238,8 +239,8 @@ pub fn TC0_TBL_LOOKUP(tc: &mut [i8; 4], iIndexA: i32, pBS: &[u8], bChroma: i8) {
 
 #[inline(always)]
 pub unsafe fn MB_BS_MV(
-    pRefPic0: *mut SPicture,
-    pRefPic1: *mut SPicture,
+    pRefPic0: Option<PicId>,
+    pRefPic1: Option<PicId>,
     iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
     iMbXy: usize,
     iMbBn: usize,
@@ -289,10 +290,10 @@ pub unsafe fn IN_MB_BS_MV_DIFF(
 
 #[inline(always)]
 pub unsafe fn ON_MB_BS(
-    ref_p0: *mut SPicture,
-    ref_q0: *mut SPicture,
-    ref_p1: *mut SPicture,
-    ref_q1: *mut SPicture,
+    ref_p0: Option<PicId>,
+    ref_q0: Option<PicId>,
+    ref_p1: Option<PicId>,
+    ref_q1: Option<PicId>,
     mv0: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
     mv1: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
     iMbXy: usize,
@@ -319,13 +320,13 @@ pub unsafe fn ON_MB_BS(
 
 #[inline(always)]
 pub unsafe fn SMB_EDGE_MV(
-    pRefPics: &[*mut std::ffi::c_void; MB_BLOCK4x4_NUM],
+    pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
     iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
     iIndex: usize,
     iNeighIndex: usize,
 ) -> u8 {
-    let p_ref0 = pRefPics[iIndex];
-    let p_ref1 = pRefPics[iNeighIndex];
+    let p_ref0 = pRefIds[iIndex];
+    let p_ref1 = pRefIds[iNeighIndex];
     if p_ref0 != p_ref1 {
         return 1;
     }
@@ -343,18 +344,18 @@ pub unsafe fn SMB_EDGE_MV(
 #[inline(always)]
 pub unsafe fn BS_EDGE(
     bsx1: u8,
-    pRefPics: &[*mut std::ffi::c_void; MB_BLOCK4x4_NUM],
+    pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
     iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
     iIndex: usize,
     iNeighIndex: usize,
 ) -> u8 {
-    let smb = SMB_EDGE_MV(pRefPics, iMotionVector, iIndex, iNeighIndex);
+    let smb = SMB_EDGE_MV(pRefIds, iMotionVector, iIndex, iNeighIndex);
     (bsx1 | smb) << (if bsx1 != 0 { 1 } else { 0 })
 }
 
 #[inline(always)]
 pub unsafe fn IN_SMB_EDGE_MV(
-    refs: &[[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A],
+    refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
     mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
     iMbXy: usize,
     iIndex: usize,
@@ -399,7 +400,7 @@ pub unsafe fn IN_SMB_EDGE_MV(
 #[inline(always)]
 pub unsafe fn IN_BS_EDGE(
     bsx1: u8,
-    refs: &[[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A],
+    refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
     mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
     iMbXy: usize,
     iIndex: usize,
@@ -521,14 +522,12 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 ) {
     let pDec = (*pCurDqLayer).pDec;
     let iRefIdx = *(*pDec).pRefIndex[LIST_0].add(iMbXy as usize);
-    let mut iRefs: [*mut std::ffi::c_void; MB_BLOCK4x4_NUM] =
-        [std::ptr::null_mut(); MB_BLOCK4x4_NUM];
+    let mut iRefs: [Option<PicId>; MB_BLOCK4x4_NUM] = [None; MB_BLOCK4x4_NUM];
     for i in 0..MB_BLOCK4x4_NUM {
         if iRefIdx[i] > REF_NOT_IN_LIST {
-            iRefs[i] = *(*pFilter).pRefPics[LIST_0].add(iRefIdx[i] as usize)
-                as *mut std::ffi::c_void;
+            iRefs[i] = (*pFilter).ref_ids[LIST_0][iRefIdx[i] as usize];
         } else {
-            iRefs[i] = std::ptr::null_mut();
+            iRefs[i] = None;
         }
     }
 
@@ -651,17 +650,15 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     pNnzTab: *const i8,
     iMbXy: i32,
 ) {
-    let mut iRefs: [[*mut std::ffi::c_void; MB_BLOCK4x4_NUM]; LIST_A] =
-        [[std::ptr::null_mut(); MB_BLOCK4x4_NUM]; LIST_A];
+    let mut iRefs: [[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A] = [[None; MB_BLOCK4x4_NUM]; LIST_A];
 
     for l in 0..LIST_A {
         let iRefIdx = *(*(*pCurDqLayer).pDec).pRefIndex[l].add(iMbXy as usize);
         for i in 0..MB_BLOCK4x4_NUM {
             if iRefIdx[i] > REF_NOT_IN_LIST {
-                iRefs[l][i] = *(*pFilter).pRefPics[l].add(iRefIdx[i] as usize)
-                    as *mut std::ffi::c_void;
+                iRefs[l][i] = (*pFilter).ref_ids[l][iRefIdx[i] as usize];
             } else {
-                iRefs[l][i] = std::ptr::null_mut();
+                iRefs[l][i] = None;
             }
         }
     }
@@ -854,14 +851,14 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                 let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[idx_neigh];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
 
                 let val = MB_BS_MV(
@@ -894,14 +891,14 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                     let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
 
                     *pBS.add(j + (i << 1)) = MB_BS_MV(
@@ -934,14 +931,14 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                     let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
 
                     *pBS.add(j + (i << 1)) = MB_BS_MV(
@@ -969,14 +966,14 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                 let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
 
                 *pBS.add(i) = MB_BS_MV(
@@ -1044,24 +1041,24 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
 
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
@@ -1107,24 +1104,24 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
 
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
@@ -1170,24 +1167,24 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                        (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
                     let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                        (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
                     } else {
-                        std::ptr::null_mut()
+                        None
                     };
 
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
@@ -1228,24 +1225,24 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_0].add(ref0_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_0][ref0_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx0 as usize)
+                    (*pFilter).ref_ids[LIST_1][ref1_idx0 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
                 let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    *(*pFilter).pRefPics[LIST_1].add(ref1_idx1 as usize)
+                    (*pFilter).ref_ids[LIST_1][ref1_idx1 as usize]
                 } else {
-                    std::ptr::null_mut()
+                    None
                 };
 
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
@@ -2097,17 +2094,43 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // 1. **The derivations do not invalidate each other.** They address three planes,
 //    which after T5.C3 are three separate allocations; the accessor's `&mut self`
 //    covers the picture's own fields, not the sample bytes.
-// 2. **Nothing else in the loop reaches `pDec`.** The only other pictures the loop
-//    touches are the ones behind `pFilter.pRefPics[l]`, and it touches them for
-//    identity, `pMv` and `pRefIndex` only — `SMB_EDGE_MV` compares the erased
-//    pointers, `DeblockingBSCalc*` reads the motion caches. No plane pointer is
-//    derived from any of them, so the question does not arise even if a reference
-//    list slot were to hold `pDec` itself.
+// 2. **Nothing else in the loop reaches `pDec`, and after T5.N4 nothing in the loop
+//    reaches another picture at all.** The reference lists are `PicId`s snapshotted
+//    at filter init, so the loop's use of a reference is a slot comparison and never
+//    a dereference; `pMv` and `pRefIndex` are read off `pCurDqLayer->pDec`, and
+//    `DeblockingBSCalc*` reads the motion caches. The question of what happens if a
+//    reference list slot holds `pDec` itself does not arise, because holding a slot
+//    number is not holding a picture.
 // 3. **The mirror is gone, and it was the decoder's last** (§2's named class, of
 //    which `pBitStringAux` was the previous one, T5.M3). A cached plane pointer
 //    beside the plane that owns it is the F16/T5 class — two fields that can
 //    disagree about one buffer — and `SDeblockingFilter` carried five of them.
 //    What replaces them is nothing: the plane is asked each time.
+
+/// The two reference lists as [`PicId`]s — `SDeblockingFilter::ref_ids`'s one writer.
+///
+/// `None` is the C's null slot. The assert is the invariant the whole conversion
+/// rests on: a reference list holds pool pictures, because `WelsInitRefList` fills it
+/// from `pPicBuff` and from nowhere else, so a non-null entry always has a slot. If it
+/// ever did not, its `None` would collide with a null slot's and boundary strength
+/// would call two different references the same one.
+#[inline]
+unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] {
+    let mut ids = [[None; MAX_DPB_COUNT]; LIST_A];
+    for l in 0..LIST_A {
+        for i in 0..MAX_DPB_COUNT {
+            let pPic = (*pCtx).sRefPic.pRefList[l][i];
+            if !pPic.is_null() {
+                debug_assert!(
+                    (*pPic).pic_id().is_some(),
+                    "a reference list holds pool pictures; slot {i} of list {l} has none"
+                );
+                ids[l][i] = (*pPic).pic_id();
+            }
+        }
+    }
+    ids
+}
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
@@ -2153,8 +2176,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
     pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     pFilter.pLoopf = &mut (*pCtx).sDeblockingFunc;
-    pFilter.pRefPics[0] = (*pCtx).sRefPic.pRefList[0].as_mut_ptr() as *mut _;
-    pFilter.pRefPics[1] = (*pCtx).sRefPic.pRefList[1].as_mut_ptr() as *mut _;
+    pFilter.ref_ids = snapshot_ref_ids(pCtx);
 
     // Step 2: Macroblock deblocking loop
     if iFilterIdc == 0 || iFilterIdc == 2 {
@@ -2211,8 +2233,7 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     (*pFilter).pLoopf = &mut (*pCtx).sDeblockingFunc;
-    (*pFilter).pRefPics[0] = (*pCtx).sRefPic.pRefList[0].as_mut_ptr() as *mut _;
-    (*pFilter).pRefPics[1] = (*pCtx).sRefPic.pRefList[1].as_mut_ptr() as *mut _;
+    (*pFilter).ref_ids = snapshot_ref_ids(pCtx);
 }
 
 pub unsafe fn WelsDeblockingFilterMB(
@@ -2258,63 +2279,72 @@ mod tests {
     // P3 site 1 of 3 — boundary strength is decided by reference-picture
     // **identity**, never by picture order count.
     //
-    // Plan §3 P3 converts `*mut SPicture` to `PicId` and compares ids. That is
-    // behaviour-preserving only if today's comparison means "the same picture
-    // object", not "a picture with the same POC" — and the two differ exactly when
-    // the DPB holds two distinct pictures with a duplicate POC, which a stream can
-    // produce (an IDR resets the POC counter; MMCO 5 does too). These tests pin the
-    // distinction *before* the conversion, because after it the property is a
-    // property of `PicId` and can no longer be observed here.
+    // Plan §3 P3 converted `*mut SPicture` to `PicId` at **T5.N4**, and these three
+    // tests are on the far side of it. They were written to pin the distinction
+    // beforehand: the comparison had to mean "the same picture object", not "a
+    // picture with the same POC", and the two differ exactly when the DPB holds two
+    // distinct pictures with a duplicate POC, which a stream can produce (an IDR
+    // resets the POC counter; MMCO 5 does too).
     //
-    // Each test therefore holds the MVs equal and varies only the reference, so the
-    // MV term cannot mask the identity term.
+    // **The POC half of that is now structural rather than tested.** These functions
+    // no longer receive a picture, so there is no POC in reach to compare — a rewrite
+    // that consulted one could not compile. What is still worth pinning, and is what
+    // they pin now, is that the *reference* term is consulted at all and that the MV
+    // term does not mask it: each holds the MVs equal and varies only the reference.
+    //
+    // The two slots come from a `Pool`, because that is the only place a `PicId`
+    // comes from. `pic_queue.rs`'s `pooled_pictures_are_identified_by_slot_not_by_poc`
+    // is the other end of the same property — that two real pooled pictures with one
+    // POC get two slots.
     // -----------------------------------------------------------------------
 
-    /// Two distinct pictures carrying the **same POC** are still different
-    /// references: `MB_BS_MV` must return 1 even though every motion vector agrees.
+    /// Two distinct slots, the shape every one of these tests needs.
+    fn two_refs() -> (Option<PicId>, Option<PicId>) {
+        let p = crate::safe::pool::Pool::new(vec![(), ()]);
+        (Some(p.id(0)), Some(p.id(1)))
+    }
+
+    /// Two different references read as boundary strength 1 even though every
+    /// motion vector agrees; one reference against itself falls through to the MVs.
     #[test]
-    fn p3_mb_bs_mv_separates_duplicate_poc_pictures() {
-        let mut a = SPicture::default();
-        let mut b = SPicture::default();
-        a.iFramePoc = 4;
-        b.iFramePoc = 4; // duplicate POC, distinct objects
+    fn p3_mb_bs_mv_separates_distinct_references() {
+        let (a, b) = two_refs();
         let mut mvs = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
 
         unsafe {
             let mv = mvs.as_mut_ptr();
             assert_eq!(
-                MB_BS_MV(&mut a, &mut b, mv, 0, 1, 0, 0),
+                MB_BS_MV(a, b, mv, 0, 1, 0, 0),
                 1,
-                "distinct pictures with equal POC must read as different references"
+                "two slots must read as different references"
             );
             assert_eq!(
-                MB_BS_MV(&mut a, &mut a, mv, 0, 1, 0, 0),
+                MB_BS_MV(a, a, mv, 0, 1, 0, 0),
                 0,
-                "one picture against itself falls through to the MV comparison"
+                "one reference against itself falls through to the MV comparison"
             );
+            // A null slot is a reference too, and it is not any picture.
+            assert_eq!(MB_BS_MV(None, None, mv, 0, 1, 0, 0), 0);
+            assert_eq!(MB_BS_MV(a, None, mv, 0, 1, 0, 0), 1);
         }
     }
 
-    /// The same property one level down, where the reference is already erased to
-    /// `*mut c_void` in the 8x8 edge path.
+    /// The same property one level down, in the 8x8 edge path — which until T5.N4
+    /// erased its references to `*mut c_void` to carry them and now carries ids.
     #[test]
-    fn p3_smb_edge_mv_separates_duplicate_poc_pictures() {
-        let mut a = SPicture::default();
-        let mut b = SPicture::default();
-        a.iFramePoc = 9;
-        b.iFramePoc = 9;
+    fn p3_smb_edge_mv_separates_distinct_references() {
+        let (a, b) = two_refs();
         let mut mvs = [[0i16; MV_A]; MB_BLOCK4x4_NUM];
 
         unsafe {
-            let mut refs: [*mut std::ffi::c_void; MB_BLOCK4x4_NUM] =
-                [&mut a as *mut SPicture as *mut std::ffi::c_void; MB_BLOCK4x4_NUM];
-            assert_eq!(SMB_EDGE_MV(&refs, &mut mvs, 0, 1), 0, "same object, equal MVs");
+            let mut refs: [Option<PicId>; MB_BLOCK4x4_NUM] = [a; MB_BLOCK4x4_NUM];
+            assert_eq!(SMB_EDGE_MV(&refs, &mut mvs, 0, 1), 0, "one slot, equal MVs");
 
-            refs[1] = &mut b as *mut SPicture as *mut std::ffi::c_void;
+            refs[1] = b;
             assert_eq!(
                 SMB_EDGE_MV(&refs, &mut mvs, 0, 1),
                 1,
-                "duplicate POC does not make two pictures one reference"
+                "a second slot is a second reference"
             );
         }
     }
@@ -2325,10 +2355,7 @@ mod tests {
     /// pins that the choice is made on identity.
     #[test]
     fn p3_on_mb_bs_arm_selection_is_by_identity() {
-        let mut a = SPicture::default();
-        let mut b = SPicture::default();
-        a.iFramePoc = 2;
-        b.iFramePoc = 2;
+        let (a, b) = two_refs();
         // Chosen so the two arms disagree: straight comparisons (l0 vs l0, l1 vs l1)
         // exceed the 4-quarter-pel threshold, crossed ones (l0 vs l1) do not. That
         // makes the `ref_p0 == ref_p1` arm — an AND of both — false while the
@@ -2342,14 +2369,14 @@ mod tests {
             let m0 = mv_l0.as_mut_ptr();
             let m1 = mv_l1.as_mut_ptr();
 
-            // All four references are one picture object.
-            let same = ON_MB_BS(&mut a, &mut a, &mut a, &mut a, m0, m1, 0, 1, 0, 0);
+            // All four references are one slot.
+            let same = ON_MB_BS(a, a, a, a, m0, m1, 0, 1, 0, 0);
 
-            // p0/q0 are that object; p1/q1 are a *different* object with the same POC.
-            let distinct = ON_MB_BS(&mut a, &mut a, &mut b, &mut b, m0, m1, 0, 1, 0, 0);
+            // p0/q0 are that slot; p1/q1 are a *different* slot.
+            let distinct = ON_MB_BS(a, a, b, b, m0, m1, 0, 1, 0, 0);
 
-            assert_eq!(same, 0, "one object in every slot takes the lists-agree arm");
-            assert_eq!(distinct, 1, "a second object with a duplicate POC is a different reference");
+            assert_eq!(same, 0, "one slot everywhere takes the lists-agree arm");
+            assert_eq!(distinct, 1, "a second slot is a different reference");
         }
     }
 
