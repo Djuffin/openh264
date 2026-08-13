@@ -576,7 +576,7 @@ pub struct SSubPictureLimits {
 
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::slice::{SSlice, SSliceHeader, SSliceHeaderExt, EWelsSliceType};
-pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo};
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SPicture, Picture, SRefPic, SLogContext, SDecodingParam as SDecoderParam};
 
 
@@ -867,7 +867,7 @@ pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
     }
 }
 
-pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut SDqLayer, pMvd: *const i16, iListIdx: i8) {
+pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const i16, iListIdx: i8) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mvd_x = *pMvd;
     let mvd_y = *pMvd.add(1);
@@ -878,7 +878,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut SDqLayer, pMvd: *const i16,
 }
 
 pub unsafe fn UpdateP16x8MvdCabac(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
     pMvd: *const i16,
@@ -904,7 +904,7 @@ pub unsafe fn UpdateP16x8MvdCabac(
 }
 
 pub unsafe fn UpdateP8x16MvdCabac(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pMvdCache: *mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
     pMvd: *const i16,

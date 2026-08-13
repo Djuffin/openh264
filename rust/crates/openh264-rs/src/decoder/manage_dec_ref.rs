@@ -12,7 +12,7 @@
 //! Translated from `codec/decoder/core/inc/manage_dec_ref.h` and `codec/decoder/core/src/manage_dec_ref.cpp`.
 
 use std::ffi::c_void;
-use crate::decoder::decoder_core::SDqLayer;
+use crate::decoder::decoder_core::DqLayerState;
 use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::nalu::{EWelsNalUnitType, EWelsNalUnitType::*};
 pub use crate::decoder::slice::{EWelsSliceType, EWelsSliceType::*, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MMCO_SHORT2LONG, MMCO_SET_MAX_LONG, MMCO_RESET, MMCO_LONG};
@@ -448,7 +448,7 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext) {
     if (*pCtx).pCurDqLayer.is_null() {
         return;
     }
-    let pCurDqLayer: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pSliceHeader =
         std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader);
     if (*pSliceHeader).pSps.is_null() {
@@ -1051,7 +1051,7 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext) -> i32 {
         return ERR_INFO_INVALID_PTR;
     }
 
-    let pCurDqLayer: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
     if pRefPicListReorderSyn.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1189,7 +1189,7 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext) -> i32 {
         return ERR_INFO_INVALID_PTR;
     }
 
-    let pCurDqLayer: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
     if pRefPicListReorderSyn.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1332,7 +1332,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
     if (*pCtx).pCurDqLayer.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pCurDqLayer: *mut SDqLayer = (*pCtx).pCurDqLayer;
+    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicMarking = (*pCurDqLayer).pRefPicMarking;
     if pRefPicMarking.is_null() {
         return ERR_INFO_INVALID_PTR;

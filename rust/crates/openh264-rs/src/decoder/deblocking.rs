@@ -193,7 +193,7 @@ pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
-pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, SDqLayer, PDqLayer};
+pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState, PDqLayer};
 pub use crate::decoder::decoder_context::{
     SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter,
     PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
@@ -201,7 +201,7 @@ pub use crate::decoder::decoder_context::{
 };
 
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     filter: *mut SDeblockingFilter,
     boundry_flag: i32,
 );
@@ -426,7 +426,7 @@ pub unsafe fn IN_BS_EDGE(
 /// `g_kuiTableB8x8Idx`/`g_kuiMbCountScan4Idx` whose entries are all < 24), so the
 /// per-element derivation reaches everything it is asked to reach.
 #[inline(always)]
-pub unsafe fn GetPNzc(pCurDqLayer: *mut SDqLayer, iMbXy: i32) -> *const i8 {
+pub unsafe fn GetPNzc(pCurDqLayer: *mut DqLayerState, iMbXy: i32) -> *const i8 {
     (*pCurDqLayer).grid.nzc.get(iMbXy as usize).as_ptr()
 }
 
@@ -514,7 +514,7 @@ pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
 #[inline(always)]
 pub unsafe fn DeblockingBSInsideMBNormal(
     pFilter: *mut SDeblockingFilter,
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
     iMbXy: i32,
@@ -646,7 +646,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 #[inline(always)]
 pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     pFilter: *mut SDeblockingFilter,
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
     iMbXy: i32,
@@ -795,7 +795,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 
 pub unsafe fn DeblockingBsMarginalMBAvcbase(
     pFilter: *mut SDeblockingFilter,
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -997,7 +997,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
 
 pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     pFilter: *mut SDeblockingFilter,
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -1278,7 +1278,7 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
 // ============================================================================
 
 #[inline]
-pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut SDqLayer, iFilterIdc: i32) -> i32 {
+pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut DqLayerState, iFilterIdc: i32) -> i32 {
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
@@ -1590,7 +1590,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 // ============================================================================
 
 unsafe fn DeblockingInterMb(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     nBS: &[[[u8; 4]; 4]; 2],
     iBoundryFlag: i32,
@@ -1731,7 +1731,7 @@ unsafe fn DeblockingInterMb(
 // ============================================================================
 
 pub unsafe fn FilteringEdgeLumaHV(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1828,7 +1828,7 @@ pub unsafe fn FilteringEdgeLumaHV(
 }
 
 pub unsafe fn FilteringEdgeChromaHV(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1964,7 +1964,7 @@ pub unsafe fn FilteringEdgeChromaHV(
 
 #[inline]
 unsafe fn DeblockingIntraMb(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1977,7 +1977,7 @@ unsafe fn DeblockingIntraMb(
 // ============================================================================
 
 pub unsafe extern "C" fn WelsDeblockingMb(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -2205,7 +2205,7 @@ pub unsafe fn WelsDeblockingInitFilter(
 }
 
 pub unsafe fn WelsDeblockingFilterMB(
-    pCurDqLayer: *mut SDqLayer,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iFilterIdc: i32,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,

@@ -189,7 +189,7 @@ pub use crate::safe::plane::PaddedPlane;
 
 
 pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
-pub use crate::decoder::decoder_core::{SDqLayer, PDqLayer, SLayerInfo, MbDims};
+pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo, MbDims};
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SRefPic};
 
 
@@ -956,7 +956,7 @@ mod tests {
         // T5.H3: `..Default::default()` zeroed the whole struct, which stopped
         // being legal when the layer gained an owned grid. `for_grid` replaced it,
         // and the dimensions are the ones the SPS above states.
-        let mut dq_layer = SDqLayer::for_grid(MbDims::new(2, 2));
+        let mut dq_layer = DqLayerState::for_grid(MbDims::new(2, 2));
         dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pCurDqLayer = &mut dq_layer as *mut _;
@@ -1022,7 +1022,7 @@ mod tests {
             // every MB lost, so EC has work to do. `MbGrid::new` zero-fills, and
             // `false` is this array's zero, so the fill is the state the layer
             // starts a sequence in rather than one the test invents (T5.L6).
-            let mut dq_layer = SDqLayer::for_grid(MbDims::new(W, H));
+            let mut dq_layer = DqLayerState::for_grid(MbDims::new(W, H));
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
 
