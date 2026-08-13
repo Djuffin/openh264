@@ -9,9 +9,16 @@ from [`phase4b_findings.md`](phase4b_findings.md) (F19–F21).
 
 ## F22 — `parse_mb_syn_cabac.rs` re-translated six `mv_pred` functions, and three of them lost a `pDec` null guard
 
-**Status: OPEN, reachability ANSWERED at T5.D1 (session D) — the guard is dead code in
-both trees, so this is a divergence and not a latent crash. Owner: 5.3 (Neighbor & MV),
-which converts `mv_pred.rs` and is where the copies become one.** Found at Phase 5
+**Status: CLOSED at Phase 5 session M (T5.M4, 2026-08-13) — the copies are one.** Eight
+names had two definitions each; every duplicate is deleted, each function now lives where
+the **C++** declares it, and the resolution was decided **per function** rather than per
+module. Zero bytes moved: goldens, 341/341 sweeps in both profiles, and both benches
+bit-identical, which was the commit's own condition. See "The unification, as it landed"
+at the end of this entry.
+
+*(History below is as it stood before the close; reachability was ANSWERED at T5.D1 —
+the guard is dead code in both trees, so this was a divergence and not a latent crash.)*
+Found at Phase 5
 session A while widening `find_stub_bodies.py --dups` to cover `src/decoder`, which it
 had never scanned. **Two corrections landed at session D** — the reachability answer, and
 an S24 re-grep of the C++ side that narrows the divergence from six functions to three
@@ -186,6 +193,60 @@ decoder phase and its brief names this instrument as one of three to run. Widene
 session A: duplicate-body groups **51 → 198**, of which **156** touch `src/decoder`.
 S22's shape exactly — the backlog surfaces the moment the instrument first covers what
 it claims to.
+
+**And the instrument under-reported this finding by five eighths**, which is worth more
+than the finding: unifying all eight copies took the count **198 → 195**. It could only
+ever see the three whose bodies had stayed *identical*; the five that had **diverged** —
+the ones that mattered, the ones this entry is about — were invisible to it by
+construction. A duplicate-body count is a floor on the duplication, never a measure of
+it, and the divergent copies are always the ones it cannot see.
+
+### The unification, as it landed (T5.M4)
+
+**Home = the C++'s home**, which is the whole answer to "which copy is the reference":
+`mv_pred.cpp` declares seven of the eight and `parse_mb_syn_cabac.cpp` merely *calls*
+them; `parse_mb_syn_cabac.cpp:141` declares the eighth and `mv_pred.cpp` is *its* caller.
+So `mv_pred.rs` keeps seven, `parse_mb_syn_cabac.rs` keeps `UpdateP8x8RefIdxCabac`, each
+module imports the other's, and a local item no longer shadows an import.
+
+| function | copies | resolution | why |
+|---|---|---|---|
+| `PredMv` | both | `mv_pred.rs`'s | bodies agreed; never touches `pDec` |
+| `PredInter16x8Mv` | both | `mv_pred.rs`'s | ditto |
+| `PredInter8x16Mv` | both | `mv_pred.rs`'s | ditto |
+| `UpdateP16x16MotionInfo` | both | `mv_pred.rs`'s, **guard kept** | `mv_pred.cpp:807` has the `pDec` branch |
+| `UpdateP16x8MotionInfo` | both | `mv_pred.rs`'s, **guard kept** | `mv_pred.cpp:885` ditto |
+| `UpdateP8x16MotionInfo` | both | `mv_pred.rs`'s, **guard kept** | `mv_pred.cpp:925` ditto |
+| `Update8x8RefIdx` | both | **the CABAC copy's shape** | `mv_pred.cpp:1175` is unguarded; `mv_pred.rs` had *added* the guard |
+| `UpdateP8x8RefIdxCabac` | both | **`parse_mb_syn_cabac.rs`'s**, two added guards deleted | its C++ home is the CABAC file, and that copy is the faithful one |
+
+**Three port-added guards died with the duplicates**, all of the class session L killed
+seventeen of: `Update8x8RefIdx`'s `pDec` test, and `UpdateP8x8RefIdxCabac`'s `pDec` *and*
+ref-index-list tests. Two more died in `UpdateP16x8MotionInfo`/`UpdateP8x16MotionInfo`,
+where the port had added `is_null` tests on the **scratch caches** that
+`mv_pred.cpp:871`/`:910` do not have — the parameters are declared
+`int16_t iMotionVector[LIST_A][30][MV_A]` there and indexed unconditionally. (T5.M2 had
+faithfully preserved those as `Option<&mut …>` hours earlier, which is the correct order:
+convert faithfully, *then* unify, so the divergence is visible in one diff instead of
+being quietly dropped in another.)
+
+**What the C++ genuinely does guard, and the port goes on guarding**:
+`FillSpatialDirect8x8Mv`/`FillTemporalDirect8x8Mv` test `pMotionVector != NULL` and
+`pMvdCache != NULL` at every use, because the CAVLC path has no mvd cache to pass. Those
+stayed `Option<&mut …>`.
+
+**One dead parameter deleted.** `UpdateP8x8RefIdxCabac` takes `int8_t pRefIndex[LIST_A][30]`
+in the C++ **and never reads it**; both port copies marked it `_`. Keeping it meant the two
+Rust callers had to invent a value they did not have — `mv_pred.cpp` passes a real cache,
+`mv_pred.rs` passed a null — so the dead parameter *was* the divergence. It is gone from
+the unified definition. Nothing observable changes, in either tree, by construction.
+
+**Not in this finding's scope, and still standing**: the port's added `pDec` tests in
+single-copy functions — `parse_mb_syn_cavlc.rs`'s four, eleven of `decode_slice.rs`'s
+thirteen, and `UpdateP16x16RefIdx` (`mv_pred.rs`), whose added `if !pDec.is_null()` has no
+`else` and so silently skips a write where the C++ would fault. Those are not duplicates;
+they are single copies that diverge from their references, which is a different job.
+`decode_slice.rs`'s eleven are 5.6's by P1.
 
 ---
 

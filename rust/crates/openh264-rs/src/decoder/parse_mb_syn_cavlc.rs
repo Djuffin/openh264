@@ -1111,7 +1111,7 @@ pub unsafe fn ParseInterInfo(
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
-                crate::decoder::mv_pred::PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 3, iRefIdx[i] as i8, &mut iMv);
+                crate::decoder::mv_pred::PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, i << 3, iRefIdx[i] as i8, &mut iMv);
 
                 let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
@@ -1125,10 +1125,10 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
-                    Some(iMvArray),
-                    Some(iRefIdxArray),
+                    iMvArray,
+                    iRefIdxArray,
                     0,
-                    (i as i32) << 3,
+                    i << 3,
                     iRefIdx[i] as i8,
                     iMv.as_ptr(),
                 );
@@ -1171,7 +1171,7 @@ pub unsafe fn ParseInterInfo(
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
-                crate::decoder::mv_pred::PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, (i as i32) << 2, iRefIdx[i] as i8, &mut iMv);
+                crate::decoder::mv_pred::PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, i << 2, iRefIdx[i] as i8, &mut iMv);
 
                 let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
@@ -1185,10 +1185,10 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
-                    Some(iMvArray),
-                    Some(iRefIdxArray),
+                    iMvArray,
+                    iRefIdxArray,
                     0,
-                    (i as i32) << 2,
+                    i << 2,
                     iRefIdx[i] as i8,
                     iMv.as_ptr(),
                 );
@@ -1294,7 +1294,7 @@ pub unsafe fn ParseInterInfo(
                     let uiScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
                     let uiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
                     let mut iMv = [0i16; 2];
-                    crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx, iBlockWidth, iRefIdx[i] as i8, &mut iMv);
+                    crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx as usize, iBlockWidth as usize, iRefIdx[i] as i8, &mut iMv);
 
                     let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
@@ -1463,7 +1463,7 @@ pub unsafe fn ParseInterBInfo(
                 crate::decoder::mv_pred::PredMv(
                     &*iMvArray,
                     &*iRefIdxArray,
-                    listIdx as i32,
+                    listIdx,
                     0,
                     4,
                     ref_idx_list[listIdx][0],
@@ -1485,7 +1485,7 @@ pub unsafe fn ParseInterBInfo(
             }
             crate::decoder::mv_pred::UpdateP16x16MotionInfo(
                 pCurDqLayer as *mut _,
-                listIdx as i32,
+                listIdx,
                 ref_idx_list[listIdx][0],
                 iMv.as_ptr(),
             );
@@ -1532,8 +1532,8 @@ pub unsafe fn ParseInterBInfo(
                     crate::decoder::mv_pred::PredInter16x8Mv(
                         &*iMvArray,
                         &*iRefIdxArray,
-                        listIdx as i32,
-                        iPartIdx,
+                        listIdx,
+                        iPartIdx as usize,
                         iRefIdx,
                         &mut iMv,
                     );
@@ -1553,10 +1553,10 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
-                    Some(iMvArray),
-                    Some(iRefIdxArray),
-                    listIdx as i32,
-                    iPartIdx,
+                    iMvArray,
+                    iRefIdxArray,
+                    listIdx,
+                    iPartIdx as usize,
                     iRefIdx,
                     iMv.as_ptr(),
                 );
@@ -1602,8 +1602,8 @@ pub unsafe fn ParseInterBInfo(
                     crate::decoder::mv_pred::PredInter8x16Mv(
                         &*iMvArray,
                         &*iRefIdxArray,
-                        listIdx as i32,
-                        iPartIdx,
+                        listIdx,
+                        iPartIdx as usize,
                         iRefIdx,
                         &mut iMv,
                     );
@@ -1623,10 +1623,10 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
-                    Some(iMvArray),
-                    Some(iRefIdxArray),
-                    listIdx as i32,
-                    iPartIdx,
+                    iMvArray,
+                    iRefIdxArray,
+                    listIdx,
+                    iPartIdx as usize,
                     iRefIdx,
                     iMv.as_ptr(),
                 );
@@ -1770,13 +1770,13 @@ pub unsafe fn ParseInterBInfo(
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
                         iIdx8,
-                        LIST_0 as i32,
+                        LIST_0,
                         iRef[LIST_0],
                     );
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
                         iIdx8,
-                        LIST_1 as i32,
+                        LIST_1,
                         iRef[LIST_1],
                     );
                     crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
@@ -1805,7 +1805,7 @@ pub unsafe fn ParseInterBInfo(
                         crate::decoder::mv_pred::Update8x8RefIdx(
                             pCurDqLayer as *mut _,
                             iIdx8,
-                            listIdx as i32,
+                            listIdx,
                             iRef[listIdx],
                         );
                         ref_idx_list[listIdx][i] = iRef[listIdx];
@@ -1831,7 +1831,7 @@ pub unsafe fn ParseInterBInfo(
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
                         iIdx8,
-                        listIdx as i32,
+                        listIdx,
                         iref,
                     );
                     ref_idx_list[listIdx][i] = iref;
@@ -1865,9 +1865,9 @@ pub unsafe fn ParseInterBInfo(
                         crate::decoder::mv_pred::PredMv(
                             &*iMvArray,
                             &*iRefIdxArray,
-                            listIdx as i32,
-                            iPartIdx as i32,
-                            iBlockW as i32,
+                            listIdx,
+                            iPartIdx as usize,
+                            iBlockW as usize,
                             iref,
                             &mut iMv,
                         );
