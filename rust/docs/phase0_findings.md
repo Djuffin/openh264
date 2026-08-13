@@ -1099,3 +1099,36 @@ question did not arise. It will the first time an encoder-touching session draws
 
 Running total unchanged: **thirty-two measurements, eleven alternations, eleven
 acquittals.**
+
+### Measurement 33 (Phase 5, session J, 2026-08-12) — one hit, and the zero-hit run ends at three
+
+**The hit**, `gates.sh full` on `d8becdf0` (Face 1's tree), debug sweep:
+
+```
+mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1 ::  C++: 42281 bytes  Rust: 0 bytes
+PASS=340 FAIL=1
+```
+
+Inside S14's signature on every field — `mt`, `sm=3`, `n=600`, `t=4`, output of the
+wrong length (zero), debug profile. The release sweep of the same battery was 341/341,
+as were both sweeps of the session's other batteries.
+
+**Step 1, the isolation re-run — 5×, machine idle, same configuration and profile:
+5/5 BYTE-IDENTICAL.** That is the expected result and not a weak one: S23b is the rule
+that says so. The race needs the load of a full sweep, and running the hitting
+configuration alone gave 0/40 the last time it was tried against a race the sweeps had
+just produced twice. **A no-reproduction in isolation is a statement about the harness.**
+
+One hit, so step 2 does not fire — an alternation is for two or more. **Acquitted as F3.**
+
+The step-0 hash shortcut was **not** claimed and would not have applied: this session's
+diff touches `rust/tools/`, `res/` and four decoder files, and while the sweep compares
+encoders, `rust_enc` is built from the same crate and the binaries were never compared.
+
+The three-session zero-hit run (G, H, I — 5456 configurations) ends here. It ended on a
+session whose code changes are again **entirely decoder-side**, which is the same reason
+those three sessions drew nothing: the sweep exercises the encoder, and what it sees is
+the ambient rate, not this tree. That is the honest reading of a single hit in 1364
+configurations either way — ≈1/800 is the measured rate and one hit is what it predicts.
+
+Running total: **thirty-three measurements, eleven alternations, twelve acquittals.**

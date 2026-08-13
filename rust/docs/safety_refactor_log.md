@@ -6121,3 +6121,298 @@ call, on these numbers:
 * **Unchanged:** `pBitStringAux` and `cabac_decoder.rs:855`'s `SHIM(phase5)` are untouched;
   face 3's ~28 cache-fill re-points have not started; F23 is Phase 8's, F31's redundant
   memset 5.5's.
+
+---
+
+## 2026-08-12 — Phase 5, session J (the probe grows a macroblock grid, and finds two defects with it)
+
+**Commits:** `60d1528b` (inherited doc tail — D-perf-5's direction paragraph, §0's two
+rows, S2b's extension, the brief), `c183c8d4` (T5.J1, F35), `d8becdf0` (T5.J2, the grid
+probe), `e207fdd9` (T5.J3, `pRefIndex` flips), `fc62d6a1` (ratchet), and this entry.
+
+### The session in one line
+
+D-perf-5's "probe first, then flip" was the right order, and the probe justified itself
+before it was committed: the second stream — 3x2 macroblocks, CABAC, 8x8 transform, B
+slices — **found a real UB on its first run**, a second one is fixed ahead of the flip
+that would have created it, and then the first hot family flipped for **+0.03% decode at
+7 pairs**.
+
+### Control battery
+
+Docs-only tail, session I accepted (**OVERALL: PASS**), `rust/tools/` and the toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 463/457/20, ratchet 4570, census 60,
+every figure matching session I's exit. Third session running that the open needed no
+correction.
+
+**The S2 null, run at open** because every verdict here is a perf verdict (3 pairs, same
+binary both slots): decode **+0.13%…+0.45%**, median +0.35% — a *tighter* floor than
+session I's ±0.6%; encode 28 rows, median +0.00%, −2.45%…+1.42%.
+
+### 1. Face 1 — the second probe stream (T5.J2)
+
+**The brief was wrong about the encoder, and the check that found it took two minutes.**
+The brief said to build the stream with the C++ encoder, on `make_narrow_assets.py`'s
+precedent. F34 — the miss the new stream has to re-find — sits behind
+`bTransform8x8ModeFlag`, so the first thing to establish was that the stream would carry
+it. It does not: `ffmpeg -bsf:v trace_headers` over `narrow_16x16.264` shows the PPS
+ending before `transform_8x8_mode_flag`, and the reason generalizes —
+`grep -rn "ransform.8x8" codec/encoder/` returns **nothing**, and `WelsWritePpsSyntax`
+(`au_set.cpp:406`) has no such syntax element. **OpenH264's encoder cannot emit the flag
+at all**, so no stream it produces can reach F34, and the brief's instruction and the
+brief's acceptance test cannot both be satisfied.
+
+Resolved in place, per the brief's own supersession clause: ffmpeg/libx264 builds this one
+asset. It is not a new dependency — `benches/decode_1080p_bench.rs` builds all three of
+its 1080p streams with it, `gates.sh` requires `FFMPEG`, and S17's UNMEASURED banner
+exists because of it. The golden is still the **C++ decoder's** output, exactly as every
+other row in the conformance file: which encoder produced the bytes never enters the
+comparison.
+
+**`res/grid_48x32.264`, 992 bytes.** 48x32 is **3x2 macroblocks** — the smallest grid that
+contains a macroblock with all four neighbours (MB(1,1)) *and* one missing only its left
+(MB(0,1)) *and* one missing only its top-right (MB(2,1)). That is every availability
+combination the neighbour paths branch on; each macroblock past it is Miri time. CABAC,
+High with `transform_8x8_mode_flag` set, **I, P and B** slices, six frames, and the same
+panned window the narrow assets use so the MVs are non-zero. `make_narrow_assets.py`
+carries it with its command line, and `--check` reproduces all four assets byte-for-byte.
+
+**Coverage proven, not asserted** (F21's rule, which is why the brief asked for it). With
+T5.I2's fix reverted in a scratch worktree:
+
+```text
+error: Undefined Behavior: not granting access to tag <35974063> because that would
+       remove [Unique for <37349573>] which is strongly protected
+  2: safe::mb_grid::MbArray::<bool>::get        at src/safe/mb_grid.rs:215
+  3: ParseTransformSize8x8FlagCabac             at src/decoder/parse_mb_syn_cabac.rs:1242
+  4: WelsDecodeMbCabacIntraModeHelper           at src/decoder/decode_slice.rs:4195
+```
+
+`parse_mb_syn_cabac.rs:1242` is the callee's own left-neighbour read — F34 exactly. The
+small probe stays green under the same revert, and stayed green for the three sessions the
+defect was live, which is the other half of the proof.
+
+**The Miri budget, stated at the site as the brief required: 258.7s wall, against the
+small probe's 250.7s.** Nine times the macroblocks per frame at a quarter of the frames is
+a wash. The pair is ~510s, `miri --lib` goes ~524s → ~780s (~13 min), inside the ~25 min
+the brief allows, so **both probes stay in `--lib` at `full` level and neither is deferred
+to `exit`**. The small one is kept rather than superseded: it is the cheap verdict for
+every path that needs no neighbour.
+
+The test asserts the decoded dimensions, not just that a frame came out. A regenerated
+asset that silently came out 16x16 would still pass "a frame came out" while covering
+nothing — which is precisely how F34 survived.
+
+### 2. F35 — what the new stream found on its first run (T5.J1)
+
+Before the probe was committed:
+
+```text
+error: Undefined Behavior: accessing memory based on pointer with alignment 2,
+       but alignment 4 is required
+    --> src/decoder/mv_pred.rs:1005:13
+             0: decoder::mv_pred::PredMvBDirectSpatial
+             1: decoder::decode_slice::WelsDecodeMbCabacBSlice
+```
+
+**Half one, 13 sites that were already UB.** `PredMvBDirectSpatial`,
+`FillSpatialDirect8x8Mv`, `FillTemporalDirect8x8Mv` and the 8x8 variants pun *stack
+locals* — `iMvp` (`[[i16; 2]; 2]`), `pMV` (`[i16; 4]`), `pMvDirect` — through `*const i32`
+/ `*mut u32`. An `i16` array is 2-aligned and nothing rounds a stack slot up, so these
+were unconditionally UB on every B slice that reached them. The file has carried
+`LD32`/`ST32` — `read_unaligned`/`write_unaligned` wrappers — since the port was written.
+These sites simply never used them.
+
+**Half two, and it is the half that matters for what follows.** `SetRectBlock` and
+`CopyRectBlock4Cols` store 2 and 4 bytes at a time into `pRefIndex` (`[i8; 16]`, align 1)
+and the MV arrays (`[[i16; 2]; 16]`, align 2). They are legal **only because every one of
+those arrays comes from `WelsMallocz`, which returns 16-byte alignment** — an accident of
+the allocator, not a property of the data. `MbArray<[i8; 16]>` is a `Vec` and its
+allocation is align 1. The first family commit that moved `pRefIndex`, `pMv` or `pMvd`
+onto the grid would have made all 65 accesses UB at once. Converted here, ahead of the
+defect, per S13.
+
+**Why nothing saw it.** `PredMvBDirectSpatial` needs a **B slice** *and* a neighbour.
+`narrow_16x16.264` has neither — the C++ encoder emits no B slices, and its frames are one
+macroblock — so the whole direct-mode family had never executed under Miri in any form.
+Byte gates cannot see it either: on both targets this project builds, an unaligned 4-byte
+load is the same instruction as an aligned one, so 341/341 sweeps and 56 goldens ran on
+top of it for the port's whole life. **A soundness defect with no observable behaviour is
+the class the Miri gate exists for**, and this is the cleanest instance the project has
+had.
+
+The class was greped rather than guessed: `deblocking.rs` already spells every wide access
+`read_unaligned`/`write_unaligned`. `mv_pred.rs` was the only outlier.
+
+### 3. Face 2 — the heat order, re-derived (S24)
+
+`/usr/bin/sample`, 6s over `decode_1080p_bench` across all three streams, self time, 3769
+samples. A family's heat is the summed self time of the functions holding its
+**layer-qualified** accesses — an attribution of where its accesses sit, not a measurement
+of the family. Layer-qualified matters: `SPicture` carries its own `pMbType`, `pMv`,
+`pRefIndex` and `pMbCorrectlyDecodedFlag` for the colocated reads, and those 198 further
+occurrences are 5.1/5.3's, not 5.2's. Counting them would have put `pMv` and `pMbType` at
+the top for the wrong reason.
+
+| # | family | heat | % | layer sites | hottest touching functions |
+|---|---|---|---|---|---|
+| 1 | `pRefIndex` | 117 | 3.1% | 17 | PredMvBDirectSpatial 56, DeblockingBsMarginalMBAvcbase 40 |
+| 2 | `pMv` | 117 | 3.1% | 18 | the same three |
+| 3 | `pMbType` | 77 | 2.0% | 8 | WelsDeblockingMb 77 |
+| 4 | `pNzc` | 63 | 1.7% | 30 | WelsDecodeMbCabacBSlice 19, …PSlice 17 |
+| 5 | `pSliceIdc` | 62 | 1.6% | 19 | PredMvBDirectSpatial 56 |
+| 6 | `pChromaQp` | 50 | 1.3% | 29 | WelsDecodeMbCabacBSlice 19 |
+| 7 | `pMvd` | 46 | 1.2% | 36 | ParseInterBMotionInfoCabac 20 |
+| 8 | `pDirect` | 27 | 0.7% | 12 | WelsDecodeMbCabacBSlice 19 |
+| 9 | `pMbCorrectlyDecodedFlag` | 18 | 0.5% | 18 | WelsTargetSliceConstruction 18 |
+| 10 | `pScaledTCoeff` | 14 | 0.4% | 11 | WelsDecodeMbCabacResidualHelper 14 |
+| 11 | `pIntraPredMode` | 0 | 0.0% | 12 | none above the sampling floor |
+
+`pRefIndex` and `pMv` tie because the same functions touch both — always as separate
+expressions, and **no signature takes both**, so they separate cleanly for S20 and stay one
+family per commit. `pRefIndex` went first on the tie-break: same heat, one fewer site, and
+the worst alignment drop (16 → 1), so it is also the sharpest test of F35's second half.
+
+### 4. T5.J3 — `pRefIndex` flips, and it is free
+
+17 layer sites: 8 neighbour reads become shared indexing, 3 write sites become
+`grid.ref_index[l].get_mut(iMbXy).as_mut_ptr()`, 1 becomes an S28 bridge, and the field,
+its two allocations and its free block are deleted.
+
+**S28.** `DeblockingBsMarginalMBAvcbase` keeps the array **base** and indexes it by
+macroblock address for the current macroblock *and* its neighbour, so the pointer's legal
+reach is the whole array. It goes through the existing `mb_grid_ptr` (allocation root +
+`wrapping_add`) and gets its own full-reach Miri test, which also pins that this bridge
+stays `*mut [i8; 16]` rather than flattening — the consumer indexes inside the record with
+a scan-order index of its own.
+
+**S25 and F34's class.** The three raw bridges derive and then write, with nothing between
+the derivation and the `ST16`s that touches `grid.ref_index` — no intervening neighbour
+read to pop the tag. No function *receives* a `&mut` into this family, so F34's shape does
+not arise. `GetPNzc` and `MB_BS_MV`, the two calls live across the deblocking bridge, take
+raw layer pointers and never retag the layer.
+
+**S21** discharges by construction: `SDqLayer::for_grid` writes only `grid` through a
+zeroed `MaybeUninit` shell, so deleting a raw pointer field whose zeroed state *was* its
+initial state changes no construction path. **Census**: no allowlist entry names this
+family; `type SDqLayer x2` re-keys when the struct is renamed, which is the last family's
+commit.
+
+**The measurement, 7 interleaved pairs, both benches** (`d8becdf0` → `e207fdd9`):
+
+```
+Constrained Baseline (CAVLC)   2.4990 -> 2.5050   +0.24%
+Main (CABAC, B-frames)         5.9850 -> 5.9870   +0.03%
+High (CABAC, 8x8)              6.0220 -> 6.0200   -0.03%
+  decode: rows 3, median +0.03%, min -0.03%, max +0.24%
+  encode: rows 28, median +0.00%   (decoder-only; unaffected, as expected)
+```
+
+**Every row is inside the session's null band, and two of the three are below its floor.**
+No ledger row opens.
+
+**The mechanism, so the next family is judged against one rather than against a hope.**
+Session H's eleven were scalars: every access was a separate bounds check on a separate
+array, 76 per macroblock. `pRefIndex` is *one* check per macroblock record, after which
+the sixteen in-record indices are const-bounded against a `[i8; 16]` and fold — which is
+exactly what D-perf-5 predicted would be different and could not test. `pMv`, `pMvd`,
+`pNzc`, `pDirect`, `pScaledTCoeff` and `pIntraPredMode` share that shape; `pMbType` and
+`pSliceIdc` do not — they are scalars and should behave like session H's.
+
+**Cumulative CB ≈ +19.2…+20.1%** (the range is session H's and session I's readings of the
+same earlier span) against the ≈+23% stop-line. Nothing is near it.
+
+**This reading owes a day-two confirmation and has not had one.** A decision rests on it —
+whether the remaining nine keep flipping — and S2b as extended says two seven-pair
+readings of one span disagreed by a factor of two on different days. Per the brief's §0.3,
+the confirmation is the **first item of the next session**; both binaries are stashed
+(`.perfpair/j_face1`, `.perfpair/j_j3`).
+
+F35's own span was measured rather than waived, since it rewrote 78 accesses in the MV
+cache helpers: decode median **−0.03%** at 3 pairs, encode +0.10%. The CB row reads +0.77%
+— the only row of either span above the null's ceiling — and the median is the verdict.
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 463 / 457 / 20 | **466 / 460 / 20** |
+| Miri `--lib` | 324 | **326** |
+| decode goldens | 56 rows | **57 rows** (`grid_48x32`, additive) |
+| census | 60 allowlisted | **60** |
+| `raw_ptr` | 4570 | **4550** |
+| `unsafe_block` | 622 | **623** |
+| `unsafe_fn` | 1248 | **1248** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+| findings | — | **F35, new and FIXED** |
+
+Per-file deltas, which is the only way to read the ratchet (S16): `mv_pred.rs` `raw_ptr`
+−16 (T5.J1's 13 rewrites — `*(x as *const i32)` names two pointer types, `LD32(x)` names
+none), `decoder_core.rs` −3 and `deblocking.rs` −1 (T5.J3's field, allocations, free block
+and the `as *mut _` fallback), `decoder_core.rs` `unsafe_block` **+1**. **The one increase
+is a test** — the S28 full-reach test the bridge owes — and no production `unsafe {}` was
+added anywhere.
+
+Both `raw_ptr` decreases are conversion rather than deletion, which is the second session
+of the phase that can say so.
+
+**Settled-tree battery, `gates.sh full` at `fc62d6a1` — OVERALL: PASS**, 9 passed / 0
+failed / 1 skipped: 466/460/20, ratchet no per-file increase, census 60, **sweeps 341/341
+both profiles** (the debug sweep clean, which is the F3 acquittal's other half), both
+benches bit-identical, **Miri `--lib` 326 passed / 0 failed** with both probes inside it.
+Batteries this session: `gates.sh commit` twice, `gates.sh full` twice.
+
+### 6. F3 — one hit, and the zero-hit run ends at three
+
+`gates.sh full` on Face 1's tree drew
+`mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1 :: Rust: 0 bytes` on the
+**debug** sweep, 340/341. Inside S14's signature on every field. Step 1's isolation re-run,
+5× on an idle machine: **5/5 BYTE-IDENTICAL** — the expected result, and S23b is the rule
+that says so: the race needs the load of a full sweep. One hit, so step 2 does not fire.
+**Acquitted as F3**, appended to `phase0_findings.md` as measurement 33 at adjudication
+time (S14 step 4). Running total: thirty-three measurements, eleven alternations, twelve
+acquittals.
+
+### 7. A gate-hygiene note worth carrying
+
+Face 1's battery ran with an uncommitted `pRefIndex` edit landing in the working tree
+partway through, and the Miri step's build almost certainly picked it up — the interpreter
+started some seven minutes after that step's header, where a warm Miri build takes about
+two. That is an inference from timing, not a proof; the test count cannot distinguish the
+two trees, because the flip adds no `--lib` test. **So that battery's Miri line is not
+claimed for Face 1 alone.** What Face 1 has instead: both probes run individually and green
+on its exact source, `gates.sh commit` green on it, and the settled-tree battery below,
+which contains Face 1 as a subset. The lesson is small and mechanical — **do not edit the
+tree while a battery is running**; `gates.sh` builds from the working tree, not from the
+commit, so the thing being measured can move without the log saying so.
+
+### 8. What went into the rules
+
+Nothing new. F35 is an instance of S13 (run the instrument everywhere it can apply, in the
+session that first applies it) and of S22 aimed at a stream — the same aim F34 established
+— and the brief's own supersession clause covered the encoder correction. **S8's fourth
+negative result was honoured rather than tested**: T5.J3 hoists nothing.
+
+### Hand-off: Phase 5, session K
+
+**First item, before any new work: the day-two confirmation of T5.J3's span.**
+`perfpair.py run j_face1 j_j3 --pairs 7`, both binaries already stashed. A decision rests
+on +0.03% and S2b's extension exists because a seven-pair reading moved by a factor of two
+overnight. If it confirms, the remaining nine flip on D-perf-4's normal terms.
+
+* **Then `pMv`, hottest first**, per §2's table: 18 layer sites, align 2 after the flip.
+  Then `pMbType`, `pNzc`, `pSliceIdc`, `pChromaQp`, `pMvd`, `pDirect`,
+  `pMbCorrectlyDecodedFlag`, `pScaledTCoeff`, `pIntraPredMode`.
+* **Grep each family's consumers for a wider-than-element access before flipping it**
+  (F35). The two known ones are converted, but that is a fact about `mv_pred.rs`, not a
+  property of the codebase.
+* **Expect the grid probe to keep finding things.** It found F35 on run one. The paths it
+  opened — B-direct, MV prediction from neighbours, the 8x8 transform — have never been
+  under the checker, and the ten remaining families are the ones that live there. Budget a
+  Miri round trip per family, not a Miri verdict per family.
+* **Face 3 has not started.** The ~28 `parse_mb_syn_*` cache-fill re-points, `pBitStringAux`
+  and `cabac_decoder.rs:855`'s `SHIM(phase5)` are untouched; re-grep before acting (S24).
+* **Unchanged:** F23 is Phase 8's, F31's redundant memset 5.5's, F22's map 5.3's,
+  `PicPool`/identity deferred.

@@ -1382,3 +1382,48 @@ still to flip are not that shape — `pNzc` is `[i8; 24]`, `pMv`/`pMvd` are
 in inner loops, where the element re-type makes the inner index const-bounded and
 check-free. **That is a different mechanism and it is untested. This null result does not
 transfer to them in either direction.**
+
+### T5.J1 and T5.J3 — the first hot family, and it is free (session J, 2026-08-12)
+
+Session-J null floor, measured at open: decode **+0.13%…+0.45%** (3 rows, median +0.35%)
+— tighter than session I's ±0.6%; encode 28 rows, median +0.00%, −2.45%…+1.42%.
+
+| span | pairs | CB (CAVLC) | Main (CABAC) | High (8x8) | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **T5.J3 — `pRefIndex` flips** (`d8becdf0` → `e207fdd9`) | **7** | +0.24% | +0.03% | −0.03% | **+0.03%** | +0.00% |
+| T5.J1+J2 — F35's unaligned spellings (`60d1528b` → `d8becdf0`) | 3 | +0.77% | −0.03% | −0.23% | **−0.03%** | +0.10% |
+
+**`pRefIndex` is the first of the hot eleven and it costs nothing measurable.** Every row
+is inside the session's null band and **two of the three are below its floor**. This is
+the family D-perf-5 named as one of the untested ones — `[i8; 16]`, indexed *inside* the
+record — and it is tied for hottest by profile: 117 of 3769 self samples, 3.1%
+(`PredMvBDirectSpatial` 56, `DeblockingBsMarginalMBAvcbase` 40, `UpdateP16x16MotionInfo`
+15). **No ledger row opens.**
+
+**Why this is plausible rather than surprising**, stated so the next family is judged
+against a mechanism and not against a hope: session H's eleven were scalars, so every
+access was a *separate* bounds check on a separate array — 76 per macroblock. `pRefIndex`
+is one check per macroblock *record*, after which the sixteen in-record indices are
+const-bounded against a `[i8; 16]` and fold. The families still to flip that share that
+shape are `pMv`, `pMvd`, `pNzc`, `pDirect`, `pScaledTCoeff` and `pIntraPredMode`; the ones
+that do not are `pMbType` and `pSliceIdc`, which are scalars and should behave like
+session H's.
+
+**This reading owes a day-two confirmation and has not had one.** S2b as extended by
+session I: two seven-pair readings of one span disagreed by a factor of two on different
+days. A decision does rest on this number — whether the remaining nine keep flipping — so
+per D-perf-5's direction the confirmation is the **first item of the next session**, from
+the same two stashed binaries (`.perfpair/j_face1`, `.perfpair/j_j3`).
+
+**Cumulative CB after this family: ≈ +19.2…+20.1%**, the range being session H's and
+session I's readings of the same earlier span, against the ≈**+23%** stop-line. Nothing is
+near it.
+
+**F35's span is a wash and no row opens for it either.** It is a soundness fix that lands
+regardless, but it rewrote 78 accesses in `mv_pred.rs`'s MV-cache helpers, so it was
+measured rather than waived: decode median −0.03% at 3 pairs. The CB row reads +0.77%,
+above the null's +0.45% ceiling and the only row of either span that is; the median is the
+verdict and S2b's escalation applies to medians outside the band, which this is not.
+`read_unaligned`/`write_unaligned` compiles to the same instruction as an aligned access
+on both targets this project builds, which is what the number says and also why no byte
+gate could ever have caught the defect.
