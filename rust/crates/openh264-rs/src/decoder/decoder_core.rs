@@ -1981,10 +1981,9 @@ pub unsafe fn WelsFreeDynamicMemory(pCtx: PWelsDecoderContext) {
         (*pCtx).pTempDec = std::ptr::null_mut();
     }
 
-    if !(*pCtx).pCabacDecEngine.is_null() {
-        WelsFreeHelper(pMa, (*pCtx).pCabacDecEngine as *mut u8, std::mem::size_of::<SWelsCabacDecEngine>());
-        (*pCtx).pCabacDecEngine = std::ptr::null_mut();
-    }
+    // T5.O2: the CABAC engine's free block stood here. The engine is a field now, so
+    // there is no allocation to release and no pointer to null — and, unlike the
+    // pointer, the field cannot be read after this function has run.
 
     (*pCtx).iImgWidthInPixel = 0;
     (*pCtx).iImgHeightInPixel = 0;
@@ -3310,13 +3309,10 @@ pub unsafe fn ConstructAccessUnit(
             return iErr;
         }
     }
-    if (*pCtx).pCabacDecEngine.is_null() {
-        let pMa = (*pCtx).pMemAlign;
-        (*pCtx).pCabacDecEngine = WelsMalloczHelper(pMa, std::mem::size_of::<SWelsCabacDecEngine>()) as *mut SWelsCabacDecEngine;
-        if (*pCtx).pCabacDecEngine.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-    }
+    // T5.O2: the CABAC engine's lazy allocation stood here — allocate on the first
+    // access unit, null-check twice, carry an out-of-memory arm. The engine is a
+    // field now, zeroed with the context, which is the state that allocation
+    // produced on its one execution.
 
     let iErr = DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo);
     WelsDecodeAccessUnitEnd(pCtx);
@@ -3629,7 +3625,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
         (*pCtx).bRPLRError = false;
         if !(*pCtx).pDec.is_null() {
             GetI4LumaIChromaAddrTable(
-                (*pCtx).iDecBlockOffsetArray.as_mut_ptr(),
+                // F38/S29: `as_mut_ptr()` takes a `&mut [i32; 24]` of a field of a
+                // raw-reached struct first; `addr_of_mut!` derives from `pCtx`.
+                std::ptr::addr_of_mut!((*pCtx).iDecBlockOffsetArray) as *mut i32,
                 (*(*pCtx).pDec).linesize(0),
                 (*(*pCtx).pDec).linesize(1),
             );
