@@ -2175,7 +2175,9 @@ pub unsafe fn WelsDeblockingFilterSlice(
     pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
     pFilter.iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
-    pFilter.pLoopf = &mut (*pCtx).sDeblockingFunc;
+    // F38/S29: `addr_of_mut!`, not `&mut` — this pointer is stored into another
+    // struct and read for the whole macroblock loop, which is S29's worst class.
+    pFilter.pLoopf = std::ptr::addr_of_mut!((*pCtx).sDeblockingFunc);
     pFilter.ref_ids = snapshot_ref_ids(pCtx);
 
     // Step 2: Macroblock deblocking loop
@@ -2232,7 +2234,8 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
     (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
-    (*pFilter).pLoopf = &mut (*pCtx).sDeblockingFunc;
+    // F38/S29, as above.
+    (*pFilter).pLoopf = std::ptr::addr_of_mut!((*pCtx).sDeblockingFunc);
     (*pFilter).ref_ids = snapshot_ref_ids(pCtx);
 }
 

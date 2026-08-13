@@ -1386,6 +1386,15 @@ decodes, and destroys it. Nothing re-initialises a live decoder, which is the
 only way to reach the state — the same shape as F31 and F36, defects behind a
 transition no asset exercises.
 
+**FIXED at Phase 5 session O (T5.O1).** The reset is restored to the head of
+`DestroyPicBuff`, before the early returns, exactly where the C++ has it; the `pCtx`
+null-guard is the port's own. A test walks the cycle the public API exposes — dirty the
+two buffers as a decode leaves them, destroy the pool, assert the slots no longer name
+it — and pins the `fullReset = false` extent (`iLargestBufferedPicIndex + 1`, not 16).
+**The fix immediately convicted F38**, which had been sitting under it: the first read
+the port ever made through `pCtx->pPictReoderingStatus` found a pointer whose tag had
+been popped.
+
 **Why it is not fixed at session N.** The reset function is `decoder_core.rs`'s
 and the list it resets is `codec_api.rs`'s; the session's brief fences both, and
 the fix is one line in a file whose whole lifecycle 5.5 rewrites. Adding the call
@@ -1393,3 +1402,81 @@ without the surrounding conversion would put a `pCtx`-reaching call inside a
 function that currently ignores its `pCtx` — S20's "atomically, per closure"
 argument running the wrong way. Listed with its owner per S18.
 
+
+---
+
+## F38 — the eight decoder-object back-pointers are derived through `&mut`, and every write through the object itself pops them
+
+*Found Phase 5 session O (2026-08-13), by the small aliasing probe, in the first
+minute after F37's fix made the port read through one of them. **Fixed in the same
+session** (S29's spelling, three files). Sibling of F24/F25/F28/F29 and the first
+instance of the class **outside** `src/decoder/`.*
+
+`decoder_init_c` (`api/codec_api.rs`) mirrors C++ `CWelsDecoder::InitDecoderCtx` by
+wiring eight of `CWelsDecoderImpl`'s own members into the decoder context:
+
+```rust
+ctx_box.pMemAlign            = &mut (*dec_impl).align;
+ctx_box.pParam               = &mut (*dec_impl).param;
+ctx_box.pLastDecPicInfo      = &mut (*dec_impl).sLastDecPicInfo;
+ctx_box.pDecoderStatistics   = &mut (*dec_impl).sDecoderStatistics;
+ctx_box.pVlcTable            = &mut (*dec_impl).sVlcTable as *mut _ as *mut c_void;
+ctx_box.pPictInfoList        = (*dec_impl).sPictInfoList.as_mut_ptr();
+ctx_box.pPictReoderingStatus = &mut (*dec_impl).sReoderingStatus;
+ctx_box.pStreamSeqNum        = &mut (*dec_impl).iStreamSeqNum;
+```
+
+Every one is S29's **worst class**: a reference to a field of a raw-reached struct,
+immediately coerced to a raw pointer and **stored into another struct** that outlives
+the expression by the decoder's whole life. The coercion retags that field's range as
+SharedReadWrite on top of `dec_impl`'s own tag — and the next write through `dec_impl`
+itself pops everything above it, including the stored pointer. `codec_api.rs` makes
+such writes constantly; the two the probe reached are
+
+```rust
+(*dec_impl).sReoderingStatus.iLastWrittenSeqNum = (*dec_impl).sPictInfoList[idx].iSeqNum;   // :1672
+```
+
+and its reorder twin. After either, `pCtx->pPictReoderingStatus` is a dead tag.
+
+**Miri's verdict, verbatim**, at the first read the port ever made through it:
+
+```
+error: Undefined Behavior: attempting a read access using <1029891> at alloc267873[0x1558],
+       but that tag does not exist in the borrow stack for this location
+  --> src/decoder/decoder_core.rs:1931   (ResetReorderingPictureBuffers)
+help: <1029891> was created by a SharedReadWrite retag ... at codec_api.rs:1440
+help: <1029891> was later invalidated ... by a write access at codec_api.rs:1672
+```
+
+**Why it never fired before, and this is the interesting part.** The context's copy of
+`pPictReoderingStatus` had **one** reader in the whole port and it was dead code; every
+live use went through `(*dec_impl).sReoderingStatus` directly. So the port stored eight
+pointers it had invalidated and dereferenced none of them on the probe's path. F37's
+one-line fix added the first such dereference, and the defect convicted on the next
+Miri run. *A stored pointer that is never read is not a fixed defect; it is an
+unexercised one* — which is S22's law about instruments, aimed at data instead.
+
+**The fix** is S29's, unchanged since F24: `ptr::addr_of_mut!` at all eight sites. It
+creates no reference, so the derived pointer carries `dec_impl`'s provenance and "whose
+retag is on top" stops being a question. Both probes green afterwards.
+
+**Two more sites of the same shape, found by grepping for it rather than by paying for
+another probe round trip** (the rate-beating move F27–F30 established), both fixed
+here:
+
+* `deblocking.rs:2178` and `:2235` — `pFilter.pLoopf = &mut (*pCtx).sDeblockingFunc`,
+  a borrow of a context field stored into `SDeblockingFilter` and held for the whole
+  macroblock loop. It does not fire today only because nothing writes
+  `sDeblockingFunc` after `WelsInitDecoderFuncs`.
+* `decoder_core.rs:3628` — `(*pCtx).iDecBlockOffsetArray.as_mut_ptr()`, which takes a
+  `&mut [i32; 24]` of a context field first. Transient rather than stored, so it is the
+  mild form.
+
+**What it says about the phase's inventory.** T5.G1 closed the `&mut *pCtx` inventory
+for `src/decoder/` and F28 generalised it to "anything reachable from `pCtx`, held
+across a call". Both were scoped to the decoder's own modules. `src/api/` is the module
+the plan exempts from `deny(unsafe_code)` forever (§2.2.8), and exempting it from the
+*lint* quietly exempted it from the *sweep*: eight instances of the phase's signature
+defect sat in the file that is supposed to be "a few hundred lines of pure
+translation". Phase 8 inherits the module; it does not inherit an audit.

@@ -1429,16 +1429,27 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             // it owns `Vec`s, so neither `Box::default()` (stack round-trip) nor
             // `new_zeroed().assume_init()` (invalid zeroed `Vec`) is usable.
             let mut ctx_box = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
-            ctx_box.pMemAlign = &mut (*dec_impl).align;
-            ctx_box.pParam = &mut (*dec_impl).param;
             // Mirror CWelsDecoder::InitDecoderCtx (welsDecoderExt.cpp): wire the
             // decoder-owned members into the context, then fill in defaults.
-            ctx_box.pLastDecPicInfo = &mut (*dec_impl).sLastDecPicInfo;
-            ctx_box.pDecoderStatistics = &mut (*dec_impl).sDecoderStatistics;
-            ctx_box.pVlcTable = &mut (*dec_impl).sVlcTable as *mut _ as *mut std::ffi::c_void;
-            ctx_box.pPictInfoList = (*dec_impl).sPictInfoList.as_mut_ptr();
-            ctx_box.pPictReoderingStatus = &mut (*dec_impl).sReoderingStatus;
-            ctx_box.pStreamSeqNum = &mut (*dec_impl).iStreamSeqNum;
+            //
+            // **Every one of these is `addr_of_mut!`, and F38 is why** (S29). These
+            // eight pointers are derived from `CWelsDecoderImpl`'s own fields and
+            // stored into another struct that outlives the expression — S29's worst
+            // class. Spelled `&mut (*dec_impl).field`, each store retags that field's
+            // range, and the *next write through `dec_impl` itself* — this file makes
+            // several, e.g. `sReoderingStatus.iLastWrittenSeqNum` in
+            // `ReleaseBufferedReadyPictureNoReorder` — pops the stored pointer's tag.
+            // The decoder then reads through it. `addr_of_mut!` creates no reference,
+            // so the derived pointer carries `dec_impl`'s provenance and the two
+            // spellings of "the same field" stop fighting.
+            ctx_box.pMemAlign = ptr::addr_of_mut!((*dec_impl).align);
+            ctx_box.pParam = ptr::addr_of_mut!((*dec_impl).param);
+            ctx_box.pLastDecPicInfo = ptr::addr_of_mut!((*dec_impl).sLastDecPicInfo);
+            ctx_box.pDecoderStatistics = ptr::addr_of_mut!((*dec_impl).sDecoderStatistics);
+            ctx_box.pVlcTable = ptr::addr_of_mut!((*dec_impl).sVlcTable) as *mut std::ffi::c_void;
+            ctx_box.pPictInfoList = ptr::addr_of_mut!((*dec_impl).sPictInfoList) as *mut _;
+            ctx_box.pPictReoderingStatus = ptr::addr_of_mut!((*dec_impl).sReoderingStatus);
+            ctx_box.pStreamSeqNum = ptr::addr_of_mut!((*dec_impl).iStreamSeqNum);
             let p_ctx = Box::into_raw(ctx_box);
             crate::decoder::decoder_core::WelsDecoderDefaults(p_ctx as *mut _, ptr::null_mut());
             crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
