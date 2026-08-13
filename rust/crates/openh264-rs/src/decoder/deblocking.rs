@@ -1975,7 +1975,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
     let iCurMbType = if !(*pCurDqLayer).pDec.is_null() {
         *(*(*pCurDqLayer).pDec).pMbType.add(iMbXyIndex as usize)
     } else {
-        *(*pCurDqLayer).pMbType.add(iMbXyIndex as usize)
+        *(*pCurDqLayer).grid.mb_type.get(iMbXyIndex as usize)
     };
 
     let pSliceHeader = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
@@ -1991,7 +1991,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
                     *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
                 } else {
-                    *(*pCurDqLayer).pMbType.add(iMbNb as usize)
+                    *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
 
                 let val = if IS_INTRA(uiMbType) {
@@ -2011,7 +2011,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
                     *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
                 } else {
-                    *(*pCurDqLayer).pMbType.add(iMbNb as usize)
+                    *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
 
                 let val = if IS_INTRA(uiMbType) {
