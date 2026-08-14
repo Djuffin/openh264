@@ -303,7 +303,8 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    au_has_nals, cur_au, dec_pic, ec_ref_pic, pic_pool_mut, pool_pic, prev_dpb_pic, ref_pic,
+    au_has_nals, cur_au, dec_pic, ec_ref_pic, pic_pool_mut, pic_refs, pool_pic, prev_dpb_pic,
+    ref_pic,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -893,7 +894,7 @@ pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, i
 
 #[inline]
 pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {
-    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(pCtx);
+    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(pCtx, pic_refs(pCtx));
 }
 
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
