@@ -8969,3 +8969,96 @@ because the flip was the face, and it is the one P″ reverted.
    and W6's NZC cache family are the next two faces where a byte gate cannot see the
    question.
 8. **Perf debt for W8** unchanged, with §5's one structural addition named.
+
+## Phase 5, session R — W3's tail, W4, W5, and W6's first legs (2026-08-14)
+
+**Commits:** `0e996823` (doc tail + S31), `2fd3e46c` `029ea5af` `bdbab19a` `c16232cb`
+(T5.R1–R4, **W3**), `65a3e056` (T5.R5, **W4**), `50e8a1ac` (T5.R6, **W5**), `fb079758`
+`5fbe61a2` (T5.R7–R8, W6's first legs).
+
+### 1. Three W-items closed, and the order was forced
+
+`pCurDqLayer` was a **cache** of `pDqLayersList` with one production stamp, so it died
+first (85 sites, 48 functions, 8 files, threaded from three bracket tops) — a stored
+derivation through an owning `Box` is invalidated by the next derivation, which is why
+the cache could not survive the flip. Then the list, `TagFmo`'s map and the parse-only
+descriptor became owners: **`WelsMallocz|WelsFree` in `src/decoder/` reads 0** and both
+allocator wrappers are deleted. **W3 closes.** W4 deleted the packed-word idiom
+(`LD*`/`ST*` and the two byte-pointer block helpers, 219 uses → assignments of the
+values they moved; the LD/ST grep reads 0 in code, 37 prose — S16's floor) and with it
+**F35's second half**. W5 made the parameter sets ids — `SpsRef = (id, subset)`,
+because the C picks between two SPS buffers with the extension flag and the pointer
+carried that choice — resolved by five `addr_of_mut!` lookups that take **no borrow at
+all**, which is F41's question answered more strongly than by reading the sites.
+
+### 2. Findings
+
+**F43 is new and unfixed** (Eugene's call): `decoder_core.rs` declares stub
+`NeedErrorCon`/`ImplementErrorCon`/`MarkECFrameAsRef`/`FmoParamUpdate`/`FmoNextMb` that
+**shadow** the real bodies in `error_concealment.rs`/`fmo.rs`, so error concealment and
+FMO never run in production and no instrument can see it — name-matching tools resolve
+to the real body, the census compares text, and clean streams make the C++ agree.
+**F42 killed T5.N5's `debug_assert!`** (a malformed stream *can* make the colocated
+picture the decoded one). **F41 half-closes**, **F40 becomes unrepresentable**, **F19
+closes for the layer**, **F35's alignment half closes**.
+
+### 3. Numbers, gates, probes
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 476 / 470 / 20 | **476 / 470 / 20** |
+| Miri `--lib` | 336 | **336** |
+| decode goldens / census | 57 / 59 | **57 / 59** |
+| decoder `raw_ptr` | 1237 | **980** |
+| decoder `WelsMallocz`/`WelsFree` call sites | 8 | **0** |
+
+Close **OVERALL: PASS** at `full`: sweeps **341/341 both profiles**, both benches
+bit-identical, Miri 336/0, ratchet regenerated (crate `raw_ptr` 4117, `unsafe_fn` 1248).
+**F3 zero hits** — no measurement to append; the running total stands at forty-two
+measurements, fourteen alternations, twenty-one acquittals. **Five probes, all green**,
+all `cargo miri test --lib` 336/0 (955–967s), run on detached worktrees so the main tree
+kept moving — the method is worth keeping.
+
+### 4. Perf
+
+**Not measured. D-gate-1.** W8 inherits N–Q's debt unchanged. Structurally this session
+*removes* work rather than adding it: 219 packed-word round trips become moves, 197
+parameter-set dereferences become an `addr_of_mut!` each, and the NZC cache stops being
+copied through pointers. Both benches bit-identical on every row.
+
+### Hand-off: Phase 5, session S — W6's tail, W7, then the exit
+
+**Two different reasons, and they should not be blurred.** W6's *done-test* is
+blocked by a design decision only Eugene or the steward can make (below). W6's
+remaining *legs* and all of W7 are **open work this session did not reach** — not
+blocked, not dropped for context (no compaction ever ran), simply not done inside the
+seams it spent. Rule 5's "drop from the end only" is satisfied; rule 1's blocker covers
+the done-test alone, and the honest count is **three W-items closed of the five
+scoped**. W6's done-test —
+`decode_slice.rs` under `#![deny(unsafe_code)]` — **cannot be reached by conversion
+work**: the file holds 80 `(*pCtx)` dereferences across 44 functions taking
+`pCtx: *mut SWelsDecoderContext`, and the lint forbids every one. The only way through
+is the context arriving as a reference, which **T5.G1 deliberately removed** and S29
+records as removed, because re-entrancy through `pCtx` invalidates such a borrow.
+**No decoder module is deny-clean today** — the count is 0, not "all but this one" — so
+the question is phase-shaped and it is Eugene's or the steward's.
+
+1. **W6's remaining legs, all available now**: the EC MC paths (`sMCRefMember`'s plane
+   pointers, `error_concealment.rs`); **`cabac_rbsp_window`'s retirement** — 21 call
+   sites, each `let cabac_win = cabac_rbsp_window(pCtx)` at a function head, and the
+   function returns `&'a [u8]` with an **unbounded** lifetime synthesized from a raw
+   pointer, which is S25's shape; the signature leg (D-fid-1: functions may merge).
+   The window is constant across a slice, so its retirement is the bracket maneuver
+   this session used three times.
+2. **W7 is untouched**: 5.2's straggler sweep, the F40-class crate-wide sweep,
+   `SHIM(` 160 → the named survivor, and the `deny(unsafe_code)` attributes — which
+   inherit the blocker above wherever a module holds `pCtx`.
+3. **F43 needs a decision before W7's sweep**, because deleting the five stubs makes a
+   whole subsystem live and changes output on damaged streams.
+4. **The census cannot see F43's class.** If the instrument is to catch the next one it
+   must compare *resolution*, not text — a note for whoever owns S22's tooling.
+5. **Findings inherited unchanged**: F41 (the `pParam` alias half), F23/F38 and the
+   `api/` inventory → Phase 8; F36 → decoder threading; F3 per S14. `PrefetchPicForThread`/
+   `PrefetchLastPicForThread` still have no callers and stay on W7's straggler list.
+6. **Probe budget**: five spent, five green. W6's EC MC paths and the `cabac_rbsp_window`
+   retirement are the next two seams a byte gate cannot see.
