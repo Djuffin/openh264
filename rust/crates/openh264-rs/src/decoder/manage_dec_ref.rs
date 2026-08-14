@@ -642,10 +642,13 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
         };
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
-            let pRef = match pic_pool_mut(pCtx) {
+            // The EC prefetch's slot, held for the whole region below — the region is
+            // one operation and the flip's bracket is drawn around exactly it.
+            let ec_slot = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
-                None => std::ptr::null_mut(),
+                None => None,
             };
+            let pRef = pool_pic(pCtx, ec_slot);
             if !pRef.is_null() {
                 (*pRef).bIsComplete = false;
                 if !(*pCtx).pSps.is_null() {

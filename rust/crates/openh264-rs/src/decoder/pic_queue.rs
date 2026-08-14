@@ -153,8 +153,16 @@ impl<'a> PicRefs<'a> {
     ///
     /// Identical in behaviour to `pool_pic(pCtx, slot)`, which is the point: the
     /// hoist moves *where the pool is reached*, not what comes back.
+    ///
+    /// **`*const`, and that is W3's settled fact 1.** Below a bracket top the decode
+    /// path only ever *reads* a reference — POCs, `bIsComplete`, `bIsLongRef`, the
+    /// colocated macroblock's motion, the plane bytes MC samples — which was verified
+    /// by grep over every ref-bound local in the files this view reaches, and comes
+    /// out to zero writes. The `*const` makes that a compile error to violate rather
+    /// than a comment, and it is what lets the flip resolve references out of a
+    /// [`PoolRest`], which can only hand out `&SPicture`.
     #[inline]
-    pub fn get(&self, slot: Option<PicId>) -> PPicture {
+    pub fn get(&self, slot: Option<PicId>) -> *const SPicture {
         match (slot, self.pool) {
             (Some(id), Some(pool)) => pool.slot(id),
             _ => std::ptr::null_mut(),
@@ -229,12 +237,21 @@ impl PicPool {
     /// higher, so an exhausted DPB eventually indexes past `iCapacity`. The port
     /// already guarded that with `iPicIdx < iCapacity`; here the bound is the pool's.
     ///
+    /// **The slot, not the picture** (W3's settled fact 4). Both callers want the
+    /// slot — one stores it straight into `pCtx->pDec`, the other writes several
+    /// fields through it — and with owned slots a `&mut SPicture` return would borrow
+    /// the pool for the whole of the caller's expression. A `PicId` borrows nothing.
+    ///
+    /// It is also the identical value the callers were computing: `pic_slot(pPic)`
+    /// read back the stamp [`stamp_slots`](Self::stamp_slots) wrote from this same
+    /// iteration, and a picture never moves between slots (T5.N2).
+    ///
     /// # Safety
     /// As [`is_recyclable`](Self::is_recyclable).
-    pub unsafe fn prefetch_free(&mut self) -> PPicture {
+    pub unsafe fn prefetch_free(&mut self) -> Option<PicId> {
         let capacity = self.capacity();
         if capacity == 0 {
-            return std::ptr::null_mut();
+            return None;
         }
 
         // Pass 1: forward from cursor + 1.
@@ -242,29 +259,27 @@ impl PicPool {
         while index < capacity {
             if self.is_recyclable(index as usize) {
                 self.cursor = index;
-                let pPic = self.slot_at(index);
-                (*pPic).iPicBuffIdx = index;
-                return pPic;
+                (*self.slot_at(index)).iPicBuffIdx = index;
+                return Some(self.id(index as usize));
             }
             index += 1;
         }
 
         // Pass 2: wrap to 0 and walk up to and including the cursor.
         index = 0;
-        let mut pPic: PPicture = std::ptr::null_mut();
+        let mut found = None;
         while index <= self.cursor && index < capacity {
             if self.is_recyclable(index as usize) {
-                pPic = self.slot_at(index);
+                found = Some(index);
                 break;
             }
             index += 1;
         }
 
         self.cursor = index;
-        if !pPic.is_null() {
-            (*pPic).iPicBuffIdx = index;
-        }
-        pPic
+        let found = found?;
+        (*self.slot_at(found)).iPicBuffIdx = index;
+        Some(self.id(found as usize))
     }
 
     /// A pool over pictures that already exist.
@@ -304,22 +319,27 @@ impl PicPool {
     ///
     /// # Safety
     /// As [`is_recyclable`](Self::is_recyclable).
-    pub unsafe fn next_for_thread(&mut self) -> PPicture {
+    pub unsafe fn next_for_thread(&mut self) -> Option<PicId> {
         let capacity = self.capacity();
         if capacity == 0 {
-            return std::ptr::null_mut();
+            return None;
         }
 
-        let pPic = self.slot_at(self.cursor);
+        let taken = self.cursor;
+        let pPic = self.slot_at(taken);
         if !pPic.is_null() {
-            (*pPic).iPicBuffIdx = self.cursor;
+            (*pPic).iPicBuffIdx = taken;
         }
 
         self.cursor += 1;
         if self.cursor >= capacity {
             self.cursor = 0;
         }
-        pPic
+        if pPic.is_null() {
+            None
+        } else {
+            Some(self.id(taken as usize))
+        }
     }
 }
 
@@ -583,7 +603,10 @@ pub unsafe fn PrefetchPicForThread(pPicBuf: PPicBuff) -> PPicture {
     if pPicBuf.is_null() {
         return std::ptr::null_mut();
     }
-    (*pPicBuf).next_for_thread()
+    match (*pPicBuf).next_for_thread() {
+        Some(id) => (*pPicBuf).slot(id),
+        None => std::ptr::null_mut(),
+    }
 }
 
 /// Retrieves an explicit picture node by its recorded buffer pool index (`iLastPicBuffIdx`).
@@ -818,16 +841,16 @@ mod tests {
             let mut pool = CreatePicBuff(pCtx, 4, 64, 64).expect("pool");
 
             // First prefetch gets index 1 (Pass 1 scan from iCurrentIdx + 1)
-            let pic1 = pool.prefetch_free();
-            assert!(!pic1.is_null());
+            let slot1 = pool.prefetch_free().expect("slot 1 is free");
+            assert_eq!(slot1.index(), 1);
             assert_eq!(pool.cursor(), 1);
 
             // Mark pic1 as used as reference
-            (*pic1).bUsedAsRef = true;
+            (*pool.slot(slot1)).bUsedAsRef = true;
 
             // Second prefetch skips index 1, finds index 2
-            let pic2 = pool.prefetch_free();
-            assert!(!pic2.is_null());
+            let slot2 = pool.prefetch_free().expect("slot 2 is free");
+            assert_eq!(slot2.index(), 2);
             assert_eq!(pool.cursor(), 2);
 
             DestroyPicBuff(pCtx, Some(pool), &mut ma as *mut CMemoryAlign);
@@ -983,21 +1006,21 @@ mod tests {
             for i in 0..3 {
                 (*pool.slot(pool.id(i))).bUsedAsRef = true;
             }
-            assert!(pool.prefetch_free().is_null());
+            assert!(pool.prefetch_free().is_none());
             assert_eq!(pool.cursor(), 1);
-            assert!(pool.prefetch_free().is_null());
+            assert!(pool.prefetch_free().is_none());
             assert_eq!(pool.cursor(), 2);
-            assert!(pool.prefetch_free().is_null());
+            assert!(pool.prefetch_free().is_none());
             assert_eq!(pool.cursor(), 3);
-            assert!(pool.prefetch_free().is_null());
+            assert!(pool.prefetch_free().is_none());
             assert_eq!(pool.cursor(), 3, "an exhausted cursor stays at the bound");
 
             // Free slot 0 — behind the cursor, so only the wrap can reach it.
             (*pool.slot(pool.id(0))).bUsedAsRef = false;
-            let got = pool.prefetch_free();
-            assert_eq!(got, pool.slot(pool.id(0)));
+            let got = pool.prefetch_free().expect("the wrap reaches slot 0");
+            assert_eq!(got, pool.id(0));
             assert_eq!(pool.cursor(), 0);
-            assert_eq!((*got).iPicBuffIdx, 0, "the winner learns its slot");
+            assert_eq!((*pool.slot(got)).iPicBuffIdx, 0, "the winner learns its slot");
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,

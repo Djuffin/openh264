@@ -272,6 +272,21 @@ pub struct PoolRest<'a, T> {
     generations: &'a [u32],
 }
 
+// `Copy` is hand-written because `#[derive]` would add a `T: Copy` bound, and the
+// `T` this view is built over is `Option<Box<SPicture>>` — the slots are not
+// copyable and are not being copied: the fields above are two shared slices and an
+// index, and copying them is copying *borrows*. A `PoolRest` that is not `Copy`
+// forces every signature it is threaded through to take it by reference, which grows
+// a second lifetime across the whole macroblock tree (W3's settled fact 3).
+impl<T> Clone for PoolRest<'_, T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for PoolRest<'_, T> {}
+
 impl<T> PoolRest<'_, T> {
     /// The slot `id` names.
     ///

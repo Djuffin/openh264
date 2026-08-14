@@ -1156,9 +1156,12 @@ unsafe fn GetRefPic(
         if !pRefPic.is_null() {
             pMCRefMem.iSrcLineLuma = (*pRefPic).linesize(0);
             pMCRefMem.iSrcLineChroma = (*pRefPic).linesize(1);
-            pMCRefMem.pSrcY = (*pRefPic).data_ptr(0);
-            pMCRefMem.pSrcU = (*pRefPic).data_ptr(1);
-            pMCRefMem.pSrcV = (*pRefPic).data_ptr(2);
+            // The three reference-side `data_ptr` calls in the tree, and the reason
+            // the `&self` form exists (W3's fact 5): MC reads the source planes and
+            // writes into the current picture, so the reference never needs `&mut`.
+            pMCRefMem.pSrcY = (*pRefPic).data_ptr_ref(0);
+            pMCRefMem.pSrcU = (*pRefPic).data_ptr_ref(1);
+            pMCRefMem.pSrcV = (*pRefPic).data_ptr_ref(2);
             if pMCRefMem.pSrcY.is_null() || pMCRefMem.pSrcU.is_null() || pMCRefMem.pSrcV.is_null() {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
             }
