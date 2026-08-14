@@ -53,8 +53,8 @@ after Miri does.**
 
 **P** = W1 + W2a — **spent** (`a3b68334`, `eef8a90b`). **P′** = W2b + W3's first seam —
 **spent** (`59dbbb0b`, `48355825`, `6758d885`;
-[`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's remainder + W4 + W5.
-**P‴** = W6 + W7. **Q** = W8. A probe run per container/file converted, and **budget it
+[`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's remainder + W4 + W5
+([`phase5_session_p3.md`](phase5_session_p3.md)). **P‴** = W6 + W7. **Q** = W8. A probe run per container/file converted, and **budget it
 to fire**: session P ran three green, session P′ ran three and the second convicted
 `AddShortTermToList` mid-face. No perf measurement before W8 (D-gate-1).
 
@@ -85,24 +85,48 @@ writers — and deletes first. One S23 check gates the mechanical pass (the
 arm's real target — `SPicture.pMv`/`pRefIndex`, still raw allocations — is W3's,
 named in its row.
 
-## W3's one design question — settle it before the first edit
+## W3's design question — settled by reading the tree (steward, at `f5a3eac8`)
 
-**`Pool<PPicture>` → `Pool<Box<SPicture>>` is unblocked and it is not mechanical**
-(session P′, T5.P′3's §4). Every raw alias into the pool is gone and the picture is a
-complete owner, so the ordering rule has nothing left to clear. What remains is the
-**call-site shape**: with owned slots, `pool_pic` must derive its raw pointer from a
-`&mut Box<SPicture>`; it is called at hundreds of sites and callers routinely hold one
-result across another call to it (`dec_pic` live while `ref_pic` is taken). Each such
-pair is a fresh Unique retag popping the last — S25's overlap at the scale of the
-decoder.
+The surface is **115 call sites, not hundreds** (`pool_pic`/`dec_pic`/`ec_ref_pic`/
+`ref_pic`: decoder_core 30, decode_slice 27, cabac 15, manage_dec_ref 13, ctx
+bodies+helpers 9, EC 7, cavlc 6, mv_pred 4, deblocking 4 — S24, the unit clause
+again). With owned slots a result stops being a copy (T5.N1's invariant) and becomes
+a derivation through the Box's tag — any two live results conflict. So per-use
+resolution dies and **accesses move inside brackets**: a scope that borrows the pool
+once at its top and threads the resolution down, touching the pool nowhere else
+inside. The decode bracket is **the slice** — `dec_pic` and both ref lists are
+constant across one slice's MB loop; EC, DPB and output ops bracket per operation.
 
-`Pool::mut_and_rest` is the designed answer and **already exists, tested**, in
-`safe/pool.rs`. What does not exist is the shape that uses it: which callers are "the
-one mutable picture" and which are readers of the rest. Settle that in writing, the way
-W2b's was settled — that settlement is why W2b executed in one pass.
+Execution is the ids-before-ownership maneuver one level up — **derivations move to
+bracket tops before brackets become borrows** — in two steps:
 
-The small W3 entries do not wait on it: `pTempDec`, `pDqLayersList` and `pPicBuff` are
-each one `Box::into_raw`/`from_raw` pair today, which is W1's shape exactly.
+1. **The hoist, under `PPicture` slots.** Per-use accessor calls become parameters
+   threaded from bracket tops (W2b(i)-(b)'s proven recipe). Pure motion —
+   `pool_pic` copies, so this is semantically a no-op, byte-identical, incremental
+   per file, probe per file.
+2. **The flip, brackets only.** Slots become `Option<Box<SPicture>>` (null slots
+   are real — `CreatePicBuff`'s partial-failure arms); bracket tops become
+   `mut_and_rest(dec_id)` → (`&mut SPicture`, `PoolRest`) with refs as
+   `rest.get(id)` (the API exists, tested); the hoisted raw params derive from the
+   bracket's borrows (S28) and nothing below re-borrows. `AllocPicture`/
+   `FreePicture`'s `into_raw`/`from_raw` die into `Pool::replace` + `Drop` (F19
+   closes decoder-side; F37's missing reset is adjudicated at this seam, per its
+   record). The four accessors are **deleted** — done-test: their greps read 0 and
+   direct `.pPicBuff` reads enumerate to bracket sites only.
+
+W4's colocated falls out of the bracket: inside the slice bracket cur and ref are
+already resolved, so `GetColocatedMb` takes both as parameters and T5.N5's
+`debug_assert!` becomes `mut_and_rest`'s type-level fact.
+
+**And `pDqLayersList` is W2b again, not W1** (the row undersold it): the list is one
+`Box::into_raw` (`decoder_core.rs:2780`) but **`pCurDqLayer` is its cache** — one
+production stamp (`:3578`), ~580 uses, of which **81 read the ctx field mid-tree**
+(decode_slice 25, decoder_core 15, cabac 12, manage_dec_ref 11, EC 11, rest 7)
+while the call tree already threads it as a parameter. The field deletes the way
+`pDec`'s did: derive once at the loop top from the owned Box, thread the existing
+parameter, the 81 field-reads become param sites. `pTempDec` alone is truly
+W1-shaped, and `pPicBuff` → owned is safe **before** the flip: under `PPicture`
+slots a `pool_pic` result's provenance is `AllocPicture`'s, not the pool Box's.
 
 ## Phase exit conditions (the definition of done)
 
