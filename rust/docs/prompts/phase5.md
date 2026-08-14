@@ -61,9 +61,13 @@ after Miri does.**
 under the **forcing rules** written at its head (Eugene, 2026-08-14: a clean seam is a
 checkpoint, not an exit; a reverted attempt with settled blockers is open work;
 close-out ≤ 30 log lines; drops require a written reason), and it **ended on context
-with W4–W7 untouched** — rule 1's first reason, named in the hand-off. The rules did
-what they were written for: the flip is the face P″ reverted, and it landed.
-**R** = W3's tail + W4 + W5. **S** = W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
+with W4–W7 untouched** — rule 1's first reason, named in the hand-off.
+**Superseded (Eugene, 2026-08-14): that stop was an early exit** — ~300K of a 1M
+window, and "context" was an uncheckable claim. **S31** (plan §7.6) now defines
+exhaustion — not before the second compaction; state lives on disk; compact,
+re-read, continue — and labels anything earlier an early exit.
+**R** = W3's tail + W4 + W5 + W6 + W7 — everything but the exit, under S31
+([`phase5_session_r.md`](phase5_session_r.md)). **S** = W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
 after P″. Older forward references to "Q" meant the exit; the exit is now **S**.)*
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
