@@ -2128,27 +2128,19 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
 /// The two reference lists as [`PicId`]s — `SDeblockingFilter::ref_ids`'s one writer.
 ///
-/// `None` is the C's null slot. The assert is the invariant the whole conversion
-/// rests on: a reference list holds pool pictures, because `WelsInitRefList` fills it
-/// from `pPicBuff` and from nowhere else, so a non-null entry always has a slot. If it
-/// ever did not, its `None` would collide with a null slot's and boundary strength
-/// would call two different references the same one.
+/// **T5.P′2 emptied this function of work.** It existed because `sRefPic`'s lists
+/// were raw picture pointers and boundary strength needed identities, so it walked 34
+/// pointers and stamped each one's slot, asserting on the way that a reference list
+/// only ever holds pool pictures. The lists *are* those identities now, so the
+/// snapshot is the copy the type does for free and the assert has moved to the door
+/// they go in by (`manage_dec_ref::insert_ref`) — one site instead of every reader.
+///
+/// The snapshot itself is still a snapshot, and for T5.N4's reason: nothing writes a
+/// reference list during deblocking, so the loop's `ref_ids` and the context's lists
+/// cannot diverge.
 #[inline]
 unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] {
-    let mut ids = [[None; MAX_DPB_COUNT]; LIST_A];
-    for l in 0..LIST_A {
-        for i in 0..MAX_DPB_COUNT {
-            let pPic = (*pCtx).sRefPic.pRefList[l][i];
-            if !pPic.is_null() {
-                debug_assert!(
-                    (*pPic).pic_id().is_some(),
-                    "a reference list holds pool pictures; slot {i} of list {l} has none"
-                );
-                ids[l][i] = (*pPic).pic_id();
-            }
-        }
-    }
-    ids
+    (*pCtx).sRefPic.pRefList
 }
 
 pub unsafe fn WelsDeblockingFilterSlice(

@@ -263,8 +263,16 @@ pub struct SPicture {
     /// Reference frame indices per 4x4 block for `LIST_0` and `LIST_1` (used for direct mode).
     pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
 
-    /// Pointers to active reference pictures in `LIST_0` and `LIST_1` used for motion compensation.
-    pub pRefPic: [[*mut SPicture; 17]; LIST_A],
+    /// This picture's own reference lists, as **slot handles** — snapshotted when the
+    /// picture is marked as a reference, and read back by `MapColToList0` when a
+    /// later B slice uses temporal direct mode.
+    ///
+    /// **T5.P′2 turned it from raw picture pointers into `Option<PicId>`**, with
+    /// `sRefPic`'s three lists and for their reason: a raw alias into the pool, held
+    /// on a *pooled picture*, for as long as that picture is a reference. The
+    /// snapshot in `DecodeCurrentAccessUnit` is now a handle-to-handle copy that
+    /// never touches the pool at all.
+    pub pRefPic: [[Option<PicId>; 17]; LIST_A],
 
 }
 
@@ -315,7 +323,7 @@ impl Default for SPicture {
             pMbType: std::ptr::null_mut(),
             pMv: [std::ptr::null_mut(); LIST_A],
             pRefIndex: [std::ptr::null_mut(); LIST_A],
-            pRefPic: [[std::ptr::null_mut(); 17]; LIST_A],
+            pRefPic: [[None; 17]; LIST_A],
         }
     }
 }

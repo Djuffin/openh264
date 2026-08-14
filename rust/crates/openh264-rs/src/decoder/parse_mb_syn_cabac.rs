@@ -44,7 +44,7 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::dec_pic;
+use crate::decoder::decoder_context::{dec_pic, pool_pic, ref_pic};
 use crate::decoder::picture::PPicture;
 use std::ptr;
 
@@ -1685,7 +1685,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
-    let ppRefPic = (*pCtx).sRefPic.pRefList[LIST_0].as_ptr();
+    let ppRefPic = &(*pCtx).sRefPic.pRefList[LIST_0];
     let pRefCount0 = pSliceHeader.uiRefCount[0];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut pMv = [0i16; 2];
@@ -1719,7 +1719,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             if err != ERR_NONE {
                 return err;
             }
-            if iRef[0] < 0 || iRef[0] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[0] as usize)).is_null() {
+            if iRef[0] < 0 || iRef[0] as i32 >= pRefCount0 || ppRefPic[iRef[0] as usize].is_none() {
                 (*pCtx).bMbRefConcealed = true;
                 if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
                     iRef[0] = 0;
@@ -1728,7 +1728,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                 }
             }
-            let pPic0 = *ppRefPic.add(iRef[0] as usize);
+            let pPic0 = pool_pic(pCtx, ppRefPic[iRef[0] as usize]);
             (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                 || (*pCtx).bMbRefConcealed
                 || !(pPic0.is_null() || (*pPic0).bIsComplete || bIsPending);
@@ -1764,7 +1764,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 if err != ERR_NONE {
                     return err;
                 }
-                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[i as usize] as usize)).is_null() {
+                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || ppRefPic[iRef[i as usize] as usize].is_none() {
                     (*pCtx).bMbRefConcealed = true;
                     if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
                         iRef[i as usize] = 0;
@@ -1773,7 +1773,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = *ppRefPic.add(iRef[i as usize] as usize);
+                let pPic = pool_pic(pCtx, ppRefPic[iRef[i as usize] as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
@@ -1813,7 +1813,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 if err != ERR_NONE {
                     return err;
                 }
-                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || (*ppRefPic.add(iRef[i as usize] as usize)).is_null() {
+                if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || ppRefPic[iRef[i as usize] as usize].is_none() {
                     (*pCtx).bMbRefConcealed = true;
                     if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
                         iRef[i as usize] = 0;
@@ -1822,7 +1822,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = *ppRefPic.add(iRef[i as usize] as usize);
+                let pPic = pool_pic(pCtx, ppRefPic[iRef[i as usize] as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
@@ -1893,7 +1893,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 if err != ERR_NONE {
                     return err;
                 }
-                if pRefIdx[i] < 0 || pRefIdx[i] as i32 >= pRefCount0 || (*ppRefPic.add(pRefIdx[i] as usize)).is_null() {
+                if pRefIdx[i] < 0 || pRefIdx[i] as i32 >= pRefCount0 || ppRefPic[pRefIdx[i] as usize].is_none() {
                     (*pCtx).bMbRefConcealed = true;
                     if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
                         pRefIdx[i] = 0;
@@ -1902,7 +1902,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = *ppRefPic.add(pRefIdx[i] as usize);
+                let pPic = pool_pic(pCtx, ppRefPic[pRefIdx[i] as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
@@ -2021,7 +2021,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     ///  !(pRefList[ref] && (pRefList[ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = (*pCtx).sRefPic.pRefList[$listIdx as usize][$iref as usize];
+            let p = ref_pic(pCtx, $listIdx as usize, $iref as usize);
             (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                 || (*pCtx).bMbRefConcealed
                 || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
@@ -2032,16 +2032,16 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     macro_rules! check_ref_idx {
         ($listIdx:expr, $iref:expr) => {{
             let list = $listIdx as usize;
-            let ppRefPic = (*pCtx).sRefPic.pRefList[list].as_ptr();
+            let ppRefPic = &(*pCtx).sRefPic.pRefList[list];
             if $iref < 0
                 || $iref as i32 >= pRefCount[list]
-                || (*ppRefPic.add($iref as usize)).is_null()
+                || ppRefPic[$iref as usize].is_none()
             {
                 (*pCtx).bMbRefConcealed = true;
                 if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
                     $iref = 0;
                     (*pCtx).iErrorCode |= dsBitstreamError;
-                    if (*ppRefPic.add($iref as usize)).is_null() {
+                    if ppRefPic[$iref as usize].is_none() {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 } else {
@@ -2228,11 +2228,11 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         let mut uiSubMbType: u32 = 0;
         // sub_mb_type, partition
         let mut pMvDirect = [[0i16; 2]; LIST_A];
-        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_null() {
+        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_none() {
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*(*pCtx).sRefPic.pRefList[LIST_1][0]).bIsLongRef;
+        let bIsLongRef = (*ref_pic(pCtx, LIST_1, 0)).bIsLongRef;
         let ref0Count = WELS_MIN(
             pSliceHeader.uiRefCount[LIST_0],
             (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
