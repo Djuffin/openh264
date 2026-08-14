@@ -371,7 +371,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
 
 // Forward definitions matching OpenH264 decoder C ABI structs
 pub use crate::decoder::picture::{SPicture, PPicture};
-use crate::decoder::decoder_context::{dec_pic, pool_pic, ref_pic};
+use crate::decoder::decoder_context::{PicRefs, ref_id};
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
@@ -1013,6 +1013,8 @@ pub unsafe fn WelsFillCacheInter(
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn ParseInterInfo(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
+    pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     buf: &[u8],
@@ -1034,7 +1036,6 @@ pub unsafe fn ParseInterInfo(
     let ec_active = (*pCtx).pParam.is_null()
         || (*(*pCtx).pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
 
-    let pDec = dec_pic(pCtx);
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     match mb_type {
         MB_TYPE_16x16 => {
@@ -1061,7 +1062,7 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx as usize]);
+                let pRefPic = pRefs.get(ppRefPic[iRefIdx as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
@@ -1112,7 +1113,7 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
+                let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
@@ -1170,7 +1171,7 @@ pub unsafe fn ParseInterInfo(
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                         }
                     }
-                    let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
+                    let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
                     (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                         || (*pCtx).bMbRefConcealed
                         || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
@@ -1271,7 +1272,7 @@ pub unsafe fn ParseInterInfo(
                                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                             }
                         }
-                        let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
+                        let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
                         (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                             || (*pCtx).bMbRefConcealed
                             || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
@@ -1356,6 +1357,8 @@ pub unsafe fn ParseInterInfo(
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
 pub unsafe fn ParseInterBInfo(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
+    pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     buf: &[u8],
@@ -1385,7 +1388,7 @@ pub unsafe fn ParseInterBInfo(
     ///  !(ppRefPic[list][ref] && (ppRefPic[list][ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = ref_pic(pCtx, $listIdx as usize, $iref as usize);
+            let p = pRefs.get(ref_id(pCtx, $listIdx as usize, $iref as usize));
             (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                 || (*pCtx).bMbRefConcealed
                 || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
@@ -1413,7 +1416,6 @@ pub unsafe fn ParseInterBInfo(
         }};
     }
 
-    let pDec = dec_pic(pCtx);
     let mbType = *(*pDec).pMbType.get(iMbXy);
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
@@ -1422,6 +1424,8 @@ pub unsafe fn ParseInterBInfo(
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx,
+                pDec,
+                pRefs,
                 &mut pMvDirect,
                 &mut iRef,
                 &mut subMbType,
@@ -1433,6 +1437,8 @@ pub unsafe fn ParseInterBInfo(
             // temporal direct 16x16 mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
                 pCtx,
+                pDec,
+                pRefs,
                 &mut pMvDirect,
                 &mut iRef,
                 &mut subMbType,
@@ -1655,7 +1661,7 @@ pub unsafe fn ParseInterBInfo(
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*ref_pic(pCtx, LIST_1, 0)).bIsLongRef;
+        let bIsLongRef = (*pRefs.get(ref_id(pCtx, LIST_1, 0))).bIsLongRef;
         let ref0Count = std::cmp::min(
             pSliceHeader.uiRefCount[LIST_0],
             (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
@@ -1694,6 +1700,8 @@ pub unsafe fn ParseInterBInfo(
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                             pCtx,
+                            pDec,
+                            pRefs,
                             &mut pMvDirect,
                             &mut iRef,
                             &mut directSubMbType,
@@ -1705,6 +1713,8 @@ pub unsafe fn ParseInterBInfo(
                         // temporal direct mode
                         let ret = crate::decoder::mv_pred::PredBDirectTemporal(
                             pCtx,
+                            pDec,
+                            pRefs,
                             &mut pMvDirect,
                             &mut iRef,
                             &mut directSubMbType,
@@ -1775,6 +1785,7 @@ pub unsafe fn ParseInterBInfo(
                         if colocRefIndexL0 >= 0 {
                             iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
                                 pCtx,
+                                pRefs,
                                 colocRefIndexL0,
                                 ref0Count,
                             );

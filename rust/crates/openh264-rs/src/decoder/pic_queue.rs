@@ -119,6 +119,49 @@ pub struct PicPool {
 pub type SPicBuff = PicPool;
 pub type PPicBuff = *mut PicPool;
 
+/// **A decode bracket's view of the pool** (T5.P″2): `PicId` → picture, with the
+/// pool reached once at the bracket top and nowhere below it.
+///
+/// This is the type W3's settlement is built on. With owned slots a resolution stops
+/// being a copy and becomes a derivation through the slot's `Box`, so two live
+/// results conflict and per-use resolution cannot survive; the answer is a scope —
+/// **the slice** for the decode path, one operation for EC, DPB and output — that
+/// borrows the pool at its top and threads this view down. Everything below reads
+/// `PicId`s out of the context and resolves them *here*, never through
+/// `(*pCtx).pPicBuff`.
+///
+/// Under `PPicture` slots (the hoist, T5.P″2) it wraps a shared borrow of the pool
+/// and [`get`](Self::get) is a slot copy, so threading it changes nothing a byte
+/// gate can see. At the flip it becomes the `PoolRest` half of
+/// [`Pool::mut_and_rest`] and the current picture becomes the `&mut` half — which is
+/// why the two travel together through every signature this face touches.
+#[derive(Clone, Copy, Debug)]
+pub struct PicRefs<'a> {
+    /// `None` before `CreatePicBuff` and after `DestroyPicBuff` — the state
+    /// `pool_pic`'s null arm was testing for.
+    pool: Option<&'a PicPool>,
+}
+
+impl<'a> PicRefs<'a> {
+    /// The bracket top's derivation.
+    #[inline]
+    pub fn over(pool: Option<&'a PicPool>) -> Self {
+        Self { pool }
+    }
+
+    /// The picture a stored handle names, or null when there is no pool or no handle.
+    ///
+    /// Identical in behaviour to `pool_pic(pCtx, slot)`, which is the point: the
+    /// hoist moves *where the pool is reached*, not what comes back.
+    #[inline]
+    pub fn get(&self, slot: Option<PicId>) -> PPicture {
+        match (slot, self.pool) {
+            (Some(id), Some(pool)) => pool.slot(id),
+            _ => std::ptr::null_mut(),
+        }
+    }
+}
+
 impl PicPool {
     /// Slot count — the C's `iCapacity`.
     #[inline]

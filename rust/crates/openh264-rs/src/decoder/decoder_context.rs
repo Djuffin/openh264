@@ -380,7 +380,7 @@ pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
 
 
 
-pub use crate::decoder::pic_queue::{PicPool, PicId, SPicBuff, PPicBuff};
+pub use crate::decoder::pic_queue::{PicPool, PicId, PicRefs, SPicBuff, PPicBuff};
 
 /// The decoder picture buffer's three lists, as **slot handles**.
 ///
@@ -651,6 +651,31 @@ pub unsafe fn pic_pool_ptr(pCtx: PWelsDecoderContext) -> PPicBuff {
         Some(pool) => pool as *mut SPicBuff,
         None => std::ptr::null_mut(),
     }
+}
+
+/// The bracket top's pool borrow, handed down as a [`PicRefs`] (T5.P″2).
+///
+/// Every scope that resolves more than one handle takes this once at its top and
+/// threads it; below a bracket top, `pRefs.get(id)` is the only way back to a
+/// picture and `(*pCtx).pPicBuff` is not read at all. That invariant is what makes
+/// the flip a change of two lines per bracket instead of a change at every use.
+#[inline]
+pub unsafe fn pic_refs<'a>(pCtx: PWelsDecoderContext) -> PicRefs<'a> {
+    PicRefs::over(if pCtx.is_null() {
+        None
+    } else {
+        (*pCtx).pPicBuff.as_deref()
+    })
+}
+
+/// Entry `i` of reference list `list` — the **handle**, without touching the pool.
+///
+/// The lists live in the context, not in the pool, so reading one below a bracket
+/// top is not a pool access: `pRefs.get(ref_id(pCtx, list, i))` is [`ref_pic`] split
+/// at exactly the line the flip moves.
+#[inline]
+pub unsafe fn ref_id(pCtx: PWelsDecoderContext, list: usize, i: usize) -> Option<PicId> {
+    (*pCtx).sRefPic.pRefList[list][i]
 }
 
 /// The picture being decoded into, or null when there is none.
