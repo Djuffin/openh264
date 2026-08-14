@@ -486,22 +486,31 @@ pub struct SPictReoderingStatus {
 }
 pub type PPictReoderingStatus = *mut SPictReoderingStatus;
 
+/// The parse-only output descriptor, **decoder-side and owned** (T5.R4).
+///
+/// The C's `SParserBsInfo` is a public API struct and `codec_api.rs` declares the
+/// port's copy of it; this one is the *decoder's* private instance, which
+/// `InitBsBuffer` used to `WelsMallocz` along with both of its buffers. Nothing
+/// hands it across the boundary — `DecodeParser` is a stub in this port and the api
+/// layer uses its own type — so the two buffers own their allocations here and the
+/// boundary's stamping of raw pointers is Phase 8's, with the rest of the `api/`
+/// inventory (F38, F41).
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct SParserBsInfo {
     pub iNalNum: i32,
-    pub pNalLenInByte: *mut i32,
-    pub pDstBuff: *mut u8,
+    /// Per-NAL lengths, `iNalNum` used of `len()` allocated. `ExpandBsLenBuffer`
+    /// grows it; the old `pCtx->iMaxNalNum` was this `Vec`'s length stored beside it
+    /// and died with the pointer (F16).
+    pub pNalLenInByte: Vec<i32>,
+    /// The parse-only destination buffer, `MAX_ACCESS_UNIT_CAPACITY` zeroed bytes.
+    /// **Allocation-only since T3.3**: the one `pNalPos`-guarded copy that wrote
+    /// through it was deleted dead, so nothing reads or writes it today.
+    pub pDstBuff: Vec<u8>,
     pub iSpsWidthInPixel: i32,
     pub iSpsHeightInPixel: i32,
     pub uiInBsTimeStamp: u64,
     pub uiOutBsTimeStamp: u64,
-}
-
-impl Default for SParserBsInfo {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
 }
 
 #[repr(C)]
@@ -678,6 +687,24 @@ pub unsafe fn cur_dq_layer(pCtx: PWelsDecoderContext) -> *mut DqLayerState {
     }
     match (*pCtx).pDqLayersList.as_deref_mut() {
         Some(layer) => layer as *mut DqLayerState,
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// The parse-only descriptor, or null when the decoder is not in parse-only mode.
+///
+/// [`cur_dq_layer`]'s shape and [`cur_dq_layer`]'s discipline (T5.R4): one live
+/// derivation at a time, and the three sites that take one —
+/// `DecodeFrameConstruction`'s two arms and `CheckAndFinishLastPic`'s reset — hold it
+/// across `cur_au` and context-field writes only, never across a second derivation of
+/// this field.
+#[inline]
+pub unsafe fn parser_bs(pCtx: PWelsDecoderContext) -> *mut SParserBsInfo {
+    if pCtx.is_null() {
+        return std::ptr::null_mut();
+    }
+    match (*pCtx).pParserBsInfo.as_deref_mut() {
+        Some(parser) => parser as *mut SParserBsInfo,
         None => std::ptr::null_mut(),
     }
 }
@@ -975,11 +1002,18 @@ pub struct SWelsDecoderContext {
     pub bFramePending: bool,
     pub bFrameFinish: bool,
     pub iNalNum: i32,
-    pub iMaxNalNum: i32,
+    // `iMaxNalNum` stood here — the allocated length of the parse-only length buffer,
+    // stored beside it and read only by the allocation and free arithmetic. T5.R4's
+    // `Vec` knows it (F16, and the same disposition `iMaxBsBufferSizeInByte` got at
+    // T3.3).
     pub sSpsBsInfo: [SSpsBsInfo; MAX_SPS_COUNT],
     pub sSubsetSpsBsInfo: [SSpsBsInfo; MAX_PPS_COUNT],
     pub sPpsBsInfo: [SPpsBsInfo; MAX_PPS_COUNT],
-    pub pParserBsInfo: *mut SParserBsInfo,
+    /// The parse-only descriptor, **owned** (T5.R4) and reached through
+    /// [`parser_bs`]. `None` outside parse-only mode, which is the state the old null
+    /// pointer named — and, unlike the null, it is what F41's flag-dependent free
+    /// path can no longer leak: the drop glue does not read `bParseOnly`.
+    pub pParserBsInfo: Option<Box<SParserBsInfo>>,
     pub pGetI16x16LumaPredFunc: [PGetIntraPredFunc; 7],
     pub pGetI4x4LumaPredFunc: [PGetIntraPredFunc; 14],
     pub pGetIChromaPredFunc: [PGetIntraPredFunc; 7],
@@ -1097,6 +1131,8 @@ impl SWelsDecoderContext {
             // S21, T5.R2: the layer joins them. Its zero was a null `PDqLayer` and is
             // now `None` through the same niche; the write states it either way.
             std::ptr::addr_of_mut!((*p).pDqLayersList).write(None);
+            // S21, T5.R4: the parse-only descriptor, `None` through the same niche.
+            std::ptr::addr_of_mut!((*p).pParserBsInfo).write(None);
             // S21, T5.R3, and the one clause here that is **not** redundant: `TagFmo`
             // owns its map as a `Vec` now, and a zeroed `Vec` is an invalid value with
             // no niche to rescue it. 256 entries, written where the array is.

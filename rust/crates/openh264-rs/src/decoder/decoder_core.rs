@@ -303,8 +303,8 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic, pic_pool_mut, pic_refs, pool_pic,
-    ref_id, ref_pic,
+    au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic, parser_bs, pic_pool_mut, pic_refs,
+    pool_pic, ref_id, ref_pic,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -685,34 +685,11 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut i32) -> i32 {
     crate::decoder::dec_golomb::BsGetSe(buf, pBs, pOut)
 }
 
-// Memory Allocation Helper Wrappers
-
-unsafe fn WelsMalloczHelper(pMa: *mut CMemoryAlign, size: usize) -> *mut u8 {
-    if !pMa.is_null() {
-        let tag = b"WelsMallocz\0".as_ptr() as *const c_char;
-        (*pMa).WelsMallocz(size as u32, tag) as *mut u8
-    } else {
-        let layout = std::alloc::Layout::from_size_align(size, 16).unwrap_or(
-            std::alloc::Layout::from_size_align(size, 1).unwrap()
-        );
-        std::alloc::alloc_zeroed(layout)
-    }
-}
-
-unsafe fn WelsFreeHelper(pMa: *mut CMemoryAlign, ptr: *mut u8, size: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    if !pMa.is_null() {
-        let tag = b"WelsFree\0".as_ptr() as *const c_char;
-        (*pMa).WelsFree(ptr as *mut c_void, tag);
-    } else {
-        let layout = std::alloc::Layout::from_size_align(size, 16).unwrap_or(
-            std::alloc::Layout::from_size_align(size, 1).unwrap()
-        );
-        std::alloc::dealloc(ptr, layout);
-    }
-}
+// `WelsMalloczHelper` and `WelsFreeHelper` stood here — the decoder's allocator
+// wrappers, each with a `pMa`-or-global arm, and after T5.R4 they had no callers: the
+// last three were the parse-only descriptor and its two buffers. **W3's done-test is
+// this**: `WelsMallocz|WelsFree` in `src/decoder/` is now prose only, and every
+// allocation the decoder makes is an owner with drop glue.
 
 // External and Internal Helper Stubs
 
@@ -1094,17 +1071,20 @@ pub unsafe fn DecodeFrameConstruction(
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
         if (*pCtx).iErrorCode == dsErrorFree {
-            let pParser = (*pCtx).pParserBsInfo;
+            let pParser = parser_bs(pCtx);
             // Nothing in this block calls back into the context, so one derivation
             // covers it — the borrow's extent is the check, not a style choice.
             if let Some(pCurAu) = cur_au(pCtx).filter(|_| !pParser.is_null()) {
                 let mut iTotalNalLen: i32 = 0;
                 for i in 0..(*pParser).iNalNum {
-                    if !(*pParser).pNalLenInByte.is_null() {
-                        iTotalNalLen += *(*pParser).pNalLenInByte.add(i as usize);
+                    if let Some(len) = (*pParser).pNalLenInByte.as_slice().get(i as usize) {
+                        iTotalNalLen += *len;
                     }
                 }
-                let mut pDstBuf = (*pParser).pDstBuff.add(iTotalNalLen as usize);
+                // The `pDstBuff` cursor `iTotalNalLen` was computed for stood here and
+                // had no reader: the one `pNalPos`-guarded copy that advanced it died
+                // at T3.3. The sum survives because it is the C's, and because the
+                // next writer of this buffer (Phase 8's `DecodeParser`) needs it.
                 let mut iIdx = pCurAu.uiStartPos as i32;
                 let iEndIdx = pCurAu.uiEndPos as i32;
                 if !(pCurAu.nal(iIdx as usize)).is_null() {
@@ -1126,8 +1106,10 @@ pub unsafe fn DecodeFrameConstruction(
                     let pCurNal = pCurAu.nal(iIdx as usize);
                     if !pCurNal.is_null() {
                         let iNalLen = (*pCurNal).sNalData.sVclNal.iNalLength;
-                        if !(*pParser).pNalLenInByte.is_null() {
-                            *(*pParser).pNalLenInByte.add((*pParser).iNalNum as usize) = iNalLen;
+                        let iSlot = (*pParser).iNalNum as usize;
+                        let lens = (*pParser).pNalLenInByte.as_mut_slice();
+                        if let Some(slot) = lens.get_mut(iSlot) {
+                            *slot = iNalLen;
                             (*pParser).iNalNum += 1;
                         }
                         // The `pNalPos`-guarded copy that sat here never executed:
@@ -1151,7 +1133,7 @@ pub unsafe fn DecodeFrameConstruction(
                 }
             }
         } else {
-            let pParser = (*pCtx).pParserBsInfo;
+            let pParser = parser_bs(pCtx);
             if !pParser.is_null() {
                 (*pParser).uiOutBsTimeStamp = 0;
                 (*pParser).iNalNum = 0;
@@ -1692,28 +1674,20 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
     }
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
-        let pParser = WelsMalloczHelper(pMa, std::mem::size_of::<SParserBsInfo>()) as *mut SParserBsInfo;
-        if pParser.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-        (*pCtx).pParserBsInfo = pParser;
-        let dstBuff = WelsMalloczHelper(pMa, MAX_ACCESS_UNIT_CAPACITY);
-        if dstBuff.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-        (*pParser).pDstBuff = dstBuff;
+        // T5.R4: three `WelsMallocz` blocks — the descriptor and its two buffers —
+        // become one owned value. The `ERR_INFO_OUT_OF_MEMORY` arms go with the null
+        // returns they tested for; `RawDataBuffer::try_new_zeroed` beside them keeps
+        // its arm because it really can fail (T3.3's fallible reserve).
+        (*pCtx).pParserBsInfo = Some(Box::new(SParserBsInfo {
+            pDstBuff: vec![0u8; MAX_ACCESS_UNIT_CAPACITY],
+            pNalLenInByte: vec![0i32; MAX_NAL_UNITS_IN_LAYER + 2],
+            ..Default::default()
+        }));
 
         match RawDataBuffer::try_new_zeroed((*pCtx).sRawData.len()) {
             Ok(saved) => (*pCtx).sSavedData = saved,
             Err(()) => return ERR_INFO_OUT_OF_MEMORY,
         }
-
-        (*pCtx).iMaxNalNum = (MAX_NAL_UNITS_IN_LAYER + 2) as i32;
-        let nalLen = WelsMalloczHelper(pMa, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>()) as *mut i32;
-        if nalLen.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
-        (*pParser).pNalLenInByte = nalLen;
     }
     ERR_NONE
 }
@@ -1731,8 +1705,8 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
 // `WelsDecodeBs`, unchanged.
 
 pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i32 {
-    let pParser = (*pCtx).pParserBsInfo;
-    if pParser.is_null() || (*pParser).pNalLenInByte.is_null() {
+    let pParser = parser_bs(pCtx);
+    if pParser.is_null() || (*pParser).pNalLenInByte.as_slice().is_empty() {
         return ERR_INFO_INVALID_ACCESS;
     }
     if kiCurrLen >= MAX_MB_SIZE + 2 {
@@ -1741,25 +1715,12 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
     }
     let mut iNewLen = kiCurrLen << 1;
     iNewLen = WELS_MIN(iNewLen, MAX_MB_SIZE + 2);
-    let pMa = (*pCtx).pMemAlign;
-    let pNewLenBuffer = WelsMalloczHelper(pMa, (iNewLen as usize) * std::mem::size_of::<i32>()) as *mut i32;
-    if pNewLenBuffer.is_null() {
-        (*pCtx).iErrorCode |= dsOutOfMemory;
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-    // F40: `copy_nonoverlapping`'s count is in **elements**; the C++'s `memcpy`
-    // (`decoder.cpp`) takes bytes, and the transliteration kept the `* sizeof(int32_t)`
-    // — so this copied four times the source and wrote four times the destination.
-    // Unreachable today (the port's `DecodeParser` is a stub, so nothing calls this
-    // function), which is why nine gates and two Miri probes never saw it.
-    std::ptr::copy_nonoverlapping(
-        (*pParser).pNalLenInByte,
-        pNewLenBuffer,
-        (*pCtx).iMaxNalNum as usize,
-    );
-    WelsFreeHelper(pMa, (*pParser).pNalLenInByte as *mut u8, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>());
-    (*pParser).pNalLenInByte = pNewLenBuffer;
-    (*pCtx).iMaxNalNum = iNewLen;
+    // **F40 is unrepresentable here now.** The allocate-copy-free triple this was —
+    // and whose `copy_nonoverlapping` counted bytes where the count is in elements, so
+    // it copied four times the source — is `Vec::resize`, which knows both the element
+    // size and the old length. The old length was `pCtx->iMaxNalNum`, a stored extent
+    // that went with the pointer (F16).
+    (*pParser).pNalLenInByte.resize(iNewLen as usize, 0);
     ERR_NONE
 }
 
@@ -2077,22 +2038,15 @@ pub unsafe fn WelsFreeStaticMemory(pCtx: PWelsDecoderContext) {
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
         (*pCtx).sSavedData.reset();
-
-        if !(*pCtx).pParserBsInfo.is_null() {
-            let pParser = (*pCtx).pParserBsInfo;
-            if !(*pParser).pNalLenInByte.is_null() {
-                WelsFreeHelper(pMa, (*pParser).pNalLenInByte as *mut u8, ((*pCtx).iMaxNalNum as usize) * std::mem::size_of::<i32>());
-                (*pParser).pNalLenInByte = std::ptr::null_mut();
-                (*pCtx).iMaxNalNum = 0;
-            }
-            if !(*pParser).pDstBuff.is_null() {
-                WelsFreeHelper(pMa, (*pParser).pDstBuff, MAX_ACCESS_UNIT_CAPACITY);
-                (*pParser).pDstBuff = std::ptr::null_mut();
-            }
-            WelsFreeHelper(pMa, pParser as *mut u8, std::mem::size_of::<SParserBsInfo>());
-            (*pCtx).pParserBsInfo = std::ptr::null_mut();
-        }
     }
+    // **Outside the `bParseOnly` arm on purpose (T5.R4, and it is half of F41).** The
+    // three free calls that stood inside it — the two buffers and the descriptor —
+    // were reachable only when the flag still read `true` at teardown, and the flag
+    // lives in the API object where a second `Initialize` can flip it. As an owned
+    // field the release is unconditional, so those three blocks can no longer leak;
+    // what remains of F41 is `sSavedData` above and the `pParam` alias itself, which
+    // is Phase 8's.
+    (*pCtx).pParserBsInfo = None;
 }
 
 // A duplicate `DecodeNalHeaderExt` was deleted dead here at T3.3 (S18): it had no
@@ -4014,8 +3968,9 @@ pub unsafe fn CheckAndFinishLastPic(
                 }
             }
         } else if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
-            if !(*pCtx).pParserBsInfo.is_null() {
-                (*(*pCtx).pParserBsInfo).iNalNum = 0;
+            let pParser = parser_bs(pCtx);
+            if !pParser.is_null() {
+                (*pParser).iNalNum = 0;
             }
             (*pCtx).bFrameFinish = true;
         } else {
