@@ -74,7 +74,8 @@ pub use crate::decoder::decoder_context::SLogContext;
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 use crate::decoder::decoder_context::{
-    cur_au, dec_pic, long_ref_pic, pic_pool_mut, pool_pic, prev_dpb_pic, ref_pic, short_ref_pic,
+    cur_au, dec_pic, long_ref_pic, pic_and_refs, pic_pool_mut, pool_pic, pool_pic_mut,
+    prev_dpb_id, ref_pic, short_ref_pic, short_ref_pic_mut,
 };
 pub use crate::decoder::pic_queue::PicId;
 
@@ -211,7 +212,7 @@ pub unsafe fn WelsResetRefPic(pCtx: *mut SWelsDecoderContext) {
     (*pRefPic).uiRefCount[LIST_1] = 0;
 
     for i in 0..MAX_DPB_COUNT {
-        let pPic = pool_pic(pCtx, (*pRefPic).pShortRefList[LIST_0][i]);
+        let pPic = pool_pic_mut(pCtx, (*pRefPic).pShortRefList[LIST_0][i]);
         if !pPic.is_null() {
             SetUnRef(pPic);
             (*pRefPic).pShortRefList[LIST_0][i] = None;
@@ -220,7 +221,7 @@ pub unsafe fn WelsResetRefPic(pCtx: *mut SWelsDecoderContext) {
     (*pRefPic).uiShortRefCount[LIST_0] = 0;
 
     for i in 0..MAX_DPB_COUNT {
-        let pPic = pool_pic(pCtx, (*pRefPic).pLongRefList[LIST_0][i]);
+        let pPic = pool_pic_mut(pCtx, (*pRefPic).pLongRefList[LIST_0][i]);
         if !pPic.is_null() {
             SetUnRef(pPic);
             (*pRefPic).pLongRefList[LIST_0][i] = None;
@@ -269,7 +270,7 @@ pub unsafe fn WelsDelShortFromList(
     let count = ref_pic.uiShortRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic(pCtx, ref_pic.pShortRefList[LIST_0][i]);
+        let pPic = pool_pic_mut(pCtx, ref_pic.pShortRefList[LIST_0][i]);
         if !pPic.is_null() && (*pPic).iFrameNum == iFrameNum {
             let iMoveSize = count - i - 1;
             let pic = &mut *pPic;
@@ -316,7 +317,7 @@ pub unsafe fn WelsDelLongFromList(
     let count = ref_pic.uiLongRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic(pCtx, ref_pic.pLongRefList[LIST_0][i]);
+        let pPic = pool_pic_mut(pCtx, ref_pic.pLongRefList[LIST_0][i]);
         if !pPic.is_null() && (*pPic).iLongTermFrameIdx == uiLongTermFrameIdx as i32 {
             let iMoveSize = count - i - 1;
             let pic = &mut *pPic;
@@ -370,6 +371,13 @@ pub unsafe fn AddShortTermToList(
     pic.bUsedAsRef = true;
     pic.bIsLongRef = false;
     pic.iLongTermFrameIdx = -1;
+    // **T5.Q2 extends the same rule one loop further out.** `pic.iFrameNum` used to
+    // be read *inside* the scan below, under the borrow above and after each
+    // `pool_pic` resolution — and a resolution of `pPic`'s own slot is exactly what
+    // this scan is looking for (it is the duplicate-frame-num test). Owned slots make
+    // that resolution a second derivation of one allocation, which pops the borrow.
+    // The value is read once, here, and the borrow is not used past this line.
+    let iPicFrameNum = pic.iFrameNum;
 
     let ref_pic = &mut *pRefPic;
     let short_count = ref_pic.uiShortRefCount[LIST_0] as usize;
@@ -380,7 +388,7 @@ pub unsafe fn AddShortTermToList(
             if cur.is_null() {
                 return ERR_INFO_INVALID_PTR;
             }
-            if pic.iFrameNum == (*cur).iFrameNum {
+            if iPicFrameNum == (*cur).iFrameNum {
                 ref_pic.pShortRefList[LIST_0][iPos] = slot;
                 return ERR_INFO_DUPLICATE_FRAME_NUM;
             }
@@ -412,6 +420,8 @@ pub unsafe fn AddLongTermToList(
     pic.bIsLongRef = true;
     pic.iLongTermFrameIdx = iLongTermFrameIdx;
     pic.uiLongTermPicNum = uiLongTermPicNum;
+    // The comparison value out from under the borrow, as in `AddShortTermToList`.
+    let iPicLongTermFrameIdx = pic.iLongTermFrameIdx;
 
     let ref_pic = &mut *pRefPic;
     let long_count = ref_pic.uiLongRefCount[LIST_0] as usize;
@@ -425,7 +435,7 @@ pub unsafe fn AddLongTermToList(
             if cur.is_null() {
                 return ERR_INFO_INVALID_PTR;
             }
-            if (*cur).iLongTermFrameIdx > pic.iLongTermFrameIdx {
+            if (*cur).iLongTermFrameIdx > iPicLongTermFrameIdx {
                 insert_idx = i;
                 break;
             }
@@ -464,7 +474,7 @@ pub unsafe fn MarkAsLongTerm(
     let count = (*pRefPic).uiRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic(pCtx, (*pRefPic).pRefList[LIST_0][i]);
+        let pPic = pool_pic_mut(pCtx, (*pRefPic).pRefList[LIST_0][i]);
         if !pPic.is_null() && (*pPic).iFrameNum == iFrameNum && !(*pPic).bIsLongRef {
             iRet = AddLongTermToList(pCtx, pRefPic, pPic, iLongTermFrameIdx, uiLongTermPicNum);
             break;
@@ -515,7 +525,7 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext) {
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
 
     for i in 0..iShortRefCount {
-        let pPic = short_ref_pic(pCtx, i);
+        let pPic = short_ref_pic_mut(pCtx, i);
         if !pPic.is_null() {
             if (*pPic).iFrameNum > (*pSliceHeader).iFrameNum {
                 (*pPic).iFrameWrapNum = (*pPic).iFrameNum - iMaxPicNum;
@@ -642,13 +652,17 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
         };
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
-            // The EC prefetch's slot, held for the whole region below — the region is
-            // one operation and the flip's bracket is drawn around exactly it.
+            // **The EC prefetch bracket** (T5.Q2). The region below writes into the
+            // slot the prefetch just took and reads the previous DPB picture out of
+            // another one, and the "are they the same slot?" guard sits in the middle
+            // of it — so both halves have to come out of one borrow, or the guard
+            // would be deciding a question the second derivation had already answered
+            // by invalidating the first.
             let ec_slot = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
                 None => None,
             };
-            let pRef = pool_pic(pCtx, ec_slot);
+            let (pRef, pRefs) = pic_and_refs(pCtx, ec_slot);
             if !pRef.is_null() {
                 (*pRef).bIsComplete = false;
                 if !(*pCtx).pSps.is_null() {
@@ -667,7 +681,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                 (*pCtx).iErrorCode |= dsDataErrorConcealed;
 
                 let mut bCopyPrevious = false;
-                let prev_pic = prev_dpb_pic(pCtx);
+                let prev_pic = pRefs.get(prev_dpb_id(pCtx));
 
                 if (ec_mode == ERROR_CON_FRAME_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_COPY_CROSS_IDR
@@ -716,23 +730,23 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                     // pointers per use; the `let prev = &*prev_pic` binding that used
                     // to span this block was a borrow held across three writes into
                     // the other picture.
-                    if !(*pRef).data_ptr(0).is_null() && !(*prev_pic).data_ptr(0).is_null() {
+                    if !(*pRef).data_ptr(0).is_null() && !(*prev_pic).data_ptr_ref(0).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr(0),
+                            (*prev_pic).data_ptr_ref(0),
                             (*pRef).data_ptr(0),
                             ((*pRef).linesize(0) * (*pRef).iHeightInPixel) as usize,
                         );
                     }
-                    if !(*pRef).data_ptr(1).is_null() && !(*prev_pic).data_ptr(1).is_null() {
+                    if !(*pRef).data_ptr(1).is_null() && !(*prev_pic).data_ptr_ref(1).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr(1),
+                            (*prev_pic).data_ptr_ref(1),
                             (*pRef).data_ptr(1),
                             ((*pRef).linesize(1) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
-                    if !(*pRef).data_ptr(2).is_null() && !(*prev_pic).data_ptr(2).is_null() {
+                    if !(*pRef).data_ptr(2).is_null() && !(*prev_pic).data_ptr_ref(2).is_null() {
                         std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr(2),
+                            (*prev_pic).data_ptr_ref(2),
                             (*pRef).data_ptr(2),
                             ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
                         );
@@ -1555,32 +1569,35 @@ mod tests {
         let mut pic2 = SPicture::default();
         pic2.iFrameNum = 12;
 
+
         unsafe {
-            // S29: `addr_of_mut!`, not `&mut` — the pool stores these for the whole
-            // test and a second `&mut` retag would pop the tag it holds (T5.O8).
-            let p1: *mut SPicture = std::ptr::addr_of_mut!(pic1);
-            let p2: *mut SPicture = std::ptr::addr_of_mut!(pic2);
-            let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p1, p2]);
+            // T5.Q2: the pool owns the pictures, so the fixture hands them over and
+            // resolves them back per call — which is the production shape, and it
+            // retires the `addr_of_mut!` pair this test needed while the pool held
+            // raw pointers into the stack frame.
+            let pool = crate::decoder::pic_queue::PicPool::over(vec![
+                Some(Box::new(pic1)),
+                Some(Box::new(pic2)),
+            ]);
+            let (s1, s2) = (Some(pool.id(0)), Some(pool.id(1)));
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
-            let s1 = (*p1).pic_id();
-            let s2 = (*p2).pic_id();
 
-            let res1 = AddShortTermToList(pCtx, pRefPic, p1);
+            let res1 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s1));
             assert_eq!(res1, ERR_NONE);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s1);
 
-            let res2 = AddShortTermToList(pCtx, pRefPic, p2);
+            let res2 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s2));
             assert_eq!(res2, ERR_NONE);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 2);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s2);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][1], s1);
 
             let deleted = WelsDelShortFromList(pCtx, pRefPic, 10);
-            assert_eq!(deleted, p1);
+            assert_eq!(crate::decoder::picture::pic_slot(deleted), s1);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s2);
         }
@@ -1592,18 +1609,18 @@ mod tests {
         let mut pic2 = SPicture::default();
 
         unsafe {
-            let p1: *mut SPicture = std::ptr::addr_of_mut!(pic1);
-            let p2: *mut SPicture = std::ptr::addr_of_mut!(pic2);
-            let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p1, p2]);
+            let pool = crate::decoder::pic_queue::PicPool::over(vec![
+                Some(Box::new(pic1)),
+                Some(Box::new(pic2)),
+            ]);
+            let (s1, s2) = (Some(pool.id(0)), Some(pool.id(1)));
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
-            let s1 = (*p1).pic_id();
-            let s2 = (*p2).pic_id();
 
-            AddLongTermToList(pCtx, pRefPic, p1, 5, 5);
-            AddLongTermToList(pCtx, pRefPic, p2, 2, 2);
+            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s1), 5, 5);
+            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s2), 2, 2);
 
             assert_eq!((*pRefPic).uiLongRefCount[LIST_0], 2);
             assert_eq!((*pRefPic).pLongRefList[LIST_0][0], s2);
@@ -1617,14 +1634,14 @@ mod tests {
         pic.iFrameNum = 1;
 
         unsafe {
-            let p: *mut SPicture = std::ptr::addr_of_mut!(pic);
-            let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p]);
+            let pool = crate::decoder::pic_queue::PicPool::over(vec![Some(Box::new(pic))]);
+            let s = Some(pool.id(0));
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
 
-            AddShortTermToList(pCtx, pRefPic, p);
+            AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s));
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             WelsResetRefPic(pCtx);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 0);

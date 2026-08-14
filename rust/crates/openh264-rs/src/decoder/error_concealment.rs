@@ -44,7 +44,7 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::{dec_pic, ec_ref_pic, prev_dpb_pic, ref_pic};
+use crate::decoder::decoder_context::{PicRefs, cur_and_refs, dec_pic, prev_dpb_id};
 use std::ptr;
 
 // ============================================================================
@@ -309,8 +309,15 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
         return;
     }
 
-    let pDstPic = dec_pic(pCtx);
-    let mut pSrcPic = prev_dpb_pic(pCtx);
+    // **The concealment bracket** (T5.Q2): one borrow of the pool, split into the
+    // picture being written and a view of the rest. The two derivations that stood
+    // here could name one slot — the previous DPB picture *is* the current one on
+    // some error paths — and the `same_picture` guard below comes after both, so
+    // under owned slots the second would have invalidated the first before the guard
+    // ever ran. `PicRefs::get` answers for the current slot from the mutable half's
+    // own pointer (F42), so one tag covers both.
+    let (pDstPic, pRefs) = cur_and_refs(pCtx);
+    let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
 
     let uiHeightInPixelY = ((*(*pCtx).pSps).iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).linesize(0);
@@ -321,7 +328,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
             && (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
         {
-            pSrcPic = ptr::null_mut();
+            pSrcPic = ptr::null();
         }
     }
 
@@ -347,23 +354,23 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
     } else if same_picture(pSrcPic, pDstPic) {
         // Prevent self-copy overlap
     } else {
-        if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr(0).is_null() {
+        if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr_ref(0).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr(0),
+                (*pSrcPic).data_ptr_ref(0),
                 (*pDstPic).data_ptr(0),
                 (uiHeightInPixelY as usize) * (iStrideY as usize),
             );
         }
-        if !(*pDstPic).data_ptr(1).is_null() && !(*pSrcPic).data_ptr(1).is_null() {
+        if !(*pDstPic).data_ptr(1).is_null() && !(*pSrcPic).data_ptr_ref(1).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr(1),
+                (*pSrcPic).data_ptr_ref(1),
                 (*pDstPic).data_ptr(1),
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
-        if !(*pDstPic).data_ptr(2).is_null() && !(*pSrcPic).data_ptr(2).is_null() {
+        if !(*pDstPic).data_ptr(2).is_null() && !(*pSrcPic).data_ptr_ref(2).is_null() {
             ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr(2),
+                (*pSrcPic).data_ptr_ref(2),
                 (*pDstPic).data_ptr(2),
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
@@ -379,14 +386,15 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
 
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
-    let pDstPic = dec_pic(pCtx);
-    let mut pSrcPic = prev_dpb_pic(pCtx);
+    // The concealment bracket — see `DoErrorConFrameCopy`.
+    let (pDstPic, pRefs) = cur_and_refs(pCtx);
+    let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
 
     if !(*pCtx).pParam.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
             && (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
         {
-            pSrcPic = ptr::null_mut();
+            pSrcPic = ptr::null();
         }
     }
 
@@ -407,14 +415,14 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
 
                     // Y Component
                     let pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
-                    let pSrcData = (*pSrcPic).data_ptr(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
+                    let pSrcData = (*pSrcPic).data_ptr_ref(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
                         f(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
                     }
 
                     // U Component
                     let pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataU = (*pSrcPic).data_ptr(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pSrcDataU = (*pSrcPic).data_ptr_ref(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataU,
@@ -426,7 +434,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
 
                     // V Component
                     let pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataV = (*pSrcPic).data_ptr(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pSrcDataV = (*pSrcPic).data_ptr_ref(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataV,
@@ -512,7 +520,16 @@ pub unsafe extern "C" fn BaseMC(
 pub unsafe extern "C" fn DoMbECMvCopy(
     pCtx: PWelsDecoderContext,
     pDec: PPicture,
-    pRef: PPicture,
+    // T5.Q2: the reference side is `*const` — this function reads the reference's
+    // motion and samples and writes only into `pDec`, which is what the flip needs
+    // the type to say. Two live results from one pool are fine while one of them is
+    // shared; they would not be if this kept the C's `PPicture` on both sides.
+    pRef: *const SPicture,
+    // T5.Q2: the concealment bracket's view, threaded rather than re-derived. The
+    // `ec_ref_pic(pCtx, 0)` call below reached the pool from under `pDec`'s borrow,
+    // and `pECRefPic[0]` is a reference-list entry, so a malformed stream can make it
+    // name the picture being written — F42 again, one call deeper.
+    pRefs: PicRefs<'_>,
     _iMbXy: i32,
     iMbX: i32,
     iMbY: i32,
@@ -561,7 +578,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
             iMVs[0] = (*pCtx).iECMVs[0][0] as i16;
             iMVs[1] = (*pCtx).iECMVs[0][1] as i16;
         } else {
-            let iScale0 = (*ec_ref_pic(pCtx, 0)).iFramePoc - iCurrPoc;
+            let iScale0 = (*pRefs.get((*pCtx).pECRefPic[0])).iFramePoc - iCurrPoc;
             let iScale1 = (*pRef).iFramePoc - iCurrPoc;
             iMVs[0] = if iScale0 == 0 {
                 0
@@ -802,8 +819,9 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
 
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
-    let pDstPic = dec_pic(pCtx);
-    let pSrcPic = prev_dpb_pic(pCtx);
+    // The concealment bracket — see `DoErrorConFrameCopy`.
+    let (pDstPic, pRefs) = cur_and_refs(pCtx);
+    let pSrcPic = pRefs.get(prev_dpb_id(pCtx));
 
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
@@ -812,9 +830,9 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
     if !pSrcPic.is_null() {
         sMCRefMem.iSrcLineLuma = (*pSrcPic).linesize(0);
         sMCRefMem.iSrcLineChroma = (*pSrcPic).linesize(1);
-        sMCRefMem.pSrcY = (*pSrcPic).data_ptr(0);
-        sMCRefMem.pSrcU = (*pSrcPic).data_ptr(1);
-        sMCRefMem.pSrcV = (*pSrcPic).data_ptr(2);
+        sMCRefMem.pSrcY = (*pSrcPic).data_ptr_ref(0);
+        sMCRefMem.pSrcU = (*pSrcPic).data_ptr_ref(1);
+        sMCRefMem.pSrcV = (*pSrcPic).data_ptr_ref(2);
         sMCRefMem.iDstLineLuma = (*pDstPic).linesize(0);
         sMCRefMem.iDstLineChroma = (*pDstPic).linesize(1);
         sMCRefMem.iPicWidth = (*pDstPic).iWidthInPixel;
@@ -831,7 +849,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
             if !*(*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
-                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
+                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, pRefs, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
                 } else {
                     let mut pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
@@ -1034,20 +1052,24 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
 
             unsafe {
-                // S29: `addr_of_mut!`, not `&mut`, for both — the pool stores these for
-                // the whole call and a `&mut` retag here is one write through `dst` away
-                // from being popped (T5.O8's class, in the fixture where it bit).
-                let dst_ptr: *mut SPicture = std::ptr::addr_of_mut!(dst);
-                let src_ptr: *mut SPicture = std::ptr::addr_of_mut!(src);
-                // `pDec` is a slot handle now, so the fixture needs a pool. Both
-                // pictures go in: `PicPool::over` stamps each with its `PicId`, which is
-                // what makes the identity this test is about a slot comparison.
-                let mut pool = crate::decoder::pic_queue::PicPool::over(vec![dst_ptr, src_ptr]);
+                // T5.Q2: the pool owns, so the pictures go *into* it rather than
+                // being aliased from the stack — and with them goes the whole S29
+                // dance this fixture used to need (`addr_of_mut!` on two locals the
+                // pool then held raw pointers to, one write through `dst` away from
+                // popping the tag it held). Slot 0 is the destination, slot 1 the
+                // source; `PicPool::over` stamps each with its `PicId`, which is what
+                // makes the identity this test is about a slot comparison.
+                let mut pool = crate::decoder::pic_queue::PicPool::over(vec![
+                    Some(Box::new(dst)),
+                    Some(Box::new(src)),
+                ]);
+                let dst_id = pool.id(0);
+                let src_id = pool.id(1);
                 last.pPreviousDecodedPictureInDpb =
-                    (*if same_object { dst_ptr } else { src_ptr }).pic_id();
+                    Some(if same_object { dst_id } else { src_id });
                 ctx.pSps = &mut sps as *mut _;
                 ctx.pPicBuff = Some(pool);
-                ctx.pDec = (*dst_ptr).pic_id();
+                ctx.pDec = Some(dst_id);
                 ctx.pCurDqLayer = &mut dq_layer as *mut _;
                 ctx.pLastDecPicInfo = &mut last as *mut _;
                 // The copy itself goes through the context's copy-function pair;
@@ -1055,7 +1077,10 @@ mod tests {
                 // nothing and the test vacuous.
                 ctx.sCopyFunc = SCopyFunc::default();
                 DoErrorConSliceCopy(&mut *ctx);
-                dst.plane(0).at(0, 0)
+                // The destination is the pool's now, so the marker is read back out
+                // of the slot instead of off the stack.
+                let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
+                (*pool.slot(dst_id)).plane(0).at(0, 0)
             }
         };
 
@@ -1103,7 +1128,7 @@ mod tests {
 
         unsafe {
             let p: *mut SPicture = &mut pic;
-            DoMbECMvCopy(&mut *ctx, p, p, 0, 0, 0, &mut mc);
+            DoMbECMvCopy(&mut *ctx, p, p, PicRefs::over(None), 0, 0, 0, &mut mc);
         }
 
         assert!(
