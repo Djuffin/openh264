@@ -506,14 +506,13 @@ pub unsafe fn GetLTRFrameIndex(
 /// Evaluates short-term frame number wrapping modulo `1 << uiLog2MaxFrameNum`.
 ///
 /// Matches `static void WrapShortRefPicNum (PWelsDecoderContext pCtx)`.
-pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext) {
+pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
     if pCtx.is_null() {
         return;
     }
-    if (*pCtx).pCurDqLayer.is_null() {
+    if pCurDqLayer.is_null() {
         return;
     }
-    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pSliceHeader =
         std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader);
     if (*pSliceHeader).pSps.is_null() {
@@ -886,6 +885,7 @@ pub unsafe fn MMCOProcess(
 /// Matches `static int32_t MMCO (PWelsDecoderContext pCtx, PRefPic pRefPic, PRefPicMarking pRefPicMarking)`.
 pub unsafe fn MMCO(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pRefPic: *mut SRefPic,
     pRefPicMarking: *mut SRefPicMarking,
 ) -> i32 {
@@ -894,10 +894,10 @@ pub unsafe fn MMCO(
     }
     let marking = &*pRefPicMarking;
 
-    let uiLog2MaxFrameNum = if !(*pCtx).pCurDqLayer.is_null()
-        && !(*(*pCtx).pCurDqLayer).sLayerInfo.pSps.is_null()
+    let uiLog2MaxFrameNum = if !pCurDqLayer.is_null()
+        && !(*pCurDqLayer).sLayerInfo.pSps.is_null()
     {
-        (*(*(*pCtx).pCurDqLayer).sLayerInfo.pSps).uiLog2MaxFrameNum
+        (*(*pCurDqLayer).sLayerInfo.pSps).uiLog2MaxFrameNum
     } else if !(*pCtx).pSps.is_null() {
         (*(*pCtx).pSps).uiLog2MaxFrameNum
     } else {
@@ -939,12 +939,12 @@ pub unsafe fn MMCO(
 /// Populates `pRefList[LIST_0]` for standard P-slices.
 ///
 /// Matches `int32_t WelsInitRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsInitRefList(pCtx: *mut SWelsDecoderContext, _iPoc: i32) -> i32 {
+pub unsafe fn WelsInitRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState, _iPoc: i32) -> i32 {
     let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
-    WrapShortRefPicNum(pCtx);
+    WrapShortRefPicNum(pCtx, pCurDqLayer);
 
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -977,12 +977,12 @@ pub unsafe fn WelsInitRefList(pCtx: *mut SWelsDecoderContext, _iPoc: i32) -> i32
 /// Populates dual reference picture lists (`pRefList[0]` and `pRefList[1]`) for B-slices.
 ///
 /// Matches `int32_t WelsInitBSliceRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, iPoc: i32) -> i32 {
+pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState, iPoc: i32) -> i32 {
     let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
-    WrapShortRefPicNum(pCtx);
+    WrapShortRefPicNum(pCtx, pCurDqLayer);
 
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1111,18 +1111,17 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, iPoc: i32) -
 /// Modifies the active reference picture lists based on parsed RPLR commands.
 ///
 /// Matches `int32_t WelsReorderRefList (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext) -> i32 {
+pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     if (*pCtx).eSliceType == I_SLICE || (*pCtx).eSliceType == SI_SLICE {
         return ERR_NONE;
     }
-    if (*pCtx).pCurDqLayer.is_null() {
+    if pCurDqLayer.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
 
-    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
     if pRefPicListReorderSyn.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1249,18 +1248,17 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext) -> i32 {
 /// Alternative test implementation of reference picture list reordering.
 ///
 /// Matches `int32_t WelsReorderRefList2 (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext) -> i32 {
+pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     if (*pCtx).eSliceType == I_SLICE || (*pCtx).eSliceType == SI_SLICE {
         return ERR_NONE;
     }
-    if (*pCtx).pCurDqLayer.is_null() {
+    if pCurDqLayer.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
 
-    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
     if pRefPicListReorderSyn.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1382,7 +1380,7 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext) -> i32 {
 /// Commits the newly reconstructed picture into the reference picture buffer pool.
 ///
 /// Matches `int32_t WelsMarkAsRef (PWelsDecoderContext pCtx, PPicture pLastDec)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPicture) -> i32 {
+pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: *mut DqLayerState, pLastDec: *mut SPicture) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -1404,10 +1402,9 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
         std::ptr::addr_of_mut!((*pCtx).sRefPic)
     };
 
-    if (*pCtx).pCurDqLayer.is_null() {
+    if pCurDqLayer.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pCurDqLayer: *mut DqLayerState = (*pCtx).pCurDqLayer;
     let pRefPicMarking = (*pCurDqLayer).pRefPicMarking;
     if pRefPicMarking.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1449,7 +1446,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pLastDec: *mut SPict
         }
     } else {
         if (*pRefPicMarking).bAdaptiveRefPicMarkingModeFlag {
-            iRet = MMCO(pCtx, pRefPic, pRefPicMarking);
+            iRet = MMCO(pCtx, pCurDqLayer, pRefPic, pRefPicMarking);
             if iRet != ERR_NONE {
                 let ec_mode = if !(*pCtx).pParam.is_null() {
                     (*(*pCtx).pParam).eEcActiveIdc

@@ -724,12 +724,12 @@ pub unsafe fn PredInter16x8Mv(
 /// Retrieves collocated macroblock parameters for spatial and temporal direct modes.
 pub unsafe fn GetColocatedMb(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     mbType: &mut MbType,
     subMbType: &mut SubMbType,
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
@@ -868,20 +868,20 @@ pub unsafe fn GetColocatedMb(
 /// Derives motion predictors and reference indices for B-slice spatial direct mode.
 pub unsafe fn PredMvBDirectSpatial(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    let ret = GetColocatedMb(pCtx, pDec, pRefs, &mut mbType, subMbType);
+    let ret = GetColocatedMb(pCtx, pCurDqLayer, pDec, pRefs, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
@@ -1111,6 +1111,7 @@ pub unsafe fn PredMvBDirectSpatial(
 /// Derives motion predictors for B-slice temporal direct mode using POC distance scaling.
 pub unsafe fn PredBDirectTemporal(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
@@ -1118,14 +1119,13 @@ pub unsafe fn PredBDirectTemporal(
     subMbType: &mut SubMbType,
 ) -> i32 {
     let mut ret = ERR_NONE;
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    ret = GetColocatedMb(pCtx, pDec, pRefs, &mut mbType, subMbType);
+    ret = GetColocatedMb(pCtx, pCurDqLayer, pDec, pRefs, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }

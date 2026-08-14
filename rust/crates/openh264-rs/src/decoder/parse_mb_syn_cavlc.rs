@@ -1013,6 +1013,7 @@ pub unsafe fn WelsFillCacheInter(
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn ParseInterInfo(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -1020,7 +1021,6 @@ pub unsafe fn ParseInterInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
     let ppRefPic = &(*pCtx).sRefPic.pRefList[0];
@@ -1357,6 +1357,7 @@ pub unsafe fn ParseInterInfo(
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
 pub unsafe fn ParseInterBInfo(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -1364,7 +1365,6 @@ pub unsafe fn ParseInterBInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
@@ -1423,7 +1423,7 @@ pub unsafe fn ParseInterBInfo(
         if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                pCtx,
+                pCtx, pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -1436,7 +1436,7 @@ pub unsafe fn ParseInterBInfo(
         } else {
             // temporal direct 16x16 mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                pCtx,
+                pCtx, pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -1699,7 +1699,7 @@ pub unsafe fn ParseInterBInfo(
                 if !has_direct_called {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                            pCtx,
+                            pCtx, pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -1712,7 +1712,7 @@ pub unsafe fn ParseInterBInfo(
                     } else {
                         // temporal direct mode
                         let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                            pCtx,
+                            pCtx, pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,

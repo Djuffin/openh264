@@ -1238,6 +1238,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
 
 pub unsafe fn ParseTransformSize8x8FlagCabac(
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pNeighAvail: *const SWelsNeighAvail,
     bTransformSize8x8Flag: &mut bool,
 ) -> i32 {
@@ -1245,7 +1246,6 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
     let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
     let cabac_win = cabac_rbsp_window(pCtx);
     let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_TS_8x8_FLAG as usize);
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iMbWidth = (*pCurDqLayer).iMbWidth as usize;
 
@@ -1409,13 +1409,13 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
 
 pub unsafe fn ParseIntraPredModeChromaCabac(
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     uiNeighAvail: u8,
     iBinVal: &mut i32,
 ) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0);
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
@@ -1492,6 +1492,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 
 pub unsafe fn ParseRefIdxCabac(
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: *const SWelsNeighAvail,
     _nzc: *mut u8,
@@ -1513,7 +1514,6 @@ pub unsafe fn ParseRefIdxCabac(
     let iIdxA: i32;
     let iIdxB: i32;
     let mut iCtxInc: i32 = 0;
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pRefIdxInMB = *(*pDec).pRefIndex[iListIdx as usize].get(iMbXy);
     let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
@@ -1678,6 +1678,7 @@ pub unsafe fn ParseMvdInfoCabac(
 
 pub unsafe fn ParseInterPMotionInfoCabac(
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
@@ -1686,7 +1687,6 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     pRefIndex: &mut [[i8; 30]; LIST_A],
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let ppRefPic = &(*pCtx).sRefPic.pRefList[LIST_0];
@@ -1707,7 +1707,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
         MB_TYPE_16x16 => {
             let iPartIdx = 0;
             let err = ParseRefIdxCabac(
-                pCtx,
+                pCtx, pCurDqLayer,
                 pDec,
                 pNeighAvail,
                 pNonZeroCount,
@@ -1753,7 +1753,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             for i in 0..2 {
                 let iPartIdx = i << 3;
                 let err = ParseRefIdxCabac(
-                    pCtx,
+                    pCtx, pCurDqLayer,
                     pDec,
                     pNeighAvail,
                     pNonZeroCount,
@@ -1803,7 +1803,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             for i in 0..2 {
                 let iPartIdx = i << 2;
                 let err = ParseRefIdxCabac(
-                    pCtx,
+                    pCtx, pCurDqLayer,
                     pDec,
                     pNeighAvail,
                     pNonZeroCount,
@@ -1884,7 +1884,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i32;
                 let err = ParseRefIdxCabac(
-                    pCtx,
+                    pCtx, pCurDqLayer,
                     pDec,
                     pNeighAvail,
                     pNonZeroCount,
@@ -2000,6 +2000,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
 pub unsafe fn ParseInterBMotionInfoCabac(
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
@@ -2009,7 +2010,6 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     pRefIndex: &mut [[i8; 30]; LIST_A],
     pDirect: &mut [i8; 30],
 ) -> i32 {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
@@ -2066,7 +2066,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                pCtx,
+                pCtx, pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -2079,7 +2079,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         } else {
             // temporal direct 16x16 mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                pCtx,
+                pCtx, pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -2096,7 +2096,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
             iRef[listIdx] = REF_NOT_IN_LIST;
             if IS_DIR(mbType, 0, listIdx) {
                 let err = ParseRefIdxCabac(
-                    pCtx,
+                    pCtx, pCurDqLayer,
                     pDec,
                     pNeighAvail,
                     pNonZeroCount,
@@ -2139,7 +2139,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let mut ref_idx: i8 = REF_NOT_IN_LIST;
                 if IS_DIR(mbType, i, listIdx) {
                     let err = ParseRefIdxCabac(
-                        pCtx,
+                        pCtx, pCurDqLayer,
                         pDec,
                         pNeighAvail,
                         pNonZeroCount,
@@ -2192,7 +2192,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let mut ref_idx: i8 = REF_NOT_IN_LIST;
                 if IS_DIR(mbType, i, listIdx) {
                     let err = ParseRefIdxCabac(
-                        pCtx,
+                        pCtx, pCurDqLayer,
                         pDec,
                         pNeighAvail,
                         pNonZeroCount,
@@ -2286,7 +2286,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 if !has_direct_called {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                            pCtx,
+                            pCtx, pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -2299,7 +2299,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     } else {
                         // temporal direct mode
                         let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                            pCtx,
+                            pCtx, pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -2402,7 +2402,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 } else {
                     if IS_DIR(subMbType, 0, listIdx) {
                         let err = ParseRefIdxCabac(
-                            pCtx,
+                            pCtx, pCurDqLayer,
                             pDec,
                             pNeighAvail,
                             pNonZeroCount,
@@ -2659,10 +2659,10 @@ pub unsafe fn ParseCbpInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, iQpDelta: &mut i32) -> i32 {
+pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState, iQpDelta: &mut i32) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
-    let pCurrSlice = &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sSliceInLayer;
+    let pCurrSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     *iQpDelta = 0;
     let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_DELTA_QP as usize);
     let iCtxInc = (pCurrSlice.iLastDeltaQp != 0) as i32;
@@ -2696,14 +2696,15 @@ pub unsafe fn ParseCbfInfoCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNzcCache: *const u8,
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     iZIndex: i32,
     iResProperty: i32,
     uiCbfBit: &mut u32,
 ) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
-    let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex;
-    let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth;
+    let iCurrBlkXy = (*pCurDqLayer).iMbXyIndex;
+    let mut iTopBlkXy = iCurrBlkXy - (*pCurDqLayer).iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
     let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0);
     *uiCbfBit = 0;
@@ -2713,12 +2714,12 @@ pub unsafe fn ParseCbfInfoCabac(
     if iResProperty == I16_LUMA_DC || iResProperty == CHROMA_DC_U || iResProperty == CHROMA_DC_V {
         if (*pNeighAvail).iTopAvail != 0 {
             nB = (*pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM
-                || ((*(*(*pCtx).pCurDqLayer).grid.cbf_dc.get(iTopBlkXy as usize) >> iResProperty) & 1) != 0)
+                || ((*(*pCurDqLayer).grid.cbf_dc.get(iTopBlkXy as usize) >> iResProperty) & 1) != 0)
                 as i8;
         }
         if (*pNeighAvail).iLeftAvail != 0 {
             nA = (*pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM
-                || ((*(*(*pCtx).pCurDqLayer).grid.cbf_dc.get(iLeftBlkXy as usize) >> iResProperty) & 1) != 0)
+                || ((*(*pCurDqLayer).grid.cbf_dc.get(iLeftBlkXy as usize) >> iResProperty) & 1) != 0)
                 as i8;
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
@@ -2732,7 +2733,7 @@ pub unsafe fn ParseCbfInfoCabac(
             return err;
         }
         if *uiCbfBit != 0 {
-            *(*(*pCtx).pCurDqLayer).grid.cbf_dc.get_mut(iCurrBlkXy as usize) |= 1 << iResProperty;
+            *(*pCurDqLayer).grid.cbf_dc.get_mut(iCurrBlkXy as usize) |= 1 << iResProperty;
         }
     } else {
         let top_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 8) as usize;
@@ -2977,6 +2978,7 @@ pub unsafe fn ParseResidualBlockCabac(
     sTCoeff: *mut i16,
     uiQp: u8,
     pCtx: PWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
 ) -> i32 {
     let mut uiTotalCoeffNum: u32 = 0;
@@ -2994,7 +2996,7 @@ pub unsafe fn ParseResidualBlockCabac(
         g_kuiDequantCoeff[uiQp as usize].as_ptr()
     };
 
-    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCtx, pDec, iIndex, iResProp, &mut uiCbpBit);
+    let mut err = ParseCbfInfoCabac(pNeighAvail, pNonZeroCountCache, pCtx, pCurDqLayer, pDec, iIndex, iResProp, &mut uiCbpBit);
     if err != ERR_NONE {
         return err;
     }
@@ -3059,9 +3061,8 @@ pub unsafe fn ParseResidualBlockCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pDec: PPicture) -> i32 {
+pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> i32 {
     let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pBsAux = &mut *crate::decoder::bit_stream::slice_bit_reader(pCtx);
     let iDstStrideLuma = (*pDec).linesize(0);
     let iDstStrideChroma = (*pDec).linesize(1);
