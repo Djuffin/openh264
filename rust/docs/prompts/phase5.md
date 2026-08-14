@@ -71,8 +71,15 @@ re-read, continue — and labels anything earlier an early exit.
 [`phase5_session_r.md`](phase5_session_r.md)). Scoped for everything but the exit under
 **S31**, it stopped with W6's tail and W7 open **on rule 1's blocker, not on context** —
 no compaction ever ran, and W6's done-test needs a decision only Eugene or the steward
-can make (the row says which). **S** = W6's tail + W7. **T** = W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
-after P″. Older forward references to "Q" meant the exit; the exit is now **S**.)*
+can make (the row says which). **S** = **the last session** (Eugene, 2026-08-14: "address these issues in the last
+session"): **F43 + W6's tail + W7 + W8**, in that order
+([`phase5_session_s.md`](phase5_session_s.md)), under S31. Both of R's stops are
+settled below — W6's deny-blocker by the view-struct design, F43 by its fix plan —
+so nothing in S waits on a decision. **W8's never-compressed clause survives the
+merge**: if S cannot reach W8 whole, it hands W8 off intact rather than squeezing
+it — that is the one sanctioned hand-off. *(Naming: primes retired — the sequence
+resumed after P″; **S is the final session**, superseding both older uses of "Q"
+and "T" for the exit.)*
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
@@ -185,6 +192,42 @@ parameter, the 81 field-reads become param sites. ~~`pTempDec` alone is truly
 W1-shaped, and `pPicBuff` → owned is safe **before** the flip~~ — **both DONE, T5.P″1
 (`acf5bfd1`)**, and the ordering claim held: under `PPicture` slots a `pool_pic` result's
 provenance is `AllocPicture`'s, not the pool `Box`'s.
+
+## Session S's two settlements (steward, at `a158183c` — both by reading, not by fiat)
+
+**W6's deny-blocker, settled.** The 80 `(*pCtx)` dereferences across
+`decode_slice.rs`'s 44 raw-context functions touch **24 fields** (census at
+`a158183c`; top of the list: `sRawData` 11, `bMbRefConcealed` 11,
+`sCabacDecEngine` 7, `pParam` 6, `eIntraPredConstraint` 6, the dequant family 10,
+the fn-table family 11). That is not 44 signature rewrites and not an
+exception-list surrender — it is **one per-slice view struct**, built by one
+`unsafe` constructor per bracket top (the same three tops the pool and layer
+already thread from), living in `decoder_context.rs`: field-precise borrows (S29)
+packaged as `&mut` for the three state machines (the raw-data reader, the CABAC
+engine, the flag/counter set), `&` for tables and config, **copied scalars** where
+S23 clears them (constant across one slice — verify per field), and `pParam`'s
+scalars copied *inside* the constructor so F41's raw field never escapes it. The
+44 functions take the view; `decode_slice.rs` compiles under
+`#![deny(unsafe_code)]`; the constructor is the enumerated exception, and it does
+not live in `decode_slice.rs`.
+
+**F43's fix plan.** Delete the five stubs and the second, structurally different
+`SFmo` (`decoder_core.rs:569`); imports resolve to the real
+`error_concealment.rs`/`fmo.rs` bodies; `pFmo` gains an owner (W1's recipe) and
+`FmoParamUpdate` is called where the C++ calls it. **Expected gate movement,
+verified rather than assumed**: the two concealed-macro goldens carry the
+**identical hash today** (`narrow_16x16_n` = `narrow_16x16_idr_lost` =
+`754db24b…`) — the tell that concealment never ran — and they regenerate **against
+the C++ dylib** (output equivalence's reference), each move logged with the C++
+agreement shown. The malformed parity rows run live against the dylib and are
+expected to hold (their damage is NAL-level, rejected before EC on both sides); a
+row that moves is evidence, logged, not noise. New coverage per F21's rule: a
+slice-level-damage asset reaching `DoErrorConSliceCopy`/`MVCopy`, and an FMO
+stream (conformance clip or constructed), both **red under re-stubbing
+`NeedErrorCon`**. F43's general rule — *a stub shadowing a real implementation is
+invisible to every name-matching instrument* — becomes W7's new sweep: every
+function name defined in two modules where a caller's own module hosts one
+locally, enumerated and resolution-checked.
 
 ## Phase exit conditions (the definition of done)
 
