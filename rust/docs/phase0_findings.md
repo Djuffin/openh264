@@ -252,6 +252,15 @@ Two refinements to the profile, both from the control side:
 Both are consistent with a race in slice-list growth: a lost slice gives short output,
 losing the first gives none.
 
+**Phase 5 session S, 2026-08-14 — one hit, retry clean, no rate work owed.** The
+exit-level battery's debug sweep read 340/341 with the single failure
+`mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0`, Rust 0 bytes against the
+C++'s 40992 — the fourth measurement's fingerprint exactly, in the profile that
+measurement added. Re-running the `mt` preset alone gave **120/120**. One hit, so the
+alternating HEAD-vs-control loop is not owed; release read 341/341 in the same
+battery. Recorded because the running total is what makes the next hit cheap to
+classify.
+
 **Fourth measurement, 2026-08-10 (the diffharness profile change) — F3 now fires in
 DEBUG, and the signature grows a clause.** The debug driver was built at
 `opt-level = 0` because its `Cargo.toml` declared no profile; giving it

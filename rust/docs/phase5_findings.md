@@ -2004,10 +2004,19 @@ every macroblock that carries residual, in I, P and B slices alike.
 
 ### Why five phases of Miri never saw it
 
-The phase's two aliasing probes drive `narrow_16x16.264` — one macroblock per frame,
-whose macroblocks carry no residual, so the innermost call is never made — and
-`grid_48x32.264`, which is **CABAC**. Between them they cover the neighbour-reading
-paths F34 was about and no CAVLC residual at all. The probe added for F43's
+**Both existing probes are CABAC.** `grid_48x32.264` is profile 100 with
+`entropy_coding_mode_flag = 1`, and so — checked, not assumed — is
+`narrow_16x16.264`. Between them the phase's Miri coverage contained **no CAVLC at
+all**, so the entire CAVLC macroblock family was unexecuted under the checker,
+residual or not.
+
+*(An earlier draft of this record said `narrow_16x16.264` was CAVLC and missed the
+path for want of residual. That was a guess about a stream nobody had parsed; the
+parameter sets say otherwise. The real gap was an entropy coder, not a coefficient.)*
+
+`narrow_16x16_idr_lost.264` — the stream the concealment probe drives — is the first
+probe input in the project's history to carry CAVLC: profiles 66 **and** 100,
+`entropy_coding_mode_flag` 0 **and** 1, 31 slices against `narrow_16x16`'s 24. The probe added for F43's
 concealment paths (`narrow_16x16_idr_lost.264`, CAVLC, 30 frames) reached it on its
 first execution.
 
