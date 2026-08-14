@@ -386,39 +386,11 @@ pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_k
 pub use crate::decoder::dec_golomb::{g_kuiPrefix8BitsTable};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountScan4Idx, g_kuiDequantCoeff, g_kuiScan4, g_kuiScan8};
 
-// ============================================================================
-// Raw Memory Access Helpers
-// ============================================================================
-
-#[inline(always)]
-pub unsafe fn LD16(ptr: *const u8) -> u16 {
-    unsafe { (ptr as *const u16).read_unaligned() }
-}
-
-#[inline(always)]
-pub unsafe fn ST16(ptr: *mut u8, val: u16) {
-    unsafe { (ptr as *mut u16).write_unaligned(val) }
-}
-
-#[inline(always)]
-pub unsafe fn LD32(ptr: *const u8) -> u32 {
-    unsafe { (ptr as *const u32).read_unaligned() }
-}
-
-#[inline(always)]
-pub unsafe fn ST32(ptr: *mut u8, val: u32) {
-    unsafe { (ptr as *mut u32).write_unaligned(val) }
-}
-
-#[inline(always)]
-pub unsafe fn LD64(ptr: *const u8) -> u64 {
-    unsafe { (ptr as *const u64).read_unaligned() }
-}
-
-#[inline(always)]
-pub unsafe fn ST64(ptr: *mut u8, val: u64) {
-    unsafe { (ptr as *mut u64).write_unaligned(val) }
-}
+// **T5.R5 deleted this file's `LD16`/`ST16`/`LD32`/`ST32`/`LD64`/`ST64`.** Their
+// twelve uses were the neighbour caches — four non-zero counts and four intra
+// prediction modes at a time — over `[i8; 24]` and `[i8; 8]` arrays whose elements are
+// single bytes, so each word move became the element copies it was spelling. `LD64`
+// and `ST64` had no use in this file at all.
 
 #[inline(always)]
 pub unsafe fn POP_BUFFER(pBitsCache: *mut SReadBitsCache, iCount: u32) {
@@ -630,20 +602,31 @@ pub unsafe fn WelsFillCacheNonZeroCount(
 
         if na.iTopAvail != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
+            // T5.R5: the C's `ST32`/`ST16` moved four and two counts at a time; the
+            // counts are bytes in a byte array, so the same bytes in the same order
+            // are four and two element copies.
             let pTopNzc = dq.grid.nzc.get(iTopXy as usize).as_ptr();
-            ST32(pNonZeroCount.add(1), LD32(pTopNzc.add(12) as *const u8));
+            for k in 0..4 {
+                *pNonZeroCount.add(1 + k) = *pTopNzc.add(12 + k) as u8;
+            }
             *pNonZeroCount.add(0) = 0;
             *pNonZeroCount.add(5) = 0;
             *pNonZeroCount.add(29) = 0;
-            ST16(pNonZeroCount.add(6), LD16(pTopNzc.add(20) as *const u8));
-            ST16(pNonZeroCount.add(30), LD16(pTopNzc.add(22) as *const u8));
+            for k in 0..2 {
+                *pNonZeroCount.add(6 + k) = *pTopNzc.add(20 + k) as u8;
+                *pNonZeroCount.add(30 + k) = *pTopNzc.add(22 + k) as u8;
+            }
         } else {
-            ST32(pNonZeroCount.add(1), 0xFFFFFFFF);
+            for k in 0..4 {
+                *pNonZeroCount.add(1 + k) = 0xFF;
+            }
             *pNonZeroCount.add(0) = 0xFF;
             *pNonZeroCount.add(5) = 0xFF;
             *pNonZeroCount.add(29) = 0xFF;
-            ST16(pNonZeroCount.add(6), 0xFFFF);
-            ST16(pNonZeroCount.add(30), 0xFFFF);
+            for k in 0..2 {
+                *pNonZeroCount.add(6 + k) = 0xFF;
+                *pNonZeroCount.add(30 + k) = 0xFF;
+            }
         }
 
         if na.iLeftAvail != 0 {
@@ -695,15 +678,22 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
+            // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
+            // fills below are the same byte four times, which is what the C's word
+            // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
-            ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
+            for k in 0..4 {
+                *pIntraPredMode.add(1 + k) = *pTopMode.add(k);
+            }
         } else {
-            let iPred: u32 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
-                0x02020202
+            let iPred: i8 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
+                0x02
             } else {
-                0xffffffff
+                -1
             };
-            ST32(pIntraPredMode.add(1) as *mut u8, iPred);
+            for k in 0..4 {
+                *pIntraPredMode.add(1 + k) = iPred;
+            }
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
@@ -2024,11 +2014,18 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
+            // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
+            // fills below are the same byte four times, which is what the C's word
+            // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
-            ST32(pIntraPredMode.add(1) as *mut u8, LD32(pTopMode as *const u8));
+            for k in 0..4 {
+                *pIntraPredMode.add(1 + k) = *pTopMode.add(k);
+            }
         } else {
-            let iPred: u32 = if na.iTopAvail != 0 { 0x02020202 } else { 0xffffffff };
-            ST32(pIntraPredMode.add(1) as *mut u8, iPred);
+            let iPred: i8 = if na.iTopAvail != 0 { 0x02 } else { -1 };
+            for k in 0..4 {
+                *pIntraPredMode.add(1 + k) = iPred;
+            }
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
