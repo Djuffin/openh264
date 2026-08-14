@@ -1662,3 +1662,62 @@ enforced by a runtime assert inherits this question: *can the untrusted input ma
 two handles equal?* Where it can, the assert is a behaviour change and the resolution
 has to come from the side that already holds the borrow. The encoder's picture pool
 (6.1/6.2) takes the same `Pool` and will meet it in `MarkPicAsRef`'s shape.
+
+## F43 — `decoder_core.rs` declares stubs that shadow the real error-concealment and FMO implementations, so neither subsystem runs
+
+*Found Phase 5 session R (2026-08-14), while threading the layer parameter through
+`error_concealment.rs` and noticing that its entry points have no production caller.
+**Not fixed.** Owner: **Eugene's call** — the fix is a behaviour change on damaged
+streams, which no gate this project owns can see.*
+
+### The defect
+
+`decoder_core.rs` defines, in the same module that calls them:
+
+```rust
+#[inline] pub unsafe fn NeedErrorCon(pCtx: PWelsDecoderContext, …) -> bool { false }
+#[inline] pub unsafe fn ImplementErrorCon(pCtx: PWelsDecoderContext, …) {}
+#[inline] pub unsafe fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 { ERR_NONE }
+#[inline] pub unsafe fn FmoParamUpdate(pFmo: *mut SFmo, …) -> i32 { ERR_NONE }
+#[inline] pub unsafe fn FmoNextMb(pFmo: *mut SFmo, iMbIdx: i32) -> i32 { iMbIdx + 1 }
+```
+
+`error_concealment.rs` and `fmo.rs` define the real ones under the same names. A local
+item beats a glob import, so **every production call site resolves to the stub**:
+`DecodeCurrentAccessUnit`'s concealment arm, `CheckAndFinishLastPic`'s, and
+`decoder_core.rs`'s one `FmoNextMb` — which additionally casts `(*pCtx).pFmo` to a
+**second, structurally different `SFmo`** declared at `decoder_core.rs:569`
+(`pSliceGroupMap`/`iSliceGroupCount`, against `fmo.rs`'s
+`pMbAllocMap`/`iCountMbNum`/`iSliceGroupCount`/`iSliceGroupType`/`bActiveFlag`).
+
+So the port's whole error-concealment subsystem — `DoErrorConFrameCopy`,
+`DoErrorConSliceCopy`, `GetAvilInfoFromCorrectMb`, `DoErrorConSliceMVCopy`, and the MC
+paths under them — is reachable **only from its own unit tests**. `(*pCtx).pFmo` is
+never written by anything, so `fmo.rs` is unreachable in production as well.
+
+### Why nothing saw it
+
+Three instruments could have and none can:
+
+* `find_stub_bodies.py` matches by name against the C++ and finds the *real* body in
+  the other module — S22's "an instrument's scope list is part of the instrument",
+  reached from a new direction: the scope is right, the *name resolution* is not.
+* The duplicate census reports only identical bodies (`--dups`), and a stub and its
+  real implementation are as different as two bodies get. The type census does not see
+  the two `SFmo`s either, for the same reason it did not see F38's: they are in
+  different modules with no shared declaration site.
+* Every byte gate decodes **clean** streams, where the C++'s own `NeedErrorCon` returns
+  false too. The outputs agree because the path never runs on either side.
+
+### Why it is not fixed here
+
+Deleting the five stubs makes the real implementations live, which changes decoded
+output on damaged streams — the class D-gate-1's byte gates do not cover and the
+conformance set does not contain. That is a behaviour change to schedule and measure,
+not a conversion to slip into a structural session (S6's never-widen default, aimed at
+a whole subsystem). The port's `error_concealment.rs` is also mid-conversion: T5.R1
+threaded the layer through it, so the code is ready to be called.
+
+**The general rule this earns**: *a stub that shadows a real implementation is
+invisible to every instrument that matches by name.* When a module defines a function
+the port already has elsewhere, the census must compare **resolution**, not text.
