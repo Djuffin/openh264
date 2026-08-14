@@ -9062,3 +9062,89 @@ the question is phase-shaped and it is Eugene's or the steward's.
    `PrefetchLastPicForThread` still have no callers and stay on W7's straggler list.
 6. **Probe budget**: five spent, five green. W6's EC MC paths and the `cabac_rbsp_window`
    retirement are the next two seams a byte gate cannot see.
+
+## Phase 5, session S — F43, and the two defects standing behind it (2026-08-14)
+
+### Face 0 — F43, F44, F45: the decoder performs the writes the C++ performs
+
+Scoped as "delete five stubs and give `pFmo` an owner". It was that, and then the
+gates said something the brief did not predict, and following it up was the session.
+
+* **T5.S1** (`5c351f28`). The five stubs and the second `SFmo` are gone; call sites
+  resolve through explicit `use`s. `pFmo` became `fmo_id: Option<i32>` + `fmo_of`/
+  `active_fmo` — **W5's shape, not W1's**: the settlement said "W1's recipe" and the
+  tree disagrees, because `sFmoList` is an array the context already owns and
+  `pCtx->pFmo` is a raw alias into it, which is this phase's named blocker class.
+  `FmoParamUpdate` runs at paramset activation. The layer's `pFmo` was dead in both
+  trees and deleted.
+* **The settlement's gate predictions were both wrong about the tree, and the second
+  one mattered.** There is **one** `asset_test_concealed!` row, not two, and it
+  correctly did not move. What moved was the malformed-parity table — and the
+  settlement expected it to hold because those rows "run live against the dylib".
+  They do not: **the table stores the port's own previous output.** That single fact
+  is what F44, F45 and F46 all hide behind.
+* **F44** — `InitErrorCon` had no caller. It clears `bFreezeOutput` (else stuck true:
+  a damaged first IDR froze output until a clean IDR arrived) and installs
+  `sCopyFunc` (else `None`: `DoErrorConSliceCopy` ran and **copied nothing**, because
+  a `None` guard is a silent no-op).
+* **F45** — `bInstantDecFlag` was read but never written, so
+  `DecodeFrameConstruction`'s incomplete-frame early return never fired and the port
+  **emitted a frame the C++ does not**: one extra at EOS on every truncated stream.
+* The two were **compensating** — `bFreezeOutput` blocked exactly what
+  `bInstantDecFlag` allowed — so frame counts matched the C++ for the wrong reason
+  and fixing either alone reads as a regression. F44 alone moved five streams
+  backwards while fixing the sixth; that spread is what pointed at F45.
+* **Truncation rows agreeing with the C++ decoder, six streams: 641/541 at session
+  start → 659/523 with F44 → 1182/0 with both.** Ten of eleven corpus streams are now
+  exact on every row; `CABA2_SVA_B` has 12 left, same frame counts and differing
+  hashes — the signature of the POC tie-break this suite already documents as
+  deliberate, not yet confirmed as such.
+* **F46, opened not closed**: with output matching, the `DECODING_STATE` returns do
+  not — ~45% of truncation rows on every stream tried, the port under-reporting
+  (`dsNoParamSets`, `dsBitstreamError` where the C++ raises them). No pixel behind
+  it, which is why no byte gate ever raised it. Owner: a scheduled parity session.
+* **Instruments, all kept.** `tools/ecref` + `compare.sh` — the C++'s answer for one
+  corpus entry, replicating `decode_case` exactly; it reproduces the clean-stream
+  conformance goldens digit for digit, which is what says it is faithful.
+  `tools/find_unwritten_fields.py` — F45's class made mechanical; against the
+  pre-session tree it reports `bInstantDecFlag` and nothing else, 1 true positive and
+  0 false out of 53 scalar fields. `tools/make_fmo_asset.py` — because **no stream in
+  `res/` has more than one slice group**, so raster order was right for all 74 and the
+  `FmoNextMb` stub was indistinguishable from the real function.
+* **Coverage**: three conformance rows whose goldens are the C++'s on damaged or FMO
+  input (the first in the project), the narrow class added to the malformed corpus
+  (it had none — F34's blind spot, still open in that instrument), and two new Miri
+  probes over paths that had never executed in production shape.
+* **Two false alarms, both mine, both caught by hand-checking the instrument.** A
+  helper that omitted the `FlushFrame` drain read as the port being one frame short of
+  the C++ on every stream; and macOS awk reading `0x0` as hex made a code comparison
+  report 194 mismatches where 76 exist. *An instrument that disagrees with a hand
+  count is wrong until proven otherwise.*
+
+### Face 0's probe — F47, and what a purpose-built asset found on the way
+
+The brief budgeted the probe to fire and it fired, twice, on paths that had never
+executed under Miri because they had never executed in production.
+
+* **T5.S2.** `decode_slice.rs` had **six** functions each taking their own
+  `(*slice_bit_reader(pCtx)).split(...)` of one `BsCursor`, nesting three deep
+  (`WelsDecodeMbCavlcISlice` → `WelsActualDecodeMbCavlcISlice` →
+  `WelsDecodeMbCavlcResidual`), with both callers using their borrow after the inner
+  retag popped it. P and B slices identically. **This is the ordinary CAVLC path** —
+  every macroblock carrying residual — not an error-concealment path at all.
+* **Why five phases of Miri missed it**: the two existing probes decode
+  `narrow_16x16.264` (one macroblock per frame, no residual, so the innermost call is
+  never made) and `grid_48x32.264` (**CABAC**). Between them, no CAVLC residual. S22
+  from a third direction — the instrument's scope here was not a module list but
+  **which bitstreams the probes decode**, and two streams chosen for frame geometry
+  left an entropy coder untested.
+* **The fix made the next one visible.** With `&mut BsCursor` in the signatures that
+  argument became strongly protected, and the FMO probe immediately convicted
+  `DecodeMbCavlcPcm`, which re-derived the whole reader one level deeper. *A raw
+  re-derivation below a bracket is invisible while everything above it is also raw.*
+* **The asset built for one thing found another.** `fmo_2groups_64x64.264` is
+  all-I_PCM because that makes a slice-group misorder legible; no probe before it had
+  decoded a PCM macroblock. Worth the cost of building assets rather than only
+  collecting them.
+* Six derivations become three, one per slice-type bracket. Output byte-identical on
+  every gate.

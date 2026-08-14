@@ -880,6 +880,14 @@ stream_case!(malformed_qcif_2p_i_allipcm, "QCIF_2P_I_allIPCM.264");
 stream_case!(malformed_ba_mw_d, "BA_MW_D.264");
 stream_case!(malformed_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264");
 stream_case!(malformed_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264");
+// Phase 5 session S. Every stream above is 176x144 or wider, and this corpus
+// "inherits the conformance streams' SPS dimensions" (F21's note) — so the narrow
+// class F21 exists for had no malformed coverage at all, and F34 is what one blind
+// spot in that class already cost. `narrow_16x16.264` is 711 bytes and one
+// macroblock per frame: the cheapest stream in the tree, and the only one whose
+// truncations reach the concealment paths with no neighbour to lean on.
+stream_case!(malformed_narrow_16x16, "narrow_16x16.264");
+stream_case!(malformed_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264");
 
 #[test]
 fn malformed_degenerate_nals() {
