@@ -804,7 +804,7 @@ pub unsafe fn UpdateP16x8RefIdxCabac(
     let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     let iCacheIdx6 = 6 + iCacheIdx;
 
-    let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pDecRef = (*pDec).pRefIndex[iListIdx as usize].get_mut(iMbXy);
     for offset in 0..4 {
         pDecRef[iScan4Idx + offset] = iRef;
         pDecRef[iScan4Idx4 + offset] = iRef;
@@ -828,7 +828,7 @@ pub unsafe fn UpdateP8x16RefIdxCabac(
         let iScan4Idx4 = 4 + iScan4Idx;
         let iCacheIdx6 = 6 + iCacheIdx;
 
-        let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+        let pDecRef = (*pDec).pRefIndex[iListIdx as usize].get_mut(iMbXy);
         for offset in 0..2 {
             pDecRef[iScan4Idx + offset] = iRef;
             pDecRef[iScan4Idx4 + offset] = iRef;
@@ -848,7 +848,7 @@ pub unsafe fn UpdateP8x8RefIdxCabac(
 ) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pDecRef = (*pDec).pRefIndex[iListIdx as usize].get_mut(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;
     pDecRef[iScan4Idx + 4] = iRef;
@@ -1415,7 +1415,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pMbType = (*dec_pic(pCtx)).pMbType;
+    let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*dec_pic(pCtx)).pMbType, 0);
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
@@ -1513,7 +1513,7 @@ pub unsafe fn ParseRefIdxCabac(
     let mut iCtxInc: i32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pRefIdxInMB = *(*dec_pic(pCtx)).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pRefIdxInMB = *(*dec_pic(pCtx)).pRefIndex[iListIdx as usize].get(iMbXy);
     let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
 
     let scan_cache = g_kuiCache30ScanIdx[iZOrderIdx as usize] as usize;
@@ -1698,7 +1698,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
     let bIsPending = GetThreadCount(pCtx) > 1;
     let pDec = dec_pic(pCtx);
-    let mbType = *(*pDec).pMbType.add(iMbXy);
+    let mbType = *(*pDec).pMbType.get(iMbXy);
 
     match mbType {
         MB_TYPE_16x16 => {
@@ -1934,7 +1934,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     pMv[0] += pMvd[0];
                     pMv[1] += pMvd[1];
 
-                    let pDecMv = &mut *(*dec_pic(pCtx)).pMv[0].add(iMbXy);
+                    let pDecMv = (*dec_pic(pCtx)).pMv[0].get_mut(iMbXy);
                     let pMvdTarget = (*pCurDqLayer).grid.mvd[0].get_mut(iMbXy);
 
                     if SUB_MB_TYPE_8x8 == uiSubMbType {
@@ -2007,7 +2007,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 
     let pRefCount = pSliceHeader.uiRefCount;
     let pDec = dec_pic(pCtx);
-    let mbType = *(*pDec).pMbType.add(iMbXy);
+    let mbType = *(*pDec).pMbType.get(iMbXy);
 
     // C keeps pMv[4]/pMvd[4]: the 8x8 path duplicates the low pair into the high
     // pair (`ST32 (pMv + 2, LD32 (pMv))`) so it can store 8 bytes at once.
@@ -2442,7 +2442,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pMvd[0] = 0; pMvd[1] = 0;
                     }
 
-                    let pDecMv = (*dec_pic(pCtx)).pMv[listIdx].add(iMbXy) as *mut [i16; 2];
+                    let pDecMv = (*dec_pic(pCtx)).pMv[listIdx].get_mut(iMbXy).as_mut_ptr();
                     let pLayerMvd = (*pCurDqLayer).grid.mvd[listIdx].get_mut(iMbXy).as_mut_ptr();
                     let mv2: [i16; 2] = [pMv[0], pMv[1]];
                     let mvd2: [i16; 2] = [pMvd[0], pMvd[1]];
@@ -2683,7 +2683,7 @@ pub unsafe fn ParseCbfInfoCabac(
     let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex;
     let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
-    let pMbType = (*dec_pic(pCtx)).pMbType;
+    let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*dec_pic(pCtx)).pMbType, 0);
     *uiCbfBit = 0;
     let mut nA: i8 = IS_INTRA(*pMbType.add(iCurrBlkXy as usize)) as i8;
     let mut nB: i8 = nA;
@@ -3054,7 +3054,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let mut pMbDstU = (*dec_pic(pCtx)).data_ptr(1).add(iMbOffsetChroma as usize);
     let mut pMbDstV = (*dec_pic(pCtx)).data_ptr(2).add(iMbOffsetChroma as usize);
 
-    *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
+    *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux);
 
     // `pEndBuf - pCurBuf` becomes `len - pos`. F4's off-by-ones are load-bearing, so

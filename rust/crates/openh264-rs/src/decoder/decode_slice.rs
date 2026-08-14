@@ -1433,7 +1433,7 @@ pub unsafe fn GetInterPred(
 
     let iMBXY = (*pCurDqLayer).iMbXyIndex as usize;
     let pDec = dec_pic(pCtx);
-    let iMBType = *(*pDec).pMbType.add(iMBXY);
+    let iMBType = *(*pDec).pMbType.get(iMBXY);
 
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
@@ -1452,8 +1452,8 @@ pub unsafe fn GetInterPred(
     pMCRefMem.iDstLineChroma = iDstLineChroma;
 
     let bWeight = (*pCurDqLayer).bUseWeightPredictionFlag;
-    let mv_mb = &*(*pDec).pMv[0].add(iMBXY);
-    let ref_mb = &*(*pDec).pRefIndex[0].add(iMBXY);
+    let mv_mb = (*pDec).pMv[0].get(iMBXY);
+    let ref_mb = (*pDec).pRefIndex[0].get(iMBXY);
 
     match iMBType {
         MB_TYPE_SKIP | MB_TYPE_16x16 => {
@@ -1638,7 +1638,7 @@ pub unsafe fn GetInterBPred(
     let mut iMVs = [0i16; 2];
 
     let pDec = dec_pic(pCtx);
-    let iMBType = *(*pDec).pMbType.add(iMBXY);
+    let iMBType = *(*pDec).pMbType.get(iMBXY);
 
     let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
     let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
@@ -1671,8 +1671,8 @@ pub unsafe fn GetInterBPred(
     let bWeightedBipredIdcIs1 = !pPpsB.is_null() && (*pPpsB).uiWeightedBipredIdc == 1;
     let bUseWeightedBiPredIdc = (*pCurDqLayer).bUseWeightedBiPredIdc;
 
-    let pMv = |list: usize, idx: usize| -> [i16; 2] { (*(*pDec).pMv[list].add(iMBXY))[idx] };
-    let pRef = |list: usize, idx: usize| -> i8 { (*(*pDec).pRefIndex[list].add(iMBXY))[idx] };
+    let pMv = |list: usize, idx: usize| -> [i16; 2] { (*(*pDec).pMv[list].get(iMBXY))[idx] };
+    let pRef = |list: usize, idx: usize| -> i8 { (*(*pDec).pRefIndex[list].get(iMBXY))[idx] };
 
     if IS_INTER_16x16(iMBType) {
         if IS_TYPE_L0(iMBType) && IS_TYPE_L1(iMBType) {
@@ -2377,10 +2377,10 @@ pub unsafe fn WelsMbIntraPredictionConstruction(
     WelsFillRecNeededMbInfo(pCtx, bOutput, pCurDqLayer);
 
     let pDec = dec_pic(pCtx);
-    if pDec.is_null() || (*pDec).pMbType.is_null() {
+    if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
         return ERR_NONE;
     }
-    let mb_type = *(*pDec).pMbType.add(iMbXy as usize);
+    let mb_type = *(*pDec).pMbType.get(iMbXy as usize);
     let pScoeffLevel = (*pCurDqLayer).grid.scaled_tcoeff.get_mut(iMbXy as usize).as_mut_ptr();
 
     if IS_INTRA16x16(mb_type) {
@@ -2405,10 +2405,10 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: *mut SWelsDecoderContext) -> i32 {
     let pDec = dec_pic(pCtx);
     let iMbXy = (*dq).iMbXyIndex as usize;
 
-    if pDec.is_null() || (*pDec).pMbType.is_null() {
+    if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
         return ERR_NONE;
     }
-    let mb_type = *(*pDec).pMbType.add(iMbXy);
+    let mb_type = *(*pDec).pMbType.get(iMbXy);
 
     if mb_type == MB_TYPE_INTRA_PCM {
         ERR_NONE
@@ -2584,7 +2584,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext) -> i32 {
 
     let iIndex = ((-pBs.cursor.left_bits()) >> 3) + 2;
 
-    *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
+    *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
 
     // step 1: locate the bit-stream position (must align to an integer byte).
     // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
@@ -2681,7 +2681,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         return DecodeMbCavlcPcm(pCtx);
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
         if (*(*pCtx).pPps).bTransform8x8ModeFlag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
@@ -2689,7 +2689,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             }
             *pTransformSize8x8Flag = uiCode != 0;
             if uiCode != 0 {
-                *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                 uiMbType = MB_TYPE_INTRA8x8;
             }
         }
@@ -2728,7 +2728,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
     } else {
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
         *pTransformSize8x8Flag = false;
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -2753,7 +2753,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
-    if *pCbp == 0 && IS_INTRANxN(*(*pDec).pMbType.add(iMbXy)) {
+    if *pCbp == 0 && IS_INTRANxN(*(*pDec).pMbType.get(iMbXy)) {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
         *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
@@ -2767,7 +2767,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.add(iMbXy) {
+    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
         let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
@@ -2829,7 +2829,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     let iMbXy = (*dq).iMbXyIndex as usize;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
-    let mb_type = *(*pDec).pMbType.add(iMbXy);
+    let mb_type = *(*pDec).pMbType.get(iMbXy);
     let is_intra = IS_INTRA(mb_type);
     // T5.I2: the QP is read once per residual block, so the four sites below sit
     // inside `for iId8x8 { for iId4x4 { } }` and cost up to sixteen checks per
@@ -3120,7 +3120,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         // inter MB type
         let mut iMotionVector = [[[0i16; 2]; 30]; 2];
         let mut iRefIndex = [[0i8; 30]; 2];
-        *(*pDec).pMbType.add(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
+        *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -3175,7 +3175,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return DecodeMbCavlcPcm(pCtx);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
@@ -3183,7 +3183,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                 }
                 *pTransformSize8x8Flag = uiCode != 0;
                 if uiCode != 0 {
-                    *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                    *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
@@ -3201,7 +3201,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
                 return ret;
             }
         } else {
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
             *pTransformSize8x8Flag = false;
             *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
             (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -3224,7 +3224,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.add(iMbXy) {
+    if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.get(iMbXy) {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
@@ -3236,7 +3236,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        let mb_type = *(*pDec).pMbType.add(iMbXy);
+        let mb_type = *(*pDec).pMbType.get(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
             if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3255,7 +3255,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
 
-        let mb_type = *(*pDec).pMbType.add(iMbXy);
+        let mb_type = *(*pDec).pMbType.get(iMbXy);
         let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
             || *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy))
             && mb_type != MB_TYPE_INTRA8x8
@@ -3275,7 +3275,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
-    let mb_type = *(*pDec).pMbType.add(iMbXy);
+    let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *pCbp == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
@@ -3290,7 +3290,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.add(iMbXy) {
+    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
         let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
@@ -3370,20 +3370,20 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         let mut iMv = [0i16; 2];
 
         if !pDec.is_null() {
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
         }
         for j in 0..24 {
             *(*dq).grid.nzc.get_mut(iMbXy).as_mut_ptr().add(j) = 0;
         }
         if !pDec.is_null() {
             for j in 0..16 {
-                *(*(*pDec).pRefIndex[0].add(iMbXy)).as_mut_ptr().add(j) = 0;
+                (*pDec).pRefIndex[0].get_mut(iMbXy)[j] = 0;
             }
         }
         crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq, pDec, &mut iMv);
         if !pDec.is_null() {
             for j in 0..16 {
-                *(*(*pDec).pMv[0].add(iMbXy)).as_mut_ptr().add(j) = iMv;
+                (*pDec).pMv[0].get_mut(iMbXy)[j] = iMv;
             }
         }
 
@@ -3474,7 +3474,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         // inter MB type
         let mut iMotionVector = [[[0i16; 2]; 30]; 2];
         let mut iRefIndex = [[0i8; 30]; 2];
-        *(*pDec).pMbType.add(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
+        *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -3529,7 +3529,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return DecodeMbCavlcPcm(pCtx);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
             if (*(*pCtx).pPps).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
@@ -3537,7 +3537,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                 }
                 *pTransformSize8x8Flag = uiCode != 0;
                 if uiCode != 0 {
-                    *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+                    *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                 }
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
@@ -3555,7 +3555,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
                 return ret;
             }
         } else {
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
             *pTransformSize8x8Flag = false;
             *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
             (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -3578,7 +3578,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.add(iMbXy) {
+    if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.get(iMbXy) {
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
             return ret as i32;
@@ -3590,7 +3590,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        let mb_type = *(*pDec).pMbType.add(iMbXy);
+        let mb_type = *(*pDec).pMbType.get(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
             if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3609,7 +3609,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
 
-        let mb_type = *(*pDec).pMbType.add(iMbXy);
+        let mb_type = *(*pDec).pMbType.get(iMbXy);
         let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
             || *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy))
             && mb_type != MB_TYPE_INTRA8x8
@@ -3629,7 +3629,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
-    let mb_type = *(*pDec).pMbType.add(iMbXy);
+    let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *pCbp == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
         let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
@@ -3644,7 +3644,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
     }
 
-    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.add(iMbXy) {
+    if *pCbp != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
         let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
@@ -3734,12 +3734,12 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         let mut iMv = [[0i16; 2]; LIST_A];
         let mut iRef = [0i8; LIST_A];
 
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
         let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
 
-        (&mut *(*pDec).pRefIndex[LIST_0].add(iMbXy)).fill(0);
-        (&mut *(*pDec).pRefIndex[LIST_1].add(iMbXy)).fill(0);
+        ((*pDec).pRefIndex[LIST_0].get_mut(iMbXy)).fill(0);
+        ((*pDec).pRefIndex[LIST_1].get_mut(iMbXy)).fill(0);
 
         let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
         let is_complete0 = !ppRefPicL0.is_null() && ((*ppRefPicL0).bIsComplete || bIsPending);
@@ -4210,7 +4210,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     if uiMbType == 0 {
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA4x4;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
         let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
         if pps.bTransform8x8ModeFlag {
             // T5.I2 (F34): the callee reads *this array* at the left and top
@@ -4239,13 +4239,13 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
         );
 
         if *(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-            *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA8x8;
+            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
             ParseIntra8x8Mode(pCtx, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         } else {
             ParseIntra4x4Mode(pCtx, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         }
     } else {
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA16x16;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
         *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType as i32 - 1) & 3) as i8;
@@ -4283,7 +4283,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
     let pps_layer = &*((*dq).sLayerInfo.pPps as *const SPps);
     let iMbXy = (*dq).iMbXyIndex as usize;
-    let mb_type = *(*pDec).pMbType.add(iMbXy);
+    let mb_type = *(*pDec).pMbType.get(iMbXy);
     let mut uiCbp = 0u32;
     let uiCbpLuma;
     let uiCbpChroma;
@@ -4754,7 +4754,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         let mut pMotionVector = [[[0i16; 2]; 30]; LIST_A];
         let mut pMvdCache = [[[0i16; 2]; 30]; LIST_A];
         let mut pRefIndex = [[0i8; 30]; LIST_A];
-        *(*pDec).pMbType.add(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
+        *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
             pNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -4883,10 +4883,10 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
     if uiCode != 0 {
         let mut pMv = [0i16; 2];
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
         let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
-        let ref_slice = &mut *(*pDec).pRefIndex[LIST_0].add(iMbXy);
+        let ref_slice = (*pDec).pRefIndex[LIST_0].get_mut(iMbXy);
         ref_slice.fill(0);
 
         let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
@@ -4900,7 +4900,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
             (*pCtx).bRPLRError || (*pCtx).bMbRefConcealed || !is_complete0;
 
         crate::decoder::mv_pred::PredPSkipMvFromNeighbor(dq, pDec, &mut pMv);
-        let mv_slice = &mut *(*pDec).pMv[LIST_0].add(iMbXy);
+        let mv_slice = (*pDec).pMv[LIST_0].get_mut(iMbXy);
         let mvd_slice = (*dq).grid.mvd[LIST_0].get_mut(iMbXy);
         for i in 0..16 {
             mv_slice[i] = pMv;
@@ -4960,7 +4960,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         let mut pMvdCache = [[[0i16; 2]; 30]; LIST_A];
         let mut pRefIndex = [[0i8; 30]; LIST_A];
         let mut pDirect = [0i8; 30];
-        *(*pDec).pMbType.add(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
+        *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
             pNeighAvail,
             pNonZeroCount.as_mut_ptr(),
@@ -5107,11 +5107,11 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         let mut ref_idx = [0i8; 2];
         let mut subMbType = 0u32;
 
-        *(*pDec).pMbType.add(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
+        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
         let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
         nzc_mb.fill(0);
-        let ref0_slice = &mut *(*pDec).pRefIndex[LIST_0].add(iMbXy);
-        let ref1_slice = &mut *(*pDec).pRefIndex[LIST_1].add(iMbXy);
+        let ref0_slice = (*pDec).pRefIndex[LIST_0].get_mut(iMbXy);
+        let ref1_slice = (*pDec).pRefIndex[LIST_1].get_mut(iMbXy);
         ref0_slice.fill(0);
         ref1_slice.fill(0);
 

@@ -75,6 +75,7 @@ pub const MV_A: usize = 2;
 
 pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::safe::plane::PaddedPlane;
+use crate::safe::mb_grid::MbDims;
 pub use crate::safe::pool::Pool;
 
 /// A handle to one slot of the decoder's [`PicPool`] — plan §2.2.3's `PicId`.
@@ -447,7 +448,15 @@ pub unsafe fn AllocPicture(
     };
     let _ = iPicChromaHeight;
 
-    let pPic: PPicture = Box::into_raw(Box::new(SPicture::with_planes(planes)));
+    // **T5.P′3**: `AllocPicture`'s own macroblock geometry, unchanged — the six
+    // `WelsMallocz` calls that used to follow were all sized `uiMbCount * elem`, and
+    // this is that count, stated once and handed to the containers.
+    let dims = MbDims::new(
+        ((kiPicWidth + 15) >> 4) as usize,
+        ((kiPicHeight + 15) >> 4) as usize,
+    );
+
+    let pPic: PPicture = Box::into_raw(Box::new(SPicture::with_planes(planes, dims)));
 
     unsafe {
         (*pPic).iWidthInPixel = kiPicWidth;
@@ -455,43 +464,6 @@ pub unsafe fn AllocPicture(
         (*pPic).iFrameNum = -1;
         (*pPic).iRefCount = 0;
         (*pPic).pSetUnRef = None;
-    }
-
-    let uiMbWidth = ((kiPicWidth + 15) >> 4) as u32;
-    let uiMbHeight = ((kiPicHeight + 15) >> 4) as u32;
-    let uiMbCount = uiMbWidth * uiMbHeight;
-
-    unsafe {
-        (*pPic).pMbCorrectlyDecodedFlag = (*pMa).WelsMallocz(
-            uiMbCount * std::mem::size_of::<bool>() as u32,
-            b"pPic->pMbCorrectlyDecodedFlag\0".as_ptr() as *const c_char,
-        ) as *mut bool;
-
-        (*pPic).pMbType = (*pMa).WelsMallocz(
-            uiMbCount * std::mem::size_of::<u32>() as u32,
-            b"pPic->pMbType\0".as_ptr() as *const c_char,
-        ) as *mut u32;
-
-        let mv_size = uiMbCount * (std::mem::size_of::<i16>() * MV_A * MB_BLOCK4x4_NUM) as u32;
-        (*pPic).pMv[LIST_0] = (*pMa).WelsMallocz(
-            mv_size,
-            b"pPic->pMv[]\0".as_ptr() as *const c_char,
-        ) as *mut [[i16; 2]; 16];
-        (*pPic).pMv[LIST_1] = (*pMa).WelsMallocz(
-            mv_size,
-            b"pPic->pMv[]\0".as_ptr() as *const c_char,
-        ) as *mut [[i16; 2]; 16];
-
-        let ref_size = uiMbCount * (std::mem::size_of::<i8>() * MB_BLOCK4x4_NUM) as u32;
-        (*pPic).pRefIndex[LIST_0] = (*pMa).WelsMallocz(
-            ref_size,
-            b"pCtx->sMb.pRefIndex[]\0".as_ptr() as *const c_char,
-        ) as *mut [i8; 16];
-        (*pPic).pRefIndex[LIST_1] = (*pMa).WelsMallocz(
-            ref_size,
-            b"pCtx->sMb.pRefIndex[]\0".as_ptr() as *const c_char,
-        ) as *mut [i8; 16];
-
     }
 
     pPic
@@ -516,47 +488,16 @@ pub unsafe fn AllocPicture(
 ///   from that function's `Box::into_raw` and from nowhere else.
 /// - `pMa` must point to the [`CMemoryAlign`] allocator used to allocate the
 ///   macroblock metadata arrays.
-pub unsafe fn FreePicture(pPic: PPicture, pMa: *mut CMemoryAlign) {
-    if pPic.is_null() || pMa.is_null() {
+pub unsafe fn FreePicture(pPic: PPicture, _pMa: *mut CMemoryAlign) {
+    if pPic.is_null() {
         return;
     }
-    unsafe {
-        if !(*pPic).pMbCorrectlyDecodedFlag.is_null() {
-            (*pMa).WelsFree(
-                (*pPic).pMbCorrectlyDecodedFlag as *mut c_void,
-                b"pPic->pMbCorrectlyDecodedFlag\0".as_ptr() as *const c_char,
-            );
-            (*pPic).pMbCorrectlyDecodedFlag = std::ptr::null_mut();
-        }
-
-        if !(*pPic).pMbType.is_null() {
-            (*pMa).WelsFree(
-                (*pPic).pMbType as *mut c_void,
-                b"pPic->pMbType\0".as_ptr() as *const c_char,
-            );
-            (*pPic).pMbType = std::ptr::null_mut();
-        }
-
-        for listIdx in LIST_0..LIST_A {
-            if !(*pPic).pMv[listIdx].is_null() {
-                (*pMa).WelsFree(
-                    (*pPic).pMv[listIdx] as *mut c_void,
-                    b"pPic->pMv[]\0".as_ptr() as *const c_char,
-                );
-                (*pPic).pMv[listIdx] = std::ptr::null_mut();
-            }
-            if !(*pPic).pRefIndex[listIdx].is_null() {
-                (*pMa).WelsFree(
-                    (*pPic).pRefIndex[listIdx] as *mut c_void,
-                    b"pPic->pRefIndex[]\0".as_ptr() as *const c_char,
-                );
-                (*pPic).pRefIndex[listIdx] = std::ptr::null_mut();
-            }
-        }
-
-        // The picture header and, with it, the three plane allocations.
-        drop(Box::from_raw(pPic));
-    }
+    // The picture header and, with it, the three planes *and* the four
+    // per-macroblock families. **T5.P′3 emptied this function**: the six `WelsFree`
+    // calls it used to make are drop glue now, and the `pMa` it needed to make them
+    // is unused — kept in the signature because `DestroyPicBuff` and the lifecycle
+    // still spell the C's pair, and W3's cascade is what deletes the parameter.
+    unsafe { drop(Box::from_raw(pPic)) }
 }
 
 // ============================================================================

@@ -60,6 +60,24 @@ impl MbDims {
         }
     }
 
+    /// The dimensions of a grid covering **no** macroblocks.
+    ///
+    /// **T5.P′3**: `SPicture`'s four per-macroblock families were raw pointers, and
+    /// a picture that had not been through `AllocPicture` — every test fixture, and
+    /// the zeroed state `Default` produces — held null in all six. This is that
+    /// state, and [`MbArray::empty`] is the array in it: readers that tested
+    /// `.is_null()` test `as_slice().is_empty()`, which is the same question.
+    ///
+    /// It is deliberately *not* reachable through [`new`](Self::new), whose panic
+    /// says there is no such picture — because for a grid that anything indexes,
+    /// there is not.
+    pub const fn none() -> Self {
+        Self {
+            mb_width: 0,
+            mb_height: 0,
+        }
+    }
+
     /// The grid covering a picture of `width` × `height` pixels, rounding partial
     /// macroblocks up — `(kiPicWidth + 15) >> 4`, as `AllocPicture` does
     /// (`pic_queue.rs:267-269`).
@@ -176,6 +194,14 @@ impl<T: Clone> MbArray<T> {
 }
 
 impl<T> MbArray<T> {
+    /// The array of a picture that covers no macroblocks — see [`MbDims::none`].
+    pub const fn empty() -> Self {
+        Self {
+            data: Vec::new(),
+            dims: MbDims::none(),
+        }
+    }
+
     /// Adopts `data` as the per-macroblock array of `dims`.
     ///
     /// # Panics

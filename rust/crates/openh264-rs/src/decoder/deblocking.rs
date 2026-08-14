@@ -528,7 +528,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
     pNnzTab: *const i8,
     iMbXy: i32,
 ) {
-    let iRefIdx = *(*pDec).pRefIndex[LIST_0].add(iMbXy as usize);
+    let iRefIdx = *(*pDec).pRefIndex[LIST_0].get(iMbXy as usize);
     let mut iRefs: [Option<PicId>; MB_BLOCK4x4_NUM] = [None; MB_BLOCK4x4_NUM];
     for i in 0..MB_BLOCK4x4_NUM {
         if iRefIdx[i] > REF_NOT_IN_LIST {
@@ -539,7 +539,9 @@ pub unsafe fn DeblockingBSInsideMBNormal(
     }
 
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
-    let pMv = (*pDec).pMv[LIST_0].add(iMbXy as usize);
+    // T5.P′3: the picture's array is owned, and `BS_EDGE` reads one macroblock's
+    // record by index, so the bridge is taken at the record rather than at the base.
+    let pMv = (*pDec).pMv[LIST_0].get_mut(iMbXy as usize) as *mut _;
     let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
 
     if is_8x8 {
@@ -661,7 +663,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     let mut iRefs: [[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A] = [[None; MB_BLOCK4x4_NUM]; LIST_A];
 
     for l in 0..LIST_A {
-        let iRefIdx = *(*pDec).pRefIndex[l].add(iMbXy as usize);
+        let iRefIdx = *(*pDec).pRefIndex[l].get(iMbXy as usize);
         for i in 0..MB_BLOCK4x4_NUM {
             if iRefIdx[i] > REF_NOT_IN_LIST {
                 iRefs[l][i] = (*pFilter).ref_ids[l][iRefIdx[i] as usize];
@@ -671,7 +673,12 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         }
     }
 
-    let pMv = &(*pDec).pMv;
+    // T5.P′3: two bridges, one per list, each from its own allocation root (S28) —
+    // `IN_BS_EDGE` indexes them by macroblock address.
+    let pMv = [
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0),
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0),
+    ];
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
 
@@ -690,7 +697,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         let val_v0 = IN_BS_EDGE(
             i8x8NnzTab[0] | i8x8NnzTab[1],
             &iRefs,
-            pMv,
+            &pMv,
             iMbXy as usize,
             iIndex_v0,
             iNeigborIndex_v0,
@@ -703,7 +710,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         let val_v1 = IN_BS_EDGE(
             i8x8NnzTab[2] | i8x8NnzTab[3],
             &iRefs,
-            pMv,
+            &pMv,
             iMbXy as usize,
             iIndex_v1,
             iNeigborIndex_v1,
@@ -716,7 +723,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         let val_h0 = IN_BS_EDGE(
             i8x8NnzTab[0] | i8x8NnzTab[2],
             &iRefs,
-            pMv,
+            &pMv,
             iMbXy as usize,
             iIndex_h0,
             iNeigborIndex_h0,
@@ -729,7 +736,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         let val_h1 = IN_BS_EDGE(
             i8x8NnzTab[1] | i8x8NnzTab[3],
             &iRefs,
-            pMv,
+            &pMv,
             iMbXy as usize,
             iIndex_h1,
             iNeigborIndex_h1,
@@ -742,55 +749,55 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         for i in 0..3 {
             uiBsx4[i] = nnz[i] | nnz[i + 1];
         }
-        nBS[0][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 1, 0);
-        nBS[0][2][0] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 2, 1);
-        nBS[0][3][0] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 3, 2);
+        nBS[0][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 1, 0);
+        nBS[0][2][0] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 2, 1);
+        nBS[0][3][0] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 3, 2);
 
         for i in 0..3 {
             uiBsx4[i] = nnz[4 + i] | nnz[4 + i + 1];
         }
-        nBS[0][1][1] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 5, 4);
-        nBS[0][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 6, 5);
-        nBS[0][3][1] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 7, 6);
+        nBS[0][1][1] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 5, 4);
+        nBS[0][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 6, 5);
+        nBS[0][3][1] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 7, 6);
 
         for i in 0..3 {
             uiBsx4[i] = nnz[8 + i] | nnz[8 + i + 1];
         }
-        nBS[0][1][2] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 9, 8);
-        nBS[0][2][2] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 10, 9);
-        nBS[0][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 11, 10);
+        nBS[0][1][2] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 9, 8);
+        nBS[0][2][2] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 10, 9);
+        nBS[0][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 11, 10);
 
         for i in 0..3 {
             uiBsx4[i] = nnz[12 + i] | nnz[12 + i + 1];
         }
-        nBS[0][1][3] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 13, 12);
-        nBS[0][2][3] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 14, 13);
-        nBS[0][3][3] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 15, 14);
+        nBS[0][1][3] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 13, 12);
+        nBS[0][2][3] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 14, 13);
+        nBS[0][3][3] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 15, 14);
 
         // horizontal
         for i in 0..4 {
             uiBsx4[i] = nnz[i] | nnz[4 + i];
         }
-        nBS[1][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 4, 0);
-        nBS[1][1][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 5, 1);
-        nBS[1][1][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 6, 2);
-        nBS[1][1][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 7, 3);
+        nBS[1][1][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 4, 0);
+        nBS[1][1][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 5, 1);
+        nBS[1][1][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 6, 2);
+        nBS[1][1][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, &pMv, iMbXy as usize, 7, 3);
 
         for i in 0..4 {
             uiBsx4[i] = nnz[4 + i] | nnz[8 + i];
         }
-        nBS[1][2][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 8, 4);
-        nBS[1][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 9, 5);
-        nBS[1][2][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 10, 6);
-        nBS[1][2][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 11, 7);
+        nBS[1][2][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 8, 4);
+        nBS[1][2][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 9, 5);
+        nBS[1][2][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 10, 6);
+        nBS[1][2][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, &pMv, iMbXy as usize, 11, 7);
 
         for i in 0..4 {
             uiBsx4[i] = nnz[8 + i] | nnz[12 + i];
         }
-        nBS[1][3][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, pMv, iMbXy as usize, 12, 8);
-        nBS[1][3][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, pMv, iMbXy as usize, 13, 9);
-        nBS[1][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, pMv, iMbXy as usize, 14, 10);
-        nBS[1][3][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, pMv, iMbXy as usize, 15, 11);
+        nBS[1][3][0] = IN_BS_EDGE(uiBsx4[0], &iRefs, &pMv, iMbXy as usize, 12, 8);
+        nBS[1][3][1] = IN_BS_EDGE(uiBsx4[1], &iRefs, &pMv, iMbXy as usize, 13, 9);
+        nBS[1][3][2] = IN_BS_EDGE(uiBsx4[2], &iRefs, &pMv, iMbXy as usize, 14, 10);
+        nBS[1][3][3] = IN_BS_EDGE(uiBsx4[3], &iRefs, &pMv, iMbXy as usize, 15, 11);
     }
 }
 
@@ -815,7 +822,8 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
     let pRefIdxArr = if !pDec.is_null() {
-        (*pDec).pRefIndex[LIST_0]
+        // T5.P′3: the picture's array joins the layer's on the same bridge.
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_0], 0)
     } else {
         // T5.J3: the grid's array, derived from the allocation root (S28) — the
         // consumer indexes it by macroblock address, so it must reach the whole
@@ -827,7 +835,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     let pMvArr = if !pDec.is_null() {
-        (*pDec).pMv[LIST_0]
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0)
     } else {
         // T5.K1: the grid's array, derived from the allocation root (S28) — `MB_BS_MV`
         // indexes it by macroblock address for the current macroblock *and* its
@@ -1017,8 +1025,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let iRefIdx0 = (*pDec).pRefIndex[LIST_0];
-    let iRefIdx1 = (*pDec).pRefIndex[LIST_1];
+    let iRefIdx0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_0], 0);
+    let iRefIdx1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_1], 0);
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb) as *const u8;
@@ -1074,8 +1082,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = (*pDec).pMv[LIST_0];
-                    let pMv1 = (*pDec).pMv[LIST_1];
+                    let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
+                    let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
                     let val = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1137,8 +1145,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = (*pDec).pMv[LIST_0];
-                        let pMv1 = (*pDec).pMv[LIST_1];
+                        let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
+                        let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
                         *pBS.add(j + (i << 1)) = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1200,8 +1208,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = (*pDec).pMv[LIST_0];
-                        let pMv1 = (*pDec).pMv[LIST_1];
+                        let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
+                        let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
                         *pBS.add(j + (i << 1)) = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1258,8 +1266,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = (*pDec).pMv[LIST_0];
-                    let pMv1 = (*pDec).pMv[LIST_1];
+                    let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
+                    let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
                     *pBS.add(i) = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1999,7 +2007,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
     let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
     let iCurMbType = if !pDec.is_null() {
-        *(*pDec).pMbType.add(iMbXyIndex as usize)
+        *(*pDec).pMbType.get(iMbXyIndex as usize)
     } else {
         *(*pCurDqLayer).grid.mb_type.get(iMbXyIndex as usize)
     };
@@ -2015,7 +2023,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
             if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - 1;
                 let uiMbType = if !pDec.is_null() {
-                    *(*pDec).pMbType.add(iMbNb as usize)
+                    *(*pDec).pMbType.get(iMbNb as usize)
                 } else {
                     *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
@@ -2035,7 +2043,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
             if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - (*pCurDqLayer).iMbWidth;
                 let uiMbType = if !pDec.is_null() {
-                    *(*pDec).pMbType.add(iMbNb as usize)
+                    *(*pDec).pMbType.get(iMbNb as usize)
                 } else {
                     *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
