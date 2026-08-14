@@ -416,8 +416,9 @@ pub struct DqLayerState {
     // Readers that hold `pCtx` derive; the layer-only leaves take the picture as a
     // parameter from their `pCtx`-holding caller (never storing it); the one identity
     // comparison is `PicId` equality with no dereference on either side. 160 sites
-    // over seven files, and `pCurDqLayer` never advances mid-access-unit — its only
-    // production write is `= pDqLayersList` at `:3555`, before the loop.
+    // over seven files, and the layer never advances mid-access-unit — the cache field
+    // that made that claim readable is gone (T5.R1) and the layer itself is threaded
+    // from the access-unit loop's own derivation.
     pub iColocMv: [[[i16; 2]; 16]; 2],
     pub iColocRefIndex: [[i8; 16]; 2],
     pub iColocIntra: [i8; 16],
@@ -758,15 +759,14 @@ unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStati
 }
 
 #[inline]
-pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
+pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext, pCurDq: PDqLayer) {
     if pCtx.is_null()
-        || (*pCtx).pCurDqLayer.is_null()
+        || pCurDq.is_null()
         || (*pCtx).pDec.is_none()
         || (*pCtx).pDecoderStatistics.is_null()
     {
         return;
     }
-    let pCurDq = (*pCtx).pCurDqLayer;
     let pPic = dec_pic(pCtx);
     let pDecStat = (*pCtx).pDecoderStatistics;
 
@@ -820,60 +820,69 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext) {
 }
 
 #[inline]
-pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, bOutput: bool) {
+pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, pCurDq: PDqLayer, bOutput: bool) {
     if pCtx.is_null() {
         return;
     }
     if (*pCtx).bFreezeOutput {
-        if !(*pCtx).pCurDqLayer.is_null() {
+        if !pCurDq.is_null() {
             UpdateDecStatFreezingInfo(
-                (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag,
+                (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag,
                 (*pCtx).pDecoderStatistics,
             );
         }
     } else if bOutput {
-        UpdateDecStatNoFreezingInfo(pCtx);
+        UpdateDecStatNoFreezingInfo(pCtx, pCurDq);
     }
 }
 
 #[inline]
-pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext) -> i32 {
-    crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx)
+pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+    crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, pCurDqLayer)
 }
 
 #[inline]
-pub unsafe fn WelsDecodeSlice(pCtx: PWelsDecoderContext, bFreshSlice: bool, pCurNal: PNalUnit) -> i32 {
-    crate::decoder::decode_slice::WelsDecodeSlice(pCtx, bFreshSlice, pCurNal)
+pub unsafe fn WelsDecodeSlice(
+    pCtx: PWelsDecoderContext,
+    pCurDqLayer: PDqLayer,
+    bFreshSlice: bool,
+    pCurNal: PNalUnit,
+) -> i32 {
+    crate::decoder::decode_slice::WelsDecodeSlice(pCtx, pCurDqLayer, bFreshSlice, pCurNal)
 }
 
 #[inline]
-pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext) -> i32 {
-    crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx)
+pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+    crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, pCurDqLayer)
 }
 
 #[inline]
-pub unsafe fn WelsInitRefList(pCtx: PWelsDecoderContext, iPoc: i32) -> i32 {
-    crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, iPoc)
+pub unsafe fn WelsInitRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer, iPoc: i32) -> i32 {
+    crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, pCurDqLayer, iPoc)
 }
 
 #[inline]
-pub unsafe fn WelsInitBSliceRefList(pCtx: PWelsDecoderContext, iPoc: i32) -> i32 {
-    crate::decoder::manage_dec_ref::WelsInitBSliceRefList(pCtx, iPoc)
+pub unsafe fn WelsInitBSliceRefList(
+    pCtx: PWelsDecoderContext,
+    pCurDqLayer: PDqLayer,
+    iPoc: i32,
+) -> i32 {
+    crate::decoder::manage_dec_ref::WelsInitBSliceRefList(pCtx, pCurDqLayer, iPoc)
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList(pCtx: PWelsDecoderContext) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx)
+pub unsafe fn WelsReorderRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer)
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList2(pCtx: PWelsDecoderContext) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx)
+pub unsafe fn WelsReorderRefList2(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer)
 }
 
 #[inline]
-pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext) -> i32 {
-    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, std::ptr::null_mut())
+pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
 }
 
 // T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
@@ -892,8 +901,12 @@ pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, i
 }
 
 #[inline]
-pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext) {
-    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(pCtx, pic_refs(pCtx));
+pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
+    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
+        pCtx,
+        pCurDqLayer,
+        pic_refs(pCtx),
+    );
 }
 
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
@@ -967,12 +980,12 @@ pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 // neither has a name to call and the F39 shape cannot be rewritten.
 
 #[inline]
-pub unsafe fn NeedErrorCon(pCtx: PWelsDecoderContext) -> bool {
+pub unsafe fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> bool {
     false
 }
 
 #[inline]
-pub unsafe fn ImplementErrorCon(pCtx: PWelsDecoderContext) {}
+pub unsafe fn ImplementErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {}
 
 #[inline]
 pub unsafe fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
@@ -1033,13 +1046,13 @@ pub unsafe fn CheckAccessUnitBoundaryExt(
 
 pub unsafe fn DecodeFrameConstruction(
     pCtx: PWelsDecoderContext,
+    pCurDq: PDqLayer,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
     if pCtx.is_null() || ppDst.is_null() || pDstInfo.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pCurDq = (*pCtx).pCurDqLayer;
     let pPic = dec_pic(pCtx);
     if pCurDq.is_null() || pPic.is_null() {
         return ERR_INFO_INVALID_PTR;
@@ -1075,7 +1088,7 @@ pub unsafe fn DecodeFrameConstruction(
                 (*(*pCtx).pDecoderStatistics).uiHeight = kiActualHeight as u32;
             }
         }
-        UpdateDecStatNoFreezingInfo(pCtx);
+        UpdateDecStatNoFreezingInfo(pCtx, pCurDq);
     }
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
@@ -1241,7 +1254,7 @@ pub unsafe fn DecodeFrameConstruction(
             (*(*pCtx).pDecoderStatistics).uiWidth = kiActualWidth as u32;
             (*(*pCtx).pDecoderStatistics).uiHeight = kiActualHeight as u32;
         }
-        UpdateDecStat(pCtx, (*pDstInfo).iBufferStatus != 0);
+        UpdateDecStat(pCtx, pCurDq, (*pDstInfo).iBufferStatus != 0);
     }
 
     ERR_NONE
@@ -1281,8 +1294,12 @@ pub unsafe fn HandleReferenceLost(pCtx: PWelsDecoderContext, pCurNal: PNalUnit) 
 }
 
 #[inline]
-pub unsafe fn WelsDecodeConstructSlice(pCtx: PWelsDecoderContext, pCurNal: PNalUnit) -> i32 {
-    let iRet = WelsTargetSliceConstruction(pCtx);
+pub unsafe fn WelsDecodeConstructSlice(
+    pCtx: PWelsDecoderContext,
+    pCurDqLayer: PDqLayer,
+    pCurNal: PNalUnit,
+) -> i32 {
+    let iRet = WelsTargetSliceConstruction(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
         HandleReferenceLostL0(pCtx, pCurNal);
     }
@@ -1392,11 +1409,10 @@ pub unsafe fn ParsePredWeightedTable(buf: &[u8], pBs: &mut BsCursor, pSh: PSlice
     ERR_NONE
 }
 
-pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() {
+pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
+    if pCtx.is_null() || pCurDqLayer.is_null() {
         return;
     }
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSliceHeader = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
     let pPps = (*pSliceHeader).pPps as *mut SPps;
     if pPps.is_null() {
@@ -3554,13 +3570,18 @@ pub unsafe fn WelsDqLayerDecodeStart(
     UpdateDecoderStatisticsForActiveParaset((*pCtx).pDecoderStatistics, pSps, pPps);
 }
 
-pub unsafe fn InitRefPicList(pCtx: PWelsDecoderContext, _kuiNRi: u8, iPoc: i32) -> i32 {
+pub unsafe fn InitRefPicList(
+    pCtx: PWelsDecoderContext,
+    pCurDqLayer: PDqLayer,
+    _kuiNRi: u8,
+    iPoc: i32,
+) -> i32 {
     let mut iRet = if (*pCtx).eSliceType == B_SLICE {
-        let ret = WelsInitBSliceRefList(pCtx, iPoc);
-        CreateImplicitWeightTable(pCtx);
+        let ret = WelsInitBSliceRefList(pCtx, pCurDqLayer, iPoc);
+        CreateImplicitWeightTable(pCtx, pCurDqLayer);
         ret
     } else {
-        WelsInitRefList(pCtx, iPoc)
+        WelsInitRefList(pCtx, pCurDqLayer, iPoc)
     };
     if (*pCtx).eSliceType != I_SLICE && (*pCtx).eSliceType != SI_SLICE {
         if !(*pCtx).pSps.is_null()
@@ -3568,9 +3589,9 @@ pub unsafe fn InitRefPicList(pCtx: PWelsDecoderContext, _kuiNRi: u8, iPoc: i32) 
             && !(*pCtx).pPps.is_null()
             && (*(*pCtx).pPps).bEntropyCodingModeFlag
         {
-            iRet = WelsReorderRefList2(pCtx);
+            iRet = WelsReorderRefList2(pCtx, pCurDqLayer);
         } else {
-            iRet = WelsReorderRefList(pCtx);
+            iRet = WelsReorderRefList(pCtx, pCurDqLayer);
         }
     }
     iRet
@@ -3596,10 +3617,6 @@ pub unsafe fn DecodeCurrentAccessUnit(
     (*pCtx).uiNalRefIdc = 0;
     let mut bFreshSliceAvailable;
 
-    if (*pCtx).bInitialDqLayersMem || (*pCtx).pCurDqLayer.is_null() {
-        (*pCtx).pCurDqLayer = (*pCtx).pDqLayersList;
-    }
-
     // Node pointers only, one derivation each. The slice loop below calls back into
     // the context on every iteration, so nothing about the access unit may be held
     // across it — but a node is its own allocation and outlives every retag (T5.O4).
@@ -3610,7 +3627,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
     (*pCtx).pNalCur = pNalCur;
 
     while iIdx <= iEndIdx {
-        let dq_cur = (*pCtx).pCurDqLayer;
+        // **The access-unit bracket** (T5.R1): the one derivation of the layer on the
+        // decode path, taken at the top of each iteration and threaded down. The stamp
+        // that stood before this loop (`pCurDqLayer = pDqLayersList` under
+        // `bInitialDqLayersMem || is_null()`) was a cache write of exactly this value —
+        // the list is reallocated only by `InitialDqLayersContext`, which runs in
+        // `InitConstructAccessUnit` *before* this function, never under it.
+        let dq_cur = (*pCtx).pDqLayersList;
         let mut pLayerInfo = SLayerInfo::default();
         let isNewFrame = (*pCtx).pDec.is_none();
 
@@ -3641,7 +3664,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // `DecodeCurrentAccessUnit` in `decoder_core.cpp`.
             let iMbCacheNum =
                 ((((*pCtx).iPicWidthReq + 15) >> 4) * (((*pCtx).iPicHeightReq + 15) >> 4)) as usize;
-            let pDq = (*pCtx).pDqLayersList;
+            // This re-derived from the list mid-loop where everything around it read
+            // the cache; both were this iteration's `dq_cur`, and now it says so.
+            let pDq = dq_cur;
             if !pDq.is_null() {
                 // `memset(pSliceIdc, 0xff, numMb * sizeof(int32_t))` — 0xff bytes in
                 // an `i32` is -1. `iMbCacheNum` is computed from `iPicWidthReq`, which
@@ -3652,15 +3677,15 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
             if !(*pCtx).pSps.is_null() {
                 let iMbNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as usize;
-                if !(*pCtx).pCurDqLayer.is_null() {
-                    (*(*pCtx).pCurDqLayer).grid.mb_correctly_decoded_flag.as_mut_slice()
+                if !dq_cur.is_null() {
+                    (*dq_cur).grid.mb_correctly_decoded_flag.as_mut_slice()
                         [..iMbNum]
                         .fill(false);
                     // The C's `memset(.., 0, iMbWidth * iMbHeight)` over the
                     // **SPS's** dimensions, which are the current sequence's and can
                     // be smaller than the grid's negotiated maximum (T5.E2). As a
                     // slice the bound is checked; as a `write_bytes` it was not.
-                    (*(*pCtx).pCurDqLayer).grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum]
+                    (*dq_cur).grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum]
                         .fill(false);
                 }
                 (*dec_pic(pCtx)).iMbNum = iMbNum as i32;
@@ -3754,7 +3779,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 InitDqLayerInfo(dq_cur, &mut pLayerInfo, pNalCur);
 
                 if iCurrIdD == (kuiDependencyIdMax as i16) && iCurrIdQ == (BASE_QUALITY_ID as i16) && isNewFrame {
-                    iRet = InitRefPicList(pCtx, (*pCtx).uiNalRefIdc, (*pSh).iPicOrderCntLsb);
+                    iRet = InitRefPicList(pCtx, dq_cur, (*pCtx).uiNalRefIdc, (*pSh).iPicOrderCntLsb);
                     if iRet != ERR_NONE {
                         (*pCtx).bRPLRError = true;
                         bAllRefComplete = false;
@@ -3769,13 +3794,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
 
                 if (*pSh).eSliceType == B_SLICE && (*pSh).iDirectSpatialMvPredFlag == 0 {
-                    ComputeColocatedTemporalScaling(pCtx);
+                    ComputeColocatedTemporalScaling(pCtx, dq_cur);
                 }
 
                 if iThreadCount > 1 {
-                    iRet = WelsDecodeAndConstructSlice(pCtx);
+                    iRet = WelsDecodeAndConstructSlice(pCtx, dq_cur);
                 } else {
-                    iRet = WelsDecodeSlice(pCtx, bFreshSliceAvailable, pNalCur);
+                    iRet = WelsDecodeSlice(pCtx, dq_cur, bFreshSliceAvailable, pNalCur);
                 }
 
                 if iRet != ERR_NONE {
@@ -3790,7 +3815,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
 
                 if iThreadCount <= 1 && bReconstructSlice {
-                    iRet = WelsDecodeConstructSlice(pCtx, pNalCur);
+                    iRet = WelsDecodeConstructSlice(pCtx, dq_cur, pNalCur);
                     if iRet != ERR_NONE {
                         if (*pCtx).pDec.is_some() {
                             (*dec_pic(pCtx)).bIsComplete = false;
@@ -3802,7 +3827,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 if bAllRefComplete && (*pCtx).eSliceType != I_SLICE {
                     if iThreadCount <= 1 {
                         if (*pCtx).sRefPic.uiRefCount[LIST_0] > 0 {
-                            bAllRefComplete = bAllRefComplete && CheckRefPicturesComplete(pCtx);
+                            bAllRefComplete =
+                                bAllRefComplete && CheckRefPicturesComplete(pCtx, dq_cur);
                         } else {
                             bAllRefComplete = false;
                         }
@@ -3844,8 +3870,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
         if !dq_cur.is_null() && (*dq_cur).uiLayerDqId == kuiTargetLayerDqId {
             if !(*pCtx).bInstantDecFlag {
                 if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly {
-                    if NeedErrorCon(pCtx) && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
-                        ImplementErrorCon(pCtx);
+                    if NeedErrorCon(pCtx, dq_cur) && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        ImplementErrorCon(pCtx, dq_cur);
                         if !(*pCtx).pSps.is_null() {
                             (*pCtx).iTotalNumMbRec = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
                             if (*pCtx).pDec.is_some() {
@@ -3859,7 +3885,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
             }
 
-            iRet = DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
+            iRet = DecodeFrameConstruction(pCtx, dq_cur, ppDst, pDstInfo);
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -3892,7 +3918,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                             }
                         }
                     }
-                    iRet = WelsMarkAsRef(pCtx);
+                    iRet = WelsMarkAsRef(pCtx, dq_cur);
                     if iRet != ERR_NONE {
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
                             (*pCtx).iErrorCode |= dsBitstreamError;
@@ -3966,9 +3992,15 @@ pub unsafe fn CheckAndFinishLastPic(
         }
     }
 
-    if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx) {
+    // **The error-concealment bracket** (T5.R1): this runs *between* access units —
+    // `ConstructAccessUnit` above may have just returned — so it takes its own
+    // derivation of the layer rather than inheriting one. It is the value the deleted
+    // cache field held at this point, and the list is what the cache was stamped from.
+    let dq_cur = (*pCtx).pDqLayersList;
+
+    if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur) {
         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
-            ImplementErrorCon(pCtx);
+            ImplementErrorCon(pCtx, dq_cur);
             if !(*pCtx).pSps.is_null() {
                 (*pCtx).iTotalNumMbRec = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
                 if (*pCtx).pDec.is_some() {
@@ -3978,7 +4010,7 @@ pub unsafe fn CheckAndFinishLastPic(
             if !(*pCtx).pPps.is_null() && (*pCtx).pDec.is_some() {
                 (*dec_pic(pCtx)).iPpsId = (*(*pCtx).pPps).iPpsId;
             }
-            DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
+            DecodeFrameConstruction(pCtx, dq_cur, ppDst, pDstInfo);
             if !(*pCtx).pLastDecPicInfo.is_null() {
                 (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
                 if (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
@@ -3994,7 +4026,7 @@ pub unsafe fn CheckAndFinishLastPic(
             }
             (*pCtx).bFrameFinish = true;
         } else {
-            if DecodeFrameConstruction(pCtx, ppDst, pDstInfo) != ERR_NONE {
+            if DecodeFrameConstruction(pCtx, dq_cur, ppDst, pDstInfo) != ERR_NONE {
                 if !(*pCtx).pLastDecPicInfo.is_null()
                     && (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
                     && (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.uiTemporalId == 0
@@ -4030,11 +4062,10 @@ pub unsafe fn CheckAndFinishLastPic(
     true
 }
 
-pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() {
+pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> bool {
+    if pCtx.is_null() || pCurDqLayer.is_null() {
         return true;
     }
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
     // and reference indices *while* resolving the reference-list entries those
     // indices name, and a malformed stream can put the current picture in that list
@@ -4408,8 +4439,8 @@ mod tests {
     #[test]
     fn test_update_dec_stat_null() {
         unsafe {
-            UpdateDecStatNoFreezingInfo(std::ptr::null_mut());
-            UpdateDecStat(std::ptr::null_mut(), true);
+            UpdateDecStatNoFreezingInfo(std::ptr::null_mut(), std::ptr::null_mut());
+            UpdateDecStat(std::ptr::null_mut(), std::ptr::null_mut(), true);
         }
     }
 
@@ -4450,17 +4481,26 @@ mod tests {
     #[test]
     fn test_inline_delegation_stubs_null() {
         unsafe {
-            assert_eq!(WelsTargetSliceConstruction(std::ptr::null_mut()), ERR_NONE);
             assert_eq!(
-                WelsDecodeSlice(std::ptr::null_mut(), true, std::ptr::null_mut()),
+                WelsTargetSliceConstruction(std::ptr::null_mut(), std::ptr::null_mut()),
                 ERR_NONE
             );
-            assert_eq!(WelsDecodeAndConstructSlice(std::ptr::null_mut()), ERR_NONE);
-            assert_ne!(WelsInitRefList(std::ptr::null_mut(), 0), ERR_NONE);
-            assert_ne!(WelsInitBSliceRefList(std::ptr::null_mut(), 0), ERR_NONE);
-            assert_ne!(WelsReorderRefList(std::ptr::null_mut()), ERR_NONE);
-            assert_ne!(WelsReorderRefList2(std::ptr::null_mut()), ERR_NONE);
-            assert_ne!(WelsMarkAsRef(std::ptr::null_mut()), ERR_NONE);
+            assert_eq!(
+                WelsDecodeSlice(std::ptr::null_mut(), std::ptr::null_mut(), true, std::ptr::null_mut()),
+                ERR_NONE
+            );
+            assert_eq!(
+                WelsDecodeAndConstructSlice(std::ptr::null_mut(), std::ptr::null_mut()),
+                ERR_NONE
+            );
+            assert_ne!(WelsInitRefList(std::ptr::null_mut(), std::ptr::null_mut(), 0), ERR_NONE);
+            assert_ne!(
+                WelsInitBSliceRefList(std::ptr::null_mut(), std::ptr::null_mut(), 0),
+                ERR_NONE
+            );
+            assert_ne!(WelsReorderRefList(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
+            assert_ne!(WelsReorderRefList2(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
+            assert_ne!(WelsMarkAsRef(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
             WelsResetRefPic(std::ptr::null_mut());
         }
     }
@@ -4519,7 +4559,12 @@ mod tests {
                 false
             );
             assert_eq!(
-                DecodeFrameConstruction(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()),
+                DecodeFrameConstruction(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
                 ERR_INFO_INVALID_PTR
             );
             WelsDecodeAccessUnitEnd(std::ptr::null_mut());

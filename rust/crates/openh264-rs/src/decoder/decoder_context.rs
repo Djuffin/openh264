@@ -912,7 +912,16 @@ pub struct SWelsDecoderContext {
     pub access_unit: Option<Box<SAccessUnit>>,
     pub pSps: *mut SSps,
     pub pPps: *mut SPps,
-    pub pCurDqLayer: *mut DqLayerState,
+    /// The one layer, and **the only way to reach it** — `pCurDqLayer` was its
+    /// cache and is gone (T5.R1).
+    ///
+    /// The cache had one production stamp (`= pDqLayersList`, under
+    /// `bInitialDqLayersMem || is_null()`) and `LAYER_NUM_EXCHANGEABLE` is 1, so the
+    /// two fields always held the same address — except in the window
+    /// `UninitialDqLayersContext` opened, where the list was nulled and the cache was
+    /// left dangling. Every reader now derives from this field at a bracket top and
+    /// threads the result down, which is what W3's flip needs: a stored derivation
+    /// through an owning `Box` is invalidated by the next derivation.
     pub pDqLayersList: *mut DqLayerState,
     pub pNalCur: *mut SNalUnit,
     pub uiNalRefIdc: u8,

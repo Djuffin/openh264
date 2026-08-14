@@ -2152,10 +2152,10 @@ unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; M
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
     let pSps = pSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
@@ -2233,10 +2233,10 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
 pub unsafe fn WelsDeblockingInitFilter(
     pCtx: *mut SWelsDecoderContext,
+    pCurDqLayer: *mut DqLayerState,
     pFilter: *mut SDeblockingFilter,
     iFilterIdc: *mut i32,
 ) {
-    let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
 
     *pFilter = SDeblockingFilter::default();
