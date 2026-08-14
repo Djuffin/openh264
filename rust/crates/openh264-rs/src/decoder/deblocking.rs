@@ -188,7 +188,6 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
     }
 }
 
-use crate::decoder::decoder_context::dec_pic;
 pub use crate::common::deblocking_common::*;
 pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
@@ -2153,6 +2152,7 @@ unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; M
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
@@ -2204,7 +2204,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
             iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
 
             if let Some(func) = pDeblockMb {
-                func(pCurDqLayer, dec_pic(pCtx), &mut pFilter, iBoundryFlag);
+                func(pCurDqLayer, pDec, &mut pFilter, iBoundryFlag);
             }
 
             iCountNumMb += 1;

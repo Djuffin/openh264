@@ -184,7 +184,7 @@ pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
 pub use crate::decoder::decoder_context::{
-    SWelsDecoderContext, PWelsDecoderContext, dec_pic, pool_pic, ref_pic,
+    SWelsDecoderContext, PWelsDecoderContext, PicRefs, ref_id,
 };
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
@@ -724,11 +724,12 @@ pub unsafe fn PredInter16x8Mv(
 /// Retrieves collocated macroblock parameters for spatial and temporal direct modes.
 pub unsafe fn GetColocatedMb(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
+    pRefs: PicRefs<'_>,
     mbType: &mut MbType,
     subMbType: &mut SubMbType,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
@@ -736,7 +737,7 @@ pub unsafe fn GetColocatedMb(
     let is8x8 = IS_Inter_8x8(curMbType);
     *mbType = curMbType;
 
-    let colocPic = ref_pic(pCtx, LIST_1, 0);
+    let colocPic = pRefs.get(ref_id(pCtx, LIST_1, 0));
     if colocPic.is_null() {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
     }
@@ -867,19 +868,20 @@ pub unsafe fn GetColocatedMb(
 /// Derives motion predictors and reference indices for B-slice spatial direct mode.
 pub unsafe fn PredMvBDirectSpatial(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
+    pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    let ret = GetColocatedMb(pCtx, &mut mbType, subMbType);
+    let ret = GetColocatedMb(pCtx, pDec, pRefs, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
@@ -1040,7 +1042,7 @@ pub unsafe fn PredMvBDirectSpatial(
     *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
 
     let pMvd = [0i16; 4];
-    let colocPic = ref_pic(pCtx, LIST_1, 0);
+    let colocPic = pRefs.get(ref_id(pCtx, LIST_1, 0));
     let bIsLongRef = if !colocPic.is_null() { (*colocPic).bIsLongRef } else { false };
 
     if IS_INTER_16x16(mbType) {
@@ -1109,20 +1111,21 @@ pub unsafe fn PredMvBDirectSpatial(
 /// Derives motion predictors for B-slice temporal direct mode using POC distance scaling.
 pub unsafe fn PredBDirectTemporal(
     pCtx: *mut SWelsDecoderContext,
+    pDec: PPicture,
+    pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
     let mut ret = ERR_NONE;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    ret = GetColocatedMb(pCtx, &mut mbType, subMbType);
+    ret = GetColocatedMb(pCtx, pDec, pRefs, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
@@ -1148,7 +1151,7 @@ pub unsafe fn PredBDirectTemporal(
             let mut mv = (*pCurDqLayer).iColocMv[LIST_0][0].as_mut_ptr();
             let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][0];
             if colocRefIndexL0 >= 0 {
-                ref_idx[LIST_0] = MapColToList0(pCtx, colocRefIndexL0, ref0Count);
+                ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
             } else {
                 mv = (*pCurDqLayer).iColocMv[LIST_1][0].as_mut_ptr();
             }
@@ -1184,7 +1187,7 @@ pub unsafe fn PredBDirectTemporal(
                     ref_idx[LIST_0] = 0;
                     let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][iScan4Idx];
                     if colocRefIndexL0 >= 0 {
-                        ref_idx[LIST_0] = MapColToList0(pCtx, colocRefIndexL0, ref0Count);
+                        ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
                     } else {
                         mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
                     }
@@ -1220,19 +1223,23 @@ pub unsafe fn PredBDirectTemporal(
 /// Maps collocated reference picture list 0 index into the current picture's List 0 reference list.
 pub unsafe fn MapColToList0(
     pCtx: *mut SWelsDecoderContext,
+    pRefs: PicRefs<'_>,
     colocRefIndexL0: i8,
     ref0Count: i32,
 ) -> i8 {
     if ((*pCtx).iErrorCode & dsRefLost) == dsRefLost {
         return 0;
     }
-    let pic1 = ref_pic(pCtx, LIST_1, 0);
+    let pic1 = pRefs.get(ref_id(pCtx, LIST_1, 0));
     if !pic1.is_null() && (colocRefIndexL0 as usize) < 17 {
-        let ref_pic_ptr = pool_pic(pCtx, (*pic1).pRefPic[LIST_0][colocRefIndexL0 as usize]);
+        // The one resolution in the decode path whose handle comes out of another
+        // *picture* rather than out of the context: the colocated picture's own
+        // list-0 entry. `pRefs` resolves it exactly as `pool_pic` did.
+        let ref_pic_ptr = pRefs.get((*pic1).pRefPic[LIST_0][colocRefIndexL0 as usize]);
         if !ref_pic_ptr.is_null() {
             let iFramePoc = (*ref_pic_ptr).iFramePoc;
             for i in 0..ref0Count {
-                let ref0 = ref_pic(pCtx, LIST_0, i as usize);
+                let ref0 = pRefs.get(ref_id(pCtx, LIST_0, i as usize));
                 if !ref0.is_null() && (*ref0).iFramePoc == iFramePoc {
                     return i as i8;
                 }
