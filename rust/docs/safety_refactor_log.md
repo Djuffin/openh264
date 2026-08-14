@@ -8551,3 +8551,245 @@ is closed; W3 is one seam in.
    S14, forty-two measurements.
 7. **Perf debt for W8**, unchanged and with this session's two structural additions named
    in §6.
+## Phase 5, session P″ — W3's two owners and the hoist (2026-08-14)
+
+Commits: `6924e94e` (docs tail), `acf5bfd1` (T5.P″1), `d7a1d130` (T5.P″2), `b07e407c`
+(T5.P″3). **W3's remainder is three seams in and one short**: the two W1-shaped owners
+landed, the hoist landed over the whole decode path, and **the flip did not** — §3 says
+why, and what the attempt settled.
+
+### 1. Face 0 — the two easy owners (T5.P″1)
+
+`pTempDec` → `Option<Box<SPicture>>` and `pPicBuff` → `Option<Box<PicPool>>`, taken
+together because they are one shape: a single `Box::into_raw`/`from_raw` pair each, no
+cache beside them, nothing aliasing what they hold.
+
+`AllocPicture`'s body became **`alloc_picture`, which returns the owner**; `AllocPicture`
+is the raw spelling the pool still needs. That split is what T5.P′3 bought — a `Box` that
+is a *complete* owner can be handed to a field, and the six `pMemAlign` allocations that
+used to escape drop glue are containers now.
+
+**`pPicBuff` owning is safe before the flip and not after**, which is the ordering the
+whole face runs on: while the slots are `PPicture`, a `pool_pic` result carries
+`AllocPicture`'s provenance and not this `Box`'s (T5.N1's invariant), so the pool borrow
+begins and ends inside the accessor and no picture pointer descends from it.
+
+Two lifecycle functions shrank rather than converted. `CreatePicBuff` returns the pool
+instead of writing it through `&mut (*pCtx).pPicBuff` — that out-parameter was a `&mut`
+into the context held across `AllocPicture` calls that *read* the context, S25's overlap
+written for no reason and discovered by asking what the parameter was for. `DestroyPicBuff`
+takes the pool by value, so `(*pCtx).pPicBuff.take()` at the call site is the C's "read it
+and null it" as one expression, and the "null it afterwards" step cannot be forgotten
+because there is nothing left to null. `PrefetchPic(PPicBuff)` was deleted: its doc comment
+said it was kept "until its two call sites hold a pool rather than a pointer to one", and
+they do.
+
+**S23's question, aimed at a lifecycle rather than at a cache.** `= None` *drops* where
+`= null_mut()` leaked, so every reset site had to be checked, not assumed:
+`WelsDecoderDefaults` is the only one, it has exactly one caller — `codec_api.rs:1454`, the
+line after the context is boxed — so it runs on a context that has never decoded and the
+drop is of nothing. S21 in the same commit: the zeroed shell writes `None` into both fields
+explicitly rather than resting on the null-pointer niche.
+
+F19, per allocation, after the face: `pTempDec` by `WelsFreeDynamicMemory`'s `= None` and,
+failing that, by the context's own drop glue (R4); the pool `Box` by the same; the pictures
+the pool addresses still by `DestroyPicBuff`'s `FreePicture` loop, which is the flip's job.
+
+### 2. Face 1 — the hoist, under `PPicture` slots (T5.P″2, T5.P″3)
+
+**S24 at the face open, and the settlement was wrong by a third.** The settled figure was
+115 call sites; the tree holds **148** — 138 in consumers, 10 in the accessors' own file —
+and its per-file split is wrong in both directions:
+
+| file | settlement | tree |
+|---|---|---|
+| decoder_core | 30 | 38 |
+| decode_slice | 27 | 35 |
+| manage_dec_ref | 13 | 24 |
+| parse_mb_syn_cabac | 15 | 17 |
+| decoder_context (bodies) | 9 | 10 |
+| parse_mb_syn_cavlc | 6 | 8 |
+| mv_pred | 4 | 8 |
+| error_concealment | 7 | 7 |
+| deblocking | **4** | **1** |
+
+Deblocking is the interesting one and it is S16's prose floor in a new place: three of that
+file's four "sites" are doc comments naming the accessor they describe. The design did not
+move — the shape of the conversion is the same at 148 as at 115 — which is why the
+disagreement was fixed in place and logged rather than re-opened.
+
+`PicRefs<'a>` is the type the settlement is built on: **a decode scope's view of the pool**,
+`PicId` → picture, taken once at the scope's top. Under `PPicture` slots it wraps a shared
+borrow and `get` is a slot copy, so threading it is invisible to every byte gate; at the
+flip it becomes `mut_and_rest`'s rest half while the current picture becomes the `&mut`
+half, which is why the two travel together through every signature the face touches.
+`ref_id` is `ref_pic` split at exactly the line the flip moves: the *list* read stays at the
+use (it is a context field, not the pool), the *resolution* goes through the view.
+
+`MapColToList0` is the site that decided the view's shape. Every other resolution in the
+decode path takes its handle out of the context; that one takes it out of **another
+picture** (`(*pic1).pRefPic[LIST_0][colocRefIndexL0]`), so a pre-resolved array of the
+reference lists — cheaper, allocation-free, and the first thing to reach for — cannot serve
+it. The view is a resolver because one site in one function needs it to be.
+
+Two commits, bottom-up. **T5.P″2** converted the four leaf files (44 sites): `mv_pred`'s
+four direct-mode functions, `parse_mb_syn_cabac`'s six parse functions plus
+`ParseResidualBlockCabac` (one hop, for `ParseCbfInfoCabac`'s neighbour read),
+`parse_mb_syn_cavlc`'s two, and `deblocking`'s slice filter, whose *per-macroblock*
+`dec_pic` became the slice's own parameter. **T5.P″3** converted `decode_slice` (35 → 3):
+26 functions and the per-macroblock dispatch type take `pDec` and `pRefs` from three
+bracket tops — `WelsDecodeAndConstructSlice`, `WelsDecodeSlice`, `WelsTargetSliceConstruction`.
+
+`PWelsDecMbFunc` carries both now, the way `PDeblockingFilterMbFunc` gained its `pDec` at
+T5.P′1 and for the same reason: the loop crosses it once per macroblock, so it is the one
+place a per-use derivation could hide from a grep of function bodies.
+
+The brief's escape hatch (~2 hops, then merge or log) was needed **once**:
+`ParseCbfInfoCabac` reads the current picture's `pMbType` for its neighbour test and sits
+one call below `ParseResidualBlockCabac`, whose caller already holds `pDec`. One hop, taken.
+
+T5.P″3 also deleted the nine interim derivations T5.P″2 left at function heads. That is
+worth naming as its own hazard: a local named `pRefs` in a function that now takes a `pRefs`
+parameter compiles, shadows, and looks exactly like the hoist while defeating it.
+
+### 3. Face 2 — the flip: attempted, reverted at the seam
+
+**Not landed.** The pool type change is atomic — `Pool<PPicture>` → `Pool<Option<Box<SPicture>>>`
+forces every consumer in one commit — and **83 consumer call sites** remain outside the
+decode path (decoder_core 38, manage_dec_ref 32, error_concealment 10, decode_slice 3),
+most of them in the DPB and concealment paths that *write* through what they resolve. That
+is not a size the session had left, and a half-flipped tree is worth less than none.
+
+What the attempt did settle, against the compiler rather than on paper — this is the
+face's deliverable and it is in the hand-off:
+
+1. **`PicRefs::get` returns `*const SPicture`.** Below a bracket top the decode path only
+   ever reads a reference — POCs, `bIsComplete`, `bIsLongRef`, the colocated macroblock's
+   motion, the plane bytes MC samples — verified by grep over every ref-bound local in the
+   four converted files: **zero writes**. A `*const` makes that fact a compile error to
+   violate instead of a comment.
+2. **The current slot must resolve through the mutable picture's own pointer, not through
+   the rest.** `PoolRest::get(cur)` *panics*, and a malformed stream can legally put the
+   picture being decoded into a reference list — the C aliases it and reads on. Answering
+   from the `&mut`'s own derivation keeps the C's behaviour *and* stays inside one borrow,
+   because the two pointers share a tag. This is S6 territory reached from an unexpected
+   direction: the safe API's panic is a behaviour change on ungated input, and it is
+   invisible to every gate this project owns.
+3. **`PoolRest` must be `Copy`, hand-written.** `#[derive(Copy)]` adds a `T: Copy` bound and
+   `T` is `Option<Box<SPicture>>`; the view copies its *borrows*, not the slots. Without it
+   every signature in the macroblock tree grows a second lifetime.
+4. **`prefetch_free` and `next_for_thread` should return `Option<PicId>`, not a pointer.**
+   Both callers want the slot — one stores it in `pCtx->pDec`, the other writes three fields
+   through it — and returning `&mut` would borrow the pool for the caller's whole expression.
+5. **`SPicture::data_ptr` takes `&mut self`** and `GetRefPic`'s three calls are the only
+   reference-side uses of it. It needs a `&self` form; the MC source planes are read-only
+   and `sMCRefMember`'s `pSrcY` field keeps the C's `*mut` spelling.
+6. `CreatePicBuff`'s partial-failure arm becomes the `Vec` going out of scope, and both the
+   C's "set capacity, then destroy" dance and the port's leak disappear with it.
+   `DestroyPicBuff` becomes F37's reset plus a `drop`, and R4's equivalence is discharged by
+   construction rather than by inspection.
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 474 / 468 / 20 | **474 / 468 / 20** |
+| Miri `--lib` | 334 | **334** |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| decoder `raw_ptr` (phase5.md's metric) | 1245 | **1229** |
+| accessor call sites | 148 | **96** |
+| decoder `WelsMallocz`/`WelsFree` call sites | 8 | **8** |
+
+| face | sites converted | decoder `raw_ptr` |
+|---|---|---|
+| T5.P″1 (Face 0) | 51 | 1245 → 1231 (−14) |
+| T5.P″2 (Face 1a) | 44 | 1231 → **1231 (±0)** |
+| T5.P″3 (Face 1b) | 35 | 1231 → 1229 (−2) |
+
+**S16's reading, and the hoist's is a new shape**: a face that converts 44 sites and moves
+the metric by *nothing at all*. It is the mirror of session P′'s +4 — that face was charged
+for pointer parameters it added; this one adds `pDec: PPicture` parameters that are free,
+because `PPicture` is an alias, and removes no pointer *type* because the accessor calls it
+deletes were never counted. The instrument counts pointer types written (S16); the hoist
+writes none and deletes none. **A W-item can be a third done with the metric flat**, which
+is the checklist's own clause arriving from the other side.
+
+### 5. Perf
+
+**Not measured. D-gate-1.** W8 inherits sessions N, O, P and P′'s debt unchanged, plus one
+addition from this session that points *toward* recovery rather than away: the hoist
+replaces 79 per-use pool lookups with parameter passing, and the deepest of them —
+`deblocking`'s `dec_pic(pCtx)` per macroblock, and the four `pool_pic` resolutions inside
+`ParseInterPMotionInfoCabac`'s partition loops — were per-macroblock or tighter. Against
+that, nothing was added. Both benches were bit-identical on every row.
+
+### 6. F3 — zero hits
+
+The close battery swept **341/341 in both profiles** and drew nothing. No measurement to
+append: S14 step 4 records measurements, and a battery with no hit produces none. Running
+total stands at **forty-two measurements, fourteen alternations, twenty-one acquittals**,
+reconciled against `phase0_findings.md` at close as the step asks.
+
+A zero-hit battery is a **sample**, not a signal — S14's own clause, and the reason it is
+worth writing down rather than passing over. The measured rate under a battery's
+interleaved sweeps is ≈1/800 configurations against 682 swept here, so zero is the
+single likeliest outcome and says nothing about the tree. Session G was the last one to
+have to look this up; the entry is here so the next zero does not have to.
+
+### 7. What went into the rules
+
+* **Nothing new.** The tags that carried the session were S24 (the face open, and its unit
+  clause caught the deblocking prose), S23 (Face 0's lifecycle check), S21 (the shell, per
+  owned field), S16 (the flat-metric reading and the prose floor), S25 (the out-parameter
+  that was an overlap), S28/S29 (the derivations in `GetTempPredPlanes` and `pic_pool_ptr`),
+  S27 (the open), S6 (Face 2's `PoolRest` panic finding).
+* **The probe budget ran three and all were green** — 944s, 943s, 943s. Session P′'s
+  conviction was mid-face; this session's three faces were motion (Face 1) or a lifecycle
+  swap on a path with one caller (Face 0), which is the population the budget expects to
+  find nothing in. It still bought the thing it is for: the hoist's Miri run is the only
+  instrument that could have seen a threaded pointer outliving its derivation.
+
+### Hand-off: Phase 5, session P‴ — W3's flip, then W4 and W5
+
+The estimate moves by one session: **P‴ (W3's flip + W4 + W5), P⁗ (W6 + W7), Q (W8)**.
+W3 is three seams in of four.
+
+1. **The flip is the whole of W3 that remains, and its design is settled and
+   compiler-checked** — §3 above lists the six things the attempt established, and they are
+   not re-derivable from reading: two of them (`PoolRest`'s `T: Copy` bound, `PoolRest::get`
+   panicking on the current slot) only appear when the code is written. Execute them; do not
+   re-open them. The sequence that works is: pool type and `PicPool`'s API, then the three
+   decode brackets (already shaped — they are three lines each), then the DPB, then EC, then
+   the AU function, then `api`'s `EmitBufferedPicture`, then delete the accessors.
+2. **83 consumer sites, and the DPB is where the work is.** `decoder_core` 38,
+   `manage_dec_ref` 32, `error_concealment` 10, `decode_slice` 3. The decode path is done —
+   it resolves through the threaded view and touches `pCtx->pPicBuff` nowhere below a
+   bracket. The remaining three files are *write* paths, and per-use resolution survives
+   there wherever the result does not outlive its expression: a borrow that ends inside
+   `if let Some(pic) = pool.slot_mut(id) { pic.bUsedAsRef = false }` is not the conflict the
+   settlement is about. Read each site for **span**, not for count.
+3. **`DecodeCurrentAccessUnit`'s 21 sites are region-scoped and were deliberately left.**
+   The AU loop prefetches into `pCtx->pDec` mid-function and six `= None` writes sit between
+   uses, so one derivation at the top is *wrong*, not just coarse. The regions want naming
+   at the moment the borrow structure is decided, which is the flip's commit and not the
+   hoist's.
+4. **`api`'s two release paths are the flip's one boundary cost.** `pic_pool_ptr` exists for
+   them (T5.P″1) and returns a raw pool pointer; with owned slots `EmitBufferedPicture` needs
+   `&mut PicPool` to decrement `iRefCount` and call `pSetUnRef`. That is api-shaped work
+   forced by a decoder change, not F41/F23's `api/` inventory — do it, and say so.
+5. **W4 and W5 are untouched and their sizes are the brief's, unverified.** Re-grep at the
+   face (S24), and this session's instance of that rule is worth having in front of you: the
+   settlement's own count was out by a third and its smallest per-file figure was **four
+   times** the truth, because three of the four were prose.
+6. **Budget a probe run per container and expect it to fire.** Three green this session; the
+   flip is the face where it will not be, because it is the first one that changes what a
+   pointer's provenance *is*.
+7. **Findings**: nothing new opened. F37 is still unadjudicated at the pool's teardown and
+   is the flip's (its record has the reset; `DestroyPicBuff` already runs it, so what the
+   flip owes is the test per S6's rescope). F19 closes decoder-side at the flip. Inherited
+   unchanged: **F41**, the eight `CWelsDecoderImpl` back-pointers and the `src/api/`
+   inventory are **Phase 8's**; **F23** Phase 8's; **F36** decoder-threading's, and
+   `PrefetchPicForThread`/`PrefetchLastPicForThread` have no callers in the tree and go on
+   W7's straggler list beside session P′'s two; **F3** per S14.
+8. **Perf debt for W8** unchanged, with §5's one structural addition named.
