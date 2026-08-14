@@ -303,8 +303,9 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    active_pps, active_sps, au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic, parser_bs,
-    pic_pool_mut, pic_refs, pool_pic, pps_of, ref_id, ref_pic, sps_of, subset_sps_of, SpsRef,
+    active_fmo, active_pps, active_sps, au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic,
+    fmo_of, parser_bs, pic_pool_mut, pic_refs, pool_pic, pps_of, ref_id, ref_pic, sps_of,
+    subset_sps_of, SpsRef,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -366,7 +367,11 @@ pub struct DqLayerState {
     // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` beside its owner for 43 readers.
     // `bit_stream::slice_bit_reader(pCtx)` derives it instead; the NAL unit owns the
     // reader and nothing else holds its address.
-    pub pFmo: *mut crate::decoder::fmo::TagFmo,
+    // T5.S1: `pFmo: *mut TagFmo` sat here, mirroring `dec_frame.h:65`'s field. It is
+    // dead in **both** trees — zero readers and zero writers here, and every C++
+    // `->pFmo` is `pCtx->pFmo` — so it deletes the way `DqLayerState::pRef` did
+    // (T5.P′1) rather than converting. The FMO state a slice needs is the context's
+    // `sFmoList` entry, reached through `active_fmo`.
     // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
     // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
     // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
@@ -566,12 +571,13 @@ pub use crate::decoder::decoder_context::{SDecodingParam, SLogContext};
 pub use crate::decoder::decoder_context::SWelsCabacDecEngine;
 
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SFmo {
-    pub pSliceGroupMap: *mut u8,
-    pub iSliceGroupCount: i32,
-}
+// **F43, T5.S1: a second, structurally different `SFmo` stood here** —
+// `pSliceGroupMap`/`iSliceGroupCount` against `fmo.rs`'s
+// `pMbAllocMap`/`iCountMbNum`/`iSliceGroupCount`/`iSliceGroupType`/`bActiveFlag`.
+// It existed only to type this file's two FMO stubs, and its one use cast the
+// context's real `TagFmo` to it. The name resolves to `fmo.rs`'s now, which is the
+// type the context's `sFmoList` has always held.
+pub use crate::decoder::fmo::SFmo;
 
 /// Reference-picture border expansion length (`PADDING_LENGTH` in
 /// `codec/common/inc/expand_pic.h`).
@@ -958,18 +964,15 @@ pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 // the allocator is `SAccessUnit::with_nodes` and the deallocator is drop glue, so
 // neither has a name to call and the F39 shape cannot be rewritten.
 
-#[inline]
-pub unsafe fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> bool {
-    false
-}
-
-#[inline]
-pub unsafe fn ImplementErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {}
-
-#[inline]
-pub unsafe fn MarkECFrameAsRef(pCtx: PWelsDecoderContext) -> i32 {
-    ERR_NONE
-}
+// **F43, T5.S1: three stubs stood here and shadowed `error_concealment.rs`.**
+// `NeedErrorCon` returned `false`, `ImplementErrorCon` did nothing, and
+// `MarkECFrameAsRef` returned `ERR_NONE` — declared in the same module that calls
+// them, so a local item beat every path to the real bodies and the port's whole
+// error-concealment subsystem was reachable only from its own unit tests. The
+// imports below are what the call sites resolve to now; they are `use`s and not a
+// glob on purpose, because the defect was name resolution and an explicit import
+// is the form that shows which body runs.
+use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, NeedErrorCon};
 
 #[inline]
 /// Matches `ResetActiveSPSForEachLayer` in `decoder_context.h`.
@@ -995,21 +998,12 @@ pub unsafe fn GetPrevFrameNum(pCtx: PWelsDecoderContext) -> i32 {
 #[inline]
 pub unsafe fn CopySpsPps(pSrcCtx: PWelsDecoderContext, pDstCtx: PWelsDecoderContext) {}
 
-#[inline]
-pub unsafe fn FmoParamUpdate(
-    pFmo: *mut SFmo,
-    pSps: PSps,
-    pPps: PPps,
-    pActiveNum: *mut i32,
-    pMa: *mut CMemoryAlign,
-) -> i32 {
-    ERR_NONE
-}
-
-#[inline]
-pub unsafe fn FmoNextMb(pFmo: *mut SFmo, iMbIdx: i32) -> i32 {
-    iMbIdx + 1
-}
+// **F43, T5.S1: the other two stubs.** `FmoParamUpdate` returned `ERR_NONE`
+// without building a map and `FmoNextMb` returned `iMbIdx + 1` — raster order, the
+// answer FMO exists to *not* give — and both took the second `SFmo` deleted at the
+// top of this file, so the one call site cast the context's real `TagFmo` to a
+// structurally different type to reach them. `fmo.rs` is the resolution now.
+use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 
 #[inline]
 pub unsafe fn CheckAccessUnitBoundaryExt(
@@ -3732,6 +3726,42 @@ pub unsafe fn DecodeCurrentAccessUnit(
             pLayerInfo.sps_ref = (*pSh).sps_ref;
             pLayerInfo.subset_sps_id = (*pShExt).subset_sps_id;
 
+            // **FMO activation** (`decoder_core.cpp:2651-2663`), restored at T5.S1.
+            // Nothing wrote `pFmo` in this port — F43's other half — so `fmo.rs` was
+            // unreachable in production and every multi-slice-group stream decoded in
+            // raster order through the deleted `FmoNextMb` stub. The id is what the C
+            // indexes `sFmoList` with, and the slice header parse has already rejected
+            // `iPpsId >= MAX_PPS_COUNT` (`:2155`), so the entry always exists.
+            //
+            // `FmoParamUpdate` rebuilds the map only when the PPS's slice-group
+            // parameters changed (`FmoParamSetsChanged`), which is why the state is
+            // per-PPS and kept across access units rather than per slice.
+            (*pCtx).fmo_id = Some(iPpsId);
+            iRet = FmoParamUpdate(
+                fmo_of(pCtx, Some(iPpsId)),
+                sps_of(pCtx, pLayerInfo.sps_ref),
+                pps_of(pCtx, pLayerInfo.pps_id),
+                std::ptr::addr_of_mut!((*pCtx).iActiveFmoNum),
+                (*pCtx).pMemAlign,
+            );
+            if iRet != ERR_NONE {
+                if iRet == ERR_INFO_OUT_OF_MEMORY {
+                    (*pCtx).iErrorCode |= dsOutOfMemory;
+                    WelsLog(
+                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        WELS_LOG_ERROR,
+                        "DecodeCurrentAccessUnit(), Fmo param alloc failed",
+                    );
+                } else {
+                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    WelsLog(
+                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        WELS_LOG_WARNING,
+                        "DecodeCurrentAccessUnit(), FmoParamUpdate failed",
+                    );
+                }
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_FMO_INIT_FAIL);
+            }
 
             bFreshSliceAvailable = iCurrIdD != iLastIdD || iCurrIdQ != iLastIdQ;
             WelsDqLayerDecodeStart(
@@ -3980,7 +4010,7 @@ pub unsafe fn CheckAndFinishLastPic(
             if !(*pCtx).pLastDecPicInfo.is_null() {
                 (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
                 if (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
-                    if MarkECFrameAsRef(pCtx) == ERR_INFO_INVALID_PTR {
+                    if MarkECFrameAsRef(pCtx, dq_cur) == ERR_INFO_INVALID_PTR {
                         (*pCtx).iErrorCode |= dsRefListNullPtrs;
                         return false;
                     }
@@ -4108,7 +4138,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
             break;
         }
         iRealMbIdx = if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).uiNumSliceGroups > 1 {
-            FmoNextMb((*pCtx).pFmo as *mut SFmo, iRealMbIdx)
+            FmoNextMb(active_fmo(pCtx), iRealMbIdx)
         } else {
             (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice + iMbIdx + 1
         };

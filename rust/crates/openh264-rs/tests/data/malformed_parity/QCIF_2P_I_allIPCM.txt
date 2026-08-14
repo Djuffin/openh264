@@ -50,7 +50,7 @@ trunc.b003+04               38251     6     1    1 176x144    e2576f9bca91c26891
 trunc.b003+05               38252     6     1    1 176x144    e2576f9bca91c26891c23fadbaccba30cc3d5008 0x0*3,0x4,0x0*2            0*5,1
 trunc.b003+06               38253     6     1    1 176x144    e2576f9bca91c26891c23fadbaccba30cc3d5008 0x0*3,0x4,0x0*2            0*5,1
 trunc.b003+07               38254     6     1    1 176x144    e2576f9bca91c26891c23fadbaccba30cc3d5008 0x0*3,0x4,0x0*2            0*5,1
-trunc.b003+08               38255     6     1    2 176x144    0c96dfba43a22cbb5d0c5540410a8f80e24ac905 0x0*4,0x4,0x0              0*4,1*2
+trunc.b003+08               38255     6     1    1 176x144    e2576f9bca91c26891c23fadbaccba30cc3d5008 0x0*4,0x4,0x0              0*5,1
 trunc.coarse01               2286     4     0    0 -          -                                        0x0*3,0x4                  0*4
 trunc.coarse02               4572     4     0    0 -          -                                        0x0*3,0x4                  0*4
 trunc.coarse03               6858     4     0    0 -          -                                        0x0*3,0x4                  0*4

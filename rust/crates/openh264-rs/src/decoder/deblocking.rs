@@ -214,7 +214,7 @@ pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
 );
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
-use crate::decoder::decoder_context::{pps_of, sps_of};
+use crate::decoder::decoder_context::{active_fmo, pps_of, sps_of};
 
 
 // ============================================================================
@@ -2163,7 +2163,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
     let iTotalMbCount = if !pSps.is_null() { (*pSps).uiTotalMbCount as i32 } else { 0 };
 
     let mut pFilter = SDeblockingFilter::default();
-    let pFmo = (*pCtx).pFmo;
+    let pFmo = active_fmo(pCtx);
     let mut iNextMbXyIndex: i32;
     let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;

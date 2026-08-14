@@ -9,7 +9,7 @@
 )]
 
 use crate::decoder::decoder_context::{
-    PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, pps_of, ref_id, sps_of,
+    PicRefs, SpsRef, active_fmo, active_pps, active_sps, cur_and_refs, pps_of, ref_id, sps_of,
 };
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
@@ -2519,7 +2519,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
         }
 
         if !(*pSliceHeader).pps_id.is_none() && (*(pps_of(pCtx, (*pSliceHeader).pps_id))).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx), iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }
@@ -5374,7 +5374,7 @@ pub unsafe fn WelsDecodeSlice(
         }
 
         if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx), iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }

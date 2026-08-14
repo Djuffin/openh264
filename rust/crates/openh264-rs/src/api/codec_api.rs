@@ -1460,6 +1460,25 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             }
             (*dec_impl).pCtx = p_ctx as *mut _;
         }
+
+        // **F44, T5.S1.** `InitErrorCon` had no production caller in this port —
+        // F43's defect shape (a real body nothing reaches) in a function F43 did not
+        // name. The C++ calls it here, from `WelsInitDecoder` (`decoder.cpp:665`),
+        // and it does two things nothing else does:
+        //
+        //  * clears `bFreezeOutput`, which `WelsDecoderDefaults` sets **true**. The
+        //    only other site that clears it is the "complete non-ECed IDR" arm of
+        //    `DecodeFrameConstruction`, so a stream whose first IDR is missing or
+        //    damaged stayed frozen and emitted nothing until a clean IDR arrived.
+        //  * installs `sCopyFunc`'s two kernels. `DoErrorConSliceCopy` and
+        //    `DoErrorConSliceMVCopy` guard every copy with `if let Some(f)`, so with
+        //    the table `None` the slice-copy concealment ran and **copied nothing**.
+        //
+        // It is placed outside the `pCtx.is_null()` block on purpose: the C++ runs it
+        // on every `Initialize`, and the parameters it reads are re-copied above.
+        if !(*dec_impl).pCtx.is_null() {
+            crate::decoder::error_concealment::InitErrorCon((*dec_impl).pCtx);
+        }
     }
     CM_RESULT_SUCCESS as c_long
 }
@@ -1868,6 +1887,22 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             );
         } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag || kpSrc.is_null() || kiSrcLen == 0 {
             (*p_ctx).bEndOfStreamFlag = true;
+            // **F45, T5.S1.** The C++ sets this on exactly this arm
+            // (`welsDecoderExt.cpp:777`) and clears it right after `WelsDecodeBs`
+            // (`:814`). Nothing in this port ever wrote it, so it read `false`
+            // forever — and `DecodeFrameConstruction` has the reader:
+            //
+            //     if iTotalNumMbRec != kiTotalNumMbInCurLayer {
+            //         bFrameCompleteFlag = false;
+            //         if bInstantDecFlag { return ERR_INFO_MB_NUM_INADEQUATE }   // <-- never taken
+            //     }
+            //
+            // With the flag stuck false the early return never fired, so the
+            // flush call fell through to the output path and **emitted a frame the
+            // C++ does not emit** — one extra frame at end of stream on every
+            // truncated stream, and a whole frame out of nothing on a stream cut
+            // inside its first slice.
+            (*p_ctx).bInstantDecFlag = true;
             crate::decoder::decoder_core::WelsDecodeBs(
                 p_ctx as *mut _,
                 kpSrc,
@@ -1876,6 +1911,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
                 pDstInfo,
                 ptr::null_mut(),
             );
+            (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
         }
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
         ReorderPicturesInDisplay(dec_impl, p_ctx, ppDst, pDstInfo);
@@ -1917,6 +1953,10 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                 if !pOption.is_null() && !(*dec_impl).pCtx.is_null() {
                     let val = *(pOption as *const ERROR_CON_IDC);
                     (*dec_impl).param.eEcActiveIdc = val;
+                    // F44's second call site (`welsDecoderExt.cpp:536`): the mode
+                    // selects which kernels `sCopyFunc` holds, so changing it without
+                    // re-running the init leaves the previous mode's table in place.
+                    crate::decoder::error_concealment::InitErrorCon((*dec_impl).pCtx);
                 }
             }
             _ => {}
