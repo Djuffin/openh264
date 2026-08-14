@@ -1,5 +1,5 @@
 {
-  "commit": "2fd3e46c",
+  "commit": "029ea5af",
   "metrics": ["unsafe_fn", "unsafe_block", "raw_ptr", "transmute", "unsafe_impl", "mem_zeroed", "no_mangle", "shim"],
   "files": {
     "api/abi_guard.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
@@ -21,10 +21,10 @@
     "decoder/dec_golomb.rs": { "unsafe_fn": 1, "unsafe_block": 5, "raw_ptr": 1, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/decode_mb_aux.rs": { "unsafe_fn": 4, "unsafe_block": 11, "raw_ptr": 13, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 4 },
     "decoder/decode_slice.rs": { "unsafe_fn": 55, "unsafe_block": 6, "raw_ptr": 244, "transmute": 1, "unsafe_impl": 0, "mem_zeroed": 2, "no_mangle": 0, "shim": 0 },
-    "decoder/decoder_context.rs": { "unsafe_fn": 19, "unsafe_block": 6, "raw_ptr": 62, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
+    "decoder/decoder_context.rs": { "unsafe_fn": 19, "unsafe_block": 6, "raw_ptr": 63, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 1, "no_mangle": 0, "shim": 0 },
     "decoder/decoder_core.rs": { "unsafe_fn": 84, "unsafe_block": 18, "raw_ptr": 114, "transmute": 1, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 3 },
     "decoder/error_concealment.rs": { "unsafe_fn": 13, "unsafe_block": 5, "raw_ptr": 34, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
-    "decoder/fmo.rs": { "unsafe_fn": 11, "unsafe_block": 4, "raw_ptr": 19, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
+    "decoder/fmo.rs": { "unsafe_fn": 9, "unsafe_block": 4, "raw_ptr": 6, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/get_intra_predictor.rs": { "unsafe_fn": 42, "unsafe_block": 43, "raw_ptr": 44, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 42 },
     "decoder/manage_dec_ref.rs": { "unsafe_fn": 24, "unsafe_block": 4, "raw_ptr": 60, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },
     "decoder/mod.rs": { "unsafe_fn": 0, "unsafe_block": 0, "raw_ptr": 0, "transmute": 0, "unsafe_impl": 0, "mem_zeroed": 0, "no_mangle": 0, "shim": 0 },

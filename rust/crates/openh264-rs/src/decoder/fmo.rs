@@ -71,11 +71,19 @@ pub const ERR_INFO_INVALID_PARAM: i32 = 4;
 pub const ERR_INFO_UNSUPPORTED_FMOTYPE: i32 = 1063;
 
 /// Flexible Macroblock Ordering (FMO) context structure.
+///
+/// **T5.R3: the map is owned.** It was the last `WelsMallocz`/`WelsFree` pair in
+/// `src/decoder/`, allocated per parameter set and freed by `UninitFmoList` walking an
+/// array of these — which is exactly the shape a `Vec` makes unforgettable. The struct
+/// loses `Copy` with the raw pointer (a `Vec` field cannot be bitwise-copied) and
+/// `sFmoList`'s 256 entries are therefore written at construction rather than left to
+/// the context's zeroed shell (S21).
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct TagFmo {
-    /// Heap-allocated array storing the slice group ID for each macroblock.
-    pub pMbAllocMap: *mut u8,
+    /// Slice group ID per macroblock, `iCountMbNum` long — empty when there is no map,
+    /// which is the state the old null pointer named.
+    pub pMbAllocMap: Vec<u8>,
     /// Total number of macroblocks in the active picture (iMbWidth * iMbHeight).
     pub iCountMbNum: i32,
     /// Number of slice groups configured for this FMO context (1..8).
@@ -94,7 +102,7 @@ pub type PFmo = *mut TagFmo;
 impl Default for TagFmo {
     fn default() -> Self {
         Self {
-            pMbAllocMap: std::ptr::null_mut(),
+            pMbAllocMap: Vec::new(),
             iCountMbNum: 0,
             iSliceGroupCount: 0,
             iSliceGroupType: -1,
@@ -108,29 +116,10 @@ impl Default for TagFmo {
 // Internal Memory Helpers
 // ============================================================================
 
-#[inline]
-unsafe fn free_mb_alloc_map(pMa: *mut CMemoryAlign, pPtr: *mut u8) {
-    if pPtr.is_null() {
-        return;
-    }
-    let tag = b"_fmo->pMbAllocMap\0".as_ptr() as *const c_char;
-    if !pMa.is_null() {
-        (*pMa).WelsFree(pPtr as *mut c_void, tag);
-    } else {
-        crate::common::memory_align::WelsFree(pPtr as *mut c_void, tag);
-    }
-}
-
-#[inline]
-unsafe fn mallocz_mb_alloc_map(pMa: *mut CMemoryAlign, size: u32) -> *mut u8 {
-    let tag = b"_fmo->pMbAllocMap\0".as_ptr() as *const c_char;
-    let ptr = if !pMa.is_null() {
-        (*pMa).WelsMallocz(size, tag)
-    } else {
-        crate::common::memory_align::WelsMallocz(size, tag)
-    };
-    ptr as *mut u8
-}
+// T5.R3: `free_mb_alloc_map` and `mallocz_mb_alloc_map` stood here — the module's
+// half of the decoder's last `WelsFree`/`WelsMallocz` pair, each with its own
+// `pMa`-or-global arm and its own allocation tag. A `Vec<u8>` is the allocation, the
+// zeroing and the free, so there is nothing left for either helper to do.
 
 // ============================================================================
 // Core FMO Map Generation Routines
@@ -146,9 +135,9 @@ pub unsafe fn FmoGenerateMbAllocMapType0(pFmo: PFmo, pPps: PPps) -> i32 {
     }
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
-    let pMbAllocMap = (*pFmo).pMbAllocMap;
+    let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
 
-    if pMbAllocMap.is_null()
+    if pMbAllocMap.is_empty()
         || iMbNum <= 0
         || uiNumSliceGroups == 0
         || uiNumSliceGroups > MAX_SLICEGROUP_IDS
@@ -164,7 +153,7 @@ pub unsafe fn FmoGenerateMbAllocMapType0(pFmo: PFmo, pPps: PPps) -> i32 {
             let mut j: i32 = 0;
             loop {
                 if (i + j) < iMbNum {
-                    *pMbAllocMap.add((i + j) as usize) = uiGroup;
+                    pMbAllocMap[(i + j) as usize] = uiGroup;
                 }
                 j += 1;
                 if !(j < kiRunIdx && (i + j) < iMbNum) {
@@ -193,9 +182,9 @@ pub unsafe fn FmoGenerateMbAllocMapType1(pFmo: PFmo, pPps: PPps, kiMbWidth: i32)
     }
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
-    let pMbAllocMap = (*pFmo).pMbAllocMap;
+    let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
 
-    if pMbAllocMap.is_null()
+    if pMbAllocMap.is_empty()
         || iMbNum <= 0
         || kiMbWidth <= 0
         || uiNumSliceGroups == 0
@@ -209,7 +198,7 @@ pub unsafe fn FmoGenerateMbAllocMapType1(pFmo: PFmo, pPps: PPps, kiMbWidth: i32)
         let col = (i % kiMbWidth) as u32;
         let row = (i / kiMbWidth) as u32;
         let val = (col + ((row * uiNumSliceGroups) >> 1)) % uiNumSliceGroups;
-        *pMbAllocMap.add(i as usize) = val as u8;
+        pMbAllocMap[i as usize] = val as u8;
         i += 1;
     }
 
@@ -236,16 +225,19 @@ pub unsafe fn FmoGenerateSliceGroup(
         return ERR_INFO_INVALID_PARAM;
     }
 
-    free_mb_alloc_map(pMa, (*pFmo).pMbAllocMap);
-    (*pFmo).pMbAllocMap = mallocz_mb_alloc_map(pMa, iNumMb as u32);
-    if (*pFmo).pMbAllocMap.is_null() {
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
+    // The free-then-allocate pair the two deleted helpers were: assigning the new map
+    // drops the old one, and `vec![0; n]` is `WelsMallocz`'s zeroing. The
+    // `ERR_INFO_OUT_OF_MEMORY` arm goes with the null return it tested for — the same
+    // argument T5.H3 made for the layer's grid.
+    (*pFmo).pMbAllocMap = vec![0u8; iNumMb as usize];
 
     (*pFmo).iCountMbNum = iNumMb;
 
     if (*kpPps).uiNumSliceGroups < 2 && iNumMb > 0 {
-        std::ptr::write_bytes((*pFmo).pMbAllocMap, 0, iNumMb as usize);
+        // The C's `memset(pMbAllocMap, 0, iNumMb)` on this arm, kept where it stood
+        // even though the allocation above already zeroed: it is what the single
+        // slice-group map *is*, not a leftover of the allocator.
+        (*pFmo).pMbAllocMap.fill(0);
         (*pFmo).iSliceGroupCount = 1;
         return ERR_NONE;
     }
@@ -318,18 +310,9 @@ pub unsafe fn UninitFmoList(
     for i in 0..kiCnt {
         let pIter = pFmo.add(i as usize);
         if (*pIter).bActiveFlag {
-            if !(*pIter).pMbAllocMap.is_null() {
-                let tag = b"pIter->pMbAllocMap\0".as_ptr() as *const c_char;
-                if !pMa.is_null() {
-                    (*pMa).WelsFree((*pIter).pMbAllocMap as *mut c_void, tag);
-                } else {
-                    crate::common::memory_align::WelsFree(
-                        (*pIter).pMbAllocMap as *mut c_void,
-                        tag,
-                    );
-                }
-                (*pIter).pMbAllocMap = std::ptr::null_mut();
-            }
+            // T5.R3: the free is the assignment, and it needs neither the allocator
+            // nor a null test — an already-empty map drops nothing.
+            (*pIter).pMbAllocMap = Vec::new();
             (*pIter).iSliceGroupCount = 0;
             (*pIter).iSliceGroupType = -1;
             (*pIter).iCountMbNum = 0;
@@ -410,13 +393,13 @@ pub unsafe fn FmoMbToSliceGroup(pFmo: PFmo, kiMbXy: MB_XY_T) -> i32 {
     }
 
     let kiMbNum = (*pFmo).iCountMbNum;
-    let kpMbMap = (*pFmo).pMbAllocMap;
+    let kpMbMap = &(*pFmo).pMbAllocMap;
 
-    if kiMbXy < 0 || kiMbXy >= kiMbNum || kpMbMap.is_null() {
+    if kiMbXy < 0 || kiMbXy >= kiMbNum || kpMbMap.is_empty() {
         return -1;
     }
 
-    *kpMbMap.add(kiMbXy as usize) as i32
+    kpMbMap[kiMbXy as usize] as i32
 }
 
 /// Returns the next successive macroblock in raster sequence belonging to the same slice group.
@@ -429,8 +412,8 @@ pub unsafe fn FmoNextMb(pFmo: PFmo, kiMbXy: MB_XY_T) -> MB_XY_T {
     }
 
     let kiTotalMb = (*pFmo).iCountMbNum;
-    let kpMbMap = (*pFmo).pMbAllocMap;
-    if kpMbMap.is_null() {
+    let kpMbMap = &(*pFmo).pMbAllocMap;
+    if kpMbMap.is_empty() {
         return -1;
     }
 
@@ -447,7 +430,7 @@ pub unsafe fn FmoNextMb(pFmo: PFmo, kiMbXy: MB_XY_T) -> MB_XY_T {
             iNextMb = -1;
             break;
         }
-        if *kpMbMap.add(iNextMb as usize) == kuiSliceGroupIdc {
+        if kpMbMap[iNextMb as usize] == kuiSliceGroupIdc {
             break;
         }
     }
@@ -467,7 +450,7 @@ mod tests {
     #[test]
     fn test_fmo_default_and_types() {
         let fmo = TagFmo::default();
-        assert!(fmo.pMbAllocMap.is_null());
+        assert!(fmo.pMbAllocMap.is_empty());
         assert_eq!(fmo.iCountMbNum, 0);
         assert_eq!(fmo.iSliceGroupCount, 0);
         assert_eq!(fmo.iSliceGroupType, -1);
@@ -486,7 +469,7 @@ mod tests {
             assert_eq!(ret, ERR_NONE);
             assert_eq!(fmo.iCountMbNum, 16);
             assert_eq!(fmo.iSliceGroupCount, 1);
-            assert!(!fmo.pMbAllocMap.is_null());
+            assert!(!fmo.pMbAllocMap.is_empty());
 
             for i in 0..16 {
                 assert_eq!(FmoMbToSliceGroup(&mut fmo, i), 0);
@@ -498,7 +481,7 @@ mod tests {
             let mut fmo_list = [fmo];
             fmo_list[0].bActiveFlag = true;
             UninitFmoList(fmo_list.as_mut_ptr(), 1, 1, &mut ma);
-            assert!(fmo_list[0].pMbAllocMap.is_null());
+            assert!(fmo_list[0].pMbAllocMap.is_empty());
             assert!(!fmo_list[0].bActiveFlag);
         }
     }

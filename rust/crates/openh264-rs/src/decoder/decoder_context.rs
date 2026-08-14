@@ -1097,6 +1097,13 @@ impl SWelsDecoderContext {
             // S21, T5.R2: the layer joins them. Its zero was a null `PDqLayer` and is
             // now `None` through the same niche; the write states it either way.
             std::ptr::addr_of_mut!((*p).pDqLayersList).write(None);
+            // S21, T5.R3, and the one clause here that is **not** redundant: `TagFmo`
+            // owns its map as a `Vec` now, and a zeroed `Vec` is an invalid value with
+            // no niche to rescue it. 256 entries, written where the array is.
+            let fmo_list = std::ptr::addr_of_mut!((*p).sFmoList) as *mut SFmo;
+            for i in 0..MAX_PPS_COUNT {
+                fmo_list.add(i).write(SFmo::default());
+            }
         }
     }
 
