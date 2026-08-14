@@ -587,10 +587,10 @@ pub unsafe fn GetNeighborAvailMbType(
 /// Fills the 48-entry local cache `pNonZeroCount` from neighboring macroblocks.
 pub unsafe fn WelsFillCacheNonZeroCount(
     pNeighAvail: PWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pCurDqLayer: PDqLayer,
 ) {
-    if pNeighAvail.is_null() || pNonZeroCount.is_null() || pCurDqLayer.is_null() {
+    if pNeighAvail.is_null() || pCurDqLayer.is_null() {
         return;
     }
     unsafe {
@@ -607,57 +607,57 @@ pub unsafe fn WelsFillCacheNonZeroCount(
             // are four and two element copies.
             let pTopNzc = dq.grid.nzc.get(iTopXy as usize).as_ptr();
             for k in 0..4 {
-                *pNonZeroCount.add(1 + k) = *pTopNzc.add(12 + k) as u8;
+                pNonZeroCount[1 + k] = *pTopNzc.add(12 + k) as u8;
             }
-            *pNonZeroCount.add(0) = 0;
-            *pNonZeroCount.add(5) = 0;
-            *pNonZeroCount.add(29) = 0;
+            pNonZeroCount[0] = 0;
+            pNonZeroCount[5] = 0;
+            pNonZeroCount[29] = 0;
             for k in 0..2 {
-                *pNonZeroCount.add(6 + k) = *pTopNzc.add(20 + k) as u8;
-                *pNonZeroCount.add(30 + k) = *pTopNzc.add(22 + k) as u8;
+                pNonZeroCount[6 + k] = *pTopNzc.add(20 + k) as u8;
+                pNonZeroCount[30 + k] = *pTopNzc.add(22 + k) as u8;
             }
         } else {
             for k in 0..4 {
-                *pNonZeroCount.add(1 + k) = 0xFF;
+                pNonZeroCount[1 + k] = 0xFF;
             }
-            *pNonZeroCount.add(0) = 0xFF;
-            *pNonZeroCount.add(5) = 0xFF;
-            *pNonZeroCount.add(29) = 0xFF;
+            pNonZeroCount[0] = 0xFF;
+            pNonZeroCount[5] = 0xFF;
+            pNonZeroCount[29] = 0xFF;
             for k in 0..2 {
-                *pNonZeroCount.add(6 + k) = 0xFF;
-                *pNonZeroCount.add(30 + k) = 0xFF;
+                pNonZeroCount[6 + k] = 0xFF;
+                pNonZeroCount[30 + k] = 0xFF;
             }
         }
 
         if na.iLeftAvail != 0 {
             iLeftXy = iCurXy - 1;
             let pLeftNzc = dq.grid.nzc.get(iLeftXy as usize).as_ptr();
-            *pNonZeroCount.add(8 * 1) = *pLeftNzc.add(3) as u8;
-            *pNonZeroCount.add(8 * 2) = *pLeftNzc.add(7) as u8;
-            *pNonZeroCount.add(8 * 3) = *pLeftNzc.add(11) as u8;
-            *pNonZeroCount.add(8 * 4) = *pLeftNzc.add(15) as u8;
+            pNonZeroCount[8 * 1] = *pLeftNzc.add(3) as u8;
+            pNonZeroCount[8 * 2] = *pLeftNzc.add(7) as u8;
+            pNonZeroCount[8 * 3] = *pLeftNzc.add(11) as u8;
+            pNonZeroCount[8 * 4] = *pLeftNzc.add(15) as u8;
 
-            *pNonZeroCount.add(5 + 8 * 1) = *pLeftNzc.add(17) as u8;
-            *pNonZeroCount.add(5 + 8 * 2) = *pLeftNzc.add(21) as u8;
-            *pNonZeroCount.add(5 + 8 * 4) = *pLeftNzc.add(19) as u8;
-            *pNonZeroCount.add(5 + 8 * 5) = *pLeftNzc.add(23) as u8;
+            pNonZeroCount[5 + 8 * 1] = *pLeftNzc.add(17) as u8;
+            pNonZeroCount[5 + 8 * 2] = *pLeftNzc.add(21) as u8;
+            pNonZeroCount[5 + 8 * 4] = *pLeftNzc.add(19) as u8;
+            pNonZeroCount[5 + 8 * 5] = *pLeftNzc.add(23) as u8;
         } else {
-            *pNonZeroCount.add(8 * 1) = 0xFF;
-            *pNonZeroCount.add(8 * 2) = 0xFF;
-            *pNonZeroCount.add(8 * 3) = 0xFF;
-            *pNonZeroCount.add(8 * 4) = 0xFF;
+            pNonZeroCount[8 * 1] = 0xFF;
+            pNonZeroCount[8 * 2] = 0xFF;
+            pNonZeroCount[8 * 3] = 0xFF;
+            pNonZeroCount[8 * 4] = 0xFF;
 
-            *pNonZeroCount.add(5 + 8 * 1) = 0xFF;
-            *pNonZeroCount.add(5 + 8 * 2) = 0xFF;
-            *pNonZeroCount.add(5 + 8 * 4) = 0xFF;
-            *pNonZeroCount.add(5 + 8 * 5) = 0xFF;
+            pNonZeroCount[5 + 8 * 1] = 0xFF;
+            pNonZeroCount[5 + 8 * 2] = 0xFF;
+            pNonZeroCount[5 + 8 * 4] = 0xFF;
+            pNonZeroCount[5 + 8 * 5] = 0xFF;
         }
     }
 }
 
 pub unsafe fn WelsFillCacheConstrain1IntraNxN(
     pNeighAvail: PWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     pCurDqLayer: PDqLayer,
 ) {
@@ -718,7 +718,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
 
 pub unsafe fn WelsFillCacheInterCabac(
     pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
@@ -880,7 +880,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 /// same as the CABAC variant but without the mvd cache).
 pub unsafe fn WelsFillCacheInter(
     pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: PDqLayer,
@@ -1993,7 +1993,7 @@ pub unsafe fn WelsFillDirectCacheCabac(
 
 pub unsafe fn WelsFillCacheConstrain0IntraNxN(
     pNeighAvail: PWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     pCurDqLayer: PDqLayer,
 ) {
@@ -2593,7 +2593,7 @@ pub unsafe fn ParseRunBefore(
 
 pub unsafe fn WelsResidualBlockCavlc(
     pVlcTable: *mut SVlcTable,
-    pNonZeroCountCache: *mut u8,
+    pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
@@ -2638,8 +2638,8 @@ pub unsafe fn WelsResidualBlockCavlc(
     };
 
     let iCurNonZeroCacheIdx = g_kuiCache48CountScan4Idx[iIndex as usize] as usize;
-    let nA = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 1) as i8;
-    let nB = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 8) as i8;
+    let nA = pNonZeroCountCache[iCurNonZeroCacheIdx - 1] as i8;
+    let nB = pNonZeroCountCache[iCurNonZeroCacheIdx - 8] as i8;
     let nC = wels_non_zero_count_average(nA, nB);
 
     iUsedBits += CavlcGetTrailingOnesAndTotalCoeff(
@@ -2652,7 +2652,7 @@ pub unsafe fn WelsResidualBlockCavlc(
     );
 
     if iResidualProperty != CHROMA_DC && iResidualProperty != I16_LUMA_DC {
-        *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
+        pNonZeroCountCache[iCurNonZeroCacheIdx] = uiTotalCoeff;
     }
     if 0 == uiTotalCoeff {
         pBs.advance_cavlc_bits(iUsedBits as isize);
@@ -2725,7 +2725,7 @@ pub unsafe fn WelsResidualBlockCavlc(
 /// Matches `WelsResidualBlockCavlc8x8` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn WelsResidualBlockCavlc8x8(
     pVlcTable: *mut SVlcTable,
-    pNonZeroCountCache: *mut u8,
+    pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
@@ -2767,8 +2767,8 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     };
 
     let iCurNonZeroCacheIdx = g_kuiCache48CountScan4Idx[iIndex as usize] as usize;
-    let nA = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 1) as i8;
-    let nB = *pNonZeroCountCache.add(iCurNonZeroCacheIdx - 8) as i8;
+    let nA = pNonZeroCountCache[iCurNonZeroCacheIdx - 1] as i8;
+    let nB = pNonZeroCountCache[iCurNonZeroCacheIdx - 8] as i8;
     let nC = wels_non_zero_count_average(nA, nB);
 
     iUsedBits += CavlcGetTrailingOnesAndTotalCoeff(
@@ -2781,7 +2781,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     );
 
     if iResidualProperty != CHROMA_DC && iResidualProperty != I16_LUMA_DC {
-        *pNonZeroCountCache.add(iCurNonZeroCacheIdx) = uiTotalCoeff;
+        pNonZeroCountCache[iCurNonZeroCacheIdx] = uiTotalCoeff;
     }
     if 0 == uiTotalCoeff {
         pBs.advance_cavlc_bits(iUsedBits as isize);
@@ -2829,7 +2829,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
 
 pub unsafe fn WelsParseMbCavlcResidual(
     pVlcTable: *mut SVlcTable,
-    pNonZeroCountCache: *mut u8,
+    pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
@@ -2945,7 +2945,7 @@ mod tests {
         unsafe {
             let res = WelsParseMbCavlcResidual(
                 &mut vlc_table,
-                non_zero_cache.as_mut_ptr(),
+                &mut non_zero_cache,
                 &buf,
                 &mut bs,
                 0,

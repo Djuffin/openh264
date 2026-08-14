@@ -550,22 +550,10 @@ pub type PWelsDecMbFunc = unsafe extern "C" fn(
     uiEosFlag: *mut u32,
 ) -> i32;
 
-pub type PFillInfoCacheIntraNxNFunc = unsafe extern "C" fn(
-    pNeighAvail: *mut SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
-    pIntraPredMode: *mut i8,
-    pCurDqLayer: *mut DqLayerState,
-);
-
-pub type PMapNxNNeighToSampleFunc = unsafe extern "C" fn(
-    pNeighAvail: *mut SWelsNeighAvail,
-    pSampleAvail: *mut i32,
-);
-
-pub type PMap16x16NeighToSampleFunc = unsafe extern "C" fn(
-    pNeighAvail: *mut SWelsNeighAvail,
-    pSampleAvail: *mut u8,
-);
+// T5.R7: `PFillInfoCacheIntraNxNFunc`, `PMapNxNNeighToSampleFunc` and
+// `PMap16x16NeighToSampleFunc` stood here with **no uses at all** — Phase 4b turned
+// their three dispatch slots into an enum method and two direct calls and left the
+// typedefs behind. S18's straggler class, deleted where it was found.
 
 pub type PIdctResAddPredFunc = unsafe extern "C" fn(
     pDst: *mut u8,
@@ -884,7 +872,7 @@ impl IntraPredConstraint {
     pub unsafe fn FillCacheIntraNxN(
         self,
         pNeighAvail: crate::decoder::parse_mb_syn_cavlc::PWelsNeighAvail,
-        pNonZeroCount: *mut u8,
+        pNonZeroCount: &mut [u8; 48],
         pIntraPredMode: *mut i8,
         pCurDqLayer: crate::decoder::decoder_core::PDqLayer,
     ) {
@@ -2711,7 +2699,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         }
         (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
@@ -2757,7 +2745,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         uiCbpL = (*pCbp as u32) & 15;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
             &mut sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             dq,
         );
         let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
@@ -2812,7 +2800,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             dq,
             pDec,
             pVlcTable,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             iScanIdxStart,
             iScanIdxEnd,
             uiCbpL,
@@ -2837,7 +2825,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     dq: *mut DqLayerState,
     pDec: PPicture,
     pVlcTable: *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
     uiCbpL: u32,
@@ -2856,11 +2844,19 @@ unsafe fn WelsDecodeMbCavlcResidual(
     // same hoist `pNzc` and `scaled_tcoeff_mb` already have on the two lines above.
     let iLumaQp = (*dq).grid.luma_qp.get(iMbXy);
 
-    let copy4 = |dst: *mut i8, src: *const u8| {
-        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 4);
+    // T5.R7: the cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the
+    // C's `ST32`/`ST16` writes are four- and two-element copies between two arrays
+    // whose elements differ only in signedness. The `as i8` per element is the same
+    // reinterpretation the pointer cast was, spelled where it happens.
+    let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
+        for k in 0..4 {
+            dst[at + k] = src[from + k] as i8;
+        }
     };
-    let copy2 = |dst: *mut i8, src: *const u8| {
-        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 2);
+    let copy2 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
+        for k in 0..2 {
+            dst[at + k] = src[from + k] as i8;
+        }
     };
 
     if MB_TYPE_INTRA16x16 == mb_type {
@@ -2903,10 +2899,10 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     return ret;
                 }
             }
-            copy4(pNzc.as_mut_ptr(), pNonZeroCount.add(1 + 8));
-            copy4(pNzc.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-            copy4(pNzc.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-            copy4(pNzc.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+            copy4(pNzc, 0, pNonZeroCount, 1 + 8);
+            copy4(pNzc, 4, pNonZeroCount, 1 + 8 * 2);
+            copy4(pNzc, 8, pNonZeroCount, 1 + 8 * 3);
+            copy4(pNzc, 12, pNonZeroCount, 1 + 8 * 4);
         }
     } else {
         // non-INTRA16x16
@@ -2939,16 +2935,16 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 } else {
                     let idx0 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
                     let idx2 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
-                    *pNonZeroCount.add(idx0) = 0;
-                    *pNonZeroCount.add(idx0 + 1) = 0;
-                    *pNonZeroCount.add(idx2) = 0;
-                    *pNonZeroCount.add(idx2 + 1) = 0;
+                    pNonZeroCount[idx0] = 0;
+                    pNonZeroCount[idx0 + 1] = 0;
+                    pNonZeroCount[idx2] = 0;
+                    pNonZeroCount[idx2 + 1] = 0;
                 }
             }
-            copy4(pNzc.as_mut_ptr(), pNonZeroCount.add(1 + 8));
-            copy4(pNzc.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-            copy4(pNzc.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-            copy4(pNzc.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+            copy4(pNzc, 0, pNonZeroCount, 1 + 8);
+            copy4(pNzc, 4, pNonZeroCount, 1 + 8 * 2);
+            copy4(pNzc, 8, pNonZeroCount, 1 + 8 * 3);
+            copy4(pNzc, 12, pNonZeroCount, 1 + 8 * 4);
         } else {
             let iMbResProperty = if is_intra { LUMA_DC_AC_INTRA } else { LUMA_DC_AC_INTER };
             for iId8x8 in 0..4usize {
@@ -2977,16 +2973,16 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 } else {
                     let idx0 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
                     let idx2 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
-                    *pNonZeroCount.add(idx0) = 0;
-                    *pNonZeroCount.add(idx0 + 1) = 0;
-                    *pNonZeroCount.add(idx2) = 0;
-                    *pNonZeroCount.add(idx2 + 1) = 0;
+                    pNonZeroCount[idx0] = 0;
+                    pNonZeroCount[idx0 + 1] = 0;
+                    pNonZeroCount[idx2] = 0;
+                    pNonZeroCount[idx2 + 1] = 0;
                 }
             }
-            copy4(pNzc.as_mut_ptr(), pNonZeroCount.add(1 + 8));
-            copy4(pNzc.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-            copy4(pNzc.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-            copy4(pNzc.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+            copy4(pNzc, 0, pNonZeroCount, 1 + 8);
+            copy4(pNzc, 4, pNonZeroCount, 1 + 8 * 2);
+            copy4(pNzc, 8, pNonZeroCount, 1 + 8 * 3);
+            copy4(pNzc, 12, pNonZeroCount, 1 + 8 * 4);
         }
     }
 
@@ -3048,10 +3044,10 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 iIndex += 1;
             }
         }
-        copy2(pNzc.as_mut_ptr().add(16), pNonZeroCount.add(6 + 8));
-        copy2(pNzc.as_mut_ptr().add(20), pNonZeroCount.add(6 + 8 * 2));
-        copy2(pNzc.as_mut_ptr().add(18), pNonZeroCount.add(6 + 8 * 4));
-        copy2(pNzc.as_mut_ptr().add(22), pNonZeroCount.add(6 + 8 * 5));
+        copy2(pNzc, 16, pNonZeroCount, 6 + 8);
+        copy2(pNzc, 20, pNonZeroCount, 6 + 8 * 2);
+        copy2(pNzc, 18, pNonZeroCount, 6 + 8 * 4);
+        copy2(pNzc, 22, pNonZeroCount, 6 + 8 * 5);
     }
 
     ERR_NONE
@@ -3141,7 +3137,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut iMotionVector,
             &mut iRefIndex,
             dq,
@@ -3208,7 +3204,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
@@ -3234,7 +3230,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             uiCbpL = (*pCbp as u32) & 15;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
-                pNonZeroCount.as_mut_ptr(),
+                &mut pNonZeroCount,
                 dq,
             );
             let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
@@ -3339,7 +3335,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             dq,
             pDec,
             pVlcTable,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             iScanIdxStart,
             iScanIdxEnd,
             uiCbpL,
@@ -3498,7 +3494,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
             &sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut iMotionVector,
             &mut iRefIndex,
             dq,
@@ -3565,7 +3561,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             }
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             pIntraPredMode.as_mut_ptr(),
             dq,
         );
@@ -3591,7 +3587,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             uiCbpL = (*pCbp as u32) & 15;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
-                pNonZeroCount.as_mut_ptr(),
+                &mut pNonZeroCount,
                 dq,
             );
             let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
@@ -3696,7 +3692,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             dq,
             pDec,
             pVlcTable,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             iScanIdxStart,
             iScanIdxEnd,
             uiCbpL,
@@ -4229,7 +4225,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     dq: *mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: *mut SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     uiMbType: u32,
 ) -> i32 {
@@ -4300,7 +4296,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     dq: *mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: *mut SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
 ) -> i32 {
@@ -4324,11 +4320,19 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     let uiCbpLuma;
     let uiCbpChroma;
 
-    let copy4 = |dst: *mut i8, src: *const u8| {
-        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 4);
+    // T5.R7: the cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the
+    // C's `ST32`/`ST16` writes are four- and two-element copies between two arrays
+    // whose elements differ only in signedness. The `as i8` per element is the same
+    // reinterpretation the pointer cast was, spelled where it happens.
+    let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
+        for k in 0..4 {
+            dst[at + k] = src[from + k] as i8;
+        }
     };
-    let copy2 = |dst: *mut i8, src: *const u8| {
-        std::ptr::copy_nonoverlapping(src, dst as *mut u8, 2);
+    let copy2 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
+        for k in 0..2 {
+            dst[at + k] = src[from + k] as i8;
+        }
     };
 
     if mb_type != MB_TYPE_INTRA16x16 {
@@ -4458,10 +4462,10 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
-                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
-                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+                copy4(nzc_mb, 0, pNonZeroCount, 1 + 8);
+                copy4(nzc_mb, 4, pNonZeroCount, 1 + 8 * 2);
+                copy4(nzc_mb, 8, pNonZeroCount, 1 + 8 * 3);
+                copy4(nzc_mb, 12, pNonZeroCount, 1 + 8 * 4);
             } else {
                 // `ST32 (&pNzc[iMbXy][n], 0)` clears four counts per store.
                 let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
@@ -4496,18 +4500,17 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             return ret;
                         }
                     } else {
-                        *pNonZeroCount.add(g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize) = 0;
-                        *pNonZeroCount
-                            .add(g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize) = 0;
+                        pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize] = 0;
+                        pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize] = 0;
                     }
                 }
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
-                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
-                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+                copy4(nzc_mb, 0, pNonZeroCount, 1 + 8);
+                copy4(nzc_mb, 4, pNonZeroCount, 1 + 8 * 2);
+                copy4(nzc_mb, 8, pNonZeroCount, 1 + 8 * 3);
+                copy4(nzc_mb, 12, pNonZeroCount, 1 + 8 * 4);
             } else {
                 let res_prop = if is_intra {
                     LUMA_DC_AC_INTRA
@@ -4539,18 +4542,17 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                             iIdx += 1;
                         }
                     } else {
-                        *pNonZeroCount.add(g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize) = 0;
-                        *pNonZeroCount
-                            .add(g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize) = 0;
+                        pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize] = 0;
+                        pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize] = 0;
                     }
                 }
                 // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
                 // copies a whole row of four 4x4 counts, not a single one.
                 let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
-                copy4(nzc_mb.as_mut_ptr().add(0), pNonZeroCount.add(1 + 8));
-                copy4(nzc_mb.as_mut_ptr().add(4), pNonZeroCount.add(1 + 8 * 2));
-                copy4(nzc_mb.as_mut_ptr().add(8), pNonZeroCount.add(1 + 8 * 3));
-                copy4(nzc_mb.as_mut_ptr().add(12), pNonZeroCount.add(1 + 8 * 4));
+                copy4(nzc_mb, 0, pNonZeroCount, 1 + 8);
+                copy4(nzc_mb, 4, pNonZeroCount, 1 + 8 * 2);
+                copy4(nzc_mb, 8, pNonZeroCount, 1 + 8 * 3);
+                copy4(nzc_mb, 12, pNonZeroCount, 1 + 8 * 4);
             }
         }
 
@@ -4629,10 +4631,10 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             }
             // `ST16 (&pNzc[iMbXy][n], LD16 (&pNonZeroCount[6 + 8 * k]))`: two counts each.
             let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
-            copy2(nzc_mb.as_mut_ptr().add(16), pNonZeroCount.add(6 + 8));
-            copy2(nzc_mb.as_mut_ptr().add(20), pNonZeroCount.add(6 + 8 * 2));
-            copy2(nzc_mb.as_mut_ptr().add(18), pNonZeroCount.add(6 + 8 * 4));
-            copy2(nzc_mb.as_mut_ptr().add(22), pNonZeroCount.add(6 + 8 * 5));
+            copy2(nzc_mb, 16, pNonZeroCount, 6 + 8);
+            copy2(nzc_mb, 20, pNonZeroCount, 6 + 8 * 2);
+            copy2(nzc_mb, 18, pNonZeroCount, 6 + 8 * 4);
+            copy2(nzc_mb, 22, pNonZeroCount, 6 + 8 * 5);
         } else {
             // `ST16 (&pNzc[iMbXy][n], 0)` clears two counts per store.
             let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
@@ -4719,7 +4721,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         dq,
         pDec,
         &mut sNeighAvail,
-        pNonZeroCount.as_mut_ptr(),
+        &mut pNonZeroCount,
         pIntraPredMode.as_mut_ptr(),
         uiMbType,
     );
@@ -4736,7 +4738,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         dq,
         pDec,
         &mut sNeighAvail,
-        pNonZeroCount.as_mut_ptr(),
+        &mut pNonZeroCount,
         iScanIdxStart,
         iScanIdxEnd,
     );
@@ -4807,7 +4809,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
@@ -4819,7 +4821,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             pDec,
             pRefs,
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
@@ -4864,7 +4866,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             dq,
             pDec,
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             pIntraPredMode.as_mut_ptr(),
             intra_type,
         );
@@ -4882,7 +4884,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         dq,
         pDec,
         pNeighAvail,
-        pNonZeroCount.as_mut_ptr(),
+        &mut pNonZeroCount,
         iScanIdxStart,
         iScanIdxEnd,
     );
@@ -5021,7 +5023,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
@@ -5038,7 +5040,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             pDec,
             pRefs,
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
@@ -5084,7 +5086,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             dq,
             pDec,
             pNeighAvail,
-            pNonZeroCount.as_mut_ptr(),
+            &mut pNonZeroCount,
             pIntraPredMode.as_mut_ptr(),
             intra_type,
         );
@@ -5102,7 +5104,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         dq,
         pDec,
         pNeighAvail,
-        pNonZeroCount.as_mut_ptr(),
+        &mut pNonZeroCount,
         iScanIdxStart,
         iScanIdxEnd,
     );
