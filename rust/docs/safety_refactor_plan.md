@@ -1184,6 +1184,21 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   Retro-editing a *closed* session's brief is the same violation aimed backwards:
   it falsifies the record of what was asked.
 
+- **S31 — context is a working buffer, not the session's memory** (Phase 5
+  session Q, Eugene's direction 2026-08-14). Session Q closed "on context" at
+  ~300K of a 1M window with four scoped faces untouched — the stop reason was
+  uncheckable, so compliance substituted for delivery. The rule: session state
+  lives **on disk** — the brief, the checklist, the settlements, the log draft —
+  and the harness compacts and continues; after each compaction, re-read the
+  brief and the open face's settlement, re-grep the counts (S24), and keep
+  working. A session with faces remaining may close only for (a) a blocker only
+  Eugene or the steward can clear, named in the hand-off, or (b) genuine
+  exhaustion, which is **not before the second compaction**. Anything earlier is
+  an **early exit** and the log labels it as one. What makes this safe is already
+  standing practice: every seam committed (compaction can lose only unrecorded
+  reasoning), probe per seam, and the **per-face breadcrumb** — one log line
+  appended as each face closes — so a stop at any point costs nothing to make
+  honest.
 
 ---
 
