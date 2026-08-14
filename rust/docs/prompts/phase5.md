@@ -56,7 +56,14 @@ after Miri does.**
 **spent** (`59dbbb0b`, `48355825`, `6758d885`;
 [`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's seams 2 and 3 — **spent**
 (`acf5bfd1`, `d7a1d130`, `b07e407c`; [`phase5_session_p3.md`](phase5_session_p3.md)).
-**P‴** = W3's flip + W4 + W5. **P⁗** = W6 + W7. **Q** = W8. A probe run per container/file
+**Q** = W3's flip + W4 + W5 + W6 + W7 — everything but the exit
+([`phase5_session_q.md`](phase5_session_q.md)), under the **forcing rules** written
+at its head (Eugene, 2026-08-14: sessions that underdeliver get forcing prompts —
+a clean seam is a checkpoint, not an exit; a reverted attempt with settled blockers
+is open work; close-out ≤ 30 log lines; drops require a written reason). **S** =
+W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
+after P″. Older forward references to "Q" meant the exit; the exit is now **S**.)*
+A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
 motion faces and a one-caller lifecycle swap. No perf measurement before W8 (D-gate-1).
@@ -72,7 +79,9 @@ correction that replaced it. W2b was **not** two carriers — the layer's `pDec`
 cache with one stamp site, and it deleted rather than converting — so W2b cost one
 session's first two faces rather than a session. What cost the rest of session P′ was
 W3's first seam (204 sites) and the discovery in §W3 below. Count is **three work
-sessions plus the exit** from here: P‴ (W3's flip + W4 + W5), P⁗ (W6 + W7), Q (W8).
+sessions plus the exit** from here — **superseded 2026-08-14**: Q absorbs what was
+R (Eugene's forcing direction), so the count is **Q (the flip through W7) + S (W8)**,
+two from here, with Q's remainder rolling forward only under its forcing rules.
 
 **W2b's design question — settled by reading the tree (steward, at `c8ebc20f`), and
 executed as settled (T5.P′1).** The settlement was right on every clause; the S23 check
@@ -121,7 +130,7 @@ bracket tops before brackets become borrows** — in two steps:
    now reaches the pool at **three** bracket tops and nowhere below them. `MapColToList0`
    is why the view is a resolver rather than a resolved array: it is the one site whose
    handle comes out of another *picture*.
-2. **The flip, brackets only — P‴'s, and its six unobvious facts are settled against the
+2. **The flip, brackets only — session Q's, and its six unobvious facts are settled against the
    compiler** (session P″ attempted it, reverted at the seam, and the attempt's whole
    yield is this list; log §3 carries the reasoning):
    - `PicRefs::get` returns **`*const SPicture`** — below a bracket top the decode path
