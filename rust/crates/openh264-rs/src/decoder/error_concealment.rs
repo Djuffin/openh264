@@ -1046,7 +1046,7 @@ mod tests {
                 last.pPreviousDecodedPictureInDpb =
                     (*if same_object { dst_ptr } else { src_ptr }).pic_id();
                 ctx.pSps = &mut sps as *mut _;
-                ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
+                ctx.pPicBuff = Some(pool);
                 ctx.pDec = (*dst_ptr).pic_id();
                 ctx.pCurDqLayer = &mut dq_layer as *mut _;
                 ctx.pLastDecPicInfo = &mut last as *mut _;

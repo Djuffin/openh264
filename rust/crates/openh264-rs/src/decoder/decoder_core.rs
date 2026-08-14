@@ -303,7 +303,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    au_has_nals, cur_au, dec_pic, ec_ref_pic, pool_pic, prev_dpb_pic, ref_pic,
+    au_has_nals, cur_au, dec_pic, ec_ref_pic, pic_pool_mut, pool_pic, prev_dpb_pic, ref_pic,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -927,14 +927,20 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
     let iPicBufSize = GetTargetRefListSize(pCtx);
     (*pCtx).iPicQueueNumber = iPicBufSize;
 
-    if (*pCtx).pPicBuff.is_null() {
-        let iErr = crate::decoder::pic_queue::CreatePicBuff(pCtx, &mut (*pCtx).pPicBuff, iPicBufSize, iPicWidth, iPicHeight);
-        if iErr != 0 {
-            return iErr;
-        }
+    if (*pCtx).pPicBuff.is_none() {
+        let Some(pool) =
+            crate::decoder::pic_queue::CreatePicBuff(pCtx, iPicBufSize, iPicWidth, iPicHeight)
+        else {
+            return 1;
+        };
+        (*pCtx).pPicBuff = Some(pool);
     } else {
-        // The buffer is not reallocated here, so report its real capacity.
-        (*pCtx).iPicQueueNumber = (*(*pCtx).pPicBuff).capacity();
+        // The buffer is not reallocated here, so report its real capacity. The `0` is
+        // unreachable — this arm *is* the pool being present — and the borrow ends
+        // before the field write, which is the discipline every `pic_pool_mut` call
+        // site keeps.
+        let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
+        (*pCtx).iPicQueueNumber = capacity;
     }
     let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
     if iErr != ERR_NONE {
@@ -948,7 +954,7 @@ pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {
     crate::decoder::manage_dec_ref::WelsResetRefPic(pCtx)
 }
 
-pub use crate::decoder::pic_queue::{PrefetchPic, PrefetchLastPicForThread};
+pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 
 // `MemInitNalList` and `MemFreeNalList` were **duplicated** here, in a different
 // shape from `nalu.rs`'s: three `WelsMallocz` blocks against one `alloc_zeroed`, and
@@ -1862,10 +1868,17 @@ pub unsafe fn WelsDecoderDefaults(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_vo
     }
     (*pCtx).iErrorCode = ERR_NONE;
     (*pCtx).pDec = None;
-    (*pCtx).pTempDec = std::ptr::null_mut();
+    // T5.P″1: both were `= null_mut()` and are now `= None`, which *drops* what they
+    // held. Checked rather than assumed (S23's question, aimed at a lifecycle): this
+    // function is `WelsDecoderDefaults`, called from exactly one place —
+    // `codec_api.rs:1454`, on the line after `Box::into_raw(ctx_box)` — so it runs on
+    // a context that has never decoded, both fields are already `None`, and the drop
+    // is of nothing. The C leaked here for the same reason it could not free: it had
+    // only a pointer's zero to write.
+    (*pCtx).pTempDec = None;
     WelsResetRefPic(pCtx);
     (*pCtx).iActiveFmoNum = 0;
-    (*pCtx).pPicBuff = std::ptr::null_mut();
+    (*pCtx).pPicBuff = None;
     if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = None;
     }
@@ -1968,14 +1981,18 @@ pub unsafe fn WelsFreeDynamicMemory(pCtx: PWelsDecoderContext) {
     crate::decoder::nalu::ResetFmoList(pCtx);
     WelsResetRefPic(pCtx);
 
-    if !(*pCtx).pPicBuff.is_null() {
-        crate::decoder::pic_queue::DestroyPicBuff(pCtx, &mut (*pCtx).pPicBuff, pMa);
+    if (*pCtx).pPicBuff.is_some() {
+        // `.take()` is the C's `ppPicBuf` out-parameter: it reads the pool and nulls
+        // the field in one expression, so `DestroyPicBuff` cannot return with the
+        // context still naming a pool it has freed.
+        let pool = (*pCtx).pPicBuff.take();
+        crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool, pMa);
     }
 
-    if !(*pCtx).pTempDec.is_null() {
-        crate::decoder::pic_queue::FreePicture((*pCtx).pTempDec as *mut _, pMa);
-        (*pCtx).pTempDec = std::ptr::null_mut();
-    }
+    // T5.P″1: `FreePicture((*pCtx).pTempDec, pMa)` followed by a null store. One
+    // `= None` is both, and F19's question — which line frees this? — is answered by
+    // the type: this line, or the context's drop glue if this line never runs (R4).
+    (*pCtx).pTempDec = None;
 
     // T5.O2: the CABAC engine's free block stood here. The engine is a field now, so
     // there is no allocation to release and no pointer to null — and, unlike the
@@ -3597,7 +3614,11 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // came from. A picture without a slot cannot be prefetched — `CreatePicBuff`
             // stamps every one of them (T5.N2) — so `pic_slot` returning `None` here is
             // the pool being empty, which is the arm below.
-            (*pCtx).pDec = pic_slot(PrefetchPic((*pCtx).pPicBuff));
+            let prefetched = match pic_pool_mut(pCtx) {
+                Some(pool) => pool.prefetch_free(),
+                None => std::ptr::null_mut(),
+            };
+            (*pCtx).pDec = pic_slot(prefetched);
             if (*pCtx).pDec.is_none() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return ERR_INFO_REF_COUNT_OVERFLOW;

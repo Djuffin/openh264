@@ -74,7 +74,7 @@ pub use crate::decoder::decoder_context::SLogContext;
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 use crate::decoder::decoder_context::{
-    cur_au, dec_pic, long_ref_pic, pool_pic, prev_dpb_pic, ref_pic, short_ref_pic,
+    cur_au, dec_pic, long_ref_pic, pic_pool_mut, pool_pic, prev_dpb_pic, ref_pic, short_ref_pic,
 };
 pub use crate::decoder::pic_queue::PicId;
 
@@ -642,7 +642,10 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
         };
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
-            let pRef = crate::decoder::pic_queue::PrefetchPic((*pCtx).pPicBuff);
+            let pRef = match pic_pool_mut(pCtx) {
+                Some(pool) => pool.prefetch_free(),
+                None => std::ptr::null_mut(),
+            };
             if !pRef.is_null() {
                 (*pRef).bIsComplete = false;
                 if !(*pCtx).pSps.is_null() {
@@ -1556,7 +1559,7 @@ mod tests {
             let p2: *mut SPicture = std::ptr::addr_of_mut!(pic2);
             let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p1, p2]);
             let mut ctx = SWelsDecoderContext::new_boxed();
-            ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
+            ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
             let s1 = (*p1).pic_id();
@@ -1590,7 +1593,7 @@ mod tests {
             let p2: *mut SPicture = std::ptr::addr_of_mut!(pic2);
             let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p1, p2]);
             let mut ctx = SWelsDecoderContext::new_boxed();
-            ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
+            ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
             let s1 = (*p1).pic_id();
@@ -1614,7 +1617,7 @@ mod tests {
             let p: *mut SPicture = std::ptr::addr_of_mut!(pic);
             let mut pool = crate::decoder::pic_queue::PicPool::over(vec![p]);
             let mut ctx = SWelsDecoderContext::new_boxed();
-            ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
+            ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = std::ptr::addr_of_mut!((*pCtx).sRefPic);
 
