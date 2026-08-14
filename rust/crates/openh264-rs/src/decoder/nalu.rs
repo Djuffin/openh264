@@ -51,7 +51,10 @@ use crate::decoder::bit_stream::{BsReader, ERR_NONE, ERR_INVALID_PARAMETERS, ERR
 use crate::safe::bits::BsCursor;
 
 use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
-use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, MAX_LAYER_NUM, SPosOffset};
+use crate::decoder::decoder_context::{
+    SWelsDecoderContext, PWelsDecoderContext, MAX_LAYER_NUM, SPosOffset, active_pps, active_sps,
+    pps_of, sps_of, subset_sps_of, SpsRef,
+};
 use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps, SLevelLimits, MAX_SPS_COUNT, MAX_PPS_COUNT, MAX_MB_SIZE, MAX_SLICEGROUP_IDS};
 use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SRefBasePicMarking, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MAX_MMCO_COUNT, MAX_REF_PIC_COUNT};
 
@@ -855,7 +858,7 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            let p_last_sps = (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+            let p_last_sps = sps_of(pCtx, (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
 
             if uiAvailNalNum == 1 && CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps) {
                 crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
@@ -883,12 +886,14 @@ pub unsafe fn ParseNalHeader(
 
 /// Evaluates whether two consecutive VCL NAL units belong to different Access Units.
 pub unsafe fn CheckAccessUnitBoundaryExt(
+    pCtx: PWelsDecoderContext,
     pLastNalHdrExt: *const SNalUnitHeaderExt,
     pCurNalHeaderExt: *const SNalUnitHeaderExt,
     pLastSliceHeader: *const SSliceHeader,
     pCurSliceHeader: *const SSliceHeader,
 ) -> bool {
-    let kpSps = (*pCurSliceHeader).pSps as *const SSps;
+    // T5.R6: the SPS the header names is looked up here rather than carried in it.
+    let kpSps = sps_of(pCtx, (*pCurSliceHeader).sps_ref);
 
     // Subclause 7.1.4.1.1 temporal_id
     if (*pLastNalHdrExt).uiTemporalId != (*pCurNalHeaderExt).uiTemporalId {
@@ -912,8 +917,10 @@ pub unsafe fn CheckAccessUnitBoundaryExt(
     if (*pLastSliceHeader).iPpsId != (*pCurSliceHeader).iPpsId {
         return true;
     }
-    if !(*pLastSliceHeader).pSps.is_null() && !(*pCurSliceHeader).pSps.is_null() {
-        if (*((*pLastSliceHeader).pSps as *mut SSps)).iSpsId != (*((*pCurSliceHeader).pSps as *mut SSps)).iSpsId {
+    if (*pLastSliceHeader).sps_ref.is_some() && (*pCurSliceHeader).sps_ref.is_some() {
+        // The ids *are* the comparison now — and they carry which buffer they index,
+        // where the C compared `pSps->iSpsId` and could not tell the two apart.
+        if (*pLastSliceHeader).sps_ref != (*pCurSliceHeader).sps_ref {
             return true;
         }
     }
@@ -1362,7 +1369,7 @@ pub unsafe fn CheckSpsActive(
                 for i in 0..iNum {
                     let pNalUnit = pCurAu.nal(i);
                     if !pNalUnit.is_null() && (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+                        let pNextUsedSps = sps_of(pCtx, (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
                             return true;
                         }
@@ -1380,7 +1387,7 @@ pub unsafe fn CheckSpsActive(
                 for i in 0..iNum {
                     let pNalUnit = pCurAu.nal(i);
                     if !pNalUnit.is_null() && !(*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+                        let pNextUsedSps = sps_of(pCtx, (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
                         if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
                             return true;
                         }
@@ -1640,7 +1647,7 @@ pub unsafe fn ParseSps(
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], pSubsetSps);
                     mark_au_ready(pCtx);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
-                } else if !(*pCtx).pSps.is_null() && (*(*pCtx).pSps).iSpsId == (*pSubsetSps).sSps.iSpsId {
+                } else if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).iSpsId == (*pSubsetSps).sSps.iSpsId {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], pSubsetSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
                 } else {
@@ -1661,7 +1668,7 @@ pub unsafe fn ParseSps(
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
-                } else if !(*pCtx).pSps.is_null() && (*(*pCtx).pSps).iSpsId == (*pSps).iSpsId {
+                } else if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).iSpsId == (*pSps).iSpsId {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
@@ -1817,9 +1824,9 @@ pub unsafe fn ParsePps(
     }
 
     let pps_idx = uiPpsId as usize;
-    if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).iPpsId == pPps.iPpsId {
+    if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).iPpsId == pPps.iPpsId {
         // Re-sent PPS for the active id: only flag an overwrite when it changed.
-        if !bytes_equal((*pCtx).pPps as *const SPps, pPps) {
+        if !bytes_equal(active_pps(pCtx) as *const SPps, pPps) {
             bytes_copy(&mut (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], pPps);
             (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
             mark_au_ready(pCtx);

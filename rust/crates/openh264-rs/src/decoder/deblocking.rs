@@ -214,6 +214,7 @@ pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
 );
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+use crate::decoder::decoder_context::{pps_of, sps_of};
 
 
 // ============================================================================
@@ -2158,7 +2159,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 ) {
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let pSps = pSliceHeaderExt.sSliceHeader.pSps as *mut SSps;
+    let pSps = sps_of(pCtx, pSliceHeaderExt.sSliceHeader.sps_ref);
     let iTotalMbCount = if !pSps.is_null() { (*pSps).uiTotalMbCount as i32 } else { 0 };
 
     let mut pFilter = SDeblockingFilter::default();
@@ -2212,7 +2213,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            let pPps = pSliceHeaderExt.sSliceHeader.pPps as *mut SPps;
+            let pPps = pps_of(pCtx, pSliceHeaderExt.sSliceHeader.pps_id);
             if !pPps.is_null() && (*pPps).uiNumSliceGroups > 1 {
                 // Flexible Macroblock Ordering slice group transition
                 iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);

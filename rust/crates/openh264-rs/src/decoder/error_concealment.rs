@@ -44,7 +44,9 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::{PicRefs, cur_and_refs, dec_pic, prev_dpb_id};
+use crate::decoder::decoder_context::{
+    PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, dec_pic, pps_of, prev_dpb_id, sps_of,
+};
 use std::ptr;
 
 // ============================================================================
@@ -289,11 +291,11 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
 
 /// Evaluates if error concealment is required by inspecting the macroblock decoding flags.
 pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> bool {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || pCurDqLayer.is_null() {
+    if pCtx.is_null() || active_sps(pCtx).is_null() || pCurDqLayer.is_null() {
         return false;
     }
 
-    let iMbNum = (*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight;
+    let iMbNum = (*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight;
 
     for i in 0..iMbNum {
         if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(i as usize) {
@@ -305,7 +307,7 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: *m
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
 pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || (*pCtx).pDec.is_none() || (*pCtx).pSps.is_null() {
+    if pCtx.is_null() || (*pCtx).pDec.is_none() || active_sps(pCtx).is_null() {
         return;
     }
 
@@ -319,10 +321,10 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
 
-    let uiHeightInPixelY = ((*(*pCtx).pSps).iMbHeight as u32) << 4;
+    let uiHeightInPixelY = ((*active_sps(pCtx)).iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).linesize(0);
     let iStrideUV = (*pDstPic).linesize(1);
-    (*pDstPic).iMbEcedNum = ((*(*pCtx).pSps).iMbWidth * (*(*pCtx).pSps).iMbHeight) as i32;
+    (*pDstPic).iMbEcedNum = ((*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight) as i32;
 
     if !(*pCtx).pParam.is_null() && !pCurDqLayer.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
@@ -380,12 +382,12 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
 pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
+    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
         return;
     }
 
-    let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
-    let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
+    let iMbWidth = (*active_sps(pCtx)).iMbWidth as usize;
+    let iMbHeight = (*active_sps(pCtx)).iMbHeight as usize;
     // The concealment bracket — see `DoErrorConFrameCopy`.
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
@@ -604,7 +606,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
         let mut iPicWidthRightLimit = (*pMCRefMem).iPicWidth;
         let mut iPicHeightBottomLimit = (*pMCRefMem).iPicHeight;
 
-        if !(*pCtx).pSps.is_null() && (*(*pCtx).pSps).bFrameCroppingFlag {
+        if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).bFrameCroppingFlag {
             iPicWidthLeftLimit = (*pCtx).sFrameCrop.iLeftOffset * 2;
             iPicWidthRightLimit = (*pMCRefMem).iPicWidth - (*pCtx).sFrameCrop.iRightOffset * 2;
             iPicHeightTopLimit = (*pCtx).sFrameCrop.iTopOffset * 2;
@@ -652,12 +654,12 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 
 /// Gathers motion vector statistics from correctly decoded macroblocks in the current picture.
 pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || pCurDqLayer.is_null() {
+    if pCtx.is_null() || active_sps(pCtx).is_null() || pCurDqLayer.is_null() {
         return;
     }
 
-    let iMbWidth = (*(*pCtx).pSps).iMbWidth;
-    let iMbHeight = (*(*pCtx).pSps).iMbHeight;
+    let iMbWidth = (*active_sps(pCtx)).iMbWidth;
+    let iMbHeight = (*active_sps(pCtx)).iMbHeight;
     let pDec = dec_pic(pCtx);
 
     if pDec.is_null() {
@@ -812,12 +814,12 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCu
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
 pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
+    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
         return;
     }
 
-    let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
-    let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
+    let iMbWidth = (*active_sps(pCtx)).iMbWidth as usize;
+    let iMbHeight = (*active_sps(pCtx)).iMbHeight as usize;
     // The concealment bracket — see `DoErrorConFrameCopy`.
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let pSrcPic = pRefs.get(prev_dpb_id(pCtx));
@@ -978,7 +980,9 @@ mod tests {
         dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
         let pCurDqLayer: *mut DqLayerState = &mut dq_layer;
-        ctx.pSps = &mut sps as *mut _;
+        // T5.R6: the SPS lives in the context's buffer and the active id names it.
+        ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
+        ctx.active_sps = Some(SpsRef { id: 0, subset: false });
 
         unsafe {
             assert_eq!(NeedErrorCon(&mut *ctx, pCurDqLayer), false);
@@ -1066,7 +1070,9 @@ mod tests {
                 let src_id = pool.id(1);
                 last.pPreviousDecodedPictureInDpb =
                     Some(if same_object { dst_id } else { src_id });
-                ctx.pSps = &mut sps as *mut _;
+                // T5.R6: the SPS lives in the context's buffer and the active id names it.
+        ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
+        ctx.active_sps = Some(SpsRef { id: 0, subset: false });
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);
                 ctx.pLastDecPicInfo = &mut last as *mut _;
