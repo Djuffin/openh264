@@ -552,6 +552,35 @@ impl SPicture {
         plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
     }
 
+    /// SHIM(phase5) — [`data_ptr`](Self::data_ptr) from a shared borrow.
+    ///
+    /// **The reference side of motion compensation, and the only side it has**
+    /// (W3's settled fact 5): `GetRefPic` fills an `sMCRefMember` from a *reference*
+    /// picture, and every use of those three pointers is a read — the MC kernels
+    /// sample the source plane and write into the current picture, never into this
+    /// one. Under owned slots a reference resolves out of `PoolRest`, which hands out
+    /// a `&SPicture`, so a `&mut self` accessor cannot be called there at all.
+    ///
+    /// The `*mut` in the return type is `sMCRefMember`'s field spelling, kept from
+    /// the C (`pSrcY` and friends are `uint8_t*`), and `cast_mut` is where the
+    /// read-only fact stops being enforced by the type. It is enforced instead by the
+    /// provenance: this pointer is derived from a shared borrow, so a *write* through
+    /// it is UB and Miri says so — which is a stronger check than the `*mut` spelling
+    /// was ever giving.
+    ///
+    /// Same derivation as [`data_ptr`](Self::data_ptr) otherwise, including S28's
+    /// rule: from the allocation root, then `wrapping_add`, never through a narrowing
+    /// slice index.
+    #[inline]
+    pub fn data_ptr_ref(&self, i: usize) -> *mut u8 {
+        let plane = &self.planes[i];
+        if plane.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let origin = plane.origin();
+        plane.as_slice().as_ptr().wrapping_add(origin).cast_mut()
+    }
+
     // T5.B2: `unsafe fn unref(&mut self)` sat here. It handed `self as *mut SPicture`
     // to the `pSetUnRef` callback, which immediately re-borrowed it `&mut` — the S25
     // shape, and the one Phase 5's brief named as 5.1's first hazard. Two facts
@@ -652,6 +681,46 @@ mod tests {
 
         assert_eq!(pic.linesize(0), stride as i32);
         assert_eq!(pic.linesize(1), (stride / 2) as i32);
+    }
+
+    /// S28's clause for the `&self` form: same address, same reach, and the reach is
+    /// what has to be run under Miri — a shared borrow narrowed to `[origin..]` would
+    /// pass every byte assertion below and be UB on the two backward reads.
+    ///
+    /// The one thing this test cannot state is the *write* side: `data_ptr_ref` hands
+    /// back a `*mut` whose provenance is read-only, so a write through it is UB with
+    /// no compile error, and Miri is the only instrument that would see it. That is
+    /// the trade the accessor's doc comment names, and the reason its callers are
+    /// exactly `GetRefPic`'s three.
+    #[test]
+    fn data_ptr_ref_reaches_as_far_backward_as_the_mutable_form() {
+        let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
+        let mut pic = SPicture::with_planes([
+            PaddedPlane::new(w, h, pad, stride),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+        ], MbDims::none());
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        pic.plane_mut(0).set(-1, -1, 0xC3);
+        pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
+
+        let expected = pic.data_ptr(0);
+        let pic: &SPicture = &pic; // the shared borrow a `PoolRest` resolution hands out
+        let p = pic.data_ptr_ref(0);
+        assert_eq!(p, expected, "the two forms name one address");
+        assert_eq!(unsafe { *p }, 0x5A);
+        assert_eq!(unsafe { *p.sub(stride + 1) }, 0xC3, "MC past the picture edge");
+        assert_eq!(
+            unsafe { *p.sub(pad * stride + pad) },
+            0x7E,
+            "the allocation root, which `[origin..]` provenance would not reach"
+        );
+        // The parse-only arm: strides, no bytes, and a null both forms agree on.
+        let empty = SPicture::with_planes(
+            [PaddedPlane::empty(stride), PaddedPlane::empty(stride / 2), PaddedPlane::empty(stride / 2)],
+            MbDims::none(),
+        );
+        assert!(empty.data_ptr_ref(0).is_null());
     }
 
     /// The recycling predicate `PrefetchPic` scans on, in its own right — the test

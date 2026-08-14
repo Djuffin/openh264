@@ -3611,15 +3611,14 @@ pub unsafe fn DecodeCurrentAccessUnit(
         let isNewFrame = (*pCtx).pDec.is_none();
 
         if (*pCtx).pDec.is_none() {
-            // The prefetch still hands back a pointer; the context stores the slot it
-            // came from. A picture without a slot cannot be prefetched — `CreatePicBuff`
-            // stamps every one of them (T5.N2) — so `pic_slot` returning `None` here is
-            // the pool being empty, which is the arm below.
-            let prefetched = match pic_pool_mut(pCtx) {
+            // The prefetch hands back the slot it landed on, which is what this field
+            // holds; `pic_slot(prefetched)` stood here and read the same value back
+            // out of the picture's stamp. `None` is the pool being empty or fully
+            // held, which is the arm below.
+            (*pCtx).pDec = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
-                None => std::ptr::null_mut(),
+                None => None,
             };
-            (*pCtx).pDec = pic_slot(prefetched);
             if (*pCtx).pDec.is_none() {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return ERR_INFO_REF_COUNT_OVERFLOW;
