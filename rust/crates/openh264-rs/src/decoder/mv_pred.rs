@@ -423,7 +423,11 @@ pub unsafe fn CopyRectBlock4Cols(
 #[inline(always)]
 pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> *mut u32 {
     if !pDec.is_null() {
-        (*pDec).pMbType
+        // T5.P′3: the picture's array is an `MbArray` now, so this arm takes the same
+        // allocation-root bridge the layer's arm below has taken since T5.K2 — and
+        // for the same reason, spelled there: every caller indexes the base it is
+        // handed at *neighbour* addresses.
+        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0)
     } else {
         // T5.K2: the grid's array, derived from the allocation root (S28). Every
         // caller keeps this base and indexes it at *neighbour* addresses — left,
@@ -510,9 +514,9 @@ pub unsafe fn PredPSkipMvFromNeighbor(
     // left
     if bLeftAvail && IS_INTER(iLeftType) {
         if !pDec.is_null() {
-            let mv_ptr = (*(*pDec).pMv[0].add(iLeftXy as usize))[3].as_ptr();
+            let mv_ptr = (*(*pDec).pMv[0].get(iLeftXy as usize))[3].as_ptr();
             ST32(iMvA.as_mut_ptr(), LD32(mv_ptr));
-            iLeftRef = (*(*pDec).pRefIndex[0].add(iLeftXy as usize))[3];
+            iLeftRef = (*(*pDec).pRefIndex[0].get(iLeftXy as usize))[3];
         } else {
             iMvA = (*pCurDqLayer).grid.mv[0].get(iLeftXy as usize)[3];
             iLeftRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftXy as usize)[3];
@@ -529,9 +533,9 @@ pub unsafe fn PredPSkipMvFromNeighbor(
     // top
     if bTopAvail && IS_INTER(iTopType) {
         if !pDec.is_null() {
-            let mv_ptr = (*(*pDec).pMv[0].add(iTopXy as usize))[12].as_ptr();
+            let mv_ptr = (*(*pDec).pMv[0].get(iTopXy as usize))[12].as_ptr();
             ST32(iMvB.as_mut_ptr(), LD32(mv_ptr));
-            iTopRef = (*(*pDec).pRefIndex[0].add(iTopXy as usize))[12];
+            iTopRef = (*(*pDec).pRefIndex[0].get(iTopXy as usize))[12];
         } else {
             iMvB = (*pCurDqLayer).grid.mv[0].get(iTopXy as usize)[12];
             iTopRef = (*pCurDqLayer).grid.ref_index[0].get(iTopXy as usize)[12];
@@ -548,9 +552,9 @@ pub unsafe fn PredPSkipMvFromNeighbor(
     // right_top
     if bRightTopAvail && IS_INTER(iRightTopType) {
         if !pDec.is_null() {
-            let mv_ptr = (*(*pDec).pMv[0].add(iRightTopXy as usize))[12].as_ptr();
+            let mv_ptr = (*(*pDec).pMv[0].get(iRightTopXy as usize))[12].as_ptr();
             ST32(iMvC.as_mut_ptr(), LD32(mv_ptr));
-            iRightTopRef = (*(*pDec).pRefIndex[0].add(iRightTopXy as usize))[12];
+            iRightTopRef = (*(*pDec).pRefIndex[0].get(iRightTopXy as usize))[12];
         } else {
             iMvC = (*pCurDqLayer).grid.mv[0].get(iRightTopXy as usize)[12];
             iRightTopRef = (*pCurDqLayer).grid.ref_index[0].get(iRightTopXy as usize)[12];
@@ -563,9 +567,9 @@ pub unsafe fn PredPSkipMvFromNeighbor(
     // left_top
     if bLeftTopAvail && IS_INTER(iLeftTopType) {
         if !pDec.is_null() {
-            let mv_ptr = (*(*pDec).pMv[0].add(iLeftTopXy as usize))[15].as_ptr();
+            let mv_ptr = (*(*pDec).pMv[0].get(iLeftTopXy as usize))[15].as_ptr();
             ST32(iMvD.as_mut_ptr(), LD32(mv_ptr));
-            iLeftTopRef = (*(*pDec).pRefIndex[0].add(iLeftTopXy as usize))[15];
+            iLeftTopRef = (*(*pDec).pRefIndex[0].get(iLeftTopXy as usize))[15];
         } else {
             iMvD = (*pCurDqLayer).grid.mv[0].get(iLeftTopXy as usize)[15];
             iLeftTopRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftTopXy as usize)[15];
@@ -758,7 +762,7 @@ pub unsafe fn GetColocatedMb(
         "the colocated picture is never the picture being decoded"
     );
 
-    let mut coloc_mbType = *(*colocPic).pMbType.add(iMbXy);
+    let mut coloc_mbType = *(*colocPic).pMbType.get(iMbXy);
     if coloc_mbType == MB_TYPE_SKIP {
         coloc_mbType |= MB_TYPE_16x16 | MB_TYPE_P0L0 | MB_TYPE_P1L0;
     }
@@ -789,15 +793,15 @@ pub unsafe fn GetColocatedMb(
     if IS_INTER_16x16(*mbType) {
         let iMVZero = [0i16; 2];
         let pMv = if IS_TYPE_L1(coloc_mbType) {
-            (*(*colocPic).pMv[LIST_1].add(iMbXy))[0].as_ptr()
+            (*(*colocPic).pMv[LIST_1].get(iMbXy))[0].as_ptr()
         } else {
             iMVZero.as_ptr()
         };
-        ST32((*pCurDqLayer).iColocMv[LIST_0][0].as_mut_ptr(), LD32((*(*colocPic).pMv[LIST_0].add(iMbXy))[0].as_ptr()));
+        ST32((*pCurDqLayer).iColocMv[LIST_0][0].as_mut_ptr(), LD32((*(*colocPic).pMv[LIST_0].get(iMbXy))[0].as_ptr()));
         ST32((*pCurDqLayer).iColocMv[LIST_1][0].as_mut_ptr(), LD32(pMv));
-        (*pCurDqLayer).iColocRefIndex[LIST_0][0] = (*(*colocPic).pRefIndex[LIST_0].add(iMbXy))[0];
+        (*pCurDqLayer).iColocRefIndex[LIST_0][0] = (*(*colocPic).pRefIndex[LIST_0].get(iMbXy))[0];
         (*pCurDqLayer).iColocRefIndex[LIST_1][0] = if IS_TYPE_L1(coloc_mbType) {
-            (*(*colocPic).pRefIndex[LIST_1].add(iMbXy))[0]
+            (*(*colocPic).pRefIndex[LIST_1].get(iMbXy))[0]
         } else {
             REF_NOT_IN_LIST
         };
@@ -805,23 +809,23 @@ pub unsafe fn GetColocatedMb(
         if !bDirect8x8InferenceFlag {
             CopyRectBlock4Cols(
                 (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr() as *mut u8,
-                (*(*colocPic).pMv[LIST_0].add(iMbXy)).as_ptr() as *const u8,
+                (*(*colocPic).pMv[LIST_0].get(iMbXy)).as_ptr() as *const u8,
                 16, 16, 4, 4,
             );
             CopyRectBlock4Cols(
                 (*pCurDqLayer).iColocRefIndex[LIST_0].as_mut_ptr() as *mut u8,
-                (*(*colocPic).pRefIndex[LIST_0].add(iMbXy)).as_ptr() as *const u8,
+                (*(*colocPic).pRefIndex[LIST_0].get(iMbXy)).as_ptr() as *const u8,
                 4, 4, 4, 1,
             );
             if IS_TYPE_L1(coloc_mbType) {
                 CopyRectBlock4Cols(
                     (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr() as *mut u8,
-                    (*(*colocPic).pMv[LIST_1].add(iMbXy)).as_ptr() as *const u8,
+                    (*(*colocPic).pMv[LIST_1].get(iMbXy)).as_ptr() as *const u8,
                     16, 16, 4, 4,
                 );
                 CopyRectBlock4Cols(
                     (*pCurDqLayer).iColocRefIndex[LIST_1].as_mut_ptr() as *mut u8,
-                    (*(*colocPic).pRefIndex[LIST_1].add(iMbXy)).as_ptr() as *const u8,
+                    (*(*colocPic).pRefIndex[LIST_1].get(iMbXy)).as_ptr() as *const u8,
                     4, 4, 4, 1,
                 );
             } else {
@@ -833,7 +837,7 @@ pub unsafe fn GetColocatedMb(
         } else {
             let maxList = 1 + (if (coloc_mbType & MB_TYPE_L1) != 0 { 1 } else { 0 });
             for listIdx in 0..maxList {
-                let colocMvPtr = *(*colocPic).pMv[listIdx].add(iMbXy);
+                let colocMvPtr = *(*colocPic).pMv[listIdx].get(iMbXy);
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][0].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[0].as_ptr()), 4);
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][2].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[3].as_ptr()), 4);
                 SetRectBlock((*pCurDqLayer).iColocMv[listIdx][8].as_mut_ptr() as *mut u8, 2, 2, 16, LD32(colocMvPtr[12].as_ptr()), 4);
@@ -845,7 +849,7 @@ pub unsafe fn GetColocatedMb(
                 // here would silently disagree with the reference decoder, so keep the
                 // sign extension. (Contrast the two `(uint8_t)REF_NOT_IN_LIST` sites,
                 // where C casts to unsigned itself.)
-                let colocRefPtr = *(*colocPic).pRefIndex[listIdx].add(iMbXy);
+                let colocRefPtr = *(*colocPic).pRefIndex[listIdx].get(iMbXy);
                 SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(0) as *mut u8, 2, 2, 4, colocRefPtr[0] as i32 as u32, 1);
                 SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(2) as *mut u8, 2, 2, 4, colocRefPtr[3] as i32 as u32, 1);
                 SetRectBlock((*pCurDqLayer).iColocRefIndex[listIdx].as_mut_ptr().add(8) as *mut u8, 2, 2, 4, colocRefPtr[12] as i32 as u32, 1);
@@ -937,9 +941,9 @@ pub unsafe fn PredMvBDirectSpatial(
     for listIdx in 0..2 {
         if bLeftAvail && IS_INTER(iLeftType) {
             if !pDec.is_null() {
-                let mv_ptr = (*(*pDec).pMv[listIdx].add(iLeftXy as usize))[3].as_ptr();
+                let mv_ptr = (*(*pDec).pMv[listIdx].get(iLeftXy as usize))[3].as_ptr();
                 ST32(iMvA[listIdx].as_mut_ptr(), LD32(mv_ptr));
-                iLeftRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iLeftXy as usize))[3];
+                iLeftRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iLeftXy as usize))[3];
             } else {
                 iMvA[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftXy as usize)[3];
                 iLeftRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftXy as usize)[3];
@@ -951,9 +955,9 @@ pub unsafe fn PredMvBDirectSpatial(
 
         if bTopAvail && IS_INTER(iTopType) {
             if !pDec.is_null() {
-                let mv_ptr = (*(*pDec).pMv[listIdx].add(iTopXy as usize))[12].as_ptr();
+                let mv_ptr = (*(*pDec).pMv[listIdx].get(iTopXy as usize))[12].as_ptr();
                 ST32(iMvB[listIdx].as_mut_ptr(), LD32(mv_ptr));
-                iTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iTopXy as usize))[12];
+                iTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iTopXy as usize))[12];
             } else {
                 iMvB[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iTopXy as usize)[12];
                 iTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iTopXy as usize)[12];
@@ -965,9 +969,9 @@ pub unsafe fn PredMvBDirectSpatial(
 
         if bRightTopAvail && IS_INTER(iRightTopType) {
             if !pDec.is_null() {
-                let mv_ptr = (*(*pDec).pMv[listIdx].add(iRightTopXy as usize))[12].as_ptr();
+                let mv_ptr = (*(*pDec).pMv[listIdx].get(iRightTopXy as usize))[12].as_ptr();
                 ST32(iMvC[listIdx].as_mut_ptr(), LD32(mv_ptr));
-                iRightTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iRightTopXy as usize))[12];
+                iRightTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iRightTopXy as usize))[12];
             } else {
                 iMvC[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iRightTopXy as usize)[12];
                 iRightTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iRightTopXy as usize)[12];
@@ -979,9 +983,9 @@ pub unsafe fn PredMvBDirectSpatial(
 
         if bLeftTopAvail && IS_INTER(iLeftTopType) {
             if !pDec.is_null() {
-                let mv_ptr = (*(*pDec).pMv[listIdx].add(iLeftTopXy as usize))[15].as_ptr();
+                let mv_ptr = (*(*pDec).pMv[listIdx].get(iLeftTopXy as usize))[15].as_ptr();
                 ST32(iMvD[listIdx].as_mut_ptr(), LD32(mv_ptr));
-                iLeftTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].add(iLeftTopXy as usize))[15];
+                iLeftTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iLeftTopXy as usize))[15];
             } else {
                 iMvD[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftTopXy as usize)[15];
                 iLeftTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftTopXy as usize)[15];
@@ -1259,11 +1263,11 @@ pub unsafe fn UpdateP16x16MotionInfo(
         let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
 
         if !pDec.is_null() {
-            let ref_ptr = (*(*pDec).pRefIndex[listIdx].add(iMbXy)).as_mut_ptr();
+            let ref_ptr = (*pDec).pRefIndex[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pDec).pMv[listIdx].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pDec).pMv[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1293,7 +1297,7 @@ pub unsafe fn UpdateP16x16RefIdx(
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     if !pDec.is_null() {
-        let ref_ptr = (*(*pDec).pRefIndex[listIdx as usize].add(iMbXy)).as_mut_ptr();
+        let ref_ptr = (*pDec).pRefIndex[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
         for i in (0..16).step_by(4) {
             let kuiScan4Idx = g_kuiScan4[i] as usize;
             let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
@@ -1318,7 +1322,7 @@ pub unsafe fn UpdateP16x16MotionOnly(
         let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
 
         if !pDec.is_null() {
-            let mv_ptr = (*(*pDec).pMv[listIdx as usize].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pDec).pMv[listIdx as usize].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1355,11 +1359,11 @@ pub unsafe fn UpdateP16x8MotionInfo(
         let kuiCacheIdxPlus6 = 6 + kuiCacheIdx;
 
         if !pDec.is_null() {
-            let ref_ptr = (*(*pDec).pRefIndex[listIdx].add(iMbXy)).as_mut_ptr();
+            let ref_ptr = (*pDec).pRefIndex[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pDec).pMv[listIdx].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pDec).pMv[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1416,11 +1420,11 @@ pub unsafe fn UpdateP8x16MotionInfo(
         let kuiCacheIdxPlus6 = 6 + kuiCacheIdx;
 
         if !pDec.is_null() {
-            let ref_ptr = (*(*pDec).pRefIndex[listIdx].add(iMbXy)).as_mut_ptr();
+            let ref_ptr = (*pDec).pRefIndex[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST16(ref_ptr.add(kuiScan4Idx), kiRef2);
             ST16(ref_ptr.add(kuiScan4IdxPlus4), kiRef2);
 
-            let mv_ptr = (*(*pDec).pMv[listIdx].add(iMbXy)).as_mut_ptr();
+            let mv_ptr = (*pDec).pMv[listIdx].get_mut(iMbXy).as_mut_ptr();
             ST32(mv_ptr.add(kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(1 + kuiScan4Idx) as *mut i16, kiMV32);
             ST32(mv_ptr.add(kuiScan4IdxPlus4) as *mut i16, kiMV32);
@@ -1469,7 +1473,7 @@ pub unsafe fn Update8x8RefIdx(
     // `mv_pred.cpp:1175` dereferences unconditionally and the CABAC copy was the
     // faithful one; the guard here was the port's addition. T5.D1 proved `pDec`
     // cannot be null on this path in either tree.
-    let pDecRef = &mut *(*pDec).pRefIndex[listIdx].add(iMbXy);
+    let pDecRef = (*pDec).pRefIndex[listIdx].get_mut(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;
     pDecRef[iScan4Idx + 4] = iRef;
@@ -1560,7 +1564,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_0) as *const i16));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
@@ -1583,7 +1587,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_1) as *const i16));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
@@ -1605,7 +1609,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
         } else {
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_0) as *const i16));
             if !pDec.is_null() {
-                let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
             {
@@ -1623,7 +1627,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect.add(LIST_1) as *const i16));
             if !pDec.is_null() {
-                let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
             {
@@ -1656,7 +1660,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 if uiColZeroFlag && ((*mv.add(0) + 1) as u32 <= 2 && (*mv.add(1) + 1) as u32 <= 2) {
                     if *iRef.add(LIST_0) == 0 {
                         if !pDec.is_null() {
-                            let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                            let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, 0);
                             ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, 0);
                         }
@@ -1679,7 +1683,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 
                     if *iRef.add(LIST_1) == 0 {
                         if !pDec.is_null() {
-                            let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                            let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, 0);
                             ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, 0);
                         }
@@ -1704,7 +1708,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 if uiColZeroFlag && ((*mv.add(0) + 1) as u32 <= 2 && (*mv.add(1) + 1) as u32 <= 2) {
                     if *iRef.add(LIST_0) == 0 {
                         if !pDec.is_null() {
-                            let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                            let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, 0);
                         }
                         {
@@ -1722,7 +1726,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                     }
                     if *iRef.add(LIST_1) == 0 {
                         if !pDec.is_null() {
-                            let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                            let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, 0);
                         }
                         {
@@ -1780,7 +1784,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_0].as_ptr()));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST64(dec_mv_l0.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l0.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
@@ -1807,7 +1811,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_1].as_ptr()));
             ST32(pMV.as_mut_ptr().add(2), LD32(pMV.as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST64(dec_mv_l1.add(iScan4Idx) as *mut i16, LD64(pMV.as_ptr()));
                 ST64(dec_mv_l1.add(iScan4Idx + 4) as *mut i16, LD64(pMV.as_ptr()));
             }
@@ -1835,7 +1839,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             }
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_0].as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l0 = (*(*pDec).pMv[LIST_0].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 ST32(dec_mv_l0.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
             {
@@ -1857,7 +1861,7 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             }
             ST32(pMV.as_mut_ptr(), LD32(pMvDirect[LIST_1].as_ptr()));
             if !pDec.is_null() {
-                let dec_mv_l1 = (*(*pDec).pMv[LIST_1].add(iMbXy)).as_mut_ptr();
+                let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 ST32(dec_mv_l1.add(iScan4Idx) as *mut i16, LD32(pMV.as_ptr()));
             }
             {

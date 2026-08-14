@@ -81,6 +81,7 @@ pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 pub use crate::decoder::slice::EWelsSliceType;
 
 pub use crate::safe::plane::PaddedPlane;
+pub use crate::safe::mb_grid::{MbArray, MbDims};
 
 /// A handle to one slot of the decoder's picture pool. Declared in `safe/pool.rs`
 /// and re-exported by `pic_queue.rs` as `PicId`; named here because [`SPicture`]
@@ -249,19 +250,33 @@ pub struct SPicture {
     // Macroblock Level Metadata & Direct Mode Caches
     // =========================================================================
 
-    /// Array of boolean flags indicating clean decoding status per macroblock (`[iMbNum]`).
-    pub pMbCorrectlyDecodedFlag: *mut bool,
+    // =========================================================================
+    // **T5.P′3 (W3): the picture finishes owning itself.**
+    //
+    // These four families were the last raw allocations on `SPicture` — six
+    // `WelsMallocz` calls in `AllocPicture` against four `WelsFree` loops in
+    // `FreePicture`, sized from `uiMbCount` at one end and re-derived at the other.
+    // They are [`MbArray`]s now, the same containers the layer's 22 per-macroblock
+    // families have been on since T5.M1, addressed by the same `MbDims`. The recipe
+    // is T5.C3's, applied to the picture's *metadata* where that commit applied it
+    // to the picture's *samples*: an owned container whose drop glue is the free
+    // path, so `FreePicture` is drop glue and nothing else.
+    //
+    // What this buys the rest of W3: `AllocPicture`'s `Box` is now a **complete**
+    // owner, so a `Box<SPicture>` can be handed to the pool (and to `pTempDec`)
+    // without leaking six allocations that no drop glue reaches.
+    // =========================================================================
+    /// Clean-decode flag per macroblock — `[iMbNum]` in the C.
+    pub pMbCorrectlyDecodedFlag: MbArray<bool>,
 
-    /// Non-Zero Count (NZC) transform coefficient table for multi-threaded decoding context sharing.
+    /// Macroblock coding types (`MB_TYPE_*`), read by direct-mode derivation.
+    pub pMbType: MbArray<u32>,
 
-    /// Array of macroblock coding types (`MB_TYPE_*`) used for direct mode derivation (`[iMbNum]`).
-    pub pMbType: *mut u32,
+    /// Motion vectors per 4x4 block for `LIST_0` and `LIST_1` (B-slice direct mode).
+    pub pMv: [MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>; LIST_A],
 
-    /// Motion vectors per 4x4 block for `LIST_0` and `LIST_1` (used for B-slice direct mode).
-    pub pMv: [*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
-
-    /// Reference frame indices per 4x4 block for `LIST_0` and `LIST_1` (used for direct mode).
-    pub pRefIndex: [*mut [i8; MB_BLOCK4x4_NUM]; LIST_A],
+    /// Reference indices per 4x4 block for `LIST_0` and `LIST_1` (direct mode).
+    pub pRefIndex: [MbArray<[i8; MB_BLOCK4x4_NUM]>; LIST_A],
 
     /// This picture's own reference lists, as **slot handles** — snapshotted when the
     /// picture is marked as a reference, and read back by `MapColToList0` when a
@@ -319,10 +334,14 @@ impl Default for SPicture {
             iMbEcedNum: 0,
             iMbEcedPropNum: 0,
             iMbNum: 0,
-            pMbCorrectlyDecodedFlag: std::ptr::null_mut(),
-            pMbType: std::ptr::null_mut(),
-            pMv: [std::ptr::null_mut(); LIST_A],
-            pRefIndex: [std::ptr::null_mut(); LIST_A],
+            // A picture that has not been through `AllocPicture` covers no
+            // macroblocks: `MbArray::empty()` is the state the six null pointers
+            // were in, and `as_slice().is_empty()` is the test that replaced
+            // `.is_null()` (T5.P′3).
+            pMbCorrectlyDecodedFlag: MbArray::empty(),
+            pMbType: MbArray::empty(),
+            pMv: [MbArray::empty(), MbArray::empty()],
+            pRefIndex: [MbArray::empty(), MbArray::empty()],
             pRefPic: [[None; 17]; LIST_A],
         }
     }
@@ -345,10 +364,24 @@ impl SPicture {
     /// value — a picture's `eSliceType` is written at `decoder_core.rs:3661` and
     /// `manage_dec_ref.rs:685` and read nowhere in the decoder, `iPlanes`'s situation
     /// one field over — but a constructor replacing a memset does not get to pick.
-    pub fn with_planes(planes: [PaddedPlane; 3]) -> Self {
+    pub fn with_planes(planes: [PaddedPlane; 3], dims: MbDims) -> Self {
         Self {
             planes,
             eSliceType: EWelsSliceType::P_SLICE,
+            // **T5.P′3**: the four per-macroblock families are sized here, from the
+            // same `uiMbWidth * uiMbHeight` `AllocPicture` used for its six
+            // `WelsMallocz` calls. One geometry, stated once, and the drop glue is
+            // the free path.
+            pMbCorrectlyDecodedFlag: MbArray::new(dims, false),
+            pMbType: MbArray::new(dims, 0),
+            pMv: [
+                MbArray::new(dims, [[0; MV_A]; MB_BLOCK4x4_NUM]),
+                MbArray::new(dims, [[0; MV_A]; MB_BLOCK4x4_NUM]),
+            ],
+            pRefIndex: [
+                MbArray::new(dims, [0; MB_BLOCK4x4_NUM]),
+                MbArray::new(dims, [0; MB_BLOCK4x4_NUM]),
+            ],
             ..Default::default()
         }
     }
@@ -565,7 +598,7 @@ mod tests {
             PaddedPlane::empty(0),
             PaddedPlane::empty(0),
             PaddedPlane::empty(0),
-        ]);
+        ], MbDims::none());
         assert_eq!(pic.eSliceType, EWelsSliceType::P_SLICE);
         assert_eq!(SPicture::default().eSliceType, EWelsSliceType::UNKNOWN_SLICE);
         assert_eq!(EWelsSliceType::P_SLICE as i32, 0, "the zero is what makes it the live value");
@@ -592,7 +625,7 @@ mod tests {
             PaddedPlane::new(w, h, pad, stride),
             PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
             PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
-        ]);
+        ], MbDims::none());
         pic.plane_mut(0).set(0, 0, 0x5A);
         pic.plane_mut(0).set(-1, -1, 0xC3);
         pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);

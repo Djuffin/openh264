@@ -4011,7 +4011,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
     }
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pDec = dec_pic(pCtx);
-    if pDec.is_null() || (*pDec).pMbType.is_null() {
+    if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
         return true;
     }
     let mut bAllRefComplete = true;
@@ -4019,10 +4019,10 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
     let totalMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
 
     for iMbIdx in 0..totalMb {
-        let mbType = *(*pDec).pMbType.add(iRealMbIdx as usize);
+        let mbType = *(*pDec).pMbType.get(iRealMbIdx as usize);
         match mbType {
             MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
+                let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 if refIdx < MAX_REF_PIC_COUNT {
                     let pRef = ref_pic(pCtx, LIST_0, refIdx);
                     if !pRef.is_null() {
@@ -4031,8 +4031,8 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 }
             }
             MB_TYPE_16x8 => {
-                let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
-                let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[8] as usize;
+                let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
                     let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
                     if !pRef0.is_null() {
@@ -4047,8 +4047,8 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 }
             }
             MB_TYPE_8x16 => {
-                let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
-                let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[2] as usize;
+                let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
                     let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
                     if !pRef0.is_null() {
@@ -4065,7 +4065,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
             MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
                 let indices = [0, 2, 8, 10];
                 for &sub in &indices {
-                    let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[sub] as usize;
+                    let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
                         let pRef = ref_pic(pCtx, LIST_0, refIdx);
                         if !pRef.is_null() {

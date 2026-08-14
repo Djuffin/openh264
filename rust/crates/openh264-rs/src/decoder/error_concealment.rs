@@ -660,14 +660,14 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
             if *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex)
-                && !(*pDec).pMbType.is_null() {
-                let iMBType = *(*pDec).pMbType.add(iMbXyIndex);
+                && !(*pDec).pMbType.as_slice().is_empty() {
+                let iMBType = *(*pDec).pMbType.get(iMbXyIndex);
                 if IS_INTER(iMBType) {
                     match iMBType {
                         MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                            if !(*pDec).pRefIndex[0].is_null() && !(*pDec).pMv[0].is_null() {
-                                let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
+                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
+                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
                                 let iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
                                     let mv = mv_row[0];
@@ -679,9 +679,9 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             }
                         }
                         MB_TYPE_16x8 => {
-                            if !(*pDec).pRefIndex[0].is_null() && !(*pDec).pMv[0].is_null() {
-                                let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
+                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
+                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
                                 // Partition 0
                                 let mut iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
@@ -703,9 +703,9 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             }
                         }
                         MB_TYPE_8x16 => {
-                            if !(*pDec).pRefIndex[0].is_null() && !(*pDec).pMv[0].is_null() {
-                                let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
+                            if !(*pDec).pRefIndex[0].as_slice().is_empty() && !(*pDec).pMv[0].as_slice().is_empty() {
+                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
                                 // Partition 0
                                 let mut iRefIdx = ref_row[0] as usize;
                                 if iRefIdx < 16 {
@@ -731,12 +731,12 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                             // the flip; `error_concealment.cpp:319` indexes it
                             // unguarded. The two picture arrays keep theirs — they
                             // are still raw and 5.1/5.4 own them.
-                            if !(*pDec).pRefIndex[0].is_null()
-                                && !(*pDec).pMv[0].is_null()
+                            if !(*pDec).pRefIndex[0].as_slice().is_empty()
+                                && !(*pDec).pMv[0].as_slice().is_empty()
                             {
                                 let sub_types = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXyIndex);
-                                let ref_row = *(*pDec).pRefIndex[0].add(iMbXyIndex);
-                                let mv_row = *(*pDec).pMv[0].add(iMbXyIndex);
+                                let ref_row = *(*pDec).pRefIndex[0].get(iMbXyIndex);
+                                let mv_row = *(*pDec).pMv[0].get(iMbXyIndex);
                                 for i in 0..4 {
                                     let iSubMBType = sub_types[i];
                                     let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
@@ -1017,12 +1017,12 @@ mod tests {
 
         let run = |same_object: bool| -> u8 {
             // `dst` carries a marker; a real copy overwrites it with `src`'s.
-            let mut dst = SPicture::with_planes(planes(0xAA));
+            let mut dst = SPicture::with_planes(planes(0xAA), MbDims::none());
             dst.iWidthInPixel = (W * 16) as i32;
             dst.iHeightInPixel = (H * 16) as i32;
             dst.iFramePoc = 7;
 
-            let mut src = SPicture::with_planes(planes(0x11));
+            let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
             src.iFramePoc = 7; // duplicate POC on purpose
 
             let mut sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
@@ -1084,7 +1084,7 @@ mod tests {
             PaddedPlane::empty(STRIDE),
             PaddedPlane::empty(STRIDE / 2),
             PaddedPlane::empty(STRIDE / 2),
-        ]);
+        ], MbDims::none());
         pic.iFramePoc = 3;
         pic.iWidthInPixel = 32;
         pic.iHeightInPixel = 32;
