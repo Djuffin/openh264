@@ -371,6 +371,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
 
 // Forward definitions matching OpenH264 decoder C ABI structs
 pub use crate::decoder::picture::{SPicture, PPicture};
+use crate::decoder::decoder_context::dec_pic;
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
@@ -527,7 +528,11 @@ pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
 
 /// Evaluates spatial neighborhood availability (Left, Top, Top-Left, Top-Right)
 /// for the current macroblock across slice boundaries.
-pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: PDqLayer) {
+pub unsafe fn GetNeighborAvailMbType(
+    pNeighAvail: PWelsNeighAvail,
+    pCurDqLayer: PDqLayer,
+    pDec: PPicture,
+) {
     if pNeighAvail.is_null() || pCurDqLayer.is_null() {
         return;
     }
@@ -584,23 +589,23 @@ pub unsafe fn GetNeighborAvailMbType(pNeighAvail: PWelsNeighAvail, pCurDqLayer: 
             na.iTopCbp = 0;
         }
 
-        na.iLeftType = if na.iLeftAvail != 0 && !dq.pDec.is_null() {
-            *(*dq.pDec).pMbType.add(iLeftXy as usize)
+        na.iLeftType = if na.iLeftAvail != 0 && !pDec.is_null() {
+            *(*pDec).pMbType.add(iLeftXy as usize)
         } else {
             0
         };
-        na.iTopType = if na.iTopAvail != 0 && !dq.pDec.is_null() {
-            *(*dq.pDec).pMbType.add(iTopXy as usize)
+        na.iTopType = if na.iTopAvail != 0 && !pDec.is_null() {
+            *(*pDec).pMbType.add(iTopXy as usize)
         } else {
             0
         };
-        na.iLeftTopType = if na.iLeftTopAvail != 0 && !dq.pDec.is_null() {
-            *(*dq.pDec).pMbType.add(iLeftTopXy as usize)
+        na.iLeftTopType = if na.iLeftTopAvail != 0 && !pDec.is_null() {
+            *(*pDec).pMbType.add(iLeftTopXy as usize)
         } else {
             0
         };
-        na.iRightTopType = if na.iRightTopAvail != 0 && !dq.pDec.is_null() {
-            *(*dq.pDec).pMbType.add(iRightTopXy as usize)
+        na.iRightTopType = if na.iRightTopAvail != 0 && !pDec.is_null() {
+            *(*pDec).pMbType.add(iRightTopXy as usize)
         } else {
             0
         };
@@ -728,6 +733,7 @@ pub unsafe fn WelsFillCacheInterCabac(
     iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: PDqLayer,
+    pDec: PPicture,
 ) {
     let na = &*pNeighAvail;
     let dq = &*pCurDqLayer;
@@ -762,9 +768,9 @@ pub unsafe fn WelsFillCacheInterCabac(
 
     for listIdx in 0..listCount {
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iLeftXy));
             let pMvd = dq.grid.mvd[listIdx].get(iLeftXy);
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iLeftXy));
             iMvArray[listIdx][6] = pMv[3];
             iMvArray[listIdx][12] = pMv[7];
             iMvArray[listIdx][18] = pMv[11];
@@ -798,9 +804,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iLeftTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iLeftTopXy);
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iLeftTopXy));
             iMvArray[listIdx][0] = pMv[15];
             iMvdCache[listIdx][0] = pMvd[15];
             iRefIdxArray[listIdx][0] = pRef[15];
@@ -812,9 +818,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iTopXy);
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iTopXy));
             iMvArray[listIdx][1] = pMv[12];
             iMvArray[listIdx][2] = pMv[13];
             iMvArray[listIdx][3] = pMv[14];
@@ -848,9 +854,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iRightTopXy));
             let pMvd = dq.grid.mvd[listIdx].get(iRightTopXy);
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iRightTopXy));
             iMvArray[listIdx][5] = pMv[12];
             iMvdCache[listIdx][5] = pMvd[12];
             iRefIdxArray[listIdx][5] = pRef[12];
@@ -888,6 +894,7 @@ pub unsafe fn WelsFillCacheInter(
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: PDqLayer,
+    pDec: PPicture,
 ) {
     let na = &*pNeighAvail;
     let dq = &*pCurDqLayer;
@@ -922,8 +929,8 @@ pub unsafe fn WelsFillCacheInter(
 
     for listIdx in 0..listCount {
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftXy));
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iLeftXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iLeftXy));
             iMvArray[listIdx][6] = pMv[3];
             iMvArray[listIdx][12] = pMv[7];
             iMvArray[listIdx][18] = pMv[11];
@@ -945,8 +952,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iLeftTopXy));
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iLeftTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iLeftTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iLeftTopXy));
             iMvArray[listIdx][0] = pMv[15];
             iRefIdxArray[listIdx][0] = pRef[15];
         } else {
@@ -956,8 +963,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iTopXy));
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iTopXy));
             iMvArray[listIdx][1] = pMv[12];
             iMvArray[listIdx][2] = pMv[13];
             iMvArray[listIdx][3] = pMv[14];
@@ -979,8 +986,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-            let pMv = &(*(*dq.pDec).pMv[listIdx].add(iRightTopXy));
-            let pRef = &(*(*dq.pDec).pRefIndex[listIdx].add(iRightTopXy));
+            let pMv = &(*(*pDec).pMv[listIdx].add(iRightTopXy));
+            let pRef = &(*(*pDec).pRefIndex[listIdx].add(iRightTopXy));
             iMvArray[listIdx][5] = pMv[12];
             iRefIdxArray[listIdx][5] = pRef[12];
         } else {
@@ -1027,7 +1034,8 @@ pub unsafe fn ParseInterInfo(
     let ec_active = (*pCtx).pParam.is_null()
         || (*(*pCtx).pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
 
-    let mb_type = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+    let pDec = dec_pic(pCtx);
+    let mb_type = *(*pDec).pMbType.add(iMbXy);
     match mb_type {
         MB_TYPE_16x16 => {
             let mut iRefIdx = 0i32;
@@ -1073,7 +1081,7 @@ pub unsafe fn ParseInterInfo(
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(pCurDqLayer as *mut _, 0, iRefIdx as i8, iMv.as_ptr());
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(pCurDqLayer as *mut _, pDec, 0, iRefIdx as i8, iMv.as_ptr());
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
@@ -1125,6 +1133,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
+                    pDec,
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1185,6 +1194,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
+                    pDec,
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1239,7 +1249,7 @@ pub unsafe fn ParseInterInfo(
             }
 
             if MB_TYPE_8x8_REF0 == mb_type {
-                let ref_idx_mb = &mut *(*(*pCurDqLayer).pDec).pRefIndex[0].add(iMbXy);
+                let ref_idx_mb = &mut *(*pDec).pRefIndex[0].add(iMbXy);
                 ref_idx_mb.fill(0);
             } else {
                 for i in 0..4 {
@@ -1266,7 +1276,7 @@ pub unsafe fn ParseInterInfo(
                             || (*pCtx).bMbRefConcealed
                             || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
 
-                        let ref_idx_mb = &mut *(*(*pCurDqLayer).pDec).pRefIndex[0].add(iMbXy);
+                        let ref_idx_mb = &mut *(*pDec).pRefIndex[0].add(iMbXy);
                         ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
                         ref_idx_mb[uiScan4Idx + 1] = iRefIdx[i] as i8;
                         ref_idx_mb[uiScan4Idx + 4] = iRefIdx[i] as i8;
@@ -1307,7 +1317,7 @@ pub unsafe fn ParseInterInfo(
                     }
                     iMv[1] = iMv[1].wrapping_add(iCode as i16);
 
-                    let mv_mb = &mut *(*(*pCurDqLayer).pDec).pMv[0].add(iMbXy);
+                    let mv_mb = &mut *(*pDec).pMv[0].add(iMbXy);
                     if SUB_MB_TYPE_8x8 == uiSubMbType {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 1] = iMv;
@@ -1403,7 +1413,8 @@ pub unsafe fn ParseInterBInfo(
         }};
     }
 
-    let mbType = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+    let pDec = dec_pic(pCtx);
+    let mbType = *(*pDec).pMbType.add(iMbXy);
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
         let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
@@ -1485,6 +1496,7 @@ pub unsafe fn ParseInterBInfo(
             }
             crate::decoder::mv_pred::UpdateP16x16MotionInfo(
                 pCurDqLayer as *mut _,
+                pDec,
                 listIdx,
                 ref_idx_list[listIdx][0],
                 iMv.as_ptr(),
@@ -1553,6 +1565,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     pCurDqLayer as *mut _,
+                    pDec,
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1623,6 +1636,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     pCurDqLayer as *mut _,
+                    pDec,
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1738,6 +1752,7 @@ pub unsafe fn ParseInterBInfo(
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         pCurDqLayer as *mut _,
+                        pDec,
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -1769,18 +1784,21 @@ pub unsafe fn ParseInterBInfo(
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
+                        pDec,
                         iIdx8,
                         LIST_0,
                         iRef[LIST_0],
                     );
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
+                        pDec,
                         iIdx8,
                         LIST_1,
                         iRef[LIST_1],
                     );
                     crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
                         pCurDqLayer as *mut _,
+                        pDec,
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -1804,6 +1822,7 @@ pub unsafe fn ParseInterBInfo(
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         crate::decoder::mv_pred::Update8x8RefIdx(
                             pCurDqLayer as *mut _,
+                            pDec,
                             iIdx8,
                             listIdx,
                             iRef[listIdx],
@@ -1830,6 +1849,7 @@ pub unsafe fn ParseInterBInfo(
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         pCurDqLayer as *mut _,
+                        pDec,
                         iIdx8,
                         listIdx,
                         iref,
@@ -1886,7 +1906,7 @@ pub unsafe fn ParseInterBInfo(
                         iMv[1] = 0;
                     }
 
-                    let mv_mb = &mut *(*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy);
+                    let mv_mb = &mut *(*pDec).pMv[listIdx].add(iMbXy);
                     if IS_SUB_8x8(subMbType) {
                         // MB_TYPE_8x8
                         mv_mb[uiScan4Idx] = iMv;

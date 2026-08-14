@@ -392,9 +392,30 @@ pub struct DqLayerState {
     pub pRefPicMarking: *mut SRefPicMarking,
     pub pRefPicBaseMarking: *mut SRefBasePicMarking,
 
-    pub pRef: *mut Picture,
-    pub pDec: *mut Picture,
-
+    // **T5.P′1 (W2b) — `pRef` and `pDec` sat here, and both are gone.**
+    //
+    // `pRef` was dead in this port: zero readers, zero writers, at every commit the
+    // grep was taken.
+    //
+    // `pDec` was a **cache of `dec_pic(pCtx)`**, not a second carrier. One stamp site
+    // in the whole decoder (`InitDqLayerInfo`, from `DecodeCurrentAccessUnit`'s inner
+    // loop), and S23's question — *can the source change behind the cache?* — is
+    // answered no by an invariant that is worth keeping written down:
+    //
+    //   Every `(*pCtx).pDec = None` in `DecodeCurrentAccessUnit` either fires only
+    //   when `iTotalNumMbRec == 0` (`:3716`, `:3738`) or runs after
+    //   `DecodeFrameConstruction` has just zeroed it (`:3847`, `:3862`), and the one
+    //   reader reachable outside the decode window — `GetAvilInfoFromCorrectMb`, via
+    //   `CheckAndFinishLastPic` → `ImplementErrorCon` — is gated on
+    //   `iTotalNumMbRec != 0`. So "the context has no picture" and "a layer read can
+    //   run" are mutually exclusive, and no reader could ever observe the cache
+    //   holding a picture the context had dropped.
+    //
+    // Readers that hold `pCtx` derive; the layer-only leaves take the picture as a
+    // parameter from their `pCtx`-holding caller (never storing it); the one identity
+    // comparison is `PicId` equality with no dereference on either side. 160 sites
+    // over seven files, and `pCurDqLayer` never advances mid-access-unit — its only
+    // production write is `= pDqLayersList` at `:3555`, before the loop.
     pub iColocMv: [[[i16; 2]; 16]; 2],
     pub iColocRefIndex: [[i8; 16]; 2],
     pub iColocIntra: [i8; 16],
@@ -3423,11 +3444,14 @@ pub unsafe fn WelsDecodeBs(
     (*pCtx).iErrorCode
 }
 
+/// **T5.P′1 dropped `pPicDec`.** It wrote `pDqLayer->pDec`, the layer's copy of
+/// `dec_pic(pCtx)` — a cache with one stamp site (this one) and no way for a reader
+/// to observe it diverging from its source, which is what W2b's S23 check
+/// established. The readers derive; the parameter had nothing left to write.
 pub unsafe fn InitDqLayerInfo(
     pDqLayer: PDqLayer,
     pLayerInfo: PLayerInfo,
     pNalUnit: PNalUnit,
-    pPicDec: PPicture,
 ) {
     if pDqLayer.is_null() || pLayerInfo.is_null() || pNalUnit.is_null() {
         return;
@@ -3445,7 +3469,6 @@ pub unsafe fn InitDqLayerInfo(
     let kuiQualityId = (*pNalHdrExt).uiQualityId;
 
     (*pDqLayer).sLayerInfo = *pLayerInfo;
-    (*pDqLayer).pDec = pPicDec;
     (*pDqLayer).iMbWidth = (*pSh).iMbWidth;
     (*pDqLayer).iMbHeight = (*pSh).iMbHeight;
     (*pDqLayer).iSliceIdcBackup = ((*pSh).iFirstMbInSlice << 7)
@@ -3701,7 +3724,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             WelsDqLayerDecodeStart(pCtx, pNalCur, pLayerInfo.pSps, pLayerInfo.pPps);
 
             if iLastIdD < 0 || iLastIdD == iCurrIdD {
-                InitDqLayerInfo(dq_cur, &mut pLayerInfo, pNalCur, dec_pic(pCtx));
+                InitDqLayerInfo(dq_cur, &mut pLayerInfo, pNalCur);
 
                 if iCurrIdD == (kuiDependencyIdMax as i16) && iCurrIdQ == (BASE_QUALITY_ID as i16) && isNewFrame {
                     iRet = InitRefPicList(pCtx, (*pCtx).uiNalRefIdc, (*pSh).iPicOrderCntLsb);
@@ -3979,7 +4002,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
         return true;
     }
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = (*pCurDqLayer).pDec;
+    let pDec = dec_pic(pCtx);
     if pDec.is_null() || (*pDec).pMbType.is_null() {
         return true;
     }
@@ -4321,7 +4344,6 @@ mod tests {
         assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
 
         // and a sample of what `WelsMallocz`'s zeroing used to leave behind
-        assert!(layer.pDec.is_null());
         assert_eq!(layer.iMbWidth, 0);
         assert_eq!(layer.iMbHeight, 0);
         assert!(!layer.bUseWeightPredictionFlag);
