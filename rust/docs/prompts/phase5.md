@@ -42,7 +42,7 @@ after Miri does.**
 | ~~W1~~ | ~~`pAccessUnitList` → `Option<Box<SAccessUnit>>`~~ — **DONE, T5.P1** (`a3b68334`) | 54 sites | — | W3's first cascade entry, taken |
 | ~~W2a~~ | ~~the context's two pool aliases: `pDec`/`pECRefPic` → `PicId`~~ — **DONE, T5.P2** (`eef8a90b`) | 85 sites | — | `dec_pic`/`ec_ref_pic` are now the **only two sites** W3 has to convert |
 | W2b | **the layer's `pDec` + the reference lists** → `PicId`/indices | 159 layer `.pDec` (`decode_slice` 72, `parse_mb_syn_cavlc` 30, `deblocking` 27, `parse_mb_syn_cabac` 13, `mv_pred` 13, rest 4); `pRefList` 82 + `pShortRefList` 25 + `pLongRefList` 24; `pRefPic` 113; `ppRefPic` 24; `pPreviousDecodedPictureInDpb` 11 — all decoder-only | greps read 0 outside `PicId` plumbing; probe green per file | W3, W4, W6's signature leg, 5.5's `Drop` |
-| W3 | ownership cascade: `pDqLayersList`, `pPicBuff`, `pTempDec` owned; `Pool<Box<SPicture>>` + `mut_and_rest`; `Drop` teardown; shell extended per field (never deleted) | 3 containers + cascade fns | zero `WelsMallocz`/`WelsFree` in `src/decoder/`; cascade functions deleted; probe green per container | 5.5 closes |
+| W3 | ownership cascade: `pDqLayersList`, `pPicBuff`, `pTempDec` owned; `Pool<Box<SPicture>>` + `mut_and_rest`; `Drop` teardown; shell extended per field (never deleted); **`SPicture` finishes owning itself** — `pMv`/`pRefIndex` (`picture.rs:261`, the grid's picture-side twins) are still raw where the planes have been owned since T5.C3 | 3 containers + cascade fns + 2 picture arrays | zero `WelsMallocz`/`WelsFree` in `src/decoder/`; cascade functions deleted; probe green per container | 5.5 closes |
 | W4 | colocated + 5.3b: `GetColocatedMb` on `cur_and_ref`; `SetRectBlock`/`CopyRectBlock4Cols` on the grid; punning → byte ops | 325 `LD*/ST*` tokens remaining | decoder `LD32\|ST32\|LD16\|ST16\|LD64\|ST64` grep reads 0 | `mv_pred.rs` deny-ready |
 | W5 | P4: `pSps`/`pPps` → active-paramset ids + lookup | 205 field occurrences (131 + 74), 4 carriers | `.pSps\|.pPps` greps read 0; no lookup borrow outlives its expression (F41's mistake, not repeated) | context sheds 2 raw fields |
 | W6 | 5.6: `decode_slice.rs` per P1 — EC MC paths, the NZC `*mut u8` cache family (~167 uses, re-grep), F31's memset, the signature leg (**D-fid-1: functions may merge — the 148-function count is an upper bound, not a target**), `cabac_rbsp_window` retirement | the phase's largest file | `decode_slice.rs` compiles under `#![deny(unsafe_code)]` | W7 |
@@ -51,8 +51,8 @@ after Miri does.**
 
 ## Session mapping
 
-**P** = W1 + W2a — **spent** (`a3b68334`, `eef8a90b`). **P′** = W2b → W5. **P″** =
-W6 + W7. **Q** = W8. A probe run per container/file converted (T5.O3's lesson, and
+**P** = W1 + W2a — **spent** (`a3b68334`, `eef8a90b`). **P′** = W2b → W5
+([`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W6 + W7. **Q** = W8. A probe run per container/file converted (T5.O3's lesson, and
 session P's three were green first time), no perf measurement before W8 (D-gate-1).
 
 The re-plan's "two sessions if P reaches W5" **did not hold, and the reason is
@@ -60,12 +60,21 @@ W2b's**: `pDec` is two carriers, not one, and the second is session O's
 148-function signature leg wearing a different hat. Count is **three work sessions
 plus the exit**.
 
-**W2b's open design question — settle it before the first edit.**
-`DqLayerState::pDec`'s 159 readers are layer-scoped: `pCurDqLayer` is in scope,
-`pCtx` is not, and a `PicId` is only a picture if you hold the pool. Either the
-layer carries the pool (a back-pointer of the kind this phase deletes) or its
-functions take it (session O §1(b)'s narrowing, arriving from the other side).
-Nothing else in W2b is hard; this is.
+**W2b's design question — settled by reading the tree (steward, at `c8ebc20f`).**
+The choice was false: the layer's `pDec` is a **cache of `dec_pic(pCtx)`** — one
+stamp site in the whole decoder (`decoder_core.rs:3704` → `InitDqLayerInfo`
+`:3448`), and its null arm is **parse-only mode**, not threading (`GetThreadCount`
+≡ 0, `decoder_core.rs:705`). So the field dies rather than converts: readers that
+hold `pCtx` derive (the two plane consumers, `decode_slice.rs:2063`/`:2115`,
+already take it as their first parameter); the few layer-only leaves
+(`PredPSkipMvFromNeighbor` `mv_pred.rs:439`'s shape) take `PPicture` from their
+ctx-holding callers or merge into them (D-fid-1); identity compares become `PicId`
+equality. **It is not the 148-function leg arriving from the other side — it is a
+handful of leaves.** `DqLayerState::pRef` is **dead** — zero readers, zero
+writers — and deletes first. One S23 check gates the mechanical pass (the
+`pDec = None` mid-AU resets); the P′ brief carries it with sites. The non-null
+arm's real target — `SPicture.pMv`/`pRefIndex`, still raw allocations — is W3's,
+named in its row.
 
 ## Phase exit conditions (the definition of done)
 
