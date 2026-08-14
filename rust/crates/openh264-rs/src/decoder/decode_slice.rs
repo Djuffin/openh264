@@ -2037,24 +2037,28 @@ unsafe fn GetTempPredPlanes(
     iLumaStride: i32,
     iChromaStride: i32,
 ) -> Option<[*mut u8; 3]> {
-    if (*pCtx).pTempDec.is_null() {
+    if (*pCtx).pTempDec.is_none() {
         if (*pCtx).pSps.is_null() {
             return None;
         }
-        (*pCtx).pTempDec = crate::decoder::pic_queue::AllocPicture(
+        // T5.P″1: `alloc_picture` hands back the owner, and the field keeps it. The
+        // lazy arm's two null tests are the same two states — "not allocated yet" and
+        // "the allocation failed" — with `Option` spelling them.
+        (*pCtx).pTempDec = crate::decoder::pic_queue::alloc_picture(
             pCtx,
             ((*(*pCtx).pSps).iMbWidth << 4) as i32,
             ((*(*pCtx).pSps).iMbHeight << 4) as i32,
         );
-        if (*pCtx).pTempDec.is_null() {
-            return None;
-        }
     }
-    let pTempDec = (*pCtx).pTempDec;
+    // The borrow is on the field (S29) and the three plane pointers derive from the
+    // picture's own plane allocations (S28, `data_ptr` from the allocation root), so
+    // nothing the caller does through `pCtx` can pop them — the only expression that
+    // re-derives this picture is this function, one macroblock later.
+    let pTempDec = (*pCtx).pTempDec.as_deref_mut()?;
     Some([
-        (*pTempDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize),
-        (*pTempDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
-        (*pTempDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
+        pTempDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize),
+        pTempDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
+        pTempDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
     ])
 }
 

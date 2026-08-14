@@ -1687,7 +1687,7 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         // `if (pCtx || m_pPicBuff)` in C++: with no context and no cached pool
         // there is nothing whose refcount could be dropped.
         let pPicBuff = if !pCtx.is_null() {
-            (*pCtx).pPicBuff
+            crate::decoder::decoder_context::pic_pool_ptr(pCtx)
         } else {
             (*dec_impl).pPicBuff
         };
@@ -1711,7 +1711,7 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
     // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` is evaluated
     // *before* the null context is replaced by the single-thread context.
     let pPicBuff = if !pCtx.is_null() {
-        (*pCtx).pPicBuff
+        crate::decoder::decoder_context::pic_pool_ptr(pCtx)
     } else {
         (*dec_impl).pPicBuff
     };

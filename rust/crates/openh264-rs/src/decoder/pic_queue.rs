@@ -357,25 +357,28 @@ fn try_filled(len: usize, fill: u8) -> Option<Vec<u8>> {
 /// every expression below is `AllocPicture`'s own arithmetic, because the kernels'
 /// output depends on it byte for byte and the goldens are the referee.
 ///
-/// The per-macroblock metadata (`pMbCorrectlyDecodedFlag`, `pMbType`, `pMv`,
-/// `pRefIndex`) is *still* raw and still allocated through `pMemAlign`; it is not
-/// planes and it is not this session's. [`FreePicture`] frees it, and F19's check —
-/// which line frees this? — is answered per allocation there.
+/// **T5.P″1: this is the constructor, and it returns the owner.** T5.P′3 made the
+/// `Box` a *complete* owner — the four per-macroblock families are containers, so
+/// drop glue reaches every byte the picture holds — which is what lets a caller keep
+/// the `Box` instead of a pointer to it. [`AllocPicture`] below is the raw spelling
+/// for the callers that still hand pointers around (the pool, until W3's flip).
+///
+/// `None` is the C's null return, and it carries the same three failures: no context,
+/// no allocator, and a plane allocation that could not be reserved.
 ///
 /// # Safety
-/// - `pCtx` must point to a valid [`SWelsDecoderContext`] containing a valid `pMemAlign`.
-/// - Memory allocated must be freed using [`FreePicture`].
-pub unsafe fn AllocPicture(
+/// `pCtx` must be null or point to a valid [`SWelsDecoderContext`].
+pub unsafe fn alloc_picture(
     pCtx: PWelsDecoderContext,
     kiPicWidth: i32,
     kiPicHeight: i32,
-) -> PPicture {
+) -> Option<Box<SPicture>> {
     if pCtx.is_null() {
-        return std::ptr::null_mut();
+        return None;
     }
     let pMa = unsafe { (*pCtx).pMemAlign };
     if pMa.is_null() {
-        return std::ptr::null_mut();
+        return None;
     }
 
     let iPicWidth = WELS_ALIGN(kiPicWidth + (PADDING_LENGTH << 1), PICTURE_RESOLUTION_ALIGNMENT);
@@ -413,7 +416,7 @@ pub unsafe fn AllocPicture(
             try_filled(iChromaSize as usize, 128),
             try_filled(iChromaSize as usize, 128),
         ) else {
-            return std::ptr::null_mut();
+            return None;
         };
         // `AllocPicture`'s own origin expressions, kept verbatim. Both are
         // `pad*stride + pad` — luma at pad 32, chroma at pad 16 — and `from_parts`
@@ -456,17 +459,36 @@ pub unsafe fn AllocPicture(
         ((kiPicHeight + 15) >> 4) as usize,
     );
 
-    let pPic: PPicture = Box::into_raw(Box::new(SPicture::with_planes(planes, dims)));
+    let mut pic = Box::new(SPicture::with_planes(planes, dims));
 
-    unsafe {
-        (*pPic).iWidthInPixel = kiPicWidth;
-        (*pPic).iHeightInPixel = kiPicHeight;
-        (*pPic).iFrameNum = -1;
-        (*pPic).iRefCount = 0;
-        (*pPic).pSetUnRef = None;
+    pic.iWidthInPixel = kiPicWidth;
+    pic.iHeightInPixel = kiPicHeight;
+    pic.iFrameNum = -1;
+    pic.iRefCount = 0;
+    pic.pSetUnRef = None;
+
+    Some(pic)
+}
+
+/// [`alloc_picture`] as the C's `AllocPicture` — a raw pointer, null on failure.
+///
+/// The pool's slots are `PPicture` until W3's flip, so [`CreatePicBuff`] and every
+/// other caller that stores a picture as a pointer comes through here. F19, per
+/// allocation: this `Box::into_raw`'s owner is the [`FreePicture`] that takes the
+/// pointer back.
+///
+/// # Safety
+/// As [`alloc_picture`]; the result must be freed with [`FreePicture`].
+#[inline]
+pub unsafe fn AllocPicture(
+    pCtx: PWelsDecoderContext,
+    kiPicWidth: i32,
+    kiPicHeight: i32,
+) -> PPicture {
+    match alloc_picture(pCtx, kiPicWidth, kiPicHeight) {
+        Some(pic) => Box::into_raw(pic),
+        None => std::ptr::null_mut(),
     }
-
-    pPic
 }
 
 /// Deallocates an [`SPicture`] instance and all its associated buffers.
@@ -504,20 +526,11 @@ pub unsafe fn FreePicture(pPic: PPicture, _pMa: *mut CMemoryAlign) {
 // Queue Retrieval Interface Routines
 // ============================================================================
 
-/// Retrieves an available, recyclable [`SPicture`] node from the picture buffer pool.
-///
-/// The scan itself is [`PicPool::prefetch_free`]; this is the C's free-function
-/// spelling, kept for its two call sites (`decoder_core.rs:3580`,
-/// `manage_dec_ref.rs:590`) until they hold a pool rather than a pointer to one.
-///
-/// # Safety
-/// `pPicBuf` must be null or point to a valid [`PicPool`].
-pub unsafe fn PrefetchPic(pPicBuf: PPicBuff) -> PPicture {
-    if pPicBuf.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*pPicBuf).prefetch_free()
-}
+// T5.P″1: `PrefetchPic(PPicBuff)` stood here — the C's free-function spelling of
+// [`PicPool::prefetch_free`], kept "until its two call sites hold a pool rather than
+// a pointer to one". `pCtx->pPicBuff` owns its pool now, so both of them do
+// (`decoder_core.rs`'s prefetch and `manage_dec_ref.rs`'s concealment prefetch), and
+// they call the scan through `pic_pool_mut`.
 
 /// Retrieves the next circular picture node in round-robin FIFO sequence for multi-threaded decoding.
 ///
@@ -564,28 +577,32 @@ pub unsafe fn PrefetchLastPicForThread(pPicBuf: PPicBuff, iLastPicBuffIdx: i32) 
 /// before the failure leaked; with a `Vec` the count and the contents are the same
 /// fact and the arm cannot disagree with itself.
 ///
+/// **T5.P″1: it returns the pool instead of writing it through an out-parameter.**
+/// The C's `ppPicBuf` existed to carry `pCtx->pPicBuff`'s address into this function;
+/// with the field owning its pool, that address is a `&mut` into the context held
+/// across the `AllocPicture` calls that read the context — S25's overlap, written for
+/// no reason. `None` is the C's `1` return, and the C's `*ppPicBuf = NULL` is the
+/// caller leaving the field as it found it.
+///
 /// # Safety
-/// - `pCtx` must point to a valid [`SWelsDecoderContext`] containing `pMemAlign`.
-/// - `ppPicBuf` must point to a writable [`PPicBuff`] variable.
+/// `pCtx` must point to a valid [`SWelsDecoderContext`] containing `pMemAlign`.
 pub unsafe fn CreatePicBuff(
     pCtx: PWelsDecoderContext,
-    ppPicBuf: *mut PPicBuff,
     kiSize: i32,
     kiPicWidth: i32,
     kiPicHeight: i32,
-) -> i32 {
-    if pCtx.is_null() || ppPicBuf.is_null() {
-        return 1;
+) -> Option<Box<PicPool>> {
+    if pCtx.is_null() {
+        return None;
     }
     let pMa = unsafe { (*pCtx).pMemAlign };
     if pMa.is_null() {
-        return 1;
+        return None;
     }
 
     let mut slots: Vec<PPicture> = Vec::new();
     if slots.try_reserve_exact(kiSize.max(0) as usize).is_err() {
-        unsafe { *ppPicBuf = std::ptr::null_mut() };
-        return 1;
+        return None;
     }
 
     unsafe {
@@ -595,16 +612,13 @@ pub unsafe fn CreatePicBuff(
                 for pBuilt in slots {
                     FreePicture(pBuilt, pMa);
                 }
-                *ppPicBuf = std::ptr::null_mut();
-                return 1;
+                return None;
             }
             slots.push(pPic);
         }
 
-        *ppPicBuf = Box::into_raw(PicPool::over(slots));
+        Some(PicPool::over(slots))
     }
-
-    0
 }
 
 /// Releases every picture the pool addresses, then the pool.
@@ -623,13 +637,19 @@ pub unsafe fn CreatePicBuff(
 /// where the C++ has it, and the `pCtx` null-guard is the port's own (the C++
 /// dereferences unconditionally).
 ///
+/// **T5.P″1: it takes the pool by value.** `ppPicBuf` was the address of
+/// `pCtx->pPicBuff` and its two jobs were to read the pool and to null the field;
+/// `(*pCtx).pPicBuff.take()` at the call site does both, in one expression, and the
+/// "null it afterwards" step cannot be forgotten because there is nothing left to
+/// null. `pMa` being null used to abandon the pool; it now only abandons the
+/// *pictures*, which is the same C behaviour with the pool's own leak removed.
+///
 /// # Safety
-/// - `ppPicBuf` must point to a writable [`PPicBuff`] variable whose value is null or
-///   a pool produced by [`CreatePicBuff`] and not yet destroyed.
+/// - Every non-null slot of `pool` must be a live picture from [`AllocPicture`].
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
 pub unsafe fn DestroyPicBuff(
     pCtx: PWelsDecoderContext,
-    ppPicBuf: *mut PPicBuff,
+    pool: Option<Box<PicPool>>,
     pMa: *mut CMemoryAlign,
 ) {
     if !pCtx.is_null() {
@@ -642,24 +662,17 @@ pub unsafe fn DestroyPicBuff(
         }
     }
 
-    if ppPicBuf.is_null() || pMa.is_null() {
-        return;
-    }
-    let pPicBuf = unsafe { *ppPicBuf };
-    if pPicBuf.is_null() {
+    let Some(pool) = pool else { return };
+    if pMa.is_null() {
         return;
     }
 
     unsafe {
-        // Reclaimed first, so the slot walk below reads through the `Box` that is
-        // about to drop rather than through a raw pointer beside it.
-        let pool = Box::from_raw(pPicBuf);
         for (_, &pPic) in pool.slots.iter() {
             if !pPic.is_null() {
                 FreePicture(pPic, pMa);
             }
         }
-        *ppPicBuf = std::ptr::null_mut();
     }
 }
 
@@ -757,32 +770,24 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
-            let ret = CreatePicBuff(
-                &mut *ctx as *mut SWelsDecoderContext,
-                &mut p_pic_buf as *mut PPicBuff,
-                4,
-                64,
-                64,
-            );
-            assert_eq!(ret, 0);
-            assert!(!p_pic_buf.is_null());
+            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+            let mut pool = CreatePicBuff(pCtx, 4, 64, 64).expect("pool");
 
             // First prefetch gets index 1 (Pass 1 scan from iCurrentIdx + 1)
-            let pic1 = PrefetchPic(p_pic_buf);
+            let pic1 = pool.prefetch_free();
             assert!(!pic1.is_null());
-            assert_eq!((*p_pic_buf).cursor(),1);
+            assert_eq!(pool.cursor(), 1);
 
             // Mark pic1 as used as reference
             (*pic1).bUsedAsRef = true;
 
             // Second prefetch skips index 1, finds index 2
-            let pic2 = PrefetchPic(p_pic_buf);
+            let pic2 = pool.prefetch_free();
             assert!(!pic2.is_null());
-            assert_eq!((*p_pic_buf).cursor(),2);
+            assert_eq!(pool.cursor(), 2);
 
-            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(pCtx, Some(pool), &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -833,10 +838,10 @@ mod tests {
         ctx.pPictInfoList = pict_info.as_mut_ptr();
         ctx.pPictReoderingStatus = &mut status;
 
-        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
-            assert_eq!(CreatePicBuff(&mut *ctx, &mut p_pic_buf, 4, 64, 64), 0);
-            DestroyPicBuff(&mut *ctx, &mut p_pic_buf, &mut ma);
+            let pool = CreatePicBuff(&mut *ctx, 4, 64, 64);
+            assert!(pool.is_some());
+            DestroyPicBuff(&mut *ctx, pool, &mut ma);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
 
@@ -866,13 +871,9 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
-            assert_eq!(
-                CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf, 2, 64, 64),
-                0
-            );
-            let pool = &*p_pic_buf;
+            let pool = CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, 2, 64, 64)
+                .expect("pool");
             let a = pool.slot(pool.id(0));
             let b = pool.slot(pool.id(1));
 
@@ -907,7 +908,7 @@ mod tests {
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,
-                &mut p_pic_buf as *mut PPicBuff,
+                Some(pool),
                 &mut ma as *mut CMemoryAlign,
             );
         }
@@ -929,13 +930,9 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
-            assert_eq!(
-                CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf, 3, 64, 64),
-                0
-            );
-            let pool = &mut *p_pic_buf;
+            let mut pool = CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, 3, 64, 64)
+                .expect("pool");
             assert_eq!(pool.capacity(), 3);
 
             // Every slot in use: the two passes both come up empty, and the cursor
@@ -961,7 +958,7 @@ mod tests {
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,
-                &mut p_pic_buf as *mut PPicBuff,
+                Some(pool),
                 &mut ma as *mut CMemoryAlign,
             );
         }
@@ -976,15 +973,13 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        let mut p_pic_buf: PPicBuff = std::ptr::null_mut();
         unsafe {
-            CreatePicBuff(
-                &mut *ctx as *mut SWelsDecoderContext,
-                &mut p_pic_buf as *mut PPicBuff,
-                3,
-                64,
-                64,
-            );
+            let mut pool = CreatePicBuff(&mut *ctx as *mut SWelsDecoderContext, 3, 64, 64)
+                .expect("pool");
+            // The two thread prefetches still take `PPicBuff`: they have no caller in
+            // the tree (F36's list) and W7's straggler sweep decides them, so the
+            // fixture derives the pointer rather than the functions changing shape.
+            let p_pic_buf: PPicBuff = &mut *pool;
 
             let pic0 = PrefetchPicForThread(p_pic_buf);
             assert_eq!((*pic0).iPicBuffIdx, 0);
@@ -1001,7 +996,7 @@ mod tests {
             let pic_lookup = PrefetchLastPicForThread(p_pic_buf, 1);
             assert_eq!(pic_lookup, pic1);
 
-            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, &mut p_pic_buf as *mut PPicBuff, &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, Some(pool), &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }

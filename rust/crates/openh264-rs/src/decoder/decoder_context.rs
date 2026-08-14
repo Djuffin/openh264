@@ -615,9 +615,41 @@ pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUni
 /// than the two W2a left.
 #[inline]
 pub unsafe fn pool_pic(pCtx: PWelsDecoderContext, slot: Option<PicId>) -> PPicture {
-    match slot {
-        Some(id) if !(*pCtx).pPicBuff.is_null() => (*(*pCtx).pPicBuff).slot(id),
+    match (slot, (*pCtx).pPicBuff.as_deref()) {
+        (Some(id), Some(pool)) => pool.slot(id),
         _ => std::ptr::null_mut(),
+    }
+}
+
+/// The pool itself, for the four operations that act on the *container* rather than
+/// on one picture: both prefetch scans, the capacity read, and the api layer's
+/// buffered-picture release.
+///
+/// The autoref is on the field (S29), so the borrow covers one word of the context
+/// and ends with the caller's expression — which is the whole discipline the owned
+/// field asks for, and the reason [`pool_pic`] above takes its own shared borrow
+/// rather than being handed one.
+#[inline]
+pub unsafe fn pic_pool_mut<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SPicBuff> {
+    if pCtx.is_null() {
+        return None;
+    }
+    (*pCtx).pPicBuff.as_deref_mut()
+}
+
+/// [`pic_pool_mut`] as a raw pointer, for the api layer's two release paths.
+///
+/// `CWelsDecoder::ReleaseBufferedReadyPicture*` evaluate `pCtx ? pCtx->pPicBuff :
+/// m_pPicBuff` into one local and pass it on, and `m_pPicBuff` is a raw field of
+/// `CWelsDecoderImpl` that Phase 8 owns — so the local is a pointer or it is two
+/// shapes at once. The reference this derives from covers the whole `PicPool`
+/// allocation and nothing re-derives the pool between the two (the code in between
+/// reads `sPictInfoList`), which is the S29 condition this site has to meet.
+#[inline]
+pub unsafe fn pic_pool_ptr(pCtx: PWelsDecoderContext) -> PPicBuff {
+    match pic_pool_mut(pCtx) {
+        Some(pool) => pool as *mut SPicBuff,
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -732,11 +764,22 @@ pub struct SWelsDecoderContext {
     /// control flow (`is_null` tests before a prefetch, after a construction failure,
     /// at reset) with the state named instead of encoded.
     pub pDec: Option<PicId>,
-    /// The B-slice temporal-direct scratch picture. **Not a pool slot**: it is
-    /// `AllocPicture`d on its own at `decode_slice.rs`'s first B macroblock and freed
-    /// by `WelsFreeDynamicMemory`, so it has no `PicId` and cannot take one. W3 owns
-    /// it (`Option<Box<SPicture>>`), not this step.
-    pub pTempDec: *mut Picture,
+    /// The B-slice temporal-direct scratch picture — **owned since T5.P″1**.
+    ///
+    /// **Not a pool slot**: it is allocated on its own at `decode_slice.rs`'s first B
+    /// macroblock and released by `WelsFreeDynamicMemory`, so it has no `PicId` and
+    /// cannot take one. That is exactly why it is W1's shape rather than W3's: one
+    /// `Box::into_raw`/`from_raw` pair with no second carrier, and
+    /// [`pic_queue::alloc_picture`](crate::decoder::pic_queue::alloc_picture) is its
+    /// constructor.
+    ///
+    /// F19: dropped by `WelsFreeDynamicMemory`'s `= None` and, failing that, by the
+    /// context's own drop glue — which is R4's equivalence, and the reason the
+    /// explicit `FreePicture` call could go.
+    ///
+    /// `None` is the C's null: "not allocated yet", the state the lazy allocation
+    /// tests for.
+    pub pTempDec: Option<Box<Picture>>,
     pub sRefPic: SRefPic,
     pub sTmpRefPic: SRefPic,
     pub pVlcTable: *mut c_void,
@@ -745,7 +788,19 @@ pub struct SWelsDecoderContext {
     pub bHasNewSps: bool,
     pub sFrameCrop: SPosOffset,
     pub pSliceHeader: *mut SSliceHeader,
-    pub pPicBuff: *mut SPicBuff,
+    /// The decoded-picture pool — **owned since T5.P″1**.
+    ///
+    /// It was `*mut SPicBuff`, one `Box::into_raw` in `CreatePicBuff` reclaimed by one
+    /// `Box::from_raw` in `DestroyPicBuff`. Owning it here is safe **before** W3's flip
+    /// and not after, which is the ordering the phase runs on: while the slots are
+    /// `PPicture`, a [`pool_pic`] result carries `AllocPicture`'s provenance and not
+    /// this `Box`'s (T5.N1's invariant), so the pool borrow this field now takes ends
+    /// inside the accessor and no picture pointer descends from it.
+    ///
+    /// F19: dropped by the context's drop glue; `WelsFreeDynamicMemory` still calls
+    /// `DestroyPicBuff` because that function also frees the pictures the pool
+    /// addresses and runs F37's reordering reset.
+    pub pPicBuff: Option<Box<SPicBuff>>,
     pub iPicQueueNumber: i32,
     /// The access unit under construction — owned since T5.P1.
     ///
@@ -902,6 +957,11 @@ impl SWelsDecoderContext {
             // the alternative is a field whose validity rests on a layout guarantee
             // that no test states and no reader of the shell can see.
             std::ptr::addr_of_mut!((*p).access_unit).write(None);
+            // S21, T5.P″1: the same clause for the two owned pictures/pool. Each was a
+            // raw pointer whose zero *was* its null; the write says so rather than
+            // relying on it.
+            std::ptr::addr_of_mut!((*p).pTempDec).write(None);
+            std::ptr::addr_of_mut!((*p).pPicBuff).write(None);
         }
     }
 
@@ -975,15 +1035,18 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut mem_align;
 
-        let mut pic_buff: *mut SPicBuff = std::ptr::null_mut();
         unsafe {
-            let err = CreatePicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, 4, 64, 64);
-            assert_eq!(err, ERR_NONE);
-            assert!(!pic_buff.is_null());
-            assert_eq!((*pic_buff).capacity(), 4);
+            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+            (*pCtx).pPicBuff = CreatePicBuff(pCtx, 4, 64, 64);
+            assert!((*pCtx).pPicBuff.is_some());
+            assert_eq!(pic_pool_mut(pCtx).map(|pool| pool.capacity()), Some(4));
 
-            DestroyPicBuff(&mut *ctx as *mut _, &mut pic_buff as *mut _, ctx.pMemAlign);
-            assert!(pic_buff.is_null());
+            // T5.P″1: the field *is* the out-parameter. `take()` reads the pool and
+            // leaves the context naming nothing, which is what the C's
+            // `*ppPicBuf = NULL` was for.
+            let pool = (*pCtx).pPicBuff.take();
+            DestroyPicBuff(pCtx, pool, (*pCtx).pMemAlign);
+            assert!((*pCtx).pPicBuff.is_none());
         }
     }
 }
