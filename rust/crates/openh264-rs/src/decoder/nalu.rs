@@ -1419,9 +1419,16 @@ pub unsafe fn ParseSps(
     // `write_bytes` is the `memset`, applied to the storage the comparison reads.
     // (Spelled without naming the intrinsic: the ratchet counts that token in prose
     // too, and `mem_zeroed` is S21's live instrument — S16.)
-    let mut sTempSubsetSps: SSubsetSps = std::mem::zeroed();
-    let pSubsetSps = &mut sTempSubsetSps as *mut SSubsetSps;
+    // **T5.R8: one zeroing, not two.** The `mem::zeroed()` initializer produced a
+    // zeroed *value* and moving it into the binding was a typed copy that left the
+    // binding's padding uninitialized — which is why the `write_bytes` had to follow
+    // it, and which makes the initializer itself redundant work with a misleading
+    // meaning. `MaybeUninit` says what is actually happening: uninitialized storage,
+    // zeroed as bytes, then read through a reference that never moves the value.
+    let mut sTempSubsetSps = std::mem::MaybeUninit::<SSubsetSps>::uninit();
+    let pSubsetSps = sTempSubsetSps.as_mut_ptr();
     std::ptr::write_bytes(pSubsetSps as *mut u8, 0, std::mem::size_of::<SSubsetSps>());
+    let sTempSubsetSps = &mut *pSubsetSps;
     let pSps = unsafe { &mut (*pSubsetSps).sSps };
 
     let kbUseSubsetFlag = IS_SUBSET_SPS_NAL((*pCtx).sCurNalHead.eNalUnitType);
@@ -1695,9 +1702,13 @@ pub unsafe fn ParsePps(
     // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp; zeroing the raw bytes also
     // clears padding, which the byte-wise comparison against the active PPS relies on.
     // F31: the `write_bytes` is what makes that true — see `ParseSps`.
-    let mut sTempPps: SPps = std::mem::zeroed();
-    let pPps = &mut sTempPps;
-    std::ptr::write_bytes(pPps as *mut SPps as *mut u8, 0, std::mem::size_of::<SPps>());
+    // T5.R8, and see `ParseSps`: the `mem::zeroed()` initializer was a typed copy
+    // whose padding the `write_bytes` then had to fix. Zeroed *storage*, read through
+    // a reference that never moves it, is one operation with the meaning the
+    // byte-wise comparison below depends on.
+    let mut sTempPpsStore = std::mem::MaybeUninit::<SPps>::uninit();
+    std::ptr::write_bytes(sTempPpsStore.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SPps>());
+    let pPps = &mut *sTempPpsStore.as_mut_ptr();
 
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
