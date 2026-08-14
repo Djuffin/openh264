@@ -9,7 +9,8 @@ log and git — this file carries only what remains.
 **The anti-circles contract.** This checklist is **closed**: work enters it only
 via an F-finding or Eugene. Every session's commits map to W-items in its log
 entry. The progress metric is monotone and grep-able — **decoder `raw_ptr`
-occurrences 1267** (1283 at the re-plan), → ~0 at exit (excluding the named
+occurrences 1229** (1283 at the re-plan, 1267 at session P′'s open), → ~0 at exit
+(excluding the named
 survivor and prose); a session that closes no W-item and moves no metric is a stall
 and says so — **and a W-item can close while the metric stands still**, which is
 what W2a did (85 sites, `raw_ptr` +0): two pointer fields became handles and four
@@ -42,7 +43,7 @@ after Miri does.**
 | ~~W1~~ | ~~`pAccessUnitList` → `Option<Box<SAccessUnit>>`~~ — **DONE, T5.P1** (`a3b68334`) | 54 sites | — | W3's first cascade entry, taken |
 | ~~W2a~~ | ~~the context's two pool aliases: `pDec`/`pECRefPic` → `PicId`~~ — **DONE, T5.P2** (`eef8a90b`) | 85 sites | — | `dec_pic`/`ec_ref_pic` are now the **only two sites** W3 has to convert |
 | ~~W2b~~ | ~~the layer's `pDec` + the reference lists~~ — **DONE, T5.P′1 + T5.P′2** (`59dbbb0b`, `48355825`). The layer's `pDec` was a **cache** and died; `pRef` was dead. The lists became `Option<PicId>`. **302 real sites, not 438**: `pRefPic`'s 113 were one identifier naming two types (S24's new clause) | 160 layer `.pDec` + 142 list field accesses | — | **every raw alias into `PicPool` is gone** — W3 is unblocked |
-| W3 | ownership cascade — **seam 1 DONE, T5.P′3** (`6758d885`): `SPicture` finishes owning itself (four per-macroblock families → `MbArray`, **6 `WelsMallocz` + 4 `WelsFree` dead**, `FreePicture` is drop glue), so `AllocPicture`'s `Box` is a *complete* owner. **Remaining**: `Pool<Box<SPicture>>` + `mut_and_rest` — the one design question left, see §W3 below; `pDqLayersList`/`pPicBuff`/`pTempDec` owned (W1's shape, one `Box::into_raw`/`from_raw` pair each); `Drop` teardown; shell extended per field (never deleted) | 3 containers + cascade fns + `fmo.rs`'s map + the parser buffers | zero `WelsMallocz`/`WelsFree` in `src/decoder/` (**8 call sites left, none a picture's**); cascade functions deleted; probe green per container | 5.5 closes |
+| W3 | ownership cascade — **three seams of four DONE**. ~~seam 1, T5.P′3~~ (`6758d885`): `SPicture` finishes owning itself, so `AllocPicture`'s `Box` is a *complete* owner. ~~seam 2, T5.P″1~~ (`acf5bfd1`): `pTempDec` and `pPicBuff` are owned fields, `alloc_picture` is the constructor, `CreatePicBuff`/`DestroyPicBuff` shrink, `PrefetchPic` deleted. ~~seam 3, T5.P″2 + T5.P″3~~ (`d7a1d130`, `b07e407c`): **the hoist** — 79 per-use resolutions become two derivations at three slice bracket tops, threaded through 30 functions and the per-macroblock dispatch type. **Remaining**: the **flip** (`Pool<Option<Box<SPicture>>>` + `cur_and_rest`, **83 consumer sites**, design settled *and compiler-checked* — see §W3 below); `pDqLayersList` owned; `Drop` teardown; shell extended per field (never deleted) | 83 sites + `pDqLayersList` + `fmo.rs`'s map + the parser buffers | zero `WelsMallocz`/`WelsFree` in `src/decoder/` (**8 call sites left, none a picture's**); cascade functions deleted; probe green per container | 5.5 closes |
 | W4 | colocated + 5.3b: `GetColocatedMb` on `cur_and_ref`; `SetRectBlock`/`CopyRectBlock4Cols` on the grid; punning → byte ops | 325 `LD*/ST*` tokens remaining | decoder `LD32\|ST32\|LD16\|ST16\|LD64\|ST64` grep reads 0 | `mv_pred.rs` deny-ready |
 | W5 | P4: `pSps`/`pPps` → active-paramset ids + lookup | 205 field occurrences (131 + 74), 4 carriers | `.pSps\|.pPps` greps read 0; no lookup borrow outlives its expression (F41's mistake, not repeated) | context sheds 2 raw fields |
 | W6 | 5.6: `decode_slice.rs` per P1 — EC MC paths, the NZC `*mut u8` cache family (~167 uses, re-grep), F31's memset, the signature leg (**D-fid-1: functions may merge — the 148-function count is an upper bound, not a target**), `cabac_rbsp_window` retirement | the phase's largest file | `decode_slice.rs` compiles under `#![deny(unsafe_code)]` | W7 |
@@ -53,17 +54,25 @@ after Miri does.**
 
 **P** = W1 + W2a — **spent** (`a3b68334`, `eef8a90b`). **P′** = W2b + W3's first seam —
 **spent** (`59dbbb0b`, `48355825`, `6758d885`;
-[`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's remainder + W4 + W5
-([`phase5_session_p3.md`](phase5_session_p3.md)). **P‴** = W6 + W7. **Q** = W8. A probe run per container/file converted, and **budget it
-to fire**: session P ran three green, session P′ ran three and the second convicted
-`AddShortTermToList` mid-face. No perf measurement before W8 (D-gate-1).
+[`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's seams 2 and 3 — **spent**
+(`acf5bfd1`, `d7a1d130`, `b07e407c`; [`phase5_session_p3.md`](phase5_session_p3.md)).
+**P‴** = W3's flip + W4 + W5. **P⁗** = W6 + W7. **Q** = W8. A probe run per container/file
+converted, and **budget it to fire**: session P ran three green, session P′ ran three and
+the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
+motion faces and a one-caller lifecycle swap. No perf measurement before W8 (D-gate-1).
+
+**Session P″ costs one more session than it was scoped for**, and the reason is a size:
+the hoist is 148 call sites, not 115 (§W3, corrected below), and the flip behind it is 83
+consumer sites in the *write* paths — DPB, concealment, the access-unit loop — where the
+settlement's own worked example (the decode path) does not apply. The flip is atomic: the
+slot type change forces every consumer in one commit, so there is no half of it to land.
 
 The re-plan's "two sessions if P reaches W5" did not hold, and neither did the
 correction that replaced it. W2b was **not** two carriers — the layer's `pDec` was a
 cache with one stamp site, and it deleted rather than converting — so W2b cost one
 session's first two faces rather than a session. What cost the rest of session P′ was
 W3's first seam (204 sites) and the discovery in §W3 below. Count is **three work
-sessions plus the exit** from here: P″ (W3's remainder + W4 + W5), P‴ (W6 + W7), Q (W8).
+sessions plus the exit** from here: P‴ (W3's flip + W4 + W5), P⁗ (W6 + W7), Q (W8).
 
 **W2b's design question — settled by reading the tree (steward, at `c8ebc20f`), and
 executed as settled (T5.P′1).** The settlement was right on every clause; the S23 check
@@ -85,12 +94,17 @@ writers — and deletes first. One S23 check gates the mechanical pass (the
 arm's real target — `SPicture.pMv`/`pRefIndex`, still raw allocations — is W3's,
 named in its row.
 
-## W3's design question — settled by reading the tree (steward, at `f5a3eac8`)
+## W3's design question — settled by reading the tree, executed and corrected (T5.P″2/3)
 
-The surface is **115 call sites, not hundreds** (`pool_pic`/`dec_pic`/`ec_ref_pic`/
-`ref_pic`: decoder_core 30, decode_slice 27, cabac 15, manage_dec_ref 13, ctx
-bodies+helpers 9, EC 7, cavlc 6, mv_pred 4, deblocking 4 — S24, the unit clause
-again). With owned slots a result stops being a copy (T5.N1's invariant) and becomes
+The surface is **148 call sites, not 115 and not hundreds** — the settled figure was out
+by a third and its smallest per-file number was four times the truth, because three of
+`deblocking.rs`'s four were **prose** (S16's floor, S24's unit clause; re-derived at the
+face and corrected in place per the brief). The tree at `f5a3eac8`: decoder_core 38,
+decode_slice 35, manage_dec_ref 24, cabac 17, ctx bodies+helpers 10, cavlc 8, mv_pred 8,
+EC 7, deblocking 1. **The design did not move** — the conversion has the same shape at 148
+as at 115, which is why the disagreement was logged rather than re-opened.
+
+With owned slots a result stops being a copy (T5.N1's invariant) and becomes
 a derivation through the Box's tag — any two live results conflict. So per-use
 resolution dies and **accesses move inside brackets**: a scope that borrows the pool
 once at its top and threads the resolution down, touching the pool nowhere else
@@ -100,19 +114,37 @@ constant across one slice's MB loop; EC, DPB and output ops bracket per operatio
 Execution is the ids-before-ownership maneuver one level up — **derivations move to
 bracket tops before brackets become borrows** — in two steps:
 
-1. **The hoist, under `PPicture` slots.** Per-use accessor calls become parameters
-   threaded from bracket tops (W2b(i)-(b)'s proven recipe). Pure motion —
-   `pool_pic` copies, so this is semantically a no-op, byte-identical, incremental
-   per file, probe per file.
-2. **The flip, brackets only.** Slots become `Option<Box<SPicture>>` (null slots
-   are real — `CreatePicBuff`'s partial-failure arms); bracket tops become
-   `mut_and_rest(dec_id)` → (`&mut SPicture`, `PoolRest`) with refs as
-   `rest.get(id)` (the API exists, tested); the hoisted raw params derive from the
-   bracket's borrows (S28) and nothing below re-borrows. `AllocPicture`/
-   `FreePicture`'s `into_raw`/`from_raw` die into `Pool::replace` + `Drop` (F19
-   closes decoder-side; F37's missing reset is adjudicated at this seam, per its
-   record). The four accessors are **deleted** — done-test: their greps read 0 and
-   direct `.pPicBuff` reads enumerate to bracket sites only.
+1. ~~**The hoist, under `PPicture` slots.**~~ **DONE — T5.P″2 (`d7a1d130`) + T5.P″3
+   (`b07e407c`).** Per-use accessor calls became parameters threaded from bracket tops;
+   pure motion, byte-identical, three green probes. `PicRefs` is the view the settlement
+   asked for, `ref_id` is `ref_pic` split at the line the flip moves, and the decode path
+   now reaches the pool at **three** bracket tops and nowhere below them. `MapColToList0`
+   is why the view is a resolver rather than a resolved array: it is the one site whose
+   handle comes out of another *picture*.
+2. **The flip, brackets only — P‴'s, and its six unobvious facts are settled against the
+   compiler** (session P″ attempted it, reverted at the seam, and the attempt's whole
+   yield is this list; log §3 carries the reasoning):
+   - `PicRefs::get` returns **`*const SPicture`** — below a bracket top the decode path
+     only *reads* a reference, verified by grep over every ref-bound local: zero writes.
+   - **The current slot resolves through the mutable picture's own pointer**, never
+     through the rest: `PoolRest::get(cur)` *panics*, and a malformed stream can legally
+     put the picture being decoded in a reference list, which the C aliases and reads on.
+     Same tag, so one borrow, and S6's never-widen default is kept on an ungated path no
+     gate here can see.
+   - `PoolRest` needs a **hand-written `Copy`** (a derive adds `T: Copy`; `T` is
+     `Option<Box<SPicture>>`), or every macroblock-tree signature grows a lifetime.
+   - `prefetch_free`/`next_for_thread` return **`Option<PicId>`**, not a pointer.
+   - `SPicture::data_ptr` takes `&mut self`; `GetRefPic`'s three calls are the only
+     reference-side uses and need a `&self` form.
+   - `CreatePicBuff`'s partial-failure arm becomes the `Vec` going out of scope;
+     `DestroyPicBuff` becomes F37's reset plus a `drop`, and R4 is discharged by
+     construction.
+   **83 consumer sites remain** (decoder_core 38, manage_dec_ref 32, error_concealment 10,
+   decode_slice 3) and they are the *write* paths, where per-use resolution survives
+   wherever the result does not outlive its expression — read each for **span**, not for
+   count. F19 closes decoder-side here; F37 is adjudicated here, per its record. The four
+   accessors are **deleted** — done-test: their greps read 0 and direct `.pPicBuff` reads
+   enumerate to bracket sites only.
 
 W4's colocated falls out of the bracket: inside the slice bracket cur and ref are
 already resolved, so `GetColocatedMb` takes both as parameters and T5.N5's
@@ -124,9 +156,10 @@ production stamp (`:3578`), ~580 uses, of which **81 read the ctx field mid-tree
 (decode_slice 25, decoder_core 15, cabac 12, manage_dec_ref 11, EC 11, rest 7)
 while the call tree already threads it as a parameter. The field deletes the way
 `pDec`'s did: derive once at the loop top from the owned Box, thread the existing
-parameter, the 81 field-reads become param sites. `pTempDec` alone is truly
-W1-shaped, and `pPicBuff` → owned is safe **before** the flip: under `PPicture`
-slots a `pool_pic` result's provenance is `AllocPicture`'s, not the pool Box's.
+parameter, the 81 field-reads become param sites. ~~`pTempDec` alone is truly
+W1-shaped, and `pPicBuff` → owned is safe **before** the flip~~ — **both DONE, T5.P″1
+(`acf5bfd1`)**, and the ordering claim held: under `PPicture` slots a `pool_pic` result's
+provenance is `AllocPicture`'s, not the pool `Box`'s.
 
 ## Phase exit conditions (the definition of done)
 
