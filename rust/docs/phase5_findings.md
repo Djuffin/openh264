@@ -1914,6 +1914,36 @@ pixel behind it, which is why five phases of byte gates never raised it.
 
 ### Why nothing saw it
 
+### Scoped, so the fix does not start from "45% of rows"
+
+The mismatches on `narrow_16x16` reduce to **three** distinct `(port, cpp)` pairs:
+
+| port | cpp | count | reading |
+|---|---|---|---|
+| `0x4` | `0x24` | 71 | `dsDataErrorConcealed` missing alongside a bitstream error |
+| `0x0` | `0x4` | 3 | `dsBitstreamError` missing |
+| `0x0` | `0x10` | 2 | `dsNoParamSets` missing |
+
+The first is 93% of them and has a **41-byte reproduction**:
+
+```
+DYLD_LIBRARY_PATH=. rust/tools/ecref/ecref res/narrow_16x16.264 41
+  → 0 - - 0x0,0x0,0x0,0x24 0,0,0,0        # the C++
+  port (malformed_parity/narrow_16x16.txt, trunc.coarse01)
+  → 0 frames, 0x0*3,0x4
+```
+
+Three NALs (SPS, PPS, a truncated IDR slice) and the EOS flush; both decoders emit
+no frame. The port has all three `dsDataErrorConcealed` sites the C++ has, and they
+read equivalently, so the difference is **which path runs**, not a missing `|=`. The
+open hypothesis, stated so the next session can falsify it cheaply: the AU-boundary
+concealment bracket is gated on `iTotalNumMbRec != 0` in both trees, and the C++
+decodes at least one macroblock out of the truncated slice where the port decodes
+none — so the C++ enters `ImplementErrorCon` and the port does not. Confirming it
+means instrumenting `iTotalNumMbRec` on both sides, which is where to start.
+
+### Why nothing saw it
+
 The malformed-parity table has recorded `ret_rle` since Phase 3 — the column is
 right there, and it is the reason the table exists. But the table compares the port
 against **its own** previous output (F44's rule), so the column pinned the port's
