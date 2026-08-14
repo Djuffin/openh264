@@ -56,12 +56,14 @@ after Miri does.**
 **spent** (`59dbbb0b`, `48355825`, `6758d885`;
 [`phase5_session_p2.md`](phase5_session_p2.md)). **P″** = W3's seams 2 and 3 — **spent**
 (`acf5bfd1`, `d7a1d130`, `b07e407c`; [`phase5_session_p3.md`](phase5_session_p3.md)).
-**Q** = W3's flip + W4 + W5 + W6 + W7 — everything but the exit
-([`phase5_session_q.md`](phase5_session_q.md)), under the **forcing rules** written
-at its head (Eugene, 2026-08-14: sessions that underdeliver get forcing prompts —
-a clean seam is a checkpoint, not an exit; a reverted attempt with settled blockers
-is open work; close-out ≤ 30 log lines; drops require a written reason). **S** =
-W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
+**Q** = W3's flip — **spent** (`539212bd`, `a8eaa3e5`, `dd26eea6`;
+[`phase5_session_q.md`](phase5_session_q.md)). It was scoped for the flip *plus* W4–W7
+under the **forcing rules** written at its head (Eugene, 2026-08-14: a clean seam is a
+checkpoint, not an exit; a reverted attempt with settled blockers is open work;
+close-out ≤ 30 log lines; drops require a written reason), and it **ended on context
+with W4–W7 untouched** — rule 1's first reason, named in the hand-off. The rules did
+what they were written for: the flip is the face P″ reverted, and it landed.
+**R** = W3's tail + W4 + W5. **S** = W8. *(Naming: primes retired at Eugene's direction — the letter sequence resumes
 after P″. Older forward references to "Q" meant the exit; the exit is now **S**.)*
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
@@ -79,9 +81,11 @@ correction that replaced it. W2b was **not** two carriers — the layer's `pDec`
 cache with one stamp site, and it deleted rather than converting — so W2b cost one
 session's first two faces rather than a session. What cost the rest of session P′ was
 W3's first seam (204 sites) and the discovery in §W3 below. Count is **three work
-sessions plus the exit** from here — **superseded 2026-08-14**: Q absorbs what was
-R (Eugene's forcing direction), so the count is **Q (the flip through W7) + S (W8)**,
-two from here, with Q's remainder rolling forward only under its forcing rules.
+sessions plus the exit** from here — **superseded 2026-08-14** (Q absorbs what was R),
+and **corrected at Q's close**: the flip alone was a session, so the count is
+**R (W3's tail + W4 + W5), a second pass (W6 + W7), S (W8)**. The flip's own size is
+the lesson worth carrying: the *type* change was six production edits, and the face was
+the aliasing question behind it — which no count in this file was measuring.
 
 **W2b's design question — settled by reading the tree (steward, at `c8ebc20f`), and
 executed as settled (T5.P′1).** The settlement was right on every clause; the S23 check

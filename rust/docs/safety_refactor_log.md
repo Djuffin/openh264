@@ -8793,3 +8793,179 @@ W3 is three seams in of four.
    `PrefetchPicForThread`/`PrefetchLastPicForThread` have no callers in the tree and go on
    W7's straggler list beside session P′'s two; **F3** per S14.
 8. **Perf debt for W8** unchanged, with §5's one structural addition named.
+
+## Phase 5, session Q — W3's flip (2026-08-14)
+
+Commits: `f30d53aa` (docs tail), `539212bd` (T5.Q1), `a8eaa3e5` (T5.Q2), `dd26eea6`
+(T5.Q3). **The flip landed.** W3 is one item short of closed; the session ended on
+context, per forcing rule 1, with W4–W7 untouched.
+
+### 1. The three faces
+
+* **T5.Q1 — the prep, under `PPicture` slots.** W3's settled facts 1/3/4/5 as
+  signatures, so the seam is a type change and not a design: `PoolRest`'s hand-written
+  `Copy`, `PicRefs::get → *const SPicture`, `SPicture::data_ptr_ref`, and
+  `prefetch_free`/`next_for_thread → Option<PicId>`. Fact 1 cost **three** edits in the
+  whole tree, exactly the three the settlement named.
+* **T5.Q2 — the flip.** `Pool<PPicture>` → `Pool<Option<Box<SPicture>>>`. **The type
+  change cost six production edits**; the face was the part no compiler could ask for.
+* **T5.Q3 — `AllocPicture`/`FreePicture` deleted**, two unit-test callers left between
+  them once the pool owned. The decoder now holds **no raw picture allocation**.
+
+### 2. What the flip actually cost, and the method that paid for it
+
+The brief said to read 83 write-path sites for **span**. Re-grepped at the face they
+are **88** (decoder_core 41, manage_dec_ref 32, EC 7, the three decode brackets 6, api
+2; deblocking's 3 are prose — S16's floor in the same file as at T5.P″2). Reading 88
+sites by eye is not what settled them. **Splitting the resolver family did**:
+`pool_pic`/`ref_pic`/`short_ref_pic`/`long_ref_pic`/`prev_dpb_id` derive **shared**,
+`pool_pic_mut`/`dec_pic`/`short_ref_pic_mut`/`prev_dpb_pic_mut` derive `&mut`, and the
+compiler enumerated the writers — **ten**, nine in `manage_dec_ref` and one in `api`.
+Eighteen source-plane reads moved onto `data_ptr_ref` the same way. `ec_ref_pic`,
+`ref_pic_mut` and `prev_dpb_pic` ended with no callers.
+
+**Nine brackets, and where they had to be.** `cur_and_refs`/`pic_and_refs` hand a scope
+one borrow split into the picture it writes and a view of the rest: the three slice
+brackets (`WelsTargetSliceConstruction`, `WelsDecodeSlice`'s parse-only and decode
+loops), `CheckRefPicturesComplete`, `DoErrorConFrameCopy`, `DoErrorConSliceCopy`,
+`DoErrorConSliceMVCopy`, `WelsCheckAndRecoverForFutureDecoding`'s EC prefetch region,
+and `DoMbECMvCopy` one call deeper. `ComputeColocatedTemporalScaling` keeps a
+whole-pool view: it runs at AU level with no picture held. **The tell for four of them
+is the same sentence**: a "is the source the destination?" guard sitting *between* two
+derivations that can name one slot — the guard was deciding a question the second
+derivation had already settled by invalidating the first.
+
+Two invalidations no type could see, both session P′'s conviction one loop further out:
+`AddShortTermToList`'s duplicate-frame-num scan and `AddLongTermToList`'s sorted insert
+read the incoming picture **under the borrow, after** resolving a list entry that can be
+that same picture. Both comparison values are now read once, before the scan.
+
+### 3. F42, and F19/F37's answers
+
+**F42 — a reference list can name the picture being decoded, and `PoolRest::get` panics
+on exactly that slot.** `pRefList[i]` comes from a `ref_idx` the bitstream chooses; the
+C++ resolves it to `pCtx->pDec` and reads on. `PicRefs` answers that slot from the
+mutable half's own pointer — same tag, so read-and-write is one derivation — and the
+covering test is red under revert (F21): it panics "held mutably". S6 territory reached
+from an unexpected direction, and **no gate this project owns could have found it**.
+
+**F19 closes for the pool and the pictures**: `CreatePicBuff` pushes owners into a
+`Vec`, its partial-failure arm is that `Vec` going out of scope, `DestroyPicBuff` is
+F37's reset plus a `drop`, and R4 is discharged by construction. One `Box::into_raw`
+remains in `src/decoder/` — `pDqLayersList` — and it is the next face. **F37 needs no
+adjudication**: its reset survived the flip in place, its test still pins the
+Initialize/Uninitialize/Initialize cycle, and the `drop` beside it is what the record
+asked for.
+
+### 4. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 474 / 468 / 20 | **476 / 470 / 20** |
+| Miri `--lib` | 334 | **336** |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| decoder `raw_ptr` | 1229 | **1237** |
+
+| face | decoder `raw_ptr` |
+|---|---|
+| T5.Q1 (prep) | 1229 → 1231 (+2: facts 1 and 5 write two pointer types) |
+| T5.Q2 (the flip) | 1231 → 1240 (+9) |
+| T5.Q3 (stragglers) | 1240 → **1237** (−3) |
+
+**S16, and this is the metric's least flattering reading yet: the flip moved it the
+wrong way.** The resolvers spell `*const SPicture`/`*mut SPicture` where they spelled
+the `PPicture` alias, and an alias is invisible to an instrument that counts pointer
+*types written*. What the face actually did — delete the last raw alias into the pool,
+put every picture under one owner, and make the read/write split a compile error to get
+wrong — the instrument cannot see at all. The accessor-deletion leg is what takes it
+back down; **do not read this number as the face's verdict**, read the probe.
+
+### 5. Perf
+
+**Not measured. D-gate-1.** W8 inherits sessions N–P″'s debt unchanged. This session
+adds one structural item pointing at cost rather than recovery: every reference
+resolution is now a derivation through the slot's `Box` where it was a pointer copy —
+one extra indirection per resolution, all of them above the macroblock loop. Both
+benches were bit-identical on every row.
+
+### 6. Gates, F3, and the probe budget
+
+**Close battery `OVERALL: PASS`** at `full`: 476/470/20, sweeps **341/341 in both
+profiles**, both benches bit-identical on every row, Miri `--lib` 336/0, census 59,
+ratchet clean. Per-commit was the cheap set, three times; **one** full battery, at
+close, per D-gate-1 and the brief's rule 4.
+
+**F3 — zero hits**, as at P″'s close, and for the same reason S14 records: 682
+configurations swept against a measured ≈1/800 rate makes zero the likeliest single
+outcome. No measurement to append; the running total stands at **forty-two
+measurements, fourteen alternations, twenty-one acquittals**.
+
+**One probe, and it was the right seam to spend it on**: `cargo miri test --lib`, 955s,
+**336 passed / 0 failed** on the flip's tree. Green — and unlike P″'s three greens this
+one was not a formality: the flip is the first face that changes what a resolution's
+*provenance* is, every other gate here is a byte gate, and the F42 fix's second clause
+(one tag, not two derivations) is checkable by nothing else.
+
+### 7. What went into the rules
+
+* **Nothing new, but S24 earned a fourth clause in practice**: the brief's 83 was 88,
+  and the split was wrong in every file. The face did not care, because the *method*
+  did not depend on the count — which is the useful form of S24's "a count that decides
+  a conversion's shape". This one decided nothing.
+* The method itself is worth a name at the steward's discretion: **when a conversion
+  splits a family by capability, change the default to the restrictive form and let the
+  compiler enumerate the exceptions.** Ten writers out of 88 sites, found in one build.
+
+### Hand-off: Phase 5, session R — W3's tail, then W4 through W7
+
+**The session ended on context, not on a clean seam** (forcing rule 1's first reason).
+Faces 1–5 of the brief are untouched and roll forward whole. The estimate is unchanged
+in shape: **R (W3's tail + W4 + W5), R′ or a second pass (W6 + W7), S (W8)** — and the
+honest version of that is that Q absorbed one face of the five it was scoped for,
+because the flip was the face, and it is the one P″ reverted.
+
+1. **W3's tail, in the order the done-test wants.** `WelsMallocz|WelsFree` in
+   `src/decoder/` reads **8 live call sites** (`decoder_core` 2 helper bodies, `fmo.rs`
+   6), and the three pieces behind it are: **`fmo.rs`'s `pMbAllocMap`** — 25 sites, one
+   file, and the trap is that `TagFmo` is `#[repr(C)] Copy` inside
+   `sFmoList: [SFmo; MAX_PPS_COUNT]`, so a `Vec` field costs the `Copy` derive and the
+   array's construction (S21's audit, and `decoder_core.rs:568` holds a *second* `SFmo`
+   definition worth a census look while you are there); **the parser buffers** —
+   3 `WelsMalloczHelper` calls, all under `bParseOnly`, and `SParserBsInfo` is a public
+   API type, so read F41's boundary note before converting rather than after; and
+   **`pDqLayersList`**, the last `Box::into_raw` in `src/decoder/`.
+2. **`pDqLayersList` and `pCurDqLayer` are one face, not two, and the flip is why.**
+   The list is one `Box::into_raw` (`decoder_core.rs:2802`, freed `:2819`) and
+   `pCurDqLayer` is its cache with **one** production stamp (`:3600`, `= pDqLayersList`
+   under `bInitialDqLayersMem || pCurDqLayer.is_null()`). Owning the list makes the
+   cache a *stored derivation through the Box*, and `decoder_core.rs:3644` re-derives
+   from `pDqLayersList` inside the AU loop — which invalidates it. Either route 3644
+   through the cache (small, sound, and leaves the field) or delete the field
+   (**81 mid-tree ctx-field reads, re-grepped and matching the brief exactly**:
+   decode_slice 25, decoder_core 15, cabac 12, manage_dec_ref 11, EC 11, mv_pred 3,
+   deblocking 2, cavlc 2). W2b's recipe, third use.
+3. **The method that paid for the flip generalises to W5, and probably to W4.** W5 is
+   `pSps`/`pPps` → ids with a lookup at use, 205 occurrences over 4 carriers, and F41's
+   mistake was answering "does a lookup borrow outlive its expression?" wrongly. The
+   flip's answer to the same question was not a reading — it was changing the default
+   to the restrictive form and letting the compiler list the exceptions. Session O's
+   S23 read says no lookup borrow outlives its expression; make the type say it.
+4. **The bracket vocabulary is in place and W4 falls out of it.** `cur_and_refs`,
+   `pic_and_refs`, `PicRefs::get`, `PoolRest`'s `Copy`. `GetColocatedMb` taking cur and
+   ref as parameters is now a signature change with both values already resolved at the
+   slice bracket, and T5.N5's `debug_assert!` is `mut_and_rest`'s type-level fact.
+5. **F42 is closed but its class is open.** Any safe container whose disjointness is a
+   runtime assert inherits the question *can untrusted input make the two handles
+   equal?* The encoder's pool (6.1/6.2) takes the same `Pool`.
+6. **Findings**: **F42** opened and closed this session. **F19** closed for the pool and
+   the pictures, open for `pDqLayersList`. **F37** needs no adjudication — reset, drop,
+   and test all in place. Inherited unchanged: **F41**, the eight `CWelsDecoderImpl`
+   back-pointers and the `src/api/` inventory are **Phase 8's**; **F23** Phase 8's;
+   **F36** decoder-threading's; `PrefetchPicForThread`/`PrefetchLastPicForThread` still
+   have no callers and stay on W7's straggler list beside session P′'s two; **F3** per
+   S14.
+7. **Probe budget**: one spent, green, and it was the seam that needed it. W4's punning
+   and W6's NZC cache family are the next two faces where a byte gate cannot see the
+   question.
+8. **Perf debt for W8** unchanged, with §5's one structural addition named.
