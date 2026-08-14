@@ -2571,9 +2571,11 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
 /// picture and update QP/NZC state. Shared by the I- and P-slice CAVLC paths.
 /// Matches the `25 == uiMbType` branch of `WelsActualDecodeMbCavlcISlice` /
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
-unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState, pDec: PPicture) -> i32 {
-    let pBs = &mut *slice_bit_reader(pCtx);
-    let buf = (*pCtx).sRawData.window_from(pBs.start);
+/// **The reader arrives as parameters — F47's second instance.** This opened by
+/// re-deriving `&mut *slice_bit_reader(pCtx)` below callers that already hold the
+/// split, which removes their strongly-protected `&mut` argument. The all-I_PCM
+/// FMO asset is what reached it: no probe before T5.S2 decoded a PCM macroblock.
+unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture) -> i32 {
     let iMbX = (*dq).iMbX;
     let iMbY = (*dq).iMbY;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -2588,7 +2590,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState
     let mut pDecU = (*pDec).data_ptr(1).offset(iOffsetC);
     let mut pDecV = (*pDec).data_ptr(2).offset(iOffsetC);
 
-    let iIndex = ((-pBs.cursor.left_bits()) >> 3) + 2;
+    let iIndex = ((-pBs.left_bits()) >> 3) + 2;
 
     *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
 
@@ -2597,8 +2599,8 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState
     // negative result was an out-of-bounds pointer with no check, so an underflow is a
     // pre-existing overrun surfacing (plan §2.2.2) — `pos` is `usize` and the slice
     // index below is what reports it.
-    let iPcmStart = (pBs.cursor.pos() as isize - iIndex as isize) as usize;
-    pBs.cursor.set_pos(iPcmStart);
+    let iPcmStart = (pBs.pos() as isize - iIndex as isize) as usize;
+    pBs.set_pos(iPcmStart);
 
     // step 2: copy pixels from the bit-stream into the decoded picture
     let mut pTmpBsBuf = buf[iPcmStart..].as_ptr();
@@ -2621,7 +2623,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState
         }
     }
 
-    pBs.cursor.set_pos(iPcmStart + 384);
+    pBs.set_pos(iPcmStart + 384);
 
     // step 3: update QP and non-zero counts (Rec. 9.2.1: for PCM, nzc = 16)
     *(*dq).grid.luma_qp.get_mut(iMbXy) = 0;
@@ -2629,7 +2631,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState
     (*dq).grid.chroma_qp.get_mut(iMbXy)[1] = 0;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(16);
-    let ret = crate::decoder::bit_stream::InitReadBits(buf, &mut pBs.cursor, 0);
+    let ret = crate::decoder::bit_stream::InitReadBits(buf, pBs, 0);
     if ret != 0 {
         return ret;
     }
@@ -2637,9 +2639,8 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState
 }
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
-pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState, pDec: PPicture) -> i32 {
+pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2682,7 +2683,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     }
 
     if 25 == uiMbType {
-        return DecodeMbCavlcPcm(pCtx, dq, pDec);
+        return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
         *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -2797,6 +2798,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
+            buf,
+            pBs,
             dq,
             pDec,
             pVlcTable,
@@ -2820,8 +2823,20 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
 /// Matches the residual sections of `WelsActualDecodeMbCavlcISlice` /
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp` (after `BsStartCavlc`,
 /// up to `BsEndCavlc`).
+///
+/// **The reader arrives as parameters — F47.** This function used to open with its
+/// own `(*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData)`, and all three of its
+/// callers had already taken that same split at their own heads. Two live `&mut`
+/// derivations of one `BsCursor` through a raw pointer: the callee's function-entry
+/// retag popped the caller's tag, and the caller then used it again —
+/// `pBs.end_cavlc(buf)` — which is Undefined Behaviour on the ordinary CAVLC path,
+/// every macroblock that carries residual. Threading the split down is the same
+/// bracket maneuver W3 used: derive once at the top, pass it, touch the source
+/// nowhere below.
 unsafe fn WelsDecodeMbCavlcResidual(
     pCtx: *mut SWelsDecoderContext,
+    buf: &[u8],
+    pBs: &mut BsCursor,
     dq: *mut DqLayerState,
     pDec: PPicture,
     pVlcTable: *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable,
@@ -2831,7 +2846,6 @@ unsafe fn WelsDecodeMbCavlcResidual(
     uiCbpL: u32,
     uiCbpC: u32,
 ) -> i32 {
-    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
@@ -3082,7 +3096,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if iBaseModeFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
     }
-    let ret = WelsActualDecodeMbCavlcISlice(pCtx, dq, pDec);
+    let ret = WelsActualDecodeMbCavlcISlice(pCtx, buf, pBs, dq, pDec);
     if ret != ERR_NONE {
         return ret;
     }
@@ -3099,9 +3113,8 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 }
 
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
-pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
+pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3188,7 +3201,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if 25 == uiMbType {
-            return DecodeMbCavlcPcm(pCtx, dq, pDec);
+            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -3332,6 +3345,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
+            buf,
+            pBs,
             dq,
             pDec,
             pVlcTable,
@@ -3433,7 +3448,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         if iBaseModeFlag {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
         }
-        let ret = WelsActualDecodeMbCavlcPSlice(pCtx, dq, pDec, pRefs);
+        let ret = WelsActualDecodeMbCavlcPSlice(pCtx, buf, pBs, dq, pDec, pRefs);
         if ret != ERR_NONE {
             return ret;
         }
@@ -3456,9 +3471,8 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 /// Identical to [`WelsActualDecodeMbCavlcPSlice`] apart from the inter/intra
 /// `mb_type` split (23 instead of 5), the mb-type table and the motion parser,
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
-pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
+pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
     let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-    let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3545,7 +3559,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         }
 
         if 25 == uiMbType {
-            return DecodeMbCavlcPcm(pCtx, dq, pDec);
+            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -3689,6 +3703,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
 
         let ret = WelsDecodeMbCavlcResidual(
             pCtx,
+            buf,
+            pBs,
             dq,
             pDec,
             pVlcTable,
@@ -3835,7 +3851,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         if iBaseModeFlag {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
         }
-        let ret = WelsActualDecodeMbCavlcBSlice(pCtx, dq, pDec, pRefs);
+        let ret = WelsActualDecodeMbCavlcBSlice(pCtx, buf, pBs, dq, pDec, pRefs);
         if ret != ERR_NONE {
             return ret;
         }
@@ -5641,7 +5657,7 @@ mod tests {
     #[test]
     fn decode_slice_loop_runs_under_the_aliasing_checker() {
         const NARROW_16X16: &[u8] = include_bytes!("../../../../../res/narrow_16x16.264");
-        let (frames, dims) = drive_decoder_over(NARROW_16X16);
+        let (frames, dims, _) = drive_decoder_over(NARROW_16X16);
         assert!(
             frames > 0,
             "no frame came out of narrow_16x16.264 — the slice loop was never entered, \
@@ -5681,7 +5697,7 @@ mod tests {
     #[test]
     fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         const GRID_48X32: &[u8] = include_bytes!("../../../../../res/grid_48x32.264");
-        let (frames, dims) = drive_decoder_over(GRID_48X32);
+        let (frames, dims, _) = drive_decoder_over(GRID_48X32);
         assert!(
             frames > 0,
             "no frame came out of grid_48x32.264 — the slice loop was never entered, \
@@ -5710,7 +5726,11 @@ mod tests {
     /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
     /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
     /// whole implementation object, so the raw-pointer spelling is sound.
-    fn drive_decoder_over(stream: &[u8]) -> (usize, Option<(i32, i32)>) {
+    /// Returns `(frames, dims, states)`, where `states` is the bitwise OR of every
+    /// `DecodeFrame2` return. The third element exists for T5.S1's probes: a
+    /// concealment path that does not run looks exactly like one that runs and
+    /// changes nothing, and `dsDataErrorConcealed` in the OR is the difference.
+    fn drive_decoder_over(stream: &[u8]) -> (usize, Option<(i32, i32)>, i32) {
         use crate::api::codec_api::*;
 
         unsafe {
@@ -5733,16 +5753,69 @@ mod tests {
 
             let mut frames = 0;
             let mut dims = None;
+            let mut states = 0i32;
             for unit in crate::split_annexb_units(stream) {
                 let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
-                ((*vtbl).DecodeFrame2)(
+                let ret = ((*vtbl).DecodeFrame2)(
                     p_decoder,
                     unit.as_ptr(),
                     unit.len() as i32,
                     p_dst.as_mut_ptr(),
                     &mut buf_info,
                 );
+                states |= ret as i32;
+                if buf_info.iBufferStatus == 1 {
+                    frames += 1;
+                    let sys = buf_info.UsrData.sSystemBuffer;
+                    dims = Some((sys.iWidth, sys.iHeight));
+                }
+            }
+
+            // End of stream, then the zero-length call that flushes it — the same
+            // tail `decoder_conformance_test.rs` and `malformed_stream_parity.rs`
+            // use. T5.S1 added it: without it this helper never drove the flush
+            // path at all, and a stream whose only frame arrives there (the FMO
+            // asset, any truncated stream) looked to it like a stream that decodes
+            // nothing. It cannot cost the two probes above a verdict — they assert
+            // `frames > 0` and the dimensions, and a flush only ever adds frames.
+            let mut eos_flag = 1i32;
+            ((*vtbl).SetOption)(
+                p_decoder,
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
+            );
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            let ret = ((*vtbl).DecodeFrame2)(
+                p_decoder,
+                std::ptr::null(),
+                0,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            states |= ret as i32;
+            if buf_info.iBufferStatus == 1 {
+                frames += 1;
+                let sys = buf_info.UsrData.sSystemBuffer;
+                dims = Some((sys.iWidth, sys.iHeight));
+            }
+
+            // …and the drain the flush announces. Leaving it out cost a frame on
+            // every stream whose last picture is still buffered at EOS, which read
+            // as the port being one frame short of the C++ until the helper was
+            // compared against `rust/tools/ecref` rather than against itself.
+            let mut remaining = 0i32;
+            ((*vtbl).GetOption)(
+                p_decoder,
+                DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                &mut remaining as *mut i32 as *mut std::ffi::c_void,
+            );
+            for _ in 0..remaining.clamp(0, 24) {
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                let ret = ((*vtbl).FlushFrame)(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
+                states |= ret as i32;
                 if buf_info.iBufferStatus == 1 {
                     frames += 1;
                     let sys = buf_info.UsrData.sSystemBuffer;
@@ -5752,8 +5825,65 @@ mod tests {
 
             ((*vtbl).Uninitialize)(p_decoder);
             WelsDestroyDecoder(p_decoder);
-            (frames, dims)
+            (frames, dims, states)
         }
+    }
+
+    /// **The error-concealment probe** — Phase 5 session S, F43/F44/F45.
+    ///
+    /// Until T5.S1 this path could not be probed, because it did not run: five stubs
+    /// in `decoder_core.rs` shadowed `error_concealment.rs` (F43), `InitErrorCon` had
+    /// no caller so `sCopyFunc` was `None` and the copies were silent no-ops (F44),
+    /// and `bInstantDecFlag` was never written so the emission gate never fired
+    /// (F45). Every Miri verdict this phase issued was on a decoder whose whole
+    /// concealment subsystem was unreachable — **a new container, in S29's sense,
+    /// arriving at the end of the phase rather than the start**.
+    ///
+    /// `narrow_16x16_idr_lost.264` is 827 bytes and one macroblock per frame — the
+    /// cheapest stream in the tree that actually conceals, which is what makes a
+    /// full `Initialize` + 30-frame decode tractable under an interpreter. Its
+    /// second sequence has no IDR to open it, so the first P slice finds the
+    /// reference lists empty and the concealment path runs for real: measured,
+    /// `dsDataErrorConcealed` comes back set. Its output is pinned against the C++
+    /// decoder elsewhere (`test_asset_narrow_16x16_idr_lost`, and every truncation
+    /// of it in `malformed_parity/narrow_16x16_idr_lost.txt` agrees with `ecref`),
+    /// so here we require only that concealment ran — the instrument is Miri's
+    /// verdict on the path, not the bytes.
+    ///
+    /// The `dsDataErrorConcealed` assertion is the point. Without it this test
+    /// passes just as well on a decoder where concealment never runs — which is
+    /// precisely the state the port was in for five phases.
+    #[test]
+    fn error_concealment_runs_under_the_aliasing_checker() {
+        const IDR_LOST: &[u8] = include_bytes!("../../../../../res/narrow_16x16_idr_lost.264");
+        let (frames, _, states) = drive_decoder_over(IDR_LOST);
+        assert!(frames > 0, "no frame came out of narrow_16x16_idr_lost.264");
+        assert_ne!(
+            states & 0x20,
+            0,
+            "dsDataErrorConcealed never set: concealment did not run, so this test is \
+             not measuring what it claims to (states = {states:#x})"
+        );
+    }
+
+    /// **The FMO probe** — Phase 5 session S, F43.
+    ///
+    /// `fmo.rs` was unreachable in production: `decoder_core.rs`'s `FmoNextMb` stub
+    /// returned `iMbIdx + 1` and nothing ever wrote `pCtx->pFmo`. It has therefore
+    /// never been under the aliasing checker in the shape a stream drives it —
+    /// `FmoParamUpdate` writing the map at paramset activation, `FmoNextMb` reading
+    /// it once per macroblock through the context's `sFmoList` entry.
+    ///
+    /// `fmo_2groups_64x64.264` is built by `rust/tools/make_fmo_asset.py` because no
+    /// stream in `res/` has more than one slice group. 16 macroblocks over two
+    /// interleaved groups, all I_PCM, one frame — the cheapest thing that makes the
+    /// map decide anything.
+    #[test]
+    fn fmo_slice_group_walk_runs_under_the_aliasing_checker() {
+        const FMO: &[u8] = include_bytes!("../../../../../res/fmo_2groups_64x64.264");
+        let (frames, dims, _) = drive_decoder_over(FMO);
+        assert_eq!(frames, 1, "fmo_2groups_64x64.264 is one frame");
+        assert_eq!(dims, Some((64, 64)));
     }
 }
 

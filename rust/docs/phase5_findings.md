@@ -1878,3 +1878,146 @@ W7 takes the mechanical form: **for every field of `SWelsDecoderContext`, does t
 port ever assign it?** A field that is read and never written is either dead or a
 missing write, and the two are distinguishable by one grep of the C++. That sweep
 would have found F45 without a bitstream, and it is cheap enough to keep.
+
+## F46 — the `DECODING_STATE` the API returns diverges from the C++ on damaged input, while the decoded output does not
+
+*Found Phase 5 session S (2026-08-14), by extending `ecref`'s comparison from the
+plane hashes to the return codes. **Not fixed.** Owner: a scheduled parity session —
+it is a wide surface and none of it moves a pixel.*
+
+### The defect
+
+After F43/F44/F45 the port's *output* on damaged streams matches the C++ decoder
+exactly: over the malformed corpus's truncation rows, **every** stream but
+`CABA2_SVA_B` agrees on frame count, dimensions and plane hashes for every row. The
+`DECODING_STATE` each `DecodeFrame2` call hands back does not:
+
+| stream | output agree/differ | codes agree/differ |
+|---|---|---|
+| `narrow_16x16` | 200 / 0 | 124 / **76** |
+| `BA_MW_D` | 199 / 0 | 108 / **91** |
+| `SarVui` | 203 / 0 | 112 / **91** |
+| `CABA3_SVA_B` | 199 / 0 | 109 / **90** |
+
+The direction is consistent: **the port under-reports**. Two rows of `narrow_16x16`,
+where the port's whole sequence is zeros:
+
+```
+trunc.b000+04  bytes=4    port=0x0*2      cpp=0x10,0x0     # dsNoParamSets
+trunc.b001-03  bytes=13   port=0x0*2      cpp=0x4,0x0      # dsBitstreamError
+```
+
+A caller that branches on `dsNoParamSets` to request a keyframe, or on
+`dsBitstreamError` to drop a connection, gets `dsErrorFree` from the port and the
+right answer from the C++. That is a behaviour difference in the public API with no
+pixel behind it, which is why five phases of byte gates never raised it.
+
+### Why nothing saw it
+
+The malformed-parity table has recorded `ret_rle` since Phase 3 — the column is
+right there, and it is the reason the table exists. But the table compares the port
+against **its own** previous output (F44's rule), so the column pinned the port's
+codes as they were rather than as the C++'s are. `ecref` compared only frames, dims
+and hashes until this session; extending it to the codes was three lines and turned
+up ~45% of rows on every stream tried.
+
+### The narrow-class gap this closed on the way
+
+`narrow_16x16.264` and `narrow_16x16_idr_lost.264` join the malformed corpus here.
+Every prior stream in it is 176x144 or wider — the corpus "inherits the conformance
+streams' SPS dimensions" — so the narrow class F21 exists for had **no malformed
+coverage at all**, and F34 is what one blind spot in that class already cost. Both
+new tables agree with the C++ on output for every row (200/0 and 198/0).
+
+### A trap worth recording, because it nearly became a false finding
+
+The first code comparison reported **194 of 200** rows differing on `narrow_16x16`;
+the true count is 76. macOS's awk (BWK, 20200816) reads `0x0` as a **hex numeral**,
+so `$0 == prev` against an uninitialised `prev` is `0 == 0` — true on the first
+record, after which `prev` is never assigned and every list run-length-encodes to
+`*<n>`. Forcing the string comparison with `("" $0) == ("" prev)` fixes it. *An
+instrument that disagrees with a hand count is wrong until proven otherwise*, and
+the hand count is what caught this one.
+
+## F47 — the CAVLC macroblock path takes three nested `&mut` derivations of one bit-reader cursor, and uses the outer ones after the inner retag pops them
+
+*Found Phase 5 session S (2026-08-14) by the error-concealment Miri probe, on its
+first run. **Fixed here** (T5.S2).*
+
+### The defect
+
+`BsReader::split(&mut self, raw) -> (&[u8], &mut BsCursor)` hands out a shared view
+of the raw buffer and a mutable borrow of the cursor. Six functions in
+`decode_slice.rs` each opened by taking their own split off the same reader, through
+a raw pointer, and they **nest three deep**:
+
+```
+WelsDecodeMbCavlcISlice        (split)   ─┐
+  └ WelsActualDecodeMbCavlcISlice (split) ─┤ same BsCursor, three live &mut
+      └ WelsDecodeMbCavlcResidual (split) ─┘
+```
+
+Each inner call's function-entry retag pops its caller's tag off the borrow stack,
+and **both callers then use theirs again** — `pBs.end_cavlc(buf)` in the middle
+frame, and `pBs.pos()`/`pBs.bits()` in the outer one, to decide whether the slice
+has run out of bits. The P- and B-slice families have the identical shape. Miri:
+
+```
+error: Undefined Behavior: trying to retag from <34866141> for SharedReadWrite
+       permission at alloc258066[0x1348], but that tag does not exist in the
+       borrow stack for this location
+  --> src/decoder/decode_slice.rs:2813  pBs.end_cavlc(buf);
+```
+
+This is **not** an error-concealment defect. It is on the ordinary CAVLC path, at
+every macroblock that carries residual, in I, P and B slices alike.
+
+### Why five phases of Miri never saw it
+
+The phase's two aliasing probes drive `narrow_16x16.264` — one macroblock per frame,
+whose macroblocks carry no residual, so the innermost call is never made — and
+`grid_48x32.264`, which is **CABAC**. Between them they cover the neighbour-reading
+paths F34 was about and no CAVLC residual at all. The probe added for F43's
+concealment paths (`narrow_16x16_idr_lost.264`, CAVLC, 30 frames) reached it on its
+first execution.
+
+That is S22's rule arriving from a third direction: *an instrument's scope list is
+part of the instrument.* The scope here was not a module list or a name list — it
+was **which bitstreams the probes decode**, and two streams chosen for frame
+geometry left an entropy coder untested.
+
+### The fix
+
+The bracket maneuver W3 used throughout: derive once at the top, thread it down,
+touch the source nowhere below. `WelsDecodeMbCavlcResidual` and the three
+`WelsActualDecodeMbCavlc*Slice` functions take `buf: &[u8], pBs: &mut BsCursor` as
+parameters; the three `WelsDecodeMbCavlc*Slice` brackets keep the only splits. Six
+derivations become three, each with one live `&mut`, and the compiler's reborrowing
+makes the nesting legal by construction rather than by luck. Output is unchanged on
+every gate — 60 conformance rows and 15 malformed tables byte-identical.
+
+### A second instance, found by the first fix
+
+With the three signatures carrying `&mut BsCursor`, that argument became **strongly
+protected**, and the FMO probe immediately convicted `DecodeMbCavlcPcm`:
+
+```
+error: Undefined Behavior: not granting access to tag <118250863> because that
+       would remove [Unique for <153605315>] which is strongly protected
+  --> src/decoder/decode_slice.rs:2575  let pBs = &mut *slice_bit_reader(pCtx);
+```
+
+Same shape, one level deeper: the I_PCM helper re-derived the **whole reader** below
+callers that already held the split. It uses only `pBs.cursor` and a window equal to
+the caller's `buf`, so it takes the same two parameters as the rest.
+
+**Neither probe could have found it before this session.** `narrow_16x16.264` and
+`grid_48x32.264` contain no I_PCM macroblock; the FMO asset is all-I_PCM by
+construction, because that is what makes a slice-group misorder legible. An asset
+built to make one thing visible made an unrelated defect visible too — which is the
+argument for building assets rather than only collecting them.
+
+**The rule**: *a raw re-derivation below a bracket is invisible while everything
+above it is also raw.* Each fix in this chain turned the next one from silence into
+a hard error, and the chain only started because a probe finally decoded a stream
+that reached the path.
