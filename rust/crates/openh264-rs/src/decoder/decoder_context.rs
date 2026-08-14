@@ -656,6 +656,32 @@ pub unsafe fn pic_pool_mut<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SPic
     (*pCtx).pPicBuff.as_deref_mut()
 }
 
+/// The layer the access unit is decoding, or null when there is none.
+///
+/// **The one way to reach [`SWelsDecoderContext::pDqLayersList`]** (T5.R2), and the
+/// shape [`pic_pool_ptr`] below already takes for the pool: the autoref is on the
+/// *field*, so the retag covers one word of the context rather than the context
+/// (S29), and the `&mut` it derives is discarded into a pointer the whole
+/// macroblock tree can carry as a parameter.
+///
+/// The S29 condition this site has to meet is that **no second derivation happens
+/// while a result is live**, and T5.R1 is what makes that checkable: the layer is
+/// threaded from three bracket tops — `DecodeCurrentAccessUnit`'s loop,
+/// `CheckAndFinishLastPic`'s concealment block, and `InitialDqLayersContext`'s own
+/// construction — and nothing below a bracket reads the field at all. The brackets
+/// do not nest: `CheckAndFinishLastPic` derives *after* the `ConstructAccessUnit`
+/// call that contains the loop returns.
+#[inline]
+pub unsafe fn cur_dq_layer(pCtx: PWelsDecoderContext) -> *mut DqLayerState {
+    if pCtx.is_null() {
+        return std::ptr::null_mut();
+    }
+    match (*pCtx).pDqLayersList.as_deref_mut() {
+        Some(layer) => layer as *mut DqLayerState,
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// [`pic_pool_mut`] as a raw pointer, for the api layer's two release paths.
 ///
 /// `CWelsDecoder::ReleaseBufferedReadyPicture*` evaluate `pCtx ? pCtx->pPicBuff :
@@ -912,17 +938,21 @@ pub struct SWelsDecoderContext {
     pub access_unit: Option<Box<SAccessUnit>>,
     pub pSps: *mut SSps,
     pub pPps: *mut SPps,
-    /// The one layer, and **the only way to reach it** — `pCurDqLayer` was its
-    /// cache and is gone (T5.R1).
+    /// The one layer, **owned** (T5.R2), and reached only through [`cur_dq_layer`].
     ///
-    /// The cache had one production stamp (`= pDqLayersList`, under
-    /// `bInitialDqLayersMem || is_null()`) and `LAYER_NUM_EXCHANGEABLE` is 1, so the
-    /// two fields always held the same address — except in the window
-    /// `UninitialDqLayersContext` opened, where the list was nulled and the cache was
-    /// left dangling. Every reader now derives from this field at a bracket top and
-    /// threads the result down, which is what W3's flip needs: a stored derivation
-    /// through an owning `Box` is invalidated by the next derivation.
-    pub pDqLayersList: *mut DqLayerState,
+    /// `pCurDqLayer` was this field's cache and died at T5.R1: it had one production
+    /// stamp (`= pDqLayersList`, under `bInitialDqLayersMem || is_null()`) and
+    /// `LAYER_NUM_EXCHANGEABLE` is 1, so the two always named one layer — except in
+    /// the window `UninitialDqLayersContext` opened, where the list was nulled and the
+    /// cache was left dangling. That deletion is what lets this field own: a stored
+    /// derivation through an owning `Box` is invalidated by the next derivation, and
+    /// there are now **three** derivations on the whole decode path — the access-unit
+    /// loop's, `CheckAndFinishLastPic`'s concealment block, and the allocator's own —
+    /// none of them nested inside another.
+    ///
+    /// `None` is the C's null list: before `InitialDqLayersContext` and after
+    /// `UninitialDqLayersContext`.
+    pub pDqLayersList: Option<Box<DqLayerState>>,
     pub pNalCur: *mut SNalUnit,
     pub uiNalRefIdc: u8,
     pub iPicWidthReq: i32,
@@ -1064,6 +1094,9 @@ impl SWelsDecoderContext {
             // relying on it.
             std::ptr::addr_of_mut!((*p).pTempDec).write(None);
             std::ptr::addr_of_mut!((*p).pPicBuff).write(None);
+            // S21, T5.R2: the layer joins them. Its zero was a null `PDqLayer` and is
+            // now `None` through the same niche; the write states it either way.
+            std::ptr::addr_of_mut!((*p).pDqLayersList).write(None);
         }
     }
 
