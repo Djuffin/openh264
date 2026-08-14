@@ -159,9 +159,12 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
 
         assert!(decoded_frames > 0, "No frames decoded for {}", file_name);
         let calculated_hash = hasher.digest();
+        // S13 — frame counts before hashes: a hash mismatch whose frame count also
+        // moved is a different defect from one whose count held, and the message is
+        // the only place a reader of a failing run can learn which.
         assert_eq!(
             calculated_hash, expected_hash,
-            "SHA-1 hash mismatch for bitstream asset {}",
+            "SHA-1 hash mismatch for bitstream asset {} ({decoded_frames} frames decoded)",
             file_name
         );
 
@@ -305,3 +308,65 @@ asset_test_concealed!(test_asset_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.2
 // no stream that encoder can produce re-finds the miss. The golden below is the
 // C++ *decoder*'s output, exactly as every other row here.
 asset_test!(test_asset_grid_48x32, "grid_48x32.264", "a56242a64a22edee058cd9cd14179f54bcd79b97");
+
+// ---------------------------------------------------------------------------
+// Error concealment — the F43 coverage (Phase 5 session S).
+//
+// Until F43 was fixed, `decoder_core.rs` declared stubs that shadowed
+// `error_concealment.rs`, so `NeedErrorCon` was a constant `false` and the whole
+// subsystem — `DoErrorConFrameCopy`, `DoErrorConSliceCopy`,
+// `GetAvilInfoFromCorrectMb`, `DoErrorConSliceMVCopy` and the MC paths under them
+// — ran only in unit tests. **Nothing above this line can see that**: every asset
+// here is a clean stream, where the C++'s own `NeedErrorCon` also returns false
+// and the two decoders agree by not running the code.
+//
+// `BA_MW_D_P_LOST` is the conformance `BA_MW_D` with a P slice dropped, so each
+// affected picture is decoded with a hole. The golden is the **C++ decoder's**,
+// taken with `rust/tools/ecref` under the same `ERROR_CON_SLICE_COPY` these tests
+// use, and the port matches it to the byte across all 99 frames.
+//
+// **What `_P_LOST` is not**: it is not F43 coverage. Measured on a worktree at
+// the pre-fix commit, it produces the *same* hash with the stubs in place — and
+// re-stubbing `NeedErrorCon` leaves it green too. The concealment it reaches
+// never came through `NeedErrorCon`'s arm. The red-under-revert evidence for F43
+// is the malformed-parity table (re-stubbing turns 6 streams red) and
+// `fmo_2groups_64x64.264` below.
+//
+// `_IDR_LOST` is **F44's** row and it did move: with the IDR gone there is no
+// complete non-ECed IDR to clear `bFreezeOutput`, and nothing else cleared it
+// because `InitErrorCon` had no caller, so the port emitted 70 frames against the
+// C++'s 97 and its slice-copy concealment silently copied nothing (`sCopyFunc`
+// was `None`). Wiring `InitErrorCon` where the C++ calls it moved this row onto
+// the C++'s hash.
+//
+// Both were **always available and never taken**: `res/` has carried them since
+// upstream added them in 2014 (`45ef803e`) and the port has driven both since
+// Phase 3 — but only through the malformed-parity gate, which pins the port
+// against *itself*. Five phases of clean-stream conformance rows, and no
+// damaged-stream row had a C++ golden. These are the first two.
+asset_test_concealed!(test_asset_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264", "f31e54a50296406f7f55d95c959e800d5dfbbe44");
+asset_test_concealed!(test_asset_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264", "66ec2f1d66356de3dfadffa298bbe838347a9eb1");
+
+// ---------------------------------------------------------------------------
+// Flexible macroblock ordering — the other half of F43 (Phase 5 session S).
+//
+// `decoder_core.rs` declared an `FmoNextMb` stub returning `iMbIdx + 1` — raster
+// order, the one answer FMO exists to *not* give — and nothing ever wrote
+// `pCtx->pFmo`, so `fmo.rs` was unreachable in production. **No asset above this
+// line could catch either**: all 74 streams in `res/` carry
+// `num_slice_groups_minus1 == 0`, so raster order *is* the right answer for every
+// one of them and the stub is indistinguishable from the real function.
+//
+// `rust/tools/make_fmo_asset.py` builds this one for the purpose: 64x64, two slice
+// groups interleaved 1-1 (`slice_group_map_type` 0), one slice per group, every
+// macroblock I_PCM with a distinct flat luma value. Slice 0 walks macroblocks
+// 0, 2, 4, … and slice 1 walks 1, 3, 5, …; a raster-order `FmoNextMb` walks
+// 0, 1, 2, … instead, so every macroblock after each slice's first lands in the
+// wrong place. I_PCM makes the frame *be* the values the generator wrote, so the
+// failure is legible rather than a diffuse hash change.
+//
+// Red under revert (F21's rule), and the revert is the stub itself. Measured:
+// with `FmoNextMb` returning `kiMbXy + 1` this row fails as **"No frames decoded"**
+// — the raster walk runs slice 0 past the macroblocks its group owns, the slice
+// errors out, and nothing is emitted at all. The golden is the C++ decoder's.
+asset_test!(test_asset_fmo_2groups_64x64, "fmo_2groups_64x64.264", "6420bae4a88f86a0f3f54c94aee59b2c1e7b7319");

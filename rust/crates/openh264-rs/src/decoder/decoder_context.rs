@@ -722,6 +722,32 @@ pub unsafe fn pps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SPps {
     std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[id as usize])
 }
 
+/// The FMO entry a PPS id names, or null when there is none. [`pps_of`]'s shape
+/// (T5.S1, F43).
+///
+/// `sFmoList` is `MAX_PPS_COUNT` entries indexed by PPS id — one FMO state per
+/// parameter set, persisting across access units, which is why the entry lives in
+/// the context's array rather than being rebuilt per slice.
+#[inline]
+pub unsafe fn fmo_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> PFmo {
+    let Some(id) = id else {
+        return std::ptr::null_mut();
+    };
+    if pCtx.is_null() || id < 0 || id as usize >= MAX_PPS_COUNT {
+        return std::ptr::null_mut();
+    }
+    std::ptr::addr_of_mut!((*pCtx).sFmoList[id as usize])
+}
+
+/// The active FMO entry — the context field `pFmo` was, resolved (T5.S1).
+#[inline]
+pub unsafe fn active_fmo(pCtx: PWelsDecoderContext) -> PFmo {
+    if pCtx.is_null() {
+        return std::ptr::null_mut();
+    }
+    fmo_of(pCtx, (*pCtx).fmo_id)
+}
+
 /// The subset SPS an id names, or null when there is none. [`sps_of`]'s shape.
 #[inline]
 pub unsafe fn subset_sps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SSubsetSps {
@@ -982,7 +1008,16 @@ pub struct SWelsDecoderContext {
     pub iFrameNum: i32,
     pub iErrorCode: i32,
     pub sFmoList: [SFmo; MAX_PPS_COUNT],
-    pub pFmo: PFmo,
+    /// The active FMO entry, as the **PPS id that selects it** (T5.S1) — the field
+    /// `pFmo` was.
+    ///
+    /// The C writes `pCtx->pFmo = &pCtx->sFmoList[iPpsId]` (`decoder_core.cpp:2651`):
+    /// a raw alias into the context's *own* array, which is the blocker class this
+    /// phase names once. The id is what the C computed the address from, so storing
+    /// it stores strictly more than the pointer did, and [`fmo_of`] derives the
+    /// address per use with no borrow taken (S29) — `pps_of`'s shape exactly, and for
+    /// the same reason: `sFmoList` is indexed by PPS id and nothing else.
+    pub fmo_id: Option<i32>,
     pub iActiveFmoNum: i32,
     pub iDecBlockOffsetArray: [i32; 24],
     /// The pool slot being decoded into — a [`PicId`] since T5.P2, reached with

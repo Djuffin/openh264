@@ -74,3 +74,6 @@ target/
 
 # perfpair.py's stashed bench binaries (rust/tools/perfpair.py)
 .perfpair/
+
+# ecref's compiled binary (rust/tools/ecref/build.sh rebuilds it from ecref.cpp)
+rust/tools/ecref/ecref
