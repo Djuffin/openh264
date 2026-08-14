@@ -303,7 +303,8 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    au_has_nals, cur_au, cur_and_refs, dec_pic, pic_pool_mut, pic_refs, pool_pic, ref_id, ref_pic,
+    au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic, pic_pool_mut, pic_refs, pool_pic,
+    ref_id, ref_pic,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -2805,19 +2806,17 @@ pub unsafe fn InitialDqLayersContext(
     // the cache's 130, of which 129 were lifecycle), so the cache was an owner with no
     // readers and it is gone. The block scopes `pDq`; it was a
     // `for i in 0..LAYER_NUM_EXCHANGEABLE` loop, and that constant was 1.
-    {
-        // T5.H3: the layer is heap-*constructed* now, not zero-allocated — it owns
-        // a `MbGrid` and a zeroed `Vec` is an invalid value (S21). `AllocPicture`'s
-        // `Box::into_raw(Box::new(...))` at T5.C3 is the same move, and F19's check
-        // pairs it with the `Box::from_raw` in `UninitialDqLayersContext`. The
-        // allocation cannot fail by returning null, so the `ERR_INFO_OUT_OF_MEMORY`
-        // arm that guarded `WelsMallocz` is gone with it; the 25 array allocations
-        // below still go through the C's allocator and are still checked where they
-        // were.
-        let pDq: PDqLayer = Box::into_raw(Box::new(DqLayerState::for_grid(dims)));
-        (*pCtx).pDqLayersList = pDq;
-
-    }
+    // T5.H3: the layer is heap-*constructed*, not zero-allocated — it owns a `MbGrid`
+    // and a zeroed `Vec` is an invalid value (S21). The allocation cannot fail by
+    // returning null, so the `ERR_INFO_OUT_OF_MEMORY` arm that guarded `WelsMallocz` is
+    // gone with it; the 25 array allocations below still go through the C's allocator
+    // and are still checked where they were.
+    //
+    // **T5.R2: the context owns it.** `Box::into_raw` and the `Box::from_raw` in
+    // `UninitialDqLayersContext` were F19's last pair in `src/decoder/` — the
+    // assignment *is* the ownership transfer now, and the old block scope existed only
+    // to bound the raw `pDq`.
+    (*pCtx).pDqLayersList = Some(Box::new(DqLayerState::for_grid(dims)));
 
     (*pCtx).bInitialDqLayersMem = true;
     (*pCtx).iPicWidthReq = kiMaxWidth;
@@ -2831,16 +2830,10 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
     }
     // T5.E2's `numMb` — the free path's copy of the allocation's dimensions, and the
     // one the closure got wrong — is gone with the raw arrays it sized. The layer's
-    // drop glue needs no size at all, which is the whole argument for owning it.
-    let pDq = (*pCtx).pDqLayersList;
-    if !pDq.is_null() {
-        // T5.H3: the matching half of `InitialDqLayersContext`'s heap construction.
-        // The grid's 22 `Vec`s go with the `Box`'s drop glue — there is no way to
-        // forget one, and no size to get wrong, which is the arithmetic T5.E2 had
-        // to correct for the raw arrays above.
-        drop(Box::from_raw(pDq));
-        (*pCtx).pDqLayersList = std::ptr::null_mut();
-    }
+    // drop glue needs no size at all, which is the whole argument for owning it, and
+    // at T5.R2 the drop *is* the assignment: the grid's 22 `Vec`s go with the field's
+    // own glue, there is no way to forget one and no size to get wrong.
+    (*pCtx).pDqLayersList = None;
     (*pCtx).iPicWidthReq = 0;
     (*pCtx).iPicHeightReq = 0;
     (*pCtx).bInitialDqLayersMem = false;
@@ -3633,7 +3626,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
         // `bInitialDqLayersMem || is_null()`) was a cache write of exactly this value —
         // the list is reallocated only by `InitialDqLayersContext`, which runs in
         // `InitConstructAccessUnit` *before* this function, never under it.
-        let dq_cur = (*pCtx).pDqLayersList;
+        let dq_cur = cur_dq_layer(pCtx);
         let mut pLayerInfo = SLayerInfo::default();
         let isNewFrame = (*pCtx).pDec.is_none();
 
@@ -3996,7 +3989,7 @@ pub unsafe fn CheckAndFinishLastPic(
     // `ConstructAccessUnit` above may have just returned — so it takes its own
     // derivation of the layer rather than inheriting one. It is the value the deleted
     // cache field held at this point, and the list is what the cache was stamped from.
-    let dq_cur = (*pCtx).pDqLayersList;
+    let dq_cur = cur_dq_layer(pCtx);
 
     if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur) {
         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
