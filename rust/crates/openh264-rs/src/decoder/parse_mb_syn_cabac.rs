@@ -1495,7 +1495,7 @@ pub unsafe fn ParseRefIdxCabac(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: *const SWelsNeighAvail,
-    _nzc: *mut u8,
+    _nzc: &mut [u8; 48],
     ref_idx: &mut [[i8; 30]; LIST_A],
     direct: Option<&[i8; 30]>,
     iListIdx: i32,
@@ -1682,7 +1682,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     pRefIndex: &mut [[i8; 30]; LIST_A],
@@ -2004,7 +2004,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCount: *mut u8,
+    pNonZeroCount: &mut [u8; 48],
     pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     pRefIndex: &mut [[i8; 30]; LIST_A],
@@ -2694,7 +2694,7 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqL
 /// at the same call.
 pub unsafe fn ParseCbfInfoCabac(
     pNeighAvail: *const SWelsNeighAvail,
-    pNzcCache: *const u8,
+    pNzcCache: &[u8; 48],
     pCtx: PWelsDecoderContext,
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
@@ -2737,18 +2737,18 @@ pub unsafe fn ParseCbfInfoCabac(
         }
     } else {
         let top_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 8) as usize;
-        if *pNzcCache.add(top_nzc_idx) != 0xff {
+        if pNzcCache[top_nzc_idx] != 0xff {
             if g_kTopBlkInsideMb[iZIndex as usize] != 0 {
                 iTopBlkXy = iCurrBlkXy;
             }
-            nB = (*pNzcCache.add(top_nzc_idx) != 0 || *pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
+            nB = (pNzcCache[top_nzc_idx] != 0 || *pMbType.add(iTopBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
         }
         let left_nzc_idx = (g_kCacheNzcScanIdx[iZIndex as usize] - 1) as usize;
-        if *pNzcCache.add(left_nzc_idx) != 0xff {
+        if pNzcCache[left_nzc_idx] != 0xff {
             if g_kLeftBlkInsideMb[iZIndex as usize] != 0 {
                 iLeftBlkXy = iCurrBlkXy;
             }
-            nA = (*pNzcCache.add(left_nzc_idx) != 0 || *pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
+            nA = (pNzcCache[left_nzc_idx] != 0 || *pMbType.add(iLeftBlkXy as usize) == MB_TYPE_INTRA_PCM) as i8;
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
@@ -2908,7 +2908,7 @@ pub unsafe fn ParseSignificantCoeffCabac(
 
 pub unsafe fn ParseResidualBlockCabac8x8(
     _pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCountCache: *mut u8,
+    pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
@@ -2940,10 +2940,10 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         return err;
     }
 
-    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[iIndex as usize] as usize) = uiTotalCoeffNum as u8;
-    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 1) as usize] as usize) = uiTotalCoeffNum as u8;
-    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 2) as usize] as usize) = uiTotalCoeffNum as u8;
-    *pNonZeroCountCache.add(g_kCacheNzcScanIdx[(iIndex + 3) as usize] as usize) = uiTotalCoeffNum as u8;
+    pNonZeroCountCache[g_kCacheNzcScanIdx[iIndex as usize] as usize] = uiTotalCoeffNum as u8;
+    pNonZeroCountCache[g_kCacheNzcScanIdx[(iIndex + 1) as usize] as usize] = uiTotalCoeffNum as u8;
+    pNonZeroCountCache[g_kCacheNzcScanIdx[(iIndex + 2) as usize] as usize] = uiTotalCoeffNum as u8;
+    pNonZeroCountCache[g_kCacheNzcScanIdx[(iIndex + 3) as usize] as usize] = uiTotalCoeffNum as u8;
 
     if uiTotalCoeffNum == 0 {
         return ERR_NONE;
@@ -2970,7 +2970,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
 
 pub unsafe fn ParseResidualBlockCabac(
     pNeighAvail: *const SWelsNeighAvail,
-    pNonZeroCountCache: *mut u8,
+    pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
     pScanTable: *const u8,
@@ -3012,7 +3012,7 @@ pub unsafe fn ParseResidualBlockCabac(
     }
 
     let iCurNzCacheIdx = g_kCacheNzcScanIdx[iIndex as usize] as usize;
-    *pNonZeroCountCache.add(iCurNzCacheIdx) = uiTotalCoeffNum as u8;
+    pNonZeroCountCache[iCurNzCacheIdx] = uiTotalCoeffNum as u8;
     if uiTotalCoeffNum == 0 {
         return ERR_NONE;
     }
