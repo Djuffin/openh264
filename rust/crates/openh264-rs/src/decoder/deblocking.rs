@@ -202,8 +202,14 @@ pub use crate::decoder::decoder_context::{
     PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
 };
 
+/// **T5.P′1 added `pDec`.** The layer used to carry the picture being decoded into,
+/// so a macroblock filter reached it through `pCurDqLayer->pDec`; the field was a
+/// cache of `dec_pic(pCtx)` and died with W2b. The slice loop derives once per
+/// macroblock and hands it down, which is the same freshness the cache had and no
+/// stored copy of it anywhere.
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     filter: *mut SDeblockingFilter,
     boundry_flag: i32,
 );
@@ -517,11 +523,11 @@ pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
 pub unsafe fn DeblockingBSInsideMBNormal(
     pFilter: *mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
     iMbXy: i32,
 ) {
-    let pDec = (*pCurDqLayer).pDec;
     let iRefIdx = *(*pDec).pRefIndex[LIST_0].add(iMbXy as usize);
     let mut iRefs: [Option<PicId>; MB_BLOCK4x4_NUM] = [None; MB_BLOCK4x4_NUM];
     for i in 0..MB_BLOCK4x4_NUM {
@@ -647,6 +653,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     pFilter: *mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
     iMbXy: i32,
@@ -654,7 +661,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     let mut iRefs: [[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A] = [[None; MB_BLOCK4x4_NUM]; LIST_A];
 
     for l in 0..LIST_A {
-        let iRefIdx = *(*(*pCurDqLayer).pDec).pRefIndex[l].add(iMbXy as usize);
+        let iRefIdx = *(*pDec).pRefIndex[l].add(iMbXy as usize);
         for i in 0..MB_BLOCK4x4_NUM {
             if iRefIdx[i] > REF_NOT_IN_LIST {
                 iRefs[l][i] = (*pFilter).ref_ids[l][iRefIdx[i] as usize];
@@ -664,7 +671,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
         }
     }
 
-    let pMv = &(*(*pCurDqLayer).pDec).pMv;
+    let pMv = &(*pDec).pMv;
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let nnz = std::slice::from_raw_parts(pNnzTab as *const u8, 24);
 
@@ -794,6 +801,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 pub unsafe fn DeblockingBsMarginalMBAvcbase(
     pFilter: *mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -806,8 +814,8 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let pRefIdxArr = if !(*pCurDqLayer).pDec.is_null() {
-        (*(*pCurDqLayer).pDec).pRefIndex[LIST_0]
+    let pRefIdxArr = if !pDec.is_null() {
+        (*pDec).pRefIndex[LIST_0]
     } else {
         // T5.J3: the grid's array, derived from the allocation root (S28) — the
         // consumer indexes it by macroblock address, so it must reach the whole
@@ -818,8 +826,8 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
-    let pMvArr = if !(*pCurDqLayer).pDec.is_null() {
-        (*(*pCurDqLayer).pDec).pMv[LIST_0]
+    let pMvArr = if !pDec.is_null() {
+        (*pDec).pMv[LIST_0]
     } else {
         // T5.K1: the grid's array, derived from the allocation root (S28) — `MB_BS_MV`
         // indexes it by macroblock address for the current macroblock *and* its
@@ -996,6 +1004,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
 pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     pFilter: *mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -1008,8 +1017,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let iRefIdx0 = (*(*pCurDqLayer).pDec).pRefIndex[LIST_0];
-    let iRefIdx1 = (*(*pCurDqLayer).pDec).pRefIndex[LIST_1];
+    let iRefIdx0 = (*pDec).pRefIndex[LIST_0];
+    let iRefIdx1 = (*pDec).pRefIndex[LIST_1];
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy) as *const u8;
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb) as *const u8;
@@ -1065,8 +1074,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
-                    let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                    let pMv0 = (*pDec).pMv[LIST_0];
+                    let pMv1 = (*pDec).pMv[LIST_1];
                     let val = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1128,8 +1137,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
-                        let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                        let pMv0 = (*pDec).pMv[LIST_0];
+                        let pMv1 = (*pDec).pMv[LIST_1];
                         *pBS.add(j + (i << 1)) = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1191,8 +1200,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
-                        let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                        let pMv0 = (*pDec).pMv[LIST_0];
+                        let pMv1 = (*pDec).pMv[LIST_1];
                         *pBS.add(j + (i << 1)) = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1249,8 +1258,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = (*(*pCurDqLayer).pDec).pMv[LIST_0];
-                    let pMv1 = (*(*pCurDqLayer).pDec).pMv[LIST_1];
+                    let pMv0 = (*pDec).pMv[LIST_0];
+                    let pMv1 = (*pDec).pMv[LIST_1];
                     *pBS.add(i) = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1589,6 +1598,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 
 unsafe fn DeblockingInterMb(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     nBS: &[[[u8; 4]; 4]; 2],
     iBoundryFlag: i32,
@@ -1601,7 +1611,6 @@ unsafe fn DeblockingInterMb(
     let pCurChromaQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
     // T5.N3: the picture, not the filter's copy of three of its pointers. See the
     // note at `WelsDeblockingFilterSlice` for why the layer's `pDec` is the route.
-    let pDec = (*pCurDqLayer).pDec;
     let iLineSize = (*pDec).linesize(0);
     let iLineSizeUV = (*pDec).linesize(1);
 
@@ -1733,6 +1742,7 @@ unsafe fn DeblockingInterMb(
 
 pub unsafe fn FilteringEdgeLumaHV(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1740,7 +1750,6 @@ pub unsafe fn FilteringEdgeLumaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let pDec = (*pCurDqLayer).pDec;
     let iLineSize = (*pDec).linesize(0);
 
     let pDestY = (*pDec).data_ptr(0).add(((iMbY * iLineSize + iMbX) << 4) as usize);
@@ -1831,6 +1840,7 @@ pub unsafe fn FilteringEdgeLumaHV(
 
 pub unsafe fn FilteringEdgeChromaHV(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1838,7 +1848,6 @@ pub unsafe fn FilteringEdgeChromaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let pDec = (*pCurDqLayer).pDec;
     let iLineSize = (*pDec).linesize(1);
 
     let pDestCb = (*pDec).data_ptr(1).add(((iMbY * iLineSize + iMbX) << 3) as usize);
@@ -1968,11 +1977,12 @@ pub unsafe fn FilteringEdgeChromaHV(
 #[inline]
 unsafe fn DeblockingIntraMb(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
-    FilteringEdgeLumaHV(pCurDqLayer, pFilter, iBoundryFlag);
-    FilteringEdgeChromaHV(pCurDqLayer, pFilter, iBoundryFlag);
+    FilteringEdgeLumaHV(pCurDqLayer, pDec, pFilter, iBoundryFlag);
+    FilteringEdgeChromaHV(pCurDqLayer, pDec, pFilter, iBoundryFlag);
 }
 
 // ============================================================================
@@ -1981,14 +1991,15 @@ unsafe fn DeblockingIntraMb(
 
 pub unsafe extern "C" fn WelsDeblockingMb(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
     let mut nBS = [[[0u8; 4]; 4]; 2];
 
     let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
-    let iCurMbType = if !(*pCurDqLayer).pDec.is_null() {
-        *(*(*pCurDqLayer).pDec).pMbType.add(iMbXyIndex as usize)
+    let iCurMbType = if !pDec.is_null() {
+        *(*pDec).pMbType.add(iMbXyIndex as usize)
     } else {
         *(*pCurDqLayer).grid.mb_type.get(iMbXyIndex as usize)
     };
@@ -1998,13 +2009,13 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
     match iCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(pCurDqLayer, pFilter, iBoundryFlag);
+            DeblockingIntraMb(pCurDqLayer, pDec, pFilter, iBoundryFlag);
         }
         _ => {
             if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - 1;
-                let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
-                    *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
+                let uiMbType = if !pDec.is_null() {
+                    *(*pDec).pMbType.add(iMbNb as usize)
                 } else {
                     *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
@@ -2012,9 +2023,9 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
                 (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(val);
             } else {
@@ -2023,8 +2034,8 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
             if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - (*pCurDqLayer).iMbWidth;
-                let uiMbType = if !(*pCurDqLayer).pDec.is_null() {
-                    *(*(*pCurDqLayer).pDec).pMbType.add(iMbNb as usize)
+                let uiMbType = if !pDec.is_null() {
+                    *(*pDec).pMbType.add(iMbNb as usize)
                 } else {
                     *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
                 };
@@ -2032,9 +2043,9 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
                 (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(val);
             } else {
@@ -2059,6 +2070,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 DeblockingBSliceBSInsideMBNormal(
                     pFilter,
                     pCurDqLayer,
+                    pDec,
                     &mut nBS,
                     GetPNzc(pCurDqLayer, iMbXyIndex),
                     iMbXyIndex,
@@ -2067,13 +2079,14 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 DeblockingBSInsideMBNormal(
                     pFilter,
                     pCurDqLayer,
+                    pDec,
                     &mut nBS,
                     GetPNzc(pCurDqLayer, iMbXyIndex),
                     iMbXyIndex,
                 );
             }
 
-            DeblockingInterMb(pCurDqLayer, pFilter, &nBS, iBoundryFlag);
+            DeblockingInterMb(pCurDqLayer, pDec, pFilter, &nBS, iBoundryFlag);
         }
     }
 }
@@ -2089,8 +2102,8 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // The borrow used to be a `data_ptr(i)` off the context's picture, taken three times at each of
 // the two filter-initialisation sites and stored into `SDeblockingFilter.pCsData` for
 // the whole macroblock loop. **There is no stored derivation now**: each reader takes
-// `pCurDqLayer`, derives from `(*pCurDqLayer).pDec` inside its own body, and the
-// result dies with the macroblock. Three answers, and none of them is a hazard:
+// the picture as a parameter, derives inside its own body, and the result dies with
+// the macroblock. Three answers, and none of them is a hazard:
 //
 // 1. **The derivations do not invalidate each other.** They address three planes,
 //    which after T5.C3 are three separate allocations; the accessor's `&mut self`
@@ -2098,10 +2111,15 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 // 2. **Nothing else in the loop reaches `pDec`, and after T5.N4 nothing in the loop
 //    reaches another picture at all.** The reference lists are `PicId`s snapshotted
 //    at filter init, so the loop's use of a reference is a slot comparison and never
-//    a dereference; `pMv` and `pRefIndex` are read off `pCurDqLayer->pDec`, and
-//    `DeblockingBSCalc*` reads the motion caches. The question of what happens if a
-//    reference list slot holds `pDec` itself does not arise, because holding a slot
-//    number is not holding a picture.
+//    a dereference; `pMv` and `pRefIndex` are read off the picture the loop passes
+//    down, and `DeblockingBSCalc*` reads the motion caches. The question of what
+//    happens if a reference list slot holds `pDec` itself does not arise, because
+//    holding a slot number is not holding a picture.
+// 4. **T5.P′1: the route is `dec_pic(pCtx)`, derived per macroblock in the loop
+//    below and passed as an argument.** It was `pCurDqLayer->pDec`, a cache of the
+//    same value with one stamp site; W2b deleted the cache rather than converting
+//    it. Nothing stores the result — not the filter, not the layer — so the class
+//    §2 names has no instance left in this file.
 // 3. **The mirror is gone, and it was the decoder's last** (§2's named class, of
 //    which `pBitStringAux` was the previous one, T5.M3). A cached plane pointer
 //    beside the plane that owns it is the F16/T5 class — two fields that can
@@ -2155,22 +2173,16 @@ pub unsafe fn WelsDeblockingFilterSlice(
     //
     // **T5.N3: the five mirrored fields are gone and nothing replaces them.** The
     // three plane pointers and two strides used to be copied out of `pCtx->pDec`
-    // here and read for the whole macroblock loop; every reader takes
-    // `pCurDqLayer`, which already carries the picture, so each derives what it
-    // needs per use and no cached copy can disagree with the plane that owns it.
+    // here and read for the whole macroblock loop; each reader derives what it needs
+    // per use, so no cached copy can disagree with the plane that owns it.
     //
     // T5.M3's lesson, applied rather than restated: *check that the route you
     // replace the mirror with is as fresh as the mirror was.* The mirror's source
-    // was `pCtx->pDec` and the route is `pCurDqLayer->pDec`, so the two must be the
-    // same picture here. They are, by control flow —
-    // `decoder_core.rs:3707`'s `InitDqLayerInfo(dq_cur, .., dec_pic(pCtx))` runs
-    // immediately before the slice decode this filter belongs to, in the same
-    // block — and the assert makes the battery say so rather than the argument.
-    debug_assert!(
-        std::ptr::eq((*pCurDqLayer).pDec, dec_pic(pCtx)),
-        "the layer's picture is the context's; the deblocking reads assume it"
-    );
-
+    // was `pCtx->pDec` and the route was `pCurDqLayer->pDec`, which is why a
+    // `debug_assert!` sat here asserting the two were one picture. **T5.P′1 deleted
+    // the assert by deleting the second route**: the layer's copy was a cache of
+    // `dec_pic(pCtx)` and it is gone, so the loop below derives the source itself,
+    // once per macroblock, and there is nothing left for the two to disagree about.
     pFilter.eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType as i32;
 
     pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
@@ -2192,7 +2204,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
             iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
 
             if let Some(func) = pDeblockMb {
-                func(pCurDqLayer, &mut pFilter, iBoundryFlag);
+                func(pCurDqLayer, dec_pic(pCtx), &mut pFilter, iBoundryFlag);
             }
 
             iCountNumMb += 1;
@@ -2242,6 +2254,7 @@ pub unsafe fn WelsDeblockingInitFilter(
 
 pub unsafe fn WelsDeblockingFilterMB(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iFilterIdc: i32,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
@@ -2249,7 +2262,7 @@ pub unsafe fn WelsDeblockingFilterMB(
     if iFilterIdc == 0 || iFilterIdc == 2 {
         let iBoundryFlag = DeblockingAvailableNoInterlayer(pCurDqLayer, iFilterIdc);
         if let Some(func) = pDeblockMb {
-            func(pCurDqLayer, pFilter, iBoundryFlag);
+            func(pCurDqLayer, pDec, pFilter, iBoundryFlag);
         }
     }
 }

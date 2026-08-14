@@ -183,7 +183,7 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState, PDqLaye
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, dec_pic};
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiScan4};
@@ -419,9 +419,9 @@ pub unsafe fn CopyRectBlock4Cols(
 // ============================================================================
 
 #[inline(always)]
-pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState) -> *mut u32 {
-    if !(*pCurDqLayer).pDec.is_null() {
-        (*(*pCurDqLayer).pDec).pMbType
+pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> *mut u32 {
+    if !pDec.is_null() {
+        (*pDec).pMbType
     } else {
         // T5.K2: the grid's array, derived from the allocation root (S28). Every
         // caller keeps this base and indexes it at *neighbour* addresses — left,
@@ -436,7 +436,11 @@ pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState) -> *mut u32 {
 // ============================================================================
 
 /// Calculates the predicted motion vector for a P_SKIP macroblock from its spatial neighbors.
-pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut DqLayerState, iMvp: &mut [i16; 2]) {
+pub unsafe fn PredPSkipMvFromNeighbor(
+    pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
+    iMvp: &mut [i16; 2],
+) {
     let mut bTopAvail = false;
     let mut bLeftTopAvail = false;
     let mut bRightTopAvail = false;
@@ -485,7 +489,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut DqLayerState, iMvp: &mut
         bRightTopAvail = false;
     }
 
-    let pMbType = GetMbType(pCurDqLayer);
+    let pMbType = GetMbType(pCurDqLayer, pDec);
     let iLeftType = if iCurX != 0 && bLeftAvail { *pMbType.add(iLeftXy as usize) } else { 0 };
     let iTopType = if iCurY != 0 && bTopAvail { *pMbType.add(iTopXy as usize) } else { 0 };
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.add(iLeftTopXy as usize) } else { 0 };
@@ -500,7 +504,6 @@ pub unsafe fn PredPSkipMvFromNeighbor(pCurDqLayer: *mut DqLayerState, iMvp: &mut
     let mut iRightTopRef: i8;
     let mut iLeftTopRef: i8;
 
-    let pDec = (*pCurDqLayer).pDec;
 
     // left
     if bLeftAvail && IS_INTER(iLeftType) {
@@ -719,9 +722,10 @@ pub unsafe fn GetColocatedMb(
     subMbType: &mut SubMbType,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
-    let pMbType = GetMbType(pCurDqLayer);
+    let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let is8x8 = IS_Inter_8x8(curMbType);
     *mbType = curMbType;
@@ -734,7 +738,7 @@ pub unsafe fn GetColocatedMb(
     // S25 for 5.3's colocated reads: *who else reaches this picture while the read
     // is in flight?* Exactly one candidate, and it is the current picture. Both
     // callers of this function — `PredMvBDirectSpatial` and `PredBDirectTemporal` —
-    // go on to write `pCurDqLayer->pDec`'s `pMv` and `pRefIndex` for the same
+    // go on to write the decoded picture's `pMv` and `pRefIndex` for the same
     // macroblock, so if the colocated picture were `pDec` the read below and that
     // write would be one buffer, and the two-picture split this code is supposed to
     // want would be a self-alias instead.
@@ -743,12 +747,12 @@ pub unsafe fn GetColocatedMb(
     // `!bUsedAsRef && iRefCount <= 0`; `InitRefPicList` fills list 1 from pictures
     // marked as references. The two populations are disjoint by construction — but
     // that is the kind of argument S25 exists to distrust, so the assert makes the
-    // battery say it instead. It is `same_picture`, so it is asking about slots
-    // (T5.N2), which is the same question the split-borrow API will ask when 5.1's
-    // remaining half gives `pDec` a `PicId` and this becomes provable rather than
-    // checked.
+    // battery say it instead. **T5.P′1 made it provable rather than checked**: the
+    // context carries a `PicId` and every pooled picture has one, so the question is
+    // slot equality with no dereference on either side — the fifth and last of P3's
+    // identity sites, and the one the note this replaces predicted.
     debug_assert!(
-        !crate::decoder::picture::same_picture(colocPic, (*pCurDqLayer).pDec),
+        crate::decoder::picture::pic_slot(colocPic) != (*pCtx).pDec,
         "the colocated picture is never the picture being decoded"
     );
 
@@ -862,8 +866,9 @@ pub unsafe fn PredMvBDirectSpatial(
     subMbType: &mut SubMbType,
 ) -> i32 {
     let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pMbType = GetMbType(pCurDqLayer);
+    let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
@@ -910,7 +915,7 @@ pub unsafe fn PredMvBDirectSpatial(
         }
     }
 
-    let pMbTypePtr = GetMbType(pCurDqLayer);
+    let pMbTypePtr = GetMbType(pCurDqLayer, pDec);
     let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.add(iLeftXy as usize) } else { 0 };
     let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.add(iTopXy as usize) } else { 0 };
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.add(iLeftTopXy as usize) } else { 0 };
@@ -926,7 +931,6 @@ pub unsafe fn PredMvBDirectSpatial(
     let mut iMvC = [[0i16; 2]; 2];
     let mut iMvD = [[0i16; 2]; 2];
 
-    let pDec = (*pCurDqLayer).pDec;
 
     for listIdx in 0..2 {
         if bLeftAvail && IS_INTER(iLeftType) {
@@ -1027,7 +1031,7 @@ pub unsafe fn PredMvBDirectSpatial(
         mbType &= !MB_TYPE_L0;
         *subMbType &= !MB_TYPE_L0;
     }
-    *GetMbType(pCurDqLayer).add(iMbXy) = mbType;
+    *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
 
     let pMvd = [0i16; 4];
     let colocPic = (*pCtx).sRefPic.pRefList[LIST_1][0];
@@ -1055,7 +1059,7 @@ pub unsafe fn PredMvBDirectSpatial(
         }
         UpdateP16x16DirectCabac(pCurDqLayer);
         for listIdx in 0..2 {
-            UpdateP16x16MotionInfo(pCurDqLayer, listIdx, ref_idx[listIdx as usize], iMvp[listIdx as usize].as_mut_ptr());
+            UpdateP16x16MotionInfo(pCurDqLayer, pDec, listIdx, ref_idx[listIdx as usize], iMvp[listIdx as usize].as_mut_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i32);
         }
     } else {
@@ -1065,8 +1069,8 @@ pub unsafe fn PredMvBDirectSpatial(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
                 (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
-                UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
                 pSubPartCount[i as usize] = g_ksInterBSubMbTypeInfo[0].iPartCount;
@@ -1078,6 +1082,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 }
                 FillSpatialDirect8x8Mv(
                     pCurDqLayer,
+                    pDec,
                     iIdx8,
                     pSubPartCount[i as usize],
                     pPartW[i as usize],
@@ -1104,8 +1109,9 @@ pub unsafe fn PredBDirectTemporal(
 ) -> i32 {
     let mut ret = ERR_NONE;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
+    let pDec = dec_pic(pCtx);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pMbType = GetMbType(pCurDqLayer);
+    let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.add(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
@@ -1115,7 +1121,7 @@ pub unsafe fn PredBDirectTemporal(
         return ret;
     }
 
-    *GetMbType(pCurDqLayer).add(iMbXy) = mbType;
+    *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
     let pMvd = [0i16; 4];
@@ -1125,12 +1131,12 @@ pub unsafe fn PredBDirectTemporal(
         ref_idx[LIST_0] = 0;
         ref_idx[LIST_1] = 0;
         UpdateP16x16DirectCabac(pCurDqLayer);
-        UpdateP16x16RefIdx(pCurDqLayer, LIST_1 as i32, ref_idx[LIST_1]);
+        UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_1 as i32, ref_idx[LIST_1]);
         ST64(iMvp.as_mut_ptr() as *mut i16, 0);
         if (*pCurDqLayer).iColocIntra[0] != 0 {
-            UpdateP16x16MotionOnly(pCurDqLayer, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
-            UpdateP16x16MotionOnly(pCurDqLayer, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
-            UpdateP16x16RefIdx(pCurDqLayer, LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
+            UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
             let mut mv = (*pCurDqLayer).iColocMv[LIST_0][0].as_mut_ptr();
@@ -1140,15 +1146,15 @@ pub unsafe fn PredBDirectTemporal(
             } else {
                 mv = (*pCurDqLayer).iColocMv[LIST_1][0].as_mut_ptr();
             }
-            UpdateP16x16RefIdx(pCurDqLayer, LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
 
             let scale = pSlice.iMvScale[LIST_0][ref_idx[LIST_0] as usize] as i32;
             iMvp[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
             iMvp[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
-            UpdateP16x16MotionOnly(pCurDqLayer, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
             iMvp[LIST_1][0] = iMvp[LIST_0][0] - *mv.add(0);
             iMvp[LIST_1][1] = iMvp[LIST_0][1] - *mv.add(1);
-            UpdateP16x16MotionOnly(pCurDqLayer, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
         }
         UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i32);
         UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_1 as i32);
@@ -1163,10 +1169,10 @@ pub unsafe fn PredBDirectTemporal(
                 let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
 
                 ref_idx[LIST_1] = 0;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 if (*pCurDqLayer).iColocIntra[iScan4Idx] != 0 {
                     ref_idx[LIST_0] = 0;
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                     ST64(iMvp.as_mut_ptr() as *mut i16, 0);
                 } else {
                     ref_idx[LIST_0] = 0;
@@ -1176,7 +1182,7 @@ pub unsafe fn PredBDirectTemporal(
                     } else {
                         mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
                     }
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                 }
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
@@ -1189,6 +1195,7 @@ pub unsafe fn PredBDirectTemporal(
                 }
                 FillTemporalDirect8x8Mv(
                     pCurDqLayer,
+                    pDec,
                     iIdx8,
                     pSubPartCount[i as usize],
                     pPartW[i as usize],
@@ -1236,6 +1243,7 @@ pub unsafe fn MapColToList0(
 /// Updates motion vector and reference index cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16MotionInfo(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     listIdx: usize,
     iRef: i8,
     iMVs: *const i16,
@@ -1243,7 +1251,6 @@ pub unsafe fn UpdateP16x16MotionInfo(
     let kiRef2 = ((iRef as u8 as u16) << 8) | (iRef as u8 as u16);
     let kiMV32 = LD32(iMVs);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
@@ -1276,12 +1283,12 @@ pub unsafe fn UpdateP16x16MotionInfo(
 /// Updates reference index cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16RefIdx(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     listIdx: i32,
     iRef: i8,
 ) {
     let kiRef2 = ((iRef as u8 as u16) << 8) | (iRef as u8 as u16);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     if !pDec.is_null() {
         let ref_ptr = (*(*pDec).pRefIndex[listIdx as usize].add(iMbXy)).as_mut_ptr();
@@ -1297,12 +1304,12 @@ pub unsafe fn UpdateP16x16RefIdx(
 /// Updates motion vector only cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16MotionOnly(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     listIdx: i32,
     iMVs: *const i16,
 ) {
     let kiMV32 = LD32(iMVs);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
@@ -1327,6 +1334,7 @@ pub unsafe fn UpdateP16x16MotionOnly(
 /// Updates reference index and motion vector caches for a 16x8 macroblock partition.
 pub unsafe fn UpdateP16x8MotionInfo(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIndex: &mut [[i8; 30]; LIST_A],
     listIdx: usize,
@@ -1337,7 +1345,6 @@ pub unsafe fn UpdateP16x8MotionInfo(
     let kiRef2 = ((iRef as u8 as u16) << 8) | (iRef as u8 as u16);
     let kiMV32 = LD32(iMVs);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     for _ in 0..2 {
         let kuiScan4Idx = g_kuiScan4[iPartIdx] as usize;
@@ -1388,6 +1395,7 @@ pub unsafe fn UpdateP16x8MotionInfo(
 /// Updates reference index and motion vector caches for an 8x16 macroblock partition.
 pub unsafe fn UpdateP8x16MotionInfo(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIndex: &mut [[i8; 30]; LIST_A],
     listIdx: usize,
@@ -1398,7 +1406,6 @@ pub unsafe fn UpdateP8x16MotionInfo(
     let kiRef2 = ((iRef as u8 as u16) << 8) | (iRef as u8 as u16);
     let kiMV32 = LD32(iMVs);
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     for _ in 0..2 {
         let kuiScan4Idx = g_kuiScan4[iPartIdx] as usize;
@@ -1449,6 +1456,7 @@ pub unsafe fn UpdateP8x16MotionInfo(
 /// Updates reference index cache for an 8x8 macroblock partition.
 pub unsafe fn Update8x8RefIdx(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iPartIdx: i16,
     listIdx: usize,
     iRef: i8,
@@ -1459,7 +1467,7 @@ pub unsafe fn Update8x8RefIdx(
     // `mv_pred.cpp:1175` dereferences unconditionally and the CABAC copy was the
     // faithful one; the guard here was the port's addition. T5.D1 proved `pDec`
     // cannot be null on this path in either tree.
-    let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[listIdx].add(iMbXy);
+    let pDecRef = &mut *(*pDec).pRefIndex[listIdx].add(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;
     pDecRef[iScan4Idx + 4] = iRef;
@@ -1526,6 +1534,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const 
 /// Populates motion vectors and clears MVDs for spatial direct 8x8 and 4x4 sub-partitions.
 pub unsafe fn FillSpatialDirect8x8Mv(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iIdx8: i16,
     iPartCount: i8,
     iPartW: i8,
@@ -1537,7 +1546,6 @@ pub unsafe fn FillSpatialDirect8x8Mv(
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDec = (*pCurDqLayer).pDec;
 
     for j in 0..iPartCount as i32 {
         let iPartIdx = (iIdx8 as i32 + j * iPartW as i32) as usize;
@@ -1737,6 +1745,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 /// Calculates and populates temporal direct motion vectors for 8x8 or 4x4 direct sub-partitions.
 pub unsafe fn FillTemporalDirect8x8Mv(
     pCurDqLayer: *mut DqLayerState,
+    pDec: PPicture,
     iIdx8: i16,
     iPartCount: i8,
     iPartW: i8,
@@ -1749,7 +1758,6 @@ pub unsafe fn FillTemporalDirect8x8Mv(
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut pMvDirect = [[0i16; 2]; 2];
-    let pDec = (*pCurDqLayer).pDec;
 
     for j in 0..iPartCount as i32 {
         let iPartIdx = (iIdx8 as i32 + j * iPartW as i32) as usize;

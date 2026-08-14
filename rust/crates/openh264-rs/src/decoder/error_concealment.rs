@@ -650,7 +650,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
     let iMbWidth = (*(*pCtx).pSps).iMbWidth;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = (*pCurDqLayer).pDec;
+    let pDec = dec_pic(pCtx);
 
     if pDec.is_null() {
         return;

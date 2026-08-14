@@ -45,6 +45,7 @@
 )]
 
 use crate::decoder::decoder_context::dec_pic;
+use crate::decoder::picture::PPicture;
 use std::ptr;
 
 
@@ -791,6 +792,7 @@ pub unsafe fn DecodeCabacIntraMbType(
 
 pub unsafe fn UpdateP16x8RefIdxCabac(
     pCurDqLayer: PDqLayer,
+    pDec: PPicture,
     pRefIndex: &mut [[i8; 30]; LIST_A],
     iPartIdx: i32,
     iRef: i8,
@@ -802,7 +804,7 @@ pub unsafe fn UpdateP16x8RefIdxCabac(
     let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
     let iCacheIdx6 = 6 + iCacheIdx;
 
-    let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
     for offset in 0..4 {
         pDecRef[iScan4Idx + offset] = iRef;
         pDecRef[iScan4Idx4 + offset] = iRef;
@@ -813,6 +815,7 @@ pub unsafe fn UpdateP16x8RefIdxCabac(
 
 pub unsafe fn UpdateP8x16RefIdxCabac(
     pCurDqLayer: PDqLayer,
+    pDec: PPicture,
     pRefIndex: &mut [[i8; 30]; LIST_A],
     mut iPartIdx: i32,
     iRef: i8,
@@ -825,7 +828,7 @@ pub unsafe fn UpdateP8x16RefIdxCabac(
         let iScan4Idx4 = 4 + iScan4Idx;
         let iCacheIdx6 = 6 + iCacheIdx;
 
-        let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+        let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
         for offset in 0..2 {
             pDecRef[iScan4Idx + offset] = iRef;
             pDecRef[iScan4Idx4 + offset] = iRef;
@@ -838,13 +841,14 @@ pub unsafe fn UpdateP8x16RefIdxCabac(
 
 pub unsafe fn UpdateP8x8RefIdxCabac(
     pCurDqLayer: PDqLayer,
+    pDec: PPicture,
     iPartIdx: i32,
     iRef: i8,
     iListIdx: i8,
 ) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDecRef = &mut *(*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pDecRef = &mut *(*pDec).pRefIndex[iListIdx as usize].add(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;
     pDecRef[iScan4Idx + 4] = iRef;
@@ -1411,7 +1415,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pMbType = (*(*pCurDqLayer).pDec).pMbType;
+    let pMbType = (*dec_pic(pCtx)).pMbType;
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
@@ -1509,7 +1513,7 @@ pub unsafe fn ParseRefIdxCabac(
     let mut iCtxInc: i32 = 0;
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pRefIdxInMB = *(*(*pCurDqLayer).pDec).pRefIndex[iListIdx as usize].add(iMbXy);
+    let pRefIdxInMB = *(*dec_pic(pCtx)).pRefIndex[iListIdx as usize].add(iMbXy);
     let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
 
     let scan_cache = g_kuiCache30ScanIdx[iZOrderIdx as usize] as usize;
@@ -1693,7 +1697,8 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     let iMaxVmv = (*(*pSps).pSLevelLimits).iMaxVmv;
 
     let bIsPending = GetThreadCount(pCtx) > 1;
-    let mbType = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+    let pDec = dec_pic(pCtx);
+    let mbType = *(*pDec).pMbType.add(iMbXy);
 
     match mbType {
         MB_TYPE_16x16 => {
@@ -1737,7 +1742,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             pMv[0] += pMvd[0];
             pMv[1] += pMvd[1];
 
-            UpdateP16x16MotionInfo(pCurDqLayer, LIST_0, iRef[0], pMv.as_ptr());
+            UpdateP16x16MotionInfo(pCurDqLayer, pDec, LIST_0, iRef[0], pMv.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i8);
         }
         MB_TYPE_16x8 => {
@@ -1772,7 +1777,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
-                UpdateP16x8RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
+                UpdateP16x8RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
                 let iPartIdx = i << 3;
@@ -1785,7 +1790,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP16x8MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
@@ -1821,7 +1826,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
-                UpdateP8x16RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
+                UpdateP8x16RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
                 let iPartIdx = i << 2;
@@ -1834,7 +1839,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP8x16MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
@@ -1901,7 +1906,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
-                UpdateP8x8RefIdxCabac(pCurDqLayer, iIdx8, pRefIdx[i], LIST_0 as i8);
+                UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8, pRefIdx[i], LIST_0 as i8);
             }
 
             for i in 0..4 {
@@ -1929,7 +1934,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     pMv[0] += pMvd[0];
                     pMv[1] += pMvd[1];
 
-                    let pDecMv = &mut *(*(*pCurDqLayer).pDec).pMv[0].add(iMbXy);
+                    let pDecMv = &mut *(*dec_pic(pCtx)).pMv[0].add(iMbXy);
                     let pMvdTarget = (*pCurDqLayer).grid.mvd[0].get_mut(iMbXy);
 
                     if SUB_MB_TYPE_8x8 == uiSubMbType {
@@ -2001,7 +2006,8 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     let pRefCount = pSliceHeader.uiRefCount;
-    let mbType = *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy);
+    let pDec = dec_pic(pCtx);
+    let mbType = *(*pDec).pMbType.add(iMbXy);
 
     // C keeps pMv[4]/pMvd[4]: the 8x8 path duplicates the low pair into the high
     // pair (`ST32 (pMv + 2, LD32 (pMv))`) so it can store 8 bytes at once.
@@ -2109,7 +2115,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 pMvd[0] = 0; pMvd[1] = 0;
             }
             let mv2: [i16; 2] = [pMv[0], pMv[1]];
-            UpdateP16x16MotionInfo(pCurDqLayer, listIdx, iRef[listIdx], mv2.as_ptr());
+            UpdateP16x16MotionInfo(pCurDqLayer, pDec, listIdx, iRef[listIdx], mv2.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i8);
         }
     } else if IS_INTER_16x8(mbType) {
@@ -2136,7 +2142,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     }
                     check_ref_idx!(listIdx, ref_idx);
                 }
-                UpdateP16x8RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, ref_idx, listIdx as i8);
+                UpdateP16x8RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, ref_idx, listIdx as i8);
                 ref_idx_list[listIdx][i] = ref_idx;
             }
         }
@@ -2160,7 +2166,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP16x8MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP16x8MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
@@ -2188,7 +2194,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     }
                     check_ref_idx!(listIdx, ref_idx);
                 }
-                UpdateP8x16RefIdxCabac(pCurDqLayer, pRefIndex, iPartIdx, ref_idx, listIdx as i8);
+                UpdateP8x16RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, ref_idx, listIdx as i8);
                 ref_idx_list[listIdx][i] = ref_idx;
             }
         }
@@ -2212,7 +2218,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP8x16MotionInfo(pCurDqLayer, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP8x16MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
@@ -2311,6 +2317,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     FillSpatialDirect8x8Mv(
                         pCurDqLayer,
+                        pDec,
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -2339,12 +2346,13 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                             mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
                         }
                     }
-                    Update8x8RefIdx(pCurDqLayer, iIdx8, LIST_0, iRef[LIST_0]);
-                    Update8x8RefIdx(pCurDqLayer, iIdx8, LIST_1, iRef[LIST_1]);
+                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, LIST_0, iRef[LIST_0]);
+                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, LIST_1, iRef[LIST_1]);
                     UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_0 as i32, iRef[LIST_0]);
                     UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_1 as i32, iRef[LIST_1]);
                     FillTemporalDirect8x8Mv(
                         pCurDqLayer,
+                        pDec,
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -2367,7 +2375,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
-                        Update8x8RefIdx(pCurDqLayer, iIdx8, listIdx, iRef[listIdx]);
+                        Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, listIdx, iRef[listIdx]);
                         ref_idx_list[listIdx][i] = iRef[listIdx];
                     }
                     UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
@@ -2390,7 +2398,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         }
                         check_ref_idx!(listIdx, iref);
                     }
-                    Update8x8RefIdx(pCurDqLayer, iIdx8, listIdx, iref);
+                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, listIdx, iref);
                     ref_idx_list[listIdx][i] = iref;
                 }
             }
@@ -2434,7 +2442,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pMvd[0] = 0; pMvd[1] = 0;
                     }
 
-                    let pDecMv = (*(*pCurDqLayer).pDec).pMv[listIdx].add(iMbXy) as *mut [i16; 2];
+                    let pDecMv = (*dec_pic(pCtx)).pMv[listIdx].add(iMbXy) as *mut [i16; 2];
                     let pLayerMvd = (*pCurDqLayer).grid.mvd[listIdx].get_mut(iMbXy).as_mut_ptr();
                     let mv2: [i16; 2] = [pMv[0], pMv[1]];
                     let mvd2: [i16; 2] = [pMvd[0], pMvd[1]];
@@ -2675,7 +2683,7 @@ pub unsafe fn ParseCbfInfoCabac(
     let iCurrBlkXy = (*(*pCtx).pCurDqLayer).iMbXyIndex;
     let mut iTopBlkXy = iCurrBlkXy - (*(*pCtx).pCurDqLayer).iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
-    let pMbType = (*(*(*pCtx).pCurDqLayer).pDec).pMbType;
+    let pMbType = (*dec_pic(pCtx)).pMbType;
     *uiCbfBit = 0;
     let mut nA: i8 = IS_INTRA(*pMbType.add(iCurrBlkXy as usize)) as i8;
     let mut nB: i8 = nA;
@@ -3032,8 +3040,9 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pBsAux = &mut *crate::decoder::bit_stream::slice_bit_reader(pCtx);
-    let iDstStrideLuma = (*(*pCurDqLayer).pDec).linesize(0);
-    let iDstStrideChroma = (*(*pCurDqLayer).pDec).linesize(1);
+    let pDec = dec_pic(pCtx);
+    let iDstStrideLuma = (*pDec).linesize(0);
+    let iDstStrideChroma = (*pDec).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
@@ -3045,7 +3054,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext) -> i32 {
     let mut pMbDstU = (*dec_pic(pCtx)).data_ptr(1).add(iMbOffsetChroma as usize);
     let mut pMbDstV = (*dec_pic(pCtx)).data_ptr(2).add(iMbOffsetChroma as usize);
 
-    *(*(*pCurDqLayer).pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
+    *(*pDec).pMbType.add(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(pCabacDecEngine, pBsAux);
 
     // `pEndBuf - pCurBuf` becomes `len - pos`. F4's off-by-ones are load-bearing, so
