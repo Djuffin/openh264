@@ -665,6 +665,93 @@ pub unsafe fn pic_pool_mut<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SPic
     (*pCtx).pPicBuff.as_deref_mut()
 }
 
+/// Which SPS buffer an id names, and the id (T5.R6).
+///
+/// The port keeps the C's two parameter-set arrays — `sSpsBuffer` for AVC and
+/// `sSubsetSpsBuffer` for SVC, whose entries *contain* an `SSps` — and the C picks
+/// between them with the NAL's extension flag, then stores the resulting pointer.
+/// The pointer is a raw alias into a context array, which is the blocker class this
+/// phase removes: the pair below is what the pointer was carrying, and the lookup
+/// that rebuilds it is `sps_of`.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub struct SpsRef {
+    pub id: i32,
+    /// `true` when the entry is `sSubsetSpsBuffer[id].sSps`.
+    pub subset: bool,
+}
+
+/// The SPS an [`SpsRef`] names, or null when there is none.
+///
+/// **The one place an SPS id becomes an address** (T5.R6). `addr_of_mut!` derives it
+/// from `pCtx` with no intermediate reference (S29), so the result carries the
+/// context's own provenance and two live results cannot conflict — which is the
+/// property the stored pointer had *only* because it was made the same way, and which
+/// nothing about a stored pointer said out loud.
+#[inline]
+pub unsafe fn sps_of(pCtx: PWelsDecoderContext, r: Option<SpsRef>) -> *mut SSps {
+    let Some(r) = r else {
+        return std::ptr::null_mut();
+    };
+    if pCtx.is_null() || r.id < 0 {
+        return std::ptr::null_mut();
+    }
+    let i = r.id as usize;
+    if r.subset {
+        if i >= MAX_SPS_COUNT + 1 {
+            return std::ptr::null_mut();
+        }
+        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[i].sSps)
+    } else {
+        if i >= MAX_SPS_COUNT + 1 {
+            return std::ptr::null_mut();
+        }
+        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSpsBuffer[i])
+    }
+}
+
+/// The PPS an id names, or null when there is none. [`sps_of`]'s shape.
+#[inline]
+pub unsafe fn pps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SPps {
+    let Some(id) = id else {
+        return std::ptr::null_mut();
+    };
+    if pCtx.is_null() || id < 0 || id as usize >= MAX_PPS_COUNT + 1 {
+        return std::ptr::null_mut();
+    }
+    std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[id as usize])
+}
+
+/// The subset SPS an id names, or null when there is none. [`sps_of`]'s shape.
+#[inline]
+pub unsafe fn subset_sps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SSubsetSps {
+    let Some(id) = id else {
+        return std::ptr::null_mut();
+    };
+    if pCtx.is_null() || id < 0 || id as usize >= MAX_SPS_COUNT + 1 {
+        return std::ptr::null_mut();
+    }
+    std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[id as usize])
+}
+
+/// The active SPS — the context field `pSps` was, resolved (T5.R6).
+#[inline]
+pub unsafe fn active_sps(pCtx: PWelsDecoderContext) -> *mut SSps {
+    if pCtx.is_null() {
+        return std::ptr::null_mut();
+    }
+    sps_of(pCtx, (*pCtx).active_sps)
+}
+
+/// The active PPS — the context field `pPps` was, resolved (T5.R6).
+#[inline]
+pub unsafe fn active_pps(pCtx: PWelsDecoderContext) -> *mut SPps {
+    if pCtx.is_null() {
+        return std::ptr::null_mut();
+    }
+    pps_of(pCtx, (*pCtx).active_pps)
+}
+
 /// The layer the access unit is decoding, or null when there is none.
 ///
 /// **The one way to reach [`SWelsDecoderContext::pDqLayersList`]** (T5.R2), and the
@@ -963,8 +1050,11 @@ pub struct SWelsDecoderContext {
     /// equivalence argument holds by construction — that cascade ran on the
     /// line before `drop(Box::from_raw(pCtx))` at both of its call sites.
     pub access_unit: Option<Box<SAccessUnit>>,
-    pub pSps: *mut SSps,
-    pub pPps: *mut SPps,
+    /// The active parameter sets, as ids rather than aliases into the two buffers
+    /// (T5.R6). `None` is the null the two pointers held before the first slice
+    /// header; [`active_sps`] and [`active_pps`] are the only readers.
+    pub active_sps: Option<SpsRef>,
+    pub active_pps: Option<i32>,
     /// The one layer, **owned** (T5.R2), and reached only through [`cur_dq_layer`].
     ///
     /// `pCurDqLayer` was this field's cache and died at T5.R1: it had one production

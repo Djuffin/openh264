@@ -181,6 +181,7 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState, PDqLaye
 
 
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+use crate::decoder::decoder_context::{active_pps, active_sps, pps_of, sps_of};
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
 pub use crate::decoder::decoder_context::{
@@ -780,8 +781,8 @@ pub unsafe fn GetColocatedMb(
         coloc_mbType |= MB_TYPE_16x16 | MB_TYPE_P0L0 | MB_TYPE_P1L0;
     }
 
-    let bDirect8x8InferenceFlag = if !(*pCtx).pSps.is_null() {
-        (*(*pCtx).pSps).bDirect8x8InferenceFlag
+    let bDirect8x8InferenceFlag = if !active_sps(pCtx).is_null() {
+        (*active_sps(pCtx)).bDirect8x8InferenceFlag
     } else {
         false
     };

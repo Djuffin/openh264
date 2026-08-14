@@ -13,6 +13,7 @@
 //! Corresponds to ITU-T H.264 Section 7.3.3 and Annex G (SVC) Section G.7.3.3.4.
 
 use std::ffi::c_void;
+use crate::decoder::decoder_context::SpsRef;
 
 // Constants matching `wels_common_defs.h` and `wels_const.h`
 pub const LIST_0: usize = 0;
@@ -265,8 +266,13 @@ pub struct TagSliceHeaders {
     pub iSliceBetaOffset: i32,
     pub iSliceGroupChangeCycle: i32,
 
-    pub pSps: PSps,
-    pub pPps: PPps,
+    /// The active parameter sets as ids, not aliases (T5.R6). These were
+    /// `void*`-typed pointers into the context's two SPS buffers and its PPS buffer —
+    /// the C's own spelling — and the pair `(id, subset)` is what they carried;
+    /// `sps_of`/`pps_of` rebuild the address at each use. `None` is the null they held
+    /// before `ParseSliceHeaderSyntaxs` filled them.
+    pub sps_ref: Option<SpsRef>,
+    pub pps_id: Option<i32>,
     pub iSpsId: i32,
     pub iPpsId: i32,
     pub bIdrFlag: bool,
@@ -310,8 +316,8 @@ impl Default for TagSliceHeaders {
             iSliceAlphaC0Offset: 0,
             iSliceBetaOffset: 0,
             iSliceGroupChangeCycle: 0,
-            pSps: std::ptr::null_mut(),
-            pPps: std::ptr::null_mut(),
+            sps_ref: None,
+            pps_id: None,
             iSpsId: 0,
             iPpsId: 0,
             bIdrFlag: false,
@@ -341,7 +347,8 @@ impl Default for TagSliceHeaders {
 #[derive(Debug, Copy, Clone)]
 pub struct TagSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
-    pub pSubsetSps: PSubsetSps,
+    /// The subset SPS id, not an alias (T5.R6); `subset_sps_of` resolves it.
+    pub subset_sps_id: Option<i32>,
 
     pub uiDisableInterLayerDeblockingFilterIdc: u32,
     pub iInterLayerSliceAlphaC0Offset: i32,
@@ -378,7 +385,7 @@ impl Default for TagSliceHeaderExt {
     fn default() -> Self {
         Self {
             sSliceHeader: SSliceHeader::default(),
-            pSubsetSps: std::ptr::null_mut(),
+            subset_sps_id: None,
             uiDisableInterLayerDeblockingFilterIdc: 0,
             iInterLayerSliceAlphaC0Offset: 0,
             iInterLayerSliceBetaOffset: 0,

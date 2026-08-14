@@ -8,7 +8,9 @@
     unused_mut
 )]
 
-use crate::decoder::decoder_context::{PicRefs, cur_and_refs, ref_id};
+use crate::decoder::decoder_context::{
+    PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, pps_of, ref_id, sps_of,
+};
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
 use std::ffi::c_void;
@@ -704,31 +706,31 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    if (*pCtx).pSps.is_null() || (*pCtx).pPps.is_null() {
+    if active_sps(pCtx).is_null() || active_pps(pCtx).is_null() {
         return ERR_NONE;
     }
-    if (*(*pCtx).pSps).bSeqScalingMatrixPresentFlag || (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
+    if (*active_sps(pCtx)).bSeqScalingMatrixPresentFlag || (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
         (*pCtx).bUseScalingList = true;
 
-        if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != (*(*pCtx).pPps).iPpsId {
+        if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != (*active_pps(pCtx)).iPpsId {
             for i in 0..6 {
                 (*pCtx).pDequant_coeff4x4[i] = (*pCtx).pDequant_coeff_buffer4x4[i].as_mut_ptr();
                 (*pCtx).pDequant_coeff8x8[i] = (*pCtx).pDequant_coeff_buffer8x8[i].as_mut_ptr();
                 for q in 0..51 {
                     for x in 0..16 {
-                        let scale4 = if (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
-                            (*(*pCtx).pPps).iScalingList4x4[i][x] as u32
+                        let scale4 = if (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
+                            (*active_pps(pCtx)).iScalingList4x4[i][x] as u32
                         } else {
-                            (*(*pCtx).pSps).iScalingList4x4[i][x] as u32
+                            (*active_sps(pCtx)).iScalingList4x4[i][x] as u32
                         };
                         (*pCtx).pDequant_coeff_buffer4x4[i][q][x] =
                             (scale4 * (g_kuiDequantCoeff[q][x & 0x07] as u32)) as u16;
                     }
                     for y in 0..64 {
-                        let scale8 = if (*(*pCtx).pPps).bPicScalingMatrixPresentFlag {
-                            (*(*pCtx).pPps).iScalingList8x8[i][y] as u32
+                        let scale8 = if (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
+                            (*active_pps(pCtx)).iScalingList8x8[i][y] as u32
                         } else {
-                            (*(*pCtx).pSps).iScalingList8x8[i][y] as u32
+                            (*active_sps(pCtx)).iScalingList8x8[i][y] as u32
                         };
                         (*pCtx).pDequant_coeff_buffer8x8[i][q][y] =
                             (scale8 * (g_kuiMatrixV[q % 6][y / 8][y % 8] as u32)) as u16;
@@ -736,7 +738,7 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
                 }
             }
             (*pCtx).bDequantCoeff4x4Init = true;
-            (*pCtx).iDequantCoeffPpsid = (*(*pCtx).pPps).iPpsId;
+            (*pCtx).iDequantCoeffPpsid = (*active_pps(pCtx)).iPpsId;
         }
     } else {
         (*pCtx).bUseScalingList = false;
@@ -1680,7 +1682,7 @@ pub unsafe fn GetInterBPred(
     let mut iRefIndex1: i8 = 0;
     let mut iRefIndex: i8 = 0;
 
-    let pPpsB = (*pCurDqLayer).sLayerInfo.pPps as *const SPps;
+    let pPpsB = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.pps_id);
     let bWeightedBipredIdcIs1 = !pPpsB.is_null() && (*pPpsB).uiWeightedBipredIdc == 1;
     let bUseWeightedBiPredIdc = (*pCurDqLayer).bUseWeightedBiPredIdc;
 
@@ -2051,7 +2053,7 @@ unsafe fn GetTempPredPlanes(
     iChromaStride: i32,
 ) -> Option<[*mut u8; 3]> {
     if (*pCtx).pTempDec.is_none() {
-        if (*pCtx).pSps.is_null() {
+        if active_sps(pCtx).is_null() {
             return None;
         }
         // T5.P″1: `alloc_picture` hands back the owner, and the field keeps it. The
@@ -2059,8 +2061,8 @@ unsafe fn GetTempPredPlanes(
         // "the allocation failed" — with `Option` spelling them.
         (*pCtx).pTempDec = crate::decoder::pic_queue::alloc_picture(
             pCtx,
-            ((*(*pCtx).pSps).iMbWidth << 4) as i32,
-            ((*(*pCtx).pSps).iMbHeight << 4) as i32,
+            ((*active_sps(pCtx)).iMbWidth << 4) as i32,
+            ((*active_sps(pCtx)).iMbHeight << 4) as i32,
         );
     }
     // The borrow is on the field (S29) and the three plane pointers derive from the
@@ -2466,10 +2468,10 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
     let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
-    if (*pSliceHeader).pSps.is_null() {
+    if (*pSliceHeader).sps_ref.is_none() {
         return ERR_NONE;
     }
-    let iTotalMbTargetLayer = (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32;
+    let iTotalMbTargetLayer = (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32;
 
 
     let iCurLayerWidth = (*dq).iMbWidth << 4;
@@ -2490,11 +2492,11 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
     (*dq).iMbXyIndex = iNextMbXyIndex;
 
     if iNextMbXyIndex == 0 && !pDec.is_null() {
-        if !(*pCtx).pSps.is_null() {
-            (*pDec).iSpsId = (*(*pCtx).pSps).iSpsId;
+        if !active_sps(pCtx).is_null() {
+            (*pDec).iSpsId = (*active_sps(pCtx)).iSpsId;
         }
-        if !(*pCtx).pPps.is_null() {
-            (*pDec).iPpsId = (*(*pCtx).pPps).iPpsId;
+        if !active_pps(pCtx).is_null() {
+            (*pDec).iPpsId = (*active_pps(pCtx)).iPpsId;
         }
         (*pDec).uiQualityId = (*dq).sLayerInfo.sNalHeaderExt.uiQualityId;
     }
@@ -2528,7 +2530,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
             return ERR_INFO_MB_NUM_EXCEED_FAIL;
         }
 
-        if !(*pSliceHeader).pPps.is_null() && (*((*pSliceHeader).pPps as *mut crate::decoder::parameter_sets::SPps)).uiNumSliceGroups > 1 {
+        if !(*pSliceHeader).pps_id.is_none() && (*(pps_of(pCtx, (*pSliceHeader).pps_id))).uiNumSliceGroups > 1 {
             iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
@@ -2685,7 +2687,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     if uiMbType > 25 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
     }
-    if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+    if (*active_sps(pCtx)).uiChromaFormatIdc == 0
         && ((uiMbType >= 5 && uiMbType <= 12) || (uiMbType >= 17 && uiMbType <= 24))
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -2696,7 +2698,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
         *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
-        if (*(*pCtx).pPps).bTransform8x8ModeFlag {
+        if (*active_pps(pCtx)).bTransform8x8ModeFlag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
@@ -2727,13 +2729,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
             return ret as i32;
         }
         uiCbp = uiCode;
-        if (*(*pCtx).pSps).uiChromaFormatIdc != 0 && uiCbp > 47 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc != 0 && uiCbp > 47 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        uiCbp = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+        uiCbp = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
             crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
         } else {
             crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
@@ -2747,7 +2749,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
         *pCbp = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
-        uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+        uiCbpC = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
             (*pCbp as u32) >> 4
         } else {
             0
@@ -2769,7 +2771,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
 
     if *pCbp == 0 && IS_INTRANxN(*(*pDec).pMbType.get(iMbXy)) {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
@@ -2797,7 +2799,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3183,7 +3185,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         if uiMbType > 25 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0
             && ((uiMbType >= 5 && uiMbType <= 12) || (uiMbType >= 17 && uiMbType <= 24))
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -3194,7 +3196,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
-            if (*(*pCtx).pPps).bTransform8x8ModeFlag {
+            if (*active_pps(pCtx)).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
@@ -3224,7 +3226,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
             (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
             *pCbp = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
-            uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            uiCbpC = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 (*pCbp as u32) >> 4
             } else {
                 0
@@ -3248,21 +3250,21 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             return ret as i32;
         }
         uiCbp = uiCode;
-        if (*(*pCtx).pSps).uiChromaFormatIdc != 0 && uiCbp > 47 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc != 0 && uiCbp > 47 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
         let mb_type = *(*pDec).pMbType.get(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
-            if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
             } else {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
             }
         } else {
-            if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiInterCbpTable[uiCbp as usize] as u32
             } else {
                 crate::decoder::dec_golomb::g_kuiInterCbpTable400[uiCbp as usize] as u32
@@ -3279,7 +3281,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             && mb_type != MB_TYPE_INTRA8x8
             && mb_type != MB_TYPE_INTRA4x4
             && uiCbpL > 0
-            && (*(*pCtx).pPps).bTransform8x8ModeFlag;
+            && (*active_pps(pCtx)).bTransform8x8ModeFlag;
 
         if bNeedParseTransformSize8x8Flag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
@@ -3296,7 +3298,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *pCbp == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
@@ -3324,7 +3326,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3410,7 +3412,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 
         let iLastMbQp = (*pSlice).iLastMbQp;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
-        let pps_ptr = (*pSliceHeaderExt).sSliceHeader.pPps as *const crate::decoder::parameter_sets::SPps;
+        let pps_ptr = pps_of(pCtx, (*pSliceHeaderExt).sSliceHeader.pps_id);
         for i in 0..2 {
             let offset = if !pps_ptr.is_null() {
                 (*pps_ptr).iChromaQpIndexOffset[i]
@@ -3540,7 +3542,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         if uiMbType > 25 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0
             && ((uiMbType >= 5 && uiMbType <= 12) || (uiMbType >= 17 && uiMbType <= 24))
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -3551,7 +3553,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
-            if (*(*pCtx).pPps).bTransform8x8ModeFlag {
+            if (*active_pps(pCtx)).bTransform8x8ModeFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
@@ -3581,7 +3583,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
             (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
             *pCbp = g_kuiI16CbpTable[((uiMbType - 1) >> 2) as usize] as i8;
-            uiCbpC = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            uiCbpC = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 (*pCbp as u32) >> 4
             } else {
                 0
@@ -3605,21 +3607,21 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             return ret as i32;
         }
         uiCbp = uiCode;
-        if (*(*pCtx).pSps).uiChromaFormatIdc != 0 && uiCbp > 47 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc != 0 && uiCbp > 47 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0 && uiCbp > 15 {
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0 && uiCbp > 15 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
         }
         let mb_type = *(*pDec).pMbType.get(iMbXy);
         uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
-            if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
             } else {
                 crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
             }
         } else {
-            if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+            if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
                 crate::decoder::dec_golomb::g_kuiInterCbpTable[uiCbp as usize] as u32
             } else {
                 crate::decoder::dec_golomb::g_kuiInterCbpTable400[uiCbp as usize] as u32
@@ -3636,7 +3638,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             && mb_type != MB_TYPE_INTRA8x8
             && mb_type != MB_TYPE_INTRA4x4
             && uiCbpL > 0
-            && (*(*pCtx).pPps).bTransform8x8ModeFlag;
+            && (*active_pps(pCtx)).bTransform8x8ModeFlag;
 
         if bNeedParseTransformSize8x8Flag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
@@ -3653,7 +3655,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *pCbp == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
@@ -3681,7 +3683,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
         (*pSlice).iLastMbQp = new_qp;
         let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3812,7 +3814,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         {
             let iLastMbQp = (*pSlice).iLastMbQp;
             *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
-            let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
+            let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
             for i in 0..2 {
                 let idx = WELS_CLIP3(
                     *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -3886,7 +3888,7 @@ pub unsafe fn ParseIntra4x4Mode(
 
     uiNeighAvail = ((iSampleAvail[6] << 2) | (iSampleAvail[0] << 1) | (iSampleAvail[1])) as u8;
 
-    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
+    let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     // T5.I5: the sixteen 4x4 modes are written through one window. Nothing in
     // the loop reaches this family — `ParseIntraPredModeLumaCabac` and
     // `CheckIntraNxNPredMode` do not — and the record is `[i8; 16]`, so the
@@ -3956,7 +3958,7 @@ pub unsafe fn ParseIntra4x4Mode(
     *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
     *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);
 
-    if (*(*pCtx).pSps).uiChromaFormatIdc == 0 {
+    if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
     }
 
@@ -4031,7 +4033,7 @@ pub unsafe fn ParseIntra8x8Mode(
         | (iSampleAvail[1])) as u8;
     *(*dq).grid.intra_nxn_avail_flag.get_mut(iMbXy) = uiNeighAvail;
 
-    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
+    let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     // T5.I5: as in `ParseIntra4x4Mode` — sixteen writes, one check.
     let pIntra4x4FinalMode = (*dq).grid.intra4x4_final_mode.get_mut(iMbXy);
     for i in 0..4usize {
@@ -4105,7 +4107,7 @@ pub unsafe fn ParseIntra8x8Mode(
     *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
     *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);
 
-    if (*(*pCtx).pSps).uiChromaFormatIdc == 0 {
+    if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
     }
 
@@ -4176,11 +4178,11 @@ pub unsafe fn ParseIntra16x16Mode(
     if crate::decoder::parse_mb_syn_cavlc::CheckIntra16x16PredMode(uiNeighAvail, pMode) != 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I16x16_PRED_MODE);
     }
-    if (*(*pCtx).pSps).uiChromaFormatIdc == 0 {
+    if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
     }
 
-    let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
+    let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     if pps.bEntropyCodingModeFlag {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx, pCurDqLayer,
@@ -4245,7 +4247,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
 
     if uiMbType == 0 {
         *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
-        let pps = &*((*dq).sLayerInfo.pPps as *const SPps);
+        let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
         if pps.bTransform8x8ModeFlag {
             // T5.I2 (F34): the callee reads *this array* at the left and top
             // addresses, and `Vec`'s `Index` builds a shared slice over the whole
@@ -4314,8 +4316,8 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
-    let pps_sh = &*((*pSliceHeader).pPps as *const SPps);
-    let pps_layer = &*((*dq).sLayerInfo.pPps as *const SPps);
+    let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+    let pps_layer = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     let mut uiCbp = 0u32;
@@ -4342,7 +4344,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         if uiCbp == 0 {
             (*pSlice).iLastDeltaQp = 0;
         }
-        uiCbpChroma = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+        uiCbpChroma = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
             uiCbp >> 4
         } else {
             0
@@ -4350,7 +4352,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         uiCbpLuma = uiCbp & 15;
     } else {
         uiCbp = *(*dq).grid.cbp.get(iMbXy) as u32;
-        uiCbpChroma = if (*(*pCtx).pSps).uiChromaFormatIdc != 0 {
+        uiCbpChroma = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
             uiCbp >> 4
         } else {
             0
@@ -4639,7 +4641,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     } else {
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
-        let pps_sh = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx =
                 WELS_CLIP3(last_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
@@ -4686,7 +4688,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     if uiMbType > 25 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
-    } else if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+    } else if (*active_sps(pCtx)).uiChromaFormatIdc == 0
         && ((uiMbType >= 5 && uiMbType <= 12) || (uiMbType >= 17 && uiMbType <= 24))
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -4830,7 +4832,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         if intra_type > 25 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0
             && ((intra_type >= 5 && intra_type <= 12) || (intra_type >= 17 && intra_type <= 24))
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -4964,7 +4966,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
-        let pps = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
+        let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx =
                 WELS_CLIP3(last_qp + pps.iChromaQpIndexOffset[i] as i32, 0, 51);
@@ -5050,7 +5052,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         if intra_type > 25 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
-        if (*(*pCtx).pSps).uiChromaFormatIdc == 0
+        if (*active_sps(pCtx)).uiChromaFormatIdc == 0
             && ((intra_type >= 5 && intra_type <= 12) || (intra_type >= 17 && intra_type <= 24))
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
@@ -5225,7 +5227,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 
         let last_qp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
-        let pps = &*((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pPps as *const SPps);
+        let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx =
                 WELS_CLIP3(last_qp + pps.iChromaQpIndexOffset[i] as i32, 0, 51);
@@ -5282,8 +5284,8 @@ pub unsafe fn WelsDecodeSlice(
     // The parse-only slice bracket, the same one borrow as the decode one below.
     let (pDec, pRefs) = cur_and_refs(pCtx);
 
-    let pDecMbFunc: PWelsDecMbFunc = if !(*pCtx).pPps.is_null()
-        && (*(*pCtx).pPps).bEntropyCodingModeFlag
+    let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null()
+        && (*active_pps(pCtx)).bEntropyCodingModeFlag
     {
         if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
@@ -5305,15 +5307,14 @@ pub unsafe fn WelsDecodeSlice(
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = (*pSliceHeader).pPps as *const crate::decoder::parameter_sets::SPps;
+    let pPpsForIntra = pps_of(pCtx, (*pSliceHeader).pps_id);
     (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
     (*pCtx).eSliceType = (*pSliceHeader).eSliceType;
-    if !(*pCurDqLayer).sLayerInfo.pPps.is_null()
-        && (*(*pCurDqLayer).sLayerInfo.pPps).bEntropyCodingModeFlag
-    {
+    let pPpsLayer = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.pps_id);
+    if !pPpsLayer.is_null() && (*pPpsLayer).bEntropyCodingModeFlag {
         let iQp = (*pSliceHeader).iSliceQp;
         let iCabacInitIdc = (*pSliceHeader).iCabacInitIdc;
         crate::decoder::cabac_decoder::WelsCabacContextInit(
@@ -5343,8 +5344,8 @@ pub unsafe fn WelsDecodeSlice(
     (*pSlice).iMbSkipRun = -1;
     let iSliceIdc = ((*pSliceHeader).iFirstMbInSlice << 7) + (*pCurDqLayer).uiLayerDqId as i32;
 
-    let kiCountNumMb = if !(*pSliceHeader).pSps.is_null() {
-        (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*pSliceHeader).sps_ref.is_none() {
+        (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5370,7 +5371,7 @@ pub unsafe fn WelsDecodeSlice(
             break;
         }
 
-        if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).uiNumSliceGroups > 1 {
+        if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).uiNumSliceGroups > 1 {
             iNextMbXyIndex = crate::decoder::fmo::FmoNextMb((*pCtx).pFmo, iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
@@ -5405,7 +5406,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
 
     (*pSlice).iTotalMbInCurSlice = 0;
 
-    let pDecMbFunc: PWelsDecMbFunc = if !(*pCtx).pPps.is_null() && (*(*pCtx).pPps).bEntropyCodingModeFlag {
+    let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).bEntropyCodingModeFlag {
         if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
         } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
@@ -5426,7 +5427,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = (*pSliceHeader).pPps as *const crate::decoder::parameter_sets::SPps;
+    let pPpsForIntra = pps_of(pCtx, (*pSliceHeader).pps_id);
     (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
@@ -5441,8 +5442,8 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     }
     (*dq).iMbXyIndex = iNextMbXyIndex;
 
-    let kiCountNumMb = if !(*pSliceHeader).pSps.is_null() {
-        (*((*pSliceHeader).pSps as *mut SSps)).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*pSliceHeader).sps_ref.is_none() {
+        (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5534,14 +5535,15 @@ mod tests {
     #[test]
     fn test_wels_calc_deq_coeff_scaling_list() {
         unsafe {
+            // T5.R6: the active parameter sets are ids into the context's own
+            // buffers, so the fixture fills the buffers rather than pointing the
+            // context at two stack locals — which is the aliasing the ids remove.
             let mut ctx = SWelsDecoderContext::new_boxed();
-            let mut sps = SSps::default();
-            let mut pps = SPps::default();
-            sps.bSeqScalingMatrixPresentFlag = true;
-            sps.iScalingList4x4[0][0] = 16;
-            pps.iPpsId = 1;
-            ctx.pSps = &mut sps;
-            ctx.pPps = &mut pps;
+            ctx.sSpsPpsCtx.sSpsBuffer[0].bSeqScalingMatrixPresentFlag = true;
+            ctx.sSpsPpsCtx.sSpsBuffer[0].iScalingList4x4[0][0] = 16;
+            ctx.sSpsPpsCtx.sPpsBuffer[1].iPpsId = 1;
+            ctx.active_sps = Some(SpsRef { id: 0, subset: false });
+            ctx.active_pps = Some(1);
             let res = WelsCalcDeqCoeffScalingList(&mut *ctx);
             assert_eq!(res, ERR_NONE);
             assert!(ctx.bUseScalingList);

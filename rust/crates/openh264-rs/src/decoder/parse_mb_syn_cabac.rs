@@ -44,7 +44,7 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::{PicRefs, ref_id};
+use crate::decoder::decoder_context::{PicRefs, active_pps, active_sps, pps_of, ref_id, sps_of};
 use crate::decoder::picture::PPicture;
 use std::ptr;
 
@@ -1696,7 +1696,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     let mut pMvd = [0i16; 2];
     let mut iRef = [0i8; 2];
 
-    let pSps = pSliceHeader.pSps as *mut SSps;
+    let pSps = sps_of(pCtx, pSliceHeader.sps_ref);
     let iMinVmv = (*(*pSps).pSLevelLimits).iMinVmv;
     let iMaxVmv = (*(*pSps).pSLevelLimits).iMaxVmv;
 
@@ -2615,7 +2615,7 @@ pub unsafe fn ParseCbpInfoCabac(
         *uiCbp += 0x08;
     }
 
-    if (*(*pCtx).pSps).uiChromaFormatIdc == 0 {
+    if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
     }
 

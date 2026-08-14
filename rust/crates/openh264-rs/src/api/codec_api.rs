@@ -1556,7 +1556,7 @@ unsafe fn BufferingReadyPicture(
     if (*pDstInfo).iBufferStatus == 0 {
         return;
     }
-    let sps = (*pCtx).pSps;
+    let sps = crate::decoder::decoder_context::active_sps(pCtx);
     if !sps.is_null() {
         (*dec_impl).bIsBaseline = (*sps).uiProfileIdc == 66 || (*sps).uiProfileIdc == 83;
     }
@@ -1799,10 +1799,11 @@ unsafe fn ReorderPicturesInDisplay(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) {
-    if pCtx.is_null() || (*pCtx).pSps.is_null() {
+    let sps = crate::decoder::decoder_context::active_sps(pCtx);
+    if pCtx.is_null() || sps.is_null() {
         return;
     }
-    let profile = (*(*pCtx).pSps).uiProfileIdc;
+    let profile = (*sps).uiProfileIdc;
     (*dec_impl).bIsBaseline = profile == 66 || profile == 83;
     if (*dec_impl).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
         return;
