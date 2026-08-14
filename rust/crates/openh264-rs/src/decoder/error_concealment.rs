@@ -44,7 +44,7 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::{dec_pic, ec_ref_pic};
+use crate::decoder::decoder_context::{dec_pic, ec_ref_pic, prev_dpb_pic, ref_pic};
 use std::ptr;
 
 // ============================================================================
@@ -310,11 +310,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext) {
     }
 
     let pDstPic = dec_pic(pCtx);
-    let mut pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
-        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
-    } else {
-        ptr::null_mut()
-    };
+    let mut pSrcPic = prev_dpb_pic(pCtx);
 
     let uiHeightInPixelY = ((*(*pCtx).pSps).iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).linesize(0);
@@ -384,11 +380,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext) {
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
     let pDstPic = dec_pic(pCtx);
-    let mut pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
-        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
-    } else {
-        ptr::null_mut()
-    };
+    let mut pSrcPic = prev_dpb_pic(pCtx);
 
     if !(*pCtx).pParam.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
@@ -681,7 +673,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -696,7 +688,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv0 = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -705,7 +697,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv8 = mv_row[8];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv8[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv8[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -720,7 +712,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv0 = mv_row[0];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -729,7 +721,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let mv2 = mv_row[2];
                                     (*pCtx).iECMVs[iRefIdx][0] += mv2[0] as i32;
                                     (*pCtx).iECMVs[iRefIdx][1] += mv2[1] as i32;
-                                    (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                    (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
@@ -750,7 +742,7 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext) {
                                     let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
                                     let iRefIdx = ref_row[iIIdx] as usize;
                                     if iRefIdx < 16 {
-                                        (*pCtx).pECRefPic[iRefIdx] = pic_slot((*pCtx).sRefPic.pRefList[LIST_0][iRefIdx]);
+                                        (*pCtx).pECRefPic[iRefIdx] = (*pCtx).sRefPic.pRefList[LIST_0][iRefIdx];
                                         match iSubMBType {
                                             SUB_MB_TYPE_8x8 => {
                                                 let mv = mv_row[iIIdx];
@@ -811,11 +803,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext) {
     let iMbWidth = (*(*pCtx).pSps).iMbWidth as usize;
     let iMbHeight = (*(*pCtx).pSps).iMbHeight as usize;
     let pDstPic = dec_pic(pCtx);
-    let pSrcPic = if !(*pCtx).pLastDecPicInfo.is_null() {
-        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
-    } else {
-        ptr::null_mut()
-    };
+    let pSrcPic = prev_dpb_pic(pCtx);
 
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
@@ -1055,7 +1043,8 @@ mod tests {
                 // pictures go in: `PicPool::over` stamps each with its `PicId`, which is
                 // what makes the identity this test is about a slot comparison.
                 let mut pool = crate::decoder::pic_queue::PicPool::over(vec![dst_ptr, src_ptr]);
-                last.pPreviousDecodedPictureInDpb = if same_object { dst_ptr } else { src_ptr };
+                last.pPreviousDecodedPictureInDpb =
+                    (*if same_object { dst_ptr } else { src_ptr }).pic_id();
                 ctx.pSps = &mut sps as *mut _;
                 ctx.pPicBuff = std::ptr::addr_of_mut!(*pool);
                 ctx.pDec = (*dst_ptr).pic_id();

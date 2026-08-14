@@ -1574,9 +1574,12 @@ unsafe fn BufferingReadyPicture(
             (*dec_impl).sPictInfoList[i].iPOC = (*(*pCtx).pSliceHeader).iPicOrderCntLsb;
             (*dec_impl).sPictInfoList[i].iSeqNum = (*pCtx).iSeqNum;
             (*dec_impl).sPictInfoList[i].uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
-            let last_dec = (*pCtx).pLastDecPicInfo;
-            if !last_dec.is_null() && !(*last_dec).pPreviousDecodedPictureInDpb.is_null() {
-                let prev = (*last_dec).pPreviousDecodedPictureInDpb;
+            // T5.P′2: the DPB's "previous picture" is a slot handle now, so the
+            // resolve happens here rather than the pointer being stored. `api/` is
+            // Phase 8's; this is the field's type change reaching its one consumer
+            // outside the decoder, nothing more.
+            let prev = crate::decoder::decoder_context::prev_dpb_pic(pCtx);
+            if !prev.is_null() {
                 (*dec_impl).sPictInfoList[i].iPicBuffIdx = (*prev).iPicBuffIdx;
                 if crate::decoder::decoder_core::GetThreadCount(pCtx) <= 1 {
                     (*prev).iRefCount += 1;

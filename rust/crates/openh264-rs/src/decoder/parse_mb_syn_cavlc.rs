@@ -371,7 +371,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
 
 // Forward definitions matching OpenH264 decoder C ABI structs
 pub use crate::decoder::picture::{SPicture, PPicture};
-use crate::decoder::decoder_context::dec_pic;
+use crate::decoder::decoder_context::{dec_pic, pool_pic, ref_pic};
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
@@ -1021,7 +1021,7 @@ pub unsafe fn ParseInterInfo(
     let pCurDqLayer = (*pCtx).pCurDqLayer;
     let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
-    let ppRefPic = (*pCtx).sRefPic.pRefList[0];
+    let ppRefPic = &(*pCtx).sRefPic.pRefList[0];
     let mut iRefCount = [0i32; 2];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut iMotionPredFlag = [if pSlice.sSliceHeaderExt.bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
@@ -1052,7 +1052,7 @@ pub unsafe fn ParseInterInfo(
                     return ret;
                 }
                 iRefIdx = uiCode as i32;
-                if iRefIdx < 0 || iRefIdx >= iRefCount[0] || ppRefPic[iRefIdx as usize].is_null() {
+                if iRefIdx < 0 || iRefIdx >= iRefCount[0] || ppRefPic[iRefIdx as usize].is_none() {
                     (*pCtx).bMbRefConcealed = true;
                     if ec_active {
                         iRefIdx = 0;
@@ -1061,10 +1061,10 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let ref_pic = ppRefPic[iRefIdx as usize];
+                let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
-                    || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+                    || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
@@ -1103,7 +1103,7 @@ pub unsafe fn ParseInterInfo(
                     return ret;
                 }
                 iRefIdx[i] = uiCode as i32;
-                if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
                     (*pCtx).bMbRefConcealed = true;
                     if ec_active {
                         iRefIdx[i] = 0;
@@ -1112,10 +1112,10 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
                 (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                     || (*pCtx).bMbRefConcealed
-                    || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+                    || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
@@ -1161,7 +1161,7 @@ pub unsafe fn ParseInterInfo(
                         return ret;
                     }
                     iRefIdx[i] = uiCode as i32;
-                    if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                    if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
                         (*pCtx).bMbRefConcealed = true;
                         if ec_active {
                             iRefIdx[i] = 0;
@@ -1170,10 +1170,10 @@ pub unsafe fn ParseInterInfo(
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                         }
                     }
-                    let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                    let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
                     (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                         || (*pCtx).bMbRefConcealed
-                        || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+                        || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
                 } else {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                 }
@@ -1262,7 +1262,7 @@ pub unsafe fn ParseInterInfo(
                             return ret;
                         }
                         iRefIdx[i] = uiCode as i32;
-                        if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_null() {
+                        if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
                             (*pCtx).bMbRefConcealed = true;
                             if ec_active {
                                 iRefIdx[i] = 0;
@@ -1271,10 +1271,10 @@ pub unsafe fn ParseInterInfo(
                                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                             }
                         }
-                        let ref_pic = ppRefPic[iRefIdx[i] as usize];
+                        let pRefPic = pool_pic(pCtx, ppRefPic[iRefIdx[i] as usize]);
                         (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                             || (*pCtx).bMbRefConcealed
-                            || !(!ref_pic.is_null() && ((*ref_pic).bIsComplete || bIsPending));
+                            || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
 
                         let ref_idx_mb = &mut *(*pDec).pRefIndex[0].add(iMbXy);
                         ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
@@ -1385,7 +1385,7 @@ pub unsafe fn ParseInterBInfo(
     ///  !(ppRefPic[list][ref] && (ppRefPic[list][ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = (*pCtx).sRefPic.pRefList[$listIdx as usize][$iref as usize];
+            let p = ref_pic(pCtx, $listIdx as usize, $iref as usize);
             (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
                 || (*pCtx).bMbRefConcealed
                 || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
@@ -1396,13 +1396,13 @@ pub unsafe fn ParseInterBInfo(
     macro_rules! check_ref_idx {
         ($listIdx:expr, $iref:expr) => {{
             let list = $listIdx as usize;
-            let ppRefPic = (*pCtx).sRefPic.pRefList[list].as_ptr();
-            if $iref < 0 || $iref as i32 >= iRefCount[list] || (*ppRefPic.add($iref as usize)).is_null() {
+            let ppRefPic = &(*pCtx).sRefPic.pRefList[list];
+            if $iref < 0 || $iref as i32 >= iRefCount[list] || ppRefPic[$iref as usize].is_none() {
                 (*pCtx).bMbRefConcealed = true;
                 if ec_active {
                     $iref = 0;
                     (*pCtx).iErrorCode |= dsBitstreamError;
-                    if (*ppRefPic.add($iref as usize)).is_null() {
+                    if ppRefPic[$iref as usize].is_none() {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 } else {
@@ -1651,11 +1651,11 @@ pub unsafe fn ParseInterBInfo(
         let mut pPartW = [0i8; 4];
         // sub_mb_type, partition
         let mut pMvDirect = [[0i16; 2]; LIST_A];
-        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_null() {
+        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_none() {
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*(*pCtx).sRefPic.pRefList[LIST_1][0]).bIsLongRef;
+        let bIsLongRef = (*ref_pic(pCtx, LIST_1, 0)).bIsLongRef;
         let ref0Count = std::cmp::min(
             pSliceHeader.uiRefCount[LIST_0],
             (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,

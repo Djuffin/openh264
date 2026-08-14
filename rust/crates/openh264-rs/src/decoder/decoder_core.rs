@@ -302,7 +302,9 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 // `nalu::SNalUnit`, whose own definitions are the ones the decoder uses.
 
 pub use crate::decoder::nalu::SAccessUnit;
-use crate::decoder::decoder_context::{cur_au, au_has_nals, dec_pic, ec_ref_pic};
+use crate::decoder::decoder_context::{
+    au_has_nals, cur_au, dec_pic, ec_ref_pic, pool_pic, prev_dpb_pic, ref_pic,
+};
 use crate::decoder::picture::pic_slot;
 
 
@@ -1392,8 +1394,8 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
 
     if (*pCurDqLayer).bUseWeightedBiPredIdc && (*pPps).uiWeightedBipredIdc == 2 {
         let iPoc = (*pSliceHeader).iPicOrderCntLsb;
-        let ref0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
-        let ref1 = (*pCtx).sRefPic.pRefList[LIST_1][0];
+        let ref0 = ref_pic(pCtx, LIST_0, 0);
+        let ref1 = ref_pic(pCtx, LIST_1, 0);
         if !ref0.is_null() && !ref1.is_null() {
             if (*pSliceHeader).uiRefCount[0] == 1
                 && (*pSliceHeader).uiRefCount[1] == 1
@@ -1408,12 +1410,12 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext) {
             (*(*pCurDqLayer).pPredWeightTable).uiLumaLog2WeightDenom = 5;
             (*(*pCurDqLayer).pPredWeightTable).uiChromaLog2WeightDenom = 5;
             for iRef0 in 0..((*pSliceHeader).uiRefCount[0] as usize) {
-                let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][iRef0];
+                let pRef0 = ref_pic(pCtx, LIST_0, iRef0);
                 if !pRef0.is_null() {
                     let iPoc0 = (*pRef0).iFramePoc;
                     let bIsLongRef0 = (*pRef0).bIsLongRef;
                     for iRef1 in 0..((*pSliceHeader).uiRefCount[1] as usize) {
-                        let pRef1 = (*pCtx).sRefPic.pRefList[LIST_1][iRef1];
+                        let pRef1 = ref_pic(pCtx, LIST_1, iRef1);
                         if !pRef1.is_null() {
                             let iPoc1 = (*pRef1).iFramePoc;
                             let bIsLongRef1 = (*pRef1).bIsLongRef;
@@ -1865,7 +1867,7 @@ pub unsafe fn WelsDecoderDefaults(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_vo
     (*pCtx).iActiveFmoNum = 0;
     (*pCtx).pPicBuff = std::ptr::null_mut();
     if !(*pCtx).pLastDecPicInfo.is_null() {
-        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = std::ptr::null_mut();
+        (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = None;
     }
     if !(*pCtx).pDecoderStatistics.is_null() {
         (*(*pCtx).pDecoderStatistics).iAvgLumaQp = -1;
@@ -1903,7 +1905,7 @@ pub fn WelsDecoderSpsPpsDefaults(sSpsPpsCtx: &mut crate::decoder::decoder_contex
 pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::decoder_context::SWelsLastDecPicInfo) {
     sLastDecPicInfo.iPrevPicOrderCntMsb = 0;
     sLastDecPicInfo.iPrevPicOrderCntLsb = 0;
-    sLastDecPicInfo.pPreviousDecodedPictureInDpb = std::ptr::null_mut();
+    sLastDecPicInfo.pPreviousDecodedPictureInDpb = None;
     sLastDecPicInfo.iPrevFrameNum = -1;
     sLastDecPicInfo.bLastHasMmco5 = false;
     sLastDecPicInfo.uiDecodingTimeStamp = 0;
@@ -3638,8 +3640,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
                 (*dec_pic(pCtx)).iMbNum = iMbNum as i32;
             }
-            (*dec_pic(pCtx)).pRefPic[LIST_0] = [std::ptr::null_mut(); MAX_DPB_COUNT];
-            (*dec_pic(pCtx)).pRefPic[LIST_1] = [std::ptr::null_mut(); MAX_DPB_COUNT];
+            (*dec_pic(pCtx)).pRefPic[LIST_0] = [None; MAX_DPB_COUNT];
+            (*dec_pic(pCtx)).pRefPic[LIST_1] = [None; MAX_DPB_COUNT];
             (*dec_pic(pCtx)).iMbEcedNum = 0;
             (*dec_pic(pCtx)).iMbEcedPropNum = 0;
         }
@@ -3838,7 +3840,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
 
             if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = dec_pic(pCtx);
+                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
             }
             (*pCtx).bUsedAsRef = (*pCtx).uiNalRefIdc > 0;
             if iThreadCount <= 1 {
@@ -3847,13 +3849,19 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     // MapColToList0 reads them back off the colocated picture when a
                     // later B slice uses temporal direct mode; without this the lookup
                     // always misses and every mapped ref index collapses to 0.
-                    if (*pCtx).pDec.is_some() {
+                    //
+                    // **T5.P′2: a handle-to-handle copy.** Both sides are `Option<PicId>`
+                    // now, so the snapshot that used to duplicate up to 34 raw aliases
+                    // into the pool — onto a *pooled picture*, for as long as it stays a
+                    // reference — reaches the pool exactly once, for `pDec` itself.
+                    let pDec = dec_pic(pCtx);
+                    if !pDec.is_null() {
                         for listIdx in LIST_0..LIST_A {
                             let mut i = 0usize;
                             while i < MAX_DPB_COUNT
-                                && !(*pCtx).sRefPic.pRefList[listIdx][i].is_null()
+                                && (*pCtx).sRefPic.pRefList[listIdx][i].is_some()
                             {
-                                (*dec_pic(pCtx)).pRefPic[listIdx][i] =
+                                (*pDec).pRefPic[listIdx][i] =
                                     (*pCtx).sRefPic.pRefList[listIdx][i];
                                 i += 1;
                             }
@@ -3947,7 +3955,7 @@ pub unsafe fn CheckAndFinishLastPic(
             }
             DecodeFrameConstruction(pCtx, ppDst, pDstInfo);
             if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = dec_pic(pCtx);
+                (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
                 if (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
                     if MarkECFrameAsRef(pCtx) == ERR_INFO_INVALID_PTR {
                         (*pCtx).iErrorCode |= dsRefListNullPtrs;
@@ -4016,7 +4024,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
             MB_TYPE_SKIP | MB_TYPE_16x16 => {
                 let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
                 if refIdx < MAX_REF_PIC_COUNT {
-                    let pRef = (*pCtx).sRefPic.pRefList[LIST_0][refIdx];
+                    let pRef = ref_pic(pCtx, LIST_0, refIdx);
                     if !pRef.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                     }
@@ -4026,13 +4034,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[8] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx0];
+                    let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx1];
+                    let pRef1 = ref_pic(pCtx, LIST_0, refIdx1);
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4042,13 +4050,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 let refIdx0 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[2] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx0];
+                    let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = (*pCtx).sRefPic.pRefList[LIST_0][refIdx1];
+                    let pRef1 = ref_pic(pCtx, LIST_0, refIdx1);
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4059,7 +4067,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 for &sub in &indices {
                     let refIdx = (*(*pDec).pRefIndex[0].add(iRealMbIdx as usize))[sub] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
-                        let pRef = (*pCtx).sRefPic.pRefList[LIST_0][refIdx];
+                        let pRef = ref_pic(pCtx, LIST_0, refIdx);
                         if !pRef.is_null() {
                             bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                         }

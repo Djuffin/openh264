@@ -8,7 +8,7 @@
     unused_mut
 )]
 
-use crate::decoder::decoder_context::dec_pic;
+use crate::decoder::decoder_context::{dec_pic, ref_pic};
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
 use std::ffi::c_void;
@@ -641,14 +641,14 @@ pub unsafe fn CheckRefPics(pCtx: *const SWelsDecoderContext) -> bool {
         let shortRefCount = ctx.sRefPic.uiShortRefCount[list];
         let pShortList = &ctx.sRefPic.pShortRefList[list];
         for refIdx in 0..shortRefCount {
-            if pShortList[refIdx as usize].is_null() {
+            if pShortList[refIdx as usize].is_none() {
                 return false;
             }
         }
         let longRefCount = ctx.sRefPic.uiLongRefCount[list];
         let pLongList = &ctx.sRefPic.pLongRefList[list];
         for refIdx in 0..longRefCount {
-            if pLongList[refIdx as usize].is_null() {
+            if pLongList[refIdx as usize].is_none() {
                 return false;
             }
         }
@@ -669,13 +669,13 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext) ->
 
     if (*pSliceHeader).iDirectSpatialMvPredFlag == 0 {
         let uiRefCount = (*pSliceHeader).uiRefCount[LIST_0];
-        let pRefList1 = &(*pCtx).sRefPic.pRefList[LIST_1];
-        let pRefList0 = &(*pCtx).sRefPic.pRefList[LIST_0];
-        if !pRefList1[0].is_null() {
+        let pic1 = ref_pic(pCtx, LIST_1, 0);
+        if !pic1.is_null() {
             for i in 0..uiRefCount {
-                if !pRefList0[i as usize].is_null() {
-                    let poc0 = (*pRefList0[i as usize]).iFramePoc;
-                    let poc1 = (*pRefList1[0]).iFramePoc;
+                let pic0 = ref_pic(pCtx, LIST_0, i as usize);
+                if !pic0.is_null() {
+                    let poc0 = (*pic0).iFramePoc;
+                    let poc1 = (*pic1).iFramePoc;
                     let poc = (*pSliceHeader).iPicOrderCntLsb;
                     let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                     if td == 0 {
@@ -1144,7 +1144,7 @@ unsafe fn GetRefPic(
     listIdx: usize,
 ) -> i32 {
     if iRefIdx >= 0 {
-        let pRefPic = (*pCtx).sRefPic.pRefList[listIdx][iRefIdx as usize];
+        let pRefPic = ref_pic(pCtx, listIdx, iRefIdx as usize);
         if !pRefPic.is_null() {
             pMCRefMem.iSrcLineLuma = (*pRefPic).linesize(0);
             pMCRefMem.iSrcLineChroma = (*pRefPic).linesize(1);
@@ -3704,8 +3704,8 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-    let ppRefPicL0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
-    let ppRefPicL1 = (*pCtx).sRefPic.pRefList[LIST_1][0];
+    let ppRefPicL0 = ref_pic(pCtx, LIST_0, 0);
+    let ppRefPicL1 = ref_pic(pCtx, LIST_1, 0);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
 
@@ -4890,7 +4890,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
         ref_slice.fill(0);
 
         let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
-        let ppRefPic0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
+        let ppRefPic0 = ref_pic(pCtx, LIST_0, 0);
         let is_complete0 = if !ppRefPic0.is_null() {
             (*ppRefPic0).bIsComplete || bIsPending
         } else {
@@ -5115,8 +5115,8 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         ref0_slice.fill(0);
         ref1_slice.fill(0);
 
-        let ppRefPic0 = (*pCtx).sRefPic.pRefList[LIST_0][0];
-        let ppRefPic1 = (*pCtx).sRefPic.pRefList[LIST_1][0];
+        let ppRefPic0 = ref_pic(pCtx, LIST_0, 0);
+        let ppRefPic1 = ref_pic(pCtx, LIST_1, 0);
         let is_complete0 = if !ppRefPic0.is_null() {
             (*ppRefPic0).bIsComplete || bIsPending
         } else {

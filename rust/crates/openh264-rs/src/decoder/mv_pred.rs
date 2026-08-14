@@ -183,7 +183,9 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState, PDqLaye
 pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, dec_pic};
+pub use crate::decoder::decoder_context::{
+    SWelsDecoderContext, PWelsDecoderContext, dec_pic, pool_pic, ref_pic,
+};
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiScan4};
@@ -730,7 +732,7 @@ pub unsafe fn GetColocatedMb(
     let is8x8 = IS_Inter_8x8(curMbType);
     *mbType = curMbType;
 
-    let colocPic = (*pCtx).sRefPic.pRefList[LIST_1][0];
+    let colocPic = ref_pic(pCtx, LIST_1, 0);
     if colocPic.is_null() {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
     }
@@ -752,7 +754,7 @@ pub unsafe fn GetColocatedMb(
     // slot equality with no dereference on either side — the fifth and last of P3's
     // identity sites, and the one the note this replaces predicted.
     debug_assert!(
-        crate::decoder::picture::pic_slot(colocPic) != (*pCtx).pDec,
+        (*pCtx).sRefPic.pRefList[LIST_1][0] != (*pCtx).pDec,
         "the colocated picture is never the picture being decoded"
     );
 
@@ -1034,7 +1036,7 @@ pub unsafe fn PredMvBDirectSpatial(
     *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
 
     let pMvd = [0i16; 4];
-    let colocPic = (*pCtx).sRefPic.pRefList[LIST_1][0];
+    let colocPic = ref_pic(pCtx, LIST_1, 0);
     let bIsLongRef = if !colocPic.is_null() { (*colocPic).bIsLongRef } else { false };
 
     if IS_INTER_16x16(mbType) {
@@ -1220,13 +1222,13 @@ pub unsafe fn MapColToList0(
     if ((*pCtx).iErrorCode & dsRefLost) == dsRefLost {
         return 0;
     }
-    let pic1 = (*pCtx).sRefPic.pRefList[LIST_1][0];
+    let pic1 = ref_pic(pCtx, LIST_1, 0);
     if !pic1.is_null() && (colocRefIndexL0 as usize) < 17 {
-        let ref_pic_ptr = (*pic1).pRefPic[LIST_0][colocRefIndexL0 as usize];
+        let ref_pic_ptr = pool_pic(pCtx, (*pic1).pRefPic[LIST_0][colocRefIndexL0 as usize]);
         if !ref_pic_ptr.is_null() {
             let iFramePoc = (*ref_pic_ptr).iFramePoc;
             for i in 0..ref0Count {
-                let ref0 = (*pCtx).sRefPic.pRefList[LIST_0][i as usize];
+                let ref0 = ref_pic(pCtx, LIST_0, i as usize);
                 if !ref0.is_null() && (*ref0).iFramePoc == iFramePoc {
                     return i as i8;
                 }

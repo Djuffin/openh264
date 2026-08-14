@@ -382,12 +382,30 @@ pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
 
 pub use crate::decoder::pic_queue::{PicPool, PicId, SPicBuff, PPicBuff};
 
-#[repr(C)]
+/// The decoder picture buffer's three lists, as **slot handles**.
+///
+/// **T5.P′2 (W2b) turned all three from raw picture pointers into `Option<PicId>`**, the
+/// shape T5.N4 gave `SDeblockingFilter::ref_ids` and T5.P2 gave `pDec`/`pECRefPic`.
+/// These were the last raw aliases *into* the pool, and the ordering rule
+/// (phase5.md) is what makes them W3's precondition: a safe container may not lend
+/// while raw aliases into it are live, so `Pool<Box<SPicture>>` could not exist
+/// while sixteen entries per list held slot addresses across a whole access unit.
+///
+/// `None` is the C's null slot. Every non-null entry is a pool picture — the lists
+/// are filled from `pPicBuff` and from nowhere else, which is the invariant T5.N4's
+/// `snapshot_ref_ids` asserted before this conversion and
+/// [`insert_ref`](crate::decoder::manage_dec_ref::insert_ref) asserts after it — so
+/// `Option<PicId>` equality is exactly the pointer equality it replaces.
+///
+/// **`#[repr(C)]` came off with the pointers**, on T5.N4's reasoning at
+/// `SDeblockingFilter`: `Option<PicId>` is a Rust type with no C layout, the struct
+/// crosses no FFI boundary, and it carries no `assert_size!`. A layout claim the
+/// struct cannot honour is worse than no claim.
 #[derive(Debug, Copy, Clone)]
 pub struct SRefPic {
-    pub pRefList: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
-    pub pShortRefList: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
-    pub pLongRefList: [[*mut Picture; MAX_DPB_COUNT]; LIST_A],
+    pub pRefList: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A],
+    pub pShortRefList: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A],
+    pub pLongRefList: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A],
     pub uiRefCount: [u8; LIST_A],
     pub uiShortRefCount: [u8; LIST_A],
     pub uiLongRefCount: [u8; LIST_A],
@@ -398,9 +416,9 @@ pub type PRefPic = *mut SRefPic;
 impl Default for SRefPic {
     fn default() -> Self {
         Self {
-            pRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            pShortRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
-            pLongRefList: [[std::ptr::null_mut(); MAX_DPB_COUNT]; LIST_A],
+            pRefList: [[None; MAX_DPB_COUNT]; LIST_A],
+            pShortRefList: [[None; MAX_DPB_COUNT]; LIST_A],
+            pLongRefList: [[None; MAX_DPB_COUNT]; LIST_A],
             uiRefCount: [0; LIST_A],
             uiShortRefCount: [0; LIST_A],
             uiLongRefCount: [0; LIST_A],
@@ -416,7 +434,10 @@ pub struct SWelsLastDecPicInfo {
     pub sLastSliceHeader: SSliceHeader,
     pub iPrevPicOrderCntMsb: i32,
     pub iPrevPicOrderCntLsb: i32,
-    pub pPreviousDecodedPictureInDpb: *mut Picture,
+    /// The last picture handed to the DPB, as a slot handle (**T5.P′2**). It is
+    /// always `(*pCtx).pDec` at the moment of the write, so it converts with the
+    /// field it copies.
+    pub pPreviousDecodedPictureInDpb: Option<PicId>,
     pub iPrevFrameNum: i32,
     pub bLastHasMmco5: bool,
     pub uiDecodingTimeStamp: u32,
@@ -430,7 +451,7 @@ impl Default for SWelsLastDecPicInfo {
             sLastSliceHeader: SSliceHeader::default(),
             iPrevPicOrderCntMsb: 0,
             iPrevPicOrderCntLsb: 0,
-            pPreviousDecodedPictureInDpb: std::ptr::null_mut(),
+            pPreviousDecodedPictureInDpb: None,
             iPrevFrameNum: -1,
             bLastHasMmco5: false,
             uiDecodingTimeStamp: 0,
@@ -577,30 +598,66 @@ pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUni
     (*pCtx).access_unit.as_deref_mut()
 }
 
-/// The picture being decoded into, or null when there is none.
+/// The picture a slot handle names, or null when there is none.
+///
+/// **The one place the decoder turns an id back into a picture** (T5.P′2 collected
+/// it; T5.P2 wrote the first two copies of the body). Every field that used to hold
+/// a raw picture pointer into the pool now holds one of these handles, and every one of
+/// them resolves here.
 ///
 /// **Copies a stored slot pointer; it does not derive one.** Same contract as
 /// [`TagAccessUnits::nal`](crate::decoder::nalu::TagAccessUnits::nal), and the
 /// reason is the one T5.N1 wrote at `PicPool`'s type: the pool addresses, it does
 /// not own, so the pointer this returns carries `AllocPicture`'s provenance and no
-/// later borrow of the pool touches it. When W3 flips the slots to
-/// `Box<SPicture>`, this is the single site that becomes a pool borrow — which is
-/// the whole reason the field stopped being a pointer first.
+/// later borrow of the pool touches it. **When W3 flips the slots to
+/// `Box<SPicture>`, this function is where the pool borrow happens** — the whole
+/// reason the fields stopped being pointers first, and now a single site rather
+/// than the two W2a left.
 #[inline]
-pub unsafe fn dec_pic(pCtx: PWelsDecoderContext) -> PPicture {
-    match (*pCtx).pDec {
+pub unsafe fn pool_pic(pCtx: PWelsDecoderContext, slot: Option<PicId>) -> PPicture {
+    match slot {
         Some(id) if !(*pCtx).pPicBuff.is_null() => (*(*pCtx).pPicBuff).slot(id),
         _ => std::ptr::null_mut(),
     }
 }
 
+/// The picture being decoded into, or null when there is none.
+#[inline]
+pub unsafe fn dec_pic(pCtx: PWelsDecoderContext) -> PPicture {
+    pool_pic(pCtx, (*pCtx).pDec)
+}
+
 /// [`dec_pic`]'s counterpart for the concealment reference list.
 #[inline]
 pub unsafe fn ec_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
-    match (*pCtx).pECRefPic[i] {
-        Some(id) if !(*pCtx).pPicBuff.is_null() => (*(*pCtx).pPicBuff).slot(id),
-        _ => std::ptr::null_mut(),
+    pool_pic(pCtx, (*pCtx).pECRefPic[i])
+}
+
+/// Entry `i` of reference list `list` — `sRefPic.pRefList[list][i]` resolved.
+#[inline]
+pub unsafe fn ref_pic(pCtx: PWelsDecoderContext, list: usize, i: usize) -> PPicture {
+    pool_pic(pCtx, (*pCtx).sRefPic.pRefList[list][i])
+}
+
+/// Entry `i` of the short-term list — `sRefPic.pShortRefList[LIST_0][i]` resolved.
+#[inline]
+pub unsafe fn short_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+    pool_pic(pCtx, (*pCtx).sRefPic.pShortRefList[LIST_0][i])
+}
+
+/// Entry `i` of the long-term list — `sRefPic.pLongRefList[LIST_0][i]` resolved.
+#[inline]
+pub unsafe fn long_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+    pool_pic(pCtx, (*pCtx).sRefPic.pLongRefList[LIST_0][i])
+}
+
+/// The previous decoded picture in the DPB — `pLastDecPicInfo`'s handle resolved.
+#[inline]
+pub unsafe fn prev_dpb_pic(pCtx: PWelsDecoderContext) -> PPicture {
+    if (*pCtx).pLastDecPicInfo.is_null() {
+        return std::ptr::null_mut();
     }
+    pool_pic(pCtx, (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb)
 }
 
 /// Whether an access unit exists and has at least one NAL queued in it.
