@@ -1414,3 +1414,45 @@ session M was right to take `cabac`/`rc` out of the signature.
 **Acquitted as F3.**
 
 Running total: **forty-one measurements, fourteen alternations, twenty acquittals.**
+
+### Measurement 42 (Phase 5, session P′, 2026-08-14) — one configuration, three outcomes, and the reproduction landed inside step 1's five runs
+
+| # | configuration | C++ | Rust |
+|---|---|---|---|
+| 42 | `mt Static_152_100 t=4 sm=3 n=600 cabac=0 rc=0` (**release**) | 29375 | **0** |
+
+One hit on the closing battery; the debug sweep was 341/341. Inside S14's signature on
+every axis — `mt`, `sm=3`, `t=4`, wrong length (zero), and the profile is not a clause.
+
+**Step 0 was checked rather than assumed, and it does not apply.** The session's diff is
+production decoder code, `src/api/codec_api.rs` and one safe container, so the shortcut's
+condition — two *byte-identical* `rust_enc` binaries — is the thing to test, not the
+"decoder-only" heuristic session P warned about. One build each:
+
+| tree | `rust_enc` (release) SHA-256 |
+|---|---|
+| base `c8ebc20f` | `4a730f44123354167979f51953101149811be935…` |
+| head `6758d885` | `db175dc17aafc3eb18b3284812f327947177dc73…` |
+
+Different binaries, so base and head are two programs and the shortcut cannot acquit.
+
+**Step 1 reproduced, within its own five runs.** Re-running the hitting configuration:
+run 4 of the first five produced a Rust stream **shorter than the C++ one** (`cmp`
+reached EOF on it); the other four, and twelve further runs afterwards, were
+**byte-identical at 29375**. Twenty-two isolation runs in total, twenty-one identical.
+
+So from **one binary and one configuration**: 29375 twenty-one times, **0 bytes** in the
+battery, and one short stream. Three distinct outcomes — S14 step 1's discriminator, met
+for the third measurement running (39 needed fifteen isolation runs to reach three; 40–41
+reached two inside an ordinary alternation; this one reached the second inside the five
+runs the protocol prescribes). *A deterministic port bug repeats its bytes.*
+
+One hit in the battery, so step 2 does not fire and no alternation was run.
+
+**Acquitted as F3.**
+
+Rate: 1 in 341 configurations on this battery, and `Static_152_100` joins the clip list —
+the third of the three sweep inputs to produce a hit, which removes the last trace of a
+per-clip clause the way measurements 36–38 removed `n`, `t` and the stream.
+
+Running total: **forty-two measurements, fourteen alternations, twenty-one acquittals.**

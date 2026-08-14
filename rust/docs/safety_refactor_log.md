@@ -8255,3 +8255,299 @@ structural, not slippage: `pDec` is **two carriers**, and the second is session 
    plausibly negative, and the exit's ledger row should look for it rather than be
    surprised by it. Session N's `.perfpair/n_base`, `n_mid`, `n_head` are still on
    disk.
+
+## 2026-08-14 — Phase 5, session P′ (W2b whole, and W3's first seam: the picture finishes owning itself)
+
+**Commits:** `1fc66ed2` (inherited doc tail), `59dbbb0b` (T5.P′1, W2b(i)), `48355825`
+(T5.P′2, W2b(ii)), `6758d885` (T5.P′3, W3 seam 1), and this entry.
+
+### The session in one line
+
+**W2b is closed and it was smaller than its size**: three of its five "fields" were one
+identifier naming two types, the layer's `pDec` was a cache rather than a carrier, and
+what remained — 302 real sites — deleted the last raw alias into `PicPool` in the tree,
+which is the single precondition `Pool<Box<SPicture>>` has been waiting on since T5.N1.
+W3's first seam followed and took the picture's own six allocations with it.
+
+### Control battery
+
+Docs-only tail, session P ended `OVERALL: PASS`, `rust/tools/` unchanged except the
+ratchet baseline (which is regenerated per commit, not an instrument change), toolchain
+unchanged — S27's cheap subset. **OVERALL: PASS**, 474/468/20, ratchet 4404, census 59,
+decoder `raw_ptr` 1267, matching session P's exit on every figure. Tenth consecutive
+session whose open needed no correction.
+
+**No perf measurement** (D-gate-1). The debt is unchanged and W8's.
+
+### 0. S24 at each face, and the two misses are the same law from opposite sides
+
+Session P's §0 established that *a count carries the directory it was taken in*. This
+session's two counts were both wrong and neither was stale:
+
+**Face 0 — the grep's unit was the pointer, and a quarter of the sites are not pointers.**
+The brief carried two figures and asked for them to be reconciled: a narrow
+`\(\*(pCurDqLayer|dq|pDqLayer)\)\.pDec` reading **134**, and phase5.md's row reading
+**159**. The tree holds **160**, and the gap is one spelling the pointer-anchored grep
+cannot see: `dq.pDec` where `dq: &DqLayerState` (24 sites), `layer.pDec` in a test (1),
+and one site reached through the context (1). The reconciliation *was* the brief's
+instruction and it took one grep; the lesson is that the receiver, not the field, is the
+unit that has to match.
+
+**Face 1 — the count's unit was the token, and the token names two types.** The brief
+sized the reference lists at 279 (`pRefList` 82 + `pShortRefList` 25 + `pLongRefList` 24
++ `pRefPic` 113 + `ppRefPic` 24 + `pPreviousDecodedPictureInDpb` 11). The real field-access
+inventory is **142**:
+
+| field | brief (tokens) | tree (field accesses) |
+|---|---|---|
+| `.pRefList` | 82 | 82 |
+| `.pShortRefList` | 25 | 23 |
+| `.pLongRefList` | 24 | 22 |
+| `.pRefPic` | 113 | **6** |
+| `.ppRefPic` | 24 | **0 fields** |
+| `.pPreviousDecodedPictureInDpb` | 11 | 9 |
+
+`pRefPic` is **two different things wearing one name**: 106 of its 127 decoder
+occurrences are a local of type `*mut SRefPic` in `manage_dec_ref.rs` — a pointer to a
+*field of the context*, never a picture — and `ppRefPic`'s 24 are locals *derived from*
+`pRefList` that collapsed when it converted rather than being converted. Session P's
+variant was hard to catch because each number was correct for some domain; this one is
+harder still, because one number is correct for two domains at once and only the design
+it implies is absurd (it sized a five-field conversion at twice its true size and put its
+centre of gravity in the wrong file).
+
+**S24's new clause, and it is the mirror of last session's**: *a count carries the unit
+it was taken in* — token, field access, receiver, or definition — and a token count of an
+identifier that names two types is not a size, it is a coincidence.
+
+### 1. Face 0 — W2b(i): the layer's `pDec` was a cache, and caches die (T5.P′1)
+
+`DqLayerState::pRef` was **dead** — zero readers, zero writers — and deleted first.
+
+`DqLayerState::pDec` **died rather than converted**, which is what the steward's
+settlement predicted and what the re-plan's "two carriers" framing got wrong. One stamp
+site in the whole decoder, one source, and `pCurDqLayer` never advances mid-access-unit
+(its only production write is `= pDqLayersList` before `DecodeCurrentAccessUnit`'s loop).
+
+**The S23 check, recorded because it is what gated the mechanical pass.** *Can the source
+change behind the cache?* No, and the invariant is worth carrying:
+
+> Every `(*pCtx).pDec = None` in `DecodeCurrentAccessUnit` either fires only when
+> `iTotalNumMbRec == 0` (`:3716`, `:3738`) or runs after `DecodeFrameConstruction` has
+> just zeroed it (`:3847`, `:3862`); and the one reader reachable outside the decode
+> window — `GetAvilInfoFromCorrectMb`, via `CheckAndFinishLastPic` → `ImplementErrorCon`
+> — is gated on `iTotalNumMbRec != 0`. "The context has no picture" and "a layer read can
+> run" are therefore **mutually exclusive**, and no reader could ever observe the cache
+> holding a picture the context had dropped.
+
+`WelsDecoderDefaults`'s reset (`:1841`) is decoder construction, before a layer exists.
+So derivation is exact and the field is redundant, not load-bearing. The answer lives at
+the deleted field, not only here.
+
+160 sites by class, and the class split is the settlement's:
+
+| class | sites | shape |
+|---|---|---|
+| (a) holds `pCtx` | 92 | `let pDec = dec_pic(pCtx);` once per function |
+| (b) layer-only leaf | 67 | `pDec: PPicture` parameter from the `pCtx`-holding caller |
+| (c) identity compare | 1 | `pic_slot(colocPic) != (*pCtx).pDec`, no dereference |
+
+**Two hops below the `pCtx` holder, nowhere deeper, and nothing stores it.** The
+deblocking family is the deep one — its dispatch type `PDeblockingFilterMbFunc` gained the
+parameter so the slice loop derives per macroblock — and the alternative (a field on
+`SDeblockingFilter`) was rejected because it re-creates the mirror T5.N3 deleted and hands
+W3 a new alias. The brief's escape hatch ("if a chain turns out deeper than ~2 hops, stop
+and say so") was not needed.
+
+Two things the cache propped up went with it. `WelsDeblockingFilterSlice`'s
+`debug_assert!(ptr::eq(layer->pDec, dec_pic(pCtx)))` — T5.N3 wrote it because the mirror
+it replaced had two possible routes — is deleted **by deleting the second route**. And
+`InitDqLayerInfo` lost its `pPicDec` parameter, which had nothing left to write.
+
+### 2. Face 1 — W2b(ii): the reference lists, and the pool has no aliases left (T5.P′2)
+
+Five fields → `Option<PicId>`: `SRefPic`'s three lists, `SPicture::pRefPic`, and
+`SWelsLastDecPicInfo::pPreviousDecodedPictureInDpb`. `pool_pic(pCtx, slot)` is the one
+door back to a picture and `dec_pic`/`ec_ref_pic`/`ref_pic`/`short_ref_pic`/
+`long_ref_pic`/`prev_dpb_pic` are its six spellings — T5.P2 wrote that body twice and
+predicted exactly this consolidation.
+
+Three consequences worth keeping:
+
+* **`snapshot_ref_ids` (T5.N4) is now `(*pCtx).sRefPic.pRefList`.** It existed to walk 34
+  pointers and stamp each one's slot; the lists *are* those slots. Its invariant assert
+  moved to the one door they enter by (`insert_ref`), where it guards every writer instead
+  of one reader — S13's law applied forwards.
+* **`DecodeCurrentAccessUnit`'s per-picture snapshot stops duplicating aliases.** It copied
+  up to 34 raw pointers *onto a pooled picture* and held them for as long as that picture
+  stayed a reference. Handle-to-handle now; the pool is reached once, for `pDec`.
+* **Eight `manage_dec_ref` helpers take `pCtx` beside the `SRefPic` they were handed.**
+  Both pointers already aliased — the module's S25 note says so at `SetUnRef` — and the
+  rule it states is unchanged: name each through its own raw pointer, per expression.
+
+**The probe budget bought a finding, which is what it is for.** The mid-face Miri run went
+red in `AddShortTermToList`: `insert_ref(pPic)` reads the picture to name its slot and sat
+*after* `let pic = &mut *pPic`, so the read popped the borrow and every `pic.` access under
+it was UB. **S29's boundary, T5.O8's lesson from the other side** — the invalidator is a
+raw read under a live `&mut`; spelling cannot fix it, only sequence can. The slot is taken
+before the borrow in both `Add*` functions, with the reason at the site. This is the first
+session since the probe budget was written where it caught something, and it caught it
+*mid-face*, which is the whole argument for the budget (T5.O7/O8 paid the alternative).
+
+Three unit tests got a pool. They put stack pictures into a list and compared pointers
+back out; a picture outside the pool has no slot, so they would have stored `None` — the
+C's null entry — and asserted that the DPB lost its entries.
+
+### 3. Face 2 — W3 seam 1: the picture finishes owning itself (T5.P′3)
+
+`SPicture`'s four per-macroblock families become `MbArray`s — the containers the layer's
+22 families have been on since T5.M1 — sized once from `AllocPicture`'s own
+`(kiPicWidth + 15) >> 4`. 204 sites over seven files.
+
+**Six `WelsMallocz` calls and four `WelsFree` loops die together**, and `FreePicture`
+becomes `drop(Box::from_raw(pPic))` and nothing else. That is the *point* of the seam:
+`AllocPicture`'s `Box` was an **incomplete owner** — drop glue reached the header and the
+three planes (T5.C3) but not six allocations made through `pMemAlign` — so a
+`Box<SPicture>` could not be handed to the pool or to `pTempDec` without leaking them.
+
+Consumers convert the way the grid families did, and the two interesting classes are the
+old ones: base-pointer takes that index at *neighbour* addresses go through `mb_grid_ptr`
+from the allocation root (S28, and `GetMbType`'s layer arm has done it since T5.K2); and
+`.is_null()` becomes `as_slice().is_empty()`, because the six null pointers meant "this
+picture covers no macroblocks". `MbDims::none()`/`MbArray::empty()` are that state and are
+deliberately **not** reachable through `MbDims::new`, whose panic says there is no such
+picture. `with_planes` takes the geometry, so a picture cannot be constructed with planes
+and no metadata — S21's shape at the constructor rather than a rule to remember.
+
+### 4. What W3 has left, and why the session stops here rather than one seam later
+
+`Pool<PPicture>` → `Pool<Box<SPicture>>` is **unblocked and not mechanical**, and that is
+the finding this face produced. With the slots owned, `pool_pic` must derive its raw
+pointer from a `&mut Box<SPicture>`; it is called at hundreds of sites and its callers
+routinely hold one result across another call to it (`dec_pic` live while `ref_pic` is
+taken). Every such pair is a fresh Unique retag popping the last — S25's overlap, at the
+scale of the whole decoder. `Pool::mut_and_rest` is the designed answer and it already
+exists, tested, in `safe/pool.rs`; what does not exist is the *call-site shape* that uses
+it, and inventing that shape hastily is how a face becomes three rounds of close battery.
+
+`pTempDec`, `pDqLayersList` and `pPicBuff` are each one `Box::into_raw`/`from_raw` pair
+today and are W1's shape exactly; they are small, and they are behind the same decision
+only in the sense that the cascade wants doing once.
+
+Decoder `WelsMallocz`/`WelsFree` **call sites** remaining: **8**, none of them a picture's
+— `fmo.rs`'s allocation map (6) and `decoder_core.rs`'s `WelsMalloczHelper`/
+`WelsFreeHelper` pair behind the parser buffers (2).
+
+### 5. Numbers
+
+| metric | entry | exit |
+|---|---|---|
+| tests (debug / release / ignored) | 474 / 468 / 20 | **474 / 468 / 20** |
+| Miri `--lib` | 334 | **334** |
+| decode goldens | 57 rows | **57** |
+| census allowlist | 59 | **59** |
+| census duplicate-body budget | 192 | **192** |
+| `raw_ptr` (crate) | 4404 | **4382** |
+| decoder `raw_ptr` (phase5.md's metric) | 1267 | **1245** |
+| `unsafe_block` | 627 | **626** |
+| `unsafe_fn` | 1247 | **1253** |
+| `mem_zeroed` | 31 | **31** |
+| `SHIM(` | 159 | **159** |
+| Miri skips | 2 | 2 |
+
+**The metric moved −22 across the session and it moved backwards for one of the three
+faces**, which is the reading S16 asks for rather than the sign:
+
+| face | sites converted | decoder `raw_ptr` |
+|---|---|---|
+| T5.P′1 (W2b(i)) | 160 | 1267 → 1265 (−2, both deleted fields) |
+| T5.P′2 (W2b(ii)) | 142 | 1265 → **1269 (+4)** |
+| T5.P′3 (W3 seam 1) | 204 | 1269 → 1245 (−24) |
+
+Face 1 deleted five pointer fields and two pointer-array locals (−7) and was charged for
+nine pointer *parameters* (+9) — eight of them the `pCtx` its helpers need to reach the
+pool. A face that removes 34 slot addresses per field, five times over, can still cost the
+instrument four, because the instrument counts pointer types *written*. Face 0's 67 new
+`pDec: PPicture` parameters were free for the opposite reason: `PPicture` is an alias.
+
+**S16's prose floor, twelfth instance**: four of Face 1's new doc comments named the
+pointer type they exist to delete, and the ratchet counted all four. Reworded, and the
+per-file table is what surfaced it — a total would have shown −20 and hidden the +4.
+
+### 6. Perf
+
+**Not measured. D-gate-1.** W8 inherits everything sessions N, O and P left, plus one
+addition to expect from this session and it points the same way as session P's:
+`ref_pic`/`short_ref_pic`/`long_ref_pic` turn what were array reads into pool lookups —
+a bounds-checked `Vec` index each — at 142 sites, some per-macroblock. Against that,
+T5.P′3 replaced 204 raw `base + iMbXy` dereferences with bounds-checked container
+accesses, which is the same direction. Both are structural and both are written here so
+the ledger does not have to guess. The benches at close were bit-identical on every row.
+
+### 7. F3 — one hit, acquitted at step 1 (measurement 42)
+
+Release sweep `mt Static_152_100 t=4 sm=3 n=600 cabac=0 rc=0`, 29375 → **0**; debug
+341/341. Inside S14's signature on every axis.
+
+**Step 0 was checked rather than assumed**, which is session P's lesson applied: the two
+release `rust_enc` binaries hash `4a730f44…` (base `c8ebc20f`) and `db175dc1…` (head), so
+they are two programs and the shortcut cannot acquit.
+
+**Step 1 reproduced inside its own five runs**: run 4 produced a Rust stream *shorter*
+than the C++ one, and twenty-one of twenty-two isolation runs were byte-identical at
+29375. One binary, one configuration, **three distinct outcomes** — S14 step 1's
+discriminator for the third measurement running. One battery hit, so step 2 does not
+fire; no alternation was run. **Acquitted.** Recorded in `phase0_findings.md` at
+adjudication time per S14 step 4; running total forty-two measurements, fourteen
+alternations, twenty-one acquittals.
+
+`Static_152_100` is the **third of the three sweep clips** to produce a hit, which removes
+the last trace of a per-clip clause.
+
+### 8. What went into the rules
+
+* **S24 gains a clause: a count carries the *unit* it was taken in.** Session P's was the
+  directory; this is the mirror, and it is the harder one — `pRefPic` is a token that
+  names a picture field *and* a context-pointer local, so a token count of it is correct
+  for neither domain and absurd only in what it implies.
+* **Nothing else is new.** The tags that carried the session were S23 (Face 0's whole
+  gate), S29 and T5.O8's ordering corollary (Face 1's Miri conviction), S28 (Face 2's
+  bridges), S16 (the per-file reading and the prose floor), S25, S21, S27, S13, F19.
+* **The probe budget earned its keep for the first time.** Three probe runs, 754s, 766s
+  and 768s; the second went red mid-face on a defect the byte gates cannot see and the
+  close battery would have surfaced only after three more commits had landed on it.
+
+### Hand-off: Phase 5, session P″ — W3's remainder, then W4 and W5
+
+The estimate does not move: **P″ (W3 remainder + W4 + W5), P‴ (W6 + W7), Q (W8)**. W2b
+is closed; W3 is one seam in.
+
+1. **`Pool<Box<SPicture>>` is the design question, and it is now the only one.** Every
+   raw alias into the pool is gone (T5.P2, T5.P′1, T5.P′2) and the picture is a complete
+   owner (T5.P′3), so the ordering rule has nothing left to clear. What remains is the
+   *call-site shape*: `pool_pic` returns a raw pointer at hundreds of sites and callers
+   hold one across another call to it, which with owned slots is a retag popping a retag.
+   `Pool::mut_and_rest` exists and is tested; the work is deciding which callers become
+   "the one mutable picture" and which become readers, and it wants settling in writing
+   before the first edit — the way W2b's was, which is why W2b executed in one pass.
+2. **The small W3 entries are W1's shape and can land first**: `pTempDec` →
+   `Option<Box<SPicture>>` (16 sites), `pDqLayersList` → `Option<Box<DqLayerState>>` (7),
+   `pPicBuff` → `Option<Box<PicPool>>`, and the free cascade into `Drop` (R4). Each is a
+   `Box::into_raw`/`from_raw` pair today. F19 per allocation; S21 per owned field.
+3. **W3's done-test is zero decoder `WelsMallocz`/`WelsFree`; there are 8 call sites left**
+   and none is a picture's — `fmo.rs`'s allocation map (6) and the parser buffers' helper
+   pair (2). Neither has been designed; both are containers of their own.
+4. **W4 and W5 are untouched and their sizes are the brief's, unverified.** Re-grep at the
+   face (S24), and this session's clause applies: check what the token *names* before
+   trusting the count. The `LD*/ST*` figure in particular is a token count.
+5. **Budget a probe run per container, and expect it to fire.** Session P ran three and all
+   were green; this session ran three and the second was not. Both outcomes are the budget
+   working.
+6. **Findings**: nothing new. Inherited unchanged — **F41**, the eight `CWelsDecoderImpl`
+   back-pointers and the `src/api/` inventory are **Phase 8's**; **F23** Phase 8's; **F36**
+   decoder-threading's, and it acquired two more dead names this session
+   (`WelsDeblockingInitFilter` and `WelsDeblockingFilterMB` have no callers in the tree —
+   converted rather than deleted, listed here for W7's straggler sweep per S18); **F3** per
+   S14, forty-two measurements.
+7. **Perf debt for W8**, unchanged and with this session's two structural additions named
+   in §6.
