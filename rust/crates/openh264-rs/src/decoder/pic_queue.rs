@@ -664,57 +664,19 @@ pub unsafe fn alloc_picture(
     Some(pic)
 }
 
-/// [`alloc_picture`] as the C's `AllocPicture` — a raw pointer, null on failure.
-///
-/// The pool's slots are `PPicture` until W3's flip, so [`CreatePicBuff`] and every
-/// other caller that stores a picture as a pointer comes through here. F19, per
-/// allocation: this `Box::into_raw`'s owner is the [`FreePicture`] that takes the
-/// pointer back.
-///
-/// # Safety
-/// As [`alloc_picture`]; the result must be freed with [`FreePicture`].
-#[inline]
-pub unsafe fn AllocPicture(
-    pCtx: PWelsDecoderContext,
-    kiPicWidth: i32,
-    kiPicHeight: i32,
-) -> PPicture {
-    match alloc_picture(pCtx, kiPicWidth, kiPicHeight) {
-        Some(pic) => Box::into_raw(pic),
-        None => std::ptr::null_mut(),
-    }
-}
-
-/// Deallocates an [`SPicture`] instance and all its associated buffers.
-///
-/// **T5.C3: the matching half of [`AllocPicture`]'s heap construction.** The three
-/// planes are freed by the `Box`'s drop glue — there is no `pBuffer[0]` arm any more,
-/// and no way to forget one. The per-macroblock metadata arrays are still raw and are
-/// still freed here, through the allocator that made them.
-///
-/// F19, per allocation, after the change: the `Box` at [`AllocPicture`]'s
-/// `Box::into_raw` by the `Box::from_raw` at the bottom of this function; the three
-/// plane `Vec`s by that same drop; the six metadata arrays by the six `WelsFree`
-/// calls between here and there. Balanced, and two of the three groups are now
-/// balanced by the type system rather than by inspection.
-///
-/// # Safety
-/// - `pPic` must point to an [`SPicture`] produced by [`AllocPicture`] and not yet
-///   freed, or be null. It is reclaimed with `Box::from_raw`, so it must have come
-///   from that function's `Box::into_raw` and from nowhere else.
-/// - `pMa` must point to the [`CMemoryAlign`] allocator used to allocate the
-///   macroblock metadata arrays.
-pub unsafe fn FreePicture(pPic: PPicture, _pMa: *mut CMemoryAlign) {
-    if pPic.is_null() {
-        return;
-    }
-    // The picture header and, with it, the three planes *and* the four
-    // per-macroblock families. **T5.P′3 emptied this function**: the six `WelsFree`
-    // calls it used to make are drop glue now, and the `pMa` it needed to make them
-    // is unused — kept in the signature because `DestroyPicBuff` and the lifecycle
-    // still spell the C's pair, and W3's cascade is what deletes the parameter.
-    unsafe { drop(Box::from_raw(pPic)) }
-}
+// **T5.Q3: `AllocPicture` and `FreePicture` stood here, and the flip deleted their
+// callers.** They were the C's raw pair — `Box::into_raw` into a `PPicture` slot,
+// `Box::from_raw` out of one — and the whole reason the picture's constructor was
+// split in two at T5.P″1. With owned slots `CreatePicBuff` pushes `alloc_picture`'s
+// `Box` straight into the `Vec` and `DestroyPicBuff` drops it, so **the decoder holds
+// no raw picture allocation at all**: F19's question has no site left to ask at, and
+// S18's straggler rule says a definition whose last caller went with a conversion goes
+// with it rather than waiting for the sweep.
+//
+// `FreePicture`'s `pMa` parameter is the fossil worth naming: T5.P′3 emptied its body
+// to a `drop` and kept the parameter because the C's lifecycle still spelled the pair.
+// The pair is gone, and with it the last place the decoder passed a `CMemoryAlign` to
+// free a picture.
 
 // ============================================================================
 // Queue Retrieval Interface Routines
@@ -902,8 +864,11 @@ mod tests {
         ctx.pParam = &mut param as *mut SDecodingParam;
 
         unsafe {
-            let p_pic = AllocPicture(&mut *ctx as *mut SWelsDecoderContext, 160, 120);
-            assert!(!p_pic.is_null());
+            // T5.Q3: `AllocPicture`'s raw pair is gone, so the fixture holds the
+            // owner the pool holds and the `Box` is what releases it.
+            let mut pic = alloc_picture(&mut *ctx as *mut SWelsDecoderContext, 160, 120)
+                .expect("the picture allocates");
+            let p_pic: PPicture = &mut *pic;
             assert_eq!((*p_pic).iWidthInPixel, 160);
             assert_eq!((*p_pic).iHeightInPixel, 120);
             assert!(!(*p_pic).data_ptr(0).is_null());
@@ -927,7 +892,7 @@ mod tests {
             assert!((*p_pic).plane(0).as_slice().iter().all(|&b| b == 128));
             assert_eq!((*p_pic).plane(0).at(-32, -32), 128);
 
-            FreePicture(p_pic, &mut ma as *mut CMemoryAlign);
+            drop(pic);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -944,8 +909,9 @@ mod tests {
         ctx.pParam = &mut param as *mut SDecodingParam;
 
         unsafe {
-            let p_pic = AllocPicture(&mut *ctx as *mut SWelsDecoderContext, 160, 120);
-            assert!(!p_pic.is_null());
+            let mut pic = alloc_picture(&mut *ctx as *mut SWelsDecoderContext, 160, 120)
+                .expect("the picture allocates");
+            let p_pic: PPicture = &mut *pic;
             assert_eq!((*p_pic).linesize(0), 224);
             assert_eq!((*p_pic).linesize(1), 112);
             assert_eq!((*p_pic).linesize(2), 112);
@@ -953,7 +919,7 @@ mod tests {
             assert!((*p_pic).data_ptr(0).is_null());
             assert!((*p_pic).data_ptr(1).is_null());
             assert!((*p_pic).data_ptr(2).is_null());
-            FreePicture(p_pic, &mut ma as *mut CMemoryAlign);
+            drop(pic);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }

@@ -1614,3 +1614,51 @@ lifecycle arithmetic reads" means.
 so the copy has to be re-established on each option write). That is boundary ownership,
 which is §2.2.8's, and it belongs with the other eight back-pointers F38 found in the
 same file. Listed with its owner per S18.
+
+## F42 — a reference list can name the picture being decoded, and the safe split's `get` panics on exactly that slot
+
+*Found Phase 5 session Q (2026-08-14), writing W3's flip. **Fixed in the same
+commit** (T5.Q2, `a8eaa3e5`), with a covering test that is red under revert (F21).
+Owner: closed.*
+
+`Pool::mut_and_rest(cur)` hands out one slot as `&mut` and every *other* slot as a
+read view, and `PoolRest::get` asserts that the handle it is given is not `cur`:
+
+```rust
+assert_ne!(index, self.cur, "slot {index} is the one held mutably by this split");
+```
+
+That assertion is correct as an API contract and wrong as decoder behaviour, because
+`pRefList[listIdx][i]` is filled from a `ref_idx` **the bitstream chooses**. A stream
+whose reference index points at the frame currently being reconstructed is malformed,
+not impossible, and the C++ resolves it to `pCtx->pDec` and reads on — motion
+compensation samples the half-written picture, the output is garbage, and decoding
+continues. Resolving that entry through the rest would abort the process instead.
+
+**Why no gate here could have found it.** The goldens, the sweeps, the benches and the
+conformance corpus are all well-formed streams; `malformed_stream_parity`'s corpus is
+NAL-level damage (truncation, emulation-prevention edges, corrupt headers), which never
+reaches a reference index. This is S6's never-widen default arriving from an unexpected
+direction: **the safe API's panic is a behaviour change on ungated input**, and the
+input class it changes behaviour on is the one no instrument in this project owns.
+
+**The fix, and its second half.** `PicRefs` carries the mutable half's own pointer
+beside the rest, and answers `get(cur)` from it:
+
+```rust
+PicView::Split { rest, cur, cur_ptr } => {
+    if id == cur { cur_ptr } else { … rest.get(id) … }
+}
+```
+
+The second half is what makes this legal rather than merely non-panicking: the answer
+and the current picture are **one tag**, derived once from the `&mut` at the bracket
+top, so a read through the reference answer and a write through `pDec` are the same
+derivation and no aliasing model has anything to complain about. Answering from a
+*separate* derivation of the same slot would swap a panic for undefined behaviour.
+
+**The class, for the phases that follow.** Any safe container API whose disjointness is
+enforced by a runtime assert inherits this question: *can the untrusted input make the
+two handles equal?* Where it can, the assert is a behaviour change and the resolution
+has to come from the side that already holds the borrow. The encoder's picture pool
+(6.1/6.2) takes the same `Pool` and will meet it in `MarkPicAsRef`'s shape.
