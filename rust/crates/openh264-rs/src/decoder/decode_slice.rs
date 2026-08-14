@@ -8,7 +8,7 @@
     unused_mut
 )]
 
-use crate::decoder::decoder_context::{PicRefs, dec_pic, pic_refs, ref_id, ref_pic};
+use crate::decoder::decoder_context::{PicRefs, cur_and_refs, ref_id};
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
 use std::ffi::c_void;
@@ -2464,8 +2464,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext) -> i32
         return ERR_NONE;
     }
     let dq: *mut DqLayerState = pCurDqLayer;
-    let pDec = dec_pic(pCtx);
-    let pRefs = pic_refs(pCtx);
+    let (pDec, pRefs) = cur_and_refs(pCtx);
     let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
@@ -5276,9 +5275,8 @@ pub unsafe fn WelsDecodeSlice(
 
     (*pSlice).iTotalMbInCurSlice = 0;
 
-    // The parse-only slice bracket, same two derivations as the decode one below.
-    let pDec = dec_pic(pCtx);
-    let pRefs = pic_refs(pCtx);
+    // The parse-only slice bracket, the same one borrow as the decode one below.
+    let (pDec, pRefs) = cur_and_refs(pCtx);
 
     let pDecMbFunc: PWelsDecMbFunc = if !(*pCtx).pPps.is_null()
         && (*(*pCtx).pPps).bEntropyCodingModeFlag
@@ -5393,12 +5391,12 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext) -> i32
         return ERR_NONE;
     }
     let dq: *mut DqLayerState = pCurDqLayer;
-    // **The slice bracket** (T5.P″3): the pool is reached twice here — once for the
-    // picture being written, once for the view every reference resolution below goes
-    // through — and nowhere under this loop. At the flip these two lines become
-    // `mut_and_rest(dec_id)` and everything below is already shaped for it.
-    let pDec = dec_pic(pCtx);
-    let pRefs = pic_refs(pCtx);
+    // **The slice bracket** (T5.P″3, split at T5.Q2): the pool is borrowed **once**
+    // here — the picture being written as the `&mut` half, every other slot as the
+    // view each reference resolution below goes through — and not at all under this
+    // loop. The two lines that stood here were two derivations; `mut_and_rest` makes
+    // them one, and everything below was already shaped for it.
+    let (pDec, pRefs) = cur_and_refs(pCtx);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 

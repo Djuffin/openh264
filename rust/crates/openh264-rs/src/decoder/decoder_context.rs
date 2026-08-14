@@ -605,18 +605,37 @@ pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUni
 /// a raw picture pointer into the pool now holds one of these handles, and every one of
 /// them resolves here.
 ///
-/// **Copies a stored slot pointer; it does not derive one.** Same contract as
-/// [`TagAccessUnits::nal`](crate::decoder::nalu::TagAccessUnits::nal), and the
-/// reason is the one T5.N1 wrote at `PicPool`'s type: the pool addresses, it does
-/// not own, so the pointer this returns carries `AllocPicture`'s provenance and no
-/// later borrow of the pool touches it. **When W3 flips the slots to
-/// `Box<SPicture>`, this function is where the pool borrow happens** — the whole
-/// reason the fields stopped being pointers first, and now a single site rather
-/// than the two W2a left.
+/// **T5.Q2: it derives, and the derivation is shared.** Until the flip this copied a
+/// stored slot pointer, so the result carried `AllocPicture`'s provenance and no
+/// later borrow of the pool could touch it. The pool owns now, so every resolution
+/// borrows: two live results for *one* slot are two derivations of one allocation and
+/// the later invalidates the earlier.
+///
+/// Shared is the default because shared results **coexist** — the reference-side
+/// readers hold several at once (`CreateImplicitWeightTable` compares a LIST_0 entry
+/// against a LIST_1 entry, and the two can legally be one picture) and none of them
+/// writes. The paths that do write take [`pool_pic_mut`] below, and the compiler
+/// enumerates them: that is the discriminator W3's settlement asks each of the write
+/// sites to be read against, applied by the type system instead of by eye.
 #[inline]
-pub unsafe fn pool_pic(pCtx: PWelsDecoderContext, slot: Option<PicId>) -> PPicture {
+pub unsafe fn pool_pic(pCtx: PWelsDecoderContext, slot: Option<PicId>) -> *const SPicture {
     match (slot, (*pCtx).pPicBuff.as_deref()) {
         (Some(id), Some(pool)) => pool.slot(id),
+        _ => std::ptr::null(),
+    }
+}
+
+/// [`pool_pic`]'s mutable form, for the paths that write through what they resolve.
+///
+/// **One live result at a time**, and it is the caller's job to keep it that way: a
+/// result that outlives the expression it was taken in, across another resolution of
+/// the same slot, is the conflict the flip is about. Where a scope needs one picture
+/// mutably *and* others readably, the answer is a bracket
+/// ([`cur_and_refs`]), not two calls here.
+#[inline]
+pub unsafe fn pool_pic_mut(pCtx: PWelsDecoderContext, slot: Option<PicId>) -> PPicture {
+    match (slot, (*pCtx).pPicBuff.as_deref_mut()) {
+        (Some(id), Some(pool)) => pool.slot_mut(id),
         _ => std::ptr::null_mut(),
     }
 }
@@ -668,6 +687,43 @@ pub unsafe fn pic_refs<'a>(pCtx: PWelsDecoderContext) -> PicRefs<'a> {
     })
 }
 
+/// **The bracket top, both halves from one borrow** (T5.Q2).
+///
+/// The two lines this replaces — `dec_pic(pCtx)` then `pic_refs(pCtx)` — were two
+/// derivations of the same pool, which under `PPicture` slots was two pointer copies
+/// and under owned slots is a `&mut` into one picture beside a shared borrow that can
+/// reach the same one. [`PicPool::cur_and_rest`] splits the slot span instead, so the
+/// current picture and the view of every other slot are the two halves of a single
+/// borrow and the disjointness is proved rather than assumed.
+///
+/// The `None` arms are the states that were reachable before the flip and stay
+/// reachable after it: no pool (before `CreatePicBuff`, after `DestroyPicBuff`) and no
+/// current picture (a bracket opened before the AU loop prefetched one). Both answer
+/// exactly as `dec_pic`/`pic_refs` did — a null picture and a view that resolves
+/// everything to null or to the whole pool.
+#[inline]
+pub unsafe fn cur_and_refs<'a>(pCtx: PWelsDecoderContext) -> (PPicture, PicRefs<'a>) {
+    pic_and_refs(pCtx, if pCtx.is_null() { None } else { (*pCtx).pDec })
+}
+
+/// [`cur_and_refs`] for a bracket whose mutable half is **not** `pCtx->pDec`: the
+/// error-concealment prefetch, which writes into the slot it just took from the pool
+/// while reading the previous DPB picture out of another one.
+#[inline]
+pub unsafe fn pic_and_refs<'a>(
+    pCtx: PWelsDecoderContext,
+    slot: Option<PicId>,
+) -> (PPicture, PicRefs<'a>) {
+    if pCtx.is_null() {
+        return (std::ptr::null_mut(), PicRefs::over(None));
+    }
+    match ((*pCtx).pPicBuff.as_deref_mut(), slot) {
+        (Some(pool), Some(id)) => pool.cur_and_rest(id),
+        (Some(pool), None) => (std::ptr::null_mut(), pool.refs()),
+        (None, _) => (std::ptr::null_mut(), PicRefs::over(None)),
+    }
+}
+
 /// Entry `i` of reference list `list` — the **handle**, without touching the pool.
 ///
 /// The lists live in the context, not in the pool, so reading one below a bracket
@@ -678,43 +734,55 @@ pub unsafe fn ref_id(pCtx: PWelsDecoderContext, list: usize, i: usize) -> Option
     (*pCtx).sRefPic.pRefList[list][i]
 }
 
-/// The picture being decoded into, or null when there is none.
+/// The picture being decoded into — **the write target**, so this one is mutable.
 #[inline]
 pub unsafe fn dec_pic(pCtx: PWelsDecoderContext) -> PPicture {
-    pool_pic(pCtx, (*pCtx).pDec)
-}
-
-/// [`dec_pic`]'s counterpart for the concealment reference list.
-#[inline]
-pub unsafe fn ec_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
-    pool_pic(pCtx, (*pCtx).pECRefPic[i])
+    pool_pic_mut(pCtx, (*pCtx).pDec)
 }
 
 /// Entry `i` of reference list `list` — `sRefPic.pRefList[list][i]` resolved.
 #[inline]
-pub unsafe fn ref_pic(pCtx: PWelsDecoderContext, list: usize, i: usize) -> PPicture {
+pub unsafe fn ref_pic(pCtx: PWelsDecoderContext, list: usize, i: usize) -> *const SPicture {
     pool_pic(pCtx, (*pCtx).sRefPic.pRefList[list][i])
 }
 
 /// Entry `i` of the short-term list — `sRefPic.pShortRefList[LIST_0][i]` resolved.
 #[inline]
-pub unsafe fn short_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+pub unsafe fn short_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> *const SPicture {
     pool_pic(pCtx, (*pCtx).sRefPic.pShortRefList[LIST_0][i])
+}
+
+/// [`short_ref_pic`]'s mutable form — `WrapShortRefPicNum`'s per-entry stamp.
+#[inline]
+pub unsafe fn short_ref_pic_mut(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+    pool_pic_mut(pCtx, (*pCtx).sRefPic.pShortRefList[LIST_0][i])
 }
 
 /// Entry `i` of the long-term list — `sRefPic.pLongRefList[LIST_0][i]` resolved.
 #[inline]
-pub unsafe fn long_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> PPicture {
+pub unsafe fn long_ref_pic(pCtx: PWelsDecoderContext, i: usize) -> *const SPicture {
     pool_pic(pCtx, (*pCtx).sRefPic.pLongRefList[LIST_0][i])
 }
 
-/// The previous decoded picture in the DPB — `pLastDecPicInfo`'s handle resolved.
+/// The previous decoded picture's **handle**, without touching the pool — the
+/// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
+/// resolve it through their own [`PicRefs`].
 #[inline]
-pub unsafe fn prev_dpb_pic(pCtx: PWelsDecoderContext) -> PPicture {
+pub unsafe fn prev_dpb_id(pCtx: PWelsDecoderContext) -> Option<PicId> {
+    if pCtx.is_null() || (*pCtx).pLastDecPicInfo.is_null() {
+        return None;
+    }
+    (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
+}
+
+/// [`prev_dpb_pic`]'s mutable form — the api layer's buffering path, which takes a
+/// DPB reference on it (`iRefCount += 1`).
+#[inline]
+pub unsafe fn prev_dpb_pic_mut(pCtx: PWelsDecoderContext) -> PPicture {
     if (*pCtx).pLastDecPicInfo.is_null() {
         return std::ptr::null_mut();
     }
-    pool_pic(pCtx, (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb)
+    pool_pic_mut(pCtx, (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb)
 }
 
 /// Whether an access unit exists and has at least one NAL queued in it.

@@ -303,8 +303,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    au_has_nals, cur_au, dec_pic, ec_ref_pic, pic_pool_mut, pic_refs, pool_pic, prev_dpb_pic,
-    ref_pic,
+    au_has_nals, cur_au, cur_and_refs, dec_pic, pic_pool_mut, pic_refs, pool_pic, ref_id, ref_pic,
 };
 use crate::decoder::picture::pic_slot;
 
@@ -1131,7 +1130,7 @@ pub unsafe fn DecodeFrameConstruction(
                     (*pCtx).bFrameFinish = true;
                 } else if (*pCtx).iTotalNumMbRec != 0 {
                     (*pCtx).bFramePending = true;
-                    (*dec_pic(pCtx)).bIsComplete = false;
+                    (*pPic).bIsComplete = false;
                     (*pCtx).bFrameFinish = false;
                     (*pCtx).iErrorCode |= dsFramePending;
                     return ERR_INFO_PARSEONLY_PENDING;
@@ -1156,7 +1155,12 @@ pub unsafe fn DecodeFrameConstruction(
             return ERR_INFO_MB_NUM_INADEQUATE;
         }
     } else if (*pCurDq).sLayerInfo.sNalHeaderExt.bIdrFlag && (*pCtx).iErrorCode == dsErrorFree {
-        (*dec_pic(pCtx)).bIsComplete = true;
+        // T5.Q2: `dec_pic(pCtx)` stood here and at the parse-only arm above. Both
+        // name the picture `pPic` already holds — `pCtx->pDec` is not written
+        // anywhere in this function — and under owned slots a second derivation of
+        // one slot invalidates the first, which `pPic`'s twenty-odd uses below are.
+        // One derivation at the top is what this whole function's region wants.
+        (*pPic).bIsComplete = true;
         (*pCtx).bFreezeOutput = false;
     }
 
@@ -4031,7 +4035,12 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
         return true;
     }
     let pCurDqLayer = (*pCtx).pCurDqLayer;
-    let pDec = dec_pic(pCtx);
+    // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
+    // and reference indices *while* resolving the reference-list entries those
+    // indices name, and a malformed stream can put the current picture in that list
+    // (F42). One borrow, split — the same shape the slice brackets take, over a
+    // whole-slice operation rather than a whole slice.
+    let (pDec, pRefs) = cur_and_refs(pCtx);
     if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
         return true;
     }
@@ -4045,7 +4054,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
             MB_TYPE_SKIP | MB_TYPE_16x16 => {
                 let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 if refIdx < MAX_REF_PIC_COUNT {
-                    let pRef = ref_pic(pCtx, LIST_0, refIdx);
+                    let pRef = pRefs.get(ref_id(pCtx, LIST_0, refIdx));
                     if !pRef.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                     }
@@ -4055,13 +4064,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
+                    let pRef0 = pRefs.get(ref_id(pCtx, LIST_0, refIdx0));
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = ref_pic(pCtx, LIST_0, refIdx1);
+                    let pRef1 = pRefs.get(ref_id(pCtx, LIST_0, refIdx1));
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4071,13 +4080,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = ref_pic(pCtx, LIST_0, refIdx0);
+                    let pRef0 = pRefs.get(ref_id(pCtx, LIST_0, refIdx0));
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = ref_pic(pCtx, LIST_0, refIdx1);
+                    let pRef1 = pRefs.get(ref_id(pCtx, LIST_0, refIdx1));
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4088,7 +4097,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext) -> bool {
                 for &sub in &indices {
                     let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
-                        let pRef = ref_pic(pCtx, LIST_0, refIdx);
+                        let pRef = pRefs.get(ref_id(pCtx, LIST_0, refIdx));
                         if !pRef.is_null() {
                             bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                         }

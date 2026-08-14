@@ -1578,7 +1578,7 @@ unsafe fn BufferingReadyPicture(
             // resolve happens here rather than the pointer being stored. `api/` is
             // Phase 8's; this is the field's type change reaching its one consumer
             // outside the decoder, nothing more.
-            let prev = crate::decoder::decoder_context::prev_dpb_pic(pCtx);
+            let prev = crate::decoder::decoder_context::prev_dpb_pic_mut(pCtx);
             if !prev.is_null() {
                 (*dec_impl).sPictInfoList[i].iPicBuffIdx = (*prev).iPicBuffIdx;
                 if crate::decoder::decoder_core::GetThreadCount(pCtx) <= 1 {
@@ -1613,9 +1613,15 @@ unsafe fn EmitBufferedPicture(
     (*dec_impl).sPictInfoList[idx].iPOC = crate::decoder::decoder_context::IMinInt32;
     let iPicBuffIdx = (*dec_impl).sPictInfoList[idx].iPicBuffIdx;
     if !pPicBuff.is_null() {
-        // `slot_at` carries the C's `>= 0 && < iCapacity` test, so the range check
+        // `slot_at_mut` carries the C's `>= 0 && < iCapacity` test, so the range check
         // and the indexing are one expression instead of two that could disagree.
-        let pPic = (*pPicBuff).slot_at(iPicBuffIdx);
+        //
+        // **The flip's one boundary cost** (T5.Q2): with owned slots this release has
+        // to *derive* the picture rather than copy a pointer out of the array, so it
+        // needs the mutable form — it decrements `iRefCount` and hands the picture to
+        // `pSetUnRef`. That is api-shaped work forced by a decoder change; it is not
+        // F41/F23's `src/api/` inventory, which stays Phase 8's.
+        let pPic = (*pPicBuff).slot_at_mut(iPicBuffIdx);
         if !pPic.is_null() {
             (*pPic).iRefCount -= 1;
             if (*pPic).iRefCount <= 0 {
