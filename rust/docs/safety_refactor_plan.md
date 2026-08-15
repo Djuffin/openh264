@@ -629,6 +629,20 @@ Stop-line: cumulative CB ≈ **+23%** — stop at a family boundary and escalate
 the data. Parking, if it comes to that, is family-granular and S20-coherent; its
 cost is phase-exit debt, not a broken tree.
 
+**D-par-1 (Eugene, 2026-08-14, mid-session S, verbatim): "if InitErrorCon is called
+in C++ code, it needs to be called in Rust code as well. we aim for test parity
+first, safety refactoring comes later."** What it reorders: behavioral parity with
+the C++ decoder — outputs *and* API-visible behavior (return codes, frame timing)
+on the full corpus including damaged input — outranks the remaining safety work
+(W6/W7's view struct and the `deny` rollout), which stands **deferred, not
+cancelled**. What it does not change: output equivalence stays the correctness
+definition (D-fid-1's reference clause), byte gates per commit, the goldens'
+authority — with the F43 precedent that a golden pinning *port* behavior against a
+divergent C++ regenerates from the C++'s answer (`tools/ecref`), each move logged.
+Executed from session S on: F43/F44/F45 fixed under it (truncation-row agreement
+641/541 → **1182/0**), F46 scheduled as the next parity item, W6/W7 wait for the
+phase's resumption.
+
 **D-fid-1 (Eugene, 2026-08-13): structural fidelity to the C++ is retired; the C++
 remains the reference for correctness, optimization, and inspiration.** The safe
 rewrite has already diverged structurally (ids for pointers, owned containers,
@@ -1199,6 +1213,28 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   reasoning), probe per seam, and the **per-face breadcrumb** — one log line
   appended as each face closes — so a stop at any point costs nothing to make
   honest.
+
+- **S32 — the Miri gate's cost is decoder instantiations, not decoded
+  macroblocks** (Phase 5 session S; the measured record is
+  `phase5_findings.md`'s S32 entry). `gates.sh exit` minus Miri is 103 seconds;
+  each probe pays for a multi-MiB `Initialize` under the interpreter, flat
+  against decoded work (36 macroblocks 268.9s, 16 macroblocks 196.0s). So
+  shortening a probe's stream saves ~nothing and removing a probe saves a
+  quarter of the wall: **probe count is the budget knob, probe coverage is the
+  value** — T5.S3 retired one probe on exactly this arithmetic, and any future
+  "make Miri faster" proposal starts from it.
+
+- **S33 — a recorded outcome is a measurement, never a prediction** (Phase 5
+  session S's own corrections, all caught and reverted in-session). Three
+  instances in one session: a new test pinned the *port's* hash instead of the
+  C++'s to stay green; two asset tests were claimed red-under-revert before the
+  revert was run (they weren't); a hash was written for a revert outcome never
+  measured. The rule: a gate outcome, a golden value, or a red-under-revert
+  claim is written only after the command ran, from its output; an expected
+  value is labeled a prediction and never occupies a result's slot. Corollary,
+  from the same session's two instrument bugs (the missing `FlushFrame` drain;
+  awk reading `0x0` as hex): *an instrument that disagrees with a hand count is
+  wrong until proven otherwise* — the hand count arbitrates.
 
 ---
 
