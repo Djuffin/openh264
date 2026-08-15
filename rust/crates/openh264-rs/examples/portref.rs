@@ -1,7 +1,31 @@
-//! TEMPORARY (session T, F46) — the port's side of one truncation, printed.
-//! Mirrors `malformed_stream_parity.rs`'s `decode_case` and `ecref`'s main.
-//! Deleted before the face commits.
+//! `portref` — the **port's** answer for one malformed-corpus entry.
+//!
+//! The exact counterpart of `rust/tools/ecref`, which prints the C++ decoder's
+//! answer for the same bytes, and it exists for the same reason: when the two
+//! disagree, "the port changed" is not evidence either way — the question is what
+//! each decoder *does*.
+//!
+//! Session S built `ecref` and had to reach for the port's side twice through
+//! temporary test files; session T needed it on every one of F46's five causes and
+//! on face 1. So it is an instrument now rather than a scratch file, and it lives in
+//! `examples/` on purpose: `cargo test` does not run examples, so this cannot become
+//! a test that asserts nothing while occupying a slot in a ratcheted count.
+//!
+//! ```text
+//! cargo run --example portref -- narrow_16x16.264 41
+//! cargo run --example portref -- CABA2_SVA_B.264 2284
+//! ```
+//!
+//! Prints, in `DecodeFrame2`/`FlushFrame` call order: the `DECODING_STATE` and
+//! `iBufferStatus` of every call, one SHA-1 per emitted frame **individually**
+//! (which is what `ecref`'s single whole-run digest cannot give you — face 1 is
+//! settled by comparing the two per-frame lists as multisets), and the same
+//! `frames / dims / codes / bufstatus` row shape the golden tables store.
+//!
+//! Same decode as `tests/malformed_stream_parity.rs`'s `decode_case`: annex-B split,
+//! `ERROR_CON_SLICE_COPY`, per-NAL feed, EOS + drain, planes in emission order.
 
+#[path = "../tests/common/mod.rs"]
 mod common;
 
 use common::Sha1Hasher;
@@ -80,11 +104,17 @@ fn run(name: &str, want: usize) {
     }
 }
 
-#[test]
-fn f46_probe() {
-    let spec = std::env::var("F46_CASE").unwrap_or_else(|_| "narrow_16x16.264:41".into());
-    let (name, want) = spec.split_once(':').unwrap();
-    run(name, want.parse().unwrap());
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let (Some(name), Some(bytes)) = (args.next(), args.next()) else {
+        eprintln!("usage: cargo run --example portref -- <stream.264> <truncate-to-bytes>");
+        std::process::exit(2);
+    };
+    let want: usize = bytes.parse().unwrap_or_else(|_| {
+        eprintln!("not a byte count: {bytes}");
+        std::process::exit(2);
+    });
+    run(&name, want);
 }
 
 unsafe fn hash_frame(info: &SBufferInfo, dst: [*mut u8; 3]) -> String {
