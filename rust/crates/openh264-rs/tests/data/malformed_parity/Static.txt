@@ -2,6 +2,10 @@
 # base: res/Static.264  bytes=9125  start_codes=12
 # knobs: fine_head=6 fine_spread=6 fine_delta=±8 coarse=16 epb_sites=4 prefix_boundaries=8
 # not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)
+# referee: tools/ecref (the C++ decoder). Re-run every row of every table with
+#   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh
+# which dumps this corpus and replays it through `ecref --stdin`. Rows are the
+# port's output; where they agree with the C++ they are pinned to the C++'s answer.
 # columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle
 trunc.b000+00                   0     1     0    0 -          -                                        0x0                        0
 trunc.b000+01                   1     1     0    0 -          -                                        0x0                        0

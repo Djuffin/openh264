@@ -2,6 +2,10 @@
 # base: res/sps_subsetsps_bothVUI.264  bytes=11341  start_codes=5
 # knobs: fine_head=6 fine_spread=6 fine_delta=±8 coarse=16 epb_sites=4 prefix_boundaries=8
 # not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)
+# referee: tools/ecref (the C++ decoder). Re-run every row of every table with
+#   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh
+# which dumps this corpus and replays it through `ecref --stdin`. Rows are the
+# port's output; where they agree with the C++ they are pinned to the C++'s answer.
 # columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle
 trunc.b000+00                   0     1     0    0 -          -                                        0x0                        0
 trunc.b000+01                   1     1     0    0 -          -                                        0x0                        0
@@ -84,13 +88,13 @@ tail.epb                       67     5     0    0 -          -                 
 tail.sc3                       67     6     0    0 -          -                                        0x0*6                      0*6
 tail.sc4                       68     6     0    0 -          -                                        0x0*6                      0*6
 tail.sc3_byte                  68     6     0    0 -          -                                        0x0*4,0x4,0x0              0*6
-hdr0.00                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
-hdr0.05                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
+hdr0.00                        64     5     0    0 -          -                                        0x10*4,0x0                 0*5
+hdr0.05                        64     5     0    0 -          -                                        0x10*4,0x0                 0*5
 hdr0.07                        64     5     0    0 -          -                                        0x0*5                      0*5
-hdr0.08                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
-hdr0.1f                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
-hdr0.65                        64     5     0    0 -          -                                        0x10,0x0,0x10*2,0x0        0*5
-hdr0.80                        64     5     0    0 -          -                                        0x4,0x0,0x10*2,0x0         0*5
+hdr0.08                        64     5     0    0 -          -                                        0x10*4,0x0                 0*5
+hdr0.1f                        64     5     0    0 -          -                                        0x10*4,0x0                 0*5
+hdr0.65                        64     5     0    0 -          -                                        0x10*4,0x0                 0*5
+hdr0.80                        64     5     0    0 -          -                                        0x4,0x10*3,0x0             0*5
 hdr1.00                        64     5     0    0 -          -                                        0x0,0x10,0x0*3             0*5
 hdr1.05                        64     5     0    0 -          -                                        0x0,0x10,0x0*3             0*5
 hdr1.07                        64     5     0    0 -          -                                        0x0*5                      0*5

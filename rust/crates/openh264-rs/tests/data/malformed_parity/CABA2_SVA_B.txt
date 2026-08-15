@@ -2,11 +2,25 @@
 # base: res/CABA2_SVA_B.264  bytes=8555  start_codes=19
 # knobs: fine_head=6 fine_spread=6 fine_delta=±8 coarse=16 epb_sites=4 prefix_boundaries=8
 # not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)
+# referee: tools/ecref (the C++ decoder). Re-run every row of every table with
+#   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh
+# which dumps this corpus and replays it through `ecref --stdin`. Rows are the
+# port's output; where they agree with the C++ they are pinned to the C++'s answer.
 # expected-divergent rows (Phase 5 session T, face 1 — confirmed, not a defect):
 #   trunc.b005+00..+03, trunc.b013+00..+03, trunc.b015+00..+03 — 12 rows whose
 #   planes_sha1 differs from the C++ decoder's while the frame count and
 #   dimensions match. The **set** of decoded frames is byte-identical on both
 #   sides; two of them are emitted in the opposite order. It is the reordering
+# and five more rows, same cause, measured at Phase 5 session U (T5.U2) once the
+# header-corruption family got a C++ referee for the first time:
+#   hdr2.00, hdr2.07, hdr2.08, hdr2.1f, hdr2.80 — bytes=3276, 5 frames each.
+#   Per-frame multisets identical on both sides, positions 3 and 4 swapped and
+#   nothing else — the same one-adjacent-pair signature as the 12 above. These
+#   are the five HEADER_BYTES values that stop the first VCL NAL being a slice;
+#   hdr2.05 and hdr2.65 keep nal_unit_type 5, decode normally, and agree.
+#   (measure: rust/tools/ecref/ecref --stdin --frames < blob  vs
+#    cargo run --example portref -- --stdin < blob)
+#   The shared reason follows:
 #   tie-break documented at `decoder_conformance_test.rs`'s test_scalinglist_jm:
 #   `ReleaseBufferedReadyPictureNoReorder` picks the smallest uiDecodingTimeStamp
 #   and upstream has no tie-break, so it keeps slot order; this port breaks the

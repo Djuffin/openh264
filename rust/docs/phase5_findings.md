@@ -2313,3 +2313,112 @@ cheap form is a Miri target over the conformance row rather than a fourth probe.
 **The general rule**: *when a gate is slow, measure which of its steps is slow before
 trimming any of them.* A per-item fixed cost and a per-work cost need opposite fixes,
 and they are indistinguishable from the outside.
+
+## F48 — a buffer with no start code is `dsErrorFree`, because `DetectStartCodePrefix` was deleted as dead and its verdict went with it
+
+**Closed at Phase 5 session U (T5.U3, `decoder_core.rs`).** The C++'s
+`WelsDecodeBs` opens with
+
+```c
+if (NULL == DetectStartCodePrefix (kpBsBuf, &iOffset, kiBsLen)) {
+  pCtx->iErrorCode |= dsBitstreamError;
+  return dsBitstreamError;              // decoder.cpp:760
+}
+```
+
+and that call has **two** results: the offset, and the verdict. The port reached
+the same decoding by iterating `split_annexb_units`, which yields nothing for
+such a buffer — so the loop body ran zero times and the function fell out
+reporting `dsErrorFree`. `DetectStartCodePrefix` itself was deleted as dead at
+T3.3 under S18, correctly: it had no callers, because the one caller only ever
+wanted the offset.
+
+**The general form, which is the part worth carrying:** *a transliteration that
+replaces a function with a better-typed equivalent inherits only the results the
+call site was reading.* The offset was read and survived; the verdict was
+discarded at the call site and disappeared with the function. Nothing downstream
+could notice, because no other code path consumes it.
+
+**Rows**: 4 — `raw.z1`, `raw.z2`, `raw.z3`, `raw.epb_only` in `degenerate.txt`,
+one to three bytes each, fed with `Feed::Raw`. Port `0x0*2`, C++ `0x4,0x0`.
+**Why it lived**: every one of them is a `raw.` feed, and the raw-feed family had
+no C++ referee until T5.U2 built one. `raw.empty` is *not* affected and agrees on
+both sides — a zero-length call takes the end-of-stream branch before this check.
+
+**Fix**: `if units.is_empty() { iErrorCode |= dsBitstreamError; return dsBitstreamError; }`.
+Four golden rows regenerated onto the C++'s answer; the output columns did not
+move, which is the guard that the change touched codes only.
+
+## F49 — the port's `IS_SPS_NAL` includes the subset-SPS, so a subset-SPS with no SPS ahead of it walks through the parameter-set gate
+
+**Closed at Phase 5 session U (T5.U3, `nalu.rs`).** `wels_common_defs.h` carries
+two macros one line apart:
+
+```c
+#define IS_PARAM_SETS_NALS(t)  ((t)==NAL_UNIT_SPS || (t)==NAL_UNIT_PPS || (t)==NAL_UNIT_SUBSET_SPS)  // :145
+#define IS_SPS_NAL(t)          ((t)==NAL_UNIT_SPS)                                                    // :146
+```
+
+The port's `IS_PARAM_SETS_NALS` matched exactly; its `IS_SPS_NAL` had
+`|| t == NAL_UNIT_SUBSET_SPS` added. The two macros differ by exactly that term,
+they sit next to each other, and the wider one is the one whose name reads like
+the general case — so the port's version is what the name suggests rather than
+what the header says.
+
+`IS_SPS_NAL` has **one caller on each side, and it is the same site**:
+`ParseNalHeader`'s "no Sequence Parameter Sets ahead of sequence" gate
+(`au_parser.cpp:150`, `nalu.rs:680`). With the subset-SPS in the set, a
+subset-SPS arriving before any SPS passes the gate, gets parsed, and the call
+answers `dsErrorFree`; the C++ rejects it with `dsNoParamSets`. The blast radius
+is exactly one gate — checked by enumerating the callers before touching the
+definition, not assumed from the name.
+
+**Rows**: 6 — `hdr0.00/05/08/1f/65/80` in `sps_subsetsps_bothVUI.txt`, 64 bytes
+each, the stream whose second NAL *is* a subset-SPS. Port `0x10,0x0,0x10*2,0x0`,
+C++ `0x10*4,0x0` (and `hdr0.80` port `0x4,0x0,0x10*2,0x0` → C++ `0x4,0x10*3,0x0`).
+`hdr0.07` is absent because site 0's byte already **is** `0x07`, which the corpus
+builder skips. **Why it lived**: only one stream in the corpus carries a
+subset-SPS, and the rows that expose it are header-corruption rows — the family
+that had no C++ referee until T5.U2.
+
+## F50 — the port's `ParseSps` rejects an 8-byte NAL the C++'s accepts, so a relabelled parameter set diverges on `DECODING_STATE`
+
+**OPEN.** Owner: Phase 6 or a parity session — it is the whole of the malformed
+corpus's remaining code residue and it is one cause.
+
+**Rows**: 24 — `hdr1.07` and `hdr2.07`, in each of the 12 stream tables that have
+both sites. `0x07` is the `HEADER_BYTES` entry that rewrites a NAL's header byte
+to *SPS, `nal_ref_idc` 0*, so the NAL keeps a PPS's or a slice's payload and
+claims to be a sequence parameter set.
+
+**Measured, on `narrow_16x16.264`'s `hdr1.07` (160 bytes, the 8-byte NAL is the
+PPS relabelled)**, with a temporary trace at `nalu.rs`'s `ParseNonVclNal`:
+
+```
+TRACE ParseSps -> 0x0      call len=16 -> 0x0     (the real SPS, both sides agree)
+TRACE ParseSps -> 0x1      call len=8  -> 0x4     (the relabelled NAL; C++ says 0x0)
+                           call len=36 -> 0x10    (and from here both sides agree,
+                           …                       0x10*6 then 0x0)
+```
+
+So the divergence is one call wide and its shape is settled: the port's
+`ParseSps` returns `ERR_INFO_INVALID_PARAM` (1) where the C++'s returns
+`ERR_NONE` on the same bytes, and `ParseNonVclNal`'s
+`dsNoParamSets`-or-`dsBitstreamError` arms then fire. Those arms are a faithful
+transliteration — read against `au_parser.cpp`'s `ParseNonVclNal` line by line —
+so **the divergence is inside SPS parsing, not around it**, and reducing it to
+the field that disagrees is what remains.
+
+**Not fixed here** because the two adjacent causes were one-liners and this is
+not: it is a difference in which garbage an SPS parser tolerates, so the fix has
+to be the C++'s actual acceptance condition rather than the removal of a check
+that looks too strict. Nothing else in the corpus depends on it: with F48 and F49
+fixed these 24 rows are the **only** remaining code disagreement in 2707 rows.
+
+**Reproduction**, one command per side:
+
+```bash
+MALFORMED_DUMP_DIR=/tmp/corpus cargo test --test malformed_stream_parity   # dump
+rust/tools/ecref/ecref --stdin < /tmp/corpus/narrow_16x16/hdr1.07.bin      # C++
+cargo run --example portref -- --stdin < /tmp/corpus/narrow_16x16/hdr1.07.bin  # port
+```
