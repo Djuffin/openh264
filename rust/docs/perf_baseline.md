@@ -1825,10 +1825,17 @@ it exactly as session N's experiment specified.
 
 **The one-pair reading is an artifact and its own control says so.** −6.84% on the
 stream with no B-frames, where `Option<PicId>` equality cannot run, is not a
-mechanism; the `A` slot read 2.706 ms where every other reading of that binary today
-read 2.52–2.60. One pair is not a verdict (S1: two runs of one binary drift ~3%).
-The brief asked for one pair; three were run because the first disagreed with its
-own control.
+mechanism.
+
+The supporting number, taken properly: `n_head`'s CB row was measured **nine times
+today**, in one slot or the other of six different runs, and it spans **2.546 ms to
+2.706 ms — a 6.3% range on one unchanged binary.** The one-pair reading's 2.706 is
+the top of that range, not an outlier outside it, and that is the stronger version
+of the point: when a binary's own readings spread 6.3%, a single pair cannot resolve
+a sub-1% effect, and −6.84% is that spread being reported as a result. (S1 says two
+runs of one binary drift ~3%; this is the same statement measured on this machine
+today, at twice the size.) The brief asked for one pair; three were run because the
+first disagreed with its own control.
 
 At 3 pairs the control behaves — **CB +0.15%, flat, as a B-slice mechanism must be
 on a stream without B-slices** — and Main/High read −0.72% and −0.99%. That is the
