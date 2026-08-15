@@ -1761,3 +1761,175 @@ down so session O can settle it with one build rather than rediscover it — and
 stands: disassemble before believing it. The three-way experiment session O owes is: the
 day-two confirmation of the whole span, the T5.N3/T5.N4 split, and the niche.
 
+
+---
+
+## Phase 5 exit — the D-gate-1 window, adjudicated (session U, 2026-08-15)
+
+D-gate-1 suspended mid-phase perf measurement after session N, so **69 commits went
+in unmeasured**: N's tail, sessions O, P, P′, P″, Q, R, S, T, and U's own work.
+This is that window, opened after the session's last code commit (`e6873fe1`) so
+the measurement window is closed. Every number below is a measurement (S33).
+
+### Session nulls — and why both are printed
+
+| pairs | decode median | decode band | width | encode median | encode band |
+|---|---|---|---|---|---|
+| 3 | +0.19% | +0.11% … +0.33% | 0.22 pt | +0.00% | −1.35% … +3.56% |
+| 7 | **−0.11%** | **−0.74% … +1.82%** | **2.56 pt** | +0.00% | −4.65% … +2.67% |
+
+**The 7-pair null is twelve times wider than the 3-pair one**, which is session K's
+result arriving from the other side: that session judged a 7-pair verdict against a
+3-pair band and S2b gained "the null must be run at the verdict's pair count". Here
+the tight band is the 3-pair one, and taking it as the floor would have made
+everything below look enormous. Every verdict in this section is judged against the
+**7-pair** band.
+
+### The owed reading — session N's stashed binaries, on a second day
+
+N measured its span on 2026-08-13 at 7 pairs and owed a day-two confirmation that
+sessions O–T never paid. `.perfpair/n_base|n_mid|n_head` were still on disk.
+
+| span | N, day one (7 pairs) | U, day two (3 pairs) |
+|---|---|---|
+| **whole** `16a6130c`→`d0b7f399` | CB +1.24 / Main +1.90 / High +0.75, med **+1.24%** | CB +0.99 / Main +0.87 / High +0.57, med **+0.87%** |
+| Face 1 `16a6130c`→`9da4bede` | CB **−0.72** / +0.11 / +0.13, med +0.11% | CB **+1.31** / +0.45 / +0.61, med +0.61% |
+| Face 3 `9da4bede`→`d0b7f399` | CB +1.17 / **+2.25** / **+2.06**, med +2.06% | CB +1.64 / **+0.93** / **+1.78**, med +1.64% |
+
+**The whole span survives its second day: N cost something, ≈ +0.87…+1.24%.** Both
+readings put every decode row above the ceiling of their own session's null.
+
+**The bisect does not survive it, and that matters more than the confirmation.**
+N's day one read Face 1 at **−0.72% CB** and concluded "Face 1 is free and Face 3
+owns all of it". Day two reads Face 1 at **+1.31% CB** — the sign flipped — and its
+median lands above the null ceiling. S2b's clause is exact here: *two measurements
+of one span disagreeing in sign is evidence the effect is below the measurement
+error.* The halves were never resolvable; only the whole was.
+
+**And the observation the niche hypothesis rested on is gone.** Day one's Face 3 had
+CB +1.17% against Main +2.25% and High +2.06% — CB roughly half, which is what
+pointed at `Option<PicId>` equality on B slices, since CB has no B-frames. Day two's
+Face 3 reads CB **+1.64%**, Main +0.93%, High +1.78%: CB is no longer the cheap row.
+**The asymmetry was noise.** The hypothesis was written down honestly as unverified
+with one supporting observation; the observation did not replicate.
+
+### The niche verdict — directionally consistent, not resolved
+
+`74d02058` (T5.O0) is `n_head` plus two docs commits plus the niche, so it isolates
+it exactly as session N's experiment specified.
+
+| pairs | CB (no B-frames — the control) | Main | High | median |
+|---|---|---|---|---|
+| 1 | **−6.84%** | −0.97% | +0.37% | −0.97% |
+| 3 | **+0.15%** | −0.72% | −0.99% | −0.72% |
+
+**The one-pair reading is an artifact and its own control says so.** −6.84% on the
+stream with no B-frames, where `Option<PicId>` equality cannot run, is not a
+mechanism; the `A` slot read 2.706 ms where every other reading of that binary today
+read 2.52–2.60. One pair is not a verdict (S1: two runs of one binary drift ~3%).
+The brief asked for one pair; three were run because the first disagreed with its
+own control.
+
+At 3 pairs the control behaves — **CB +0.15%, flat, as a B-slice mechanism must be
+on a stream without B-slices** — and Main/High read −0.72% and −0.99%. That is the
+right sign and the right rows. It is **inside the 7-pair null band**, so it is not
+resolved: the honest verdict is *directionally consistent, unresolved*, and the
+mechanism it was proposed to fix has itself evaporated with the asymmetry above.
+
+### The window — the phase's unmeasured span, measured
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **`d0b7f399` → `e6873fe1`** (69 commits) | 3 | **+3.87%** | +2.63% | +2.55% | **+2.63%** | +0.10% |
+| **`d0b7f399` → `e6873fe1`** | 7 | **+3.58%** | +2.77% | +2.21% | **+2.77%** | +0.21% |
+| 7-pair null | 7 | +1.82% | −0.11% | −0.74% | −0.11% | +0.00% |
+
+**Read twice, agreeing in sign, magnitude and row order, with every decode row above
+the 7-pair null's ceiling. This is real.** Encode is flat at both counts, which is
+what a decoder-only window must produce and is the check that the harness was not
+simply having a bad day.
+
+### The bisect — run because a stop-line breach demands it, and it does not resolve
+
+| half | pairs | CB | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| **A — structural**: O, P, P′, P″, Q, R (`d0b7f399`→`5fbe61a2`) | 3 | +1.13% | +1.36% | +2.07% | **+1.36%** | +0.00% |
+| **B — parity + instruments**: S, T, U (`5fbe61a2`→`e6873fe1`) | 3 | +2.75% | −0.03% | −0.43% | **−0.03%** | +1.54% |
+
+The CB rows sum (1.13 + 2.75 = 3.88 against the whole's 3.87/3.58) and the medians
+do not (1.36 − 0.03 = 1.33 against the whole's 2.63/2.77). One of those is a
+coincidence and **this harness cannot say which** — session N's own bisect note said
+the same thing about the same instrument, and session K proved it at 7 pairs three
+times. The whole span's number is the one to carry; the halves are worth less.
+
+**What can be said about half B is an argument, not a measurement, and is labeled as
+such:** sessions S, T and U changed error-signal bookkeeping, wrapped `DECODING_STATE`
+in a `#[repr(transparent)]` newtype, fixed two one-line parity defects, added three
+`deny` attributes and built instruments. None of that is per-macroblock work. A
++2.75% CB cost from it is not mechanically plausible, and its own decode median is
+−0.03%. But the number is what it is, and "implausible" is not a measurement.
+
+### The stop-line verdict — **OVER, and this escalates**
+
+| term | CB |
+|---|---|
+| cumulative at N's head (Phase 4a exit +17.8%, the 5.2 flip, session N) | **+21.6 … +21.9%** |
+| the D-gate-1 window (7 pairs / 3 pairs) | **+3.58 … +3.87%** |
+| **cumulative CB now** | **≈ +25.2 … +25.8%** |
+| stop-line (plan §7.4) | ≈ **+23%** |
+| **breach** | **≈ 2.2 … 2.8 points over** |
+
+D-perf-4's *other* tripwire — +25% **median** cumulative — is **not** breached: the
+decode median has never tracked CB, which is the worst of the three streams and the
+one the stop-line was written against. Both are stated so the escalation is not
+argued from the harsher number alone.
+
+The rule (plan §7.4) is *stop at a family boundary and escalate with the data*. The
+tree is at a family boundary: W6 and W7 are unstarted structural work, not a
+half-landed conversion. **This is that escalation.**
+
+### The escalation table — options with measured sizes, for Eugene
+
+| # | option | measured size | what it costs | what it risks |
+|---|---|---|---|---|
+| 1 | **Accept and re-baseline the stop-line to ≈+26%** | 0 work | nothing now | the next phase inherits no headroom at all; W6/W7 are still unmeasured and are the phase's largest structural work |
+| 2 | **Day-two the window before deciding anything** | one session's bench time, no code | ~1 hour | nothing — and it is the only option that is free. The window is a **day-one** reading; every prior Phase 5 decision that rested on one reading (N's bisect, the niche asymmetry) has been overturned by its second day |
+| 3 | **Land the niche's remaining recovery** | already in the tree since T5.O0; measured −0.72/−0.99% Main/High, +0.15% CB, inside the null | 0 | it does not touch CB, which is the row that breaches |
+| 4 | **Bisect the window properly** (per-session builds, 7 pairs, two days) | 8 builds, ~16 runs | ≈ half a session of bench time | the 3-pair bisect above says the halves are at this harness's resolution limit; a per-session split is finer, so it is likely to resolve *less*, not more (session K's law) |
+| 5 | **Park a conversion and re-measure** | not sized — option 4 is its prerequisite | unknown | nothing can be parked until something is attributed, and nothing is attributed |
+| 6 | **Defer recovery to the Phase 9 perf pass** (D-perf-4's own disposition) | 0 now | the debt compounds through Phases 6–8 | the ledger already carries Phase 2's +14.7%/+16.6% on the same basis, so this is the precedent rather than a new policy |
+
+**The recommendation, stated as one:** option 2 first, then re-read this table. The
+breach is 2.2–2.8 points; the window's own two readings differ by 0.29 points and
+the 7-pair null is 2.56 points wide. A second day is the cheapest thing that can
+change the verdict, and this phase has twice had a second day overturn a conclusion
+drawn from a first.
+
+### The ledger, reconciled
+
+No ledger row moves. The open rows are Phase 2's shim families, downgraded to
+Phase 5 and then to the Phase 9 perf pass under D-perf-4, and **the window's cost is
+not shim scaffolding** — it is the structural conversion work Phase 5 exists to do,
+which has no recovery row because nothing was parked to recover. The recovery
+expectation the phase carried was Phase 4a's de-virtualization, already banked in
+the +17.8% base. So the reconciliation is: **cumulative CB ≈ +25.2…+25.8%, no row
+recovers it, and the stop-line is breached** — which is why this is an escalation
+and not a ledger entry.
+
+### Day two — owed, and named
+
+This session could not span days. Under S2b every reading above that a decision
+rests on is therefore **provisional**, and the hand-off names exactly what day two
+re-runs:
+
+1. **The window at 7 pairs** (`n_head` → `u_head`) with a **7-pair null taken the
+   same day** — the stop-line verdict rests on this and nothing else.
+2. **The niche at 3 pairs** (`n_head` → `o_niche`) — to close it as resolved or
+   inside the floor, on a day when the floor is known.
+3. *Not* the bisect halves: they are at the resolution limit and a second day of
+   them buys a second unresolvable answer (session K's law, stated here so the next
+   session does not spend a morning proving it again).
+
+Binaries are stashed and stay on disk: `.perfpair/n_base` (`16a6130c`), `n_mid`
+(`9da4bede`), `n_head` (`d0b7f399`), `o_niche` (`74d02058`), `r_head` (`5fbe61a2`),
+`u_head` (`e6873fe1`). Day two needs **no build**.
