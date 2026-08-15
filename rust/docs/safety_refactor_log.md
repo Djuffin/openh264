@@ -9288,7 +9288,7 @@ a different order. Conformance 60/60 asset rows, 16/16 e2e rows, goldens unmoved
 corpus's other 389 rows — 14%, the header-corruption, emulation-prevention,
 synthetic-tail and raw-feed families — build their bytes inside the Rust harness, so
 `ecref` cannot replay them and they are still pinned against the port's own previous
-output.** That is precisely the blindness F43–F47 lived behind. Closing it means
+output.** That is precisely the blindness F43–F46 lived behind. Closing it means
 teaching `ecref` to take a byte blob rather than a truncation length, and it is the
 instrument item in the hand-off.
 
@@ -9333,7 +9333,7 @@ half-landed.
    corpus's 2707 rows (14%) have **no C++ referee**: `ecref` replays a truncation
    *length*, and the header-corruption, emulation-prevention, synthetic-tail and
    raw-feed families build their bytes inside the Rust harness. They are pinned
-   against the port's own previous output — the exact shape of the blindness F43–F47
+   against the port's own previous output — the exact shape of the blindness F43–F46
    lived behind. `ecref` taking a byte blob on stdin is the cheap fix.
 4. **A gate hole with a one-line fix.** The per-commit gate cannot see a public type
    change break a bench or an example, because `cargo test` builds neither. Either
