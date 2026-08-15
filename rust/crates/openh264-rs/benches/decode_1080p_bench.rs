@@ -194,10 +194,10 @@ impl RustDecoder {
 
 impl Decoder for RustDecoder {
     unsafe fn decode(&mut self, src: *const u8, len: i32, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
-        unsafe { (*self.dec).DecodeFrame2(src, len, dst, info) as i32 }
+        unsafe { (*self.dec).DecodeFrame2(src, len, dst, info).0 }
     }
     unsafe fn flush(&mut self, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
-        unsafe { (*self.dec).FlushFrame(dst, info) as i32 }
+        unsafe { (*self.dec).FlushFrame(dst, info).0 }
     }
     unsafe fn signal_end_of_stream(&mut self) {
         unsafe {
@@ -395,7 +395,7 @@ impl Drop for CppDecoder<'_> {
 // The decode loop, shared by both implementations
 // ---------------------------------------------------------------------------
 
-const DS_ERROR_FREE: i32 = DECODING_STATE::dsErrorFree as i32;
+const DS_ERROR_FREE: i32 = DECODING_STATE::dsErrorFree.0;
 
 fn hash_plane(hasher: &mut Sha1Hasher, plane: *const u8, width: usize, height: usize, stride: usize) {
     if plane.is_null() || width == 0 || height == 0 || stride == 0 {
