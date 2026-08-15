@@ -420,7 +420,7 @@ unsafe fn feed(
             p_dst.as_mut_ptr(),
             &mut buf_info,
         );
-        record(ret as i32, &buf_info, p_dst, run, hasher);
+        record(ret.0, &buf_info, p_dst, run, hasher);
     }
 }
 
@@ -515,7 +515,7 @@ fn decode_case(case: &Case) -> (Run, String) {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let flush_ret = (*decoder).FlushFrame(p_dst.as_mut_ptr(), &mut buf_info);
-            record(flush_ret as i32, &buf_info, p_dst, &mut run, &mut hasher);
+            record(flush_ret.0, &buf_info, p_dst, &mut run, &mut hasher);
         }
 
         (*decoder).Uninitialize();

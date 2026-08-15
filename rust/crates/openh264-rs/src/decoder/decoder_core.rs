@@ -3330,7 +3330,7 @@ pub unsafe fn WelsDecodeBs(
     _pDstBsInfo: *mut c_void,
 ) -> i32 {
     if pCtx.is_null() {
-        return crate::api::codec_api::DECODING_STATE::dsInitialOptExpected as i32;
+        return crate::api::codec_api::DECODING_STATE::dsInitialOptExpected.0;
     }
     if !pDstInfo.is_null() {
         (*pDstInfo).iBufferStatus = 0;
@@ -4521,7 +4521,7 @@ mod tests {
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                 ),
-                crate::api::codec_api::DECODING_STATE::dsInitialOptExpected as i32
+                crate::api::codec_api::DECODING_STATE::dsInitialOptExpected.0
             );
         }
     }

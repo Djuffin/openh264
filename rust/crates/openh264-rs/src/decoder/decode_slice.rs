@@ -5736,7 +5736,7 @@ mod tests {
                     p_dst.as_mut_ptr(),
                     &mut buf_info,
                 );
-                states |= ret as i32;
+                states |= ret.0;
                 if buf_info.iBufferStatus == 1 {
                     frames += 1;
                     let sys = buf_info.UsrData.sSystemBuffer;
@@ -5766,7 +5766,7 @@ mod tests {
                 p_dst.as_mut_ptr(),
                 &mut buf_info,
             );
-            states |= ret as i32;
+            states |= ret.0;
             if buf_info.iBufferStatus == 1 {
                 frames += 1;
                 let sys = buf_info.UsrData.sSystemBuffer;
@@ -5787,7 +5787,7 @@ mod tests {
                 let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
                 let ret = ((*vtbl).FlushFrame)(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
-                states |= ret as i32;
+                states |= ret.0;
                 if buf_info.iBufferStatus == 1 {
                     frames += 1;
                     let sys = buf_info.UsrData.sSystemBuffer;
