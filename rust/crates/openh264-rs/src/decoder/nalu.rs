@@ -195,7 +195,15 @@ pub fn IS_SEI_NAL(t: EWelsNalUnitType) -> bool {
 
 #[inline(always)]
 pub fn IS_SPS_NAL(t: EWelsNalUnitType) -> bool {
-    t == EWelsNalUnitType::NAL_UNIT_SPS || t == EWelsNalUnitType::NAL_UNIT_SUBSET_SPS
+    // **F49, T5.U3 — SPS only.** `wels_common_defs.h:146` is
+    // `#define IS_SPS_NAL(t) ((t) == NAL_UNIT_SPS)`; the subset-SPS is *not* in
+    // it, and `IS_PARAM_SETS_NALS` (`:145`) is the macro that takes all three.
+    // The port had the subset-SPS here, which opened the one gate this is used
+    // for — `ParseNalHeader`'s "no Sequence Parameter Sets ahead of sequence"
+    // check, the sole caller on either side — to a subset-SPS arriving with no
+    // SPS before it. The C++ answers `dsNoParamSets` there and the port parsed
+    // the subset-SPS and answered `dsErrorFree`.
+    t == EWelsNalUnitType::NAL_UNIT_SPS
 }
 
 #[inline(always)]

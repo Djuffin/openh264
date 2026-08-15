@@ -3403,6 +3403,28 @@ pub unsafe fn WelsDecodeBs(
         let input_slice = std::slice::from_raw_parts(kpBsBuf, kiBsLen as usize);
         let units = crate::split_annexb_units(input_slice);
 
+        // **F48, T5.U3 — a buffer with no start code is an error, not an empty
+        // loop.** The C++ opens with `DetectStartCodePrefix`, and its *return
+        // value* is a verdict, not just an offset:
+        //
+        //     if (NULL == DetectStartCodePrefix (kpBsBuf, &iOffset, kiBsLen)) {
+        //       pCtx->iErrorCode |= dsBitstreamError;
+        //       return dsBitstreamError;      // decoder.cpp:760
+        //     }
+        //
+        // The port reached the same *decoding* by iterating `split_annexb_units`,
+        // which yields nothing for such a buffer — so the loop body ran zero times
+        // and the function fell out reporting `dsErrorFree`. The transliteration
+        // deleted `DetectStartCodePrefix` as dead at T3.3 (S18: it had no callers)
+        // and the error signal went with it, because the caller only ever used the
+        // offset. Nothing could see it: the four rows it moves are `raw.*` feeds of
+        // one to three bytes, which is the family that got its first C++ referee in
+        // this commit.
+        if units.is_empty() {
+            (*pCtx).iErrorCode |= dsBitstreamError;
+            return dsBitstreamError;
+        }
+
         // The raw-data buffer can be rewound once no pending NAL units
         // reference it (slices stay queued until their access unit completes).
         if !au_has_nals(pCtx) {

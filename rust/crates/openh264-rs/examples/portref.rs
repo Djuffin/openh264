@@ -41,6 +41,24 @@ fn run(name: &str, want: usize) {
     if want < data.len() {
         data.truncate(want);
     }
+    decode(&format!("{name} @{want}"), &data, false);
+}
+
+/// Bytes on stdin, the mirror of `ecref --stdin` (Phase 5 session U, T5.U2).
+///
+/// A prefix truncation is `(stream, length)`; the `hdr*.*`, `tail.*` and
+/// degenerate corpus entries are built inside the harness and no such pair names
+/// them. Both referees therefore read a blob, and the harness hands one over via
+/// `MALFORMED_DUMP_DIR` — which is what makes a per-frame multiset comparison
+/// possible on those rows rather than only on the truncations.
+fn run_stdin(raw: bool) {
+    use std::io::Read as _;
+    let mut data = Vec::new();
+    std::io::stdin().read_to_end(&mut data).expect("stdin");
+    decode("<stdin>", &data, raw);
+}
+
+fn decode(label: &str, data: &[u8], raw: bool) {
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
         WelsCreateDecoder(&mut decoder);
@@ -67,8 +85,12 @@ fn run(name: &str, want: usize) {
             bufs.push(buf_info.iBufferStatus);
             if buf_info.iBufferStatus == 1 { frame_hashes.push(hash_frame(&buf_info, p_dst)); }
         };
-        for unit in split_annexb_units(&data) {
-            feed(unit);
+        if raw {
+            feed(data);
+        } else {
+            for unit in split_annexb_units(data) {
+                feed(unit);
+            }
         }
         let mut eos_flag = 1i32;
         (*decoder).SetOption(
@@ -97,7 +119,7 @@ fn run(name: &str, want: usize) {
             eprintln!("PORTFRAME {i} {h}");
         }
         eprintln!(
-            "PORT {name} @{want}: codes {} bufs {:?}",
+            "PORT {label}: codes {} bufs {:?}",
             codes.iter().map(|c| format!("0x{c:x}")).collect::<Vec<_>>().join(","),
             bufs
         );
@@ -105,9 +127,15 @@ fn run(name: &str, want: usize) {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("--stdin") {
+        run_stdin(argv.iter().any(|a| a == "--raw"));
+        return;
+    }
+    let mut args = argv.into_iter();
     let (Some(name), Some(bytes)) = (args.next(), args.next()) else {
         eprintln!("usage: cargo run --example portref -- <stream.264> <truncate-to-bytes>");
+        eprintln!("       cargo run --example portref -- --stdin [--raw]");
         std::process::exit(2);
     };
     let want: usize = bytes.parse().unwrap_or_else(|_| {

@@ -604,6 +604,20 @@ fn row(case: &Case, outcome: &Outcome) -> String {
 const COLUMN_HEADER: &str =
     "# columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle";
 
+/// Emitted into every table so a reader knows these rows have an external
+/// referee and how to re-run it.
+///
+/// The note says how to check, not what the check returned. A generated file
+/// cannot carry a measurement it did not take (S33), and an agreement tally
+/// baked in here would go stale silently the next time anything moves; the
+/// measured per-table numbers live in the session log, dated and attributed to
+/// a commit. What is durable — and what was missing until Phase 5 session U —
+/// is that the referee reaches *every* row rather than the `trunc.*` ones only.
+const REFEREE_NOTE: &str = "# referee: tools/ecref (the C++ decoder). Re-run every row of every table with\n\
+     #   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh\n\
+     # which dumps this corpus and replays it through `ecref --stdin`. Rows are the\n\
+     # port's output; where they agree with the C++ they are pinned to the C++'s answer.";
+
 /// Runs one corpus entry and renders its row — the unit both the worker and a direct
 /// (non-forking) run share.
 fn run_case(case: &Case) -> String {
@@ -721,6 +735,7 @@ fn table(base: &str, data: &[u8], offsets: &[usize], cases: &[Case], test_name: 
         out,
         "# not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)"
     );
+    let _ = writeln!(out, "{REFEREE_NOTE}");
     for note in expected_divergent_note(base) {
         let _ = writeln!(out, "{note}");
     }
@@ -747,6 +762,16 @@ fn expected_divergent_note(base: &str) -> Vec<&'static str> {
         "#   planes_sha1 differs from the C++ decoder's while the frame count and",
         "#   dimensions match. The **set** of decoded frames is byte-identical on both",
         "#   sides; two of them are emitted in the opposite order. It is the reordering",
+        "# and five more rows, same cause, measured at Phase 5 session U (T5.U2) once the",
+        "# header-corruption family got a C++ referee for the first time:",
+        "#   hdr2.00, hdr2.07, hdr2.08, hdr2.1f, hdr2.80 — bytes=3276, 5 frames each.",
+        "#   Per-frame multisets identical on both sides, positions 3 and 4 swapped and",
+        "#   nothing else — the same one-adjacent-pair signature as the 12 above. These",
+        "#   are the five HEADER_BYTES values that stop the first VCL NAL being a slice;",
+        "#   hdr2.05 and hdr2.65 keep nal_unit_type 5, decode normally, and agree.",
+        "#   (measure: rust/tools/ecref/ecref --stdin --frames < blob  vs",
+        "#    cargo run --example portref -- --stdin < blob)",
+        "#   The shared reason follows:",
         "#   tie-break documented at `decoder_conformance_test.rs`'s test_scalinglist_jm:",
         "#   `ReleaseBufferedReadyPictureNoReorder` picks the smallest uiDecodingTimeStamp",
         "#   and upstream has no tie-break, so it keeps slot order; this port breaks the",
@@ -757,6 +782,53 @@ fn expected_divergent_note(base: &str) -> Vec<&'static str> {
         "#   stream agrees with POC order, which is the independent check on the direction.",
         "#   Re-measure: hash each emitted frame on both sides and compare the multisets.",
     ]
+}
+
+// ---------------------------------------------------------------------------
+// The corpus dump — how a row that is not a prefix truncation gets a referee
+// ---------------------------------------------------------------------------
+
+/// Set to a directory to write the corpus's bytes instead of decoding it.
+///
+/// `tools/ecref` answers "what does the C++ decoder do on these bytes", and for
+/// most of this corpus that question used to be unaskable. A `trunc.*` entry is
+/// `stream[..n]`, so `ecref <stream> <n>` names it exactly; the `tail.*`,
+/// `hdr*.*` and degenerate entries are **built here** — a prefix plus a
+/// synthetic suffix, a prefix with one header byte overwritten, parameter sets
+/// lifted out of one stream and re-sequenced — and no `(file, length)` pair
+/// names any of them. 389 of the corpus's 2707 rows were pinned against the
+/// port's own previous output for exactly that reason, which is the blindness
+/// F43–F46 lived behind (session T's hand-off §4).
+///
+/// So the harness hands the bytes over: one file per entry plus a manifest
+/// carrying the feed mode, and `tools/ecref/compare.sh` replays every row
+/// through `ecref --stdin`. The dump is the whole corpus, not the 389 — a
+/// `trunc.*` row now has two independent routes to the same C++ answer, and
+/// `compare.sh` checks they agree, which is what keeps the dump honest.
+const ENV_DUMP_DIR: &str = "MALFORMED_DUMP_DIR";
+
+/// Writes `<dir>/<stem>/<variant>.bin` per entry plus `<dir>/<stem>.manifest`
+/// with `variant<TAB>feed<TAB>len` lines. Returns true when it ran, in which
+/// case the caller decodes nothing.
+fn dump_corpus(stem: &str, cases: &[Case]) -> bool {
+    let Some(dir) = std::env::var_os(ENV_DUMP_DIR) else {
+        return false;
+    };
+    let dir = PathBuf::from(dir);
+    let bins = dir.join(stem);
+    std::fs::create_dir_all(&bins).expect("create dump dir");
+    let mut manifest = String::new();
+    for case in cases {
+        std::fs::write(bins.join(format!("{}.bin", case.name)), &case.data).expect("dump entry");
+        let feed = match case.feed {
+            Feed::AnnexB => "annexb",
+            Feed::Raw => "raw",
+        };
+        let _ = writeln!(manifest, "{}\t{}\t{}", case.name, feed, case.data.len());
+    }
+    std::fs::write(dir.join(format!("{stem}.manifest")), manifest).expect("dump manifest");
+    eprintln!("dumped {} corpus entries to {}", cases.len(), bins.display());
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +918,7 @@ fn check_stream(name: &str, test_name: &str) {
     let offsets = scan_start_codes(&data);
     assert!(!offsets.is_empty(), "{name} has no start codes");
     let cases = build_corpus(&data, &offsets);
-    if worker_mode(&cases) {
+    if dump_corpus(stem_of(name), &cases) || worker_mode(&cases) {
         return;
     }
     let actual = table(&format!("res/{name}"), &data, &offsets, &cases, test_name);
@@ -923,7 +995,7 @@ stream_case!(malformed_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264");
 #[test]
 fn malformed_degenerate_nals() {
     let cases = degenerate_corpus();
-    if worker_mode(&cases) {
+    if dump_corpus("degenerate", &cases) || worker_mode(&cases) {
         return;
     }
     let mut out = String::new();
@@ -941,6 +1013,7 @@ fn malformed_degenerate_nals() {
         "# parameter sets are lifted from res/SarVui.264; `raw.` feeds one DecodeFrame2 call, \
          `annexb.` splits first"
     );
+    let _ = writeln!(out, "{REFEREE_NOTE}");
     let _ = writeln!(out, "{COLUMN_HEADER}");
     for row in collect_rows(&cases, "malformed_degenerate_nals") {
         let _ = writeln!(out, "{row}");
