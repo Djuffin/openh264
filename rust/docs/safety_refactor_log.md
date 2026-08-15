@@ -9292,6 +9292,18 @@ output.** That is precisely the blindness F43–F46 lived behind. Closing it mea
 teaching `ecref` to take a byte blob rather than a truncation length, and it is the
 instrument item in the hand-off.
 
+### Gate state at close
+
+**`OVERALL: PASS` at `exit` level, every step green** (run at `b5b35521`; the two
+commits after it are a comment and two doc lines, verified code-free):
+482 debug / 476 release / 20 ignored, ratchet clean, census **59**, sweeps
+**341/341 in both profiles**, `decode_1080p_bench` and `c_vs_rust_bench` both
+**bit-identical**, Miri `--lib` **337/0** and the three `exit`-level differential
+targets **20 / 7 / 3**, all 0 failed. **F3 drew zero hits** — 682 configurations
+against S14's measured ≈1/800 rate, where zero is the likeliest single outcome.
+Decoder conformance **60/60** over **58 asset rows**, and **zero golden hash
+literals changed anywhere in the session's diff**.
+
 ### Numbers, and one miss that is a gate-design fact
 
 Decoder `raw_ptr` **980, unmoved**, and every ratchet metric with it. **Session T
