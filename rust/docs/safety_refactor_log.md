@@ -9162,6 +9162,34 @@ spent itself on parity instead, which is where every finding below came from.
 (F46 scoped), `4a2f5714` (§0, F47's correction, F3), `cf31bf2f` (T5.S3, probe
 retirement), `db7ef34c` (W7's F43-class sweep).
 
+### T5.S3 — one Miri probe retires, and its first justification was wrong
+
+`gates.sh exit`'s cost is **103s for everything that is not Miri**; the rest is the
+library Miri run, and inside it four whole-decoder probes with 334 free tests around
+them. Per probe: 268.9s / 265.3s / 257.5s / 196.0s for 36 / 24 / 31 / 16 macroblocks
+— **cost tracks decoder instantiations, not decoding work**, because a full
+`Initialize` of a multi-MiB context under an interpreter dwarfs the macroblocks. So
+shortening a stream saves nothing; this session was about to shorten one.
+
+The clean-stream probe was retired: **1686.40s → 1322.91s, −21.6%** like-for-like.
+
+**The justification given for it was false, and the correction is the useful part.**
+It claimed `narrow_16x16_idr_lost.264` was a strict superset. Counting which decode
+entries each stream reaches disproves it — that stream decodes **zero CABAC
+I-slices**, because the CABAC sequence in it is exactly the one whose IDR was
+removed. Profile, entropy mode and slice count describe the *parameter sets*; which
+entries run describes the *slice types after damage*.
+
+The retirement stands on a sounder rule (Eugene, 2026-08-14): *do not keep a probe
+for a vector another test already runs* — `test_asset_narrow_16x16` checks that
+stream's full SHA-1 against the C++ decoder, which is more than the probe asserted.
+Probes cost 0.001s natively and 196–269s under Miri, so their unique value is the
+aliasing verdict and their unique cost is Miri time.
+
+**Recorded cost**: `decoder_conformance_test` is not a Miri target, so CABAC
+I-slices at one-macroblock-per-frame geometry are now unprobed. The cheap way back,
+if wanted, is a Miri target over the conformance row rather than a fourth probe.
+
 **Gate state at close**: exit battery `OVERALL: FAIL (1)` → the one failure was F3's
 exact fingerprint and `mt` re-ran 120/120, so the honest reading is **pass with F3's
 known race**. Sweeps 341/341 release, both benches bit-identical, **Miri 338/0**

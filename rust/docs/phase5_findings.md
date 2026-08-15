@@ -2105,12 +2105,44 @@ all.** This was worth measuring precisely because the intuition ran the other wa
 the session's first instinct was to trim the concealment probe's stream from 30
 frames to a shorter prefix, which the table above says would have bought nothing.
 
-**Applied (T5.S3)**: the clean-stream probe is retired, because
-`narrow_16x16_idr_lost.264` is its strict syntactic superset — profile {100} ⊂
+### Applied — with the justification corrected after it was disproved
+
+T5.S3 retired the clean-stream probe on the argument that
+`narrow_16x16_idr_lost.264` is its strict **syntactic** superset: profile {100} ⊂
 {66, 100}, `entropy_coding_mode_flag` {1} ⊂ {0, 1}, 24 slices < 31, the same 16x16
-one-macroblock geometry — so everything it executed the concealment probe executes,
-including a great deal it never did. Its geometry assertion moved with it. **989.2s →
-three probes**, no coverage lost.
+one-macroblock geometry. 1686.4s → 1322.9s.
+
+**That argument was false.** Counting which macroblock decode entry each probe
+stream actually reaches — temporary atomic counters in the seven
+`WelsActualDecodeMb*` / `DecodeMbCavlcPcm` entries, run natively:
+
+| stream | CavlcPcm | CavlcI | CavlcP | CabacI | CabacP | CabacB |
+|---|---|---|---|---|---|---|
+| `narrow_16x16` | 0 | 0 | 0 | **3** | **21** | 0 |
+| `narrow_16x16_idr_lost` | 0 | 3 | 21 | **0** | 7 | 0 |
+| `grid_48x32` | 0 | 0 | 0 | 6 | 18 | 7 |
+| `fmo_2groups_64x64` | 16 | 16 | 0 | 0 | 0 | 0 |
+
+`narrow_16x16_idr_lost` decodes **zero CABAC I-slices** — in it, the CABAC sequence
+is precisely the one whose IDR was removed, so those slices never decode cleanly.
+Profile, entropy mode and slice count are properties of the *parameter sets*; which
+decode entries run is a property of the *slice types after damage*. A superset of
+the first is not a superset of the second, and this stream is the counter-example:
+its extra syntax is bought by removing the IDR that would have exercised the coder
+it adds.
+
+**The retirement stands anyway, on a different and sounder rule** (Eugene,
+2026-08-14): *do not keep a probe for a vector another test already runs.*
+`narrow_16x16.264` is decoded by `test_asset_narrow_16x16`, which checks its full
+SHA-1 against the C++ decoder — strictly more than the probe asserted. The probes
+cost **0.001s natively** and 196–269s under Miri, so what a probe uniquely buys is
+the aliasing verdict, and what it uniquely costs is Miri time.
+
+**What that costs, recorded rather than waved past**: `decoder_conformance_test` is
+not a Miri target, so **CABAC I-slices on a one-macroblock-per-frame picture are now
+unprobed**. `grid_48x32` reaches `CabacI` but at 3x2, with different stride
+arithmetic and frame-edge handling. If a future session wants that verdict back, the
+cheap form is a Miri target over the conformance row rather than a fourth probe.
 
 **The general rule**: *when a gate is slow, measure which of its steps is slow before
 trimming any of them.* A per-item fixed cost and a per-work cost need opposite fixes,
