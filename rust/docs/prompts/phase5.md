@@ -92,10 +92,12 @@ truncated SPS the C++ rejects. **Face 1 confirmed**: `CABA2_SVA_B`'s 12 rows are
 documented POC tie-break, settled by per-frame hash multisets (identical sets, one
 pair swapped) and annotated in the golden's generated header. **Face 2**: 13 tables,
 2318 rows, codes 2318/0, output 2306/12. **The perf adjudication was postponed out
-of T** (Eugene, 2026-08-14) and is U's. **U** = W6 + W7 + **W8 whole** — the adjudication (stashed binaries,
-niche verdict, the D-gate-1 window as spans, the stop-line verdict, the ledger)
-and the phase close (phase6.md, briefs historical, this checklist closed).
-Nothing is "the last session" again until U closes the phase.
+of T** (Eugene, 2026-08-14) and is U's. **U** = **the last session** ([`phase5_session_u.md`](phase5_session_u.md)): T's
+two named instrument fixes first (the `--all-targets` gate hole; `ecref` on stdin
+for the **389 rows with no C++ referee**), then W6 + W7 + **W8 whole** — the
+twice-postponed adjudication (stashed binaries, niche verdict, the D-gate-1
+window as spans, the stop-line verdict, the ledger) and the phase close
+(phase6.md, briefs historical, this checklist closed).
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
