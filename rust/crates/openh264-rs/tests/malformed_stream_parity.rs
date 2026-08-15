@@ -721,11 +721,42 @@ fn table(base: &str, data: &[u8], offsets: &[usize], cases: &[Case], test_name: 
         out,
         "# not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)"
     );
+    for note in expected_divergent_note(base) {
+        let _ = writeln!(out, "{note}");
+    }
     let _ = writeln!(out, "{COLUMN_HEADER}");
     for row in collect_rows(cases, test_name) {
         let _ = writeln!(out, "{row}");
     }
     out
+}
+
+/// Rows whose plane hash is **expected** to differ from the C++ decoder's, with the
+/// reason, emitted into the table's header so regeneration cannot lose it.
+///
+/// This is the one place in the suite where "the port and the C++ disagree" is a
+/// recorded position rather than a defect, so it says exactly what was measured and
+/// how to re-measure it. Everything else in every table is the C++'s answer.
+fn expected_divergent_note(base: &str) -> Vec<&'static str> {
+    if !base.ends_with("CABA2_SVA_B.264") {
+        return Vec::new();
+    }
+    vec![
+        "# expected-divergent rows (Phase 5 session T, face 1 — confirmed, not a defect):",
+        "#   trunc.b005+00..+03, trunc.b013+00..+03, trunc.b015+00..+03 — 12 rows whose",
+        "#   planes_sha1 differs from the C++ decoder's while the frame count and",
+        "#   dimensions match. The **set** of decoded frames is byte-identical on both",
+        "#   sides; two of them are emitted in the opposite order. It is the reordering",
+        "#   tie-break documented at `decoder_conformance_test.rs`'s test_scalinglist_jm:",
+        "#   `ReleaseBufferedReadyPictureNoReorder` picks the smallest uiDecodingTimeStamp",
+        "#   and upstream has no tie-break, so it keeps slot order; this port breaks the",
+        "#   tie by POC (`api/codec_api.rs`), which is display order.",
+        "#   Traced on each of the 12: exactly one tie fires, two pictures sharing one",
+        "#   uiDecodingTimeStamp — e.g. at bytes=2284, slot 0 POC 4 / dts 5 against slot 1",
+        "#   POC 2 / dts 5, and POC 2 is the earlier picture. The JVT gold for this very",
+        "#   stream agrees with POC order, which is the independent check on the direction.",
+        "#   Re-measure: hash each emitted frame on both sides and compare the multisets.",
+    ]
 }
 
 // ---------------------------------------------------------------------------

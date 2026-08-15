@@ -2,6 +2,20 @@
 # base: res/CABA2_SVA_B.264  bytes=8555  start_codes=19
 # knobs: fine_head=6 fine_spread=6 fine_delta=±8 coarse=16 epb_sites=4 prefix_boundaries=8
 # not covered by design: boundaries outside the fine set (cost is quadratic in NAL count)
+# expected-divergent rows (Phase 5 session T, face 1 — confirmed, not a defect):
+#   trunc.b005+00..+03, trunc.b013+00..+03, trunc.b015+00..+03 — 12 rows whose
+#   planes_sha1 differs from the C++ decoder's while the frame count and
+#   dimensions match. The **set** of decoded frames is byte-identical on both
+#   sides; two of them are emitted in the opposite order. It is the reordering
+#   tie-break documented at `decoder_conformance_test.rs`'s test_scalinglist_jm:
+#   `ReleaseBufferedReadyPictureNoReorder` picks the smallest uiDecodingTimeStamp
+#   and upstream has no tie-break, so it keeps slot order; this port breaks the
+#   tie by POC (`api/codec_api.rs`), which is display order.
+#   Traced on each of the 12: exactly one tie fires, two pictures sharing one
+#   uiDecodingTimeStamp — e.g. at bytes=2284, slot 0 POC 4 / dts 5 against slot 1
+#   POC 2 / dts 5, and POC 2 is the earlier picture. The JVT gold for this very
+#   stream agrees with POC order, which is the independent check on the direction.
+#   Re-measure: hash each emitted frame on both sides and compare the multisets.
 # columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle
 trunc.b000+00                   0     1     0    0 -          -                                        0x0                        0
 trunc.b000+01                   1     1     0    0 -          -                                        0x0                        0
