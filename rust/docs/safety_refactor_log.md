@@ -9352,3 +9352,85 @@ half-landed.
    add `cargo build --all-targets` to `gates.sh commit` (~seconds) or make it a rule
    at the face; T5.T5 is the cost of not having it.
 5. **`phase6.md` stays deliberately absent** until the phase actually closes (S19).
+
+## Session U (Phase 5) — the referee reaches every row, the bill arrives, and the phase does not close
+
+**Commits:** `d0c4237b` (doc tail), `cd50e3f6` (T5.U1), `1423f8eb` (T5.U2/U3),
+`e6873fe1` (T5.U4). Scoped as the last session; it is not, and §0 says why.
+
+**Face 0 landed whole.** The per-commit gate now runs `cargo build --all-targets`
+(T5.U1) — proved red by reverting T5.T5's three casts, where it fails while
+`cargo test` reports 482/476 all-green, the original incident's exact shape. Then
+the instrument session T named: **every one of the corpus's 2707 rows has a C++
+referee, where 389 had none** (T5.U2). `ecref --stdin [--raw]`, a harness corpus
+dump (`MALFORMED_DUMP_DIR`), and `compare_all.sh` that **checks** the dump rather
+than trusting it — the manifest length must equal each table's `bytes` column, and
+a truncation's blob must be byte-identical to the stream's prefix.
+
+**It found three causes on its first run, and two were one-liners** (T5.U3).
+**F48**: a buffer with no start code answered `dsErrorFree`. The C++ opens
+`WelsDecodeBs` with `DetectStartCodePrefix`, whose *return value is a verdict*;
+the port iterated `split_annexb_units`, which yields nothing, so the loop ran zero
+times and the function fell out clean. The function was deleted as dead at T3.3
+under S18 — correctly, it had no callers — and **the error signal went with it,
+because the one caller only ever read the offset.** That is the lesson worth
+carrying: a transliteration that swaps in a better-typed equivalent inherits only
+the results the call site was reading. **F49**: `IS_SPS_NAL` carried the
+subset-SPS. `wels_common_defs.h` has `IS_PARAM_SETS_NALS` (all three) at :145 and
+`IS_SPS_NAL` (SPS only) at :146, one line apart, and the port's copy of the narrow
+one had the wide one's extra term. One caller on each side, the same gate,
+enumerated before the edit rather than assumed from the name. **F50** stays open,
+scoped: `ParseSps` returns `ERR_INFO_INVALID_PARAM` where the C++'s returns
+`ERR_NONE` on the same 8 bytes, 24 rows, traced one call wide.
+
+Corpus at close: **output 2690 agree / 17 differ, codes 2683 / 24**. All 17 output
+rows are the documented `CABA2_SVA_B` tie-break — the 5 newly-refereed ones settled
+the way session T settled the 12, by per-frame multiset: identical sets, positions
+3 and 4 swapped, nothing else.
+
+**W8 landed whole and the bill is larger than the budget.** N's stashed binaries
+got the day two they were owed two sessions ago. **The whole span confirms**
+(+0.87% against +1.24%); **the bisect does not** — Face 1's CB row flips sign,
+−0.72% → +1.31%, which is S2b's clause verbatim. **The niche lost its evidence in
+the same run**: the CB-is-half asymmetry that pointed at `Option<PicId>` on B
+slices does not replicate, and the niche reads directionally consistent but
+unresolved. Its 1-pair reading was an artifact **its own control convicted** —
+−6.84% on the stream with no B-frames, where the mechanism cannot run.
+
+The **D-gate-1 window** — 69 commits, N-tail through U — reads **+2.77% decode
+median / +3.58% CB at 7 pairs**, +2.63%/+3.87% at 3, every row above the 7-pair
+null's ceiling, encode flat: real, read twice. **Cumulative CB ≈ +25.2…+25.8%
+against the ≈+23% stop-line — breached by ≈2.2–2.8 points.** The window's bisect
+does not attribute it (CB rows sum, medians do not — session K's law), so
+**nothing can be parked, because nothing is attributed.** Six options are tabled
+with measured sizes; the recommendation is **day-two the window first**, because
+it is free and this phase has twice had a second day overturn a first.
+
+**And the null itself is the session's methodological result**: 2.56 points wide at
+7 pairs against 0.22 at 3. Session K's law from the other side — the *tight* band
+was the small sample, and taking it as the floor would have made everything look
+enormous.
+
+**W7 is three items in, W6 did not start, and the second fact explains the first.**
+The F40-class sweep is crate-wide and clean (0 suspects, 81 files) — as an
+instrument that had to be corrected after it filed **F40 itself** into a
+middle bucket and exited 0. Three decoder modules are deny-clean where the phase
+had **none**. But W6, re-derived at the face: the settlement said 80 `(*pCtx)`
+derefs over 44 functions touching 24 fields; the file holds **202 raw-pointer types
+over 55 `unsafe fn`** and the lint fires on all of them, so the view struct
+addresses **44 of 202**. The settlement's own census was wrong when written — 86
+derefs over 30 fields at `a158183c`. The design does not move; the **face** does,
+and W6 is not one session. W7's SHIM item is blocked behind it by construction: 42
+of the 51 retiring shims are in `get_intra_predictor.rs` and exist *because* their
+callers hold the raw plane pointers W6 converts.
+
+**The ratchet caught this session's own comment**: a note beside a new
+`#![deny(unsafe_code)]` contained the words `unsafe impl`, the metric is
+`grep -Eo 'unsafe impl'`, and three files whose code had not changed went red.
+S16's floor, arriving from the direction of a comment written to celebrate it.
+
+**Exit conditions 1–3 unmet, 5 escalated. `phase6.md` stays deliberately unwritten
+and the next brief is a Phase 5 one** ([`prompts/phase5_session_v.md`](prompts/phase5_session_v.md)),
+whose face 0 is the day two and whose rule is that no code lands before it closes —
+the window's endpoint must stay `e6873fe1` or it is not a second reading of the
+same thing.
