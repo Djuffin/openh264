@@ -12,12 +12,12 @@ raw.z3                          3     2     0    0 -          -                 
 annexb.z3                       3     1     0    0 -          -                                        0x0                        0
 raw.epb_only                    3     2     0    0 -          -                                        0x0*2                      0*2
 annexb.epb_only                 3     1     0    0 -          -                                        0x0                        0
-raw.sc3_only                    3     2     0    0 -          -                                        0x0*2                      0*2
-annexb.sc3_only                 3     2     0    0 -          -                                        0x0*2                      0*2
-raw.sc4_only                    4     2     0    0 -          -                                        0x0*2                      0*2
-annexb.sc4_only                 4     2     0    0 -          -                                        0x0*2                      0*2
-raw.sc3_zero_payload            6     2     0    0 -          -                                        0x0*2                      0*2
-annexb.sc3_zero_payload         6     3     0    0 -          -                                        0x0*3                      0*3
+raw.sc3_only                    3     2     0    0 -          -                                        0x10,0x0                   0*2
+annexb.sc3_only                 3     2     0    0 -          -                                        0x10,0x0                   0*2
+raw.sc4_only                    4     2     0    0 -          -                                        0x10,0x0                   0*2
+annexb.sc4_only                 4     2     0    0 -          -                                        0x10,0x0                   0*2
+raw.sc3_zero_payload            6     2     0    0 -          -                                        0x10,0x0                   0*2
+annexb.sc3_zero_payload         6     3     0    0 -          -                                        0x10*2,0x0                 0*3
 raw.sc3_sps_byte                4     2     0    0 -          -                                        0x0*2                      0*2
 annexb.sc3_sps_byte             4     2     0    0 -          -                                        0x0*2                      0*2
 raw.sc3_slice_byte              4     2     0    0 -          -                                        0x10,0x0                   0*2
@@ -35,7 +35,7 @@ annexb.pps_then_sps            27     3     0    0 -          -                 
 raw.sps_pps_slice1             32     2     0    0 -          -                                        0x4,0x0                    0*2
 annexb.sps_pps_slice1          32     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
 raw.sps_pps_slice2             33     2     0    0 -          -                                        0x4,0x0                    0*2
-annexb.sps_pps_slice2          33     4     0    0 -          -                                        0x0*2,0x14,0x0             0*4
+annexb.sps_pps_slice2          33     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
 raw.sps_pps_slice3             34     2     0    0 -          -                                        0x4,0x0                    0*2
 annexb.sps_pps_slice3          34     4     0    0 -          -                                        0x0*2,0x4,0x0              0*4
 raw.sps_pps_slice4             35     2     0    0 -          -                                        0x4,0x0                    0*2
