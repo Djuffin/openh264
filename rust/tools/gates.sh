@@ -3,7 +3,7 @@
 #
 #   usage: rust/tools/gates.sh [level]
 #
-#     commit   cargo test (debug + release) + the unsafe ratchet          (~2 min)
+#     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
 #     family   commit + diffharness sweeps st/mt/def in BOTH profiles     (~5 min)
 #     full     family + decode bench + encoder bench + Miri --lib         (default)
 #     exit     full + Miri over the differential integration tests        (phase exits)
@@ -41,6 +41,33 @@ fail() { FAIL=$((FAIL+1)); RESULTS+=("FAIL  $1"); printf 'FAIL  %s\n' "$1"; }
 skip() { SKIP=$((SKIP+1)); RESULTS+=("SKIP  $1"); printf 'SKIP  %s\n' "$1"; }
 
 hdr() { printf '\n=== %s\n' "$1"; }
+
+# ---------------------------------------------------------------------------
+# 0. Every target compiles (Phase 5 session U, T5.T5).
+#
+# `cargo test` builds the lib, the unit tests, the integration tests and the
+# bins — and NOT the benches or the examples. So a change to a *public* type can
+# break a bench and leave the whole per-commit gate green: that is exactly what
+# T5.T1's `DECODING_STATE` newtype did, and nothing said so until the `exit`
+# battery tried to run `decode_1080p_bench` five commits later and it did not
+# compile. Five commits of that session touched a public type.
+#
+# The cost is seconds (it shares the target dir with the tests that follow, so
+# almost everything here is a cache hit), which is why this closes the hole
+# mechanically rather than by a rule telling sessions to remember.
+#
+# Debug only, deliberately: the missing targets are the same set in both
+# profiles and a type error is profile-independent, so the release compile is
+# `run_cargo_test release`'s to pay for. `--all-targets` implies `--benches`,
+# which *builds* the benches without running them.
+# ---------------------------------------------------------------------------
+hdr "cargo build --all-targets"
+(cd "$CRATE" && cargo build --all-targets 2>&1) | tee "$LOGS/build_all_targets.log" | grep -E '^error|^warning: unused|Compiling|Finished' | tail -15
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+  fail "cargo build --all-targets: a target does not compile — see $LOGS/build_all_targets.log"
+else
+  pass "cargo build --all-targets: benches and examples compile"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. cargo test, both profiles.
@@ -360,6 +387,9 @@ skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no cor
 # Pipeline audit (2026-08-10, F17's commit). Every `if`/verdict in this script,
 # and where its status comes from:
 #
+#   cargo build --all-targets  PIPESTATUS[0]; the display grep may match
+#                        nothing on a fully cached build, so unlike the benches
+#                        its emptiness is not a signal and is not checked  sound
 #   run_cargo_test       PIPESTATUS[0] + parsed totals + the ignored set   sound
 #   unsafe_ratchet.sh    direct exit status, no pipeline                   sound
 #   diffharness build.sh redirect, not a pipe                              sound
