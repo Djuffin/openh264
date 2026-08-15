@@ -1624,11 +1624,23 @@ pub unsafe fn ParseSps(
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSps.bVuiParamPresentFlag = uiCode != 0;
     if pSps.bVuiParamPresentFlag {
+        // **F46, T5.T3 — the arms were inverted** (`au_parser.cpp:1156`). The C++
+        // reads: *if* the VUI failed because it carries HRD, tolerate it — except on a
+        // subset SPS, where it is fatal — and **otherwise propagate whatever it
+        // returned** (`WELS_READ_VERIFY`). The port propagated the subset-HRD case and
+        // swallowed everything else, so a VUI that ran out of bits left `ParseSps`
+        // returning `ERR_NONE`: the port **accepted a truncated SPS** the C++ rejects,
+        // and answered `dsErrorFree` where the C++ answers `dsBitstreamError`. All 22
+        // truncation rows still disagreeing after T5.T2 are this one arm, and closing
+        // it takes the corpus to **2318 / 0** on codes.
         let iRetVui = ParseVui(pCtx, pSps, buf, pBsAux);
-        if iRetVui != ERR_NONE {
-            if kbUseSubsetFlag && iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
+        if iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
+            // Currently no support for VUI with HRD enabled in a subset SPS.
+            if kbUseSubsetFlag {
                 return iRetVui;
             }
+        } else if iRetVui != ERR_NONE {
+            return iRetVui;
         }
     }
 

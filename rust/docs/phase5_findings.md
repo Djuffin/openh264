@@ -1882,8 +1882,11 @@ would have found F45 without a bitstream, and it is cheap enough to keep.
 ## F46 — the `DECODING_STATE` the API returns diverges from the C++ on damaged input, while the decoded output does not
 
 *Found Phase 5 session S (2026-08-14), by extending `ecref`'s comparison from the
-plane hashes to the return codes. **Not fixed.** Owner: a scheduled parity session —
-it is a wide surface and none of it moves a pixel.*
+plane hashes to the return codes. **Closed in session T** (T5.T1–T5.T3): one type,
+five unported sites and one inverted `if`, taking the corpus from 1142/1176 to
+**2318 agree / 0 differ** on codes with no pixel moved. The section below is kept in
+the order it was learned — the scoping, then the hypothesis it stated, then the
+falsification — because the hypothesis was wrong in an instructive way.*
 
 ### The defect
 
@@ -2025,6 +2028,42 @@ four-byte `fill(0)` closed both pairs at once.
 **Measured after all five** (13 tables, 2318 rows): codes **1919 / 399 → 2259 / 59
 → 2296 / 22**; output steady at 2306 agree / 12 differ throughout, and the
 output-column guard clean on the committed state.
+
+### The last 22 rows: two `if` arms in the wrong order (session T, T5.T3)
+
+The residue was a single pair — `0x0` where the C++ says `0x4` — on four streams,
+every one of them a truncated **SPS**. Instrumenting the port's `ParseSps` on
+`narrow_16x16.264` truncated to 13 bytes showed it running to completion and
+storing a sequence parameter set, with `ParseVui` having returned `0x1` on the way.
+
+`au_parser.cpp:1156`:
+
+```c
+int iRetVui = ParseVui (pCtx, pSps, pBsAux);
+if (iRetVui == ERR_INFO_UNSUPPORTED_VUI_HRD) {
+  if (kbUseSubsetFlag) { … return iRetVui; }   // fatal only on a subset SPS
+} else {
+  WELS_READ_VERIFY (iRetVui);                  // anything else is fatal
+}
+```
+
+The port had the two arms **inverted**: it propagated the subset-SPS HRD case and
+swallowed everything else, so a VUI that ran out of bits left `ParseSps` returning
+`ERR_NONE`. The port *accepted a truncated SPS the C++ rejects* — which is why its
+answer was `dsErrorFree`.
+
+Not a bug the return-code work created; a parser divergence the return-code work
+made visible. It is also the only one of the five that changed anything besides a
+code: three `narrow_16x16_idr_lost` rows lose one buffered frame at end of stream,
+so `calls` 33 → 32, `drain` 1 → 0 — and the C++'s own answer for those rows is 32
+calls and drain 0. **Frames, dimensions and plane hashes did not move on any row of
+any table.**
+
+### F46, closed
+
+**Codes: 2318 agree / 0 differ**, all thirteen tables, every truncation row.
+Output: 2306 / 12, unchanged all session — the 12 are `CABA2_SVA_B`'s, which is a
+separate question and this session's face 1.
 
 ### Why nothing saw it
 
