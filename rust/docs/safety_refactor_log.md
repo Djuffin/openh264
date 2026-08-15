@@ -9148,3 +9148,53 @@ executed under Miri because they had never executed in production.
   collecting them.
 * Six derivations become three, one per slice-type bracket. Output byte-identical on
   every gate.
+
+### Close-out and hand-off: Phase 5 stays open
+
+**The phase did not exit, and the reason is a change of priority, not a blocker.**
+Mid-session direction (Eugene, 2026-08-14): *"if InitErrorCon is called in C++ code,
+it needs to be called in Rust code as well. we aim for test parity first, safety
+refactoring comes later."* W6 and W7 **are** the safety refactoring, and they carry
+exit conditions 1–3, so those stand deferred and the phase stays open. Session S
+spent itself on parity instead, which is where every finding below came from.
+
+**Commits**: `5c351f28` (T5.S1, F43/F44/F45), `e6e10788` (T5.S2, F47), `8ae9861c`
+(F46 scoped), `4a2f5714` (§0, F47's correction, F3), `cf31bf2f` (T5.S3, probe
+retirement), `db7ef34c` (W7's F43-class sweep).
+
+**Gate state at close**: exit battery `OVERALL: FAIL (1)` → the one failure was F3's
+exact fingerprint and `mt` re-ran 120/120, so the honest reading is **pass with F3's
+known race**. Sweeps 341/341 release, both benches bit-identical, **Miri 338/0**
+across the library and all three differential targets, census 59, tests 482/476/20.
+
+**What remains, in the order a next session should take it:**
+
+1. **W8's perf adjudication — the D-gate-1 bill, untouched.** The whole reason
+   D-gate-1 deferred measurement was to pay it once at the exit, and this session
+   did not. Owed: session N's stashed binaries (`.perfpair/n_base|n_mid|n_head`),
+   the `NonZeroU32` niche verdict (hypothesis written at `perf_baseline.md:1755`,
+   never built), the D-gate-1 window as spans, 3-pair + day-two per S2b, and the
+   stop-line verdict against ≈+23% from cumulative ≈+21.6–21.9% at N. `perfpair.py`
+   is the instrument and the stashes exist; nothing blocks it but time.
+2. **W6 and W7**, whenever safety refactoring resumes. W6's design is settled in
+   writing (phase5.md §S-settlements, the per-slice view struct); W7 has one item
+   done (the F43-class sweep, `tools/find_shadowing_stubs.py`, clean) and the rest
+   untouched — the straggler sweep, the F40-class element-vs-byte sweep, `SHIM(` 52
+   → 1 survivor, `deny(unsafe_code)` per module (**0 modules today**).
+3. **F46** — return codes, ~45% of truncation rows, scoped to three causes and a
+   41-byte reproduction, with the hypothesis to falsify written down.
+4. **`CABA2_SVA_B`'s 12 rows** — the only output divergence left in the corpus. Same
+   frame counts, differing hashes, which is the signature of the POC tie-break this
+   suite already documents as deliberate. Likely explained; not confirmed.
+5. **`phase6.md` is deliberately absent.** S19 hands off one brief ahead *at a phase
+   exit*; writing the encoder brief now would assert a close that has not happened.
+
+**Findings ledger after S**: F43 **closed**, F44 **closed**, F45 **closed**, F47
+**closed**, F46 **open** (scoped), F3 unchanged (one hit, retry clean), S32 recorded.
+Inherited unchanged: F23/F38/F41 + the `api/` inventory → Phase 8, F36 → decoder
+threading, F37 per its record.
+
+**The sentence this session is worth remembering by**: *the malformed-parity table
+compares the port against its own previous output, so it can see change and never
+wrongness* — and four defects lived their entire lives behind it while it stayed
+green.
