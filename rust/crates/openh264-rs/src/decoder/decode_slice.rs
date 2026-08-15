@@ -5594,77 +5594,26 @@ mod tests {
         }
     }
 
-    /// The smallest legal stream this repository has, decoded through the real
-    /// path — and, until session J added the grid probe below, the **only**
-    /// `--lib` test that reached `WelsDecodeSlice`'s macroblock loop.
-    ///
-    /// It exists for Miri, not for its assertion. Every other test in this module
-    /// calls one function with null arguments; the integration tests that decode
-    /// real streams are not Miri targets (`gates.sh`'s exit level runs Miri over
-    /// `tests/*differential*.rs`, which are kernel-, plane- and bits-level). So
-    /// until this test, **no Miri-covered code path had ever entered the slice
-    /// decode loop** — and that loop holds three overlapping `&mut` borrows across
-    /// a re-entrant call:
-    ///
-    /// ```text
-    /// let ctx = &mut *pCtx;                    // the context
-    /// let dq  = &mut *ctx.pCurDqLayer;         // the layer (a context field, until T5.R1)
-    /// let pSlice = &mut (*dq).sLayerInfo…;        // a reborrow of the layer
-    /// …
-    /// pDecMbFunc(pCtx, dq, pDec, pRefs, pNalCur, &mut uiEosFlag);   // re-enters through pCtx
-    ///                                              // and reaches the same layer
-    /// …(*dq).pMbRefConcealedFlag…  ctx.bMbRefConcealed…  (*pSlice).iTotalMbInCurSlice…
-    /// ```
-    ///
-    /// That is S25's shape (plan §7.6) in code that predates Phase 5, and 5.2 —
-    /// which converts these very fields — cannot decide whether it must be fixed
-    /// without a gate that can see it. This test is that gate. The stream is
-    /// embedded rather than read from `res/` because Miri isolates filesystem
-    /// access and the gate does not pass `-Zmiri-disable-isolation`.
-    ///
-    /// `narrow_16x16.264` is 711 bytes: one macroblock per frame, which is what
-    /// makes a full `Initialize` + decode tractable under an interpreter. It is
-    /// also a decode-goldens row (`test_asset_narrow_16x16`), so its output is
-    /// pinned elsewhere; here we only require that a frame comes out, because the
-    /// instrument is Miri's verdict on the path, not the bytes.
-    ///
-    /// **One macroblock per frame is also this test's ceiling, and F34 is what it
-    /// cost.** It stays as the cheap probe — every path that does not need a
-    /// neighbour gets its verdict here in a quarter of the grid probe's time —
-    /// but "the probe is green" now means the pair, not this test.
-    ///
-    /// The vtable calls are spelled the way a C caller spells them, for F23's
-    /// reason — see [`drive_decoder_over`], which both probes share.
-    ///
-    /// **`#[cfg_attr(miri, ignore)]` is gone (T5.G1), and this test is a Miri gate.**
-    /// T5.E1 closed F24 and F25's loop; T5.F2 closed F26 (the allocator no longer
-    /// launders provenance, so the whole decoder heap carries tracked tags and this
-    /// test is the first thing in the project's history that can see borrow structure
-    /// on top of it); T5.F3 worked the backlog that un-blinding released and closed
-    /// F27–F30; T5.G1 cleared F25's own inventory — **11 `&mut *pCtx` bindings, 6 in
-    /// this file and 5 in `manage_dec_ref.rs`**, plus the 13 nested borrows that hung
-    /// off them.
-    ///
-    /// **The inventory was recorded as 12/7/5 and the seventh was this doc comment.**
-    /// `grep 'let ctx = &mut \*pCtx;'` over this file returns seven lines and one of
-    /// them is the illustration above — prose inflating a count of code, which is
-    /// S16's warning about `raw_ptr` arriving at a place S24 was already watching.
-    /// The code count is six.
-    ///
-    /// Whatever this test stops on next is a **finding**, not a known item: nothing is
-    /// left on the queue that has been named. Add the attribute back only with a
-    /// finding that owns it (S15), and say in the label exactly what it is waiting on.
-    #[test]
-    fn decode_slice_loop_runs_under_the_aliasing_checker() {
-        const NARROW_16X16: &[u8] = include_bytes!("../../../../../res/narrow_16x16.264");
-        let (frames, dims, _) = drive_decoder_over(NARROW_16X16);
-        assert!(
-            frames > 0,
-            "no frame came out of narrow_16x16.264 — the slice loop was never entered, \
-             so this test is not measuring what it claims to"
-        );
-        assert_eq!(dims, Some((16, 16)), "narrow_16x16.264 is one macroblock per frame");
-    }
+    // **The one-macroblock clean-stream probe stood here, and was retired at T5.S3.**
+    //
+    // It decoded `narrow_16x16.264` and asserted a frame came out at 16x16. Measured
+    // under Miri it cost **265.3s of the library's 989.2s**, and its stream is a
+    // strict syntactic subset of the concealment probe's below: profile {100} against
+    // {66, 100}, `entropy_coding_mode_flag` {1} against {0, 1}, 24 slices against 31,
+    // the same 16x16 one-macroblock geometry. Everything it executed, that probe
+    // executes — including, since it carries CAVLC, a great deal it never did.
+    //
+    // **Why deleting a probe is the right lever and shortening one is not.** The four
+    // probes cost 268.9s / 265.3s / 257.5s / 196.0s for 36 / 24 / 31 / 16 macroblocks:
+    // cost does not track decoding work, it tracks the **number of decoder
+    // instantiations**, because a full `Initialize` of a multi-MiB context under an
+    // interpreter dwarfs the macroblocks. Trimming a stream saves nothing; removing a
+    // redundant `Initialize` saves a quarter of the run.
+    //
+    // Its history is not lost — F34's lesson (one macroblock per frame was a ceiling,
+    // and a real UB hid under it) is recorded on the grid probe below, which exists
+    // because of it.
+
 
     /// The same gate over a stream that has **neighbours** — Phase 5 session J,
     /// D-perf-5's "probe first, then flip".
@@ -5853,11 +5802,17 @@ mod tests {
     /// The `dsDataErrorConcealed` assertion is the point. Without it this test
     /// passes just as well on a decoder where concealment never runs — which is
     /// precisely the state the port was in for five phases.
+    ///
+    /// **It also carries the retired clean-stream probe's duty** (T5.S3): the
+    /// dimension assertion below was that probe's, and this stream is its superset
+    /// in every syntactic dimension, so the geometry check moves here rather than
+    /// disappearing with it.
     #[test]
     fn error_concealment_runs_under_the_aliasing_checker() {
         const IDR_LOST: &[u8] = include_bytes!("../../../../../res/narrow_16x16_idr_lost.264");
-        let (frames, _, states) = drive_decoder_over(IDR_LOST);
+        let (frames, dims, states) = drive_decoder_over(IDR_LOST);
         assert!(frames > 0, "no frame came out of narrow_16x16_idr_lost.264");
+        assert_eq!(dims, Some((16, 16)), "this stream is one macroblock per frame");
         assert_ne!(
             states & 0x20,
             0,

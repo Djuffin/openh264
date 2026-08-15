@@ -2060,3 +2060,58 @@ argument for building assets rather than only collecting them.
 above it is also raw.* Each fix in this chain turned the next one from silence into
 a hard error, and the chain only started because a probe finally decoded a stream
 that reached the path.
+
+## S32 — the Miri gate's cost is decoder instantiations, not decoded macroblocks
+
+*Measured Phase 5 session S (2026-08-14), because the exit-level battery took long
+enough to ask why, and the answer was not the one being assumed.*
+
+`gates.sh exit`'s stages, timed on one run: **103 seconds for everything that is not
+Miri** — both `cargo test` profiles, the census, both builds, both diffharness
+sweeps, both benches. Everything after that is Miri, and within Miri the library run
+is four whole-decoder probes and 334 tests that are free.
+
+Per probe, with `--report-time`, in the two contexts they were measured in:
+
+| probe | macroblocks | alone (`--lib aliasing_checker`) | inside the whole-library run |
+|---|---|---|---|
+| `grid_48x32` | 36 | 268.9s | 385.5s |
+| `narrow_16x16` (clean) | 24 | 265.3s | *(retired)* |
+| `narrow_16x16_idr_lost` (EC) | 31 | 257.5s | 373.6s |
+| `fmo_2groups_64x64` | 16 | 196.0s | 340.2s |
+| whole `--lib` run | | | **1686.4s → 1322.9s** |
+
+**Cost does not track decoding work.** In both columns the spread across a 2.25x
+range of macroblocks is under 40%, and it does not order with the work: 36
+macroblocks and 16 macroblocks cost within 40% of each other. What each probe pays
+for is a full `Initialize`/`Uninitialize` of a multi-MiB decoder context under an
+interpreter, and the macroblocks are noise beside it.
+
+**Two things the second column says that the first does not.** The same probes are
+**~40% slower when run after the rest of the library** than when run alone —
+Miri's bookkeeping grows with everything that came before it — so a per-seam probe
+run directly is cheaper than the same probe reached through the battery, and the
+two numbers are not interchangeable. And absolute Miri timings move by that much
+between contexts, so this table is a **shape**, not a benchmark: the conclusion
+rests on cost being flat against macroblock count *within each column*, which it is
+in both, and not on any single figure.
+
+The like-for-like measurement — same flags, same whole-library run, before and after
+retiring one probe — is **1686.40s → 1322.91s**, a 21.6% cut for one fewer decoder
+instantiation.
+
+**So the lever is the number of probes, and shortening a stream is not a lever at
+all.** This was worth measuring precisely because the intuition ran the other way —
+the session's first instinct was to trim the concealment probe's stream from 30
+frames to a shorter prefix, which the table above says would have bought nothing.
+
+**Applied (T5.S3)**: the clean-stream probe is retired, because
+`narrow_16x16_idr_lost.264` is its strict syntactic superset — profile {100} ⊂
+{66, 100}, `entropy_coding_mode_flag` {1} ⊂ {0, 1}, 24 slices < 31, the same 16x16
+one-macroblock geometry — so everything it executed the concealment probe executes,
+including a great deal it never did. Its geometry assertion moved with it. **989.2s →
+three probes**, no coverage lost.
+
+**The general rule**: *when a gate is slow, measure which of its steps is slow before
+trimming any of them.* A per-item fixed cost and a per-work cost need opposite fixes,
+and they are indistinguishable from the outside.
