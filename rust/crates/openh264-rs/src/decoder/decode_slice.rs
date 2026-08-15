@@ -5596,23 +5596,46 @@ mod tests {
 
     // **The one-macroblock clean-stream probe stood here, and was retired at T5.S3.**
     //
-    // It decoded `narrow_16x16.264` and asserted a frame came out at 16x16. Measured
-    // under Miri it cost **265.3s of the library's 989.2s**, and its stream is a
-    // strict syntactic subset of the concealment probe's below: profile {100} against
-    // {66, 100}, `entropy_coding_mode_flag` {1} against {0, 1}, 24 slices against 31,
-    // the same 16x16 one-macroblock geometry. Everything it executed, that probe
-    // executes — including, since it carries CAVLC, a great deal it never did.
+    // It decoded `narrow_16x16.264` and asserted a frame came out at 16x16, and it
+    // cost **265.3s of the library's 989.2s** under Miri against 0.001s natively —
+    // the whole of its cost, and the whole of its unique value, is the aliasing
+    // verdict.
     //
-    // **Why deleting a probe is the right lever and shortening one is not.** The four
-    // probes cost 268.9s / 265.3s / 257.5s / 196.0s for 36 / 24 / 31 / 16 macroblocks:
-    // cost does not track decoding work, it tracks the **number of decoder
-    // instantiations**, because a full `Initialize` of a multi-MiB context under an
-    // interpreter dwarfs the macroblocks. Trimming a stream saves nothing; removing a
-    // redundant `Initialize` saves a quarter of the run.
+    // **The stream is still decoded**, by `test_asset_narrow_16x16` in
+    // `decoder_conformance_test.rs`, which checks its full SHA-1 against the C++
+    // decoder's — strictly more than this probe asserted. Retiring a probe whose
+    // vector another test already runs is the rule that removed it (Eugene,
+    // 2026-08-14).
     //
-    // Its history is not lost — F34's lesson (one macroblock per frame was a ceiling,
-    // and a real UB hid under it) is recorded on the grid probe below, which exists
-    // because of it.
+    // **What that costs, stated because it is not nothing.** The conformance suite
+    // is not a Miri target, so no aliasing verdict covers this stream any more.
+    // Counting decode entries per probe stream shows the gap precisely:
+    //
+    //     stream                  CavlcPcm CavlcI CavlcP  CabacI CabacP CabacB
+    //     narrow_16x16                   0      0      0       3     21      0
+    //     narrow_16x16_idr_lost          0      3     21       0      7      0
+    //     grid_48x32                     0      0      0       6     18      7
+    //     fmo_2groups_64x64             16     16      0       0      0      0
+    //
+    // CABAC I-slices on a one-macroblock-per-frame picture are now unprobed:
+    // `grid_48x32` reaches `CabacI` but at 3x2 with different stride arithmetic, and
+    // `narrow_16x16_idr_lost` reaches it **zero** times, because in that stream the
+    // CABAC sequence is exactly the one whose IDR was removed.
+    //
+    // *(An earlier version of this note claimed `narrow_16x16_idr_lost` was a strict
+    // superset and that nothing was lost. That was a syntactic argument — profile,
+    // entropy mode, slice count — and the table above is what disproved it. Which
+    // decode entries run is a property of slice types after damage, not of the
+    // parameter sets.)*
+    //
+    // **Why deleting a probe is the lever and shortening one is not.** The probes
+    // cost 268.9s / 265.3s / 257.5s / 196.0s for 36 / 24 / 31 / 16 macroblocks: cost
+    // tracks the number of decoder instantiations, not decoding work, because a full
+    // `Initialize` of a multi-MiB context under an interpreter dwarfs the
+    // macroblocks. Trimming a stream saves nothing.
+    //
+    // F34's lesson — one macroblock per frame was a ceiling, and a real UB hid under
+    // it — is recorded on the grid probe below, which exists because of it.
 
 
     /// The same gate over a stream that has **neighbours** — Phase 5 session J,
