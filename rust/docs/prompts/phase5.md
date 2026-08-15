@@ -71,15 +71,22 @@ re-read, continue — and labels anything earlier an early exit.
 [`phase5_session_r.md`](phase5_session_r.md)). Scoped for everything but the exit under
 **S31**, it stopped with W6's tail and W7 open **on rule 1's blocker, not on context** —
 no compaction ever ran, and W6's done-test needs a decision only Eugene or the steward
-can make (the row says which). **S** = **the last session** (Eugene, 2026-08-14: "address these issues in the last
-session"): **F43 + W6's tail + W7 + W8**, in that order
-([`phase5_session_s.md`](phase5_session_s.md)), under S31. Both of R's stops are
-settled below — W6's deny-blocker by the view-struct design, F43 by its fix plan —
-so nothing in S waits on a decision. **W8's never-compressed clause survives the
-merge**: if S cannot reach W8 whole, it hands W8 off intact rather than squeezing
-it — that is the one sanctioned hand-off. *(Naming: primes retired — the sequence
-resumed after P″; **S is the final session**, superseding both older uses of "Q"
-and "T" for the exit.)*
+can make (the row says which). **S** = **spent** (7 commits through `bfe3c80f`;
+[`phase5_session_s.md`](phase5_session_s.md)). Scoped as the last session (F43 +
+W6's tail + W7 + W8), it became **the parity pivot** instead: F43 opened into F44
+and F45 (compensating defects — EC had never run in five phases) and F47 (real
+CAVLC UB behind a probe gap), Eugene redirected mid-session (**D-par-1**, plan
+§7.4: *test parity first, safety refactoring later*), and the session delivered
+the parity work — truncation-row agreement 641/541 → **1182/0**, ten of eleven
+corpus streams exact, four instruments and two probes added — with W6/W7
+**deferred** and W8's adjudication **owed**. The phase stays **open**.
+**T** = the parity closure
+([`phase5_session_t.md`](phase5_session_t.md)): F46, `CABA2_SVA_B`'s 12 rows, the
+corpus statement. **The perf adjudication is postponed out of T** (Eugene,
+2026-08-14). **U** = W6 + W7 + **W8 whole** — the adjudication (stashed binaries,
+niche verdict, the D-gate-1 window as spans, the stop-line verdict, the ledger)
+and the phase close (phase6.md, briefs historical, this checklist closed).
+Nothing is "the last session" again until U closes the phase.
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
