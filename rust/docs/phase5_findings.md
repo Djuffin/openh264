@@ -2065,6 +2065,44 @@ any table.**
 Output: 2306 / 12, unchanged all session — the 12 are `CABA2_SVA_B`'s, which is a
 separate question and this session's face 1.
 
+## Face 1 — `CABA2_SVA_B`'s 12 rows are the documented tie-break, confirmed (session T)
+
+Session S left these as *"likely explained; not confirmed"*. They are confirmed,
+and the confirmation did not need the C++ instrumented.
+
+**The test that settles it is a multiset comparison, not a trace.** Hash every
+emitted frame *individually* on both sides and compare the two lists. If the port
+had decoded anything differently, some frame would have no counterpart; if it had
+only emitted them in a different order, the two lists would be permutations. On all
+twelve rows the lists are permutations — **identical multisets, one adjacent pair
+swapped** — so every pixel the port produced is a pixel the C++ produced.
+
+| rows | frames | multiset | order | ties fired |
+|---|---|---|---|---|
+| `trunc.b005+00..+03` | 3 | identical | swapped | 1 |
+| `trunc.b013+00..+03` | 11 | identical | swapped | 1 |
+| `trunc.b015+00..+03` | 13 | identical | swapped | 1 |
+
+The cause is the tie-break already recorded at `decoder_conformance_test.rs`'s
+`test_scalinglist_jm`. `ReleaseBufferedReadyPictureNoReorder` releases the buffered
+picture with the smallest `uiDecodingTimeStamp`; upstream
+(`welsDecoderExt.cpp:1106`) compares **only** that, so when two pictures share a
+timestamp it keeps whichever slot it scanned first. This port's loop adds
+`|| (dts == dts && iPOC < iChosenPOC)`. Traced on the port at `bytes=2284`: slot 0
+is POC 4 at `dts` 5 and slot 1 is POC 2 at `dts` 5 — one tie, and POC 2 is the
+earlier picture, so the port emits it first and upstream emits POC 4 first. Exactly
+one tie fires on each of the twelve rows.
+
+Direction: the JVT gold for `CABA2_SVA_B` itself agrees with POC order, which is why
+the deviation exists and why it is not being reverted to match the dylib.
+
+**Recorded, not fixed**, and recorded where regeneration cannot lose it: the twelve
+rows and this reasoning are emitted into `malformed_parity/CABA2_SVA_B.txt`'s header
+by the generator (`expected_divergent_note`), so `UPDATE_MALFORMED_GOLDEN=1` rewrites
+them rather than dropping them. It is the only place in the suite where a
+disagreement with the C++ is a position rather than a defect, so it carries its own
+re-measurement recipe.
+
 ### Why nothing saw it
 
 The malformed-parity table has recorded `ret_rle` since Phase 3 — the column is
