@@ -9429,6 +9429,13 @@ callers hold the raw plane pointers W6 converts.
 `grep -Eo 'unsafe impl'`, and three files whose code had not changed went red.
 S16's floor, arriving from the direction of a comment written to celebrate it.
 
+**Gate state at close**: exit battery **`OVERALL: PASS`, 13 passed / 0 failed / 1
+skipped** — tests 482/476/20, sweeps **341/341 in both profiles**, both benches
+bit-identical, **Miri 367/0** across the library (337) and all three differential
+targets (20/7/3), census 59, ratchet no per-file increase, `--all-targets`
+compiling. **No F3 hit this session** — the first Phase 5 exit battery in several to
+come back clean on the first run rather than pass-modulo-F3.
+
 **Exit conditions 1–3 unmet, 5 escalated. `phase6.md` stays deliberately unwritten
 and the next brief is a Phase 5 one** ([`prompts/phase5_session_v.md`](prompts/phase5_session_v.md)),
 whose face 0 is the day two and whose rule is that no code lands before it closes —
