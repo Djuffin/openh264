@@ -1942,6 +1942,44 @@ decodes at least one macroblock out of the truncated slice where the port decode
 none — so the C++ enters `ImplementErrorCon` and the port does not. Confirming it
 means instrumenting `iTotalNumMbRec` on both sides, which is where to start.
 
+### The hypothesis above is **false**, and the cause is one line of the API (session T, T5.T1)
+
+Instrumenting both sides on the 41-byte reproduction — the C++ through its own
+`WELS_LOG_DEBUG` trace (`DECODER_OPTION_TRACE_LEVEL`, so the reference dylib is
+never rebuilt), the port through an `eprintln!` at the same place — took one
+command each and refuted it:
+
+```
+C++  Debug:DecodeFrameConstruction(): iTotalNumMbRec:0, total_num_mb_sps:1, …
+port [F46] after slice loop: pDec=true bAllRefComplete=false totalmb=0 err=0x4
+```
+
+**Both decode zero macroblocks**, so neither enters the `iTotalNumMbRec != 0`
+bracket, and the port *does* reach `decoder_core.rs:3859` and *does* set
+`dsDataErrorConcealed` — the next instrumented line shows `iErrorCode` at `0x24`.
+The bit was set and then thrown away on the way out.
+
+`DECODING_STATE` is declared as an `enum` in the C header and used as a **bit set**:
+the decoder accumulates with `|=` into `pCtx->iErrorCode`, and `DecodeFrame2WithCtx`
+returns the accumulator whole — `return (DECODING_STATE)pDecContext->iErrorCode`
+(`welsDecoderExt.cpp:892`). A Rust `enum` cannot hold `0x24`; producing one is UB.
+So the port had a function, `decoding_state_from_bits`, that collapsed the
+accumulator to its **first set bit in a fixed priority order** — with
+`dsBitstreamError` ahead of `dsDataErrorConcealed`, which is exactly the 71-row
+pair. The fix is the type: `#[repr(transparent)] struct DECODING_STATE(pub i32)`
+with the variants as associated constants, and the raw accumulator returned.
+
+*This is the F44/F45 shape once more, one level out.* Nothing was missing from the
+decoder; the value the decoder computed could not survive the type it was returned
+through, and no byte gate looks at a return code.
+
+**Measured, corpus-wide** (13 tables, 2318 truncation rows, `ecref` as the
+reference): codes **1142 agree / 1176 differ → 1919 / 399**. Output columns —
+frames, dims, plane hashes — and `bufstatus_rle` are byte-identical across all 14
+tables before and after, which is the guard that the fix touched codes only.
+`narrow_16x16` goes 124/76 → 195/**5**: the 71-row pair, gone, leaving exactly the
+two pairs this record already scoped.
+
 ### Why nothing saw it
 
 The malformed-parity table has recorded `ret_rle` since Phase 3 — the column is

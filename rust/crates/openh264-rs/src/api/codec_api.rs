@@ -122,24 +122,84 @@ pub enum ENalPriority {
     NAL_PRIORITY_HIGHEST = 3,
 }
 
-/// Decoding status bitmask / enumeration (`DECODING_STATE`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum DECODING_STATE {
-    #[default]
-    dsErrorFree = 0x00,
-    dsFramePending = 0x01,
-    dsRefLost = 0x02,
-    dsBitstreamError = 0x04,
-    dsDepLayerLost = 0x08,
-    dsNoParamSets = 0x10,
-    dsDataErrorConcealed = 0x20,
-    dsRefListNullPtrs = 0x40,
+/// Decoding status bitmask (`DECODING_STATE`).
+///
+/// **A bitmask, not an enumeration — F46, T5.T1.** The C++ declares this as an
+/// `enum` and then uses it as a flag set: the decoder accumulates into
+/// `pCtx->iErrorCode` with `|=` and `DecodeFrame2WithCtx` hands the accumulator
+/// back whole (`welsDecoderExt.cpp:892`, `return (DECODING_STATE)pDecContext->iErrorCode`).
+/// `dsBitstreamError | dsDataErrorConcealed` = `0x24` is a value this API returns,
+/// and it names no variant.
+///
+/// A Rust `enum` cannot hold `0x24` — the value is invalid and producing one is UB —
+/// so the port used to collapse the accumulator to its first set bit in a fixed
+/// priority order, which is how 71 of `narrow_16x16`'s 76 code mismatches happened:
+/// every row where the C++ said "concealed, and the bitstream was damaged" the port
+/// said only "damaged". A transparent newtype is the type the C++ actually has; the
+/// `DECODING_STATE::dsErrorFree` spelling at every use site is unchanged.
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialEq, Eq, Default)]
+pub struct DECODING_STATE(pub i32);
 
-    dsInvalidArgument = 0x1000,
-    dsInitialOptExpected = 0x2000,
-    dsOutOfMemory = 0x4000,
-    dsDstBufNeedExpan = 0x8000,
+#[allow(non_upper_case_globals)]
+impl DECODING_STATE {
+    pub const dsErrorFree: Self = Self(0x00);
+    pub const dsFramePending: Self = Self(0x01);
+    pub const dsRefLost: Self = Self(0x02);
+    pub const dsBitstreamError: Self = Self(0x04);
+    pub const dsDepLayerLost: Self = Self(0x08);
+    pub const dsNoParamSets: Self = Self(0x10);
+    pub const dsDataErrorConcealed: Self = Self(0x20);
+    pub const dsRefListNullPtrs: Self = Self(0x40);
+
+    pub const dsInvalidArgument: Self = Self(0x1000);
+    pub const dsInitialOptExpected: Self = Self(0x2000);
+    pub const dsOutOfMemory: Self = Self(0x4000);
+    pub const dsDstBufNeedExpan: Self = Self(0x8000);
+
+    /// The set bits, named, in the C header's order — so a `{:?}` of a combined
+    /// value reads as the C++ log does rather than as a number.
+    const NAMES: [(i32, &'static str); 12] = [
+        (0x01, "dsFramePending"),
+        (0x02, "dsRefLost"),
+        (0x04, "dsBitstreamError"),
+        (0x08, "dsDepLayerLost"),
+        (0x10, "dsNoParamSets"),
+        (0x20, "dsDataErrorConcealed"),
+        (0x40, "dsRefListNullPtrs"),
+        (0x1000, "dsInvalidArgument"),
+        (0x2000, "dsInitialOptExpected"),
+        (0x4000, "dsOutOfMemory"),
+        (0x8000, "dsDstBufNeedExpan"),
+        (0, ""),
+    ];
+}
+
+impl core::fmt::Debug for DECODING_STATE {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0 == 0 {
+            return f.write_str("dsErrorFree");
+        }
+        let mut first = true;
+        let mut rest = self.0;
+        for (bit, name) in Self::NAMES {
+            if bit != 0 && self.0 & bit != 0 {
+                if !first {
+                    f.write_str("|")?;
+                }
+                f.write_str(name)?;
+                first = false;
+                rest &= !bit;
+            }
+        }
+        if rest != 0 {
+            if !first {
+                f.write_str("|")?;
+            }
+            write!(f, "{rest:#x}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Encoder option identifiers (`ENCODER_OPTION`).
@@ -1536,30 +1596,6 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo)
 }
 
-/// Map an internal `iErrorCode` bitmask to a representative `DECODING_STATE`
-/// variant (the enum cannot hold OR-ed combinations).
-fn decoding_state_from_bits(bits: i32) -> DECODING_STATE {
-    if bits == 0 {
-        return DECODING_STATE::dsErrorFree;
-    }
-    for state in [
-        DECODING_STATE::dsOutOfMemory,
-        DECODING_STATE::dsInitialOptExpected,
-        DECODING_STATE::dsInvalidArgument,
-        DECODING_STATE::dsNoParamSets,
-        DECODING_STATE::dsRefListNullPtrs,
-        DECODING_STATE::dsBitstreamError,
-        DECODING_STATE::dsDepLayerLost,
-        DECODING_STATE::dsRefLost,
-        DECODING_STATE::dsDataErrorConcealed,
-        DECODING_STATE::dsFramePending,
-    ] {
-        if bits & (state as i32) != 0 {
-            return state;
-        }
-    }
-    DECODING_STATE::dsBitstreamError
-}
 
 /// Matches `void CWelsDecoder::BufferingReadyPicture (...)` in `welsDecoderExt.cpp`.
 ///
@@ -1870,7 +1906,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             return DECODING_STATE::dsInitialOptExpected;
         }
 
-        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree as i32;
+        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
             if crate::decoder::decoder_core::GetThreadCount(p_ctx) <= 0 {
@@ -1915,7 +1951,8 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         }
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
         ReorderPicturesInDisplay(dec_impl, p_ctx, ppDst, pDstInfo);
-        decoding_state_from_bits((*p_ctx).iErrorCode)
+        // **F46, T5.T1.** `welsDecoderExt.cpp:892` — the accumulator, whole.
+        DECODING_STATE((*p_ctx).iErrorCode)
     }
 }
 
