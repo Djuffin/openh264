@@ -253,9 +253,12 @@ locally, enumerated and resolution-checked.
    Phase 8 pointers.
 3. `SHIM(` decoder share = the survivor list exactly; census green; F40-class
    sweep run with its results recorded.
-4. Gates: full battery `OVERALL: PASS` at `exit` level — goldens 57 (none ever
-   moved), sweeps 341/341 both profiles, benches bit-identical, Miri both probes,
-   the widened `exit`-level Miri targets (S22: the backlog check).
+4. Gates: full battery `OVERALL: PASS` at `exit` level — the decoder conformance
+   goldens (**58 asset rows** at session T, re-counted there: 55 `asset_test!` + 3
+   `asset_test_concealed!`; this line read "57" from before session S added the
+   damaged-input and FMO rows) none ever moved, sweeps 341/341 both profiles,
+   benches bit-identical, Miri both probes, the widened `exit`-level Miri targets
+   (S22: the backlog check).
 5. The perf adjudication done and written: stop-line verdict, niche verdict,
    ledger reconciled toward the recovery expectation — or the escalation table in
    front of Eugene.
