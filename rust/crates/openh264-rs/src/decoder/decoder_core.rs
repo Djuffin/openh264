@@ -2745,7 +2745,8 @@ pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
     // three assignments above, so **the whole block was absent** and `dsRefLost` had no
     // producer anywhere in the decoder: `iErrorCode |= dsRefLost` appears once
     // (`HandleReferenceLost`) against the C++'s four, and this is the site the corpus
-    // reaches. 356 of the 399 truncation rows still disagreeing after T5.T1 are this
+    // reaches. Measured: this block plus the `bParamSetsLostFlag` clear it depends on
+    // take the corpus's disagreeing truncation rows from **399 to 188** — 211 rows,
     // one bit on one call.
     //
     // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is

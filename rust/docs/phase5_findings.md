@@ -1990,12 +1990,17 @@ measurable for the first time, and 399 rows said it was short. Re-scoped, they w
 four sites — each a piece of the C++ that the port simply does not have, each found
 by reading the C++ beside the port rather than by another hypothesis:
 
+The row counts below are **measured in pairs**, because sites 2 and 4 are what make
+1 and 3 correct — adding either alone moves plane hashes, so neither has a row count
+of its own:
+
 | # | site | what was missing | rows |
 |---|---|---|---|
-| 1 | `UpdateAccessUnit` (`decoder_core.cpp:1454`) | the whole "mosaic avoidance" block: an AU with no IDR while waiting for a key frame is `dsRefLost` | ~200 |
-| 2 | `DecodeFrameConstruction` (`decoder_core.cpp:60`) | the clear of `bParamSetsLostFlag` — the port had taken the **non-`LONG_TERM_REF` line** of the `#ifdef`, clearing `bReferenceLostAtT0Flag`, which has no reader | (gates 1) |
-| 3 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2675`) | subclause 8.2.5.2, gaps in `frame_num` → `dsRefLost` | ~156 |
-| 4 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2864`) | "need update frame_num due current frame is well decoded" — the `iPrevFrameNum` writer on the *ordinary* path; the port had only `CheckAndFinishLastPic`'s | (gates 3) |
+| 1 | `UpdateAccessUnit` (`decoder_core.cpp:1454`) | the whole "mosaic avoidance" block: an AU with no IDR while waiting for a key frame is `dsRefLost` | **211** |
+| 2 | `DecodeFrameConstruction` (`decoder_core.cpp:60`) | the clear of `bParamSetsLostFlag` — the port had taken the **non-`LONG_TERM_REF` line** of the `#ifdef`, clearing `bReferenceLostAtT0Flag`, which has no reader | (with 1: 399 → 188) |
+| 3 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2675`) | subclause 8.2.5.2, gaps in `frame_num` → `dsRefLost` | **129** |
+| 4 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2864`) | "need update frame_num due current frame is well decoded" — the `iPrevFrameNum` writer on the *ordinary* path; the port had only `CheckAndFinishLastPic`'s | (with 3: 188 → 59) |
+| 5 | `WelsDecodeBs` (`decoder.cpp:874`) | the four reserved zero bytes, and the `continue` on an empty NAL that has no C++ counterpart | **37** (59 → 22) |
 
 `dsRefLost` had **no producer** in the port that the corpus could reach: one
 `iErrorCode |= dsRefLost` against the C++'s four.
