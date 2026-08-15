@@ -9226,3 +9226,117 @@ threading, F37 per its record.
 compares the port against its own previous output, so it can see change and never
 wrongness* — and four defects lived their entire lives behind it while it stayed
 green.
+
+## Phase 5, session T — the parity closure (2026-08-14)
+
+### Face 0 — F46 closed, and the brief's hypothesis was wrong in a useful way
+
+* **The falsification cost one command per side.** The C++'s own trace
+  (`DECODER_OPTION_TRACE_LEVEL`, so the reference dylib is never rebuilt) reports
+  `iTotalNumMbRec:0` on the 41-byte reproduction; so does the port. Neither enters
+  the concealment bracket the brief pointed at — and the port had already **set**
+  `dsDataErrorConcealed`: its `iErrorCode` reads `0x24`, the C++'s answer, one line
+  before the function returns `0x4`.
+* **T5.T1** (`252650aa`). `DECODING_STATE` is a **bit set** that the C header
+  declares as an `enum`. A Rust `enum` cannot hold `dsBitstreamError |
+  dsDataErrorConcealed`, so the port collapsed the accumulator to its first set bit
+  in a priority order that puts `dsBitstreamError` first — which *is* F46's 71-row
+  pair. It is a `#[repr(transparent)]` newtype now. Codes **1142/1176 → 1919/399**.
+* **T5.T2** (`cd6a8a51`). With the accumulator surviving the return, what it holds
+  became measurable and five sites were missing: `UpdateAccessUnit`'s
+  mosaic-avoidance block — **`dsRefLost` had one producer against the C++'s four** —
+  the clear of `bParamSetsLostFlag` (the port had taken the **non-`LONG_TERM_REF`
+  side of the `#ifdef`**), 8.2.5.2's frame-gap check, the `iPrevFrameNum` writer on
+  the ordinary path, and the **four reserved zero bytes** written before every
+  `ParseNalHeader` — which are both a zero-length NAL's header byte and F4/P6's
+  guard bytes, and without them a truncated SPS parsed off the *previous* NAL's
+  data. **1919/399 → 2259/59 → 2296/22.**
+* **T5.T3** (`23bdbe1e`). The last 22 were **two `if` arms in the wrong order**: the
+  C++ tolerates exactly one `ParseVui` failure and propagates the rest; the port did
+  the opposite, so it accepted a truncated SPS the C++ rejects. **2318 / 0.**
+* **The lesson.** `dsRefLost` is *read* as well as reported (`mv_pred.cpp:1161`,
+  `rec_mb.cpp:258`), so each of the two `dsRefLost` sites moved plane hashes when
+  added alone — and the two sites that repair them were found by the output-column
+  guard, not by reading. *A partial state machine reads as a permanent alarm.*
+
+### Face 1 — `CABA2_SVA_B`'s 12 rows: confirmed, by a multiset
+
+* **T5.T4** (`7d9d5d82`, `f3444e9d`). The settling test is not a trace. Hash every
+  emitted frame **individually** on both sides: a decode difference leaves a frame
+  without a counterpart, a reordering leaves permutations. All twelve rows are
+  permutations — identical multisets, one adjacent pair swapped — with exactly one
+  `uiDecodingTimeStamp` tie each (at `bytes=2284`, POC 4 and POC 2 both at `dts` 5).
+  That is the tie-break `test_scalinglist_jm` documents, and the JVT gold for this
+  same stream agrees with the port's direction.
+* Recorded, not fixed, and **generated into the golden's header**, so
+  `UPDATE_MALFORMED_GOLDEN=1` rewrites the annotation instead of dropping it.
+* The scratch instrument face 0 needed five times became `examples/portref.rs` —
+  `ecref`'s port-side counterpart, per-frame hashes included. It went in as a
+  `#[test]` by accident and was moved out: it asserts nothing, and it had taken the
+  ratcheted counts to 483/477.
+
+### Face 2 — the corpus statement
+
+**Against the C++ decoder via `ecref`, on the malformed corpus's 2318 truncation
+rows across thirteen streams: codes 2318 agree / 0 differ, output 2306 agree / 12
+differ.** Every stream is exact on every row's `DECODING_STATE`. Twelve of thirteen
+are exact on frame count, dimensions and plane hash for every row; the thirteenth's
+twelve are `CABA2_SVA_B`'s confirmed reordering tie-break — byte-identical frames in
+a different order. Conformance 60/60 asset rows, 16/16 e2e rows, goldens unmoved.
+
+**What the statement does not cover, stated rather than left to be inferred: the
+corpus's other 389 rows — 14%, the header-corruption, emulation-prevention,
+synthetic-tail and raw-feed families — build their bytes inside the Rust harness, so
+`ecref` cannot replay them and they are still pinned against the port's own previous
+output.** That is precisely the blindness F43–F47 lived behind. Closing it means
+teaching `ecref` to take a byte blob rather than a truncation length, and it is the
+instrument item in the hand-off.
+
+### Numbers, and one miss that is a gate-design fact
+
+Decoder `raw_ptr` **980, unmoved**, and every ratchet metric with it. **Session T
+closed no W-item, by direction** — D-par-1 defers W6/W7 — and the instrument counts
+pointer *types written* (S16), so it has nothing to say about whether the decoder
+returns the code the C++ returns. Said plainly rather than dressed up, per
+phase5.md's anti-circles contract. The session's metric is the corpus one above.
+
+**The miss.** The first `exit` battery returned `FAIL (1)` and it was not a test:
+`decode_1080p_bench` did not **compile**, because T5.T1's public type change reached
+`benches/` and **`cargo test` does not build benches** — so the per-commit gate,
+which is `cargo test` + ratchet + census under D-gate-1, cannot see a public type
+change break a bench. Three casts (T5.T5, `2e7b31fc`); the bench is bit-identical
+again. The general form: *the per-commit gate compiles a subset of the targets, so a
+change to a **public** type needs `cargo build --all-targets` at the face, not a
+battery at the close.* Five commits of this session touched a public type and none
+of them would have caught it.
+
+### Hand-off: Phase 5, session U — W6 + W7 + W8 whole, and the phase close
+
+**The phase stays open, and for the same reason it did after S**: W6 and W7 carry
+exit conditions 1–3 and are the safety refactoring D-par-1 deferred. What T removes
+from U's plate is the parity work — it is done and measured, and nothing in it is
+half-landed.
+
+1. **W8's perf adjudication — the D-gate-1 bill, still untouched and now twice
+   postponed.** Session N's stashed binaries (`.perfpair/n_base|n_mid|n_head`), the
+   `NonZeroU32` niche verdict (hypothesis at `perf_baseline.md:1755`, never built),
+   the D-gate-1 window as spans, 3-pair + day-two per S2b, and the stop-line verdict
+   against ≈+23% from cumulative ≈+21.6–21.9% at N. `perfpair.py` is the instrument
+   and the stashes exist. **One new input**: T5.T2 added five sites to the decoder's
+   *error* paths, all outside the per-macroblock loop, so the expectation is no
+   measurable decode cost — an expectation, labelled as one per S33, not a result.
+2. **W6 and W7.** W6's design is settled in writing (phase5.md §S-settlements, the
+   per-slice view struct); W7 has one item done (`find_shadowing_stubs.py`, clean)
+   and the rest untouched — the straggler sweep, the F40-class element-vs-byte sweep,
+   `SHIM(` 52 → 1 survivor, `deny(unsafe_code)` per module (**0 modules today**).
+3. **The instrument gap T measured and did not close.** 389 of the malformed
+   corpus's 2707 rows (14%) have **no C++ referee**: `ecref` replays a truncation
+   *length*, and the header-corruption, emulation-prevention, synthetic-tail and
+   raw-feed families build their bytes inside the Rust harness. They are pinned
+   against the port's own previous output — the exact shape of the blindness F43–F47
+   lived behind. `ecref` taking a byte blob on stdin is the cheap fix.
+4. **A gate hole with a one-line fix.** The per-commit gate cannot see a public type
+   change break a bench or an example, because `cargo test` builds neither. Either
+   add `cargo build --all-targets` to `gates.sh commit` (~seconds) or make it a rule
+   at the face; T5.T5 is the cost of not having it.
+5. **`phase6.md` stays deliberately absent** until the phase actually closes (S19).
