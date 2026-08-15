@@ -1041,7 +1041,16 @@ pub unsafe fn DecodeFrameConstruction(
         if !pSps.is_null() {
             (*pCtx).sFrameCrop = (*pSps).sFrameCrop;
         }
-        (*pCtx).bReferenceLostAtT0Flag = false;
+        // **F46, T5.T2 — the wrong side of the `#ifdef`.** `LONG_TERM_REF` is defined
+        // (`decoder_context.h:67`), so `decoder_core.cpp:60` clears
+        // **`bParamSetsLostFlag`** here and leaves `bReferenceLostAtT0Flag` alone; the
+        // port took the `#else` line. It cost nothing while nothing read the flag —
+        // `bReferenceLostAtT0Flag` has no reader in either tree under this `#ifdef` —
+        // and it costs a return code now that `UpdateAccessUnit`'s mosaic-avoidance
+        // block reads `bParamSetsLostFlag`: without the clear the port would raise
+        // `dsRefLost` on every non-IDR access unit for the life of the decoder, which
+        // is not "references lost", it is "we have never seen a key frame".
+        (*pCtx).bParamSetsLostFlag = false;
         if (*pCtx).iTotalNumMbRec == kiTotalNumMbInCurLayer {
             (*pCtx).bPrintFrameErrorTraceFlag = true;
             (*pCtx).iIgnoredErrorInfoPacketCount = 0;
@@ -2728,6 +2737,58 @@ pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
     if let Some(dq_id) = dq_id {
         (*pCtx).uiTargetDqId = dq_id;
     }
+
+    // **F46, T5.T2 — the mosaic-avoidance block, never ported** (`decoder_core.cpp:1454`).
+    // "Added for mosaic avoidance, 11/19/2009": an access unit that arrives while the
+    // decoder is still waiting for a key frame, and that contains no IDR, means the
+    // references this AU predicts from are gone — `dsRefLost`. The port stopped at the
+    // three assignments above, so **the whole block was absent** and `dsRefLost` had no
+    // producer anywhere in the decoder: `iErrorCode |= dsRefLost` appears once
+    // (`HandleReferenceLost`) against the C++'s four, and this is the site the corpus
+    // reaches. 356 of the 399 truncation rows still disagreeing after T5.T1 are this
+    // one bit on one call.
+    //
+    // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is
+    // `bParamSetsLostFlag || bNewSeqBegin`. Both trees leave `bParamSetsLostFlag` true
+    // from `WelsOpenDecoder` on every non-parse-only path — the only clear is inside
+    // `DecodeFrameConstruction`'s `bParseOnly` arm — so the guard is not what was
+    // missing and is written here as the C++ writes it rather than folded away.
+    let waiting_for_key = (*pCtx).bParamSetsLostFlag || (*pCtx).bNewSeqBegin;
+    if waiting_for_key {
+        let mut uiActualIdx = 0u32;
+        while uiActualIdx < pCurAu.uiActualUnitsNum {
+            let nal = pCurAu.nal(uiActualIdx as usize);
+            if nal.is_null() {
+                break;
+            }
+            let hdr = &(*nal).sNalHeaderExt;
+            if hdr.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+                || hdr.bIdrFlag
+            {
+                break;
+            }
+            uiActualIdx += 1;
+        }
+        if uiActualIdx == pCurAu.uiActualUnitsNum {
+            // No IDR in this access unit.
+            if !(*pCtx).pDecoderStatistics.is_null() {
+                (*(*pCtx).pDecoderStatistics).uiIDRLostNum += 1;
+            }
+            if !(*pCtx).bParamSetsLostFlag {
+                WelsLog(
+                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                    WELS_LOG_WARNING,
+                    "UpdateAccessUnit():::::Key frame lost.....CAN NOT find IDR from current AU.",
+                );
+            }
+            (*pCtx).iErrorCode |= dsRefLost;
+            if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+                (*pCtx).iErrorCode |= dsNoParamSets;
+                return dsNoParamSets;
+            }
+        }
+    }
+
     ERR_NONE
 }
 
@@ -3354,9 +3415,17 @@ pub unsafe fn WelsDecodeBs(
             } else if payload_slice.starts_with(&[0, 0, 1]) {
                 payload_slice = &payload_slice[3..];
             }
-            if payload_slice.is_empty() {
-                continue;
-            }
+            // **F46, T5.T3 — an empty NAL is a NAL.** This used to `continue`. The C++
+            // has no such skip: a start code with nothing behind it reaches
+            // `ParseNalHeader` with `iSrcRbspLen == 0`, whose header byte then reads
+            // out of the **four reserved zero bytes** the scanner writes at the write
+            // position before every parse (`decoder.cpp:875`, `:874`). That is
+            // `nal_unit_type` 0 — `NAL_UNIT_UNSPEC_0` — with no SPS ahead of it, so
+            // the C++ answers `dsNoParamSets` where the port answered `dsErrorFree`.
+            // The four zeroes are written below rather than assumed: they are also the
+            // guard bytes the refill predicate is allowed to touch past an RBSP end
+            // (F4/P6), and `sRawData` is reused across access units, so "the buffer
+            // starts zeroed" stops being true after the first rewind.
 
             // Copy the NAL into the persistent raw-data buffer, stripping
             // emulation-prevention bytes (00 00 03 -> 00 00), as the C++
@@ -3387,6 +3456,7 @@ pub unsafe fn WelsDecodeBs(
                 }
             }
             let (payload_start, payload_len) = (*pCtx).sRawData.append_ebsp_stripped(payload_slice);
+            (*pCtx).sRawData.zero_reserved(payload_start + payload_len);
 
             let mut consumed_bytes = 0i32;
             let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
@@ -3569,6 +3639,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     let kuiDependencyIdMax = (kuiTargetLayerDqId & 0x7F) >> 4;
     let mut iLastIdD: i16 = -1;
     let mut iLastIdQ: i16 = -1;
+    let mut iLastSliceFrameNum: i32 = 0;
     (*pCtx).uiNalRefIdc = 0;
     let mut bFreshSliceAvailable;
 
@@ -3680,6 +3751,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
             let pShExt: PSliceHeaderExt =
                 std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt);
+            // The C++ declares `pSh` at function scope, so after the slice loop it
+            // still names the *last* slice header — which is the one the frame_num
+            // update below wants. Here `pSh` is a per-iteration derivation (T5.O4's
+            // rule: nothing about the access unit survives a call back into the
+            // context), so the one field that outlives the iteration is carried out
+            // by value rather than the pointer by reference.
+            iLastSliceFrameNum = (*pSh).iFrameNum;
             (*pCtx).bRPLRError = false;
             let bReconstructSlice = CheckSliceNeedReconstruct((*pNalCur).sNalHeaderExt.uiLayerDqId, kuiTargetLayerDqId);
 
@@ -3773,6 +3851,52 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
             if iLastIdD < 0 || iLastIdD == iCurrIdD {
                 InitDqLayerInfo(pCtx, dq_cur, &mut pLayerInfo, pNalCur);
+
+                // **F46, T5.T2 — subclause 8.2.5.2, gaps in `frame_num`**
+                // (`decoder_core.cpp:2675`), the second of the C++'s four `dsRefLost`
+                // sites and also never ported. A non-IDR slice whose `frame_num` is
+                // neither the previous one nor its successor means frames went missing
+                // in transmission, so the pictures this one predicts from are gone.
+                // This is the site `BA_MW_D_P_LOST` reaches — the stream is a lost P
+                // frame, which is precisely a `frame_num` gap.
+                let dq_sps = sps_of(pCtx, (*dq_cur).sLayerInfo.sps_ref);
+                if !dq_sps.is_null() && !(*dq_sps).bGapsInFrameNumValueAllowedFlag {
+                    let hdr_ext = &(*dq_cur).sLayerInfo.sNalHeaderExt;
+                    let kbIdrFlag = hdr_ext.bIdrFlag
+                        || hdr_ext.sNalUnitHeader.eNalUnitType
+                            == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+                    // `pLastThreadCtx` is the multi-threaded arm's `GetPrevFrameNum`
+                    // detour; `GetThreadCount` is identically 0 here (F36 owns the
+                    // threading gap), so the C++'s single-threaded read is the whole
+                    // of it.
+                    let iPrevFrameNum = if (*pCtx).pLastDecPicInfo.is_null() {
+                        -1
+                    } else {
+                        (*(*pCtx).pLastDecPicInfo).iPrevFrameNum
+                    };
+                    let wrap = (1i32 << (*dq_sps).uiLog2MaxFrameNum) - 1;
+                    if !kbIdrFlag
+                        && (*pSh).iFrameNum != iPrevFrameNum
+                        && (*pSh).iFrameNum != ((iPrevFrameNum + 1) & wrap)
+                    {
+                        WelsLog(
+                            std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                            WELS_LOG_WARNING,
+                            "referencing pictures lost due frame gaps exist",
+                        );
+                        bAllRefComplete = false;
+                        (*pCtx).iErrorCode |= dsRefLost;
+                        if !(*pCtx).pParam.is_null()
+                            && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE
+                        {
+                            (*pCtx).bParamSetsLostFlag = true;
+                            return GENERATE_ERROR_NO(
+                                ERR_LEVEL_SLICE_HEADER,
+                                ERR_INFO_REFERENCE_PIC_LOST,
+                            );
+                        }
+                    }
+                }
 
                 if iCurrIdD == (kuiDependencyIdMax as i16) && iCurrIdQ == (BASE_QUALITY_ID as i16) && isNewFrame {
                     iRet = InitRefPicList(pCtx, dq_cur, (*pCtx).uiNalRefIdc, (*pSh).iPicOrderCntLsb);
@@ -3936,6 +4060,30 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 }
             }
             (*pCtx).pDec = None;
+
+            // **F46, T5.T2 — "need update frame_num due current frame is well
+            // decoded"** (`decoder_core.cpp:2864`). The port had the *other* writer of
+            // `iPrevFrameNum` — `CheckAndFinishLastPic`'s, off `sLastSliceHeader` — and
+            // not this one, which is the writer on the ordinary path where an access
+            // unit decodes to completion. With only half the state machine the frame
+            // number the gap test compares against went stale after the first frame,
+            // so the gap test above would report a gap on **every** subsequent access
+            // unit rather than on the one that actually skipped a frame.
+            let pStartNal = match cur_au(pCtx) {
+                Some(au) if (au.uiStartPos as usize) < au.count() as usize => {
+                    au.nal(au.uiStartPos as usize)
+                }
+                _ => std::ptr::null_mut(),
+            };
+            if !pStartNal.is_null()
+                && (*pStartNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0
+                && !(*pCtx).pLastDecPicInfo.is_null()
+            {
+                (*(*pCtx).pLastDecPicInfo).iPrevFrameNum = iLastSliceFrameNum;
+            }
+            if !(*pCtx).pLastDecPicInfo.is_null() && (*(*pCtx).pLastDecPicInfo).bLastHasMmco5 {
+                (*(*pCtx).pLastDecPicInfo).iPrevFrameNum = 0;
+            }
         }
 
         if pNalCur.is_null() {

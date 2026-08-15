@@ -198,6 +198,23 @@ impl RawDataBuffer {
         (start, dst_len)
     }
 
+    /// Zeroes the four reserved bytes at `at` — `pDstNal[iDstIdx .. iDstIdx+4] = 0`,
+    /// which `WelsDecodeBs` writes before **every** `ParseNalHeader` call
+    /// (`decoder.cpp:874` and `:875`). They are the guard bytes a refill is allowed to
+    /// load past an RBSP end (F4/P6) *and* the bytes a zero-length NAL's header is read
+    /// out of, which is what made their absence observable (F46, T5.T3).
+    ///
+    /// Short-buffer safety: the caller has already ensured `remaining() >= len + 4`
+    /// before appending, so `at + 4 <= len()` holds; the clamp keeps a violated
+    /// contract from panicking where the C wrote through a raw pointer.
+    #[inline]
+    pub fn zero_reserved(&mut self, at: usize) {
+        let end = (at + 4).min(self.buf.len());
+        if at < end {
+            self.buf[at..end].fill(0);
+        }
+    }
+
     /// The whole backing store.
     #[inline]
     pub fn bytes(&self) -> &[u8] {

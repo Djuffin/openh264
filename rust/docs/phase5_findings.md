@@ -1980,6 +1980,52 @@ tables before and after, which is the guard that the fix touched codes only.
 `narrow_16x16` goes 124/76 → 195/**5**: the 71-row pair, gone, leaving exactly the
 two pairs this record already scoped.
 
+### Behind the collapse: four unported error-signal sites, and a guard byte (session T, T5.T2)
+
+With the accumulator surviving the return, what the accumulator *contains* became
+measurable for the first time, and 399 rows said it was short. Re-scoped, they were
+four sites — each a piece of the C++ that the port simply does not have, each found
+by reading the C++ beside the port rather than by another hypothesis:
+
+| # | site | what was missing | rows |
+|---|---|---|---|
+| 1 | `UpdateAccessUnit` (`decoder_core.cpp:1454`) | the whole "mosaic avoidance" block: an AU with no IDR while waiting for a key frame is `dsRefLost` | ~200 |
+| 2 | `DecodeFrameConstruction` (`decoder_core.cpp:60`) | the clear of `bParamSetsLostFlag` — the port had taken the **non-`LONG_TERM_REF` line** of the `#ifdef`, clearing `bReferenceLostAtT0Flag`, which has no reader | (gates 1) |
+| 3 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2675`) | subclause 8.2.5.2, gaps in `frame_num` → `dsRefLost` | ~156 |
+| 4 | `DecodeCurrentAccessUnit` (`decoder_core.cpp:2864`) | "need update frame_num due current frame is well decoded" — the `iPrevFrameNum` writer on the *ordinary* path; the port had only `CheckAndFinishLastPic`'s | (gates 3) |
+
+`dsRefLost` had **no producer** in the port that the corpus could reach: one
+`iErrorCode |= dsRefLost` against the C++'s four.
+
+**Sites 2 and 4 are the interesting half, and both were found by the gate rather
+than by reading.** Adding site 1 alone moved *plane hashes* on `CABA3_SVA_B` —
+`dsRefLost` is not only reported, it is **read** (`mv_pred.cpp:1161`,
+`rec_mb.cpp:258`), so over-raising it changes decoding. Site 2 is why: without the
+clear, the port declared "we have never seen a key frame" forever. Adding site 3
+alone moved hashes again, and site 4 is why: with only half the `iPrevFrameNum`
+state machine the comparand went stale after the first frame, so every later access
+unit looked like a gap. *A partial state machine reads as a permanent alarm* — and
+the output-column guard is what caught both within one command.
+
+**And the last pair was not what it looked like.** `0x0 → 0x4` and `0x0 → 0x10` had
+been scoped here as two causes, "`dsBitstreamError` missing" and "`dsNoParamSets`
+missing". They are one, and it is neither: `WelsDecodeBs` writes **four reserved
+zero bytes** at the raw buffer's write position before every `ParseNalHeader`
+(`decoder.cpp:874`), and the port never wrote them. Those bytes are (a) the header
+byte of a **zero-length NAL** — which the port skipped outright with an
+`if payload_slice.is_empty() { continue; }` the C++ has no equivalent of, hence the
+missing `dsNoParamSets` — and (b) the **guard bytes past an RBSP end** that F4/P6
+established the refill predicate is allowed to load. `sRawData` is reused across
+access units, so after the first rewind those bytes hold the *previous* NAL's
+content, and a truncated SPS that should have run out of bits instead parsed
+successfully off stale data. That is why the port's `ParseSps` returned `ERR_NONE`
+at `narrow_16x16.264` truncated to 13 bytes where the C++'s failed, and why one
+four-byte `fill(0)` closed both pairs at once.
+
+**Measured after all five** (13 tables, 2318 rows): codes **1919 / 399 → 2259 / 59
+→ 2296 / 22**; output steady at 2306 agree / 12 differ throughout, and the
+output-column guard clean on the committed state.
+
 ### Why nothing saw it
 
 The malformed-parity table has recorded `ret_rle` since Phase 3 — the column is
