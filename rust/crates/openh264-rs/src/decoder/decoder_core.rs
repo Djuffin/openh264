@@ -826,7 +826,10 @@ pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, pCurDq: PDqLayer, bOutput
 
 #[inline]
 pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
-    crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, pCurDqLayer)
+    match pCurDqLayer.as_mut() {
+        Some(dq) => crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq),
+        None => ERR_NONE,
+    }
 }
 
 #[inline]
@@ -836,12 +839,18 @@ pub unsafe fn WelsDecodeSlice(
     bFreshSlice: bool,
     pCurNal: PNalUnit,
 ) -> i32 {
-    crate::decoder::decode_slice::WelsDecodeSlice(pCtx, pCurDqLayer, bFreshSlice, pCurNal)
+    match pCurDqLayer.as_mut() {
+        Some(dq) => crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal),
+        None => ERR_NONE,
+    }
 }
 
 #[inline]
 pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
-    crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, pCurDqLayer)
+    match pCurDqLayer.as_mut() {
+        Some(dq) => crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq),
+        None => ERR_NONE,
+    }
 }
 
 #[inline]
@@ -890,11 +899,13 @@ pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, i
 
 #[inline]
 pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
-    let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
-        pCtx,
-        pCurDqLayer,
-        pic_refs(pCtx),
-    );
+    if let Some(dq) = pCurDqLayer.as_mut() {
+        let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
+            pCtx,
+            dq,
+            pic_refs(pCtx),
+        );
+    }
 }
 
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
