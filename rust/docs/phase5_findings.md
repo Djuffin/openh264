@@ -2495,3 +2495,74 @@ No corpus stream carries a mid-sequence SPS together with FMO (session S built
 `make_fmo_asset.py` because no `res/` stream had more than one slice group at all),
 which is why the corpus reads **2690/17 output, 2707/0 codes — unchanged — after the
 fix**: the defect is real and the corpus cannot see it. The test is the instrument.
+
+---
+
+## F52 — a sixth F43-class stub: `CheckAccessUnitBoundaryExt` returned `true` unconditionally, and the F43 sweep could not see it
+
+*Phase 5 session X, at `1cbfbea5`. Fixed the commit it was found in (T5.X7).*
+
+`decoder_core.rs:1032` defined
+
+```rust
+#[inline]
+pub unsafe fn CheckAccessUnitBoundaryExt(
+    pLastNalHdr: *mut SNalUnitHeaderExt,
+    pCurNalHdr:  *mut SNalUnitHeaderExt,
+    pLastSh:     *mut SSliceHeader,
+    pCurSh:      *mut SSliceHeader,
+) -> bool {
+    true
+}
+```
+
+in the module that calls it. A local item beats every import, so
+`CheckAndFinishLastPic`'s access-unit boundary test read
+
+```rust
+bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0 && true
+```
+
+where `decoder_core.cpp` calls the function that compares **fifteen header fields**
+— temporal id, redundant-pic count, dependency and quality id, frame number, PPS id,
+SPS identity, field/bottom-field flags, `nal_ref_idc != 0`, IDR flag, IDR pic id, and
+the POC fields the SPS's `uiPocType` selects. The real 80-line implementation lives
+in `nalu.rs:896` and had **no caller at all**; `decoder_core.rs` never imported it.
+
+**This is F43's class exactly** — the fifth-and-sixth instance of "a stub shadowing a
+real implementation is invisible to every name-matching instrument" — and F43's own
+sweep, `tools/find_shadowing_stubs.py`, ran clean over it at session U and at session
+W. **The sweep was wrong, and the reason is a one-line off-by-a-brace**: it counted a
+function's statements as the lines between the `fn` line and the closing brace, so a
+four-parameter signature spread over six lines charged those six lines to the body. A
+stub whose entire body is `true` scored **6** and was classified `SUBSTANTIAL`, which
+is the class the filter uses for *real implementations* — so the stub was never
+compared against its own implementation and never printed. S33's corollary, one level
+up: an instrument that disagrees with a hand count is wrong until proven otherwise,
+and here nothing hand-counted it for two sessions.
+
+**Fix**: the stub is deleted, `CheckAndFinishLastPic` calls
+`nalu::CheckAccessUnitBoundaryExt`, and the sweep counts from the body's opening brace
+(`body_start`) rather than from the `fn` line. The repaired sweep reports **21**
+candidate names against 15, and the six new ones are all in `encoder/`, `processing/`
+and `common/` — none in `src/decoder/`, which is what closes this finding for Phase 5.
+The six are **not adjudicated here** (F12/P10 puts encoder sites outside this phase);
+they are named in phase5.md's open-findings list with Phase 6 as the owner:
+`ExecuteTasks`, `InitFrame`, `OnTaskStop`, `Uninit`, `WelsRcPostFrameSkipping`, and
+`push_back`.
+
+**Coverage** (F21's rule), and it is red under re-stubbing, **measured**:
+`check_access_unit_boundary_ext_says_no_boundary_when_nothing_differs` in `nalu.rs`
+asserts the `false` arm for two identical headers and the `true` arm for one differing
+field each in the NAL header and the slice header. With `if true { return true; }`
+prepended to the real body the test FAILS at the first assertion; with it removed it
+passes. It pins the arm the stub destroyed; it does not prove the *wiring*, which the
+compiler now does, there being exactly one such function.
+
+**What the fix moves: nothing measurable.** Sweeps 341/341 in both profiles, the 58
+conformance goldens unmoved, `cargo test` 483/477, and the malformed corpus refereed
+against the C++ decoder end to end at **2690/17 output, 2707/0 codes** — identical to
+session W's close, with the 17 the documented `CABA2_SVA_B` POC tie-break. So the
+defect is real and no stream this project owns distinguishes it: on every one of them
+the port's `iTotalNumMbRec != 0` and the C++'s fifteen comparisons agree. The test is
+the instrument, exactly as for F51.

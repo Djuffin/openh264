@@ -1028,15 +1028,18 @@ pub unsafe fn CopySpsPps(pSrcCtx: PWelsDecoderContext, pDstCtx: PWelsDecoderCont
 // structurally different type to reach them. `fmo.rs` is the resolution now.
 use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 
-#[inline]
-pub unsafe fn CheckAccessUnitBoundaryExt(
-    pLastNalHdr: *mut SNalUnitHeaderExt,
-    pCurNalHdr: *mut SNalUnitHeaderExt,
-    pLastSh: *mut SSliceHeader,
-    pCurSh: *mut SSliceHeader,
-) -> bool {
-    true
-}
+// **F52 (T5.X7): a sixth F43-class stub stood here** — `CheckAccessUnitBoundaryExt`
+// returning `true` unconditionally, in the module that calls it, shadowing the real
+// 80-line implementation in `nalu.rs` (which had **no caller at all**). A local item
+// beats every import, so `CheckAndFinishLastPic`'s access-unit boundary test read
+// `iTotalNumMbRec != 0 && true` where the C++ compares fifteen header fields.
+//
+// The F43 sweep (`tools/find_shadowing_stubs.py`) reported clean over this: it counts
+// a function's statements as the lines between the `fn` line and the closing brace,
+// so a **multi-line signature** is counted as statements and a four-parameter stub
+// scores 6 — `SUBSTANTIAL`, not `TRIVIAL`. The instrument is fixed with the finding
+// (S33's corollary: an instrument that disagrees with a hand count is wrong until
+// proven otherwise). Callers use `nalu.rs` directly.
 
 // Core Functions Implemented in `decoder_core.cpp`
 
@@ -4155,13 +4158,12 @@ pub unsafe fn CheckAndFinishLastPic(
         };
         if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
-                && CheckAccessUnitBoundaryExt(
-                    std::ptr::addr_of_mut!((*(*pCtx).pLastDecPicInfo).sLastNalHdrExt),
-                    std::ptr::addr_of_mut!((*pCurNal).sNalHeaderExt),
-                    std::ptr::addr_of_mut!((*(*pCtx).pLastDecPicInfo).sLastSliceHeader),
-                    std::ptr::addr_of_mut!(
-                        (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader
-                    ),
+                && crate::decoder::nalu::CheckAccessUnitBoundaryExt(
+                    pCtx,
+                    &(*(*pCtx).pLastDecPicInfo).sLastNalHdrExt,
+                    &(*pCurNal).sNalHeaderExt,
+                    &(*(*pCtx).pLastDecPicInfo).sLastSliceHeader,
+                    &(*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader,
                 );
         }
     } else {
