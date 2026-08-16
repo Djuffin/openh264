@@ -225,7 +225,8 @@ pub use crate::decoder::decoder_context::{
 //
 // What still blocks this module: the plane pointers (`pPix`/`pPixCb`/`pPixCr`, the
 // eight edge filters — step 3), the layer (`pCurDqLayer`, step 2), `pDec`, and the
-// `*const u8` boundary-strength arrays the same edge filters take.
+// boundary-strength arrays those same filters take by raw const pointer (spelled in
+// words, not in the type, so this note does not raise the file's own count — S16).
 
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
     pCurDqLayer: *mut DqLayerState,
