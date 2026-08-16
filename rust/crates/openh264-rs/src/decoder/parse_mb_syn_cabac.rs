@@ -3063,7 +3063,7 @@ pub unsafe fn ParseResidualBlockCabac(
 
 pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> i32 {
     let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let pBsAux = &mut *crate::decoder::bit_stream::slice_bit_reader(pCtx);
+    let pBsAux = &mut *crate::decoder::decoder_context::slice_bit_reader(pCtx);
     let iDstStrideLuma = (*pDec).linesize(0);
     let iDstStrideChroma = (*pDec).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;

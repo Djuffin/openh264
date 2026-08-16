@@ -863,7 +863,7 @@ pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
 ///
 /// `SHIM(phase5)`, and **the marker's reason changed at T5.M3 rather than expiring**:
 /// the layer's `pBitStringAux` mirror it used to walk is deleted, so what it walks now
-/// is [`slice_bit_reader`](crate::decoder::bit_stream::slice_bit_reader) — one raw
+/// is [`slice_bit_reader`](crate::decoder::decoder_context::slice_bit_reader) — one raw
 /// derivation from `pCtx.pNalCur` instead of one from a cached duplicate. It retires
 /// when 5.6 converts `parse_mb_syn_cabac.rs`'s 18 callers, not before, and saying so
 /// beats retiring a marker whose pointer is still there.
@@ -876,7 +876,7 @@ pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
 pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
     unsafe {
         let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
-        raw.rbsp_window(&*crate::decoder::bit_stream::slice_bit_reader(pCtx))
+        raw.rbsp_window(&*crate::decoder::decoder_context::slice_bit_reader(pCtx))
     }
 }
 

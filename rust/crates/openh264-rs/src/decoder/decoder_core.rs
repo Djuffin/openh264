@@ -3800,7 +3800,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // **T5.M3 — where `dq_cur->pBitStringAux` was written.** The layer mirrored
             // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` here and every reader in
             // `decode_slice.rs` and `parse_mb_syn_cabac.rs` went through the mirror;
-            // `bit_stream::slice_bit_reader` derives it from `pNalCur` instead, so the
+            // `decoder_context::slice_bit_reader` derives it from `pNalCur` instead, so the
             // one thing that has to be true is that **this** field is as fresh as the
             // mirror was.
             //

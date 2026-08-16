@@ -1,10 +1,23 @@
+#![deny(unsafe_code)]
+// Phase 5 W7/W6 (T5.V3). Two removals got this module here, and neither was a
+// conversion:
+//
+//   * `RBSP2EBSP` was a **raw duplicate of the safe helper beside it**
+//     (`rbsp_to_ebsp`, same file, same semantics), with no production caller and one
+//     test — Phase 2's straggler-sweep shape (S18), found where the sweep looks: at
+//     the definitions, not at the call sites. Deleted; the test calls the helper and
+//     now also checks its byte count.
+//   * `slice_bit_reader` moved to `decoder_context.rs`, which is what it always was:
+//     a context accessor reaching through `pCtx` to a NAL field, sitting in the
+//     module that holds the cursor types and their arithmetic.
+//
+// Raw pointer *types* do not trip this lint and one remains in prose (S16's floor).
 #![allow(
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 //! Decoder bitstream reading and RBSP/EBSP serialization utilities.
@@ -300,34 +313,6 @@ impl BsReader {
     }
 }
 
-/// The bit reader for the slice being parsed — **the one route to it** (T5.M3).
-///
-/// The NAL unit owns its reader (`sNalData.sVclNal.sSliceBitsRead`, initialized by
-/// `DecInitBits` at parse time) and nothing else does. `DqLayerState::pBitStringAux`
-/// used to mirror the address beside its owner, which is the class §2 keeps naming;
-/// this replaces the mirror with a derivation. (`SDeblockingFilter.pCsData` was the
-/// last one left and died the same way at T5.N3 — with nothing, because its readers
-/// already had the layer that carries the picture.)
-///
-/// `pCtx.pNalCur` is re-pointed at **every** slice NAL, in the same statement of
-/// `DecodeCurrentAccessUnit` that used to re-point the layer's mirror, so this is
-/// exactly as fresh as the mirror was — see the note there for why it had to move.
-///
-/// **S29**: `addr_of_mut!` all the way down, so no `&mut SNalUnit` is created to
-/// retag and the returned pointer carries the NAL allocation's provenance, not a
-/// field borrow's.
-///
-/// # Safety
-/// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
-/// the NAL being parsed — the precondition every caller already relies on, and the
-/// same one the deleted field carried.
-#[inline(always)]
-pub unsafe fn slice_bit_reader(
-    pCtx: *mut crate::decoder::decoder_context::SWelsDecoderContext,
-) -> *mut BsReader {
-    std::ptr::addr_of_mut!((*(*pCtx).pNalCur).sNalData.sVclNal.sSliceBitsRead)
-}
-
 /// Initializes bitstream reading registers and performs buffer boundary checks.
 ///
 /// Matches `int32_t InitReadBits (PBitStringAux pBitString, intX_t iEndOffset)` in
@@ -358,45 +343,6 @@ pub fn DecInitBits(pReader: &mut BsReader, raw: &RawDataBuffer, start: usize, ki
             ERR_NONE
         }
         Err(err) => err.0,
-    }
-}
-
-/// Converts Raw Byte Sequence Payload (RBSP) to Encapsulated Byte Sequence Payload (EBSP)
-/// by injecting emulation prevention bytes (`0x03`) after any sequence of two consecutive `0x00`
-/// bytes followed by a byte `<= 3`.
-///
-/// Matches `void RBSP2EBSP (uint8_t* pDstBuf, uint8_t* pSrcBuf, const int32_t kiSize)` in `bit_stream.cpp`.
-///
-/// # Safety
-/// `pDstBuf` and `pSrcBuf` must point to valid memory buffers. `pDstBuf` must be large enough
-/// to hold the resulting EBSP data.
-pub unsafe fn RBSP2EBSP(pDstBuf: *mut u8, pSrcBuf: *const u8, kiSize: i32) {
-    if pDstBuf.is_null() || pSrcBuf.is_null() || kiSize <= 0 {
-        return;
-    }
-    unsafe {
-        let mut pSrcPointer = pSrcBuf;
-        let mut pDstPointer = pDstBuf;
-        let pSrcEnd = pSrcBuf.offset(kiSize as isize);
-        let mut iZeroCount: i32 = 0;
-
-        while pSrcPointer < pSrcEnd {
-            let val = *pSrcPointer;
-            if iZeroCount == 2 && val <= 3 {
-                // add the emulation prevention code 0x03
-                *pDstPointer = 3;
-                pDstPointer = pDstPointer.add(1);
-                iZeroCount = 0;
-            }
-            if val == 0 {
-                iZeroCount += 1;
-            } else {
-                iZeroCount = 0;
-            }
-            *pDstPointer = val;
-            pDstPointer = pDstPointer.add(1);
-            pSrcPointer = pSrcPointer.add(1);
-        }
     }
 }
 
@@ -550,9 +496,8 @@ mod tests {
         let src: [u8; 6] = [0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         let mut dst: [u8; 10] = [0; 10];
 
-        unsafe {
-            RBSP2EBSP(dst.as_mut_ptr(), src.as_ptr(), src.len() as i32);
-        }
+        let written = rbsp_to_ebsp(&src, &mut dst);
+        assert_eq!(written, 8);
 
         let expected = [0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x03, 0x00];
         assert_eq!(&dst[0..8], &expected);

@@ -1,10 +1,19 @@
+#![deny(unsafe_code)]
+// Phase 5 W7/W6 (T5.V3). The module holds none of the three forms the lint denies.
+// Getting here took one signature and five deletions: `BsGetTrailingBits` was the
+// file's only `unsafe fn` and its raw parameter documented a caller defect that T3.3
+// had already fixed, and the five `unsafe` blocks were **vestigial** — every call
+// inside them (`DecInitBits`, `BsGetUe`, `BsGetSe`, `BsGetTe0`) had become a safe fn
+// under it, and `unused_unsafe` was allowed file-wide, so nothing said so.
+//
+// That `allow` is gone too: a module that denies unsafe cannot have a stale one, and
+// the lint is the instrument that keeps the deletions from growing back.
 #![allow(
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 //! Exponential-Golomb entropy decoding and bitstream parsing routines.
@@ -249,13 +258,20 @@ pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) ->
 /// Counts the number of trailing zero bits following the `rbsp_stop_one_bit` in `pBuf`.
 ///
 /// Matches `int32_t BsGetTrailingBits (uint8_t* pBuf)` in `dec_golomb.h`. The body is
-/// [`crate::safe::bits::trailing_bits`]; the pointer stays in the signature because the
-/// *callers* are what is wrong here — `nalu.rs:675` and `:762` index one byte before
-/// this buffer when the NAL strips to nothing
-/// ([`phase3_findings.md`](../../../docs/phase3_findings.md) §F15), and T3.3 fixes them.
+/// [`crate::safe::bits::trailing_bits`].
+///
+/// **The pointer is gone and the reason it was there is gone with it** (T5.V3). The
+/// signature kept `*const u8` to document a *caller* defect — `nalu.rs:675` and `:762`
+/// indexed one byte before this buffer when the NAL stripped to nothing
+/// ([`phase3_findings.md`](../../../docs/phase3_findings.md) §F15) — and T3.3 fixed
+/// those callers, after which nothing in production called this at all. What kept it
+/// alive is `tests/safe_bits_differential.rs`, where it is the table-driven *old* side
+/// of the differential against [`crate::safe::bits::trailing_bits`]; both call sites
+/// already spelled the argument `&byte`, so the reference form is the same text at
+/// every one of them.
 #[inline(always)]
-pub unsafe fn BsGetTrailingBits(pBuf: *const u8) -> i32 {
-    unsafe { crate::safe::bits::trailing_bits(*pBuf) }
+pub fn BsGetTrailingBits(pBuf: &u8) -> i32 {
+    crate::safe::bits::trailing_bits(*pBuf)
 }
 
 /// Checks whether additional RBSP syntax elements remain before `rbsp_trailing_bits()`.
@@ -355,15 +371,13 @@ mod tests {
         let buf = with_slop(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = BsReader::default();
 
-        unsafe {
-            let err = DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
-            assert_eq!(err, ERR_NONE);
+        let err = DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
+        assert_eq!(err, ERR_NONE);
 
-            let mut code: u32 = 999;
-            let ret = BsGetUe(&buf, &mut bs.cursor, &mut code);
-            assert_eq!(ret, ERR_NONE as u32);
-            assert_eq!(code, 0);
-        }
+        let mut code: u32 = 999;
+        let ret = BsGetUe(&buf, &mut bs.cursor, &mut code);
+        assert_eq!(ret, ERR_NONE as u32);
+        assert_eq!(code, 0);
     }
 
     #[test]
@@ -373,19 +387,17 @@ mod tests {
         let buf = with_slop(&[0b01001100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = BsReader::default();
 
-        unsafe {
-            DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
+        DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
 
-            let mut se_code1: i32 = 0;
-            let ret1 = BsGetSe(&buf, &mut bs.cursor, &mut se_code1);
-            assert_eq!(ret1, ERR_NONE);
-            assert_eq!(se_code1, 1);
+        let mut se_code1: i32 = 0;
+        let ret1 = BsGetSe(&buf, &mut bs.cursor, &mut se_code1);
+        assert_eq!(ret1, ERR_NONE);
+        assert_eq!(se_code1, 1);
 
-            let mut se_code2: i32 = 0;
-            let ret2 = BsGetSe(&buf, &mut bs.cursor, &mut se_code2);
-            assert_eq!(ret2, ERR_NONE);
-            assert_eq!(se_code2, -1);
-        }
+        let mut se_code2: i32 = 0;
+        let ret2 = BsGetSe(&buf, &mut bs.cursor, &mut se_code2);
+        assert_eq!(ret2, ERR_NONE);
+        assert_eq!(se_code2, -1);
     }
 
     #[test]
@@ -393,27 +405,23 @@ mod tests {
         let buf = with_slop(&[0b10100000, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         let mut bs = BsReader::default();
 
-        unsafe {
-            DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
+        DecInitBits(&mut bs, &RawDataBuffer::from_vec(buf.clone()), 0, 64);
 
-            let mut code: u32 = 99;
-            // iRange = 1: returns 0 directly without bit consumption
-            let ret = BsGetTe0(&buf, &mut bs.cursor, 1, &mut code);
-            assert_eq!(ret, ERR_NONE);
-            assert_eq!(code, 0);
+        let mut code: u32 = 99;
+        // iRange = 1: returns 0 directly without bit consumption
+        let ret = BsGetTe0(&buf, &mut bs.cursor, 1, &mut code);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(code, 0);
 
-            // iRange = 2: reads 1 bit (which is '1') -> code = 1 ^ 1 = 0
-            let ret2 = BsGetTe0(&buf, &mut bs.cursor, 2, &mut code);
-            assert_eq!(ret2, ERR_NONE);
-            assert_eq!(code, 0);
-        }
+        // iRange = 2: reads 1 bit (which is '1') -> code = 1 ^ 1 = 0
+        let ret2 = BsGetTe0(&buf, &mut bs.cursor, 2, &mut code);
+        assert_eq!(ret2, ERR_NONE);
+        assert_eq!(code, 0);
     }
 
     #[test]
     fn test_trailing_bits() {
         let byte1 = 0b00001000u8;
-        unsafe {
-            assert_eq!(BsGetTrailingBits(&byte1), 3);
-        }
+        assert_eq!(BsGetTrailingBits(&byte1), 3);
     }
 }

@@ -12,7 +12,8 @@ use crate::decoder::decoder_context::{
     PicRefs, SpsRef, active_fmo, active_pps, active_sps, cur_and_refs, pps_of, ref_id, sps_of,
 };
 use crate::safe::bits::BsCursor;
-use crate::decoder::bit_stream::{BsReader, slice_bit_reader};
+use crate::decoder::bit_stream::BsReader;
+use crate::decoder::decoder_context::slice_bit_reader;
 use std::ffi::c_void;
 
 // ============================================================================
@@ -3882,7 +3883,7 @@ pub unsafe fn ParseIntra4x4Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
+    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
@@ -4023,7 +4024,7 @@ pub unsafe fn ParseIntra8x8Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
+    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
@@ -4171,7 +4172,7 @@ pub unsafe fn ParseIntra16x16Mode(
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `bit_stream::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
+    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
     // — S29's spelling, S25's rule that no borrow outlives one expression.
     pBsAux: *mut BsCursor,
     pCurDqLayer: *mut DqLayerState,
