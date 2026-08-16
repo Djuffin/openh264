@@ -929,9 +929,18 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
     (*pCtx).iPicQueueNumber = iPicBufSize;
 
     if (*pCtx).pPicBuff.is_none() {
-        let Some(pool) =
-            crate::decoder::pic_queue::CreatePicBuff(pCtx, iPicBufSize, iPicWidth, iPicHeight)
-        else {
+        // T5.W3: `CreatePicBuff`'s two guards — a null context and a null
+        // `pMemAlign` — are tested here now, at the caller that holds the context.
+        // Both took the `return 1` arm before by way of the callee's `None`.
+        if (*pCtx).pMemAlign.is_null() {
+            return 1;
+        }
+        let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
+            crate::decoder::decoder_context::parse_only(pCtx),
+            iPicBufSize,
+            iPicWidth,
+            iPicHeight,
+        ) else {
             return 1;
         };
         (*pCtx).pPicBuff = Some(pool);
