@@ -1099,7 +1099,7 @@ pub unsafe fn ParseInterInfo(
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(pCurDqLayer as *mut _, pDec, 0, iRefIdx as i8, iMv.as_ptr());
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, 0, iRefIdx as i8, iMv.as_ptr());
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
@@ -1150,7 +1150,7 @@ pub unsafe fn ParseInterInfo(
                 }
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
-                    pCurDqLayer as *mut _,
+                    &mut *pCurDqLayer,
                     pDec,
                     iMvArray,
                     iRefIdxArray,
@@ -1211,7 +1211,7 @@ pub unsafe fn ParseInterInfo(
                 }
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
-                    pCurDqLayer as *mut _,
+                    &mut *pCurDqLayer,
                     pDec,
                     iMvArray,
                     iRefIdxArray,
@@ -1440,7 +1440,7 @@ pub unsafe fn ParseInterBInfo(
         if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                pCtx, pCurDqLayer,
+                pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -1453,7 +1453,7 @@ pub unsafe fn ParseInterBInfo(
         } else {
             // temporal direct 16x16 mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                pCtx, pCurDqLayer,
+                pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -1518,7 +1518,7 @@ pub unsafe fn ParseInterBInfo(
                 iMv[1] = 0;
             }
             crate::decoder::mv_pred::UpdateP16x16MotionInfo(
-                pCurDqLayer as *mut _,
+                &mut *pCurDqLayer,
                 pDec,
                 listIdx,
                 ref_idx_list[listIdx][0],
@@ -1587,7 +1587,7 @@ pub unsafe fn ParseInterBInfo(
                     iMv[1] = 0;
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
-                    pCurDqLayer as *mut _,
+                    &mut *pCurDqLayer,
                     pDec,
                     iMvArray,
                     iRefIdxArray,
@@ -1658,7 +1658,7 @@ pub unsafe fn ParseInterBInfo(
                     iMv[1] = 0;
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
-                    pCurDqLayer as *mut _,
+                    &mut *pCurDqLayer,
                     pDec,
                     iMvArray,
                     iRefIdxArray,
@@ -1716,7 +1716,7 @@ pub unsafe fn ParseInterBInfo(
                 if !has_direct_called {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                            pCtx, pCurDqLayer,
+                            pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -1729,7 +1729,7 @@ pub unsafe fn ParseInterBInfo(
                     } else {
                         // temporal direct mode
                         let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                            pCtx, pCurDqLayer,
+                            pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -1778,7 +1778,7 @@ pub unsafe fn ParseInterBInfo(
             if IS_DIRECT(pSubMbType[i]) {
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
-                        pCurDqLayer as *mut _,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         pSubPartCount[i],
@@ -1811,21 +1811,21 @@ pub unsafe fn ParseInterBInfo(
                         }
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
-                        pCurDqLayer as *mut _,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         LIST_0,
                         iRef[LIST_0],
                     );
                     crate::decoder::mv_pred::Update8x8RefIdx(
-                        pCurDqLayer as *mut _,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         LIST_1,
                         iRef[LIST_1],
                     );
                     crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
-                        pCurDqLayer as *mut _,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         pSubPartCount[i],
@@ -1849,7 +1849,7 @@ pub unsafe fn ParseInterBInfo(
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         crate::decoder::mv_pred::Update8x8RefIdx(
-                            pCurDqLayer as *mut _,
+                            &mut *pCurDqLayer,
                             pDec,
                             iIdx8,
                             listIdx,
@@ -1876,7 +1876,7 @@ pub unsafe fn ParseInterBInfo(
                         }
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
-                        pCurDqLayer as *mut _,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         listIdx,

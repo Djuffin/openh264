@@ -445,7 +445,7 @@ pub unsafe fn CopyRectBlock4Cols(
 // ============================================================================
 
 #[inline(always)]
-pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> *mut u32 {
+pub unsafe fn GetMbType(pCurDqLayer: &mut DqLayerState, pDec: PPicture) -> *mut u32 {
     if !pDec.is_null() {
         // T5.P′3: the picture's array is an `MbArray` now, so this arm takes the same
         // allocation-root bridge the layer's arm below has taken since T5.K2 — and
@@ -467,7 +467,7 @@ pub unsafe fn GetMbType(pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> *mut 
 
 /// Calculates the predicted motion vector for a P_SKIP macroblock from its spatial neighbors.
 pub unsafe fn PredPSkipMvFromNeighbor(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iMvp: &mut [i16; 2],
 ) {
@@ -744,7 +744,7 @@ pub unsafe fn PredInter16x8Mv(
 /// Retrieves collocated macroblock parameters for spatial and temporal direct modes.
 pub unsafe fn GetColocatedMb(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     colocPic: *const SPicture,
     mbType: &mut MbType,
@@ -870,7 +870,7 @@ pub unsafe fn GetColocatedMb(
 /// Derives motion predictors and reference indices for B-slice spatial direct mode.
 pub unsafe fn PredMvBDirectSpatial(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
@@ -1110,7 +1110,7 @@ pub unsafe fn PredMvBDirectSpatial(
 /// Derives motion predictors for B-slice temporal direct mode using POC distance scaling.
 pub unsafe fn PredBDirectTemporal(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
@@ -1131,10 +1131,17 @@ pub unsafe fn PredBDirectTemporal(
     }
 
     *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    // T5.W6: the two `&mut` bindings that stood here were held across sixteen calls
+    // that take the layer, and **both of their uses are reads** — a ref count copied
+    // out on the next line, and one `iMvScale` entry read at `:1160`. As raw pointers
+    // the overlap was invisible; as borrows the compiler names it, which is S25's law
+    // arriving on schedule. The fix is S25's too: no borrow outlives one expression,
+    // so the count is copied here and the scale is re-read at its use.
     let pMvd = [0i16; 4];
-    let ref0Count = std::cmp::min(pSliceHeader.uiRefCount[LIST_0], (*pCtx).sRefPic.uiRefCount[LIST_0] as i32);
+    let ref0Count = std::cmp::min(
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
+        (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
+    );
 
     if IS_INTER_16x16(mbType) {
         ref_idx[LIST_0] = 0;
@@ -1157,7 +1164,8 @@ pub unsafe fn PredBDirectTemporal(
             }
             UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
 
-            let scale = pSlice.iMvScale[LIST_0][ref_idx[LIST_0] as usize] as i32;
+            let scale = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
+                [ref_idx[LIST_0] as usize] as i32;
             iMvp[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
             iMvp[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
             UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
@@ -1255,7 +1263,7 @@ pub unsafe fn MapColToList0(
 
 /// Updates motion vector and reference index cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16MotionInfo(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     listIdx: usize,
     iRef: i8,
@@ -1298,7 +1306,7 @@ pub unsafe fn UpdateP16x16MotionInfo(
 
 /// Updates reference index cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16RefIdx(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     listIdx: i32,
     iRef: i8,
@@ -1320,7 +1328,7 @@ pub unsafe fn UpdateP16x16RefIdx(
 
 /// Updates motion vector only cache for a 16x16 macroblock.
 pub unsafe fn UpdateP16x16MotionOnly(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     listIdx: i32,
     iMVs: *const i16,
@@ -1350,7 +1358,7 @@ pub unsafe fn UpdateP16x16MotionOnly(
 
 /// Updates reference index and motion vector caches for a 16x8 macroblock partition.
 pub unsafe fn UpdateP16x8MotionInfo(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIndex: &mut [[i8; 30]; LIST_A],
@@ -1416,7 +1424,7 @@ pub unsafe fn UpdateP16x8MotionInfo(
 
 /// Updates reference index and motion vector caches for an 8x16 macroblock partition.
 pub unsafe fn UpdateP8x16MotionInfo(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIndex: &mut [[i8; 30]; LIST_A],
@@ -1482,7 +1490,7 @@ pub unsafe fn UpdateP8x16MotionInfo(
 
 /// Updates reference index cache for an 8x8 macroblock partition.
 pub unsafe fn Update8x8RefIdx(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iPartIdx: i16,
     listIdx: usize,
@@ -1513,7 +1521,7 @@ pub use crate::decoder::parse_mb_syn_cabac::UpdateP8x8RefIdxCabac;
 // this copy's two added guards (`pDec`, then the ref-index list) went with it.
 
 #[inline(always)]
-pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: *mut DqLayerState, iPartIdx: i32) {
+pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
     {
@@ -1526,7 +1534,7 @@ pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: *mut DqLayerState, iPartIdx: i3
 }
 
 #[inline(always)]
-pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: *mut DqLayerState) {
+pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let direct: u16 = (1 << 8) | 1;
     {
@@ -1543,7 +1551,7 @@ pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: *mut DqLayerState) {
 }
 
 #[inline(always)]
-pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const i16, iListIdx: i32) {
+pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: *const i16, iListIdx: i32) {
     let kMvd = [*pMvd, *pMvd.add(1)];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mvd_ptr = (*pCurDqLayer).grid.mvd[iListIdx as usize]
@@ -1560,7 +1568,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const 
 
 /// Populates motion vectors and clears MVDs for spatial direct 8x8 and 4x4 sub-partitions.
 pub unsafe fn FillSpatialDirect8x8Mv(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iIdx8: i16,
     iPartCount: i8,
@@ -1803,7 +1811,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 
 /// Calculates and populates temporal direct motion vectors for 8x8 or 4x4 direct sub-partitions.
 pub unsafe fn FillTemporalDirect8x8Mv(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iIdx8: i16,
     iPartCount: i8,
