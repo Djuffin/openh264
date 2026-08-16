@@ -154,8 +154,8 @@ F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 u
 [`phase5_session_y.md`](phase5_session_y.md)) — **and it did not close the phase**.
 Decoder `raw_ptr` **456 → 383**, `SHIM(` **7 → 6**, deny-clean **11 of 22** unmoved.
 **Face 0's first half landed**: `SliceCtx` and `slice_split` — the slice's view of
-the context, `pPicBuff` deliberately outside it — and **99 functions below the
-bracket stopped taking a context** (`decode_slice.rs` 89 → 36 raw-pointer
+the context, `pPicBuff` deliberately outside it — and **75 functions below the
+bracket stopped taking a context** (228 → 153 still take it) (`decode_slice.rs` 89 → 36 raw-pointer
 occurrences, `parse_mb_syn_cavlc` 26 → 18, `parse_mb_syn_cabac` 14 → 10). Both of
 X's compiled facts landed with it, and `cabac_ctx_base` (29 sites) and
 `cabac_rbsp_window` (18) retired with no callers left — W6 step 3's last
