@@ -279,7 +279,9 @@ pub struct SWelsNeighAvail {
     pub iLeftCbp: u8,
     pub iDummy: [u8; 2],
 }
-pub type PWelsNeighAvail = *mut SWelsNeighAvail;
+// T5.W10: `pub type PWelsNeighAvail = *mut SWelsNeighAvail;` sat here and has no
+// user left — the struct is a stack local of `decode_slice.rs` threaded down, so
+// every consumer takes a borrow now. S18's shape, found at the definition.
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -528,16 +530,13 @@ pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
 /// Evaluates spatial neighborhood availability (Left, Top, Top-Left, Top-Right)
 /// for the current macroblock across slice boundaries.
 pub unsafe fn GetNeighborAvailMbType(
-    pNeighAvail: PWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pCurDqLayer: Option<&DqLayerState>,
     pDec: PPicture,
 ) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pNeighAvail.is_null() {
-        return;
-    }
     unsafe {
         let dq = &*pCurDqLayer;
         let na = &mut *pNeighAvail;
@@ -616,16 +615,13 @@ pub unsafe fn GetNeighborAvailMbType(
 
 /// Fills the 48-entry local cache `pNonZeroCount` from neighboring macroblocks.
 pub unsafe fn WelsFillCacheNonZeroCount(
-    pNeighAvail: PWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pCurDqLayer: Option<&DqLayerState>,
 ) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pNeighAvail.is_null() {
-        return;
-    }
     unsafe {
         let na = &*pNeighAvail;
         let dq = &*pCurDqLayer;
@@ -689,7 +685,7 @@ pub unsafe fn WelsFillCacheNonZeroCount(
 }
 
 pub unsafe fn WelsFillCacheConstrain1IntraNxN(
-    pNeighAvail: PWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     pCurDqLayer: &DqLayerState,
@@ -750,7 +746,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
 }
 
 pub unsafe fn WelsFillCacheInterCabac(
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
@@ -774,7 +770,7 @@ pub unsafe fn WelsFillCacheInterCabac(
         1
     };
 
-    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, Some(pCurDqLayer));
+    WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
     if na.iTopAvail != 0 {
         iTopXy = iCurXy - dq.iMbWidth as usize;
@@ -912,7 +908,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 /// Matches `WelsFillCacheInter` in `parse_mb_syn_cavlc.cpp` (CAVLC variant,
 /// same as the CABAC variant but without the mvd cache).
 pub unsafe fn WelsFillCacheInter(
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
@@ -935,7 +931,7 @@ pub unsafe fn WelsFillCacheInter(
         1
     };
 
-    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, Some(pCurDqLayer));
+    WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
     if na.iTopAvail != 0 {
         iTopXy = iCurXy - dq.iMbWidth as usize;
@@ -2007,7 +2003,7 @@ pub unsafe fn ParseInterBInfo(
 }
 
 pub unsafe fn WelsFillDirectCacheCabac(
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     iDirect: &mut [i8; 30],
     pCurDqLayer: &DqLayerState,
 ) {
@@ -2058,7 +2054,7 @@ pub unsafe fn WelsFillDirectCacheCabac(
 }
 
 pub unsafe fn WelsFillCacheConstrain0IntraNxN(
-    pNeighAvail: PWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     pCurDqLayer: &DqLayerState,

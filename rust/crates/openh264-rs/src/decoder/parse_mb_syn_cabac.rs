@@ -567,7 +567,7 @@ pub const g_kuiDequantCoeff8x8: [[u16; 64]; 52] = [
 // Core Context Structures & Type Definitions
 // ============================================================================
 
-pub use crate::decoder::parse_mb_syn_cavlc::{SWelsNeighAvail, PWelsNeighAvail};
+pub use crate::decoder::parse_mb_syn_cavlc::SWelsNeighAvail;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -752,7 +752,7 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 
 pub unsafe fn DecodeCabacIntraMbType(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     ctx_base: i32,
 ) -> u32 {
     let mut uiCode: u32 = 0;
@@ -969,7 +969,7 @@ pub unsafe fn ParseEndOfSliceCabac(pCtx: PWelsDecoderContext, uiBinVal: &mut u32
 
 pub unsafe fn ParseSkipFlagCabac(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     uiSkip: &mut u32,
 ) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
@@ -991,7 +991,7 @@ pub unsafe fn ParseSkipFlagCabac(
 
 pub unsafe fn ParseMBTypeISliceCabac(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     uiBinVal: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1061,7 +1061,7 @@ pub unsafe fn ParseMBTypeISliceCabac(
 
 pub unsafe fn ParseMBTypePSliceCabac(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1157,7 +1157,7 @@ pub unsafe fn ParseMBTypePSliceCabac(
 
 pub unsafe fn ParseMBTypeBSliceCabac(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1239,7 +1239,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
 pub unsafe fn ParseTransformSize8x8FlagCabac(
     pCtx: PWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     bTransformSize8x8Flag: &mut bool,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1271,7 +1271,7 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
 
 pub unsafe fn ParseSubMBTypeCabac(
     pCtx: PWelsDecoderContext,
-    _pNeighAvail: *const SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1305,7 +1305,7 @@ pub unsafe fn ParseSubMBTypeCabac(
 
 pub unsafe fn ParseBSubMBTypeCabac(
     pCtx: PWelsDecoderContext,
-    _pNeighAvail: *const SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1482,7 +1482,7 @@ pub unsafe fn ParseRefIdxCabac(
     pCtx: PWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     _nzc: &mut [u8; 48],
     ref_idx: &mut [[i8; 30]; LIST_A],
     direct: Option<&[i8; 30]>,
@@ -1586,7 +1586,7 @@ pub unsafe fn ParseRefIdxCabac(
 
 pub unsafe fn ParseMvdInfoCabac(
     pCtx: PWelsDecoderContext,
-    _pNeighAvail: *const SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     pRefIndex: &[[i8; 30]; LIST_A],
     pMvdCache: &[[[i16; 2]; 30]; LIST_A],
     index: i32,
@@ -1663,7 +1663,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
@@ -1994,7 +1994,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pMotionVector: &mut [[[i16; 2]; 30]; LIST_A],
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
@@ -2523,7 +2523,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 
 pub unsafe fn ParseCbpInfoCabac(
     pCtx: PWelsDecoderContext,
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     uiCbp: &mut u32,
 ) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
@@ -2668,7 +2668,7 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqL
 /// array now — and `pMbType`'s went with it because it is the same dead expression
 /// at the same call.
 pub unsafe fn ParseCbfInfoCabac(
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNzcCache: &[u8; 48],
     pCtx: PWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
@@ -2874,7 +2874,7 @@ pub unsafe fn ParseSignificantCoeffCabac(
 }
 
 pub unsafe fn ParseResidualBlockCabac8x8(
-    _pNeighAvail: *const SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
@@ -2936,7 +2936,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
 }
 
 pub unsafe fn ParseResidualBlockCabac(
-    pNeighAvail: *const SWelsNeighAvail,
+    pNeighAvail: &SWelsNeighAvail,
     pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
