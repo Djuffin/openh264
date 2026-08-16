@@ -9593,3 +9593,84 @@ not a 0/0 one (S23b): **HEAD is not worse.**
 **And the rate is a datapoint against its own record**: ≈1/720 per side under
 back-to-back presets, where session K measured ≈1/307 under the same regime. What
 reproduces across sessions is the *signature*; the frequency does not.
+
+## Session W (Phase 5) — W6 bottom-up: five families, then the pointer families themselves
+
+**Commits:** `b045bd42` (doc tail), `648ac299` (T5.W1 `picture.rs`), `90d45206`
+(T5.W2 `cabac_decoder.rs`), `c722e1ec` (T5.W3 `pic_queue.rs`), `171cea5b` (T5.W4 CAVLC
+leaves), `f215cf98` + `2467d0ee` (T5.W5/W5b `deblocking`'s filter), `c8e2f74c`,
+`0f724a8a`, `8dbb2f44`, `43c9e4e3` (T5.W6–W9, the layer flip), `ecae509f` (T5.W10
+`SWelsNeighAvail`), `7a5a9a0e` (T5.W11 `SRefPic`), `a37e784f` (T5.W12 the MV pair),
+`b56e66bd` (T5.W13 the intra-pred array), `e6579e3c` (T5.W14 the nzc record).
+
+**Decoder `raw_ptr` 974 → 767 (−21%)**; files carrying `#![deny(unsafe_code)]` **6 → 9**,
+eight of them allowing nothing. `SHIM(` unmoved at 52 — its 42 are family 13's and wait
+on step 3, exactly as W7's row says. Corpus **2690/17 and 2707/0**, conformance 60/60,
+sweeps 341/341 both profiles, at every one of the fifteen commits.
+
+### The mechanism, and it is one sentence
+
+**A callee stops taking a raw pointer by taking what it actually reaches.**
+`WelsCabacGlobalInit` took three context fields; `alloc_picture` took one `bool`;
+`GetPNzc` took the 24-byte record its four consumers were re-asserting by hand. That is
+the view struct's mechanism at three fields instead of forty-four, which is why five
+families converted *before* the view struct exists — the thing session V's measurement
+said they were blocked on.
+
+### What the conversions found, which is why they are worth doing (S25)
+
+Every borrow the compiler rejected was a `&mut` that had been live all along and
+invisible. Four shapes, recurring across six modules: a slice-header borrow held across
+sixteen calls that take the whole layer (`mv_pred`, both CAVLC parsers, both CABAC
+parsers — **all uses reads**, all copied); T5.I1's loop-level window into
+`no_sub_mb_part_size_less_than8x8_flag` held across `PredMvBDirectSpatial` (F24/F25/F28's
+shape exactly, in two files); T5.I1's shared `sub_mb_type` window (copied, justified by
+its own comment's sentence); and fourteen `&mut … as *mut _` casts, S29's spelling, which
+the flip makes unspellable. **No value moved** in any of it.
+
+### The order, re-derived twice (S24)
+
+The queue's §1 order came from "callee of `decode_slice`"; the axis that actually gates a
+family is **how much of it takes the context** — 24/24, 61/77, 44/55 for families 11, 14,
+16 against 0/42, 3/34, 6/26 for 13, 10, 8. So 8 and 10 were taken ahead of 6 and 7. Then
+the better unit turned out not to be the module at all but **the pointer family**: the
+same four aliasing shapes cost a reading the first time and a recognition afterwards.
+**And a raw count is not a size**: `mv_pred`'s 115 is mostly `as *mut u32` casts inside
+W4's settled block helpers, not a signature surface.
+
+### Where it stops, named at the type
+
+`decode_slice.rs` keeps its 51 layer pointers, and the blocker is one thing: the residual
+path hands `ParseResidualBlockCabac` a `&mut` **into** `grid.scaled_tcoeff` *and* a `&mut`
+to the whole layer, in one call. That needs a disjoint split of the layer — `PoolRest`'s
+`mut_and_rest` maneuver (T5.Q1) applied to the grid — which is design, not a flip, and it
+is the next step of W6 step 2. `SVlcTable`'s varying-length raw sub-tables block family 8;
+planes and `pIdct*Func`/`PDeblockingFilterMbFunc` block families 3, 10 and 13 (step 3);
+the context blocks 6, 7, 11, 12, 14, 15, 16.
+
+### Gates, F3, and the mechanical-pass lesson
+
+**Three `exit`-level runs. The second found undefined behaviour, and it was this
+session's own.** `manage_dec_ref.rs`'s `test_wels_reset_ref_pic` held
+`&mut (*pCtx).sRefPic` across `WelsResetRefPic(pCtx)`, which derives the same field —
+Miri: *trying to retag from <122753411> for SharedReadOnly … that tag does not exist in
+the borrow stack*. **T5.W11 created it**: with `pRefPic` a raw pointer both derivations
+were `addr_of_mut!` and neither retagged, so a fixture could hold one across a call that
+made another; turning the callee's parameter into `&mut SRefPic` made the second
+derivation *invalidate* the first. That is S29's sentence arriving as a test failure
+rather than a review comment, and the `exit` battery is where it could surface (S22).
+The fixture re-derives per use now; the production path was never affected —
+`WelsResetRefPic` holds one borrow of `sRefPic` while the calls inside it reach
+`pPicBuff` and a picture, disjoint fields. **Re-run: Miri `--lib` 338 passed / 0
+failed**, plus 20/7/3 on the differential targets; the other two batteries were
+`OVERALL: PASS` 13/0/1. **F3 drew one hit** (measurement **46**, ledgered at
+adjudication time; running total 46/15/25) — signature-exact, five isolation runs all
+byte-identical, step 2 not required at one hit.
+
+**The tests caught every real slip, three times, and each was a mechanical pass getting
+the type right and the meaning wrong**: `alloc_picture(false, …)` where the test's whole
+subject was the `true` arm; `Some(&mut *p)` on the ten delegation stubs that are
+*documented to accept null*, where the correct wrapper `as_mut()` **is** the null test;
+and a test fixture's `[i8; 64]` where the production allocation is 48. **S16 fired four
+times** — a comment explaining a pointer conversion inflates the metric the conversion
+just moved. Reworded, never regenerated for prose.

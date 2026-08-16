@@ -1629,13 +1629,24 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
-            let pRefPic = &mut (*pCtx).sRefPic;
 
-            AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s));
-            assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
+            // T5.W11b: the borrow is re-derived at each use, never held across
+            // `WelsResetRefPic`. **Miri convicted the previous shape** and it was
+            // this session's own doing: with `pRefPic` a `*mut SRefPic` both
+            // derivations were `addr_of_mut!` and neither retagged, so a fixture
+            // could hold one across a call that made another. T5.W11 turned the
+            // callee's parameter into `&mut SRefPic` and the derivations into field
+            // borrows — correct, and it makes the second derivation *invalidate* the
+            // first, which is S29's sentence arriving as a test failure rather than
+            // as a review comment. The production path is unaffected:
+            // `WelsResetRefPic` holds one borrow of `sRefPic` and the calls inside it
+            // (`pool_pic_mut`, `SetUnRef`) reach `pPicBuff` and a picture, disjoint
+            // fields, which is why the `exit` battery is where this surfaced (S22).
+            AddShortTermToList(pCtx, &mut (*pCtx).sRefPic, pool_pic_mut(pCtx, s));
+            assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 1);
             WelsResetRefPic(pCtx);
-            assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 0);
-            assert_eq!((*pRefPic).pShortRefList[LIST_0][0], None);
+            assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 0);
+            assert_eq!((*pCtx).sRefPic.pShortRefList[LIST_0][0], None);
         }
     }
 }
