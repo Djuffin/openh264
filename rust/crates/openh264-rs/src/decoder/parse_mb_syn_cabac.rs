@@ -688,8 +688,8 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
 // ============================================================================
 
 pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: PWelsDecoderContext) {
-    let kiQMul = if (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[0].is_null() {
-        (*(*pCtx).pDequant_coeff4x4[0].add(iQp as usize))[0] as i32
+    let kiQMul = if (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
+        (*pCtx).pDequant_coeff_buffer4x4[0][iQp as usize][0] as i32
     } else {
         (g_kuiDequantCoeff[iQp as usize][0] as i32) << 4
     };
@@ -2900,11 +2900,11 @@ pub unsafe fn ParseResidualBlockCabac8x8(
     let mut iResProp = iResProperty;
     GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
 
-    let pDeQuantMul: *const u16 = if (*pCtx).bUseScalingList {
-        (*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize]
-            .add(uiQp as usize) as *const u16
+    let scaling8x8: &[[[u16; 64]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer8x8);
+    let pDeQuantMul: &[u16] = if (*pCtx).bUseScalingList {
+        &scaling8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
     } else {
-        g_kuiDequantCoeff8x8[uiQp as usize].as_ptr()
+        &g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
 
     let mut err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx, &mut uiTotalCoeffNum);
@@ -2930,7 +2930,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         for j in 0..64 {
             if pSignificantMap[j] != 0 {
                 let i = *pScanTable.add(j) as usize;
-                let dequant_val = *pDeQuantMul.add(i) as i32;
+                let dequant_val = pDeQuantMul[i] as i32;
                 let sig_val = pSignificantMap[j];
                 *sTCoeff.add(i) = if uiQp >= 36 {
                     ((sig_val * dequant_val) * (1 << (qp_shift - 6))) as i16
@@ -2967,11 +2967,11 @@ pub unsafe fn ParseResidualBlockCabac(
     let mut iResProp = iResProperty;
     GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
 
-    let pDeQuantMul: *const u16 = if (*pCtx).bUseScalingList {
-        (*pCtx).pDequant_coeff4x4[iMbResProperty as usize]
-            .add(uiQp as usize) as *const u16
+    let scaling4x4: &[[[u16; 16]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer4x4);
+    let pDeQuantMul: &[u16] = if (*pCtx).bUseScalingList {
+        &scaling4x4[iMbResProperty as usize][uiQp as usize][..]
     } else {
-        g_kuiDequantCoeff[uiQp as usize].as_ptr()
+        &g_kuiDequantCoeff[uiQp as usize][..]
     };
 
     let mut err = ParseCbfInfoCabac(
@@ -3018,7 +3018,7 @@ pub unsafe fn ParseResidualBlockCabac(
             *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
         }
         WelsChromaDcIdct(sTCoeff);
-        let dequant_mul0 = *pDeQuantMul as i64;
+        let dequant_mul0 = pDeQuantMul[0] as i64;
         if !(*pCtx).bUseScalingList {
             for j in 0..4 {
                 let scan_idx = *pScanTable.add(j) as usize;
@@ -3038,10 +3038,10 @@ pub unsafe fn ParseResidualBlockCabac(
                 let scan_idx = *pScanTable.add(j) as usize;
                 let sig_val = pSignificantMap[j] as i64;
                 if !(*pCtx).bUseScalingList {
-                    let mul = *pDeQuantMul.add(scan_idx & 0x07) as i32;
+                    let mul = pDeQuantMul[scan_idx & 0x07] as i32;
                     *sTCoeff.add(scan_idx) = (pSignificantMap[j] * mul) as i16;
                 } else {
-                    let mul = *pDeQuantMul.add(scan_idx) as i64;
+                    let mul = pDeQuantMul[scan_idx] as i64;
                     *sTCoeff.add(scan_idx) = (((sig_val * mul) + 8) >> 4) as i16;
                 }
             }

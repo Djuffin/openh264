@@ -2359,8 +2359,8 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
 
 pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: *mut SWelsDecoderContext) {
     unsafe {
-        let kiQMul: i32 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[0].is_null() {
-            (*(*pCtx).pDequant_coeff4x4[0].add(uiQp as usize))[0] as i32
+        let kiQMul: i32 = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
+            (*pCtx).pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
         } else {
             (g_kuiDequantCoeff[uiQp as usize][0] as i32) << 4
         };
@@ -2677,10 +2677,11 @@ pub unsafe fn WelsResidualBlockCavlc(
     // `pCtx->pDequant_coeff4x4[iMbResProperty][uiQp]` in parse_mb_syn_cavlc.cpp: the 4x4
     // table is indexed directly by the MB residual property (0..5); only the 8x8 table
     // is biased by 6.
-    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].is_null() {
-        (*(*pCtx).pDequant_coeff4x4[iMbResProperty as usize].add(uiQp as usize)).as_ptr()
+    let kpDequantCoeff: &[u16] = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
+        let scaling4x4: &[[[u16; 16]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer4x4);
+        &scaling4x4[iMbResProperty as usize][uiQp as usize][..]
     } else {
-        g_kuiDequantCoeff[uiQp as usize].as_ptr()
+        &g_kuiDequantCoeff[uiQp as usize][..]
     };
 
     let mut uiTotalCoeff: u8 = 0;
@@ -2758,12 +2759,12 @@ pub unsafe fn WelsResidualBlockCavlc(
         if pCtx.is_null() || !(*pCtx).bUseScalingList {
             for j in 0..4 {
                 let idx = kpZigzagTable[j] as usize;
-                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * *kpDequantCoeff as i32) >> 1) as i16;
+                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * kpDequantCoeff[0] as i32) >> 1) as i16;
             }
         } else {
             for j in 0..4 {
                 let idx = kpZigzagTable[j] as usize;
-                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (*kpDequantCoeff as i64)) >> 5) as i16;
+                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (kpDequantCoeff[0] as i64)) >> 5) as i16;
             }
         }
     } else if iResidualProperty == I16_LUMA_DC {
@@ -2778,9 +2779,9 @@ pub unsafe fn WelsResidualBlockCavlc(
             iCoeffNum += iRun[i] + 1;
             let j = kpZigzagTable[iCoeffNum as usize] as usize;
             if pCtx.is_null() || !(*pCtx).bUseScalingList {
-                *pTCoeff.add(j) = (iLevel[i] * (*kpDequantCoeff.add(j & 0x07)) as i32) as i16;
+                *pTCoeff.add(j) = (iLevel[i] * kpDequantCoeff[j & 0x07] as i32) as i16;
             } else {
-                *pTCoeff.add(j) = ((iLevel[i] * (*kpDequantCoeff.add(j)) as i32 + 8) >> 4) as i16;
+                *pTCoeff.add(j) = ((iLevel[i] * kpDequantCoeff[j] as i32 + 8) >> 4) as i16;
             }
         }
     }
@@ -2807,10 +2808,11 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     let mut iMbResProperty: i32 = 0;
     GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
 
-    let kpDequantCoeff: *const u16 = if !pCtx.is_null() && (*pCtx).bUseScalingList && !(*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize].is_null() {
-        (*(*pCtx).pDequant_coeff8x8[(iMbResProperty - 6) as usize].add(uiQp as usize)).as_ptr()
+    let kpDequantCoeff: &[u16] = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
+        let scaling8x8: &[[[u16; 64]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer8x8);
+        &scaling8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
     } else {
-        crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8[uiQp as usize].as_ptr()
+        &crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
 
     let mut uiTotalCoeff: u8 = 0;
@@ -2882,9 +2884,9 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
         let j = (iCoeffNum << 2) + iIdx4x4;
         let j = kpZigzagTable[j as usize] as usize;
         let coeff = if uiQp >= 36 {
-            (iLevel[i] * *kpDequantCoeff.add(j) as i32) * (1 << (uiQp as i32 / 6 - 6))
+            (iLevel[i] * kpDequantCoeff[j] as i32) * (1 << (uiQp as i32 / 6 - 6))
         } else {
-            (iLevel[i] * *kpDequantCoeff.add(j) as i32 + (1 << (5 - uiQp as i32 / 6))) >> (6 - uiQp as i32 / 6)
+            (iLevel[i] * kpDequantCoeff[j] as i32 + (1 << (5 - uiQp as i32 / 6))) >> (6 - uiQp as i32 / 6)
         };
         *pTCoeff.add(j) = coeff as i16;
     }

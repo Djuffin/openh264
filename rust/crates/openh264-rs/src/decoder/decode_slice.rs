@@ -690,8 +690,10 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
 
         if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != (*active_pps(pCtx)).iPpsId {
             for i in 0..6 {
-                (*pCtx).pDequant_coeff4x4[i] = (*pCtx).pDequant_coeff_buffer4x4[i].as_mut_ptr();
-                (*pCtx).pDequant_coeff8x8[i] = (*pCtx).pDequant_coeff_buffer8x8[i].as_mut_ptr();
+                // T5.Y1: the two alias stores that stood here (`pDequant_coeff4x4[i]
+                // = pDequant_coeff_buffer4x4[i]`'s first row, and the 8x8 twin) are
+                // gone with the fields — every reader indexes the buffer by the same
+                // `i` the alias was derived from.
                 for q in 0..51 {
                     for x in 0..16 {
                         let scale4 = if (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
