@@ -110,6 +110,13 @@ at the face and the settlement was out by 4.5x, which is why — the rows say it
 **phase6.md is again deliberately unwritten**: exit conditions 1–3 are unmet, so
 Phase 5 has not exited, and the next brief is a Phase 5 one
 ([`phase5_session_v.md`](phase5_session_v.md)).
+**V** = **the closing session** (Eugene, 2026-08-15: *"make the next session finish
+the work of this phase"*): face 0 is **the day two** — U's rule holds, no code
+lands before it closes — and the stop-line disposition is recorded from its
+result (the default is the table's option 6, D-perf-4's own disposition, unless
+Eugene picks otherwise); then **F50**, then **W6 whole per the decomposition
+below**, W7's remainder, and the close. The only sanctioned hand-off out of V is
+the day-two of V's *own* window extension.
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
@@ -258,6 +265,35 @@ stream (conformance clip or constructed), both **red under re-stubbing
 invisible to every name-matching instrument* — becomes W7's new sweep: every
 function name defined in two modules where a caller's own module hosts one
 locally, enumerated and resolution-checked.
+
+## W6 decomposed — the closing settlement (steward, at `ba4da8d8`)
+
+U's census stands (202 raw-pointer types over 55 `unsafe fn` at `1423f8eb`), and
+its "not one session" reading was right **for conversion in place**. The
+decomposition is what makes it one forced session: the 202 collapse under three
+recipes the phase has already proven, in order —
+
+1. **The view struct** (settled since session R) kills the 44
+   `*mut SWelsDecoderContext` — and removes the *reason* every other parameter
+   is raw: S29's objection (a `&mut` param retag popping threaded raw aliases)
+   dies with the last `pCtx` parameter.
+2. **The reference-flip** — the bracket-borrow maneuver's third application,
+   after the pool's (Q) and the layer's (R). The bracket tops already own every
+   container, so `*mut DqLayerState` 51, `SWelsNeighAvail` 13, `SSlice` 10,
+   `SNalUnit` 8, `BsCursor` 5 — **87 types** — become `&mut`/`&` threaded from
+   the same three tops the raw params thread from today. Re-spelling once step 1
+   lands; byte-identical; probe per seam.
+3. **The plane/block-slice conversion**: the ~38 scalar-pointer types are
+   cursors into pictures and the grid, and they are **the same work as 42 of the
+   51 `SHIM(phase2)` retirements** — the shims exist to bridge exactly these
+   callers to the Phase-2-safe kernels. One family at a time; S6 widths; F35's
+   alignment rules.
+4. `cabac_rbsp_window` (18 sites, 72 occurrences) rides step 2's threading —
+   the window is one more `&[u8]` handed from the slice bracket top.
+
+None of the four is novel. The schedule risk is size alone, which S31 addresses
+(compaction is not a stop); if V still splits, the remainder is a **named list of
+families**, not an open question.
 
 ## Phase exit conditions (the definition of done)
 
