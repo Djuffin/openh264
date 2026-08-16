@@ -2383,7 +2383,35 @@ that had no C++ referee until T5.U2.
 
 ## F50 — the port's `ParseSps` rejects an 8-byte NAL the C++'s accepts, so a relabelled parameter set diverges on `DECODING_STATE`
 
-**OPEN.** Owner: Phase 6 or a parity session — it is the whole of the malformed
+**FIXED (session V, T5.V2).** The cause is one token: `au_parser.cpp:947` spells the
+unsupported-`profile_idc` arm **`return false;`** inside a function whose every other
+exit is an error code, so the C++ reports *success* — `false` converts to 0, which is
+`ERR_NONE`. The caller's `if (ERR_NONE != iErr)` does not fire, no
+`dsNoParamSets`/`dsBitstreamError` is raised, and `bHasNewSps` is set for an SPS that
+was never stored. The port had transliterated the arm's **intent** (reject) rather
+than its **value** (0), and returned `ERR_INVALID_PARAMETERS`.
+
+Measured, one command per side, on `narrow_16x16`'s `hdr1.07`: the C++ answers
+`0x0,0x0,0x10*6,0x0` and the port answered `0x0,0x4,0x10*6,0x0`; after the fix the
+port answers the C++'s string exactly. Corpus after: **codes 2707 agree / 0 differ**
+(2683/24 before), output unchanged at 2690/17 — all 17 the documented `CABA2_SVA_B`
+tie-break. The 24 golden rows moved in the code column only: **no frame count, no
+dimension and no plane hash moves on any of them**, which is the shape the finding
+predicted (the divergence is one call wide).
+
+**The class, checked rather than assumed.** A `bool`-shaped `return` inside an
+`int32_t` error-code function is invisible to every name-matching instrument and to
+the type checker on both sides. All 21 remaining `return false;` sites under
+`codec/decoder/core/src/` were read: every one is in a function that really does
+return `bool` (`CheckAccessUnitBoundary*`, `CheckNextAuNewSeq`, `CheckSpsActive`,
+`FillDefaultSliceHeaderExt`, `PrefetchNalHeaderExtSyntax`, `CheckPocOfCurValidNalUnits`,
+`CheckIntegrityNalUnitsList`, `CheckAndFinishLastPic`, `CheckRefPicturesComplete`,
+`CheckRefPics`). `ParseSps` is the only instance in the decoder, and the same read of
+`return true;` sites found no reverse instance (a `true` returned as error code 1).
+
+*Original scoping follows.*
+
+**Was OPEN.** Owner: Phase 6 or a parity session — it is the whole of the malformed
 corpus's remaining code residue and it is one cause.
 
 **Rows**: 24 — `hdr1.07` and `hdr2.07`, in each of the 12 stream tables that have

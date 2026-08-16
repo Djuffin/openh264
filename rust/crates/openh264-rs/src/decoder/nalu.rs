@@ -1455,7 +1455,24 @@ pub unsafe fn ParseSps(
         && uiProfileIdc != PRO_EXTENDED
         && uiProfileIdc != PRO_HIGH
     {
-        return ERR_INVALID_PARAMETERS;
+        // **F50, and it is `ERR_NONE` on purpose.** `au_parser.cpp:947` spells this
+        // arm `return false;` inside a function whose every other exit is an error
+        // code, so the C++ reports **success** for an unsupported `profile_idc`:
+        // `false` converts to 0, which is `ERR_NONE`, so `ParseNonVclNal`'s
+        // `if (ERR_NONE != iErr)` does not fire, no `dsNoParamSets`/`dsBitstreamError`
+        // is raised, and `bHasNewSps` is set for an SPS that was never stored.
+        //
+        // The port had transliterated the arm's *intent* (reject) instead of its
+        // *value* (0), which is the whole of F50: 24 corpus rows — `hdr1.07` and
+        // `hdr2.07` in each of the 12 tables that have both sites — relabel a NAL as
+        // an SPS, so `profile_idc` is whatever the borrowed payload starts with
+        // (0xee on `narrow_16x16`), and the port answered `dsBitstreamError` where
+        // the C++ answered `dsErrorFree`.
+        //
+        // The whole decoder's C++ has exactly one instance of the shape: every other
+        // `return false` under `codec/decoder/core/src/` (21 sites) is in a function
+        // that really does return `bool`, checked one by one.
+        return ERR_NONE;
     }
 
     for i in 0..6 {
