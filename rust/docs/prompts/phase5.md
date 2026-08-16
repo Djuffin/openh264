@@ -150,13 +150,27 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
-**Y** = **the close candidate** ([`phase5_session_y.md`](phase5_session_y.md)):
-face 0 the measured context split (`SliceCtx`, `pPicBuff` deliberately not in it,
-X's two compiled facts carried), the remaining families, **the `common/`
-boundary decided** (safe entry points beside the raw ones — the brief's §4
-carries the settlement: decoder deny-clean now, no encoder edit, raw forms
-deleted in Phase 6, per-kernel exception fallback), W7's closure, and the phase
-close if conditions 1–3 read met.
+**Y** = **spent** (4 commits, `ab7ec744`…`dff3f78b`;
+[`phase5_session_y.md`](phase5_session_y.md)) — **and it did not close the phase**.
+Decoder `raw_ptr` **456 → 383**, `SHIM(` **7 → 6**, deny-clean **11 of 22** unmoved.
+**Face 0's first half landed**: `SliceCtx` and `slice_split` — the slice's view of
+the context, `pPicBuff` deliberately outside it — and **99 functions below the
+bracket stopped taking a context** (`decode_slice.rs` 89 → 36 raw-pointer
+occurrences, `parse_mb_syn_cavlc` 26 → 18, `parse_mb_syn_cabac` 14 → 10). Both of
+X's compiled facts landed with it, and `cabac_ctx_base` (29 sites) and
+`cabac_rbsp_window` (18) retired with no callers left — W6 step 3's last
+retirement. Two prep commits cleared aliases the view could not coexist with: the
+context's own dequant pointer arrays (T5.Y1) and `SDeblockingFilter.pLoopf`, written
+twice and read never (T5.Y3a). **The flip above it was attempted, compiled whole —
+72 errors, five named shapes, all fixed, 342 unit tests and 60 goldens green — and
+reverted on a Miri verdict** that is a class rather than a list: *every raw pointer
+an accessor derives from the context dies at the next call that takes the context*.
+Three instances in one probe run, the last of them two accessor results in one call,
+each invalidating the other. **So the flip's blocker is the accessors' return types,
+not the signatures** — session Z's face 0, with the size measured at the revert (60
+bindings, ~180 call sites). The next brief is a Phase 5 one
+([`phase5_session_z.md`](phase5_session_z.md)); `phase6.md` stays unwritten for the
+fifth session running, because exit conditions 1–3 are unmet.
 **X** = **spent** (10 commits, `4d36cb6c`…`ec672022`;
 [`phase5_session_x.md`](phase5_session_x.md)) — scoped as the endgame, and **it did not
 close the phase**. Decoder `raw_ptr` **765 → 456 (−40%)**, `SHIM(` **52 → 7**,
@@ -516,15 +530,78 @@ are `common/`, not `src/decoder/` — or an enumerated exception with a Phase po
 `decode_mb_aux` and `error_concealment` have the same shape. It is a decision, and it
 should be written down rather than settled by whichever is easier when it is met.
 
+## The context, measured twice — sessions X and Y
+
+**X measured the flip and reverted it; Y split the slice off it, landed that, and
+reverted the flip again one level deeper.** The two measurements are the same face
+seen from two distances, and together they name the whole of what is left.
+
+**What Y landed** (`f82fa258`): `SliceCtx<'a>` in `decoder_context.rs` — the slice's
+view of the context as field-precise borrows, with **`pPicBuff` deliberately not
+among them** — and `slice_split`, which hands back the pool's two halves *and* the
+view out of one borrow. That last part is the correction the face made to its own
+settlement: with the context a borrow, taking `cur_and_refs` and then the view is two
+mutable borrows of one object, so the split has to happen **inside one function**,
+where the disjointness is the compiler's business. Six bracket tops take it
+(`WelsDecodeSlice`, `WelsDecodeAndConstructSlice`, `WelsTargetSliceConstruction`,
+`ComputeColocatedTemporalScaling`, `CheckRefPicturesComplete`,
+`DoErrorConSliceMVCopy`) — not the three the brief named, which were the *layer*
+brackets.
+
+**What Y measured and did not land.** The flip of the remaining 153 signatures opens
+at **72 errors** (145 before the slice view took the tree out of it), and all of them
+reduce to five shapes with fixes that compile: the null guards (28, moved to the
+boundary that still holds a pointer), the bracket (2, `slice_split`), the access unit
+(8, `pCtx.access_unit.as_deref_mut()` — S29 in safe code), the reference set (13
+functions, where a selector travels instead of a `&mut SRefPic`), and the bitstream
+window (5 functions, where the offset travels instead of the slice). The tree
+compiled and passed 342 unit tests and 60 conformance goldens.
+
+**Miri refused it, and the verdict is the finding**:
+
+> Every raw pointer a `decoder_context` accessor derives from the context — `sps_of`,
+> `active_sps`, `pps_of`, `fmo_of`, `dec_pic`, `pool_pic_mut` and their siblings —
+> dies at the next call that takes the context. A `Unique` function-entry retag on
+> `&mut SWelsDecoderContext` pops the derivation, and the next read through it is
+> undefined.
+
+Three instances in one probe run, each more general than the last: a pointer *into*
+the context passed beside it (`CheckSpsActive`, fixable by passing the index); a
+binding held across one call (`AllocPicBuffOnNewSeqBegin`, fixable by reading two
+values); and **two accessor results in one call, each invalidating the other**
+(`FmoParamUpdate(fmo_of(pCtx, …), sps_of(pCtx, …), …)`), which no site-local repair
+fixes. So the accessors return borrows first — `Option<&SSps>`, the shape
+`SliceCtx`'s own methods already have — and then the rule is a compile error at every
+site instead of a Miri verdict on the paths a probe happens to drive. **Size at the
+revert: 60 bindings of an accessor result into a local** (`manage_dec_ref` 35,
+`decoder_core` 15, `deblocking` 3, `decode_slice` 3, `error_concealment` 2, `nalu`
+2), against ~180 call sites of the family.
+
+**And the cheap half of what is left is now visible**: the slice view left ~150
+`unsafe fn` whose bodies are already safe — `parse_mb_syn_cabac` carries 34 against
+**10** raw-pointer occurrences, `mv_pred` 21 against 4, `decode_slice` 54 against 32.
+Dropping the keyword module by module is what takes the deny-clean count off 11.
+
+**Per-module sizes at Y's close** (raw-pointer occurrences / `unsafe fn`):
+`decoder_core` 67/75, `decoder_context` 54/28, `nalu` 35/18, `decode_slice` 32/54,
+`pic_queue` 30/1, `error_concealment` 22/13, `deblocking` 20/33,
+`parse_mb_syn_cavlc` 18/22, `manage_dec_ref` 11/24, `parse_mb_syn_cabac` 10/34,
+`mv_pred` 4/21. **The two columns have come apart**, and that is the session's
+structural news: the modules the slice view converted hold three to five times more
+`unsafe fn` than raw pointers, because the keyword outlived the pointers it was there
+for.
+
 ## Phase exit conditions (the definition of done)
 
-**Status at session X's close** (`ec672022`), so the next session opens against
-facts rather than against this list's prose: **1 unmet** (decoder `raw_ptr` 456);
-**2 unmet** (11 of 22 modules deny-clean); **3 unmet** (`SHIM(` 7 against a survivor
-list of 1 — 4 are prose and 2 are `decoder_core`'s `expand_picture` bridges, so the
-real remainder is 3); **4 met** at X's close (`OVERALL: PASS` at `exit`, 13/0/1);
-**5 met and closed** (D-perf-6); **6 unmet** and deliberately so — `phase6.md` is
-written at the exit, and the phase has not exited.
+**Status at session Y's close** (`dff3f78b`), so the next session opens against
+facts rather than against this list's prose: **1 unmet** (decoder `raw_ptr` 383);
+**2 unmet** (11 of 22 modules deny-clean — unmoved at Y, and the sweep that moves it
+is named in the section above); **3 unmet** (`SHIM(` 6 against a survivor list of 1 —
+3 are prose and 2 are `decoder_core`'s `expand_picture` bridges, so the real
+remainder is 3); **4 met** at Y's close (`exit` battery 12/1/1, the one failure a
+single F3 hit at the documented signature); **5 met and closed** (D-perf-6);
+**6 unmet** and deliberately so — `phase6.md` is written at the exit, and the phase
+has not exited.
 
 1. Decoder `raw_ptr` ≈ 0: every occurrence in `src/decoder/` is on the survivor
    list (the output-contract consumer) or is prose.
