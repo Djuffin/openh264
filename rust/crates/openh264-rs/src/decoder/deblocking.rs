@@ -189,6 +189,7 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
 }
 
 pub use crate::common::deblocking_common::*;
+use crate::safe::mb_grid::MbArray;
 pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
@@ -272,7 +273,7 @@ pub fn TC0_TBL_LOOKUP(tc: &mut [i8; 4], iIndexA: i32, pBS: &[u8], bChroma: i8) {
 pub unsafe fn MB_BS_MV(
     pRefPic0: Option<PicId>,
     pRefPic1: Option<PicId>,
-    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMotionVector: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
     iMbBn: usize,
     iIndex: usize,
@@ -281,8 +282,8 @@ pub unsafe fn MB_BS_MV(
     if pRefPic0 != pRefPic1 {
         return 1;
     }
-    let mv_curr = (*iMotionVector.add(iMbXy))[iIndex];
-    let mv_neigh = (*iMotionVector.add(iMbBn))[iNeighIndex];
+    let mv_curr = iMotionVector.get(iMbXy)[iIndex];
+    let mv_neigh = iMotionVector.get(iMbBn)[iNeighIndex];
     if (mv_curr[0] as i32 - mv_neigh[0] as i32).abs() >= 4
         || (mv_curr[1] as i32 - mv_neigh[1] as i32).abs() >= 4
     {
@@ -294,28 +295,28 @@ pub unsafe fn MB_BS_MV(
 
 #[inline(always)]
 pub unsafe fn ON_MB_BS_MV_DIFF(
-    iMV_A: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
-    iMV_B: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMV_A: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
+    iMV_B: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
     iMbBn: usize,
     iIndex: usize,
     iNeighIndex: usize,
 ) -> bool {
-    let mv_a = (*iMV_A.add(iMbXy))[iIndex];
-    let mv_b = (*iMV_B.add(iMbBn))[iNeighIndex];
+    let mv_a = iMV_A.get(iMbXy)[iIndex];
+    let mv_b = iMV_B.get(iMbBn)[iNeighIndex];
     (mv_a[0] as i32 - mv_b[0] as i32).abs() >= 4 || (mv_a[1] as i32 - mv_b[1] as i32).abs() >= 4
 }
 
 #[inline(always)]
 pub unsafe fn IN_MB_BS_MV_DIFF(
-    iMV_A: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
-    iMV_B: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMV_A: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
+    iMV_B: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
     iIndex: usize,
     iNeighIndex: usize,
 ) -> bool {
-    let mv_a = (*iMV_A.add(iMbXy))[iIndex];
-    let mv_b = (*iMV_B.add(iMbXy))[iNeighIndex];
+    let mv_a = iMV_A.get(iMbXy)[iIndex];
+    let mv_b = iMV_B.get(iMbXy)[iNeighIndex];
     (mv_a[0] as i32 - mv_b[0] as i32).abs() >= 4 || (mv_a[1] as i32 - mv_b[1] as i32).abs() >= 4
 }
 
@@ -325,8 +326,8 @@ pub unsafe fn ON_MB_BS(
     ref_q0: Option<PicId>,
     ref_p1: Option<PicId>,
     ref_q1: Option<PicId>,
-    mv0: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
-    mv1: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    mv0: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
+    mv1: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
     iMbBn: usize,
     iIndex: usize,
@@ -352,7 +353,7 @@ pub unsafe fn ON_MB_BS(
 #[inline(always)]
 pub unsafe fn SMB_EDGE_MV(
     pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
-    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMotionVector: &[[i16; MV_A]; MB_BLOCK4x4_NUM],
     iIndex: usize,
     iNeighIndex: usize,
 ) -> u8 {
@@ -361,8 +362,8 @@ pub unsafe fn SMB_EDGE_MV(
     if p_ref0 != p_ref1 {
         return 1;
     }
-    let mv0 = (*iMotionVector)[iIndex];
-    let mv1 = (*iMotionVector)[iNeighIndex];
+    let mv0 = iMotionVector[iIndex];
+    let mv1 = iMotionVector[iNeighIndex];
     let diff0 = (mv0[0] as i32 - mv1[0] as i32).abs();
     let diff1 = (mv0[1] as i32 - mv1[1] as i32).abs();
     if ((diff0 & !3) | (diff1 & !3)) != 0 {
@@ -376,7 +377,7 @@ pub unsafe fn SMB_EDGE_MV(
 pub unsafe fn BS_EDGE(
     bsx1: u8,
     pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
-    iMotionVector: *mut [[i16; MV_A]; MB_BLOCK4x4_NUM],
+    iMotionVector: &[[i16; MV_A]; MB_BLOCK4x4_NUM],
     iIndex: usize,
     iNeighIndex: usize,
 ) -> u8 {
@@ -387,7 +388,7 @@ pub unsafe fn BS_EDGE(
 #[inline(always)]
 pub unsafe fn IN_SMB_EDGE_MV(
     refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
-    mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    mv: &[&MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>; LIST_A],
     iMbXy: usize,
     iIndex: usize,
     iNeighborIndex: usize,
@@ -432,7 +433,7 @@ pub unsafe fn IN_SMB_EDGE_MV(
 pub unsafe fn IN_BS_EDGE(
     bsx1: u8,
     refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
-    mv: &[*mut [[i16; MV_A]; MB_BLOCK4x4_NUM]; LIST_A],
+    mv: &[&MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>; LIST_A],
     iMbXy: usize,
     iIndex: usize,
     iNeighborIndex: usize,
@@ -565,7 +566,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     // T5.P′3: the picture's array is owned, and `BS_EDGE` reads one macroblock's
     // record by index, so the bridge is taken at the record rather than at the base.
-    let pMv = (*pDec).pMv[LIST_0].get_mut(iMbXy as usize) as *mut _;
+    let pMv = (*pDec).pMv[LIST_0].get(iMbXy as usize);
 
     if is_8x8 {
         let mut i8x8NnzTab = [0u8; 4];
@@ -698,10 +699,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 
     // T5.P′3: two bridges, one per list, each from its own allocation root (S28) —
     // `IN_BS_EDGE` indexes them by macroblock address.
-    let pMv = [
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0),
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0),
-    ];
+    let pMv = [&(*pDec).pMv[LIST_0], &(*pDec).pMv[LIST_1]];
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
 
     if is_8x8 {
@@ -835,8 +833,11 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     iNeighMb: i32,
     iMbXy: i32,
 ) -> u32 {
-    let mut uiBSx4 = 0u32;
-    let pBS = (&mut uiBSx4 as *mut u32) as *mut u8;
+    // T5.X5: `uiBSx4` was a `u32` written through a `*mut u8` byte view and
+    // returned whole. It is the four bytes it always was; the one word the
+    // caller wants is assembled at the `return`, in the same native order the
+    // pun had.
+    let mut pBS = [0u8; 4];
 
     let pBIdx = &g_kuiTableBIdx[iEdge as usize][0..4];
     let pBnIdx = &g_kuiTableBIdx[iEdge as usize][4..8];
@@ -845,19 +846,19 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
 
     let pRefIdxArr = if !pDec.is_null() {
         // T5.P′3: the picture's array joins the layer's on the same bridge.
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_0], 0)
+        &(*pDec).pRefIndex[LIST_0]
     } else {
         // T5.J3: the grid's array, derived from the allocation root (S28) — the
         // consumer indexes it by macroblock address, so it must reach the whole
         // array and a narrowing slice would be UB at the second index.
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.ref_index[LIST_0], 0)
+        &(*pCurDqLayer).grid.ref_index[LIST_0]
     };
 
     let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
     let pMvArr = if !pDec.is_null() {
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0)
+        &(*pDec).pMv[LIST_0]
     } else {
         // T5.K1: the grid's array, derived from the allocation root (S28) — `MB_BS_MV`
         // indexes it by macroblock address for the current macroblock *and* its
@@ -865,7 +866,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
         // as `pRefIdxArr` above, and a second bridge in this function is sound for the
         // same reason the first one is: the two `&mut`s are of different fields, whose
         // `Vec`s are different allocations.
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.mv[LIST_0], 0)
+        &(*pCurDqLayer).grid.mv[LIST_0]
     };
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
@@ -881,13 +882,13 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                 }
             }
             if uiNzc != 0 {
-                *pBS.add(i << 1) = 2;
-                *pBS.add(1 + (i << 1)) = 2;
+                pBS[i << 1] = 2;
+                pBS[1 + (i << 1)] = 2;
             } else {
                 let idx_curr = pB8x8Idx[i * 4] as usize;
                 let idx_neigh = pBn8x8Idx[i * 4] as usize;
-                let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[idx_curr];
-                let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[idx_neigh];
+                let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[idx_curr];
+                let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[idx_neigh];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
                     (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
@@ -909,8 +910,8 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                     idx_curr,
                     idx_neigh,
                 );
-                *pBS.add(i << 1) = val;
-                *pBS.add(1 + (i << 1)) = val;
+                pBS[i << 1] = val;
+                pBS[1 + (i << 1)] = val;
             }
         }
     } else if is_8x8_curr {
@@ -923,11 +924,11 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
             for j in 0..2 {
                 let bn_idx = pBnIdx[bn_idx_pos] as usize;
                 if (uiNzc | (pNzcNeigh[bn_idx] as u8)) != 0 {
-                    *pBS.add(j + (i << 1)) = 2;
+                    pBS[j + (i << 1)] = 2;
                 } else {
                     let b_idx = pB8x8Idx[i * 4] as usize;
-                    let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
-                    let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+                    let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
+                    let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
                         (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
@@ -940,7 +941,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                         None
                     };
 
-                    *pBS.add(j + (i << 1)) = MB_BS_MV(
+                    pBS[j + (i << 1)] = MB_BS_MV(
                         ref0,
                         ref1,
                         pMvArr,
@@ -963,11 +964,11 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
             for j in 0..2 {
                 let b_idx = pBIdx[b_idx_pos] as usize;
                 if (uiNzc | (pNzcCurr[b_idx] as u8)) != 0 {
-                    *pBS.add(j + (i << 1)) = 2;
+                    pBS[j + (i << 1)] = 2;
                 } else {
                     let bn_idx = pBn8x8Idx[i * 4] as usize;
-                    let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
-                    let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+                    let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
+                    let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                     let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
                         (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
@@ -980,7 +981,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                         None
                     };
 
-                    *pBS.add(j + (i << 1)) = MB_BS_MV(
+                    pBS[j + (i << 1)] = MB_BS_MV(
                         ref0,
                         ref1,
                         pMvArr,
@@ -999,10 +1000,10 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
             let b_idx = pBIdx[i] as usize;
             let bn_idx = pBnIdx[i] as usize;
             if ((pNzcCurr[b_idx] as u8) | (pNzcNeigh[bn_idx] as u8)) != 0 {
-                *pBS.add(i) = 2;
+                pBS[i] = 2;
             } else {
-                let ref_idx0 = (*pRefIdxArr.add(iMbXy as usize))[b_idx];
-                let ref_idx1 = (*pRefIdxArr.add(iNeighMb as usize))[bn_idx];
+                let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
+                let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
 
                 let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
                     (*pFilter).ref_ids[LIST_0][ref_idx0 as usize]
@@ -1015,7 +1016,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
                     None
                 };
 
-                *pBS.add(i) = MB_BS_MV(
+                pBS[i] = MB_BS_MV(
                     ref0,
                     ref1,
                     pMvArr,
@@ -1028,7 +1029,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
         }
     }
 
-    uiBSx4
+    u32::from_ne_bytes(pBS)
 }
 
 pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
@@ -1039,16 +1040,19 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     iNeighMb: i32,
     iMbXy: i32,
 ) -> u32 {
-    let mut uiBSx4 = 0u32;
-    let pBS = (&mut uiBSx4 as *mut u32) as *mut u8;
+    // T5.X5: `uiBSx4` was a `u32` written through a `*mut u8` byte view and
+    // returned whole. It is the four bytes it always was; the one word the
+    // caller wants is assembled at the `return`, in the same native order the
+    // pun had.
+    let mut pBS = [0u8; 4];
 
     let pBIdx = &g_kuiTableBIdx[iEdge as usize][0..4];
     let pBnIdx = &g_kuiTableBIdx[iEdge as usize][4..8];
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let iRefIdx0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_0], 0);
-    let iRefIdx1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pRefIndex[LIST_1], 0);
+    let iRefIdx0 = &(*pDec).pRefIndex[LIST_0];
+    let iRefIdx1 = &(*pDec).pRefIndex[LIST_1];
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
@@ -1066,19 +1070,19 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 }
             }
             if uiNzc != 0 {
-                *pBS.add(i << 1) = 2;
-                *pBS.add(1 + (i << 1)) = 2;
+                pBS[i << 1] = 2;
+                pBS[1 + (i << 1)] = 2;
             } else {
-                *pBS.add(i << 1) = 1;
-                *pBS.add(1 + (i << 1)) = 1;
+                pBS[i << 1] = 1;
+                pBS[1 + (i << 1)] = 1;
 
                 let b_idx = pB8x8Idx[i * 4] as usize;
                 let bn_idx = pBn8x8Idx[i * 4] as usize;
 
-                let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
-                let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
-                let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
-                let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+                let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
+                let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
+                let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
+                let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
                     (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
@@ -1104,8 +1108,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
-                    let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
+                    let pMv0 = &(*pDec).pMv[LIST_0];
+                    let pMv1 = &(*pDec).pMv[LIST_1];
                     let val = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1118,8 +1122,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                         b_idx,
                         bn_idx,
                     );
-                    *pBS.add(i << 1) = val;
-                    *pBS.add(1 + (i << 1)) = val;
+                    pBS[i << 1] = val;
+                    pBS[1 + (i << 1)] = val;
                 }
             }
         }
@@ -1133,15 +1137,15 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
             for j in 0..2 {
                 let bn_idx = pBnIdx[bn_idx_pos] as usize;
                 if (uiNzc | (pNzcNeigh[bn_idx] as u8)) != 0 {
-                    *pBS.add(j + (i << 1)) = 2;
+                    pBS[j + (i << 1)] = 2;
                 } else {
-                    *pBS.add(j + (i << 1)) = 1;
+                    pBS[j + (i << 1)] = 1;
                     let b_idx = pB8x8Idx[i * 4] as usize;
 
-                    let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
-                    let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
-                    let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
-                    let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+                    let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
+                    let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
+                    let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
+                    let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
                         (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
@@ -1167,9 +1171,9 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
-                        let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
-                        *pBS.add(j + (i << 1)) = ON_MB_BS(
+                        let pMv0 = &(*pDec).pMv[LIST_0];
+                        let pMv1 = &(*pDec).pMv[LIST_1];
+                        pBS[j + (i << 1)] = ON_MB_BS(
                             ref_p0,
                             ref_q0,
                             ref_p1,
@@ -1196,15 +1200,15 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
             for j in 0..2 {
                 let b_idx = pBIdx[b_idx_pos] as usize;
                 if (uiNzc | (pNzcCurr[b_idx] as u8)) != 0 {
-                    *pBS.add(j + (i << 1)) = 2;
+                    pBS[j + (i << 1)] = 2;
                 } else {
-                    *pBS.add(j + (i << 1)) = 1;
+                    pBS[j + (i << 1)] = 1;
                     let bn_idx = pBn8x8Idx[i * 4] as usize;
 
-                    let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
-                    let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
-                    let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
-                    let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+                    let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
+                    let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
+                    let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
+                    let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                     let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
                         (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
@@ -1230,9 +1234,9 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
-                        let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
-                        *pBS.add(j + (i << 1)) = ON_MB_BS(
+                        let pMv0 = &(*pDec).pMv[LIST_0];
+                        let pMv1 = &(*pDec).pMv[LIST_1];
+                        pBS[j + (i << 1)] = ON_MB_BS(
                             ref_p0,
                             ref_q0,
                             ref_p1,
@@ -1255,14 +1259,14 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
             let b_idx = pBIdx[i] as usize;
             let bn_idx = pBnIdx[i] as usize;
             if ((pNzcCurr[b_idx] as u8) | (pNzcNeigh[bn_idx] as u8)) != 0 {
-                *pBS.add(i) = 2;
+                pBS[i] = 2;
             } else {
-                *pBS.add(i) = 1;
+                pBS[i] = 1;
 
-                let ref0_idx0 = (*iRefIdx0.add(iMbXy as usize))[b_idx];
-                let ref0_idx1 = (*iRefIdx0.add(iNeighMb as usize))[bn_idx];
-                let ref1_idx0 = (*iRefIdx1.add(iMbXy as usize))[b_idx];
-                let ref1_idx1 = (*iRefIdx1.add(iNeighMb as usize))[bn_idx];
+                let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
+                let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
+                let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
+                let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
 
                 let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
                     (*pFilter).ref_ids[LIST_0][ref0_idx0 as usize]
@@ -1288,9 +1292,9 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_0], 0);
-                    let pMv1 = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMv[LIST_1], 0);
-                    *pBS.add(i) = ON_MB_BS(
+                    let pMv0 = &(*pDec).pMv[LIST_0];
+                    let pMv1 = &(*pDec).pMv[LIST_1];
+                    pBS[i] = ON_MB_BS(
                         ref_p0,
                         ref_q0,
                         ref_p1,
@@ -1307,7 +1311,7 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
         }
     }
 
-    uiBSx4
+    u32::from_ne_bytes(pBS)
 }
 
 // ============================================================================
@@ -1347,7 +1351,7 @@ pub unsafe fn FilteringEdgeLumaH(
     pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
-    pBS: *const u8,
+    pBS: &[u8; 4],
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1364,8 +1368,7 @@ pub unsafe fn FilteringEdgeLumaH(
     );
 
     if (iAlpha | iBeta) != 0 {
-        let bs_slice = std::slice::from_raw_parts(pBS, 4);
-        TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
+        TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 0);
         DeblockLumaLt4V_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
     }
 }
@@ -1375,7 +1378,7 @@ pub unsafe fn FilteringEdgeLumaV(
     pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
-    pBS: *const u8,
+    pBS: &[u8; 4],
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1392,8 +1395,7 @@ pub unsafe fn FilteringEdgeLumaV(
     );
 
     if (iAlpha | iBeta) != 0 {
-        let bs_slice = std::slice::from_raw_parts(pBS, 4);
-        TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 0);
+        TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 0);
         DeblockLumaLt4H_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
     }
 }
@@ -1403,7 +1405,6 @@ pub unsafe fn FilteringEdgeLumaIntraH(
     pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
-    _pBS: *const u8,
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1428,7 +1429,6 @@ pub unsafe fn FilteringEdgeLumaIntraV(
     pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
-    _pBS: *const u8,
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1453,7 +1453,7 @@ pub unsafe fn FilteringEdgeChromaH(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
-    pBS: *const u8,
+    pBS: &[u8; 4],
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1470,8 +1470,7 @@ pub unsafe fn FilteringEdgeChromaH(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            let bs_slice = std::slice::from_raw_parts(pBS, 4);
-            TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+            TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
             DeblockChromaLt4V_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
         }
     } else {
@@ -1486,8 +1485,7 @@ pub unsafe fn FilteringEdgeChromaH(
             );
             if (iAlpha | iBeta) != 0 {
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                let bs_slice = std::slice::from_raw_parts(pBS, 4);
-                TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+                    TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
                 DeblockChromaLt4V2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
             }
         }
@@ -1499,7 +1497,7 @@ pub unsafe fn FilteringEdgeChromaV(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
-    pBS: *const u8,
+    pBS: &[u8; 4],
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1516,8 +1514,7 @@ pub unsafe fn FilteringEdgeChromaV(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            let bs_slice = std::slice::from_raw_parts(pBS, 4);
-            TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+            TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
             DeblockChromaLt4H_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
         }
     } else {
@@ -1532,8 +1529,7 @@ pub unsafe fn FilteringEdgeChromaV(
             );
             if (iAlpha | iBeta) != 0 {
                 let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                let bs_slice = std::slice::from_raw_parts(pBS, 4);
-                TC0_TBL_LOOKUP(&mut tc, iIndexA, bs_slice, 1);
+                    TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
                 DeblockChromaLt4H2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
             }
         }
@@ -1545,7 +1541,6 @@ pub unsafe fn FilteringEdgeChromaIntraH(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
-    _pBS: *const u8,
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1586,7 +1581,6 @@ pub unsafe fn FilteringEdgeChromaIntraV(
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
-    _pBS: *const u8,
 ) {
     let mut iIndexA = 0i32;
     let mut iAlpha = 0i32;
@@ -1661,13 +1655,13 @@ unsafe fn DeblockingInterMb(
         }
 
         if nBS[0][0][0] == 0x04 {
-            FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize, std::ptr::null());
-            FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSizeUV, std::ptr::null());
+            FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize);
+            FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSizeUV);
         } else {
-            let bs_word = (nBS[0][0].as_ptr() as *const u32).read_unaligned();
+            let bs_word = u32::from_ne_bytes(nBS[0][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaV(pFilter, pDestY, iLineSize, nBS[0][0].as_ptr());
-                FilteringEdgeChromaV(pFilter, pDestCb, pDestCr, iLineSizeUV, nBS[0][0].as_ptr());
+                FilteringEdgeLumaV(pFilter, pDestY, iLineSize, &nBS[0][0]);
+                FilteringEdgeChromaV(pFilter, pDestCb, pDestCr, iLineSizeUV, &nBS[0][0]);
             }
         }
     }
@@ -1678,26 +1672,26 @@ unsafe fn DeblockingInterMb(
 
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXyIndex as usize);
 
-    let bs_01 = (nBS[0][1].as_ptr() as *const u32).read_unaligned();
+    let bs_01 = u32::from_ne_bytes(nBS[0][1]);
     if bs_01 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(1 << 2), iLineSize, nBS[0][1].as_ptr());
+        FilteringEdgeLumaV(pFilter, pDestY.add(1 << 2), iLineSize, &nBS[0][1]);
     }
 
-    let bs_02 = (nBS[0][2].as_ptr() as *const u32).read_unaligned();
+    let bs_02 = u32::from_ne_bytes(nBS[0][2]);
     if bs_02 != 0 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(2 << 2), iLineSize, nBS[0][2].as_ptr());
+        FilteringEdgeLumaV(pFilter, pDestY.add(2 << 2), iLineSize, &nBS[0][2]);
         FilteringEdgeChromaV(
             pFilter,
             pDestCb.add(2 << 1),
             pDestCr.add(2 << 1),
             iLineSizeUV,
-            nBS[0][2].as_ptr(),
+            &nBS[0][2],
         );
     }
 
-    let bs_03 = (nBS[0][3].as_ptr() as *const u32).read_unaligned();
+    let bs_03 = u32::from_ne_bytes(nBS[0][3]);
     if bs_03 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(3 << 2), iLineSize, nBS[0][3].as_ptr());
+        FilteringEdgeLumaV(pFilter, pDestY.add(3 << 2), iLineSize, &nBS[0][3]);
     }
 
     // Horizontal margin
@@ -1713,13 +1707,13 @@ unsafe fn DeblockingInterMb(
         }
 
         if nBS[1][0][0] == 0x04 {
-            FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize, std::ptr::null());
-            FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSizeUV, std::ptr::null());
+            FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize);
+            FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSizeUV);
         } else {
-            let bs_word = (nBS[1][0].as_ptr() as *const u32).read_unaligned();
+            let bs_word = u32::from_ne_bytes(nBS[1][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaH(pFilter, pDestY, iLineSize, nBS[1][0].as_ptr());
-                FilteringEdgeChromaH(pFilter, pDestCb, pDestCr, iLineSizeUV, nBS[1][0].as_ptr());
+                FilteringEdgeLumaH(pFilter, pDestY, iLineSize, &nBS[1][0]);
+                FilteringEdgeChromaH(pFilter, pDestCb, pDestCr, iLineSizeUV, &nBS[1][0]);
             }
         }
     }
@@ -1728,40 +1722,40 @@ unsafe fn DeblockingInterMb(
     (*pFilter).iChromaQP[0] = pCurChromaQp[0];
     (*pFilter).iChromaQP[1] = pCurChromaQp[1];
 
-    let bs_11 = (nBS[1][1].as_ptr() as *const u32).read_unaligned();
+    let bs_11 = u32::from_ne_bytes(nBS[1][1]);
     if bs_11 != 0 && !is_8x8 {
         FilteringEdgeLumaH(
             pFilter,
             pDestY.add(((1 << 2) * iLineSize) as usize),
             iLineSize,
-            nBS[1][1].as_ptr(),
+            &nBS[1][1],
         );
     }
 
-    let bs_12 = (nBS[1][2].as_ptr() as *const u32).read_unaligned();
+    let bs_12 = u32::from_ne_bytes(nBS[1][2]);
     if bs_12 != 0 {
         FilteringEdgeLumaH(
             pFilter,
             pDestY.add(((2 << 2) * iLineSize) as usize),
             iLineSize,
-            nBS[1][2].as_ptr(),
+            &nBS[1][2],
         );
         FilteringEdgeChromaH(
             pFilter,
             pDestCb.add(((2 << 1) * iLineSizeUV) as usize),
             pDestCr.add(((2 << 1) * iLineSizeUV) as usize),
             iLineSizeUV,
-            nBS[1][2].as_ptr(),
+            &nBS[1][2],
         );
     }
 
-    let bs_13 = (nBS[1][3].as_ptr() as *const u32).read_unaligned();
+    let bs_13 = u32::from_ne_bytes(nBS[1][3]);
     if bs_13 != 0 && !is_8x8 {
         FilteringEdgeLumaH(
             pFilter,
             pDestY.add(((3 << 2) * iLineSize) as usize),
             iLineSize,
-            nBS[1][3].as_ptr(),
+            &nBS[1][3],
         );
     }
 }
@@ -1794,7 +1788,7 @@ pub unsafe fn FilteringEdgeLumaHV(
             + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
             + 1)
             >> 1) as i8;
-        FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize, std::ptr::null());
+        FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize);
     }
 
     (*pFilter).iLumaQP = iCurQp as i8;
@@ -1833,7 +1827,7 @@ pub unsafe fn FilteringEdgeLumaHV(
             + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
             + 1)
             >> 1) as i8;
-        FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize, std::ptr::null());
+        FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize);
     }
 
     (*pFilter).iLumaQP = iCurQp as i8;
@@ -1895,7 +1889,7 @@ pub unsafe fn FilteringEdgeChromaHV(
                 + 1)
                 >> 1) as i8;
         }
-        FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSize, std::ptr::null());
+        FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSize);
     }
 
     (*pFilter).iChromaQP[0] = pCurQp[0];
@@ -1955,7 +1949,7 @@ pub unsafe fn FilteringEdgeChromaHV(
                 + 1)
                 >> 1) as i8;
         }
-        FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSize, std::ptr::null());
+        FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSize);
     }
 
     (*pFilter).iChromaQP[0] = pCurQp[0];
@@ -2057,9 +2051,9 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 } else {
                     DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
-                (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(val);
+                nBS[0][0] = val.to_ne_bytes();
             } else {
-                (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(0);
+                nBS[0][0] = [0u8; 4];
             }
 
             if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
@@ -2077,18 +2071,18 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 } else {
                     DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
-                (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(val);
+                nBS[1][0] = val.to_ne_bytes();
             } else {
-                (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(0);
+                nBS[1][0] = [0u8; 4];
             }
 
             if IS_SKIP(iCurMbType) {
-                (nBS[0][1].as_mut_ptr() as *mut u32).write_unaligned(0);
-                (nBS[0][2].as_mut_ptr() as *mut u32).write_unaligned(0);
-                (nBS[0][3].as_mut_ptr() as *mut u32).write_unaligned(0);
-                (nBS[1][1].as_mut_ptr() as *mut u32).write_unaligned(0);
-                (nBS[1][2].as_mut_ptr() as *mut u32).write_unaligned(0);
-                (nBS[1][3].as_mut_ptr() as *mut u32).write_unaligned(0);
+                nBS[0][1] = [0u8; 4];
+                nBS[0][2] = [0u8; 4];
+                nBS[0][3] = [0u8; 4];
+                nBS[1][1] = [0u8; 4];
+                nBS[1][2] = [0u8; 4];
+                nBS[1][3] = [0u8; 4];
             } else if IS_INTER_16x16(iCurMbType) {
                 let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get((*pCurDqLayer).iMbXyIndex as usize);
                 if !is_8x8 {
@@ -2319,6 +2313,7 @@ pub unsafe fn DeblockingInit(pFunc: *mut SDeblockingFunc, iCpu: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::safe::mb_grid::MbDims;
 
     // -----------------------------------------------------------------------
     // P3 site 1 of 3 — boundary strength is decided by reference-picture
@@ -2354,10 +2349,12 @@ mod tests {
     #[test]
     fn p3_mb_bs_mv_separates_distinct_references() {
         let (a, b) = two_refs();
-        let mut mvs = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
+        // T5.X5: the helper takes the array, not a base pointer into it, so the
+        // fixture is a two-macroblock `MbArray` rather than a `[_; 2]` and a cast.
+        let mvs = MbArray::from_vec(vec![[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2], MbDims::new(2, 1));
 
         unsafe {
-            let mv = mvs.as_mut_ptr();
+            let mv = &mvs;
             assert_eq!(
                 MB_BS_MV(a, b, mv, 0, 1, 0, 0),
                 1,
@@ -2379,15 +2376,15 @@ mod tests {
     #[test]
     fn p3_smb_edge_mv_separates_distinct_references() {
         let (a, b) = two_refs();
-        let mut mvs = [[0i16; MV_A]; MB_BLOCK4x4_NUM];
+        let mvs = [[0i16; MV_A]; MB_BLOCK4x4_NUM];
 
         unsafe {
             let mut refs: [Option<PicId>; MB_BLOCK4x4_NUM] = [a; MB_BLOCK4x4_NUM];
-            assert_eq!(SMB_EDGE_MV(&refs, &mut mvs, 0, 1), 0, "one slot, equal MVs");
+            assert_eq!(SMB_EDGE_MV(&refs, &mvs, 0, 1), 0, "one slot, equal MVs");
 
             refs[1] = b;
             assert_eq!(
-                SMB_EDGE_MV(&refs, &mut mvs, 0, 1),
+                SMB_EDGE_MV(&refs, &mvs, 0, 1),
                 1,
                 "a second slot is a second reference"
             );
@@ -2405,14 +2402,16 @@ mod tests {
         // exceed the 4-quarter-pel threshold, crossed ones (l0 vs l1) do not. That
         // makes the `ref_p0 == ref_p1` arm — an AND of both — false while the
         // `ref_p0 != ref_p1, ref_p0 == ref_q0` arm is true.
-        let mut mv_l0 = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
-        let mut mv_l1 = [[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2];
-        mv_l0[0][0][0] = 64; // current MB, list 0
-        mv_l1[1][0][0] = 64; // neighbour MB, list 1
+        let mut mv_l0 =
+            MbArray::from_vec(vec![[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2], MbDims::new(2, 1));
+        let mut mv_l1 =
+            MbArray::from_vec(vec![[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2], MbDims::new(2, 1));
+        mv_l0.get_mut(0)[0][0] = 64; // current MB, list 0
+        mv_l1.get_mut(1)[0][0] = 64; // neighbour MB, list 1
 
         unsafe {
-            let m0 = mv_l0.as_mut_ptr();
-            let m1 = mv_l1.as_mut_ptr();
+            let m0 = &mv_l0;
+            let m1 = &mv_l1;
 
             // All four references are one slot.
             let same = ON_MB_BS(a, a, a, a, m0, m1, 0, 1, 0, 0);
