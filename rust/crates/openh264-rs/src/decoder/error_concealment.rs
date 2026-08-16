@@ -353,7 +353,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
                 ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
             );
         }
-    } else if same_picture(pSrcPic, pDstPic) {
+    } else if same_picture(pSrcPic.as_ref(), pDstPic.as_ref()) {
         // Prevent self-copy overlap
     } else {
         if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr_ref(0).is_null() {
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLa
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
 
-    if !pSrcPic.is_null() && same_picture(pSrcPic, pDstPic) {
+    if !pSrcPic.is_null() && same_picture(pSrcPic.as_ref(), pDstPic.as_ref()) {
         return;
     }
 
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     // handed a pointer it must not read. Both arms return, so the order is not
     // observable; `pDec == pRef` with both null took the first arm before and takes
     // the second now.
-    if pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || pCtx.is_null() || same_picture(pDec, pRef) {
+    if pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || pCtx.is_null() || same_picture(pDec.as_ref(), pRef.as_ref()) {
         return;
     }
 
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
         // Slot equality, direct: P3's predicate with both sides already handles.
         // `same_picture`'s address fallback existed for pictures with no slot, and a
         // `PicId` is a picture that has one.
-        if (*pCtx).pECRefPic[0] == pic_slot(pRef) {
+        if (*pCtx).pECRefPic[0] == pic_slot(pRef.as_ref()) {
             iMVs[0] = (*pCtx).iECMVs[0][0] as i16;
             iMVs[1] = (*pCtx).iECMVs[0][1] as i16;
         } else {
@@ -839,7 +839,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
         sMCRefMem.iPicWidth = (*pDstPic).iWidthInPixel;
         sMCRefMem.iPicHeight = (*pDstPic).iHeightInPixel;
 
-        if same_picture(pDstPic, pSrcPic) {
+        if same_picture(pDstPic.as_ref(), pSrcPic.as_ref()) {
             return;
         }
     }

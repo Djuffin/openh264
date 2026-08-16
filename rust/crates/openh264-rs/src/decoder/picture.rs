@@ -54,6 +54,25 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+// Phase 5 W6 (family 2). The module's two `unsafe fn` were the identity pair,
+// `pic_slot` and `same_picture`, each taking `*const SPicture` with a null test at
+// the top — `fmo.rs`'s shape one module over, and it takes `fmo.rs`'s conversion:
+// `Option<&SPicture>`, with the null test kept exactly where it was and spelled as
+// the `Option`. The callers do the `as_ref()` at their own raw boundary, which is
+// where the rawness actually lives; each of those modules is its own family below.
+//
+// **The enumerated exception is in the tests, and it is mandated rather than
+// tolerated**: `data_ptr`/`data_ptr_ref` are the phase-5 shim accessors below —
+// their markers are on the accessors themselves, and naming the marker again here
+// would raise this file's `shim` count by a comment, which the ratchet caught on
+// the first run (S16's prose floor). They must reach the padding *behind* the
+// pointer they return, and S28 requires a Miri test
+// that reads the pointer's full legal reach in both directions. Reading through a
+// raw pointer is what that instrument *is*, so the two tests carry
+// `#[allow(unsafe_code)]` individually — not the test module — and the shims they
+// pin retire with their callers' plane pointers (W6 step 3, family 13).
+
 // Constants matching OpenH264 common definitions (`wels_const_common.h` and `wels_common_defs.h`)
 
 /// Number of 4x4 sub-blocks in a 16x16 macroblock.
@@ -442,39 +461,43 @@ impl SPicture {
 /// where a caller already has `PicId`s, as `SDeblockingFilter` does after T5.N4, it
 /// compares them directly and never reaches here.
 ///
-/// The slot a picture pointer names, or `None` for a null pointer or a picture
-/// outside the pool.
+/// The slot a picture names, or `None` for an absent picture or one outside the
+/// pool.
 ///
 /// The one-way door from the pointer world into the id world, and the shape every
 /// raw picture field takes as it converts (T5.P2's `pDec` and `pECRefPic`, and the
-/// reference lists after them). It is deliberately total: a null pointer and a
-/// pool-less picture are both "no slot", which is what the arms it replaces did.
+/// reference lists after them). It is deliberately total: an absent picture and a
+/// pool-less one are both "no slot", which is what the arms it replaces did.
+///
+/// **T5.W1 moved the absence from a null pointer into the `Option`** and the
+/// function stopped being `unsafe`. The `None` arm is the null test, unmoved: a
+/// caller holding a raw pointer writes `pic_slot(p.as_ref())`, and `as_ref()`
+/// performs exactly the null test this function used to perform for it — one
+/// `unsafe` at the caller's own raw boundary instead of one hidden behind a safe-
+/// looking argument.
 ///
 /// (S16's prose floor, collected for the eleventh time: the first draft of the
 /// sentence above named the pointer type this function exists to delete, and the
 /// ratchet counted it.)
-///
-/// # Safety
-/// `p` must be null or point to a live [`SPicture`].
 #[inline]
-pub unsafe fn pic_slot(p: *const SPicture) -> Option<PicId> {
-    if p.is_null() {
-        None
-    } else {
-        (*p).pic_id()
+pub fn pic_slot(p: Option<&SPicture>) -> Option<PicId> {
+    match p {
+        None => None,
+        Some(p) => p.pic_id(),
     }
 }
 
-/// # Safety
-/// `a` and `b` must each be null or point to a live [`SPicture`].
+/// Are these two the same picture? See the note above for the address fallback.
 #[inline]
-pub unsafe fn same_picture(a: *const SPicture, b: *const SPicture) -> bool {
-    if a.is_null() || b.is_null() {
-        return a == b;
-    }
-    match ((*a).pic_id(), (*b).pic_id()) {
+pub fn same_picture(a: Option<&SPicture>, b: Option<&SPicture>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        // The raw form returned `a == b` whenever either side was null: two nulls
+        // compared equal, and a null never equalled a live picture. Reproduced.
+        return a.is_none() && b.is_none();
+    };
+    match (a.pic_id(), b.pic_id()) {
         (Some(x), Some(y)) => x == y,
-        _ => a == b,
+        _ => std::ptr::eq(a, b),
     }
 }
 
@@ -647,7 +670,14 @@ mod tests {
     /// diagonally behind the origin (motion compensation past the picture edge) and
     /// the full `pDst.sub(pad * stride + pad)` that `expand_shim_span`
     /// (`decoder_core.rs`) uses to recover the whole allocation from `pData[i]`.
+    ///
+    /// **The module's enumerated exception to `#![deny(unsafe_code)]`, and S28 is
+    /// what mandates it**: the rule's own sentence is "every such accessor gets a
+    /// Miri test that reads the pointer's full legal reach in both directions", so
+    /// the raw reads below *are* the instrument. It retires with `data_ptr` itself,
+    /// when family 13's callers stop taking plane pointers (W6 step 3).
     #[test]
+    #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
         let mut pic = SPicture::with_planes([
@@ -692,7 +722,10 @@ mod tests {
     /// no compile error, and Miri is the only instrument that would see it. That is
     /// the trade the accessor's doc comment names, and the reason its callers are
     /// exactly `GetRefPic`'s three.
+    ///
+    /// S28's mandated exception, as on the test above.
     #[test]
+    #[allow(unsafe_code)]
     fn data_ptr_ref_reaches_as_far_backward_as_the_mutable_form() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
         let mut pic = SPicture::with_planes([

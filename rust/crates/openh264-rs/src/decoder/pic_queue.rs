@@ -1101,8 +1101,8 @@ mod tests {
             (*pool.slot_mut(id_a)).iFramePoc = 4;
             (*pool.slot_mut(id_b)).iFramePoc = 4; // duplicate POC, distinct slots
             let (a, b) = (pool.slot(id_a), pool.slot(id_b));
-            assert!(!same_picture(a, b), "two slots are two references");
-            assert!(same_picture(a, a));
+            assert!(!same_picture(a.as_ref(), b.as_ref()), "two slots are two references");
+            assert!(same_picture(a.as_ref(), a.as_ref()));
 
             // A picture outside the pool has no slot and is its own identity only.
             // Both writes happen before either address is taken, and the addresses
@@ -1118,12 +1118,14 @@ mod tests {
             let l: *const SPicture = std::ptr::addr_of!(loose);
             let l2: *const SPicture = std::ptr::addr_of!(loose2);
             assert_eq!((*l).pic_id(), None);
-            assert!(same_picture(l, l));
-            assert!(!same_picture(l, l2), "and POC joins nothing");
-            assert!(!same_picture(l, a));
+            assert!(same_picture(l.as_ref(), l.as_ref()));
+            assert!(!same_picture(l.as_ref(), l2.as_ref()), "and POC joins nothing");
+            assert!(!same_picture(l.as_ref(), a.as_ref()));
 
-            assert!(same_picture(std::ptr::null(), std::ptr::null()));
-            assert!(!same_picture(std::ptr::null(), a));
+            // T5.W1: the two null pointers are two absent pictures now, and the
+            // `as_ref()` above is the null test that used to live inside the callee.
+            assert!(same_picture(None, None));
+            assert!(!same_picture(None, a.as_ref()));
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,
