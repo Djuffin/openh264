@@ -9667,6 +9667,24 @@ failed**, plus 20/7/3 on the differential targets; the other two batteries were
 adjudication time; running total 46/15/25) — signature-exact, five isolation runs all
 byte-identical, step 2 not required at one hit.
 
+### The session's own span (S2b) — measured twice, and it is not a regression
+
+`92d6fa75`→`0e42e80f`, decode bench, **3 pairs: −0.45% median** (CB −0.55, Main −0.45,
+High −0.38) against a 3-pair null of +0.02…+0.94 — outside the band, so S2b's first move
+was taken and it was **more pairs, not a diagnosis**. **7 pairs: −0.49% median** (CB
+−1.20, Main −0.12, High −0.49) against a 7-pair null of −0.18…+0.09 (0.27 points wide,
+run at the verdict's pair count per session K's clause). The two readings agree in sign
+and their medians are 0.04 points apart; two of three rows sit below the null's floor on
+the **fast** side and Main is inside it.
+
+So: **small, favorable, consistent** — 207 raw-pointer occurrences became borrows,
+slices and copies, and the decoder did not get slower. No mechanism is claimed: at this
+size D-perf-4's disposition is diagnostic-only, and the plausible causes (four
+`from_raw_parts(…, 24)` re-derivations deleted, pointer arithmetic folded into indexing)
+are exactly the kind that S2b says not to reach for. **No day two is owed** — S2b's
+clause attaches to readings a decision rests on, and no decision rests on this one.
+D-perf-6 governs everything else; both binaries stay stashed (`v_head`, `w_final`).
+
 **The tests caught every real slip, three times, and each was a mechanical pass getting
 the type right and the meaning wrong**: `alloc_picture(false, …)` where the test's whole
 subject was the `true` arm; `Some(&mut *p)` on the ten delegation stubs that are
