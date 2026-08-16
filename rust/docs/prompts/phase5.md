@@ -9,7 +9,7 @@ log and git — this file carries only what remains.
 **The anti-circles contract.** This checklist is **closed**: work enters it only
 via an F-finding or Eugene. Every session's commits map to W-items in its log
 entry. The progress metric is monotone and grep-able — **decoder `raw_ptr`
-occurrences 767** (1283 at the re-plan, 1237 at session R's open, 980 at V's, 974 at W's open), → ~0 at exit
+occurrences 765** (1283 at the re-plan, 1237 at session R's open, 980 at V's, 974 at W's open), → ~0 at exit
 (excluding the named
 survivor and prose); a session that closes no W-item and moves no metric is a stall
 and says so — **and a W-item can close while the metric stands still**, which is
@@ -135,7 +135,7 @@ caller where the C++ has one — fixed, with a red-under-revert test. Decoder `r
 third session running, because exit conditions 1–3 are unmet.
 **W** = **spent** (16 commits, `b045bd42`…`e6579e3c`;
 [`phase5_session_w.md`](phase5_session_w.md)) — W6 bottom-up, and the unit that worked
-turned out to be the **pointer family**, not the module. **Decoder `raw_ptr` 974 → 767
+turned out to be the **pointer family**, not the module. **Decoder `raw_ptr` 974 → 765
 (−21%)**; files carrying `#![deny(unsafe_code)]` **6 → 9**, eight allowing nothing.
 `picture.rs` and `cabac_decoder.rs` closed (the second to **zero** raw pointers),
 `pic_queue.rs` closed with two exceptions named at the items; then the layer flip
@@ -392,7 +392,7 @@ different unit and four of fifteen differ by 1–3; no conversion's shape moved)
 | 8 | `parse_mb_syn_cavlc.rs` | 26 / 68 | 22 / 26 | **PARTIAL** T5.W4/W8/W10/W13 — blocked on `SVlcTable`'s varying-length raw sub-tables |
 | 9 | `mv_pred.rs` | 22 / 115 | 22 / 94 | layer + MV pair flipped (T5.W6/W12); its residue is **`as *mut u32` casts in W4's settled block helpers**, not a signature surface |
 | 10 | `deblocking.rs` | 34 / 109 | 33 / 63 | **PARTIAL** T5.W5/W7/W14 — blocked on planes (step 3) and `pDec` |
-| 11 | `manage_dec_ref.rs` | 24 / 57 | 24 / 37 | layer + `SRefPic` flipped (T5.W8/W11); **context-blocked**, 24 of 24 |
+| 11 | `manage_dec_ref.rs` | 24 / 57 | 24 / 35 | layer + `SRefPic` flipped (T5.W8/W11); **context-blocked**, 24 of 24 |
 | 12 | `nalu.rs` | 23 / 67 | 23 / 68 | untouched — **context-blocked**, 16 of 23 |
 | 13 | `get_intra_predictor.rs` | 42 / 44 | 42 / 44 | untouched — **the 42 retiring SHIMs, step 3**, and 0 of 42 take `pCtx` |
 | 14 | `decoder_core.rs` | 77 / 74 | 77 / 74 | untouched — **context-blocked**, 61 of 77 |

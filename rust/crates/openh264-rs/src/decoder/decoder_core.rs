@@ -527,7 +527,7 @@ pub fn mb_grid_ptr<T>(a: &mut MbArray<T>, mb_xy: usize) -> *mut T {
     a.as_mut_slice().as_mut_ptr().wrapping_add(mb_xy)
 }
 
-pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+pub use crate::decoder::decoder_context::SRefPic;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

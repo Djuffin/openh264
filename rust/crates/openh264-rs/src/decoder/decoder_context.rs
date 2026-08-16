@@ -411,7 +411,10 @@ pub struct SRefPic {
     pub uiLongRefCount: [u8; LIST_A],
     pub iMaxLongTermFrameIdx: i32,
 }
-pub type PRefPic = *mut SRefPic;
+// T5.W11c: `pub type PRefPic = *mut SRefPic;` sat here. Its last code user went when
+// `manage_dec_ref.rs` took the set by borrow; the name survives only in doc comments
+// quoting the C++ signatures, which is the C's name and not this crate's type. The
+// fourth dead pointer typedef of session W (S18, at the definition).
 
 impl Default for SRefPic {
     fn default() -> Self {

@@ -62,7 +62,7 @@ pub const WELS_LOG_INFO: i32 = 3;
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
 
 
-pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+pub use crate::decoder::decoder_context::SRefPic;
 use crate::decoder::decoder_context::{active_pps, active_sps, pps_of, sps_of};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
 
@@ -527,7 +527,7 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
 /// Evicts the oldest short-term reference picture when DPB reaches capacity.
 ///
 /// Matches `static int32_t SlidingWindow (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
-pub unsafe fn SlidingWindow(pCtx: *mut SWelsDecoderContext, pRefPic: *mut SRefPic) -> i32 {
+pub unsafe fn SlidingWindow(pCtx: *mut SWelsDecoderContext, pRefPic: &mut SRefPic) -> i32 {
     if pCtx.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -593,7 +593,7 @@ pub unsafe fn RemainOneBufferInDpbForEC(
 
     let mut iRet = ERR_NONE;
     if (*pRefPic).uiShortRefCount[0] > 0 {
-        iRet = SlidingWindow(pCtx, pRefPic);
+        iRet = SlidingWindow(pCtx, &mut *pRefPic);
     } else {
         let mut iLongTermFrameIdx = 0i32;
         let iMaxLongTermFrameIdx = (*pRefPic).iMaxLongTermFrameIdx;
@@ -1389,10 +1389,12 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Option<
         return ERR_INFO_INVALID_PTR;
     }
 
-    let pRefPic: *mut SRefPic = if isThreadCtx {
-        std::ptr::addr_of_mut!((*pCtx).sTmpRefPic)
+    // T5.W11c: the two-source pick is a borrow of one field or the other, which the
+    // arms unify to on their own — the last raw `SRefPic` in the module.
+    let pRefPic: &mut SRefPic = if isThreadCtx {
+        &mut (*pCtx).sTmpRefPic
     } else {
-        std::ptr::addr_of_mut!((*pCtx).sRefPic)
+        &mut (*pCtx).sRefPic
     };
 
     let Some(pCurDqLayer) = pCurDqLayer else {
@@ -1460,7 +1462,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Option<
                 (*pDec).iFramePoc = 0;
             }
         } else {
-            iRet = SlidingWindow(pCtx, pRefPic);
+            iRet = SlidingWindow(pCtx, &mut *pRefPic);
             if iRet != ERR_NONE {
                 let ec_mode = if !(*pCtx).pParam.is_null() {
                     (*(*pCtx).pParam).eEcActiveIdc
@@ -1632,7 +1634,7 @@ mod tests {
 
             // T5.W11b: the borrow is re-derived at each use, never held across
             // `WelsResetRefPic`. **Miri convicted the previous shape** and it was
-            // this session's own doing: with `pRefPic` a `*mut SRefPic` both
+            // this session's own doing: with `pRefPic` a raw pointer both
             // derivations were `addr_of_mut!` and neither retagged, so a fixture
             // could hold one across a call that made another. T5.W11 turned the
             // callee's parameter into `&mut SRefPic` and the derivations into field

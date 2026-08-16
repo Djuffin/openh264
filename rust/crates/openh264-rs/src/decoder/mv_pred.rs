@@ -180,7 +180,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState, PDqLayer};
 
 
-pub use crate::decoder::decoder_context::{SRefPic, PRefPic};
+pub use crate::decoder::decoder_context::{SRefPic};
 use crate::decoder::decoder_context::{active_pps, active_sps, pps_of, sps_of};
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
