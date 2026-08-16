@@ -791,7 +791,7 @@ pub unsafe fn DecodeCabacIntraMbType(
 }
 
 pub unsafe fn UpdateP16x8RefIdxCabac(
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefIndex: &mut [[i8; 30]; LIST_A],
     iPartIdx: i32,
@@ -814,7 +814,7 @@ pub unsafe fn UpdateP16x8RefIdxCabac(
 }
 
 pub unsafe fn UpdateP8x16RefIdxCabac(
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefIndex: &mut [[i8; 30]; LIST_A],
     mut iPartIdx: i32,
@@ -840,7 +840,7 @@ pub unsafe fn UpdateP8x16RefIdxCabac(
 }
 
 pub unsafe fn UpdateP8x8RefIdxCabac(
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iPartIdx: i32,
     iRef: i8,
@@ -855,7 +855,7 @@ pub unsafe fn UpdateP8x8RefIdxCabac(
     pDecRef[iScan4Idx + 5] = iRef;
 }
 
-pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
+pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
     let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
@@ -865,7 +865,7 @@ pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: PDqLayer, iPartIdx: i32) {
     *pDirect.add(iScan4Idx + 5) = 1;
 }
 
-pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
+pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
     for i in (0..16).step_by(4) {
@@ -878,7 +878,7 @@ pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: PDqLayer) {
     }
 }
 
-pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const i16, iListIdx: i8) {
+pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: *const i16, iListIdx: i8) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mvd_x = *pMvd;
     let mvd_y = *pMvd.add(1);
@@ -889,7 +889,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: *mut DqLayerState, pMvd: *const 
 }
 
 pub unsafe fn UpdateP16x8MvdCabac(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
     pMvd: *const i16,
@@ -915,7 +915,7 @@ pub unsafe fn UpdateP16x8MvdCabac(
 }
 
 pub unsafe fn UpdateP8x16MvdCabac(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
     pMvd: *const i16,
@@ -1238,7 +1238,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
 
 pub unsafe fn ParseTransformSize8x8FlagCabac(
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pNeighAvail: *const SWelsNeighAvail,
     bTransformSize8x8Flag: &mut bool,
 ) -> i32 {
@@ -1406,7 +1406,7 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
 
 pub unsafe fn ParseIntraPredModeChromaCabac(
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     uiNeighAvail: u8,
     iBinVal: &mut i32,
@@ -1480,7 +1480,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 
 pub unsafe fn ParseRefIdxCabac(
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: *const SWelsNeighAvail,
     _nzc: &mut [u8; 48],
@@ -1660,7 +1660,7 @@ pub unsafe fn ParseMvdInfoCabac(
 
 pub unsafe fn ParseInterPMotionInfoCabac(
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
@@ -1669,16 +1669,23 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     pRefIndex: &mut [[i8; 30]; LIST_A],
 ) -> i32 {
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    // T5.W9: reads only, so copied rather than borrowed — `mv_pred`'s and
+    // `parse_mb_syn_cavlc`'s case a third time (T5.W6/W8).
+    let pRefCountHdr =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
+    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let ppRefPic = &(*pCtx).sRefPic.pRefList[LIST_0];
-    let pRefCount0 = pSliceHeader.uiRefCount[0];
+    let pRefCount0 = pRefCountHdr[0];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut pMv = [0i16; 2];
     let mut pMvd = [0i16; 2];
     let mut iRef = [0i8; 2];
 
-    let pSps = sps_of(pCtx, pSliceHeader.sps_ref);
+    let pSps = sps_of(
+        pCtx,
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+    );
     let iMinVmv = (*(*pSps).pSLevelLimits).iMinVmv;
     let iMaxVmv = (*(*pSps).pSLevelLimits).iMaxVmv;
 
@@ -1841,7 +1848,8 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             // `ParseRefIdxCabac` and `UpdateP8x8RefIdxCabac` reach the layer but
             // neither of these arrays; the eight per-partition checks below become
             // two.
-            let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+            // T5.W9: the window borrow that stood here was written once and read
+            // once, across two calls taking the whole layer. Re-derived per access.
             let pNoSubMbPartSizeLessThan8x8Flag = (*pCurDqLayer)
                 .grid
                 .no_sub_mb_part_size_less_than8x8_flag
@@ -1855,7 +1863,8 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 if uiSubMbType >= 4 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_SUB_MB_TYPE);
                 }
-                pSubMbType[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
+                (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i] =
+                    g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iType;
                 pSubPartCount[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartCount;
                 pPartW[i] = g_ksInterPSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
 
@@ -1900,7 +1909,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
             for i in 0..4 {
                 let iPartCount = pSubPartCount[i] as usize;
-                uiSubMbType = pSubMbType[i];
+                uiSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMbXy)[i];
                 let iBlockW = pPartW[i] as usize;
                 let mut iCacheIdx = g_kuiCache30ScanIdx[i << 2] as usize;
 
@@ -1982,7 +1991,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 
 pub unsafe fn ParseInterBMotionInfoCabac(
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: *const SWelsNeighAvail,
@@ -1992,11 +2001,15 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     pRefIndex: &mut [[i8; 30]; LIST_A],
     pDirect: &mut [i8; 30],
 ) -> i32 {
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &mut pSlice.sSliceHeaderExt.sSliceHeader;
+    // T5.W9: reads only, so copied rather than borrowed — `mv_pred`'s and
+    // `parse_mb_syn_cavlc`'s case a third time (T5.W6/W8).
+    let pRefCountHdr =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
+    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
-    let pRefCount = pSliceHeader.uiRefCount;
+    let pRefCount = pRefCountHdr;
     let mbType = *(*pDec).pMbType.get(iMbXy);
 
     // C keeps pMv[4]/pMvd[4]: the 8x8 path duplicates the low pair into the high
@@ -2045,7 +2058,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
         let mut subMbType: SubMbType = 0;
-        if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+        if iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx, &mut *pCurDqLayer,
@@ -2231,21 +2244,16 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         }
         let bIsLongRef = (*pRefs.get(ref_id(pCtx, LIST_1, 0))).bIsLongRef;
         let ref0Count = WELS_MIN(
-            pSliceHeader.uiRefCount[LIST_0],
+            pRefCountHdr[LIST_0],
             (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
         );
         let mut has_direct_called = false;
         let mut directSubMbType: SubMbType = 0;
 
-        // T5.I1: one window borrow for the flag across the parse loop. `pSubMbType`
-        // cannot take one here — `PredMvBDirectSpatial` and `PredBDirectTemporal`
-        // write `grid.sub_mb_type[iMbXy]` themselves (`mv_pred.rs:1035`, `:1130`) —
-        // so its window is per iteration below, and one shared window covers the
-        // read-only loops after.
-        let pNoSubMbPartSizeLessThan8x8Flag = (*pCurDqLayer)
-            .grid
-            .no_sub_mb_part_size_less_than8x8_flag
-            .get_mut(iMbXy);
+        // T5.W9: T5.I1's loop-level window borrow for the flag is gone, for the
+        // reason its cavlc twin's went at T5.W8 — it was a `&mut` into one grid array
+        // held across `PredMvBDirectSpatial`/`PredBDirectTemporal`, which take the
+        // whole layer. Re-derived per write below.
 
         for i in 0..4usize {
             let err = ParseBSubMBTypeCabac(pCtx, pNeighAvail, &mut uiSubMbType);
@@ -2261,12 +2269,13 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *pNoSubMbPartSizeLessThan8x8Flag = false;
+                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) =
+                    false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
                 if !has_direct_called {
-                    if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                    if iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
@@ -2294,9 +2303,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     }
                     has_direct_called = true;
                 }
-                let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
-                pSubMbType[i] = directSubMbType;
-                if IS_SUB_4x4(pSubMbType[i]) {
+                // T5.W9: re-derived per access, as above.
+                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = directSubMbType;
+                if IS_SUB_4x4((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
                     pSubPartCount[i] = 4;
                     pPartW[i] = 1;
                 }
@@ -2309,13 +2318,15 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         // T5.I1: nothing below writes this family, and `FillSpatialDirect8x8Mv`,
         // `FillTemporalDirect8x8Mv`, `Update8x8RefIdx` and `PredMv` reach the layer
         // but not this array. One shared window for the three loops that follow.
-        let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
+        // T5.W9: copied, not borrowed — the parse loop is done writing and the
+        // readers below reach the layer but not this array (T5.I1's own sentence).
+        let pSubMbType = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
 
         for i in 0..4usize {
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
             if IS_DIRECT(pSubMbType[i]) {
-                if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                if iDirectSpatialMvPredFlag != 0 {
                     FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
                         pDec,
@@ -2376,7 +2387,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let subMbType = pSubMbType[i];
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
-                    if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                    if iDirectSpatialMvPredFlag != 0 {
                         Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, listIdx, iRef[listIdx]);
                         ref_idx_list[listIdx][i] = iRef[listIdx];
                     }
@@ -2412,7 +2423,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
                 let subMbType = pSubMbType[i];
-                if IS_DIRECT(subMbType) && pSliceHeader.iDirectSpatialMvPredFlag == 0 {
+                if IS_DIRECT(subMbType) && iDirectSpatialMvPredFlag == 0 {
                     continue;
                 }
                 let iref = ref_idx_list[listIdx][i];
@@ -2623,7 +2634,7 @@ pub unsafe fn ParseCbpInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState, iQpDelta: &mut i32) -> i32 {
+pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqLayerState, iQpDelta: &mut i32) -> i32 {
     let cabac_win = cabac_rbsp_window(pCtx);
     let mut uiCode: u32 = 0;
     let pCurrSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
@@ -2660,7 +2671,7 @@ pub unsafe fn ParseCbfInfoCabac(
     pNeighAvail: *const SWelsNeighAvail,
     pNzcCache: &[u8; 48],
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iZIndex: i32,
     iResProperty: i32,
@@ -2934,7 +2945,7 @@ pub unsafe fn ParseResidualBlockCabac(
     sTCoeff: *mut i16,
     uiQp: u8,
     pCtx: PWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
 ) -> i32 {
     let mut uiTotalCoeffNum: u32 = 0;
@@ -3017,7 +3028,7 @@ pub unsafe fn ParseResidualBlockCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState, pDec: PPicture) -> i32 {
+pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqLayerState, pDec: PPicture) -> i32 {
     let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
     let pBsAux = &mut *crate::decoder::decoder_context::slice_bit_reader(pCtx);
     let iDstStrideLuma = (*pDec).linesize(0);

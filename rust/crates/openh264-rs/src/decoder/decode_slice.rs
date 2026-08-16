@@ -3990,7 +3990,7 @@ pub unsafe fn ParseIntra4x4Mode(
 
     if pps.bEntropyCodingModeFlag {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
-            pCtx, pCurDqLayer,
+            pCtx, &mut *pCurDqLayer,
             pDec,
             uiNeighAvail,
             &mut iCode,
@@ -4139,7 +4139,7 @@ pub unsafe fn ParseIntra8x8Mode(
 
     if pps.bEntropyCodingModeFlag {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
-            pCtx, pCurDqLayer,
+            pCtx, &mut *pCurDqLayer,
             pDec,
             uiNeighAvail,
             &mut iCode,
@@ -4211,7 +4211,7 @@ pub unsafe fn ParseIntra16x16Mode(
     let pps = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     if pps.bEntropyCodingModeFlag {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
-            pCtx, pCurDqLayer,
+            pCtx, &mut *pCurDqLayer,
             pDec,
             uiNeighAvail,
             &mut iCode,
@@ -4284,7 +4284,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
             // a local and storing it after the call has no borrow live across it.
             let mut bTransformSize8x8Flag = false;
             let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
-                pCtx, dq,
+                pCtx, &mut *dq,
                 pNeighAvail,
                 &mut bTransformSize8x8Flag,
             );
@@ -4411,7 +4411,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 // neighbour addresses while holding this borrow.
                 let mut bTransformSize8x8Flag = false;
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
-                    pCtx, dq,
+                    pCtx, &mut *dq,
                     pNeighAvail,
                     &mut bTransformSize8x8Flag,
                 );
@@ -4427,7 +4427,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
 
         let mut iQpDelta = 0i32;
         let ret = crate::decoder::parse_mb_syn_cabac::ParseDeltaQpCabac(
-            pCtx, dq,
+            pCtx, &mut *dq,
             &mut iQpDelta,
         );
         if ret != ERR_NONE {
@@ -4461,7 +4461,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 I16_LUMA_DC,
                 scaled_tcoeff_mb.as_mut_ptr(),
                 *iLumaQp as u8,
-                pCtx, dq,
+                pCtx, &mut *dq,
                 pDec,
             );
             if ret != ERR_NONE {
@@ -4482,7 +4482,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         I16_LUMA_AC,
                         coeff_ptr,
                         *iLumaQp as u8,
-                        pCtx, dq,
+                        pCtx, &mut *dq,
                         pDec,
                     );
                     if ret != ERR_NONE {
@@ -4563,7 +4563,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                                 res_prop,
                                 coeff_ptr,
                                 *iLumaQp as u8,
-                                pCtx, dq,
+                                pCtx, &mut *dq,
                                 pDec,
                             );
                             if ret != ERR_NONE {
@@ -4611,7 +4611,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     res_prop,
                     coeff_ptr,
                     (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
-                    pCtx, dq,
+                    pCtx, &mut *dq,
                     pDec,
                 );
                 if ret != ERR_NONE {
@@ -4650,7 +4650,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         res_prop,
                         coeff_ptr,
                         (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
-                        pCtx, dq,
+                        pCtx, &mut *dq,
                         pDec,
                     );
                     if ret != ERR_NONE {
@@ -4725,7 +4725,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
     } else if uiMbType == 25 {
-        ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, dq, pDec);
+        ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut *dq, pDec);
         if ret != ERR_NONE {
             return ret;
         }
@@ -4847,7 +4847,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             pDec,
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterPMotionInfoCabac(
-            pCtx, dq,
+            pCtx, &mut *dq,
             pDec,
             pRefs,
             pNeighAvail,
@@ -4870,7 +4870,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
         if intra_type == 25 {
-            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, dq, pDec);
+            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut *dq, pDec);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -5066,7 +5066,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             &*dq,
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterBMotionInfoCabac(
-            pCtx, dq,
+            pCtx, &mut *dq,
             pDec,
             pRefs,
             pNeighAvail,
@@ -5090,7 +5090,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
         if intra_type == 25 {
-            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, dq, pDec);
+            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut *dq, pDec);
             if ret != ERR_NONE {
                 return ret;
             }
