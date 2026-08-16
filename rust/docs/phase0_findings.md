@@ -1465,3 +1465,65 @@ the third of the three sweep inputs to produce a hit, which removes the last tra
 per-clip clause the way measurements 36–38 removed `n`, `t` and the stream.
 
 Running total: **forty-two measurements, fourteen alternations, twenty-one acquittals.**
+
+### Forty-third to forty-fifth measurements — 2026-08-15, Phase 5 session V: three hits over two batteries, and the first alternation in this phase that ties at 2/2
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 43 | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0` (**release**, battery at `3180ac39`) | 42538 | **40857** (short) |
+| 44 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**, battery at `92d6fa75`) | 39981 | **0** |
+| 45 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=1500 cabac=0 rc=0` (**release**, same battery) | 39895 | **0** |
+
+Two exit batteries ran this session — one after the deny-clean pair, one after the
+`fmo` conversion — and every hit is inside S14's signature on every axis: `mt`,
+`sm=3`, `t=4`, wrong length. The profile is not a clause (43 and 45 are release, 44 is
+debug) and neither is `n` (45 is the fourth `n=1500` observation in 45 measurements)
+nor the clip.
+
+**Step 0 checked, not assumed, and it does not apply.** The session's diff is
+production decoder code, so the "test-only" condition fails and the shortcut needs two
+byte-identical `rust_enc` binaries to acquit. One build each:
+
+| tree | `rust_enc` (debug) SHA-256 |
+|---|---|
+| control `676231fa` (U's code state) | `1a5881495c0caf590b6a297f3d1fc15f1f9325e6…` |
+| head `92d6fa75` | `cccb75cbe472705f5220866002736a93d906225b…` |
+
+Different binaries, so base and head are two programs — session P's warning met
+head-on: the driver links the whole library, so decoder-only production changes still
+change the encoder binary.
+
+**Step 1, all three: five isolation runs each, all byte-identical at the C++'s
+length.** 43 gave 42538 five times where the battery gave 40857; 44 gave 39981 five
+times where the battery gave 0; 45 gave 39895 five times where the battery gave 0. So
+from **one binary and one configuration**, each of the three produced two different
+outcomes — the discriminator S14 step 1 names, met three times: *a deterministic port
+bug repeats its bytes.* And the isolation runs reproducing nothing is a statement
+about the harness, not the trees (S23b, from the other side): the race needs a sweep's
+load.
+
+**Step 2 fired, because two hits landed in one battery.** Whole `mt` presets
+alternated back to back, both binaries built once and copied over the driver's path
+inside one loop, machine otherwise idle, 12 presets per side at 120 configurations
+each — **1440 configurations per side**:
+
+| side | hits |
+|---|---|
+| head `92d6fa75` | **2** |
+| control `676231fa` | **2** |
+
+**A tie, and not a 0/0 tie** — the alternation ran (S23b's condition) and produced hits
+on both sides, which is what S14 says to expect. **HEAD is not worse. Acquitted as F3,
+all three.**
+
+**Rate, and it is a datapoint against the sustained-load figure.** 2 hits per 1440
+configurations is ≈**1/720** per side under *back-to-back* presets, where session K
+measured ≈1/307 under the same regime over 6442 configurations, and ≈1/800 is the
+battery figure. The rate is not stable across sessions at this sample size; what
+reproduces is the signature, not the frequency. Three hits in two batteries of 682
+configurations each is ≈1/455 on the battery side of this session — higher than
+K's battery rate and lower than its preset rate, from the same instrument on a
+different day.
+
+Running total: **forty-five measurements, fifteen alternations, twenty-four
+acquittals.**

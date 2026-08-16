@@ -9441,3 +9441,155 @@ and the next brief is a Phase 5 one** ([`prompts/phase5_session_v.md`](prompts/p
 whose face 0 is the day two and whose rule is that no code lands before it closes —
 the window's endpoint must stay `e6873fe1` or it is not a second reading of the
 same thing.
+
+## Session V (Phase 5) — the day two confirms, F50 and F51 close, and W6's done-test is re-derived as the decoder's
+
+**Commits:** `676231fa` (doc tail), `40ecab8b` (T5.V1, face 0), `d9c3f147` (T5.V2,
+F50), `3180ac39` (T5.V3, two modules deny-clean), `92d6fa75` (T5.V4, `fmo.rs` + F51).
+Scoped as the closing session; it is not, and the reason is a closure this session
+measured rather than assumed.
+
+### Face 0 — the day two is paid, and it is the phase's first that confirms
+
+The D-gate-1 window `d0b7f399`→`e6873fe1` reads **+3.38% CB / +2.65% decode median**
+at 7 pairs against U's morning **+3.58% / +2.77%**: same sign, same row order, medians
+0.12 points apart, every decode row above its own reading's null ceiling, encode flat
+in both. **The separation is stated rather than implied** — ≈10 hours, *same calendar
+day*, 09:30–10:30 against 20:01–20:08 — which is not the different day S2b's clause
+asks for and is the widest the closing order left; so the verdict rests on the two
+readings **agreeing**, not on the second alone. V's own 7-pair null is 2.70 points
+wide (U's 2.56), and CB clears its own ceiling by 1.09 points, Main by 0.20: thin
+margins that would not carry a verdict alone, which is the point of taking two.
+
+**The niche loses the other half of its label.** Main flips sign between the readings
+(−0.72% → +0.33%), High falls to a third, every row inside the floor on both days. It
+goes from *directionally consistent, unresolved* to **unresolved**, and stays in the
+tree because nothing is outside the floor in either direction. The bisect halves were
+not re-run — session K's law, as the hand-off said.
+
+**Option 2 is spent and it changed nothing, which is itself the result.** This is the
+phase's third second-day reading and the first that confirms; the two that overturned
+(N's bisect halves, the niche asymmetry) were measured in pieces at the resolution
+limit, and the two that survived (N's whole span, this window) were measured whole.
+
+**Stop-line: still breached, ≈2.0–2.5 points** — cumulative CB ≈ +25.0…+25.5% against
+≈+23%, the median tripwire still not breached. **D-perf-6** (plan §7.4): recovery
+deferred to the Phase 9 perf pass, D-perf-4's own disposition, on Phase 2's precedent.
+Nothing parks because nothing is attributed; the line is **not** re-baselined to fit
+the result. **Exit condition 5 is discharged.**
+
+### Face 1 — F50 was one token, and the token is `false`
+
+`au_parser.cpp:947` rejects an unsupported `profile_idc` with `return false;` inside
+an `int32_t` function whose every other exit is an error code — so the C++ reports
+**success**, raises no error signal, and sets `bHasNewSps` for an SPS it never stored.
+The port had transliterated the arm's *intent* instead of its *value*. **Corpus codes
+2683/24 → 2707/0**, output unchanged at 2690/17 (all 17 the documented `CABA2_SVA_B`
+tie-break), and every one of the 24 moved golden rows moved **in the code column
+only** — no frame count, no dimension, no plane hash. The class was checked, not
+assumed: all 21 other `return false;` sites under `codec/decoder/core/src/` are in
+functions that really return `bool`, and there is no reverse instance.
+
+### Face 2 — the brief's premise did not survive the face, and the correction is the hand-off
+
+W6's done-test is "`decode_slice.rs` compiles under `#![deny(unsafe_code)]`". Measured
+at the face: that file calls **49 distinct `unsafe fn`s across 10 other modules** — 41
+by qualified path (`parse_mb_syn_cabac` 15, `parse_mb_syn_cavlc` 14, `mv_pred` 3,
+`cabac_decoder` 3, `deblocking` 2, one each in `pic_queue`, `fmo`, `decoder_core`,
+`common::deblocking_common`) and 8 imported from `decoder_context`. The lint fires on
+an `unsafe` **block** and calling an `unsafe fn` requires one, so **the done-test's
+S20 closure is the transitive callee set, which is the decoder**: 16 non-deny modules,
+**439 `unsafe fn`, 977 raw-pointer occurrences**.
+
+**And the same closure blocks step 1 of the decomposition specifically.** The view
+struct hands out `&mut` borrows of context fields while all 49 callees still take
+`pCtx` and reach those fields through it — F24/F25/F28's retag shape, which the Miri
+probes exist to catch. The decomposition's sentence is right and its scope was wrong:
+S29's objection dies with *the last `pCtx` parameter*, and that is decoder-wide. **So
+the order inverts: the callees convert first, bottom-up, and the view struct is W6's
+last step.** The named list of families, with a size each and the dependency order, is
+`phase5_session_w.md` §1 — "never *the rest*", met.
+
+### What landed under the corrected order — three modules, and one of them found a defect
+
+`dec_golomb.rs` and `bit_stream.rs` (T5.V3) needed **no conversion at all**:
+`BsGetTrailingBits`'s raw parameter documented a caller defect T3.3 fixed three phases
+ago and its five `unsafe` blocks were vestigial under a file-wide `unused_unsafe`;
+`RBSP2EBSP` was a raw duplicate of the safe helper *in the same file* with no
+production caller (S18's shape, found at the definitions); `slice_bit_reader` moved to
+`decoder_context.rs`, which is what it always was.
+
+`fmo.rs` (T5.V4) is the recipe in miniature — nine `unsafe fn` of one shape (raw
+pointer, null test, deref), converted to `Option<&TagFmo>`/`Option<&mut TagFmo>` with
+the null test kept exactly where it was; `UninitFmoList` takes `&mut [TagFmo]`; four
+signatures shed `pMa`, dead since T5.R3. **Deny-clean decoder modules 3 → 6 of 22**,
+each proved to bite (S33: a one-line `unsafe { *p }` gives `error: usage of an unsafe
+block`). Decoder `raw_ptr` **980 → 974**.
+
+**F51, found by that conversion**: `UninitFmoList` had no caller in the port, and the
+C++ has one — `ResetFmoList` clears every active `sFmoList` entry *and then* zeroes
+`iActiveFmoNum`; the port did only the second. So no entry ever went inactive:
+`FmoParamUpdate`'s re-activation arm could never fire again (the counter stayed 0 for
+the decoder's life), and `FmoParamSetsChanged`'s first term — `!bActiveFlag`, which
+exists to force a rebuild after exactly this reset — could never fire either, so an
+entry whose slice-group parameters matched the new sequence kept its old map. F44's
+class: a function the C++ calls and the port does not, invisible to
+`find_unwritten_fields.py` because the fields *are* written, just never cleared.
+Fixed, with a **red-under-revert** test; the corpus is unchanged at 2690/17 and 2707/0
+because no corpus stream carries a mid-sequence SPS together with FMO — the test is
+the instrument, per F21.
+
+### Numbers, gates, and the session's own span
+
+Corpus **output 2690/17, codes 2707/0**, all 2707 rows C++-refereed. Decoder `raw_ptr`
+**974**, `SHIM(` **52** (unmoved: the 42 in `get_intra_predictor.rs` still wait on
+their callers' plane pointers), deny-clean modules **6/22**. Ratchet totals
+`unsafe_fn` 1245 → 1234, `unsafe_block` 618 → 607, `raw_ptr` 4117 → 4111; the baseline
+was regenerated twice, each time because a **move** raised a destination file's
+per-file count while the totals fell — S16's "read per-file deltas, never the total",
+arriving from the direction it warns about.
+
+**V's own span** (`e6873fe1`→`92d6fa75`, 3 pairs) reads **+0.11% decode median** with
+every row **inside** its own 3-pair null band (−0.11%…+0.26% against −0.15%…+0.46%).
+No day two is owed: S2b's clause attaches to readings a decision rests on, and no
+decision rests on this one. Both binaries stay stashed.
+
+### Hand-off: Phase 5, session W — W6 bottom-up, callees first
+
+Brief: [`prompts/phase5_session_w.md`](prompts/phase5_session_w.md). It carries the
+**named list of families** — sixteen, in dependency order, each with its `unsafe fn`
+and raw-pointer count — which is what W6's remainder is, rather than "the rest".
+Session W's scope is families 2, 4, 5 and 6 (the ones with nothing in front of them
+now that `fmo` has landed), then as much of `parse_mb_syn_cabac` and
+`parse_mb_syn_cavlc` as fits, because those two are 29 of the 49 calls that stand
+between `decode_slice.rs` and its done-test.
+
+**Nothing else is owed out of this session.** The window's day two is paid and
+dispositioned (D-perf-6); V's own span reads inside its own null band on every row, so
+S2b attaches no day two to it; the corpus is fully refereed at 2707/0 codes; the F3
+ledger is current. `phase6.md` stays unwritten because exit conditions 1–3 are unmet —
+the third session running, and the reason is now measured rather than estimated.
+
+### Gate state at close, and the F3 adjudication
+
+**Exit battery at `92d6fa75`: 11 passed / 2 failed / 1 skipped** — tests 483/477/20,
+census 59, ratchet no per-file increase, `--all-targets` compiling, both benches
+bit-identical, **Miri 368/0** across the library (338) and all three differential
+targets (20/7/3). The two FAILs are **both sweep steps, one hit each, both F3**; a
+first battery at `3180ac39` had one more. Corpus **2690/17 output, 2707/0 codes**,
+every row C++-refereed.
+
+**Three F3 measurements (43–45), adjudicated and acquitted** — `phase0_findings.md`
+§F3. Each is inside the signature on every axis; step 0's hash shortcut was tested and
+does not apply (two different `rust_enc` binaries, because the driver links the whole
+library and this session changed production decoder code — session P's warning met
+head-on); step 1 gave **five byte-identical isolation runs each**, against a battery
+that produced a short stream once and zero bytes twice, which is *two different
+outcomes from one binary and one configuration*, three times over. Step 2 fired
+because two hits landed in one battery: whole `mt` presets alternated back to back,
+12 per side, 1440 configurations each — **head 2 hits, control 2 hits**. A tie, and
+not a 0/0 one (S23b): **HEAD is not worse.**
+
+**And the rate is a datapoint against its own record**: ≈1/720 per side under
+back-to-back presets, where session K measured ≈1/307 under the same regime. What
+reproduces across sessions is the *signature*; the frequency does not.

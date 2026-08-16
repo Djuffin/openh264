@@ -2450,3 +2450,48 @@ MALFORMED_DUMP_DIR=/tmp/corpus cargo test --test malformed_stream_parity   # dum
 rust/tools/ecref/ecref --stdin < /tmp/corpus/narrow_16x16/hdr1.07.bin      # C++
 cargo run --example portref -- --stdin < /tmp/corpus/narrow_16x16/hdr1.07.bin  # port
 ```
+
+## F51 — `ResetFmoList` resets the counter and not the list, so `UninitFmoList` had no caller
+
+**FIXED (session V, T5.V4).** Found by converting `fmo.rs` to references: the module's
+`UninitFmoList` had **zero callers in the port**, and the C++ has one.
+
+`au_parser.cpp:1790` — `ResetFmoList`, whose own comment is *"reset fmo list due to got
+Sps now"* — does two things in order:
+
+```c
+UninitFmoList (&pCtx->sFmoList[0], MAX_PPS_COUNT, pCtx->iActiveFmoNum, pCtx->pMemAlign);
+iCountNum = pCtx->iActiveFmoNum;
+pCtx->iActiveFmoNum = 0;
+```
+
+The port did the second and not the first. Every entry of `sFmoList` kept
+`bActiveFlag = true`, its macroblock count, its slice-group type and count, and its
+map, across a new sequence.
+
+**Two consequences, both C++-visible, and neither is a leak** (the map is a `Vec` since
+T5.R3, so the memory the C++'s comment was fixing cannot leak here):
+
+1. **The counter never climbs again.** `FmoParamUpdate`'s re-activation arm is
+   `!(*pFmo).bActiveFlag && *pActiveFmoNum < MAX_PPS_COUNT`. With no entry ever
+   deactivated, it cannot fire after the first reset, so `iActiveFmoNum` stays 0 for
+   the decoder's life and `ResetFmoList` returns 0 where the C++ returns a real count.
+2. **A stale map can survive a new sequence.** `FmoParamSetsChanged`'s **first** term
+   is `!(*pFmo).bActiveFlag` — it is there precisely to force a rebuild after this
+   reset. An entry whose slice-group parameters happen to match the new sequence's
+   passes the other three terms and keeps the previous sequence's map.
+
+**The class is F44's** — a function the C++ calls and the port does not — and it hides
+from the same instruments. `find_unwritten_fields.py` (F45's tool) cannot see it,
+because these fields *are* written; they are simply never cleared. `find_stub_bodies.py`
+and `find_shadowing_stubs.py` (F43's) cannot see it either: there is no stub, just an
+absent call.
+
+**Coverage** (F21's rule): `reset_fmo_list_clears_the_entries_the_cpp_clears` in
+`nalu.rs` pins both halves — the entry's fields after the reset, and that a cleared
+entry re-activates and increments the counter — and is **red under revert, measured**:
+deleting the `UninitFmoList` call fails the first assertion and the re-activation one.
+No corpus stream carries a mid-sequence SPS together with FMO (session S built
+`make_fmo_asset.py` because no `res/` stream had more than one slice group at all),
+which is why the corpus reads **2690/17 output, 2707/0 codes — unchanged — after the
+fix**: the defect is real and the corpus cannot see it. The test is the instrument.
