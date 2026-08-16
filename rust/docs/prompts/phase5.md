@@ -150,6 +150,13 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**Y** = **the close candidate** ([`phase5_session_y.md`](phase5_session_y.md)):
+face 0 the measured context split (`SliceCtx`, `pPicBuff` deliberately not in it,
+X's two compiled facts carried), the remaining families, **the `common/`
+boundary decided** (safe entry points beside the raw ones — the brief's §4
+carries the settlement: decoder deny-clean now, no encoder edit, raw forms
+deleted in Phase 6, per-kernel exception fallback), W7's closure, and the phase
+close if conditions 1–3 read met.
 **X** = **spent** (10 commits, `4d36cb6c`…`ec672022`;
 [`phase5_session_x.md`](phase5_session_x.md)) — scoped as the endgame, and **it did not
 close the phase**. Decoder `raw_ptr` **765 → 456 (−40%)**, `SHIM(` **52 → 7**,

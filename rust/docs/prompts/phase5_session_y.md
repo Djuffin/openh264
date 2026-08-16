@@ -68,15 +68,27 @@ exceptions stay); `decoder_context.rs`'s 59; `decoder_core.rs`'s 68; the `SSlice
 and `BsCursor` locals in `decode_slice.rs`; `parse_mb_syn_cavlc`'s `SVlcTable`
 sub-tables. Sizes re-derived at each family's open.
 
-## 4. Face 2 — the `common/` boundary, which is a decision
+## 4. Face 2 — the `common/` boundary, **decided** (steward, at `3e2f43e6`)
 
-`deblocking.rs`'s eight edge filters call `common::deblocking_common`'s `unsafe fn`
-kernels, so the module cannot carry `#![deny(unsafe_code)]` without either
-converting those kernels (they are `common/`, not `src/decoder/`, so it is a scope
-call) or an enumerated exception with a Phase pointer. Same shape for
-`decode_mb_aux`'s and `error_concealment`'s `common/` calls. **Decide it explicitly
-and write the decision down**; do not let it be settled by whichever is easier at
-the moment it is met.
+The either/or ("convert the kernels or except the modules") missed the strangler's
+own third form: **safe slice-taking entry points added beside the raw ones, in
+`common/`**. The kernel body is shared; the safe form takes what the decoder now
+has (slices, cursors); its internal `unsafe` block lives in `common/`, which exit
+condition 2 does not scope (it reads "every **decoder** module"). So:
+
+1. Decoder callers move to the safe forms; `deblocking.rs`, `decode_mb_aux.rs`
+   and `error_concealment.rs` go deny-clean **now**, with no encoder edit
+   (F12/P10 holds — the raw forms stay for the encoder's callers).
+2. The raw forms carry a one-line pointer: **deleted in Phase 6** when the
+   encoder's callers convert onto the safe forms.
+3. Per-kernel fallback, used only where a wrapper cannot express the contract:
+   the enumerated exception with its Phase pointer (`expand_pic`'s two named
+   survivors are already this).
+
+The surface is small — re-derive at the face (S24), but the raw-signature
+kernels the decoder still reaches number single digits. Write each wrapper's
+width/alignment contract from the kernel's own (S6, F35); no behavior change,
+byte-identical per commit.
 
 ## 5. Face 3 — W7's closure, then the phase close
 
