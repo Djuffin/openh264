@@ -1113,7 +1113,7 @@ pub unsafe fn ParseInterInfo(
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, 0, iRefIdx as i8, iMv.as_ptr());
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, 0, iRefIdx as i8, &iMv);
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
@@ -1171,7 +1171,7 @@ pub unsafe fn ParseInterInfo(
                     0,
                     i << 3,
                     iRefIdx[i] as i8,
-                    iMv.as_ptr(),
+                    &iMv,
                 );
             }
         }
@@ -1232,7 +1232,7 @@ pub unsafe fn ParseInterInfo(
                     0,
                     i << 2,
                     iRefIdx[i] as i8,
-                    iMv.as_ptr(),
+                    &iMv,
                 );
             }
         }
@@ -1548,7 +1548,7 @@ pub unsafe fn ParseInterBInfo(
                 pDec,
                 listIdx,
                 ref_idx_list[listIdx][0],
-                iMv.as_ptr(),
+                &iMv,
             );
         }
     } else if IS_INTER_16x8(mbType) {
@@ -1620,7 +1620,7 @@ pub unsafe fn ParseInterBInfo(
                     listIdx,
                     iPartIdx as usize,
                     iRefIdx,
-                    iMv.as_ptr(),
+                    &iMv,
                 );
             }
         }
@@ -1691,7 +1691,7 @@ pub unsafe fn ParseInterBInfo(
                     listIdx,
                     iPartIdx as usize,
                     iRefIdx,
-                    iMv.as_ptr(),
+                    &iMv,
                 );
             }
         }

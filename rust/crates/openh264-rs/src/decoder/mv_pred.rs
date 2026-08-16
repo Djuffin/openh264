@@ -1040,7 +1040,7 @@ pub unsafe fn PredMvBDirectSpatial(
     }
     *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
 
-    let pMvd = [0i16; 4];
+    let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
     let colocPic = pRefs.get(ref_id(pCtx, LIST_1, 0));
     let bIsLongRef = if !colocPic.is_null() { (*colocPic).bIsLongRef } else { false };
 
@@ -1066,8 +1066,8 @@ pub unsafe fn PredMvBDirectSpatial(
         }
         UpdateP16x16DirectCabac(pCurDqLayer);
         for listIdx in 0..2 {
-            UpdateP16x16MotionInfo(pCurDqLayer, pDec, listIdx, ref_idx[listIdx as usize], iMvp[listIdx as usize].as_mut_ptr());
-            UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i32);
+            UpdateP16x16MotionInfo(pCurDqLayer, pDec, listIdx, ref_idx[listIdx as usize], &iMvp[listIdx as usize]);
+            UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, listIdx as i32);
         }
     } else {
         if bSkipOrDirect {
@@ -1137,7 +1137,7 @@ pub unsafe fn PredBDirectTemporal(
     // the overlap was invisible; as borrows the compiler names it, which is S25's law
     // arriving on schedule. The fix is S25's too: no borrow outlives one expression,
     // so the count is copied here and the scale is re-read at its use.
-    let pMvd = [0i16; 4];
+    let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
     let ref0Count = std::cmp::min(
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
         (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
@@ -1150,8 +1150,8 @@ pub unsafe fn PredBDirectTemporal(
         UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_1 as i32, ref_idx[LIST_1]);
         *iMvp = [[0, 0]; 2];
         if (*pCurDqLayer).iColocIntra[0] != 0 {
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, &iMvp[LIST_0]);
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, &iMvp[LIST_1]);
             UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
@@ -1168,13 +1168,13 @@ pub unsafe fn PredBDirectTemporal(
                 [ref_idx[LIST_0] as usize] as i32;
             iMvp[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
             iMvp[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, iMvp[LIST_0].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, &iMvp[LIST_0]);
             iMvp[LIST_1][0] = iMvp[LIST_0][0] - *mv.add(0);
             iMvp[LIST_1][1] = iMvp[LIST_0][1] - *mv.add(1);
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, iMvp[LIST_1].as_mut_ptr());
+            UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, &iMvp[LIST_1]);
         }
-        UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i32);
-        UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_1 as i32);
+        UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, LIST_0 as i32);
+        UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, LIST_1 as i32);
     } else {
         if bSkipOrDirect {
             let mut pSubPartCount = [0i8; 4];
@@ -1267,9 +1267,9 @@ pub unsafe fn UpdateP16x16MotionInfo(
     pDec: PPicture,
     listIdx: usize,
     iRef: i8,
-    iMVs: *const i16,
+    iMVs: &[i16; 2],
 ) {
-    let kiMV = [*iMVs, *iMVs.add(1)];
+    let kiMV = *iMVs;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     for i in (0..16).step_by(4) {
@@ -1331,9 +1331,9 @@ pub unsafe fn UpdateP16x16MotionOnly(
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     listIdx: i32,
-    iMVs: *const i16,
+    iMVs: &[i16; 2],
 ) {
-    let kiMV = [*iMVs, *iMVs.add(1)];
+    let kiMV = *iMVs;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     for i in (0..16).step_by(4) {
@@ -1365,9 +1365,9 @@ pub unsafe fn UpdateP16x8MotionInfo(
     listIdx: usize,
     mut iPartIdx: usize,
     iRef: i8,
-    iMVs: *const i16,
+    iMVs: &[i16; 2],
 ) {
-    let kiMV = [*iMVs, *iMVs.add(1)];
+    let kiMV = *iMVs;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     for _ in 0..2 {
@@ -1431,9 +1431,9 @@ pub unsafe fn UpdateP8x16MotionInfo(
     listIdx: usize,
     mut iPartIdx: usize,
     iRef: i8,
-    iMVs: *const i16,
+    iMVs: &[i16; 2],
 ) {
-    let kiMV = [*iMVs, *iMVs.add(1)];
+    let kiMV = *iMVs;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     for _ in 0..2 {
@@ -1551,8 +1551,8 @@ pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
 }
 
 #[inline(always)]
-pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: *const i16, iListIdx: i32) {
-    let kMvd = [*pMvd, *pMvd.add(1)];
+pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: &[i16; 2], iListIdx: i32) {
+    let kMvd = *pMvd;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mvd_ptr = (*pCurDqLayer).grid.mvd[iListIdx as usize]
         .get_mut(iMbXy)
