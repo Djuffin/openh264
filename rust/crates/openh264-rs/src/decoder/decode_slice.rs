@@ -548,7 +548,7 @@ pub type PWelsDecMbFunc = unsafe extern "C" fn(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32;
 
 // T5.R7: `PFillInfoCacheIntraNxNFunc`, `PMapNxNNeighToSampleFunc` and
@@ -894,7 +894,7 @@ impl IntraPredConstraint {
     pub unsafe fn MapNxNNeighToSample(
         self,
         pNeighAvail: &mut SWelsNeighAvail,
-        pSampleAvail: *mut i32,
+        pSampleAvail: &mut [i32; 30],
     ) {
         match self {
             IntraPredConstraint::Constrain0 => {
@@ -914,7 +914,7 @@ impl IntraPredConstraint {
     pub unsafe fn Map16x16NeighToSample(
         self,
         pNeighAvail: &mut SWelsNeighAvail,
-        pSampleAvail: *mut u8,
+        pSampleAvail: &mut u8,
     ) {
         match self {
             IntraPredConstraint::Constrain0 => {
@@ -929,67 +929,58 @@ impl IntraPredConstraint {
 
 pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
     pNeighAvail: &mut SWelsNeighAvail,
-    pSampleAvail: *mut i32,
+    pSampleAvail: &mut [i32; 30],
 ) {
-    if pSampleAvail.is_null() {
-        return;
-    }
     let avail = &*pNeighAvail;
     if avail.iLeftAvail != 0 {
-        *pSampleAvail.add(6) = 1;
-        *pSampleAvail.add(12) = 1;
-        *pSampleAvail.add(18) = 1;
-        *pSampleAvail.add(24) = 1;
+        pSampleAvail[6] = 1;
+        pSampleAvail[12] = 1;
+        pSampleAvail[18] = 1;
+        pSampleAvail[24] = 1;
     }
     if avail.iLeftTopAvail != 0 {
-        *pSampleAvail.add(0) = 1;
+        pSampleAvail[0] = 1;
     }
     if avail.iTopAvail != 0 {
-        *pSampleAvail.add(1) = 1;
-        *pSampleAvail.add(2) = 1;
-        *pSampleAvail.add(3) = 1;
-        *pSampleAvail.add(4) = 1;
+        pSampleAvail[1] = 1;
+        pSampleAvail[2] = 1;
+        pSampleAvail[3] = 1;
+        pSampleAvail[4] = 1;
     }
     if avail.iRightTopAvail != 0 {
-        *pSampleAvail.add(5) = 1;
+        pSampleAvail[5] = 1;
     }
 }
 
 pub unsafe extern "C" fn WelsMapNxNNeighToSampleConstrain1(
     pNeighAvail: &mut SWelsNeighAvail,
-    pSampleAvail: *mut i32,
+    pSampleAvail: &mut [i32; 30],
 ) {
-    if pSampleAvail.is_null() {
-        return;
-    }
     let avail = &*pNeighAvail;
     if avail.iLeftAvail != 0 && IS_INTRA(avail.iLeftType) {
-        *pSampleAvail.add(6) = 1;
-        *pSampleAvail.add(12) = 1;
-        *pSampleAvail.add(18) = 1;
-        *pSampleAvail.add(24) = 1;
+        pSampleAvail[6] = 1;
+        pSampleAvail[12] = 1;
+        pSampleAvail[18] = 1;
+        pSampleAvail[24] = 1;
     }
     if avail.iLeftTopAvail != 0 && IS_INTRA(avail.iLeftTopType) {
-        *pSampleAvail.add(0) = 1;
+        pSampleAvail[0] = 1;
     }
     if avail.iTopAvail != 0 && IS_INTRA(avail.iTopType) {
-        *pSampleAvail.add(1) = 1;
-        *pSampleAvail.add(2) = 1;
-        *pSampleAvail.add(3) = 1;
-        *pSampleAvail.add(4) = 1;
+        pSampleAvail[1] = 1;
+        pSampleAvail[2] = 1;
+        pSampleAvail[3] = 1;
+        pSampleAvail[4] = 1;
     }
     if avail.iRightTopAvail != 0 && IS_INTRA(avail.iRightTopType) {
-        *pSampleAvail.add(5) = 1;
+        pSampleAvail[5] = 1;
     }
 }
 
 pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
     pNeighAvail: &mut SWelsNeighAvail,
-    pSampleAvail: *mut u8,
+    pSampleAvail: &mut u8,
 ) {
-    if pSampleAvail.is_null() {
-        return;
-    }
     let avail = &*pNeighAvail;
     let mut mask: u8 = 0;
     if avail.iLeftAvail != 0 {
@@ -1006,11 +997,8 @@ pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
 
 pub unsafe extern "C" fn WelsMap16x16NeighToSampleConstrain1(
     pNeighAvail: &mut SWelsNeighAvail,
-    pSampleAvail: *mut u8,
+    pSampleAvail: &mut u8,
 ) {
-    if pSampleAvail.is_null() {
-        return;
-    }
     let avail = &*pNeighAvail;
     let mut mask: u8 = 0;
     if avail.iLeftAvail != 0 && IS_INTRA(avail.iLeftType) {
@@ -3123,7 +3111,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     if pCtx.is_null() {
         return ERR_NONE;
@@ -3149,7 +3137,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     }
     let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
     if iUsedBits == (pBs.bits() - 1) && (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun <= 0 {
-        if !uiEosFlag.is_null() {
+        if true {
             *uiEosFlag = 1;
         }
     }
@@ -3422,7 +3410,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     if pCtx.is_null() {
         return ERR_NONE;
@@ -3503,7 +3491,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 
     let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
     if iUsedBits == (pBs.bits() - 1) && (*pSlice).iMbSkipRun <= 0 {
-        if !uiEosFlag.is_null() {
+        if true {
             *uiEosFlag = 1;
         }
     }
@@ -3781,7 +3769,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     if pCtx.is_null() {
         return ERR_NONE;
@@ -3911,7 +3899,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         && 0 >= (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun
     {
         // slice boundary
-        if !uiEosFlag.is_null() {
+        if true {
             *uiEosFlag = 1;
         }
     }
@@ -3943,7 +3931,7 @@ pub unsafe fn ParseIntra4x4Mode(
 
     (*pCtx)
         .eIntraPredConstraint
-        .MapNxNNeighToSample(pNeighAvail, iSampleAvail.as_mut_ptr());
+        .MapNxNNeighToSample(pNeighAvail, &mut iSampleAvail);
 
     uiNeighAvail = ((iSampleAvail[6] << 2) | (iSampleAvail[0] << 1) | (iSampleAvail[1])) as u8;
 
@@ -4084,7 +4072,7 @@ pub unsafe fn ParseIntra8x8Mode(
 
     (*pCtx)
         .eIntraPredConstraint
-        .MapNxNNeighToSample(pNeighAvail, iSampleAvail.as_mut_ptr());
+        .MapNxNNeighToSample(pNeighAvail, &mut iSampleAvail);
 
     uiNeighAvail = ((iSampleAvail[5] << 3)
         | (iSampleAvail[6] << 2)
@@ -4745,7 +4733,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     dq: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
@@ -4788,7 +4776,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         (*dq).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
         ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
             pCtx,
-            &mut *uiEosFlag,
+            uiEosFlag,
         );
         if ret != ERR_NONE {
             return ret;
@@ -4834,7 +4822,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
         pCtx,
-        &mut *uiEosFlag,
+        uiEosFlag,
     );
     if ret != ERR_NONE {
         return ret;
@@ -4854,7 +4842,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let ret = WelsDecodeMbCabacISliceBaseMode0(pCtx, dq, pDec, pRefs, uiEosFlag);
     if ret != ERR_NONE {
@@ -4869,7 +4857,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &mut SWelsNeighAvail,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
@@ -4933,7 +4921,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             (*dq).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
             ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
                 pCtx,
-                &mut *uiEosFlag,
+                uiEosFlag,
             );
             if ret != ERR_NONE {
                 return ret;
@@ -4980,7 +4968,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
 
     ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
         pCtx,
-        &mut *uiEosFlag,
+        uiEosFlag,
     );
     if ret != ERR_NONE {
         return ret;
@@ -5000,7 +4988,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut sNeighAvail = SWelsNeighAvail::default();
@@ -5065,7 +5053,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
         ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
             pCtx,
-            &mut *uiEosFlag,
+            uiEosFlag,
         );
         if ret != ERR_NONE {
             return ret;
@@ -5082,7 +5070,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &mut SWelsNeighAvail,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
     let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
@@ -5153,7 +5141,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             (*dq).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
             ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
                 pCtx,
-                &mut *uiEosFlag,
+                uiEosFlag,
             );
             if ret != ERR_NONE {
                 return ret;
@@ -5200,7 +5188,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
 
     ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
         pCtx,
-        &mut *uiEosFlag,
+        uiEosFlag,
     );
     if ret != ERR_NONE {
         return ret;
@@ -5220,7 +5208,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     pNalCur: *mut SNalUnit,
-    uiEosFlag: *mut u32,
+    uiEosFlag: &mut u32,
 ) -> i32 {
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
     let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
@@ -5326,7 +5314,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 
         ret = crate::decoder::parse_mb_syn_cabac::ParseEndOfSliceCabac(
             pCtx,
-            &mut *uiEosFlag,
+            uiEosFlag,
         );
         if ret != ERR_NONE {
             return ret;
@@ -5678,13 +5666,14 @@ mod tests {
     fn test_wels_decode_mb_cavlc_slices_null() {
         unsafe {
             let mut layer = DqLayerState::for_grid(MbDims::new(1, 1));
+            let mut eos = 0u32;
             let res_i = WelsDecodeMbCavlcISlice(
                 std::ptr::null_mut(),
                 &mut layer,
                 std::ptr::null_mut(),
                 PicRefs::over(None),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut eos,
             );
             assert_eq!(res_i, ERR_NONE);
             let res_p = WelsDecodeMbCavlcPSlice(
@@ -5693,7 +5682,7 @@ mod tests {
                 std::ptr::null_mut(),
                 PicRefs::over(None),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                &mut eos,
             );
             assert_eq!(res_p, ERR_NONE);
         }

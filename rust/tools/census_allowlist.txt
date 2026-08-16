@@ -55,7 +55,9 @@ alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut DqLa
 alias PIdctResAddPredFunc x3        # decode_mb_aux/decode_slice/decoder_context. Owner: 5.6.
 alias PIdctFourResAddPredFunc x2    # Owner: 5.6.
 alias PCopyFunc x3                  # decoder_context + two encoder modules. Owner: 5.6/6.3.
-alias PGetIntraPredFunc x4          # decoder_context, both get_intra_predictor, func_ptr_def
+alias PGetIntraPredFunc x3          # decoder_context, common/intra_pred_common, encoder/func_ptr_def
+                                    # (x4 until T5.X8 deleted get_intra_predictor's, which described
+                                    #  the deleted Phase-2 wrappers and had no use of its own)
 alias PGetIntraPred8x8Func x2       # Owner: 5.6 decoder-side, 6.3 encoder-side.
 
 # encoder-side only — Phase 6 owns every line below
