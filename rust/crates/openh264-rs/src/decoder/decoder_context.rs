@@ -236,7 +236,7 @@ pub type PDeblockingFunc = *mut SDeblockingFunc;
 pub type PWelsParseIntra4x4ModeFunc = Option<
     unsafe extern "C" fn(
         pNeighAvail: *mut c_void,
-        pIntraPredMode: *mut i8,
+        pIntraPredMode: &mut [i8; 48],
         pBs: *mut c_void,
         pCurDqLayer: *mut c_void,
     ) -> i32,

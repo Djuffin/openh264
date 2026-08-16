@@ -687,7 +687,7 @@ pub unsafe fn WelsFillCacheNonZeroCount(
 pub unsafe fn WelsFillCacheConstrain1IntraNxN(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
-    pIntraPredMode: *mut i8,
+    pIntraPredMode: &mut [i8; 48],
     pCurDqLayer: &DqLayerState,
 ) {
     unsafe {
@@ -712,7 +712,7 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
             // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
             for k in 0..4 {
-                *pIntraPredMode.add(1 + k) = *pTopMode.add(k);
+                pIntraPredMode[1 + k] = *pTopMode.add(k);
             }
         } else {
             let iPred: i8 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
@@ -721,26 +721,26 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
                 -1
             };
             for k in 0..4 {
-                *pIntraPredMode.add(1 + k) = iPred;
+                pIntraPredMode[1 + k] = iPred;
             }
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
             let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
-            *pIntraPredMode.add(0 + 8) = *pLeftMode.add(4);
-            *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
-            *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);
-            *pIntraPredMode.add(0 + 8 * 4) = *pLeftMode.add(3);
+            pIntraPredMode[0 + 8] = *pLeftMode.add(4);
+            pIntraPredMode[0 + 8 * 2] = *pLeftMode.add(5);
+            pIntraPredMode[0 + 8 * 3] = *pLeftMode.add(6);
+            pIntraPredMode[0 + 8 * 4] = *pLeftMode.add(3);
         } else {
             let iPred: i8 = if IS_INTRA16x16(na.iLeftType) || (MB_TYPE_INTRA_PCM == na.iLeftType) {
                 2
             } else {
                 -1
             };
-            *pIntraPredMode.add(0 + 8) = iPred;
-            *pIntraPredMode.add(0 + 8 * 2) = iPred;
-            *pIntraPredMode.add(0 + 8 * 3) = iPred;
-            *pIntraPredMode.add(0 + 8 * 4) = iPred;
+            pIntraPredMode[0 + 8] = iPred;
+            pIntraPredMode[0 + 8 * 2] = iPred;
+            pIntraPredMode[0 + 8 * 3] = iPred;
+            pIntraPredMode[0 + 8 * 4] = iPred;
         }
     }
 }
@@ -2056,7 +2056,7 @@ pub unsafe fn WelsFillDirectCacheCabac(
 pub unsafe fn WelsFillCacheConstrain0IntraNxN(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
-    pIntraPredMode: *mut i8,
+    pIntraPredMode: &mut [i8; 48],
     pCurDqLayer: &DqLayerState,
 ) {
     unsafe {
@@ -2081,27 +2081,27 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
             // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
             for k in 0..4 {
-                *pIntraPredMode.add(1 + k) = *pTopMode.add(k);
+                pIntraPredMode[1 + k] = *pTopMode.add(k);
             }
         } else {
             let iPred: i8 = if na.iTopAvail != 0 { 0x02 } else { -1 };
             for k in 0..4 {
-                *pIntraPredMode.add(1 + k) = iPred;
+                pIntraPredMode[1 + k] = iPred;
             }
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
             let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
-            *pIntraPredMode.add(0 + 8 * 1) = *pLeftMode.add(4);
-            *pIntraPredMode.add(0 + 8 * 2) = *pLeftMode.add(5);
-            *pIntraPredMode.add(0 + 8 * 3) = *pLeftMode.add(6);
-            *pIntraPredMode.add(0 + 8 * 4) = *pLeftMode.add(3);
+            pIntraPredMode[0 + 8 * 1] = *pLeftMode.add(4);
+            pIntraPredMode[0 + 8 * 2] = *pLeftMode.add(5);
+            pIntraPredMode[0 + 8 * 3] = *pLeftMode.add(6);
+            pIntraPredMode[0 + 8 * 4] = *pLeftMode.add(3);
         } else {
             let iPred: i8 = if na.iLeftAvail != 0 { 2 } else { -1 };
-            *pIntraPredMode.add(0 + 8 * 1) = iPred;
-            *pIntraPredMode.add(0 + 8 * 2) = iPred;
-            *pIntraPredMode.add(0 + 8 * 3) = iPred;
-            *pIntraPredMode.add(0 + 8 * 4) = iPred;
+            pIntraPredMode[0 + 8 * 1] = iPred;
+            pIntraPredMode[0 + 8 * 2] = iPred;
+            pIntraPredMode[0 + 8 * 3] = iPred;
+            pIntraPredMode[0 + 8 * 4] = iPred;
         }
     }
 }
@@ -2111,11 +2111,14 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
 // ============================================================================
 
 /// Predicts the most probable mode for an Intra 4x4 sub-block.
-pub unsafe fn PredIntra4x4Mode(pIntraPredMode: *mut i8, iIdx4: i32) -> i32 {
-    unsafe {
+/// T5.W13: safe, and the array parameter is what made it so — the body indexes
+/// `scan - 8` and `scan - 1` and does nothing else, so with the span in the type there
+/// is no operation left for the qualifier to cover.
+pub fn PredIntra4x4Mode(pIntraPredMode: &mut [i8; 48], iIdx4: i32) -> i32 {
+    {
         let scan = g_kuiScan8[iIdx4 as usize] as usize;
-        let iTopMode = *pIntraPredMode.add(scan - 8);
-        let iLeftMode = *pIntraPredMode.add(scan - 1);
+        let iTopMode = pIntraPredMode[scan - 8];
+        let iLeftMode = pIntraPredMode[scan - 1];
 
         if iLeftMode == -1 || iTopMode == -1 {
             2
@@ -2935,12 +2938,16 @@ mod tests {
 
     #[test]
     fn test_pred_intra_4x4_mode() {
-        let mut modes = [0i8; 64];
+        // T5.W13: 48, which is the size the production caller allocates
+        // (`decode_slice.rs`'s `let mut pIntraPredMode = [0i8; 48]`) and now the size
+        // the signature states. The fixture's 64 was never anything but slack — the
+        // two indices it writes are 1 and 8.
+        let mut modes = [0i8; 48];
         // Set top and left modes
         modes[9 - 8] = 3; // Top
         modes[9 - 1] = 1; // Left
-        unsafe {
-            let res = PredIntra4x4Mode(modes.as_mut_ptr(), 0);
+        {
+            let res = PredIntra4x4Mode(&mut modes, 0);
             assert_eq!(res, 1);
         }
     }
