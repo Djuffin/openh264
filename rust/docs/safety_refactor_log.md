@@ -9692,3 +9692,232 @@ subject was the `true` arm; `Some(&mut *p)` on the ten delegation stubs that are
 and a test fixture's `[i8; 64]` where the production allocation is 48. **S16 fired four
 times** — a comment explaining a pointer conversion inflates the metric the conversion
 just moved. Reworded, never regenerated for prose.
+## Session X (Phase 5) — the endgame, and it did not reach the end
+
+**Commits:** `4d36cb6c` (doc tail), `b00df177` (T5.X1–X3, the residual chain and
+`decode_slice.rs`'s 51 layer pointers), `d02e8c72` (T5.X4, `mv_pred`), `1cbfbea5`
+(T5.X5, `deblocking`), `00b5aa96` (T5.X6–X7, `nalu` + **F52**), `d985962a` (T5.X8,
+the reconstruction dispatch and 46 shims), `24a4252e` (T5.X9,
+`get_intra_predictor.rs` deny-clean), `574bd987` (T5.X10, two out-param families),
+`5c836358` (T5.X11, **F53** and `decode_mb_aux.rs` deny-clean), `ec672022` (T5.X11b,
+F53's sweep).
+
+**Metrics.** Decoder `raw_ptr` **765 → 456 (−40%)**; decoder `SHIM(` **52 → 7** (4
+prose, 2 `expand_picture`, 1 the named survivor's pair); decoder modules carrying
+`#![deny(unsafe_code)]` **9 → 11 of 22**; decoder `unsafe fn` **381 → 327** (439 at V's open). The
+ratchet, tree-wide: `raw_ptr` **−499**, `unsafe_fn` −59, `unsafe_block` −57, `shim` −45.
+
+**Exit conditions 1–3 are not met and the phase does not close.** What remains is
+one face and it is named at the type below.
+
+### Face 0 — the residual chain, and the settlement held
+
+The steward's settlement was verified by grep at the face, not taken: reading
+`ParseResidualBlockCabac` confirms one use of its layer parameter (the forward to
+`ParseCbfInfoCabac`) and `ParseCbfInfoCabac`'s whole reach is two scalars, `&mut` on
+one grid family and a read-only mb_type. **One clause needed the face to settle it**
+(S24): the mb_type is **the picture's** `pMbType`, not `grid.mb_type` — the decoder
+carries both, and the residual chain reads the picture's. Nothing in the chain
+touches `scaled_tcoeff`, so `tcoeff_and_rest` was not needed and no new API landed
+on the grid.
+
+With the chain narrowed, `*mut DqLayerState` in `decode_slice.rs` went **51 → 0**.
+Three shapes carried it, all take-what-you-reach: the narrow set at the two residual
+functions; `Option<&SPredWeightTable>` at `WeightPrediction`/`BiWeightPrediction`,
+which is what lets the caller's `&[u32; 4]` window into `grid.sub_mb_type` (T5.I1)
+coexist with them; and T5.I3's two `&mut` cursors into `grid.cbp` and
+`grid.transform_size8x8_flag` re-derived per use, because a cursor's span is the
+layer's span once the layer is a borrow. `BiPrediction`'s layer parameter was
+`_pCurDqLayer` — unused since it was written — and deleted.
+
+### Face 1 — families, and two of them were dead rather than convertible
+
+`mv_pred.rs` **94 → 8**: `SetRectBlock` and `CopyRectBlock4Cols` had **zero callers
+anywhere in the crate** since T5.R5, and were 82 raw-pointer casts and a width
+dispatch nothing dispatched to. `GetMbType` hands back `&MbArray<u32>` rather than
+the array's base, which says the same whole-array reach with the bound checked.
+Three out-params and one alias became values: `mvColoc` was
+`iColocMv[l].as_mut_ptr()` at all four call sites, so **which list** is what crosses
+now.
+
+`deblocking.rs` **63 → 23**: 18 `nBS` word puns became `from_ne_bytes`/`to_ne_bytes`;
+the eight edge filters take `&[u8; 4]` where they took a pointer and rebuilt a slice,
+and the four `Intra` variants' `_pBS` (unused, every caller passing
+`std::ptr::null()`) is deleted; twelve `mb_grid_ptr(.., 0)` bridges became the arrays
+themselves.
+
+`nalu.rs` **68 → 49**: the scaling-list pair takes slices and `&mut`, with the four
+"previous matrix" fallbacks copied into a `ScalingListSource` at the call — because
+the lists `ParseScalingList` writes are fields of the same SPS when the caller is
+`ParseSps`, which as pointers nothing said. `ParsePps`'s `pPpsList` and `ParseSei`'s
+`_pSei` were dead parameters.
+
+### F52 — a sixth F43-class stub, and the sweep that could not see it
+
+`decoder_core.rs` defined a four-parameter `CheckAccessUnitBoundaryExt` returning
+`true` unconditionally, in the module that calls it, shadowing the real 80-line
+implementation in `nalu.rs` — which had **no caller at all**.
+`CheckAndFinishLastPic`'s access-unit boundary test read `iTotalNumMbRec != 0 && true`
+where the C++ compares fifteen header fields.
+
+**F43's own sweep ran clean over it at sessions U and W**, and the reason is an
+off-by-a-brace: `find_shadowing_stubs.py` counted a function's statements from the
+`fn` line, so a four-parameter signature spread over six lines scored the stub as
+`SUBSTANTIAL` — the class reserved for real implementations — and it was never
+compared against its own. Repaired to count from the body's opening brace, it reports
+**21** candidates against 15, and **none of the six new ones is in `src/decoder/`**
+(encoder/processing/common; named in the finding with Phase 6 as owner).
+
+Coverage per F21, red under re-stubbing and **measured**. The fix moves nothing
+measurable: sweeps 341/341 both profiles, goldens unmoved, and the malformed corpus
+refereed end to end against the C++ at **2690/17 output, 2707/0 codes** — identical
+to W's close. So the defect is real and no stream this project owns distinguishes it.
+
+### Face 2 — the dispatch carries a cursor, and 46 shims go
+
+Every slot of the four intra-prediction tables and the three IDCT slots held a
+Phase-2 strangler wrapper whose entire body rebuilt a `(len, center)` span from a
+stride, made one `from_raw_parts_mut`, and called a safe kernel that had been sitting
+beside it since Phase 2. The tables name the kernels now; `PGetIntraPredFunc` is
+`Option<fn(&mut PlaneCursorMut<'_>)>`. **`SHIM(` 52 → 7.**
+
+Two caches died with them, and both were caches of things their readers already had:
+`DqLayerState::pPred: [*mut u8; 3]` (the macroblock's top-left sample per plane — a
+cache of `(iMbX, iMbY)` against a picture every reader takes) and
+`SWelsDecoderContext::iDecBlockOffsetArray: [i32; 24]` (the 4x4 blocks' **byte**
+offsets, rebuilt per access unit because they depended on the strides; a block's
+position is a pair of sample coordinates and no stride enters it).
+
+### F53 — the `exit` battery found UB, and it was this session's own
+
+`WelsDecodeMbCabacResidualHelper` held
+`addr_of_mut!((*dq).sLayerInfo.sSliceInLayer)` across `ParseDeltaQpCabac(pCtx,
+&mut *dq, …)` and read through it afterwards. Miri: *a read using a tag that does
+not exist in the borrow stack* — a `SharedReadWrite` created at the derivation,
+invalidated by the `Unique` retag at the call.
+
+**The spelling did not change; the parent did.** With `dq` a raw pointer the
+derivation was a `SharedReadWrite` **below** every later `Unique`, which is the whole
+reason S29 recommends `addr_of_mut!`; with `dq` a `&mut DqLayerState` it sits **above**
+the reference's own tag and the next reborrow pops it. Sound while the parent was a
+pointer, UB the moment it became a borrow, **with no line of it edited** — T5.W11's
+sentence one level up, and the second phase-5 session running to meet S29's boundary
+clause as a Miri failure rather than as a review comment.
+
+26 bindings and 104 use sites in `decode_slice.rs` re-derived as the field paths they
+always denoted — the same fix T5.X3 gave the `grid.cbp` cursors, which were this shape
+and were caught only because *those* were `&mut` and failed to compile. A raw pointer is
+invisible to borrowck, which is why these needed a stream and an aliasing model to find.
+Then the **sweep**, which is F53's other half: every `addr_of_mut!((*layer).…)` where
+the layer is a borrow, four more in `manage_dec_ref.rs`, on paths no probe drives. The
+decoder holds none.
+
+**The generalisation for Phase 6**: converting a parameter from `*mut T` to `&mut T`
+invalidates every raw alias derived from it that outlives a reborrow — so the
+conversion's work list is not the parameter's own uses, it is every
+`addr_of_mut!((*p).…)` in the same function.
+
+### Where it stops, named at the type — and it is one thing
+
+**The context, and the blocker is the pool bracket.** The flip was attempted and
+measured rather than estimated: `pCtx: *mut SWelsDecoderContext` → `&mut` across the
+tree gives **145 errors**, of which 87 are `is_null()` on a reference (mechanical) and
+the rest reduce to **one shape**, which no amount of local repair removes:
+
+> `WelsDecodeSlice`'s bracket top does `let (pDec, pRefs) = cur_and_refs(pCtx);`, and
+> `PicRefs<'a>` borrows the pool for the whole slice. Below it the per-macroblock
+> dispatch is `pDecMbFunc(pCtx, dq, pDec, pRefs, pNalCur, uiEosFlag)` — the context
+> **whole**, beside a live borrow of one of its fields.
+
+As raw pointers the two coexisted silently; as borrows they cannot, and that is the
+S29 objection arriving from the side V predicted it would. The answer is the settled
+one and it is not smaller than the settlement said: the bracket top splits the context
+**once** and everything below takes pieces, never `pCtx` — which is a signature change
+at **220 functions** (`decoder_core` 61, `decode_slice` 44, `manage_dec_ref` 24,
+`parse_mb_syn_cabac` 24, `decoder_context` 25, `nalu` 15, `error_concealment` 11,
+`parse_mb_syn_cavlc` 6, `mv_pred` 4, `deblocking` 3, `pic_queue` 3). The flip was
+**reverted rather than half-landed**; the measurement is the deliverable.
+
+Two smaller things fall out of the same attempt and are worth carrying: the CABAC
+operands are three **disjoint field paths** (`sRawData`, `sCabacDecEngine`,
+`pCabacCtx`) and spell correctly once the window borrows the field rather than the
+context — `cabac_window_of(&pCtx.sRawData, slice_bit_reader(pCtx))`; and
+`slice_bit_reader` needs only `&SWelsDecoderContext`, because the reader lives in the
+**NAL**.
+
+Also still open, and outside the context: `deblocking.rs`'s eight edge filters call
+`common::deblocking_common`'s `unsafe fn` kernels, so `deblocking.rs` cannot go
+deny-clean without `common/` converting or an enumerated exception — a scope fact
+this session discovered and did not act on.
+
+### Gates at close, F3, and the session's own span
+
+**Exit battery at `ec672022`: `OVERALL: PASS`, 13 passed / 0 failed / 1 skipped** —
+tests 484/478/20, census 59, ratchet clean with no per-file increase,
+`--all-targets` compiling, both benches bit-identical, sweeps **341/341 in both
+profiles**, Miri **339/0** across the library plus 20/7/3 on the three differential
+targets. The malformed corpus, refereed end to end against the C++ decoder:
+**2690/17 output, 2707/0 codes** — identical to W's close, across two behaviour
+fixes (F52's boundary test and F51-class nothing else).
+
+**A first `exit` run at `574bd987` failed 2 of 13** and that is the row worth
+keeping: Miri `--lib` on F53's UB, and the debug sweep on three F3 hits. Both are
+above.
+
+**F3: five hits over three batteries, and the sixteenth alternation.** Step 0
+measured rather than predicted — the two `rust_enc` binaries hash `d9a3bf77…` and
+`d4f5770e…`, so the shortcut does not apply. Step 1: fifteen isolation runs of one
+binary at one configuration gave **13 byte-identical, one short and one long** —
+three lengths, one binary, which is the discriminator at full strength. Step 2:
+twelve whole `mt` presets per side inside one loop, 1440 configurations each —
+**HEAD 5 hits, control 7**. HEAD is not worse. Measurements 47–51,
+`phase0_findings.md`; running total 51/16/27. The final battery drew **zero**.
+
+**The session's own span (S2b) — small, adverse, consistent.** `361592a7`→`ec672022`,
+decode bench. 3 pairs: **+0.29% median** with CB at +0.96% above a 3-pair null's
++0.65% ceiling — the shape S2b answers with pair count, so more pairs were taken.
+7 pairs: **+0.39% median** (CB +0.27, Main +0.39, High +0.50) against a 7-pair null
+of −0.37…+0.15%, **every row above the ceiling**; the two readings agree in sign,
+medians 0.10 points apart.
+
+Unlike V's and W's spans this one touches the per-macroblock hot path, and it is the
+first Phase 5 session span to read adverse. No mechanism is claimed (S2b) and the
+plausible ones are named in `perf_baseline.md` only so a later session need not
+re-derive them. **Cumulative CB ≈ +25.0…+25.5% → ≈ +25.3…+25.8%**, against a
+stop-line already breached and already dispositioned as **D-perf-6** (recovery to
+Phase 9). D-perf-4's +25% *median* tripwire is not breached. **No day two is owed**:
+S2b's clause attaches to readings a decision rests on, and this changes no
+disposition that is not already made.
+
+### What the session got wrong, and what the tests caught
+
+**The census key.** Deleting `get_intra_predictor.rs`'s duplicate typedef failed the
+duplicate census, because the count is part of the allowlist key by design — a
+*decrease* fails it exactly as an increase does. Correct behaviour from the
+instrument; the key followed the deletion with the reason recorded at the entry.
+
+**S16 fired twice, for the fifth session running** — a comment explaining the shim
+deletion contained the token `SHIM(`, and a new test's `unsafe` block pushed a file
+over its ratchet budget. Both reworded; the baseline was never regenerated to fit a
+result, which is the temptation the rule exists against.
+
+**And one process slip worth naming**: T5.X6–X7 was committed after its gate rather
+than before, so the ratchet increase the new test introduced arrived unmeasured and
+was found by the *next* commit's gate. Nothing shipped broken, and the fix improved
+the code (`CheckAccessUnitBoundaryExt` became a safe fn), but the gate ran on a tree
+that was not the tree committed.
+
+### Hand-off: Phase 5, session Y — the context, and the phase close
+
+Brief: [`prompts/phase5_session_y.md`](prompts/phase5_session_y.md). It carries the
+**measured** blocker rather than an estimate of it, the design that clears it
+(unchanged from the settlement — the bracket top splits the context once and nothing
+below takes `pCtx`), the two facts X's reverted attempt established, and the
+`common/` boundary as an explicit decision rather than something to be settled by
+whichever is easier when it is met.
+
+**Nothing else is owed out of this session.** The corpus is fully refereed at
+2707/0 codes; the F3 ledger is current at 51/16/27; the span is measured and needs no
+day two; both perf binaries are stashed. `phase6.md` stays unwritten because exit
+conditions 1–3 are unmet — **the fourth session running**, and the reason is now a
+number (220 signatures) rather than a judgement.

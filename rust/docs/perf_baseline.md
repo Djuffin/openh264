@@ -2063,3 +2063,44 @@ the span in a chain.
 The encode null's +2.88% median and −5.65%…+13.11% band are the ordinary reminder of
 why encode rows are read against their own floor and not at face value (S2, and
 Phase 3's exit at +22.57%).
+
+### Session X's own span — small, adverse, consistent, and nothing rests on it
+
+Taken after X's last code commit, 2026-08-16, machine otherwise idle. Ten commits, of
+which nine carry code: the residual chain and `decode_slice.rs`'s 51 layer pointers,
+three raw families (`mv_pred`, `deblocking`, `nalu`), **the reconstruction dispatch**
+(46 Phase-2 strangler wrappers deleted, the four tables retyped to take a
+`PlaneCursorMut`), two deleted caches, and F52's and F53's fixes. Unlike sessions V and
+W this span **does** touch the per-macroblock hot path: intra prediction and the IDCT
+add now go through a bounds-checked plane cursor built at the block, where they went
+through a raw pointer offset by a precomputed byte table.
+
+| span | pairs | CB (CAVLC) | Main | High | decode median |
+|---|---|---|---|---|---|
+| `361592a7` → `ec672022` | 3 | +0.96% | −0.15% | +0.29% | **+0.29%** |
+| 3-pair null (`x_head` both slots) | 3 | +0.65% | −0.66% | +0.11% | **+0.11%** |
+| `361592a7` → `ec672022` | **7** | +0.27% | +0.39% | +0.50% | **+0.39%** |
+| 7-pair null (`x_head` both slots) | **7** | +0.15% | −0.37% | −0.26% | **−0.26%** |
+
+**S2b's first move was taken and it was more pairs, not a diagnosis**: at 3 pairs one
+row (CB, +0.96%) sat above the 3-pair null's ceiling of +0.65% while the median did
+not, which is the shape S2b says to answer with pair count. At 7 — the null re-run at
+the verdict's own pair count, per session K's clause — **all three rows sit above the
+null's ceiling** (+0.27/+0.39/+0.50% against a band of −0.37…+0.15%, 0.52 points wide),
+and the two readings agree in sign with medians 0.10 points apart.
+
+So: **+0.39% decode median, real at this harness's resolution, and the smallest
+category of real.** No mechanism is claimed (S2b) and the plausible ones are exactly
+what that rule says not to reach for; they are named only so a later session does not
+have to re-derive them: the reconstruction path builds a `PlaneCursorMut` per 4x4/8x8
+block where it offset a raw pointer, and `blk4_xy` recomputes a coordinate pair where
+`iDecBlockOffsetArray` held a precomputed byte offset.
+
+**The ledger moves by this much and no decision rests on it.** Cumulative CB goes
+≈ +25.0…+25.5% → **≈ +25.3…+25.8%**, against a stop-line of ≈+23% that was **already
+breached and already dispositioned** (D-perf-6: recovery to the Phase 9 perf pass,
+nothing parked because nothing is attributed). D-perf-4's +25% *median* tripwire is not
+breached. **No day two is owed** — S2b's day-two clause attaches to readings a decision
+rests on, and this one changes no disposition that is not already made. Both binaries
+stay stashed (`.perfpair/x_base` = `361592a7`, `.perfpair/x_head` = `ec672022`) so a
+later session can chain the span for free.
