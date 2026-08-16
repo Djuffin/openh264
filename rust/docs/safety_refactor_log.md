@@ -9947,7 +9947,11 @@ of the update paths, not an assumption).
 **`pPicBuff` deliberately not among them**, `&mut` for the three state machines, `&`
 for the tables, and scalars copied where every update path is above the bracket
 (`pParam`'s two questions answered inside the constructor, so F41's raw field never
-escapes). **99 functions below the bracket stopped taking a context**;
+escapes). **75 functions below the bracket stopped taking a context** (the reachable
+closure the face was sized by was 99, which counted the `decoder_context` accessors
+and `decoder_core`'s forwarding shims that stayed — the converted count is what the
+tree shows: 74 take `&mut SliceCtx` and one takes `&SliceCtx`, against 153 that
+still take the context, out of 228 at the open);
 `decode_slice.rs`'s raw-pointer occurrences fell 89 → 36, `parse_mb_syn_cavlc`'s
 26 → 18, `parse_mb_syn_cabac`'s 14 → 10. Both of session X's compiled facts landed
 with it: the CABAC operands are three disjoint field paths, and the window is
