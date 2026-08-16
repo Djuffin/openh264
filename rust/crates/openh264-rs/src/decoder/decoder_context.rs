@@ -238,7 +238,8 @@ pub use crate::common::deblocking_common::{
     PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
     SDeblockingFunc,
 };
-pub type PDeblockingFunc = *mut SDeblockingFunc;
+// T5.Y3: `PDeblockingFunc` went with the field it named — the fifth dead pointer
+// typedef this phase has deleted at its definition (S18).
 
 // `PWelsFillNeighborMbInfoIntra4x4Func`, `PWelsMapNeighToSample` and
 // `PWelsMap16NeighToSample` were deleted at T4b.3. All three declared
@@ -286,7 +287,13 @@ pub struct SDeblockingFilter {
     pub iSliceBetaOffset: i8,
     pub iChromaQP: [i8; 2],
     pub iLumaQP: i8,
-    pub pLoopf: *mut SDeblockingFunc,
+    // **T5.Y3: `pLoopf` stood here and was written twice and read never.** The C++
+    // filter reaches its kernels through it (`pFilter->pLoopf->pfLumaDeblockingLT4Ver`);
+    // Phase 2 gave the port direct calls into `common::deblocking_common` and left the
+    // slot behind, so both assignments were bookkeeping for a table nothing consulted.
+    // S18's straggler class, and its deletion removes an alias into the context that
+    // outlives every reborrow of it — F53's shape, found by the inventory the flip
+    // owes rather than by a probe.
 
     /// The two reference lists as **identities**, snapshotted at filter init.
     ///
