@@ -2562,7 +2562,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
         return ERR_NONE;
     } else {
         crate::decoder::deblocking::WelsDeblockingFilterSlice(
-            pCtx, pCurDqLayer,
+            pCtx, &mut *pCurDqLayer,
             pDec,
             Some(crate::decoder::deblocking::WelsDeblockingMb),
         );
