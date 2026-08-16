@@ -1319,8 +1319,15 @@ pub struct SWelsDecoderContext {
     pub uiDecodingTimeStamp: u32,
     pub pDequant_coeff_buffer4x4: [[[u16; 16]; 52]; 6],
     pub pDequant_coeff_buffer8x8: [[[u16; 64]; 52]; 6],
-    pub pDequant_coeff4x4: [*mut [u16; 16]; 6],
-    pub pDequant_coeff8x8: [*mut [u16; 64]; 6],
+    // T5.Y1: `pDequant_coeff4x4` and `pDequant_coeff8x8` stood here — six aliases
+    // each into the two buffers directly above, written as
+    // `pDequant_coeff4x4[i] = pDequant_coeff_buffer4x4[i].as_mut_ptr()` and read
+    // back as `[i][qp]`. Aliases into the context's own array: the blocker class
+    // this phase names once, and here in its purest form, because the index the
+    // alias was derived from is the index every reader already had. The readers
+    // take the buffer row; `bDequantCoeff4x4Init` is the initialized test the
+    // null test was (both are written in `WelsCalcDeqCoeffScalingList`'s one
+    // block, and nothing else writes either).
     pub iDequantCoeffPpsid: i32,
     pub bDequantCoeff4x4Init: bool,
     pub bUseScalingList: bool,
