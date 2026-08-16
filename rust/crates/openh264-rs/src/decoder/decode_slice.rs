@@ -2648,7 +2648,9 @@ unsafe fn DecodeMbCavlcPcm(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture) -> i32 {
-    let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
+    // T5.W4: the table is read-only — no `SVlcTable` field is written outside
+    // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
+    let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2847,7 +2849,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     pBs: &mut BsCursor,
     dq: *mut DqLayerState,
     pDec: PPicture,
-    pVlcTable: *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable,
+    pVlcTable: &crate::decoder::parse_mb_syn_cavlc::SVlcTable,
     pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
@@ -2890,7 +2892,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
             pBs,
             0,
             16,
-            g_kuiLumaDcZigzagScan.as_ptr(),
+            &g_kuiLumaDcZigzagScan,
             I16_LUMA_DC,
             scaled_tcoeff_mb.as_mut_ptr(),
             *iLumaQp as u8,
@@ -2911,7 +2913,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     pBs,
                     i as i32,
                     len,
-                    g_kuiZigzagScan.as_ptr().add(max_idx),
+                    &g_kuiZigzagScan[max_idx..],
                     I16_LUMA_AC,
                     scaled_tcoeff_mb.as_mut_ptr().add(i << 4),
                     *iLumaQp as u8,
@@ -2942,7 +2944,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             pBs,
                             iIndex,
                             len,
-                            g_kuiZigzagScan8x8.as_ptr().add(iScanIdxStart),
+                            &g_kuiZigzagScan8x8[iScanIdxStart..],
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add(iId8x8 << 6),
                             iId4x4,
@@ -2981,7 +2983,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             pBs,
                             iIndex,
                             len,
-                            g_kuiZigzagScan.as_ptr().add(iScanIdxStart),
+                            &g_kuiZigzagScan[iScanIdxStart..],
                             iMbResProperty,
                             scaled_tcoeff_mb.as_mut_ptr().add((iIndex as usize) << 4),
                             *iLumaQp as u8,
@@ -3024,7 +3026,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 pBs,
                 (16 + (i << 2)) as i32,
                 4,
-                g_kuiChromaDcScan.as_ptr(),
+                &g_kuiChromaDcScan,
                 iMbResProperty,
                 scaled_tcoeff_mb.as_mut_ptr().add(256 + (i << 6)),
                 (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
@@ -3054,7 +3056,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     pBs,
                     iIndex as i32,
                     len,
-                    g_kuiZigzagScan.as_ptr().add(max_idx),
+                    &g_kuiZigzagScan[max_idx..],
                     iMbResProperty,
                     scaled_tcoeff_mb.as_mut_ptr().add(iIndex << 4),
                     (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
@@ -3122,7 +3124,9 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
 
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
-    let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
+    // T5.W4: the table is read-only — no `SVlcTable` field is written outside
+    // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
+    let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3480,7 +3484,9 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
 /// `mb_type` split (23 instead of 5), the mb-type table and the motion parser,
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
 pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderContext, buf: &[u8], pBs: &mut BsCursor, dq: *mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
-    let pVlcTable = (*pCtx).pVlcTable as *mut crate::decoder::parse_mb_syn_cavlc::SVlcTable;
+    // T5.W4: the table is read-only — no `SVlcTable` field is written outside
+    // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
+    let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
     let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
     let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
