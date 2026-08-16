@@ -400,7 +400,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
 
 // Forward definitions matching OpenH264 decoder C ABI structs
 pub use crate::decoder::picture::{SPicture, PPicture};
-use crate::decoder::decoder_context::{PicRefs, ref_id};
+use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
@@ -1031,7 +1031,7 @@ pub unsafe fn WelsFillCacheInter(
 
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn ParseInterInfo(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
@@ -1054,7 +1054,7 @@ pub unsafe fn ParseInterInfo(
         .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let uiRefCountHdr =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
-    let ppRefPic = &(*pCtx).sRefPic.pRefList[0];
+    let ppRefPic = &pCtx.sRefPic.pRefList[0];
     let mut iRefCount = [0i32; 2];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut iMotionPredFlag = [if bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
@@ -1063,9 +1063,8 @@ pub unsafe fn ParseInterInfo(
     iRefCount[0] = uiRefCountHdr[0];
     iRefCount[1] = uiRefCountHdr[1];
 
-    let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
-    let ec_active = (*pCtx).pParam.is_null()
-        || (*(*pCtx).pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
+    let bIsPending = pCtx.iThreadCount > 1;
+    let ec_active = pCtx.bEcActive;
 
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     match mb_type {
@@ -1085,17 +1084,17 @@ pub unsafe fn ParseInterInfo(
                 }
                 iRefIdx = uiCode as i32;
                 if iRefIdx < 0 || iRefIdx >= iRefCount[0] || ppRefPic[iRefIdx as usize].is_none() {
-                    (*pCtx).bMbRefConcealed = true;
+                    *pCtx.bMbRefConcealed = true;
                     if ec_active {
                         iRefIdx = 0;
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        *pCtx.iErrorCode |= dsBitstreamError;
                     } else {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
                 let pRefPic = pRefs.get(ppRefPic[iRefIdx as usize]);
-                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                    || (*pCtx).bMbRefConcealed
+                *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                    || *pCtx.bMbRefConcealed
                     || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
@@ -1136,17 +1135,17 @@ pub unsafe fn ParseInterInfo(
                 }
                 iRefIdx[i] = uiCode as i32;
                 if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
-                    (*pCtx).bMbRefConcealed = true;
+                    *pCtx.bMbRefConcealed = true;
                     if ec_active {
                         iRefIdx[i] = 0;
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        *pCtx.iErrorCode |= dsBitstreamError;
                     } else {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
                 let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
-                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                    || (*pCtx).bMbRefConcealed
+                *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                    || *pCtx.bMbRefConcealed
                     || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
             }
             for i in 0..2 {
@@ -1194,17 +1193,17 @@ pub unsafe fn ParseInterInfo(
                     }
                     iRefIdx[i] = uiCode as i32;
                     if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
-                        (*pCtx).bMbRefConcealed = true;
+                        *pCtx.bMbRefConcealed = true;
                         if ec_active {
                             iRefIdx[i] = 0;
-                            (*pCtx).iErrorCode |= dsBitstreamError;
+                            *pCtx.iErrorCode |= dsBitstreamError;
                         } else {
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                         }
                     }
                     let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
-                    (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                        || (*pCtx).bMbRefConcealed
+                    *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                        || *pCtx.bMbRefConcealed
                         || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
                 } else {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
@@ -1295,17 +1294,17 @@ pub unsafe fn ParseInterInfo(
                         }
                         iRefIdx[i] = uiCode as i32;
                         if iRefIdx[i] < 0 || iRefIdx[i] >= iRefCount[0] || ppRefPic[iRefIdx[i] as usize].is_none() {
-                            (*pCtx).bMbRefConcealed = true;
+                            *pCtx.bMbRefConcealed = true;
                             if ec_active {
                                 iRefIdx[i] = 0;
-                                (*pCtx).iErrorCode |= dsBitstreamError;
+                                *pCtx.iErrorCode |= dsBitstreamError;
                             } else {
                                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                             }
                         }
                         let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
-                        (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                            || (*pCtx).bMbRefConcealed
+                        *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                            || *pCtx.bMbRefConcealed
                             || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
 
                         let ref_idx_mb = (*pDec).pRefIndex[0].get_mut(iMbXy);
@@ -1387,7 +1386,7 @@ pub unsafe fn ParseInterInfo(
 /// `WELS_CHECK_SE_BOTH_WARNING` on the vertical mv is warning-only in C (see
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
 pub unsafe fn ParseInterBInfo(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
@@ -1423,17 +1422,16 @@ pub unsafe fn ParseInterBInfo(
     iRefCount[0] = uiRefCountHdr[0];
     iRefCount[1] = uiRefCountHdr[1];
 
-    let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
-    let ec_active = (*pCtx).pParam.is_null()
-        || (*(*pCtx).pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
+    let bIsPending = pCtx.iThreadCount > 1;
+    let ec_active = pCtx.bEcActive;
 
     /// `pCtx->bMbRefConcealed = pCtx->bRPLRError || pCtx->bMbRefConcealed ||
     ///  !(ppRefPic[list][ref] && (ppRefPic[list][ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = pRefs.get(ref_id(pCtx, $listIdx as usize, $iref as usize));
-            (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                || (*pCtx).bMbRefConcealed
+            let p = pRefs.get(pCtx.ref_id($listIdx as usize, $iref as usize));
+            *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                || *pCtx.bMbRefConcealed
                 || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
         }};
     }
@@ -1442,12 +1440,12 @@ pub unsafe fn ParseInterBInfo(
     macro_rules! check_ref_idx {
         ($listIdx:expr, $iref:expr) => {{
             let list = $listIdx as usize;
-            let ppRefPic = &(*pCtx).sRefPic.pRefList[list];
+            let ppRefPic = &pCtx.sRefPic.pRefList[list];
             if $iref < 0 || $iref as i32 >= iRefCount[list] || ppRefPic[$iref as usize].is_none() {
-                (*pCtx).bMbRefConcealed = true;
+                *pCtx.bMbRefConcealed = true;
                 if ec_active {
                     $iref = 0;
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    *pCtx.iErrorCode |= dsBitstreamError;
                     if ppRefPic[$iref as usize].is_none() {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
@@ -1700,14 +1698,14 @@ pub unsafe fn ParseInterBInfo(
         let mut pPartW = [0i8; 4];
         // sub_mb_type, partition
         let mut pMvDirect = [[0i16; 2]; LIST_A];
-        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_none() {
+        if pCtx.sRefPic.pRefList[LIST_1][0].is_none() {
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*pRefs.get(ref_id(pCtx, LIST_1, 0))).bIsLongRef;
+        let bIsLongRef = (*pRefs.get(pCtx.ref_id(LIST_1, 0))).bIsLongRef;
         let ref0Count = std::cmp::min(
             uiRefCountHdr[LIST_0],
-            (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
+            pCtx.sRefPic.uiRefCount[LIST_0] as i32,
         );
         let mut has_direct_called = false;
         let mut directSubMbType: crate::decoder::mv_pred::SubMbType = 0;
@@ -2357,10 +2355,10 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
     }
 }
 
-pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: *mut SWelsDecoderContext) {
+pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: &mut SliceCtx<'_>) {
     unsafe {
-        let kiQMul: i32 = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
-            (*pCtx).pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
+        let kiQMul: i32 = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
+            pCtx.pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
         } else {
             (g_kuiDequantCoeff[uiQp as usize][0] as i32) << 4
         };
@@ -2667,7 +2665,7 @@ pub unsafe fn WelsResidualBlockCavlc(
     mut iResidualProperty: i32,
     pTCoeff: *mut i16,
     uiQp: u8,
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
     let mut iLevel = [0i32; 16];
     let mut iRun = [0i32; 16];
@@ -2677,9 +2675,8 @@ pub unsafe fn WelsResidualBlockCavlc(
     // `pCtx->pDequant_coeff4x4[iMbResProperty][uiQp]` in parse_mb_syn_cavlc.cpp: the 4x4
     // table is indexed directly by the MB residual property (0..5); only the 8x8 table
     // is biased by 6.
-    let kpDequantCoeff: &[u16] = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
-        let scaling4x4: &[[[u16; 16]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer4x4);
-        &scaling4x4[iMbResProperty as usize][uiQp as usize][..]
+    let kpDequantCoeff: &[u16] = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
+        &pCtx.pDequant_coeff_buffer4x4[iMbResProperty as usize][uiQp as usize][..]
     } else {
         &g_kuiDequantCoeff[uiQp as usize][..]
     };
@@ -2756,7 +2753,7 @@ pub unsafe fn WelsResidualBlockCavlc(
             *pTCoeff.add(j) = iLevel[i] as i16;
         }
         WelsChromaDcIdct(pTCoeff);
-        if pCtx.is_null() || !(*pCtx).bUseScalingList {
+        if !pCtx.bUseScalingList {
             for j in 0..4 {
                 let idx = kpZigzagTable[j] as usize;
                 *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * kpDequantCoeff[0] as i32) >> 1) as i16;
@@ -2778,7 +2775,7 @@ pub unsafe fn WelsResidualBlockCavlc(
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
             let j = kpZigzagTable[iCoeffNum as usize] as usize;
-            if pCtx.is_null() || !(*pCtx).bUseScalingList {
+            if !pCtx.bUseScalingList {
                 *pTCoeff.add(j) = (iLevel[i] * kpDequantCoeff[j & 0x07] as i32) as i16;
             } else {
                 *pTCoeff.add(j) = ((iLevel[i] * kpDequantCoeff[j] as i32 + 8) >> 4) as i16;
@@ -2801,16 +2798,15 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     pTCoeff: *mut i16,
     iIdx4x4: i32,
     uiQp: u8,
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
     let mut iLevel = [0i32; 16];
     let mut iRun = [0i32; 16];
     let mut iMbResProperty: i32 = 0;
     GetMbResProperty(&mut iMbResProperty, &mut iResidualProperty, true);
 
-    let kpDequantCoeff: &[u16] = if !pCtx.is_null() && (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
-        let scaling8x8: &[[[u16; 64]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer8x8);
-        &scaling8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
+    let kpDequantCoeff: &[u16] = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
+        &pCtx.pDequant_coeff_buffer8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
     } else {
         &crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
@@ -2905,7 +2901,7 @@ pub unsafe fn WelsParseMbCavlcResidual(
     iResidualProperty: i32,
     pTCoeff: *mut i16,
     uiQp: u8,
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
     WelsResidualBlockCavlc(
         pVlcTable,
@@ -3014,8 +3010,14 @@ mod tests {
         InitVlcTable(&mut vlc_table);
 
         unsafe {
+            // T5.Y2: the residual parser takes the slice view, so the null context
+            // this passed is unrepresentable. The fixture is a zeroed context wired
+            // the way `Initialize` wires the real one — `bUseScalingList` false is
+            // the same arm the null pointer selected here.
+            let mut ctx = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
+            let mut view = crate::decoder::decoder_context::test_slice_ctx(&mut ctx, &mut vlc_table);
             let res = WelsParseMbCavlcResidual(
-                &mut vlc_table,
+                view.pVlcTable,
                 &mut non_zero_cache,
                 &buf,
                 &mut bs,
@@ -3025,7 +3027,7 @@ mod tests {
                 0,
                 coeffs.as_mut_ptr(),
                 26,
-                std::ptr::null_mut(),
+                &mut view,
             );
             assert_eq!(res, ERR_NONE);
             assert_eq!(non_zero_cache[g_kuiCache48CountScan4Idx[0] as usize], 0);
