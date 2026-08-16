@@ -3,6 +3,7 @@
 //! Rust translation of:
 //! - `codec/decoder/core/inc/decode_mb_aux.h`
 //! - `codec/decoder/core/src/decode_mb_aux.cpp`
+#![deny(unsafe_code)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
