@@ -53,12 +53,16 @@ plane/block-slice conversion); what V measured is which end to start from.
 Total at V's open: **439 `unsafe fn`, 977 raw-pointer occurrences** over 16 modules; **430 / 974** after `fmo` landed. That is
 the measured size of exit conditions 1–2, and it is not one session.
 
-## 2. This session's scope
+## 2. This session's scope — the queue, not a cap (steward's amendment)
 
-Families 2, 4, 5 and 6 — the ones with no other family in front of them (1 landed at V) —
-one commit each, probe per seam, gate per commit. Then as much of 7 and 8 as fits;
-they are the two that unblock `decode_slice.rs`'s CABAC/CAVLC calls and are half
-its cross-module surface.
+The work queue is §1's list **entire**, entered in order. Families 2, 4, 5 and 6
+first — no family stands in front of them (1 landed at V) — one commit each,
+probe per seam, gate per commit; then 7 and 8, which unblock `decode_slice.rs`'s
+CABAC/CAVLC calls and are half its cross-module surface; then straight down the
+list. **A clean family boundary is a checkpoint, not an exit** (forcing rule 1;
+S31 — compaction is not a stop). The session ends when the list ends or at
+genuine exhaustion; the hand-off names the families remaining, sizes carried
+forward.
 
 Done-test per family: the module carries `#![deny(unsafe_code)]` **proved to bite**
 (append a one-line `unsafe { *p }`, see the error, remove it), or its exceptions are
@@ -71,7 +75,15 @@ Per commit: build both profiles + `--all-targets` + tests + ratchet + census. Pr
 per seam (S32 beside any probe change). Full battery once at close. **Do not edit
 the working tree while the battery runs.** F3 per S14 — V drew three hits across two batteries and adjudicated them; the ledger is current.
 
-## 4. Non-goals
+## 4. Close
+
+Breadcrumb-built log entry (≤ 30 lines), phase5.md's family list marked, §0's
+rows re-derived. This session's own span measured at close per S2b if code
+landed — no other perf work (D-perf-6). Hand-off: the families remaining; if the
+list ends, the next brief is the `decode_slice.rs`/view-struct endgame plus the
+phase close.
+
+## 5. Non-goals
 
 No encoder sites (F12/P10 — Phase 6's). No F23/F38-class/F41/`api/` work (Phase 8's).
 No F36 work. No `get_unchecked` (S8). No golden movement. **No perf work at all** —

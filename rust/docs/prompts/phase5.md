@@ -133,6 +133,10 @@ caller where the C++ has one — fixed, with a red-under-revert test. Decoder `r
 **974**. The next brief is a Phase 5 one
 ([`phase5_session_w.md`](phase5_session_w.md)); `phase6.md` stays unwritten for the
 third session running, because exit conditions 1–3 are unmet.
+**W** = W6 bottom-up ([`phase5_session_w.md`](phase5_session_w.md)): the
+dependency-ordered family queue of its §1, entered at the top and driven as far
+as S31 allows — a clean family boundary is a checkpoint, not an exit; the
+hand-off names the families remaining with their sizes carried forward.
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
@@ -283,6 +287,12 @@ function name defined in two modules where a caller's own module hosts one
 locally, enumerated and resolution-checked.
 
 ## W6 decomposed — the closing settlement (steward, at `ba4da8d8`)
+
+**Order superseded (session V, measured at the face)**: the three recipes stand,
+the sequence below does not — `deny(unsafe_code)` fires on *calling* an
+`unsafe fn`, so the callees convert first, bottom-up, and the view struct is
+W6's **last** step (§"The order the decomposition needs", below). Kept unedited
+under it because the record of a wrong settlement is part of the record.
 
 U's census stands (202 raw-pointer types over 55 `unsafe fn` at `1423f8eb`), and
 its "not one session" reading was right **for conversion in place**. The
