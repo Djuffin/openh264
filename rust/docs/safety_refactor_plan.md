@@ -629,6 +629,32 @@ Stop-line: cumulative CB ≈ **+23%** — stop at a family boundary and escalate
 the data. Parking, if it comes to that, is family-granular and S20-coherent; its
 cost is phase-exit debt, not a broken tree.
 
+**D-perf-6 (Phase 5 session V, 2026-08-15, under Eugene's closing order): the Phase
+5 stop-line breach is recorded and its recovery deferred to the Phase 9 perf pass.**
+The escalation table's **option 6**, taken after option 2 (its own recommendation)
+was spent. The measurement: the D-gate-1 window `d0b7f399`→`e6873fe1` read **+3.58%
+CB / +2.77% decode median** at 7 pairs in session U's morning and **+3.38% CB /
++2.65%** at 7 pairs ≈10 hours later — same sign, same row order, medians 0.12 points
+apart, every decode row above its own reading's null ceiling, encode flat in both.
+So **cumulative CB ≈ +25.0…+25.5% against the ≈+23% stop-line: over by ≈2.0–2.5
+points**, and D-perf-4's +25% *median* tripwire is not breached (both stated).
+What the decision is, precisely:
+- **Recovery is owed and scheduled, not waived.** It goes to the Phase 9 perf pass
+  driven by the ledger — D-perf-4's own disposition for a deficit nothing attributes
+  — on the precedent the ledger already carries (Phase 2's shim families).
+- **Nothing parks, because nothing is attributed.** The window's bisect does not
+  resolve (the CB rows sum, the medians do not; session K's law), and a per-session
+  split is finer, so it would resolve less rather than more. Option 5 has option 4
+  as its prerequisite and option 4 is refused on those grounds.
+- **The line does not move.** Option 1 — re-baseline to ≈+26% — is refused: the
+  phase exits *over* its stop-line with the overage named, rather than under a line
+  redrawn to fit it.
+- **The exit is not blocked by it.** Exit condition 5 is "the perf adjudication done
+  and written"; it is done, written, day-two'd, and dispositioned. The breach is a
+  ledger fact Phase 6 inherits, not an open question.
+`perf_baseline.md` §Phase 5 exit carries both readings, the two nulls, the niche's
+second reading, and this disposition.
+
 **D-par-1 (Eugene, 2026-08-14, mid-session S, verbatim): "if InitErrorCon is called
 in C++ code, it needs to be called in Rust code as well. we aim for test parity
 first, safety refactoring comes later."** What it reorders: behavioral parity with
