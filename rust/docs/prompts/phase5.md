@@ -9,7 +9,8 @@ log and git — this file carries only what remains.
 **The anti-circles contract.** This checklist is **closed**: work enters it only
 via an F-finding or Eugene. Every session's commits map to W-items in its log
 entry. The progress metric is monotone and grep-able — **decoder `raw_ptr`
-occurrences 765** (1283 at the re-plan, 1237 at session R's open, 980 at V's, 974 at W's open), → ~0 at exit
+occurrences 456** (1283 at the re-plan, 1237 at session R's open, 980 at V's, 974 at
+W's open, 765 at X's), → ~0 at exit
 (excluding the named
 survivor and prose); a session that closes no W-item and moves no metric is a stall
 and says so — **and a W-item can close while the metric stands still**, which is
@@ -46,8 +47,8 @@ after Miri does.**
 | ~~W3~~ | **DONE — the tail landed at T5.R1–R4** (`2fd3e46c`, `029ea5af`, `bdbab19a`, `c16232cb`): the `pCurDqLayer` cache died first (85 sites, 48 functions, 8 files — a stored derivation through an owning `Box` cannot survive the next derivation, so the cache had to go before the list could own), then `pDqLayersList`, `TagFmo`'s map and the parse-only descriptor became owners. **`WelsMallocz|WelsFree` in `src/decoder/` reads 0**, `WelsMalloczHelper`/`WelsFreeHelper` deleted, F19 closed for the layer, half of F41 closed, F40 unrepresentable, `iMaxNalNum` deleted (F16). ~~Prior:~~ ownership cascade — ~~seam 1, T5.P′3~~ (`6758d885`): `SPicture` finishes owning itself, so `AllocPicture`'s `Box` is a *complete* owner. ~~seam 2, T5.P″1~~ (`acf5bfd1`): `pTempDec` and `pPicBuff` are owned fields, `alloc_picture` is the constructor, `CreatePicBuff`/`DestroyPicBuff` shrink, `PrefetchPic` deleted. ~~seam 3, T5.P″2 + T5.P″3~~ (`d7a1d130`, `b07e407c`): **the hoist** — 79 per-use resolutions become two derivations at three slice bracket tops, threaded through 30 functions and the per-macroblock dispatch type. ~~seam 4, T5.Q1 + T5.Q2~~ (`539212bd`, `a8eaa3e5`): **the flip** — `Pool<Option<Box<SPicture>>>`, the resolver family split shared/`_mut` so the compiler enumerates the writers, five brackets where a span really crossed, **F42** found and fixed with a red-under-revert test, **F19 closed decoder-side**, **R4 by construction**, F37's reset kept beside a `drop`. **Remaining**: `pDqLayersList` owned + `pCurDqLayer`'s deletion (**81 mid-tree ctx-field reads**, re-grepped at `a8eaa3e5`); `fmo.rs`'s map (25 sites, one file); the parser buffers (3 `WelsMalloczHelper` calls, all under `bParseOnly`, and `SParserBsInfo` is a public API type) | `pDqLayersList` + `fmo.rs`'s map + the parser buffers | zero `WelsMallocz`/`WelsFree` in `src/decoder/` (**8 call sites left, none a picture's**); cascade functions deleted; probe green per container | 5.5 closes |
 | ~~W4~~ | **DONE, T5.R5** (`65a3e056`): 219 packed-word uses became assignments of the values they moved, `LD*`/`ST*` and both byte-pointer block helpers deleted, decoder LD/ST grep **0 in code** (37 prose — S16's floor), **F35's second half closed**, T5.N5's `debug_assert!` deleted because **F42 disproved it**. ~~Prior:~~ colocated + 5.3b: `GetColocatedMb` on `cur_and_ref`; `SetRectBlock`/`CopyRectBlock4Cols` on the grid; punning → byte ops | 325 `LD*/ST*` tokens remaining | decoder `LD32\|ST32\|LD16\|ST16\|LD64\|ST64` grep reads 0 | `mv_pred.rs` deny-ready |
 | ~~W5~~ | **DONE, T5.R6** (`50e8a1ac`): 197 sites, 4 carriers; `SpsRef = (id, subset)` because the C picks between two SPS buffers with the extension flag and the pointer carried that choice; five `addr_of_mut!` lookups take **no borrow at all** — F41's question answered by construction. Done-test reads **2**, both `0..pSps.field` range operators, not field accesses. ~~Prior:~~ P4: `pSps`/`pPps` → active-paramset ids + lookup | 205 field occurrences (131 + 74), 4 carriers | `.pSps\|.pPps` greps read 0; no lookup borrow outlives its expression (F41's mistake, not repeated) | context sheds 2 raw fields |
-| W6 | **OPEN, and session U re-derived its size: the settlement was out by 4.5x** (S24, at the face). The settled design said "80 `(*pCtx)` dereferences over 44 functions, touching 24 fields" and that is what made W6 look like one face. Measured at `1423f8eb`: the file holds **202 raw-pointer types over 55 `unsafe fn`**, and `deny(unsafe_code)` fires on *every* `unsafe fn` and `unsafe` block, not only on the context ones. The view struct addresses **44 of 202** — `*mut DqLayerState` is 51, the plane/block pointers 38, `SWelsNeighAvail` 13, `SSlice` 10, `SNalUnit` 8, `BsCursor` 5. **The settlement's own census was also wrong at the moment it was written**: at `a158183c` the file held **86 derefs over 30 fields**, not 80 over 24; today it is 80 over 29, and the one field that went away is `pFmo` (F43's fix gave it an owner). The design does not move — it is still one per-slice view struct, built by one `unsafe` constructor per bracket top — but **the face does**: W6 is not one session, and a brief that schedules it as one is wrong before it starts (S20's clause). `cabac_rbsp_window`'s retirement was sized too: **18 call sites, one per function, 72 occurrences with their callers**, and the window must thread from the slice bracket top through the whole per-MB dispatch — W3's-hoist scale on its own. ~~Prior:~~ **DEFERRED (session S, Eugene's direction: parity first, safety refactoring later; still deferred through T, whose scope was parity)** — the design is settled below and unexecuted. 5.6: `decode_slice.rs` per P1 — **NZC cache DONE** (T5.R7, `fb079758`: `&mut [u8; 48]`, 18 signatures, 92 uses, three dead dispatch typedefs deleted); **F31's redundant zeroing DONE** (T5.R8, `5fbe61a2`). **Remaining**: the EC MC paths; `cabac_rbsp_window`'s retirement (21 sites; it returns `&'a [u8]` with an **unbounded** lifetime synthesized from a raw pointer — S25's shape, and the window is constant across a slice, so it is the bracket maneuver again); the signature leg (**D-fid-1: functions may merge — 148 is an upper bound, not a target**) | the phase's largest file | **The done-test is the closure, not the file** (session V, measured at the face): `decode_slice.rs` deny-clean requires the **49 `unsafe fn`s it calls across 10 modules** to be safe first, so this cell is exit condition 2 wearing one file's name — order in `phase5_session_w.md` §1, view struct last. ~~`decode_slice.rs` compiles under `#![deny(unsafe_code)]`~~ — ~~**BLOCKED, and not by conversion work**~~ (session R): the file holds 80 `(*pCtx)` dereferences over 44 functions taking `pCtx: *mut SWelsDecoderContext` and the lint forbids every one; the way through is the context arriving as a reference, which **T5.G1 removed deliberately** (S29). **No decoder module is deny-clean today** — 0, not "all but this one". Eugene's or the steward's call | W7 |
-| W7 | **three items done (session U), the rest is blocked on W6 — and the checklist's own `unblocks` column already said so.** Done: the F43-class resolution sweep (`tools/find_shadowing_stubs.py`, clean); the **F40-class sweep crate-wide** as an instrument (`tools/find_elem_byte_confusion.py`) — **0 suspects over 81 files**, 11 byte-sized hits with the two non-obvious ones hand-read, and the tool proved against the pre-T5.O5 tree where it reports F40 and exits 1; **the first three deny-clean decoder modules** (`vlc_tables.rs`, `parameter_sets.rs`, `slice.rs`), where the phase had **0** — compiler-verified, and proved to bite. **Blocked**: 42 of the 51 retiring SHIMs are in `get_intra_predictor.rs`, and those shims exist *because* their callers hold raw plane pointers — that conversion is W6's, so 52 → 1 cannot precede it. Measured per module at `e6873fe1` (`unsafe fn` / raw-ptr types): `decode_slice` 55/202, `decoder_core` 77/74, `deblocking` 34/109, `mv_pred` 22/115, `parse_mb_syn_cavlc` 26/68, `nalu` 23/67, `decoder_context` 27/65, `manage_dec_ref` 24/57, `parse_mb_syn_cabac` 34/45, `get_intra_predictor` 42/44, `pic_queue` 7/41, `error_concealment` 13/32, `cabac_decoder` 14/12, `decode_mb_aux` 4/13, `fmo` 9/6, `picture` 2/8, `bit_stream` 2/5, `dec_golomb` 1/1. Remaining: 5.2's straggler sweep | sweeps + deletions | SHIM greps match the survivor list exactly; every decoder module deny-clean or on the exception list with its Phase 8 pointer — **9 of 22 carry the lint at session W's close, 8 of them allowing nothing** (V added `dec_golomb`, `bit_stream`, `fmo`; W added `picture`, `cabac_decoder`, and `pic_queue` with two named exceptions) | the exit |
+| W6 | **OPEN — three of its four steps are done and the fourth is the context** (session X). Step 2's grid split and the layer flip landed whole (T5.X1–X3: `decode_slice.rs`'s 51 layer pointers → 0), step 3's plane/dispatch conversion landed whole (T5.X8: `SHIM(` 52 → 7, 46 Phase-2 wrappers deleted, `get_intra_predictor.rs` deny-clean), and step 1 — **the view struct** — is what is left, sized by measurement rather than by settlement in §"The context, measured at the face" below. ~~Prior:~~ **and session U re-derived its size: the settlement was out by 4.5x** (S24, at the face). The settled design said "80 `(*pCtx)` dereferences over 44 functions, touching 24 fields" and that is what made W6 look like one face. Measured at `1423f8eb`: the file holds **202 raw-pointer types over 55 `unsafe fn`**, and `deny(unsafe_code)` fires on *every* `unsafe fn` and `unsafe` block, not only on the context ones. The view struct addresses **44 of 202** — `*mut DqLayerState` is 51, the plane/block pointers 38, `SWelsNeighAvail` 13, `SSlice` 10, `SNalUnit` 8, `BsCursor` 5. **The settlement's own census was also wrong at the moment it was written**: at `a158183c` the file held **86 derefs over 30 fields**, not 80 over 24; today it is 80 over 29, and the one field that went away is `pFmo` (F43's fix gave it an owner). The design does not move — it is still one per-slice view struct, built by one `unsafe` constructor per bracket top — but **the face does**: W6 is not one session, and a brief that schedules it as one is wrong before it starts (S20's clause). `cabac_rbsp_window`'s retirement was sized too: **18 call sites, one per function, 72 occurrences with their callers**, and the window must thread from the slice bracket top through the whole per-MB dispatch — W3's-hoist scale on its own. ~~Prior:~~ **DEFERRED (session S, Eugene's direction: parity first, safety refactoring later; still deferred through T, whose scope was parity)** — the design is settled below and unexecuted. 5.6: `decode_slice.rs` per P1 — **NZC cache DONE** (T5.R7, `fb079758`: `&mut [u8; 48]`, 18 signatures, 92 uses, three dead dispatch typedefs deleted); **F31's redundant zeroing DONE** (T5.R8, `5fbe61a2`). **Remaining**: the EC MC paths; `cabac_rbsp_window`'s retirement (21 sites; it returns `&'a [u8]` with an **unbounded** lifetime synthesized from a raw pointer — S25's shape, and the window is constant across a slice, so it is the bracket maneuver again); the signature leg (**D-fid-1: functions may merge — 148 is an upper bound, not a target**) | the phase's largest file | **The done-test is the closure, not the file** (session V, measured at the face): `decode_slice.rs` deny-clean requires the **49 `unsafe fn`s it calls across 10 modules** to be safe first, so this cell is exit condition 2 wearing one file's name — order in `phase5_session_w.md` §1, view struct last. ~~`decode_slice.rs` compiles under `#![deny(unsafe_code)]`~~ — ~~**BLOCKED, and not by conversion work**~~ (session R): the file holds 80 `(*pCtx)` dereferences over 44 functions taking `pCtx: *mut SWelsDecoderContext` and the lint forbids every one; the way through is the context arriving as a reference, which **T5.G1 removed deliberately** (S29). **No decoder module is deny-clean today** — 0, not "all but this one". Eugene's or the steward's call | W7 |
+| W7 | **three items done (session U), the rest is blocked on W6 — and the checklist's own `unblocks` column already said so.** Done: the F43-class resolution sweep (`tools/find_shadowing_stubs.py`, clean); the **F40-class sweep crate-wide** as an instrument (`tools/find_elem_byte_confusion.py`) — **0 suspects over 81 files**, 11 byte-sized hits with the two non-obvious ones hand-read, and the tool proved against the pre-T5.O5 tree where it reports F40 and exits 1; **the first three deny-clean decoder modules** (`vlc_tables.rs`, `parameter_sets.rs`, `slice.rs`), where the phase had **0** — compiler-verified, and proved to bite. **Blocked**: ~~42 of the 51 retiring SHIMs are in `get_intra_predictor.rs`~~ — **done at T5.X8**, with `decode_mb_aux.rs`'s four: `SHIM(` reads **7**, of which 1 is the named survivor, 2 are `expand_picture` bridges in `decoder_core.rs` and 4 are prose. **Blocked**: Measured per module at `e6873fe1` (`unsafe fn` / raw-ptr types): `decode_slice` 55/202, `decoder_core` 77/74, `deblocking` 34/109, `mv_pred` 22/115, `parse_mb_syn_cavlc` 26/68, `nalu` 23/67, `decoder_context` 27/65, `manage_dec_ref` 24/57, `parse_mb_syn_cabac` 34/45, `get_intra_predictor` 42/44, `pic_queue` 7/41, `error_concealment` 13/32, `cabac_decoder` 14/12, `decode_mb_aux` 4/13, `fmo` 9/6, `picture` 2/8, `bit_stream` 2/5, `dec_golomb` 1/1. Remaining: 5.2's straggler sweep | sweeps + deletions | SHIM greps match the survivor list exactly; every decoder module deny-clean or on the exception list with its Phase 8 pointer — **11 of 22 carry the lint at session X's close, 10 of them allowing nothing** (X added `get_intra_predictor` and `decode_mb_aux`, both to zero `unsafe fn` and zero raw pointers) (V added `dec_golomb`, `bit_stream`, `fmo`; W added `picture`, `cabac_decoder`, and `pic_queue` with two named exceptions) | the exit |
 | ~~W8~~ | **DONE — the adjudication landed whole at session U** (`perf_baseline.md` §Phase 5 exit). N's stashed binaries got their owed day two: the whole span confirms (**+0.87%** against day one's +1.24%, every row above its own null's ceiling) and **the bisect does not** — Face 1's CB row flips sign (−0.72% → +1.31%), so S2b's clause applies and the halves were never resolvable. **The niche's motivating observation evaporated with it**: day one's CB-is-half asymmetry, which is what pointed at `Option<PicId>` on B slices, does not replicate. The niche itself reads **directionally consistent, unresolved** (3 pairs: CB +0.15% — the control, flat, as a B-slice mechanism must be on a stream without B-slices; Main −0.72%, High −0.99%, inside the 7-pair floor); its 1-pair reading was an artifact its own control convicted. **The window** (`d0b7f399`→`e6873fe1`, 69 commits) reads **+2.77% median / +3.58% CB at 7 pairs** and +2.63% / +3.87% at 3, every decode row above the 7-pair null's ceiling, encode flat — **real**. Its bisect does not resolve (CB rows sum, medians do not; session K's law). **Stop-line: BREACHED.** Cumulative CB **≈ +25.2…+25.8%** against ≈+23% — over by ≈2.2…2.8 points. D-perf-4's +25% *median* tripwire is not breached, and both are stated. **The escalation table is written and option 2 is the recommendation: day-two the window first, because it is free and this phase has twice had a second day overturn a first.** Every reading is provisional (no second day available); the hand-off names exactly what day two re-runs and all six binaries are stashed, so day two needs no build | one session | ~~`OVERALL: PASS` at `exit`~~; ledger reconciled or escalated with the table — **escalated**; ~~phase6.md exists~~ — **not written, and deliberately: Phase 5 has not exited** | Phase 6 |
 | ~~W8 (prior)~~ | **PARTIAL (sessions S and T)** — the full battery ran at `exit` level in both (T: 482/476/20, Miri `--lib` 337/0 plus 20/7/3 on the differential targets, sweeps 341/341 both profiles, benches bit-identical, F3 zero hits) and §0 is refreshed twice; **the perf adjudication was not done in either and is the largest single item outstanding** — postponed out of T by direction (Eugene, 2026-08-14), and `phase6.md` is deliberately unwritten because the phase did not close. **the exit — never compressed**: all D-gate-1-deferred measurement (session N's stashed binaries, the niche verdict, the ≈+23% stop-line, the recovery/ledger adjudication vs ≈+21.6–21.9% cumulative CB), 3-pair+day-two protocol, §0 refresh, `prompts/phase6.md` (S19), briefs stamped historical | one session | `OVERALL: PASS` at `exit` level; ledger reconciled or escalated with the table; phase6.md exists | Phase 6 |
 
@@ -149,10 +150,36 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
-**X** = **the endgame** ([`phase5_session_x.md`](phase5_session_x.md)): the settled
-residual chain (below), the family queue to zero, planes + dispatch with the 42
-SHIM retirements, the view struct **last**, W7's closure, and **the phase close** —
-phase6.md, briefs historical, this checklist closed.
+**X** = **spent** (10 commits, `4d36cb6c`…`ec672022`;
+[`phase5_session_x.md`](phase5_session_x.md)) — scoped as the endgame, and **it did not
+close the phase**. Decoder `raw_ptr` **765 → 456 (−40%)**, `SHIM(` **52 → 7**,
+deny-clean **9 → 11 of 22**, decoder `unsafe fn` **381 → 327** (439 at V's open). Face 0 landed whole and
+the settlement held: `ParseCbfInfoCabac`'s reach is what it said, with one clause the
+face corrected (the mb_type is the *picture's*, not the grid's — S24), and
+`decode_slice.rs`'s 51 layer pointers fell without `tcoeff_and_rest` and without new
+API on the grid. Face 1 took `mv_pred` 94 → 8, `deblocking` 63 → 23 and `nalu` 68 → 49,
+and **two of those families were dead rather than convertible** — `SetRectBlock` and
+`CopyRectBlock4Cols` had zero callers anywhere in the crate since T5.R5 and were 82 of
+`mv_pred`'s raw casts. Face 2 landed whole: the four reconstruction dispatch types take
+a `PlaneCursorMut`, 46 Phase-2 strangler wrappers are deleted, and two caches died with
+them (`DqLayerState::pPred` and `SWelsDecoderContext::iDecBlockOffsetArray`).
+**F52** is the session's finding — a sixth F43-class stub, `CheckAccessUnitBoundaryExt`
+returning `true` unconditionally in the module that calls it, shadowing the real
+80-line implementation which had no caller at all; **F43's own sweep had run clean over
+it twice**, on an off-by-a-brace in its statement counter, and the instrument is fixed
+with the finding. **Face 3 did not land, and X's measurement of why is the hand-off's
+content**: the flip was attempted, produced 145 errors that reduce to one shape, and was
+**reverted rather than half-landed** (§"The context, measured at the face" below).
+**F53** is the second finding, and the `exit` battery is what found it: a raw alias
+into the layer, sound while its parent was a pointer and UB the moment the parent
+became a borrow, **with no line of it edited** — S29's boundary clause met as a Miri
+failure for the second session running (T5.W11's was the same sentence one level
+down). 26 bindings and 104 use sites re-derived, then a grep sweep for the shape
+decoder-wide, which found four more on paths no probe drives.
+F3 drew five hits across three batteries and the **sixteenth alternation** acquitted
+them — HEAD 5, control 7, 1440 configurations per side. The next brief is a Phase 5 one
+([`phase5_session_y.md`](phase5_session_y.md)); `phase6.md` stays unwritten for the
+fourth session running, because exit conditions 1–3 are unmet.
 
 **The residual-chain blocker, settled by reading (steward, at `361592a7`).** W
 stopped `decode_slice.rs`'s layer conversion on "`&mut` into `grid.scaled_tcoeff`
@@ -395,28 +422,28 @@ has one.
 
 ## The family queue, marked at session W's close
 
-Sizes are `unsafe fn` / raw-pointer occurrences, re-derived at W's close with the
+Sizes are `unsafe fn` / raw-pointer occurrences, re-derived at **X's** close with the
 ratchet's own line-anchored unit (S24 — the brief's §1 figures were taken in a
 different unit and four of fifteen differ by 1–3; no conversion's shape moved).
 
-| # | family | at V | at W's close | state |
+| # | family | at V | at X's close | state |
 |---|---|---|---|---|
 | ~~1~~ | ~~`fmo.rs`~~ | 9 / 6 | 0 / 2 | **DONE, T5.V4** |
 | ~~2~~ | ~~`picture.rs`~~ | 2 / 8 | 0 / 6 | **DONE, T5.W1** — lint on; exception is S28's own instrument |
-| 3 | `decode_mb_aux.rs` | 4 / 13 | 4 / 13 | untouched — its 4 `pIdct*Func` shims are **step 3**'s dispatch change |
+| ~~3~~ | ~~`decode_mb_aux.rs`~~ | 4 / 13 | **0 / 0** | **DONE, T5.X8** — lint on; the 4 `pIdct*Func` shims are deleted, not converted |
 | ~~4~~ | ~~`cabac_decoder.rs`~~ | 14 / 12 | **0 / 0** | **DONE, T5.W2** — the cleanest close of the phase |
 | ~~5~~ | ~~`pic_queue.rs`~~ | 7 / 41 | 1 / 35 | **DONE, T5.W3** — lint on, two exceptions named (family 14; W3's resolver design) |
 | 6 | `error_concealment.rs` | 13 / 32 | 13 / 23 | layer flipped (T5.W8); **context-blocked**, 11 of 13 take `pCtx` |
 | 7 | `parse_mb_syn_cabac.rs` | 34 / 45 | 34 / **14** | layer + MV pair flipped (T5.W9/W12); **context-blocked**, 24 of 34 |
 | 8 | `parse_mb_syn_cavlc.rs` | 26 / 68 | 22 / 26 | **PARTIAL** T5.W4/W8/W10/W13 — blocked on `SVlcTable`'s varying-length raw sub-tables |
-| 9 | `mv_pred.rs` | 22 / 115 | 22 / 94 | layer + MV pair flipped (T5.W6/W12); its residue is **`as *mut u32` casts in W4's settled block helpers**, not a signature surface |
-| 10 | `deblocking.rs` | 34 / 109 | 33 / 63 | **PARTIAL** T5.W5/W7/W14 — blocked on planes (step 3) and `pDec` |
+| 9 | `mv_pred.rs` | 22 / 115 | 21 / **8** | **T5.X4** — the two block helpers were **dead** (zero callers since T5.R5) and deleted; residue is 4 `pCtx` + 1 `colocPic` |
+| 10 | `deblocking.rs` | 34 / 109 | 33 / **23** | **T5.X5** — BS words de-punned, MV/ref arrays whole, edge filters take `&[u8; 4]`; blocked on `common/`'s kernels and `pCtx` |
 | 11 | `manage_dec_ref.rs` | 24 / 57 | 24 / 35 | layer + `SRefPic` flipped (T5.W8/W11); **context-blocked**, 24 of 24 |
-| 12 | `nalu.rs` | 23 / 67 | 23 / 68 | untouched — **context-blocked**, 16 of 23 |
-| 13 | `get_intra_predictor.rs` | 42 / 44 | 42 / 44 | untouched — **the 42 retiring SHIMs, step 3**, and 0 of 42 take `pCtx` |
-| 14 | `decoder_core.rs` | 77 / 74 | 77 / 74 | untouched — **context-blocked**, 61 of 77 |
-| 15 | `decoder_context.rs` | 28 / 66 | 31 / 66 | the accessors' home — **grew by three** as families 4 and 5 sent theirs here, by design |
-| 16 | `decode_slice.rs` | 55 / 202 | 55 / 184 | the view struct + the reference-flip, last. **Its 51 layer pointers need the grid split** (below) |
+| 12 | `nalu.rs` | 23 / 67 | 18 / **49** | **T5.X6/X7** — the parse out-params are borrows and `CheckAccessUnitBoundaryExt` is safe; **F52** found here |
+| ~~13~~ | ~~`get_intra_predictor.rs`~~ | 42 / 44 | **0 / 1** | **DONE, T5.X8/X9** — lint on, allowing nothing; the 42 SHIMs deleted |
+| 14 | `decoder_core.rs` | 77 / 74 | **75 / 68** | the `expand_picture` bridges and the dispatch installers moved at T5.X8/X11; **context-blocked**, 61 of 75 |
+| 15 | `decoder_context.rs` | 28 / 66 | 31 / **59** | the accessors' home and **the view struct's** — converted last, and the enumerated exception |
+| 16 | `decode_slice.rs` | 55 / 202 | 55 / **89** | **T5.X1–X3/X8/X10** — the 51 layer pointers, the reconstruction bracket and two out-param families; the view struct is what is left |
 
 
 **What W measured that re-orders what is left.** The queue's order came from "callee
@@ -445,7 +472,52 @@ family:**
    `nalu`, 11 in `error_concealment`. W showed the mechanism is available already at
    small field counts; what these need is the packaging.
 
+## The context, measured at the face (session X, at `ec672022`)
+
+**The view struct is W6's last step and the only one left, and its blocker is one
+shape.** Session X flipped `pCtx: *mut SWelsDecoderContext` → `&mut` across the
+decoder to measure it rather than estimate it: **145 errors**, of which 87 are
+`is_null()` on a reference (mechanical) and the remainder reduce to this —
+
+> `WelsDecodeSlice`'s bracket top does `let (pDec, pRefs) = cur_and_refs(pCtx);` and
+> `PicRefs<'a>` borrows `pPicBuff` for the whole slice. Below it the per-macroblock
+> dispatch is `pDecMbFunc(pCtx, dq, pDec, pRefs, pNalCur, uiEosFlag)` — **the context
+> whole, beside a live borrow of one of its fields.**
+
+As raw pointers the two coexisted silently; as borrows they cannot. This is S29's
+objection arriving exactly where session V said it would, and **the answer is the
+settled one**: the bracket top splits the context once and everything below takes
+pieces, never `pCtx`. `pPicBuff` is **not** in the view — `PicRefs` and `pDec` already
+travel as their own parameters, which is what makes the split expressible at all.
+
+**The size, by grep at `ec672022`**: 220 functions take the context —
+`decoder_core` 61, `decode_slice` 44, `decoder_context` 25, `manage_dec_ref` 24,
+`parse_mb_syn_cabac` 24, `nalu` 15, `error_concealment` 11, `parse_mb_syn_cavlc` 6,
+`mv_pred` 4, `deblocking` 3, `pic_queue` 3.
+
+**Two facts the attempt established and did not land**, both of which compiled:
+the CABAC call's three operands are three *disjoint field paths* (`sRawData`,
+`sCabacDecEngine`, `pCabacCtx`) once the window borrows the field rather than the
+context — `cabac_window_of(&pCtx.sRawData, slice_bit_reader(pCtx))`; and
+`slice_bit_reader` needs only `&SWelsDecoderContext`, because the reader lives in the
+**NAL**, reached through `pNalCur`'s value.
+
+**And one scope fact, found and deliberately not acted on**: `deblocking.rs`'s eight
+edge filters call `common::deblocking_common`'s `unsafe fn` kernels, so the module
+cannot carry `#![deny(unsafe_code)]` without either converting those kernels — which
+are `common/`, not `src/decoder/` — or an enumerated exception with a Phase pointer.
+`decode_mb_aux` and `error_concealment` have the same shape. It is a decision, and it
+should be written down rather than settled by whichever is easier when it is met.
+
 ## Phase exit conditions (the definition of done)
+
+**Status at session X's close** (`ec672022`), so the next session opens against
+facts rather than against this list's prose: **1 unmet** (decoder `raw_ptr` 456);
+**2 unmet** (11 of 22 modules deny-clean); **3 unmet** (`SHIM(` 7 against a survivor
+list of 1 — 4 are prose and 2 are `decoder_core`'s `expand_picture` bridges, so the
+real remainder is 3); **4 met** at X's close (`OVERALL: PASS` at `exit`, 13/0/1);
+**5 met and closed** (D-perf-6); **6 unmet** and deliberately so — `phase6.md` is
+written at the exit, and the phase has not exited.
 
 1. Decoder `raw_ptr` ≈ 0: every occurrence in `src/decoder/` is on the survivor
    list (the output-contract consumer) or is prose.

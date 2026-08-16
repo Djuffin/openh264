@@ -1,9 +1,9 @@
 # Phase 5, session Y — the context, and the phase close
 
-Exit conditions 1–3 are unmet (decoder `raw_ptr` 466; 11 of 22 modules deny-clean;
+Exit conditions 1–3 are unmet (decoder `raw_ptr` 456; 11 of 22 modules deny-clean;
 `SHIM(` 7 against a survivor list of 1). Condition 5 is met and closed (D-perf-6).
 **D-par-1**, **D-fid-1**, **D-perf-6**, **S31**–**S33**, forcing rules v2 in force.
-Counts at `574bd987`; re-grep at each face's open (S24).
+Counts at `ec672022`; re-grep at each face's open (S24).
 
 **Read first**: `phase5.md` §"The context, measured at the face (session X)". The
 flip was attempted, measured and reverted; the blocker is one shape and the design
@@ -13,7 +13,7 @@ that clears it is the settlement's, unchanged.
 
 1. Commit the inherited doc tail.
 2. Open per **S27**: X closed `OVERALL: PASS` at `exit`. Last recorded: decoder
-   `raw_ptr` **466**, deny-clean **11/22**, `SHIM(` 7, corpus 2690/17 + 2707/0,
+   `raw_ptr` **456**, deny-clean **11/22**, `SHIM(` 7, corpus 2690/17 + 2707/0,
    conformance 60/60, Miri 338/0 + 20/7/3. Recount.
 3. Probe per seam (S32 beside any probe change); S33 on every number; breadcrumb
    per face.
@@ -41,6 +41,13 @@ As raw pointers those coexisted; as borrows they cannot.
 
 Done when `*mut SWelsDecoderContext` and `PWelsDecoderContext` read **0** outside
 the constructor, and the constructor is the enumerated exception.
+
+**F53's rule applies to every step of this face** (`phase5_findings.md`): converting a
+parameter from `*mut T` to `&mut T` invalidates every raw alias derived from it that
+outlives a reborrow, so each function's work list is its own `addr_of_mut!((*p).…)`
+sites as well as the parameter's uses. X met it twice — once as a Miri failure, once
+as a grep sweep — and the decoder holds none *of the layer's*; the context's are the
+ones this face creates.
 
 ## 2. Two facts session X measured and did not land
 
