@@ -290,8 +290,11 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
 }
 
 /// Evaluates if error concealment is required by inspecting the macroblock decoding flags.
-pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> bool {
-    if pCtx.is_null() || active_sps(pCtx).is_null() || pCurDqLayer.is_null() {
+pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return false;
+    };
+    if pCtx.is_null() || active_sps(pCtx).is_null() {
         return false;
     }
 
@@ -306,7 +309,7 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: *m
 }
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
-pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
+pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     if pCtx.is_null() || (*pCtx).pDec.is_none() || active_sps(pCtx).is_null() {
         return;
     }
@@ -326,9 +329,9 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
     let iStrideUV = (*pDstPic).linesize(1);
     (*pDstPic).iMbEcedNum = ((*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight) as i32;
 
-    if !(*pCtx).pParam.is_null() && !pCurDqLayer.is_null() {
+    if !(*pCtx).pParam.is_null() && pCurDqLayer.is_some() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
-            && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
+            && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
         {
             pSrcPic = ptr::null();
         }
@@ -381,8 +384,11 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
 }
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
-pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
+pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return;
+    };
+    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() {
         return;
     }
 
@@ -653,8 +659,11 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 }
 
 /// Gathers motion vector statistics from correctly decoded macroblocks in the current picture.
-pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || active_sps(pCtx).is_null() || pCurDqLayer.is_null() {
+pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return;
+    };
+    if pCtx.is_null() || active_sps(pCtx).is_null() {
         return;
     }
 
@@ -813,8 +822,11 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCu
 }
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
-pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
-    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() || pCurDqLayer.is_null() {
+pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return;
+    };
+    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() {
         return;
     }
 
@@ -876,12 +888,12 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
 }
 
 /// Fallback DPB reference marking routine.
-pub unsafe extern "C" fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> i32 {
+pub unsafe extern "C" fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
-pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) -> i32 {
+pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     let iRet = WelsMarkAsRef(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
         return iRet;
@@ -901,7 +913,7 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer
 }
 
 /// Top-level error concealment dispatcher.
-pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: *mut DqLayerState) {
+pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
     if pCtx.is_null() || (*pCtx).pParam.is_null() {
         return;
     }
@@ -914,17 +926,17 @@ pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext, pCurDqLaye
     } else if ec_mode == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_FRAME_COPY_CROSS_IDR
     {
-        DoErrorConFrameCopy(pCtx, pCurDqLayer);
+        DoErrorConFrameCopy(pCtx, pCurDqLayer.as_deref_mut());
     } else if ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
     {
-        DoErrorConSliceCopy(pCtx, pCurDqLayer);
+        DoErrorConSliceCopy(pCtx, pCurDqLayer.as_deref_mut());
     } else if ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
     {
-        GetAvilInfoFromCorrectMb(pCtx, pCurDqLayer);
-        DoErrorConSliceMVCopy(pCtx, pCurDqLayer);
+        GetAvilInfoFromCorrectMb(pCtx, pCurDqLayer.as_deref_mut());
+        DoErrorConSliceMVCopy(pCtx, pCurDqLayer.as_deref_mut());
     }
 
     (*pCtx).iErrorCode |= dsDataErrorConcealed;
@@ -979,15 +991,15 @@ mod tests {
         let mut dq_layer = DqLayerState::for_grid(MbDims::new(2, 2));
         dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
-        let pCurDqLayer: *mut DqLayerState = &mut dq_layer;
+
         // T5.R6: the SPS lives in the context's buffer and the active id names it.
         ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
         ctx.active_sps = Some(SpsRef { id: 0, subset: false });
 
         unsafe {
-            assert_eq!(NeedErrorCon(&mut *ctx, pCurDqLayer), false);
-            *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get_mut(2) = false;
-            assert_eq!(NeedErrorCon(&mut *ctx, pCurDqLayer), true);
+            assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), false);
+            *dq_layer.grid.mb_correctly_decoded_flag.get_mut(2) = false;
+            assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), true);
         }
     }
 
@@ -1080,7 +1092,7 @@ mod tests {
                 // `new_boxed()` leaves it zeroed, which would make both arms write
                 // nothing and the test vacuous.
                 ctx.sCopyFunc = SCopyFunc::default();
-                DoErrorConSliceCopy(&mut *ctx, &mut dq_layer);
+                DoErrorConSliceCopy(&mut *ctx, Some(&mut dq_layer));
                 // The destination is the pool's now, so the marker is read back out
                 // of the slot instead of off the stack.
                 let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
@@ -1151,7 +1163,7 @@ mod tests {
         ctx.pParam = &mut param as *mut _;
 
         unsafe {
-            ImplementErrorCon(&mut *ctx, std::ptr::null_mut());
+            ImplementErrorCon(&mut *ctx, None);
             assert_eq!(ctx.iErrorCode & dsBitstreamError, dsBitstreamError);
         }
     }

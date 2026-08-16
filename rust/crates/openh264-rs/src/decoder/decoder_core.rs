@@ -846,7 +846,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext, pCurDqLayer
 
 #[inline]
 pub unsafe fn WelsInitRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer, iPoc: i32) -> i32 {
-    crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, pCurDqLayer, iPoc)
+    crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, pCurDqLayer.as_mut(), iPoc)
 }
 
 #[inline]
@@ -855,22 +855,22 @@ pub unsafe fn WelsInitBSliceRefList(
     pCurDqLayer: PDqLayer,
     iPoc: i32,
 ) -> i32 {
-    crate::decoder::manage_dec_ref::WelsInitBSliceRefList(pCtx, pCurDqLayer, iPoc)
+    crate::decoder::manage_dec_ref::WelsInitBSliceRefList(pCtx, pCurDqLayer.as_mut(), iPoc)
 }
 
 #[inline]
 pub unsafe fn WelsReorderRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer)
+    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer.as_mut())
 }
 
 #[inline]
 pub unsafe fn WelsReorderRefList2(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer)
+    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer.as_mut())
 }
 
 #[inline]
 pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
-    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
+    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer.as_mut(), std::ptr::null_mut())
 }
 
 // T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
@@ -4024,8 +4024,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
         if !dq_cur.is_null() && (*dq_cur).uiLayerDqId == kuiTargetLayerDqId {
             if !(*pCtx).bInstantDecFlag {
                 if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly {
-                    if NeedErrorCon(pCtx, dq_cur) && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
-                        ImplementErrorCon(pCtx, dq_cur);
+                    if NeedErrorCon(pCtx, dq_cur.as_mut()) && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                        ImplementErrorCon(pCtx, dq_cur.as_mut());
                         if !active_sps(pCtx).is_null() {
                             (*pCtx).iTotalNumMbRec = ((*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight) as i32;
                             if (*pCtx).pDec.is_some() {
@@ -4176,9 +4176,9 @@ pub unsafe fn CheckAndFinishLastPic(
     // cache field held at this point, and the list is what the cache was stamped from.
     let dq_cur = cur_dq_layer(pCtx);
 
-    if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur) {
+    if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur.as_mut()) {
         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
-            ImplementErrorCon(pCtx, dq_cur);
+            ImplementErrorCon(pCtx, dq_cur.as_mut());
             if !active_sps(pCtx).is_null() {
                 (*pCtx).iTotalNumMbRec = ((*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight) as i32;
                 if (*pCtx).pDec.is_some() {
@@ -4192,7 +4192,7 @@ pub unsafe fn CheckAndFinishLastPic(
             if !(*pCtx).pLastDecPicInfo.is_null() {
                 (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = (*pCtx).pDec;
                 if (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0 {
-                    if MarkECFrameAsRef(pCtx, dq_cur) == ERR_INFO_INVALID_PTR {
+                    if MarkECFrameAsRef(pCtx, dq_cur.as_mut()) == ERR_INFO_INVALID_PTR {
                         (*pCtx).iErrorCode |= dsRefListNullPtrs;
                         return false;
                     }

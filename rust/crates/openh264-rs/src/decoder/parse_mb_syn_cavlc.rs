@@ -529,10 +529,13 @@ pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
 /// for the current macroblock across slice boundaries.
 pub unsafe fn GetNeighborAvailMbType(
     pNeighAvail: PWelsNeighAvail,
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: Option<&DqLayerState>,
     pDec: PPicture,
 ) {
-    if pNeighAvail.is_null() || pCurDqLayer.is_null() {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return;
+    };
+    if pNeighAvail.is_null() {
         return;
     }
     unsafe {
@@ -615,9 +618,12 @@ pub unsafe fn GetNeighborAvailMbType(
 pub unsafe fn WelsFillCacheNonZeroCount(
     pNeighAvail: PWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: Option<&DqLayerState>,
 ) {
-    if pNeighAvail.is_null() || pCurDqLayer.is_null() {
+    let Some(pCurDqLayer) = pCurDqLayer else {
+        return;
+    };
+    if pNeighAvail.is_null() {
         return;
     }
     unsafe {
@@ -686,10 +692,10 @@ pub unsafe fn WelsFillCacheConstrain1IntraNxN(
     pNeighAvail: PWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &DqLayerState,
 ) {
     unsafe {
-        WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, pCurDqLayer);
+        WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
         let na = &*pNeighAvail;
         let dq = &*pCurDqLayer;
@@ -749,7 +755,7 @@ pub unsafe fn WelsFillCacheInterCabac(
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
 ) {
     let na = &*pNeighAvail;
@@ -768,7 +774,7 @@ pub unsafe fn WelsFillCacheInterCabac(
         1
     };
 
-    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, pCurDqLayer);
+    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, Some(pCurDqLayer));
 
     if na.iTopAvail != 0 {
         iTopXy = iCurXy - dq.iMbWidth as usize;
@@ -910,7 +916,7 @@ pub unsafe fn WelsFillCacheInter(
     pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
 ) {
     let na = &*pNeighAvail;
@@ -929,7 +935,7 @@ pub unsafe fn WelsFillCacheInter(
         1
     };
 
-    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, pCurDqLayer);
+    WelsFillCacheNonZeroCount(pNeighAvail as *mut _, pNonZeroCount, Some(pCurDqLayer));
 
     if na.iTopAvail != 0 {
         iTopXy = iCurXy - dq.iMbWidth as usize;
@@ -1030,7 +1036,7 @@ pub unsafe fn WelsFillCacheInter(
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn ParseInterInfo(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -1038,16 +1044,28 @@ pub unsafe fn ParseInterInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
+    // T5.W8: these two bindings were held across every call in the function that
+    // takes the layer, and **every one of their uses is a read of a slice-header
+    // scalar** this function never writes (grep-verified over both bodies). The layer
+    // flip made the overlap a compile error where the raw pointer had made it
+    // invisible (S25); the fix is the bracket maneuver at four scalars — copy once,
+    // use everywhere, borrow nothing.
+    let bDefaultMotionPredFlag =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
+    let bAdaptiveMotionPredFlag =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
+    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
+    let uiRefCountHdr =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let ppRefPic = &(*pCtx).sRefPic.pRefList[0];
     let mut iRefCount = [0i32; 2];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let mut iMotionPredFlag = [if pSlice.sSliceHeaderExt.bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
+    let mut iMotionPredFlag = [if bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
-    iRefCount[0] = pSliceHeader.uiRefCount[0];
-    iRefCount[1] = pSliceHeader.uiRefCount[1];
+    iRefCount[0] = uiRefCountHdr[0];
+    iRefCount[1] = uiRefCountHdr[1];
 
     let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
     let ec_active = (*pCtx).pParam.is_null()
@@ -1057,7 +1075,7 @@ pub unsafe fn ParseInterInfo(
     match mb_type {
         MB_TYPE_16x16 => {
             let mut iRefIdx = 0i32;
-            if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+            if bAdaptiveMotionPredFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
@@ -1104,7 +1122,7 @@ pub unsafe fn ParseInterInfo(
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
-                if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                if bAdaptiveMotionPredFlag {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
@@ -1164,7 +1182,7 @@ pub unsafe fn ParseInterInfo(
         MB_TYPE_8x16 => {
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
-                if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+                if bAdaptiveMotionPredFlag {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
@@ -1256,7 +1274,7 @@ pub unsafe fn ParseInterInfo(
                     *pNoSubMbPartSizeLessThan8x8Flag && (uiSubMbType == 0);
             }
 
-            if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+            if bAdaptiveMotionPredFlag {
                 for i in 0..4 {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
@@ -1374,7 +1392,7 @@ pub unsafe fn ParseInterInfo(
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
 pub unsafe fn ParseInterBInfo(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -1382,20 +1400,32 @@ pub unsafe fn ParseInterBInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
+    // T5.W8: these two bindings were held across every call in the function that
+    // takes the layer, and **every one of their uses is a read of a slice-header
+    // scalar** this function never writes (grep-verified over both bodies). The layer
+    // flip made the overlap a compile error where the raw pointer had made it
+    // invisible (S25); the fix is the bracket maneuver at four scalars — copy once,
+    // use everywhere, borrow nothing.
+    let bDefaultMotionPredFlag =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
+    let bAdaptiveMotionPredFlag =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
+    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
+    let uiRefCountHdr =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     let mut ref_idx_list = [[-1i8; 4]; LIST_A];
     let mut iRef = [0i8; 2];
     let mut iRefCount = [0i32; 2];
     let mut iMotionPredFlag =
-        [[if pSlice.sSliceHeaderExt.bDefaultMotionPredFlag { 1u8 } else { 0u8 }; 4]; LIST_A];
+        [[if bDefaultMotionPredFlag { 1u8 } else { 0u8 }; 4]; LIST_A];
     let mut iMv = [0i16; 2];
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
-    iRefCount[0] = pSliceHeader.uiRefCount[0];
-    iRefCount[1] = pSliceHeader.uiRefCount[1];
+    iRefCount[0] = uiRefCountHdr[0];
+    iRefCount[1] = uiRefCountHdr[1];
 
     let bIsPending = crate::decoder::decoder_core::GetThreadCount(pCtx) > 1;
     let ec_active = (*pCtx).pParam.is_null()
@@ -1437,7 +1467,7 @@ pub unsafe fn ParseInterBInfo(
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
         let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
-        if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+        if iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx, &mut *pCurDqLayer,
@@ -1465,7 +1495,7 @@ pub unsafe fn ParseInterBInfo(
             }
         }
     } else if IS_INTER_16x16(mbType) {
-        if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+        if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 if IS_DIR(mbType, 0, listIdx) {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
@@ -1526,7 +1556,7 @@ pub unsafe fn ParseInterBInfo(
             );
         }
     } else if IS_INTER_16x8(mbType) {
-        if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+        if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
@@ -1599,7 +1629,7 @@ pub unsafe fn ParseInterBInfo(
             }
         }
     } else if IS_INTER_8x16(mbType) {
-        if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+        if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
@@ -1680,18 +1710,23 @@ pub unsafe fn ParseInterBInfo(
         }
         let bIsLongRef = (*pRefs.get(ref_id(pCtx, LIST_1, 0))).bIsLongRef;
         let ref0Count = std::cmp::min(
-            pSliceHeader.uiRefCount[LIST_0],
+            uiRefCountHdr[LIST_0],
             (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
         );
         let mut has_direct_called = false;
         let mut directSubMbType: crate::decoder::mv_pred::SubMbType = 0;
 
-        // T5.I1: one window borrow for the flag across the parse loop. `pSubMbType`
-        // gets no loop-level borrow here and cannot: `PredMvBDirectSpatial` and
-        // `PredBDirectTemporal` write `grid.sub_mb_type[iMbXy]` themselves
-        // (`mv_pred.rs:1035`, `:1130`), so the window is per iteration below.
-        let pNoSubMbPartSizeLessThan8x8Flag =
-            (*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
+        // T5.W8: T5.I1's loop-level window borrow for the flag **is gone**, and the
+        // layer flip is what removed it. It was a `&mut` into
+        // `grid.no_sub_mb_part_size_less_than8x8_flag` held across
+        // `PredMvBDirectSpatial`/`PredBDirectTemporal`, which take the whole layer
+        // mutably — F24/F25/F28's shape, invisible while the layer was a raw pointer
+        // and a compile error the moment it was not. The two callees write a
+        // *different* grid array (`sub_mb_type`, `mv_pred.rs:1035`/`:1130`), so no
+        // write was actually lost; the borrow was still one the type system could not
+        // justify. Re-derived per write below, which is exactly the same effect and
+        // costs nothing worth measuring: S8's fourth negative result (D-perf-5) is
+        // that bounds-check amortisation does not pay per macroblock.
 
         // uiSubMbType, partition
         for i in 0..4usize {
@@ -1709,12 +1744,13 @@ pub unsafe fn ParseInterBInfo(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *pNoSubMbPartSizeLessThan8x8Flag = false;
+                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) =
+                    false;
             }
 
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
                 if !has_direct_called {
-                    if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                    if iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
@@ -1753,12 +1789,15 @@ pub unsafe fn ParseInterBInfo(
                     g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType;
             }
         }
-        // T5.I1: the parse loop is done writing, and every remaining reader of this
-        // family is a read — `FillSpatialDirect8x8Mv`, `FillTemporalDirect8x8Mv`,
-        // `Update8x8RefIdx` and `PredMv` reach the layer but not this array. One
-        // shared window covers all four loops below.
-        let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
-        if pSlice.sSliceHeaderExt.bAdaptiveMotionPredFlag {
+        // T5.I1's shared window over this family, **copied rather than borrowed since
+        // T5.W8**. Its own sentence is what makes the copy exact: the parse loop is
+        // done writing, and every remaining reader below — `FillSpatialDirect8x8Mv`,
+        // `FillTemporalDirect8x8Mv`, `Update8x8RefIdx`, `PredMv` — reaches the layer
+        // but not this array. Under `&mut DqLayerState` the borrow the window took
+        // could not coexist with those calls, and four `SubMbType`s are a copy the
+        // compiler will sink anyway.
+        let pSubMbType = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
+        if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..4usize {
                     let is_dir = IS_DIR(pSubMbType[i], 0, listIdx);
@@ -1776,7 +1815,7 @@ pub unsafe fn ParseInterBInfo(
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
             if IS_DIRECT(pSubMbType[i]) {
-                if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                if iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
                         pDec,
@@ -1847,7 +1886,7 @@ pub unsafe fn ParseInterBInfo(
                 let subMbType = pSubMbType[i];
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
-                    if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
+                    if iDirectSpatialMvPredFlag != 0 {
                         crate::decoder::mv_pred::Update8x8RefIdx(
                             &mut *pCurDqLayer,
                             pDec,
@@ -1970,7 +2009,7 @@ pub unsafe fn ParseInterBInfo(
 pub unsafe fn WelsFillDirectCacheCabac(
     pNeighAvail: *const SWelsNeighAvail,
     iDirect: &mut [i8; 30],
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &DqLayerState,
 ) {
     let na = &*pNeighAvail;
     let dq = &*pCurDqLayer;
@@ -2022,10 +2061,10 @@ pub unsafe fn WelsFillCacheConstrain0IntraNxN(
     pNeighAvail: PWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
-    pCurDqLayer: PDqLayer,
+    pCurDqLayer: &DqLayerState,
 ) {
     unsafe {
-        WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, pCurDqLayer);
+        WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
         let na = &*pNeighAvail;
         let dq = &*pCurDqLayer;
