@@ -9921,3 +9921,167 @@ whichever is easier when it is met.
 day two; both perf binaries are stashed. `phase6.md` stays unwritten because exit
 conditions 1–3 are unmet — **the fourth session running**, and the reason is now a
 number (220 signatures) rather than a judgement.
+
+## Phase 5, session Y — the slice view lands, and the flip behind it is measured again
+
+**Scope**: `prompts/phase5_session_y.md` — face 0 the measured context split, then the
+remaining families, the `common/` boundary, W7's closure, and the phase close if exit
+conditions 1–3 read met. **They do not.** Decoder `raw_ptr` **456 → 383**, deny-clean
+**11 of 22**, `SHIM(` **7 → 6**. Face 0's first half landed; its second half was
+attempted, compiled whole, and **reverted on a Miri verdict** — the second session
+running to end that way, and for a reason one level deeper than X's.
+
+### What landed
+
+**T5.Y1 — the dequant aliases** (`dd810cc5`). `pDequant_coeff4x4`/`pDequant_coeff8x8`
+held six addresses each into the context's *own* buffers, written together with them
+and read back by the same index: the blocker class named once, in its purest form —
+the index the alias was derived from is the index every reader already had. The
+residual paths take the buffer row as a slice, and `bDequantCoeff4x4Init` replaces
+the null test at the four guarded sites because it *is* the same test (both written
+in `WelsCalcDeqCoeffScalingList`'s one block, nothing else writes either — S23's read
+of the update paths, not an assumption).
+
+**T5.Y2 — `SliceCtx`, and the split that makes the pool borrow expressible**
+(`f82fa258`). The view is the settlement's, unchanged: field-precise borrows,
+**`pPicBuff` deliberately not among them**, `&mut` for the three state machines, `&`
+for the tables, and scalars copied where every update path is above the bracket
+(`pParam`'s two questions answered inside the constructor, so F41's raw field never
+escapes). **99 functions below the bracket stopped taking a context**;
+`decode_slice.rs`'s raw-pointer occurrences fell 89 → 36, `parse_mb_syn_cavlc`'s
+26 → 18, `parse_mb_syn_cabac`'s 14 → 10. Both of session X's compiled facts landed
+with it: the CABAC operands are three disjoint field paths, and the window is
+constant across a slice — so **`cabac_ctx_base` (29 sites) and `cabac_rbsp_window`
+(18) have no callers left and are deleted**, W6 step 3's last retirement, with the
+`SHIM(phase5)` marker going exactly as its own doc comment predicted.
+
+**The probe convicted this commit's first spelling**, and that is the session's own
+F53 instance: the constructor derived the RBSP window from `pCtx->pNalCur`, a
+*second* path to the NAL the bracket top already held as `&mut`, so the shared retag
+popped the caller's `Unique` and the dispatch call one line below was UB. The window
+now comes from the borrow the tree carries, and the constructor takes the reader as
+an argument.
+
+**T5.Y3a — `SDeblockingFilter.pLoopf`** (`dff3f78b`), written twice and read never:
+the C++ reaches its deblocking kernels through it, Phase 2 gave the port direct calls
+and left the slot behind. It is also the flip's first F53 site, found by *inventory*
+rather than by a probe — an alias into the context held across a loop that calls
+`pps_of(pCtx, …)` inside itself. The inventory was 12 sites; this was the one that
+could not survive.
+
+### The flip: compiled whole, reverted whole, and the measurement is the deliverable
+
+`*mut SWelsDecoderContext` → `&mut` across the remaining 153 signatures. X measured
+145 errors; after T5.Y2 took the slice tree out of it, it opened at **72**, and every
+one reduced to a named shape that was then fixed:
+
+- **the null guards (28)** — a `&mut` cannot be null, so 71 `is_null()` arms are
+  unrepresentable; they move to the boundary that still holds a pointer (`api/`
+  guards all four of its dereferences, and the two sites that could reach an accessor
+  with a null context keep the test there);
+- **the bracket (2)** — `cur_and_refs(pCtx)` and the view are two mutable borrows of
+  one context, answered by `slice_split`: one function, one borrow, `pPicBuff` to the
+  pool half, every other field to the view, no field twice;
+- **the access unit (8)** — `cur_au(pCtx)` borrows the whole context to hand back one
+  field, so the field-precise `pCtx.access_unit.as_deref_mut()` replaces it;
+- **the reference set (13 functions)** — the DPB marking family took `pRefPic: &mut
+  SRefPic` beside `pCtx`; the selector travels instead of the borrow;
+- **the bitstream window (5 functions)** — `ParseSliceHeaderSyntaxs`, `ParseSps`,
+  `ParsePps` and three sub-parsers took `buf: &[u8]` out of `pCtx.sRawData` and held
+  it across the parameter-set activation they end with; the **offset** travels instead
+  of the slice, and the window is derived from the field per read.
+
+All 342 unit tests and all 60 conformance goldens passed on the flipped tree. **Miri
+did not**, and its verdict is a *class* rather than a list:
+
+> **Every raw pointer an accessor derives from the context dies at the next call that
+> takes the context.** `sps_of`, `active_sps`, `fmo_of`, `pps_of`, `dec_pic`,
+> `pool_pic_mut` and their siblings return `*mut T` derived from the `&mut` they were
+> handed; a `Unique` function-entry retag on the context pops that derivation, and
+> the next read through it is undefined.
+
+Three instances in one probe run, each one level more general than the last:
+`CheckSpsActive(pCtx, pTmpSps, …)` (a pointer *into* the context passed beside it —
+fixed by passing the index); `AllocPicBuffOnNewSeqBegin`'s `let pSps = sps_of(pCtx,
+…); … GetThreadCount(pCtx); (*pSps).iMbWidth` (fixed by reading the two dimensions
+as values); and `FmoParamUpdate(fmo_of(pCtx, …).as_mut(), sps_of(pCtx, …).as_ref(),
+…)` — **two accessor results in one call, each invalidating the other**, which no
+site-local repair fixes.
+
+So the flip was reverted rather than half-landed, exactly as X's was, and the fact it
+establishes is the next session's face: **the flip's blocker is the accessors' return
+types, not the signatures.** With `Option<&SSps>` in place of `*mut SSps` the rule
+stops being a Miri verdict on the paths a probe happens to drive and becomes a
+compile error at every site. The size, measured at the revert: **60 bindings** of an
+accessor result into a local (`manage_dec_ref` 35, `decoder_core` 15, `deblocking` 3,
+`decode_slice` 3, `error_concealment` 2, `nalu` 2), against ~180 call sites of the
+family as a whole.
+
+### What else the face measured
+
+- **The bracket tops are `decode_slice`'s, not `decoder_core`'s.** The brief named
+  the three *layer* brackets; the pool bracket — what the split has to coexist with —
+  is `cur_and_refs` inside `WelsDecodeSlice`, `WelsDecodeAndConstructSlice` and
+  `WelsTargetSliceConstruction`, plus three more in `decoder_core`, `manage_dec_ref`
+  and `error_concealment`. Six splits, not three; the design did not move (S24).
+- **A view alone stops being constructible once the context is a borrow**: two
+  successive constructors are two mutable borrows. `slice_split` is the shape that
+  survives, and it is what the next attempt starts from.
+- **Two dead lookups**, both found where the conversion needed their reach:
+  `ParseInterPMotionInfoCabac`'s `iMinVmv`/`iMaxVmv` (the C++'s only use is a
+  `WelsLog` warning, so the port never had a consumer), and `ParseVui`/
+  `DecodeSpsSvcExt`'s context parameter (used nowhere, and what made the window and
+  the cursor collide in one call).
+- **~150 `unsafe fn` in the converted modules no longer need the keyword.**
+  `parse_mb_syn_cabac` carries 34 against 10 raw-pointer occurrences, `mv_pred` 21
+  against 4, `decode_slice` 54 against 32. `ParseSkipFlagCabac` is the shape: every
+  dereference in it is through a `&`/`&mut` and the keyword is a leftover. That is
+  the cheap half of the next session's deny-clean work, and it is available now.
+
+### Gates at close, F3, and the session's own span
+
+**Exit battery at `dff3f78b`: 12 passed / 1 failed / 1 skipped** — tests
+**481/475/20**, census 59, ratchet clean with no per-file increase, `--all-targets`
+compiling, both benches bit-identical, **debug sweep 341/341**, Miri `--lib`
+**336/0** plus the three differential targets (**20 / 7 / 3**). The one failure is
+the release sweep's single F3 hit at the documented signature (`mt … t=4 sm=3 n=600
+cabac=1 rc=0`, 37837 bytes against 39981 — short, not zero).
+
+**F3: four hits over three batteries, and the seventeenth alternation acquits them.**
+One at T5.Y1's `family` battery (debug, zero-byte; the `mt` preset re-ran **120/120**
+clean, which is step 1's reproduction test failing to reproduce), two at T5.Y2's
+`full` battery (debug, same signature, two clips), one at the close (release, short).
+Step 0 was measured rather than assumed (S33): the two `rust_enc` binaries hash
+`379688ef…` (HEAD) and `05c73ee8…` (control at `3e2f43e6`), so the shortcut does not
+apply. Step 2 alternated **12 whole `mt` presets per side inside one loop**, both
+binaries built once and swapped, machine otherwise idle: **HEAD 9 hits, control 10**
+over 1440 configurations each side. HEAD is not worse; all 19 hits are `mt sm=3`, 18
+at `t=4` and one at `t=2`, and none is outside the signature. Measurements 52–55,
+`phase0_findings.md`; running total **55/17/28**.
+
+**The session's own span (S2b) — at the floor, and the first Phase 5 span to read
+that way.** `3e2f43e6`→`dff3f78b`, decode bench. 3 pairs: **+0.26% median** with Main
+at +0.68%, above a 3-pair null's +0.08% ceiling — so S2b's first move was taken and
+it was more pairs. **7 pairs: +0.13% median** (CB +0.12, Main +0.15, High +0.13)
+against a 7-pair null of **−0.06…+0.19%**: *every row is inside the null's range*, and
+the three rows agree with each other to two hundredths of a point. The session's
+production change is a struct of borrows travelling where a pointer did, and the
+measurement says it costs nothing. **Cumulative CB ≈ +25.3…+25.9%**, unmoved within
+the floor, against a stop-line already breached and already dispositioned as
+**D-perf-6** (recovery to Phase 9). No day two is owed: S2b's clause attaches to
+readings a decision rests on, and this one changes no disposition.
+
+### Hand-off: Phase 5, session Z — the accessors, then the flip, then the close
+
+Brief: [`prompts/phase5_session_z.md`](prompts/phase5_session_z.md). Its face 0 is
+the finding above — the accessor family returns borrows, so the rule the flip needs
+becomes a compile error rather than a Miri verdict — and its face 1 is the flip
+itself, with Y's five shapes and their fixes written down as a recipe rather than as
+an estimate. Face 2 is the `unsafe fn` sweep the slice view made available, face 3 is
+the `common/` boundary (decided at `3e2f43e6`, still not started), face 4 is W7 and
+the close.
+
+**Nothing else is owed out of this session.** The corpus is unmoved and fully
+refereed; the F3 ledger is current; the span is measured and needs no day two;
+`phase6.md` stays unwritten because exit conditions 1–3 are unmet — the **fifth**
+session running, and the reason is now two measurements rather than one.

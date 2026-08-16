@@ -1600,3 +1600,48 @@ from a divergence. No side produced a hit outside the signature.
 
 Running total: **fifty-one measurements, sixteen alternations, twenty-seven
 acquittals.**
+
+### Fifty-second to fifty-fifth measurements — 2026-08-16, Phase 5 session Y: four hits over three batteries, and the seventeenth alternation
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 52 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**, `family` battery over T5.Y1) | 39981 | **0** |
+| 53 | the same configuration (**debug**, `full` battery over T5.Y2) | 39981 | **0** |
+| 54 | `mt Static_152_100 t=4 sm=3 n=600 cabac=1 rc=1` (**debug**, same battery) | 30190 | **0** |
+| 55 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**release**, `exit` battery at the close) | 39981 | **37837** (short) |
+
+Every one inside the signature — `mt`, `sm=3`, `t=4`, wrong length — and the close
+battery's **debug** sweep read 341/341 at the configurations the earlier debug sweeps
+had hit, which is S23b's load-dependence again, this time with the profiles swapped
+relative to session X's observation.
+
+**Step 1 after measurement 52**: the whole `mt` preset re-ran in debug, **120/120
+byte-identical**, which is the retry rule's reproduction test failing to reproduce —
+valid evidence on its own for a single hit, and what deferred the alternation until
+the count reached four.
+
+**Step 0, measured rather than predicted** (S33): the two `rust_enc` binaries hash
+`379688ef…` (HEAD at `dff3f78b`) and `05c73ee8…` (control at `3e2f43e6`, session Y's
+base). They differ, as the "test-only" predicate says they must for a diff of
+production decoder code, so the shortcut does not apply.
+
+**Step 2, the seventeenth alternation: twelve whole `mt` presets per side, both
+binaries built once and swapped inside one loop**, 120 configurations per preset,
+1440 per side, machine otherwise idle.
+
+| side | hits | presets | configurations |
+|---|---|---|---|
+| HEAD (`dff3f78b`) | **9** | 12 | 1440 |
+| control (`3e2f43e6`, session Y's base) | **10** | 12 | 1440 |
+
+**HEAD is not worse, and the two rates are the same rate**: ≈1/160 (HEAD) and ≈1/144
+(control) against session K's ≈1/307 under sustained presets — both denser than K's,
+both on a machine that had been running batteries all day, which is the load
+dependence rather than a change in either tree. All 19 hits are `mt sm=3`, 18 at
+`t=4` and one at `t=2`; the configurations that hit move between rounds and between
+sides. No hit outside the signature on either side.
+
+**Acquitted as F3.**
+
+Running total: **fifty-five measurements, seventeen alternations, twenty-eight
+acquittals.**

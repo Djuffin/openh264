@@ -2104,3 +2104,39 @@ breached. **No day two is owed** — S2b's day-two clause attaches to readings a
 rests on, and this one changes no disposition that is not already made. Both binaries
 stay stashed (`.perfpair/x_base` = `361592a7`, `.perfpair/x_head` = `ec672022`) so a
 later session can chain the span for free.
+
+### Session Y's own span — at the floor, and the first Phase 5 span to read that way
+
+`3e2f43e6` → `dff3f78b` (four commits: the context's dequant aliases, the slice view
+`SliceCtx`/`slice_split` with 99 functions below the bracket converted, and
+`SDeblockingFilter.pLoopf`'s deletion). Decode bench, machine otherwise idle, S1/S2
+protocol through `perfpair.py`.
+
+| span | pairs | CB (CAVLC) | Main | High | decode median |
+|---|---|---|---|---|---|
+| `3e2f43e6` → `dff3f78b` | 3 | −0.04% | +0.68% | +0.26% | **+0.26%** |
+| 3-pair null (`y_head` both slots) | 3 | −0.68% | +0.06% | +0.08% | **+0.06%** |
+| `3e2f43e6` → `dff3f78b` | **7** | +0.12% | +0.15% | +0.13% | **+0.13%** |
+| 7-pair null (`y_head` both slots) | **7** | +0.19% | −0.06% | +0.08% | **+0.08%** |
+
+**S2b's first move was taken and it was more pairs**: at 3 pairs one row (Main,
++0.68%) sat above the 3-pair null's +0.08% ceiling. At 7 — the null re-run at the
+verdict's own pair count, per session K's clause — **every row is inside the null's
+range** (+0.12/+0.15/+0.13% against a band of −0.06…+0.19%), and the three rows agree
+with each other to two hundredths of a point, which is tighter than the floor itself.
+
+So: **+0.13% decode median, indistinguishable from noise.** The session's production
+change is a struct of borrows travelling where a raw pointer did — the per-macroblock
+dispatch now carries `&mut SliceCtx` instead of `*mut SWelsDecoderContext`, and the
+CABAC window is a slice read out of the view rather than a two-deref derivation per
+parsing function — and the measurement says the exchange costs nothing. The one place
+a cost was plausible is T5.Y1's dequantisation slices, where the scaling-list arm
+gained bounds checks; that arm is off on every bench stream, which is consistent with
+what the rows show and is *not* claimed as the explanation (S2b).
+
+**Cumulative CB ≈ +25.3…+25.9%**, unmoved within the floor, against a stop-line
+already breached and already dispositioned (D-perf-6: recovery to the Phase 9 perf
+pass). D-perf-4's +25% *median* tripwire is not breached. **No day two is owed** —
+S2b's clause attaches to readings a decision rests on, and this one changes no
+disposition. Both binaries stay stashed (`.perfpair/y_base` = `3e2f43e6`,
+`.perfpair/y_head` = `dff3f78b`) so a later session can chain the span for free.
