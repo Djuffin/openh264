@@ -899,10 +899,14 @@ pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) ->
 #[inline]
 pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
     if let Some(dq) = pCurDqLayer.as_mut() {
+        // T5.Y2: a slice bracket of its own — the pool view and the context view
+        // come out of the same context, and the two are disjoint by construction.
+        let pRefs = pic_refs(pCtx);
+        let mut view = crate::decoder::decoder_context::slice_ctx(pCtx, None);
         let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
-            pCtx,
+            &mut view,
             dq,
-            pic_refs(pCtx),
+            pRefs,
         );
     }
 }

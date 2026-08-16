@@ -44,20 +44,21 @@
     unused_unsafe
 )]
 
-use crate::decoder::decoder_context::{PicRefs, active_pps, active_sps, pps_of, ref_id, sps_of};
+use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 use crate::decoder::picture::PPicture;
 use std::ptr;
 
 
 use super::bit_stream::InitReadBits;
 use crate::safe::bits::BsCursor;
+use crate::decoder::bit_stream::BsReader;
 use super::cabac_decoder::{
     DecodeBinCabac, DecodeBypassCabac, DecodeTerminateCabac, DecodeUEGLevelCabac, DecodeUEGMvCabac,
     DecodeUnaryBinCabac, InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS,
     SWelsCabacCtx, SWelsCabacDecEngine,
 };
 // T5.W2: both are context accessors and live in `decoder_context.rs` now.
-use super::decoder_context::{cabac_rbsp_window, cabac_ctx_base};
+
 
 // ============================================================================
 // Constants, Macros & Error Codes
@@ -687,9 +688,9 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
 // IDCT Dequantization Primitives
 // ============================================================================
 
-pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: PWelsDecoderContext) {
-    let kiQMul = if (*pCtx).bUseScalingList && (*pCtx).bDequantCoeff4x4Init {
-        (*pCtx).pDequant_coeff_buffer4x4[0][iQp as usize][0] as i32
+pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: &mut SliceCtx<'_>) {
+    let kiQMul = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
+        pCtx.pDequant_coeff_buffer4x4[0][iQp as usize][0] as i32
     } else {
         (g_kuiDequantCoeff[iQp as usize][0] as i32) << 4
     };
@@ -752,23 +753,22 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 // ============================================================================
 
 pub unsafe fn DecodeCabacIntraMbType(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     ctx_base: i32,
 ) -> u32 {
     let mut uiCode: u32 = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(ctx_base as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = ctx_base as usize;
 
-    if DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx), &mut uiCode) != ERR_NONE {
+    if DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx], &mut uiCode) != ERR_NONE {
         return 0;
     }
     if uiCode == 0 {
         return 0; // I4x4
     }
 
-    if DecodeTerminateCabac(cabac_win,&mut *pCabacDecEngine, &mut uiCode) != ERR_NONE {
+    if DecodeTerminateCabac(cabac_win,&mut *pCtx.sCabacDecEngine, &mut uiCode) != ERR_NONE {
         return 0;
     }
     if uiCode != 0 {
@@ -776,17 +776,17 @@ pub unsafe fn DecodeCabacIntraMbType(
     }
 
     let mut uiMbType: u32 = 1; // I16x16
-    DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.add(1)), &mut uiCode);
+    DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 1], &mut uiCode);
     uiMbType += 12 * uiCode;
 
-    DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.add(2)), &mut uiCode);
+    DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 2], &mut uiCode);
     if uiCode != 0 {
-        DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.add(2)), &mut uiCode);
+        DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 2], &mut uiCode);
         uiMbType += 4 + 4 * uiCode;
     }
-    DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.add(3)), &mut uiCode);
+    DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
     uiMbType += 2 * uiCode;
-    DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.add(3)), &mut uiCode);
+    DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
     uiMbType += uiCode;
     uiMbType
 }
@@ -957,10 +957,10 @@ pub unsafe fn UpdateP8x8RefCacheIdxCabac(
 // Macroblock Header & Syntax Parsing Functions
 // ============================================================================
 
-pub unsafe fn ParseEndOfSliceCabac(pCtx: PWelsDecoderContext, uiBinVal: &mut u32) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+pub unsafe fn ParseEndOfSliceCabac(pCtx: &mut SliceCtx<'_>, uiBinVal: &mut u32) -> i32 {
+    let cabac_win = pCtx.rbsp;
     *uiBinVal = 0;
-    let err = DecodeTerminateCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(uiBinVal));
+    let err = DecodeTerminateCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut *(uiBinVal));
     if err != ERR_NONE {
         return err;
     }
@@ -968,21 +968,21 @@ pub unsafe fn ParseEndOfSliceCabac(pCtx: PWelsDecoderContext, uiBinVal: &mut u32
 }
 
 pub unsafe fn ParseSkipFlagCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiSkip: &mut u32,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     *uiSkip = 0;
     let mut iCtxInc: i32 = NEW_CTX_OFFSET_SKIP;
     iCtxInc += (((*pNeighAvail).iLeftAvail != 0 && !IS_SKIP((*pNeighAvail).iLeftType as u32))
         as i32)
         + (((*pNeighAvail).iTopAvail != 0 && !IS_SKIP((*pNeighAvail).iTopType as u32)) as i32);
-    if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+    if pCtx.eSliceType == EWelsSliceType::B_SLICE {
         iCtxInc += 13;
     }
-    let pBinCtx = cabac_ctx_base(pCtx).add(iCtxInc as usize);
-    let err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pBinCtx),&mut *(uiSkip));
+    let pBinCtx = iCtxInc as usize;
+    let err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx],&mut *(uiSkip));
     if err != ERR_NONE {
         return err;
     }
@@ -990,15 +990,14 @@ pub unsafe fn ParseSkipFlagCabac(
 }
 
 pub unsafe fn ParseMBTypeISliceCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiBinVal: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
     *uiBinVal = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_MB_TYPE_I as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = NEW_CTX_OFFSET_MB_TYPE_I as usize;
 
     let iIdxA = ((*pNeighAvail).iLeftAvail != 0
         && ((*pNeighAvail).iLeftType as u32 != MB_TYPE_INTRA4x4
@@ -1008,32 +1007,32 @@ pub unsafe fn ParseMBTypeISliceCabac(
             && (*pNeighAvail).iTopType as u32 != MB_TYPE_INTRA8x8)) as i32;
     let iCtxInc = iIdxA + iIdxB;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(iCtxInc as isize)), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + iCtxInc as usize], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     *uiBinVal = uiCode;
 
     if *uiBinVal != 0 {
-        err = DecodeTerminateCabac(cabac_win,&mut *pCabacDecEngine, &mut uiCode);
+        err = DecodeTerminateCabac(cabac_win,&mut *pCtx.sCabacDecEngine, &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode == 1 {
             *uiBinVal = 25; // I_PCM
         } else {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiBinVal = 1 + uiCode * 12;
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(4)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 4], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             if uiCode != 0 {
-                err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+                err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
                 if err != ERR_NONE {
                     return err;
                 }
@@ -1043,13 +1042,13 @@ pub unsafe fn ParseMBTypeISliceCabac(
                 }
             }
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(6)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 6], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiBinVal += uiCode << 1;
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(7)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 7], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1060,28 +1059,27 @@ pub unsafe fn ParseMBTypeISliceCabac(
 }
 
 pub unsafe fn ParseMBTypePSliceCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
     *uiMbType = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_SKIP as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = NEW_CTX_OFFSET_SKIP as usize;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
 
     if uiCode != 0 {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(6)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 6], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode != 0 {
-            err = DecodeTerminateCabac(cabac_win,&mut *pCabacDecEngine, &mut uiCode);
+            err = DecodeTerminateCabac(cabac_win,&mut *pCtx.sCabacDecEngine, &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1090,19 +1088,19 @@ pub unsafe fn ParseMBTypePSliceCabac(
                 return ERR_NONE;
             }
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(7)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 7], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType = 6 + uiCode * 12;
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(8)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 8], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             if uiCode != 0 {
                 *uiMbType += 4;
-                err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(8)), &mut uiCode);
+                err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 8], &mut uiCode);
                 if err != ERR_NONE {
                     return err;
                 }
@@ -1111,13 +1109,13 @@ pub unsafe fn ParseMBTypePSliceCabac(
                 }
             }
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(9)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 9], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType += uiCode << 1;
 
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(9)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 9], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1126,12 +1124,12 @@ pub unsafe fn ParseMBTypePSliceCabac(
             *uiMbType = 5; // Intra 4x4
         }
     } else {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(4)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 4], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode != 0 {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(6)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 6], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1141,7 +1139,7 @@ pub unsafe fn ParseMBTypePSliceCabac(
                 *uiMbType = 2;
             }
         } else {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1156,21 +1154,20 @@ pub unsafe fn ParseMBTypePSliceCabac(
 }
 
 pub unsafe fn ParseMBTypeBSliceCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
     *uiMbType = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(27);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = 27;
 
     let iIdxA = ((*pNeighAvail).iLeftAvail != 0 && !IS_DIRECT((*pNeighAvail).iLeftType as u32)) as i32;
     let iIdxB = ((*pNeighAvail).iTopAvail != 0 && !IS_DIRECT((*pNeighAvail).iTopType as u32)) as i32;
     let iCtxInc = iIdxA + iIdxB;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(iCtxInc as isize)), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + iCtxInc as usize], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
@@ -1178,33 +1175,33 @@ pub unsafe fn ParseMBTypeBSliceCabac(
     if uiCode == 0 {
         *uiMbType = 0; // Bi_Direct
     } else {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode == 0 {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType = 1 + uiCode; // 16x16 L0L1
         } else {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(4)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 4], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType = uiCode << 3;
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType |= uiCode << 2;
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *uiMbType |= uiCode << 1;
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1225,7 +1222,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
             }
 
             *uiMbType <<= 1;
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(5)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 5], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1237,15 +1234,14 @@ pub unsafe fn ParseMBTypeBSliceCabac(
 }
 
 pub unsafe fn ParseTransformSize8x8FlagCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pNeighAvail: &SWelsNeighAvail,
     bTransformSize8x8Flag: &mut bool,
 ) -> i32 {
     let mut uiCode: u32 = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_TS_8x8_FLAG as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = NEW_CTX_OFFSET_TS_8x8_FLAG as usize;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iMbWidth = (*pCurDqLayer).iMbWidth as usize;
 
@@ -1261,7 +1257,7 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
     };
     let iCtxInc = iIdxA + iIdxB;
 
-    let err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(iCtxInc as isize)), &mut uiCode);
+    let err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + iCtxInc as usize], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
@@ -1270,28 +1266,27 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
 }
 
 pub unsafe fn ParseSubMBTypeCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_SUBMB_TYPE as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = NEW_CTX_OFFSET_SUBMB_TYPE as usize;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode != 0 {
         *uiSubMbType = 0;
     } else {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(1)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 1], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode != 0 {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(2)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 2], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1304,16 +1299,15 @@ pub unsafe fn ParseSubMBTypeCabac(
 }
 
 pub unsafe fn ParseBSubMBTypeCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let cabac_win = cabac_rbsp_window(pCtx);
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_B_SUBMB_TYPE as usize);
+        let cabac_win = pCtx.rbsp;
+    let pBinCtx = NEW_CTX_OFFSET_B_SUBMB_TYPE as usize;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
@@ -1322,12 +1316,12 @@ pub unsafe fn ParseBSubMBTypeCabac(
         return ERR_NONE;
     }
 
-    err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(1)), &mut uiCode);
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 1], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode == 0 {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
@@ -1336,17 +1330,17 @@ pub unsafe fn ParseBSubMBTypeCabac(
     }
 
     *uiSubMbType = 3;
-    err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(2)), &mut uiCode);
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 2], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode != 0 {
-        err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         if uiCode != 0 {
-            err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -1356,13 +1350,13 @@ pub unsafe fn ParseBSubMBTypeCabac(
         *uiSubMbType += 4;
     }
 
-    err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     *uiSubMbType += 2 * uiCode;
 
-    err = DecodeBinCabac(cabac_win,&mut *pCabacDecEngine,&mut *(pBinCtx.offset(3)), &mut uiCode);
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
@@ -1370,11 +1364,11 @@ pub unsafe fn ParseBSubMBTypeCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &mut i32) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: &mut SliceCtx<'_>, iBinVal: &mut i32) -> i32 {
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     *iBinVal = 0;
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_IPR as usize)),
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[NEW_CTX_OFFSET_IPR as usize],
         &mut uiCode);
     if err != ERR_NONE {
         return err;
@@ -1382,20 +1376,20 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
     if uiCode == 1 {
         *iBinVal = -1;
     } else {
-        let pCtx1 = cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_IPR + 1) as usize);
-        err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pCtx1), &mut uiCode);
+        let pCtx1 = (NEW_CTX_OFFSET_IPR + 1) as usize;
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pCtx1], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         *iBinVal |= uiCode as i32;
 
-        err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pCtx1), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pCtx1], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         *iBinVal |= (uiCode as i32) << 1;
 
-        err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pCtx1), &mut uiCode);
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pCtx1], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
@@ -1405,13 +1399,13 @@ pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: PWelsDecoderContext, iBinVal: &m
 }
 
 pub unsafe fn ParseIntraPredModeChromaCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     uiNeighAvail: u8,
     iBinVal: &mut i32,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0);
     let iLeftAvail = uiNeighAvail & 0x04;
@@ -1436,7 +1430,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     };
     let iCtxInc = iIdxA + iIdxB;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + iCtxInc) as usize)),
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CIPR + iCtxInc) as usize],
         &mut uiCode);
     if err != ERR_NONE {
         return err;
@@ -1445,7 +1439,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 
     if *iBinVal != 0 {
         let mut iSym: u32 = 0;
-        err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + 3) as usize)),
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CIPR + 3) as usize],
             &mut iSym);
         if err != ERR_NONE {
             return err;
@@ -1456,7 +1450,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
         }
         iSym = 0;
         loop {
-            err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CIPR + 3) as usize)),
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CIPR + 3) as usize],
                 &mut uiCode);
             if err != ERR_NONE {
                 return err;
@@ -1479,7 +1473,7 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 // ============================================================================
 
 pub unsafe fn ParseRefIdxCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pNeighAvail: &SWelsNeighAvail,
@@ -1492,7 +1486,7 @@ pub unsafe fn ParseRefIdxCabac(
     _b8mode: i32,
     iRefIdxVal: &mut i8,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     if iActiveRefNum == 1 {
         *iRefIdxVal = 0;
         return ERR_NONE;
@@ -1515,7 +1509,7 @@ pub unsafe fn ParseRefIdxCabac(
         iIdxA = ((*pNeighAvail).iLeftAvail != 0
             && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
             && ref_idx[iListIdx as usize][scan_cache - 1] > 0) as i32;
-        if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+        if pCtx.eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && direct.is_some_and(|d| d[scan_cache - 6] == 0) {
                 iCtxInc += 2;
             }
@@ -1528,7 +1522,7 @@ pub unsafe fn ParseRefIdxCabac(
             && (*pNeighAvail).iTopType != MB_TYPE_INTRA_PCM
             && ref_idx[iListIdx as usize][scan_cache - 6] > 0) as i32;
         iIdxA = (pRefIdxInMB[g_kuiScan4[iZOrderIdx as usize] as usize - 1] > 0) as i32;
-        if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+        if pCtx.eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && direct.is_some_and(|d| d[scan_cache - 6] == 0) {
                 iCtxInc += 2;
             }
@@ -1541,7 +1535,7 @@ pub unsafe fn ParseRefIdxCabac(
         iIdxA = ((*pNeighAvail).iLeftAvail != 0
             && (*pNeighAvail).iLeftType != MB_TYPE_INTRA_PCM
             && ref_idx[iListIdx as usize][scan_cache - 1] > 0) as i32;
-        if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+        if pCtx.eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) == 0 {
                 iCtxInc += 2;
             }
@@ -1552,7 +1546,7 @@ pub unsafe fn ParseRefIdxCabac(
     } else {
         iIdxB = (pRefIdxInMB[g_kuiScan4[iZOrderIdx as usize] as usize - 4] > 0) as i32;
         iIdxA = (pRefIdxInMB[g_kuiScan4[iZOrderIdx as usize] as usize - 1] > 0) as i32;
-        if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+        if pCtx.eSliceType == EWelsSliceType::B_SLICE {
             if iIdxB > 0 && *pDirect.add(g_kuiScan4[iZOrderIdx as usize] as usize - 4) == 0 {
                 iCtxInc += 2;
             }
@@ -1562,17 +1556,17 @@ pub unsafe fn ParseRefIdxCabac(
         }
     }
 
-    if (*pCtx).eSliceType != EWelsSliceType::B_SLICE {
+    if pCtx.eSliceType != EWelsSliceType::B_SLICE {
         iCtxInc = iIdxA + (iIdxB << 1);
     }
 
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_REF_NO + iCtxInc) as usize)),
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_REF_NO + iCtxInc) as usize],
         &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode != 0 {
-        err = DecodeUnaryBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,std::slice::from_raw_parts_mut(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_REF_NO + 4) as usize), (1 + 1) as usize),
+        err = DecodeUnaryBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_REF_NO + 4) as usize..(NEW_CTX_OFFSET_REF_NO + 4) as usize + (1 + 1)],
             1,
             &mut uiCode);
         if err != ERR_NONE {
@@ -1585,7 +1579,7 @@ pub unsafe fn ParseRefIdxCabac(
 }
 
 pub unsafe fn ParseMvdInfoCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     pRefIndex: &[[i8; 30]; LIST_A],
     pMvdCache: &[[[i16; 2]; 30]; LIST_A],
@@ -1594,12 +1588,10 @@ pub unsafe fn ParseMvdInfoCabac(
     iMvComp: i8,
     iMvdVal: &mut i16,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let mut iIdxA: i32 = 0;
-    let pBinCtx = cabac_ctx_base(pCtx).add(
-        (NEW_CTX_OFFSET_MVD + (iMvComp as i32) * CTX_NUM_MVD) as usize,
-    );
+    let pBinCtx = (NEW_CTX_OFFSET_MVD + (iMvComp as i32) * CTX_NUM_MVD) as usize;
     *iMvdVal = 0;
 
     let cache_idx = g_kuiCache30ScanIdx[index as usize] as usize;
@@ -1615,17 +1607,17 @@ pub unsafe fn ParseMvdInfoCabac(
         iCtxInc = 1 + (iIdxA > 32) as i32;
     }
 
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pBinCtx.add(iCtxInc as usize)), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + iCtxInc as usize], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode != 0 {
-        err = DecodeUEGMvCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,std::slice::from_raw_parts_mut(pBinCtx.add(3), 4), 3, &mut uiCode);
+        err = DecodeUEGMvCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 3..pBinCtx + 3 + (4) as usize], 3, &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
         *iMvdVal = (uiCode + 1) as i16;
-        err = DecodeBypassCabac(cabac_win,&mut (*pCtx).sCabacDecEngine, &mut uiCode);
+        err = DecodeBypassCabac(cabac_win,&mut *pCtx.sCabacDecEngine, &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
@@ -1659,7 +1651,7 @@ pub unsafe fn ParseMvdInfoCabac(
 
 
 pub unsafe fn ParseInterPMotionInfoCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
@@ -1675,21 +1667,21 @@ pub unsafe fn ParseInterPMotionInfoCabac(
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let iDirectSpatialMvPredFlag = (*pCurDqLayer)
         .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
-    let ppRefPic = &(*pCtx).sRefPic.pRefList[LIST_0];
+    let ppRefPic = &pCtx.sRefPic.pRefList[LIST_0];
     let pRefCount0 = pRefCountHdr[0];
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let mut pMv = [0i16; 2];
     let mut pMvd = [0i16; 2];
     let mut iRef = [0i8; 2];
 
-    let pSps = sps_of(
-        pCtx,
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
-    );
-    let iMinVmv = (*(*pSps).pSLevelLimits).iMinVmv;
-    let iMaxVmv = (*(*pSps).pSLevelLimits).iMaxVmv;
-
-    let bIsPending = GetThreadCount(pCtx) > 1;
+    // T5.Y2: `pSps`, `iMinVmv` and `iMaxVmv` stood here — the level's vertical MV
+    // bounds, looked up through the slice header's SPS and then **never read**. The
+    // C++'s four uses are all `WELS_CHECK_SE_BOTH_WARNING (pMv[1], iMinVmv, iMaxVmv,
+    // "vertical mv")`, which is a `WelsLog` warning and nothing else
+    // (`dec_golomb.h:288`), so the port never had a consumer for them and the
+    // lookup was pure. S18's straggler class, found where the view struct needed
+    // the SPS reach and there was none.
+    let bIsPending = pCtx.iThreadCount > 1;
     let mbType = *(*pDec).pMbType.get(iMbXy);
 
     match mbType {
@@ -1713,17 +1705,17 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 return err;
             }
             if iRef[0] < 0 || iRef[0] as i32 >= pRefCount0 || ppRefPic[iRef[0] as usize].is_none() {
-                (*pCtx).bMbRefConcealed = true;
-                if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                *pCtx.bMbRefConcealed = true;
+                if pCtx.bEcActive {
                     iRef[0] = 0;
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    *pCtx.iErrorCode |= dsBitstreamError;
                 } else {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                 }
             }
             let pPic0 = pRefs.get(ppRefPic[iRef[0] as usize]);
-            (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                || (*pCtx).bMbRefConcealed
+            *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                || *pCtx.bMbRefConcealed
                 || !(pPic0.is_null() || (*pPic0).bIsComplete || bIsPending);
 
             PredMv(pMotionVector, pRefIndex, LIST_0, 0, 4, iRef[0], &mut pMv);
@@ -1759,17 +1751,17 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     return err;
                 }
                 if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || ppRefPic[iRef[i as usize] as usize].is_none() {
-                    (*pCtx).bMbRefConcealed = true;
-                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                    *pCtx.bMbRefConcealed = true;
+                    if pCtx.bEcActive {
                         iRef[i as usize] = 0;
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        *pCtx.iErrorCode |= dsBitstreamError;
                     } else {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
                 let pPic = pRefs.get(ppRefPic[iRef[i as usize] as usize]);
-                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                    || (*pCtx).bMbRefConcealed
+                *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                    || *pCtx.bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
                 UpdateP16x8RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
@@ -1809,17 +1801,17 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     return err;
                 }
                 if iRef[i as usize] < 0 || iRef[i as usize] as i32 >= pRefCount0 || ppRefPic[iRef[i as usize] as usize].is_none() {
-                    (*pCtx).bMbRefConcealed = true;
-                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                    *pCtx.bMbRefConcealed = true;
+                    if pCtx.bEcActive {
                         iRef[i as usize] = 0;
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        *pCtx.iErrorCode |= dsBitstreamError;
                     } else {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
                 let pPic = pRefs.get(ppRefPic[iRef[i as usize] as usize]);
-                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                    || (*pCtx).bMbRefConcealed
+                *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                    || *pCtx.bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
                 UpdateP8x16RefIdxCabac(pCurDqLayer, pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
@@ -1892,17 +1884,17 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     return err;
                 }
                 if pRefIdx[i] < 0 || pRefIdx[i] as i32 >= pRefCount0 || ppRefPic[pRefIdx[i] as usize].is_none() {
-                    (*pCtx).bMbRefConcealed = true;
-                    if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                    *pCtx.bMbRefConcealed = true;
+                    if pCtx.bEcActive {
                         pRefIdx[i] = 0;
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        *pCtx.iErrorCode |= dsBitstreamError;
                     } else {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
                 let pPic = pRefs.get(ppRefPic[pRefIdx[i] as usize]);
-                (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                    || (*pCtx).bMbRefConcealed
+                *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                    || *pCtx.bMbRefConcealed
                     || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
                 UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8, pRefIdx[i], LIST_0 as i8);
             }
@@ -1990,7 +1982,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 }
 
 pub unsafe fn ParseInterBMotionInfoCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
@@ -2018,15 +2010,15 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     let mut pMvd = [0i16; 4];
     let mut iRef = [0i8; LIST_A];
 
-    let bIsPending = GetThreadCount(pCtx) > 1;
+    let bIsPending = pCtx.iThreadCount > 1;
 
     /// `pCtx->bMbRefConcealed = pCtx->bRPLRError || pCtx->bMbRefConcealed ||
     ///  !(pRefList[ref] && (pRefList[ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = pRefs.get(ref_id(pCtx, $listIdx as usize, $iref as usize));
-            (*pCtx).bMbRefConcealed = (*pCtx).bRPLRError
-                || (*pCtx).bMbRefConcealed
+            let p = pRefs.get(pCtx.ref_id($listIdx as usize, $iref as usize));
+            *pCtx.bMbRefConcealed = pCtx.bRPLRError
+                || *pCtx.bMbRefConcealed
                 || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
         }};
     }
@@ -2035,15 +2027,15 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     macro_rules! check_ref_idx {
         ($listIdx:expr, $iref:expr) => {{
             let list = $listIdx as usize;
-            let ppRefPic = &(*pCtx).sRefPic.pRefList[list];
+            let ppRefPic = &pCtx.sRefPic.pRefList[list];
             if $iref < 0
                 || $iref as i32 >= pRefCount[list]
                 || ppRefPic[$iref as usize].is_none()
             {
-                (*pCtx).bMbRefConcealed = true;
-                if (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+                *pCtx.bMbRefConcealed = true;
+                if pCtx.bEcActive {
                     $iref = 0;
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    *pCtx.iErrorCode |= dsBitstreamError;
                     if ppRefPic[$iref as usize].is_none() {
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
@@ -2238,14 +2230,14 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         let mut uiSubMbType: u32 = 0;
         // sub_mb_type, partition
         let mut pMvDirect = [[0i16; 2]; LIST_A];
-        if (*pCtx).sRefPic.pRefList[LIST_1][0].is_none() {
+        if pCtx.sRefPic.pRefList[LIST_1][0].is_none() {
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*pRefs.get(ref_id(pCtx, LIST_1, 0))).bIsLongRef;
+        let bIsLongRef = (*pRefs.get(pCtx.ref_id(LIST_1, 0))).bIsLongRef;
         let ref0Count = WELS_MIN(
             pRefCountHdr[LIST_0],
-            (*pCtx).sRefPic.uiRefCount[LIST_0] as i32,
+            pCtx.sRefPic.uiRefCount[LIST_0] as i32,
         );
         let mut has_direct_called = false;
         let mut directSubMbType: SubMbType = 0;
@@ -2522,11 +2514,11 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 // ============================================================================
 
 pub unsafe fn ParseCbpInfoCabac(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiCbp: &mut u32,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut iIdxA: i32;
     let mut iIdxB: i32;
     let mut pALeftMb = [0i32; 2];
@@ -2550,7 +2542,7 @@ pub unsafe fn ParseCbpInfoCabac(
 
     // left_top 8x8 block
     iCtxInc = pALeftMb[0] + (pBTopMb[0] << 1);
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize)),
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + iCtxInc) as usize],
         &mut pCbpBit[0]);
     if err != ERR_NONE {
         return err;
@@ -2562,7 +2554,7 @@ pub unsafe fn ParseCbpInfoCabac(
     // right_top 8x8 block
     iIdxA = (pCbpBit[0] == 0) as i32;
     iCtxInc = iIdxA + (pBTopMb[1] << 1);
-    err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize)),
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + iCtxInc) as usize],
         &mut pCbpBit[1]);
     if err != ERR_NONE {
         return err;
@@ -2574,7 +2566,7 @@ pub unsafe fn ParseCbpInfoCabac(
     // left_bottom 8x8 block
     iIdxB = (pCbpBit[0] == 0) as i32;
     iCtxInc = pALeftMb[1] + (iIdxB << 1);
-    err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize)),
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + iCtxInc) as usize],
         &mut pCbpBit[2]);
     if err != ERR_NONE {
         return err;
@@ -2587,7 +2579,7 @@ pub unsafe fn ParseCbpInfoCabac(
     iIdxB = (pCbpBit[1] == 0) as i32;
     iIdxA = (pCbpBit[2] == 0) as i32;
     iCtxInc = iIdxA + (iIdxB << 1);
-    err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + iCtxInc) as usize)),
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + iCtxInc) as usize],
         &mut pCbpBit[3]);
     if err != ERR_NONE {
         return err;
@@ -2596,7 +2588,7 @@ pub unsafe fn ParseCbpInfoCabac(
         *uiCbp += 0x08;
     }
 
-    if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
+    if pCtx.active_sps().is_some_and(|sps| sps.uiChromaFormatIdc == 0) {
         return ERR_NONE;
     }
 
@@ -2609,7 +2601,7 @@ pub unsafe fn ParseCbpInfoCabac(
             || (((*pNeighAvail).iLeftCbp >> 4) != 0))) as i32;
 
     iCtxInc = iIdxA + (iIdxB << 1);
-    err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + CTX_NUM_CBP + iCtxInc) as usize)),
+    err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + CTX_NUM_CBP + iCtxInc) as usize],
         &mut pCbpBit[4]);
     if err != ERR_NONE {
         return err;
@@ -2623,7 +2615,7 @@ pub unsafe fn ParseCbpInfoCabac(
             && ((*pNeighAvail).iLeftType == MB_TYPE_INTRA_PCM
                 || (((*pNeighAvail).iLeftCbp >> 4) == 2))) as i32;
         iCtxInc = iIdxA + (iIdxB << 1);
-        err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add((NEW_CTX_OFFSET_CBP + 2 * CTX_NUM_CBP + iCtxInc) as usize)),
+        err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[(NEW_CTX_OFFSET_CBP + 2 * CTX_NUM_CBP + iCtxInc) as usize],
             &mut pCbpBit[5]);
         if err != ERR_NONE {
             return err;
@@ -2634,20 +2626,20 @@ pub unsafe fn ParseCbpInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqLayerState, iQpDelta: &mut i32) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+pub unsafe fn ParseDeltaQpCabac(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState, iQpDelta: &mut i32) -> i32 {
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let pCurrSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
     *iQpDelta = 0;
-    let pBinCtx = cabac_ctx_base(pCtx).add(NEW_CTX_OFFSET_DELTA_QP as usize);
+    let pBinCtx = NEW_CTX_OFFSET_DELTA_QP as usize;
     let iCtxInc = (pCurrSlice.iLastDeltaQp != 0) as i32;
 
-    let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pBinCtx.add(iCtxInc as usize)), &mut uiCode);
+    let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + iCtxInc as usize], &mut uiCode);
     if err != ERR_NONE {
         return err;
     }
     if uiCode != 0 {
-        err = DecodeUnaryBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,std::slice::from_raw_parts_mut(pBinCtx.add(2), (1 + 1) as usize), 1, &mut uiCode);
+        err = DecodeUnaryBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pBinCtx + 2..pBinCtx + 2 + (1 + 1) as usize], 1, &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
@@ -2679,7 +2671,7 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqL
 pub unsafe fn ParseCbfInfoCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNzcCache: &[u8; 48],
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     iCurrBlkXy: i32,
     iMbWidth: i32,
     cbf_dc: &mut MbArray<u16>,
@@ -2688,7 +2680,7 @@ pub unsafe fn ParseCbfInfoCabac(
     iResProperty: i32,
     uiCbfBit: &mut u32,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut iTopBlkXy = iCurrBlkXy - iMbWidth;
     let mut iLeftBlkXy = iCurrBlkXy - 1;
     *uiCbfBit = 0;
@@ -2708,7 +2700,7 @@ pub unsafe fn ParseCbfInfoCabac(
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
-        let err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add(ctx_offset as usize)),&mut *(uiCbfBit));
+        let err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[ctx_offset as usize],&mut *(uiCbfBit));
         if err != ERR_NONE {
             return err;
         }
@@ -2732,7 +2724,7 @@ pub unsafe fn ParseCbfInfoCabac(
         }
         let iCtxInc = (nA as i32) + ((nB as i32) << 1);
         let ctx_offset = NEW_CTX_OFFSET_CBF + g_kBlockCat2CtxOffsetCBF[iResProperty as usize] as i32 + iCtxInc;
-        let err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(cabac_ctx_base(pCtx).add(ctx_offset as usize)),&mut *(uiCbfBit));
+        let err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[ctx_offset as usize],&mut *(uiCbfBit));
         if err != ERR_NONE {
             return err;
         }
@@ -2743,10 +2735,10 @@ pub unsafe fn ParseCbfInfoCabac(
 pub unsafe fn ParseSignificantMapCabac(
     mut pSignificantMap: *mut i32,
     iResProperty: i32,
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     uiCoeffNum: &mut u32,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let map_base = if iResProperty == LUMA_DC_AC_8 {
         NEW_CTX_OFFSET_MAP_8x8
@@ -2759,10 +2751,8 @@ pub unsafe fn ParseSignificantMapCabac(
         NEW_CTX_OFFSET_LAST
     };
 
-    let pMapCtx = cabac_ctx_base(pCtx)
-        .add((map_base + g_kBlockCat2CtxOffsetMap[iResProperty as usize] as i32) as usize);
-    let pLastCtx = cabac_ctx_base(pCtx)
-        .add((last_base + g_kBlockCat2CtxOffsetLast[iResProperty as usize] as i32) as usize);
+    let pMapCtx = (map_base + g_kBlockCat2CtxOffsetMap[iResProperty as usize] as i32) as usize;
+    let pLastCtx = (last_base + g_kBlockCat2CtxOffsetLast[iResProperty as usize] as i32) as usize;
 
     *uiCoeffNum = 0;
     let i1 = g_kMaxPos[iResProperty as usize] as i32;
@@ -2774,7 +2764,7 @@ pub unsafe fn ParseSignificantMapCabac(
             i
         };
 
-        let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pMapCtx.offset(iCtx as isize)), &mut uiCode);
+        let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pMapCtx + iCtx as usize], &mut uiCode);
         if err != ERR_NONE {
             return err;
         }
@@ -2788,7 +2778,7 @@ pub unsafe fn ParseSignificantMapCabac(
             } else {
                 i
             };
-            err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pLastCtx.offset(iLastCtx as isize)), &mut uiCode);
+            err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pLastCtx + iLastCtx as usize], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -2811,9 +2801,9 @@ pub unsafe fn ParseSignificantMapCabac(
 pub unsafe fn ParseSignificantCoeffCabac(
     pSignificant: *mut i32,
     iResProperty: i32,
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
-    let cabac_win = cabac_rbsp_window(pCtx);
+    let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let one_base = if iResProperty == LUMA_DC_AC_8 {
         NEW_CTX_OFFSET_ONE_8x8
@@ -2826,10 +2816,8 @@ pub unsafe fn ParseSignificantCoeffCabac(
         NEW_CTX_OFFSET_ABS
     };
 
-    let pOneCtx = cabac_ctx_base(pCtx)
-        .add((one_base + g_kBlockCat2CtxOffsetOne[iResProperty as usize] as i32) as usize);
-    let pAbsCtx = cabac_ctx_base(pCtx)
-        .add((abs_base + g_kBlockCat2CtxOffsetAbs[iResProperty as usize] as i32) as usize);
+    let pOneCtx = (one_base + g_kBlockCat2CtxOffsetOne[iResProperty as usize] as i32) as usize;
+    let pAbsCtx = (abs_base + g_kBlockCat2CtxOffsetAbs[iResProperty as usize] as i32) as usize;
 
     let iMaxType = g_kMaxC2[iResProperty as usize] as i32;
     let mut i = g_kMaxPos[iResProperty as usize] as i32;
@@ -2839,13 +2827,13 @@ pub unsafe fn ParseSignificantCoeffCabac(
 
     while i >= 0 {
         if *pCoff != 0 {
-            let mut err = DecodeBinCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pOneCtx.offset(c1 as isize)), &mut uiCode);
+            let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pOneCtx + c1 as usize], &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
             *pCoff += uiCode as i32;
             if *pCoff == 2 {
-                let err = DecodeUEGLevelCabac(cabac_win,&mut (*pCtx).sCabacDecEngine,&mut *(pAbsCtx.offset(c2 as isize)), &mut uiCode);
+                let err = DecodeUEGLevelCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pAbsCtx + c2 as usize], &mut uiCode);
                 if err != (ERR_NONE as u32) {
                     return err as i32;
                 }
@@ -2861,7 +2849,7 @@ pub unsafe fn ParseSignificantCoeffCabac(
                     c1 = 4;
                 }
             }
-            err = DecodeBypassCabac(cabac_win,&mut (*pCtx).sCabacDecEngine, &mut uiCode);
+            err = DecodeBypassCabac(cabac_win,&mut *pCtx.sCabacDecEngine, &mut uiCode);
             if err != ERR_NONE {
                 return err;
             }
@@ -2891,7 +2879,7 @@ pub unsafe fn ParseResidualBlockCabac8x8(
     iResProperty: i32,
     sTCoeff: *mut i16,
     uiQp: u8,
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
     let mut uiTotalCoeffNum: u32 = 0;
     let mut pSignificantMap = [0i32; 64];
@@ -2900,9 +2888,8 @@ pub unsafe fn ParseResidualBlockCabac8x8(
     let mut iResProp = iResProperty;
     GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
 
-    let scaling8x8: &[[[u16; 64]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer8x8);
-    let pDeQuantMul: &[u16] = if (*pCtx).bUseScalingList {
-        &scaling8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
+    let pDeQuantMul: &[u16] = if pCtx.bUseScalingList {
+        &pCtx.pDequant_coeff_buffer8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
     } else {
         &g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
@@ -2953,7 +2940,7 @@ pub unsafe fn ParseResidualBlockCabac(
     iResProperty: i32,
     sTCoeff: *mut i16,
     uiQp: u8,
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SliceCtx<'_>,
     iCurrBlkXy: i32,
     iMbWidth: i32,
     cbf_dc: &mut MbArray<u16>,
@@ -2967,9 +2954,8 @@ pub unsafe fn ParseResidualBlockCabac(
     let mut iResProp = iResProperty;
     GetMbResProperty(&mut iMbResProperty, &mut iResProp, false);
 
-    let scaling4x4: &[[[u16; 16]; 52]; 6] = &*std::ptr::addr_of!((*pCtx).pDequant_coeff_buffer4x4);
-    let pDeQuantMul: &[u16] = if (*pCtx).bUseScalingList {
-        &scaling4x4[iMbResProperty as usize][uiQp as usize][..]
+    let pDeQuantMul: &[u16] = if pCtx.bUseScalingList {
+        &pCtx.pDequant_coeff_buffer4x4[iMbResProperty as usize][uiQp as usize][..]
     } else {
         &g_kuiDequantCoeff[uiQp as usize][..]
     };
@@ -3019,7 +3005,7 @@ pub unsafe fn ParseResidualBlockCabac(
         }
         WelsChromaDcIdct(sTCoeff);
         let dequant_mul0 = pDeQuantMul[0] as i64;
-        if !(*pCtx).bUseScalingList {
+        if !pCtx.bUseScalingList {
             for j in 0..4 {
                 let scan_idx = *pScanTable.add(j) as usize;
                 let val = *sTCoeff.add(scan_idx) as i64;
@@ -3037,7 +3023,7 @@ pub unsafe fn ParseResidualBlockCabac(
             if pSignificantMap[j] != 0 {
                 let scan_idx = *pScanTable.add(j) as usize;
                 let sig_val = pSignificantMap[j] as i64;
-                if !(*pCtx).bUseScalingList {
+                if !pCtx.bUseScalingList {
                     let mul = pDeQuantMul[scan_idx & 0x07] as i32;
                     *sTCoeff.add(scan_idx) = (pSignificantMap[j] * mul) as i16;
                 } else {
@@ -3050,9 +3036,12 @@ pub unsafe fn ParseResidualBlockCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut DqLayerState, pDec: PPicture) -> i32 {
-    let pCabacDecEngine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-    let pBsAux = &mut *crate::decoder::decoder_context::slice_bit_reader(pCtx);
+pub unsafe fn ParseIPCMInfoCabac(
+    pCtx: &mut SliceCtx<'_>,
+    pBsAux: &mut BsReader,
+    pCurDqLayer: &mut DqLayerState,
+    pDec: PPicture,
+) -> i32 {
     let iDstStrideLuma = (*pDec).linesize(0);
     let iDstStrideChroma = (*pDec).linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;
@@ -3067,7 +3056,7 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut Dq
     let mut pMbDstV = (*pDec).data_ptr(2).add(iMbOffsetChroma as usize);
 
     *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
-    RestoreCabacDecEngineToBS(&mut *pCabacDecEngine, pBsAux);
+    RestoreCabacDecEngineToBS(&mut *pCtx.sCabacDecEngine, pBsAux);
 
     // `pEndBuf - pCurBuf` becomes `len - pos`. F4's off-by-ones are load-bearing, so
     // the comparison keeps its exact shape.
@@ -3076,8 +3065,8 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut Dq
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
     let iPcmStart = pBsAux.cursor.pos();
-    let mut pPtrSrc = (*pCtx).sRawData.window_from(pBsAux.start)[iPcmStart..].as_ptr();
-    if !(*(*pCtx).pParam).bParseOnly {
+    let mut pPtrSrc = pCtx.sRawData.window_from(pBsAux.start)[iPcmStart..].as_ptr();
+    if !pCtx.bParseOnly {
         for _ in 0..16 {
             ptr::copy_nonoverlapping(pPtrSrc, pMbDstY, 16);
             pMbDstY = pMbDstY.add(iDstStrideLuma as usize);
@@ -3103,12 +3092,12 @@ pub unsafe fn ParseIPCMInfoCabac(pCtx: PWelsDecoderContext, pCurDqLayer: &mut Dq
     pChromaQp[1] = 0;
     (*pCurDqLayer).grid.nzc.get_mut(iMbXy).fill(16);
 
-    let (buf, cursor) = pBsAux.split(&(*pCtx).sRawData);
+    let (buf, cursor) = pBsAux.split(pCtx.sRawData);
     let mut err = InitReadBits(buf, cursor, 1);
     if err != ERR_NONE {
         return err;
     }
-    err = InitCabacDecEngineFromBS(&mut *pCabacDecEngine, pBsAux, &(*pCtx).sRawData);
+    err = InitCabacDecEngineFromBS(&mut *pCtx.sCabacDecEngine, pBsAux, pCtx.sRawData);
     if err != ERR_NONE {
         return err;
     }

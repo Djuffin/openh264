@@ -17,6 +17,9 @@ use crate::decoder::bit_stream::BsReader;
 use crate::safe::plane::PlaneCursorMut;
 use crate::decoder::fmo::{PFmo, SFmo};
 use crate::decoder::slice::EWelsSliceType;
+use crate::decoder::decode_slice::IntraPredConstraint;
+use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
+use crate::decoder::error_concealment::ERROR_CON_IDC;
 use std::ffi::{c_char, c_void};
 
 
@@ -814,49 +817,16 @@ pub unsafe fn active_pps(pCtx: PWelsDecoderContext) -> *mut SPps {
 /// retag and the returned pointer carries the NAL allocation's provenance, not a
 /// field borrow's.
 ///
-/// The CABAC context array as a raw base pointer, with **no reference in between**.
-///
-/// `cabac_ctx_base(pCtx)` takes `&mut` of the array first, which retags
-/// `Unique` over the whole of it and kills every pointer previously derived from it.
-/// `ParseSignificantMapCabac` keeps **two** live at once (`pMapCtx` and `pLastCtx`),
-/// so the second derivation invalidated the first and every read through it was UB —
-/// F13's `as_mut_ptr()` shape, the one T5.B2 found six times in `manage_dec_ref.rs`,
-/// here in the CABAC parser. `addr_of_mut!` creates no reference, so every pointer
-/// this hands out carries the context allocation's own provenance and none can
-/// invalidate another (S29).
-///
-/// # Safety
-/// `pCtx` must be a live decoder context; the caller indexes within
-/// `WELS_CONTEXT_COUNT`, exactly as the `as_mut_ptr().add(..)` spelling did.
-#[inline(always)]
-pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
-    unsafe { std::ptr::addr_of_mut!((*pCtx).pCabacCtx).cast::<SWelsCabacCtx>() }
-}
-
-/// The RBSP window the CABAC engine reads, for a context mid-slice.
-///
-/// One deref chain, once per parsing function rather than once per bin, and the
-/// window is derived from the owning [`RawDataBuffer`] at call time
-/// ([`RawDataBuffer::rbsp_window`] is the single authority).
-///
-/// `SHIM(phase5)`, and **the marker's reason changed at T5.M3 rather than expiring**:
-/// the layer's `pBitStringAux` mirror it used to walk is deleted, so what it walks now
-/// is [`slice_bit_reader`](crate::decoder::decoder_context::slice_bit_reader) — one raw
-/// derivation from `pCtx.pNalCur` instead of one from a cached duplicate. It retires
-/// when 5.6 converts `parse_mb_syn_cabac.rs`'s 18 callers, not before, and saying so
-/// beats retiring a marker whose pointer is still there.
-///
-/// # Safety
-/// `pCtx` must be a live decoder context inside slice decoding, so `pNalCur` is the
-/// NAL being parsed — the same precondition every caller in `parse_mb_syn_cabac.rs`
-/// already relies on for `pCabacDecEngine`.
-#[inline(always)]
-pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
-    unsafe {
-        let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
-        raw.rbsp_window(&*slice_bit_reader(pCtx))
-    }
-}
+// **T5.Y2: `cabac_ctx_base` and `cabac_rbsp_window` stood here and are retired.**
+// The first handed out a base address into `pCabacCtx` that 29 call sites indexed
+// with `.add(N)`; the view carries the array itself and the same sites index it with
+// the bound checked. The second synthesized an unbounded lifetime out of `pCtx` at
+// 18 sites (S25's shape) to hand back the RBSP window; the window is constant across
+// a slice — `sRawData[reader.start..][..reader.cursor.len()]`, and neither bound
+// moves while the cursor walks it — so the bracket top derives it once and the view
+// carries it. **The marker on the second one went with it**: the last of W6 step 3's
+// retirements, and it retired the way its own doc said it would, when its callers
+// stopped needing a raw derivation.
 
 /// `pCtx->pParam->bParseOnly`, with the null test the five hand-written copies of
 /// this chain all carry (T5.W3).
@@ -1086,6 +1056,273 @@ pub unsafe fn mark_au_ready(pCtx: PWelsDecoderContext) -> bool {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The slice's view of the context (T5.Y2, W6 step 1)
+// ---------------------------------------------------------------------------
+
+/// Everything the per-macroblock tree reaches in [`SWelsDecoderContext`], as
+/// field-precise borrows — **and not the picture pool**.
+///
+/// **Why a view and not the context.** `WelsDecodeSlice`'s bracket top does
+/// `let (pDec, pRefs) = cur_and_refs(pCtx)` and [`PicRefs`] borrows `pPicBuff` for
+/// the whole slice, while the per-macroblock dispatch takes the context *whole*
+/// beside it. As raw pointers the two coexisted silently; as borrows they cannot,
+/// and no local repair removes it — session X measured that with the flip and
+/// reverted rather than half-land it. The answer is this struct: the bracket top
+/// splits the context once, `pPicBuff` is **not** in the split (`pDec` and `pRefs`
+/// already travel as their own parameters), and everything below takes pieces.
+///
+/// The three groups are the three state machines the slice actually runs — the
+/// raw-data reader's owner, the CABAC engine, and the flag/counter set — plus the
+/// tables and configuration it reads, plus scalars **copied** where S23 clears
+/// them: a copied field is one nothing below the bracket writes, checked per field
+/// against every update path rather than assumed.
+///
+/// **The NAL is not in here either.** The slice's bit cursor lives in
+/// `pNalCur->sNalData.sVclNal.sSliceBitsRead` — its own allocation, reached by the
+/// dispatch's own `pNalCur` parameter — so a callee that needs both the view and
+/// the cursor takes two arguments and the borrows are disjoint by construction.
+/// The same reasoning as the pool, one field over.
+///
+/// Field names are the context's own, so a reader greps one name and finds both
+/// sides of every conversion.
+pub struct SliceCtx<'a> {
+    /// The buffer every window is derived from. Nothing below the bracket writes
+    /// it — the appends are `WelsDecodeBs`'s, an access unit earlier.
+    pub sRawData: &'a RawDataBuffer,
+    /// The RBSP window the CABAC engine reads, derived **once** at the bracket top.
+    ///
+    /// This is `cabac_rbsp_window`'s retirement (W6 step 3): the window is
+    /// `sRawData[reader.start..][..reader.cursor.len()]`, and both bounds are fixed
+    /// when the NAL is parsed — the cursor's *position* moves inside it, the window
+    /// does not. Held as a shared slice, so reading it costs no borrow of the view
+    /// and the engine can be borrowed mutably in the same expression.
+    pub rbsp: &'a [u8],
+    pub sCabacDecEngine: &'a mut SWelsCabacDecEngine,
+    pub pCabacCtx: &'a mut [SWelsCabacCtx; WELS_CONTEXT_COUNT],
+    pub bMbRefConcealed: &'a mut bool,
+    pub iErrorCode: &'a mut i32,
+    pub iTotalNumMbRec: &'a mut i32,
+    /// The B-slice temporal-direct scratch picture, lazily allocated at the first B
+    /// macroblock — a write, so it is a borrow and not a copy.
+    pub pTempDec: &'a mut Option<Box<Picture>>,
+    pub sSpsPpsCtx: &'a SWelsDecoderSpsPpsCTX,
+    pub sFmoList: &'a [SFmo; MAX_PPS_COUNT],
+    pub sRefPic: &'a SRefPic,
+    /// `pCtx->pVlcTable` resolved. The table is `CWelsDecoderImpl`'s, filled once by
+    /// `InitVlcTable` and never written again, so the view carries the borrow the
+    /// three CAVLC derivations used to spell as a cast each.
+    pub pVlcTable: &'a SVlcTable,
+    pub pDequant_coeff_buffer4x4: &'a [[[u16; 16]; 52]; 6],
+    pub pDequant_coeff_buffer8x8: &'a [[[u16; 64]; 52]; 6],
+    pub pGetI16x16LumaPredFunc: &'a [PGetIntraPredFunc; 7],
+    pub pGetI4x4LumaPredFunc: &'a [PGetIntraPredFunc; 14],
+    pub pGetIChromaPredFunc: &'a [PGetIntraPredFunc; 7],
+    pub pGetI8x8LumaPredFunc: &'a [PGetIntraPred8x8Func; 14],
+    pub pIdctResAddPredFunc: PIdctResAddPredFunc,
+    pub pIdctFourResAddPredFunc: PIdctFourResAddPredFunc,
+    pub pIdctResAddPredFunc8x8: PIdctResAddPred8x8Func,
+
+    // --- copied scalars, each with the update paths that clear it (S23) ---
+    /// Written by `WelsDecodeSlice`'s and `WelsDecodeAndConstructSlice`'s bracket
+    /// tops, above this construction, and by nothing below.
+    pub eSliceType: EWelsSliceType,
+    /// Same two writers, same line (T4b.3's three laundered slots, as one enum).
+    pub eIntraPredConstraint: IntraPredConstraint,
+    /// Both written by `WelsCalcDeqCoeffScalingList`, which the bracket top calls
+    /// before this construction and nothing below calls at all.
+    pub bUseScalingList: bool,
+    pub bDequantCoeff4x4Init: bool,
+    /// Written by `DecodeCurrentAccessUnit` (once per access unit) and by
+    /// `manage_dec_ref`'s reference-list construction — both above the bracket.
+    pub bRPLRError: bool,
+    /// `pParam`'s two questions, answered **inside** the constructor so F41's raw
+    /// field never escapes into the tree. Neither answer changes after
+    /// `Initialize`.
+    ///
+    /// `bParseOnly` is [`parse_only`]'s body. `bEcActive` is
+    /// `eEcActiveIdc != ERROR_CON_DISABLE`, which is the only comparison any of the
+    /// eight consumers made — three of them spelled `pParam.is_null() || …`, which
+    /// this keeps, and five dereferenced without the test, which this makes safe.
+    pub bParseOnly: bool,
+    pub bEcActive: bool,
+    /// `pMemAlign != null` — the whole of what `GetTempPredPlanes` asks it, since
+    /// `alloc_picture` stopped taking the aligner at T5.W3.
+    pub bHasMemAlign: bool,
+    pub iCurSeqIntervalMaxPicWidth: i32,
+    /// `GetThreadCount`, which is 0 and cannot change mid-slice.
+    pub iThreadCount: i32,
+    /// The active parameter sets, as the ids the context stores.
+    pub active_sps: Option<SpsRef>,
+    pub active_pps: Option<i32>,
+    pub fmo_id: Option<i32>,
+}
+
+impl<'a> SliceCtx<'a> {
+    /// [`sps_of`] against the view — same bounds, same `None` for the same ids.
+    #[inline]
+    pub fn sps_of(&self, r: Option<SpsRef>) -> Option<&SSps> {
+        let r = r?;
+        if r.id < 0 || r.id as usize >= MAX_SPS_COUNT + 1 {
+            return None;
+        }
+        let i = r.id as usize;
+        Some(if r.subset {
+            &self.sSpsPpsCtx.sSubsetSpsBuffer[i].sSps
+        } else {
+            &self.sSpsPpsCtx.sSpsBuffer[i]
+        })
+    }
+
+    /// [`pps_of`] against the view.
+    #[inline]
+    pub fn pps_of(&self, id: Option<i32>) -> Option<&SPps> {
+        let id = id?;
+        if id < 0 || id as usize >= MAX_PPS_COUNT + 1 {
+            return None;
+        }
+        Some(&self.sSpsPpsCtx.sPpsBuffer[id as usize])
+    }
+
+    /// [`active_sps`] against the view.
+    #[inline]
+    pub fn active_sps(&self) -> Option<&SSps> {
+        self.sps_of(self.active_sps)
+    }
+
+    /// [`active_pps`] against the view.
+    #[inline]
+    pub fn active_pps(&self) -> Option<&SPps> {
+        self.pps_of(self.active_pps)
+    }
+
+    /// [`active_fmo`] against the view. `sFmoList` is `MAX_PPS_COUNT` entries
+    /// indexed by PPS id, and the bound is the one `fmo_of` carries.
+    #[inline]
+    pub fn active_fmo(&self) -> Option<&SFmo> {
+        let id = self.fmo_id?;
+        if id < 0 || id as usize >= MAX_PPS_COUNT {
+            return None;
+        }
+        Some(&self.sFmoList[id as usize])
+    }
+
+    /// [`ref_id`] against the view — the handle, without touching the pool.
+    #[inline]
+    pub fn ref_id(&self, list: usize, i: usize) -> Option<PicId> {
+        self.sRefPic.pRefList[list][i]
+    }
+
+    /// `pSps->uiChromaFormatIdc`, the active SPS's, at the 25 sites that read it
+    /// per macroblock.
+    ///
+    /// **0 with no active SPS**, which is monochrome — and a state the slice tree
+    /// cannot reach, because a slice header that activates no SPS never gets here.
+    /// The spelling this replaces dereferenced the null, so every arm below is
+    /// strictly more defined than what it translates.
+    #[inline]
+    pub fn uiChromaFormatIdc(&self) -> u8 {
+        self.active_sps().map_or(0, |sps| sps.uiChromaFormatIdc)
+    }
+
+    /// `pPps->bTransform8x8ModeFlag`, the active PPS's. `false` with no active PPS
+    /// — [`uiChromaFormatIdc`](Self::uiChromaFormatIdc)'s clause, same reason.
+    #[inline]
+    pub fn bTransform8x8ModeFlag(&self) -> bool {
+        self.active_pps().is_some_and(|pps| pps.bTransform8x8ModeFlag)
+    }
+}
+
+/// **The bracket top's split** — the one construction of [`SliceCtx`], and the
+/// enumerated exception this face leaves behind.
+///
+/// Every borrow is derived with `addr_of!`/`addr_of_mut!` and dereferenced field by
+/// field (S29), so no reference to the context *as a whole* is ever created: the
+/// `PicRefs` the caller is holding over `pPicBuff` is derived from the same raw
+/// pointer and stays valid across this, which is the property that lets the split
+/// happen beside the pool borrow rather than instead of it.
+///
+/// **The reader arrives as an argument, and Miri is why** (T5.Y2). The first
+/// spelling derived the window here from `pCtx->pNalCur`, which is a *second* path
+/// to the NAL the caller is already holding as `&mut` — a shared retag through the
+/// context's raw field pops the caller's `Unique`, and the next use of the borrow is
+/// UB. The probe convicted it at the dispatch call one line below the split. So the
+/// window comes from the borrow the tree itself carries: one path to the NAL, and
+/// the returned slice borrows `sRawData` rather than the reader, so the argument's
+/// borrow ends with this call.
+///
+/// `None` is a bracket with no NAL in flight — the reconstruction and colocated
+/// brackets, which parse nothing — and the view carries an empty window. A read
+/// through it fails with `ERR_INFO_READ_OVERFLOW`, which is the disposition
+/// `window_from`'s clamp already takes; the alternative is the null dereference
+/// `cabac_rbsp_window` would have made, and no caller could survive that.
+///
+/// # Safety
+/// `pCtx` must be a live decoder context inside a slice bracket, with the parameter
+/// sets and the dequantisation tables already selected for this slice — the
+/// scalars are copies, and a write to one of them behind the view's back is exactly
+/// what S23 asks each field to be checked against.
+pub unsafe fn slice_ctx<'a>(pCtx: PWelsDecoderContext, reader: Option<&BsReader>) -> SliceCtx<'a> {
+    use std::ptr::{addr_of, addr_of_mut};
+    let pParam = (*pCtx).pParam;
+    let raw: &'a RawDataBuffer = &*addr_of!((*pCtx).sRawData);
+    SliceCtx {
+        sRawData: raw,
+        rbsp: match reader {
+            Some(reader) => raw.rbsp_window(reader),
+            None => &[],
+        },
+        sCabacDecEngine: &mut *addr_of_mut!((*pCtx).sCabacDecEngine),
+        pCabacCtx: &mut *addr_of_mut!((*pCtx).pCabacCtx),
+        bMbRefConcealed: &mut *addr_of_mut!((*pCtx).bMbRefConcealed),
+        iErrorCode: &mut *addr_of_mut!((*pCtx).iErrorCode),
+        iTotalNumMbRec: &mut *addr_of_mut!((*pCtx).iTotalNumMbRec),
+        pTempDec: &mut *addr_of_mut!((*pCtx).pTempDec),
+        sSpsPpsCtx: &*addr_of!((*pCtx).sSpsPpsCtx),
+        sFmoList: &*addr_of!((*pCtx).sFmoList),
+        sRefPic: &*addr_of!((*pCtx).sRefPic),
+        pVlcTable: &*((*pCtx).pVlcTable as *const SVlcTable),
+        pDequant_coeff_buffer4x4: &*addr_of!((*pCtx).pDequant_coeff_buffer4x4),
+        pDequant_coeff_buffer8x8: &*addr_of!((*pCtx).pDequant_coeff_buffer8x8),
+        pGetI16x16LumaPredFunc: &*addr_of!((*pCtx).pGetI16x16LumaPredFunc),
+        pGetI4x4LumaPredFunc: &*addr_of!((*pCtx).pGetI4x4LumaPredFunc),
+        pGetIChromaPredFunc: &*addr_of!((*pCtx).pGetIChromaPredFunc),
+        pGetI8x8LumaPredFunc: &*addr_of!((*pCtx).pGetI8x8LumaPredFunc),
+        pIdctResAddPredFunc: (*pCtx).pIdctResAddPredFunc,
+        pIdctFourResAddPredFunc: (*pCtx).pIdctFourResAddPredFunc,
+        pIdctResAddPredFunc8x8: (*pCtx).pIdctResAddPredFunc8x8,
+        eSliceType: (*pCtx).eSliceType,
+        eIntraPredConstraint: (*pCtx).eIntraPredConstraint,
+        bUseScalingList: (*pCtx).bUseScalingList,
+        bDequantCoeff4x4Init: (*pCtx).bDequantCoeff4x4Init,
+        bRPLRError: (*pCtx).bRPLRError,
+        bParseOnly: !pParam.is_null() && (*pParam).bParseOnly,
+        bEcActive: pParam.is_null()
+            || (*pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE,
+        bHasMemAlign: !(*pCtx).pMemAlign.is_null(),
+        iCurSeqIntervalMaxPicWidth: (*pCtx).iCurSeqIntervalMaxPicWidth,
+        iThreadCount: crate::decoder::decoder_core::GetThreadCount(pCtx),
+        active_sps: (*pCtx).active_sps,
+        active_pps: (*pCtx).active_pps,
+        fmo_id: (*pCtx).fmo_id,
+    }
+}
+
+/// A view over a test context, wired the way `Initialize` wires the real one.
+///
+/// The only wiring [`slice_ctx`] needs and a zeroed context does not have is the VLC
+/// table, which lives in `CWelsDecoderImpl` and is installed at
+/// `api/codec_api.rs:1509`; the fixture installs it from the caller's own table so
+/// the borrow the view hands out has a real owner.
+#[cfg(test)]
+pub(crate) unsafe fn test_slice_ctx<'a>(
+    ctx: &'a mut SWelsDecoderContext,
+    vlc: &'a mut SVlcTable,
+) -> SliceCtx<'a> {
+    ctx.pVlcTable = std::ptr::addr_of_mut!(*vlc).cast::<c_void>();
+    slice_ctx(std::ptr::addr_of_mut!(*ctx), None)
+}
 
 // ---------------------------------------------------------------------------
 // Master Decoder Context
