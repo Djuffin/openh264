@@ -893,15 +893,16 @@ pub unsafe fn ParseNalHeader(
 }
 
 /// Evaluates whether two consecutive VCL NAL units belong to different Access Units.
-pub unsafe fn CheckAccessUnitBoundaryExt(
-    pCtx: PWelsDecoderContext,
+/// T5.X7: the context was a parameter for one expression — `sps_of(pCtx,
+/// pCurSliceHeader.sps_ref)` — so the caller does the lookup and this function is
+/// **safe**, which is what the fifteen comparisons below always were.
+pub fn CheckAccessUnitBoundaryExt(
+    kpSps: Option<&SSps>,
     pLastNalHdrExt: &SNalUnitHeaderExt,
     pCurNalHeaderExt: &SNalUnitHeaderExt,
     pLastSliceHeader: &SSliceHeader,
     pCurSliceHeader: &SSliceHeader,
 ) -> bool {
-    // T5.R6: the SPS the header names is looked up here rather than carried in it.
-    let kpSps = sps_of(pCtx, pCurSliceHeader.sps_ref);
 
     // Subclause 7.1.4.1.1 temporal_id
     if pLastNalHdrExt.uiTemporalId != pCurNalHeaderExt.uiTemporalId {
@@ -951,15 +952,15 @@ pub unsafe fn CheckAccessUnitBoundaryExt(
             return true;
         }
     }
-    if !kpSps.is_null() {
-        if (*kpSps).uiPocType == 0 {
+    if let Some(kpSps) = kpSps {
+        if kpSps.uiPocType == 0 {
             if pLastSliceHeader.iPicOrderCntLsb != pCurSliceHeader.iPicOrderCntLsb {
                 return true;
             }
             if pLastSliceHeader.iDeltaPicOrderCntBottom != pCurSliceHeader.iDeltaPicOrderCntBottom {
                 return true;
             }
-        } else if (*kpSps).uiPocType == 1 {
+        } else if kpSps.uiPocType == 1 {
             if pLastSliceHeader.iDeltaPicOrderCnt[0] != pCurSliceHeader.iDeltaPicOrderCnt[0] {
                 return true;
             }
@@ -2469,26 +2470,21 @@ mod au_list_tests {
     /// *wiring*; the compiler does that, now that only one such function exists.
     #[test]
     fn check_access_unit_boundary_ext_says_no_boundary_when_nothing_differs() {
-        unsafe {
-            let mut ctx = SWelsDecoderContext::new_boxed();
-            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+        let hdr = SNalUnitHeaderExt::default();
+        let sh = SSliceHeader::default();
+        assert!(
+            !CheckAccessUnitBoundaryExt(None, &hdr, &hdr, &sh, &sh),
+            "identical headers are the same access unit"
+        );
 
-            let hdr = SNalUnitHeaderExt::default();
-            let sh = SSliceHeader::default();
-            assert!(
-                !CheckAccessUnitBoundaryExt(pCtx, &hdr, &hdr, &sh, &sh),
-                "identical headers are the same access unit"
-            );
+        // And one field at a time is enough to make it a boundary — the fifteen
+        // comparisons are what the stub was standing in for.
+        let mut cur_hdr = hdr;
+        cur_hdr.uiTemporalId = 1;
+        assert!(CheckAccessUnitBoundaryExt(None, &hdr, &cur_hdr, &sh, &sh));
 
-            // And one field at a time is enough to make it a boundary — the fifteen
-            // comparisons are what the stub was standing in for.
-            let mut cur_hdr = hdr;
-            cur_hdr.uiTemporalId = 1;
-            assert!(CheckAccessUnitBoundaryExt(pCtx, &hdr, &cur_hdr, &sh, &sh));
-
-            let mut cur_sh = sh.clone();
-            cur_sh.iFrameNum = 1;
-            assert!(CheckAccessUnitBoundaryExt(pCtx, &hdr, &hdr, &sh, &cur_sh));
-        }
+        let mut cur_sh = sh.clone();
+        cur_sh.iFrameNum = 1;
+        assert!(CheckAccessUnitBoundaryExt(None, &hdr, &hdr, &sh, &cur_sh));
     }
 }

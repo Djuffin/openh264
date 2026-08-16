@@ -383,7 +383,10 @@ pub struct DqLayerState {
     // 27 allocations before 5.2 carries either into a safe container.
     pub iLumaStride: i32,
     pub iChromaStride: i32,
-    pub pPred: [*mut u8; 3],
+    // T5.X8: `pPred: [*mut u8; 3]` stood here — the current macroblock's top-left
+    // sample in each plane, stamped once per macroblock by
+    // `WelsFillRecNeededMbInfo`. It was a cache of `(iMbX, iMbY)` resolved against
+    // the picture, and both are parameters of every function that read it.
     pub iMbX: i32,
     pub iMbY: i32,
     pub iMbXyIndex: i32,
@@ -892,10 +895,6 @@ pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) ->
 // such calls**; every remaining ratchet match, including this comment, is prose.
 // Callers use `common/expand_pic.rs` directly.
 
-#[inline]
-pub unsafe fn GetI4LumaIChromaAddrTable(pBlockOffset: *mut i32, iStrideY: i32, iStrideUV: i32) {
-    crate::decoder::decode_mb_aux::GetI4LumaIChromaAddrTable(pBlockOffset, iStrideY, iStrideUV);
-}
 
 #[inline]
 pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
@@ -1790,63 +1789,63 @@ pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
     // identical functions -- the 4a shape, in the decoder.
 
     // 3. IDCT Inverse Transform
-    (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctResAddPred_c);
-    (*pCtx).pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::IdctResAddPred8x8_c);
-    (*pCtx).pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::IdctFourResAddPred_c);
+    (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
+    (*pCtx).pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::idct_res_add_pred8x8);
+    (*pCtx).pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_four_res_add_pred);
 
     // 4. Intra Prediction
     (*pCtx).pGetI4x4LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredV_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredH_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDc_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDL_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDR_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVR_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredHD_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVL_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredHU_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcLeft_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDcNA_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredDDLTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsI4x4LumaPredVLTop_c),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_v),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_h),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddr),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vr),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hd),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hu),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_left),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_top),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_na),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl_top),
+        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl_top),
     ];
 
     (*pCtx).pGetI16x16LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredV_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredH_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDc_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredPlane_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcLeft_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsI16x16LumaPredDcNA_c),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_v),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_h),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_plane),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_left),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_top),
+        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_na),
     ];
 
     (*pCtx).pGetIChromaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDc_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredH_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredV_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredPlane_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcLeft_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsIChromaPredDcNA_c),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_dc),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_h),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_v),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_plane),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_left),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_top),
+        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_na),
     ];
 
     (*pCtx).pGetI8x8LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredV_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredH_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDc_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDL_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDR_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVR_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredHD_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVL_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredHU_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcLeft_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDcNA_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredDDLTop_c),
-        Some(crate::decoder::get_intra_predictor::WelsI8x8LumaPredVLTop_c),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_v),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_h),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddr),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vr),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hd),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hu),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_left),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_top),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_na),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl_top),
+        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl_top),
     ];
 }
 
@@ -3772,15 +3771,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
         }
 
         (*pCtx).bRPLRError = false;
-        if (*pCtx).pDec.is_some() {
-            GetI4LumaIChromaAddrTable(
-                // F38/S29: `as_mut_ptr()` takes a `&mut [i32; 24]` of a field of a
-                // raw-reached struct first; `addr_of_mut!` derives from `pCtx`.
-                std::ptr::addr_of_mut!((*pCtx).iDecBlockOffsetArray) as *mut i32,
-                (*dec_pic(pCtx)).linesize(0),
-                (*dec_pic(pCtx)).linesize(1),
-            );
-        }
+        // T5.X8: `GetI4LumaIChromaAddrTable` filled `iDecBlockOffsetArray` here,
+        // once per access unit, because the 24 byte offsets it held depended on the
+        // picture's two strides. The reconstruction path addresses blocks by sample
+        // coordinate now (`decode_slice.rs`'s `blk4_xy`), so there is no table.
 
         if !pNalCur.is_null() && (*pNalCur).sNalHeaderExt.uiLayerDqId > kuiTargetLayerDqId {
             break;
@@ -4159,7 +4153,11 @@ pub unsafe fn CheckAndFinishLastPic(
         if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && crate::decoder::nalu::CheckAccessUnitBoundaryExt(
-                    pCtx,
+                    sps_of(
+                        pCtx,
+                        (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+                    )
+                    .as_ref(),
                     &(*(*pCtx).pLastDecPicInfo).sLastNalHdrExt,
                     &(*pCurNal).sNalHeaderExt,
                     &(*(*pCtx).pLastDecPicInfo).sLastSliceHeader,

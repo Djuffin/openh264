@@ -1553,3 +1553,50 @@ prediction rather than a result, per S33.
 
 Running total: **forty-six measurements, fifteen alternations, twenty-five
 acquittals.**
+
+### Forty-seventh to fifty-first measurements — 2026-08-16, Phase 5 session X: five hits over three batteries, and the sixteenth alternation
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 47 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**, `family` battery over T5.X8) | 39981 | **37837** (short) |
+| 48 | the same configuration (**release**, same battery) | 39981 | **37837** (short) |
+| 49 | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**, next battery) | 42281 | **40645** (short) |
+| 50 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1` (**debug**, same battery) | 40992 | **0** |
+| 51 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**, isolation, below) | 39981 | **40463** (long) |
+
+Every one inside the signature — `mt`, `sm=3`, `t=4`, wrong length — and the second
+battery's release sweep read **341/341** at the configuration the first battery's had
+hit, which is the load-dependence S23b names.
+
+**Step 0, measured rather than predicted** (S33): the two `rust_enc` binaries hash
+`d9a3bf77…` (HEAD) and `d4f5770e…` (control at `361592a7`). They differ, as the
+"test-only" predicate says they must for a diff of production decoder code, so the
+shortcut does not apply.
+
+**Step 1: fifteen isolation runs of the debug binary at measurement 47's
+configuration**, machine idle. Thirteen produced **39981 bytes, byte-identical to the
+C++**; one produced a short output; one produced **40463**, a *long* one. Three
+different lengths from **one binary and one configuration**, with the reference bytes
+on 13 of 15 attempts, is step 1's discriminator at full strength — *a deterministic
+port bug repeats its bytes* — and 40463 ≠ 37837 is the "two different wrong lengths"
+clause literally.
+
+**Step 2, the sixteenth alternation: twelve whole `mt` presets per side, both
+binaries built once and swapped inside one loop**, 120 configurations per preset,
+1440 per side, machine otherwise idle.
+
+| side | hits | presets | configurations |
+|---|---|---|---|
+| HEAD (T5.X8) | **5** | 12 | 1440 |
+| control (`361592a7`, session X's base) | **7** | 12 | 1440 |
+
+**HEAD is not worse; it is marginally better, and both are inside the same rate.**
+≈1/288 (HEAD) and ≈1/206 (control) against session K's ≈1/307 under sustained
+presets. Every hit on both sides is `mt sm=3 t=4`; the configurations that hit move
+between rounds and between sides, which is the property that distinguishes a race
+from a divergence. No side produced a hit outside the signature.
+
+**Acquitted as F3.**
+
+Running total: **fifty-one measurements, sixteen alternations, twenty-seven
+acquittals.**
