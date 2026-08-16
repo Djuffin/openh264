@@ -38,18 +38,27 @@
 //! - Parameter set change detection (`FmoParamSetsChanged`) and synchronization (`FmoParamUpdate`).
 //! - Fast O(1) macroblock-to-slice-group queries (`FmoMbToSliceGroup`) and sequential iterators (`FmoNextMb`).
 
+#![deny(unsafe_code)]
+// Phase 5 W6 (T5.V4). The module's nine `unsafe fn` were all the same shape — a raw
+// pointer, a null test at the top, and a body that dereferences it — so the
+// conversion is `Option<&TagFmo>`/`Option<&mut TagFmo>` and the null test stays
+// exactly where it was, spelled as a `let … else`. `UninitFmoList` walked
+// `pFmo.add(i)` over an array and takes `&mut [TagFmo]`; its `kiCnt` was the array's
+// length, which a slice carries.
+//
+// `pMa: *mut CMemoryAlign` left four signatures as the dead parameter it had been
+// since T5.R3 deleted the allocator helpers — nothing in any of these bodies had read
+// it since.
 #![allow(
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 use core::ffi::{c_char, c_void};
-use crate::common::memory_align::CMemoryAlign;
-use crate::decoder::parameter_sets::{PPps, PSps};
+use crate::decoder::parameter_sets::{SPps, SSps};
 
 // ============================================================================
 // Constants, Types & Error Codes
@@ -127,12 +136,7 @@ impl Default for TagFmo {
 
 /// Generates the macroblock allocation map for Interleaved Slice Groups (Type 0).
 ///
-/// # Safety
-/// `pFmo` and `pPps` must point to valid structures or null.
-pub unsafe fn FmoGenerateMbAllocMapType0(pFmo: PFmo, pPps: PPps) -> i32 {
-    if pFmo.is_null() || pPps.is_null() {
-        return ERR_INFO_INVALID_PARAM;
-    }
+pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
     let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
@@ -174,12 +178,7 @@ pub unsafe fn FmoGenerateMbAllocMapType0(pFmo: PFmo, pPps: PPps) -> i32 {
 
 /// Generates the macroblock allocation map for Dispersed Slice Groups (Type 1).
 ///
-/// # Safety
-/// `pFmo` and `pPps` must point to valid structures or null.
-pub unsafe fn FmoGenerateMbAllocMapType1(pFmo: PFmo, pPps: PPps, kiMbWidth: i32) -> i32 {
-    if pFmo.is_null() || pPps.is_null() {
-        return ERR_INFO_INVALID_PARAM;
-    }
+pub fn FmoGenerateMbAllocMapType1(pFmo: &mut TagFmo, pPps: &SPps, kiMbWidth: i32) -> i32 {
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
     let pMbAllocMap = &mut (*pFmo).pMbAllocMap;
@@ -207,18 +206,15 @@ pub unsafe fn FmoGenerateMbAllocMapType1(pFmo: PFmo, pPps: PPps, kiMbWidth: i32)
 
 /// Internal helper allocating `pMbAllocMap` and dispatching map generation according to PPS parameters.
 ///
-/// # Safety
-/// Pointers must be valid or null.
-pub unsafe fn FmoGenerateSliceGroup(
-    pFmo: PFmo,
-    kpPps: PPps,
+pub fn FmoGenerateSliceGroup(
+    pFmo: Option<&mut TagFmo>,
+    kpPps: Option<&SPps>,
     kiMbWidth: i32,
     kiMbHeight: i32,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
-    if pFmo.is_null() || kpPps.is_null() {
+    let (Some(pFmo), Some(kpPps)) = (pFmo, kpPps) else {
         return ERR_INFO_INVALID_PARAM;
-    }
+    };
 
     let iNumMb = kiMbWidth * kiMbHeight;
     if iNumMb <= 0 {
@@ -280,43 +276,36 @@ pub unsafe fn FmoGenerateSliceGroup(
 
 /// Initializes a Flexible Macroblock Ordering (FMO) context.
 ///
-/// # Safety
-/// Pointers must be valid or null.
-pub unsafe fn InitFmo(
-    pFmo: PFmo,
-    pPps: PPps,
+pub fn InitFmo(
+    pFmo: Option<&mut TagFmo>,
+    pPps: Option<&SPps>,
     kiMbWidth: i32,
     kiMbHeight: i32,
-    pMa: *mut CMemoryAlign,
 ) -> i32 {
-    FmoGenerateSliceGroup(pFmo, pPps, kiMbWidth, kiMbHeight, pMa)
+    FmoGenerateSliceGroup(pFmo, pPps, kiMbWidth, kiMbHeight)
 }
 
 /// Frees all dynamically allocated memory across the FMO context array.
 ///
-/// # Safety
-/// `pFmo` must point to an array of `TagFmo` of size at least `kiCnt`.
-pub unsafe fn UninitFmoList(
-    pFmo: PFmo,
-    kiCnt: i32,
-    kiAvail: i32,
-    pMa: *mut CMemoryAlign,
-) {
-    if pFmo.is_null() || kiAvail <= 0 || kiCnt < kiAvail {
+/// The C's `kiCnt` is the array's length and `pFmo` its base, so the pair is one
+/// slice; `kiCnt < kiAvail` — a count smaller than the number of entries to clear —
+/// is the same refusal it always was, now spelled against `pFmo.len()`.
+pub fn UninitFmoList(pFmo: &mut [TagFmo], kiAvail: i32) {
+    let kiCnt = pFmo.len() as i32;
+    if kiAvail <= 0 || kiCnt < kiAvail {
         return;
     }
 
     let mut iFreeNodes: i32 = 0;
-    for i in 0..kiCnt {
-        let pIter = pFmo.add(i as usize);
-        if (*pIter).bActiveFlag {
+    for pIter in pFmo.iter_mut() {
+        if pIter.bActiveFlag {
             // T5.R3: the free is the assignment, and it needs neither the allocator
             // nor a null test — an already-empty map drops nothing.
-            (*pIter).pMbAllocMap = Vec::new();
-            (*pIter).iSliceGroupCount = 0;
-            (*pIter).iSliceGroupType = -1;
-            (*pIter).iCountMbNum = 0;
-            (*pIter).bActiveFlag = false;
+            pIter.pMbAllocMap = Vec::new();
+            pIter.iSliceGroupCount = 0;
+            pIter.iSliceGroupType = -1;
+            pIter.iCountMbNum = 0;
+            pIter.bActiveFlag = false;
             iFreeNodes += 1;
             if iFreeNodes >= kiAvail {
                 break;
@@ -327,17 +316,15 @@ pub unsafe fn UninitFmoList(
 
 /// Detects whether SPS or PPS parameter sets have changed relative to the cached FMO state.
 ///
-/// # Safety
-/// `pFmo` must point to a valid structure or null.
-pub unsafe fn FmoParamSetsChanged(
-    pFmo: PFmo,
+pub fn FmoParamSetsChanged(
+    pFmo: Option<&TagFmo>,
     kiCountNumMb: i32,
     kiSliceGroupType: i32,
     kiSliceGroupCount: i32,
 ) -> bool {
-    if pFmo.is_null() {
+    let Some(pFmo) = pFmo else {
         return false;
-    }
+    };
     !(*pFmo).bActiveFlag
         || (kiCountNumMb != (*pFmo).iCountMbNum)
         || (kiSliceGroupType != (*pFmo).iSliceGroupType)
@@ -348,35 +335,34 @@ pub unsafe fn FmoParamSetsChanged(
 ///
 /// # Safety
 /// Pointers must be valid or null.
-pub unsafe fn FmoParamUpdate(
-    pFmo: PFmo,
-    pSps: PSps,
-    pPps: PPps,
-    pActiveFmoNum: *mut i32,
-    pMa: *mut CMemoryAlign,
+pub fn FmoParamUpdate(
+    pFmo: Option<&mut TagFmo>,
+    pSps: Option<&SSps>,
+    pPps: Option<&SPps>,
+    pActiveFmoNum: &mut i32,
 ) -> i32 {
-    if pFmo.is_null() || pSps.is_null() || pPps.is_null() || pActiveFmoNum.is_null() {
+    let (Some(pFmo), Some(pSps), Some(pPps)) = (pFmo, pSps, pPps) else {
         return ERR_INFO_INVALID_PARAM;
-    }
+    };
 
-    let kuiMbWidth = (*pSps).iMbWidth;
-    let kuiMbHeight = (*pSps).iMbHeight;
+    let kuiMbWidth = pSps.iMbWidth;
+    let kuiMbHeight = pSps.iMbHeight;
     let mut iRet = ERR_NONE;
 
     if FmoParamSetsChanged(
-        pFmo,
+        Some(pFmo),
         (kuiMbWidth * kuiMbHeight) as i32,
-        (*pPps).uiSliceGroupMapType as i32,
-        (*pPps).uiNumSliceGroups as i32,
+        pPps.uiSliceGroupMapType as i32,
+        pPps.uiNumSliceGroups as i32,
     ) {
-        iRet = InitFmo(pFmo, pPps, kuiMbWidth as i32, kuiMbHeight as i32, pMa);
+        iRet = InitFmo(Some(pFmo), Some(pPps), kuiMbWidth as i32, kuiMbHeight as i32);
         if iRet != ERR_NONE {
             return iRet;
         }
 
-        if !(*pFmo).bActiveFlag && *pActiveFmoNum < MAX_PPS_COUNT {
+        if !pFmo.bActiveFlag && *pActiveFmoNum < MAX_PPS_COUNT {
             *pActiveFmoNum += 1;
-            (*pFmo).bActiveFlag = true;
+            pFmo.bActiveFlag = true;
         }
     }
 
@@ -385,12 +371,10 @@ pub unsafe fn FmoParamUpdate(
 
 /// Converts a linear macroblock index (`kiMbXy`) to its corresponding slice group ID.
 ///
-/// # Safety
-/// `pFmo` must point to a valid structure or null.
-pub unsafe fn FmoMbToSliceGroup(pFmo: PFmo, kiMbXy: MB_XY_T) -> i32 {
-    if pFmo.is_null() {
+pub fn FmoMbToSliceGroup(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> i32 {
+    let Some(pFmo) = pFmo else {
         return -1;
-    }
+    };
 
     let kiMbNum = (*pFmo).iCountMbNum;
     let kpMbMap = &(*pFmo).pMbAllocMap;
@@ -404,12 +388,10 @@ pub unsafe fn FmoMbToSliceGroup(pFmo: PFmo, kiMbXy: MB_XY_T) -> i32 {
 
 /// Returns the next successive macroblock in raster sequence belonging to the same slice group.
 ///
-/// # Safety
-/// `pFmo` must point to a valid structure or null.
-pub unsafe fn FmoNextMb(pFmo: PFmo, kiMbXy: MB_XY_T) -> MB_XY_T {
-    if pFmo.is_null() {
+pub fn FmoNextMb(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> MB_XY_T {
+    let Some(pFmo) = pFmo else {
         return -1;
-    }
+    };
 
     let kiTotalMb = (*pFmo).iCountMbNum;
     let kpMbMap = &(*pFmo).pMbAllocMap;
@@ -417,7 +399,7 @@ pub unsafe fn FmoNextMb(pFmo: PFmo, kiMbXy: MB_XY_T) -> MB_XY_T {
         return -1;
     }
 
-    let iGroup = FmoMbToSliceGroup(pFmo, kiMbXy);
+    let iGroup = FmoMbToSliceGroup(Some(pFmo), kiMbXy);
     if iGroup < 0 {
         return -1;
     }
@@ -459,137 +441,125 @@ mod tests {
 
     #[test]
     fn test_fmo_single_slice_group() {
-        unsafe {
-            let mut fmo = TagFmo::default();
-            let mut pps = SPps::default();
-            pps.uiNumSliceGroups = 1;
-            let mut ma = CMemoryAlign::new(16);
+        let mut fmo = TagFmo::default();
+        let mut pps = SPps::default();
+        pps.uiNumSliceGroups = 1;
 
-            let ret = InitFmo(&mut fmo, &mut pps, 4, 4, &mut ma);
-            assert_eq!(ret, ERR_NONE);
-            assert_eq!(fmo.iCountMbNum, 16);
-            assert_eq!(fmo.iSliceGroupCount, 1);
-            assert!(!fmo.pMbAllocMap.is_empty());
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 4, 4);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(fmo.iCountMbNum, 16);
+        assert_eq!(fmo.iSliceGroupCount, 1);
+        assert!(!fmo.pMbAllocMap.is_empty());
 
-            for i in 0..16 {
-                assert_eq!(FmoMbToSliceGroup(&mut fmo, i), 0);
-            }
-            assert_eq!(FmoNextMb(&mut fmo, 0), 1);
-            assert_eq!(FmoNextMb(&mut fmo, 14), 15);
-            assert_eq!(FmoNextMb(&mut fmo, 15), -1);
-
-            let mut fmo_list = [fmo];
-            fmo_list[0].bActiveFlag = true;
-            UninitFmoList(fmo_list.as_mut_ptr(), 1, 1, &mut ma);
-            assert!(fmo_list[0].pMbAllocMap.is_empty());
-            assert!(!fmo_list[0].bActiveFlag);
+        for i in 0..16 {
+            assert_eq!(FmoMbToSliceGroup(Some(&fmo), i), 0);
         }
+        assert_eq!(FmoNextMb(Some(&fmo), 0), 1);
+        assert_eq!(FmoNextMb(Some(&fmo), 14), 15);
+        assert_eq!(FmoNextMb(Some(&fmo), 15), -1);
+
+        let mut fmo_list = [fmo];
+        fmo_list[0].bActiveFlag = true;
+        UninitFmoList(&mut fmo_list, 1);
+        assert!(fmo_list[0].pMbAllocMap.is_empty());
+        assert!(!fmo_list[0].bActiveFlag);
     }
 
     #[test]
     fn test_fmo_type0_interleaved() {
-        unsafe {
-            let mut fmo = TagFmo::default();
-            let mut pps = SPps::default();
-            pps.uiNumSliceGroups = 2;
-            pps.uiSliceGroupMapType = 0;
-            pps.uiRunLength[0] = 3;
-            pps.uiRunLength[1] = 2;
-            let mut ma = CMemoryAlign::new(16);
+        let mut fmo = TagFmo::default();
+        let mut pps = SPps::default();
+        pps.uiNumSliceGroups = 2;
+        pps.uiSliceGroupMapType = 0;
+        pps.uiRunLength[0] = 3;
+        pps.uiRunLength[1] = 2;
 
-            let ret = InitFmo(&mut fmo, &mut pps, 5, 2, &mut ma);
-            assert_eq!(ret, ERR_NONE);
-            assert_eq!(fmo.iCountMbNum, 10);
-            assert_eq!(fmo.iSliceGroupCount, 2);
-            assert_eq!(fmo.iSliceGroupType, 0);
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 5, 2);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(fmo.iCountMbNum, 10);
+        assert_eq!(fmo.iSliceGroupCount, 2);
+        assert_eq!(fmo.iSliceGroupType, 0);
 
-            // Pattern: 3 in group 0, 2 in group 1, 3 in group 0, 2 in group 1
-            // Indices: 0,1,2 -> 0; 3,4 -> 1; 5,6,7 -> 0; 8,9 -> 1
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 0), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 1), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 2), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 3), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 4), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 5), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 6), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 7), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 8), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 9), 1);
+        // Pattern: 3 in group 0, 2 in group 1, 3 in group 0, 2 in group 1
+        // Indices: 0,1,2 -> 0; 3,4 -> 1; 5,6,7 -> 0; 8,9 -> 1
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 0), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 1), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 2), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 3), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 4), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 5), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 6), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 7), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 8), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 9), 1);
 
-            // Traversal for group 0
-            assert_eq!(FmoNextMb(&mut fmo, 0), 1);
-            assert_eq!(FmoNextMb(&mut fmo, 2), 5);
-            assert_eq!(FmoNextMb(&mut fmo, 7), -1);
+        // Traversal for group 0
+        assert_eq!(FmoNextMb(Some(&fmo), 0), 1);
+        assert_eq!(FmoNextMb(Some(&fmo), 2), 5);
+        assert_eq!(FmoNextMb(Some(&fmo), 7), -1);
 
-            // Traversal for group 1
-            assert_eq!(FmoNextMb(&mut fmo, 3), 4);
-            assert_eq!(FmoNextMb(&mut fmo, 4), 8);
-            assert_eq!(FmoNextMb(&mut fmo, 8), 9);
-            assert_eq!(FmoNextMb(&mut fmo, 9), -1);
+        // Traversal for group 1
+        assert_eq!(FmoNextMb(Some(&fmo), 3), 4);
+        assert_eq!(FmoNextMb(Some(&fmo), 4), 8);
+        assert_eq!(FmoNextMb(Some(&fmo), 8), 9);
+        assert_eq!(FmoNextMb(Some(&fmo), 9), -1);
 
-            let mut fmo_list = [fmo];
-            fmo_list[0].bActiveFlag = true;
-            UninitFmoList(fmo_list.as_mut_ptr(), 1, 1, &mut ma);
-        }
+        let mut fmo_list = [fmo];
+        fmo_list[0].bActiveFlag = true;
+        UninitFmoList(&mut fmo_list, 1);
     }
 
     #[test]
     fn test_fmo_type1_dispersed() {
-        unsafe {
-            let mut fmo = TagFmo::default();
-            let mut pps = SPps::default();
-            pps.uiNumSliceGroups = 2;
-            pps.uiSliceGroupMapType = 1;
-            let mut ma = CMemoryAlign::new(16);
+        let mut fmo = TagFmo::default();
+        let mut pps = SPps::default();
+        pps.uiNumSliceGroups = 2;
+        pps.uiSliceGroupMapType = 1;
 
-            let ret = InitFmo(&mut fmo, &mut pps, 4, 4, &mut ma);
-            assert_eq!(ret, ERR_NONE);
-            assert_eq!(fmo.iCountMbNum, 16);
-            assert_eq!(fmo.iSliceGroupCount, 2);
-            assert_eq!(fmo.iSliceGroupType, 1);
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 4, 4);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(fmo.iCountMbNum, 16);
+        assert_eq!(fmo.iSliceGroupCount, 2);
+        assert_eq!(fmo.iSliceGroupType, 1);
 
-            // Checkerboard grid 4x4:
-            // Row 0: 0, 1, 0, 1
-            // Row 1: 1, 0, 1, 0
-            // Row 2: 0, 1, 0, 1
-            // Row 3: 1, 0, 1, 0
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 0), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 1), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 2), 0);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 3), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 4), 1);
-            assert_eq!(FmoMbToSliceGroup(&mut fmo, 5), 0);
+        // Checkerboard grid 4x4:
+        // Row 0: 0, 1, 0, 1
+        // Row 1: 1, 0, 1, 0
+        // Row 2: 0, 1, 0, 1
+        // Row 3: 1, 0, 1, 0
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 0), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 1), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 2), 0);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 3), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 4), 1);
+        assert_eq!(FmoMbToSliceGroup(Some(&fmo), 5), 0);
 
-            assert_eq!(FmoNextMb(&mut fmo, 0), 2);
-            assert_eq!(FmoNextMb(&mut fmo, 1), 3);
-            assert_eq!(FmoNextMb(&mut fmo, 3), 4);
+        assert_eq!(FmoNextMb(Some(&fmo), 0), 2);
+        assert_eq!(FmoNextMb(Some(&fmo), 1), 3);
+        assert_eq!(FmoNextMb(Some(&fmo), 3), 4);
 
-            let mut fmo_list = [fmo];
-            fmo_list[0].bActiveFlag = true;
-            UninitFmoList(fmo_list.as_mut_ptr(), 1, 1, &mut ma);
-        }
+        let mut fmo_list = [fmo];
+        fmo_list[0].bActiveFlag = true;
+        UninitFmoList(&mut fmo_list, 1);
     }
 
     #[test]
     fn test_fmo_param_update() {
-        unsafe {
-            let mut fmo = TagFmo::default();
-            let mut sps = SSps::default();
-            sps.iMbWidth = 4;
-            sps.iMbHeight = 4;
-            let mut pps = SPps::default();
-            pps.uiNumSliceGroups = 2;
-            pps.uiSliceGroupMapType = 1;
-            let mut active_fmo_num: i32 = 0;
-            let mut ma = CMemoryAlign::new(16);
+        let mut fmo = TagFmo::default();
+        let mut sps = SSps::default();
+        sps.iMbWidth = 4;
+        sps.iMbHeight = 4;
+        let mut pps = SPps::default();
+        pps.uiNumSliceGroups = 2;
+        pps.uiSliceGroupMapType = 1;
+        let mut active_fmo_num: i32 = 0;
 
-            let ret = FmoParamUpdate(&mut fmo, &mut sps, &mut pps, &mut active_fmo_num, &mut ma);
-            assert_eq!(ret, ERR_NONE);
-            assert_eq!(active_fmo_num, 1);
-            assert!(fmo.bActiveFlag);
+        let ret = FmoParamUpdate(Some(&mut fmo), Some(&sps), Some(&pps), &mut active_fmo_num);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(active_fmo_num, 1);
+        assert!(fmo.bActiveFlag);
 
-            let mut fmo_list = [fmo];
-            UninitFmoList(fmo_list.as_mut_ptr(), 1, 1, &mut ma);
-        }
+        let mut fmo_list = [fmo];
+        UninitFmoList(&mut fmo_list, 1);
     }
 }

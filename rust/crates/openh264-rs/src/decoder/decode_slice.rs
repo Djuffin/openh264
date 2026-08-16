@@ -2520,7 +2520,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
         }
 
         if !(*pSliceHeader).pps_id.is_none() && (*(pps_of(pCtx, (*pSliceHeader).pps_id))).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx), iNextMbXyIndex);
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx).as_ref(), iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }
@@ -5391,7 +5391,7 @@ pub unsafe fn WelsDecodeSlice(
         }
 
         if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).uiNumSliceGroups > 1 {
-            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx), iNextMbXyIndex);
+            iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx).as_ref(), iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
         }

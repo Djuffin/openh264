@@ -3839,11 +3839,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // per-PPS and kept across access units rather than per slice.
             (*pCtx).fmo_id = Some(iPpsId);
             iRet = FmoParamUpdate(
-                fmo_of(pCtx, Some(iPpsId)),
-                sps_of(pCtx, pLayerInfo.sps_ref),
-                pps_of(pCtx, pLayerInfo.pps_id),
-                std::ptr::addr_of_mut!((*pCtx).iActiveFmoNum),
-                (*pCtx).pMemAlign,
+                fmo_of(pCtx, Some(iPpsId)).as_mut(),
+                sps_of(pCtx, pLayerInfo.sps_ref).as_ref(),
+                pps_of(pCtx, pLayerInfo.pps_id).as_ref(),
+                &mut (*pCtx).iActiveFmoNum,
             );
             if iRet != ERR_NONE {
                 if iRet == ERR_INFO_OUT_OF_MEMORY {
@@ -4309,7 +4308,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
             break;
         }
         iRealMbIdx = if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).uiNumSliceGroups > 1 {
-            FmoNextMb(active_fmo(pCtx), iRealMbIdx)
+            FmoNextMb(active_fmo(pCtx).as_ref(), iRealMbIdx)
         } else {
             (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice + iMbIdx + 1
         };
