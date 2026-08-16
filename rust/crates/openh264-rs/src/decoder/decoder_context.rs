@@ -778,6 +778,40 @@ pub unsafe fn active_pps(pCtx: PWelsDecoderContext) -> *mut SPps {
     pps_of(pCtx, (*pCtx).active_pps)
 }
 
+/// The bit reader for the slice being parsed — **the one route to it** (T5.M3).
+///
+/// **Moved here from `bit_stream.rs` at T5.V3**, which is where it belonged: it is a
+/// context accessor, not bitstream code — it reaches through `pCtx` to a NAL field and
+/// returns a pointer, exactly like [`cur_dq_layer`] below it. Its old home holds the
+/// cursor types and their arithmetic, and with this gone that module has no `unsafe`
+/// left at all.
+///
+/// The NAL unit owns its reader (`sNalData.sVclNal.sSliceBitsRead`, initialized by
+/// `DecInitBits` at parse time) and nothing else does. `DqLayerState::pBitStringAux`
+/// used to mirror the address beside its owner, which is the class §2 keeps naming;
+/// this replaces the mirror with a derivation. (`SDeblockingFilter.pCsData` was the
+/// last one left and died the same way at T5.N3 — with nothing, because its readers
+/// already had the layer that carries the picture.)
+///
+/// `pCtx.pNalCur` is re-pointed at **every** slice NAL, in the same statement of
+/// `DecodeCurrentAccessUnit` that used to re-point the layer's mirror, so this is
+/// exactly as fresh as the mirror was — see the note there for why it had to move.
+///
+/// **S29**: `addr_of_mut!` all the way down, so no `&mut SNalUnit` is created to
+/// retag and the returned pointer carries the NAL allocation's provenance, not a
+/// field borrow's.
+///
+/// # Safety
+/// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
+/// the NAL being parsed — the precondition every caller already relies on, and the
+/// same one the deleted field carried.
+#[inline(always)]
+pub unsafe fn slice_bit_reader(
+    pCtx: PWelsDecoderContext,
+) -> *mut crate::decoder::bit_stream::BsReader {
+    std::ptr::addr_of_mut!((*(*pCtx).pNalCur).sNalData.sVclNal.sSliceBitsRead)
+}
+
 /// The layer the access unit is decoding, or null when there is none.
 ///
 /// **The one way to reach [`SWelsDecoderContext::pDqLayersList`]** (T5.R2), and the
