@@ -874,7 +874,7 @@ impl IntraPredConstraint {
         self,
         pNeighAvail: &SWelsNeighAvail,
         pNonZeroCount: &mut [u8; 48],
-        pIntraPredMode: *mut i8,
+        pIntraPredMode: &mut [i8; 48],
         pCurDqLayer: crate::decoder::decoder_core::PDqLayer,
     ) {
         match self {
@@ -2711,13 +2711,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
             &mut pNonZeroCount,
-            pIntraPredMode.as_mut_ptr(),
+            &mut pIntraPredMode,
             dq,
         );
         let ret = if !*pTransformSize8x8Flag {
-            ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+            ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
         } else {
-            ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+            ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
         };
         if ret != ERR_NONE {
             return ret;
@@ -3230,13 +3230,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
             &mut pNonZeroCount,
-            pIntraPredMode.as_mut_ptr(),
+            &mut pIntraPredMode,
             dq,
         );
             let ret = if !*pTransformSize8x8Flag {
-                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3590,13 +3590,13 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             (*pCtx).eIntraPredConstraint.FillCacheIntraNxN(
             &mut sNeighAvail,
             &mut pNonZeroCount,
-            pIntraPredMode.as_mut_ptr(),
+            &mut pIntraPredMode,
             dq,
         );
             let ret = if !*pTransformSize8x8Flag {
-                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, pIntraPredMode.as_mut_ptr(), buf, pBs, dq)
+                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3892,7 +3892,7 @@ pub unsafe fn ParseIntra4x4Mode(
     pCtx: *mut SWelsDecoderContext,
     pDec: PPicture,
     pNeighAvail: &mut SWelsNeighAvail,
-    pIntraPredMode: *mut i8,
+    pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
@@ -3971,18 +3971,18 @@ pub unsafe fn ParseIntra4x4Mode(
         }
 
         pIntra4x4FinalMode[g_kuiScan4[i as usize] as usize] = iFinalMode as i8;
-        *pIntraPredMode.add(g_kuiScan8[i as usize] as usize) = iBestMode;
+        pIntraPredMode[g_kuiScan8[i as usize] as usize] = iBestMode;
         iSampleAvail[g_kCache30ScanIdx[i as usize] as usize] = 1;
     }
 
     let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy).as_mut_ptr();
-    *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
-    *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
-    *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
-    *dst_modes.add(3) = *pIntraPredMode.add(4 + 8 * 4);
-    *dst_modes.add(4) = *pIntraPredMode.add(4 + 8 * 1);
-    *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
-    *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);
+    *dst_modes.add(0) = pIntraPredMode[1 + 8 * 4];
+    *dst_modes.add(1) = pIntraPredMode[2 + 8 * 4];
+    *dst_modes.add(2) = pIntraPredMode[3 + 8 * 4];
+    *dst_modes.add(3) = pIntraPredMode[4 + 8 * 4];
+    *dst_modes.add(4) = pIntraPredMode[4 + 8 * 1];
+    *dst_modes.add(5) = pIntraPredMode[4 + 8 * 2];
+    *dst_modes.add(6) = pIntraPredMode[4 + 8 * 3];
 
     if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
@@ -4033,7 +4033,7 @@ pub unsafe fn ParseIntra8x8Mode(
     pCtx: *mut SWelsDecoderContext,
     pDec: PPicture,
     pNeighAvail: &mut SWelsNeighAvail,
-    pIntraPredMode: *mut i8,
+    pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
@@ -4116,7 +4116,7 @@ pub unsafe fn ParseIntra8x8Mode(
         for j in 0..4usize {
             pIntra4x4FinalMode[g_kuiScan4[(i << 2) + j] as usize] =
                 iFinalMode as i8;
-            *pIntraPredMode.add(g_kuiScan8[(i << 2) + j] as usize) = iBestMode;
+            pIntraPredMode[g_kuiScan8[(i << 2) + j] as usize] = iBestMode;
             iSampleAvail[g_kCache30ScanIdx[(i << 2) + j] as usize] = 1;
         }
     }
@@ -4125,13 +4125,13 @@ pub unsafe fn ParseIntra8x8Mode(
     // four modes, not one; entries 1..3 feed the left-neighbour cache of the next
     // macroblock (WelsFillCacheConstrain0IntraNxN reads [3]).
     let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy).as_mut_ptr();
-    *dst_modes.add(0) = *pIntraPredMode.add(1 + 8 * 4);
-    *dst_modes.add(1) = *pIntraPredMode.add(2 + 8 * 4);
-    *dst_modes.add(2) = *pIntraPredMode.add(3 + 8 * 4);
-    *dst_modes.add(3) = *pIntraPredMode.add(4 + 8 * 4);
-    *dst_modes.add(4) = *pIntraPredMode.add(4 + 8 * 1);
-    *dst_modes.add(5) = *pIntraPredMode.add(4 + 8 * 2);
-    *dst_modes.add(6) = *pIntraPredMode.add(4 + 8 * 3);
+    *dst_modes.add(0) = pIntraPredMode[1 + 8 * 4];
+    *dst_modes.add(1) = pIntraPredMode[2 + 8 * 4];
+    *dst_modes.add(2) = pIntraPredMode[3 + 8 * 4];
+    *dst_modes.add(3) = pIntraPredMode[4 + 8 * 4];
+    *dst_modes.add(4) = pIntraPredMode[4 + 8 * 1];
+    *dst_modes.add(5) = pIntraPredMode[4 + 8 * 2];
+    *dst_modes.add(6) = pIntraPredMode[4 + 8 * 3];
 
     if (*active_sps(pCtx)).uiChromaFormatIdc == 0 {
         return ERR_NONE;
@@ -4256,7 +4256,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     pDec: PPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
-    pIntraPredMode: *mut i8,
+    pIntraPredMode: &mut [i8; 48],
     uiMbType: u32,
 ) -> i32 {
     // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
@@ -4752,7 +4752,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         pDec,
         &mut sNeighAvail,
         &mut pNonZeroCount,
-        pIntraPredMode.as_mut_ptr(),
+        &mut pIntraPredMode,
         uiMbType,
     );
     if ret != ERR_NONE {
@@ -4897,7 +4897,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             pDec,
             pNeighAvail,
             &mut pNonZeroCount,
-            pIntraPredMode.as_mut_ptr(),
+            &mut pIntraPredMode,
             intra_type,
         );
         if ret != ERR_NONE {
@@ -5117,7 +5117,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             pDec,
             pNeighAvail,
             &mut pNonZeroCount,
-            pIntraPredMode.as_mut_ptr(),
+            &mut pIntraPredMode,
             intra_type,
         );
         if ret != ERR_NONE {
