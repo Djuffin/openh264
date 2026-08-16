@@ -216,12 +216,14 @@ pub use crate::decoder::decoder_context::{
 // site outside this file changed. Bodies did not change either — `(*pFilter).field`
 // reads the same through a borrow.
 //
-// **`WelsDeblockingMb` keeps the raw parameter, and that is a dispatch shape, not an
-// oversight**: `PDeblockingFilterMbFunc` below is the per-macroblock filter's
-// installed type and `WelsDeblockingMb` is what gets installed, so its signature and
-// the typedef move together or not at all — W6 step 3's class, with the four
-// `decode_mb_aux.rs` `pIdct*Func` shims (family 3). It reborrows at its eight call
-// sites into the flipped functions instead.
+// **`WelsDeblockingMb` keeps the raw `pFilter`, and that is a dispatch shape**:
+// `PDeblockingFilterMbFunc` below is the per-macroblock filter's installed type and
+// `WelsDeblockingMb` is what gets installed, so a parameter's type and the typedef
+// move together or not at all — W6 step 3's class, with the four `decode_mb_aux.rs`
+// `pIdct*Func` shims (family 3). It reborrows `&mut *pFilter` at its eight call sites.
+// **Its layer parameter did move**, at T5.W7, because the layer flip forced the
+// question and the answer was cheap: one typedef, one implementor, one install site
+// (`decode_slice.rs:2567`), all named in `decoder_context.rs`'s own comment.
 //
 // What still blocks this module: the plane pointers (`pPix`/`pPixCb`/`pPixCr`, the
 // eight edge filters — step 3), the layer (`pCurDqLayer`, step 2), `pDec`, and the
@@ -229,7 +231,7 @@ pub use crate::decoder::decoder_context::{
 // words, not in the type, so this note does not raise the file's own count — S16).
 
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     filter: *mut SDeblockingFilter,
     boundry_flag: i32,
@@ -456,7 +458,7 @@ pub unsafe fn IN_BS_EDGE(
 /// `g_kuiTableB8x8Idx`/`g_kuiMbCountScan4Idx` whose entries are all < 24), so the
 /// per-element derivation reaches everything it is asked to reach.
 #[inline(always)]
-pub unsafe fn GetPNzc(pCurDqLayer: *mut DqLayerState, iMbXy: i32) -> *const i8 {
+pub unsafe fn GetPNzc(pCurDqLayer: &DqLayerState, iMbXy: i32) -> *const i8 {
     (*pCurDqLayer).grid.nzc.get(iMbXy as usize).as_ptr()
 }
 
@@ -544,7 +546,7 @@ pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
 #[inline(always)]
 pub unsafe fn DeblockingBSInsideMBNormal(
     pFilter: &mut SDeblockingFilter,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
@@ -676,7 +678,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 #[inline(always)]
 pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     pFilter: &mut SDeblockingFilter,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: *const i8,
@@ -829,7 +831,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 
 pub unsafe fn DeblockingBsMarginalMBAvcbase(
     pFilter: &mut SDeblockingFilter,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iEdge: i32,
     iNeighMb: i32,
@@ -1033,7 +1035,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
 
 pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     pFilter: &mut SDeblockingFilter,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     iEdge: i32,
     iNeighMb: i32,
@@ -1315,7 +1317,7 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
 // ============================================================================
 
 #[inline]
-pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut DqLayerState, iFilterIdc: i32) -> i32 {
+pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i32) -> i32 {
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
@@ -1627,7 +1629,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 // ============================================================================
 
 unsafe fn DeblockingInterMb(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     pFilter: &mut SDeblockingFilter,
     nBS: &[[[u8; 4]; 4]; 2],
@@ -1771,7 +1773,7 @@ unsafe fn DeblockingInterMb(
 // ============================================================================
 
 pub unsafe fn FilteringEdgeLumaHV(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
@@ -1869,7 +1871,7 @@ pub unsafe fn FilteringEdgeLumaHV(
 }
 
 pub unsafe fn FilteringEdgeChromaHV(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
@@ -2006,7 +2008,7 @@ pub unsafe fn FilteringEdgeChromaHV(
 
 #[inline]
 unsafe fn DeblockingIntraMb(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pDec: PPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
@@ -2020,7 +2022,7 @@ unsafe fn DeblockingIntraMb(
 // ============================================================================
 
 pub unsafe extern "C" fn WelsDeblockingMb(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pFilter: *mut SDeblockingFilter,
     iBoundryFlag: i32,
@@ -2175,7 +2177,7 @@ unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; M
 
 pub unsafe fn WelsDeblockingFilterSlice(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
@@ -2216,6 +2218,11 @@ pub unsafe fn WelsDeblockingFilterSlice(
     pFilter.pLoopf = std::ptr::addr_of_mut!((*pCtx).sDeblockingFunc);
     pFilter.ref_ids = snapshot_ref_ids(pCtx);
 
+    // T5.W7: `pps_id` is the slice header's and constant across the loop, so it is
+    // read once here rather than through a shared borrow of the layer held across the
+    // loop's mutable uses of it — the bracket maneuver at one scalar.
+    let pps_id = pSliceHeaderExt.sSliceHeader.pps_id;
+
     // Step 2: Macroblock deblocking loop
     if iFilterIdc == 0 || iFilterIdc == 2 {
         iNextMbXyIndex = pSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
@@ -2235,7 +2242,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            let pPps = pps_of(pCtx, pSliceHeaderExt.sSliceHeader.pps_id);
+            let pPps = pps_of(pCtx, pps_id);
             if !pPps.is_null() && (*pPps).uiNumSliceGroups > 1 {
                 // Flexible Macroblock Ordering slice group transition
                 iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo.as_ref(), iNextMbXyIndex);
@@ -2256,7 +2263,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
 pub unsafe fn WelsDeblockingInitFilter(
     pCtx: *mut SWelsDecoderContext,
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &DqLayerState,
     pFilter: &mut SDeblockingFilter,
     iFilterIdc: *mut i32,
 ) {
@@ -2276,7 +2283,7 @@ pub unsafe fn WelsDeblockingInitFilter(
 }
 
 pub unsafe fn WelsDeblockingFilterMB(
-    pCurDqLayer: *mut DqLayerState,
+    pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pFilter: &mut SDeblockingFilter,
     iFilterIdc: i32,
