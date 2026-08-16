@@ -502,12 +502,10 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    let pSliceHeader =
-        std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader);
-    if (*pSliceHeader).sps_ref.is_none() {
+    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
         return;
     }
-    let pSps = &*(sps_of(pCtx, (*pSliceHeader).sps_ref));
+    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
 
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
@@ -515,7 +513,7 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     for i in 0..iShortRefCount {
         let pPic = short_ref_pic_mut(pCtx, i);
         if !pPic.is_null() {
-            if (*pPic).iFrameNum > (*pSliceHeader).iFrameNum {
+            if (*pPic).iFrameNum > (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum {
                 (*pPic).iFrameWrapNum = (*pPic).iFrameNum - iMaxPicNum;
             } else {
                 (*pPic).iFrameWrapNum = (*pPic).iFrameNum;
@@ -1121,20 +1119,17 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     }
     let reorder_syn = &*pRefPicListReorderSyn;
 
-    let pNalHeaderExt = std::ptr::addr_of!((*pCurDqLayer).sLayerInfo.sNalHeaderExt);
-    let pSliceHeader =
-        std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader);
-    if (*pSliceHeader).sps_ref.is_none() {
+    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pSps = &*(sps_of(pCtx, (*pSliceHeader).sps_ref));
+    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
 
     let list_count = if (*pCtx).eSliceType == B_SLICE { 2 } else { 1 };
 
     for listIdx in 0..list_count {
         let iMaxRefIdx = ((*pCtx).iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
-        let iRefCount = (*pSliceHeader).uiRefCount[listIdx] as i32;
-        let mut iPredFrameNum = (*pSliceHeader).iFrameNum;
+        let iRefCount = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx] as i32;
+        let mut iPredFrameNum = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
         let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
         let mut iReorderingIndex = 0usize;
 
@@ -1166,8 +1161,8 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
                         let cur = ref_pic(pCtx, listIdx, i);
                         if !cur.is_null() && (*cur).iFrameNum == iPredFrameNum && !(*cur).bIsLongRef
                         {
-                            if (*pNalHeaderExt).uiQualityId == (*cur).uiQualityId
-                                && (*pSliceHeader).iSpsId != (*cur).iSpsId
+                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == (*cur).uiQualityId
+                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != (*cur).iSpsId
                             {
                                 WelsLog(
                                     &(*pCtx).sLogCtx,
@@ -1191,8 +1186,8 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
                             && (*cur).bIsLongRef
                             && (*cur).iLongTermFrameIdx == target_long
                         {
-                            if (*pNalHeaderExt).uiQualityId == (*cur).uiQualityId
-                                && (*pSliceHeader).iSpsId != (*cur).iSpsId
+                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == (*cur).uiQualityId
+                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != (*cur).iSpsId
                             {
                                 WelsLog(
                                     &(*pCtx).sLogCtx,
@@ -1258,23 +1253,21 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
     }
     let reorder_syn = &*pRefPicListReorderSyn;
 
-    let pSliceHeader =
-        std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader);
-    if (*pSliceHeader).sps_ref.is_none() {
+    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
         return ERR_INFO_INVALID_PTR;
     }
-    let pSps = &*(sps_of(pCtx, (*pSliceHeader).sps_ref));
+    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
 
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
     let iLongRefCount = (*pCtx).sRefPic.uiLongRefCount[LIST_0] as usize;
     let iMaxRefIdx = ((*pCtx).iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
-    let iCurFrameNum = (*pSliceHeader).iFrameNum;
+    let iCurFrameNum = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iListCount = if (*pCtx).eSliceType == B_SLICE { 2 } else { 1 };
 
     for listIdx in 0..iListCount {
         let mut iCount = 0usize;
-        let iRefCount = (*pSliceHeader).uiRefCount[listIdx] as usize;
+        let iRefCount = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx] as usize;
 
         if reorder_syn.bRefPicListReorderingFlag[listIdx] {
             let mut iPredFrameNum = iCurFrameNum;
