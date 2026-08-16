@@ -2039,3 +2039,27 @@ structural conversion work Phase 5 exists to do, which has no recovery row becau
 nothing was parked to recover. The new line for the record: **cumulative CB
 ≈ +25.0…+25.5% at Phase 5's exit, ≈2.0–2.5 points over the ≈+23% stop-line,
 deferred to Phase 9 by D-perf-6.**
+
+### Session V's own span — inside the floor, and nothing rests on it
+
+Taken after V's last code commit, 2026-08-15 evening, the same sitting as the day two
+above. Four commits, of which three carry code: F50's one-line `ParseSps` arm, F51's
+restored `UninitFmoList` call at `ResetFmoList`, and three modules converted to
+references and marked `#![deny(unsafe_code)]`. No kernel, no allocation path, no
+dispatch change, no shim retirement.
+
+| span | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `e6873fe1` → `92d6fa75` | 3 | +0.11% | −0.11% | +0.26% | **+0.11%** | −0.39% |
+| 3-pair null (`v_head` both slots) | 3 | −0.04% | +0.46% | −0.15% | **−0.04%** | +2.88% |
+
+**Every decode row of the span is inside the null band** (span −0.11%…+0.26% against
+a null of −0.15%…+0.46%), so there is no effect to report and **no day two is owed**:
+S2b's day-two clause attaches to readings a decision rests on, and no decision rests
+on this one. Both binaries stay stashed (`.perfpair/u_head` = `e6873fe1`,
+`.perfpair/v_head` = `92d6fa75`) so a later session can take one for free if it wants
+the span in a chain.
+
+The encode null's +2.88% median and −5.65%…+13.11% band are the ordinary reminder of
+why encode rows are read against their own floor and not at face value (S2, and
+Phase 3's exit at +22.57%).
