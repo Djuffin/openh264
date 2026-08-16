@@ -2048,11 +2048,18 @@ unsafe fn GetTempPredPlanes(
         // T5.P″1: `alloc_picture` hands back the owner, and the field keeps it. The
         // lazy arm's two null tests are the same two states — "not allocated yet" and
         // "the allocation failed" — with `Option` spelling them.
-        (*pCtx).pTempDec = crate::decoder::pic_queue::alloc_picture(
-            pCtx,
-            ((*active_sps(pCtx)).iMbWidth << 4) as i32,
-            ((*active_sps(pCtx)).iMbHeight << 4) as i32,
-        );
+        // T5.W3: `alloc_picture` stopped taking the context, so its `pMemAlign`
+        // guard is tested here — the same `None`, from the same condition, at the one
+        // caller that holds a context to test it with.
+        (*pCtx).pTempDec = if (*pCtx).pMemAlign.is_null() {
+            None
+        } else {
+            crate::decoder::pic_queue::alloc_picture(
+                crate::decoder::decoder_context::parse_only(pCtx),
+                ((*active_sps(pCtx)).iMbWidth << 4) as i32,
+                ((*active_sps(pCtx)).iMbHeight << 4) as i32,
+            )
+        };
     }
     // The borrow is on the field (S29) and the three plane pointers derive from the
     // picture's own plane allocations (S28, `data_ptr` from the allocation root), so

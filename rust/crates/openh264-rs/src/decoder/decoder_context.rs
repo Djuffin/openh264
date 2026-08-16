@@ -845,6 +845,20 @@ pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
     }
 }
 
+/// `pCtx->pParam->bParseOnly`, with the null test the five hand-written copies of
+/// this chain all carry (T5.W3).
+///
+/// It is here because it is a context accessor, and it exists because family 5's
+/// conversion needed the answer without the context: `alloc_picture` reached two
+/// pointers deep for one `bool`, and the callers that hold `pCtx` read it for it now.
+///
+/// # Safety
+/// `pCtx` must be null or point to a live decoder context.
+#[inline]
+pub unsafe fn parse_only(pCtx: PWelsDecoderContext) -> bool {
+    !pCtx.is_null() && !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly
+}
+
 /// # Safety
 /// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
 /// the NAL being parsed — the precondition every caller already relies on, and the
@@ -1418,7 +1432,7 @@ mod tests {
 
         unsafe {
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
-            (*pCtx).pPicBuff = CreatePicBuff(pCtx, 4, 64, 64);
+            (*pCtx).pPicBuff = CreatePicBuff(false, 4, 64, 64);
             assert!((*pCtx).pPicBuff.is_some());
             assert_eq!(pic_pool_mut(pCtx).map(|pool| pool.capacity()), Some(4));
 
