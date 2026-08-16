@@ -196,7 +196,7 @@ pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
 pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState, PDqLayer};
 pub use crate::decoder::decoder_context::{
-    SRefPic, SDeblockingFunc, PDeblockingFunc, SDeblockingFilter, PDeblockingFilter, PicId,
+    SRefPic, SDeblockingFunc, SDeblockingFilter, PDeblockingFilter, PicId,
     MAX_DPB_COUNT,
     PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
     PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,
@@ -2207,7 +2207,6 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
     // F38/S29: `addr_of_mut!`, not `&mut` — this pointer is stored into another
     // struct and read for the whole macroblock loop, which is S29's worst class.
-    pFilter.pLoopf = std::ptr::addr_of_mut!((*pCtx).sDeblockingFunc);
     pFilter.ref_ids = snapshot_ref_ids(pCtx);
 
     // T5.W7: `pps_id` is the slice header's and constant across the loop, so it is
@@ -2270,7 +2269,6 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     // F38/S29, as above.
-    (*pFilter).pLoopf = std::ptr::addr_of_mut!((*pCtx).sDeblockingFunc);
     (*pFilter).ref_ids = snapshot_ref_ids(pCtx);
 }
 
