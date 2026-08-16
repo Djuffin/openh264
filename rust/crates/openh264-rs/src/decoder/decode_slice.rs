@@ -872,7 +872,7 @@ impl IntraPredConstraint {
     #[inline]
     pub unsafe fn FillCacheIntraNxN(
         self,
-        pNeighAvail: crate::decoder::parse_mb_syn_cavlc::PWelsNeighAvail,
+        pNeighAvail: &SWelsNeighAvail,
         pNonZeroCount: &mut [u8; 48],
         pIntraPredMode: *mut i8,
         pCurDqLayer: crate::decoder::decoder_core::PDqLayer,
@@ -904,7 +904,7 @@ impl IntraPredConstraint {
     #[inline]
     pub unsafe fn MapNxNNeighToSample(
         self,
-        pNeighAvail: *mut SWelsNeighAvail,
+        pNeighAvail: &mut SWelsNeighAvail,
         pSampleAvail: *mut i32,
     ) {
         match self {
@@ -924,7 +924,7 @@ impl IntraPredConstraint {
     #[inline]
     pub unsafe fn Map16x16NeighToSample(
         self,
-        pNeighAvail: *mut SWelsNeighAvail,
+        pNeighAvail: &mut SWelsNeighAvail,
         pSampleAvail: *mut u8,
     ) {
         match self {
@@ -939,10 +939,10 @@ impl IntraPredConstraint {
 }
 
 pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: *mut i32,
 ) {
-    if pNeighAvail.is_null() || pSampleAvail.is_null() {
+    if pSampleAvail.is_null() {
         return;
     }
     let avail = &*pNeighAvail;
@@ -967,10 +967,10 @@ pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
 }
 
 pub unsafe extern "C" fn WelsMapNxNNeighToSampleConstrain1(
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: *mut i32,
 ) {
-    if pNeighAvail.is_null() || pSampleAvail.is_null() {
+    if pSampleAvail.is_null() {
         return;
     }
     let avail = &*pNeighAvail;
@@ -995,10 +995,10 @@ pub unsafe extern "C" fn WelsMapNxNNeighToSampleConstrain1(
 }
 
 pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: *mut u8,
 ) {
-    if pNeighAvail.is_null() || pSampleAvail.is_null() {
+    if pSampleAvail.is_null() {
         return;
     }
     let avail = &*pNeighAvail;
@@ -1016,10 +1016,10 @@ pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
 }
 
 pub unsafe extern "C" fn WelsMap16x16NeighToSampleConstrain1(
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: *mut u8,
 ) {
-    if pNeighAvail.is_null() || pSampleAvail.is_null() {
+    if pSampleAvail.is_null() {
         return;
     }
     let avail = &*pNeighAvail;
@@ -3891,7 +3891,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 pub unsafe fn ParseIntra4x4Mode(
     pCtx: *mut SWelsDecoderContext,
     pDec: PPicture,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
@@ -4032,7 +4032,7 @@ pub unsafe fn ParseIntra4x4Mode(
 pub unsafe fn ParseIntra8x8Mode(
     pCtx: *mut SWelsDecoderContext,
     pDec: PPicture,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: *mut i8,
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
@@ -4181,7 +4181,7 @@ pub unsafe fn ParseIntra8x8Mode(
 pub unsafe fn ParseIntra16x16Mode(
     pCtx: *mut SWelsDecoderContext,
     pDec: PPicture,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
     // whole duration, and the CABAC arm below re-reaches this very cursor through
@@ -4254,7 +4254,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     pCtx: *mut SWelsDecoderContext,
     dq: *mut DqLayerState,
     pDec: PPicture,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: *mut i8,
     uiMbType: u32,
@@ -4325,7 +4325,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     pCtx: *mut SWelsDecoderContext,
     dq: *mut DqLayerState,
     pDec: PPicture,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
@@ -4812,7 +4812,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     dq: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: *mut u32,
 ) -> i32 {
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
@@ -5025,7 +5025,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     dq: *mut DqLayerState,
     pDec: PPicture,
     pRefs: PicRefs<'_>,
-    pNeighAvail: *mut SWelsNeighAvail,
+    pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: *mut u32,
 ) -> i32 {
     let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
