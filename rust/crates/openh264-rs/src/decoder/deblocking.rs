@@ -2216,7 +2216,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
             let pPps = pps_of(pCtx, pSliceHeaderExt.sSliceHeader.pps_id);
             if !pPps.is_null() && (*pPps).uiNumSliceGroups > 1 {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);
+                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo.as_ref(), iNextMbXyIndex);
             } else {
                 iNextMbXyIndex += 1;
             }

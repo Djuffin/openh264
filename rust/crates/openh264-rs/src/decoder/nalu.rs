@@ -2202,11 +2202,25 @@ pub unsafe fn ParseScalingList(
 }
 
 /// Resets FMO contexts and returns count of active FMO units.
+///
+/// **F51 (session V): the list reset was missing, and only the counter was here.**
+/// `au_parser.cpp:1794` clears every active entry of `sFmoList` —
+/// `UninitFmoList (&pCtx->sFmoList[0], MAX_PPS_COUNT, pCtx->iActiveFmoNum, …)` — and
+/// *then* zeroes `iActiveFmoNum`. The port zeroed the counter alone, so after a new
+/// SPS every entry kept `bActiveFlag = true` with the previous sequence's map. Two
+/// consequences, both C++-visible: `FmoParamUpdate`'s re-activation arm
+/// (`!bActiveFlag && iActiveFmoNum < MAX_PPS_COUNT`) could never fire again, so
+/// `iActiveFmoNum` stayed 0 for the decoder's life and this function returned 0
+/// where the C++ returns a real count; and an entry whose slice-group parameters
+/// happen to match the new sequence's kept its stale map, because
+/// `FmoParamSetsChanged`'s first term — the one that exists to catch exactly this —
+/// is `!bActiveFlag`.
 pub unsafe fn ResetFmoList(pCtx: *mut SWelsDecoderContext) -> i32 {
     if pCtx.is_null() {
         return 0;
     }
     let iCountNum = (*pCtx).iActiveFmoNum;
+    crate::decoder::fmo::UninitFmoList(&mut (*pCtx).sFmoList, iCountNum);
     (*pCtx).iActiveFmoNum = 0;
     iCountNum
 }
@@ -2389,6 +2403,52 @@ mod au_list_tests {
             au.nal_units.swap(0, 3);
             let seen: Vec<u64> = (0..4).map(|i| (*au.nal(i)).uiTimeStamp).collect();
             assert_eq!(seen, vec![3, 1, 2, 0]);
+        }
+    }
+
+    /// **F51's red-under-revert test** (session V). `ResetFmoList` must clear the FMO
+    /// list, not only the counter: `au_parser.cpp:1794` calls `UninitFmoList` over
+    /// `sFmoList` and *then* zeroes `iActiveFmoNum`. Delete the `UninitFmoList` call in
+    /// `ResetFmoList` and this test fails on its first assertion — the entry keeps
+    /// `bActiveFlag` and its previous map — and on the last one, because
+    /// `FmoParamUpdate`'s re-activation arm never fires again for an entry that still
+    /// claims to be active.
+    #[test]
+    fn reset_fmo_list_clears_the_entries_the_cpp_clears() {
+        unsafe {
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+
+            // One active entry with a map, exactly as `FmoParamUpdate` leaves it.
+            (*pCtx).sFmoList[0].bActiveFlag = true;
+            (*pCtx).sFmoList[0].pMbAllocMap = vec![0u8; 16];
+            (*pCtx).sFmoList[0].iCountMbNum = 16;
+            (*pCtx).sFmoList[0].iSliceGroupCount = 1;
+            (*pCtx).sFmoList[0].iSliceGroupType = 0;
+            (*pCtx).iActiveFmoNum = 1;
+
+            assert_eq!(ResetFmoList(pCtx), 1, "returns the count it reset");
+            assert!(!(*pCtx).sFmoList[0].bActiveFlag, "the entry is deactivated");
+            assert!((*pCtx).sFmoList[0].pMbAllocMap.is_empty(), "its map is dropped");
+            assert_eq!((*pCtx).sFmoList[0].iCountMbNum, 0);
+            assert_eq!((*pCtx).sFmoList[0].iSliceGroupType, -1);
+            assert_eq!((*pCtx).iActiveFmoNum, 0);
+
+            // And the consequence that made it worth finding: a cleared entry can be
+            // re-activated, so the counter climbs again.
+            let mut sps = crate::decoder::parameter_sets::SSps::default();
+            sps.iMbWidth = 4;
+            sps.iMbHeight = 4;
+            let mut pps = crate::decoder::parameter_sets::SPps::default();
+            pps.uiNumSliceGroups = 1;
+            let ret = crate::decoder::fmo::FmoParamUpdate(
+                Some(&mut (*pCtx).sFmoList[0]),
+                Some(&sps),
+                Some(&pps),
+                &mut (*pCtx).iActiveFmoNum,
+            );
+            assert_eq!(ret, ERR_NONE);
+            assert_eq!((*pCtx).iActiveFmoNum, 1, "re-activation counts again");
         }
     }
 }
