@@ -47,6 +47,7 @@
 )]
 
 use std::ffi::c_void;
+use crate::safe::mb_grid::MbArray;
 
 // ============================================================================
 // Constants & Error Codes
@@ -273,191 +274,45 @@ pub fn WELS_MIN_POSITIVE(a: i8, b: i8) -> i8 {
     }
 }
 
-// ============================================================================
-// Memory & Block Manipulation Primitives
-// ============================================================================
-//
-// **Every wide access below is unaligned, and that is F35** (Phase 5 session J).
-// These two helpers take byte pointers and write 2 and 4 bytes at a time into
-// arrays of `i8` and `i16`. That was legal only because every one of those arrays
-// came from `WelsMallocz`, which returns 16-byte-aligned memory — an accident of
-// the allocator, not a property of the data. `pRefIndex` is `[i8; 16]` (align 1)
-// and `pMv`/`pMvd` are `[[i16; 2]; 16]` (align 2), so the moment 5.2 moves them
-// into the grid's `Vec`s the allocation's alignment becomes the element's and
-// every one of these becomes UB.
-//
-// `read_unaligned`/`write_unaligned` is the same load or store on both targets
-// this project builds; what it drops is the alignment *precondition*, which is
-// the only thing the aligned spelling was buying. The same rewrite fixed the 13
-// direct-mode sites that were already UB — those punned stack `[i16; 2]`s, where
-// no allocator was rounding the address up.
-
-#[inline(always)]
-pub unsafe fn SetRectBlock(
-    vp: *mut u8,
-    mut w: i32,
-    h: i32,
-    stride: i32,
-    val: u32,
-    size: i32,
-) {
-    let p = vp;
-    w *= size;
-    let v16 = if size == 4 {
-        val as u16
-    } else {
-        // C computes this in uint32_t and truncates; callers may pass a
-        // sign-extended int8_t, so the multiply has to wrap rather than panic.
-        val.wrapping_mul(0x0101) as u16
-    };
-    let v32 = if size == 4 {
-        val
-    } else {
-        val.wrapping_mul(0x01010101)
-    };
-
-    if w == 1 && h == 4 {
-        let v8 = val as u8;
-        *p.offset(0 * stride as isize) = v8;
-        *p.offset(1 * stride as isize) = v8;
-        *p.offset(2 * stride as isize) = v8;
-        *p.offset(3 * stride as isize) = v8;
-    } else if w == 2 && h == 2 {
-        (p.offset(0 * stride as isize) as *mut u16).write_unaligned(v16);
-        (p.offset(1 * stride as isize) as *mut u16).write_unaligned(v16);
-    } else if w == 2 && h == 4 {
-        (p.offset(0 * stride as isize) as *mut u16).write_unaligned(v16);
-        (p.offset(1 * stride as isize) as *mut u16).write_unaligned(v16);
-        (p.offset(2 * stride as isize) as *mut u16).write_unaligned(v16);
-        (p.offset(3 * stride as isize) as *mut u16).write_unaligned(v16);
-    } else if w == 4 && h == 2 {
-        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
-    } else if w == 4 && h == 4 {
-        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize) as *mut u32).write_unaligned(v32);
-    } else if w == 8 && h == 1 {
-        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-    } else if w == 8 && h == 2 {
-        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-    } else if w == 8 && h == 4 {
-        (p.offset(0 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-    } else if w == 16 && h == 2 {
-        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-    } else if w == 16 && h == 3 {
-        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-    } else if w == 16 && h == 4 {
-        (p.offset(0 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(0 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(1 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(2 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize + 0) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize + 4) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize + 8) as *mut u32).write_unaligned(v32);
-        (p.offset(3 * stride as isize + 12) as *mut u32).write_unaligned(v32);
-    }
-}
-
-#[inline(always)]
-pub unsafe fn CopyRectBlock4Cols(
-    vdst: *mut u8,
-    vsrc: *const u8,
-    stride_dst: i32,
-    stride_src: i32,
-    mut w: i32,
-    size: i32,
-) {
-    let dst = vdst;
-    let src = vsrc;
-    w *= size;
-    if w == 1 {
-        *dst.offset(stride_dst as isize * 0) = *src.offset(stride_src as isize * 0);
-        *dst.offset(stride_dst as isize * 1) = *src.offset(stride_src as isize * 1);
-        *dst.offset(stride_dst as isize * 2) = *src.offset(stride_src as isize * 2);
-        *dst.offset(stride_dst as isize * 3) = *src.offset(stride_src as isize * 3);
-    } else if w == 2 {
-        (dst.offset(stride_dst as isize * 0) as *mut u16)
-            .write_unaligned((src.offset(stride_src as isize * 0) as *const u16).read_unaligned());
-        (dst.offset(stride_dst as isize * 1) as *mut u16)
-            .write_unaligned((src.offset(stride_src as isize * 1) as *const u16).read_unaligned());
-        (dst.offset(stride_dst as isize * 2) as *mut u16)
-            .write_unaligned((src.offset(stride_src as isize * 2) as *const u16).read_unaligned());
-        (dst.offset(stride_dst as isize * 3) as *mut u16)
-            .write_unaligned((src.offset(stride_src as isize * 3) as *const u16).read_unaligned());
-    } else if w == 4 {
-        (dst.offset(stride_dst as isize * 0) as *mut u32)
-            .write_unaligned((src.offset(stride_src as isize * 0) as *const u32).read_unaligned());
-        (dst.offset(stride_dst as isize * 1) as *mut u32)
-            .write_unaligned((src.offset(stride_src as isize * 1) as *const u32).read_unaligned());
-        (dst.offset(stride_dst as isize * 2) as *mut u32)
-            .write_unaligned((src.offset(stride_src as isize * 2) as *const u32).read_unaligned());
-        (dst.offset(stride_dst as isize * 3) as *mut u32)
-            .write_unaligned((src.offset(stride_src as isize * 3) as *const u32).read_unaligned());
-    } else if w == 16 {
-        std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 0), dst.offset(stride_dst as isize * 0), 16);
-        std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 1), dst.offset(stride_dst as isize * 1), 16);
-        std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 2), dst.offset(stride_dst as isize * 2), 16);
-        std::ptr::copy_nonoverlapping(src.offset(stride_src as isize * 3), dst.offset(stride_dst as isize * 3), 16);
-    }
-}
+// **T5.X4: `SetRectBlock` and `CopyRectBlock4Cols` are deleted, not converted.**
+// T5.R5's note above says every one of their 207 uses became an assignment of the
+// value the C was moving — and it was right: the two definitions had **zero
+// callers anywhere in the crate** from that commit onwards. They stood here as
+// 82 raw-pointer casts (65 `*mut u32` among them) and a width dispatch that
+// nothing dispatched to. S18's straggler class, deleted where it was found. F35's
+// record is `phase5_findings.md`'s; the alignment precondition it named went with
+// the last use, not with this deletion.
 
 // ============================================================================
 // Macroblock Type Accessor
 // ============================================================================
 
+/// The macroblock-type array this layer reads, **whole** — the picture's when there
+/// is a picture, the layer's grid otherwise.
+///
+/// T5.X4: this handed back `mb_grid_ptr(.., 0)`, the array's base as a raw pointer,
+/// because every caller indexes it at *neighbour* addresses (left, top, top-left,
+/// top-right) and a narrowing slice would be UB at the first one (S28). Handing back
+/// the array itself says the same thing with no pointer written and no reach to get
+/// wrong: `MbArray::get` bounds-checks against the allocation, which is exactly the
+/// reach the raw base had. Shared, because all seven read sites read — the two that
+/// write go through [`SetMbType`] below, one expression each, as they already did.
 #[inline(always)]
-pub unsafe fn GetMbType(pCurDqLayer: &mut DqLayerState, pDec: PPicture) -> *mut u32 {
+pub unsafe fn GetMbType<'a>(pCurDqLayer: &'a DqLayerState, pDec: PPicture) -> &'a MbArray<u32> {
     if !pDec.is_null() {
-        // T5.P′3: the picture's array is an `MbArray` now, so this arm takes the same
-        // allocation-root bridge the layer's arm below has taken since T5.K2 — and
-        // for the same reason, spelled there: every caller indexes the base it is
-        // handed at *neighbour* addresses.
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0)
+        &(*pDec).pMbType
     } else {
-        // T5.K2: the grid's array, derived from the allocation root (S28). Every
-        // caller keeps this base and indexes it at *neighbour* addresses — left,
-        // top, top-left, top-right — so the legal reach is the whole array and a
-        // narrowing slice would be UB at the first neighbour.
-        crate::decoder::decoder_core::mb_grid_ptr(&mut (*pCurDqLayer).grid.mb_type, 0)
+        &pCurDqLayer.grid.mb_type
+    }
+}
+
+/// [`GetMbType`]'s write half — the same dual path, one macroblock.
+#[inline(always)]
+pub unsafe fn SetMbType(pCurDqLayer: &mut DqLayerState, pDec: PPicture, mb_xy: usize, val: u32) {
+    if !pDec.is_null() {
+        *(*pDec).pMbType.get_mut(mb_xy) = val;
+    } else {
+        *pCurDqLayer.grid.mb_type.get_mut(mb_xy) = val;
     }
 }
 
@@ -520,10 +375,10 @@ pub unsafe fn PredPSkipMvFromNeighbor(
     }
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
-    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbType.add(iLeftXy as usize) } else { 0 };
-    let iTopType = if iCurY != 0 && bTopAvail { *pMbType.add(iTopXy as usize) } else { 0 };
-    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.add(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.add(iRightTopXy as usize) } else { 0 };
+    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbType.get(iLeftXy as usize) } else { 0 };
+    let iTopType = if iCurY != 0 && bTopAvail { *pMbType.get(iTopXy as usize) } else { 0 };
+    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.get(iLeftTopXy as usize) } else { 0 };
+    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.get(iRightTopXy as usize) } else { 0 };
 
     let mut iMvA = [0i16; 2];
     let mut iMvB = [0i16; 2];
@@ -753,7 +608,7 @@ pub unsafe fn GetColocatedMb(
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
-    let curMbType = *pMbType.add(iMbXy);
+    let curMbType = *pMbType.get(iMbXy);
     let is8x8 = IS_Inter_8x8(curMbType);
     *mbType = curMbType;
 
@@ -879,7 +734,7 @@ pub unsafe fn PredMvBDirectSpatial(
 ) -> i32 {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
-    let curMbType = *pMbType.add(iMbXy);
+    let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
@@ -927,10 +782,10 @@ pub unsafe fn PredMvBDirectSpatial(
     }
 
     let pMbTypePtr = GetMbType(pCurDqLayer, pDec);
-    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.add(iLeftXy as usize) } else { 0 };
-    let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.add(iTopXy as usize) } else { 0 };
-    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.add(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbTypePtr.add(iRightTopXy as usize) } else { 0 };
+    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.get(iLeftXy as usize) } else { 0 };
+    let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.get(iTopXy as usize) } else { 0 };
+    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.get(iLeftTopXy as usize) } else { 0 };
+    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbTypePtr.get(iRightTopXy as usize) } else { 0 };
 
     let mut iLeftRef = [0i8; 2];
     let mut iTopRef = [0i8; 2];
@@ -1038,7 +893,7 @@ pub unsafe fn PredMvBDirectSpatial(
         mbType &= !MB_TYPE_L0;
         *subMbType &= !MB_TYPE_L0;
     }
-    *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
+    SetMbType(pCurDqLayer, pDec, iMbXy, mbType);
 
     let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
     let colocPic = pRefs.get(ref_id(pCtx, LIST_1, 0));
@@ -1095,8 +950,8 @@ pub unsafe fn PredMvBDirectSpatial(
                     pPartW[i as usize],
                     *subMbType,
                     bIsLongRef,
-                    iMvp.as_mut_ptr() as *mut [i16; 2],
-                    ref_idx.as_mut_ptr(),
+                    iMvp,
+                    ref_idx,
                     None,
                     None,
                 );
@@ -1120,7 +975,7 @@ pub unsafe fn PredBDirectTemporal(
     let mut ret = ERR_NONE;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, pDec);
-    let curMbType = *pMbType.add(iMbXy);
+    let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
@@ -1130,7 +985,7 @@ pub unsafe fn PredBDirectTemporal(
         return ret;
     }
 
-    *GetMbType(pCurDqLayer, pDec).add(iMbXy) = mbType;
+    SetMbType(pCurDqLayer, pDec, iMbXy, mbType);
     // T5.W6: the two `&mut` bindings that stood here were held across sixteen calls
     // that take the layer, and **both of their uses are reads** — a ref count copied
     // out on the next line, and one `iMvScale` entry read at `:1160`. As raw pointers
@@ -1155,22 +1010,27 @@ pub unsafe fn PredBDirectTemporal(
             UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
-            let mut mv = (*pCurDqLayer).iColocMv[LIST_0][0].as_mut_ptr();
+            // T5.X4: the selection is which *list*, and the value read out of it is
+            // one `[i16; 2]`. It stood here as a `*mut i16` re-pointed in the `else`
+            // arm; the copy is taken after the selection instead, which is the same
+            // two loads and no pointer.
             let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][0];
-            if colocRefIndexL0 >= 0 {
+            let colocList = if colocRefIndexL0 >= 0 {
                 ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
+                LIST_0
             } else {
-                mv = (*pCurDqLayer).iColocMv[LIST_1][0].as_mut_ptr();
-            }
+                LIST_1
+            };
+            let mv = (*pCurDqLayer).iColocMv[colocList][0];
             UpdateP16x16RefIdx(pCurDqLayer, pDec, LIST_0 as i32, ref_idx[LIST_0]);
 
             let scale = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
                 [ref_idx[LIST_0] as usize] as i32;
-            iMvp[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
-            iMvp[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
+            iMvp[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
+            iMvp[LIST_0][1] = ((scale * (mv[1] as i32) + 128) >> 8) as i16;
             UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_0 as i32, &iMvp[LIST_0]);
-            iMvp[LIST_1][0] = iMvp[LIST_0][0] - *mv.add(0);
-            iMvp[LIST_1][1] = iMvp[LIST_0][1] - *mv.add(1);
+            iMvp[LIST_1][0] = iMvp[LIST_0][0] - mv[0];
+            iMvp[LIST_1][1] = iMvp[LIST_0][1] - mv[1];
             UpdateP16x16MotionOnly(pCurDqLayer, pDec, LIST_1 as i32, &iMvp[LIST_1]);
         }
         UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, LIST_0 as i32);
@@ -1183,7 +1043,7 @@ pub unsafe fn PredBDirectTemporal(
                 let iIdx8 = (i << 2) as i16;
                 let iScan4Idx = g_kuiScan4[iIdx8 as usize] as usize;
                 (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
-                let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
+                let mut colocList = LIST_0;
 
                 ref_idx[LIST_1] = 0;
                 UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
@@ -1197,7 +1057,7 @@ pub unsafe fn PredBDirectTemporal(
                     if colocRefIndexL0 >= 0 {
                         ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
                     } else {
-                        mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
+                        colocList = LIST_1;
                     }
                     UpdateP8x8RefIdxCabac(pCurDqLayer, pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                 }
@@ -1217,8 +1077,8 @@ pub unsafe fn PredBDirectTemporal(
                     pSubPartCount[i as usize],
                     pPartW[i as usize],
                     *subMbType,
-                    ref_idx.as_mut_ptr(),
-                    mvColoc as *mut [i16; 2],
+                    ref_idx,
+                    colocList,
                     None,
                     None,
                 );
@@ -1575,8 +1435,10 @@ pub unsafe fn FillSpatialDirect8x8Mv(
     iPartW: i8,
     subMbType: SubMbType,
     bIsLongRef: bool,
-    pMvDirect: *mut [i16; 2],
-    iRef: *mut i8,
+    // T5.X4: two `[i16; 2]` and two `i8`, one per list — indexed at `LIST_0`/`LIST_1`
+    // and never written, which is what the two raw out-params were carrying.
+    pMvDirect: &[[i16; 2]; 2],
+    iRef: &[i8; 2],
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
@@ -1590,7 +1452,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
 
         let mut pMV = [[0i16; 2]; 2];
         if IS_SUB_8x8(subMbType) {
-            pMV[0] = *pMvDirect.add(LIST_0);
+            pMV[0] = pMvDirect[LIST_0];
             pMV[1] = pMV[0];
             if !pDec.is_null() {
                 let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
@@ -1621,7 +1483,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 *mvd_cache_l0.add(iCacheIdx + 6 + 1) = [0, 0];
             }
 
-            pMV[0] = *pMvDirect.add(LIST_1);
+            pMV[0] = pMvDirect[LIST_1];
             pMV[1] = pMV[0];
             if !pDec.is_null() {
                 let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
@@ -1652,7 +1514,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 *mvd_cache_l1.add(iCacheIdx + 6 + 1) = [0, 0];
             }
         } else {
-            pMV[0] = *pMvDirect.add(LIST_0);
+            pMV[0] = pMvDirect[LIST_0];
             if !pDec.is_null() {
                 let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                 *dec_mv_l0.add(iScan4Idx) = pMV[0];
@@ -1670,7 +1532,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                 *mvd_cache_l0.add(iCacheIdx) = [0, 0];
             }
 
-            pMV[0] = *pMvDirect.add(LIST_1);
+            pMV[0] = pMvDirect[LIST_1];
             if !pDec.is_null() {
                 let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                 *dec_mv_l1.add(iScan4Idx) = pMV[0];
@@ -1689,21 +1551,23 @@ pub unsafe fn FillSpatialDirect8x8Mv(
             }
         }
 
-        if *pMvDirect.add(LIST_0) != [0, 0] || *pMvDirect.add(LIST_1) != [0, 0] {
+        if pMvDirect[LIST_0] != [0, 0] || pMvDirect[LIST_1] != [0, 0] {
             let uiColZeroFlag = (0 == (*pCurDqLayer).iColocIntra[iColocIdx]) && !bIsLongRef &&
                 ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] == 0 ||
                  ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] < 0 && (*pCurDqLayer).iColocRefIndex[LIST_1][iColocIdx] == 0));
 
-            let mvColoc = if 0 == (*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] {
-                (*pCurDqLayer).iColocMv[LIST_0].as_ptr()
+            // T5.X4: the same list selection as `FillTemporalDirect8x8Mv`'s, spelled
+            // as the index it always was rather than as a pointer into the field.
+            let colocList = if 0 == (*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] {
+                LIST_0
             } else {
-                (*pCurDqLayer).iColocMv[LIST_1].as_ptr()
+                LIST_1
             };
-            let mv = (*mvColoc.add(iColocIdx)).as_ptr();
+            let mv = (*pCurDqLayer).iColocMv[colocList][iColocIdx];
 
             if IS_SUB_8x8(subMbType) {
-                if uiColZeroFlag && ((*mv.add(0) + 1) as u32 <= 2 && (*mv.add(1) + 1) as u32 <= 2) {
-                    if *iRef.add(LIST_0) == 0 {
+                if uiColZeroFlag && ((mv[0] + 1) as u32 <= 2 && (mv[1] + 1) as u32 <= 2) {
+                    if iRef[LIST_0] == 0 {
                         if !pDec.is_null() {
                             let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             *dec_mv_l0.add(iScan4Idx) = [0, 0];
@@ -1734,7 +1598,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                         }
                     }
 
-                    if *iRef.add(LIST_1) == 0 {
+                    if iRef[LIST_1] == 0 {
                         if !pDec.is_null() {
                             let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             *dec_mv_l1.add(iScan4Idx) = [0, 0];
@@ -1766,8 +1630,8 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                     }
                 }
             } else {
-                if uiColZeroFlag && ((*mv.add(0) + 1) as u32 <= 2 && (*mv.add(1) + 1) as u32 <= 2) {
-                    if *iRef.add(LIST_0) == 0 {
+                if uiColZeroFlag && ((mv[0] + 1) as u32 <= 2 && (mv[1] + 1) as u32 <= 2) {
+                    if iRef[LIST_0] == 0 {
                         if !pDec.is_null() {
                             let dec_mv_l0 = (*pDec).pMv[LIST_0].get_mut(iMbXy).as_mut_ptr();
                             *dec_mv_l0.add(iScan4Idx) = [0, 0];
@@ -1785,7 +1649,7 @@ pub unsafe fn FillSpatialDirect8x8Mv(
                             *mvd_cache_l0.add(iCacheIdx) = [0, 0];
                         }
                     }
-                    if *iRef.add(LIST_1) == 0 {
+                    if iRef[LIST_1] == 0 {
                         if !pDec.is_null() {
                             let dec_mv_l1 = (*pDec).pMv[LIST_1].get_mut(iMbXy).as_mut_ptr();
                             *dec_mv_l1.add(iScan4Idx) = [0, 0];
@@ -1817,8 +1681,12 @@ pub unsafe fn FillTemporalDirect8x8Mv(
     iPartCount: i8,
     iPartW: i8,
     subMbType: SubMbType,
-    iRef: *mut i8,
-    mvColoc: *mut [i16; 2],
+    iRef: &[i8; 2],
+    // T5.X4: `mvColoc` was `(*pCurDqLayer).iColocMv[l].as_mut_ptr()` at every one of
+    // its four call sites — a raw alias of a field this function already reaches
+    // through `pCurDqLayer`, whose only variable was **which list**. So the list is
+    // what crosses now, and the array is read where it lives.
+    colocList: usize,
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
@@ -1832,15 +1700,15 @@ pub unsafe fn FillTemporalDirect8x8Mv(
         let iColocIdx = g_kuiScan4[iPartIdx] as usize;
         let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
 
-        let mv = (*mvColoc.add(iColocIdx)).as_ptr();
+        let mv = (*pCurDqLayer).iColocMv[colocList][iColocIdx];
 
         let mut pMV = [[0i16; 2]; 2];
         if IS_SUB_8x8(subMbType) {
             if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
-                let ref0 = *iRef.add(LIST_0) as usize;
+                let ref0 = iRef[LIST_0] as usize;
                 let scale = pSlice.iMvScale[LIST_0][ref0] as i32;
-                pMvDirect[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
-                pMvDirect[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
+                pMvDirect[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
+                pMvDirect[LIST_0][1] = ((scale * (mv[1] as i32) + 128) >> 8) as i16;
             }
             pMV[0] = pMvDirect[LIST_0];
             pMV[1] = pMV[0];
@@ -1874,8 +1742,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             }
 
             if (*pCurDqLayer).iColocIntra[g_kuiScan4[iIdx8 as usize] as usize] == 0 {
-                pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - *mv.add(0);
-                pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - *mv.add(1);
+                pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - mv[0];
+                pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - mv[1];
             }
             pMV[0] = pMvDirect[LIST_1];
             pMV[1] = pMV[0];
@@ -1909,10 +1777,10 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             }
         } else {
             if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
-                let ref0 = *iRef.add(LIST_0) as usize;
+                let ref0 = iRef[LIST_0] as usize;
                 let scale = pSlice.iMvScale[LIST_0][ref0] as i32;
-                pMvDirect[LIST_0][0] = ((scale * (*mv.add(0) as i32) + 128) >> 8) as i16;
-                pMvDirect[LIST_0][1] = ((scale * (*mv.add(1) as i32) + 128) >> 8) as i16;
+                pMvDirect[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
+                pMvDirect[LIST_0][1] = ((scale * (mv[1] as i32) + 128) >> 8) as i16;
             }
             pMV[0] = pMvDirect[LIST_0];
             if !pDec.is_null() {
@@ -1933,8 +1801,8 @@ pub unsafe fn FillTemporalDirect8x8Mv(
             }
 
             if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
-                pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - *mv.add(0);
-                pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - *mv.add(1);
+                pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - mv[0];
+                pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - mv[1];
             }
             pMV[0] = pMvDirect[LIST_1];
             if !pDec.is_null() {
