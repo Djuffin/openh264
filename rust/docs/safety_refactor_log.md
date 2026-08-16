@@ -9603,7 +9603,7 @@ leaves), `f215cf98` + `2467d0ee` (T5.W5/W5b `deblocking`'s filter), `c8e2f74c`,
 `SWelsNeighAvail`), `7a5a9a0e` (T5.W11 `SRefPic`), `a37e784f` (T5.W12 the MV pair),
 `b56e66bd` (T5.W13 the intra-pred array), `e6579e3c` (T5.W14 the nzc record).
 
-**Decoder `raw_ptr` 974 → 767 (−21%)**; files carrying `#![deny(unsafe_code)]` **6 → 9**,
+**Decoder `raw_ptr` 974 → 765 (−21%)**; files carrying `#![deny(unsafe_code)]` **6 → 9**,
 eight of them allowing nothing. `SHIM(` unmoved at 52 — its 42 are family 13's and wait
 on step 3, exactly as W7's row says. Corpus **2690/17 and 2707/0**, conformance 60/60,
 sweeps 341/341 both profiles, at every one of the fifteen commits.
