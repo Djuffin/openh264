@@ -1728,7 +1728,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             pMv[0] += pMvd[0];
             pMv[1] += pMvd[1];
 
-            UpdateP16x16MotionInfo(pCurDqLayer, pDec, LIST_0, iRef[0], pMv.as_ptr());
+            UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, LIST_0, iRef[0], pMv.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), LIST_0 as i8);
         }
         MB_TYPE_16x8 => {
@@ -1777,7 +1777,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP16x8MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP16x8MotionInfo(&mut *pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
@@ -1827,7 +1827,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP8x16MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
+                UpdateP8x16MotionInfo(&mut *pCurDqLayer, pDec, pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], pMv.as_ptr());
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), LIST_0 as i8);
             }
         }
@@ -2048,7 +2048,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                pCtx, pCurDqLayer,
+                pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -2061,7 +2061,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
         } else {
             // temporal direct 16x16 mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                pCtx, pCurDqLayer,
+                pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
                 &mut pMvDirect,
@@ -2110,7 +2110,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 pMvd[0] = 0; pMvd[1] = 0;
             }
             let mv2: [i16; 2] = [pMv[0], pMv[1]];
-            UpdateP16x16MotionInfo(pCurDqLayer, pDec, listIdx, iRef[listIdx], mv2.as_ptr());
+            UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, listIdx, iRef[listIdx], mv2.as_ptr());
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd.as_ptr(), listIdx as i8);
         }
     } else if IS_INTER_16x8(mbType) {
@@ -2162,7 +2162,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP16x8MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP16x8MotionInfo(&mut *pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
@@ -2215,7 +2215,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP8x16MotionInfo(pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
+                UpdateP8x16MotionInfo(&mut *pCurDqLayer, pDec, pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, mv2.as_ptr());
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd.as_ptr(), listIdx as i8);
             }
         }
@@ -2268,7 +2268,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 if !has_direct_called {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                         let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
-                            pCtx, pCurDqLayer,
+                            pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -2281,7 +2281,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     } else {
                         // temporal direct mode
                         let ret = crate::decoder::mv_pred::PredBDirectTemporal(
-                            pCtx, pCurDqLayer,
+                            pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
                             &mut pMvDirect,
@@ -2317,7 +2317,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
             if IS_DIRECT(pSubMbType[i]) {
                 if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
                     FillSpatialDirect8x8Mv(
-                        pCurDqLayer,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         pSubPartCount[i],
@@ -2348,12 +2348,12 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                             mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
                         }
                     }
-                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, LIST_0, iRef[LIST_0]);
-                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, LIST_1, iRef[LIST_1]);
+                    Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, LIST_0, iRef[LIST_0]);
+                    Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, LIST_1, iRef[LIST_1]);
                     UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_0 as i32, iRef[LIST_0]);
                     UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_1 as i32, iRef[LIST_1]);
                     FillTemporalDirect8x8Mv(
-                        pCurDqLayer,
+                        &mut *pCurDqLayer,
                         pDec,
                         iIdx8,
                         pSubPartCount[i],
@@ -2377,7 +2377,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if pSliceHeader.iDirectSpatialMvPredFlag != 0 {
-                        Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, listIdx, iRef[listIdx]);
+                        Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, listIdx, iRef[listIdx]);
                         ref_idx_list[listIdx][i] = iRef[listIdx];
                     }
                     UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
@@ -2401,7 +2401,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         }
                         check_ref_idx!(listIdx, iref);
                     }
-                    Update8x8RefIdx(pCurDqLayer, pDec, iIdx8, listIdx, iref);
+                    Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, listIdx, iref);
                     ref_idx_list[listIdx][i] = iref;
                 }
             }
