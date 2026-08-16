@@ -311,6 +311,33 @@ pub struct SVlcTable {
     pub kpTotalZerosTable: [[*const [u8; 2]; 15]; 2],
 }
 
+// T5.W4 (W6, family 8, partial): the CAVLC leaf parameters became borrows.
+//
+//   * `pBitsCache` is `&mut SReadBitsCache` at nine signatures. The type never
+//     leaves this module — it is a local of `WelsResidualBlockCavlc` and
+//     `…8x8`, built and passed down — and every call site already spelled the
+//     argument `&mut sReadBitsCache`, so the flip changed no call site at all.
+//   * `pVlcTable` is `&SVlcTable` at nine. **Shared, because nothing writes one
+//     outside `InitVlcTable` below** — grep-verified over the crate — so the three
+//     `decode_slice.rs` derivations off `(*pCtx).pVlcTable` are shared borrows now.
+//   * `kpZigzagTable` is `&[u8]`, and its span is exact rather than open. The
+//     callers pass `&g_kuiZigzagScan[max_idx..]` where they passed
+//     `.as_ptr().add(max_idx)`, and the length is provably enough: the callee
+//     indexes `0..iMaxNumCoeff` with `iMaxNumCoeff = iScanIdxEnd - max_idx + 1`,
+//     and `uiScanIdxEnd` is a **4-bit** slice-header field (`decoder_core.rs:2692`)
+//     that the port then rejects unless it reads exactly 15 (`:2696`), every other
+//     path assigning the literal 15. So `max_idx + iMaxNumCoeff - 1 <= 15 < 16`,
+//     the bound the raw form argued in prose is now the type's, and no input can
+//     reach the panic. S9's exact-span trim, at table scale.
+//
+// **What is left, and why it is not a signature problem**: nine of these functions
+// are still `unsafe fn`, and every one of them is unsafe for `SVlcTable`'s own
+// fields — `[[*const [u8; 2]; 8]; 4]` and friends, raw because the sub-tables have
+// *varying lengths* and the C indexes them by a computed VLC bucket. Converting
+// those is a table-representation change, not a parameter flip, and it is the whole
+// of what stands between this module and the lint. Named here so the next session
+// costs it rather than rediscovering it.
+
 /// Matches `InitVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`.
 pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
     use crate::decoder::vlc_tables::*;
@@ -393,7 +420,7 @@ pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountSca
 // and `ST64` had no use in this file at all.
 
 #[inline(always)]
-pub unsafe fn POP_BUFFER(pBitsCache: *mut SReadBitsCache, iCount: u32) {
+pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache, iCount: u32) {
     unsafe {
         (*pBitsCache).uiCache32Bit = (*pBitsCache).uiCache32Bit.wrapping_shl(iCount);
         (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_sub(iCount as u8);
@@ -401,7 +428,7 @@ pub unsafe fn POP_BUFFER(pBitsCache: *mut SReadBitsCache, iCount: u32) {
 }
 
 #[inline(always)]
-pub unsafe fn SHIFT_BUFFER(pBitsCache: *mut SReadBitsCache) {
+pub fn SHIFT_BUFFER(pBitsCache: &mut SReadBitsCache) {
     unsafe {
         // Matches the C++ macro: pBuf is advanced FIRST, so the two bytes
         // shifted in are the original pBuf[4] and pBuf[5].
@@ -2346,8 +2373,8 @@ pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: *mut SWels
 pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
     uiTotalCoeff: &mut u8,
     uiTrailingOnes: &mut u8,
-    pBitsCache: *mut SReadBitsCache,
-    pVlcTable: *mut SVlcTable,
+    pBitsCache: &mut SReadBitsCache,
+    pVlcTable: &SVlcTable,
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
@@ -2408,17 +2435,17 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
 pub unsafe fn ParseCoeffToken(
     uiTotalCoeff: &mut u8,
     uiTrailingOnes: &mut u8,
-    pBitsCache: *mut SReadBitsCache,
-    pVlcTable: *mut SVlcTable,
+    pBitsCache: &mut SReadBitsCache,
+    pVlcTable: &SVlcTable,
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
     CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC)
 }
 
-pub unsafe fn CavlcGetLevelVal(
+pub fn CavlcGetLevelVal(
     iLevel: &mut [i32; 16],
-    pBitsCache: *mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
     uiTrailingOnes: u8,
 ) -> i32 {
@@ -2487,9 +2514,9 @@ pub unsafe fn CavlcGetLevelVal(
 
 pub unsafe fn CavlcGetTotalZeros(
     iZerosLeft: &mut i32,
-    pBitsCache: *mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     bChromaDc: bool,
 ) -> i32 {
     let mut iUsedBits: i32 = 0;
@@ -2517,9 +2544,9 @@ pub unsafe fn CavlcGetTotalZeros(
 
 pub unsafe fn ParseTotalZeros(
     iZerosLeft: &mut i32,
-    pBitsCache: *mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     bChromaDc: bool,
 ) -> i32 {
     CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc)
@@ -2527,9 +2554,9 @@ pub unsafe fn ParseTotalZeros(
 
 pub unsafe fn CavlcGetRunBefore(
     iRun: &mut [i32; 16],
-    pBitsCache: *mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     mut iZerosLeft: i32,
 ) -> i32 {
     let mut iUsedBits: i32 = 0;
@@ -2583,22 +2610,22 @@ pub unsafe fn CavlcGetRunBefore(
 
 pub unsafe fn ParseRunBefore(
     iRun: &mut [i32; 16],
-    pBitsCache: *mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     iZerosLeft: i32,
 ) -> i32 {
     CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft)
 }
 
 pub unsafe fn WelsResidualBlockCavlc(
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
-    kpZigzagTable: *const u8,
+    kpZigzagTable: &[u8],
     mut iResidualProperty: i32,
     pTCoeff: *mut i16,
     uiQp: u8,
@@ -2686,32 +2713,32 @@ pub unsafe fn WelsResidualBlockCavlc(
     if iResidualProperty == CHROMA_DC {
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            let j = kpZigzagTable[iCoeffNum as usize] as usize;
             *pTCoeff.add(j) = iLevel[i] as i16;
         }
         WelsChromaDcIdct(pTCoeff);
         if pCtx.is_null() || !(*pCtx).bUseScalingList {
             for j in 0..4 {
-                let idx = *kpZigzagTable.add(j) as usize;
+                let idx = kpZigzagTable[j] as usize;
                 *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * *kpDequantCoeff as i32) >> 1) as i16;
             }
         } else {
             for j in 0..4 {
-                let idx = *kpZigzagTable.add(j) as usize;
+                let idx = kpZigzagTable[j] as usize;
                 *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (*kpDequantCoeff as i64)) >> 5) as i16;
             }
         }
     } else if iResidualProperty == I16_LUMA_DC {
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            let j = kpZigzagTable[iCoeffNum as usize] as usize;
             *pTCoeff.add(j) = iLevel[i] as i16;
         }
         WelsLumaDcDequantIdct(pTCoeff, uiQp, pCtx);
     } else {
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
-            let j = *kpZigzagTable.add(iCoeffNum as usize) as usize;
+            let j = kpZigzagTable[iCoeffNum as usize] as usize;
             if pCtx.is_null() || !(*pCtx).bUseScalingList {
                 *pTCoeff.add(j) = (iLevel[i] * (*kpDequantCoeff.add(j & 0x07)) as i32) as i16;
             } else {
@@ -2724,13 +2751,13 @@ pub unsafe fn WelsResidualBlockCavlc(
 
 /// Matches `WelsResidualBlockCavlc8x8` in `parse_mb_syn_cavlc.cpp`.
 pub unsafe fn WelsResidualBlockCavlc8x8(
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
-    kpZigzagTable: *const u8,
+    kpZigzagTable: &[u8],
     mut iResidualProperty: i32,
     pTCoeff: *mut i16,
     iIdx4x4: i32,
@@ -2815,7 +2842,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     for i in (0..(uiTotalCoeff as usize)).rev() {
         iCoeffNum += iRun[i] + 1;
         let j = (iCoeffNum << 2) + iIdx4x4;
-        let j = *kpZigzagTable.add(j as usize) as usize;
+        let j = kpZigzagTable[j as usize] as usize;
         let coeff = if uiQp >= 36 {
             (iLevel[i] * *kpDequantCoeff.add(j) as i32) * (1 << (uiQp as i32 / 6 - 6))
         } else {
@@ -2828,13 +2855,13 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
 }
 
 pub unsafe fn WelsParseMbCavlcResidual(
-    pVlcTable: *mut SVlcTable,
+    pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
     pBs: &mut BsCursor,
     iIndex: i32,
     iMaxNumCoeff: i32,
-    kpZigzagTable: *const u8,
+    kpZigzagTable: &[u8],
     iResidualProperty: i32,
     pTCoeff: *mut i16,
     uiQp: u8,
@@ -2950,7 +2977,7 @@ mod tests {
                 &mut bs,
                 0,
                 16,
-                zigzag.as_ptr(),
+                &zigzag,
                 0,
                 coeffs.as_mut_ptr(),
                 26,
