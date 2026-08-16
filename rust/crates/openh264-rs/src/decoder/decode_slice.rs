@@ -883,7 +883,7 @@ impl IntraPredConstraint {
                     pNeighAvail,
                     pNonZeroCount,
                     pIntraPredMode,
-                    pCurDqLayer,
+                    &*pCurDqLayer,
                 )
             }
             IntraPredConstraint::Constrain1 => {
@@ -891,7 +891,7 @@ impl IntraPredConstraint {
                     pNeighAvail,
                     pNonZeroCount,
                     pIntraPredMode,
-                    pCurDqLayer,
+                    &*pCurDqLayer,
                 )
             }
         }
@@ -2665,7 +2665,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq, pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
 
     // T5.I3: two windows for the macroblock, opened after the neighbour
     // scan — `GetNeighborAvailMbType` reads `cbp` at the left and top
@@ -2757,7 +2757,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
             &mut sNeighAvail,
             &mut pNonZeroCount,
-            dq,
+            Some(&*dq),
         );
         let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
         if ret != ERR_NONE {
@@ -3141,7 +3141,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq, pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
 
     // T5.I3: two windows for the macroblock, opened after the neighbour
     // scan — `GetNeighborAvailMbType` reads `cbp` at the left and top
@@ -3165,12 +3165,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             &mut pNonZeroCount,
             &mut iMotionVector,
             &mut iRefIndex,
-            dq,
+            &*dq,
             pDec,
         );
 
         let ret = crate::decoder::parse_mb_syn_cavlc::ParseInterInfo(
-            pCtx, dq,
+            pCtx, &mut *dq,
             pDec,
             pRefs,
             &mut iMotionVector,
@@ -3256,7 +3256,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
                 &mut pNonZeroCount,
-                dq,
+                Some(&*dq),
             );
             let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
@@ -3501,7 +3501,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, dq, pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
 
     // T5.I3: two windows for the macroblock, opened after the neighbour
     // scan — `GetNeighborAvailMbType` reads `cbp` at the left and top
@@ -3525,12 +3525,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             &mut pNonZeroCount,
             &mut iMotionVector,
             &mut iRefIndex,
-            dq,
+            &*dq,
             pDec,
         );
 
         let ret = crate::decoder::parse_mb_syn_cavlc::ParseInterBInfo(
-            pCtx, dq,
+            pCtx, &mut *dq,
             pDec,
             pRefs,
             &mut iMotionVector,
@@ -3616,7 +3616,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
                 &mut sNeighAvail,
                 &mut pNonZeroCount,
-                dq,
+                Some(&*dq),
             );
             let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
@@ -4315,7 +4315,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
         crate::decoder::parse_mb_syn_cavlc::WelsFillCacheNonZeroCount(
             pNeighAvail,
             pNonZeroCount,
-            dq,
+            Some(&*dq),
         );
         ParseIntra16x16Mode(pCtx, pDec, pNeighAvail, buf, pBsAux, dq)
     }
@@ -4706,7 +4706,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
 
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
-        dq,
+        Some(&*dq),
         pDec,
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseMBTypeISliceCabac(
@@ -4843,7 +4843,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
-            dq,
+            &*dq,
             pDec,
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterPMotionInfoCabac(
@@ -4958,7 +4958,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
 
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
-        dq,
+        Some(&*dq),
         pDec,
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
@@ -5057,13 +5057,13 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             &mut pMotionVector,
             &mut pMvdCache,
             &mut pRefIndex,
-            dq,
+            &*dq,
             pDec,
         );
         crate::decoder::parse_mb_syn_cavlc::WelsFillDirectCacheCabac(
             pNeighAvail,
             &mut pDirect,
-            dq,
+            &*dq,
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterBMotionInfoCabac(
             pCtx, dq,
@@ -5180,7 +5180,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
-        dq,
+        Some(&*dq),
         pDec,
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
