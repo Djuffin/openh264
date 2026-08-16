@@ -2335,13 +2335,13 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pPartW[i],
                         directSubMbType,
                         bIsLongRef,
-                        pMvDirect.as_mut_ptr(),
-                        iRef.as_mut_ptr(),
+                        &pMvDirect,
+                        &iRef,
                         Some(&mut *pMotionVector),
                         Some(&mut *pMvdCache),
                     );
                 } else {
-                    let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
+                    let mut colocList = LIST_0;
                     iRef[LIST_1] = 0;
                     iRef[LIST_0] = 0;
                     let uiColoc4Idx = g_kuiScan4[iIdx8 as usize] as usize;
@@ -2356,7 +2356,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                                 ref0Count,
                             );
                         } else {
-                            mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
+                            colocList = LIST_1;
                         }
                     }
                     Update8x8RefIdx(&mut *pCurDqLayer, pDec, iIdx8, LIST_0, iRef[LIST_0]);
@@ -2370,8 +2370,8 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pSubPartCount[i],
                         pPartW[i],
                         directSubMbType,
-                        iRef.as_mut_ptr(),
-                        mvColoc,
+                        &iRef,
+                        colocList,
                         Some(&mut *pMotionVector),
                         Some(&mut *pMvdCache),
                     );

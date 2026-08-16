@@ -1820,14 +1820,14 @@ pub unsafe fn ParseInterBInfo(
                         pPartW[i],
                         directSubMbType,
                         bIsLongRef,
-                        pMvDirect.as_mut_ptr(),
-                        iRef.as_mut_ptr(),
+                        &pMvDirect,
+                        &iRef,
                         Some(iMvArray),
                         // CAVLC has no mvd cache — the C++ passes NULL here too.
                         None,
                     );
                 } else {
-                    let mut mvColoc = (*pCurDqLayer).iColocMv[LIST_0].as_mut_ptr();
+                    let mut colocList = LIST_0;
                     iRef[LIST_1] = 0;
                     iRef[LIST_0] = 0;
                     let uiColoc4Idx = g_kuiScan4[iIdx8 as usize] as usize;
@@ -1842,7 +1842,7 @@ pub unsafe fn ParseInterBInfo(
                                 ref0Count,
                             );
                         } else {
-                            mvColoc = (*pCurDqLayer).iColocMv[LIST_1].as_mut_ptr();
+                            colocList = LIST_1;
                         }
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
@@ -1866,8 +1866,8 @@ pub unsafe fn ParseInterBInfo(
                         pSubPartCount[i],
                         pPartW[i],
                         directSubMbType,
-                        iRef.as_mut_ptr(),
-                        mvColoc,
+                        &iRef,
+                        colocList,
                         Some(iMvArray),
                         // CAVLC has no mvd cache — the C++ passes NULL here too.
                         None,
