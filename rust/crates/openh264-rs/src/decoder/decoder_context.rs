@@ -14,6 +14,7 @@
 
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::bit_stream::BsReader;
+use crate::safe::plane::PlaneCursorMut;
 use crate::decoder::fmo::{PFmo, SFmo};
 use crate::decoder::slice::EWelsSliceType;
 use std::ffi::{c_char, c_void};
@@ -200,12 +201,21 @@ impl Default for SPpsBsInfo {
 // Function Pointer Dispatch Types
 // ---------------------------------------------------------------------------
 
-pub type PGetIntraPredFunc = Option<unsafe extern "C" fn(pPred: *mut u8, kiLumaStride: i32)>;
-pub type PIdctResAddPredFunc = Option<unsafe extern "C" fn(pPred: *mut u8, kiStride: i32, pRs: *mut i16)>;
+// **T5.X8: the four reconstruction dispatch types carry a plane cursor, not a
+// pointer and a stride.** Every slot in all four tables was a Phase-2 strangler
+// wrapper whose whole body rebuilt `(len, center)` from the stride and called a
+// safe kernel — 46 of them, and 42 of the phase's 51 retiring bridges. The kernels
+// *are* the table now: the wrappers are deleted, the tables name them directly,
+// and the one `from_raw_parts_mut` each performed happens once at the
+// reconstruction bracket, where the picture is (`decode_slice.rs`'s `Rec*` family),
+// because a plane's slice is what the picture owns.
+pub type PGetIntraPredFunc = Option<fn(pred: &mut PlaneCursorMut<'_>)>;
+pub type PIdctResAddPredFunc = Option<fn(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16])>;
+pub type PIdctResAddPred8x8Func = Option<fn(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64])>;
 pub type PIdctFourResAddPredFunc =
-    Option<unsafe extern "C" fn(pPred: *mut u8, iStride: i32, pRs: *mut i16, pNzc: *const i8)>;
+    Option<fn(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64], nzc: &[i8; 6])>;
 pub type PGetIntraPred8x8Func =
-    Option<unsafe extern "C" fn(pPred: *mut u8, kiLumaStride: i32, bTLAvail: bool, bTRAvail: bool)>;
+    Option<fn(pred: &mut PlaneCursorMut<'_>, bTLAvail: bool, bTRAvail: bool)>;
 pub type PCopyFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32)>;
 
 pub type PDeblockingFilterMbFunc =
@@ -1114,7 +1124,10 @@ pub struct SWelsDecoderContext {
     /// the same reason: `sFmoList` is indexed by PPS id and nothing else.
     pub fmo_id: Option<i32>,
     pub iActiveFmoNum: i32,
-    pub iDecBlockOffsetArray: [i32; 24],
+    // T5.X8: `iDecBlockOffsetArray: [i32; 24]` stood here — the 4x4 blocks'
+    // byte offsets inside a macroblock, rebuilt per access unit because they
+    // depended on the picture's strides. Sample coordinates carry the same fact
+    // with no stride in them: `decode_slice.rs`'s `blk4_xy`.
     /// The pool slot being decoded into — a [`PicId`] since T5.P2, reached with
     /// [`dec_pic`].
     ///
@@ -1241,7 +1254,7 @@ pub struct SWelsDecoderContext {
     pub pIdctFourResAddPredFunc: PIdctFourResAddPredFunc,
     pub sMcFunc: crate::decoder::error_concealment::SMcFunc,
     pub pGetI8x8LumaPredFunc: [PGetIntraPred8x8Func; 14],
-    pub pIdctResAddPredFunc8x8: PIdctResAddPredFunc,
+    pub pIdctResAddPredFunc8x8: PIdctResAddPred8x8Func,
     pub sCopyFunc: SCopyFunc,
     pub sDeblockingFunc: SDeblockingFunc,
     // T4b.3b: `sExpandPicFunc: SExpandPicFunc` sat here. Three constant slots,
@@ -1388,7 +1401,7 @@ impl SWelsDecoderContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::decode_mb_aux::IdctResAddPred_c;
+    use crate::decoder::decode_mb_aux::idct_res_add_pred;
     use crate::decoder::pic_queue::{CreatePicBuff, DestroyPicBuff};
 
     #[test]
@@ -1404,10 +1417,8 @@ mod tests {
     #[test]
     fn test_idct_res_add_pred_c() {
         let mut pred = [128u8; 16];
-        let mut rs = [0i16; 16];
-        unsafe {
-            IdctResAddPred_c(pred.as_mut_ptr(), 4, rs.as_mut_ptr());
-        }
+        let rs = [0i16; 16];
+        idct_res_add_pred(&mut PlaneCursorMut::new(&mut pred, 0, 4), &rs);
         for &val in &pred {
             assert_eq!(val, 128);
         }

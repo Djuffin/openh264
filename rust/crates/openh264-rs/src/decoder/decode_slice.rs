@@ -556,18 +556,10 @@ pub type PWelsDecMbFunc = unsafe extern "C" fn(
 // their three dispatch slots into an enum method and two direct calls and left the
 // typedefs behind. S18's straggler class, deleted where it was found.
 
-pub type PIdctResAddPredFunc = unsafe extern "C" fn(
-    pDst: *mut u8,
-    iStride: i32,
-    pScaledTCoeff: *mut i16,
-    pNzc: *const i8,
-);
-
-pub type PIdctResAddPredFunc8x8 = unsafe extern "C" fn(
-    pDst: *mut u8,
-    iStride: i32,
-    pScaledTCoeff: *mut i16,
-);
+// T5.X8: two more of that class, and this pair was worse than unused — they were a
+// *second* declaration of `PIdctResAddPredFunc` (`decoder_context.rs` holds the one
+// the tables are typed by) with a different parameter list, so a reader who found
+// this one learned the wrong signature. Neither had a use in this file.
 
 // T4b.3c: `SBlockFunc` was declared **twice** -- here and in `decoder_context.rs`,
 // with the same three members and two different `PWelsNonZeroCountFunc` /
@@ -1058,31 +1050,29 @@ pub unsafe extern "C" fn WelsMap16x16NeighToSampleConstrain1(
 // Macroblock Reconstruction Functions
 // ============================================================================
 
+/// **T5.X8: the residual add takes the picture, not three plane pointers.**
+///
+/// The three `*mut u8` and two strides were the caller's `data_ptr(i) + (mb << 4)`
+/// arithmetic, handed on so the IDCT shims could rebuild a slice out of them. The
+/// picture owns its planes, so the cursor is `plane_mut(i).cursor_mut(x, y)` and
+/// the block offsets are sample coordinates rather than byte offsets that had to be
+/// recomputed whenever a stride changed.
 pub unsafe fn WelsMbInterSampleConstruction(
     pCtx: *mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
-    pDstY: *mut u8,
-    pDstU: *mut u8,
-    pDstV: *mut u8,
-    iStrideL: i32,
-    iStrideC: i32,
+    pDec: PPicture,
 ) -> i32 {
-    if pCtx.is_null() {
+    if pCtx.is_null() || pDec.is_null() {
         return ERR_NONE;
     }
     let ctx = &*pCtx;
-    // T5.L5: a raw layer pointer, as every other function in this file spells it.
-    // It was `&*pCurDqLayer` while the coefficient array was reached through a
-    // pointer *field* — a `Copy` read that a shared borrow allows. Owned, the array
-    // is reached with `get_mut`, and taking a `&mut` of a subfield through a live
-    // `&DqLayerState` is the shape F28 names.
     let dq: &mut DqLayerState = pCurDqLayer;
     let iMbXy = (*dq).iMbXyIndex as usize;
+    let (mb_x, mb_y) = ((*dq).iMbX as isize, (*dq).iMbY as isize);
 
     let pTransformSize8x8 = *(*dq).grid.transform_size8x8_flag.get(iMbXy);
     let pNzc = *(*dq).grid.nzc.get(iMbXy);
-    let pScaledTCoeff = (*dq).grid.scaled_tcoeff.get_mut(iMbXy).as_mut_ptr();
-
+    let tcoeff: &[i16; 384] = (*dq).grid.scaled_tcoeff.get(iMbXy);
 
     if pTransformSize8x8 {
         if let Some(idct8x8) = ctx.pIdctResAddPredFunc8x8 {
@@ -1093,34 +1083,48 @@ pub unsafe fn WelsMbInterSampleConstruction(
                     || pNzc[iIndex + 4] != 0
                     || pNzc[iIndex + 5] != 0
                 {
-                    let iOffset =
-                        ((iIndex >> 2) << 2) as i32 * iStrideL + ((iIndex % 4) << 2) as i32;
-                    idct8x8(pDstY.offset(iOffset as isize), iStrideL, pScaledTCoeff.add(i << 6));
+                    let (dx, dy) = (((iIndex % 4) << 2) as isize, ((iIndex >> 2) << 2) as isize);
+                    let rs: &[i16; 64] = tcoeff[i << 6..][..64].try_into().unwrap();
+                    idct8x8(
+                        &mut (*pDec)
+                            .plane_mut(0)
+                            .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
+                        rs,
+                    );
                 }
             }
         }
     } else {
         if let Some(idct4x4) = ctx.pIdctFourResAddPredFunc {
-            idct4x4(pDstY.offset(0), iStrideL, pScaledTCoeff.add(0), pNzc.as_ptr().add(0));
-            idct4x4(pDstY.offset(8), iStrideL, pScaledTCoeff.add(64), pNzc.as_ptr().add(2));
-            idct4x4(
-                pDstY.offset((8 * iStrideL) as isize),
-                iStrideL,
-                pScaledTCoeff.add(128),
-                pNzc.as_ptr().add(8),
-            );
-            idct4x4(
-                pDstY.offset((8 * iStrideL + 8) as isize),
-                iStrideL,
-                pScaledTCoeff.add(192),
-                pNzc.as_ptr().add(10),
-            );
+            for (q, (dx, dy, nz)) in [(0, 0, 0usize), (8, 0, 2), (0, 8, 8), (8, 8, 10)]
+                .into_iter()
+                .enumerate()
+            {
+                let rs: &[i16; 64] = tcoeff[q << 6..][..64].try_into().unwrap();
+                let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
+                idct4x4(
+                    &mut (*pDec)
+                        .plane_mut(0)
+                        .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
+                    rs,
+                    nzc,
+                );
+            }
         }
     }
 
     if let Some(idct4x4) = ctx.pIdctFourResAddPredFunc {
-        idct4x4(pDstU, iStrideC, pScaledTCoeff.add(256), pNzc.as_ptr().add(16));
-        idct4x4(pDstV, iStrideC, pScaledTCoeff.add(320), pNzc.as_ptr().add(18));
+        for (plane, (coeff, nz)) in [(256usize, 16usize), (320, 18)].into_iter().enumerate() {
+            let rs: &[i16; 64] = tcoeff[coeff..][..64].try_into().unwrap();
+            let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
+            idct4x4(
+                &mut (*pDec)
+                    .plane_mut(plane + 1)
+                    .cursor_mut(mb_x << 3, mb_y << 3),
+                rs,
+                nzc,
+            );
+        }
     }
 
     ERR_NONE
@@ -2115,7 +2119,7 @@ pub unsafe fn WelsMbInterConstruction(
         }
     }
 
-    WelsMbInterSampleConstruction(pCtx, dq, pDstY, pDstCb, pDstCr, iLumaStride, iChromaStride);
+    WelsMbInterSampleConstruction(pCtx, dq, pDec);
 
     // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
     // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
@@ -2192,31 +2196,64 @@ pub unsafe fn WelsFillRecNeededMbInfo(
     (*pCurDqLayer).iLumaStride = iLumaStride;
     (*pCurDqLayer).iChromaStride = iChromaStride;
 
-    if bOutput && !(*pCurPic).data_ptr(0).is_null() {
-        (*pCurDqLayer).pPred[0] = (*pCurPic).data_ptr(0).add(((iMbY * iLumaStride + iMbX) << 4) as usize);
-        (*pCurDqLayer).pPred[1] = (*pCurPic).data_ptr(1).add(((iMbY * iChromaStride + iMbX) << 3) as usize);
-        (*pCurDqLayer).pPred[2] = (*pCurPic).data_ptr(2).add(((iMbY * iChromaStride + iMbX) << 3) as usize);
-    }
+    // T5.X8: `pPred[0..3]` was stamped here — the macroblock's top-left sample in
+    // each plane, cached as three raw pointers under `bOutput && !data_ptr(0)
+    // .is_null()`. It was a cache of `(iMbX, iMbY)`, which this layer already
+    // carries, resolved against a picture the reconstruction path already has; the
+    // field is deleted and its readers derive `plane_mut(i).cursor_mut(x, y)`. The
+    // guard went with it: a null `data_ptr(0)` is an empty plane, and every read of
+    // it now goes through `PaddedPlane`, which answers by bounds rather than by a
+    // stale pointer.
+    let _ = bOutput;
+}
+
+// **T5.X8: the intra reconstruction bracket.**
+//
+// This family reached the picture through `DqLayerState::pPred[3]` — three raw plane
+// pointers stamped once per macroblock by `WelsFillRecNeededMbInfo` — and then
+// offset them by `iDecBlockOffsetArray`, a 24-entry table of **byte** offsets that
+// `WelsDecodeSlice` recomputed every time a stride changed. Both are cache, not
+// carrier: the picture owns its planes, and a 4x4 block's position inside a
+// macroblock is a pair of sample coordinates that no stride enters. So the family
+// takes `pDec` and derives `plane_mut(i).cursor_mut(x, y)` at the block, and the
+// dispatch tables hold the safe kernels themselves.
+//
+// The layer is read for small per-macroblock values (the modes, the availability
+// mask, the non-zero counts) which are **copied**, and for the coefficient block,
+// which is borrowed shared — the picture is a different object, so writing it
+// through `pDec` while holding that borrow is not an aliasing question at all.
+
+/// Sample coordinates of 4x4 block `i` inside its macroblock — `iDecBlockOffsetArray`
+/// with the stride factored out (`i4_luma_ichroma_addr_table`'s `(x, y)` before it
+/// multiplied `y` by the stride and shifted).
+#[inline]
+pub(crate) fn blk4_xy(i: usize) -> (isize, isize) {
+    let a = g_kuiScan8[i] as usize - g_kuiScan8[0] as usize;
+    (((a & 0x07) << 2) as isize, ((a >> 3) << 2) as isize)
 }
 
 pub unsafe fn RecChroma(
     iMBXY: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    let iChromaStride = (*pDqLayer).iChromaStride;
     let pIdctFourResAddPredFunc = (*pCtx).pIdctFourResAddPredFunc;
-
+    let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
     let uiCbpC = ((*(*pDqLayer).grid.cbp.get(iMBXY as usize)) as u8) >> 4;
 
     if uiCbpC == 1 || uiCbpC == 2 {
         if let Some(func) = pIdctFourResAddPredFunc {
+            let pNzc = *(*pDqLayer).grid.nzc.get(iMBXY as usize);
+            let tcoeff: &[i16; 384] = (*pDqLayer).grid.scaled_tcoeff.get(iMBXY as usize);
             for i in 0..2 {
-                let pRS = pScoeffLevel.add(256 + (i << 6));
-                let pPred = (*pDqLayer).pPred[i + 1];
-                let pNzc = (*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr().add(16 + 2 * i) as *const i8;
-                func(pPred, iChromaStride, pRS, pNzc);
+                let rs: &[i16; 64] = tcoeff[256 + (i << 6)..][..64].try_into().unwrap();
+                let nzc: &[i8; 6] = pNzc[16 + 2 * i..][..6].try_into().unwrap();
+                func(
+                    &mut (*pDec).plane_mut(i + 1).cursor_mut(mb_x << 3, mb_y << 3),
+                    rs,
+                    nzc,
+                );
             }
         }
     }
@@ -2226,30 +2263,29 @@ pub unsafe fn RecChroma(
 pub unsafe fn RecI4x4Luma(
     iMBXY: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    let pPred = (*pDqLayer).pPred[0];
-    let iLumaStride = (*pDqLayer).iLumaStride;
-    let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra4x4PredMode =
-        mb_grid_ptr(&mut (*pDqLayer).grid.intra4x4_final_mode, iMBXY as usize) as *mut i8;
-    let pRS = pScoeffLevel;
+    let pIntra4x4PredMode = *(*pDqLayer).grid.intra4x4_final_mode.get(iMBXY as usize);
+    let pNzc = *(*pDqLayer).grid.nzc.get(iMBXY as usize);
+    let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
+    let tcoeff: &[i16; 384] = (*pDqLayer).grid.scaled_tcoeff.get(iMBXY as usize);
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc;
 
     for i in 0..16 {
-        let pPredI4x4 = pPred.add(*pBlockOffset.add(i) as usize);
-        let uiMode = *pIntra4x4PredMode.add(g_kuiMbCountScan4Idx[i] as usize) as usize;
+        let (dx, dy) = blk4_xy(i);
+        let (x, y) = ((mb_x << 4) + dx, (mb_y << 4) + dy);
+        let uiMode = pIntra4x4PredMode[g_kuiMbCountScan4Idx[i] as usize] as usize;
 
         if let Some(func) = (*pCtx).pGetI4x4LumaPredFunc[uiMode] {
-            func(pPredI4x4, iLumaStride);
+            func(&mut (*pDec).plane_mut(0).cursor_mut(x, y));
         }
 
         let nzc_idx = g_kuiMbCountScan4Idx[i] as usize;
-        if *((*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr().add(nzc_idx)) != 0 {
+        if pNzc[nzc_idx] != 0 {
             if let Some(idct_func) = pIdctResAddPredFunc {
-                let pRSI4x4 = pRS.add(i << 4);
-                idct_func(pPredI4x4, iLumaStride, pRSI4x4);
+                let rs: &[i16; 16] = tcoeff[i << 4..][..16].try_into().unwrap();
+                idct_func(&mut (*pDec).plane_mut(0).cursor_mut(x, y), rs);
             }
         }
     }
@@ -2259,45 +2295,41 @@ pub unsafe fn RecI4x4Luma(
 pub unsafe fn RecI4x4Chroma(
     iMBXY: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    let iChromaStride = (*pDqLayer).iChromaStride;
     let iChromaPredMode = *(*pDqLayer).grid.chroma_pred_mode.get(iMBXY as usize) as usize;
+    let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
 
     if let Some(func) = (*pCtx).pGetIChromaPredFunc[iChromaPredMode] {
-        let pPred1 = (*pDqLayer).pPred[1];
-        func(pPred1, iChromaStride);
-        let pPred2 = (*pDqLayer).pPred[2];
-        func(pPred2, iChromaStride);
+        func(&mut (*pDec).plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
+        func(&mut (*pDec).plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
     }
 
-    RecChroma(iMBXY, pCtx, pScoeffLevel, pDqLayer)
+    RecChroma(iMBXY, pCtx, pDec, pDqLayer)
 }
 
 pub unsafe fn RecI4x4Mb(
     iMBXY: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    RecI4x4Luma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
-    RecI4x4Chroma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
+    RecI4x4Luma(iMBXY, pCtx, pDec, pDqLayer);
+    RecI4x4Chroma(iMBXY, pCtx, pDec, pDqLayer);
     ERR_NONE
 }
 
 pub unsafe fn RecI8x8Luma(
     iMbXy: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    let pPred = (*pDqLayer).pPred[0];
-    let iLumaStride = (*pDqLayer).iLumaStride;
-    let pBlockOffset = (*pCtx).iDecBlockOffsetArray.as_ptr();
-    let pIntra8x8PredMode =
-        mb_grid_ptr(&mut (*pDqLayer).grid.intra4x4_final_mode, iMbXy as usize) as *mut i8;
-    let pRS = pScoeffLevel;
+    let pIntra8x8PredMode = *(*pDqLayer).grid.intra4x4_final_mode.get(iMbXy as usize);
+    let pNzc = *(*pDqLayer).grid.nzc.get(iMbXy as usize);
+    let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
+    let tcoeff: &[i16; 384] = (*pDqLayer).grid.scaled_tcoeff.get(iMbXy as usize);
     let pIdctResAddPredFunc = (*pCtx).pIdctResAddPredFunc8x8;
 
     let avail = *(*pDqLayer).grid.intra_nxn_avail_flag.get(iMbXy as usize);
@@ -2315,23 +2347,27 @@ pub unsafe fn RecI8x8Luma(
     ];
 
     for i in 0..4 {
-        let pPredI8x8 = pPred.add(*pBlockOffset.add(i << 2) as usize);
-        let uiMode = *pIntra8x8PredMode.add(g_kuiMbCountScan4Idx[i << 2] as usize) as usize;
+        let (dx, dy) = blk4_xy(i << 2);
+        let (x, y) = ((mb_x << 4) + dx, (mb_y << 4) + dy);
+        let uiMode = pIntra8x8PredMode[g_kuiMbCountScan4Idx[i << 2] as usize] as usize;
 
         if let Some(func) = (*pCtx).pGetI8x8LumaPredFunc[uiMode] {
-            func(pPredI8x8, iLumaStride, bTLAvail[i], bTRAvail[i]);
+            func(
+                &mut (*pDec).plane_mut(0).cursor_mut(x, y),
+                bTLAvail[i],
+                bTRAvail[i],
+            );
         }
 
         let iIndex = g_kuiMbCountScan4Idx[i << 2] as usize;
-        let nzc_ptr = (*pDqLayer).grid.nzc.get(iMbXy as usize).as_ptr();
-        if *nzc_ptr.add(iIndex) != 0
-            || *nzc_ptr.add(iIndex + 1) != 0
-            || *nzc_ptr.add(iIndex + 4) != 0
-            || *nzc_ptr.add(iIndex + 5) != 0
+        if pNzc[iIndex] != 0
+            || pNzc[iIndex + 1] != 0
+            || pNzc[iIndex + 4] != 0
+            || pNzc[iIndex + 5] != 0
         {
             if let Some(idct_func) = pIdctResAddPredFunc {
-                let pRSI8x8 = pRS.add(i << 6);
-                idct_func(pPredI8x8, iLumaStride, pRSI8x8);
+                let rs: &[i16; 64] = tcoeff[i << 6..][..64].try_into().unwrap();
+                idct_func(&mut (*pDec).plane_mut(0).cursor_mut(x, y), rs);
             }
         }
     }
@@ -2341,46 +2377,54 @@ pub unsafe fn RecI8x8Luma(
 pub unsafe fn RecI8x8Mb(
     iMbXy: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    RecI8x8Luma(iMbXy, pCtx, pScoeffLevel, pDqLayer);
-    RecI4x4Chroma(iMbXy, pCtx, pScoeffLevel, pDqLayer);
+    RecI8x8Luma(iMbXy, pCtx, pDec, pDqLayer);
+    RecI4x4Chroma(iMbXy, pCtx, pDec, pDqLayer);
     ERR_NONE
 }
 
 pub unsafe fn RecI16x16Mb(
     iMBXY: i32,
     pCtx: *mut SWelsDecoderContext,
-    pScoeffLevel: *mut i16,
+    pDec: PPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let iI16x16PredMode = (*pDqLayer).grid.intra_pred_mode.get(iMBXY as usize)[7] as usize;
     let iChromaPredMode = *(*pDqLayer).grid.chroma_pred_mode.get(iMBXY as usize) as usize;
-    let iUVStride = (*pDqLayer).iChromaStride;
-    let iYStride = (*pDqLayer).iLumaStride;
-    let pRS = pScoeffLevel;
-    let pPredY = (*pDqLayer).pPred[0];
+    let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
     let pIdctFourResAddPredFunc = (*pCtx).pIdctFourResAddPredFunc;
 
     if let Some(func) = (*pCtx).pGetI16x16LumaPredFunc[iI16x16PredMode] {
-        func(pPredY, iYStride);
+        func(&mut (*pDec).plane_mut(0).cursor_mut(mb_x << 4, mb_y << 4));
     }
 
     if let Some(idct_func) = pIdctFourResAddPredFunc {
-        let pNzc = (*pDqLayer).grid.nzc.get(iMBXY as usize).as_ptr() as *const i8;
-        idct_func(pPredY.add(0 * iYStride as usize + 0), iYStride, pRS.add(0 * 64), pNzc.add(0));
-        idct_func(pPredY.add(0 * iYStride as usize + 8), iYStride, pRS.add(1 * 64), pNzc.add(2));
-        idct_func(pPredY.add(8 * iYStride as usize + 0), iYStride, pRS.add(2 * 64), pNzc.add(8));
-        idct_func(pPredY.add(8 * iYStride as usize + 8), iYStride, pRS.add(3 * 64), pNzc.add(10));
+        let pNzc = *(*pDqLayer).grid.nzc.get(iMBXY as usize);
+        let tcoeff: &[i16; 384] = (*pDqLayer).grid.scaled_tcoeff.get(iMBXY as usize);
+        for (q, (dx, dy, nz)) in [(0isize, 0isize, 0usize), (8, 0, 2), (0, 8, 8), (8, 8, 10)]
+            .into_iter()
+            .enumerate()
+        {
+            let rs: &[i16; 64] = tcoeff[q << 6..][..64].try_into().unwrap();
+            let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
+            idct_func(
+                &mut (*pDec)
+                    .plane_mut(0)
+                    .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
+                rs,
+                nzc,
+            );
+        }
     }
 
     if let Some(chroma_func) = (*pCtx).pGetIChromaPredFunc[iChromaPredMode] {
-        chroma_func((*pDqLayer).pPred[1], iUVStride);
-        chroma_func((*pDqLayer).pPred[2], iUVStride);
+        chroma_func(&mut (*pDec).plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
+        chroma_func(&mut (*pDec).plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
     }
 
-    RecChroma(iMBXY, pCtx, pScoeffLevel, pDqLayer);
+    RecChroma(iMBXY, pCtx, pDec, pDqLayer);
     ERR_NONE
 }
 
@@ -2401,14 +2445,13 @@ pub unsafe fn WelsMbIntraPredictionConstruction(
         return ERR_NONE;
     }
     let mb_type = *(*pDec).pMbType.get(iMbXy as usize);
-    let pScoeffLevel = (*pCurDqLayer).grid.scaled_tcoeff.get_mut(iMbXy as usize).as_mut_ptr();
 
     if IS_INTRA16x16(mb_type) {
-        RecI16x16Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+        RecI16x16Mb(iMbXy, pCtx, pDec, pCurDqLayer);
     } else if IS_INTRA8x8(mb_type) {
-        RecI8x8Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+        RecI8x8Mb(iMbXy, pCtx, pDec, pCurDqLayer);
     } else if IS_INTRA4x4(mb_type) {
-        RecI4x4Mb(iMbXy, pCtx, pScoeffLevel, pCurDqLayer);
+        RecI4x4Mb(iMbXy, pCtx, pDec, pCurDqLayer);
     }
     ERR_NONE
 }

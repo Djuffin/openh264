@@ -247,118 +247,19 @@ pub fn i4_luma_ichroma_addr_table(block_offset: &mut [i32; 24], stride_y: i32, s
     }
 }
 
-/// Function pointer type for 4x4 IDCT and residual prediction addition.
-pub type PIdctResAddPredFunc = unsafe extern "C" fn(pPred: *mut u8, kiStride: i32, pRs: *mut i16);
-
-/// Function pointer type for batch 4-block IDCT and residual prediction addition.
-pub type PIdctFourResAddPredFunc =
-    unsafe extern "C" fn(pPred: *mut u8, iStride: i32, pRs: *mut i16, pNzc: *const i8);
-
-/// Performs 2D 4x4 Inverse Integer Discrete Cosine Transform on scaled coefficients `pRs`,
-/// sums the resulting spatial residuals with the prediction samples `pPred`,
-/// saturates the pixel values to [0, 255], and writes them back to `pPred` in-place.
-///
-/// NOTE: `pRs` is NOT modified during transform calculation to maintain JSVM compliance.
-///
-/// # Safety
-/// * `pPred` points at sample `(0, 0)` of a 4x4 block inside a pixel surface whose
-///   rows are `kiStride` bytes apart. The bytes `[0, 3*kiStride + 4)` from `pPred`
-///   must be valid to read and write; the kernel touches each of the block's 16
-///   samples exactly once and **reaches forward only** — no `-1` column, no
-///   `-kiStride` row — so the block needs no padding around it.
-/// * `kiStride >= 4` and positive.
-/// * `pRs` points at 16 readable, `i16`-aligned `i16`. It is not written.
-///
-/// Every decoder call site satisfies this: `pPred` is `pDstY`/`pPred[i]` offset by an
-/// entry of `iDecBlockOffsetArray`, which addresses a 4x4 block of a macroblock inside
-/// a `PADDING_LENGTH`-padded picture plane, and `pRs` is a 16-coefficient slice of
-/// `pScaledTCoeff` (`decode_slice.rs:2076-2093`, `:2201-2211`).
-pub unsafe extern "C" fn IdctResAddPred_c(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    // SHIM(phase2) -> idct_res_add_pred
-    let stride = kiStride as usize;
-    let buf = unsafe { std::slice::from_raw_parts_mut(pPred, 3 * stride + 4) };
-    let rs: &[i16; 16] = unsafe { std::slice::from_raw_parts(pRs, 16) }
-        .try_into()
-        .unwrap();
-    idct_res_add_pred(&mut PlaneCursorMut::new(buf, 0, stride), rs);
-}
-
-/// Performs 2D 8x8 Inverse Integer Discrete Cosine Transform on scaled coefficients `pRs`
-/// for H.264 High Profile (FRExt) transform blocks, adds the residuals to `pPred`,
-/// and saturates pixel values to [0, 255].
-///
-/// # Safety
-/// * `pPred` points at sample `(0, 0)` of an 8x8 block inside a pixel surface whose
-///   rows are `kiStride` bytes apart. The bytes `[0, 7*kiStride + 8)` from `pPred`
-///   must be valid to read and write; the kernel reaches forward only.
-/// * `kiStride >= 8` and positive.
-/// * `pRs` points at 64 readable, `i16`-aligned `i16`. It is not written.
-///
-/// The one decoder call site (`decode_slice.rs:2138-2172`, via
-/// `pIdctResAddPredFunc8x8`) offsets `pPred[0]` by an `iDecBlockOffsetArray` entry for
-/// an 8x8 transform block of an I_NxN macroblock, and passes `pScaledTCoeff + (i << 6)`.
-pub unsafe extern "C" fn IdctResAddPred8x8_c(pPred: *mut u8, kiStride: i32, pRs: *mut i16) {
-    // SHIM(phase2) -> idct_res_add_pred8x8
-    let stride = kiStride as usize;
-    let buf = unsafe { std::slice::from_raw_parts_mut(pPred, 7 * stride + 8) };
-    let rs: &[i16; 64] = unsafe { std::slice::from_raw_parts(pRs, 64) }
-        .try_into()
-        .unwrap();
-    idct_res_add_pred8x8(&mut PlaneCursorMut::new(buf, 0, stride), rs);
-}
-
-/// Precomputes the 24-element byte offset lookup table `pBlockOffset`
-/// from the top-left corner of a macroblock to each 4x4 sub-block.
-///
-/// # Safety
-/// `pBlockOffset` points at 24 writable, `i32`-aligned `i32`. The single call site
-/// (`decoder_core.rs:3952`, through the inline wrapper at `:947`) passes
-/// `SWelsDecoderContext::iDecBlockOffsetArray`, which *is* an `[i32; 24]`
-/// (`decoder_context.rs:676`) — so the safe kernel behind this shim takes that array
-/// type directly and the size stops being an unwritten agreement between two files.
-pub unsafe fn GetI4LumaIChromaAddrTable(
-    pBlockOffset: *mut i32,
-    kiYStride: i32,
-    kiUVStride: i32,
-) {
-    // SHIM(phase2) -> i4_luma_ichroma_addr_table
-    let table: &mut [i32; 24] = unsafe { std::slice::from_raw_parts_mut(pBlockOffset, 24) }
-        .try_into()
-        .unwrap();
-    i4_luma_ichroma_addr_table(table, kiYStride, kiUVStride);
-}
-
-/// Batch 4-block IDCT and residual prediction addition using Non-Zero Count cache `pNzc`.
-///
-/// # Safety
-/// * `pPred` points at sample `(0, 0)` of an 8x8 quadrant inside a pixel surface whose
-///   rows are `iStride` bytes apart. The bytes `[0, 7*iStride + 8)` from `pPred` must
-///   be valid to read and write; the kernel reaches forward only.
-/// * `iStride >= 8` and positive.
-/// * `pRs` points at 64 readable, `i16`-aligned `i16` (four 4x4 blocks). Not written.
-/// * `pNzc` points at **6** readable `i8`: the window of the macroblock's 8-wide
-///   non-zero-count raster starting at this quadrant's top-left 4x4 block. Only
-///   indices 0, 1, 4 and 5 are read, but index 5 is the reach, so a 4-element window
-///   is not enough. Every call site passes a `[i8; 24]` per-MB array offset by 0, 2, 8,
-///   10, 16 or 18 (`decode_slice.rs:1002-1023`, `:2053-2059`, `:2207-2211`), each of
-///   which leaves at least 6 elements.
-pub unsafe extern "C" fn IdctFourResAddPred_c(
-    pPred: *mut u8,
-    iStride: i32,
-    pRs: *mut i16,
-    pNzc: *const i8,
-) {
-    // SHIM(phase2) -> idct_four_res_add_pred
-    let stride = iStride as usize;
-    let buf = unsafe { std::slice::from_raw_parts_mut(pPred, 7 * stride + 8) };
-    let rs: &[i16; 64] = unsafe { std::slice::from_raw_parts(pRs, 64) }
-        .try_into()
-        .unwrap();
-    let nzc: &[i8; 6] = unsafe { std::slice::from_raw_parts(pNzc, 6) }
-        .try_into()
-        .unwrap();
-    idct_four_res_add_pred(&mut PlaneCursorMut::new(buf, 0, stride), rs, nzc);
-}
+// **T5.X8: the four `SHIM(phase2)` entry points that stood here are deleted**, with
+// the two dispatch typedefs that described them. Each rebuilt a slice from a raw
+// pointer and a stride and called the kernel above it; the dispatch tables hold the
+// kernels themselves now (`decoder_context.rs`'s `PIdctResAddPredFunc` and friends
+// take a `PlaneCursorMut`), and the reconstruction bracket builds the cursor from
+// the picture's own plane.
+//
+// `GetI4LumaIChromaAddrTable` and `i4_luma_ichroma_addr_table` went with them, and
+// so did `SWelsDecoderContext::iDecBlockOffsetArray`: the table held **byte** offsets
+// of the 16 luma and 8 chroma 4x4 blocks, which is why it had to be recomputed
+// whenever a picture's stride changed. A block's position inside its macroblock is a
+// pair of sample coordinates and no stride enters it — `decode_slice.rs`'s `blk4_xy`
+// is that pair, computed from `g_kuiScan8` exactly as the table's own body did.
 
 #[cfg(test)]
 mod tests {
@@ -376,10 +277,8 @@ mod tests {
     #[test]
     fn test_idct_res_add_pred_c_zero_residual() {
         let mut pred = [128u8; 64];
-        let mut rs = [0i16; 16];
-        unsafe {
-            IdctResAddPred_c(pred.as_mut_ptr(), 8, rs.as_mut_ptr());
-        }
+        let rs = [0i16; 16];
+        idct_res_add_pred(&mut PlaneCursorMut::new(&mut pred, 0, 8), &rs);
         for row in 0..4 {
             for col in 0..4 {
                 assert_eq!(pred[row * 8 + col], 128);
@@ -392,9 +291,7 @@ mod tests {
         let mut pred = [128u8; 64];
         let mut rs = [0i16; 16];
         rs[0] = 64; // DC coeff = 64 -> (32 + 64) >> 6 = 1
-        unsafe {
-            IdctResAddPred_c(pred.as_mut_ptr(), 8, rs.as_mut_ptr());
-        }
+        idct_res_add_pred(&mut PlaneCursorMut::new(&mut pred, 0, 8), &rs);
         for row in 0..4 {
             for col in 0..4 {
                 assert_eq!(pred[row * 8 + col], 129);
@@ -402,19 +299,23 @@ mod tests {
         }
     }
 
+    /// **T5.X8**: the byte-offset table this file used to build is gone, and
+    /// `decode_slice.rs`'s `blk4_xy` replaces it. The values it produced are pinned
+    /// here in the units they moved to — a 32-byte luma stride made block 1 offset
+    /// 4 (`x = 4`) and block 2 offset 128 (`y = 4`), which is what these coordinates
+    /// say without a stride in them.
     #[test]
-    fn test_get_i4_luma_i_chroma_addr_table() {
-        let mut block_offset = [0i32; 24];
-        unsafe {
-            GetI4LumaIChromaAddrTable(block_offset.as_mut_ptr(), 32, 16);
-        }
-        assert_eq!(block_offset[0], 0);
-        assert_eq!(block_offset[1], 4);
-        assert_eq!(block_offset[2], 128);
-        assert_eq!(block_offset[3], 132);
-        assert_eq!(block_offset[16], 0);
-        assert_eq!(block_offset[20], 0);
-        assert_eq!(block_offset[17], 4);
-        assert_eq!(block_offset[21], 4);
+    fn blk4_xy_is_the_deleted_offset_table_with_the_stride_factored_out() {
+        use crate::decoder::decode_slice::blk4_xy;
+        assert_eq!(blk4_xy(0), (0, 0));
+        assert_eq!(blk4_xy(1), (4, 0));
+        assert_eq!(blk4_xy(2), (0, 4));
+        assert_eq!(blk4_xy(3), (4, 4));
+        // And the whole 4x4 grid of 4x4 blocks is covered exactly once.
+        let mut seen: Vec<(isize, isize)> = (0..16).map(blk4_xy).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 16);
+        assert!(seen.iter().all(|&(x, y)| (0..16).contains(&x) && (0..16).contains(&y)));
     }
 }
