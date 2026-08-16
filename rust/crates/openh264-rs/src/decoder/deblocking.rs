@@ -206,6 +206,27 @@ pub use crate::decoder::decoder_context::{
 /// cache of `dec_pic(pCtx)` and died with W2b. The slice loop derives once per
 /// macroblock and hands it down, which is the same freshness the cache had and no
 /// stored copy of it anywhere.
+// T5.W5 (W6, family 10, partial): `pFilter` is `&mut SDeblockingFilter` at eighteen
+// signatures — every function in this module that threads the filter except the one
+// below, which the fn-pointer type pins.
+//
+// The flip is bounded and it is entirely local: the filter is a **stack local** of
+// `WelsDeblockingFilterSlice` (`let mut pFilter = SDeblockingFilter::default()`),
+// threaded down and out of nothing, so no other module names the type and no call
+// site outside this file changed. Bodies did not change either — `(*pFilter).field`
+// reads the same through a borrow.
+//
+// **`WelsDeblockingMb` keeps the raw parameter, and that is a dispatch shape, not an
+// oversight**: `PDeblockingFilterMbFunc` below is the per-macroblock filter's
+// installed type and `WelsDeblockingMb` is what gets installed, so its signature and
+// the typedef move together or not at all — W6 step 3's class, with the four
+// `decode_mb_aux.rs` `pIdct*Func` shims (family 3). It reborrows at its eight call
+// sites into the flipped functions instead.
+//
+// What still blocks this module: the plane pointers (`pPix`/`pPixCb`/`pPixCr`, the
+// eight edge filters — step 3), the layer (`pCurDqLayer`, step 2), `pDec`, and the
+// `*const u8` boundary-strength arrays the same edge filters take.
+
 pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
@@ -521,7 +542,7 @@ pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
 
 #[inline(always)]
 pub unsafe fn DeblockingBSInsideMBNormal(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
@@ -653,7 +674,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 
 #[inline(always)]
 pub unsafe fn DeblockingBSliceBSInsideMBNormal(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
@@ -806,7 +827,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 // ============================================================================
 
 pub unsafe fn DeblockingBsMarginalMBAvcbase(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     iEdge: i32,
@@ -1010,7 +1031,7 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
 }
 
 pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
     iEdge: i32,
@@ -1322,7 +1343,7 @@ pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: *mut DqLayerState, iF
 
 #[inline]
 pub unsafe fn FilteringEdgeLumaH(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
     pBS: *const u8,
@@ -1350,7 +1371,7 @@ pub unsafe fn FilteringEdgeLumaH(
 
 #[inline]
 pub unsafe fn FilteringEdgeLumaV(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
     pBS: *const u8,
@@ -1378,7 +1399,7 @@ pub unsafe fn FilteringEdgeLumaV(
 
 #[inline]
 pub unsafe fn FilteringEdgeLumaIntraH(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
     _pBS: *const u8,
@@ -1403,7 +1424,7 @@ pub unsafe fn FilteringEdgeLumaIntraH(
 
 #[inline]
 pub unsafe fn FilteringEdgeLumaIntraV(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPix: *mut u8,
     iStride: i32,
     _pBS: *const u8,
@@ -1427,7 +1448,7 @@ pub unsafe fn FilteringEdgeLumaIntraV(
 }
 
 pub unsafe fn FilteringEdgeChromaH(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
@@ -1473,7 +1494,7 @@ pub unsafe fn FilteringEdgeChromaH(
 }
 
 pub unsafe fn FilteringEdgeChromaV(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
@@ -1519,7 +1540,7 @@ pub unsafe fn FilteringEdgeChromaV(
 }
 
 pub unsafe fn FilteringEdgeChromaIntraH(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
@@ -1560,7 +1581,7 @@ pub unsafe fn FilteringEdgeChromaIntraH(
 }
 
 pub unsafe fn FilteringEdgeChromaIntraV(
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     pPixCb: *mut u8,
     pPixCr: *mut u8,
     iStride: i32,
@@ -1607,7 +1628,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 unsafe fn DeblockingInterMb(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     nBS: &[[[u8; 4]; 4]; 2],
     iBoundryFlag: i32,
 ) {
@@ -1751,7 +1772,7 @@ unsafe fn DeblockingInterMb(
 pub unsafe fn FilteringEdgeLumaHV(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
     let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
@@ -1849,7 +1870,7 @@ pub unsafe fn FilteringEdgeLumaHV(
 pub unsafe fn FilteringEdgeChromaHV(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
     let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
@@ -1986,7 +2007,7 @@ pub unsafe fn FilteringEdgeChromaHV(
 unsafe fn DeblockingIntraMb(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
     FilteringEdgeLumaHV(pCurDqLayer, pDec, pFilter, iBoundryFlag);
@@ -2017,7 +2038,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
     match iCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(pCurDqLayer, pDec, pFilter, iBoundryFlag);
+            DeblockingIntraMb(pCurDqLayer, pDec, &mut *pFilter, iBoundryFlag);
         }
         _ => {
             if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
@@ -2031,9 +2052,9 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
                 (nBS[0][0].as_mut_ptr() as *mut u32).write_unaligned(val);
             } else {
@@ -2051,9 +2072,9 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
                 (nBS[1][0].as_mut_ptr() as *mut u32).write_unaligned(val);
             } else {
@@ -2076,7 +2097,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 }
             } else if bBSlice {
                 DeblockingBSliceBSInsideMBNormal(
-                    pFilter,
+                    &mut *pFilter,
                     pCurDqLayer,
                     pDec,
                     &mut nBS,
@@ -2085,7 +2106,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 );
             } else {
                 DeblockingBSInsideMBNormal(
-                    pFilter,
+                    &mut *pFilter,
                     pCurDqLayer,
                     pDec,
                     &mut nBS,
@@ -2094,7 +2115,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 );
             }
 
-            DeblockingInterMb(pCurDqLayer, pDec, pFilter, &nBS, iBoundryFlag);
+            DeblockingInterMb(pCurDqLayer, pDec, &mut *pFilter, &nBS, iBoundryFlag);
         }
     }
 }
@@ -2235,7 +2256,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 pub unsafe fn WelsDeblockingInitFilter(
     pCtx: *mut SWelsDecoderContext,
     pCurDqLayer: *mut DqLayerState,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     iFilterIdc: *mut i32,
 ) {
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
@@ -2256,7 +2277,7 @@ pub unsafe fn WelsDeblockingInitFilter(
 pub unsafe fn WelsDeblockingFilterMB(
     pCurDqLayer: *mut DqLayerState,
     pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pFilter: &mut SDeblockingFilter,
     iFilterIdc: i32,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
