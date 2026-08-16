@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -20,9 +21,9 @@ pub const I16x16_COUNT: usize = 16;
 
 use crate::safe::plane::PlaneCursorMut;
 
-pub type PGetIntraPredFunc = unsafe extern "C" fn(pPred: *mut u8, kiLumaStride: i32);
-pub type PGetIntraPred8x8Func =
-    unsafe extern "C" fn(pPred: *mut u8, kiLumaStride: i32, bTLAvail: bool, bTRAvail: bool);
+// T5.X8: two more duplicate dispatch typedefs — `decoder_context.rs` holds the
+// pair the tables are actually typed by, and these two, unused here, described the
+// deleted wrappers' signature. S18's straggler class.
 
 #[inline(always)]
 pub fn WelsClip1(iX: i32) -> u8 {
