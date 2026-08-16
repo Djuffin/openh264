@@ -1527,3 +1527,29 @@ different day.
 
 Running total: **forty-five measurements, fifteen alternations, twenty-four
 acquittals.**
+
+### Forty-sixth measurement — 2026-08-15, Phase 5 session W: one hit, and step 1 alone settles it
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 46 | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**, `family` battery over T5.W2) | 42281 | **0** |
+
+Inside the signature on every axis — `mt`, `sm=3`, `t=4`, wrong length, and the
+zero-length form. The release sweep in the same battery read **341/341**.
+
+**Step 1: five isolation runs, all byte-identical at 42281** — the same binary and the
+same configuration producing two different outcomes, which is S14 step 1's
+discriminator met (*a deterministic port bug repeats its bytes*), and the
+non-reproduction is S23b from the other side: the race needs a sweep's load.
+
+**Step 2 not required and not run** — it is the two-or-more-hits arm, and this battery
+drew one. **Step 0 not run either, and its outcome is not asserted here**: the
+shortcut needs two byte-identical `rust_enc` binaries, its "test-only" predicate fails
+by inspection (the diff is production decoder code), and measurements 43–45 measured
+that exact class three commits ago and found the binaries differ. Recording that as a
+prediction rather than a result, per S33.
+
+**Acquitted as F3.**
+
+Running total: **forty-six measurements, fifteen alternations, twenty-five
+acquittals.**

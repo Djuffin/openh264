@@ -1,3 +1,32 @@
+#![deny(unsafe_code)]
+// Phase 5 W6 (family 4, T5.W2). Fourteen `unsafe fn` and two raw-pointer typedefs
+// went, in three moves and no new design:
+//
+//   * **The engine and the out-parameters became borrows.** Ten functions took a
+//     raw `pDecEngine` and eight took raw `u32`/`i32` out-parameters (the pointer
+//     spellings are deliberately not written here: this file's raw-pointer count is
+//     zero now, and S16 counts prose), every one guarded by a null test no caller could
+//     trip — verified by grep over all 74 call sites, which pass
+//     `addr_of_mut!((*pCtx).sCabacDecEngine)` or a `&mut` local and never a null.
+//     The guards are deleted rather than wrapped in `Option`, because absence is
+//     not a state a caller can express here; `fmo.rs`'s `Option<&T>` was the
+//     opposite case and kept its test.
+//   * **`pBinCtx` became `&mut SWelsCabacCtx`, or `&mut [SWelsCabacCtx]` where the
+//     body indexes it.** `DecodeUnaryBinCabac` walks `pBinCtx[0]` and
+//     `pBinCtx[iCtxOffset]`; `DecodeUEGMvCabac` walks `g_kMvdBinPos2Ctx`, whose
+//     largest entry is 3. Those two take a slice of exactly the length the index
+//     can reach, and the callers hand it over; the other two take one context.
+//   * **The two context accessors moved to `decoder_context.rs`.** `cabac_ctx_base`
+//     and `cabac_rbsp_window` reach through `pCtx` to a context field and derive
+//     from it, which is what a context accessor is — T5.V3's move of
+//     `slice_bit_reader` out of `bit_stream.rs`, one module over and for the same
+//     reason. They retire with family 15 and the view struct.
+//
+// What is *not* here is the reason the callers still hold raw pointers: the borrows
+// are created at each call and die with it (S25 — no borrow outlives one
+// expression), so `parse_mb_syn_cabac.rs`'s `pCabacDecEngine` and its
+// `cabac_ctx_base(pCtx).add(N)` locals stay raw and stay family 7's.
+
 //! Rust translation of OpenH264 CABAC Decoder Engine (`cabac_decoder.h` and `cabac_decoder.cpp`).
 //!
 //! # The read-extent audit (T3.2 step 0)
@@ -633,7 +662,16 @@ pub struct SWelsCabacCtx {
     pub uiMPS: u8,
 }
 
-pub type PWelsCabacCtx = *mut SWelsCabacCtx;
+// T5.W2: the `PWelsCabacCtx` pointer typedef sat here. With the eight
+// decoding functions taking `&mut SWelsCabacCtx` (or `&mut [SWelsCabacCtx]`) it has
+// no user left in the crate — S18's shape, found at the definition — and the same is
+// true of `PWelsCabacDecEngine` below. Both are deleted, which is what takes this
+// module's raw-pointer count to zero.
+
+/// The decoder context's four CABAC model tables — `sWelsCabacContexts`'s own type,
+/// named here so `WelsCabacGlobalInit` and `WelsCabacContextInit` can take the field
+/// by reference instead of reaching it through the context pointer (T5.W2).
+pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX as usize + 1]; 4];
 
 /// The arithmetic-decoding engine state — a **detached position**, per plan §2.1.3.
 ///
@@ -664,19 +702,14 @@ pub struct SWelsCabacDecEngine {
     pub pos: usize,
 }
 
-pub type PWelsCabacDecEngine = *mut SWelsCabacDecEngine;
-
 pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
 
 // 1. CABAC context initialization
-pub unsafe fn WelsCabacGlobalInit(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
-    unsafe {
+pub fn WelsCabacGlobalInit(contexts: &mut CabacModelTables, inited: &mut bool) {
+    {
         for iModel in 0..4 {
             for iQp in 0..=WELS_QP_MAX {
                 for iIdx in 0..WELS_CONTEXT_COUNT {
@@ -692,25 +725,24 @@ pub unsafe fn WelsCabacGlobalInit(pCtx: PWelsDecoderContext) {
                         uiStateIdx = (iPreCtxState - 64) as u8;
                         uiValMps = 1;
                     }
-                    (*pCtx).sWelsCabacContexts[iModel][iQp as usize][iIdx].uiState = uiStateIdx;
-                    (*pCtx).sWelsCabacContexts[iModel][iQp as usize][iIdx].uiMPS = uiValMps;
+                    contexts[iModel][iQp as usize][iIdx].uiState = uiStateIdx;
+                    contexts[iModel][iQp as usize][iIdx].uiMPS = uiValMps;
                 }
             }
         }
-        (*pCtx).bCabacInited = true;
+        *inited = true;
     }
 }
 
-pub unsafe fn WelsCabacContextInit(
-    pCtx: PWelsDecoderContext,
+pub fn WelsCabacContextInit(
+    contexts: &mut CabacModelTables,
+    inited: &mut bool,
+    active: &mut [SWelsCabacCtx; WELS_CONTEXT_COUNT],
     eSliceType: u8,
     iCabacInitIdc: i32,
     iQp: i32,
 ) {
-    if pCtx.is_null() {
-        return;
-    }
-    unsafe {
+    {
         let iIdx = if eSliceType as i32 == I_SLICE as i32 {
             0
         } else {
@@ -718,16 +750,14 @@ pub unsafe fn WelsCabacContextInit(
 
             (iCabacInitIdc + 1) as usize
         };
-        if !(*pCtx).bCabacInited {
-            WelsCabacGlobalInit(pCtx);
+        if !*inited {
+            WelsCabacGlobalInit(contexts, inited);
         }
         let qp_idx = iQp as usize;
         let model_idx = iIdx;
-        std::ptr::copy_nonoverlapping(
-            (*pCtx).sWelsCabacContexts[model_idx][qp_idx].as_ptr(),
-            cabac_ctx_base(pCtx),
-            WELS_CONTEXT_COUNT,
-        );
+        // The C++ `memcpy` of `WELS_CONTEXT_COUNT` contexts, with the count now the
+        // array's own length on both sides rather than a third number beside them.
+        *active = contexts[model_idx][qp_idx];
     }
 }
 
@@ -747,15 +777,12 @@ pub unsafe fn WelsCabacContextInit(
 /// advanced gives `pos = 4, remaining_bytes = 4`, landing exactly on `curr = 0`. The
 /// `debug_assert` is there because that reasoning is about *callers*, and callers
 /// change.
-pub unsafe fn InitCabacDecEngineFromBS(
-    pDecEngine: PWelsCabacDecEngine,
+pub fn InitCabacDecEngineFromBS(
+    pDecEngine: &mut SWelsCabacDecEngine,
     pBsAux: &mut BsReader,
     raw: &RawDataBuffer,
 ) -> i32 {
-    if pDecEngine.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let pos = pBsAux.cursor.pos() as isize;
         let len = pBsAux.cursor.len() as isize;
         let iRemainingBits = -pBsAux.cursor.left_bits();
@@ -822,63 +849,24 @@ pub unsafe fn InitCabacDecEngineFromBS(
 /// On the error path `bits_left` goes negative, the arithmetic shift goes negative, and
 /// the position moves *forward*: the raw code's behaviour, reproduced by doing this in
 /// `isize` and casting once, exactly where the raw code cast its `offset_from`.
-pub unsafe fn RestoreCabacDecEngineToBS(pDecEngine: PWelsCabacDecEngine, pBsAux: &mut BsReader) {
-    if pDecEngine.is_null() {
-        return;
-    }
-    unsafe {
-        let back = ((*pDecEngine).iBitsLeft >> 3) as isize;
-        let pos = (*pDecEngine).pos as isize - back;
+pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &mut BsReader) {
+    {
+        let back = (pDecEngine.iBitsLeft >> 3) as isize;
+        let pos = pDecEngine.pos as isize - back;
         debug_assert!(pos >= 0, "CABAC restore rewind underflows: pos {}", pos);
-        (*pDecEngine).pos = pos as usize;
-        (*pDecEngine).iBitsLeft = 0;
-        pBsAux.cursor.restore_from_cabac((*pDecEngine).pos);
+        pDecEngine.pos = pos as usize;
+        pDecEngine.iBitsLeft = 0;
+        pBsAux.cursor.restore_from_cabac(pDecEngine.pos);
     }
 }
 
-/// The CABAC context array as a raw base pointer, with **no reference in between**.
-///
-/// `cabac_ctx_base(pCtx)` takes `&mut` of the array first, which retags
-/// `Unique` over the whole of it and kills every pointer previously derived from it.
-/// `ParseSignificantMapCabac` keeps **two** live at once (`pMapCtx` and `pLastCtx`),
-/// so the second derivation invalidated the first and every read through it was UB —
-/// F13's `as_mut_ptr()` shape, the one T5.B2 found six times in `manage_dec_ref.rs`,
-/// here in the CABAC parser. `addr_of_mut!` creates no reference, so every pointer
-/// this hands out carries the context allocation's own provenance and none can
-/// invalidate another (S29).
-///
-/// # Safety
-/// `pCtx` must be a live decoder context; the caller indexes within
-/// `WELS_CONTEXT_COUNT`, exactly as the `as_mut_ptr().add(..)` spelling did.
-#[inline(always)]
-pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
-    unsafe { std::ptr::addr_of_mut!((*pCtx).pCabacCtx).cast::<SWelsCabacCtx>() }
-}
-
-/// The RBSP window the CABAC engine reads, for a context mid-slice.
-///
-/// One deref chain, once per parsing function rather than once per bin, and the
-/// window is derived from the owning [`RawDataBuffer`] at call time
-/// ([`RawDataBuffer::rbsp_window`] is the single authority).
-///
-/// `SHIM(phase5)`, and **the marker's reason changed at T5.M3 rather than expiring**:
-/// the layer's `pBitStringAux` mirror it used to walk is deleted, so what it walks now
-/// is [`slice_bit_reader`](crate::decoder::decoder_context::slice_bit_reader) — one raw
-/// derivation from `pCtx.pNalCur` instead of one from a cached duplicate. It retires
-/// when 5.6 converts `parse_mb_syn_cabac.rs`'s 18 callers, not before, and saying so
-/// beats retiring a marker whose pointer is still there.
-///
-/// # Safety
-/// `pCtx` must be a live decoder context inside slice decoding, so `pNalCur` is the
-/// NAL being parsed — the same precondition every caller in `parse_mb_syn_cabac.rs`
-/// already relies on for `pCabacDecEngine`.
-#[inline(always)]
-pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
-    unsafe {
-        let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
-        raw.rbsp_window(&*crate::decoder::decoder_context::slice_bit_reader(pCtx))
-    }
-}
+// T5.W2: `cabac_ctx_base` and `cabac_rbsp_window` moved to `decoder_context.rs`.
+// Both reach through `pCtx` to a context field and derive from it — `pCabacCtx` for
+// the first, `sRawData` + `slice_bit_reader` for the second — which is what a context
+// accessor *is*, and is why neither could convert while it lived here. This is
+// T5.V3's move of `slice_bit_reader` out of `bit_stream.rs`, one module over and for
+// the same reason: they retire with family 15's accessors and the view struct, not
+// with the arithmetic decoder.
 
 // 3. Actual decoding
 /// The refill — **audit site 2**, the 4/3/2/1 end ladder, bounded by `len - 1`.
@@ -912,23 +900,16 @@ pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
 /// `DecodeBinCabac` a stack frame *on every bin*, refill or not. This pins the
 /// reference's shape rather than leaving it to a heuristic (S8).
 #[inline(always)]
-pub unsafe fn Read32BitsCabac(
+pub fn Read32BitsCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    uiValue: *mut u32,
-    iNumBitsRead: *mut i32,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    uiValue: &mut u32,
+    iNumBitsRead: &mut i32,
 ) -> i32 {
-    if pDecEngine.is_null() {
-        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
-    }
-    unsafe {
-        let pos = (*pDecEngine).pos;
-        if !iNumBitsRead.is_null() {
-            *iNumBitsRead = 0;
-        }
-        if !uiValue.is_null() {
-            *uiValue = 0;
-        }
+    {
+        let pos = pDecEngine.pos;
+        *iNumBitsRead = 0;
+        *uiValue = 0;
         if pos >= win.len() {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
         }
@@ -946,27 +927,20 @@ pub unsafe fn Read32BitsCabac(
         } else {
             (tail[0] as u32, 8, 1)
         };
-        if !uiValue.is_null() {
-            *uiValue = v;
-        }
-        (*pDecEngine).pos = pos + width;
-        if !iNumBitsRead.is_null() {
-            *iNumBitsRead = n;
-        }
+        *uiValue = v;
+        pDecEngine.pos = pos + width;
+        *iNumBitsRead = n;
         ERR_NONE
     }
 }
 
-pub unsafe fn DecodeBinCabac(
+pub fn DecodeBinCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    pBinCtx: PWelsCabacCtx,
-    uiBit: *mut u32,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    pBinCtx: &mut SWelsCabacCtx,
+    uiBit: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() || pBinCtx.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let iErrorInfo: i32;
         let uiState = (*pBinCtx).uiState as usize;
         let mut uiBinVal = (*pBinCtx).uiMPS as u32;
@@ -992,10 +966,8 @@ pub unsafe fn DecodeBinCabac(
             // MPS
             (*pBinCtx).uiState = g_kuiStateTransTable[uiState][1];
             if uiRange >= WELS_CABAC_QUARTER {
-                (*pDecEngine).uiRange = uiRange;
-                if !uiBit.is_null() {
-                    *uiBit = uiBinVal;
-                }
+                pDecEngine.uiRange = uiRange;
+                *uiBit = uiBinVal;
                 return ERR_NONE;
             } else {
                 uiRange <<= 1;
@@ -1004,10 +976,8 @@ pub unsafe fn DecodeBinCabac(
 
         // Renorm
         (*pDecEngine).uiRange = uiRange;
-        (*pDecEngine).iBitsLeft -= iRenorm;
-        if !uiBit.is_null() {
-            *uiBit = uiBinVal;
-        }
+        pDecEngine.iBitsLeft -= iRenorm;
+        *uiBit = uiBinVal;
 
         if (*pDecEngine).iBitsLeft > 0 {
             (*pDecEngine).uiOffset = uiOffset;
@@ -1027,15 +997,12 @@ pub unsafe fn DecodeBinCabac(
     }
 }
 
-pub unsafe fn DecodeBypassCabac(
+pub fn DecodeBypassCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    uiBinVal: *mut u32,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    uiBinVal: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let iErrorInfo: i32;
         let mut iBitsLeft = (*pDecEngine).iBitsLeft;
         let mut uiOffset = (*pDecEngine).uiOffset;
@@ -1055,43 +1022,32 @@ pub unsafe fn DecodeBypassCabac(
         let uiRangeValue = (*pDecEngine).uiRange << iBitsLeft;
         if uiOffset >= uiRangeValue {
             (*pDecEngine).iBitsLeft = iBitsLeft;
-            (*pDecEngine).uiOffset = uiOffset - uiRangeValue;
-            if !uiBinVal.is_null() {
-                *uiBinVal = 1;
-            }
+            pDecEngine.uiOffset = uiOffset - uiRangeValue;
+            *uiBinVal = 1;
             return ERR_NONE;
         }
 
         (*pDecEngine).iBitsLeft = iBitsLeft;
-        (*pDecEngine).uiOffset = uiOffset;
-        if !uiBinVal.is_null() {
-            *uiBinVal = 0;
-        }
+        pDecEngine.uiOffset = uiOffset;
+        *uiBinVal = 0;
         ERR_NONE
     }
 }
 
-pub unsafe fn DecodeTerminateCabac(
+pub fn DecodeTerminateCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    uiBinVal: *mut u32,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    uiBinVal: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let mut iErrorInfo = ERR_NONE;
         let uiRange = (*pDecEngine).uiRange - 2;
         let uiOffset = (*pDecEngine).uiOffset;
 
-        if uiOffset >= (uiRange << (*pDecEngine).iBitsLeft) {
-            if !uiBinVal.is_null() {
-                *uiBinVal = 1;
-            }
+        if uiOffset >= (uiRange << pDecEngine.iBitsLeft) {
+            *uiBinVal = 1;
         } else {
-            if !uiBinVal.is_null() {
-                *uiBinVal = 0;
-            }
+            *uiBinVal = 0;
             // Renorm
             if uiRange < WELS_CABAC_QUARTER {
                 let iRenorm = g_kRenormTable256[uiRange as usize] as i32;
@@ -1118,37 +1074,35 @@ pub unsafe fn DecodeTerminateCabac(
 }
 
 // 4. Unary parsing
-pub unsafe fn DecodeUnaryBinCabac(
+/// `pBinCtx` is a **slice** because this function indexes it: the C++ walks
+/// `pBinCtx[0]` for the first bin and `pBinCtx[iCtxOffset]` for every bin after it,
+/// so the caller hands over exactly the `iCtxOffset + 1` contexts that names, and the
+/// index is bounds-checked instead of being a `.offset()` the type could not see
+/// (T5.W2).
+pub fn DecodeUnaryBinCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    pBinCtx: PWelsCabacCtx,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    pBinCtx: &mut [SWelsCabacCtx],
     iCtxOffset: i32,
-    uiSymVal: *mut u32,
+    uiSymVal: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() || pBinCtx.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
-        if !uiSymVal.is_null() {
-            *uiSymVal = 0;
-        }
+    {
+        *uiSymVal = 0;
         let mut uiFirstBin: u32 = 0;
-        let err = DecodeBinCabac(win, pDecEngine, pBinCtx, &mut uiFirstBin);
+        let err = DecodeBinCabac(win, pDecEngine, &mut pBinCtx[0], &mut uiFirstBin);
         if err != 0 {
             return err;
         }
         if uiFirstBin == 0 {
-            if !uiSymVal.is_null() {
-                *uiSymVal = 0;
-            }
+            *uiSymVal = 0;
             return ERR_NONE;
         }
 
-        let pCtx = pBinCtx.offset(iCtxOffset as isize);
+        let ctx_idx = iCtxOffset as usize;
         let mut sym_val: u32 = 0;
         loop {
             let mut uiCode: u32 = 0;
-            let err = DecodeBinCabac(win, pDecEngine, pCtx, &mut uiCode);
+            let err = DecodeBinCabac(win, pDecEngine, &mut pBinCtx[ctx_idx], &mut uiCode);
             if err != 0 {
                 return err;
             }
@@ -1157,30 +1111,23 @@ pub unsafe fn DecodeUnaryBinCabac(
                 break;
             }
         }
-        if !uiSymVal.is_null() {
-            *uiSymVal = sym_val;
-        }
+        *uiSymVal = sym_val;
         ERR_NONE
     }
 }
 
 // 5. EXGk parsing
-pub unsafe fn DecodeExpBypassCabac(
+pub fn DecodeExpBypassCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
+    pDecEngine: &mut SWelsCabacDecEngine,
     mut iCount: i32,
-    uiSymVal: *mut u32,
+    uiSymVal: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let mut uiCode: u32 = 0;
         let mut iSymTmp: i32 = 0;
         let mut iSymTmp2: i32 = 0;
-        if !uiSymVal.is_null() {
-            *uiSymVal = 0;
-        }
+        *uiSymVal = 0;
 
         loop {
             let err = DecodeBypassCabac(win, pDecEngine, &mut uiCode);
@@ -1211,32 +1158,25 @@ pub unsafe fn DecodeExpBypassCabac(
             }
         }
 
-        if !uiSymVal.is_null() {
-            *uiSymVal = (iSymTmp + iSymTmp2) as u32;
-        }
+        *uiSymVal = (iSymTmp + iSymTmp2) as u32;
         ERR_NONE
     }
 }
 
-pub unsafe fn DecodeUEGLevelCabac(
+pub fn DecodeUEGLevelCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    pBinCtx: PWelsCabacCtx,
-    uiBinVal: *mut u32,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    pBinCtx: &mut SWelsCabacCtx,
+    uiBinVal: &mut u32,
 ) -> u32 {
-    if pDecEngine.is_null() || pBinCtx.is_null() {
-        return ERR_INFO_INVALID_ACCESS as u32;
-    }
-    unsafe {
+    {
         let mut uiCode: u32 = 0;
         let err = DecodeBinCabac(win, pDecEngine, pBinCtx, &mut uiCode);
         if err != 0 {
             return err as u32;
         }
         if uiCode == 0 {
-            if !uiBinVal.is_null() {
-                *uiBinVal = 0;
-            }
+            *uiBinVal = 0;
             return ERR_NONE as u32;
         }
 
@@ -1264,38 +1204,34 @@ pub unsafe fn DecodeUEGLevelCabac(
             uiCode += uiTmp + 1;
         }
 
-        if !uiBinVal.is_null() {
-            *uiBinVal = uiCode;
-        }
+        *uiBinVal = uiCode;
         ERR_NONE as u32
     }
 }
 
-pub unsafe fn DecodeUEGMvCabac(
+/// `pBinCtx` is a **slice** for [`DecodeUnaryBinCabac`]'s reason: the bin index walks
+/// `g_kMvdBinPos2Ctx`, whose largest entry is 3, so the caller hands over the four
+/// contexts the table can name (T5.W2).
+pub fn DecodeUEGMvCabac(
     win: &[u8],
-    pDecEngine: PWelsCabacDecEngine,
-    pBinCtx: PWelsCabacCtx,
+    pDecEngine: &mut SWelsCabacDecEngine,
+    pBinCtx: &mut [SWelsCabacCtx],
     iMaxC: u32,
-    uiCode: *mut u32,
+    uiCode: &mut u32,
 ) -> i32 {
-    if pDecEngine.is_null() || pBinCtx.is_null() {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    unsafe {
+    {
         let mut first_code: u32 = 0;
         let err = DecodeBinCabac(
             win,
             pDecEngine,
-            pBinCtx.offset(g_kMvdBinPos2Ctx[0] as isize),
+            &mut pBinCtx[g_kMvdBinPos2Ctx[0] as usize],
             &mut first_code,
         );
         if err != 0 {
             return err;
         }
         if first_code == 0 {
-            if !uiCode.is_null() {
-                *uiCode = 0;
-            }
+            *uiCode = 0;
             return ERR_NONE;
         }
 
@@ -1304,9 +1240,9 @@ pub unsafe fn DecodeUEGMvCabac(
         let mut code: u32 = 0;
 
         loop {
-            let ctx_offset = g_kMvdBinPos2Ctx[uiCount] as isize;
+            let ctx_offset = g_kMvdBinPos2Ctx[uiCount] as usize;
             uiCount += 1;
-            let err = DecodeBinCabac(win, pDecEngine, pBinCtx.offset(ctx_offset), &mut uiTmp);
+            let err = DecodeBinCabac(win, pDecEngine, &mut pBinCtx[ctx_offset], &mut uiTmp);
             if err != 0 {
                 return err;
             }
@@ -1324,9 +1260,7 @@ pub unsafe fn DecodeUEGMvCabac(
             code += uiTmp + 1;
         }
 
-        if !uiCode.is_null() {
-            *uiCode = code;
-        }
+        *uiCode = code;
         ERR_NONE
     }
 }
@@ -1350,11 +1284,21 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.eSliceType = crate::decoder::slice::EWelsSliceType::I_SLICE;
         ctx.bCabacInited = false;
-        unsafe {
-            WelsCabacGlobalInit(&mut *ctx);
-            assert!(ctx.bCabacInited);
-            WelsCabacContextInit(&mut *ctx, crate::decoder::slice::EWelsSliceType::I_SLICE as u8, 0, 26);
-        }
+        WelsCabacGlobalInit(&mut ctx.sWelsCabacContexts, &mut ctx.bCabacInited);
+        assert!(ctx.bCabacInited);
+        WelsCabacContextInit(
+            &mut ctx.sWelsCabacContexts,
+            &mut ctx.bCabacInited,
+            &mut ctx.pCabacCtx,
+            crate::decoder::slice::EWelsSliceType::I_SLICE as u8,
+            0,
+            26,
+        );
+        // T5.W2: the `memcpy` is an array assignment now, so the test can say what it
+        // was always asserting by omission — that the active contexts *are* the model
+        // row the two indices select. Nothing here was reachable before: the previous
+        // body called both functions through `pCtx` and checked only the flag.
+        assert_eq!(ctx.pCabacCtx, ctx.sWelsCabacContexts[0][26]);
     }
 
     // -----------------------------------------------------------------------
@@ -1389,7 +1333,7 @@ mod tests {
         let mut bs = BsReader::default();
         let mut engine = SWelsCabacDecEngine::default();
 
-        unsafe {
+        {
             let err = DecInitBits(&mut bs, &raw, 0, (payload.len() * 8) as i32);
             assert_eq!(err, ERR_NONE);
 
@@ -1465,7 +1409,7 @@ mod tests {
         let mut engine = SWelsCabacDecEngine::default();
         let win = &buf[..payload.len()];
 
-        unsafe {
+        {
             let mut value: u32 = 0;
             let mut bits: i32 = 0;
             // Walk the ladder from the last four bytes down: 4, then 3/2/1.
@@ -1509,7 +1453,7 @@ mod tests {
         let raw = RawDataBuffer::from_vec(rbsp_with_slack(&payload));
         let mut bs = BsReader::default();
         let mut engine = SWelsCabacDecEngine::default();
-        unsafe {
+        {
             assert_eq!(
                 DecInitBits(&mut bs, &raw, 0, (payload.len() * 8) as i32),
                 ERR_NONE

@@ -153,7 +153,7 @@ pub const FEEDBACK_VCL_NAL: i32 = 1;
 // CABAC & Bitstream Data Structures
 // ---------------------------------------------------------------------------
 
-pub use crate::decoder::cabac_decoder::{SWelsCabacCtx, PWelsCabacCtx, SWelsCabacDecEngine, PWelsCabacDecEngine};
+pub use crate::decoder::cabac_decoder::{SWelsCabacCtx, SWelsCabacDecEngine};
 
 // `SDataBuffer { pHead, pEnd, pStartPos, pCurPos }` died at T3.3: the raw bitstream
 // buffer is an owned [`RawDataBuffer`] (`decoder::bit_stream`), and positions are
@@ -801,6 +801,50 @@ pub unsafe fn active_pps(pCtx: PWelsDecoderContext) -> *mut SPps {
 /// retag and the returned pointer carries the NAL allocation's provenance, not a
 /// field borrow's.
 ///
+/// The CABAC context array as a raw base pointer, with **no reference in between**.
+///
+/// `cabac_ctx_base(pCtx)` takes `&mut` of the array first, which retags
+/// `Unique` over the whole of it and kills every pointer previously derived from it.
+/// `ParseSignificantMapCabac` keeps **two** live at once (`pMapCtx` and `pLastCtx`),
+/// so the second derivation invalidated the first and every read through it was UB —
+/// F13's `as_mut_ptr()` shape, the one T5.B2 found six times in `manage_dec_ref.rs`,
+/// here in the CABAC parser. `addr_of_mut!` creates no reference, so every pointer
+/// this hands out carries the context allocation's own provenance and none can
+/// invalidate another (S29).
+///
+/// # Safety
+/// `pCtx` must be a live decoder context; the caller indexes within
+/// `WELS_CONTEXT_COUNT`, exactly as the `as_mut_ptr().add(..)` spelling did.
+#[inline(always)]
+pub unsafe fn cabac_ctx_base(pCtx: PWelsDecoderContext) -> *mut SWelsCabacCtx {
+    unsafe { std::ptr::addr_of_mut!((*pCtx).pCabacCtx).cast::<SWelsCabacCtx>() }
+}
+
+/// The RBSP window the CABAC engine reads, for a context mid-slice.
+///
+/// One deref chain, once per parsing function rather than once per bin, and the
+/// window is derived from the owning [`RawDataBuffer`] at call time
+/// ([`RawDataBuffer::rbsp_window`] is the single authority).
+///
+/// `SHIM(phase5)`, and **the marker's reason changed at T5.M3 rather than expiring**:
+/// the layer's `pBitStringAux` mirror it used to walk is deleted, so what it walks now
+/// is [`slice_bit_reader`](crate::decoder::decoder_context::slice_bit_reader) — one raw
+/// derivation from `pCtx.pNalCur` instead of one from a cached duplicate. It retires
+/// when 5.6 converts `parse_mb_syn_cabac.rs`'s 18 callers, not before, and saying so
+/// beats retiring a marker whose pointer is still there.
+///
+/// # Safety
+/// `pCtx` must be a live decoder context inside slice decoding, so `pNalCur` is the
+/// NAL being parsed — the same precondition every caller in `parse_mb_syn_cabac.rs`
+/// already relies on for `pCabacDecEngine`.
+#[inline(always)]
+pub unsafe fn cabac_rbsp_window<'a>(pCtx: PWelsDecoderContext) -> &'a [u8] {
+    unsafe {
+        let raw: &'a RawDataBuffer = &(*pCtx).sRawData;
+        raw.rbsp_window(&*slice_bit_reader(pCtx))
+    }
+}
+
 /// # Safety
 /// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
 /// the NAL being parsed — the precondition every caller already relies on, and the
