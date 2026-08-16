@@ -101,7 +101,7 @@ unsafe fn insert_ref(pPic: *mut SPicture) -> Option<PicId> {
         pPic.is_null() || (*pPic).pic_id().is_some(),
         "a reference list holds pool pictures; this one has no slot"
     );
-    crate::decoder::picture::pic_slot(pPic)
+    crate::decoder::picture::pic_slot(pPic.as_ref())
 }
 
 #[inline(always)]
@@ -716,7 +716,9 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
                             ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
                         );
                     }
-                } else if crate::decoder::picture::pic_slot(pRef) == crate::decoder::picture::pic_slot(prev_pic) {
+                } else if crate::decoder::picture::pic_slot(pRef.as_ref())
+                    == crate::decoder::picture::pic_slot(prev_pic.as_ref())
+                {
                     WelsLog(
                         &(*pCtx).sLogCtx,
                         WELS_LOG_WARNING,
@@ -1598,7 +1600,7 @@ mod tests {
             assert_eq!((*pRefPic).pShortRefList[LIST_0][1], s1);
 
             let deleted = WelsDelShortFromList(pCtx, pRefPic, 10);
-            assert_eq!(crate::decoder::picture::pic_slot(deleted), s1);
+            assert_eq!(crate::decoder::picture::pic_slot(deleted.as_ref()), s1);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s2);
         }

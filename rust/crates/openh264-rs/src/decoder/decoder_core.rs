@@ -307,7 +307,10 @@ use crate::decoder::decoder_context::{
     fmo_of, parser_bs, pic_pool_mut, pic_refs, pool_pic, pps_of, ref_id, ref_pic, sps_of,
     subset_sps_of, SpsRef,
 };
-use crate::decoder::picture::pic_slot;
+// T5.W1: `use crate::decoder::picture::pic_slot;` sat here with **no user** — the
+// last one went at T5.P″1 (`:3691`'s comment records the deletion), and the import
+// outlived it because `unused_imports` is allowed crate-wide (`lib.rs`). Found by
+// family 2's caller grep, deleted here.
 
 
 #[repr(C)]
