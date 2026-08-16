@@ -1940,3 +1940,102 @@ re-runs:
 Binaries are stashed and stay on disk: `.perfpair/n_base` (`16a6130c`), `n_mid`
 (`9da4bede`), `n_head` (`d0b7f399`), `o_niche` (`74d02058`), `r_head` (`5fbe61a2`),
 `u_head` (`e6873fe1`). Day two needs **no build**.
+
+### Day two — paid, and the verdict does not move (session V, 2026-08-15)
+
+**The separation, stated exactly rather than implied by a heading.** U's readings
+were taken 2026-08-15, 09:30–10:30 PDT; these were taken the same day, 20:01–20:08
+PDT — **≈10 hours later, same calendar day**, machine otherwise idle, no build in
+between (all six binaries were already stashed). S2b's clause asks for a *different
+day*, and this is not one; it is the widest separation Eugene's closing order left
+available. It is a genuine re-roll of machine state — different thermal history,
+different background load, a different page cache — and it is weaker than a true
+day two. Every verdict below therefore rests on whether the two readings **agree**,
+not on the second one alone.
+
+#### The window — confirmed, and no longer provisional
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| U, morning | 7 | +3.58% | +2.77% | +2.21% | **+2.77%** | +0.21% |
+| **V, evening** | 7 | **+3.38%** | **+2.49%** | **+2.65%** | **+2.65%** | **+0.00%** |
+| U's 7-pair null | 7 | +1.82% | −0.11% | −0.74% | −0.11% | +0.00% |
+| **V's 7-pair null** (`u_head` both slots) | 7 | **+2.29%** | **+0.15%** | **−0.41%** | **+0.15%** | **+0.00%** |
+
+Two independent 7-pair readings of `d0b7f399`→`e6873fe1`, agreeing in **sign**, in
+**magnitude** (medians 0.12 points apart, CB rows 0.20 apart) and in **row order**
+(CB worst in both), with every decode row above its own reading's null ceiling and
+encode flat in both. **The window is real**, and the label "provisional" comes off
+it.
+
+**The margins are thinner in the evening and that is worth printing.** V's null CB
+row is +2.29%, so CB clears its own null's ceiling by 1.09 points and Main by 0.20.
+A single evening reading judged against a 2.70-point-wide band would not have
+carried a verdict on its own. What carries it is the agreement between two
+readings, which is exactly what S2b's day-two clause is for.
+
+**And the recommendation the table made has now been spent.** Option 2 was "day-two
+the window before deciding anything", on the ground that this phase had twice had a
+second day overturn a first (N's bisect, the niche's asymmetry). It was the right
+call to make and it did not overturn anything: the third second-day reading in this
+phase is the first one that **confirms**. That is a result about the instrument as
+much as about the window — the spans that survived their second day (N's whole span,
+this window) are the ones measured whole, and the ones that did not (N's bisect
+halves, the niche's asymmetry) are the ones measured in pieces at the resolution
+limit.
+
+#### The niche — inside the floor, and "directionally consistent" does not survive
+
+| reading | pairs | CB (no B-frames — the control) | Main | High | median |
+|---|---|---|---|---|---|
+| U | 3 | +0.15% | −0.72% | −0.99% | −0.72% |
+| **V** | 3 | **−0.15%** | **+0.33%** | **−0.29%** | **−0.15%** |
+
+Main flips sign between the two readings (−0.72% → +0.33%) and High falls to a
+third of its morning value. Every row of both readings is inside the 7-pair null
+band on either day. U's verdict was *directionally consistent, unresolved*; the
+second reading removes the first half of it, by S2b's own clause — two measurements
+of one span disagreeing in sign is evidence the effect is below the measurement
+error. **The niche is unresolved and inside the floor.** It stays in the tree where
+T5.O0 put it: no row is outside the floor in either direction, so there is nothing
+to recover and nothing to revert.
+
+Not run: the bisect halves (session K's law; the hand-off said so and it was right).
+
+#### The stop-line verdict, re-derived on two readings — **the breach stands**
+
+| term | CB |
+|---|---|
+| cumulative at N's head (Phase 4a exit +17.8%, the 5.2 flip, session N) | +21.6 … +21.9% |
+| the D-gate-1 window, 7 pairs, **two** readings | **+3.38 … +3.58%** |
+| **cumulative CB now** | **≈ +25.0 … +25.5%** |
+| stop-line (plan §7.4, D-perf-5's direction) | ≈ **+23%** |
+| **breach** | **≈ 2.0 … 2.5 points over** |
+
+The window's second reading is 0.20 points cheaper than its first, so the breach
+narrows from ≈2.2–2.8 points to ≈2.0–2.5. It does not close, and no reading
+available to this session can close it: the whole distance to the line is 2 points
+and the window is the only unmeasured term left in the chain.
+
+D-perf-4's *other* tripwire — **+25% median cumulative** — is **not** breached, on
+the same basis U stated: the decode median has never tracked CB, and CB is both the
+worst of the three streams and the row the stop-line was written against. Both are
+stated so the escalation is not argued from the harsher number alone.
+
+#### The disposition — **D-perf-6: recovery deferred to the Phase 9 perf pass**
+
+Recorded in full at plan §7.4 as **D-perf-6**. In short: the escalation table's
+**option 6**, which is D-perf-4's own disposition for a cumulative deficit that
+nothing attributes, on the precedent the ledger already carries (Phase 2's +14.7% /
++16.6% shim families, downgraded to Phase 5 and then to the Phase 9 pass). Options
+4 and 5 are refused on measurement grounds rather than on cost: the window's bisect
+does not resolve at 3 pairs and a per-session split is finer, so it would resolve
+less (session K's law), and **nothing can be parked because nothing is attributed**.
+Option 1 (re-baseline to ≈+26%) is not taken — the line stays where D-perf-5 put it,
+and the phase exits over it with the overage named.
+
+**The ledger does not move.** No row recovers this: the window's cost is the
+structural conversion work Phase 5 exists to do, which has no recovery row because
+nothing was parked to recover. The new line for the record: **cumulative CB
+≈ +25.0…+25.5% at Phase 5's exit, ≈2.0–2.5 points over the ≈+23% stop-line,
+deferred to Phase 9 by D-perf-6.**
