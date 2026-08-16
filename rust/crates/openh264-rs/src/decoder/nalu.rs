@@ -560,8 +560,8 @@ unsafe fn bytes_copy<T>(dst: *mut T, src: *const T) {
 /// parameter at all** in pointer form; it gains one by construction, and every
 /// caller passes exactly [`NAL_UNIT_HEADER_EXT_SIZE`] bytes behind its own
 /// `iNalSize` guard.
-pub unsafe fn DecodeNalHeaderExt(pNal: *mut SNalUnit, src: &[u8]) {
-    let pHeaderExt = &mut (*pNal).sNalHeaderExt;
+pub fn DecodeNalHeaderExt(pNal: &mut SNalUnit, src: &[u8]) {
+    let pHeaderExt = &mut pNal.sNalHeaderExt;
 
     let mut uiCurByte = src[0];
     pHeaderExt.bIdrFlag = (uiCurByte & 0x40) != 0;
@@ -624,17 +624,17 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
 /// owning buffer.
 pub unsafe fn ParseNalHeader(
     pCtx: *mut SWelsDecoderContext,
-    pNalUnitHeader: *mut SNalUnitHeader,
+    pNalUnitHeader: &mut SNalUnitHeader,
     kiRbspStart: usize,
     iSrcRbspLen: i32,
-    pConsumedBytes: *mut i32,
+    pConsumedBytes: &mut i32,
 ) -> Option<usize> {
     let pCurNal: *mut SNalUnit;
     let bytes = (*pCtx).sRawData.bytes();
     let mut iNal = kiRbspStart;
     let mut iNalSize = iSrcRbspLen;
 
-    (*pNalUnitHeader).eNalUnitType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
+    pNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_UNSPEC_0;
 
     // Remove consecutive ZERO bytes at the end of current NAL in reverse order
     let mut iIndex = iSrcRbspLen - 1;
@@ -648,14 +648,14 @@ pub unsafe fn ParseNalHeader(
         }
     }
 
-    (*pNalUnitHeader).uiForbiddenZeroBit = bytes[iNal] >> 7;
-    if (*pNalUnitHeader).uiForbiddenZeroBit != 0 {
+    pNalUnitHeader.uiForbiddenZeroBit = bytes[iNal] >> 7;
+    if pNalUnitHeader.uiForbiddenZeroBit != 0 {
         (*pCtx).iErrorCode |= dsBitstreamError;
         return None;
     }
 
-    (*pNalUnitHeader).uiNalRefIdc = (bytes[iNal] >> 5) & 0x03;
-    (*pNalUnitHeader).eNalUnitType = match bytes[iNal] & 0x1F {
+    pNalUnitHeader.uiNalRefIdc = (bytes[iNal] >> 5) & 0x03;
+    pNalUnitHeader.eNalUnitType = match bytes[iNal] & 0x1F {
         0 => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
         1 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE,
         2 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPA,
@@ -682,7 +682,7 @@ pub unsafe fn ParseNalHeader(
     iNalSize -= 1;
     *pConsumedBytes += 1;
 
-    let eType = (*pNalUnitHeader).eNalUnitType;
+    let eType = pNalUnitHeader.eNalUnitType;
 
     if !(IS_SEI_NAL(eType)
         || IS_SPS_NAL(eType)
@@ -738,7 +738,7 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            DecodeNalHeaderExt(pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
+            DecodeNalHeaderExt(&mut *pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
             if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                 || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
             {
@@ -752,11 +752,11 @@ pub unsafe fn ParseNalHeader(
             iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
             *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
 
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = (*pNalUnitHeader).uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
 
-            if (*pNalUnitHeader).uiNalRefIdc != 0 {
+            if pNalUnitHeader.uiNalRefIdc != 0 {
                 let iBitSize = rbsp_bit_size(bytes, iNal, iNalSize);
                 let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iNal, iBitSize);
                 if iErr != ERR_NONE {
@@ -787,9 +787,9 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
             (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = (*pNalUnitHeader).uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = (*pNalUnitHeader).uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = (*pNalUnitHeader).eNalUnitType;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
+            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
 
             // The count is a scalar copy, not a borrow: it is the one thing this branch
             // needs to carry across `ParseSliceHeaderSyntaxs`, which derives the access
@@ -807,7 +807,7 @@ pub unsafe fn ParseNalHeader(
                     return None;
                 }
 
-                DecodeNalHeaderExt(pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
+                DecodeNalHeaderExt(&mut *pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
                 if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                     || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
                 {
@@ -895,75 +895,75 @@ pub unsafe fn ParseNalHeader(
 /// Evaluates whether two consecutive VCL NAL units belong to different Access Units.
 pub unsafe fn CheckAccessUnitBoundaryExt(
     pCtx: PWelsDecoderContext,
-    pLastNalHdrExt: *const SNalUnitHeaderExt,
-    pCurNalHeaderExt: *const SNalUnitHeaderExt,
-    pLastSliceHeader: *const SSliceHeader,
-    pCurSliceHeader: *const SSliceHeader,
+    pLastNalHdrExt: &SNalUnitHeaderExt,
+    pCurNalHeaderExt: &SNalUnitHeaderExt,
+    pLastSliceHeader: &SSliceHeader,
+    pCurSliceHeader: &SSliceHeader,
 ) -> bool {
     // T5.R6: the SPS the header names is looked up here rather than carried in it.
-    let kpSps = sps_of(pCtx, (*pCurSliceHeader).sps_ref);
+    let kpSps = sps_of(pCtx, pCurSliceHeader.sps_ref);
 
     // Subclause 7.1.4.1.1 temporal_id
-    if (*pLastNalHdrExt).uiTemporalId != (*pCurNalHeaderExt).uiTemporalId {
+    if pLastNalHdrExt.uiTemporalId != pCurNalHeaderExt.uiTemporalId {
         return true;
     }
     // Subclause 7.4.1.2.5
-    if (*pLastSliceHeader).iRedundantPicCnt > (*pCurSliceHeader).iRedundantPicCnt {
+    if pLastSliceHeader.iRedundantPicCnt > pCurSliceHeader.iRedundantPicCnt {
         return true;
     }
     // Subclause G.7.4.1.2.4
-    if (*pLastNalHdrExt).uiDependencyId > (*pCurNalHeaderExt).uiDependencyId {
+    if pLastNalHdrExt.uiDependencyId > pCurNalHeaderExt.uiDependencyId {
         return true;
     }
-    if (*pLastNalHdrExt).uiQualityId > (*pCurNalHeaderExt).uiQualityId {
+    if pLastNalHdrExt.uiQualityId > pCurNalHeaderExt.uiQualityId {
         return true;
     }
     // Subclause 7.4.1.2.4
-    if (*pLastSliceHeader).iFrameNum != (*pCurSliceHeader).iFrameNum {
+    if pLastSliceHeader.iFrameNum != pCurSliceHeader.iFrameNum {
         return true;
     }
-    if (*pLastSliceHeader).iPpsId != (*pCurSliceHeader).iPpsId {
+    if pLastSliceHeader.iPpsId != pCurSliceHeader.iPpsId {
         return true;
     }
-    if (*pLastSliceHeader).sps_ref.is_some() && (*pCurSliceHeader).sps_ref.is_some() {
+    if pLastSliceHeader.sps_ref.is_some() && pCurSliceHeader.sps_ref.is_some() {
         // The ids *are* the comparison now — and they carry which buffer they index,
         // where the C compared `pSps->iSpsId` and could not tell the two apart.
-        if (*pLastSliceHeader).sps_ref != (*pCurSliceHeader).sps_ref {
+        if pLastSliceHeader.sps_ref != pCurSliceHeader.sps_ref {
             return true;
         }
     }
-    if (*pLastSliceHeader).bFieldPicFlag != (*pCurSliceHeader).bFieldPicFlag {
+    if pLastSliceHeader.bFieldPicFlag != pCurSliceHeader.bFieldPicFlag {
         return true;
     }
-    if (*pLastSliceHeader).bBottomFiledFlag != (*pCurSliceHeader).bBottomFiledFlag {
+    if pLastSliceHeader.bBottomFiledFlag != pCurSliceHeader.bBottomFiledFlag {
         return true;
     }
-    if ((*pLastNalHdrExt).sNalUnitHeader.uiNalRefIdc != NRI_PRI_LOWEST)
-        != ((*pCurNalHeaderExt).sNalUnitHeader.uiNalRefIdc != NRI_PRI_LOWEST)
+    if (pLastNalHdrExt.sNalUnitHeader.uiNalRefIdc != NRI_PRI_LOWEST)
+        != (pCurNalHeaderExt.sNalUnitHeader.uiNalRefIdc != NRI_PRI_LOWEST)
     {
         return true;
     }
-    if (*pLastNalHdrExt).bIdrFlag != (*pCurNalHeaderExt).bIdrFlag {
+    if pLastNalHdrExt.bIdrFlag != pCurNalHeaderExt.bIdrFlag {
         return true;
     }
-    if (*pCurNalHeaderExt).bIdrFlag {
-        if (*pLastSliceHeader).uiIdrPicId != (*pCurSliceHeader).uiIdrPicId {
+    if pCurNalHeaderExt.bIdrFlag {
+        if pLastSliceHeader.uiIdrPicId != pCurSliceHeader.uiIdrPicId {
             return true;
         }
     }
     if !kpSps.is_null() {
         if (*kpSps).uiPocType == 0 {
-            if (*pLastSliceHeader).iPicOrderCntLsb != (*pCurSliceHeader).iPicOrderCntLsb {
+            if pLastSliceHeader.iPicOrderCntLsb != pCurSliceHeader.iPicOrderCntLsb {
                 return true;
             }
-            if (*pLastSliceHeader).iDeltaPicOrderCntBottom != (*pCurSliceHeader).iDeltaPicOrderCntBottom {
+            if pLastSliceHeader.iDeltaPicOrderCntBottom != pCurSliceHeader.iDeltaPicOrderCntBottom {
                 return true;
             }
         } else if (*kpSps).uiPocType == 1 {
-            if (*pLastSliceHeader).iDeltaPicOrderCnt[0] != (*pCurSliceHeader).iDeltaPicOrderCnt[0] {
+            if pLastSliceHeader.iDeltaPicOrderCnt[0] != pCurSliceHeader.iDeltaPicOrderCnt[0] {
                 return true;
             }
-            if (*pLastSliceHeader).iDeltaPicOrderCnt[1] != (*pCurSliceHeader).iDeltaPicOrderCnt[1] {
+            if pLastSliceHeader.iDeltaPicOrderCnt[1] != pCurSliceHeader.iDeltaPicOrderCnt[1] {
                 return true;
             }
         }
@@ -1135,12 +1135,7 @@ pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize,
                 }
             }
             let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
-            iErr = ParsePps(
-                pCtx,
-                (*pCtx).sSpsPpsCtx.sPpsBuffer.as_mut_ptr(),
-                buf,
-                cursor,
-            );
+            iErr = ParsePps(pCtx, buf, cursor);
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
                     && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1170,14 +1165,14 @@ pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize,
 pub unsafe fn ParseRefBasePicMarking(
     buf: &[u8],
     pBs: &mut BsCursor,
-    pRefBasePicMarking: *mut SRefBasePicMarking,
+    pRefBasePicMarking: &mut SRefBasePicMarking,
 ) -> i32 {
     let mut uiCode: u32 = 0;
     if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
         return ERR_INVALID_PARAMETERS;
     }
     let kbAdaptiveMarkingModeFlag = uiCode != 0;
-    (*pRefBasePicMarking).bAdaptiveRefBasePicMarkingModeFlag = kbAdaptiveMarkingModeFlag;
+    pRefBasePicMarking.bAdaptiveRefBasePicMarkingModeFlag = kbAdaptiveMarkingModeFlag;
 
     if kbAdaptiveMarkingModeFlag {
         let mut iIdx = 0;
@@ -1186,7 +1181,7 @@ pub unsafe fn ParseRefBasePicMarking(
                 return ERR_INVALID_PARAMETERS;
             }
             let kuiMmco = uiCode;
-            (*pRefBasePicMarking).mmco_base[iIdx].uiMmcoType = kuiMmco;
+            pRefBasePicMarking.mmco_base[iIdx].uiMmcoType = kuiMmco;
 
             if kuiMmco == MMCO_END {
                 break;
@@ -1195,13 +1190,13 @@ pub unsafe fn ParseRefBasePicMarking(
                 if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                     return ERR_INVALID_PARAMETERS;
                 }
-                (*pRefBasePicMarking).mmco_base[iIdx].uiDiffOfPicNums = 1 + uiCode;
-                (*pRefBasePicMarking).mmco_base[iIdx].iShortFrameNum = 0;
+                pRefBasePicMarking.mmco_base[iIdx].uiDiffOfPicNums = 1 + uiCode;
+                pRefBasePicMarking.mmco_base[iIdx].iShortFrameNum = 0;
             } else if kuiMmco == MMCO_LONG2UNUSED {
                 if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
                     return ERR_INVALID_PARAMETERS;
                 }
-                (*pRefBasePicMarking).mmco_base[iIdx].uiLongTermPicNum = uiCode;
+                pRefBasePicMarking.mmco_base[iIdx].uiLongTermPicNum = uiCode;
             }
             iIdx += 1;
             if iIdx >= MAX_MMCO_COUNT {
@@ -1254,11 +1249,11 @@ pub unsafe fn ParsePrefixNalUnit(
 /// Decodes the SVC extension syntax block within a Subset SPS (`SSubsetSps`).
 pub unsafe fn DecodeSpsSvcExt(
     pCtx: *mut SWelsDecoderContext,
-    pSpsExt: *mut SSubsetSps,
+    pSpsExt: &mut SSubsetSps,
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    let pExt = &mut (*pSpsExt).sSpsSvcExt;
+    let pExt = &mut pSpsExt.sSpsSvcExt;
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
@@ -1412,8 +1407,8 @@ pub unsafe fn ParseSps(
     pCtx: *mut SWelsDecoderContext,
     buf: &[u8],
     pBsAux: &mut BsCursor,
-    pPicWidth: *mut i32,
-    pPicHeight: *mut i32,
+    pPicWidth: &mut i32,
+    pPicHeight: &mut i32,
 ) -> i32 {
     // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in au_parser.cpp. Zeroing the
     // raw bytes (rather than using Default) also clears the struct's padding, which
@@ -1537,15 +1532,16 @@ pub unsafe fn ParseSps(
         pSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
 
         if pSps.bSeqScalingMatrixPresentFlag {
+            let src = ScalingListSource::of(pSps);
             ParseScalingList(
-                pSps,
+                &src,
                 buf,
                 pBsAux,
                 false,
                 false,
-                pSps.bSeqScalingListPresentFlag.as_mut_ptr(),
-                pSps.iScalingList4x4.as_mut_ptr(),
-                pSps.iScalingList8x8.as_mut_ptr(),
+                &mut pSps.bSeqScalingListPresentFlag,
+                &mut pSps.iScalingList4x4,
+                &mut pSps.iScalingList8x8,
             );
         }
     }
@@ -1670,7 +1666,7 @@ pub unsafe fn ParseSps(
     }
 
     if kbUseSubsetFlag && (uiProfileIdc == PRO_SCALABLE_BASELINE || uiProfileIdc == PRO_SCALABLE_HIGH) {
-        let iRet = DecodeSpsSvcExt(pCtx, pSubsetSps, buf, pBsAux);
+        let iRet = DecodeSpsSvcExt(pCtx, &mut *pSubsetSps, buf, pBsAux);
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -1732,10 +1728,13 @@ pub unsafe fn ParseSps(
 /// Parses Picture Parameter Sets (PPS).
 pub unsafe fn ParsePps(
     pCtx: *mut SWelsDecoderContext,
-    pPpsList: *mut SPps,
     buf: &[u8],
     pBsAux: &mut BsCursor,
 ) -> i32 {
+    // T5.X6: `pPpsList: *mut SPps` stood here — the context's PPS buffer base,
+    // passed by every caller and **read nowhere in the body**, which reaches the
+    // buffer through `pCtx` instead. Dead since the function was written; deleted
+    // rather than converted (S18).
     // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp; zeroing the raw bytes also
     // clears padding, which the byte-wise comparison against the active PPS relies on.
     // F31: the `write_bytes` is what makes that true — see `ParseSps`.
@@ -1847,15 +1846,17 @@ pub unsafe fn ParsePps(
 
         if pPps.bPicScalingMatrixPresentFlag {
             if (*pCtx).sSpsPpsCtx.bSpsAvailFlags[pPps.iSpsId as usize] {
+                let src =
+                    ScalingListSource::of(&(*pCtx).sSpsPpsCtx.sSpsBuffer[pPps.iSpsId as usize]);
                 ParseScalingList(
-                    &mut (*pCtx).sSpsPpsCtx.sSpsBuffer[pPps.iSpsId as usize],
+                    &src,
                     buf,
                     pBsAux,
                     true,
                     pPps.bTransform8x8ModeFlag,
-                    pPps.bPicScalingListPresentFlag.as_mut_ptr(),
-                    pPps.iScalingList4x4.as_mut_ptr(),
-                    pPps.iScalingList8x8.as_mut_ptr(),
+                    &mut pPps.bPicScalingListPresentFlag,
+                    &mut pPps.iScalingList4x4,
+                    &mut pPps.iScalingList8x8,
                 );
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_SPS_ID);
@@ -1890,12 +1891,12 @@ pub unsafe fn ParsePps(
 /// Parses Video Usability Information (VUI) parameters inside an SPS.
 pub unsafe fn ParseVui(
     pCtx: *mut SWelsDecoderContext,
-    pSps: *mut SSps,
+    pSps: &mut SSps,
     buf: &[u8],
     pBsAux: &mut BsCursor,
 ) -> i32 {
     let mut uiCode: u32 = 0;
-    let pVui = &mut (*pSps).sVui;
+    let pVui = &mut pSps.sVui;
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pVui.bAspectRatioInfoPresentFlag = uiCode != 0;
@@ -2045,15 +2046,15 @@ pub unsafe fn ParseVui(
 }
 
 /// Reserved SEI message parsing hook.
-pub unsafe fn ParseSei(_pSei: *mut c_void, _pBsAux: &mut BsCursor) -> i32 {
+pub fn ParseSei(_pBsAux: &mut BsCursor) -> i32 {
     ERR_NONE
 }
 
 /// Decodes frequency scaling matrix values from signed delta codes.
-pub unsafe fn SetScalingListValue(
-    pScalingList: *mut u8,
+pub fn SetScalingListValue(
+    pScalingList: &mut [u8],
     iScalingListNum: i32,
-    bUseDefaultScalingMatrixFlag: *mut bool,
+    bUseDefaultScalingMatrixFlag: &mut bool,
     buf: &[u8],
     pBsAux: &mut BsCursor,
 ) -> i32 {
@@ -2086,67 +2087,81 @@ pub unsafe fn SetScalingListValue(
         } else {
             iNextScale as u8
         };
-        *pScalingList.add(iIdx) = val;
+        pScalingList[iIdx] = val;
         iLastScale = val as i32;
     }
 
     ERR_NONE
 }
 
+/// What [`ParseScalingList`] reads out of the SPS.
+///
+/// **T5.X6: copied at the call, because the lists it writes are fields of that same
+/// SPS when the caller is `ParseSps`.** As raw pointers the source and the
+/// destination could be one object and nothing in the signature said so; as borrows
+/// they cannot be. The C++'s own `bInit` is `bPPS && sps->bSeqScalingMatrixPresentFlag`
+/// and `ParseSps` passes `bPPS = false`, so the fallbacks are never read on the path
+/// where the two would alias — the copy is of four arrays the PPS path reads out of a
+/// *different* SPS.
+#[derive(Copy, Clone)]
+pub struct ScalingListSource {
+    pub uiChromaFormatIdc: u8,
+    pub bSeqScalingMatrixPresentFlag: bool,
+    /// The SPS's 4x4 lists 0 and 3 — the two the C++ names `defaultScaling4x4_*`.
+    pub prev4x4: [[u8; 16]; 2],
+    /// The SPS's 8x8 lists 0 and 1.
+    pub prev8x8: [[u8; 64]; 2],
+}
+
+impl ScalingListSource {
+    pub fn of(pSps: &SSps) -> Self {
+        Self {
+            uiChromaFormatIdc: pSps.uiChromaFormatIdc,
+            bSeqScalingMatrixPresentFlag: pSps.bSeqScalingMatrixPresentFlag,
+            prev4x4: [pSps.iScalingList4x4[0], pSps.iScalingList4x4[3]],
+            prev8x8: [pSps.iScalingList8x8[0], pSps.iScalingList8x8[1]],
+        }
+    }
+}
+
 /// Parses 4x4 and 8x8 frequency scaling list matrices.
-pub unsafe fn ParseScalingList(
-    pSps: *mut SSps,
+pub fn ParseScalingList(
+    pSps: &ScalingListSource,
     buf: &[u8],
     pBs: &mut BsCursor,
     bPPS: bool,
     kbTrans8x8ModeFlag: bool,
-    pScalingListPresentFlag: *mut bool,
-    iScalingList4x4: *mut [u8; 16],
-    iScalingList8x8: *mut [u8; 64],
+    pScalingListPresentFlag: &mut [bool],
+    iScalingList4x4: &mut [[u8; 16]],
+    iScalingList8x8: &mut [[u8; 64]],
 ) -> i32 {
     let mut uiCode: u32 = 0;
     let mut bUseDefaultScalingMatrixFlag4x4 = false;
     let mut bUseDefaultScalingMatrixFlag8x8 = false;
 
     let uiScalingListNum = if !bPPS {
-        if (*pSps).uiChromaFormatIdc != 3 { 8 } else { 12 }
+        if pSps.uiChromaFormatIdc != 3 { 8 } else { 12 }
     } else {
-        6 + (kbTrans8x8ModeFlag as usize) * if (*pSps).uiChromaFormatIdc != 3 { 2 } else { 6 }
+        6 + (kbTrans8x8ModeFlag as usize) * if pSps.uiChromaFormatIdc != 3 { 2 } else { 6 }
     };
 
-    let bInit = if bPPS { (*pSps).bSeqScalingMatrixPresentFlag } else { false };
+    let bInit = if bPPS { pSps.bSeqScalingMatrixPresentFlag } else { false };
 
-    let defaultScaling4x4_0 = if bInit {
-        (*pSps).iScalingList4x4[0].as_ptr()
-    } else {
-        g_kuiDequantScaling4x4Default[0].as_ptr()
-    };
-    let defaultScaling4x4_1 = if bInit {
-        (*pSps).iScalingList4x4[3].as_ptr()
-    } else {
-        g_kuiDequantScaling4x4Default[1].as_ptr()
-    };
-    let defaultScaling8x8_0 = if bInit {
-        (*pSps).iScalingList8x8[0].as_ptr()
-    } else {
-        g_kuiDequantScaling8x8Default[0].as_ptr()
-    };
-    let defaultScaling8x8_1 = if bInit {
-        (*pSps).iScalingList8x8[1].as_ptr()
-    } else {
-        g_kuiDequantScaling8x8Default[1].as_ptr()
-    };
+    let defaultScaling4x4_0 = if bInit { pSps.prev4x4[0] } else { g_kuiDequantScaling4x4Default[0] };
+    let defaultScaling4x4_1 = if bInit { pSps.prev4x4[1] } else { g_kuiDequantScaling4x4Default[1] };
+    let defaultScaling8x8_0 = if bInit { pSps.prev8x8[0] } else { g_kuiDequantScaling8x8Default[0] };
+    let defaultScaling8x8_1 = if bInit { pSps.prev8x8[1] } else { g_kuiDequantScaling8x8Default[1] };
 
     for i in 0..uiScalingListNum {
         if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE as u32 {
             return ERR_INVALID_PARAMETERS;
         }
-        *pScalingListPresentFlag.add(i) = uiCode != 0;
+        pScalingListPresentFlag[i] = uiCode != 0;
 
         if uiCode != 0 {
             if i < 6 {
                 SetScalingListValue(
-                    (*iScalingList4x4.add(i)).as_mut_ptr(),
+                    &mut iScalingList4x4[i],
                     16,
                     &mut bUseDefaultScalingMatrixFlag4x4,
                     buf,
@@ -2154,12 +2169,11 @@ pub unsafe fn ParseScalingList(
                 );
                 if bUseDefaultScalingMatrixFlag4x4 {
                     bUseDefaultScalingMatrixFlag4x4 = false;
-                    let src = g_kuiDequantScaling4x4Default[i / 3].as_ptr();
-                    std::ptr::copy_nonoverlapping(src, (*iScalingList4x4.add(i)).as_mut_ptr(), 16);
+                    iScalingList4x4[i] = g_kuiDequantScaling4x4Default[i / 3];
                 }
             } else {
                 SetScalingListValue(
-                    (*iScalingList8x8.add(i - 6)).as_mut_ptr(),
+                    &mut iScalingList8x8[i - 6],
                     64,
                     &mut bUseDefaultScalingMatrixFlag8x8,
                     buf,
@@ -2167,32 +2181,23 @@ pub unsafe fn ParseScalingList(
                 );
                 if bUseDefaultScalingMatrixFlag8x8 {
                     bUseDefaultScalingMatrixFlag8x8 = false;
-                    let src = g_kuiDequantScaling8x8Default[(i - 6) & 1].as_ptr();
-                    std::ptr::copy_nonoverlapping(src, (*iScalingList8x8.add(i - 6)).as_mut_ptr(), 64);
+                    iScalingList8x8[i - 6] = g_kuiDequantScaling8x8Default[(i - 6) & 1];
                 }
             }
         } else {
             if i < 6 {
                 if i != 0 && i != 3 {
-                    std::ptr::copy_nonoverlapping(
-                        (*iScalingList4x4.add(i - 1)).as_ptr(),
-                        (*iScalingList4x4.add(i)).as_mut_ptr(),
-                        16,
-                    );
+                    iScalingList4x4[i] = iScalingList4x4[i - 1];
                 } else {
-                    let src = if i / 3 == 0 { defaultScaling4x4_0 } else { defaultScaling4x4_1 };
-                    std::ptr::copy_nonoverlapping(src, (*iScalingList4x4.add(i)).as_mut_ptr(), 16);
+                    iScalingList4x4[i] =
+                        if i / 3 == 0 { defaultScaling4x4_0 } else { defaultScaling4x4_1 };
                 }
             } else {
                 if i == 6 || i == 7 {
-                    let src = if ((i & 1) + 2) == 2 { defaultScaling8x8_0 } else { defaultScaling8x8_1 };
-                    std::ptr::copy_nonoverlapping(src, (*iScalingList8x8.add(i - 6)).as_mut_ptr(), 64);
+                    iScalingList8x8[i - 6] =
+                        if ((i & 1) + 2) == 2 { defaultScaling8x8_0 } else { defaultScaling8x8_1 };
                 } else {
-                    std::ptr::copy_nonoverlapping(
-                        (*iScalingList8x8.add(i - 8)).as_ptr(),
-                        (*iScalingList8x8.add(i - 6)).as_mut_ptr(),
-                        64,
-                    );
+                    iScalingList8x8[i - 6] = iScalingList8x8[i - 8];
                 }
             }
         }
@@ -2449,6 +2454,41 @@ mod au_list_tests {
             );
             assert_eq!(ret, ERR_NONE);
             assert_eq!((*pCtx).iActiveFmoNum, 1, "re-activation counts again");
+        }
+    }
+
+    /// **F52's coverage** — `CheckAccessUnitBoundaryExt` returns `false` for two NAL
+    /// units that agree on every field it compares.
+    ///
+    /// That is the arm a stub returning `true` unconditionally destroys, and it was
+    /// destroyed: `decoder_core.rs` defined a four-parameter
+    /// `CheckAccessUnitBoundaryExt { true }` in the module that calls it, so the real
+    /// implementation below had no caller at all. This test is **red under
+    /// re-stubbing** — replace this function's body with `true` and it fails — which
+    /// is the property the deleted stub violated. It does not, and cannot, prove the
+    /// *wiring*; the compiler does that, now that only one such function exists.
+    #[test]
+    fn check_access_unit_boundary_ext_says_no_boundary_when_nothing_differs() {
+        unsafe {
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+
+            let hdr = SNalUnitHeaderExt::default();
+            let sh = SSliceHeader::default();
+            assert!(
+                !CheckAccessUnitBoundaryExt(pCtx, &hdr, &hdr, &sh, &sh),
+                "identical headers are the same access unit"
+            );
+
+            // And one field at a time is enough to make it a boundary — the fifteen
+            // comparisons are what the stub was standing in for.
+            let mut cur_hdr = hdr;
+            cur_hdr.uiTemporalId = 1;
+            assert!(CheckAccessUnitBoundaryExt(pCtx, &hdr, &cur_hdr, &sh, &sh));
+
+            let mut cur_sh = sh.clone();
+            cur_sh.iFrameNum = 1;
+            assert!(CheckAccessUnitBoundaryExt(pCtx, &hdr, &hdr, &sh, &cur_sh));
         }
     }
 }

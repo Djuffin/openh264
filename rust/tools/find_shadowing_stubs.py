@@ -42,21 +42,36 @@ TRIVIAL, SUBSTANTIAL = 2, 6
 
 
 def functions(text):
-    """(name, statement_count, body_text, line_no) for each fn in one file."""
+    """(name, statement_count, body_text, line_no) for each fn in one file.
+
+    **The body starts at the opening brace, not at the `fn` line** (F52, Phase 5
+    session X). Counting from `i + 1` charges a multi-line signature's parameter
+    lines to the body: a four-parameter stub whose whole body is `true` scored 6
+    statements and was classified SUBSTANTIAL, so it never appeared opposite its own
+    real implementation. That is exactly how a sixth F43-class stub —
+    `decoder_core.rs`'s `CheckAccessUnitBoundaryExt`, shadowing `nalu.rs`'s 80-line
+    one — survived this sweep's clean run at session U. `body_start` is the line the
+    brace that opens the body is on; everything before it is signature.
+    """
     out, lines = [], text.split("\n")
     for i, line in enumerate(lines):
         m = FN.match(line)
         if not m:
             continue
-        depth, j, started = 0, i, False
+        depth, j, started, body_start = 0, i, False, i
         while j < len(lines) and j < i + 400:
             depth += lines[j].count("{") - lines[j].count("}")
-            if "{" in lines[j]:
+            if "{" in lines[j] and not started:
                 started = True
+                body_start = j
             if started and depth <= 0:
                 break
             j += 1
-        inner = [b.strip() for b in lines[i + 1:j] if b.strip() and not b.strip().startswith("//")]
+        inner = [
+            b.strip()
+            for b in lines[body_start + 1:j]
+            if b.strip() and not b.strip().startswith("//")
+        ]
         out.append((m.group(1), len(inner), "\n".join(inner), i + 1))
     return out
 
