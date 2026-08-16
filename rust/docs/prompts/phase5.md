@@ -149,6 +149,25 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**X** = **the endgame** ([`phase5_session_x.md`](phase5_session_x.md)): the settled
+residual chain (below), the family queue to zero, planes + dispatch with the 42
+SHIM retirements, the view struct **last**, W7's closure, and **the phase close** —
+phase6.md, briefs historical, this checklist closed.
+
+**The residual-chain blocker, settled by reading (steward, at `361592a7`).** W
+stopped `decode_slice.rs`'s layer conversion on "`&mut` into `grid.scaled_tcoeff`
+plus `&mut` whole layer in one call — needs the grid's `mut_and_rest`". Reading
+the chain dissolves it: `ParseResidualBlockCabac` uses its layer parameter
+**once** — forwarding to `ParseCbfInfoCabac` (`parse_mb_syn_cabac.rs:2966`) —
+and `ParseCbfInfoCabac`'s whole reach (`:2669–2733`) is **two scalars
+(`iMbXyIndex`, `iMbWidth`), `&mut` on one grid family (`cbf_dc`), and read-only
+mb_type**. Nothing in the chain touches `scaled_tcoeff`. So **take-what-you-reach
+applies twice down the forward chain** — `ParseCbfInfoCabac` takes the narrow
+set, the residual functions drop the layer and forward it — and the caller's
+borrows become **disjoint grid fields**, which split-borrow in safe code with no
+new API. `tcoeff_and_rest` (PoolRest's shape on the grid) is the fallback only
+if a residual-path callee is found reaching `scaled_tcoeff` itself; none read so
+far does. The `pDec` operand's dual path is verified at the face (S24).
 A probe run per container/file
 converted, and **budget it to fire**: session P ran three green, session P′ ran three and
 the second convicted `AddShortTermToList` mid-face, session P″ ran three green over two
