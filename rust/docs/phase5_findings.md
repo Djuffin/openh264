@@ -2566,3 +2566,56 @@ session W's close, with the 17 the documented `CABA2_SVA_B` POC tie-break. So th
 defect is real and no stream this project owns distinguishes it: on every one of them
 the port's `iTotalNumMbRec != 0` and the C++'s fifteen comparisons agree. The test is
 the instrument, exactly as for F51.
+
+---
+
+## F53 — S29's boundary clause, arriving as a Miri failure for the second session running: a raw alias into a struct that stops being raw
+
+*Phase 5 session X, at `574bd987`, found by the `exit` battery. Created by T5.X1–X3
+and fixed at T5.X11, in the session that created it.*
+
+`WelsDecodeMbCabacResidualHelper` opened with
+
+```rust
+let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
+```
+
+and read `(*pSlice).iLastMbQp` a hundred lines later, after
+`ParseDeltaQpCabac(pCtx, &mut *dq, …)`. Miri:
+
+> attempting a read access using `<40603035>` … that tag does not exist in the
+> borrow stack for this location — created by a **SharedReadWrite** retag at
+> `decode_slice.rs:4364`, later invalidated by a **Unique** retag at `:4458`
+> (`&mut *dq`).
+
+**The spelling did not change; the parent did.** While `dq` was `*mut DqLayerState`,
+`addr_of_mut!((*dq).f)` derived a `SharedReadWrite` from the *raw* tag and a later
+`&mut *dq` pushed a `Unique` **above** it, leaving it live — which is exactly why S29
+recommends the spelling. Once `dq` is `&mut DqLayerState` the derivation sits **above**
+the reference's own `Unique`, and the next reborrow of `dq` pops it. So the alias was
+sound for as long as its parent was a pointer and became UB the moment the parent
+became a borrow, with no line of it edited.
+
+**This is S29's stated boundary** — *"`addr_of_mut!` rescues derivations through a raw
+parent; reaching for the spelling where the invalidator is the local itself is the
+misfire to avoid"* — and it is the **second phase-5 session in a row** to meet it as a
+Miri failure rather than as a review comment (T5.W11's was the same sentence one level
+down, on `SRefPic`). The generalisation worth carrying into Phase 6: **converting a
+parameter from `*mut T` to `&mut T` invalidates every raw alias derived from it that
+outlives a reborrow** — so the conversion's work list is not only the parameter's own
+uses, it is every `addr_of_mut!((*p).…)` in the same function.
+
+**The fix**: 26 such bindings in `decode_slice.rs` (`pSlice`, `pCurSlice`,
+`pSliceHeader`, `pSliceHeaderExt` — 104 use sites) are deleted and re-derived at each
+use as the field path they always denoted. That is S29's other half — *re-acquire
+through one helper at each use, and no borrow outlives one expression* — and it is what
+the residual chain's `pCbp`/`pTransformSize8x8Flag` cursors already got at T5.X3; these
+were the same shape and were missed because a raw pointer is invisible to borrowck, so
+nothing failed to compile.
+
+**Why no gate below `exit` saw it**: the sweeps are the encoder's, the goldens and the
+corpus are byte comparisons, and the read through the popped tag returns the correct
+byte on every real target — `iLastMbQp` is where it always was. Only the aliasing model
+objects. `gates.sh exit` at `574bd987` reported it; the repaired probe
+(`decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`, 391s under
+Miri) passes, and nothing else in the battery moved.

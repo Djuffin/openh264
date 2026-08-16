@@ -651,11 +651,9 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext, pC
     if pCtx.is_null() {
         return false;
     }
-    let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
-    if (*pSliceHeader).iDirectSpatialMvPredFlag == 0 {
-        let uiRefCount = (*pSliceHeader).uiRefCount[LIST_0];
+    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag == 0 {
+        let uiRefCount = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0];
         let pic1 = pRefs.get(ref_id(pCtx, LIST_1, 0));
         if !pic1.is_null() {
             for i in 0..uiRefCount {
@@ -663,14 +661,14 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: *mut SWelsDecoderContext, pC
                 if !pic0.is_null() {
                     let poc0 = (*pic0).iFramePoc;
                     let poc1 = (*pic1).iFramePoc;
-                    let poc = (*pSliceHeader).iPicOrderCntLsb;
+                    let poc = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
                     let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                     if td == 0 {
-                        (*pCurSlice).iMvScale[LIST_0][i as usize] = 1 << 8;
+                        (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0][i as usize] = 1 << 8;
                     } else {
                         let tb = WELS_CLIP3(poc - poc0, -128, 127);
                         let tx = (16384 + (td.abs() >> 1)) / td;
-                        (*pCurSlice).iMvScale[LIST_0][i as usize] =
+                        (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0][i as usize] =
                             WELS_CLIP3((tb * tx + 32) >> 6, -1024, 1023) as i16;
                     }
                 }
@@ -2488,20 +2486,18 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
     }
     let dq: &mut DqLayerState = pCurDqLayer;
     let (pDec, pRefs) = cur_and_refs(pCtx);
-    let pCurSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pCurSlice).sSliceHeaderExt.sSliceHeader);
 
-    if (*pSliceHeader).sps_ref.is_none() {
+    if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
         return ERR_NONE;
     }
-    let iTotalMbTargetLayer = (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32;
+    let iTotalMbTargetLayer = (*(sps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref))).uiTotalMbCount as i32;
 
 
     let iCurLayerWidth = (*dq).iMbWidth << 4;
     let iCurLayerHeight = (*dq).iMbHeight << 4;
 
-    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
-    let iTotalNumMb = (*pCurSlice).iTotalMbInCurSlice;
+    let mut iNextMbXyIndex = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+    let iTotalNumMb = (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0;
 
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && iCurLayerWidth != (*pCtx).iCurSeqIntervalMaxPicWidth {
@@ -2553,7 +2549,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
             return ERR_INFO_MB_NUM_EXCEED_FAIL;
         }
 
-        if !(*pSliceHeader).pps_id.is_none() && (*(pps_of(pCtx, (*pSliceHeader).pps_id))).uiNumSliceGroups > 1 {
+        if !(*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id.is_none() && (*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id))).uiNumSliceGroups > 1 {
             iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(active_fmo(pCtx).as_ref(), iNextMbXyIndex);
         } else {
             iNextMbXyIndex += 1;
@@ -2573,9 +2569,9 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
         (*pDec).iHeightInPixel = iCurLayerHeight;
     }
 
-    if (*pCurSlice).eSliceType != EWelsSliceType::I_SLICE as u8
-        && (*pCurSlice).eSliceType != EWelsSliceType::P_SLICE as u8
-        && (*pCurSlice).eSliceType != EWelsSliceType::B_SLICE as u8
+    if (*dq).sLayerInfo.sSliceInLayer.eSliceType != EWelsSliceType::I_SLICE as u8
+        && (*dq).sLayerInfo.sSliceInLayer.eSliceType != EWelsSliceType::P_SLICE as u8
+        && (*dq).sLayerInfo.sSliceInLayer.eSliceType != EWelsSliceType::B_SLICE as u8
     {
         return ERR_NONE;
     }
@@ -2585,7 +2581,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
         return ERR_NONE;
     }
 
-    if (*pSliceHeader).uiDisableDeblockingFilterIdc == 1 || (*pCurSlice).iTotalMbInCurSlice <= 0 {
+    if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 || (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice <= 0 {
         return ERR_NONE;
     } else {
         crate::decoder::deblocking::WelsDeblockingFilterSlice(
@@ -2678,10 +2674,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     // T5.W4: the table is read-only — no `SVlcTable` field is written outside
     // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
     let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
-    let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
-    let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
+    let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
+    let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
 
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
@@ -2701,7 +2696,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     // instead — S29's spelling, and the same one expression per access the C++'s
     // `pCurDqLayer->pCbp[iMbXy]` compiles to. Nothing between a write and a read of
     // either field writes it, so the values read are the cursors'.
-    *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+    *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
     *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
     *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
@@ -2797,9 +2792,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
     pNzc.fill(0);
 
     if *(*dq).grid.cbp.get(iMbXy) == 0 && IS_INTRANxN(*(*pDec).pMbType.get(iMbXy)) {
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
-        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
                 *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -2822,11 +2816,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: *mut SWelsDecoderCo
         if iQpDelta > 25 || iQpDelta < -26 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
-        let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
+        let new_qp = ((*dq).sLayerInfo.sSliceInLayer.iLastMbQp + iQpDelta + 52) % 52;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
-        (*pSlice).iLastMbQp = new_qp;
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+        (*dq).sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3117,16 +3110,15 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
         return ERR_NONE;
     }
     let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
-    let pSliceHeaderExt = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt);
     let mut uiCode = 0u32;
     let iBaseModeFlag;
-    if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
+    if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveBaseModeFlag {
         if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
         iBaseModeFlag = uiCode != 0;
     } else {
-        iBaseModeFlag = (*pSliceHeaderExt).bDefaultBaseModeFlag;
+        iBaseModeFlag = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultBaseModeFlag;
     }
     if iBaseModeFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
@@ -3152,10 +3144,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
     // T5.W4: the table is read-only — no `SVlcTable` field is written outside
     // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
     let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
-    let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
-    let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
+    let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
+    let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
 
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
@@ -3210,14 +3201,14 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
 
         // T5.I4: one window over the write-then-test — three checks became one.
         let pResidualPredFlag = (*dq).grid.residual_pred_flag.get_mut(iMbXy);
-        if (*pSlice).sSliceHeaderExt.bAdaptiveResidualPredFlag {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveResidualPredFlag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
             *pResidualPredFlag = uiCode as i8;
         } else {
-            *pResidualPredFlag = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *pResidualPredFlag = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
         if *pResidualPredFlag == 0 {
@@ -3344,9 +3335,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
 
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *(*dq).grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
-        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
                 *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -3369,11 +3359,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: *mut SWelsDecoderCo
         if iQpDelta > 25 || iQpDelta < -26 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
-        let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
+        let new_qp = ((*dq).sLayerInfo.sSliceInLayer.iLastMbQp + iQpDelta + 52) % 52;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
-        (*pSlice).iLastMbQp = new_qp;
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+        (*dq).sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3416,25 +3405,23 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         return ERR_NONE;
     }
     let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeaderExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
 
-    if (*pSlice).iMbSkipRun == -1 {
+    if (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun == -1 {
         if crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSlice).iMbSkipRun = uiCode as i32;
-        if (*pSlice).iMbSkipRun == -1 {
+        (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun = uiCode as i32;
+        if (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun == -1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_PARAM);
         }
     }
 
     // C++ uses `if (pSlice->iMbSkipRun--)`: a coded macroblock leaves the
     // counter at -1 so the next macroblock parses a fresh mb_skip_run.
-    let bSkip = (*pSlice).iMbSkipRun != 0;
-    (*pSlice).iMbSkipRun -= 1;
+    let bSkip = (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun != 0;
+    (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun -= 1;
     if bSkip {
         let mut iMv = [0i16; 2];
 
@@ -3456,9 +3443,9 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
             }
         }
 
-        let iLastMbQp = (*pSlice).iLastMbQp;
+        let iLastMbQp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
-        let pps_ptr = pps_of(pCtx, (*pSliceHeaderExt).sSliceHeader.pps_id);
+        let pps_ptr = pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id);
         for i in 0..2 {
             let offset = if !pps_ptr.is_null() {
                 (*pps_ptr).iChromaQpIndexOffset[i]
@@ -3472,13 +3459,13 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
         *(*dq).grid.cbp.get_mut(iMbXy) = 0;
     } else {
         let iBaseModeFlag;
-        if (*pSliceHeaderExt).bAdaptiveBaseModeFlag {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveBaseModeFlag {
             if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
                 return ERR_INFO_INVALID_ACCESS;
             }
             iBaseModeFlag = uiCode != 0;
         } else {
-            iBaseModeFlag = (*pSliceHeaderExt).bDefaultBaseModeFlag;
+            iBaseModeFlag = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultBaseModeFlag;
         }
         if iBaseModeFlag {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
@@ -3490,7 +3477,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
     }
 
     let iUsedBits = (pBs.pos() as i32) * 8 - (16 - pBs.left_bits());
-    if iUsedBits == (pBs.bits() - 1) && (*pSlice).iMbSkipRun <= 0 {
+    if iUsedBits == (pBs.bits() - 1) && (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun <= 0 {
         if true {
             *uiEosFlag = 1;
         }
@@ -3510,10 +3497,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
     // T5.W4: the table is read-only — no `SVlcTable` field is written outside
     // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
     let pVlcTable = &*((*pCtx).pVlcTable as *const crate::decoder::parse_mb_syn_cavlc::SVlcTable);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
 
-    let iScanIdxStart = (*pSlice).sSliceHeaderExt.uiScanIdxStart as usize;
-    let iScanIdxEnd = (*pSlice).sSliceHeaderExt.uiScanIdxEnd as usize;
+    let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
+    let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
 
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut uiCode = 0u32;
@@ -3568,14 +3554,14 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
 
         // T5.I4: one window over the write-then-test — three checks became one.
         let pResidualPredFlag = (*dq).grid.residual_pred_flag.get_mut(iMbXy);
-        if (*pSlice).sSliceHeaderExt.bAdaptiveResidualPredFlag {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveResidualPredFlag {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
             *pResidualPredFlag = uiCode as i8;
         } else {
-            *pResidualPredFlag = (*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag as i8;
+            *pResidualPredFlag = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
         }
 
         if *pResidualPredFlag == 0 {
@@ -3702,9 +3688,8 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
 
     let mb_type = *(*pDec).pMbType.get(iMbXy);
     if *(*dq).grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
-        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*pSlice).iLastMbQp as i8;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
+        *(*dq).grid.luma_qp.get_mut(iMbXy) = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp as i8;
         for i in 0..2 {
             let idx = WELS_CLIP3(
                 *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -3727,11 +3712,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: *mut SWelsDecoderCo
         if iQpDelta > 25 || iQpDelta < -26 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
-        let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
+        let new_qp = ((*dq).sLayerInfo.sSliceInLayer.iLastMbQp + iQpDelta + 52) % 52;
         *(*dq).grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
-        (*pSlice).iLastMbQp = new_qp;
-        let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
-        let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+        (*dq).sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
+        let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
         for i in 0..2 {
             let idx = WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
             (*dq).grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3775,8 +3759,6 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         return ERR_NONE;
     }
     let (buf, pBs) = (*slice_bit_reader(pCtx)).split(&(*pCtx).sRawData);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = &(*pSlice).sSliceHeaderExt.sSliceHeader;
     let ppRefPicL0 = pRefs.get(ref_id(pCtx, LIST_0, 0));
     let ppRefPicL1 = pRefs.get(ref_id(pCtx, LIST_1, 0));
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -3785,13 +3767,13 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
     *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
     *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
 
-    if (*pSlice).iMbSkipRun == -1 {
+    if (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun == -1 {
         // mb_skip_run
         if crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode) != 0 {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSlice).iMbSkipRun = uiCode as i32;
-        if (*pSlice).iMbSkipRun == -1 {
+        (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun = uiCode as i32;
+        if (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun == -1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_SKIP_RUN);
         }
         if (uiCode) > (((*dq).iMbWidth * (*dq).iMbHeight - iMbXy as i32) as u32) {
@@ -3801,8 +3783,8 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 
     // C++ uses `if (pSlice->iMbSkipRun--)`: a coded macroblock leaves the
     // counter at -1 so the next macroblock parses a fresh mb_skip_run.
-    let bSkip = (*pSlice).iMbSkipRun != 0;
-    (*pSlice).iMbSkipRun -= 1;
+    let bSkip = (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun != 0;
+    (*dq).sLayerInfo.sSliceInLayer.iMbSkipRun -= 1;
     if bSkip {
         let mut iMv = [[0i16; 2]; LIST_A];
         let mut iRef = [0i8; LIST_A];
@@ -3825,7 +3807,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 
         // predict iMv
         let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
-        if (*pSliceHeader).iDirectSpatialMvPredFlag != 0 {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx, &mut *dq,
@@ -3854,14 +3836,14 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         }
 
         // reset rS
-        if !(*pSlice).sSliceHeaderExt.bDefaultResidualPredFlag
+        if !(*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag
             || (!pNalCur.is_null()
                 && (*pNalCur).sNalHeaderExt.uiQualityId == 0
                 && (*pNalCur).sNalHeaderExt.uiDependencyId == 0)
         {
-            let iLastMbQp = (*pSlice).iLastMbQp;
+            let iLastMbQp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
             *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
-            let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+            let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
             for i in 0..2 {
                 let idx = WELS_CLIP3(
                     *(*dq).grid.luma_qp.get(iMbXy) as i32 + pps_sh.iChromaQpIndexOffset[i] as i32,
@@ -3875,13 +3857,13 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
         *(*dq).grid.cbp.get_mut(iMbXy) = 0;
     } else {
         let iBaseModeFlag;
-        if (*pSlice).sSliceHeaderExt.bAdaptiveBaseModeFlag {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveBaseModeFlag {
             if crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode) != 0 {
                 return ERR_INFO_INVALID_ACCESS;
             }
             iBaseModeFlag = uiCode != 0;
         } else {
-            iBaseModeFlag = (*pSlice).sSliceHeaderExt.bDefaultBaseModeFlag;
+            iBaseModeFlag = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultBaseModeFlag;
         }
         if iBaseModeFlag {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
@@ -4361,9 +4343,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     let pBsRd: *mut BsReader = slice_bit_reader(pCtx);
     let buf = (*pCtx).sRawData.window_from((*pBsRd).start);
     let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
-    let pps_sh = &*(pps_of(pCtx, (*pSliceHeader).pps_id));
+    let pps_sh = &*(pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id));
     let pps_layer = &*(pps_of(pCtx, (*dq).sLayerInfo.pps_id));
     let iMbXy = (*dq).iMbXyIndex as usize;
     // T5.X1: the two scalars the residual chain reaches, read once here. The chain
@@ -4402,7 +4382,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         }
         *(*dq).grid.cbp.get_mut(iMbXy) = uiCbp as i8;
         if uiCbp == 0 {
-            (*pSlice).iLastDeltaQp = 0;
+            (*dq).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
         }
         uiCbpChroma = if (*active_sps(pCtx)).uiChromaFormatIdc != 0 {
             uiCbp >> 4
@@ -4465,7 +4445,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_QP);
         }
         let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
-        let new_qp = ((*pSlice).iLastMbQp + iQpDelta + 52) % 52;
+        let new_qp = ((*dq).sLayerInfo.sSliceInLayer.iLastMbQp + iQpDelta + 52) % 52;
         // T5.I2: the write opens the window and the four residual reads below —
         // each of them inside `for iId8x8 { for iId4x4 { } }` — read through it.
         // `ParseResidualBlockCabac` reaches the layer but not this family. The
@@ -4473,7 +4453,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
         // alternative, never the same execution.
         let iLumaQp = (*dq).grid.luma_qp.get_mut(iMbXy);
         *iLumaQp = new_qp as i8;
-        (*pSlice).iLastMbQp = new_qp;
+        (*dq).sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
         for i in 0..2 {
             let idx =
                 WELS_CLIP3(new_qp + pps_sh.iChromaQpIndexOffset[i] as i32, 0, 51);
@@ -5210,8 +5190,6 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     pNalCur: *mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
     let iMbXy = (*dq).iMbXyIndex as usize;
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut uiCode = 0u32;
@@ -5349,10 +5327,8 @@ pub unsafe fn WelsDecodeSlice(
     // them. T5.G1 removed the last of the invalidators: there is no `&mut *pCtx` left in
     // `src/decoder/`, so no callee can retag the context out from under a caller.
     // S25's shape (plan §7.6); S29 is the spelling.
-    let pSlice = std::ptr::addr_of_mut!((*pCurDqLayer).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 
-    (*pSlice).iTotalMbInCurSlice = 0;
+    (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
 
     // The parse-only slice bracket, the same one borrow as the decode one below.
     let (pDec, pRefs) = cur_and_refs(pCtx);
@@ -5360,17 +5336,17 @@ pub unsafe fn WelsDecodeSlice(
     let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null()
         && (*active_pps(pCtx)).bEntropyCodingModeFlag
     {
-        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
+        if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
+        if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -5380,25 +5356,25 @@ pub unsafe fn WelsDecodeSlice(
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pps_of(pCtx, (*pSliceHeader).pps_id);
+    let pPpsForIntra = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id);
     (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
-    (*pCtx).eSliceType = (*pSliceHeader).eSliceType;
+    (*pCtx).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType;
     let pPpsLayer = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.pps_id);
     if !pPpsLayer.is_null() && (*pPpsLayer).bEntropyCodingModeFlag {
-        let iQp = (*pSliceHeader).iSliceQp;
-        let iCabacInitIdc = (*pSliceHeader).iCabacInitIdc;
+        let iQp = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSliceQp;
+        let iCabacInitIdc = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iCabacInitIdc;
         crate::decoder::cabac_decoder::WelsCabacContextInit(
             &mut (*pCtx).sWelsCabacContexts,
             &mut (*pCtx).bCabacInited,
             &mut (*pCtx).pCabacCtx,
-            (*pSlice).eSliceType,
+            (*pCurDqLayer).sLayerInfo.sSliceInLayer.eSliceType,
             iCabacInitIdc,
             iQp,
         );
-        (*pSlice).iLastDeltaQp = 0;
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
         let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
             &mut (*pCtx).sCabacDecEngine,
             &mut *slice_bit_reader(pCtx),
@@ -5410,17 +5386,17 @@ pub unsafe fn WelsDecodeSlice(
     }
     WelsCalcDeqCoeffScalingList(pCtx);
 
-    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
+    let mut iNextMbXyIndex = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     if (*pCurDqLayer).iMbWidth > 0 {
         (*pCurDqLayer).iMbX = iNextMbXyIndex % (*pCurDqLayer).iMbWidth;
         (*pCurDqLayer).iMbY = iNextMbXyIndex / (*pCurDqLayer).iMbWidth;
     }
     (*pCurDqLayer).iMbXyIndex = iNextMbXyIndex;
-    (*pSlice).iMbSkipRun = -1;
-    let iSliceIdc = ((*pSliceHeader).iFirstMbInSlice << 7) + (*pCurDqLayer).uiLayerDqId as i32;
+    (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMbSkipRun = -1;
+    let iSliceIdc = ((*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice << 7) + (*pCurDqLayer).uiLayerDqId as i32;
 
-    let kiCountNumMb = if !(*pSliceHeader).sps_ref.is_none() {
-        (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
+        (*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref))).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5441,7 +5417,7 @@ pub unsafe fn WelsDecodeSlice(
             return iRet;
         }
 
-        (*pSlice).iTotalMbInCurSlice += 1;
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice += 1;
         if uiEosFlag != 0 {
             break;
         }
@@ -5473,23 +5449,21 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     // loop. The two lines that stood here were two derivations; `mut_and_rest` makes
     // them one, and everything below was already shaped for it.
     let (pDec, pRefs) = cur_and_refs(pCtx);
-    let pSlice: *mut SSlice = std::ptr::addr_of_mut!((*dq).sLayerInfo.sSliceInLayer);
-    let pSliceHeader = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt.sSliceHeader);
 
-    (*pSlice).iTotalMbInCurSlice = 0;
+    (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
 
     let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).bEntropyCodingModeFlag {
-        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
-        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCabacBSlice
         } else {
             WelsDecodeMbCabacISlice
         }
     } else {
-        if (*pSliceHeader).eSliceType == EWelsSliceType::P_SLICE {
+        if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCavlcPSlice
-        } else if (*pSliceHeader).eSliceType == EWelsSliceType::B_SLICE {
+        } else if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
             WelsDecodeMbCavlcBSlice
         } else {
             WelsDecodeMbCavlcISlice
@@ -5499,23 +5473,23 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pps_of(pCtx, (*pSliceHeader).pps_id);
+    let pPpsForIntra = pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id);
     (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
         !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
     );
 
-    (*pCtx).eSliceType = (*pSliceHeader).eSliceType;
+    (*pCtx).eSliceType = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType;
     WelsCalcDeqCoeffScalingList(pCtx);
 
-    let mut iNextMbXyIndex = (*pSliceHeader).iFirstMbInSlice;
+    let mut iNextMbXyIndex = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     if (*dq).iMbWidth > 0 {
         (*dq).iMbX = iNextMbXyIndex % (*dq).iMbWidth;
         (*dq).iMbY = iNextMbXyIndex / (*dq).iMbWidth;
     }
     (*dq).iMbXyIndex = iNextMbXyIndex;
 
-    let kiCountNumMb = if !(*pSliceHeader).sps_ref.is_none() {
-        (*(sps_of(pCtx, (*pSliceHeader).sps_ref))).uiTotalMbCount as i32
+    let kiCountNumMb = if !(*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
+        (*(sps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref))).uiTotalMbCount as i32
     } else {
         0
     };
@@ -5550,7 +5524,7 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
             (*pCtx).iTotalNumMbRec += 1;
         }
 
-        (*pSlice).iTotalMbInCurSlice += 1;
+        (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice += 1;
         if uiEosFlag != 0 {
             break;
         }
