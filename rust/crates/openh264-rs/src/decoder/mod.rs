@@ -1,3 +1,12 @@
+//! The decoder's module tree.
+//!
+//! **T5.AC12: the lint is on every file below, and on this one.** All 22 modules
+//! of `src/decoder/` carry `#![deny(unsafe_code)]` as of session AC; this file
+//! declares them and holds no code, so its own lint is the tree's statement rather
+//! than a check on anything here.
+
+#![deny(unsafe_code)]
+
 pub mod bit_stream;
 pub mod cabac_decoder;
 pub mod dec_golomb;

@@ -7,6 +7,24 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC10 — the lint on the module the brief called the odd one.** Its
+// 36 raw-pointer occurrences against five `unsafe fn` said what §1 predicted:
+// *"most of those are type aliases and API-boundary spellings, not conversions."*
+// Measured, they were three things and only one was a conversion —
+//
+//   * **Six dead pointer typedefs**, deleted at their definitions, plus a *third*
+//     declaration of `PCopyFunc` that no side imported (S18, the tombstones below).
+//   * **The twelve api-owned context fields** — `pParam`, `pLastDecPicInfo`,
+//     `pDecoderStatistics`, `pMemAlign`, `pVlcTable`, `pSliceHeader`, `pNalCur`,
+//     `pStreamSeqNum`, `pPictInfoList`, `pPictReoderingStatus`, `pTraceHandle`,
+//     `pArgDec`. They are declarations of a boundary this phase does not own; the
+//     whole decoder reaches them through `api_alias`/`api_alias_mut` (T5.AC4), and
+//     the fields themselves are **Phase 8's** with the `api/` inventory.
+//   * **The four exceptions below**: the three per-slice view constructors, which
+//     W6's settlement named as the enumerated exception before they were written,
+//     and the zeroed shell, which is session O's standing constraint.
+
 //! Master decoder execution context, function dispatch tables, DPB memory pool management,
 //! bitstream demuxing, and statistics aggregation.
 //!
@@ -219,7 +237,13 @@ pub type PIdctFourResAddPredFunc =
     Option<fn(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64], nzc: &[i8; 6])>;
 pub type PGetIntraPred8x8Func =
     Option<fn(pred: &mut PlaneCursorMut<'_>, bTLAvail: bool, bTRAvail: bool)>;
-pub type PCopyFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32)>;
+// **T5.AC10: `PCopyFunc` stood here and is deleted — a *third* declaration of one
+// typedef, and the only one in `src/decoder/`.** The other two are
+// `encoder/encode_mb_aux.rs:200` and `encoder/md.rs:228`, and it is the first that
+// `encoder/wels_func_ptr_def.rs` and `encoder/md.rs` actually import; this copy had
+// zero users on either side. No encoder site is touched and no encoder file is
+// edited — the duplicate that goes is the decoder's, which is what makes this S18
+// rather than F22, and the encoder's remaining pair is Phase 6's.
 
 pub type PDeblockingFilterMbFunc =
     Option<unsafe extern "C" fn(pCurDqLayer: *mut c_void, filter: *mut SDeblockingFilter, boundry_flag: i32)>;
@@ -247,16 +271,23 @@ pub use crate::common::deblocking_common::{
 // stored in them -- so every install and every fallback had to launder the mismatch.
 // They are one
 // `IntraPredConstraint` now; see that type in `decode_slice.rs`.
-pub type PWelsParseIntra4x4ModeFunc = Option<
-    unsafe extern "C" fn(
-        pNeighAvail: *mut c_void,
-        pIntraPredMode: &mut [i8; 48],
-        pBs: *mut c_void,
-        pCurDqLayer: *mut c_void,
-    ) -> i32,
->;
-pub type PWelsParseIntra16x16ModeFunc =
-    Option<unsafe extern "C" fn(pNeighAvail: *mut c_void, pBs: *mut c_void, pCurDqLayer: *mut c_void) -> i32>;
+// **T5.AC10 — six dead pointer typedefs, deleted at their definitions (S18).**
+// Each declared a raw pointer and had **zero users** anywhere in the crate at the
+// commit the grep was taken; two of them were function-pointer types for a dispatch
+// that no longer exists.
+//
+//   `PWelsDecoderSpsPpsCTX`, `PWelsLastDecPicInfo`, `PPictInfo`,
+//   `PPictReoderingStatus` — the four `*mut` spellings of context-adjacent structs,
+//   outlived by the accessors that reach those structs by field.
+//
+//   `PWelsParseIntra4x4ModeFunc`, `PWelsParseIntra16x16ModeFunc` — the last two of
+//   the intra-mode dispatch typedefs. Their three siblings went at T4b.3 and the
+//   note above records why: they declared `*mut c_void` and `extern "C"`, neither
+//   of which matched what was stored in them. `IntraPredConstraint` replaced the
+//   dispatch; these two outlived it because nothing named them.
+//
+// This is the phase's sixth through eleventh dead typedef, and the sixth time the
+// count moved because a *definition* went rather than a use (S16).
 
 // ---------------------------------------------------------------------------
 // Auxiliary Data Structures
@@ -370,7 +401,6 @@ pub struct SWelsDecoderSpsPpsCTX {
     pub iSeqId: i32,
     pub iOverwriteFlags: i32,
 }
-pub type PWelsDecoderSpsPpsCTX = *mut SWelsDecoderSpsPpsCTX;
 
 impl Default for SWelsDecoderSpsPpsCTX {
     fn default() -> Self {
@@ -472,7 +502,6 @@ pub struct SWelsLastDecPicInfo {
     pub bLastHasMmco5: bool,
     pub uiDecodingTimeStamp: u32,
 }
-pub type PWelsLastDecPicInfo = *mut SWelsLastDecPicInfo;
 
 impl Default for SWelsLastDecPicInfo {
     fn default() -> Self {
@@ -500,7 +529,6 @@ pub struct SPictInfo {
     pub uiDecodingTimeStamp: u32,
     pub iSeqNum: i32,
 }
-pub type PPictInfo = *mut SPictInfo;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
@@ -514,7 +542,6 @@ pub struct SPictReoderingStatus {
     pub iLargestBufferedPicIndex: i32,
     pub bHasBSlice: bool,
 }
-pub type PPictReoderingStatus = *mut SPictReoderingStatus;
 
 /// The parse-only output descriptor, **decoder-side and owned** (T5.R4).
 ///
@@ -1403,6 +1430,15 @@ impl<'a> SliceCtx<'a> {
 /// sets and the dequantisation tables already selected for this slice — the
 /// scalars are copies, and a write to one of them behind the view's back is exactly
 /// what S23 asks each field to be checked against.
+/// **Enumerated exception — the per-slice view constructors** (W6's settlement,
+/// steward at `a158183c`: *"the constructor is the enumerated exception, and it
+/// does not live in `decode_slice.rs`"*). All three build field-precise borrows out
+/// of one context by `addr_of_mut!`, which is the only way to hand out disjoint
+/// borrows the compiler cannot prove disjoint through a method; `slice_split` also
+/// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
+/// `PPicture` option-1/2 revisit — everything below them is safe because they are
+/// not.
+#[allow(unsafe_code)]
 pub unsafe fn slice_ctx<'a>(
     pCtx: &'a mut SWelsDecoderContext,
     reader: Option<&BsReader>,
@@ -1475,6 +1511,15 @@ pub unsafe fn slice_ctx<'a>(
 /// # Safety
 /// [`slice_ctx`]'s contract, unchanged.
 #[inline]
+/// **Enumerated exception — the per-slice view constructors** (W6's settlement,
+/// steward at `a158183c`: *"the constructor is the enumerated exception, and it
+/// does not live in `decode_slice.rs`"*). All three build field-precise borrows out
+/// of one context by `addr_of_mut!`, which is the only way to hand out disjoint
+/// borrows the compiler cannot prove disjoint through a method; `slice_split` also
+/// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
+/// `PPicture` option-1/2 revisit — everything below them is safe because they are
+/// not.
+#[allow(unsafe_code)]
 pub unsafe fn slice_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
     reader: Option<&BsReader>,
@@ -1510,6 +1555,15 @@ pub unsafe fn slice_split<'a>(
 /// # Safety
 /// [`slice_ctx`]'s contract, unchanged.
 #[inline]
+/// **Enumerated exception — the per-slice view constructors** (W6's settlement,
+/// steward at `a158183c`: *"the constructor is the enumerated exception, and it
+/// does not live in `decode_slice.rs`"*). All three build field-precise borrows out
+/// of one context by `addr_of_mut!`, which is the only way to hand out disjoint
+/// borrows the compiler cannot prove disjoint through a method; `slice_split` also
+/// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
+/// `PPicture` option-1/2 revisit — everything below them is safe because they are
+/// not.
+#[allow(unsafe_code)]
 pub unsafe fn pic_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
 ) -> (Option<&'a mut SPicture>, SliceCtx<'a>) {
@@ -1547,6 +1601,7 @@ pub(crate) fn test_slice_ctx<'a>(
     vlc: &'a mut SVlcTable,
 ) -> SliceCtx<'a> {
     ctx.pVlcTable = std::ptr::addr_of_mut!(*vlc).cast::<c_void>();
+    #[allow(unsafe_code)] // the view constructor's own test fixture
     unsafe { slice_ctx(ctx, None) }
 }
 
@@ -1801,6 +1856,13 @@ pub struct SWelsDecoderContext {
 }
 pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
+/// **Enumerated exception — the shell is the constructor** (session O's correction,
+/// a standing constraint of this phase). The context is created zeroed because
+/// every value field's zero is its C default; two fields own heap allocations,
+/// whose zero is not a valid value, so they are written *through* the uninitialized
+/// shell and no invalid value ever exists. **Phase 8's**, with the `api/` inventory
+/// that owns the lifecycle.
+#[allow(unsafe_code)]
 impl Default for SWelsDecoderContext {
     fn default() -> Self {
         // The context has always been created zeroed (`WelsMallocz` semantics, and
@@ -1817,6 +1879,7 @@ impl Default for SWelsDecoderContext {
 impl SWelsDecoderContext {
     /// Writes valid values into the `Vec`-bearing fields of a zeroed, not yet
     /// materialized context. Everything else's zero is its C default.
+    #[allow(unsafe_code)]
     fn make_zeroed_shell_valid(p: *mut Self) {
         unsafe {
             std::ptr::addr_of_mut!((*p).sRawData).write(RawDataBuffer::default());
@@ -1869,6 +1932,7 @@ impl SWelsDecoderContext {
     /// an option at any point in the phase, and "retire the shell" was never a step
     /// anything could perform. What 5.5 owes is to keep the shell honest per owned
     /// field (S21), which is what T5.O3 did when the CABAC engine moved in.
+    #[allow(unsafe_code)] // the shell, as above
     pub fn new_boxed() -> Box<Self> {
         let mut shell = Box::<Self>::new_zeroed();
         Self::make_zeroed_shell_valid(shell.as_mut_ptr());
@@ -1926,6 +1990,7 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut mem_align;
 
+        #[allow(unsafe_code)] // the shell's own test
         unsafe {
             let pCtx = &mut *ctx;
             (*pCtx).pPicBuff = CreatePicBuff(false, 4, 64, 64);

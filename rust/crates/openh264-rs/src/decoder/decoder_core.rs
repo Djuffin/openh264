@@ -41,6 +41,46 @@
     unused_mut
 )]
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC11 — the lint, with every survivor enumerated at its item.**
+// Each `#[allow(unsafe_code)]` below carries a family tag, and the four families
+// are these, with the argument and the Phase pointer written once:
+//
+//   * **`PPicture survivor (F42)`** — `pDec` and `pRefs` come out of one
+//     `PicPool::cur_and_rest`, and `PicRefs::get` answers the current slot from
+//     `pDec`'s own pointer, because a malformed stream can legally put the picture
+//     being decoded into a reference list and the C++ resolves it and reads on.
+//     Sharing a tag is what makes that sound; as a borrow, every function-entry
+//     retag on the picture pops `cur_ptr`. Ruled the phase's second enumerated
+//     survivor by the steward at `6b6dd9a3`. **Phase 8's**, with the option-1/2
+//     revisit (retire the F42 arm, or give the planes interior mutability).
+//
+//   * **`parse tree`** — `PNalUnit` / `PSliceHeader` / `PSliceHeaderExt` and the
+//     `sNalData` **union** whose VCL arm only the NAL type licenses. The access
+//     unit's slots are raw by a Miri verdict rather than by omission
+//     (`TagAccessUnits::nal_units`' note): a container that lends `&mut` to a node
+//     invalidates the live aliases into it. Reading a node is safe
+//     (`SAccessUnit::node`, T5.AC5); writing one is **Phase 8's**, when the slots
+//     can own the way `PicPool`'s did at T5.Q1.
+//
+//   * **`api boundary`** — `ppDst`, `pDstInfo`, `kpBsBuf`, the picture-info and
+//     reordering-status arrays: the decoder's own entry and exit points, whose
+//     types are `api/`'s. **Phase 8's**, with F23/F41 and the `api/` inventory.
+//
+//   * **`sMCRefMember`** — the C++'s MC descriptor, six raw plane cursors,
+//     `#[repr(C)]`, shared with `error_concealment.rs`. A vocabulary change across
+//     both consumers, scoped out by `phase5_session_ac.md` §2. **Phase 8's**.
+//
+//   * **`decoder-internal raw cursor`** — the residue: `BsCursor` derivations off a
+//     NAL's own storage, `data_ptr`-based plane walks in the reconstruction and
+//     I_PCM paths, and the two zeroed-shell constructors. Each is a *use* of one of
+//     the four families above rather than a fifth family, and each retires with the
+//     family it reaches — which is why they are tagged rather than argued
+//     separately.
+//
+// A tag ending `the family's own test` marks a test that drives one of these
+// deliberately; those retire with their subject.
+
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
 
@@ -487,14 +527,18 @@ impl DqLayerState {
     /// `Default` is not reinstated on top of this: a layer cannot be constructed
     /// without dimensions any more, and a `Default` that invented some would be the
     /// same lie the wholesale zeroing was.
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     pub fn for_grid(dims: MbDims) -> Self {
-        let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
+        // SAFETY: the family named at the item above.
         unsafe {
-            std::ptr::addr_of_mut!((*shell.as_mut_ptr()).grid).write(MbGrid::new(dims));
-            let mut layer = shell.assume_init();
-            layer.uiRefLayerDqId = 255;
-            layer.uiRefLayerChromaPhaseYPlus1 = 1;
-            layer
+            let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
+            unsafe {
+                std::ptr::addr_of_mut!((*shell.as_mut_ptr()).grid).write(MbGrid::new(dims));
+                let mut layer = shell.assume_init();
+                layer.uiRefLayerDqId = 255;
+                layer.uiRefLayerChromaPhaseYPlus1 = 1;
+                layer
+            }
         }
     }
 }
@@ -656,10 +700,7 @@ pub fn GetThreadCount(_pCtx: &SWelsDecoderContext) -> i32 {
     0
 }
 
-unsafe fn ResetDecStatNums(pDecStat: *mut SDecoderStatistics) {
-    if pDecStat.is_null() {
-        return;
-    }
+fn ResetDecStatNums(pDecStat: &mut SDecoderStatistics) {
     let width = (*pDecStat).uiWidth;
     let height = (*pDecStat).uiHeight;
     let avg_luma_qp = (*pDecStat).iAvgLumaQp;
@@ -673,10 +714,7 @@ unsafe fn ResetDecStatNums(pDecStat: *mut SDecoderStatistics) {
     (*pDecStat).uiLevel = level;
 }
 
-unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStatistics) {
-    if pDecStat.is_null() {
-        return;
-    }
+fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: &mut SDecoderStatistics) {
     if idr_flag {
         (*pDecStat).uiFreezingIDRNum += 1;
     } else {
@@ -685,113 +723,132 @@ unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStati
 }
 
 #[inline]
-pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerState>) {
-    let Some(pCurDq) = pCurDq else {
-        return;
-    };
-    if (*pCtx).pDec.is_none() || (*pCtx).pDecoderStatistics.is_null() {
-        return;
-    }
-    let Some(pPic) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) else {
-        return;
-    };
-    let pDecStat = (*pCtx).pDecoderStatistics;
+#[allow(unsafe_code)] // api boundary
+pub fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerState>) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurDq) = pCurDq else {
+            return;
+        };
+        if (*pCtx).pDec.is_none() || (*pCtx).pDecoderStatistics.is_null() {
+            return;
+        }
+        let Some(pPic) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) else {
+            return;
+        };
+        let pDecStat = (*pCtx).pDecoderStatistics;
 
-    if (*pDecStat).iAvgLumaQp == -1 {
-        (*pDecStat).iAvgLumaQp = 0;
-    }
+        if (*pDecStat).iAvgLumaQp == -1 {
+            (*pDecStat).iAvgLumaQp = 0;
+        }
 
-    let mut iTotalQp = 0i64;
-    let kiMbNum = (pCurDq.iMbWidth * pCurDq.iMbHeight) as usize;
-    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
-        for iMb in 0..kiMbNum {
-            iTotalQp += *pCurDq.grid.luma_qp.get(iMb) as i64;
-        }
-        if kiMbNum > 0 {
-            iTotalQp /= kiMbNum as i64;
-        }
-    } else {
-        let mut iCorrectMbNum = 0i64;
-        for iMb in 0..kiMbNum {
-            let correct = if *pCurDq.grid.mb_correctly_decoded_flag.get(iMb) {
-                1i64
-            } else {
-                0i64
-            };
-            iCorrectMbNum += correct;
-            iTotalQp += (*pCurDq.grid.luma_qp.get(iMb) as i64) * correct;
-        }
-        if iCorrectMbNum == 0 {
-            iTotalQp = (*pDecStat).iAvgLumaQp as i64;
+        let mut iTotalQp = 0i64;
+        let kiMbNum = (pCurDq.iMbWidth * pCurDq.iMbHeight) as usize;
+        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+            for iMb in 0..kiMbNum {
+                iTotalQp += *pCurDq.grid.luma_qp.get(iMb) as i64;
+            }
+            if kiMbNum > 0 {
+                iTotalQp /= kiMbNum as i64;
+            }
         } else {
-            iTotalQp /= iCorrectMbNum;
+            let mut iCorrectMbNum = 0i64;
+            for iMb in 0..kiMbNum {
+                let correct = if *pCurDq.grid.mb_correctly_decoded_flag.get(iMb) {
+                    1i64
+                } else {
+                    0i64
+                };
+                iCorrectMbNum += correct;
+                iTotalQp += (*pCurDq.grid.luma_qp.get(iMb) as i64) * correct;
+            }
+            if iCorrectMbNum == 0 {
+                iTotalQp = (*pDecStat).iAvgLumaQp as i64;
+            } else {
+                iTotalQp /= iCorrectMbNum;
+            }
         }
-    }
 
-    if (*pDecStat).uiDecodedFrameCount == u32::MAX {
-        ResetDecStatNums(pDecStat);
-        (*pDecStat).iAvgLumaQp = iTotalQp as i32;
-    } else {
-        let count = (*pDecStat).uiDecodedFrameCount as i64;
-        (*pDecStat).iAvgLumaQp =
-            (((*pDecStat).iAvgLumaQp as i64 * count + iTotalQp) / (count + 1)) as i32;
-    }
+        if (*pDecStat).uiDecodedFrameCount == u32::MAX {
+            ResetDecStatNums(&mut *pDecStat);
+            (*pDecStat).iAvgLumaQp = iTotalQp as i32;
+        } else {
+            let count = (*pDecStat).uiDecodedFrameCount as i64;
+            (*pDecStat).iAvgLumaQp =
+                (((*pDecStat).iAvgLumaQp as i64 * count + iTotalQp) / (count + 1)) as i32;
+        }
 
-    if pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag {
-        if pPic.bIsComplete {
-            (*pDecStat).uiIDRCorrectNum += 1;
-        } else if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
-            (*pDecStat).uiEcIDRNum += 1;
+        if pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag {
+            if pPic.bIsComplete {
+                (*pDecStat).uiIDRCorrectNum += 1;
+            } else if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
+                (*pDecStat).uiEcIDRNum += 1;
+            }
         }
     }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerState>, bOutput: bool) {
-    if (*pCtx).bFreezeOutput {
-        if let Some(pCurDq) = pCurDq {
-            unsafe { UpdateDecStatFreezingInfo(
-                pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag,
-                (*pCtx).pDecoderStatistics,
-            ) };
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if (*pCtx).bFreezeOutput {
+            if let Some(pCurDq) = pCurDq {
+                if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                    UpdateDecStatFreezingInfo(pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag, stat);
+                }
+            }
+        } else if bOutput {
+            unsafe { UpdateDecStatNoFreezingInfo(pCtx, pCurDq) };
         }
-    } else if bOutput {
-        unsafe { UpdateDecStatNoFreezingInfo(pCtx, pCurDq) };
     }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsTargetSliceConstruction(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    match pCurDqLayer {
-        Some(dq) => unsafe { crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq) },
-        None => ERR_NONE,
+    // SAFETY: the family named at the item above.
+    unsafe {
+        match pCurDqLayer {
+            Some(dq) => unsafe { crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq) },
+            None => ERR_NONE,
+        }
     }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     bFreshSlice: bool,
     pCurNal: PNalUnit,
 ) -> i32 {
-    match pCurDqLayer {
-        Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal) },
-        None => ERR_NONE,
+    // SAFETY: the family named at the item above.
+    unsafe {
+        match pCurDqLayer {
+            Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal) },
+            None => ERR_NONE,
+        }
     }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsDecodeAndConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    match pCurDqLayer {
-        Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq) },
-        None => ERR_NONE,
+    // SAFETY: the family named at the item above.
+    unsafe {
+        match pCurDqLayer {
+            Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq) },
+            None => ERR_NONE,
+        }
     }
 }
 
@@ -814,27 +871,39 @@ pub fn WelsInitBSliceRefList(
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsReorderRefList(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer) }
+    // SAFETY: the family named at the item above.
+    unsafe {
+        unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer) }
+    }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsReorderRefList2(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer) }
+    // SAFETY: the family named at the item above.
+    unsafe {
+        unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer) }
+    }
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsMarkAsRef(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None) }
+    // SAFETY: the family named at the item above.
+    unsafe {
+        unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None) }
+    }
 }
 
 // T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
@@ -849,19 +918,23 @@ pub fn WelsMarkAsRef(
 
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn ComputeColocatedTemporalScaling(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) {
-    if let Some(dq) = pCurDqLayer {
-        // T5.Y2: a slice bracket of its own — the pool view and the context view
-        // come out of the same context, and the two are disjoint by construction.
-        let (_, pRefs, mut view) = unsafe { crate::decoder::decoder_context::slice_split(pCtx, None) };
-        let _ = unsafe { crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
-            &mut view,
-            dq,
-            pRefs,
-        ) };
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if let Some(dq) = pCurDqLayer {
+            // T5.Y2: a slice bracket of its own — the pool view and the context view
+            // come out of the same context, and the two are disjoint by construction.
+            let (_, pRefs, mut view) = unsafe { crate::decoder::decoder_context::slice_split(pCtx, None) };
+            let _ = unsafe { crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
+                &mut view,
+                dq,
+                pRefs,
+            ) };
+        }
     }
 }
 
@@ -890,41 +963,45 @@ pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
     iNumRefFrames
 }
 
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
-    let iPicWidth = (iWidth << 4) as i32;
-    let iPicHeight = (iHeight << 4) as i32;
-    let iPicBufSize = GetTargetRefListSize(pCtx);
-    (*pCtx).iPicQueueNumber = iPicBufSize;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let iPicWidth = (iWidth << 4) as i32;
+        let iPicHeight = (iHeight << 4) as i32;
+        let iPicBufSize = GetTargetRefListSize(pCtx);
+        (*pCtx).iPicQueueNumber = iPicBufSize;
 
-    if (*pCtx).pPicBuff.is_none() {
-        // T5.W3: `CreatePicBuff`'s two guards — a null context and a null
-        // `pMemAlign` — are tested here now, at the caller that holds the context.
-        // Both took the `return 1` arm before by way of the callee's `None`.
-        if (*pCtx).pMemAlign.is_null() {
-            return 1;
+        if (*pCtx).pPicBuff.is_none() {
+            // T5.W3: `CreatePicBuff`'s two guards — a null context and a null
+            // `pMemAlign` — are tested here now, at the caller that holds the context.
+            // Both took the `return 1` arm before by way of the callee's `None`.
+            if (*pCtx).pMemAlign.is_null() {
+                return 1;
+            }
+            let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
+                crate::decoder::decoder_context::parse_only(&pCtx.pParam),
+                iPicBufSize,
+                iPicWidth,
+                iPicHeight,
+            ) else {
+                return 1;
+            };
+            (*pCtx).pPicBuff = Some(pool);
+        } else {
+            // The buffer is not reallocated here, so report its real capacity. The `0` is
+            // unreachable — this arm *is* the pool being present — and the borrow ends
+            // before the field write, which is the discipline every `pic_pool_mut` call
+            // site keeps.
+            let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
+            (*pCtx).iPicQueueNumber = capacity;
         }
-        let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
-            crate::decoder::decoder_context::parse_only(&pCtx.pParam),
-            iPicBufSize,
-            iPicWidth,
-            iPicHeight,
-        ) else {
-            return 1;
-        };
-        (*pCtx).pPicBuff = Some(pool);
-    } else {
-        // The buffer is not reallocated here, so report its real capacity. The `0` is
-        // unreachable — this arm *is* the pool being present — and the borrow ends
-        // before the field write, which is the discipline every `pic_pool_mut` call
-        // site keeps.
-        let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
-        (*pCtx).iPicQueueNumber = capacity;
+        let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
+        if iErr != ERR_NONE {
+            return iErr;
+        }
+        ERR_NONE
     }
-    let iErr = InitialDqLayersContext(pCtx, iPicWidth, iPicHeight);
-    if iErr != ERR_NONE {
-        return iErr;
-    }
-    ERR_NONE
 }
 
 #[inline]
@@ -996,7 +1073,7 @@ use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 // proven otherwise). Callers use `nalu.rs` directly.
 
 // Core Functions Implemented in `decoder_core.cpp`
-
+#[allow(unsafe_code)] // api boundary
 pub unsafe fn DecodeFrameConstruction(
     pCtx: &mut SWelsDecoderContext,
     pCurDq: Option<&DqLayerState>,
@@ -1265,153 +1342,169 @@ pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &*mut SDecodingParam) -> u8 {
 }
 
 #[inline]
-pub unsafe fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
-    if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
-        (*pCtx).bReferenceLostAtT0Flag = true;
+#[allow(unsafe_code)] // decoder-internal raw cursor
+pub fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
+            (*pCtx).bReferenceLostAtT0Flag = true;
+        }
+        (*pCtx).iErrorCode |= dsBitstreamError;
     }
-    (*pCtx).iErrorCode |= dsBitstreamError;
 }
 
 #[inline]
-pub unsafe fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
-    if !pCurNal.is_null()
-        && ((*pCurNal).sNalHeaderExt.uiTemporalId == 0 || (*pCurNal).sNalHeaderExt.uiTemporalId == 1)
-    {
-        (*pCtx).bReferenceLostAtT0Flag = true;
+#[allow(unsafe_code)] // decoder-internal raw cursor
+pub fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if !pCurNal.is_null()
+            && ((*pCurNal).sNalHeaderExt.uiTemporalId == 0 || (*pCurNal).sNalHeaderExt.uiTemporalId == 1)
+        {
+            (*pCtx).bReferenceLostAtT0Flag = true;
+        }
+        (*pCtx).iErrorCode |= dsRefLost;
     }
-    (*pCtx).iErrorCode |= dsRefLost;
 }
 
 #[inline]
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsDecodeConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     pCurNal: PNalUnit,
 ) -> i32 {
-    let iRet = WelsTargetSliceConstruction(pCtx, pCurDqLayer);
-    if iRet != ERR_NONE {
-        unsafe { HandleReferenceLostL0(pCtx, pCurNal) };
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let iRet = WelsTargetSliceConstruction(pCtx, pCurDqLayer);
+        if iRet != ERR_NONE {
+            unsafe { HandleReferenceLostL0(pCtx, pCurNal) };
+        }
+        iRet
     }
-    iRet
 }
 
-pub unsafe fn ParsePredWeightedTable(
+#[allow(unsafe_code)] // parse tree
+pub fn ParsePredWeightedTable(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
     pSh: PSliceHeader,
 ) -> i32 {
-    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
-    let buf = pCtx.sRawData.window_from(kiRbspStart);
-    if pSh.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let mut uiCode: u32 = 0;
-    let mut iCode: i32 = 0;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+        let buf = pCtx.sRawData.window_from(kiRbspStart);
+        if pSh.is_null() {
+            return ERR_INFO_INVALID_PTR;
+        }
+        let mut uiCode: u32 = 0;
+        let mut iCode: i32 = 0;
 
-    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    if uiCode > 7 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_LOG2_WEIGHT_DENOM);
-    }
-    (*pSh).sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
-
-    // `Option`, not a defaulted scalar: the two arms below distinguish "no SPS" from
-    // "monochrome SPS" and they distinguish them *in opposite directions* — the
-    // first parses nothing without an SPS, the second parses chroma weights
-    // *because* there is none. A `map_or(0, …)` collapses them and desynchronises
-    // the slice header (T5.Z1).
-    let uiChromaArrayType =
-        sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref).map(|sps| sps.uiChromaArrayType);
-
-    if uiChromaArrayType.is_some_and(|t| t != 0) {
         if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > 7 {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_LOG2_WEIGHT_DENOM);
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_LOG2_WEIGHT_DENOM);
         }
-        (*pSh).sPredWeightTable.uiChromaLog2WeightDenom = uiCode;
-    }
+        (*pSh).sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
 
-    if ((*pSh).sPredWeightTable.uiLumaLog2WeightDenom | (*pSh).sPredWeightTable.uiChromaLog2WeightDenom) > 7 {
-        return ERR_NONE;
-    }
+        // `Option`, not a defaulted scalar: the two arms below distinguish "no SPS" from
+        // "monochrome SPS" and they distinguish them *in opposite directions* — the
+        // first parses nothing without an SPS, the second parses chroma weights
+        // *because* there is none. A `map_or(0, …)` collapses them and desynchronises
+        // the slice header (T5.Z1).
+        let uiChromaArrayType =
+            sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref).map(|sps| sps.uiChromaArrayType);
 
-    let mut iList = 0;
-    while iList < LIST_A {
-        for i in 0..((*pSh).uiRefCount[iList] as usize) {
-            if i >= MAX_REF_PIC_COUNT {
+        if uiChromaArrayType.is_some_and(|t| t != 0) {
+            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            if uiCode > 7 {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_LOG2_WEIGHT_DENOM);
+            }
+            (*pSh).sPredWeightTable.uiChromaLog2WeightDenom = uiCode;
+        }
+
+        if ((*pSh).sPredWeightTable.uiLumaLog2WeightDenom | (*pSh).sPredWeightTable.uiChromaLog2WeightDenom) > 7 {
+            return ERR_NONE;
+        }
+
+        let mut iList = 0;
+        while iList < LIST_A {
+            for i in 0..((*pSh).uiRefCount[iList] as usize) {
+                if i >= MAX_REF_PIC_COUNT {
+                    break;
+                }
+                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                if uiCode != 0 {
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    if iCode < -128 || iCode > 127 {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_WEIGHT);
+                    }
+                    (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] = iCode;
+
+                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    if iCode < -128 || iCode > 127 {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_OFFSET);
+                    }
+                    (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = iCode;
+                } else {
+                    (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] =
+                        1 << (*pSh).sPredWeightTable.uiLumaLog2WeightDenom;
+                    (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = 0;
+                }
+
+                if uiChromaArrayType == Some(0) {
+                    continue;
+                }
+
+                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                if uiCode != 0 {
+                    for j in 0..2 {
+                        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        if iCode < -128 || iCode > 127 {
+                            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_WEIGHT);
+                        }
+                        (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] = iCode;
+
+                        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        if iCode < -128 || iCode > 127 {
+                            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_OFFSET);
+                        }
+                        (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = iCode;
+                    }
+                } else {
+                    for j in 0..2 {
+                        (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] =
+                            1 << (*pSh).sPredWeightTable.uiChromaLog2WeightDenom;
+                        (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = 0;
+                    }
+                }
+            }
+            iList += 1;
+            if (*pSh).eSliceType != B_SLICE {
                 break;
             }
-            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            if uiCode != 0 {
-                if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
-                }
-                if iCode < -128 || iCode > 127 {
-                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_WEIGHT);
-                }
-                (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] = iCode;
-
-                if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
-                }
-                if iCode < -128 || iCode > 127 {
-                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_OFFSET);
-                }
-                (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = iCode;
-            } else {
-                (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] =
-                    1 << (*pSh).sPredWeightTable.uiLumaLog2WeightDenom;
-                (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = 0;
-            }
-
-            if uiChromaArrayType == Some(0) {
-                continue;
-            }
-
-            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            if uiCode != 0 {
-                for j in 0..2 {
-                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    if iCode < -128 || iCode > 127 {
-                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_WEIGHT);
-                    }
-                    (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] = iCode;
-
-                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    if iCode < -128 || iCode > 127 {
-                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_OFFSET);
-                    }
-                    (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = iCode;
-                }
-            } else {
-                for j in 0..2 {
-                    (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] =
-                        1 << (*pSh).sPredWeightTable.uiChromaLog2WeightDenom;
-                    (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = 0;
-                }
-            }
         }
-        iList += 1;
-        if (*pSh).eSliceType != B_SLICE {
-            break;
-        }
+        ERR_NONE
     }
-    ERR_NONE
 }
 
-pub unsafe fn CreateImplicitWeightTable(
+pub fn CreateImplicitWeightTable(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) {
@@ -1493,82 +1586,87 @@ pub unsafe fn CreateImplicitWeightTable(
     }
 }
 
-pub unsafe fn ParseRefPicListReordering(
+#[allow(unsafe_code)] // parse tree
+pub fn ParseRefPicListReordering(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
     pSh: PSliceHeader,
 ) -> i32 {
-    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
-    let buf = pCtx.sRawData.window_from(kiRbspStart);
-    if pSh.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let keSt = (*pSh).eSliceType;
-    if keSt == I_SLICE || keSt == SI_SLICE {
-        return ERR_NONE;
-    }
-    let pRefPicListReordering = &mut (*pSh).pRefPicListReordering;
-    let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref) else {
-        return ERR_INFO_INVALID_PTR;
-    };
-
-    let mut iList = 0;
-    let mut uiCode: u32 = 0;
-    loop {
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+        let buf = pCtx.sRawData.window_from(kiRbspStart);
+        if pSh.is_null() {
+            return ERR_INFO_INVALID_PTR;
         }
-        pRefPicListReordering.bRefPicListReorderingFlag[iList] = uiCode != 0;
+        let keSt = (*pSh).eSliceType;
+        if keSt == I_SLICE || keSt == SI_SLICE {
+            return ERR_NONE;
+        }
+        let pRefPicListReordering = &mut (*pSh).pRefPicListReordering;
+        let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref) else {
+            return ERR_INFO_INVALID_PTR;
+        };
 
-        if pRefPicListReordering.bRefPicListReorderingFlag[iList] {
-            let mut iIdx = 0;
-            loop {
-                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
-                }
-                let kuiIdc = uiCode;
-                if (iIdx >= MAX_REF_PIC_COUNT && kuiIdc != 3) || kuiIdc > 3 {
-                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
-                }
-                pRefPicListReordering.sReorderingSyn[iList][iIdx].uiReorderingOfPicNumsIdc = kuiIdc as _;
+        let mut iList = 0;
+        let mut uiCode: u32 = 0;
+        loop {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            pRefPicListReordering.bRefPicListReorderingFlag[iList] = uiCode != 0;
 
-                if kuiIdc == 3 {
-                    break;
-                }
-                if iIdx >= (*pSh).uiRefCount[iList] as usize || iIdx >= MAX_REF_PIC_COUNT {
-                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
-                }
-                if kuiIdc == 0 || kuiIdc == 1 {
+            if pRefPicListReordering.bRefPicListReorderingFlag[iList] {
+                let mut iIdx = 0;
+                loop {
                     if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    if uiCode >= (1u32 << (*pSps).uiLog2MaxFrameNum) {
+                    let kuiIdc = uiCode;
+                    if (iIdx >= MAX_REF_PIC_COUNT && kuiIdc != 3) || kuiIdc > 3 {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
                     }
-                    pRefPicListReordering.sReorderingSyn[iList][iIdx].uiAbsDiffPicNumMinus1 = uiCode;
-                } else if kuiIdc == 2 {
-                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    pRefPicListReordering.sReorderingSyn[iList][iIdx].uiLongTermPicNum = uiCode as u16;
+                    pRefPicListReordering.sReorderingSyn[iList][iIdx].uiReorderingOfPicNumsIdc = kuiIdc as _;
 
+                    if kuiIdc == 3 {
+                        break;
+                    }
+                    if iIdx >= (*pSh).uiRefCount[iList] as usize || iIdx >= MAX_REF_PIC_COUNT {
+                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
+                    }
+                    if kuiIdc == 0 || kuiIdc == 1 {
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        if uiCode >= (1u32 << (*pSps).uiLog2MaxFrameNum) {
+                            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
+                        }
+                        pRefPicListReordering.sReorderingSyn[iList][iIdx].uiAbsDiffPicNumMinus1 = uiCode;
+                    } else if kuiIdc == 2 {
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        pRefPicListReordering.sReorderingSyn[iList][iIdx].uiLongTermPicNum = uiCode as u16;
+
+                    }
+                    iIdx += 1;
                 }
-                iIdx += 1;
+            }
+            if keSt != B_SLICE {
+                break;
+            }
+            iList += 1;
+            if iList >= LIST_A {
+                break;
             }
         }
-        if keSt != B_SLICE {
-            break;
-        }
-        iList += 1;
-        if iList >= LIST_A {
-            break;
-        }
+        ERR_NONE
     }
-    ERR_NONE
 }
 
-pub unsafe fn ParseDecRefPicMarking(
+#[allow(unsafe_code)] // parse tree
+pub fn ParseDecRefPicMarking(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
@@ -1576,150 +1674,157 @@ pub unsafe fn ParseDecRefPicMarking(
     sps_ref: Option<SpsRef>,
     kbIdrFlag: bool,
 ) -> i32 {
-    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
-    let buf = pCtx.sRawData.window_from(kiRbspStart);
-    // **And the SPS travels as a ref, not a pointer.** Its two scalars are read out
-    // here, above every use of the context: derived from `pCtx` and passed beside
-    // it, the pointer dies at this function's own entry retag — Y's verdict, arriving
-    // from a *caller-derived* alias rather than from an accessor.
-    let Some((uiLog2MaxFrameNum, iNumRefFrames)) = sps_of(&pCtx.sSpsPpsCtx, sps_ref)
-        .map(|sps| (sps.uiLog2MaxFrameNum, sps.iNumRefFrames))
-    else {
-        return ERR_INFO_INVALID_PTR;
-    };
-    if pSh.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let kpRefMarking = &mut (*pSh).sRefMarking;
-    let mut uiCode: u32 = 0;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+        let buf = pCtx.sRawData.window_from(kiRbspStart);
+        // **And the SPS travels as a ref, not a pointer.** Its two scalars are read out
+        // here, above every use of the context: derived from `pCtx` and passed beside
+        // it, the pointer dies at this function's own entry retag — Y's verdict, arriving
+        // from a *caller-derived* alias rather than from an accessor.
+        let Some((uiLog2MaxFrameNum, iNumRefFrames)) = sps_of(&pCtx.sSpsPpsCtx, sps_ref)
+            .map(|sps| (sps.uiLog2MaxFrameNum, sps.iNumRefFrames))
+        else {
+            return ERR_INFO_INVALID_PTR;
+        };
+        if pSh.is_null() {
+            return ERR_INFO_INVALID_PTR;
+        }
+        let kpRefMarking = &mut (*pSh).sRefMarking;
+        let mut uiCode: u32 = 0;
 
-    if kbIdrFlag {
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        kpRefMarking.bNoOutputOfPriorPicsFlag = uiCode != 0;
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        kpRefMarking.bLongTermRefFlag = uiCode != 0;
-    } else {
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        kpRefMarking.bAdaptiveRefPicMarkingModeFlag = uiCode != 0;
-        if kpRefMarking.bAdaptiveRefPicMarkingModeFlag {
-            let mut iIdx = 0;
-            let mut bAllowMmco5 = true;
-            let mut bMmco4Exist = false;
-            let mut bMmco5Exist = false;
-            let mut bMmco6Exist = false;
+        if kbIdrFlag {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            kpRefMarking.bNoOutputOfPriorPicsFlag = uiCode != 0;
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            kpRefMarking.bLongTermRefFlag = uiCode != 0;
+        } else {
+            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            kpRefMarking.bAdaptiveRefPicMarkingModeFlag = uiCode != 0;
+            if kpRefMarking.bAdaptiveRefPicMarkingModeFlag {
+                let mut iIdx = 0;
+                let mut bAllowMmco5 = true;
+                let mut bMmco4Exist = false;
+                let mut bMmco5Exist = false;
+                let mut bMmco6Exist = false;
 
-            while iIdx < MAX_MMCO_COUNT {
-                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
-                }
-                let kuiMmco = uiCode;
-                kpRefMarking.sMmcoRef[iIdx].uiMmcoType = kuiMmco;
-                if kuiMmco == MMCO_END {
-                    break;
-                }
-                if kuiMmco == MMCO_SHORT2UNUSED || kuiMmco == MMCO_SHORT2LONG {
-                    bAllowMmco5 = false;
+                while iIdx < MAX_MMCO_COUNT {
                     if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
-                    kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = ((*pSh).iFrameNum
-                        - kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum)
-                        & (((1 << uiLog2MaxFrameNum) - 1) as i32);
-                } else if kuiMmco == MMCO_LONG2UNUSED {
-                    bAllowMmco5 = false;
-                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
+                    let kuiMmco = uiCode;
+                    kpRefMarking.sMmcoRef[iIdx].uiMmcoType = kuiMmco;
+                    if kuiMmco == MMCO_END {
+                        break;
                     }
-                    kpRefMarking.sMmcoRef[iIdx].uiLongTermPicNum = uiCode;
-                }
-                if kuiMmco == MMCO_SHORT2LONG || kuiMmco == MMCO_LONG {
-                    if kuiMmco == MMCO_LONG {
-                        if bMmco6Exist {
+                    if kuiMmco == MMCO_SHORT2UNUSED || kuiMmco == MMCO_SHORT2LONG {
+                        bAllowMmco5 = false;
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
+                        kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = ((*pSh).iFrameNum
+                            - kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum)
+                            & (((1 << uiLog2MaxFrameNum) - 1) as i32);
+                    } else if kuiMmco == MMCO_LONG2UNUSED {
+                        bAllowMmco5 = false;
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        kpRefMarking.sMmcoRef[iIdx].uiLongTermPicNum = uiCode;
+                    }
+                    if kuiMmco == MMCO_SHORT2LONG || kuiMmco == MMCO_LONG {
+                        if kuiMmco == MMCO_LONG {
+                            if bMmco6Exist {
+                                return -1;
+                            }
+                            bMmco6Exist = true;
+                        }
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        kpRefMarking.sMmcoRef[iIdx].iLongTermFrameIdx = uiCode as i32;
+                    } else if kuiMmco == MMCO_SET_MAX_LONG {
+                        if bMmco4Exist {
                             return -1;
                         }
-                        bMmco6Exist = true;
+                        bMmco4Exist = true;
+                        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        let iMaxLongTermFrameIdx = -1 + (uiCode as i32);
+                        if iMaxLongTermFrameIdx > iNumRefFrames {
+                            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_MARKING);
+                        }
+                        kpRefMarking.sMmcoRef[iIdx].iMaxLongTermFrameIdx = iMaxLongTermFrameIdx;
+                    } else if kuiMmco == MMCO_RESET {
+                        if !bAllowMmco5 || bMmco5Exist {
+                            return -1;
+                        }
+                        bMmco5Exist = true;
+                        if !(*pCtx).pLastDecPicInfo.is_null() {
+                            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = 0;
+                            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = 0;
+                        }
+                        (*pSh).iPicOrderCntLsb = 0;
+                        if !(*pCtx).pSliceHeader.is_null() {
+                            (*(*pCtx).pSliceHeader).iPicOrderCntLsb = 0;
+                        }
                     }
-                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    kpRefMarking.sMmcoRef[iIdx].iLongTermFrameIdx = uiCode as i32;
-                } else if kuiMmco == MMCO_SET_MAX_LONG {
-                    if bMmco4Exist {
-                        return -1;
-                    }
-                    bMmco4Exist = true;
-                    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    let iMaxLongTermFrameIdx = -1 + (uiCode as i32);
-                    if iMaxLongTermFrameIdx > iNumRefFrames {
-                        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_MARKING);
-                    }
-                    kpRefMarking.sMmcoRef[iIdx].iMaxLongTermFrameIdx = iMaxLongTermFrameIdx;
-                } else if kuiMmco == MMCO_RESET {
-                    if !bAllowMmco5 || bMmco5Exist {
-                        return -1;
-                    }
-                    bMmco5Exist = true;
-                    if !(*pCtx).pLastDecPicInfo.is_null() {
-                        (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = 0;
-                        (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = 0;
-                    }
-                    (*pSh).iPicOrderCntLsb = 0;
-                    if !(*pCtx).pSliceHeader.is_null() {
-                        (*(*pCtx).pSliceHeader).iPicOrderCntLsb = 0;
-                    }
+                    iIdx += 1;
                 }
-                iIdx += 1;
             }
         }
+        ERR_NONE
     }
-    ERR_NONE
 }
 
-pub unsafe fn FillDefaultSliceHeaderExt(
+#[allow(unsafe_code)] // parse tree
+pub fn FillDefaultSliceHeaderExt(
     pShExt: PSliceHeaderExt,
     pNalExt: PNalUnitHeaderExt,
 ) -> bool {
-    if pShExt.is_null() || pNalExt.is_null() {
-        return false;
-    }
-    if (*pNalExt).bNoInterLayerPredFlag || (*pNalExt).uiQualityId > 0 {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if pShExt.is_null() || pNalExt.is_null() {
+            return false;
+        }
+        if (*pNalExt).bNoInterLayerPredFlag || (*pNalExt).uiQualityId > 0 {
 
-        (*pShExt).bBasePredWeightTableFlag = false;
-    } else {
-        (*pShExt).bBasePredWeightTableFlag = true;
+            (*pShExt).bBasePredWeightTableFlag = false;
+        } else {
+            (*pShExt).bBasePredWeightTableFlag = true;
+        }
+        (*pShExt).uiRefLayerDqId = 255;
+        (*pShExt).uiDisableInterLayerDeblockingFilterIdc = 0;
+        (*pShExt).iInterLayerSliceAlphaC0Offset = 0;
+        (*pShExt).iInterLayerSliceBetaOffset = 0;
+        (*pShExt).bConstrainedIntraResamplingFlag = false;
+        (*pShExt).uiRefLayerChromaPhaseXPlus1Flag = 0;
+        (*pShExt).uiRefLayerChromaPhaseYPlus1 = 1;
+        (*pShExt).iScaledRefLayerPicWidthInSampleLuma = (*pShExt).sSliceHeader.iMbWidth << 4;
+        (*pShExt).iScaledRefLayerPicHeightInSampleLuma = (*pShExt).sSliceHeader.iMbHeight << 4;
+        (*pShExt).bSliceSkipFlag = false;
+        (*pShExt).bAdaptiveBaseModeFlag = false;
+        (*pShExt).bDefaultBaseModeFlag = false;
+        (*pShExt).bAdaptiveMotionPredFlag = false;
+        (*pShExt).bDefaultMotionPredFlag = false;
+        (*pShExt).bAdaptiveResidualPredFlag = false;
+        (*pShExt).bDefaultResidualPredFlag = false;
+        (*pShExt).bTCoeffLevelPredFlag = false;
+        (*pShExt).uiScanIdxStart = 0;
+        (*pShExt).uiScanIdxEnd = 15;
+        true
     }
-    (*pShExt).uiRefLayerDqId = 255;
-    (*pShExt).uiDisableInterLayerDeblockingFilterIdc = 0;
-    (*pShExt).iInterLayerSliceAlphaC0Offset = 0;
-    (*pShExt).iInterLayerSliceBetaOffset = 0;
-    (*pShExt).bConstrainedIntraResamplingFlag = false;
-    (*pShExt).uiRefLayerChromaPhaseXPlus1Flag = 0;
-    (*pShExt).uiRefLayerChromaPhaseYPlus1 = 1;
-    (*pShExt).iScaledRefLayerPicWidthInSampleLuma = (*pShExt).sSliceHeader.iMbWidth << 4;
-    (*pShExt).iScaledRefLayerPicHeightInSampleLuma = (*pShExt).sSliceHeader.iMbHeight << 4;
-    (*pShExt).bSliceSkipFlag = false;
-    (*pShExt).bAdaptiveBaseModeFlag = false;
-    (*pShExt).bDefaultBaseModeFlag = false;
-    (*pShExt).bAdaptiveMotionPredFlag = false;
-    (*pShExt).bDefaultMotionPredFlag = false;
-    (*pShExt).bAdaptiveResidualPredFlag = false;
-    (*pShExt).bDefaultResidualPredFlag = false;
-    (*pShExt).bTCoeffLevelPredFlag = false;
-    (*pShExt).uiScanIdxStart = 0;
-    (*pShExt).uiScanIdxEnd = 15;
-    true
 }
 
-pub unsafe fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
     let pMa = (*pCtx).pMemAlign;
     // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
     // `sRawData.len()` — the `iMaxBsBufferSizeInByte` field died with the pointers,
@@ -1785,87 +1890,91 @@ pub fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 
     ERR_NONE
 }
 
-pub unsafe fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
-    let cpu_flag = (*pCtx).uiCpuFlag;
+#[allow(unsafe_code)] // api boundary
+pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let cpu_flag = (*pCtx).uiCpuFlag;
 
-    // 0. Block helpers. `WelsBlockFuncInit` filled `sBlockFunc` here (`InitDecFuncs`
-    // in `decoder.cpp`), through a `*mut _ as *mut _` double cast that bridged the
-    // port's two incompatible declarations of one struct. T4b.3c deleted both. The
-    // one slot that was ever read -- `pWelsSetNonZeroCountFunc`, which clamps every
-    // non-zero coefficient count to 1 after inter reconstruction so that deblocking
-    // derives the boundary strengths the C++ derives -- is a direct call at its
-    // single use in `decode_slice.rs`.
+        // 0. Block helpers. `WelsBlockFuncInit` filled `sBlockFunc` here (`InitDecFuncs`
+        // in `decoder.cpp`), through a `*mut _ as *mut _` double cast that bridged the
+        // port's two incompatible declarations of one struct. T4b.3c deleted both. The
+        // one slot that was ever read -- `pWelsSetNonZeroCountFunc`, which clamps every
+        // non-zero coefficient count to 1 after inter reconstruction so that deblocking
+        // derives the boundary strengths the C++ derives -- is a direct call at its
+        // single use in `decode_slice.rs`.
 
-    // 1. Deblocking Filter
-    crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc, cpu_flag as i32);
+        // 1. Deblocking Filter
+        crate::common::deblocking_common::DeblockingInit(&mut (*pCtx).sDeblockingFunc, cpu_flag as i32);
 
-    // 2. Motion Compensation
-    crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc, cpu_flag);
+        // 2. Motion Compensation
+        crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc, cpu_flag);
 
-    // 2b. Reference picture border expansion installed `sExpandPicFunc` here,
-    // three constants that T4b.3b turned into direct calls. Both chroma slots held
-    // `ExpandPictureChroma_c`, so the aligned/unaligned index selected between two
-    // identical functions -- the 4a shape, in the decoder.
+        // 2b. Reference picture border expansion installed `sExpandPicFunc` here,
+        // three constants that T4b.3b turned into direct calls. Both chroma slots held
+        // `ExpandPictureChroma_c`, so the aligned/unaligned index selected between two
+        // identical functions -- the 4a shape, in the decoder.
 
-    // 3. IDCT Inverse Transform
-    (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
-    (*pCtx).pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::idct_res_add_pred8x8);
-    (*pCtx).pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_four_res_add_pred);
+        // 3. IDCT Inverse Transform
+        (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
+        (*pCtx).pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::idct_res_add_pred8x8);
+        (*pCtx).pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_four_res_add_pred);
 
-    // 4. Intra Prediction
-    (*pCtx).pGetI4x4LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_v),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_h),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddr),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vr),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hd),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hu),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_left),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_top),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_na),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl_top),
-        Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl_top),
-    ];
+        // 4. Intra Prediction
+        (*pCtx).pGetI4x4LumaPredFunc = [
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_v),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_h),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddr),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vr),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hd),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hu),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_left),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_top),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_na),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl_top),
+            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl_top),
+        ];
 
-    (*pCtx).pGetI16x16LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_v),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_h),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_plane),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_left),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_top),
-        Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_na),
-    ];
+        (*pCtx).pGetI16x16LumaPredFunc = [
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_v),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_h),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_plane),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_left),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_top),
+            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_na),
+        ];
 
-    (*pCtx).pGetIChromaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::chroma_pred_dc),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_h),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_v),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_plane),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_left),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_top),
-        Some(crate::decoder::get_intra_predictor::chroma_pred_dc_na),
-    ];
+        (*pCtx).pGetIChromaPredFunc = [
+            Some(crate::decoder::get_intra_predictor::chroma_pred_dc),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_h),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_v),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_plane),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_left),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_top),
+            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_na),
+        ];
 
-    (*pCtx).pGetI8x8LumaPredFunc = [
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_v),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_h),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddr),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vr),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hd),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hu),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_left),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_top),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_na),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl_top),
-        Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl_top),
-    ];
+        (*pCtx).pGetI8x8LumaPredFunc = [
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_v),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_h),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddr),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vr),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hd),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hu),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_left),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_top),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_na),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl_top),
+            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl_top),
+        ];
+    }
 }
 
 /// Returns the detected host CPU core count.
@@ -1876,6 +1985,7 @@ pub fn GetCPUCount() -> i32 {
 
 /// Detects SIMD hardware capabilities.
 /// Matches `uint32_t WelsCPUFeatureDetect (int32_t* pCPUFlag)` in `decoder.cpp`.
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub unsafe fn WelsCPUFeatureDetect(pCpuCores: *mut i32) -> u32 {
     if !pCpuCores.is_null() {
         *pCpuCores = GetCPUCount();
@@ -1887,6 +1997,7 @@ pub unsafe fn WelsCPUFeatureDetect(pCpuCores: *mut i32) -> u32 {
 /// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
 /// Fill data fields in default for decoder context.
 /// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub unsafe fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) {
     let mut iCpuCores = 1i32;
     (*pCtx).pArgDec = std::ptr::null_mut();
@@ -1964,6 +2075,7 @@ pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::d
 
 /// Reset picture reordering buffer list.
 /// Matches `void ResetReorderingPictureBuffers (...)` in `decoder.cpp`.
+#[allow(unsafe_code)] // api boundary
 pub unsafe fn ResetReorderingPictureBuffers(
     pPictReoderingStatus: *mut crate::decoder::decoder_context::SPictReoderingStatus,
     pPictInfo: *mut crate::decoder::decoder_context::SPictInfo,
@@ -1990,7 +2102,8 @@ pub unsafe fn ResetReorderingPictureBuffers(
     (*pPictReoderingStatus).bHasBSlice = false;
 }
 
-pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
+#[allow(unsafe_code)] // api boundary
+pub unsafe fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = unsafe { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
     unsafe { WelsInitDecoderFuncs(pCtx) };
@@ -2040,31 +2153,39 @@ pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
 
 /// Terminates decoder worker threads and cleans up internal decoding context.
 /// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
-    WelsFreeDynamicMemory(pCtx);
-    unsafe { WelsFreeStaticMemory(pCtx) };
-    (*pCtx).bParamSetsLostFlag = false;
-    (*pCtx).bNewSeqBegin = false;
-    (*pCtx).bPrintFrameErrorTraceFlag = false;
-    (*pCtx).iIgnoredErrorInfoPacketCount = 0;
-    (*pCtx).bFrameFinish = false;
-}
-
-pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
-    WelsOpenDecoder(pCtx, std::ptr::null_mut());
-    // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
-    // caller's argument, exactly as `decoder_core.cpp:763` passes it.
-    (*pCtx).access_unit = Some(SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU));
-    if unsafe { InitBsBuffer(pCtx) } != 0 {
-        (*pCtx).iErrorCode |= dsOutOfMemory;
-        return ERR_INFO_OUT_OF_MEMORY;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        WelsFreeDynamicMemory(pCtx);
+        unsafe { WelsFreeStaticMemory(pCtx) };
+        (*pCtx).bParamSetsLostFlag = false;
+        (*pCtx).bNewSeqBegin = false;
+        (*pCtx).bPrintFrameErrorTraceFlag = false;
+        (*pCtx).iIgnoredErrorInfoPacketCount = 0;
+        (*pCtx).bFrameFinish = false;
     }
-    (*pCtx).uiTargetDqId = 255;
-    (*pCtx).bEndOfStreamFlag = false;
-    ERR_NONE
 }
 
-pub unsafe fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
+#[allow(unsafe_code)] // api boundary
+pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        WelsOpenDecoder(pCtx, std::ptr::null_mut());
+        // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
+        // caller's argument, exactly as `decoder_core.cpp:763` passes it.
+        (*pCtx).access_unit = Some(SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU));
+        if unsafe { InitBsBuffer(pCtx) } != 0 {
+            (*pCtx).iErrorCode |= dsOutOfMemory;
+            return ERR_INFO_OUT_OF_MEMORY;
+        }
+        (*pCtx).uiTargetDqId = 255;
+        (*pCtx).bEndOfStreamFlag = false;
+        ERR_NONE
+    }
+}
+
+pub fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
     let pMa = (*pCtx).pMemAlign;
     // R4, first entry: the access unit's free is `Option::take`'s drop, and it happens
     // here rather than in the context's own `Drop` only because this function still
@@ -2093,6 +2214,7 @@ pub unsafe fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
 // callers — both call sites resolve to `nalu::DecodeNalHeaderExt`, which takes the
 // 3-byte window as a slice since this seam.
 
+#[allow(unsafe_code)] // decoder-internal raw cursor
 pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
     pDecoderStatistics: *mut SDecoderStatistics,
     pSps: Option<&SSps>,
@@ -2110,641 +2232,646 @@ pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
     (*pDecoderStatistics).uiLevel = pSps.uiLevelIdc as u32;
 }
 
-pub unsafe fn ParseSliceHeaderSyntaxs(
+#[allow(unsafe_code)] // parse tree
+pub fn ParseSliceHeaderSyntaxs(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
     kbExtensionFlag: bool,
 ) -> i32 {
-    // **The window is re-derived per read, not bound** (T5.Z4). This function
-    // interleaves reads with calls that take the context — the three sub-parsers and
-    // the parameter-set lookups — so a `let win!() = …` at the top is a shared borrow of
-    // `sRawData` live across a `&mut` of its parent. Each `win!()` ends with its
-    // expression; S25's shape, and the same one `ref_set` takes for the DPB.
-    macro_rules! win {
-        () => {
-            pCtx.sRawData.window_from(kiRbspStart)
-        };
-    }
-    // The access unit is borrowed for exactly these three lines. `kpCurNal` outlives
-    // it — it is a copy of a stored node pointer, and the whole 576-line body below
-    // runs against the node, not against the list.
-    let kpCurNal = match cur_au(&mut pCtx.access_unit) {
-        None => return ERR_INFO_INVALID_PTR,
-        Some(au) if au.uiAvailUnitsNum == 0 => return ERR_INFO_OUT_OF_MEMORY,
-        Some(au) => au.nal((au.uiAvailUnitsNum - 1) as usize),
-    };
-    if kpCurNal.is_null() {
-        return ERR_INFO_OUT_OF_MEMORY;
-    }
-
-    // **S25 (F24) — none of these three is a borrow, and that is the fix.**
-    // `sSliceHeader` sits *inside* `sSliceHeaderExt`, so taking `&mut` of each puts the
-    // outer's Unique retag on top of the inner's and every later write through the inner
-    // is UB — Miri, byte-exact: `[0x28..0xf00]` created here, invalidated by the retag at
-    // `[0x28..0x1350]`, caught at the `iFirstMbInSlice` store 13 lines down. `pSliceHead`
-    // is used 74 times after that point and `pSliceHeadExt` 50, so the whole 576-line
-    // function ran on an invalid borrow stack. `addr_of_mut!` creates no reference: all
-    // three pointers carry `kpCurNal`'s own provenance, none can invalidate another, and
-    // the raw `bSliceHeaderExtFlag` write below is no longer racing two live borrows.
-    // `pNalHeaderExt` is a sibling field and was never part of the defect; it moves with
-    // them so the rule reads uniformly. T5.B2's shape (`manage_dec_ref.rs`, `SetUnRef`):
-    // no borrow outlives one expression. Anything added here inherits it.
-    let pNalHeaderExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*kpCurNal).sNalHeaderExt);
-    let pSliceHead: PSliceHeader =
-        std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
-    let eNalType = (*pNalHeaderExt).sNalUnitHeader.eNalUnitType;
-    let pSliceHeadExt: PSliceHeaderExt =
-        std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt);
-
-    (*kpCurNal).sNalData.sVclNal.bSliceHeaderExtFlag = kbExtensionFlag;
-
-    let mut uiCode: u32 = 0;
-    let mut iCode: i32 = 0;
-
-    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    if uiCode > 36863 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FIRST_MB_IN_SLICE);
-    }
-    (*pSliceHead).iFirstMbInSlice = uiCode as i32;
-
-    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    let mut uiSliceType = uiCode;
-    if uiSliceType > 9 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
-    }
-    if uiSliceType > 4 {
-        uiSliceType -= 5;
-    }
-    if eNalType == NAL_UNIT_CODED_SLICE_IDR && uiSliceType != 2 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
-    }
-    if kbExtensionFlag && uiSliceType > 2 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
-    }
-
-    (*pSliceHead).eSliceType = match uiSliceType {
-        0 => P_SLICE,
-        1 => B_SLICE,
-        2 => I_SLICE,
-        3 => SP_SLICE,
-        _ => SI_SLICE,
-    };
-
-    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    if uiCode >= MAX_PPS_COUNT as u32 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_PPS_ID_OVERFLOW);
-    }
-    let iPpsId = uiCode as i32;
-
-    if !(*pCtx).sSpsPpsCtx.bPpsAvailFlags[iPpsId as usize] {
-        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
-            stat.iPpsReportErrorNum += 1;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // **The window is re-derived per read, not bound** (T5.Z4). This function
+        // interleaves reads with calls that take the context — the three sub-parsers and
+        // the parameter-set lookups — so a `let win!() = …` at the top is a shared borrow of
+        // `sRawData` live across a `&mut` of its parent. Each `win!()` ends with its
+        // expression; S25's shape, and the same one `ref_set` takes for the DPB.
+        macro_rules! win {
+            () => {
+                pCtx.sRawData.window_from(kiRbspStart)
+            };
         }
-        (*pCtx).iErrorCode |= dsNoParamSets;
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_PPS_ID);
-    }
-
-    // The same rule, for the paramset side — a second live instance of F24's shape,
-    // not a precaution. `pSps` was `&mut (*pSubsetSps).sSps`, nested inside a `&mut` of
-    // the subset SPS entry, and the three later `let pSubsetSps` bindings each took
-    // `&mut` of that *same* entry again — popping the nested tag, after which every
-    // `(*pSps)` read is UB (`uiLog2MaxFrameNum`, `uiTotalMbCount`, `bFrameMbsOnlyFlag`,
-    // the POC block, and on). Every `kbExtensionFlag` path, which means every SVC
-    // stream. **No gate reaches it**: `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
-    // (`nalu.rs:684`) and the probe decodes AVC, so it was found by reading while fixing
-    // the pair above and dies in the same commit rather than waiting for a test that
-    // does not exist. The stored `(*pSliceHead).pps_id` / `pSps` pointers get the
-    // context's provenance for free, which is what S28 asks of a pointer that outlives
-    // the expression that made it.
-    let pPps: PPps = std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize]);
-    if (*pPps).uiNumSliceGroups == 0 {
-        (*pCtx).iErrorCode |= dsNoParamSets;
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
-    }
-
-    // **T5.Z4: the ref, not the address.** This derived a raw `SSps` alias out of
-    // the context and read it across two dozen calls that take the context — the
-    // same class the accessors shed at T5.Z1, arriving from a hand-written
-    // derivation. `sps!()` re-resolves in one expression, exactly as `win!()` does
-    // for the bitstream window above.
-    let sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
-    macro_rules! sps {
-        () => {
-            match sps_of(&pCtx.sSpsPpsCtx, sps_ref) {
-                Some(sps) => sps,
-                None => return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID),
-            }
+        // The access unit is borrowed for exactly these three lines. `kpCurNal` outlives
+        // it — it is a copy of a stored node pointer, and the whole 576-line body below
+        // runs against the node, not against the list.
+        let kpCurNal = match cur_au(&mut pCtx.access_unit) {
+            None => return ERR_INFO_INVALID_PTR,
+            Some(au) if au.uiAvailUnitsNum == 0 => return ERR_INFO_OUT_OF_MEMORY,
+            Some(au) => au.nal((au.uiAvailUnitsNum - 1) as usize),
         };
-    }
-
-    if sps!().iNumRefFrames == 0
-        && (*pSliceHead).eSliceType != I_SLICE
-        && (*pSliceHead).eSliceType != SI_SLICE
-    {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
-    }
-
-    (*pSliceHead).iPpsId = iPpsId;
-    (*pSliceHead).iSpsId = (*pPps).iSpsId;
-    // T5.R6: what the two stored pointers carried — an id and, for the SPS, which of
-    // the two buffers it indexes. `kbExtensionFlag` is that choice, made three lines
-    // above where `pSps` was derived.
-    (*pSliceHead).pps_id = Some(iPpsId);
-    (*pSliceHead).sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
-    if kbExtensionFlag {
-        (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
-    }
-
-    let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
-        || (kbExtensionFlag && (*pNalHeaderExt).bIdrFlag);
-    (*pSliceHead).bIdrFlag = bIdrFlag;
-
-    if sps!().uiLog2MaxFrameNum == 0 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
-    }
-    if ((*pSliceHead).iFirstMbInSlice as u32) > sps!().uiTotalMbCount - 1 {
-        return GENERATE_ERROR_NO(
-            ERR_LEVEL_SLICE_HEADER,
-            ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
-        );
-    }
-    if BsGetBits(win!(), pBs, sps!().uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    (*pSliceHead).iFrameNum = uiCode as i32;
-    if !sps!().bFrameMbsOnlyFlag {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MBAFF);
-    }
-    (*pSliceHead).iMbWidth = sps!().iMbWidth as i32;
-    (*pSliceHead).iMbHeight = sps!().iMbHeight as i32;
-
-    if bIdrFlag {
-        if (*pSliceHead).iFrameNum != 0 {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FRAME_NUM);
+        if kpCurNal.is_null() {
+            return ERR_INFO_OUT_OF_MEMORY;
         }
+
+        // **S25 (F24) — none of these three is a borrow, and that is the fix.**
+        // `sSliceHeader` sits *inside* `sSliceHeaderExt`, so taking `&mut` of each puts the
+        // outer's Unique retag on top of the inner's and every later write through the inner
+        // is UB — Miri, byte-exact: `[0x28..0xf00]` created here, invalidated by the retag at
+        // `[0x28..0x1350]`, caught at the `iFirstMbInSlice` store 13 lines down. `pSliceHead`
+        // is used 74 times after that point and `pSliceHeadExt` 50, so the whole 576-line
+        // function ran on an invalid borrow stack. `addr_of_mut!` creates no reference: all
+        // three pointers carry `kpCurNal`'s own provenance, none can invalidate another, and
+        // the raw `bSliceHeaderExtFlag` write below is no longer racing two live borrows.
+        // `pNalHeaderExt` is a sibling field and was never part of the defect; it moves with
+        // them so the rule reads uniformly. T5.B2's shape (`manage_dec_ref.rs`, `SetUnRef`):
+        // no borrow outlives one expression. Anything added here inherits it.
+        let pNalHeaderExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*kpCurNal).sNalHeaderExt);
+        let pSliceHead: PSliceHeader =
+            std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
+        let eNalType = (*pNalHeaderExt).sNalUnitHeader.eNalUnitType;
+        let pSliceHeadExt: PSliceHeaderExt =
+            std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt);
+
+        (*kpCurNal).sNalData.sVclNal.bSliceHeaderExtFlag = kbExtensionFlag;
+
+        let mut uiCode: u32 = 0;
+        let mut iCode: i32 = 0;
+
         if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
+        if uiCode > 36863 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FIRST_MB_IN_SLICE);
         }
-        (*pSliceHead).uiIdrPicId = uiCode as u16;
-    }
+        (*pSliceHead).iFirstMbInSlice = uiCode as i32;
 
-    (*pSliceHead).iDeltaPicOrderCntBottom = 0;
-    (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
-    (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
-    if sps!().uiPocType == 0 {
-        if BsGetBits(win!(), pBs, sps!().iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        let iMaxPocLsb = 1 << sps!().iLog2MaxPocLsb;
-        let pocLsb = uiCode as i32;
-        (*pSliceHead).iPicOrderCntLsb = pocLsb;
-        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
-        }
-        let prevLsb = if !(*pCtx).pLastDecPicInfo.is_null() {
-            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb
-        } else {
-            0
-        };
-        let prevMsb = if !(*pCtx).pLastDecPicInfo.is_null() {
-            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb
-        } else {
-            0
-        };
-        let pocMsb = if pocLsb < prevLsb && (prevLsb - pocLsb) >= (iMaxPocLsb / 2) {
-            prevMsb + iMaxPocLsb
-        } else if pocLsb > prevLsb && (pocLsb - prevLsb) > (iMaxPocLsb / 2) {
-            prevMsb - iMaxPocLsb
-        } else {
-            prevMsb
-        };
-        (*pSliceHead).iPicOrderCntLsb = pocMsb + pocLsb;
-        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            (*pSliceHead).iPicOrderCntLsb += (*pSliceHead).iDeltaPicOrderCntBottom;
-        }
-        if !(*pCtx).pLastDecPicInfo.is_null() && (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
-            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
-            (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
-        }
-    } else if sps!().uiPocType == 1 && !sps!().bDeltaPicOrderAlwaysZeroFlag {
-        if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
-        }
-        (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
-        if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
-        }
-    }
-
-    (*pSliceHead).iRedundantPicCnt = 0;
-    if (*pPps).bRedundantPicCntPresentFlag {
         if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        if uiCode > SLICE_HEADER_REDUNDANT_PIC_CNT_MAX {
-            return GENERATE_ERROR_NO(
-                ERR_LEVEL_SLICE_HEADER,
-                ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
-            );
+        let mut uiSliceType = uiCode;
+        if uiSliceType > 9 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
         }
-        (*pSliceHead).iRedundantPicCnt = uiCode as i32;
-        if (*pSliceHead).iRedundantPicCnt > 0 {
-            return GENERATE_ERROR_NO(
-                ERR_LEVEL_SLICE_HEADER,
-                ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
-            );
+        if uiSliceType > 4 {
+            uiSliceType -= 5;
         }
-    }
+        if eNalType == NAL_UNIT_CODED_SLICE_IDR && uiSliceType != 2 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
+        }
+        if kbExtensionFlag && uiSliceType > 2 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
+        }
 
-    if (*pSliceHead).eSliceType == B_SLICE {
-        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+        (*pSliceHead).eSliceType = match uiSliceType {
+            0 => P_SLICE,
+            1 => B_SLICE,
+            2 => I_SLICE,
+            3 => SP_SLICE,
+            _ => SI_SLICE,
+        };
+
+        if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
-    }
-
-    (*pSliceHead).uiRefCount[0] = (*pPps).uiNumRefIdxL0Active as i32;
-    (*pSliceHead).uiRefCount[1] = (*pPps).uiNumRefIdxL1Active as i32;
-
-    let mut bReadNumRefFlag = (*pSliceHead).eSliceType == P_SLICE
-        || (*pSliceHead).eSliceType == B_SLICE;
-    if kbExtensionFlag {
-        bReadNumRefFlag &= (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID;
-    }
-    if bReadNumRefFlag {
-        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-            return ERR_INFO_INVALID_ACCESS;
+        if uiCode >= MAX_PPS_COUNT as u32 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_PPS_ID_OVERFLOW);
         }
-        (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
-        if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
-            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
+        let iPpsId = uiCode as i32;
+
+        if !(*pCtx).sSpsPpsCtx.bPpsAvailFlags[iPpsId as usize] {
+            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                stat.iPpsReportErrorNum += 1;
             }
-            if uiCode > MAX_NUM_REF_IDX_L0_ACTIVE_MINUS1 {
-                return GENERATE_ERROR_NO(
-                    ERR_LEVEL_SLICE_HEADER,
-                    ERR_INFO_INVALID_NUM_REF_IDX_L0_ACTIVE_MINUS1,
-                );
-            }
-            (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
-            if (*pSliceHead).eSliceType == B_SLICE {
-                if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
+            (*pCtx).iErrorCode |= dsNoParamSets;
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_PPS_ID);
+        }
+
+        // The same rule, for the paramset side — a second live instance of F24's shape,
+        // not a precaution. `pSps` was `&mut (*pSubsetSps).sSps`, nested inside a `&mut` of
+        // the subset SPS entry, and the three later `let pSubsetSps` bindings each took
+        // `&mut` of that *same* entry again — popping the nested tag, after which every
+        // `(*pSps)` read is UB (`uiLog2MaxFrameNum`, `uiTotalMbCount`, `bFrameMbsOnlyFlag`,
+        // the POC block, and on). Every `kbExtensionFlag` path, which means every SVC
+        // stream. **No gate reaches it**: `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
+        // (`nalu.rs:684`) and the probe decodes AVC, so it was found by reading while fixing
+        // the pair above and dies in the same commit rather than waiting for a test that
+        // does not exist. The stored `(*pSliceHead).pps_id` / `pSps` pointers get the
+        // context's provenance for free, which is what S28 asks of a pointer that outlives
+        // the expression that made it.
+        let pPps: PPps = std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize]);
+        if (*pPps).uiNumSliceGroups == 0 {
+            (*pCtx).iErrorCode |= dsNoParamSets;
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
+        }
+
+        // **T5.Z4: the ref, not the address.** This derived a raw `SSps` alias out of
+        // the context and read it across two dozen calls that take the context — the
+        // same class the accessors shed at T5.Z1, arriving from a hand-written
+        // derivation. `sps!()` re-resolves in one expression, exactly as `win!()` does
+        // for the bitstream window above.
+        let sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
+        macro_rules! sps {
+            () => {
+                match sps_of(&pCtx.sSpsPpsCtx, sps_ref) {
+                    Some(sps) => sps,
+                    None => return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID),
                 }
-                if uiCode > MAX_NUM_REF_IDX_L1_ACTIVE_MINUS1 {
-                    return GENERATE_ERROR_NO(
-                        ERR_LEVEL_SLICE_HEADER,
-                        ERR_INFO_INVALID_NUM_REF_IDX_L1_ACTIVE_MINUS1,
-                    );
-                }
-                (*pSliceHead).uiRefCount[1] = (1 + uiCode) as i32;
-            }
-        }
-    }
-    if ((*pSliceHead).uiRefCount[0] as usize) > MAX_REF_PIC_COUNT
-        || ((*pSliceHead).uiRefCount[1] as usize) > MAX_REF_PIC_COUNT
-    {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_REF_COUNT_OVERFLOW);
-    }
-
-    if (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID {
-        let iRet = ParseRefPicListReordering(pCtx, kiRbspStart, pBs, pSliceHead);
-        if iRet != ERR_NONE {
-            return iRet;
+            };
         }
 
-        // pred_weight_table(): present for weighted P slices and for B slices when
-        // weighted_bipred_idc == 1. Skipping it desynchronises the rest of the
-        // slice header (`decoder_core.cpp`).
-        if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
-            || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
+        if sps!().iNumRefFrames == 0
+            && (*pSliceHead).eSliceType != I_SLICE
+            && (*pSliceHead).eSliceType != SI_SLICE
         {
-            let iRet = ParsePredWeightedTable(pCtx, kiRbspStart, pBs, pSliceHead);
-            if iRet != ERR_NONE {
-                return iRet;
-            }
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
         }
 
+        (*pSliceHead).iPpsId = iPpsId;
+        (*pSliceHead).iSpsId = (*pPps).iSpsId;
+        // T5.R6: what the two stored pointers carried — an id and, for the SPS, which of
+        // the two buffers it indexes. `kbExtensionFlag` is that choice, made three lines
+        // above where `pSps` was derived.
+        (*pSliceHead).pps_id = Some(iPpsId);
+        (*pSliceHead).sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
         if kbExtensionFlag {
-            (*pSliceHeadExt).bBasePredWeightTableFlag =
-                !((*pNalHeaderExt).bNoInterLayerPredFlag || (*pNalHeaderExt).uiQualityId > 0);
+            (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
         }
 
-        if (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
-            let iRet = ParseDecRefPicMarking(pCtx, kiRbspStart, pBs, pSliceHead, sps_ref, bIdrFlag);
-            if iRet != ERR_NONE {
-                return iRet;
-            }
-            if kbExtensionFlag {
-                let pSubsetSps: PSubsetSps = std::ptr::addr_of_mut!(
-                    (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]
-                );
-                if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
-                    if ((*pNalHeaderExt).bUseRefBasePicFlag
-                        || (*pSliceHeadExt).bStoreRefBasePicFlag)
-                        && !bIdrFlag
-                    {
-                        return GENERATE_ERROR_NO(
-                            ERR_LEVEL_SLICE_HEADER,
-                            ERR_INFO_UNSUPPORTED_ILP,
-                        );
-                    }
-                }
-            }
+        let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
+            || (kbExtensionFlag && (*pNalHeaderExt).bIdrFlag);
+        (*pSliceHead).bIdrFlag = bIdrFlag;
+
+        if sps!().uiLog2MaxFrameNum == 0 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
         }
-    }
-
-    if (*pPps).bEntropyCodingModeFlag {
-        if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
-            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
-                return ERR_INFO_INVALID_CABAC_INIT_IDC;
-            }
-            (*pSliceHead).iCabacInitIdc = uiCode as i32;
-        } else {
-            (*pSliceHead).iCabacInitIdc = 0;
+        if ((*pSliceHead).iFirstMbInSlice as u32) > sps!().uiTotalMbCount - 1 {
+            return GENERATE_ERROR_NO(
+                ERR_LEVEL_SLICE_HEADER,
+                ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
+            );
         }
-    }
-
-    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-        return ERR_INFO_INVALID_ACCESS;
-    }
-    (*pSliceHead).iSliceQpDelta = iCode;
-    (*pSliceHead).iSliceQp = (*pPps).iPicInitQp + (*pSliceHead).iSliceQpDelta;
-    if (*pSliceHead).iSliceQp < 0 || (*pSliceHead).iSliceQp > 51 {
-        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_QP);
-    }
-
-    (*pSliceHead).uiDisableDeblockingFilterIdc = 0;
-    (*pSliceHead).iSliceAlphaC0Offset = 0;
-    (*pSliceHead).iSliceBetaOffset = 0;
-    if (*pPps).bDeblockingFilterControlPresentFlag {
-        if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+        if BsGetBits(win!(), pBs, sps!().uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
-        if (*pSliceHead).uiDisableDeblockingFilterIdc > 6 {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
+        (*pSliceHead).iFrameNum = uiCode as i32;
+        if !sps!().bFrameMbsOnlyFlag {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MBAFF);
         }
-        if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
-            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
-            if (*pSliceHead).iSliceAlphaC0Offset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
-                || (*pSliceHead).iSliceAlphaC0Offset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
-            {
-                return GENERATE_ERROR_NO(
-                    ERR_LEVEL_SLICE_HEADER,
-                    ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
-                );
-            }
-            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHead).iSliceBetaOffset = iCode * 2;
-            if (*pSliceHead).iSliceBetaOffset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
-                || (*pSliceHead).iSliceBetaOffset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
-            {
-                return GENERATE_ERROR_NO(
-                    ERR_LEVEL_SLICE_HEADER,
-                    ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
-                );
-            }
-        }
-    }
+        (*pSliceHead).iMbWidth = sps!().iMbWidth as i32;
+        (*pSliceHead).iMbHeight = sps!().iMbHeight as i32;
 
-    let mut bSgChangeCycleInvolved = (*pPps).uiNumSliceGroups > 1
-        && (*pPps).uiSliceGroupMapType >= 3
-        && (*pPps).uiSliceGroupMapType <= 5;
-    if kbExtensionFlag && bSgChangeCycleInvolved {
-        bSgChangeCycleInvolved =
-            bSgChangeCycleInvolved && ((*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID);
-    }
-    if bSgChangeCycleInvolved {
-        if (*pPps).uiSliceGroupChangeRate > 0 {
-            let kiNumBits = ((1 + (*pPps).uiPicSizeInMapUnits / (*pPps).uiSliceGroupChangeRate)
-                as f64)
-                .log2()
-                .ceil() as u32;
-            if BsGetBits(win!(), pBs, kiNumBits, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
+        if bIdrFlag {
+            if (*pSliceHead).iFrameNum != 0 {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FRAME_NUM);
             }
-            (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
-        } else {
-            (*pSliceHead).iSliceGroupChangeCycle = 0;
-        }
-    }
-
-    if !kbExtensionFlag {
-        FillDefaultSliceHeaderExt(pSliceHeadExt, pNalHeaderExt);
-    } else {
-        // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
-        // the slice header, so skipping them desynchronises the slice-data parse.
-        (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
-        // The borrow lives across the whole SVC extension parse below, which reads
-        // `win!()`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
-        // the context — so nothing here can invalidate it (T5.Z1). The `None` arm is
-        // unreachable: the id is the PPS's own `iSpsId`, which `ParsePps` bounds to
-        // `< MAX_SPS_COUNT` before the PPS is ever stored.
-        let Some(pSubsetSps) = subset_sps_of(&(*pCtx).sSpsPpsCtx, (*pSliceHeadExt).subset_sps_id)
-        else {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID);
-        };
-
-        if !(*pNalHeaderExt).bNoInterLayerPredFlag
-            && BASE_QUALITY_ID == (*pNalHeaderExt).uiQualityId
-        {
             if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
-            (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
-            if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
+            if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
+            }
+            (*pSliceHead).uiIdrPicId = uiCode as u16;
+        }
+
+        (*pSliceHead).iDeltaPicOrderCntBottom = 0;
+        (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
+        (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
+        if sps!().uiPocType == 0 {
+            if BsGetBits(win!(), pBs, sps!().iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            let iMaxPocLsb = 1 << sps!().iLog2MaxPocLsb;
+            let pocLsb = uiCode as i32;
+            (*pSliceHead).iPicOrderCntLsb = pocLsb;
+            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+                if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
+            }
+            let prevLsb = if !(*pCtx).pLastDecPicInfo.is_null() {
+                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb
+            } else {
+                0
+            };
+            let prevMsb = if !(*pCtx).pLastDecPicInfo.is_null() {
+                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb
+            } else {
+                0
+            };
+            let pocMsb = if pocLsb < prevLsb && (prevLsb - pocLsb) >= (iMaxPocLsb / 2) {
+                prevMsb + iMaxPocLsb
+            } else if pocLsb > prevLsb && (pocLsb - prevLsb) > (iMaxPocLsb / 2) {
+                prevMsb - iMaxPocLsb
+            } else {
+                prevMsb
+            };
+            (*pSliceHead).iPicOrderCntLsb = pocMsb + pocLsb;
+            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+                (*pSliceHead).iPicOrderCntLsb += (*pSliceHead).iDeltaPicOrderCntBottom;
+            }
+            if !(*pCtx).pLastDecPicInfo.is_null() && (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
+                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
+                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
+            }
+        } else if sps!().uiPocType == 1 && !sps!().bDeltaPicOrderAlwaysZeroFlag {
+            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
+            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+                if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
+            }
+        }
+
+        (*pSliceHead).iRedundantPicCnt = 0;
+        if (*pPps).bRedundantPicCntPresentFlag {
+            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            if uiCode > SLICE_HEADER_REDUNDANT_PIC_CNT_MAX {
+                return GENERATE_ERROR_NO(
+                    ERR_LEVEL_SLICE_HEADER,
+                    ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
+                );
+            }
+            (*pSliceHead).iRedundantPicCnt = uiCode as i32;
+            if (*pSliceHead).iRedundantPicCnt > 0 {
+                return GENERATE_ERROR_NO(
+                    ERR_LEVEL_SLICE_HEADER,
+                    ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
+                );
+            }
+        }
+
+        if (*pSliceHead).eSliceType == B_SLICE {
+            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
+        }
+
+        (*pSliceHead).uiRefCount[0] = (*pPps).uiNumRefIdxL0Active as i32;
+        (*pSliceHead).uiRefCount[1] = (*pPps).uiNumRefIdxL1Active as i32;
+
+        let mut bReadNumRefFlag = (*pSliceHead).eSliceType == P_SLICE
+            || (*pSliceHead).eSliceType == B_SLICE;
+        if kbExtensionFlag {
+            bReadNumRefFlag &= (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID;
+        }
+        if bReadNumRefFlag {
+            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
+            if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
                 if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                //disable_inter_layer_deblocking_filter_idc
-                (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc = uiCode;
-                if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc > 6 {
+                if uiCode > MAX_NUM_REF_IDX_L0_ACTIVE_MINUS1 {
                     return GENERATE_ERROR_NO(
                         ERR_LEVEL_SLICE_HEADER,
-                        ERR_INFO_INVALID_DBLOCKING_IDC,
+                        ERR_INFO_INVALID_NUM_REF_IDX_L0_ACTIVE_MINUS1,
                     );
                 }
-                if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
-                    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
+                if (*pSliceHead).eSliceType == B_SLICE {
+                    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    //inter_layer_slice_alpha_c0_offset_div2
-                    (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset = iCode * 2;
-                    if (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
-                        < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
-                        || (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
-                            > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
-                    {
+                    if uiCode > MAX_NUM_REF_IDX_L1_ACTIVE_MINUS1 {
                         return GENERATE_ERROR_NO(
                             ERR_LEVEL_SLICE_HEADER,
-                            ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
+                            ERR_INFO_INVALID_NUM_REF_IDX_L1_ACTIVE_MINUS1,
                         );
                     }
-                    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    //inter_layer_slice_beta_offset_div2
-                    (*pSliceHeadExt).iInterLayerSliceBetaOffset = iCode * 2;
-                    if (*pSliceHeadExt).iInterLayerSliceBetaOffset
-                        < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
-                        || (*pSliceHeadExt).iInterLayerSliceBetaOffset
-                            > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
-                    {
-                        return GENERATE_ERROR_NO(
-                            ERR_LEVEL_SLICE_HEADER,
-                            ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
-                        );
-                    }
+                    (*pSliceHead).uiRefCount[1] = (1 + uiCode) as i32;
                 }
             }
-
-            (*pSliceHeadExt).uiRefLayerChromaPhaseXPlus1Flag =
-                (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseXPlus1Flag;
-            (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
-                (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
-
-            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
-
-            {
-                let scaled = &(*pSubsetSps).sSpsSvcExt.sSeqScaledRefLayer;
-                let iLeftOffset = scaled.iLeftOffset;
-                let iTopOffset = scaled.iTopOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
-                let iRightOffset = scaled.iRightOffset;
-                let iBottomOffset = scaled.iBottomOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
-                (*pSliceHeadExt).iScaledRefLayerPicWidthInSampleLuma =
-                    ((*pSliceHead).iMbWidth << 4) - (iLeftOffset + iRightOffset);
-                (*pSliceHeadExt).iScaledRefLayerPicHeightInSampleLuma =
-                    ((*pSliceHead).iMbHeight << 4)
-                        - (iTopOffset + iBottomOffset) / (1 + (*pSliceHead).bFieldPicFlag as i32);
-            }
-        } else if (*pNalHeaderExt).uiQualityId > BASE_QUALITY_ID {
-            // MGS not supported.
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
-        } else {
-            (*pSliceHeadExt).uiRefLayerDqId = u8::MAX;
+        }
+        if ((*pSliceHead).uiRefCount[0] as usize) > MAX_REF_PIC_COUNT
+            || ((*pSliceHead).uiRefCount[1] as usize) > MAX_REF_PIC_COUNT
+        {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_REF_COUNT_OVERFLOW);
         }
 
-        (*pSliceHeadExt).bSliceSkipFlag = false;
-        (*pSliceHeadExt).bAdaptiveBaseModeFlag = false;
-        (*pSliceHeadExt).bDefaultBaseModeFlag = false;
-        (*pSliceHeadExt).bAdaptiveMotionPredFlag = false;
-        (*pSliceHeadExt).bDefaultMotionPredFlag = false;
-        (*pSliceHeadExt).bAdaptiveResidualPredFlag = false;
-        (*pSliceHeadExt).bDefaultResidualPredFlag = false;
-        (*pSliceHeadExt).bTCoeffLevelPredFlag = if (*pNalHeaderExt).bNoInterLayerPredFlag {
-            false
-        } else {
-            (*pSubsetSps).sSpsSvcExt.bSeqTCoeffLevelPredFlag
-        };
-
-        if !(*pNalHeaderExt).bNoInterLayerPredFlag {
-            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
+        if (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID {
+            let iRet = ParseRefPicListReordering(pCtx, kiRbspStart, pBs, pSliceHead);
+            if iRet != ERR_NONE {
+                return iRet;
             }
-            (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
-            if (*pSliceHeadExt).bSliceSkipFlag {
-                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
-            } else {
-                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                    return ERR_INFO_INVALID_ACCESS;
+
+            // pred_weight_table(): present for weighted P slices and for B slices when
+            // weighted_bipred_idc == 1. Skipping it desynchronises the rest of the
+            // slice header (`decoder_core.cpp`).
+            if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
+                || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
+            {
+                let iRet = ParsePredWeightedTable(pCtx, kiRbspStart, pBs, pSliceHead);
+                if iRet != ERR_NONE {
+                    return iRet;
                 }
-                (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
-                if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
-                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
+            }
+
+            if kbExtensionFlag {
+                (*pSliceHeadExt).bBasePredWeightTableFlag =
+                    !((*pNalHeaderExt).bNoInterLayerPredFlag || (*pNalHeaderExt).uiQualityId > 0);
+            }
+
+            if (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
+                let iRet = ParseDecRefPicMarking(pCtx, kiRbspStart, pBs, pSliceHead, sps_ref, bIdrFlag);
+                if iRet != ERR_NONE {
+                    return iRet;
                 }
-                if !(*pSliceHeadExt).bDefaultBaseModeFlag {
-                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
-                        return ERR_INFO_INVALID_ACCESS;
-                    }
-                    //adaptive_motion_prediction_flag
-                    (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
-                    if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
+                if kbExtensionFlag {
+                    let pSubsetSps: PSubsetSps = std::ptr::addr_of_mut!(
+                        (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]
+                    );
+                    if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
                         if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
-                        //default_motion_prediction_flag
-                        (*pSliceHeadExt).bDefaultMotionPredFlag = uiCode != 0;
+                        (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
+                        if ((*pNalHeaderExt).bUseRefBasePicFlag
+                            || (*pSliceHeadExt).bStoreRefBasePicFlag)
+                            && !bIdrFlag
+                        {
+                            return GENERATE_ERROR_NO(
+                                ERR_LEVEL_SLICE_HEADER,
+                                ERR_INFO_UNSUPPORTED_ILP,
+                            );
+                        }
                     }
                 }
+            }
+        }
+
+        if (*pPps).bEntropyCodingModeFlag {
+            if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
+                if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
+                    return ERR_INFO_INVALID_CABAC_INIT_IDC;
+                }
+                (*pSliceHead).iCabacInitIdc = uiCode as i32;
+            } else {
+                (*pSliceHead).iCabacInitIdc = 0;
+            }
+        }
+
+        if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+            return ERR_INFO_INVALID_ACCESS;
+        }
+        (*pSliceHead).iSliceQpDelta = iCode;
+        (*pSliceHead).iSliceQp = (*pPps).iPicInitQp + (*pSliceHead).iSliceQpDelta;
+        if (*pSliceHead).iSliceQp < 0 || (*pSliceHead).iSliceQp > 51 {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_QP);
+        }
+
+        (*pSliceHead).uiDisableDeblockingFilterIdc = 0;
+        (*pSliceHead).iSliceAlphaC0Offset = 0;
+        (*pSliceHead).iSliceBetaOffset = 0;
+        if (*pPps).bDeblockingFilterControlPresentFlag {
+            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+                return ERR_INFO_INVALID_ACCESS;
+            }
+            (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
+            if (*pSliceHead).uiDisableDeblockingFilterIdc > 6 {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
+            }
+            if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
+                if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
+                if (*pSliceHead).iSliceAlphaC0Offset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                    || (*pSliceHead).iSliceAlphaC0Offset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+                {
+                    return GENERATE_ERROR_NO(
+                        ERR_LEVEL_SLICE_HEADER,
+                        ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
+                    );
+                }
+                if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHead).iSliceBetaOffset = iCode * 2;
+                if (*pSliceHead).iSliceBetaOffset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                    || (*pSliceHead).iSliceBetaOffset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+                {
+                    return GENERATE_ERROR_NO(
+                        ERR_LEVEL_SLICE_HEADER,
+                        ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
+                    );
+                }
+            }
+        }
+
+        let mut bSgChangeCycleInvolved = (*pPps).uiNumSliceGroups > 1
+            && (*pPps).uiSliceGroupMapType >= 3
+            && (*pPps).uiSliceGroupMapType <= 5;
+        if kbExtensionFlag && bSgChangeCycleInvolved {
+            bSgChangeCycleInvolved =
+                bSgChangeCycleInvolved && ((*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID);
+        }
+        if bSgChangeCycleInvolved {
+            if (*pPps).uiSliceGroupChangeRate > 0 {
+                let kiNumBits = ((1 + (*pPps).uiPicSizeInMapUnits / (*pPps).uiSliceGroupChangeRate)
+                    as f64)
+                    .log2()
+                    .ceil() as u32;
+                if BsGetBits(win!(), pBs, kiNumBits, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
+            } else {
+                (*pSliceHead).iSliceGroupChangeCycle = 0;
+            }
+        }
+
+        if !kbExtensionFlag {
+            FillDefaultSliceHeaderExt(pSliceHeadExt, pNalHeaderExt);
+        } else {
+            // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
+            // the slice header, so skipping them desynchronises the slice-data parse.
+            (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
+            // The borrow lives across the whole SVC extension parse below, which reads
+            // `win!()`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
+            // the context — so nothing here can invalidate it (T5.Z1). The `None` arm is
+            // unreachable: the id is the PPS's own `iSpsId`, which `ParsePps` bounds to
+            // `< MAX_SPS_COUNT` before the PPS is ever stored.
+            let Some(pSubsetSps) = subset_sps_of(&(*pCtx).sSpsPpsCtx, (*pSliceHeadExt).subset_sps_id)
+            else {
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID);
+            };
+
+            if !(*pNalHeaderExt).bNoInterLayerPredFlag
+                && BASE_QUALITY_ID == (*pNalHeaderExt).uiQualityId
+            {
+                if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
+                if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
+                    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //disable_inter_layer_deblocking_filter_idc
+                    (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc = uiCode;
+                    if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc > 6 {
+                        return GENERATE_ERROR_NO(
+                            ERR_LEVEL_SLICE_HEADER,
+                            ERR_INFO_INVALID_DBLOCKING_IDC,
+                        );
+                    }
+                    if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
+                        if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        //inter_layer_slice_alpha_c0_offset_div2
+                        (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset = iCode * 2;
+                        if (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                            < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
+                            || (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                                > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
+                        {
+                            return GENERATE_ERROR_NO(
+                                ERR_LEVEL_SLICE_HEADER,
+                                ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
+                            );
+                        }
+                        if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        //inter_layer_slice_beta_offset_div2
+                        (*pSliceHeadExt).iInterLayerSliceBetaOffset = iCode * 2;
+                        if (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                            < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
+                            || (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                                > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
+                        {
+                            return GENERATE_ERROR_NO(
+                                ERR_LEVEL_SLICE_HEADER,
+                                ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2,
+                            );
+                        }
+                    }
+                }
+
+                (*pSliceHeadExt).uiRefLayerChromaPhaseXPlus1Flag =
+                    (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseXPlus1Flag;
+                (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
+                    (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
 
                 if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                //adaptive_residual_prediction_flag
-                (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
-                if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
+                (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
+
+                {
+                    let scaled = &(*pSubsetSps).sSpsSvcExt.sSeqScaledRefLayer;
+                    let iLeftOffset = scaled.iLeftOffset;
+                    let iTopOffset = scaled.iTopOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
+                    let iRightOffset = scaled.iRightOffset;
+                    let iBottomOffset = scaled.iBottomOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
+                    (*pSliceHeadExt).iScaledRefLayerPicWidthInSampleLuma =
+                        ((*pSliceHead).iMbWidth << 4) - (iLeftOffset + iRightOffset);
+                    (*pSliceHeadExt).iScaledRefLayerPicHeightInSampleLuma =
+                        ((*pSliceHead).iMbHeight << 4)
+                            - (iTopOffset + iBottomOffset) / (1 + (*pSliceHead).bFieldPicFlag as i32);
+                }
+            } else if (*pNalHeaderExt).uiQualityId > BASE_QUALITY_ID {
+                // MGS not supported.
+                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
+            } else {
+                (*pSliceHeadExt).uiRefLayerDqId = u8::MAX;
+            }
+
+            (*pSliceHeadExt).bSliceSkipFlag = false;
+            (*pSliceHeadExt).bAdaptiveBaseModeFlag = false;
+            (*pSliceHeadExt).bDefaultBaseModeFlag = false;
+            (*pSliceHeadExt).bAdaptiveMotionPredFlag = false;
+            (*pSliceHeadExt).bDefaultMotionPredFlag = false;
+            (*pSliceHeadExt).bAdaptiveResidualPredFlag = false;
+            (*pSliceHeadExt).bDefaultResidualPredFlag = false;
+            (*pSliceHeadExt).bTCoeffLevelPredFlag = if (*pNalHeaderExt).bNoInterLayerPredFlag {
+                false
+            } else {
+                (*pSubsetSps).sSpsSvcExt.bSeqTCoeffLevelPredFlag
+            };
+
+            if !(*pNalHeaderExt).bNoInterLayerPredFlag {
+                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
+                if (*pSliceHeadExt).bSliceSkipFlag {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
+                } else {
                     if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    //default_residual_prediction_flag
-                    (*pSliceHeadExt).bDefaultResidualPredFlag = uiCode != 0;
+                    (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
+                    if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
+                        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
+                    }
+                    if !(*pSliceHeadExt).bDefaultBaseModeFlag {
+                        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        //adaptive_motion_prediction_flag
+                        (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
+                        if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
+                            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                                return ERR_INFO_INVALID_ACCESS;
+                            }
+                            //default_motion_prediction_flag
+                            (*pSliceHeadExt).bDefaultMotionPredFlag = uiCode != 0;
+                        }
+                    }
+
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //adaptive_residual_prediction_flag
+                    (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
+                    if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
+                        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                            return ERR_INFO_INVALID_ACCESS;
+                        }
+                        //default_residual_prediction_flag
+                        (*pSliceHeadExt).bDefaultResidualPredFlag = uiCode != 0;
+                    }
+                }
+                if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+                        return ERR_INFO_INVALID_ACCESS;
+                    }
+                    //tcoeff_level_prediction_flag
+                    (*pSliceHeadExt).bTCoeffLevelPredFlag = uiCode != 0;
                 }
             }
-            if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
-                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
+
+            if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+                if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                //tcoeff_level_prediction_flag
-                (*pSliceHeadExt).bTCoeffLevelPredFlag = uiCode != 0;
+                (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
+                if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
+                    return ERR_INFO_INVALID_ACCESS;
+                }
+                (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
+                if (*pSliceHeadExt).uiScanIdxStart != 0 || (*pSliceHeadExt).uiScanIdxEnd != 15 {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
+                }
+            } else {
+                (*pSliceHeadExt).uiScanIdxStart = 0;
+                (*pSliceHeadExt).uiScanIdxEnd = 15;
             }
         }
 
-        if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-            if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
-            if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
-                return ERR_INFO_INVALID_ACCESS;
-            }
-            (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
-            if (*pSliceHeadExt).uiScanIdxStart != 0 || (*pSliceHeadExt).uiScanIdxEnd != 15 {
-                return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
-            }
-        } else {
-            (*pSliceHeadExt).uiScanIdxStart = 0;
-            (*pSliceHeadExt).uiScanIdxEnd = 15;
-        }
+        ERR_NONE
     }
-
-    ERR_NONE
 }
 
+#[allow(unsafe_code)] // parse tree
 pub unsafe fn PrefetchNalHeaderExtSyntax(
     pCtx: &mut SWelsDecoderContext,
     kpDst: PNalUnit,
@@ -2774,127 +2901,135 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
     true
 }
 
-pub unsafe fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return ERR_INFO_INVALID_PTR;
-    };
-    let iIdx = pCurAu.uiEndPos as usize;
-    let dq_id = if iIdx < pCurAu.count() as usize {
-        Some((*pCurAu.nal(iIdx)).sNalHeaderExt.uiLayerDqId)
-    } else {
-        None
-    };
-    pCurAu.uiActualUnitsNum = pCurAu.uiEndPos + 1;
-    pCurAu.bCompletedAuFlag = true;
-    if let Some(dq_id) = dq_id {
-        (*pCtx).uiTargetDqId = dq_id;
-    }
-
-    // **F46, T5.T2 — the mosaic-avoidance block, never ported** (`decoder_core.cpp:1454`).
-    // "Added for mosaic avoidance, 11/19/2009": an access unit that arrives while the
-    // decoder is still waiting for a key frame, and that contains no IDR, means the
-    // references this AU predicts from are gone — `dsRefLost`. The port stopped at the
-    // three assignments above, so **the whole block was absent** and `dsRefLost` had no
-    // producer anywhere in the decoder: `iErrorCode |= dsRefLost` appears once
-    // (`HandleReferenceLost`) against the C++'s four, and this is the site the corpus
-    // reaches. Measured: this block plus the `bParamSetsLostFlag` clear it depends on
-    // take the corpus's disagreeing truncation rows from **399 to 188** — 211 rows,
-    // one bit on one call.
-    //
-    // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is
-    // `bParamSetsLostFlag || bNewSeqBegin`. Both trees leave `bParamSetsLostFlag` true
-    // from `WelsOpenDecoder` on every non-parse-only path — the only clear is inside
-    // `DecodeFrameConstruction`'s `bParseOnly` arm — so the guard is not what was
-    // missing and is written here as the C++ writes it rather than folded away.
-    let waiting_for_key = (*pCtx).bParamSetsLostFlag || (*pCtx).bNewSeqBegin;
-    if waiting_for_key {
-        let mut uiActualIdx = 0u32;
-        while uiActualIdx < pCurAu.uiActualUnitsNum {
-            let nal = pCurAu.nal(uiActualIdx as usize);
-            if nal.is_null() {
-                break;
-            }
-            let hdr = &(*nal).sNalHeaderExt;
-            if hdr.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
-                || hdr.bIdrFlag
-            {
-                break;
-            }
-            uiActualIdx += 1;
+#[allow(unsafe_code)] // parse tree
+pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+            return ERR_INFO_INVALID_PTR;
+        };
+        let iIdx = pCurAu.uiEndPos as usize;
+        let dq_id = if iIdx < pCurAu.count() as usize {
+            Some((*pCurAu.nal(iIdx)).sNalHeaderExt.uiLayerDqId)
+        } else {
+            None
+        };
+        pCurAu.uiActualUnitsNum = pCurAu.uiEndPos + 1;
+        pCurAu.bCompletedAuFlag = true;
+        if let Some(dq_id) = dq_id {
+            (*pCtx).uiTargetDqId = dq_id;
         }
-        if uiActualIdx == pCurAu.uiActualUnitsNum {
-            // No IDR in this access unit.
-            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
-                stat.uiIDRLostNum += 1;
+
+        // **F46, T5.T2 — the mosaic-avoidance block, never ported** (`decoder_core.cpp:1454`).
+        // "Added for mosaic avoidance, 11/19/2009": an access unit that arrives while the
+        // decoder is still waiting for a key frame, and that contains no IDR, means the
+        // references this AU predicts from are gone — `dsRefLost`. The port stopped at the
+        // three assignments above, so **the whole block was absent** and `dsRefLost` had no
+        // producer anywhere in the decoder: `iErrorCode |= dsRefLost` appears once
+        // (`HandleReferenceLost`) against the C++'s four, and this is the site the corpus
+        // reaches. Measured: this block plus the `bParamSetsLostFlag` clear it depends on
+        // take the corpus's disagreeing truncation rows from **399 to 188** — 211 rows,
+        // one bit on one call.
+        //
+        // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is
+        // `bParamSetsLostFlag || bNewSeqBegin`. Both trees leave `bParamSetsLostFlag` true
+        // from `WelsOpenDecoder` on every non-parse-only path — the only clear is inside
+        // `DecodeFrameConstruction`'s `bParseOnly` arm — so the guard is not what was
+        // missing and is written here as the C++ writes it rather than folded away.
+        let waiting_for_key = (*pCtx).bParamSetsLostFlag || (*pCtx).bNewSeqBegin;
+        if waiting_for_key {
+            let mut uiActualIdx = 0u32;
+            while uiActualIdx < pCurAu.uiActualUnitsNum {
+                let nal = pCurAu.nal(uiActualIdx as usize);
+                if nal.is_null() {
+                    break;
+                }
+                let hdr = &(*nal).sNalHeaderExt;
+                if hdr.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+                    || hdr.bIdrFlag
+                {
+                    break;
+                }
+                uiActualIdx += 1;
             }
-            if !(*pCtx).bParamSetsLostFlag {
-                WelsLog(
-                    std::ptr::addr_of_mut!((*pCtx).sLogCtx),
-                    WELS_LOG_WARNING,
-                    "UpdateAccessUnit():::::Key frame lost.....CAN NOT find IDR from current AU.",
-                );
-            }
-            (*pCtx).iErrorCode |= dsRefLost;
-            if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
-                (*pCtx).iErrorCode |= dsNoParamSets;
-                return dsNoParamSets;
+            if uiActualIdx == pCurAu.uiActualUnitsNum {
+                // No IDR in this access unit.
+                if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                    stat.uiIDRLostNum += 1;
+                }
+                if !(*pCtx).bParamSetsLostFlag {
+                    WelsLog(
+                        std::ptr::addr_of_mut!((*pCtx).sLogCtx),
+                        WELS_LOG_WARNING,
+                        "UpdateAccessUnit():::::Key frame lost.....CAN NOT find IDR from current AU.",
+                    );
+                }
+                (*pCtx).iErrorCode |= dsRefLost;
+                if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
+                    (*pCtx).iErrorCode |= dsNoParamSets;
+                    return dsNoParamSets;
+                }
             }
         }
-    }
 
-    ERR_NONE
+        ERR_NONE
+    }
 }
 
+#[allow(unsafe_code)] // parse tree
 pub fn InitialDqLayersContext(
     pCtx: &mut SWelsDecoderContext,
     kiMaxWidth: i32,
     kiMaxHeight: i32,
 ) -> i32 {
-    if kiMaxWidth <= 0 || kiMaxHeight <= 0 {
-        return ERR_INFO_INVALID_PARAM;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if kiMaxWidth <= 0 || kiMaxHeight <= 0 {
+            return ERR_INFO_INVALID_PARAM;
+        }
+
+        if (*pCtx).bInitialDqLayersMem
+            && kiMaxWidth <= (*pCtx).iPicWidthReq
+            && kiMaxHeight <= (*pCtx).iPicHeightReq
+        {
+            return ERR_NONE;
+        }
+
+        UninitialDqLayersContext(pCtx);
+
+        // The **allocation's** dimensions, from the negotiated maximum — the layer's
+        // `iMbWidth`/`iMbHeight` are the current slice's and are smaller on any stream
+        // decoding below it (T5.E2). `pMa` and a separate `numMb` were still declared
+        // here for the 25 raw array allocations that died at T5.H3; the grid is the only
+        // consumer of this arithmetic now.
+        let dims = MbDims::new(
+            ((kiMaxWidth + 15) >> 4) as usize,
+            ((kiMaxHeight + 15) >> 4) as usize,
+        );
+
+        // One layer, and these 27 arrays are now allocated *into* it. They used to be
+        // allocated into `SWelsDecoderContext::sMb` and re-aliased onto the layer once per
+        // picture by `InitCurDqLayerData`; the alias carried every real access (316 against
+        // the cache's 130, of which 129 were lifecycle), so the cache was an owner with no
+        // readers and it is gone. The block scopes `pDq`; it was a
+        // `for i in 0..LAYER_NUM_EXCHANGEABLE` loop, and that constant was 1.
+        // T5.H3: the layer is heap-*constructed*, not zero-allocated — it owns a `MbGrid`
+        // and a zeroed `Vec` is an invalid value (S21). The allocation cannot fail by
+        // returning null, so the `ERR_INFO_OUT_OF_MEMORY` arm that guarded `WelsMallocz` is
+        // gone with it; the 25 array allocations below still go through the C's allocator
+        // and are still checked where they were.
+        //
+        // **T5.R2: the context owns it.** `Box::into_raw` and the `Box::from_raw` in
+        // `UninitialDqLayersContext` were F19's last pair in `src/decoder/` — the
+        // assignment *is* the ownership transfer now, and the old block scope existed only
+        // to bound the raw `pDq`.
+        (*pCtx).pDqLayersList = Some(Box::new(DqLayerState::for_grid(dims)));
+
+        (*pCtx).bInitialDqLayersMem = true;
+        (*pCtx).iPicWidthReq = kiMaxWidth;
+        (*pCtx).iPicHeightReq = kiMaxHeight;
+        ERR_NONE
     }
-
-    if (*pCtx).bInitialDqLayersMem
-        && kiMaxWidth <= (*pCtx).iPicWidthReq
-        && kiMaxHeight <= (*pCtx).iPicHeightReq
-    {
-        return ERR_NONE;
-    }
-
-    UninitialDqLayersContext(pCtx);
-
-    // The **allocation's** dimensions, from the negotiated maximum — the layer's
-    // `iMbWidth`/`iMbHeight` are the current slice's and are smaller on any stream
-    // decoding below it (T5.E2). `pMa` and a separate `numMb` were still declared
-    // here for the 25 raw array allocations that died at T5.H3; the grid is the only
-    // consumer of this arithmetic now.
-    let dims = MbDims::new(
-        ((kiMaxWidth + 15) >> 4) as usize,
-        ((kiMaxHeight + 15) >> 4) as usize,
-    );
-
-    // One layer, and these 27 arrays are now allocated *into* it. They used to be
-    // allocated into `SWelsDecoderContext::sMb` and re-aliased onto the layer once per
-    // picture by `InitCurDqLayerData`; the alias carried every real access (316 against
-    // the cache's 130, of which 129 were lifecycle), so the cache was an owner with no
-    // readers and it is gone. The block scopes `pDq`; it was a
-    // `for i in 0..LAYER_NUM_EXCHANGEABLE` loop, and that constant was 1.
-    // T5.H3: the layer is heap-*constructed*, not zero-allocated — it owns a `MbGrid`
-    // and a zeroed `Vec` is an invalid value (S21). The allocation cannot fail by
-    // returning null, so the `ERR_INFO_OUT_OF_MEMORY` arm that guarded `WelsMallocz` is
-    // gone with it; the 25 array allocations below still go through the C's allocator
-    // and are still checked where they were.
-    //
-    // **T5.R2: the context owns it.** `Box::into_raw` and the `Box::from_raw` in
-    // `UninitialDqLayersContext` were F19's last pair in `src/decoder/` — the
-    // assignment *is* the ownership transfer now, and the old block scope existed only
-    // to bound the raw `pDq`.
-    (*pCtx).pDqLayersList = Some(Box::new(DqLayerState::for_grid(dims)));
-
-    (*pCtx).bInitialDqLayersMem = true;
-    (*pCtx).iPicWidthReq = kiMaxWidth;
-    (*pCtx).iPicHeightReq = kiMaxHeight;
-    ERR_NONE
 }
 
 pub fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
@@ -2969,299 +3104,329 @@ pub fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-pub unsafe fn CheckAvailNalUnitsListContinuity(
+#[allow(unsafe_code)] // parse tree
+pub fn CheckAvailNalUnitsListContinuity(
     pCtx: &mut SWelsDecoderContext,
     iStartIdx: i32,
     iEndIdx: i32,
 ) {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return;
-    };
-    let mut uiLastNuDependencyId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiDependencyId;
-    let mut uiLastNuLayerDqId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiLayerDqId;
-    let mut iCurNalUnitIdx = iStartIdx + 1;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+            return;
+        };
+        let mut uiLastNuDependencyId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiDependencyId;
+        let mut uiLastNuLayerDqId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiLayerDqId;
+        let mut iCurNalUnitIdx = iStartIdx + 1;
 
-    while iCurNalUnitIdx <= iEndIdx {
-        let pNal = pCurAu.nal(iCurNalUnitIdx as usize);
-        let uiCurNuDependencyId = (*pNal).sNalHeaderExt.uiDependencyId;
-        let uiCurNuQualityId = (*pNal).sNalHeaderExt.uiQualityId;
-        let uiCurNuLayerDqId = (*pNal).sNalHeaderExt.uiLayerDqId;
-        let uiCurNuRefLayerDqId = (*pNal).sNalData.sVclNal.sSliceHeaderExt.uiRefLayerDqId;
+        while iCurNalUnitIdx <= iEndIdx {
+            let Some(pNal) = pCurAu.node(iCurNalUnitIdx as usize) else {
+                return;
+            };
+            let uiCurNuDependencyId = pNal.sNalHeaderExt.uiDependencyId;
+            let uiCurNuQualityId = pNal.sNalHeaderExt.uiQualityId;
+            let uiCurNuLayerDqId = pNal.sNalHeaderExt.uiLayerDqId;
+            let uiCurNuRefLayerDqId = pNal.sNalData.sVclNal.sSliceHeaderExt.uiRefLayerDqId;
 
-        if uiCurNuDependencyId == uiLastNuDependencyId {
-            uiLastNuLayerDqId = uiCurNuLayerDqId;
-            iCurNalUnitIdx += 1;
-        } else {
-            if uiCurNuQualityId == 0 {
-                uiLastNuDependencyId = uiCurNuDependencyId;
-                if uiCurNuRefLayerDqId == uiLastNuLayerDqId {
-                    uiLastNuLayerDqId = uiCurNuLayerDqId;
-                    iCurNalUnitIdx += 1;
+            if uiCurNuDependencyId == uiLastNuDependencyId {
+                uiLastNuLayerDqId = uiCurNuLayerDqId;
+                iCurNalUnitIdx += 1;
+            } else {
+                if uiCurNuQualityId == 0 {
+                    uiLastNuDependencyId = uiCurNuDependencyId;
+                    if uiCurNuRefLayerDqId == uiLastNuLayerDqId {
+                        uiLastNuLayerDqId = uiCurNuLayerDqId;
+                        iCurNalUnitIdx += 1;
+                    } else {
+                        break;
+                    }
                 } else {
                     break;
                 }
-            } else {
-                break;
             }
         }
+        iCurNalUnitIdx -= 1;
+        pCurAu.uiEndPos = iCurNalUnitIdx as u32;
+        let dq_id = (*pCurAu.nal(iCurNalUnitIdx as usize)).sNalHeaderExt.uiLayerDqId;
+        (*pCtx).uiTargetDqId = dq_id;
     }
-    iCurNalUnitIdx -= 1;
-    pCurAu.uiEndPos = iCurNalUnitIdx as u32;
-    let dq_id = (*pCurAu.nal(iCurNalUnitIdx as usize)).sNalHeaderExt.uiLayerDqId;
-    (*pCtx).uiTargetDqId = dq_id;
 }
+#[allow(unsafe_code)] // parse tree
+pub fn RefineIdxNoInterLayerPred(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: &mut i32) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // T5.AC11: the out-parameter is a borrow and the node arrives through the AU's
+        // shared reader, so this whole function is safe (T5.AC5's `node`).
+        let idx = *pIdxNoInterLayerPred as usize;
+        let Some(pNal) = pCurAu.node(idx) else {
+            return;
+        };
+        let iLastNalDependId = pNal.sNalHeaderExt.uiDependencyId;
+        let iLastNalQualityId = pNal.sNalHeaderExt.uiQualityId;
+        let uiLastNalTId = pNal.sNalHeaderExt.uiTemporalId;
+        let iLastNalFrameNum = pNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
+        let iLastNalPoc = pNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
+        let iLastNalFirstMb = pNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
-pub unsafe fn RefineIdxNoInterLayerPred(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: *mut i32) {
-    if pIdxNoInterLayerPred.is_null() {
-        return;
-    }
-    let idx = *pIdxNoInterLayerPred as usize;
-    let pNal = pCurAu.nal(idx);
-    if pNal.is_null() {
-        return;
-    }
-    let iLastNalDependId = (*pNal).sNalHeaderExt.uiDependencyId;
-    let iLastNalQualityId = (*pNal).sNalHeaderExt.uiQualityId;
-    let uiLastNalTId = (*pNal).sNalHeaderExt.uiTemporalId;
-    let iLastNalFrameNum = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
-    let iLastNalPoc = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
-    let iLastNalFirstMb = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+        let mut bMultiSliceFind = false;
+        let mut iFinalIdxNoInterLayerPred = 0;
+        let mut iCurIdx = (*pIdxNoInterLayerPred) - 1;
 
-    let mut bMultiSliceFind = false;
-    let mut iFinalIdxNoInterLayerPred = 0;
-    let mut iCurIdx = (*pIdxNoInterLayerPred) - 1;
+        while iCurIdx >= 0 {
+            let pCurNal = (*pCurAu).nal(iCurIdx as usize);
+            if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag {
+                let iCurNalDependId = (*pCurNal).sNalHeaderExt.uiDependencyId;
+                let iCurNalQualityId = (*pCurNal).sNalHeaderExt.uiQualityId;
+                let iCurNalTId = (*pCurNal).sNalHeaderExt.uiTemporalId;
+                let iCurNalFrameNum = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
+                let iCurNalPoc = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
+                let iCurNalFirstMb = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
-    while iCurIdx >= 0 {
-        let pCurNal = (*pCurAu).nal(iCurIdx as usize);
-        if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag {
-            let iCurNalDependId = (*pCurNal).sNalHeaderExt.uiDependencyId;
-            let iCurNalQualityId = (*pCurNal).sNalHeaderExt.uiQualityId;
-            let iCurNalTId = (*pCurNal).sNalHeaderExt.uiTemporalId;
-            let iCurNalFrameNum = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
-            let iCurNalPoc = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
-            let iCurNalFirstMb = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
-
-            if iCurNalDependId == iLastNalDependId
-                && iCurNalQualityId == iLastNalQualityId
-                && iCurNalTId == uiLastNalTId
-                && iCurNalFrameNum == iLastNalFrameNum
-                && iCurNalPoc == iLastNalPoc
-                && iCurNalFirstMb != iLastNalFirstMb
-            {
-                bMultiSliceFind = true;
-                iFinalIdxNoInterLayerPred = iCurIdx;
-                iCurIdx -= 1;
-                continue;
-            } else {
-                break;
+                if iCurNalDependId == iLastNalDependId
+                    && iCurNalQualityId == iLastNalQualityId
+                    && iCurNalTId == uiLastNalTId
+                    && iCurNalFrameNum == iLastNalFrameNum
+                    && iCurNalPoc == iLastNalPoc
+                    && iCurNalFirstMb != iLastNalFirstMb
+                {
+                    bMultiSliceFind = true;
+                    iFinalIdxNoInterLayerPred = iCurIdx;
+                    iCurIdx -= 1;
+                    continue;
+                } else {
+                    break;
+                }
             }
+            iCurIdx -= 1;
         }
-        iCurIdx -= 1;
-    }
 
-    if bMultiSliceFind && *pIdxNoInterLayerPred != iFinalIdxNoInterLayerPred {
-        *pIdxNoInterLayerPred = iFinalIdxNoInterLayerPred;
+        if bMultiSliceFind && *pIdxNoInterLayerPred != iFinalIdxNoInterLayerPred {
+            *pIdxNoInterLayerPred = iFinalIdxNoInterLayerPred;
+        }
     }
 }
 
-pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: i32) -> bool {
-    let iEndIdx = pCurAu.uiEndPos as i32;
-    let iCurAuPoc = (*pCurAu.nal(pIdxNoInterLayerPred as usize))
-        .sNalData
-        .sVclNal
-        .sSliceHeaderExt
-        .sSliceHeader
-        .iPicOrderCntLsb;
-
-    for i in (pIdxNoInterLayerPred + 1)..iEndIdx {
-        let iTmpPoc = (*pCurAu.nal(i as usize))
+#[allow(unsafe_code)] // parse tree
+pub fn CheckPocOfCurValidNalUnits(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: i32) -> bool {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let iEndIdx = pCurAu.uiEndPos as i32;
+        let iCurAuPoc = (*pCurAu.nal(pIdxNoInterLayerPred as usize))
             .sNalData
             .sVclNal
             .sSliceHeaderExt
             .sSliceHeader
             .iPicOrderCntLsb;
-        if iTmpPoc != iCurAuPoc {
-            return false;
+
+        for i in (pIdxNoInterLayerPred + 1)..iEndIdx {
+            let iTmpPoc = (*pCurAu.nal(i as usize))
+                .sNalData
+                .sVclNal
+                .sSliceHeaderExt
+                .sSliceHeader
+                .iPicOrderCntLsb;
+            if iTmpPoc != iCurAuPoc {
+                return false;
+            }
         }
+        true
     }
-    true
 }
 
-pub unsafe fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return false;
-    };
-    let kiEndPos = pCurAu.uiEndPos as i32;
+#[allow(unsafe_code)] // parse tree
+pub fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+            return false;
+        };
+        let kiEndPos = pCurAu.uiEndPos as i32;
 
-    if !pCurAu.bCompletedAuFlag {
-        return false;
-    }
-
-    if (*pCtx).bNewSeqBegin {
-        pCurAu.uiStartPos = 0;
-        let mut iIdxNoInterLayerPred = kiEndPos;
-        while iIdxNoInterLayerPred >= 0 {
-            if (*pCurAu.nal(iIdxNoInterLayerPred as usize)).sNalHeaderExt.bNoInterLayerPredFlag {
-                break;
-            }
-            iIdxNoInterLayerPred -= 1;
-        }
-        if iIdxNoInterLayerPred < 0 {
+        if !pCurAu.bCompletedAuFlag {
             return false;
         }
-        RefineIdxNoInterLayerPred(pCurAu, &mut iIdxNoInterLayerPred);
-        pCurAu.uiStartPos = iIdxNoInterLayerPred as u32;
 
-        // `CheckAvailNalUnitsListContinuity` derives the access unit itself and writes
-        // `uiEndPos` through its own borrow, so everything below re-derives. This is
-        // the shape the raw field made invisible: the old `pCurAu` stayed usable
-        // afterwards precisely because nothing owned the thing it pointed at.
-        CheckAvailNalUnitsListContinuity(pCtx, iIdxNoInterLayerPred, kiEndPos);
+        if (*pCtx).bNewSeqBegin {
+            pCurAu.uiStartPos = 0;
+            let mut iIdxNoInterLayerPred = kiEndPos;
+            while iIdxNoInterLayerPred >= 0 {
+                if (*pCurAu.nal(iIdxNoInterLayerPred as usize)).sNalHeaderExt.bNoInterLayerPredFlag {
+                    break;
+                }
+                iIdxNoInterLayerPred -= 1;
+            }
+            if iIdxNoInterLayerPred < 0 {
+                return false;
+            }
+            RefineIdxNoInterLayerPred(pCurAu, &mut iIdxNoInterLayerPred);
+            pCurAu.uiStartPos = iIdxNoInterLayerPred as u32;
+
+            // `CheckAvailNalUnitsListContinuity` derives the access unit itself and writes
+            // `uiEndPos` through its own borrow, so everything below re-derives. This is
+            // the shape the raw field made invisible: the old `pCurAu` stayed usable
+            // afterwards precisely because nothing owned the thing it pointed at.
+            CheckAvailNalUnitsListContinuity(pCtx, iIdxNoInterLayerPred, kiEndPos);
+
+            let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+                return false;
+            };
+            if !CheckPocOfCurValidNalUnits(pCurAu, iIdxNoInterLayerPred) {
+                return false;
+            }
+            let endIdx = pCurAu.uiEndPos as usize;
+            let pEndNal = pCurAu.nal(endIdx);
+            (*pCtx).iCurSeqIntervalTargetDependId = (*pEndNal).sNalHeaderExt.uiDependencyId as i32;
+            (*pCtx).iCurSeqIntervalMaxPicWidth = (*pEndNal)
+                .sNalData
+                .sVclNal
+                .sSliceHeaderExt
+                .sSliceHeader
+                .iMbWidth
+                << 4;
+            (*pCtx).iCurSeqIntervalMaxPicHeight = (*pEndNal)
+                .sNalData
+                .sVclNal
+                .sSliceHeaderExt
+                .sSliceHeader
+                .iMbHeight
+                << 4;
+        }
+        true
+    }
+}
+
+#[allow(unsafe_code)] // parse tree
+pub fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+            return;
+        };
+        let iEndIdx = pCurAu.uiEndPos as usize;
+        let mut iCurIdx = pCurAu.uiStartPos as usize;
+        let uiDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
+        let uiQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
+        let uiTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
+
+        (*pCtx).bOnlyOneLayerInCurAuFlag = true;
+        if iEndIdx == iCurIdx {
+            return;
+        }
+        iCurIdx += 1;
+        while iCurIdx <= iEndIdx {
+            let uiCurDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
+            let uiCurQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
+            let uiCurTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
+            if uiDId != uiCurDId || uiQId != uiCurQId || uiTId != uiCurTId {
+                (*pCtx).bOnlyOneLayerInCurAuFlag = false;
+                return;
+            }
+            iCurIdx += 1;
+        }
+    }
+}
+
+#[allow(unsafe_code)] // parse tree
+pub fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let iRet = unsafe { UpdateAccessUnit(pCtx) };
+        if iRet != ERR_NONE {
+            return iRet;
+        }
+        if let Some(au) = cur_au(&mut pCtx.access_unit) {
+            au.uiStartPos = 0;
+        }
+        if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !unsafe { CheckIntegrityNalUnitsList(pCtx) } {
+            (*pCtx).iErrorCode |= dsBitstreamError;
+            { return dsBitstreamError; }
+        }
+        if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag {
+            unsafe { CheckOnlyOneLayerInAu(pCtx) };
+        }
+        ERR_NONE
+    }
+}
+
+#[allow(unsafe_code)] // parse tree
+pub fn WelsDecodeAccessUnitEnd(pCtx: &mut SWelsDecoderContext) {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+            return;
+        };
+        let endIdx = pCurAu.uiEndPos as usize;
+        if endIdx < pCurAu.count() as usize {
+            let pCurNal = pCurAu.nal(endIdx);
+            if !(*pCtx).pLastDecPicInfo.is_null() {
+                (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt = (*pCurNal).sNalHeaderExt;
+                (*(*pCtx).pLastDecPicInfo).sLastSliceHeader =
+                    (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+            }
+        }
+        ResetCurrentAccessUnit(pCtx);
+    }
+}
+
+#[allow(unsafe_code)] // parse tree
+pub fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: &mut SWelsDecoderContext) -> bool {
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let mut bNewSeq = false;
+        let mut pTmpLayerSps: [Option<SpsRef>; MAX_LAYER_NUM] = [None; MAX_LAYER_NUM];
 
         let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
             return false;
         };
-        if !CheckPocOfCurValidNalUnits(pCurAu, iIdxNoInterLayerPred) {
-            return false;
-        }
-        let endIdx = pCurAu.uiEndPos as usize;
-        let pEndNal = pCurAu.nal(endIdx);
-        (*pCtx).iCurSeqIntervalTargetDependId = (*pEndNal).sNalHeaderExt.uiDependencyId as i32;
-        (*pCtx).iCurSeqIntervalMaxPicWidth = (*pEndNal)
-            .sNalData
-            .sVclNal
-            .sSliceHeaderExt
-            .sSliceHeader
-            .iMbWidth
-            << 4;
-        (*pCtx).iCurSeqIntervalMaxPicHeight = (*pEndNal)
-            .sNalData
-            .sVclNal
-            .sSliceHeaderExt
-            .sSliceHeader
-            .iMbHeight
-            << 4;
-    }
-    true
-}
-
-pub unsafe fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return;
-    };
-    let iEndIdx = pCurAu.uiEndPos as usize;
-    let mut iCurIdx = pCurAu.uiStartPos as usize;
-    let uiDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
-    let uiQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
-    let uiTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
-
-    (*pCtx).bOnlyOneLayerInCurAuFlag = true;
-    if iEndIdx == iCurIdx {
-        return;
-    }
-    iCurIdx += 1;
-    while iCurIdx <= iEndIdx {
-        let uiCurDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
-        let uiCurQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
-        let uiCurTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
-        if uiDId != uiCurDId || uiQId != uiCurQId || uiTId != uiCurTId {
-            (*pCtx).bOnlyOneLayerInCurAuFlag = false;
-            return;
-        }
-        iCurIdx += 1;
-    }
-}
-
-pub fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let iRet = unsafe { UpdateAccessUnit(pCtx) };
-    if iRet != ERR_NONE {
-        return iRet;
-    }
-    if let Some(au) = cur_au(&mut pCtx.access_unit) {
-        au.uiStartPos = 0;
-    }
-    if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !unsafe { CheckIntegrityNalUnitsList(pCtx) } {
-        (*pCtx).iErrorCode |= dsBitstreamError;
-        { return dsBitstreamError; }
-    }
-    if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag {
-        unsafe { CheckOnlyOneLayerInAu(pCtx) };
-    }
-    ERR_NONE
-}
-
-pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: &mut SWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return;
-    };
-    let endIdx = pCurAu.uiEndPos as usize;
-    if endIdx < pCurAu.count() as usize {
-        let pCurNal = pCurAu.nal(endIdx);
-        if !(*pCtx).pLastDecPicInfo.is_null() {
-            (*(*pCtx).pLastDecPicInfo).sLastNalHdrExt = (*pCurNal).sNalHeaderExt;
-            (*(*pCtx).pLastDecPicInfo).sLastSliceHeader =
-                (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-        }
-    }
-    ResetCurrentAccessUnit(pCtx);
-}
-
-pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: &mut SWelsDecoderContext) -> bool {
-    let mut bNewSeq = false;
-    let mut pTmpLayerSps: [Option<SpsRef>; MAX_LAYER_NUM] = [None; MAX_LAYER_NUM];
-
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
-        return false;
-    };
-    let start = pCurAu.uiStartPos as usize;
-    let end = pCurAu.uiEndPos as usize;
-    for i in start..=end {
-        if i < pCurAu.count() as usize {
-            let pNal = pCurAu.nal(i);
-            let uiDid = (*pNal).sNalHeaderExt.uiDependencyId as usize;
-            if uiDid < MAX_LAYER_NUM {
-                pTmpLayerSps[uiDid] = sps_ref_of(
-                    &(*pCtx).sSpsPpsCtx,
-                    (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
-                );
-            }
-            if (*pNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
-                || (*pNal).sNalHeaderExt.bIdrFlag
-            {
-                bNewSeq = true;
+        let start = pCurAu.uiStartPos as usize;
+        let end = pCurAu.uiEndPos as usize;
+        for i in start..=end {
+            if let Some(pNal) = pCurAu.node(i) {
+                let uiDid = pNal.sNalHeaderExt.uiDependencyId as usize;
+                if uiDid < MAX_LAYER_NUM {
+                    pTmpLayerSps[uiDid] = sps_ref_of(
+                        &(*pCtx).sSpsPpsCtx,
+                        pNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+                    );
+                }
+                if pNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
+                    || pNal.sNalHeaderExt.bIdrFlag
+                {
+                    bNewSeq = true;
+                }
             }
         }
-    }
 
-    let mut iMaxActiveLayer = 0;
-    let mut iMaxCurrentLayer = 0;
-    for i in (0..MAX_LAYER_NUM).rev() {
-        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i].is_some() {
-            iMaxActiveLayer = i;
-            break;
-        }
-    }
-    for i in (0..MAX_LAYER_NUM).rev() {
-        if pTmpLayerSps[i].is_some() {
-            iMaxCurrentLayer = i;
-            break;
-        }
-    }
-    if iMaxCurrentLayer != iMaxActiveLayer
-        || pTmpLayerSps[iMaxCurrentLayer] != (*pCtx).sSpsPpsCtx.pActiveLayerSps[iMaxActiveLayer]
-    {
-        bNewSeq = true;
-    }
-    if !bNewSeq {
-        for i in 0..MAX_LAYER_NUM {
-            if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i].is_none() && pTmpLayerSps[i].is_some() {
-                (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = pTmpLayerSps[i];
+        let mut iMaxActiveLayer = 0;
+        let mut iMaxCurrentLayer = 0;
+        for i in (0..MAX_LAYER_NUM).rev() {
+            if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i].is_some() {
+                iMaxActiveLayer = i;
+                break;
             }
         }
-    } else {
-        (*pCtx).sSpsPpsCtx.pActiveLayerSps.copy_from_slice(&pTmpLayerSps);
+        for i in (0..MAX_LAYER_NUM).rev() {
+            if pTmpLayerSps[i].is_some() {
+                iMaxCurrentLayer = i;
+                break;
+            }
+        }
+        if iMaxCurrentLayer != iMaxActiveLayer
+            || pTmpLayerSps[iMaxCurrentLayer] != (*pCtx).sSpsPpsCtx.pActiveLayerSps[iMaxActiveLayer]
+        {
+            bNewSeq = true;
+        }
+        if !bNewSeq {
+            for i in 0..MAX_LAYER_NUM {
+                if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i].is_none() && pTmpLayerSps[i].is_some() {
+                    (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = pTmpLayerSps[i];
+                }
+            }
+        } else {
+            (*pCtx).sSpsPpsCtx.pActiveLayerSps.copy_from_slice(&pTmpLayerSps);
+        }
+        bNewSeq
     }
-    bNewSeq
 }
 
 pub fn WriteBackActiveParameters(pCtx: &mut SWelsDecoderContext) {
@@ -3298,6 +3463,7 @@ pub fn DecodeFinishUpdate(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
+#[allow(unsafe_code)] // parse tree
 pub unsafe fn WelsDecodeInitAccessUnitStart(
     pCtx: &mut SWelsDecoderContext,
     pDstInfo: *mut SBufferInfo,
@@ -3341,49 +3507,57 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     // second of them moves `uiStartPos`. Hoisting this was legal only while the field
     // was a raw pointer into memory nothing owned.
     let pNal = match cur_au(&mut pCtx.access_unit) {
-        Some(au) if (au.uiStartPos as usize) < au.count() as usize => {
-            au.nal(au.uiStartPos as usize)
-        }
-        _ => std::ptr::null_mut(),
+        Some(au) => au.node(au.uiStartPos as usize).map(|nal| {
+            (
+                nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+                nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pps_id,
+            )
+        }),
+        _ => None,
     };
-    if !pNal.is_null() {
-        (*pCtx).active_sps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref;
-        (*pCtx).active_pps = (*pNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.pps_id;
+    if let Some((sps_ref, pps_id)) = pNal {
+        (*pCtx).active_sps = sps_ref;
+        (*pCtx).active_pps = pps_id;
     }
     iErr
 }
 
+#[allow(unsafe_code)] // api boundary
 pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
-    // T5.R6: the fallback scan now yields the *id* of the first initialized entry —
-    // the same entry its `sps as *mut SSps` named, without the alias.
-    let active = if (*pCtx).active_sps.is_some() {
-        (*pCtx).active_sps
-    } else {
-        (*pCtx)
-            .sSpsPpsCtx
-            .sSpsBuffer
-            .iter()
-            .position(|sps| sps.uiTotalMbCount > 0)
-            .map(|i| SpsRef { id: i as i32, subset: false })
-    };
+    // SAFETY: the family named at the item above.
+    unsafe {
+        // T5.R6: the fallback scan now yields the *id* of the first initialized entry —
+        // the same entry its `sps as *mut SSps` named, without the alias.
+        let active = if (*pCtx).active_sps.is_some() {
+            (*pCtx).active_sps
+        } else {
+            (*pCtx)
+                .sSpsPpsCtx
+                .sSpsBuffer
+                .iter()
+                .position(|sps| sps.uiTotalMbCount > 0)
+                .map(|i| SpsRef { id: i as i32, subset: false })
+        };
 
-    // The dimensions as values: `WelsResetRefPic` and `SyncPictureResolutionExt`
-    // both re-enter through the context (T5.Z1).
-    let Some((iMbWidth, iMbHeight)) =
-        sps_of(&(*pCtx).sSpsPpsCtx, active).map(|sps| (sps.iMbWidth, sps.iMbHeight))
-    else {
-        return ERR_INFO_INVALID_PTR;
-    };
-    (*pCtx).active_sps = active;
+        // The dimensions as values: `WelsResetRefPic` and `SyncPictureResolutionExt`
+        // both re-enter through the context (T5.Z1).
+        let Some((iMbWidth, iMbHeight)) =
+            sps_of(&(*pCtx).sSpsPpsCtx, active).map(|sps| (sps.iMbWidth, sps.iMbHeight))
+        else {
+            return ERR_INFO_INVALID_PTR;
+        };
+        (*pCtx).active_sps = active;
 
-    if GetThreadCount(pCtx) <= 1 {
-        WelsResetRefPic(pCtx);
+        if GetThreadCount(pCtx) <= 1 {
+            WelsResetRefPic(pCtx);
+        }
+        let iErr = SyncPictureResolutionExt(pCtx, iMbWidth as u32, iMbHeight as u32);
+        iErr
     }
-    let iErr = SyncPictureResolutionExt(pCtx, iMbWidth as u32, iMbHeight as u32);
-    iErr
 }
 
-pub fn InitConstructAccessUnit(
+#[allow(unsafe_code)] // parse tree
+pub unsafe fn InitConstructAccessUnit(
     pCtx: &mut SWelsDecoderContext,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
@@ -3400,7 +3574,8 @@ pub fn InitConstructAccessUnit(
     iErr
 }
 
-pub fn ConstructAccessUnit(
+#[allow(unsafe_code)] // parse tree
+pub unsafe fn ConstructAccessUnit(
     pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
@@ -3423,6 +3598,7 @@ pub fn ConstructAccessUnit(
 
 /// Core bitstream decoding loop that demultiplexes Annex B NAL units and decodes them into an access unit.
 /// Matches `int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const int32_t kiBsLen, uint8_t** ppDst, SBufferInfo* pDstBufInfo, SParserBsInfo* pDstBsInfo)` in `decoder.cpp:741`.
+#[allow(unsafe_code)] // api boundary
 pub unsafe fn WelsDecodeBs(
     pCtx: &mut SWelsDecoderContext,
     kpBsBuf: *const u8,
@@ -3570,142 +3746,155 @@ pub unsafe fn WelsDecodeBs(
 /// `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)` — a cache with one stamp site (this one) and no way for a reader
 /// to observe it diverging from its source, which is what W2b's S23 check
 /// established. The readers derive; the parameter had nothing left to write.
-pub unsafe fn InitDqLayerInfo(
+#[allow(unsafe_code)] // parse tree
+pub fn InitDqLayerInfo(
     pCtx: &mut SWelsDecoderContext,
     pDqLayer: Option<&mut DqLayerState>,
     pLayerInfo: PLayerInfo,
     pNalUnit: PNalUnit,
 ) {
-    let Some(pDqLayer) = pDqLayer else {
-        return;
-    };
-    if pLayerInfo.is_null() || pNalUnit.is_null() {
-        return;
-    }
-    // F24's shape, third site (T5.E1). `pSh` was a `&mut` *inside* `pShExt`'s `&mut`,
-    // so every `(*pShExt)` read below popped it and every later `(*pSh)` read was UB;
-    // worse, the four escaping borrows in the `kuiQualityId` block store pointers into
-    // the layer that outlive this function, and as `&mut` they died at the next use of
-    // their parent. Raw derivations from `pNalUnit` carry the NAL unit's provenance and
-    // nothing pops anything.
-    let pNalHdrExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*pNalUnit).sNalHeaderExt);
-    let pShExt: PSliceHeaderExt =
-        std::ptr::addr_of_mut!((*pNalUnit).sNalData.sVclNal.sSliceHeaderExt);
-    let pSh: PSliceHeader = std::ptr::addr_of_mut!((*pShExt).sSliceHeader);
-    let kuiQualityId = (*pNalHdrExt).uiQualityId;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pDqLayer) = pDqLayer else {
+            return;
+        };
+        if pLayerInfo.is_null() || pNalUnit.is_null() {
+            return;
+        }
+        // F24's shape, third site (T5.E1). `pSh` was a `&mut` *inside* `pShExt`'s `&mut`,
+        // so every `(*pShExt)` read below popped it and every later `(*pSh)` read was UB;
+        // worse, the four escaping borrows in the `kuiQualityId` block store pointers into
+        // the layer that outlive this function, and as `&mut` they died at the next use of
+        // their parent. Raw derivations from `pNalUnit` carry the NAL unit's provenance and
+        // nothing pops anything.
+        let pNalHdrExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*pNalUnit).sNalHeaderExt);
+        let pShExt: PSliceHeaderExt =
+            std::ptr::addr_of_mut!((*pNalUnit).sNalData.sVclNal.sSliceHeaderExt);
+        let pSh: PSliceHeader = std::ptr::addr_of_mut!((*pShExt).sSliceHeader);
+        let kuiQualityId = (*pNalHdrExt).uiQualityId;
 
-    pDqLayer.sLayerInfo = *pLayerInfo;
-    pDqLayer.iMbWidth = (*pSh).iMbWidth;
-    pDqLayer.iMbHeight = (*pSh).iMbHeight;
-    pDqLayer.iSliceIdcBackup = ((*pSh).iFirstMbInSlice << 7)
-        | (((*pNalHdrExt).uiDependencyId as i32) << 4)
-        | ((*pNalHdrExt).uiQualityId as i32);
+        pDqLayer.sLayerInfo = *pLayerInfo;
+        pDqLayer.iMbWidth = (*pSh).iMbWidth;
+        pDqLayer.iMbHeight = (*pSh).iMbHeight;
+        pDqLayer.iSliceIdcBackup = ((*pSh).iFirstMbInSlice << 7)
+            | (((*pNalHdrExt).uiDependencyId as i32) << 4)
+            | ((*pNalHdrExt).uiQualityId as i32);
 
-    if let Some(iPpsId) = (*pLayerInfo).pps_id {
-        // T5.R6: the id *is* what the pointer was carried for here.
-        pDqLayer.uiPpsId = iPpsId as u32;
-    }
-    pDqLayer.uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc;
-    pDqLayer.iInterLayerSliceAlphaC0Offset = (*pShExt).iInterLayerSliceAlphaC0Offset;
-    pDqLayer.iInterLayerSliceBetaOffset = (*pShExt).iInterLayerSliceBetaOffset;
-    pDqLayer.iSliceGroupChangeCycle = (*pSh).iSliceGroupChangeCycle;
-    pDqLayer.bStoreRefBasePicFlag = (*pShExt).bStoreRefBasePicFlag;
-    pDqLayer.bTCoeffLevelPredFlag = (*pShExt).bTCoeffLevelPredFlag;
-    pDqLayer.bConstrainedIntraResamplingFlag = (*pShExt).bConstrainedIntraResamplingFlag;
-    pDqLayer.uiRefLayerDqId = (*pShExt).uiRefLayerDqId;
-    pDqLayer.uiRefLayerChromaPhaseXPlus1Flag = (*pShExt).uiRefLayerChromaPhaseXPlus1Flag;
-    pDqLayer.uiRefLayerChromaPhaseYPlus1 = (*pShExt).uiRefLayerChromaPhaseYPlus1;
-    pDqLayer.bUseWeightPredictionFlag = false;
-    pDqLayer.bUseWeightedBiPredIdc = false;
+        if let Some(iPpsId) = (*pLayerInfo).pps_id {
+            // T5.R6: the id *is* what the pointer was carried for here.
+            pDqLayer.uiPpsId = iPpsId as u32;
+        }
+        pDqLayer.uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc;
+        pDqLayer.iInterLayerSliceAlphaC0Offset = (*pShExt).iInterLayerSliceAlphaC0Offset;
+        pDqLayer.iInterLayerSliceBetaOffset = (*pShExt).iInterLayerSliceBetaOffset;
+        pDqLayer.iSliceGroupChangeCycle = (*pSh).iSliceGroupChangeCycle;
+        pDqLayer.bStoreRefBasePicFlag = (*pShExt).bStoreRefBasePicFlag;
+        pDqLayer.bTCoeffLevelPredFlag = (*pShExt).bTCoeffLevelPredFlag;
+        pDqLayer.bConstrainedIntraResamplingFlag = (*pShExt).bConstrainedIntraResamplingFlag;
+        pDqLayer.uiRefLayerDqId = (*pShExt).uiRefLayerDqId;
+        pDqLayer.uiRefLayerChromaPhaseXPlus1Flag = (*pShExt).uiRefLayerChromaPhaseXPlus1Flag;
+        pDqLayer.uiRefLayerChromaPhaseYPlus1 = (*pShExt).uiRefLayerChromaPhaseYPlus1;
+        pDqLayer.bUseWeightPredictionFlag = false;
+        pDqLayer.bUseWeightedBiPredIdc = false;
 
-    if kuiQualityId == BASE_QUALITY_ID {
-        // **T5.AC2: the four `addr_of_mut!`s are three copies and a deletion.** Each
-        // addressed a field of `(*pSh)` / `(*pShExt)` — the very slice header
-        // `pDqLayer.sLayerInfo = *pLayerInfo` copied whole at the top of this
-        // function — so the value is taken here instead of the address. The
-        // assignment stays inside this `kuiQualityId` block, which is what keeps
-        // the retention rule the pointers carried: at a quality-enhancement slice
-        // nothing writes these three and they still read the base slice's.
-        //
-        // Nothing wrote *through* two of the three (the marking and the
-        // reordering syntax are read-only below this point); the third,
-        // `sPredWeightTable`, is written by `CreateImplicitWeightTable`, whose
-        // writes now land in the layer's own copy and are read back through it —
-        // the NAL's copy had no other reader.
-        pDqLayer.sRefPicListReordering = Some((*pSh).pRefPicListReordering);
-        pDqLayer.sRefPicMarking = Some((*pSh).sRefMarking);
-        if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
-            pps_of(&(*pCtx).sSpsPpsCtx, (*pSh).pps_id)
-                .map(|pps| (pps.bWeightedPredFlag, pps.uiWeightedBipredIdc))
-        {
-            pDqLayer.bUseWeightPredictionFlag = bWeightedPredFlag;
-            pDqLayer.bUseWeightedBiPredIdc = uiWeightedBipredIdc != 0;
-            if bWeightedPredFlag || uiWeightedBipredIdc != 0 {
-                pDqLayer.sPredWeightTable = Some((*pSh).sPredWeightTable);
+        if kuiQualityId == BASE_QUALITY_ID {
+            // **T5.AC2: the four `addr_of_mut!`s are three copies and a deletion.** Each
+            // addressed a field of `(*pSh)` / `(*pShExt)` — the very slice header
+            // `pDqLayer.sLayerInfo = *pLayerInfo` copied whole at the top of this
+            // function — so the value is taken here instead of the address. The
+            // assignment stays inside this `kuiQualityId` block, which is what keeps
+            // the retention rule the pointers carried: at a quality-enhancement slice
+            // nothing writes these three and they still read the base slice's.
+            //
+            // Nothing wrote *through* two of the three (the marking and the
+            // reordering syntax are read-only below this point); the third,
+            // `sPredWeightTable`, is written by `CreateImplicitWeightTable`, whose
+            // writes now land in the layer's own copy and are read back through it —
+            // the NAL's copy had no other reader.
+            pDqLayer.sRefPicListReordering = Some((*pSh).pRefPicListReordering);
+            pDqLayer.sRefPicMarking = Some((*pSh).sRefMarking);
+            if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
+                pps_of(&(*pCtx).sSpsPpsCtx, (*pSh).pps_id)
+                    .map(|pps| (pps.bWeightedPredFlag, pps.uiWeightedBipredIdc))
+            {
+                pDqLayer.bUseWeightPredictionFlag = bWeightedPredFlag;
+                pDqLayer.bUseWeightedBiPredIdc = uiWeightedBipredIdc != 0;
+                if bWeightedPredFlag || uiWeightedBipredIdc != 0 {
+                    pDqLayer.sPredWeightTable = Some((*pSh).sPredWeightTable);
+                }
             }
         }
+        pDqLayer.uiLayerDqId = (*pNalHdrExt).uiLayerDqId;
+        pDqLayer.bUseRefBasePicFlag = (*pNalHdrExt).bUseRefBasePicFlag;
     }
-    pDqLayer.uiLayerDqId = (*pNalHdrExt).uiLayerDqId;
-    pDqLayer.bUseRefBasePicFlag = (*pNalHdrExt).bUseRefBasePicFlag;
 }
 
 /// **The parameter sets arrive as ids** (T5.Z1). They used to arrive as pointers
 /// the caller derived from the context it passes beside them, which is the shape
 /// this face removes; resolved here, at the one line that reads them, nothing else
 /// of the context is borrowed.
-pub unsafe fn WelsDqLayerDecodeStart(
+#[allow(unsafe_code)] // parse tree
+pub fn WelsDqLayerDecodeStart(
     pCtx: &mut SWelsDecoderContext,
     pCurNal: PNalUnit,
     sps_ref: Option<SpsRef>,
     pps_id: Option<i32>,
 ) {
-    if pCurNal.is_null() {
-        return;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        if pCurNal.is_null() {
+            return;
+        }
+        // F24's shape, fourth site — and the one that escapes furthest: `(*pCtx).pSliceHeader`
+        // outlives this call by the whole slice decode, so as a `&mut`-derived pointer it
+        // was dead the moment any other borrow of this NAL unit was taken (which
+        // `InitDqLayerInfo` does, immediately after, at the same call site).
+        let pSh: PSliceHeader =
+            std::ptr::addr_of_mut!((*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
+        (*pCtx).eSliceType = (*pSh).eSliceType;
+        (*pCtx).pSliceHeader = pSh;
+        (*pCtx).bUsedAsRef = false;
+        (*pCtx).iFrameNum = (*pSh).iFrameNum;
+        UpdateDecoderStatisticsForActiveParaset(
+            (*pCtx).pDecoderStatistics,
+            sps_of(&(*pCtx).sSpsPpsCtx, sps_ref),
+            pps_of(&(*pCtx).sSpsPpsCtx, pps_id),
+        );
     }
-    // F24's shape, fourth site — and the one that escapes furthest: `(*pCtx).pSliceHeader`
-    // outlives this call by the whole slice decode, so as a `&mut`-derived pointer it
-    // was dead the moment any other borrow of this NAL unit was taken (which
-    // `InitDqLayerInfo` does, immediately after, at the same call site).
-    let pSh: PSliceHeader =
-        std::ptr::addr_of_mut!((*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
-    (*pCtx).eSliceType = (*pSh).eSliceType;
-    (*pCtx).pSliceHeader = pSh;
-    (*pCtx).bUsedAsRef = false;
-    (*pCtx).iFrameNum = (*pSh).iFrameNum;
-    UpdateDecoderStatisticsForActiveParaset(
-        (*pCtx).pDecoderStatistics,
-        sps_of(&(*pCtx).sSpsPpsCtx, sps_ref),
-        pps_of(&(*pCtx).sSpsPpsCtx, pps_id),
-    );
 }
 
+#[allow(unsafe_code)] // parse tree
 pub fn InitRefPicList(
     pCtx: &mut SWelsDecoderContext,
     mut pCurDqLayer: Option<&mut DqLayerState>,
     _kuiNRi: u8,
     iPoc: i32,
 ) -> i32 {
-    let mut iRet = if (*pCtx).eSliceType == B_SLICE {
-        let ret = WelsInitBSliceRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc);
-        unsafe { CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut()) };
-        ret
-    } else {
-        WelsInitRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc)
-    };
-    if (*pCtx).eSliceType != I_SLICE && (*pCtx).eSliceType != SI_SLICE {
-        if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
-            .is_some_and(|sps| sps.uiProfileIdc != 66)
-            && active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
-                .is_some_and(|pps| pps.bEntropyCodingModeFlag)
-        {
-            iRet = WelsReorderRefList2(pCtx, pCurDqLayer.as_deref_mut());
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let mut iRet = if (*pCtx).eSliceType == B_SLICE {
+            let ret = WelsInitBSliceRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc);
+            unsafe { CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut()) };
+            ret
         } else {
-            iRet = WelsReorderRefList(pCtx, pCurDqLayer.as_deref_mut());
+            WelsInitRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc)
+        };
+        if (*pCtx).eSliceType != I_SLICE && (*pCtx).eSliceType != SI_SLICE {
+            if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                .is_some_and(|sps| sps.uiProfileIdc != 66)
+                && active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+                    .is_some_and(|pps| pps.bEntropyCodingModeFlag)
+            {
+                iRet = WelsReorderRefList2(pCtx, pCurDqLayer.as_deref_mut());
+            } else {
+                iRet = WelsReorderRefList(pCtx, pCurDqLayer.as_deref_mut());
+            }
         }
+        iRet
     }
-    iRet
 }
 
+#[allow(unsafe_code)] // parse tree
 pub unsafe fn DecodeCurrentAccessUnit(
     pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
@@ -4234,6 +4423,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     iRet
 }
 
+#[allow(unsafe_code)] // api boundary
 pub unsafe fn CheckAndFinishLastPic(
     pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
@@ -4363,74 +4553,34 @@ pub unsafe fn CheckAndFinishLastPic(
     bRet
 }
 
-pub unsafe fn CheckRefPicturesComplete(
+#[allow(unsafe_code)] // decoder-internal raw cursor
+pub fn CheckRefPicturesComplete(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&DqLayerState>,
 ) -> bool {
-    let Some(pCurDqLayer) = pCurDqLayer else {
-        return true;
-    };
-    // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
-    // and reference indices *while* resolving the reference-list entries those
-    // indices name, and a malformed stream can put the current picture in that list
-    // (F42). One borrow, split — the same shape the slice brackets take, over a
-    // whole-slice operation rather than a whole slice.
-    let (pDec, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
-    if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
-        return true;
-    }
-    let mut bAllRefComplete = true;
-    let mut iRealMbIdx = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
-    let totalMb = pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
+    // SAFETY: the family named at the item above.
+    unsafe {
+        let Some(pCurDqLayer) = pCurDqLayer else {
+            return true;
+        };
+        // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
+        // and reference indices *while* resolving the reference-list entries those
+        // indices name, and a malformed stream can put the current picture in that list
+        // (F42). One borrow, split — the same shape the slice brackets take, over a
+        // whole-slice operation rather than a whole slice.
+        let (pDec, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
+        if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
+            return true;
+        }
+        let mut bAllRefComplete = true;
+        let mut iRealMbIdx = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+        let totalMb = pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
 
-    for iMbIdx in 0..totalMb {
-        let mbType = *(*pDec).pMbType.get(iRealMbIdx as usize);
-        match mbType {
-            MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
-                if refIdx < MAX_REF_PIC_COUNT {
-                    let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
-                    if !pRef.is_null() {
-                        bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
-                    }
-                }
-            }
-            MB_TYPE_16x8 => {
-                let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
-                let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
-                if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
-                    if !pRef0.is_null() {
-                        bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
-                    }
-                }
-                if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
-                    if !pRef1.is_null() {
-                        bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
-                    }
-                }
-            }
-            MB_TYPE_8x16 => {
-                let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
-                let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
-                if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
-                    if !pRef0.is_null() {
-                        bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
-                    }
-                }
-                if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
-                    if !pRef1.is_null() {
-                        bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
-                    }
-                }
-            }
-            MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
-                let indices = [0, 2, 8, 10];
-                for &sub in &indices {
-                    let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
+        for iMbIdx in 0..totalMb {
+            let mbType = *(*pDec).pMbType.get(iRealMbIdx as usize);
+            match mbType {
+                MB_TYPE_SKIP | MB_TYPE_16x16 => {
+                    let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
                         let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
                         if !pRef.is_null() {
@@ -4438,24 +4588,68 @@ pub unsafe fn CheckRefPicturesComplete(
                         }
                     }
                 }
+                MB_TYPE_16x8 => {
+                    let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                    let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
+                    if refIdx0 < MAX_REF_PIC_COUNT {
+                        let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
+                        if !pRef0.is_null() {
+                            bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
+                        }
+                    }
+                    if refIdx1 < MAX_REF_PIC_COUNT {
+                        let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
+                        if !pRef1.is_null() {
+                            bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
+                        }
+                    }
+                }
+                MB_TYPE_8x16 => {
+                    let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                    let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
+                    if refIdx0 < MAX_REF_PIC_COUNT {
+                        let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
+                        if !pRef0.is_null() {
+                            bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
+                        }
+                    }
+                    if refIdx1 < MAX_REF_PIC_COUNT {
+                        let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
+                        if !pRef1.is_null() {
+                            bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
+                        }
+                    }
+                }
+                MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
+                    let indices = [0, 2, 8, 10];
+                    for &sub in &indices {
+                        let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
+                        if refIdx < MAX_REF_PIC_COUNT {
+                            let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
+                            if !pRef.is_null() {
+                                bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+            if !bAllRefComplete {
+                break;
+            }
+            iRealMbIdx = if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+                .is_some_and(|pps| pps.uiNumSliceGroups > 1)
+            {
+                FmoNextMb(active_fmo(&(*pCtx).sFmoList, (*pCtx).fmo_id), iRealMbIdx)
+            } else {
+                pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice + iMbIdx + 1
+            };
+            if iRealMbIdx == -1 {
+                return false;
+            }
         }
-        if !bAllRefComplete {
-            break;
-        }
-        iRealMbIdx = if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
-            .is_some_and(|pps| pps.uiNumSliceGroups > 1)
-        {
-            FmoNextMb(active_fmo(&(*pCtx).sFmoList, (*pCtx).fmo_id), iRealMbIdx)
-        } else {
-            pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice + iMbIdx + 1
-        };
-        if iRealMbIdx == -1 {
-            return false;
-        }
+        bAllRefComplete
     }
-    bAllRefComplete
 }
 
 #[cfg(test)]
@@ -4492,217 +4686,257 @@ mod tests {
     /// Under Miri this is also the test that would fail if the shell were ever
     /// materialized before the grid was written into it.
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn for_grid_constructs_a_layer_whose_grid_is_valid_and_whose_rest_is_zero() {
-        let dims = MbDims::new(5, 3);
-        let layer = DqLayerState::for_grid(dims);
+        #[allow(unsafe_code)] // the family's own test drives its raw items
+        unsafe {
+            let dims = MbDims::new(5, 3);
+            let layer = DqLayerState::for_grid(dims);
 
-        // the owned field
-        assert_eq!(layer.grid.dims(), dims);
-        assert_eq!(layer.grid.mb_type.as_slice().len(), dims.count());
-        assert!(layer.grid.scaled_tcoeff.as_slice().iter().all(|mb| mb.iter().all(|&c| c == 0)));
+            // the owned field
+            assert_eq!(layer.grid.dims(), dims);
+            assert_eq!(layer.grid.mb_type.as_slice().len(), dims.count());
+            assert!(layer.grid.scaled_tcoeff.as_slice().iter().all(|mb| mb.iter().all(|&c| c == 0)));
 
-        // the two the C++ constructor overwrites
-        assert_eq!(layer.uiRefLayerDqId, 255);
-        assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
+            // the two the C++ constructor overwrites
+            assert_eq!(layer.uiRefLayerDqId, 255);
+            assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
 
-        // and a sample of what `WelsMallocz`'s zeroing used to leave behind
-        assert_eq!(layer.iMbWidth, 0);
-        assert_eq!(layer.iMbHeight, 0);
-        assert!(!layer.bUseWeightPredictionFlag);
-        assert_eq!(layer.uiRefLayerChromaPhaseXPlus1Flag, 0);
+            // and a sample of what `WelsMallocz`'s zeroing used to leave behind
+            assert_eq!(layer.iMbWidth, 0);
+            assert_eq!(layer.iMbHeight, 0);
+            assert!(!layer.bUseWeightPredictionFlag);
+            assert_eq!(layer.uiRefLayerChromaPhaseXPlus1Flag, 0);
+        }
     }
 
     /// The grid is sized from the **allocation's** dimensions, and the layer's
     /// `iMbWidth`/`iMbHeight` are the current slice's — T5.E2's correction, now
     /// structural rather than a comment on a `numMb` expression.
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn the_grid_outlives_a_narrower_slice() {
-        let mut layer = DqLayerState::for_grid(MbDims::from_pixels(1920, 1080));
-        assert_eq!(layer.grid.dims().count(), 120 * 68);
-        // a stream decoding below the negotiated maximum
-        layer.iMbWidth = 11;
-        layer.iMbHeight = 9;
-        assert_eq!(
-            layer.grid.mb_type.as_slice().len(),
-            120 * 68,
-            "the grid is the allocation's, not the slice's"
-        );
+        #[allow(unsafe_code)] // the family's own test drives its raw items
+        unsafe {
+            let mut layer = DqLayerState::for_grid(MbDims::from_pixels(1920, 1080));
+            assert_eq!(layer.grid.dims().count(), 120 * 68);
+            // a stream decoding below the negotiated maximum
+            layer.iMbWidth = 11;
+            layer.iMbHeight = 9;
+            assert_eq!(
+                layer.grid.mb_type.as_slice().len(),
+                120 * 68,
+                "the grid is the allocation's, not the slice's"
+            );
+        }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_update_dec_stat_null_layer() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            // T5.Z4: the null-*context* arm is gone with the raw parameter; the
-            // null-*layer* arm is what these two still answer.
-            let mut ctx = SWelsDecoderContext::new_boxed();
-            UpdateDecStatNoFreezingInfo(&mut ctx, None);
-            UpdateDecStat(&mut ctx, None, true);
+            unsafe {
+                // T5.Z4: the null-*context* arm is gone with the raw parameter; the
+                // null-*layer* arm is what these two still answer.
+                let mut ctx = SWelsDecoderContext::new_boxed();
+                UpdateDecStatNoFreezingInfo(&mut ctx, None);
+                UpdateDecStat(&mut ctx, None, true);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_update_dec_stat_freezing() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            let mut stat = SDecoderStatistics::default();
-            UpdateDecStatFreezingInfo(true, &mut stat);
-            assert_eq!(stat.uiFreezingIDRNum, 1);
-            assert_eq!(stat.uiFreezingNonIDRNum, 0);
-            UpdateDecStatFreezingInfo(false, &mut stat);
-            assert_eq!(stat.uiFreezingNonIDRNum, 1);
+            unsafe {
+                let mut stat = SDecoderStatistics::default();
+                UpdateDecStatFreezingInfo(true, &mut stat);
+                assert_eq!(stat.uiFreezingIDRNum, 1);
+                assert_eq!(stat.uiFreezingNonIDRNum, 0);
+                UpdateDecStatFreezingInfo(false, &mut stat);
+                assert_eq!(stat.uiFreezingNonIDRNum, 1);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_reset_dec_stat_nums() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            let mut stat = SDecoderStatistics::default();
-            stat.uiWidth = 1920;
-            stat.uiHeight = 1080;
-            stat.iAvgLumaQp = 26;
-            stat.uiProfile = 66;
-            stat.uiLevel = 31;
-            stat.uiDecodedFrameCount = 100;
-            stat.uiIDRCorrectNum = 5;
-            ResetDecStatNums(&mut stat);
-            assert_eq!(stat.uiWidth, 1920);
-            assert_eq!(stat.uiHeight, 1080);
-            assert_eq!(stat.iAvgLumaQp, 26);
-            assert_eq!(stat.uiProfile, 66);
-            assert_eq!(stat.uiLevel, 31);
-            assert_eq!(stat.uiDecodedFrameCount, 0);
-            assert_eq!(stat.uiIDRCorrectNum, 0);
+            unsafe {
+                let mut stat = SDecoderStatistics::default();
+                stat.uiWidth = 1920;
+                stat.uiHeight = 1080;
+                stat.iAvgLumaQp = 26;
+                stat.uiProfile = 66;
+                stat.uiLevel = 31;
+                stat.uiDecodedFrameCount = 100;
+                stat.uiIDRCorrectNum = 5;
+                ResetDecStatNums(&mut stat);
+                assert_eq!(stat.uiWidth, 1920);
+                assert_eq!(stat.uiHeight, 1080);
+                assert_eq!(stat.iAvgLumaQp, 26);
+                assert_eq!(stat.uiProfile, 66);
+                assert_eq!(stat.uiLevel, 31);
+                assert_eq!(stat.uiDecodedFrameCount, 0);
+                assert_eq!(stat.uiIDRCorrectNum, 0);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_inline_delegation_stubs_null_layer() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            let mut ctx = SWelsDecoderContext::new_boxed();
-            let pCtx = &mut *ctx;
-            assert_eq!(
-                WelsTargetSliceConstruction(pCtx, None),
-                ERR_NONE
-            );
-            assert_eq!(
-                WelsDecodeSlice(pCtx, None, true, std::ptr::null_mut()),
-                ERR_NONE
-            );
-            assert_eq!(
-                WelsDecodeAndConstructSlice(pCtx, None),
-                ERR_NONE
-            );
-            // **T5.Z4: these five asserted the null-*context* guard, not the
-            // null-layer one.** With the context a `&mut` the guard is gone and the
-            // remaining arm is the layer's, which every one of them answers by doing
-            // nothing — the values below are what the tree returns, read off the
-            // run rather than predicted (S33).
-            assert_eq!(WelsInitRefList(pCtx, None, 0), ERR_NONE);
-            assert_eq!(WelsInitBSliceRefList(pCtx, None, 0), ERR_NONE);
-            // `manage_dec_ref`'s `ERR_INFO_INVALID_PTR` is 3 where this module's own
-            // constant is 1 — the three shims below forward into the former, which is
-            // why the value is spelled through its owner.
-            const MDR_INVALID_PTR: i32 = crate::decoder::manage_dec_ref::ERR_INFO_INVALID_PTR;
-            assert_eq!(WelsReorderRefList(pCtx, None), MDR_INVALID_PTR);
-            assert_eq!(WelsReorderRefList2(pCtx, None), MDR_INVALID_PTR);
-            assert_eq!(WelsMarkAsRef(pCtx, None), MDR_INVALID_PTR);
-            WelsResetRefPic(pCtx);
+            unsafe {
+                let mut ctx = SWelsDecoderContext::new_boxed();
+                let pCtx = &mut *ctx;
+                assert_eq!(
+                    WelsTargetSliceConstruction(pCtx, None),
+                    ERR_NONE
+                );
+                assert_eq!(
+                    WelsDecodeSlice(pCtx, None, true, std::ptr::null_mut()),
+                    ERR_NONE
+                );
+                assert_eq!(
+                    WelsDecodeAndConstructSlice(pCtx, None),
+                    ERR_NONE
+                );
+                // **T5.Z4: these five asserted the null-*context* guard, not the
+                // null-layer one.** With the context a `&mut` the guard is gone and the
+                // remaining arm is the layer's, which every one of them answers by doing
+                // nothing — the values below are what the tree returns, read off the
+                // run rather than predicted (S33).
+                assert_eq!(WelsInitRefList(pCtx, None, 0), ERR_NONE);
+                assert_eq!(WelsInitBSliceRefList(pCtx, None, 0), ERR_NONE);
+                // `manage_dec_ref`'s `ERR_INFO_INVALID_PTR` is 3 where this module's own
+                // constant is 1 — the three shims below forward into the former, which is
+                // why the value is spelled through its owner.
+                const MDR_INVALID_PTR: i32 = crate::decoder::manage_dec_ref::ERR_INFO_INVALID_PTR;
+                assert_eq!(WelsReorderRefList(pCtx, None), MDR_INVALID_PTR);
+                assert_eq!(WelsReorderRefList2(pCtx, None), MDR_INVALID_PTR);
+                assert_eq!(WelsMarkAsRef(pCtx, None), MDR_INVALID_PTR);
+                WelsResetRefPic(pCtx);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_missing_functions_highlight_translations() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            assert_eq!(GetCPUCount(), 1);
-            let mut cpu_cores = 0;
-            assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
-            assert_eq!(cpu_cores, 1);
-            // T5.Z4: this asserted the null-context guard too. `WelsOpenDecoder`
-            // on a real context is the success path `Initialize` takes.
-            assert_eq!(
-                WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut()),
-                ERR_NONE
-            );
-            WelsEndDecoder(&mut SWelsDecoderContext::new_boxed());
-            // T5.Z4: the null-context arm is gone; a zero-length source on a real
-            // context is the flush path, which succeeds.
-            assert_eq!(
-                WelsDecodeBs(
-                    &mut SWelsDecoderContext::new_boxed(),
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                ),
-                ERR_NONE
-            );
+            unsafe {
+                assert_eq!(GetCPUCount(), 1);
+                let mut cpu_cores = 0;
+                assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
+                assert_eq!(cpu_cores, 1);
+                // T5.Z4: this asserted the null-context guard too. `WelsOpenDecoder`
+                // on a real context is the success path `Initialize` takes.
+                assert_eq!(
+                    WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut()),
+                    ERR_NONE
+                );
+                WelsEndDecoder(&mut SWelsDecoderContext::new_boxed());
+                // T5.Z4: the null-context arm is gone; a zero-length source on a real
+                // context is the flush path, which succeeds.
+                assert_eq!(
+                    WelsDecodeBs(
+                        &mut SWelsDecoderContext::new_boxed(),
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    ),
+                    ERR_NONE
+                );
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_decoder_open_end_and_init_static_memory_state_flags() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            let mut ctx = SWelsDecoderContext::new_boxed();
-            assert_eq!(WelsOpenDecoder(&mut *ctx, std::ptr::null_mut()), ERR_NONE);
-            assert!(ctx.bParamSetsLostFlag);
-            assert!(ctx.bNewSeqBegin);
-            assert!(ctx.bPrintFrameErrorTraceFlag);
-            assert_eq!(ctx.iIgnoredErrorInfoPacketCount, 0);
-            assert!(ctx.bFrameFinish);
-            assert_eq!(ctx.iSeqNum, 0);
+            unsafe {
+                let mut ctx = SWelsDecoderContext::new_boxed();
+                assert_eq!(WelsOpenDecoder(&mut *ctx, std::ptr::null_mut()), ERR_NONE);
+                assert!(ctx.bParamSetsLostFlag);
+                assert!(ctx.bNewSeqBegin);
+                assert!(ctx.bPrintFrameErrorTraceFlag);
+                assert_eq!(ctx.iIgnoredErrorInfoPacketCount, 0);
+                assert!(ctx.bFrameFinish);
+                assert_eq!(ctx.iSeqNum, 0);
 
-            WelsEndDecoder(&mut *ctx);
-            assert!(!ctx.bParamSetsLostFlag);
-            assert!(!ctx.bNewSeqBegin);
-            assert!(!ctx.bPrintFrameErrorTraceFlag);
-            assert!(!ctx.bFrameFinish);
+                WelsEndDecoder(&mut *ctx);
+                assert!(!ctx.bParamSetsLostFlag);
+                assert!(!ctx.bNewSeqBegin);
+                assert!(!ctx.bPrintFrameErrorTraceFlag);
+                assert!(!ctx.bFrameFinish);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_chapter_7_frame_finalization() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            assert_eq!(
-                CheckAndFinishLastPic(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut(), std::ptr::null_mut()),
-                false
-            );
-            assert_eq!(
-                DecodeFrameConstruction(
-                    &mut SWelsDecoderContext::new_boxed(),
-                    None,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut()
-                ),
-                ERR_INFO_INVALID_PTR
-            );
-            WelsDecodeAccessUnitEnd(&mut SWelsDecoderContext::new_boxed());
+            unsafe {
+                assert_eq!(
+                    CheckAndFinishLastPic(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut(), std::ptr::null_mut()),
+                    false
+                );
+                assert_eq!(
+                    DecodeFrameConstruction(
+                        &mut SWelsDecoderContext::new_boxed(),
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    ERR_INFO_INVALID_PTR
+                );
+                WelsDecodeAccessUnitEnd(&mut SWelsDecoderContext::new_boxed());
 
-            let mut stat = SDecoderStatistics::default();
-            let mut sps = SSps::default();
-            sps.iSpsId = 3;
-            sps.uiProfileIdc = 66;
-            sps.uiLevelIdc = 31;
-            let mut pps = SPps::default();
-            pps.iPpsId = 5;
+                let mut stat = SDecoderStatistics::default();
+                let mut sps = SSps::default();
+                sps.iSpsId = 3;
+                sps.uiProfileIdc = 66;
+                sps.uiLevelIdc = 31;
+                let mut pps = SPps::default();
+                pps.iPpsId = 5;
 
-            UpdateDecoderStatisticsForActiveParaset(&mut stat, Some(&sps), Some(&pps));
-            assert_eq!(stat.iCurrentActiveSpsId, 3);
-            assert_eq!(stat.iCurrentActivePpsId, 5);
-            assert_eq!(stat.uiProfile, 66);
-            assert_eq!(stat.uiLevel, 31);
+                UpdateDecoderStatisticsForActiveParaset(&mut stat, Some(&sps), Some(&pps));
+                assert_eq!(stat.iCurrentActiveSpsId, 3);
+                assert_eq!(stat.iCurrentActivePpsId, 5);
+                assert_eq!(stat.uiProfile, 66);
+                assert_eq!(stat.uiLevel, 31);
+            }
         }
     }
 
     #[test]
+    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_parse_slice_header_syntaxs_no_access_unit() {
+        #[allow(unsafe_code)] // the family's own test drives its raw items
         unsafe {
-            // T5.Z4: the null-*context* arm is gone with the raw parameter; what this
-            // still covers is the arm the body actually takes first — no access unit
-            // in flight, so no NAL to read a header out of.
-            let mut cursor = crate::safe::bits::BsCursor::default();
-            let mut ctx = SWelsDecoderContext::new_boxed();
-            let res = ParseSliceHeaderSyntaxs(&mut ctx, 0, &mut cursor, false);
-            assert_eq!(res, ERR_INFO_INVALID_PTR);
+            unsafe {
+                // T5.Z4: the null-*context* arm is gone with the raw parameter; what this
+                // still covers is the arm the body actually takes first — no access unit
+                // in flight, so no NAL to read a header out of.
+                let mut cursor = crate::safe::bits::BsCursor::default();
+                let mut ctx = SWelsDecoderContext::new_boxed();
+                let res = ParseSliceHeaderSyntaxs(&mut ctx, 0, &mut cursor, false);
+                assert_eq!(res, ERR_INFO_INVALID_PTR);
+            }
         }
     }
 }
