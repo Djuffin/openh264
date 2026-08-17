@@ -14,7 +14,6 @@ use crate::decoder::decoder_context::{
 };
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::BsReader;
-use crate::decoder::decoder_context::slice_bit_reader;
 use std::ffi::c_void;
 
 // ============================================================================
