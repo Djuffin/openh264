@@ -1048,11 +1048,11 @@ pub extern "C" fn WelsMap16x16NeighToSampleConstrain1(
 pub unsafe fn WelsMbInterSampleConstruction(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: Option<&mut SPicture>,
 ) -> i32 {
-    if pDec.is_null() {
+    let Some(pDec) = pDec else {
         return ERR_NONE;
-    }
+    };
     let ctx = &*pCtx;
     let dq: &mut DqLayerState = pCurDqLayer;
     let iMbXy = (*dq).iMbXyIndex as usize;
@@ -1074,7 +1074,7 @@ pub unsafe fn WelsMbInterSampleConstruction(
                     let (dx, dy) = (((iIndex % 4) << 2) as isize, ((iIndex >> 2) << 2) as isize);
                     let rs: &[i16; 64] = tcoeff[i << 6..][..64].try_into().unwrap();
                     idct8x8(
-                        &mut (*pDec)
+                        &mut pDec
                             .plane_mut(0)
                             .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
                         rs,
@@ -1091,7 +1091,7 @@ pub unsafe fn WelsMbInterSampleConstruction(
                 let rs: &[i16; 64] = tcoeff[q << 6..][..64].try_into().unwrap();
                 let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
                 idct4x4(
-                    &mut (*pDec)
+                    &mut pDec
                         .plane_mut(0)
                         .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
                     rs,
@@ -1106,7 +1106,7 @@ pub unsafe fn WelsMbInterSampleConstruction(
             let rs: &[i16; 64] = tcoeff[coeff..][..64].try_into().unwrap();
             let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
             idct4x4(
-                &mut (*pDec)
+                &mut pDec
                     .plane_mut(plane + 1)
                     .cursor_mut(mb_x << 3, mb_y << 3),
                 rs,
@@ -2105,7 +2105,7 @@ pub unsafe fn WelsMbInterConstruction(
         }
     }
 
-    WelsMbInterSampleConstruction(pCtx, dq, pDec);
+    WelsMbInterSampleConstruction(pCtx, dq, pDec.as_mut());
 
     // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
     // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
@@ -2160,16 +2160,15 @@ pub unsafe fn WelsMbInterPrediction(
 
 pub unsafe fn WelsFillRecNeededMbInfo(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: Option<&mut SPicture>,
     bOutput: bool,
     pCurDqLayer: &mut DqLayerState,
 ) {
-    let pCurPic = pDec;
-    if pCurPic.is_null() {
+    let Some(pCurPic) = pDec else {
         return;
-    }
-    let iLumaStride = (*pCurPic).linesize(0);
-    let iChromaStride = (*pCurPic).linesize(1);
+    };
+    let iLumaStride = pCurPic.linesize(0);
+    let iChromaStride = pCurPic.linesize(1);
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
 
@@ -2215,7 +2214,7 @@ pub(crate) fn blk4_xy(i: usize) -> (isize, isize) {
 pub unsafe fn RecChroma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let pIdctFourResAddPredFunc = pCtx.pIdctFourResAddPredFunc;
@@ -2230,7 +2229,7 @@ pub unsafe fn RecChroma(
                 let rs: &[i16; 64] = tcoeff[256 + (i << 6)..][..64].try_into().unwrap();
                 let nzc: &[i8; 6] = pNzc[16 + 2 * i..][..6].try_into().unwrap();
                 func(
-                    &mut (*pDec).plane_mut(i + 1).cursor_mut(mb_x << 3, mb_y << 3),
+                    &mut pDec.plane_mut(i + 1).cursor_mut(mb_x << 3, mb_y << 3),
                     rs,
                     nzc,
                 );
@@ -2243,7 +2242,7 @@ pub unsafe fn RecChroma(
 pub unsafe fn RecI4x4Luma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let pIntra4x4PredMode = *(*pDqLayer).grid.intra4x4_final_mode.get(iMBXY as usize);
@@ -2258,14 +2257,14 @@ pub unsafe fn RecI4x4Luma(
         let uiMode = pIntra4x4PredMode[g_kuiMbCountScan4Idx[i] as usize] as usize;
 
         if let Some(func) = pCtx.pGetI4x4LumaPredFunc[uiMode] {
-            func(&mut (*pDec).plane_mut(0).cursor_mut(x, y));
+            func(&mut pDec.plane_mut(0).cursor_mut(x, y));
         }
 
         let nzc_idx = g_kuiMbCountScan4Idx[i] as usize;
         if pNzc[nzc_idx] != 0 {
             if let Some(idct_func) = pIdctResAddPredFunc {
                 let rs: &[i16; 16] = tcoeff[i << 4..][..16].try_into().unwrap();
-                idct_func(&mut (*pDec).plane_mut(0).cursor_mut(x, y), rs);
+                idct_func(&mut pDec.plane_mut(0).cursor_mut(x, y), rs);
             }
         }
     }
@@ -2275,35 +2274,35 @@ pub unsafe fn RecI4x4Luma(
 pub unsafe fn RecI4x4Chroma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let iChromaPredMode = *(*pDqLayer).grid.chroma_pred_mode.get(iMBXY as usize) as usize;
     let (mb_x, mb_y) = ((*pDqLayer).iMbX as isize, (*pDqLayer).iMbY as isize);
 
     if let Some(func) = pCtx.pGetIChromaPredFunc[iChromaPredMode] {
-        func(&mut (*pDec).plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
-        func(&mut (*pDec).plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
+        func(&mut pDec.plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
+        func(&mut pDec.plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
     }
 
-    RecChroma(iMBXY, pCtx, pDec, pDqLayer)
+    RecChroma(iMBXY, pCtx, &mut *pDec, pDqLayer)
 }
 
 pub unsafe fn RecI4x4Mb(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    RecI4x4Luma(iMBXY, pCtx, pDec, pDqLayer);
-    RecI4x4Chroma(iMBXY, pCtx, pDec, pDqLayer);
+    RecI4x4Luma(iMBXY, pCtx, &mut *pDec, pDqLayer);
+    RecI4x4Chroma(iMBXY, pCtx, &mut *pDec, pDqLayer);
     ERR_NONE
 }
 
 pub unsafe fn RecI8x8Luma(
     iMbXy: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let pIntra8x8PredMode = *(*pDqLayer).grid.intra4x4_final_mode.get(iMbXy as usize);
@@ -2333,7 +2332,7 @@ pub unsafe fn RecI8x8Luma(
 
         if let Some(func) = pCtx.pGetI8x8LumaPredFunc[uiMode] {
             func(
-                &mut (*pDec).plane_mut(0).cursor_mut(x, y),
+                &mut pDec.plane_mut(0).cursor_mut(x, y),
                 bTLAvail[i],
                 bTRAvail[i],
             );
@@ -2347,7 +2346,7 @@ pub unsafe fn RecI8x8Luma(
         {
             if let Some(idct_func) = pIdctResAddPredFunc {
                 let rs: &[i16; 64] = tcoeff[i << 6..][..64].try_into().unwrap();
-                idct_func(&mut (*pDec).plane_mut(0).cursor_mut(x, y), rs);
+                idct_func(&mut pDec.plane_mut(0).cursor_mut(x, y), rs);
             }
         }
     }
@@ -2357,18 +2356,18 @@ pub unsafe fn RecI8x8Luma(
 pub unsafe fn RecI8x8Mb(
     iMbXy: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
-    RecI8x8Luma(iMbXy, pCtx, pDec, pDqLayer);
-    RecI4x4Chroma(iMbXy, pCtx, pDec, pDqLayer);
+    RecI8x8Luma(iMbXy, pCtx, &mut *pDec, pDqLayer);
+    RecI4x4Chroma(iMbXy, pCtx, &mut *pDec, pDqLayer);
     ERR_NONE
 }
 
 pub unsafe fn RecI16x16Mb(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDqLayer: &mut DqLayerState,
 ) -> i32 {
     let iI16x16PredMode = (*pDqLayer).grid.intra_pred_mode.get(iMBXY as usize)[7] as usize;
@@ -2377,7 +2376,7 @@ pub unsafe fn RecI16x16Mb(
     let pIdctFourResAddPredFunc = pCtx.pIdctFourResAddPredFunc;
 
     if let Some(func) = pCtx.pGetI16x16LumaPredFunc[iI16x16PredMode] {
-        func(&mut (*pDec).plane_mut(0).cursor_mut(mb_x << 4, mb_y << 4));
+        func(&mut pDec.plane_mut(0).cursor_mut(mb_x << 4, mb_y << 4));
     }
 
     if let Some(idct_func) = pIdctFourResAddPredFunc {
@@ -2390,7 +2389,7 @@ pub unsafe fn RecI16x16Mb(
             let rs: &[i16; 64] = tcoeff[q << 6..][..64].try_into().unwrap();
             let nzc: &[i8; 6] = pNzc[nz..][..6].try_into().unwrap();
             idct_func(
-                &mut (*pDec)
+                &mut pDec
                     .plane_mut(0)
                     .cursor_mut((mb_x << 4) + dx, (mb_y << 4) + dy),
                 rs,
@@ -2400,35 +2399,38 @@ pub unsafe fn RecI16x16Mb(
     }
 
     if let Some(chroma_func) = pCtx.pGetIChromaPredFunc[iChromaPredMode] {
-        chroma_func(&mut (*pDec).plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
-        chroma_func(&mut (*pDec).plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
+        chroma_func(&mut pDec.plane_mut(1).cursor_mut(mb_x << 3, mb_y << 3));
+        chroma_func(&mut pDec.plane_mut(2).cursor_mut(mb_x << 3, mb_y << 3));
     }
 
-    RecChroma(iMBXY, pCtx, pDec, pDqLayer);
+    RecChroma(iMBXY, pCtx, &mut *pDec, pDqLayer);
     ERR_NONE
 }
 
 pub unsafe fn WelsMbIntraPredictionConstruction(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    mut pDec: Option<&mut SPicture>,
     pCurDqLayer: &mut DqLayerState,
     bOutput: bool,
 ) -> i32 {
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
 
-    WelsFillRecNeededMbInfo(pCtx, pDec, bOutput, pCurDqLayer);
+    WelsFillRecNeededMbInfo(pCtx, pDec.as_deref_mut(), bOutput, pCurDqLayer);
 
-    if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
+    let Some(pDec) = pDec else {
+        return ERR_NONE;
+    };
+    if pDec.pMbType.as_slice().is_empty() {
         return ERR_NONE;
     }
-    let mb_type = *(*pDec).pMbType.get(iMbXy as usize);
+    let mb_type = *pDec.pMbType.get(iMbXy as usize);
 
     if IS_INTRA16x16(mb_type) {
-        RecI16x16Mb(iMbXy, pCtx, pDec, pCurDqLayer);
+        RecI16x16Mb(iMbXy, pCtx, &mut *pDec, pCurDqLayer);
     } else if IS_INTRA8x8(mb_type) {
-        RecI8x8Mb(iMbXy, pCtx, pDec, pCurDqLayer);
+        RecI8x8Mb(iMbXy, pCtx, &mut *pDec, pCurDqLayer);
     } else if IS_INTRA4x4(mb_type) {
-        RecI4x4Mb(iMbXy, pCtx, pDec, pCurDqLayer);
+        RecI4x4Mb(iMbXy, pCtx, &mut *pDec, pCurDqLayer);
     }
     ERR_NONE
 }
@@ -2445,7 +2447,7 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mu
     if mb_type == MB_TYPE_INTRA_PCM {
         ERR_NONE
     } else if IS_INTRA(mb_type) {
-        WelsMbIntraPredictionConstruction(pCtx, pDec, pCurDqLayer, true);
+        WelsMbIntraPredictionConstruction(pCtx, pDec.as_mut(), pCurDqLayer, true);
         ERR_NONE
     } else if IS_INTER(mb_type) {
         // T5.H12: a `pCbp.is_null()` guard returning `ERR_INFO_MB_RECON_FAIL` sat
@@ -2590,7 +2592,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDq
         if let Some(pDec) = pDec {
             crate::decoder::deblocking::WelsDeblockingFilterSlice(
                 &view, dq,
-                pDec,
+                &mut *pDec,
                 Some(crate::decoder::deblocking::WelsDeblockingMb),
             );
         }
@@ -2611,24 +2613,24 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDq
 /// re-deriving `&mut *slice_bit_reader(pCtx)` below callers that already hold the
 /// split, which removes their strongly-protected `&mut` argument. The all-I_PCM
 /// FMO asset is what reached it: no probe before T5.S2 decoded a PCM macroblock.
-unsafe fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: PPicture) -> i32 {
+unsafe fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     let iMbX = (*dq).iMbX;
     let iMbY = (*dq).iMbY;
     let iMbXy = (*dq).iMbXyIndex as usize;
 
-    let iDecStrideL = (*pDec).linesize(0);
-    let iDecStrideC = (*pDec).linesize(1);
+    let iDecStrideL = pDec.linesize(0);
+    let iDecStrideC = pDec.linesize(1);
 
     let iOffsetL = ((iMbX + iMbY * iDecStrideL) << 4) as isize;
     let iOffsetC = ((iMbX + iMbY * iDecStrideC) << 3) as isize;
 
-    let mut pDecY = (*pDec).data_ptr(0).offset(iOffsetL);
-    let mut pDecU = (*pDec).data_ptr(1).offset(iOffsetC);
-    let mut pDecV = (*pDec).data_ptr(2).offset(iOffsetC);
+    let mut pDecY = pDec.data_ptr(0).offset(iOffsetL);
+    let mut pDecU = pDec.data_ptr(1).offset(iOffsetC);
+    let mut pDecV = pDec.data_ptr(2).offset(iOffsetC);
 
     let iIndex = ((-pBs.left_bits()) >> 3) + 2;
 
-    *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
+    *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
 
     // step 1: locate the bit-stream position (must align to an integer byte).
     // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
@@ -2675,7 +2677,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCurs
 }
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
-pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: PPicture) -> i32 {
+pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     // T5.W4: the table is read-only — no `SVlcTable` field is written outside
     // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
     let pVlcTable = pCtx.pVlcTable;
@@ -2692,7 +2694,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
 
     // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
     // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
@@ -2721,10 +2723,10 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
     }
 
     if 25 == uiMbType {
-        return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
+        return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
-        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
+        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
         if pCtx.bTransform8x8ModeFlag() {
             let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
             if ret != 0 {
@@ -2732,7 +2734,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             }
             *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = uiCode != 0;
             if uiCode != 0 {
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
+                *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                 uiMbType = MB_TYPE_INTRA8x8;
             }
         }
@@ -2743,9 +2745,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             dq,
         );
         let ret = if !*(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-            ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+            ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
         } else {
-            ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+            ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
         };
         if ret != ERR_NONE {
             return ret;
@@ -2771,7 +2773,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
         uiCbpC = uiCbp >> 4;
         uiCbpL = uiCbp & 15;
     } else {
-        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
+        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
         *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -2787,7 +2789,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             &mut pNonZeroCount,
             Some(&*dq),
         );
-        let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
+        let ret = ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq);
         if ret != ERR_NONE {
             return ret;
         }
@@ -2796,7 +2798,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     pNzc.fill(0);
 
-    if *(*dq).grid.cbp.get(iMbXy) == 0 && IS_INTRANxN(*(*pDec).pMbType.get(iMbXy)) {
+    if *(*dq).grid.cbp.get(iMbXy) == 0 && IS_INTRANxN(*pDec.pMbType.get(iMbXy)) {
         let pps_sh_chroma_qp_offset = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
         let pps_sh_entropy = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
         let pps_sh_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
@@ -2811,7 +2813,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
         }
     }
 
-    if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
+    if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *pDec.pMbType.get(iMbXy) {
         let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
         scaled_tcoeff_mb.fill(0);
 
@@ -2841,7 +2843,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             buf,
             pBs,
             dq,
-            pDec,
+            &mut *pDec,
             pVlcTable,
             &mut pNonZeroCount,
             iScanIdxStart,
@@ -2878,7 +2880,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     buf: &[u8],
     pBs: &mut BsCursor,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pVlcTable: &crate::decoder::parse_mb_syn_cavlc::SVlcTable,
     pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
@@ -2889,7 +2891,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
     let iMbXy = (*dq).iMbXyIndex as usize;
     let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
     let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
-    let mb_type = *(*pDec).pMbType.get(iMbXy);
+    let mb_type = *pDec.pMbType.get(iMbXy);
     let is_intra = IS_INTRA(mb_type);
     // T5.I2: the QP is read once per residual block, so the four sites below sit
     // inside `for iId8x8 { for iId4x4 { } }` and cost up to sixteen checks per
@@ -3129,7 +3131,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcISlice(
     if iBaseModeFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_ILP);
     }
-    let ret = WelsActualDecodeMbCavlcISlice(pCtx, buf, pBs, dq, pDec);
+    let ret = WelsActualDecodeMbCavlcISlice(pCtx, buf, pBs, dq, &mut *pDec);
     if ret != ERR_NONE {
         return ret;
     }
@@ -3163,7 +3165,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
 
     // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
     // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
@@ -3189,12 +3191,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
             &mut iMotionVector,
             &mut iRefIndex,
             &*dq,
-            pDec,
+            &*pDec,
         );
 
         let ret = crate::decoder::parse_mb_syn_cavlc::ParseInterInfo(
             pCtx, &mut *dq,
-            pDec,
+            &mut *pDec,
             pRefs,
             &mut iMotionVector,
             &mut iRefIndex,
@@ -3236,7 +3238,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
         }
 
         if 25 == uiMbType {
-            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
+            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -3257,9 +3259,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
             dq,
         );
             let ret = if !*(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+                ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+                ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3281,7 +3283,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
                 &mut pNonZeroCount,
                 Some(&*dq),
             );
-            let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
+            let ret = ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -3385,7 +3387,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, 
             buf,
             pBs,
             dq,
-            pDec,
+            &mut *pDec,
             pVlcTable,
             &mut pNonZeroCount,
             iScanIdxStart,
@@ -3443,7 +3445,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcPSlice(
                 (*pDec).pRefIndex[0].get_mut(iMbXy)[j] = 0;
             }
         }
-        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec, &mut iMv);
+        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec.as_ref(), &mut iMv);
         if !pDec.is_null() {
             for j in 0..16 {
                 (*pDec).pMv[0].get_mut(iMbXy)[j] = iMv;
@@ -3513,7 +3515,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
 
     let mut sNeighAvail = SWelsNeighAvail::default();
     let mut pNonZeroCount = [0u8; 48];
-    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), pDec);
+    crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
 
     // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
     // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
@@ -3539,12 +3541,12 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
             &mut iMotionVector,
             &mut iRefIndex,
             &*dq,
-            pDec,
+            &*pDec,
         );
 
         let ret = crate::decoder::parse_mb_syn_cavlc::ParseInterBInfo(
             pCtx, &mut *dq,
-            pDec,
+            &mut *pDec,
             pRefs,
             &mut iMotionVector,
             &mut iRefIndex,
@@ -3586,7 +3588,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
         }
 
         if 25 == uiMbType {
-            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, pDec);
+            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -3607,9 +3609,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
             dq,
         );
             let ret = if !*(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-                ParseIntra4x4Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+                ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             } else {
-                ParseIntra8x8Mode(pCtx, pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+                ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -3631,7 +3633,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
                 &mut pNonZeroCount,
                 Some(&*dq),
             );
-            let ret = ParseIntra16x16Mode(pCtx, pDec, &mut sNeighAvail, buf, pBs, dq);
+            let ret = ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -3735,7 +3737,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, 
             buf,
             pBs,
             dq,
-            pDec,
+            &mut *pDec,
             pVlcTable,
             &mut pNonZeroCount,
             iScanIdxStart,
@@ -3815,7 +3817,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
             // predict direct spatial mv
             let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx, &mut *dq,
-                pDec,
+                &mut *pDec,
                 pRefs,
                 &mut iMv,
                 &mut iRef,
@@ -3828,7 +3830,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
             // temporal direct mode
             let ret = crate::decoder::mv_pred::PredBDirectTemporal(
                 pCtx, &mut *dq,
-                pDec,
+                &mut *pDec,
                 pRefs,
                 &mut iMv,
                 &mut iRef,
@@ -3898,7 +3900,7 @@ pub unsafe extern "C" fn WelsDecodeMbCavlcBSlice(
 
 pub unsafe fn ParseIntra4x4Mode(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
@@ -4003,7 +4005,7 @@ pub unsafe fn ParseIntra4x4Mode(
     if pps_entropy {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx, dq,
-            pDec,
+            &*pDec,
             uiNeighAvail,
             &mut iCode,
         );
@@ -4043,7 +4045,7 @@ pub unsafe fn ParseIntra4x4Mode(
 
 pub unsafe fn ParseIntra8x8Mode(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
@@ -4156,7 +4158,7 @@ pub unsafe fn ParseIntra8x8Mode(
     if pps_entropy {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx, dq,
-            pDec,
+            &*pDec,
             uiNeighAvail,
             &mut iCode,
         );
@@ -4196,7 +4198,7 @@ pub unsafe fn ParseIntra8x8Mode(
 
 pub unsafe fn ParseIntra16x16Mode(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     buf: &[u8],
     // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
@@ -4232,7 +4234,7 @@ pub unsafe fn ParseIntra16x16Mode(
     if pps_entropy {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx, dq,
-            pDec,
+            &*pDec,
             uiNeighAvail,
             &mut iCode,
         );
@@ -4274,7 +4276,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: &mut [i8; 48],
@@ -4293,7 +4295,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
     let iMbXy = (*dq).iMbXyIndex as usize;
 
     if uiMbType == 0 {
-        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
+        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
         let pps_chroma_qp_offset = pCtx.pps_of((*dq).sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
         let pps_entropy = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
         let pps_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
@@ -4324,13 +4326,13 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
         );
 
         if *(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
-            ParseIntra8x8Mode(pCtx, pDec, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
+            *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
+            ParseIntra8x8Mode(pCtx, &mut *pDec, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         } else {
-            ParseIntra4x4Mode(pCtx, pDec, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
+            ParseIntra4x4Mode(pCtx, &mut *pDec, pNeighAvail, pIntraPredMode, buf, pBsAux, dq)
         }
     } else {
-        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
+        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
         *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType as i32 - 1) & 3) as i8;
@@ -4340,7 +4342,7 @@ unsafe fn WelsDecodeMbCabacIntraModeHelper(
             pNonZeroCount,
             Some(&*dq),
         );
-        ParseIntra16x16Mode(pCtx, pDec, pNeighAvail, buf, pBsAux, dq)
+        ParseIntra16x16Mode(pCtx, &mut *pDec, pNeighAvail, buf, pBsAux, dq)
     }
 }
 
@@ -4348,7 +4350,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iScanIdxStart: usize,
@@ -4376,7 +4378,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
     // never has to coexist with a `&mut` to the whole layer.
     let iMbXyIndex = (*dq).iMbXyIndex;
     let iMbWidth = (*dq).iMbWidth;
-    let mb_type = *(*pDec).pMbType.get(iMbXy);
+    let mb_type = *pDec.pMbType.get(iMbXy);
     let mut uiCbp = 0u32;
     let uiCbpLuma;
     let uiCbpChroma;
@@ -4499,7 +4501,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 iMbXyIndex,
                 iMbWidth,
                 &mut (*dq).grid.cbf_dc,
-                &(*pDec).pMbType,
+                &pDec.pMbType,
             );
             if ret != ERR_NONE {
                 return ret;
@@ -4523,7 +4525,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         iMbXyIndex,
                         iMbWidth,
                         &mut (*dq).grid.cbf_dc,
-                        &(*pDec).pMbType,
+                        &pDec.pMbType,
                     );
                     if ret != ERR_NONE {
                         return ret;
@@ -4607,7 +4609,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                                 iMbXyIndex,
                                 iMbWidth,
                                 &mut (*dq).grid.cbf_dc,
-                                &(*pDec).pMbType,
+                                &pDec.pMbType,
                             );
                             if ret != ERR_NONE {
                                 return ret;
@@ -4658,7 +4660,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     iMbXyIndex,
                     iMbWidth,
                     &mut (*dq).grid.cbf_dc,
-                    &(*pDec).pMbType,
+                    &pDec.pMbType,
                 );
                 if ret != ERR_NONE {
                     return ret;
@@ -4700,7 +4702,7 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         iMbXyIndex,
                         iMbWidth,
                         &mut (*dq).grid.cbf_dc,
-                        &(*pDec).pMbType,
+                        &pDec.pMbType,
                     );
                     if ret != ERR_NONE {
                         return ret;
@@ -4759,7 +4761,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
         Some(&*dq),
-        pDec,
+        pDec.as_ref(),
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseMBTypeISliceCabac(
         pCtx,
@@ -4777,7 +4779,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
     } else if uiMbType == 25 {
-        ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, pDec);
+        ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, &mut *pDec);
         if ret != ERR_NONE {
             return ret;
         }
@@ -4802,7 +4804,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         pCtx,
         pNalCur,
         dq,
-        pDec,
+        &mut *pDec,
         &mut sNeighAvail,
         &mut pNonZeroCount,
         &mut pIntraPredMode,
@@ -4820,7 +4822,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         pCtx,
         pNalCur,
         dq,
-        pDec,
+        &mut *pDec,
         &mut sNeighAvail,
         &mut pNonZeroCount,
         iScanIdxStart,
@@ -4900,11 +4902,11 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             &mut pMvdCache,
             &mut pRefIndex,
             &*dq,
-            pDec,
+            &*pDec,
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterPMotionInfoCabac(
             pCtx, &mut *dq,
-            pDec,
+            &mut *pDec,
             pRefs,
             pNeighAvail,
             &mut pNonZeroCount,
@@ -4926,7 +4928,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
         if intra_type == 25 {
-            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, pDec);
+            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, &mut *pDec);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -4951,7 +4953,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             pCtx,
         pNalCur,
             dq,
-            pDec,
+            &mut *pDec,
             pNeighAvail,
             &mut pNonZeroCount,
             &mut pIntraPredMode,
@@ -4970,7 +4972,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
         pCtx,
         pNalCur,
         dq,
-        pDec,
+        &mut *pDec,
         pNeighAvail,
         &mut pNonZeroCount,
         iScanIdxStart,
@@ -5017,7 +5019,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
         Some(&*dq),
-        pDec,
+        pDec.as_ref(),
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
         pCtx,
@@ -5046,7 +5048,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacPSlice(
         *pCtx.bMbRefConcealed =
             pCtx.bRPLRError || *pCtx.bMbRefConcealed || !is_complete0;
 
-        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec, &mut pMv);
+        crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec.as_ref(), &mut pMv);
         let mv_slice = (*pDec).pMv[LIST_0].get_mut(iMbXy);
         let mvd_slice = (*dq).grid.mvd[LIST_0].get_mut(iMbXy);
         for i in 0..16 {
@@ -5120,7 +5122,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             &mut pMvdCache,
             &mut pRefIndex,
             &*dq,
-            pDec,
+            &*pDec,
         );
         crate::decoder::parse_mb_syn_cavlc::WelsFillDirectCacheCabac(
             pNeighAvail,
@@ -5129,7 +5131,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         );
         ret = crate::decoder::parse_mb_syn_cabac::ParseInterBMotionInfoCabac(
             pCtx, &mut *dq,
-            pDec,
+            &mut *pDec,
             pRefs,
             pNeighAvail,
             &mut pNonZeroCount,
@@ -5152,7 +5154,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
         if intra_type == 25 {
-            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, pDec);
+            ret = crate::decoder::parse_mb_syn_cabac::ParseIPCMInfoCabac(pCtx, &mut pNalCur.sNalData.sVclNal.sSliceBitsRead, &mut *dq, &mut *pDec);
             if ret != ERR_NONE {
                 return ret;
             }
@@ -5177,7 +5179,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             pCtx,
         pNalCur,
             dq,
-            pDec,
+            &mut *pDec,
             pNeighAvail,
             &mut pNonZeroCount,
             &mut pIntraPredMode,
@@ -5196,7 +5198,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
         pCtx,
         pNalCur,
         dq,
-        pDec,
+        &mut *pDec,
         pNeighAvail,
         &mut pNonZeroCount,
         iScanIdxStart,
@@ -5243,7 +5245,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
     crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
         &mut sNeighAvail,
         Some(&*dq),
-        pDec,
+        pDec.as_ref(),
     );
     let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
         pCtx,
@@ -5296,7 +5298,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag != 0 {
             ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
                 pCtx, &mut *dq,
-                pDec,
+                &mut *pDec,
                 pRefs,
                 &mut pMv,
                 &mut ref_idx,
