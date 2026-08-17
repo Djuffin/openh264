@@ -990,6 +990,20 @@ pub fn pic_and_refs(
     }
 }
 
+/// [`pic_and_refs`]'s borrow form — the bracket for a scope that resolves its
+/// references through [`PicRefs::classify`] rather than through `get` (T5.AB3).
+#[inline]
+pub fn pic_and_refs_mut(
+    pool: &mut Option<Box<SPicBuff>>,
+    slot: Option<PicId>,
+) -> (Option<&mut SPicture>, PicRefs<'_>) {
+    match (pool.as_deref_mut(), slot) {
+        (Some(pool), Some(id)) => pool.cur_and_rest_mut(id),
+        (Some(pool), None) => (None, pool.refs()),
+        (None, _) => (None, PicRefs::over(None)),
+    }
+}
+
 /// Entry `i` of reference list `list` — the **handle**, without touching the pool.
 ///
 /// The lists live in the context, not in the pool, so reading one below a bracket

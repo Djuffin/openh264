@@ -287,14 +287,21 @@ impl<T> Clone for PoolRest<'_, T> {
 
 impl<T> Copy for PoolRest<'_, T> {}
 
-impl<T> PoolRest<'_, T> {
+impl<'a, T> PoolRest<'a, T> {
     /// The slot `id` names.
+    ///
+    /// **The borrow is the view's, not this call's** (T5.AB3): the rest is two
+    /// shared slices with lifetime `'a`, so a result may outlive the `&self` that
+    /// asked for it. `PoolRest` is `Copy`, so a caller that destructures it out of
+    /// an enum holds a *local* — and with the elided lifetime the answer died with
+    /// that local, which is what kept `PicRefs::classify` from handing back a
+    /// reference at all.
     ///
     /// # Panics
     /// If `id` names the slot that is held mutably, or is out of range, or — debug
     /// builds only — is stale.
     #[inline]
-    pub fn get(&self, id: Id) -> &T {
+    pub fn get(&self, id: Id) -> &'a T {
         let index = id.index();
         assert_ne!(
             index, self.cur,

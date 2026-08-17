@@ -188,6 +188,8 @@ impl Default for TagMCRefMember {
 // ============================================================================
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
+pub use crate::decoder::decoder_context::pic_and_refs_mut;
+pub use crate::decoder::pic_queue::RefSlot;
 pub use crate::decoder::picture::{same_picture, pic_slot};
 pub use crate::safe::plane::PaddedPlane;
 
@@ -245,14 +247,31 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
 //
 // | function | the pair | the guard, and where |
 // |---|---|---|
-// | `DoErrorConFrameCopy` | `pDec` / `pPreviousDecodedPictureInDpb` | `same_picture` (:345) |
-// | `DoErrorConSliceCopy` | same pair | `same_picture` (:398) |
-// | `DoErrorConSliceMVCopy` | same pair | `same_picture` (:822) |
-// | `DoMbECMvCopy` | `pDec` / one reference | `same_picture` (:523) |
+// | `DoErrorConFrameCopy` | `pDec` / `pPreviousDecodedPictureInDpb` | **`PicRefs::classify`** |
+// | `DoErrorConSliceCopy` | same pair | **`PicRefs::classify`** |
+// | `DoErrorConSliceMVCopy` | same pair | `same_picture` |
+// | `DoMbECMvCopy` | `pDec` / one reference | `same_picture` |
 //
-// All four were pointer equality over `SPicture` until T5.N2 and are slot comparisons now
-// (`picture.rs`'s `same_picture`, plan P3). The disjointness argument is unchanged,
-// because the predicate is: two pool slots are two pictures.
+// All four were pointer equality over `SPicture` until T5.N2 and became slot
+// comparisons (`picture.rs`'s `same_picture`, plan P3). The disjointness argument is
+// unchanged, because the predicate is: two pool slots are two pictures.
+//
+// **T5.AB3 turned the first two into a type.** `same_picture(pSrcPic, pDstPic)` was
+// asking the bracket a question the bracket already knew the answer to: whether the
+// handle resolves to the slot it is holding mutably. [`PicRefs::classify`] answers it
+// as `RefSlot::Current`, which carries no reference at all — so the source arrives as
+// an `&SPicture` that *cannot* be the destination, the compiler holds the two
+// together, and the picture the copy writes into is a `&mut SPicture` from
+// `pic_and_refs_mut`. Same three arms, same bytes, no pointer.
+//
+// **The third and fourth are blocked, and by one thing**: `DoMbECMvCopy` takes
+// `&mut SWelsDecoderContext`, and `DoErrorConSliceMVCopy` calls it inside its own
+// bracket — so a picture borrow derived from `pCtx.pPicBuff` would travel beside a
+// borrow of the whole context, which is the shape the context flip cannot express
+// (session Y's verdict; T5.Z4 already moved the EC reference's POC out of this call
+// for the same reason). What unblocks it is the maneuver `slice_split` is for, aimed
+// at the concealment bracket rather than the slice — an EC view of the context —
+// and that is the module's remaining face, not a `PPicture` question.
 //
 // **Every one of them returns before the first derivation.** That is not a property
 // this conversion added — the C++ has all four, because a `memcpy` from a picture
@@ -338,64 +357,62 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCu
     // ever ran. `PicRefs::get` answers for the current slot from the mutable half's
     // own pointer (F42), so one tag covers both.
     let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
-    let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
-    let mut pSrcPic = pRefs.get(prev);
+    let (pDstPic, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, pCtx.pDec);
+    let Some(pDstPic) = pDstPic else {
+        return;
+    };
+    // **T5.AB3: the guard is the classification, not a comparison of addresses.**
+    // `same_picture(pSrcPic, pDstPic)` stood below and answered exactly
+    // `RefSlot::Current` — the previous DPB picture *is* the one being written on
+    // some error paths (F42's shape, one bracket over). Asking `classify` means the
+    // source arrives as an `&SPicture` that cannot be the destination, so the two
+    // travel together in safe code and the skip arm is a match arm.
+    let mut pSrcPic = pRefs.classify(prev);
 
     let uiHeightInPixelY = (iMbHeight as u32) << 4;
-    let iStrideY = (*pDstPic).linesize(0);
-    let iStrideUV = (*pDstPic).linesize(1);
-    (*pDstPic).iMbEcedNum = (iMbWidth * iMbHeight) as i32;
+    let iStrideY = pDstPic.linesize(0);
+    let iStrideUV = pDstPic.linesize(1);
+    pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
     if !(*pCtx).pParam.is_null() && pCurDqLayer.is_some() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
             && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
         {
-            pSrcPic = ptr::null();
+            pSrcPic = RefSlot::Empty;
         }
     }
 
-    if pSrcPic.is_null() {
-        // Fill planes with neutral gray (128)
-        if !(*pDstPic).data_ptr(0).is_null() {
-            ptr::write_bytes((*pDstPic).data_ptr(0), 128, (uiHeightInPixelY as usize) * (iStrideY as usize));
+    if matches!(pSrcPic, RefSlot::Empty) {
+        // Fill planes with neutral gray (128). The `data_ptr(i).is_null()` test each
+        // of these carried is `plane(i).is_empty()`: the pointer was the plane's
+        // base and a plane with no bytes is what answered null (T5.C3).
+        let spans = [
+            (0usize, (uiHeightInPixelY as usize) * (iStrideY as usize)),
+            (1, ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize)),
+            (2, ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize)),
+        ];
+        for (i, len) in spans {
+            let plane = pDstPic.plane_mut(i);
+            if !plane.is_empty() {
+                let base = plane.origin();
+                plane.as_mut_slice()[base..base + len].fill(128);
+            }
         }
-        if !(*pDstPic).data_ptr(1).is_null() {
-            ptr::write_bytes(
-                (*pDstPic).data_ptr(1),
-                128,
-                ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
-            );
-        }
-        if !(*pDstPic).data_ptr(2).is_null() {
-            ptr::write_bytes(
-                (*pDstPic).data_ptr(2),
-                128,
-                ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
-            );
-        }
-    } else if same_picture(pSrcPic.as_ref(), pDstPic.as_ref()) {
-        // Prevent self-copy overlap
-    } else {
-        if !(*pDstPic).data_ptr(0).is_null() && !(*pSrcPic).data_ptr_ref(0).is_null() {
-            ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr_ref(0),
-                (*pDstPic).data_ptr(0),
-                (uiHeightInPixelY as usize) * (iStrideY as usize),
-            );
-        }
-        if !(*pDstPic).data_ptr(1).is_null() && !(*pSrcPic).data_ptr_ref(1).is_null() {
-            ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr_ref(1),
-                (*pDstPic).data_ptr(1),
-                ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
-            );
-        }
-        if !(*pDstPic).data_ptr(2).is_null() && !(*pSrcPic).data_ptr_ref(2).is_null() {
-            ptr::copy_nonoverlapping(
-                (*pSrcPic).data_ptr_ref(2),
-                (*pDstPic).data_ptr(2),
-                ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize),
-            );
+    } else if let RefSlot::Other(pSrcPic) = pSrcPic {
+        let spans = [
+            (0usize, (uiHeightInPixelY as usize) * (iStrideY as usize)),
+            (1, ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize)),
+            (2, ((uiHeightInPixelY >> 1) as usize) * (iStrideUV as usize)),
+        ];
+        for (i, len) in spans {
+            if pDstPic.plane(i).is_empty() || pSrcPic.plane(i).is_empty() {
+                continue;
+            }
+            let (src_base, dst_base) = (pSrcPic.plane(i).origin(), pDstPic.plane(i).origin());
+            let src = &pSrcPic.plane(i).as_slice()[src_base..src_base + len];
+            // One copy, disjoint by the classification above rather than by a
+            // comparison the compiler cannot see.
+            pDstPic.plane_mut(i).as_mut_slice()[dst_base..dst_base + len].copy_from_slice(src);
         }
     }
 }
@@ -417,42 +434,55 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
     };
     // The concealment bracket — see `DoErrorConFrameCopy`.
     let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
-    let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
-    let mut pSrcPic = pRefs.get(prev);
+    let (pDstPic, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, pCtx.pDec);
+    let Some(pDstPic) = pDstPic else {
+        return;
+    };
+    // T5.AB3, as in `DoErrorConFrameCopy`: `RefSlot::Current` *is* the
+    // `same_picture(pSrcPic, pDstPic)` this used to compute, and the early return it
+    // guarded is the `None` arm below — the source and the destination cannot be one
+    // picture once the source arrives as an `&SPicture` out of the rest.
+    let mut pSrcPic = pRefs.classify(prev);
 
     if !(*pCtx).pParam.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
             && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
         {
-            pSrcPic = ptr::null();
+            pSrcPic = RefSlot::Empty;
         }
     }
 
-
-    let iDstStride = (*pDstPic).linesize(0) as usize;
-
-    if !pSrcPic.is_null() && same_picture(pSrcPic.as_ref(), pDstPic.as_ref()) {
+    // The self-copy arm returns **before the loop**, so it never reaches
+    // `iMbEcedNum`. That is a third behaviour, not a second: an empty slot conceals
+    // (counting each macroblock) and the current picture does nothing at all.
+    if matches!(pSrcPic, RefSlot::Current) {
         return;
     }
+    let pSrcPic = match pSrcPic {
+        RefSlot::Other(pic) => Some(pic),
+        _ => None,
+    };
+
+    let iDstStride = pDstPic.linesize(0) as usize;
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = iMbY * iMbWidth + iMbX;
             if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
-                (*pDstPic).iMbEcedNum += 1;
-                if !pSrcPic.is_null() {
-                    let iSrcStride = (*pSrcPic).linesize(0) as usize;
+                pDstPic.iMbEcedNum += 1;
+                if let Some(pSrcPic) = pSrcPic {
+                    let iSrcStride = pSrcPic.linesize(0) as usize;
 
                     // Y Component
-                    let pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
-                    let pSrcData = (*pSrcPic).data_ptr_ref(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
+                    let pDstData = pDstPic.data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
+                    let pSrcData = pSrcPic.data_ptr_ref(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
                         f(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
                     }
 
                     // U Component
-                    let pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataU = (*pSrcPic).data_ptr_ref(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pDstDataU = pDstPic.data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataU = pSrcPic.data_ptr_ref(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataU,
@@ -463,8 +493,8 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
                     }
 
                     // V Component
-                    let pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataV = (*pSrcPic).data_ptr_ref(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
+                    let pDstDataV = pDstPic.data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
+                    let pSrcDataV = pSrcPic.data_ptr_ref(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
                     if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
                         f(
                             pDstDataV,
