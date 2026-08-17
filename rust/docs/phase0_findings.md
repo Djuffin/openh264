@@ -1645,3 +1645,34 @@ sides. No hit outside the signature on either side.
 
 Running total: **fifty-five measurements, seventeen alternations, twenty-eight
 acquittals.**
+
+### Fifty-sixth measurement — 2026-08-16, Phase 5 session Z: one hit, and step 1 closed it
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 56 | `mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=1` (**release**, `exit` battery at the close) | 41938 | **0** |
+
+Inside the signature — `mt`, `sm=3`, `t=2`, wrong length — and the same battery's
+**debug** sweep read 341/341, which is the profile asymmetry S23b calls load
+dependence rather than a property of either build. It is the session's *only* hit
+across an `exit` battery whose three other sweeps were clean, against a diff that
+rewrote 138 decoder signatures.
+
+**Step 0, measured rather than predicted** (S33): the two `rust_enc` binaries hash
+`e170cdbf…` (HEAD at `2a0e0330`) and `1cff2df7…` (control at `73581a49`, session Z's
+base). They differ — as the "test-only" predicate says they must for a diff of
+production decoder code — so the shortcut does not apply.
+
+**Step 1, twice.** The hitting configuration re-ran **5/5 byte-identical** in
+release, and then the whole `mt` preset re-ran **120/120 byte-identical** in release
+— the retry rule's reproduction test failing to reproduce at both the isolated level
+and the level S23b says the race actually needs. One hit, not reproducing.
+
+**Step 2 does not trigger**: the alternation is the protocol's answer to *two or
+more* hits, and this session drew one. Session Y's own `family`-battery hit was
+disposed of the same way and for the same reason.
+
+**Acquitted as F3.**
+
+Running total: **fifty-six measurements, seventeen alternations, twenty-nine
+acquittals.**

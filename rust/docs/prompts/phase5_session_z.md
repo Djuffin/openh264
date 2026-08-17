@@ -1,5 +1,15 @@
 # Phase 5, session Z — the accessors, then the flip, then the close
 
+> **SPENT — historical (S19).** Executed 2026-08-16 in 5 commits,
+> `92add69d`…`2a0e0330`. Faces 0, 1 and 2 landed whole; faces 3 and 4 did not
+> start and the phase did not close. The record is `safety_refactor_log.md`
+> §"Phase 5, session Z"; the successor is
+> [`phase5_session_aa.md`](phase5_session_aa.md). Two of this brief's own facts
+> were wrong and are corrected there: `slice_split` was **not** in the tree (it
+> was part of session Y's *reverted* flip), and the `unsafe fn` sweep cannot be
+> run in ratio order — the answer is order-dependent, so it runs over every
+> module at once.
+
 Exit conditions 1–3 are unmet (decoder `raw_ptr` 383; 11 of 22 modules deny-clean;
 `SHIM(` 6 against a survivor list of 1). Condition 5 is met and closed (D-perf-6).
 **D-par-1**, **D-fid-1**, **D-perf-6**, **S31**–**S33**, forcing rules v2 in force.

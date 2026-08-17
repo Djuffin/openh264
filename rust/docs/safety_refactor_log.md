@@ -10089,3 +10089,162 @@ the close.
 refereed; the F3 ledger is current; the span is measured and needs no day two;
 `phase6.md` stays unwritten because exit conditions 1–3 are unmet — the **fifth**
 session running, and the reason is now two measurements rather than one.
+
+## Phase 5, session Z — the accessors, the flip, and the keyword sweep
+
+**Scope**: `prompts/phase5_session_z.md` under **the finish rule** (Eugene,
+2026-08-16). Five commits, `92add69d`…`2a0e0330`. **Faces 0, 1 and 2 landed
+whole.** Decoder `raw_ptr` **383 → 310**, decoder `unsafe fn` **326 → 230**,
+`SHIM(` **6** and deny-clean **11 of 22** unmoved. **The phase did not close** —
+exit conditions 1–3 are unmet and §"Phase exit conditions" carries the numbers.
+
+**The session reverted the flip once, mid-way, and was told to keep going**
+(Eugene, in-session). That instruction is the reason face 1 exists: the revert
+had been taken on scope, not on a blocker, which the finish rule's clause 1 does
+not admit as an end state. The re-attempt reached the same 27 errors in three
+scripted steps instead of thirty, because by then the route was written down.
+
+### Face 0 — the accessor class (T5.Z1, T5.Z2, T5.Z3)
+
+Session Y reverted its flip on a Miri verdict that is a *class*: every raw
+pointer a `decoder_context` accessor derives from the context dies at the next
+call that takes the context, because a `Unique` function-entry retag pops the
+derivation. Face 0 removes the class at the return types — and, more
+importantly, at the **parameters**.
+
+Every accessor now takes **the field it reaches** — `sSpsPpsCtx`, `sFmoList`,
+`pPicBuff`, `sRefPic`, `pDqLayersList`, `pParserBsInfo`, `access_unit` — rather
+than the context. Three reasons, in the order they were established:
+
+1. It is the only shape that repairs the call Y's verdict called unfixable:
+   `FmoParamUpdate(fmo_of(pCtx, …), sps_of(pCtx, …), pps_of(pCtx, …), &mut
+   pCtx.iActiveFmoNum)` is four things from one context, and as fields it is four
+   disjoint borrows the compiler checks.
+2. A whole-context borrow satisfies the *return-type* requirement and is still
+   wrong: it conflicts with every disjoint field a caller touches beside the
+   result, so face 1 would have gained one error per accessor site — roughly 180
+   — instead of none. **This is what kept face 1 at Y's measured size.**
+3. It is `SliceCtx`'s own shape, one level up, which is what the brief said to
+   copy.
+
+`pActiveLayerSps` converted with them (`[*mut SSps; 8]` → `[Option<SpsRef>; 8]`:
+identity is all six readers ever wanted), `CheckSpsActive`/`CheckAccessUnitBoundary`/
+`CheckNextAuNewSeq` take the ref and resolve inside, and
+`WelsDelShortFromList`/`WelsDelLongFromList` return `Option<PicId>` because the
+handle is what their callers use the result for. `slice_bit_reader` is deleted
+dead (S18: zero callers, one import). Done-test: `grep -E '^pub (unsafe )?fn
+.*-> *(\*|P[A-Z])'` over `decoder_context.rs` reads **empty**, and that file goes
+55/31 → 42/12 — a borrow-returning accessor has no raw dereference in it, so
+face 2 arrived early there.
+
+### Face 1 — the flip (T5.Z4)
+
+`*mut SWelsDecoderContext` → `&mut` across **138** signatures (153 at Y's close;
+face 0 deleted fifteen). The crate-wide grep for a raw context parameter reads
+**0**. It opened at **79** errors — 62 `is_null()` on a reference, 11
+api-boundary type mismatches, **5 genuine borrow conflicts**, 1 unbounded
+lifetime — and Y's five shapes are what closed them:
+
+- **the null guards**: 42 whole guards deleted; the survivors are `api/`'s.
+- **the bracket**: `slice_split` — **written here, not reused.** `phase5.md` and
+  this session's own brief both said Y landed it; it was part of Y's *reverted*
+  flip (S24, aimed at our own documents).
+- **the access unit**: `cur_au` takes `access_unit`.
+- **the reference set**: the selector travels (`bTmpRefSet`, `ref_set(pCtx, tmp)`
+  per use). **A mechanical pass over this family does not work** — it catches
+  `pRefPicMarking`/`pRefPicListReorderSyn` and lands the helper where neither
+  name is in scope, turning 27 errors into 113. That is the session's most useful
+  negative result; the thirteen were read one at a time.
+- **the bitstream window**: the offset travels. `ParseVui` and `DecodeSpsSvcExt`
+  take a context they never read — deleted (S18), and that deletion is what lets
+  the window outlive the reads in `ParseSps`.
+
+**Miri found two things the compiler could not, and both are *ordering*, not
+aliasing** — T5.O8's sentence, confirmed at scale. `slice_ctx` called
+`GetThreadCount(pCtx)` in the middle of its struct literal, and that function's
+parameter has been **unused since F36 stubbed it** while still taking `&mut` — a
+`Unique` retag over the whole context, popping every field borrow above it. And
+`ParseDecRefPicMarking` took a `*mut SSps` its caller derived from the context it
+passes beside it: Y's verdict arriving from a hand-written alias rather than an
+accessor.
+
+**One production defect, caught by a probe**: the slice-header cursor was written
+back into `pCtx.sBs` when it belongs to the NAL's own reader — every slice header
+would have been re-read from its first bit. The FMO probe named it in one run
+because its assertion prints the decoder's state bits now.
+
+### Face 2 — the keyword sweep (T5.Z5)
+
+Decoder `unsafe fn` **298 → 230**, by compiler rather than by reading: strip
+`unsafe` from every `fn`, build, restore only where a body errors. Four restore
+rounds, because the answer is order-dependent — which is why the sweep must run
+over every module at once rather than in ratio order, as the brief proposed.
+
+**And the compiler is not the whole test.** Nine functions have bodies free of
+unsafe operations — six of them already wrap the body in an explicit `unsafe`
+block — while their *signatures* dereference a caller-supplied `*mut`. The rule
+this face adds: **a definition that names a raw pointer in its signature keeps
+`unsafe`, whatever the body does.** The build tells you which bodies need it;
+only a read tells you which signatures do.
+
+### F54 — and S21 predicted it
+
+`Option<SpsRef>`'s niche is in `SpsRef`'s `bool`, where `0` is a *valid* `false`,
+so the zeroed shell read the array back as `Some(SpsRef { id: 0, subset: false })`
+and `CheckSpsActive` answered "SPS 0 is already active" before one had been
+parsed. Every stream decoded to zero frames with `dsNoParamSets`. Four prior
+conversions of this kind wrote `None` into the shell *redundantly* through the
+null-pointer niche; this is the first where the write is load-bearing, and the
+two look identical in a diff. Full entry in `phase5_findings.md`.
+
+Two behaviour clauses the conversion had to keep, both surfaced by the same
+probes: `ParsePredWeightedTable` distinguishes "no SPS" from "monochrome SPS" in
+*opposite directions* at its two arms, so the chroma type travels as an `Option`
+and not a defaulted scalar; and `ReorderPicturesInDisplay` tested `pCtx` for null
+*after* calling the accessor, which only the accessor's internal null arm made
+safe.
+
+**The ratchet earned its keep twice**, and neither was fixed by regenerating the
+baseline: `pic_queue.rs` 35 → 36 from four hand-written casts (one helper per
+direction, S7 — it ends below where it started), and `api/codec_api.rs` 231 → 233
+from two `*mut _` turbofishes (the existing `PPicBuff` alias says the same thing).
+
+### Gates at close, F3, and what is owed
+
+**Exit battery at `2a0e0330`: 12 passed / 1 failed / 1 skipped** — tests
+**481/475/20**, census 59, ratchet clean with no per-file increase, `--all-targets`
+compiling, both benches bit-identical, **debug sweep 341/341**, Miri `--lib`
+**336/0** plus the three differential targets (**20 / 7 / 3**). The one failure is
+the release sweep's single F3 hit.
+
+**F3: one hit, closed at step 1.** `mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600
+cabac=0 rc=1`, release, zero-length against 41938 — inside the documented
+signature. Step 0 measured rather than assumed (S33): the two `rust_enc` binaries
+hash `e170cdbf…` (HEAD) and `1cff2df7…` (control at `73581a49`), so the shortcut
+does not apply. Step 1 ran twice: the hitting configuration **5/5 byte-identical**,
+then the whole `mt` preset **120/120 byte-identical** in release — the reproduction
+test failing to reproduce at both the isolated level and the level S23b says the
+race needs. Step 2 triggers at two or more hits; this session drew one. Measurement
+56, `phase0_findings.md`; running total **56/17/29**.
+
+**What is owed and is not done**: this session's own perf span (S2b) was not
+measured. Nothing in it changes a disposition — D-perf-6 has already sent recovery
+to Phase 9 and the stop-line is already breached and adjudicated — but the span is
+a number the next session should take rather than one this session may skip
+silently, and it is named in `phase5_session_aa.md` §3.
+
+### Hand-off: Phase 5, session AA — the deny-clean sweep, `common/`, and the close
+
+Brief: [`prompts/phase5_session_aa.md`](prompts/phase5_session_aa.md). **Nothing
+in it is blocked.** The context is a `&mut` everywhere, every accessor returns a
+borrow and takes the field it reaches, and the vestigial `unsafe fn` is gone — so
+what is left is genuinely raw: the layer bracket (`PDqLayer`), the parse tree's
+`PNalUnit`/`PSliceHeader`, and `common/`'s kernels, with the sizes per module in
+its §1. Two rules the brief carries forward because they are cheap to lose: a
+definition that names a raw pointer in its signature keeps `unsafe` whatever its
+body does, and a field's all-zero bit pattern is a question to ask at every type
+change (F54).
+
+`phase6.md` stays unwritten for the sixth session running, because exit conditions
+1–3 are unmet — and the reason is now a shrinking list of named families rather
+than a structural blocker.
