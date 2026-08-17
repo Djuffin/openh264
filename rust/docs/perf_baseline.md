@@ -2141,6 +2141,61 @@ S2b's clause attaches to readings a decision rests on, and this one changes no
 disposition. Both binaries stay stashed (`.perfpair/y_base` = `3e2f43e6`,
 `.perfpair/y_head` = `dff3f78b`) so a later session can chain the span for free.
 
+### Session AC's span — the phase's last, and the one row that moves is the one the work touched
+
+`11002e4c` (session AB's close, `.perfpair/ab_head`) → `5ebaf904` (session AC's
+close): **four commits**, the whole of AC. Decode and encode benches, machine
+otherwise idle, S1/S2 protocol through `perfpair.py`, null re-run at the verdict's
+own pair count (session K's clause).
+
+The base is deliberate and was checked rather than inherited: `phase5_session_ac.md`
+§3.2 names `ab_head` at `11002e4c` — two commits before AB's close — on the ground
+that T5.AB4/AB5 are keyword-and-block only and AB5's `rust_enc` hashed identically
+to its parent's. That still holds, so the span covers AB's tail as well as AC, and
+AB's own adjudicated span (below) is not re-measured.
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `11002e4c` → `5ebaf904` | **7** | **+0.51%** | +0.03% | −0.27% | **+0.03%** | **+0.19%** |
+| 7-pair null (`ac_head` both slots) | **7** | −0.25% | +0.08% | −0.02% | **−0.02%** | **+0.00%** |
+
+Null bands at 7 pairs: decode **−0.25% … +0.08%** (0.33 points wide — the tightest
+this phase has measured), encode **−1.43% … +1.45%** (2.88 points).
+
+**Both medians are inside their bands. One row is not, and it is worth naming which
+one.** CB sits **0.43 points above the decode null's ceiling**; Main and High are
+inside. CB is the corpus's only **CAVLC** row, and Main and High are the CABAC ones.
+
+**The candidate mechanism, named as a candidate and not as the explanation (S2b)**:
+`parse_mb_syn_cavlc.rs` is the module this session changed most, and both of its
+conversions add a bounds check to a **per-coefficient** path that CABAC does not
+take. `SVlcTable`'s sub-tables became slices, so every coeff-token, total-zeros and
+zero-left lookup is checked; the bit cache carries the RBSP window rather than a
+`*mut u8` into it, so `SHIFT_BUFFER`'s two look-ahead bytes are checked too. The row
+pattern is exactly what that predicts — cost on the CAVLC row, nothing on the two
+CABAC rows — which is why it is written down. It is one row at 0.43 points outside a
+0.33-point floor, so it is *at* the resolution limit, not above it, and session L's
+law applies: per-unit readings under-report systematically at this scale, and the
+honest instrument for a cost this size is the cumulative span rather than this one.
+
+**No day two is owed and none is taken.** S2b's clause attaches to readings a
+decision rests on; **D-perf-6 already dispositions recovery to the Phase 9 perf
+pass**, so no disposition here changes on 0.43 points. What the phase hands Phase 9
+is the *mechanism*, which is more useful than the number: if a CAVLC cost is real it
+is bounds checks on the coefficient path, and that is the one place a
+`get_unchecked` argument could ever be made — S8 forbids it today and Phase 9 owns
+whether that stays.
+
+**Cumulative CB at the phase's exit: ≈ +24.3…+24.9%** if the +0.51% is real,
+≈ +23.7…+24.3% if it is floor. **The ≈+23% stop-line stays breached** — by
+≈1.3…1.9 points on the first reading, ≈0.7…1.3 on the second — and **D-perf-4's
++25% median tripwire stays unbreached**, with this span's decode median at +0.03%.
+Both figures are stated because the phase has stated both since session U, and
+neither is re-baselined to fit the result.
+
+Binaries stay stashed (`.perfpair/ab_head` = `11002e4c`, `.perfpair/ac_head` =
+`5ebaf904`) so Phase 6 chains from the phase's exit for free.
+
 ### Session AB's span — three commits, and the instrument cannot tell them from nothing
 
 `2de8703f` (session AA's close) → `11002e4c` (session AB's close): **three

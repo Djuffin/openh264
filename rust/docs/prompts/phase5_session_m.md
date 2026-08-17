@@ -1,3 +1,8 @@
+> **HISTORICAL — Phase 5 closed at session AC (2026-08-17, `5ebaf904`).**
+> This brief is the record of what one session was asked to do. It is not an
+> instruction to anyone now: read [`phase5.md`](phase5.md) for the phase's
+> close and [`phase6.md`](phase6.md) for what follows.
+
 # Phase 5, session M — T5.M: 5.2's last structural pieces, then 5.3's core
 
 > **EXECUTED 2026-08-13. Superseded-historical.** Faces 1–5 landed (T5.M1–T5.M4); face 6

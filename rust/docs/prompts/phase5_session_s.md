@@ -1,3 +1,8 @@
+> **HISTORICAL — Phase 5 closed at session AC (2026-08-17, `5ebaf904`).**
+> This brief is the record of what one session was asked to do. It is not an
+> instruction to anyone now: read [`phase5.md`](phase5.md) for the phase's
+> close and [`phase6.md`](phase6.md) for what follows.
+
 # Phase 5, session S — the last session: F43, W6's tail, W7, W8
 
 This session **ends Phase 5**: F43's fix, W6's remaining legs, W7, and W8 — in
