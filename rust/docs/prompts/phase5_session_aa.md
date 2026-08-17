@@ -64,7 +64,9 @@ express the contract. Re-derive the surface at the face (S24).
    `data_ptr`'s output-contract consumer, Phase 8's — of the 6 today, 2 are prose
    and 2 are `decoder_core`'s `expand_picture` bridges); census green.
 2. Full battery at `exit` level; F3 per S14.
-3. AA's own span per S2b — **no other perf work** (D-perf-6).
+3. AA's span per S2b — **and its base is Y's close (`dff3f78b`), not Z's**:
+   session Z's five code commits went unmeasured (the debt its report named),
+   so one span covers both sessions. **No other perf work** (D-perf-6).
 4. **`prompts/phase6.md` per S19** — only if the phase actually exits.
 5. Briefs stamped historical; phase5.md's checklist closed; §0 refreshed; open
    findings each with an owner (F3→Phase 7, F23/F38-class/F41 + the `api/`
