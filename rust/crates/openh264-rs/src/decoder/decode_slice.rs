@@ -859,7 +859,7 @@ impl IntraPredConstraint {
     /// # Safety
     /// The pointers must satisfy `WelsFillCacheConstrain0IntraNxN`'s contract.
     #[inline]
-    pub unsafe fn FillCacheIntraNxN(
+    pub fn FillCacheIntraNxN(
         self,
         pNeighAvail: &SWelsNeighAvail,
         pNonZeroCount: &mut [u8; 48],
@@ -1045,7 +1045,7 @@ pub extern "C" fn WelsMap16x16NeighToSampleConstrain1(
 /// picture owns its planes, so the cursor is `plane_mut(i).cursor_mut(x, y)` and
 /// the block offsets are sample coordinates rather than byte offsets that had to be
 /// recomputed whenever a stride changed.
-pub unsafe fn WelsMbInterSampleConstruction(
+pub fn WelsMbInterSampleConstruction(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: Option<&mut SPicture>,
@@ -2158,7 +2158,7 @@ pub unsafe fn WelsMbInterPrediction(
     ERR_NONE
 }
 
-pub unsafe fn WelsFillRecNeededMbInfo(
+pub fn WelsFillRecNeededMbInfo(
     pCtx: &mut SliceCtx<'_>,
     pDec: Option<&mut SPicture>,
     bOutput: bool,
@@ -2211,7 +2211,7 @@ pub(crate) fn blk4_xy(i: usize) -> (isize, isize) {
     (((a & 0x07) << 2) as isize, ((a >> 3) << 2) as isize)
 }
 
-pub unsafe fn RecChroma(
+pub fn RecChroma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2239,7 +2239,7 @@ pub unsafe fn RecChroma(
     ERR_NONE
 }
 
-pub unsafe fn RecI4x4Luma(
+pub fn RecI4x4Luma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2271,7 +2271,7 @@ pub unsafe fn RecI4x4Luma(
     ERR_NONE
 }
 
-pub unsafe fn RecI4x4Chroma(
+pub fn RecI4x4Chroma(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2288,7 +2288,7 @@ pub unsafe fn RecI4x4Chroma(
     RecChroma(iMBXY, pCtx, &mut *pDec, pDqLayer)
 }
 
-pub unsafe fn RecI4x4Mb(
+pub fn RecI4x4Mb(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2299,7 +2299,7 @@ pub unsafe fn RecI4x4Mb(
     ERR_NONE
 }
 
-pub unsafe fn RecI8x8Luma(
+pub fn RecI8x8Luma(
     iMbXy: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2353,7 +2353,7 @@ pub unsafe fn RecI8x8Luma(
     ERR_NONE
 }
 
-pub unsafe fn RecI8x8Mb(
+pub fn RecI8x8Mb(
     iMbXy: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2364,7 +2364,7 @@ pub unsafe fn RecI8x8Mb(
     ERR_NONE
 }
 
-pub unsafe fn RecI16x16Mb(
+pub fn RecI16x16Mb(
     iMBXY: i32,
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
@@ -2407,7 +2407,7 @@ pub unsafe fn RecI16x16Mb(
     ERR_NONE
 }
 
-pub unsafe fn WelsMbIntraPredictionConstruction(
+pub fn WelsMbIntraPredictionConstruction(
     pCtx: &mut SliceCtx<'_>,
     mut pDec: Option<&mut SPicture>,
     pCurDqLayer: &mut DqLayerState,
@@ -2677,7 +2677,7 @@ unsafe fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCurs
 }
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
-pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
+pub extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     // T5.W4: the table is read-only — no `SVlcTable` field is written outside
     // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
     let pVlcTable = pCtx.pVlcTable;
@@ -2723,7 +2723,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
     }
 
     if 25 == uiMbType {
-        return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
+        return unsafe { DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec) };
     } else if 0 == uiMbType {
         let mut pIntraPredMode = [0i8; 48];
         *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -2745,9 +2745,9 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             dq,
         );
         let ret = if !*(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-            ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+            unsafe { ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq) }
         } else {
-            ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
+            unsafe { ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq) }
         };
         if ret != ERR_NONE {
             return ret;
@@ -2789,7 +2789,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             &mut pNonZeroCount,
             Some(&*dq),
         );
-        let ret = ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq);
+        let ret = unsafe { ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq) };
         if ret != ERR_NONE {
             return ret;
         }
@@ -2838,7 +2838,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
 
         pBs.start_cavlc();
 
-        let ret = WelsDecodeMbCavlcResidual(
+        let ret = unsafe { WelsDecodeMbCavlcResidual(
             pCtx,
             buf,
             pBs,
@@ -2850,7 +2850,7 @@ pub unsafe extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, 
             iScanIdxEnd,
             uiCbpL,
             uiCbpC,
-        );
+        ) };
         if ret != ERR_NONE {
             return ret;
         }
@@ -4848,7 +4848,7 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     ERR_NONE
 }
 
-pub unsafe extern "C" fn WelsDecodeMbCabacISlice(
+pub extern "C" fn WelsDecodeMbCabacISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
     pDec: PPicture,
@@ -4856,8 +4856,8 @@ pub unsafe extern "C" fn WelsDecodeMbCabacISlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    let ret = WelsDecodeMbCabacISliceBaseMode0(pCtx,
-        pNalCur, dq, pDec, pRefs, uiEosFlag);
+    let ret = unsafe { WelsDecodeMbCabacISliceBaseMode0(pCtx,
+        pNalCur, dq, pDec, pRefs, uiEosFlag) };
     if ret != ERR_NONE {
         return ret;
     }

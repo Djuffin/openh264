@@ -590,7 +590,7 @@ pub type PPredWeightTable = *mut SPredWeightTable;
 /// The C++'s logging entry point, stubbed. It keeps `unsafe` although the body is
 /// empty: the parameter is a raw log context and any real implementation
 /// dereferences it, so the contract is the signature's, not today's body's.
-pub unsafe fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
+pub fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
 
 #[inline]
 pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, n: u32, pOut: &mut u32) -> i32 {
@@ -732,56 +732,56 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq
 }
 
 #[inline]
-pub unsafe fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerState>, bOutput: bool) {
+pub fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerState>, bOutput: bool) {
     if (*pCtx).bFreezeOutput {
         if let Some(pCurDq) = pCurDq {
-            UpdateDecStatFreezingInfo(
+            unsafe { UpdateDecStatFreezingInfo(
                 pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag,
                 (*pCtx).pDecoderStatistics,
-            );
+            ) };
         }
     } else if bOutput {
-        UpdateDecStatNoFreezingInfo(pCtx, pCurDq);
+        unsafe { UpdateDecStatNoFreezingInfo(pCtx, pCurDq) };
     }
 }
 
 #[inline]
-pub unsafe fn WelsTargetSliceConstruction(
+pub fn WelsTargetSliceConstruction(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
     match pCurDqLayer {
-        Some(dq) => crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq),
+        Some(dq) => unsafe { crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq) },
         None => ERR_NONE,
     }
 }
 
 #[inline]
-pub unsafe fn WelsDecodeSlice(
+pub fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     bFreshSlice: bool,
     pCurNal: PNalUnit,
 ) -> i32 {
     match pCurDqLayer {
-        Some(dq) => crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal),
+        Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal) },
         None => ERR_NONE,
     }
 }
 
 #[inline]
-pub unsafe fn WelsDecodeAndConstructSlice(
+pub fn WelsDecodeAndConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
     match pCurDqLayer {
-        Some(dq) => crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq),
+        Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq) },
         None => ERR_NONE,
     }
 }
 
 #[inline]
-pub unsafe fn WelsInitRefList(
+pub fn WelsInitRefList(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     iPoc: i32,
@@ -790,7 +790,7 @@ pub unsafe fn WelsInitRefList(
 }
 
 #[inline]
-pub unsafe fn WelsInitBSliceRefList(
+pub fn WelsInitBSliceRefList(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     iPoc: i32,
@@ -799,27 +799,27 @@ pub unsafe fn WelsInitBSliceRefList(
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList(
+pub fn WelsReorderRefList(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer)
+    unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer) }
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList2(
+pub fn WelsReorderRefList2(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer)
+    unsafe { crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer) }
 }
 
 #[inline]
-pub unsafe fn WelsMarkAsRef(
+pub fn WelsMarkAsRef(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
+    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut()) }
 }
 
 // T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
@@ -834,19 +834,19 @@ pub unsafe fn WelsMarkAsRef(
 
 
 #[inline]
-pub unsafe fn ComputeColocatedTemporalScaling(
+pub fn ComputeColocatedTemporalScaling(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) {
     if let Some(dq) = pCurDqLayer {
         // T5.Y2: a slice bracket of its own — the pool view and the context view
         // come out of the same context, and the two are disjoint by construction.
-        let (_, pRefs, mut view) = crate::decoder::decoder_context::slice_split(pCtx, None);
-        let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
+        let (_, pRefs, mut view) = unsafe { crate::decoder::decoder_context::slice_split(pCtx, None) };
+        let _ = unsafe { crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
             &mut view,
             dq,
             pRefs,
-        );
+        ) };
     }
 }
 
@@ -875,7 +875,7 @@ pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
     iNumRefFrames
 }
 
-pub unsafe fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
+pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
     let iPicWidth = (iWidth << 4) as i32;
     let iPicHeight = (iHeight << 4) as i32;
     let iPicBufSize = GetTargetRefListSize(pCtx);
@@ -889,7 +889,7 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u
             return 1;
         }
         let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
-            crate::decoder::decoder_context::parse_only(pCtx),
+            unsafe { crate::decoder::decoder_context::parse_only(pCtx) },
             iPicBufSize,
             iPicWidth,
             iPicHeight,
@@ -913,7 +913,7 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u
 }
 
 #[inline]
-pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
+pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     crate::decoder::manage_dec_ref::WelsResetRefPic(pCtx)
 }
 
@@ -1272,14 +1272,14 @@ pub unsafe fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalU
 }
 
 #[inline]
-pub unsafe fn WelsDecodeConstructSlice(
+pub fn WelsDecodeConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     pCurNal: PNalUnit,
 ) -> i32 {
     let iRet = WelsTargetSliceConstruction(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
-        HandleReferenceLostL0(pCtx, pCurNal);
+        unsafe { HandleReferenceLostL0(pCtx, pCurNal) };
     }
     iRet
 }
@@ -1974,10 +1974,10 @@ pub unsafe fn ResetReorderingPictureBuffers(
     (*pPictReoderingStatus).bHasBSlice = false;
 }
 
-pub unsafe fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
+pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
     let mut cpu_cores = 0i32;
-    (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores) as u32;
-    WelsInitDecoderFuncs(pCtx);
+    (*pCtx).uiCpuFlag = unsafe { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
+    unsafe { WelsInitDecoderFuncs(pCtx) };
     (*pCtx).bParamSetsLostFlag = true;
     (*pCtx).bNewSeqBegin = true;
     (*pCtx).bPrintFrameErrorTraceFlag = true;
@@ -1990,7 +1990,7 @@ pub unsafe fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_v
 /// Frees dynamically-grown decoder memory (DQ layers, FMO, reference
 /// pictures, picture buffer, CABAC engine).
 /// Matches `void WelsFreeDynamicMemory (PWelsDecoderContext pCtx)` in `decoder.cpp`.
-pub unsafe fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
+pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
     let pMa = (*pCtx).pMemAlign;
 
     UninitialDqLayersContext(pCtx);
@@ -2024,9 +2024,9 @@ pub unsafe fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
 
 /// Terminates decoder worker threads and cleans up internal decoding context.
 /// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
-pub unsafe fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
+pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
     WelsFreeDynamicMemory(pCtx);
-    WelsFreeStaticMemory(pCtx);
+    unsafe { WelsFreeStaticMemory(pCtx) };
     (*pCtx).bParamSetsLostFlag = false;
     (*pCtx).bNewSeqBegin = false;
     (*pCtx).bPrintFrameErrorTraceFlag = false;
@@ -2034,12 +2034,12 @@ pub unsafe fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).bFrameFinish = false;
 }
 
-pub unsafe fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
     WelsOpenDecoder(pCtx, std::ptr::null_mut());
     // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
     // caller's argument, exactly as `decoder_core.cpp:763` passes it.
     (*pCtx).access_unit = Some(SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU));
-    if InitBsBuffer(pCtx) != 0 {
+    if unsafe { InitBsBuffer(pCtx) } != 0 {
         (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
@@ -3156,20 +3156,20 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-pub unsafe fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let iRet = UpdateAccessUnit(pCtx);
+pub fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
+    let iRet = unsafe { UpdateAccessUnit(pCtx) };
     if iRet != ERR_NONE {
         return iRet;
     }
     if let Some(au) = cur_au(&mut pCtx.access_unit) {
         au.uiStartPos = 0;
     }
-    if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !CheckIntegrityNalUnitsList(pCtx) {
+    if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !unsafe { CheckIntegrityNalUnitsList(pCtx) } {
         (*pCtx).iErrorCode |= dsBitstreamError;
         { return dsBitstreamError; }
     }
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag {
-        CheckOnlyOneLayerInAu(pCtx);
+        unsafe { CheckOnlyOneLayerInAu(pCtx) };
     }
     ERR_NONE
 }
@@ -3337,7 +3337,7 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     iErr
 }
 
-pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
     // T5.R6: the fallback scan now yields the *id* of the first initialized entry —
     // the same entry its `sps as *mut SSps` named, without the alias.
     let active = if (*pCtx).active_sps.is_some() {
@@ -3367,11 +3367,11 @@ pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
     iErr
 }
 
-pub unsafe fn InitConstructAccessUnit(
+pub fn InitConstructAccessUnit(
     pCtx: &mut SWelsDecoderContext,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
-    let mut iErr = WelsDecodeInitAccessUnitStart(pCtx, pDstInfo);
+    let mut iErr = unsafe { WelsDecodeInitAccessUnitStart(pCtx, pDstInfo) };
     if iErr != ERR_NONE {
         return iErr;
     }
@@ -3384,7 +3384,7 @@ pub unsafe fn InitConstructAccessUnit(
     iErr
 }
 
-pub unsafe fn ConstructAccessUnit(
+pub fn ConstructAccessUnit(
     pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
@@ -3400,8 +3400,8 @@ pub unsafe fn ConstructAccessUnit(
     // field now, zeroed with the context, which is the state that allocation
     // produced on its one execution.
 
-    let iErr = DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo);
-    WelsDecodeAccessUnitEnd(pCtx);
+    let iErr = unsafe { DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo) };
+    unsafe { WelsDecodeAccessUnitEnd(pCtx) };
     iErr
 }
 
@@ -3652,7 +3652,7 @@ pub unsafe fn WelsDqLayerDecodeStart(
     );
 }
 
-pub unsafe fn InitRefPicList(
+pub fn InitRefPicList(
     pCtx: &mut SWelsDecoderContext,
     mut pCurDqLayer: Option<&mut DqLayerState>,
     _kuiNRi: u8,
@@ -3660,7 +3660,7 @@ pub unsafe fn InitRefPicList(
 ) -> i32 {
     let mut iRet = if (*pCtx).eSliceType == B_SLICE {
         let ret = WelsInitBSliceRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc);
-        CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut());
+        unsafe { CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut()) };
         ret
     } else {
         WelsInitRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc)

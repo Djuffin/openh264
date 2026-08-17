@@ -221,7 +221,7 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 /// # Safety
 /// See [`copy_shim`] with `W = 16`, `H = 16`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
+pub extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
     unsafe { copy_shim::<16, 16>(pDst, iDstStride, pSrc, iSrcStride, copy_16x16) }
 }
 
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 8`.
 #[inline]
-pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
+pub extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
     unsafe { copy_shim::<8, 8>(pDst, iDstStride, pSrc, iSrcStride, copy_8x8) }
 }
 
@@ -952,8 +952,8 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, p
 }
 
 /// Fallback DPB reference marking routine.
-pub unsafe extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
-    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
+pub extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut()) }
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.

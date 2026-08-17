@@ -745,7 +745,7 @@ pub fn WelsFillCacheConstrain1IntraNxN(
     }
 }
 
-pub unsafe fn WelsFillCacheInterCabac(
+pub fn WelsFillCacheInterCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -907,7 +907,7 @@ pub unsafe fn WelsFillCacheInterCabac(
 
 /// Matches `WelsFillCacheInter` in `parse_mb_syn_cavlc.cpp` (CAVLC variant,
 /// same as the CABAC variant but without the mvd cache).
-pub unsafe fn WelsFillCacheInter(
+pub fn WelsFillCacheInter(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
@@ -2153,7 +2153,7 @@ fn CHECK_I4_MODE(a: i8, b: i32, c: i32, d: i32) -> bool {
         && (d >= info.iLeftTopAvail as i32)
 }
 
-pub unsafe fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: *mut i8) -> i32 {
+pub fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: *mut i8) -> i32 {
     unsafe {
         let iLeftAvail = (uiSampleAvail & 0x04) as i32;
         let bLeftTopAvail = (uiSampleAvail & 0x02) as i32;
@@ -2214,7 +2214,7 @@ pub fn CheckIntraChromaPredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
     }
 }
 
-pub unsafe fn CheckIntraNxNPredMode(
+pub fn CheckIntraNxNPredMode(
     pSampleAvail: *const i32,
     pMode: *mut i8,
     iIndex: i32,
@@ -2272,7 +2272,7 @@ pub unsafe fn CheckIntraNxNPredMode(
 // Inverse Quantization and Transforms (IDCT)
 // ============================================================================
 
-pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
+pub fn WelsChromaDcIdct(pBlock: *mut i16) {
     unsafe {
         let iStride: isize = 32;
         let iXStride: isize = 16;
@@ -2355,7 +2355,7 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
     }
 }
 
-pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: &mut SliceCtx<'_>) {
+pub fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: &mut SliceCtx<'_>) {
     unsafe {
         let kiQMul: i32 = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
             pCtx.pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
@@ -2468,7 +2468,7 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
     iUsedBits
 }
 
-pub unsafe fn ParseCoeffToken(
+pub fn ParseCoeffToken(
     uiTotalCoeff: &mut u8,
     uiTrailingOnes: &mut u8,
     pBitsCache: &mut SReadBitsCache,
@@ -2476,7 +2476,7 @@ pub unsafe fn ParseCoeffToken(
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
-    CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC)
+    unsafe { CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC) }
 }
 
 pub fn CavlcGetLevelVal(
@@ -2578,14 +2578,14 @@ pub unsafe fn CavlcGetTotalZeros(
     iUsedBits
 }
 
-pub unsafe fn ParseTotalZeros(
+pub fn ParseTotalZeros(
     iZerosLeft: &mut i32,
     pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
 ) -> i32 {
-    CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc)
+    unsafe { CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc) }
 }
 
 pub unsafe fn CavlcGetRunBefore(
@@ -2644,14 +2644,14 @@ pub unsafe fn CavlcGetRunBefore(
     iUsedBits
 }
 
-pub unsafe fn ParseRunBefore(
+pub fn ParseRunBefore(
     iRun: &mut [i32; 16],
     pBitsCache: &mut SReadBitsCache,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     iZerosLeft: i32,
 ) -> i32 {
-    CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft)
+    unsafe { CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft) }
 }
 
 pub unsafe fn WelsResidualBlockCavlc(
@@ -2890,7 +2890,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     ERR_NONE
 }
 
-pub unsafe fn WelsParseMbCavlcResidual(
+pub fn WelsParseMbCavlcResidual(
     pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
@@ -2903,7 +2903,7 @@ pub unsafe fn WelsParseMbCavlcResidual(
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
-    WelsResidualBlockCavlc(
+    unsafe { WelsResidualBlockCavlc(
         pVlcTable,
         pNonZeroCountCache,
         buf,
@@ -2915,7 +2915,7 @@ pub unsafe fn WelsParseMbCavlcResidual(
         pTCoeff,
         uiQp,
         pCtx,
-    )
+    ) }
 }
 
 // ============================================================================
