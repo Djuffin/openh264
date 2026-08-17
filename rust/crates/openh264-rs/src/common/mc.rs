@@ -820,6 +820,262 @@ pub fn mc_chroma(
 }
 
 // ============================================================================
+// The same-picture arm — F42's motion compensation, in one borrow
+// ============================================================================
+//
+// **What this family is for.** A malformed stream can put the picture being decoded
+// into its own reference list (`decoder/pic_queue.rs`, finding F42), and the C++
+// resolves that entry and motion-compensates from the picture it is writing. Every
+// kernel above takes two cursors because the two pictures are two allocations at
+// every *well-formed* call site; here they are one, so there is no second cursor to
+// build and a `(&[u8], &mut [u8])` pair over the one buffer would be an aliasing
+// violation rather than a spelling choice. `decoder/pic_queue.rs`'s
+// `PicRefs::classify` is what tells the two apart, and these are what its
+// `RefSlot::Current` arm runs.
+//
+// **The shape.** One `PlaneCursorMut` anchored at the destination block, plus the
+// source anchor `(sx, sy)` *relative to that same anchor* — legal because one plane
+// has one stride, so a source displaced by a motion vector is a relative offset and
+// nothing else. Reads go through `at`, writes through `set`, and the two interleave
+// exactly as the C++'s `pSrc[j]` / `pDst[j]` do.
+//
+// **Why the ordering is the whole contract.** When the source window overlaps the
+// destination block, motion compensation reads samples it has already written, and
+// *which* ones depends on the loop order. So these reproduce the C++'s order rather
+// than a faster equivalent: raster within each output row for the direct filters, a
+// per-output-row 16-bit intermediate for the centre kernel, and `copy_within` (not a
+// block copy) for the integer-MV path. The composite quarter-pel kernels are the
+// cheap case and are *not* rewritten: they already build their intermediates into
+// 16-stride scratch surfaces, so the source reads all finish before the first
+// destination write, and they reuse the two-cursor kernels above through a shared
+// borrow of this cursor. Only the four kernels that write the destination straight
+// from the source are index-based.
+//
+// **Cold by construction** — malformed input only — so the spelling is chosen for
+// soundness, not speed: `at` per sample where the two-cursor form hoists a row.
+
+/// The six horizontal taps the 6-tap filter reads for output column `x` of row `y`.
+#[inline(always)]
+fn taps_h(p: &PlaneCursorMut<'_>, x: isize, y: isize) -> [u8; 6] {
+    [
+        p.at(x - 2, y),
+        p.at(x - 1, y),
+        p.at(x, y),
+        p.at(x + 1, y),
+        p.at(x + 2, y),
+        p.at(x + 3, y),
+    ]
+}
+
+/// The six vertical taps, for the same output sample.
+#[inline(always)]
+fn taps_v(p: &PlaneCursorMut<'_>, x: isize, y: isize) -> [u8; 6] {
+    [
+        p.at(x, y - 2),
+        p.at(x, y - 1),
+        p.at(x, y),
+        p.at(x, y + 1),
+        p.at(x, y + 2),
+        p.at(x, y + 3),
+    ]
+}
+
+/// [`mc_copy`]'s same-plane form — `McCopy_c` when source and destination are one
+/// allocation. The width narrowing is [`copy_width`]'s, so a caller passing 3 moves
+/// two samples here exactly as it does there.
+#[inline(never)]
+fn same_copy(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
+    let w = copy_width(width);
+    for dy in 0..height as isize {
+        p.copy_row_within(sx, sy + dy, dy, w);
+    }
+}
+
+/// [`mc_hor_ver20`]'s same-plane form.
+#[inline(never)]
+fn same_hor_ver20(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
+    for dy in 0..height as isize {
+        for dx in 0..width as isize {
+            let t = taps_h(p, sx + dx, sy + dy);
+            p.set(dx, dy, WelsClip1((filter_input_8bit(&t) + 16) >> 5));
+        }
+    }
+}
+
+/// [`mc_hor_ver02`]'s same-plane form.
+#[inline(never)]
+fn same_hor_ver02(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
+    for dy in 0..height as isize {
+        for dx in 0..width as isize {
+            let t = taps_v(p, sx + dx, sy + dy);
+            p.set(dx, dy, WelsClip1((filter_input_8bit(&t) + 16) >> 5));
+        }
+    }
+}
+
+/// [`mc_hor_ver22`]'s same-plane form — the `iTmp` row is the C++'s own, refilled
+/// per output row, which is what puts each row's reads before that row's writes and
+/// each row's writes before the *next* row's reads.
+#[inline(never)]
+fn same_hor_ver22(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
+    let mut iTmp = [0i16; 17 + 5];
+    let n = width + 5;
+    for dy in 0..height as isize {
+        for (j, t) in iTmp[..n].iter_mut().enumerate() {
+            let taps = taps_v(p, sx + j as isize - 2, sy + dy);
+            *t = filter_input_8bit(&taps) as i16;
+        }
+        for dx in 0..width {
+            let w: &[i16; 6] = iTmp[dx..][..6].try_into().unwrap();
+            p.set(
+                dx as isize,
+                dy,
+                WelsClip1((hor_filter_input_16bit(w) + 512) >> 10),
+            );
+        }
+    }
+}
+
+/// [`pixel_avg`]'s same-plane form for the quarter-pel kernels whose *first* input
+/// is the source picture itself — `(0,1)`, `(0,3)`, `(1,0)`, `(3,0)`. The other
+/// eight average two scratch surfaces and need nothing from here.
+#[inline(never)]
+fn same_avg_with_src(
+    p: &mut PlaneCursorMut<'_>,
+    sx: isize,
+    sy: isize,
+    b: &[u8; 256],
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        for dx in 0..width as isize {
+            let a = p.at(sx + dx, sy + dy) as u32;
+            let v = ((a + (b[(dy as usize) * 16 + dx as usize] as u32) + 1) >> 1) as u8;
+            p.set(dx, dy, v);
+        }
+    }
+}
+
+/// A read cursor on the source window, for the phases that only read.
+#[inline(always)]
+fn same_src<'p>(p: &'p PlaneCursorMut<'_>, sx: isize, sy: isize) -> PlaneCursor<'p> {
+    p.as_ref().advance(sx, sy)
+}
+
+/// [`mc_luma`]'s same-plane form — the same sixteen arms in the same order.
+///
+/// `(sx, sy)` is the source anchor relative to `p`'s own, in samples.
+pub fn mc_luma_same(
+    p: &mut PlaneCursorMut<'_>,
+    sx: isize,
+    sy: isize,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    // The eight composite arms: both averaged inputs are 16-stride scratch, so the
+    // source reads finish inside `hor`/`ver`/`ctr` and the destination writes come
+    // after — the two-cursor kernels are reused verbatim, through a shared borrow.
+    macro_rules! avg_two {
+        ($fa:ident($dxa:expr, $dya:expr), $fb:ident($dxb:expr, $dyb:expr)) => {{
+            let (mut a, mut b) = (scratch(), scratch());
+            {
+                let src = same_src(p, sx, sy);
+                $fa(
+                    &src.advance($dxa, $dya),
+                    &mut PlaneCursorMut::new(&mut a, 0, 16),
+                    width,
+                    height,
+                );
+                $fb(
+                    &src.advance($dxb, $dyb),
+                    &mut PlaneCursorMut::new(&mut b, 0, 16),
+                    width,
+                    height,
+                );
+            }
+            pixel_avg(
+                p,
+                &PlaneCursor::new(&a, 0, 16),
+                &PlaneCursor::new(&b, 0, 16),
+                width,
+                height,
+            );
+        }};
+    }
+    // The four arms that average the source picture against one scratch surface.
+    macro_rules! avg_src {
+        ($f:ident, $adx:expr, $ady:expr) => {{
+            let mut t = scratch();
+            {
+                let src = same_src(p, sx, sy);
+                $f(&src, &mut PlaneCursorMut::new(&mut t, 0, 16), width, height);
+            }
+            same_avg_with_src(p, sx + $adx, sy + $ady, &t, width, height);
+        }};
+    }
+
+    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
+        (0, 0) => same_copy(p, sx, sy, width, height),
+        (0, 1) => avg_src!(mc_hor_ver02, 0, 0),
+        (0, 2) => same_hor_ver02(p, sx, sy, width, height),
+        (0, 3) => avg_src!(mc_hor_ver02, 0, 1),
+        (1, 0) => avg_src!(mc_hor_ver20, 0, 0),
+        (1, 1) => avg_two!(mc_hor_ver20(0, 0), mc_hor_ver02(0, 0)),
+        (1, 2) => avg_two!(mc_hor_ver02(0, 0), mc_hor_ver22(0, 0)),
+        (1, 3) => avg_two!(mc_hor_ver20(0, 1), mc_hor_ver02(0, 0)),
+        (2, 0) => same_hor_ver20(p, sx, sy, width, height),
+        (2, 1) => avg_two!(mc_hor_ver20(0, 0), mc_hor_ver22(0, 0)),
+        (2, 2) => same_hor_ver22(p, sx, sy, width, height),
+        (2, 3) => avg_two!(mc_hor_ver20(0, 1), mc_hor_ver22(0, 0)),
+        (3, 0) => avg_src!(mc_hor_ver20, 1, 0),
+        (3, 1) => avg_two!(mc_hor_ver20(0, 0), mc_hor_ver02(1, 0)),
+        (3, 2) => avg_two!(mc_hor_ver02(1, 0), mc_hor_ver22(0, 0)),
+        _ => avg_two!(mc_hor_ver20(0, 1), mc_hor_ver02(1, 0)),
+    }
+}
+
+/// [`mc_chroma`]'s same-plane form.
+pub fn mc_chroma_same(
+    p: &mut PlaneCursorMut<'_>,
+    sx: isize,
+    sy: isize,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    if (mv_x & 0x07) == 0 && (mv_y & 0x07) == 0 {
+        same_copy(p, sx, sy, width, height);
+        return;
+    }
+    if width == 0 {
+        return;
+    }
+    let pABCD = &g_kuiABCD[(mv_y & 0x07) as usize][(mv_x & 0x07) as usize];
+    let (iA, iB, iC, iD) = (
+        pABCD[0] as i32,
+        pABCD[1] as i32,
+        pABCD[2] as i32,
+        pABCD[3] as i32,
+    );
+    for dy in 0..height as isize {
+        for dx in 0..width as isize {
+            let (x, y) = (sx + dx, sy + dy);
+            let v = ((iA * (p.at(x, y) as i32)
+                + iB * (p.at(x + 1, y) as i32)
+                + iC * (p.at(x, y + 1) as i32)
+                + iD * (p.at(x + 1, y + 1) as i32)
+                + 32)
+                >> 6) as u8;
+            p.set(dx, dy, v);
+        }
+    }
+}
+
+// ============================================================================
 // Strangler shims (plan §4 R7) — the raw-pointer entry points `SMcFunc` still
 // holds. Each builds the cursor pair its kernel needs and calls the safe
 // implementation above.
@@ -1976,6 +2232,186 @@ pub unsafe extern "C" fn InitMcFunc(pMcFuncs: *mut SMcFunc, _uiCpuFlag: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deterministic plane: one buffer, `STRIDE` bytes per row, `ROWS` rows.
+    #[cfg(test)]
+    const STRIDE: usize = 64;
+    #[cfg(test)]
+    const ROWS: usize = 64;
+
+    #[cfg(test)]
+    fn filled_plane() -> Vec<u8> {
+        // A cheap deterministic fill with no run-length structure, so a kernel that
+        // reads the wrong tap cannot accidentally agree.
+        let mut v = vec![0u8; STRIDE * ROWS];
+        let mut s: u32 = 0x1234_5678;
+        for b in v.iter_mut() {
+            s = s.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            *b = (s >> 16) as u8;
+        }
+        v
+    }
+
+    /// The block shapes `BaseMC` actually dispatches, luma and chroma.
+    #[cfg(test)]
+    const LUMA_SHAPES: [(usize, usize); 7] =
+        [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)];
+
+    /// **The same-picture arm equals the two-cursor arm wherever both are defined.**
+    ///
+    /// F42's kernels exist because a source that *is* the destination cannot be
+    /// spelled as a cursor pair; that makes the two forms incomparable exactly on the
+    /// overlapping case and comparable everywhere else. This drives every one of the
+    /// sixteen quarter-pel arms at every block shape with the two windows disjoint
+    /// inside one buffer, and requires the whole buffer — not just the block — to come
+    /// out equal, so a kernel writing outside its block is caught too.
+    #[test]
+    fn same_picture_luma_matches_the_two_cursor_kernels_when_the_windows_are_disjoint() {
+        let base = filled_plane();
+        // Source at (8, 8), destination at (8, 40): the filter reaches y in 5..27 and
+        // the block writes y in 40..56, so nothing overlaps.
+        let (src_c, dst_c) = (8 * STRIDE + 8, 40 * STRIDE + 8);
+        for (width, height) in LUMA_SHAPES {
+            for mv_x in 0..4i16 {
+                for mv_y in 0..4i16 {
+                    let mut one = base.clone();
+                    mc_luma_same(
+                        &mut PlaneCursorMut::new(&mut one, dst_c, STRIDE),
+                        0,
+                        -32,
+                        mv_x,
+                        mv_y,
+                        width,
+                        height,
+                    );
+
+                    let src = base.clone();
+                    let mut two = base.clone();
+                    mc_luma(
+                        &PlaneCursor::new(&src, src_c, STRIDE),
+                        &mut PlaneCursorMut::new(&mut two, dst_c, STRIDE),
+                        mv_x,
+                        mv_y,
+                        width,
+                        height,
+                    );
+
+                    assert_eq!(one, two, "luma ({mv_x}, {mv_y}) at {width}x{height}");
+                }
+            }
+        }
+    }
+
+    /// [`mc_chroma_same`] against [`mc_chroma`], over all sixty-four eighth-pel
+    /// fractions — the copy arm included, because `(0, 0)` is the one that reaches
+    /// [`same_copy`].
+    #[test]
+    fn same_picture_chroma_matches_the_two_cursor_kernel_when_the_windows_are_disjoint() {
+        let base = filled_plane();
+        let (src_c, dst_c) = (8 * STRIDE + 8, 40 * STRIDE + 8);
+        for (width, height) in [(8usize, 8usize), (8, 4), (4, 8), (4, 4), (4, 2), (2, 4), (2, 2)] {
+            for mv_x in 0..8i16 {
+                for mv_y in 0..8i16 {
+                    let mut one = base.clone();
+                    mc_chroma_same(
+                        &mut PlaneCursorMut::new(&mut one, dst_c, STRIDE),
+                        0,
+                        -32,
+                        mv_x,
+                        mv_y,
+                        width,
+                        height,
+                    );
+
+                    let src = base.clone();
+                    let mut two = base.clone();
+                    mc_chroma(
+                        &PlaneCursor::new(&src, src_c, STRIDE),
+                        &mut PlaneCursorMut::new(&mut two, dst_c, STRIDE),
+                        mv_x,
+                        mv_y,
+                        width,
+                        height,
+                    );
+
+                    assert_eq!(one, two, "chroma ({mv_x}, {mv_y}) at {width}x{height}");
+                }
+            }
+        }
+    }
+
+    /// **The overlapping case, where the two forms are not comparable and the C++'s
+    /// loop order is the whole specification.**
+    ///
+    /// The reference here is a transliteration of `McHorVer20_c` over one buffer —
+    /// raster order, each output sample written before the next one's taps are read —
+    /// so what this pins is the property the two-cursor kernel cannot state: that
+    /// `same_hor_ver20` reads a sample it has already written exactly when the C++
+    /// does. The geometry puts the destination two rows below the source, inside the
+    /// filter's own vertical reach.
+    #[test]
+    fn the_overlapping_arm_reproduces_the_c_loop_order() {
+        let base = filled_plane();
+        let dst_c = 10 * STRIDE + 8;
+        let (width, height) = (16usize, 16usize);
+        // Source one row above the destination: rows 9..25 read, rows 10..26 written.
+        let (sx, sy) = (0isize, -1isize);
+
+        let mut got = base.clone();
+        same_hor_ver20(
+            &mut PlaneCursorMut::new(&mut got, dst_c, STRIDE),
+            sx,
+            sy,
+            width,
+            height,
+        );
+
+        let mut want = base.clone();
+        for i in 0..height as isize {
+            for j in 0..width as isize {
+                let s = (dst_c as isize + (sy + i) * STRIDE as isize + sx + j) as usize;
+                let taps: [u8; 6] = [
+                    want[s - 2],
+                    want[s - 1],
+                    want[s],
+                    want[s + 1],
+                    want[s + 2],
+                    want[s + 3],
+                ];
+                let d = (dst_c as isize + i * STRIDE as isize + j) as usize;
+                want[d] = WelsClip1((filter_input_8bit(&taps) + 16) >> 5);
+            }
+        }
+        assert_eq!(got, want);
+        assert_ne!(got, base, "the geometry has to actually write something");
+    }
+
+    /// [`PlaneCursorMut::copy_row_within`] is memmove, not memcpy: the integer-MV arm
+    /// of a self-referencing macroblock copies a row onto itself displaced by a few
+    /// samples, and the C++'s `LD64`/`ST64` pairs make that overlap defined by
+    /// accident where a Rust block copy would make it UB.
+    #[test]
+    fn the_copy_arm_is_defined_when_the_row_overlaps_itself() {
+        let mut buf = vec![0u8; STRIDE * 4];
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        let want: Vec<u8> = {
+            let mut w = buf.clone();
+            let (s, d) = (STRIDE + 8 + 3, STRIDE + 8);
+            let row: Vec<u8> = w[s..s + 16].to_vec();
+            w[d..d + 16].copy_from_slice(&row);
+            w
+        };
+        same_copy(
+            &mut PlaneCursorMut::new(&mut buf, STRIDE + 8, STRIDE),
+            3,
+            0,
+            16,
+            1,
+        );
+        assert_eq!(buf, want);
+    }
 
     /// Plan §5's de-virtualization mitigation, half one: `InitMcFunc` is a
     /// **constant function of its CPU-flag argument**.

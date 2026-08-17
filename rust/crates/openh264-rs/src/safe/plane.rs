@@ -438,6 +438,31 @@ impl<'a> PlaneCursorMut<'a> {
         &mut self.buf[start..][..len]
     }
 
+    /// `len` samples of relative row `sy` starting at relative column `sx0`, copied
+    /// onto relative row `dy` starting at column `0` — **within this one plane**.
+    ///
+    /// This is the F42 copy: a reference list entry naming the picture being decoded
+    /// makes motion compensation read and write one allocation, so there is no second
+    /// cursor to hand [`row`](Self::row) and [`row_mut`](Self::row_mut) at once. Both
+    /// windows are indices into the same slice and `copy_within` is what a single
+    /// `&mut` can express — memmove semantics, so an overlapping window is *defined*
+    /// rather than the `memcpy` the two-cursor form would have been.
+    ///
+    /// # Panics
+    /// If either window leaves the buffer, at the slice index — same contract as
+    /// [`row`](Self::row).
+    #[inline]
+    pub fn copy_row_within(&mut self, sx0: isize, sy: isize, dy: isize, len: usize) {
+        let src = idx(self.center, sx0, sy, self.stride);
+        let dst = idx(self.center, 0, dy, self.stride);
+        // Both ends are checked before anything moves: `copy_within` panics on an
+        // out-of-range source range or destination start, and the explicit index of
+        // the destination end is what makes the message name this plane rather than
+        // the slice primitive.
+        let _ = &self.buf[dst..][..len];
+        self.buf.copy_within(src..src + len, dst);
+    }
+
     /// The same view rebased by `(dx, dy)`, consuming it — the `pDstY.add(16)` of
     /// the MB walk.
     ///
