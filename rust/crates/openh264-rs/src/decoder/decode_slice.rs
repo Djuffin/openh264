@@ -1462,7 +1462,7 @@ pub unsafe fn GetInterPred(
             }
             BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bWeight {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 16);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 16);
             }
         }
         MB_TYPE_16x8 => {
@@ -1474,7 +1474,7 @@ pub unsafe fn GetInterPred(
             }
             BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 8, iMVs);
             if bWeight {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
             }
 
             let iMVs = mv_mb[8];
@@ -1488,7 +1488,7 @@ pub unsafe fn GetInterPred(
             pMCRefMem.pDstV = pPredCr.offset((iDstLineChroma << 2) as isize);
             BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY + 8, 16, 8, iMVs);
             if bWeight {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
             }
         }
         MB_TYPE_8x16 => {
@@ -1500,7 +1500,7 @@ pub unsafe fn GetInterPred(
             }
             BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 8, 16, iMVs);
             if bWeight {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
             }
 
             let iMVs = mv_mb[2];
@@ -1514,7 +1514,7 @@ pub unsafe fn GetInterPred(
             pMCRefMem.pDstV = pPredCr.offset(4);
             BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX + 8, iMBOffsetY, 8, 16, iMVs);
             if bWeight {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
             }
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
@@ -1547,14 +1547,14 @@ pub unsafe fn GetInterPred(
                         let iMVs = mv_mb[iIIdx];
                         BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
                         if bWeight {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 8);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 8);
                         }
                     }
                     SUB_MB_TYPE_8x4 => {
                         let iMVs = mv_mb[iIIdx];
                         BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
                         if bWeight {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
                         }
 
                         let iMVs = mv_mb[iIIdx + 4];
@@ -1563,14 +1563,14 @@ pub unsafe fn GetInterPred(
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
                         BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
                         if bWeight {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
                         }
                     }
                     SUB_MB_TYPE_4x8 => {
                         let iMVs = mv_mb[iIIdx];
                         BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
                         if bWeight {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
                         }
 
                         let iMVs = mv_mb[iIIdx + 1];
@@ -1579,7 +1579,7 @@ pub unsafe fn GetInterPred(
                         pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
                         BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
                         if bWeight {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
                         }
                     }
                     SUB_MB_TYPE_4x4 => {
@@ -1606,7 +1606,7 @@ pub unsafe fn GetInterPred(
                                 iMVs,
                             );
                             if bWeight {
-                                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 4);
+                                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 4);
                             }
                         }
                     }
@@ -1690,7 +1690,7 @@ pub unsafe fn GetInterBPred(
             }
             BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bUseWeightedBiPredIdc {
-                BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 16);
+                BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 16);
             } else {
                 BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 16, 16);
             }
@@ -1704,7 +1704,7 @@ pub unsafe fn GetInterBPred(
             }
             BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bWeightedBipredIdcIs1 {
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 16, 16);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 16, 16);
             }
         }
     } else if IS_INTER_16x8(iMBType) {
@@ -1744,7 +1744,7 @@ pub unsafe fn GetInterBPred(
                         if bUseWeightedBiPredIdc {
                             iRefIndex0 = pRef(LIST_0, iPartIdx);
                             iRefIndex1 = pRef(LIST_1, iPartIdx);
-                            BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 8);
+                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 8);
                         } else {
                             BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 16, 8);
                         }
@@ -1753,7 +1753,7 @@ pub unsafe fn GetInterBPred(
             }
             if listCount == 1 && bWeightedBipredIdcIs1 {
                 iRefIndex = pRef(lastListIdx, iPartIdx);
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 16, 8);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 16, 8);
             }
         }
     } else if IS_INTER_8x16(iMBType) {
@@ -1792,7 +1792,7 @@ pub unsafe fn GetInterBPred(
                         if bUseWeightedBiPredIdc {
                             iRefIndex0 = pRef(LIST_0, i << 1);
                             iRefIndex1 = pRef(LIST_1, i << 1);
-                            BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 16);
+                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 16);
                         } else {
                             BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 16);
                         }
@@ -1801,7 +1801,7 @@ pub unsafe fn GetInterBPred(
             }
             if listCount == 1 && bWeightedBipredIdcIs1 {
                 iRefIndex = pRef(lastListIdx, i << 1);
-                WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 8, 16);
+                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 8, 16);
             }
         }
     } else if IS_Inter_8x8(iMBType) {
@@ -1861,7 +1861,7 @@ pub unsafe fn GetInterBPred(
                     BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 8);
+                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 8);
                     } else {
                         BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 8);
                     }
@@ -1871,7 +1871,7 @@ pub unsafe fn GetInterBPred(
                     iRefIndex = pRef(listIdx, iIIdx);
                     BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 8);
+                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 8);
                     }
                 }
             } else if IS_SUB_8x4(iSubMBType) {
@@ -1883,7 +1883,7 @@ pub unsafe fn GetInterBPred(
                     BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 4, iMVs);
 
                     if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
+                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
                     } else {
                         BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 4);
                     }
@@ -1901,7 +1901,7 @@ pub unsafe fn GetInterBPred(
                     BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset + 4, 8, 4, iMVs);
 
                     if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
+                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
                     } else {
                         BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 4);
                     }
@@ -1917,7 +1917,7 @@ pub unsafe fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx + 4);
                     BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 4);
+                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 4);
                     }
                 }
             } else if IS_SUB_4x8(iSubMBType) {
@@ -1929,7 +1929,7 @@ pub unsafe fn GetInterBPred(
                     BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 4, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
+                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
                     } else {
                         BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 8);
                     }
@@ -1947,7 +1947,7 @@ pub unsafe fn GetInterBPred(
                     BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + 4, iYOffset, 4, 8, iMVs);
 
                     if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
+                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
                     } else {
                         BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 8);
                     }
@@ -1963,7 +1963,7 @@ pub unsafe fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx + 1);
                     BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 8);
+                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 8);
                     }
                 }
             } else if IS_SUB_4x4(iSubMBType) {
@@ -1993,7 +1993,7 @@ pub unsafe fn GetInterBPred(
                         BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
 
                         if bUseWeightedBiPredIdc {
-                            BiWeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 4);
+                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 4);
                         } else {
                             BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 4);
                         }
@@ -2015,7 +2015,7 @@ pub unsafe fn GetInterBPred(
                         iMVs = pMv(listIdx, iIIdx + iJIdx);
                         BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
                         if bWeightedBipredIdcIs1 {
-                            WeightPrediction((*pCurDqLayer).pPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 4);
+                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 4);
                         }
                     }
                 }
@@ -2576,7 +2576,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDq
         return ERR_NONE;
     }
 
-    if crate::decoder::decoder_context::parse_only(pCtx) {
+    if crate::decoder::decoder_context::parse_only(&pCtx.pParam) {
         return ERR_NONE;
     }
 

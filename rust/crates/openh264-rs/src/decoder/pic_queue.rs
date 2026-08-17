@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn test_alloc_picture_parse_only_carries_strides_and_no_bytes() {
         let mut ma = CMemoryAlign::new(32);
-        // T5.W3: the fixture context stays, because `parse_only(pCtx)` is what a
+        // T5.W3: the fixture context stays, because `parse_only(&pCtx.pParam)` is what a
         // production caller passes and this asserts the two agree — the mechanical
         // pass through this file set the argument to `false` here and the test caught
         // it, which is the whole reason the flag is read back rather than written in.
@@ -1058,10 +1058,10 @@ mod tests {
         unsafe {
             let pCtx = &mut *ctx;
             assert!(
-                crate::decoder::decoder_context::parse_only(pCtx),
+                crate::decoder::decoder_context::parse_only(&pCtx.pParam),
                 "the accessor reads the field the callee used to reach for itself"
             );
-            let mut pic = alloc_picture(parse_only(pCtx), 160, 120)
+            let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
                 .expect("the picture allocates");
             let p_pic: PPicture = &mut *pic;
             assert_eq!((*p_pic).linesize(0), 224);

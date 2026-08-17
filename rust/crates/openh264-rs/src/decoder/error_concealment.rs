@@ -189,6 +189,7 @@ impl Default for TagMCRefMember {
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
 pub use crate::decoder::decoder_context::pic_and_refs_mut;
+use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
 pub use crate::decoder::pic_queue::RefSlot;
 pub use crate::decoder::picture::{same_picture, pic_slot};
 pub use crate::safe::plane::PaddedPlane;
@@ -293,11 +294,10 @@ pub extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, i
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
 pub unsafe extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
-    if (*pCtx).pParam.is_null() {
+    // T5.AC4: the early return is `None` and the read is the `Some` arm.
+    let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
         return;
-    }
-
-    let ec_mode = (*(*pCtx).pParam).eEcActiveIdc;
+    };
     if ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR
@@ -356,7 +356,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCu
     // under owned slots the second would have invalidated the first before the guard
     // ever ran. `PicRefs::get` answers for the current slot from the mutable half's
     // own pointer (F42), so one tag covers both.
-    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let prev = prev_dpb_id(&pCtx.pLastDecPicInfo);
     let (pDstPic, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, pCtx.pDec);
     let Some(pDstPic) = pDstPic else {
         return;
@@ -374,8 +374,8 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCu
     let iStrideUV = pDstPic.linesize(1);
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
-    if !(*pCtx).pParam.is_null() && pCurDqLayer.is_some() {
-        if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
+    if api_alias(&(*pCtx).pParam).is_some() && pCurDqLayer.is_some() {
+        if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
             && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
         {
             pSrcPic = RefSlot::Empty;
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
         return;
     };
     // The concealment bracket — see `DoErrorConFrameCopy`.
-    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let prev = prev_dpb_id(&pCtx.pLastDecPicInfo);
     let (pDstPic, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, pCtx.pDec);
     let Some(pDstPic) = pDstPic else {
         return;
@@ -444,8 +444,8 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
     // picture once the source arrives as an `&SPicture` out of the rest.
     let mut pSrcPic = pRefs.classify(prev);
 
-    if !(*pCtx).pParam.is_null() {
-        if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
+    if api_alias(&(*pCtx).pParam).is_some() {
+        if ec_active_idc(&(*pCtx).pParam) == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
             && (*pCurDqLayer).sLayerInfo.sNalHeaderExt.bIdrFlag
         {
             pSrcPic = RefSlot::Empty;
@@ -895,7 +895,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, p
     // The concealment bracket — see `DoErrorConFrameCopy`. The EC reference's POC is
     // read *inside* it and travels as a value, because `DoMbECMvCopy` below takes the
     // context and the view cannot travel beside it (T5.Z4).
-    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let prev = prev_dpb_id(&pCtx.pLastDecPicInfo);
     let ec_ref = pCtx.pECRefPic[0];
     let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
     let pSrcPic = pRefs.get(prev);
@@ -953,7 +953,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, p
 
 /// Fallback DPB reference marking routine.
 pub extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut()) }
+    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None) }
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
@@ -979,11 +979,10 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDq
 
 /// Top-level error concealment dispatcher.
 pub unsafe extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
-    if (*pCtx).pParam.is_null() {
+    // T5.AC4: the early return is `None` and the read is the `Some` arm.
+    let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
         return;
-    }
-
-    let ec_mode = (*(*pCtx).pParam).eEcActiveIdc;
+    };
 
     if ec_mode == ERROR_CON_IDC::ERROR_CON_DISABLE {
         (*pCtx).iErrorCode |= dsBitstreamError;

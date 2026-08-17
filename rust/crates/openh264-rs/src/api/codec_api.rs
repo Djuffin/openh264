@@ -1641,7 +1641,7 @@ unsafe fn BufferingReadyPicture(
             // The thread count is read before the pool borrow opens: the picture
             // is `pPicBuff`'s and `GetThreadCount` takes the context (T5.Z1).
             let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&mut *pCtx) <= 1;
-            let prev_id = crate::decoder::decoder_context::prev_dpb_id((*pCtx).pLastDecPicInfo);
+            let prev_id = crate::decoder::decoder_context::prev_dpb_id(&(*pCtx).pLastDecPicInfo);
             if let Some(prev) =
                 crate::decoder::decoder_context::prev_dpb_pic_mut(&mut (*pCtx).pPicBuff, prev_id)
             {
@@ -1692,7 +1692,10 @@ unsafe fn EmitBufferedPicture(
             (*pPic).iRefCount -= 1;
             if (*pPic).iRefCount <= 0 {
                 if let Some(set_unref) = (*pPic).pSetUnRef {
-                    set_unref(pPic);
+                    // T5.AC1: the callback takes `&mut SPicture`, so the null test
+                    // above is what licenses the borrow — one derivation, for the
+                    // length of the call, out of the pointer this boundary holds.
+                    set_unref(&mut *pPic);
                 }
             }
         }
