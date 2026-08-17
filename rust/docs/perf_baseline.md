@@ -2140,3 +2140,50 @@ pass). D-perf-4's +25% *median* tripwire is not breached. **No day two is owed**
 S2b's clause attaches to readings a decision rests on, and this one changes no
 disposition. Both binaries stay stashed (`.perfpair/y_base` = `3e2f43e6`,
 `.perfpair/y_head` = `dff3f78b`) so a later session can chain the span for free.
+
+### Sessions Z and AA's combined span — the debt Z named, paid, and it reads *faster*
+
+`dff3f78b` (session Y's close) → `2de8703f` (session AA's close): **nine commits**,
+covering **both** sessions, because session Z's five went unmeasured and its own
+report named the debt. Decode and encode benches, machine otherwise idle, S1/S2
+protocol through `perfpair.py`, and the null re-run at the verdict's own pair count
+(session K's clause).
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `dff3f78b` → `2de8703f` | **7** | **−1.31%** | −0.28% | −0.35% | **−0.35%** | **−0.28%** |
+| 7-pair null (`aa_head` both slots) | **7** | −0.26% | +0.14% | −0.06% | **−0.06%** | **+0.00%** |
+
+Null bands at 7 pairs: decode **−0.26% … +0.14%** (0.40 points wide), encode
+**−0.77% … +1.47%** (2.24 points).
+
+**Encode is inside its floor** — median −0.28% against a band straddling zero, 28
+rows, none over +5%. **Decode's median lands just outside its band, on the fast
+side**, and CB is 1.31% faster against a 0.40-point floor. S2b's first move for a
+median outside the band is more pairs rather than a diagnosis, and it is **not taken
+here**, deliberately: the reading is an *improvement*, no disposition rests on it
+(D-perf-6 has already sent recovery to the Phase 9 pass and nothing is attributed),
+and the same session's two nulls disagree about the encode band's width by a factor
+of two (−2.90…+1.49% earlier, −0.77…+1.47% here) — a band is a sample like anything
+else, which is the clause session K added.
+
+So: **nine commits of borrow conversion cost nothing and may have returned a little.**
+That is the same answer sessions V, X and Y got for their own spans, at a span four
+times the size — which is the useful part. What these nine commits did was delete
+aliases: the context flip (Z), the accessors returning borrows (Z), 68 vestigial
+`unsafe fn` (Z), the layer bracket (AA1), the deblocking plane cursors (AA2), the
+DPB handles (AA4). None of that adds work per macroblock, and one part of it removes
+work — `deblocking.rs`'s edge filters no longer rebuild a slice from a pointer per
+edge (`shim_span` + `from_raw_parts_mut`, twelve call sites per macroblock), which is
+the only mechanism on the table that could explain a decode improvement and is
+**named as a candidate, not as the explanation** (S2b).
+
+**Cumulative CB ≈ +23.7…+24.3%** (1.253 × 0.9869 and 1.259 × 0.9869, from
+≈+25.3…+25.9% at Y's close) — **the first time the phase's cumulative figure has
+moved down**. The ≈+23% stop-line is **still breached**, by ≈0.7…1.3 points rather
+than ≈2.3…2.9, and the disposition does not change with it: D-perf-6 sent recovery
+to the Phase 9 pass and this is not recovery work, it is a side effect of deleting
+aliases. D-perf-4's +25% median tripwire remains unbreached. **No day two is
+owed**: the clause attaches to readings a decision rests on, and this one changes no
+disposition. Both binaries stay stashed (`.perfpair/y_head` = `dff3f78b`,
+`.perfpair/aa_head` = `2de8703f`).

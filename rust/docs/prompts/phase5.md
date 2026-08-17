@@ -150,11 +150,26 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
-**AA** = **the close** ([`phase5_session_aa.md`](phase5_session_aa.md)), under the
-finish rule: the residue families (the layer bracket first — `slice_split`'s
-maneuver one container over), the decided `common/` boundary executed, W7's
-closure, the combined Y-close→AA span (Z's five commits went unmeasured), and
-**the phase close** — phase6.md, briefs historical, this checklist shut.
+**AA** = **spent** (4 commits, `00a281bb`…`2de8703f`;
+[`phase5_session_aa.md`](phase5_session_aa.md)) — **and it did not close the
+phase**. Decoder `raw_ptr` **310 → 278**, `unsafe fn` **230 → 204**, deny-clean
+**11 → 12 of 22**, `SHIM(` **6 → 3**, and the `exit` battery reads **13/0/1 —
+the phase's first fully clean one** (Y and Z each closed at 12/1/1 on an F3 hit).
+The layer bracket landed and `PDqLayer` is deleted: the two brackets that derived
+it now **move** the layer out of the context for the loop, which is `slice_split`'s
+maneuver in its other shape. The decided `common/` boundary landed at
+`deblocking.rs` — **0 `unsafe fn`, lint on, one exception named**; the eight edge
+filters take plane cursors and call `common/`'s safe kernels, and the decoder's raw
+entry points into `common/deblocking_common` read 0. W7's straggler sweep took
+`SHIM(` to 3 (real remainder **0**: one prose tombstone and `data_ptr` with its
+shared form) and deleted `mb_grid_ptr`; the DPB lists take handles.
+**The session's finding is a size the metric could not show**: `PDqLayer` was 16
+signatures, and the largest family left is **`PPicture` at 78** — invisible to
+`raw_ptr`, which counts spellings, not aliases (S16). **41 of the remaining 64 are
+unblocked**; the other 23 need a decision only Eugene or the steward can make,
+because there the raw pointer is load-bearing (F42) rather than vestigial. The next
+brief is a Phase 5 one ([`phase5_session_ab.md`](phase5_session_ab.md)) and it opens
+with that decision; `phase6.md` stays unwritten for the seventh session running.
 **Z** = **spent** (5 commits, `92add69d`…`2a0e0330`;
 [`phase5_session_z.md`](phase5_session_z.md)) — **faces 0, 1 and 2 landed whole,
 and the phase did not close**. Decoder `raw_ptr` **383 → 310**, decoder
@@ -660,19 +675,61 @@ genuinely raw: the layer bracket (`PDqLayer`), the parse tree's `PNalUnit` /
 [`phase5_session_aa.md`](phase5_session_aa.md) §1.
 
 
+## `PPicture` — the family the metric cannot see (session AA, at `2de8703f`)
+
+**Measured, because the brief's largest family was not the largest.** `PDqLayer`
+read 16 signatures and converted in one seam (T5.AA1); `PPicture` read **78
+signatures over 10 modules** at the face, and **64 at the session's close** after
+`deblocking.rs`'s eleven and `manage_dec_ref`'s three converted. No brief has named it because
+`raw_ptr` counts `*mut `/`*const ` *spellings* and `PPicture` is a `type` alias — the
+whole family reads **1** in the instrument, at the line that declares it. S16's
+prose-floor clause arriving from the other side: a metric can have a *hidden* floor
+as well as a visible one, and this one has hidden the phase's largest remaining
+conversion for six sessions.
+
+**Two halves, and only one is blocked.**
+
+*41 of the remaining 64 do not carry `PicRefs` beside the picture* and convert the
+way `deblocking.rs`'s eleven did at T5.AA2 — `decoder_context::pic_split` is the
+bracket, `(Option<&mut SPicture>, SliceCtx)`, sound wherever the scope resolves no
+reference pictures. Per module: `decode_slice` 18, `mv_pred` 12,
+`parse_mb_syn_cabac` 6, `parse_mb_syn_cavlc` 3, `manage_dec_ref` 2.
+
+*23 carry both, and there the raw pointer is load-bearing.*
+`PicPool::cur_and_rest` hands the current picture as `*mut SPicture` and the rest as
+`PicRefs`; `PicRefs::get` answers the **current** slot from `cur_ptr`, a pointer
+sharing the mutable half's tag, because a malformed stream can legally put the
+picture being decoded into a reference list and the C++ resolves it and reads on
+(**F42**; `PoolRest::get` panics on that slot). Sharing a tag is what makes the
+aliasing sound. As a borrow, every function-entry retag on the picture pops
+`cur_ptr` and the next read through the F42 arm is UB — session Y's verdict, one
+container over, with the pointer this time *earning* its place. `mv_pred`'s
+strip-and-build prices it: **470 errors, every one a dereference of `pDec`.**
+
+**The three ways out, none of which a session may pick** (`phase5_session_ab.md`
+§0): retire the F42 arm — a behaviour change on malformed input, which S6's
+never-widen default forbids; give the planes interior mutability — a design change
+that reaches the encoder's picture type; or make `PPicture` the phase's **second
+enumerated survivor** with a Phase pointer, which exit condition 2 already admits in
+shape and exit condition 1 would have to name the way it names `data_ptr`.
+
 ## Phase exit conditions (the definition of done)
 
-**Status at session Z's close** (`2a0e0330`): **1 unmet** (decoder `raw_ptr`
-**310**, 383 at Z's open); **2 unmet** (11 of 22 modules deny-clean — unmoved, and
-the sweep that moves it is `phase5_session_aa.md` §1, now sized against a decoder
-`unsafe fn` count of **230** rather than 326); **3 unmet** (`SHIM(` 6 against a
-survivor list of 1 — 2 are prose and 2 are `decoder_core`'s `expand_picture`
-bridges, so the real remainder is 2); **4 met** (`exit` battery 12/1/1 — tests
-481/475/20, census 59, ratchet clean, both benches bit-identical, debug sweep
-341/341, Miri `--lib` 336/0 plus 20/7/3; the one failure is a single F3 hit,
-acquitted at step 1, measurement 56); **5 met and closed** (D-perf-6); **6 unmet**
-and deliberately so — `phase6.md` is written at the exit, and the phase has not
-exited.
+**Status at session AA's close** (`2de8703f`): **1 unmet** (decoder `raw_ptr`
+**278**, 310 at AA's open — and the number *understates* what is left, because
+`PPicture`'s 78 signatures are invisible to it; §"`PPicture`" above); **2 unmet**
+(**12 of 22** modules deny-clean — `deblocking.rs` added at T5.AA2 with one
+exception named, and the next module is blocked on the same decision); **3 unmet in
+the metric, met in substance** (`SHIM(` **3** against a survivor list of 1 — one is
+a prose tombstone and the other two are `SPicture::data_ptr` and its shared form
+`data_ptr_ref`, which is the named survivor and the decoder's output contract, so
+the real remainder is **0**; the list should be restated as the accessor's two
+forms); **4 met** (`exit` battery at `ed05d699` **13 passed / 0 failed / 1
+skipped — the phase's first fully clean one**: tests 474/468/20, census 59, ratchet
+clean, both benches bit-identical, **both sweeps 341/341**, Miri `--lib` 329/0 plus
+20/7/3. T5.AA4 landed after it with its own commit gates and Miri 3/3); **5 met and
+closed** (D-perf-6); **6 unmet** and deliberately so — `phase6.md` is written at the
+exit, and the phase has not exited.
 
 1. Decoder `raw_ptr` ≈ 0: every occurrence in `src/decoder/` is on the survivor
    list (the output-contract consumer) or is prose.

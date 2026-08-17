@@ -10248,3 +10248,220 @@ change (F54).
 `phase6.md` stays unwritten for the sixth session running, because exit conditions
 1–3 are unmet — and the reason is now a shrinking list of named families rather
 than a structural blocker.
+
+## Phase 5, session AA — the layer bracket, the `common/` boundary, and the family the metric cannot see
+
+**Scope**: `prompts/phase5_session_aa.md` under **the finish rule**. Four commits,
+`00a281bb`…`2de8703f`. Decoder `raw_ptr` **310 → 278**, decoder `unsafe fn`
+**230 → 204**, deny-clean **11 → 12 of 22**, `SHIM(` **6 → 3**. The `exit` battery
+reads **13 passed / 0 failed / 1 skipped — the phase's first fully clean one**
+(sessions Y and Z each closed at 12/1/1 on an F3 hit). **The phase did not close**,
+and the reason is a measurement rather than a schedule: §"`PPicture`, and why it is
+a decision".
+
+### S24 at the face — the brief's largest family was not the largest
+
+The brief's §1 named `PDqLayer` "the largest single family left". Measured at the
+face it is **16 signatures and one alias definition**, and it converted whole in one
+seam. The largest is **`PPicture`** — 111 mentions over 11 modules, **78 signatures**
+at the face and **64 at this session's close** — and the reason no brief has said so
+is S16 pointed at a `type` instead of at
+cached prose: `raw_ptr` counts `*mut `/`*const ` **spellings**, and `PPicture` is an
+alias. The whole family reads **1** in the instrument, at the line that declares it.
+S16's prose-floor clause arriving from the other side: a metric can have a *hidden*
+floor as well as a visible one.
+
+Two of the brief's per-module `unsafe fn` figures were also short (`decoder_core`
+59 → **62**, `parse_mb_syn_cavlc` 14 → **18**); the eleven modules sum to the
+session-open total of 230 only with the re-grepped ones.
+
+### Face 0 — the access-unit bracket owns the layer (T5.AA1)
+
+`DecodeCurrentAccessUnit` and `CheckAndFinishLastPic` derived `cur_dq_layer`'s
+borrow and cast it straight back to a pointer. That round trip was *laundering*: the
+loop below passes the layer beside `pCtx` to a dozen functions, and two borrows of
+one object do not travel together.
+
+`slice_split`'s maneuver one container over — and the other of its two shapes.
+Rather than splitting the borrow, the bracket **moves the layer out of the context**
+(`pCtx.pDqLayersList.take()`) for the loop and restores it after. The move is
+checkable rather than arguable: `pDqLayersList` has exactly two readers in the
+decoder, these two brackets, and one writer, `InitialDqLayersContext`, which runs in
+`InitConstructAccessUnit` *above* `DecodeCurrentAccessUnit` and never under it.
+
+A **labelled block** is what guarantees the restore — the seven `return`s inside the
+loop became `break 'au` / `break 'ec`, so every exit lands on the restore line. The
+first draft split each bracket into a second function instead, and that is the
+measurement worth keeping: two new signatures each repeating `ppDst`/`pDstInfo`
+moved decoder `raw_ptr` **+6** on a face whose point is to move it down. S16 counts
+pointer types *written*, and a helper's signature is a write.
+
+Two bodies had the shape the raw parameter was hiding, and the compiler named both:
+`CreateImplicitWeightTable` held a `&mut` *into* the layer's slice header across
+writes to the layer itself, and the frame-gap block read the layer's NAL header
+inside a block that writes the context. Both became copies.
+
+### Face 1 — the `common/` boundary, executed at `deblocking.rs` (T5.AA2)
+
+The decided boundary (steward, at `3e2f43e6`) at its largest site. `deblocking.rs`
+carries `#![deny(unsafe_code)]` with **one exception allowed by name** — the test
+that drives `common/`'s installer, whose raw signature stays for the encoder.
+
+**The mechanism is not a spelling pass.** The eight edge filters took
+`pPix: *mut u8` and called `common/`'s `Deblock*_c` shims, whose entire body is
+`shim_span` + `from_raw_parts_mut` to rebuild a slice from that pointer. They take a
+`PlaneCursorMut` anchored at the macroblock's own coordinate and call the **safe
+kernels beside those shims**, so the span arithmetic is the plane's and the bound is
+checked where the shim asserted it in a doc comment. All twelve step pairs were read
+off the shim they replace; `.add(1 << 2)` and `.add((2 << 1) * iLineSizeUV)` become
+`+4` and `+4 rows`, which is what they meant. The decoder's raw entry points into
+`common/deblocking_common` read **0**.
+
+**What made it expressible is the picture arriving as a borrow.** `pic_split` is
+`slice_split` with the reference half dropped — and it is sound *here* and would not
+be in the decode bracket. That difference is the session's structural news, below.
+
+Three null arms went with the pointer: they selected the *layer's* grid when `pDec`
+was null, and no execution reached them, because the first filtering call after each
+dereferenced the same null. S18 found one more: `DeblockingInit` in this module was
+a dead duplicate of `common/`'s, with the module's own test as its only caller.
+
+### Face 2 — the shim markers that were not the decoder's (T5.AA3)
+
+`expand_shim_span` and the two `ExpandPicture*_c` bridges lived in `src/decoder/`
+and their only consumer is `common::expand_pic::ExpandReferencingPicture` — a
+`common/` function importing from the decoder, the dependency the wrong way round.
+Moved to `common/`; no encoder line touched (F12/P10). `mb_grid_ptr` is **deleted**:
+its last production caller was two neighbour reads of the picture's `pMbType`, and
+`MbArray::get` reaches both with a bound. Its seven Miri provenance tests go with
+it, which is the whole of the test-count drop (481/475 → 474/468) — the accessor
+they instrument no longer exists and its replacement is safe code with nothing to
+pin.
+
+`SHIM(` in `src/decoder/` reads **3**: one prose tombstone and `SPicture::data_ptr`
+with its shared form — the named survivor, Phase 8's, and the decoder's output
+contract. **Exit condition 3's real remainder is 0**, and the survivor list should
+be restated as the accessor's two forms.
+
+### Face 3 — the DPB handles (T5.AA4)
+
+`AddShortTermToList` and `AddLongTermToList` took a `*mut SPicture` the caller
+derived from `pCtx.pPicBuff` and passed *beside* `pCtx` — the layer bracket's shape
+one container over, and the phase's own rule answers it before the compiler does:
+**aliases become ids**. Everything they did with the picture was name its slot and
+write four fields, both reachable from an `Option<PicId>`. Five callers pass the
+handle they already had (`pCtx.pDec`, the prefetch's `ec_slot`, the scan's own
+slot), and `insert_ref` — whose `debug_assert!` checked that a list entry names a
+pool picture at all — is **deleted**, because the parameter type discharges it.
+`manage_dec_ref` 18 → **15** `unsafe fn`, 15 → **7** `raw_ptr`.
+
+**The strip-and-build sweep found nothing else in that module**, and the instrument
+lied once before it said so (S33's corollary): the first pass mapped compiler errors
+to the *previous safe* function, because its boundary regex did not match
+`pub unsafe fn` lines — so three already-safe functions were "restored" to `unsafe`,
+two of them this face's own conversions. Fixed, re-run, and the answer is that all
+fifteen survivors need the keyword: the module's remaining `unsafe` is
+`WelsInitRefList`'s EC block, which holds two pictures of one pool at once, and that
+is §"`PPicture`" below.
+
+### `PPicture`, and why it is a decision rather than a face
+
+`PicPool::cur_and_rest` hands a bracket the current picture as `*mut SPicture` and
+the rest as `PicRefs`. `PicRefs::get` answers the *current* slot from `cur_ptr`, a
+pointer sharing the mutable half's tag, because a malformed stream can legally put
+the picture being decoded into a reference list and the C++ resolves it and reads on
+(**F42**; `PoolRest::get` panics on that slot). **Sharing a tag is what makes it
+sound.** As a `&mut`, every function-entry retag on the picture pops `cur_ptr` and
+the next read through the F42 arm is UB — session Y's verdict, with the raw pointer
+this time *earning* its place rather than laundering one.
+
+Measured: **41 of the remaining 64 signatures do not carry `PicRefs`** and convert
+the way `deblocking.rs`'s eleven did (`decode_slice` 18, `mv_pred` 12,
+`parse_mb_syn_cabac` 6, `parse_mb_syn_cavlc` 3, `manage_dec_ref` 2). **23 do**, and
+those are the per-macroblock decode dispatch. `mv_pred`'s strip-and-build prices the
+blocker: **470 errors, every one a dereference of `pDec`.**
+
+The three ways out are in `phase5_session_ab.md` §0, and none is a session's to
+pick.
+
+### The straggler sweep's one finding, and it is a duplicate the other codec converted
+
+`find_shadowing_stubs.py` reports 21 candidate names; every decoder-side one is a
+trait-impl `default` — which the tool's own note excludes — **except two, and they
+are real**: `error_concealment.rs`'s `WelsCopy16x16_c`/`WelsCopy8x8_c` are raw row
+loops, while the encoder's same-named pair (`encoder/encode_mb_aux.rs:968`/`:993`)
+are Phase-2 shims over the safe `copy_8x8`/`copy_16x16`. One C++ function, two
+ports, one converted — **Phase 2's own finding, in the other codec** (S18's
+motivating incident, mirrored).
+
+It is **not fixed here**, and the reason is a boundary rather than a difficulty:
+the safe kernels are stranded in `encoder/`, so the decoder cannot reach them
+without the dependency inversion T5.AA3 just removed for `expand_pic`. The fix is
+to move `copy_8x8`, `copy_16x16` and `copy_shim` to `common/` — which edits an
+encoder *file* while converting no encoder *site*, and whether F12/P10 admits that
+is a question for the same person as `PPicture`'s. Named in
+`phase5_session_ab.md` §2.
+
+The rest of the sweep is clean: `find_elem_byte_confusion.py` **0 suspects over 81
+files** (11 byte-sized hits, element size 1), `find_unwritten_fields.py` clean over
+`SWelsDecoderContext`'s 53 scalar fields, census 59 allowlisted with nothing new.
+
+### Gates, F3, and the span
+
+**The `exit` battery at `ed05d699` reads `OVERALL: PASS` — 13 passed / 0 failed / 1
+skipped**, and it is **the phase's first fully clean one**: tests 474/468/20,
+census 59, ratchet clean, `--all-targets` compiling, both benches bit-identical,
+**both sweeps 341/341**, Miri `--lib` **329/0** plus the three differential targets
+(**20 / 7 / 3**). Sessions Y and Z each closed at 12/1/1 on a single F3 hit; this
+one drew none. T5.AA4 landed after it, with its own commit gates and Miri 3/3 on
+the three decoder probes.
+
+**F3 twice, and the second one triggered step 2.** Measurement **57** (T5.AA2's
+`family` battery, release, one hit) closed at step 1 — the configuration 5/5
+byte-identical and the whole `mt` preset 120/120. Measurement **58** (T5.AA3's,
+debug, two hits, one zero-length and one short) went to the alternation: both
+binaries built once and swapped inside one loop, **12 whole `mt` presets per side,
+1440 configurations each**, and it is **the eighteenth alternation and the first
+exact tie — HEAD 6, control 6**. Rate ≈1/240 per side, the loaded-machine band
+sessions K and Y both measured. Running total **58 measurements, 18 alternations,
+31 acquittals**.
+
+### The span — the debt session Z named, paid, and it reads *faster*
+
+`dff3f78b` (Y's close) → `2de8703f`, **nine commits across two sessions**, because
+Z's five went unmeasured and its report said so. 7 pairs, with the null re-run at
+the verdict's own pair count.
+
+| reading | CB | Main | High | decode median | encode median |
+|---|---|---|---|---|---|
+| span | **−1.31%** | −0.28% | −0.35% | **−0.35%** | **−0.28%** |
+| 7-pair null | −0.26% | +0.14% | −0.06% | −0.06% | +0.00% |
+
+Null bands: decode **−0.26%…+0.14%**, encode **−0.77%…+1.47%**. Encode is inside
+its floor. **Decode's median is just outside, on the fast side**, and S2b's
+more-pairs move is deliberately not taken: the reading is an improvement, no
+disposition rests on it, and this session's own two nulls disagree about the encode
+band's width by a factor of two — a band is a sample like anything else.
+
+**Cumulative CB ≈ +23.7…+24.3%**, down from ≈+25.3…+25.9% — the first time the
+phase's cumulative figure has moved *down*. The ≈+23% stop-line is still breached,
+by ≈0.7…1.3 points instead of ≈2.3…2.9, and D-perf-6's disposition does not change:
+this is not recovery work, it is what deleting nine commits' worth of aliases did on
+its own. The only mechanism on the table that could explain a decode improvement is
+`deblocking.rs`'s edge filters no longer rebuilding a slice from a pointer per edge
+— twelve `shim_span` + `from_raw_parts_mut` call sites per macroblock, gone at
+T5.AA2 — and it is **named as a candidate, not as the explanation** (S2b). Full
+entry in `perf_baseline.md`.
+
+### Where it stops, and it is a decision rather than a wall
+
+Exit conditions 1–3 are unmet and the finish rule's clause 1 is what ends the
+session: **a blocker only Eugene or the steward can clear, named in the hand-off**.
+The blocker is `PPicture`'s 23 `PicRefs`-carrying signatures and the three ways out
+in `phase5_session_ab.md` §0; the 41 unblocked ones are ordinary work the next
+session can start on without an answer. The straggler in §2 of that brief —
+`WelsCopy16x16_c`, converted in the encoder and raw in the decoder, with the safe
+kernel stranded in `encoder/` — needs the same person's ruling on whether moving a
+definition into `common/` counts as an encoder site under F12/P10.
+
+`phase6.md` stays unwritten for the seventh session running.
