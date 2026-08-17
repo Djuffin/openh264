@@ -1404,6 +1404,34 @@ pub unsafe fn slice_split<'a>(
     (pDec, pRefs, slice_ctx(&mut *raw, reader))
 }
 
+/// **The bracket top's split for a scope that writes the picture and reads no
+/// references** (T5.AA2) — the current picture as a *borrow*, beside the view.
+///
+/// [`slice_split`] hands the picture back as a `PPicture` and must: the decode
+/// bracket resolves reference lists beside it, and a malformed stream can put the
+/// picture being decoded into one (**F42**), so the two have to share a tag. The
+/// deblocking bracket resolves no references at all — it snapshots the reference
+/// *ids* and reads only the current picture's planes and per-macroblock arrays — so
+/// here the picture is a real `&mut` and the whole family below it converts.
+///
+/// `None` is the state the null `PPicture` stood for: no pool, or no current
+/// picture. The one caller skips deblocking there, which is what the null arms
+/// inside the family used to stand in for and never reached — the first read after
+/// them dereferenced the same null.
+///
+/// # Safety
+/// [`slice_ctx`]'s contract, unchanged.
+#[inline]
+pub unsafe fn pic_split<'a>(
+    pCtx: &'a mut SWelsDecoderContext,
+) -> (Option<&'a mut SPicture>, SliceCtx<'a>) {
+    // `slice_split`'s construction verbatim, with the reference half dropped: this
+    // adds no derivation of its own, so the disjointness argument is the one Miri
+    // has already accepted there.
+    let (pDec, _refs, view) = slice_split(pCtx, None);
+    (pDec.as_mut(), view)
+}
+
 /// The reference set a DPB operation acts on — **the selector travels, not the
 /// borrow** (T5.Z4).
 ///
