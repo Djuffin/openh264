@@ -150,6 +150,15 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**AB** = **the close** ([`phase5_session_ab.md`](phase5_session_ab.md)), under the
+finish rule, **with both of AA's open rulings made** (steward, at `6b6dd9a3`, in
+the brief's §0 and §2): `PPicture` is the phase's **second enumerated survivor**
+(option 3 — no behaviour moves; the F42-arm retirement stays Eugene-level; the
+option-1/2 revisit is Phase 8's), and the stranded `copy_8x8`/`copy_16x16`
+kernels **move to `common/`**, the C++'s own home (`codec/common/src/copy_mb.cpp`
+— F22's rule, not an F12/P10 breach). Faces: the 41 unblocked picture
+signatures, EC's MC paths + the relocation, W7's survivor-list restatement,
+and **the phase close**.
 **AA** = **spent** (4 commits, `00a281bb`…`2de8703f`;
 [`phase5_session_aa.md`](phase5_session_aa.md)) — **and it did not close the
 phase**. Decoder `raw_ptr` **310 → 278**, `unsafe fn` **230 → 204**, deny-clean
