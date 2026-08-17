@@ -889,16 +889,11 @@ pub unsafe fn parse_only(pCtx: PWelsDecoderContext) -> bool {
     !pCtx.is_null() && !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly
 }
 
-/// # Safety
-/// `pCtx` must be a live decoder context inside slice decoding, where `pNalCur` is
-/// the NAL being parsed — the precondition every caller already relies on, and the
-/// same one the deleted field carried.
-#[inline(always)]
-pub unsafe fn slice_bit_reader(
-    pCtx: PWelsDecoderContext,
-) -> *mut crate::decoder::bit_stream::BsReader {
-    std::ptr::addr_of_mut!((*(*pCtx).pNalCur).sNalData.sVclNal.sSliceBitsRead)
-}
+// **T5.Z3: `slice_bit_reader` stood here and is deleted.** It reached the slice's
+// bit cursor through `pCtx->pNalCur` and returned a raw pointer; T5.Y2's split gave
+// the tree one path to the NAL — the dispatch's own `pNalCur` parameter — and the
+// last call went with `cabac_rbsp_window`. Found by S18's sweep with zero callers
+// and one dead import.
 
 /// The layer the access unit is decoding, or null when there is none.
 ///
@@ -915,15 +910,14 @@ pub unsafe fn slice_bit_reader(
 /// construction — and nothing below a bracket reads the field at all. The brackets
 /// do not nest: `CheckAndFinishLastPic` derives *after* the `ConstructAccessUnit`
 /// call that contains the loop returns.
+///
+/// **T5.Z1's parameter rule** (T5.Z3): the field. The two bracket tops that take
+/// one hold it across calls that take the context, which is face 1's shape and not
+/// this accessor's — spelled as `pDqLayersList` the borrow is disjoint from every
+/// other field those calls touch.
 #[inline]
-pub unsafe fn cur_dq_layer(pCtx: PWelsDecoderContext) -> *mut DqLayerState {
-    if pCtx.is_null() {
-        return std::ptr::null_mut();
-    }
-    match (*pCtx).pDqLayersList.as_deref_mut() {
-        Some(layer) => layer as *mut DqLayerState,
-        None => std::ptr::null_mut(),
-    }
+pub fn cur_dq_layer(list: &mut Option<Box<DqLayerState>>) -> Option<&mut DqLayerState> {
+    list.as_deref_mut()
 }
 
 /// The parse-only descriptor, or null when the decoder is not in parse-only mode.
@@ -933,31 +927,25 @@ pub unsafe fn cur_dq_layer(pCtx: PWelsDecoderContext) -> *mut DqLayerState {
 /// `DecodeFrameConstruction`'s two arms and `CheckAndFinishLastPic`'s reset — hold it
 /// across `cur_au` and context-field writes only, never across a second derivation of
 /// this field.
+///
+/// **T5.Z1's parameter rule** (T5.Z3): the field, not the context — the four
+/// consumers all write the descriptor beside reads of other context fields.
 #[inline]
-pub unsafe fn parser_bs(pCtx: PWelsDecoderContext) -> *mut SParserBsInfo {
-    if pCtx.is_null() {
-        return std::ptr::null_mut();
-    }
-    match (*pCtx).pParserBsInfo.as_deref_mut() {
-        Some(parser) => parser as *mut SParserBsInfo,
-        None => std::ptr::null_mut(),
-    }
+pub fn parser_bs(bs: &mut Option<Box<SParserBsInfo>>) -> Option<&mut SParserBsInfo> {
+    bs.as_deref_mut()
 }
 
-/// [`pic_pool_mut`] as a raw pointer, for the api layer's two release paths.
+/// The pool for the api layer's two release paths, **from the field** (T5.Z3).
 ///
 /// `CWelsDecoder::ReleaseBufferedReadyPicture*` evaluate `pCtx ? pCtx->pPicBuff :
 /// m_pPicBuff` into one local and pass it on, and `m_pPicBuff` is a raw field of
-/// `CWelsDecoderImpl` that Phase 8 owns — so the local is a pointer or it is two
-/// shapes at once. The reference this derives from covers the whole `PicPool`
-/// allocation and nothing re-derives the pool between the two (the code in between
-/// reads `sPictInfoList`), which is the S29 condition this site has to meet.
+/// `CWelsDecoderImpl` that Phase 8 owns — so the *local* is a pointer or it is two
+/// shapes at once. That is the api layer's problem, not this accessor's: it hands
+/// back the borrow and the api site casts once, at the line where the two sources
+/// meet, with the Phase 8 pointer on it.
 #[inline]
-pub unsafe fn pic_pool_ptr(pCtx: PWelsDecoderContext) -> PPicBuff {
-    match pic_pool_mut(pCtx) {
-        Some(pool) => pool as *mut SPicBuff,
-        None => std::ptr::null_mut(),
-    }
+pub fn pic_pool_ptr(pool: &mut Option<Box<SPicBuff>>) -> Option<&mut SPicBuff> {
+    pool.as_deref_mut()
 }
 
 /// The bracket top's pool borrow, handed down as a [`PicRefs`] (T5.P″2).

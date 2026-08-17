@@ -1758,8 +1758,13 @@ unsafe fn ReleaseBufferedReadyPictureNoReorder(
         (*dec_impl).sReoderingStatus.iLastWrittenSeqNum = (*dec_impl).sPictInfoList[idx].iSeqNum;
         // `if (pCtx || m_pPicBuff)` in C++: with no context and no cached pool
         // there is nothing whose refcount could be dropped.
-        let pPicBuff = if !pCtx.is_null() {
-            crate::decoder::decoder_context::pic_pool_ptr(pCtx)
+        // The cast is **here**, where the two sources meet: `m_pPicBuff` is a raw
+        // field of `CWelsDecoderImpl` that Phase 8 owns, so the local is a pointer
+        // or it is two shapes at once. The accessor hands back the borrow (T5.Z3);
+        // this line is the api boundary's, and it carries the Phase 8 pointer.
+        let pPicBuff: crate::decoder::pic_queue::PPicBuff = if !pCtx.is_null() {
+            crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
+                .map_or(std::ptr::null_mut(), |pool| pool)
         } else {
             (*dec_impl).pPicBuff
         };
@@ -1782,8 +1787,10 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
     // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` is evaluated
     // *before* the null context is replaced by the single-thread context.
-    let pPicBuff = if !pCtx.is_null() {
-        crate::decoder::decoder_context::pic_pool_ptr(pCtx)
+    let pPicBuff: crate::decoder::pic_queue::PPicBuff = if !pCtx.is_null() {
+        // The api boundary's cast — see `ReleaseBufferedReadyPicture` (T5.Z3).
+        crate::decoder::decoder_context::pic_pool_ptr(&mut (*pCtx).pPicBuff)
+            .map_or(std::ptr::null_mut(), |pool| pool)
     } else {
         (*dec_impl).pPicBuff
     };

@@ -1135,10 +1135,14 @@ pub unsafe fn DecodeFrameConstruction(
                         - ((sps.sFrameCrop.iTopOffset + sps.sFrameCrop.iBottomOffset) << 1),
                 )
             });
-            let pParser = parser_bs(pCtx);
-            // Nothing in this block calls back into the context, so one derivation
+            // Two field borrows, disjoint: the access unit is `access_unit`'s own
+            // allocation and the descriptor is `pParserBsInfo`'s (T5.Z3). Nothing in
+            // this block calls back into the context, so one derivation of each
             // covers it — the borrow's extent is the check, not a style choice.
-            if let Some(pCurAu) = cur_au(pCtx).filter(|_| !pParser.is_null()) {
+            let SWelsDecoderContext { access_unit, pParserBsInfo, .. } = &mut *pCtx;
+            if let (Some(pCurAu), Some(pParser)) =
+                (access_unit.as_deref_mut(), parser_bs(pParserBsInfo))
+            {
                 let mut iTotalNalLen: i32 = 0;
                 for i in 0..(*pParser).iNalNum {
                     if let Some(len) = (*pParser).pNalLenInByte.as_slice().get(i as usize) {
@@ -1190,12 +1194,11 @@ pub unsafe fn DecodeFrameConstruction(
                 }
             }
         } else {
-            let pParser = parser_bs(pCtx);
-            if !pParser.is_null() {
-                (*pParser).uiOutBsTimeStamp = 0;
-                (*pParser).iNalNum = 0;
-                (*pParser).iSpsWidthInPixel = 0;
-                (*pParser).iSpsHeightInPixel = 0;
+            if let Some(pParser) = parser_bs(&mut (*pCtx).pParserBsInfo) {
+                pParser.uiOutBsTimeStamp = 0;
+                pParser.iNalNum = 0;
+                pParser.iSpsWidthInPixel = 0;
+                pParser.iSpsHeightInPixel = 0;
             }
             return ERR_INFO_PARSEONLY_ERROR;
         }
@@ -1782,14 +1785,18 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
 // `WelsDecodeBs`, unchanged.
 
 pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i32 {
-    let pParser = parser_bs(pCtx);
-    if pParser.is_null() || (*pParser).pNalLenInByte.as_slice().is_empty() {
+    if !parser_bs(&mut (*pCtx).pParserBsInfo)
+        .is_some_and(|p| !p.pNalLenInByte.as_slice().is_empty())
+    {
         return ERR_INFO_INVALID_ACCESS;
     }
     if kiCurrLen >= MAX_MB_SIZE + 2 {
         (*pCtx).iErrorCode |= dsOutOfMemory;
         return ERR_INFO_OUT_OF_MEMORY;
     }
+    let Some(pParser) = parser_bs(&mut (*pCtx).pParserBsInfo) else {
+        return ERR_INFO_INVALID_ACCESS;
+    };
     let mut iNewLen = kiCurrLen << 1;
     iNewLen = WELS_MIN(iNewLen, MAX_MB_SIZE + 2);
     // **F40 is unrepresentable here now.** The allocate-copy-free triple this was —
@@ -3770,7 +3777,11 @@ pub unsafe fn DecodeCurrentAccessUnit(
         // `bInitialDqLayersMem || is_null()`) was a cache write of exactly this value —
         // the list is reallocated only by `InitialDqLayersContext`, which runs in
         // `InitConstructAccessUnit` *before* this function, never under it.
-        let dq_cur = cur_dq_layer(pCtx);
+        // The accessor hands back a borrow (T5.Z3); the bracket still travels a
+        // pointer because the loop below passes `dq_cur` *beside* `pCtx` to a dozen
+        // functions, which is face 1's layer-bracket shape and not this face's.
+        let dq_cur: PDqLayer = cur_dq_layer(&mut (*pCtx).pDqLayersList)
+            .map_or(std::ptr::null_mut(), |l| l);
         let mut pLayerInfo = SLayerInfo::default();
         let isNewFrame = (*pCtx).pDec.is_none();
 
@@ -4282,7 +4293,11 @@ pub unsafe fn CheckAndFinishLastPic(
     // `ConstructAccessUnit` above may have just returned — so it takes its own
     // derivation of the layer rather than inheriting one. It is the value the deleted
     // cache field held at this point, and the list is what the cache was stamped from.
-    let dq_cur = cur_dq_layer(pCtx);
+    // The accessor hands back a borrow (T5.Z3); the bracket still travels a
+        // pointer because the loop below passes `dq_cur` *beside* `pCtx` to a dozen
+        // functions, which is face 1's layer-bracket shape and not this face's.
+        let dq_cur: PDqLayer = cur_dq_layer(&mut (*pCtx).pDqLayersList)
+            .map_or(std::ptr::null_mut(), |l| l);
 
     if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur.as_mut()) {
         if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
@@ -4313,9 +4328,9 @@ pub unsafe fn CheckAndFinishLastPic(
                 }
             }
         } else if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
-            let pParser = parser_bs(pCtx);
-            if !pParser.is_null() {
-                (*pParser).iNalNum = 0;
+            let pParser = parser_bs(&mut (*pCtx).pParserBsInfo);
+            if let Some(pParser) = pParser {
+                pParser.iNalNum = 0;
             }
             (*pCtx).bFrameFinish = true;
         } else {
