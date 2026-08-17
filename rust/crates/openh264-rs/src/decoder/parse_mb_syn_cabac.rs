@@ -1683,7 +1683,7 @@ pub fn ParseMvdInfoCabac(
 pub unsafe fn ParseInterPMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
@@ -1743,10 +1743,12 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                 }
             }
-            let pPic0 = pRefs.get(ppRefPic[iRef[0] as usize]);
+            // F42: resolved against the picture the bracket holds, and reduced to the
+            // one flag it is read for in the same expression.
+            let pPic0 = pRefs.resolve(ppRefPic[iRef[0] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
-                || !(pPic0.is_null() || (*pPic0).bIsComplete || bIsPending);
+                || !pPic0.map_or(true, |c| c || bIsPending);
 
             PredMv(pMotionVector, pRefIndex, LIST_0, 0, 4, iRef[0], &mut pMv);
             let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx as i32, LIST_0 as i8, 0, &mut pMvd[0]);
@@ -1757,7 +1759,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
             pMv[0] += pMvd[0];
             pMv[1] += pMvd[1];
 
-            UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), LIST_0, iRef[0], &pMv);
+            UpdateP16x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), LIST_0, iRef[0], &pMv);
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd[..2].try_into().unwrap(), LIST_0 as i8);
         }
         MB_TYPE_16x8 => {
@@ -1789,10 +1791,12 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = pRefs.get(ppRefPic[iRef[i as usize] as usize]);
+                // F42: resolved against the picture the bracket holds, and reduced to the
+                // one flag it is read for in the same expression.
+                let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                    || !pPic.map_or(true, |c| c || bIsPending);
                 UpdateP16x8RefIdxCabac(pCurDqLayer, &mut *pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
@@ -1806,7 +1810,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP16x8MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], &pMv);
+                UpdateP16x8MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], &pMv);
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd[..2].try_into().unwrap(), LIST_0 as i8);
             }
         }
@@ -1839,10 +1843,12 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = pRefs.get(ppRefPic[iRef[i as usize] as usize]);
+                // F42: resolved against the picture the bracket holds, and reduced to the
+                // one flag it is read for in the same expression.
+                let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                    || !pPic.map_or(true, |c| c || bIsPending);
                 UpdateP8x16RefIdxCabac(pCurDqLayer, &mut *pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
@@ -1856,7 +1862,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                 pMv[0] += pMvd[0];
                 pMv[1] += pMvd[1];
 
-                UpdateP8x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], &pMv);
+                UpdateP8x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), pMotionVector, pRefIndex, LIST_0, iPartIdx, iRef[i as usize], &pMv);
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd[..2].try_into().unwrap(), LIST_0 as i8);
             }
         }
@@ -1922,10 +1928,12 @@ pub unsafe fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pPic = pRefs.get(ppRefPic[pRefIdx[i] as usize]);
+                // F42: resolved against the picture the bracket holds, and reduced to the
+                // one flag it is read for in the same expression.
+                let pPic = pRefs.resolve(ppRefPic[pRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !(pPic.is_null() || (*pPic).bIsComplete || bIsPending);
+                    || !pPic.map_or(true, |c| c || bIsPending);
                 UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8, pRefIdx[i], LIST_0 as i8);
             }
 
@@ -2021,7 +2029,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 pub unsafe fn ParseInterBMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
@@ -2053,10 +2061,12 @@ pub unsafe fn ParseInterBMotionInfoCabac(
     ///  !(pRefList[ref] && (pRefList[ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = pRefs.get(pCtx.ref_id($listIdx as usize, $iref as usize));
+            let p = pRefs
+                .resolve(pCtx.ref_id($listIdx as usize, $iref as usize), Some(&*pDec))
+                .map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
-                || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
+                || !p.is_some_and(|c| c || bIsPending);
         }};
     }
 
@@ -2152,7 +2162,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 pMvd[0] = 0; pMvd[1] = 0;
             }
             let mv2: [i16; 2] = [pMv[0], pMv[1]];
-            UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), listIdx, iRef[listIdx], &mv2);
+            UpdateP16x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), listIdx, iRef[listIdx], &mv2);
             UpdateP16x16MvdCabac(pCurDqLayer, pMvd[..2].try_into().unwrap(), listIdx as i8);
         }
     } else if IS_INTER_16x8(mbType) {
@@ -2204,7 +2214,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP16x8MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
+                UpdateP16x8MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
                 UpdateP16x8MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd[..2].try_into().unwrap(), listIdx as i8);
             }
         }
@@ -2257,7 +2267,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     pMvd[0] = 0; pMvd[1] = 0;
                 }
                 let mv2: [i16; 2] = [pMv[0], pMv[1]];
-                UpdateP8x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
+                UpdateP8x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), pMotionVector, pRefIndex, listIdx, iPartIdx as usize, ref_idx, &mv2);
                 UpdateP8x16MvdCabac(pCurDqLayer, pMvdCache, iPartIdx as i32, pMvd[..2].try_into().unwrap(), listIdx as i8);
             }
         }
@@ -2271,7 +2281,9 @@ pub unsafe fn ParseInterBMotionInfoCabac(
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*pRefs.get(pCtx.ref_id(LIST_1, 0))).bIsLongRef;
+        let bIsLongRef = pRefs
+            .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
+            .is_some_and(|p| p.bIsLongRef);
         let ref0Count = WELS_MIN(
             pRefCountHdr[LIST_0],
             pCtx.sRefPic.uiRefCount[LIST_0] as i32,
@@ -2358,7 +2370,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                 if iDirectSpatialMvPredFlag != 0 {
                     FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec.as_mut(),
+                        Some(&mut *pDec),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -2381,6 +2393,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                             iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
                                 pCtx,
                                 pRefs,
+                                Some(&*pDec),
                                 colocRefIndexL0,
                                 ref0Count,
                             );
@@ -2394,7 +2407,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                     UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_1 as i32, iRef[LIST_1]);
                     FillTemporalDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec.as_mut(),
+                        Some(&mut *pDec),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],

@@ -1506,7 +1506,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             ctx_box.pParam = ptr::addr_of_mut!((*dec_impl).param);
             ctx_box.pLastDecPicInfo = ptr::addr_of_mut!((*dec_impl).sLastDecPicInfo);
             ctx_box.pDecoderStatistics = ptr::addr_of_mut!((*dec_impl).sDecoderStatistics);
-            ctx_box.pVlcTable = ptr::addr_of_mut!((*dec_impl).sVlcTable) as *mut std::ffi::c_void;
+            ctx_box.pVlcTable = ptr::addr_of_mut!((*dec_impl).sVlcTable);
             ctx_box.pPictInfoList = ptr::addr_of_mut!((*dec_impl).sPictInfoList) as *mut _;
             ctx_box.pPictReoderingStatus = ptr::addr_of_mut!((*dec_impl).sReoderingStatus);
             ctx_box.pStreamSeqNum = ptr::addr_of_mut!((*dec_impl).iStreamSeqNum);

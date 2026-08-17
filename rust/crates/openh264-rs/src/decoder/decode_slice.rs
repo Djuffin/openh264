@@ -49,9 +49,10 @@
 // deliberately; those retire with their subject.
 
 use crate::decoder::decoder_context::{
-    PicRefs, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, pps_of, ref_id, slice_split,
-    sps_of,
+    PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, pps_of, ref_id,
+    slice_split, sps_of,
 };
+use crate::decoder::pic_queue::RefSlot;
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::BsReader;
 use std::ffi::c_void;
@@ -61,6 +62,7 @@ use std::ffi::c_void;
 // ============================================================================
 
 pub const ERR_NONE: i32 = 0;
+pub use crate::decoder::decoder_core::ERR_INFO_REF_COUNT_OVERFLOW;
 pub const ERR_INVALID_PARAMETERS: i32 = 1;
 pub const ERR_MALLOC_FAILED: i32 = 2;
 pub const ERR_API_FAILED: i32 = 3;
@@ -586,10 +588,10 @@ pub static g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
 /// bracket resolves once and hands the result down, so the type that crosses the
 /// loop is where the hoist becomes visible. `PDeblockingFilterMbFunc` gained its
 /// `pDec` the same way at T5.P′1, for the same reason.
-pub type PWelsDecMbFunc = unsafe extern "C" fn(
+pub type PWelsDecMbFunc = fn(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -686,20 +688,23 @@ pub fn CheckRefPics(ctx: &SliceCtx<'_>) -> bool {
     true
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
-pub fn ComputeColocatedTemporalScaling(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState, pRefs: PicRefs<'_>) -> bool {
-    // SAFETY: the family named at the item above.
-    unsafe {
+pub fn ComputeColocatedTemporalScaling(
+    pCtx: &mut SliceCtx<'_>,
+    pCurDqLayer: &mut DqLayerState,
+    pRefs: PicRefs<'_>,
+    pDec: Option<&SPicture>,
+) -> bool {
+    {
 
         if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag == 0 {
             let uiRefCount = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0];
-            let pic1 = pRefs.get(pCtx.ref_id(LIST_1, 0));
-            if !pic1.is_null() {
+            let pic1 = pRefs.resolve(pCtx.ref_id(LIST_1, 0), pDec);
+            if let Some(pic1) = pic1 {
                 for i in 0..uiRefCount {
-                    let pic0 = pRefs.get(pCtx.ref_id(LIST_0, i as usize));
-                    if !pic0.is_null() {
-                        let poc0 = (*pic0).iFramePoc;
-                        let poc1 = (*pic1).iFramePoc;
+                    let pic0 = pRefs.resolve(pCtx.ref_id(LIST_0, i as usize), pDec);
+                    if let Some(pic0) = pic0 {
+                        let poc0 = pic0.iFramePoc;
+                        let poc1 = pic1.iFramePoc;
                         let poc = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
                         let td = WELS_CLIP3(poc1 - poc0, -128, 127);
                         if td == 0 {
@@ -1108,175 +1113,295 @@ pub fn WelsMbInterSampleConstruction(
     ERR_NONE
 }
 
-use crate::decoder::error_concealment::sMCRefMember;
 // Phase 4a: `BaseMC` calls these directly instead of through `SMcFunc` slots.
-use crate::common::mc::{McChroma_c, McLuma_c};
+// T5b.2: and the safe kernels directly rather than through the raw shims, because
+// the callers now hold pictures rather than plane pointers.
+use crate::common::mc::{mc_chroma, mc_chroma_same, mc_luma, mc_luma_same};
 
-/// Fill an `sMCRefMember` with the reference picture selected by `iRefIdx`.
-/// Matches `GetRefPic` in `rec_mb.cpp`.
-#[allow(unsafe_code)] // decoder-internal raw cursor
-fn GetRefPic(
-    pMCRefMem: &mut sMCRefMember,
-    pCtx: &mut SliceCtx<'_>,
-    pRefs: PicRefs<'_>,
+// ============================================================================
+// Inter prediction — `rec_mb.cpp`, and what became of `sMCRefMember`
+// ============================================================================
+//
+// **T5b.2 (face 0 + face 2).** The C++'s MC descriptor is six raw plane cursors,
+// two source strides, two destination strides and the picture's dimensions; the port
+// built one per macroblock with `mem::zeroed()` and walked its `pDst*` fields with
+// pointer arithmetic. Every one of those fields is something a picture already
+// carries or a coordinate the walk already knows, so the descriptor is gone and what
+// replaces it is [`McDst`] (where the block lands) plus [`McSrc`] (where the samples
+// come from). The two `mem::zeroed()` sites die with it — S21's question, "what does
+// the all-zero pattern mean now", had no answer here: a zeroed descriptor is six
+// null cursors that every path overwrites before use.
+//
+// **What made this face a design question rather than a spelling pass is F42.** A
+// malformed stream can put the picture being decoded into its own reference list, so
+// `pSrcY` and `pDstY` can address one allocation — which is why `pDec` was a raw
+// pointer in twenty-three signatures, and why converting them needed a *type* for
+// the answer. [`PicRefs::classify`] is that type: `RefSlot::Other` is a picture
+// disjoint from the destination and runs the two-cursor kernels; `RefSlot::Current`
+// resolves to the destination itself and runs `mc_luma_same`/`mc_chroma_same`
+// (`common/mc.rs`, T5b.1), which read and write through the one `&mut`.
+
+/// **Where a partition's prediction lands**: the block's sample coordinates in the
+/// destination picture's luma and chroma planes.
+///
+/// `sMCRefMember`'s `pDstY`/`pDstU`/`pDstV`, as the coordinates the pointers were
+/// carrying. **Luma and chroma are tracked separately rather than derived from one
+/// another**, and `rec_mb.cpp:1014` is the reason: it applies the 8x8 sub-partition
+/// offset *twice* to the LIST_1 luma destination of a bi-predicted 4x4 block and
+/// once to its chroma. The C's two walks were independent, so the divergence was
+/// expressible; deriving `chroma = luma >> 1` would silently repair it, which is a
+/// behaviour change on a B-slice path (S6).
+#[derive(Clone, Copy)]
+struct McDst {
+    luma: (isize, isize),
+    chroma: (isize, isize),
+}
+
+impl McDst {
+    /// The macroblock's own top-left sample, in both planes.
+    #[inline]
+    fn mb(iMbX: i32, iMbY: i32) -> Self {
+        Self {
+            luma: ((iMbX as isize) << 4, (iMbY as isize) << 4),
+            chroma: ((iMbX as isize) << 3, (iMbY as isize) << 3),
+        }
+    }
+
+    /// A sub-block step both planes take together: luma by `(x, y)`, chroma by half
+    /// of each. Every `pDst*.offset(...)` pair in `rec_mb.cpp` is this one except the
+    /// case named at the type.
+    #[inline]
+    fn blk(self, x: isize, y: isize) -> Self {
+        Self {
+            luma: (self.luma.0 + x, self.luma.1 + y),
+            chroma: (self.chroma.0 + (x >> 1), self.chroma.1 + (y >> 1)),
+        }
+    }
+
+    /// The two planes stepped independently — `rec_mb.cpp:1014`'s case, and only it.
+    #[inline]
+    fn split_blk(self, lx: isize, ly: isize, cx: isize, cy: isize) -> Self {
+        Self {
+            luma: (self.luma.0 + lx, self.luma.1 + ly),
+            chroma: (self.chroma.0 + cx, self.chroma.1 + cy),
+        }
+    }
+}
+
+/// Where motion compensation reads from — [`PicRefs::classify`]'s answer resolved
+/// against *this* destination.
+enum McSrc<'a> {
+    /// A picture disjoint from the destination: the ordinary case, and the one the
+    /// two-cursor kernels are written for.
+    Other(&'a SPicture),
+    /// The destination picture is its own reference (**F42**): one allocation, and
+    /// `mc_luma_same`/`mc_chroma_same` are what run.
+    Dst,
+}
+
+/// The C's `ERR_INFO_REFERENCE_PIC_LOST`, which all three of `GetRefPic`'s failure
+/// arms return.
+#[inline]
+fn ref_pic_lost() -> i32 {
+    GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST)
+}
+
+/// `GetRefPic`'s third arm: the C tested the three source cursors for null after
+/// filling them, which is exactly "this picture has an unallocated plane".
+#[inline]
+fn has_planes(pic: &SPicture) -> bool {
+    !pic.plane(0).is_empty() && !pic.plane(1).is_empty() && !pic.plane(2).is_empty()
+}
+
+/// The reference `iRefIdx` selects in list `listIdx`, for a destination that **is**
+/// the picture the bracket holds — the P-slice path and the B path's LIST_0 half.
+///
+/// Matches `GetRefPic` in `rec_mb.cpp`, whose whole body was filling `sMCRefMember`'s
+/// source cursors and strides from the resolved picture. The three failure arms are
+/// the C's: a negative index, a handle that resolves to nothing, and a resolved
+/// picture with an empty plane.
+#[inline]
+fn ref_for_current<'a>(
+    pRefs: PicRefs<'a>,
+    sRefPic: &SRefPic,
     iRefIdx: i8,
     listIdx: usize,
-) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        if iRefIdx >= 0 {
-            let pRefPic = pRefs.get(pCtx.ref_id(listIdx, iRefIdx as usize));
-            if !pRefPic.is_null() {
-                pMCRefMem.iSrcLineLuma = (*pRefPic).linesize(0);
-                pMCRefMem.iSrcLineChroma = (*pRefPic).linesize(1);
-                // The three reference-side `data_ptr` calls in the tree, and the reason
-                // the `&self` form exists (W3's fact 5): MC reads the source planes and
-                // writes into the current picture, so the reference never needs `&mut`.
-                pMCRefMem.pSrcY = (*pRefPic).data_ptr_ref(0);
-                pMCRefMem.pSrcU = (*pRefPic).data_ptr_ref(1);
-                pMCRefMem.pSrcV = (*pRefPic).data_ptr_ref(2);
-                if pMCRefMem.pSrcY.is_null() || pMCRefMem.pSrcU.is_null() || pMCRefMem.pSrcV.is_null() {
-                    return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
-                }
-                return ERR_NONE;
-            }
-        }
-        GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST)
+) -> Result<McSrc<'a>, i32> {
+    if iRefIdx < 0 {
+        return Err(ref_pic_lost());
+    }
+    match pRefs.classify(ref_id(sRefPic, listIdx, iRefIdx as usize)) {
+        RefSlot::Empty => Err(ref_pic_lost()),
+        // F42. The C resolved this to `pCtx->pDec` and read on; so does the `Dst`
+        // arm, and the destination's own planes are the ones `has_planes` would have
+        // tested — the caller holds them mutably, so the test moves there.
+        RefSlot::Current => Ok(McSrc::Dst),
+        RefSlot::Other(pic) if has_planes(pic) => Ok(McSrc::Other(pic)),
+        RefSlot::Other(_) => Err(ref_pic_lost()),
+    }
+}
+
+/// [`ref_for_current`] for a destination that is **not** the bracket's picture: the
+/// B-slice scratch (`pCtx->pTempDec`), where the LIST_1 hypothesis lands.
+///
+/// F42's arm is an ordinary disjoint reference here — the destination is a different
+/// allocation — so `cur` is passed in and the answer never needs the `Dst` form.
+#[inline]
+fn ref_for_other<'s>(
+    pRefs: PicRefs<'s>,
+    sRefPic: &SRefPic,
+    iRefIdx: i8,
+    listIdx: usize,
+    cur: &'s SPicture,
+) -> Result<McSrc<'s>, i32> {
+    if iRefIdx < 0 {
+        return Err(ref_pic_lost());
+    }
+    match pRefs.resolve(ref_id(sRefPic, listIdx, iRefIdx as usize), Some(cur)) {
+        Some(pic) if has_planes(pic) => Ok(McSrc::Other(pic)),
+        _ => Err(ref_pic_lost()),
     }
 }
 
 /// Motion-compensate one block from the reference into the destination.
 /// Matches `BaseMC` in `rec_mb.cpp` (single-thread path).
-#[allow(unsafe_code)] // sMCRefMember
+///
+/// `geom` is `sMCRefMember`'s `(iPicWidth, iPicHeight)` — the MV clamp's bounds, and
+/// the descriptor's only two fields that were data rather than cursors.
 fn BaseMC(
-    _pCtx: &mut SliceCtx<'_>,
-    pMCRefMem: &mut sMCRefMember,
-    _listIdx: usize,
-    _iRefIdx: i8,
+    geom: (i32, i32),
+    src: &McSrc<'_>,
+    dst: &mut SPicture,
+    at: McDst,
     iXOffset: i32,
     iYOffset: i32,
     iBlkWidth: i32,
     iBlkHeight: i32,
     iMVs: [i16; 2],
 ) {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        const PADDING_LENGTH: i32 = 32;
-        let mut iFullMVx = (iXOffset << 2) + iMVs[0] as i32;
-        let mut iFullMVy = (iYOffset << 2) + iMVs[1] as i32;
-        iFullMVx = WELS_CLIP3(
-            iFullMVx,
-            (-PADDING_LENGTH + 2) * 4,
-            (pMCRefMem.iPicWidth + PADDING_LENGTH - 19) * 4,
-        );
-        iFullMVy = WELS_CLIP3(
-            iFullMVy,
-            (-PADDING_LENGTH + 2) * 4,
-            (pMCRefMem.iPicHeight + PADDING_LENGTH - 19) * 4,
-        );
+    const PADDING_LENGTH: i32 = 32;
+    let mut iFullMVx = (iXOffset << 2) + iMVs[0] as i32;
+    let mut iFullMVy = (iYOffset << 2) + iMVs[1] as i32;
+    iFullMVx = WELS_CLIP3(
+        iFullMVx,
+        (-PADDING_LENGTH + 2) * 4,
+        (geom.0 + PADDING_LENGTH - 19) * 4,
+    );
+    iFullMVy = WELS_CLIP3(
+        iFullMVy,
+        (-PADDING_LENGTH + 2) * 4,
+        (geom.1 + PADDING_LENGTH - 19) * 4,
+    );
 
-        let iSrcPixOffsetLuma = (iFullMVx >> 2) + (iFullMVy >> 2) * pMCRefMem.iSrcLineLuma;
-        let iSrcPixOffsetChroma = (iFullMVx >> 3) + (iFullMVy >> 3) * pMCRefMem.iSrcLineChroma;
+    // The C added `(iFullMVx >> 2) + (iFullMVy >> 2) * iSrcLineLuma` to the source
+    // plane's origin; the stride is the plane's own, so what is left is the sample
+    // coordinate. Chroma is the same expression at `>> 3`, which is the eighth-pel
+    // vector's integer part — *not* half the luma one, because the two shifts round
+    // differently on negatives.
+    let (sy_luma, sx_luma) = ((iFullMVy >> 2) as isize, (iFullMVx >> 2) as isize);
+    let (sy_chroma, sx_chroma) = ((iFullMVy >> 3) as isize, (iFullMVx >> 3) as isize);
 
-        let iBlkWidthChroma = iBlkWidth >> 1;
-        let iBlkHeightChroma = iBlkHeight >> 1;
+    let (bw, bh) = (iBlkWidth as usize, iBlkHeight as usize);
+    let (bwc, bhc) = (bw >> 1, bh >> 1);
+    let (mvx, mvy) = (iFullMVx as i16, iFullMVy as i16);
 
-        let pSrcY = pMCRefMem.pSrcY.offset(iSrcPixOffsetLuma as isize);
-        let pSrcU = pMCRefMem.pSrcU.offset(iSrcPixOffsetChroma as isize);
-        let pSrcV = pMCRefMem.pSrcV.offset(iSrcPixOffsetChroma as isize);
-
-        // Phase 4a: direct calls. `pMCFunc` held `McLuma_c`/`McChroma_c` and
-        // nothing else — `init_mc_func_ignores_the_cpu_flag` pins that the
-        // installer is constant in its CPU flag, and
-        // `mc_table_slots_match_the_direct_calls` pins that those slots compute
-        // what these symbols compute. The `if let Some` guards are gone with the
-        // indirection: `WelsOpenDecoder` runs `WelsInitDecoderFuncs`
-        // unconditionally before any frame is decoded, so the slots were never
-        // `None` here, and a `None` would have silently left the prediction block
-        // unwritten rather than reported anything.
-        //
-        // **Why this recovers nothing on the decode side, unlike the encoder's.**
-        // Direct dispatch bought the encoder ~5% (see `perf_baseline.md` §Phase 4a)
-        // and this side ~0. The difference is not the calls, it is where the block
-        // dimensions become constant. The encoder's call sites name these shims
-        // with literals (`16, 16` / `8, 8`), so inlining folds the shim's span
-        // arithmetic and its `from_raw_parts` against them. Here the sizes arrive
-        // as `iBlkWidth`/`iBlkHeight` *parameters*: they are constant at `BaseMC`'s
-        // ~40 call sites but runtime inside it, and `BaseMC` is ~1300 instructions,
-        // so `#[inline]` on it is declined. Measured, not assumed — `#[inline]` on
-        // `BaseMC` and `#[inline(always)]` on `McChroma_c` were each built and
-        // paired, and both read inside the null floor. Disassembly confirms
-        // `McLuma_c` does inline here (the `mc_hor_ver*` kernels are called
-        // straight from `BaseMC`) while the two chroma calls stay out of line.
-        //
-        // What would recover it is making the dimensions constant *at the shim*:
-        // const-generic `BaseMC::<W, H>` monomorphised over the seven partition
-        // shapes, or Phase 5 converting these callers so the whole path carries
-        // typed blocks. That is caller conversion, which is Phase 5's job, and the
-        // ledger row is downgraded to say so rather than to keep promising Phase 4.
-        McLuma_c(
-            pSrcY,
-            pMCRefMem.iSrcLineLuma,
-            pMCRefMem.pDstY,
-            pMCRefMem.iDstLineLuma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidth,
-            iBlkHeight,
-        );
-        McChroma_c(
-            pSrcU,
-            pMCRefMem.iSrcLineChroma,
-            pMCRefMem.pDstU,
-            pMCRefMem.iDstLineChroma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidthChroma,
-            iBlkHeightChroma,
-        );
-        McChroma_c(
-            pSrcV,
-            pMCRefMem.iSrcLineChroma,
-            pMCRefMem.pDstV,
-            pMCRefMem.iDstLineChroma,
-            iFullMVx as i16,
-            iFullMVy as i16,
-            iBlkWidthChroma,
-            iBlkHeightChroma,
-        );
+    // Phase 4a's direct-dispatch note stands and is recorded at the safe kernels:
+    // `pMCFunc` held `McLuma_c`/`McChroma_c` and nothing else, and the block
+    // dimensions arrive here as parameters, which is why de-virtualization recovered
+    // nothing on this side. What T5b.2 changes is that the shims — `shim_wh`'s
+    // `from_raw_parts` pair per call, three per partition — are gone with the plane
+    // pointers: the kernels are handed cursors over the pictures themselves.
+    match *src {
+        McSrc::Other(pic) => {
+            mc_luma(
+                &pic.plane(0).cursor(sx_luma, sy_luma),
+                &mut dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1),
+                mvx,
+                mvy,
+                bw,
+                bh,
+            );
+            for i in 1..3usize {
+                mc_chroma(
+                    &pic.plane(i).cursor(sx_chroma, sy_chroma),
+                    &mut dst.plane_mut(i).cursor_mut(at.chroma.0, at.chroma.1),
+                    mvx,
+                    mvy,
+                    bwc,
+                    bhc,
+                );
+            }
+        }
+        // F42's arm: the source anchor is expressed *relative to* the destination's,
+        // because one plane has one stride and there is only one borrow to give.
+        McSrc::Dst => {
+            mc_luma_same(
+                &mut dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1),
+                sx_luma - at.luma.0,
+                sy_luma - at.luma.1,
+                mvx,
+                mvy,
+                bw,
+                bh,
+            );
+            for i in 1..3usize {
+                mc_chroma_same(
+                    &mut dst.plane_mut(i).cursor_mut(at.chroma.0, at.chroma.1),
+                    sx_chroma - at.chroma.0,
+                    sy_chroma - at.chroma.1,
+                    mvx,
+                    mvy,
+                    bwc,
+                    bhc,
+                );
+            }
+        }
     }
 }
 
 /// Matches `WeightPrediction` in `rec_mb.cpp`.
-#[allow(unsafe_code)] // sMCRefMember
 fn WeightPrediction(
     pwt: Option<&SPredWeightTable>,
-    pMCRefMem: &mut sMCRefMember,
+    dst: &mut SPicture,
+    at: McDst,
     listIdx: usize,
     iRefIdx: i32,
     iBlkWidth: i32,
     iBlkHeight: i32,
 ) {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        // T5.X2 — take what you reach. The layer was the parameter and one nullable
-        // field of it was the reach; the null test that stood on the field stands on
-        // the `Option` here, with the same two arms and the same span (the caller
-        // derives it as the argument, so the shared reference lives exactly as long as
-        // it did). The caller's `&[u32; 4]` window into `grid.sub_mb_type` (T5.I1) is
-        // what this pays for: two shared borrows of one layer coexist, a `&mut` of the
-        // whole layer beside a `&` of one of its fields does not.
-        let Some(pwt) = pwt.filter(|_| iRefIdx >= 0) else {
-            return;
-        };
-        // luma
-        let iLog2denom = pwt.uiLumaLog2WeightDenom as i32;
-        let iWoc = pwt.sPredList[listIdx].iLumaWeight[iRefIdx as usize];
-        let iOoc = pwt.sPredList[listIdx].iLumaOffset[iRefIdx as usize];
-        let iLineStride = pMCRefMem.iDstLineLuma;
-        for i in 0..iBlkHeight {
-            for j in 0..iBlkWidth {
-                let p = pMCRefMem.pDstY.offset((j + i * iLineStride) as isize);
+    // T5.X2 — take what you reach. The layer was the parameter and one nullable
+    // field of it was the reach; the null test that stood on the field stands on the
+    // `Option` here, with the same two arms.
+    let Some(pwt) = pwt.filter(|_| iRefIdx >= 0) else {
+        return;
+    };
+    // luma
+    let iLog2denom = pwt.uiLumaLog2WeightDenom as i32;
+    let iWoc = pwt.sPredList[listIdx].iLumaWeight[iRefIdx as usize];
+    let iOoc = pwt.sPredList[listIdx].iLumaOffset[iRefIdx as usize];
+    let mut cur = dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1);
+    for i in 0..iBlkHeight as isize {
+        let out = cur.row_mut(i, 0, iBlkWidth as usize);
+        for p in out.iter_mut() {
+            let iPredTemp = if iLog2denom >= 1 {
+                ((*p as i32 * iWoc + (1 << (iLog2denom - 1))) >> iLog2denom) + iOoc
+            } else {
+                *p as i32 * iWoc + iOoc
+            };
+            *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
+        }
+    }
+    // chroma
+    let iLog2denom = pwt.uiChromaLog2WeightDenom as i32;
+    for plane in 0..2usize {
+        let iWoc = pwt.sPredList[listIdx].iChromaWeight[iRefIdx as usize][plane];
+        let iOoc = pwt.sPredList[listIdx].iChromaOffset[iRefIdx as usize][plane];
+        let mut cur = dst
+            .plane_mut(plane + 1)
+            .cursor_mut(at.chroma.0, at.chroma.1);
+        for i in 0..(iBlkHeight >> 1) as isize {
+            let out = cur.row_mut(i, 0, (iBlkWidth >> 1) as usize);
+            for p in out.iter_mut() {
                 let iPredTemp = if iLog2denom >= 1 {
                     ((*p as i32 * iWoc + (1 << (iLog2denom - 1))) >> iLog2denom) + iOoc
                 } else {
@@ -1285,98 +1410,80 @@ fn WeightPrediction(
                 *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
             }
         }
-        // chroma
-        let iLog2denom = pwt.uiChromaLog2WeightDenom as i32;
-        let iLineStride = pMCRefMem.iDstLineChroma;
-        for (plane, dst) in [pMCRefMem.pDstU, pMCRefMem.pDstV].into_iter().enumerate() {
-            let iWoc = pwt.sPredList[listIdx].iChromaWeight[iRefIdx as usize][plane];
-            let iOoc = pwt.sPredList[listIdx].iChromaOffset[iRefIdx as usize][plane];
-            for i in 0..(iBlkHeight >> 1) {
-                for j in 0..(iBlkWidth >> 1) {
-                    let p = dst.offset((j + i * iLineStride) as isize);
-                    let iPredTemp = if iLog2denom >= 1 {
-                        ((*p as i32 * iWoc + (1 << (iLog2denom - 1))) >> iLog2denom) + iOoc
-                    } else {
-                        *p as i32 * iWoc + iOoc
-                    };
-                    *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
-                }
-            }
-        }
     }
 }
 
 /// Matches `BiWeightPrediction` in `rec_mb.cpp`.
-#[allow(unsafe_code)] // sMCRefMember
+///
+/// `tmp` is `pCtx->pTempDec` — a different picture from `dst` at every call site, so
+/// the two halves of the blend are two borrows the compiler separates for free.
 fn BiWeightPrediction(
     pwt: Option<&SPredWeightTable>,
-    pMCRefMem: &mut sMCRefMember,
-    pTempMCRefMem: &sMCRefMember,
+    dst: &mut SPicture,
+    at: McDst,
+    tmp: &SPicture,
+    tmp_at: McDst,
     iRefIdx1: i32,
     iRefIdx2: i32,
     bWeightedBipredIdcIs1: bool,
     iBlkWidth: i32,
     iBlkHeight: i32,
 ) {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        // T5.X2, as `WeightPrediction` above.
-        let Some(pwt) = pwt else {
-            return;
-        };
-        let (mut iWoc1, mut iOoc1, mut iWoc2, mut iOoc2) = (0i32, 0i32, 0i32, 0i32);
+    // T5.X2, as `WeightPrediction` above.
+    let Some(pwt) = pwt else {
+        return;
+    };
+    let (mut iWoc1, mut iOoc1, mut iWoc2, mut iOoc2) = (0i32, 0i32, 0i32, 0i32);
 
-        // luma
-        let mut iLog2denom = pwt.uiLumaLog2WeightDenom as i32;
-        if bWeightedBipredIdcIs1 {
-            iWoc1 = pwt.sPredList[LIST_0].iLumaWeight[iRefIdx1 as usize];
-            iOoc1 = pwt.sPredList[LIST_0].iLumaOffset[iRefIdx1 as usize];
-            iWoc2 = pwt.sPredList[LIST_1].iLumaWeight[iRefIdx2 as usize];
-            iOoc2 = pwt.sPredList[LIST_1].iLumaOffset[iRefIdx2 as usize];
-        } else {
-            iWoc1 = pwt.iImplicitWeight[iRefIdx1 as usize][iRefIdx2 as usize];
-            iWoc2 = 64 - iWoc1;
-        }
-        let mut iLineStride = pMCRefMem.iDstLineLuma;
+    // luma
+    let mut iLog2denom = pwt.uiLumaLog2WeightDenom as i32;
+    if bWeightedBipredIdcIs1 {
+        iWoc1 = pwt.sPredList[LIST_0].iLumaWeight[iRefIdx1 as usize];
+        iOoc1 = pwt.sPredList[LIST_0].iLumaOffset[iRefIdx1 as usize];
+        iWoc2 = pwt.sPredList[LIST_1].iLumaWeight[iRefIdx2 as usize];
+        iOoc2 = pwt.sPredList[LIST_1].iLumaOffset[iRefIdx2 as usize];
+    } else {
+        iWoc1 = pwt.iImplicitWeight[iRefIdx1 as usize][iRefIdx2 as usize];
+        iWoc2 = 64 - iWoc1;
+    }
 
-        for i in 0..iBlkHeight {
-            for j in 0..iBlkWidth {
-                let iPixel = (j + i * iLineStride) as isize;
-                let p = pMCRefMem.pDstY.offset(iPixel);
-                let t = pTempMCRefMem.pDstY.offset(iPixel);
-                let iPredTemp = ((*p as i32 * iWoc1 + *t as i32 * iWoc2 + (1 << iLog2denom))
+    {
+        let src = tmp.plane(0).cursor(tmp_at.luma.0, tmp_at.luma.1);
+        let mut cur = dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1);
+        for i in 0..iBlkHeight as isize {
+            let t = src.row(i, 0, iBlkWidth as usize);
+            let out = cur.row_mut(i, 0, iBlkWidth as usize);
+            for (p, &t) in out.iter_mut().zip(t) {
+                let iPredTemp = ((*p as i32 * iWoc1 + t as i32 * iWoc2 + (1 << iLog2denom))
                     >> (iLog2denom + 1))
                     + ((iOoc1 + iOoc2 + 1) >> 1);
                 *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
             }
         }
+    }
 
-        // UV
-        let iBlkWidth = iBlkWidth >> 1;
-        let iBlkHeight = iBlkHeight >> 1;
-        iLog2denom = pwt.uiChromaLog2WeightDenom as i32;
-        iLineStride = pMCRefMem.iDstLineChroma;
+    // UV
+    let iBlkWidth = iBlkWidth >> 1;
+    let iBlkHeight = iBlkHeight >> 1;
+    iLog2denom = pwt.uiChromaLog2WeightDenom as i32;
 
-        for k in 0..2usize {
-            if bWeightedBipredIdcIs1 {
-                iWoc1 = pwt.sPredList[LIST_0].iChromaWeight[iRefIdx1 as usize][k];
-                iOoc1 = pwt.sPredList[LIST_0].iChromaOffset[iRefIdx1 as usize][k];
-                iWoc2 = pwt.sPredList[LIST_1].iChromaWeight[iRefIdx2 as usize][k];
-                iOoc2 = pwt.sPredList[LIST_1].iChromaOffset[iRefIdx2 as usize][k];
-            }
-            let pDst = if k != 0 { pMCRefMem.pDstV } else { pMCRefMem.pDstU };
-            let pTempDst = if k != 0 { pTempMCRefMem.pDstV } else { pTempMCRefMem.pDstU };
-
-            for i in 0..iBlkHeight {
-                for j in 0..iBlkWidth {
-                    let iPixel = (j + i * iLineStride) as isize;
-                    let p = pDst.offset(iPixel);
-                    let t = pTempDst.offset(iPixel);
-                    let iPredTemp = ((*p as i32 * iWoc1 + *t as i32 * iWoc2 + (1 << iLog2denom))
-                        >> (iLog2denom + 1))
-                        + ((iOoc1 + iOoc2 + 1) >> 1);
-                    *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
-                }
+    for k in 0..2usize {
+        if bWeightedBipredIdcIs1 {
+            iWoc1 = pwt.sPredList[LIST_0].iChromaWeight[iRefIdx1 as usize][k];
+            iOoc1 = pwt.sPredList[LIST_0].iChromaOffset[iRefIdx1 as usize][k];
+            iWoc2 = pwt.sPredList[LIST_1].iChromaWeight[iRefIdx2 as usize][k];
+            iOoc2 = pwt.sPredList[LIST_1].iChromaOffset[iRefIdx2 as usize][k];
+        }
+        let src = tmp.plane(k + 1).cursor(tmp_at.chroma.0, tmp_at.chroma.1);
+        let mut cur = dst.plane_mut(k + 1).cursor_mut(at.chroma.0, at.chroma.1);
+        for i in 0..iBlkHeight as isize {
+            let t = src.row(i, 0, iBlkWidth as usize);
+            let out = cur.row_mut(i, 0, iBlkWidth as usize);
+            for (p, &t) in out.iter_mut().zip(t) {
+                let iPredTemp = ((*p as i32 * iWoc1 + t as i32 * iWoc2 + (1 << iLog2denom))
+                    >> (iLog2denom + 1))
+                    + ((iOoc1 + iOoc2 + 1) >> 1);
+                *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
             }
         }
     }
@@ -1385,43 +1492,39 @@ fn BiWeightPrediction(
 /// Matches `BiPrediction` in `rec_mb.cpp`.
 // T5.X2: the layer parameter was `_pCurDqLayer` — unused since the function was
 // written — and it is deleted rather than converted.
-#[allow(unsafe_code)] // sMCRefMember
 fn BiPrediction(
-    pMCRefMem: &mut sMCRefMember,
-    pTempMCRefMem: &sMCRefMember,
+    dst: &mut SPicture,
+    at: McDst,
+    tmp: &SPicture,
+    tmp_at: McDst,
     iBlkWidth: i32,
     iBlkHeight: i32,
 ) {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        // luma
-        let mut iLineStride = pMCRefMem.iDstLineLuma;
-        for i in 0..iBlkHeight {
-            for j in 0..iBlkWidth {
-                let iPixel = (j + i * iLineStride) as isize;
-                let p = pMCRefMem.pDstY.offset(iPixel);
-                let t = pTempMCRefMem.pDstY.offset(iPixel);
-                let iPredTemp = (*p as i32 + *t as i32 + 1) >> 1;
+    {
+        let src = tmp.plane(0).cursor(tmp_at.luma.0, tmp_at.luma.1);
+        let mut cur = dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1);
+        for i in 0..iBlkHeight as isize {
+            let t = src.row(i, 0, iBlkWidth as usize);
+            let out = cur.row_mut(i, 0, iBlkWidth as usize);
+            for (p, &t) in out.iter_mut().zip(t) {
+                let iPredTemp = (*p as i32 + t as i32 + 1) >> 1;
                 *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
             }
         }
+    }
 
-        // UV
-        let iBlkWidth = iBlkWidth >> 1;
-        let iBlkHeight = iBlkHeight >> 1;
-        iLineStride = pMCRefMem.iDstLineChroma;
-
-        for k in 0..2usize {
-            let pDst = if k != 0 { pMCRefMem.pDstV } else { pMCRefMem.pDstU };
-            let pTempDst = if k != 0 { pTempMCRefMem.pDstV } else { pTempMCRefMem.pDstU };
-            for i in 0..iBlkHeight {
-                for j in 0..iBlkWidth {
-                    let iPixel = (j + i * iLineStride) as isize;
-                    let p = pDst.offset(iPixel);
-                    let t = pTempDst.offset(iPixel);
-                    let iPredTemp = (*p as i32 + *t as i32 + 1) >> 1;
-                    *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
-                }
+    // UV
+    let iBlkWidth = iBlkWidth >> 1;
+    let iBlkHeight = iBlkHeight >> 1;
+    for k in 0..2usize {
+        let src = tmp.plane(k + 1).cursor(tmp_at.chroma.0, tmp_at.chroma.1);
+        let mut cur = dst.plane_mut(k + 1).cursor_mut(at.chroma.0, at.chroma.1);
+        for i in 0..iBlkHeight as isize {
+            let t = src.row(i, 0, iBlkWidth as usize);
+            let out = cur.row_mut(i, 0, iBlkWidth as usize);
+            for (p, &t) in out.iter_mut().zip(t) {
+                let iPredTemp = (*p as i32 + t as i32 + 1) >> 1;
+                *p = WELS_CLIP3(iPredTemp, 0, 255) as u8;
             }
         }
     }
@@ -1429,110 +1532,58 @@ fn BiPrediction(
 
 /// Inter (motion-compensated) prediction of one P-slice macroblock.
 /// Matches `GetInterPred` in `rec_mb.cpp`.
-#[allow(unsafe_code)] // PPicture survivor (F42)
-pub unsafe fn GetInterPred(
-    pPredY: *mut u8,
-    pPredCb: *mut u8,
-    pPredCr: *mut u8,
-    pCtx: &mut SliceCtx<'_>,
-    pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+pub fn GetInterPred(
+    sRefPic: &SRefPic,
     pRefs: PicRefs<'_>,
+    pDec: &mut SPicture,
+    pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
+    let iMBXY = pCurDqLayer.iMbXyIndex as usize;
+    // Copied, not borrowed: the same picture is written below, and these are the
+    // per-macroblock records the C++ hoisted into locals for the same reason.
+    let iMBType = *pDec.pMbType.get(iMBXY);
+    let mv_mb = *pDec.pMv[0].get(iMBXY);
+    let ref_mb = *pDec.pRefIndex[0].get(iMBXY);
 
-    let iMBXY = (*pCurDqLayer).iMbXyIndex as usize;
-    let iMBType = *(*pDec).pMbType.get(iMBXY);
+    let iMBOffsetX = pCurDqLayer.iMbX << 4;
+    let iMBOffsetY = pCurDqLayer.iMbY << 4;
 
-    let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
-    let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
+    let sh = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
+    let geom = (sh.iMbWidth << 4, sh.iMbHeight << 4);
+    let pwt = pCurDqLayer.sPredWeightTable;
+    let bWeight = pCurDqLayer.bUseWeightPredictionFlag;
+    let mb = McDst::mb(pCurDqLayer.iMbX, pCurDqLayer.iMbY);
 
-    let iDstLineLuma = (*pDec).linesize(0);
-    let iDstLineChroma = (*pDec).linesize(1);
-
-    let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
-    let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
-    pMCRefMem.iPicWidth = sh.iMbWidth << 4;
-    pMCRefMem.iPicHeight = sh.iMbHeight << 4;
-    pMCRefMem.pDstY = pPredY;
-    pMCRefMem.pDstU = pPredCb;
-    pMCRefMem.pDstV = pPredCr;
-    pMCRefMem.iDstLineLuma = iDstLineLuma;
-    pMCRefMem.iDstLineChroma = iDstLineChroma;
-
-    let bWeight = (*pCurDqLayer).bUseWeightPredictionFlag;
-    let mv_mb = (*pDec).pMv[0].get(iMBXY);
-    let ref_mb = (*pDec).pRefIndex[0].get(iMBXY);
+    macro_rules! mc {
+        ($at:expr, $iref:expr, $x:expr, $y:expr, $w:expr, $h:expr, $mvs:expr) => {{
+            let src = match ref_for_current(pRefs, sRefPic, $iref, LIST_0) {
+                Ok(src) => src,
+                Err(ret) => return ret,
+            };
+            let at = $at;
+            BaseMC(geom, &src, pDec, at, $x, $y, $w, $h, $mvs);
+            if bWeight {
+                WeightPrediction(pwt.as_ref(), pDec, at, LIST_0, $iref as i32, $w, $h);
+            }
+        }};
+    }
 
     match iMBType {
         MB_TYPE_SKIP | MB_TYPE_16x16 => {
-            let iMVs = mv_mb[0];
-            let iRefIndex = ref_mb[0];
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
-            if bWeight {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 16);
-            }
+            mc!(mb, ref_mb[0], iMBOffsetX, iMBOffsetY, 16, 16, mv_mb[0]);
         }
         MB_TYPE_16x8 => {
-            let iMVs = mv_mb[0];
-            let iRefIndex = ref_mb[0];
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 8, iMVs);
-            if bWeight {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
-            }
-
-            let iMVs = mv_mb[8];
-            let iRefIndex = ref_mb[8];
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            pMCRefMem.pDstY = pPredY.offset((iDstLineLuma << 3) as isize);
-            pMCRefMem.pDstU = pPredCb.offset((iDstLineChroma << 2) as isize);
-            pMCRefMem.pDstV = pPredCr.offset((iDstLineChroma << 2) as isize);
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY + 8, 16, 8, iMVs);
-            if bWeight {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 16, 8);
-            }
+            mc!(mb, ref_mb[0], iMBOffsetX, iMBOffsetY, 16, 8, mv_mb[0]);
+            mc!(mb.blk(0, 8), ref_mb[8], iMBOffsetX, iMBOffsetY + 8, 16, 8, mv_mb[8]);
         }
         MB_TYPE_8x16 => {
-            let iMVs = mv_mb[0];
-            let iRefIndex = ref_mb[0];
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX, iMBOffsetY, 8, 16, iMVs);
-            if bWeight {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
-            }
-
-            let iMVs = mv_mb[2];
-            let iRefIndex = ref_mb[2];
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            pMCRefMem.pDstY = pPredY.offset(8);
-            pMCRefMem.pDstU = pPredCb.offset(4);
-            pMCRefMem.pDstV = pPredCr.offset(4);
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iMBOffsetX + 8, iMBOffsetY, 8, 16, iMVs);
-            if bWeight {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 16);
-            }
+            mc!(mb, ref_mb[0], iMBOffsetX, iMBOffsetY, 8, 16, mv_mb[0]);
+            mc!(mb.blk(8, 0), ref_mb[2], iMBOffsetX + 8, iMBOffsetY, 8, 16, mv_mb[2]);
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
             // T5.I1: one window borrow at the loop head, where the C++ hoists
-            // `pCurDqLayer->pSubMbType[iMBXY]` into a `uint32_t (*)[4]`. The four
-            // partition reads then index a `[u32; 4]` by a `0..4` induction variable.
-            let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMBXY);
+            // `pCurDqLayer->pSubMbType[iMBXY]` into a `uint32_t (*)[4]`.
+            let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMBXY);
             for i in 0..4usize {
                 let iSubMBType = pSubMbType[i];
                 let iBlk8X = ((i & 1) << 3) as i32;
@@ -1542,83 +1593,34 @@ pub unsafe fn GetInterPred(
 
                 let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
                 let iRefIndex = ref_mb[iIIdx];
-                let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, LIST_0);
-                if ret != ERR_NONE {
-                    return ret;
-                }
-                let pDstY = pPredY.offset((iBlk8X + iBlk8Y * iDstLineLuma) as isize);
-                let pDstU = pPredCb.offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-                let pDstV = pPredCr.offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-                pMCRefMem.pDstY = pDstY;
-                pMCRefMem.pDstU = pDstU;
-                pMCRefMem.pDstV = pDstV;
+                let blk8 = mb.blk(iBlk8X as isize, iBlk8Y as isize);
 
                 match iSubMBType {
                     SUB_MB_TYPE_8x8 => {
-                        let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
-                        if bWeight {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 8);
-                        }
+                        mc!(blk8, iRefIndex, iXOffset, iYOffset, 8, 8, mv_mb[iIIdx]);
                     }
                     SUB_MB_TYPE_8x4 => {
-                        let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
-                        if bWeight {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
-                        }
-
-                        let iMVs = mv_mb[iIIdx + 4];
-                        pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
-                        pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
-                        pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
-                        if bWeight {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 8, 4);
-                        }
+                        mc!(blk8, iRefIndex, iXOffset, iYOffset, 8, 4, mv_mb[iIIdx]);
+                        mc!(blk8.blk(0, 4), iRefIndex, iXOffset, iYOffset + 4, 8, 4, mv_mb[iIIdx + 4]);
                     }
                     SUB_MB_TYPE_4x8 => {
-                        let iMVs = mv_mb[iIIdx];
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
-                        if bWeight {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
-                        }
-
-                        let iMVs = mv_mb[iIIdx + 1];
-                        pMCRefMem.pDstY = pMCRefMem.pDstY.offset(4);
-                        pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
-                        pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
-                        if bWeight {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 8);
-                        }
+                        mc!(blk8, iRefIndex, iXOffset, iYOffset, 4, 8, mv_mb[iIIdx]);
+                        mc!(blk8.blk(4, 0), iRefIndex, iXOffset + 4, iYOffset, 4, 8, mv_mb[iIIdx + 1]);
                     }
                     SUB_MB_TYPE_4x4 => {
                         for j in 0..4usize {
                             let iJIdx = ((j >> 1) << 2) + (j & 1);
                             let iBlk4X = ((j & 1) << 2) as i32;
                             let iBlk4Y = ((j >> 1) << 2) as i32;
-
-                            let iUVLineStride = (iBlk4X >> 1) + (iBlk4Y >> 1) * iDstLineChroma;
-                            pMCRefMem.pDstY = pDstY.offset((iBlk4X + iBlk4Y * iDstLineLuma) as isize);
-                            pMCRefMem.pDstU = pDstU.offset(iUVLineStride as isize);
-                            pMCRefMem.pDstV = pDstV.offset(iUVLineStride as isize);
-
-                            let iMVs = mv_mb[iIIdx + iJIdx];
-                            BaseMC(
-                                pCtx,
-                                &mut pMCRefMem,
-                                LIST_0,
+                            mc!(
+                                blk8.blk(iBlk4X as isize, iBlk4Y as isize),
                                 iRefIndex,
                                 iXOffset + iBlk4X,
                                 iYOffset + iBlk4Y,
                                 4,
                                 4,
-                                iMVs,
+                                mv_mb[iIIdx + iJIdx]
                             );
-                            if bWeight {
-                                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, LIST_0, iRefIndex as i32, 4, 4);
-                            }
                         }
                     }
                     _ => {}
@@ -1633,93 +1635,116 @@ pub unsafe fn GetInterPred(
 /// Inter (motion-compensated) prediction of one B-slice macroblock.
 /// Matches `GetInterBPred` in `rec_mb.cpp`.
 ///
-/// `pTempPredYCbCr` receives the LIST_1 prediction so the two hypotheses can be
-/// blended in place by [`BiPrediction`] / [`BiWeightPrediction`].
-#[allow(unsafe_code)] // PPicture survivor (F42)
-pub unsafe fn GetInterBPred(
-    pPredYCbCr: [*mut u8; 3],
-    pTempPredYCbCr: [*mut u8; 3],
-    pCtx: &mut SliceCtx<'_>,
-    pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+/// `pTempDec` receives the LIST_1 prediction so the two hypotheses can be blended in
+/// place by [`BiPrediction`] / [`BiWeightPrediction`]. It is `pCtx->pTempDec`, a
+/// different picture from `pDec` — which is why F42's arm never reaches the LIST_1
+/// half: for that half the current picture is an ordinary disjoint reference
+/// ([`ref_for_other`]).
+pub fn GetInterBPred(
+    sRefPic: &SRefPic,
     pRefs: PicRefs<'_>,
+    pDec: &mut SPicture,
+    pTempDec: &mut SPicture,
+    pCurDqLayer: &mut DqLayerState,
+    bWeightedBipredIdcIs1: bool,
 ) -> i32 {
+    let iMBXY = pCurDqLayer.iMbXyIndex as usize;
 
-    let iMBXY = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMBType = *pDec.pMbType.get(iMBXY);
+    let mv = [*pDec.pMv[LIST_0].get(iMBXY), *pDec.pMv[LIST_1].get(iMBXY)];
+    let rf = [
+        *pDec.pRefIndex[LIST_0].get(iMBXY),
+        *pDec.pRefIndex[LIST_1].get(iMBXY),
+    ];
+    let pMv = |list: usize, idx: usize| -> [i16; 2] { mv[list][idx] };
+    let pRef = |list: usize, idx: usize| -> i8 { rf[list][idx] };
+
+    let iMBOffsetX = pCurDqLayer.iMbX << 4;
+    let iMBOffsetY = pCurDqLayer.iMbY << 4;
+
+    let sh = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
+    let geom = (sh.iMbWidth << 4, sh.iMbHeight << 4);
+    let pwt = pCurDqLayer.sPredWeightTable;
+    let bUseWeightedBiPredIdc = pCurDqLayer.bUseWeightedBiPredIdc;
+    let mb = McDst::mb(pCurDqLayer.iMbX, pCurDqLayer.iMbY);
+
     let mut iMVs = [0i16; 2];
-
-    let iMBType = *(*pDec).pMbType.get(iMBXY);
-
-    let iMBOffsetX = (*pCurDqLayer).iMbX << 4;
-    let iMBOffsetY = (*pCurDqLayer).iMbY << 4;
-
-    let iDstLineLuma = (*pDec).linesize(0);
-    let iDstLineChroma = (*pDec).linesize(1);
-
-    let mut pMCRefMem: sMCRefMember = std::mem::zeroed();
-    let sh = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
-    pMCRefMem.iPicWidth = sh.iMbWidth << 4;
-    pMCRefMem.iPicHeight = sh.iMbHeight << 4;
-
-    pMCRefMem.pDstY = pPredYCbCr[0];
-    pMCRefMem.pDstU = pPredYCbCr[1];
-    pMCRefMem.pDstV = pPredYCbCr[2];
-
-    pMCRefMem.iDstLineLuma = iDstLineLuma;
-    pMCRefMem.iDstLineChroma = iDstLineChroma;
-
-    let mut pTempMCRefMem = pMCRefMem;
-    pTempMCRefMem.pDstY = pTempPredYCbCr[0];
-    pTempMCRefMem.pDstU = pTempPredYCbCr[1];
-    pTempMCRefMem.pDstV = pTempPredYCbCr[2];
-
     let mut iRefIndex0: i8 = 0;
     let mut iRefIndex1: i8 = 0;
     let mut iRefIndex: i8 = 0;
 
-    let pPpsB = pCtx.pps_of((*pCurDqLayer).sLayerInfo.pps_id);
-    let bWeightedBipredIdcIs1 = pPpsB.is_some_and(|p| p.uiWeightedBipredIdc == 1);
-    let bUseWeightedBiPredIdc = (*pCurDqLayer).bUseWeightedBiPredIdc;
-
-    let pMv = |list: usize, idx: usize| -> [i16; 2] { (*(*pDec).pMv[list].get(iMBXY))[idx] };
-    let pRef = |list: usize, idx: usize| -> i8 { (*(*pDec).pRefIndex[list].get(iMBXY))[idx] };
+    /// LIST_0's hypothesis, into `pDec`.
+    macro_rules! mc0 {
+        ($at:expr, $list:expr, $iref:expr, $x:expr, $y:expr, $w:expr, $h:expr, $mvs:expr) => {{
+            let src = match ref_for_current(pRefs, sRefPic, $iref, $list) {
+                Ok(src) => src,
+                Err(ret) => return ret,
+            };
+            BaseMC(geom, &src, pDec, $at, $x, $y, $w, $h, $mvs);
+        }};
+    }
+    /// LIST_1's hypothesis, into `pTempDec`. `pDec` is only read here, so the
+    /// shared reborrow coexists with the scratch picture's `&mut`.
+    macro_rules! mc1 {
+        ($at:expr, $list:expr, $iref:expr, $x:expr, $y:expr, $w:expr, $h:expr, $mvs:expr) => {{
+            let src = match ref_for_other(pRefs, sRefPic, $iref, $list, &*pDec) {
+                Ok(src) => src,
+                Err(ret) => return ret,
+            };
+            BaseMC(geom, &src, pTempDec, $at, $x, $y, $w, $h, $mvs);
+        }};
+    }
+    macro_rules! blend {
+        ($at:expr, $tat:expr, $r0:expr, $r1:expr, $w:expr, $h:expr) => {{
+            if bUseWeightedBiPredIdc {
+                BiWeightPrediction(
+                    pwt.as_ref(),
+                    pDec,
+                    $at,
+                    pTempDec,
+                    $tat,
+                    $r0 as i32,
+                    $r1 as i32,
+                    bWeightedBipredIdcIs1,
+                    $w,
+                    $h,
+                );
+            } else {
+                BiPrediction(pDec, $at, pTempDec, $tat, $w, $h);
+            }
+        }};
+    }
 
     if IS_INTER_16x16(iMBType) {
         if IS_TYPE_L0(iMBType) && IS_TYPE_L1(iMBType) {
             iMVs = pMv(LIST_0, 0);
             iRefIndex0 = pRef(LIST_0, 0);
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex0, LIST_0);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
+            mc0!(mb, LIST_0, iRefIndex0, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
 
             iMVs = pMv(LIST_1, 0);
             iRefIndex1 = pRef(LIST_1, 0);
-            let ret = GetRefPic(&mut pTempMCRefMem, pCtx, pRefs, iRefIndex1, LIST_1);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
-            if bUseWeightedBiPredIdc {
-                BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 16);
-            } else {
-                BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 16, 16);
-            }
+            mc1!(mb, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
+            blend!(mb, mb, iRefIndex0, iRefIndex1, 16, 16);
         } else {
             let listIdx = if (iMBType & MB_TYPE_P0L0) != 0 { LIST_0 } else { LIST_1 };
             iMVs = pMv(listIdx, 0);
             iRefIndex = pRef(listIdx, 0);
-            let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, listIdx);
-            if ret != ERR_NONE {
-                return ret;
-            }
-            BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
+            mc0!(mb, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY, 16, 16, iMVs);
             if bWeightedBipredIdcIs1 {
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 16, 16);
+                WeightPrediction(pwt.as_ref(), pDec, mb, listIdx, iRefIndex as i32, 16, 16);
             }
         }
     } else if IS_INTER_16x8(iMBType) {
+        // **The two destination walks accumulate, and that is not a transcription
+        // choice.** `rec_mb.cpp:749` advances `pMCRefMem.pDst*` *inside* the list
+        // loop under `if (i)`, and `pMCRefMem` is function-scoped — so a second-half
+        // partition predicted from **both** lists advances it **twice**, and the
+        // LIST_1 hypothesis of that partition lands 8 rows below where a single
+        // advance would put it. Reproduced verbatim (S6); a fixed per-partition
+        // coordinate diverges on exactly the bi-predicted 16x8 macroblock, which is
+        // what eight B-slice conformance assets caught when this face first landed.
+        let mut at = mb;
+        let mut tat = mb;
         for i in 0..2usize {
             let iPartIdx = i << 3;
             let mut listCount = 0u32;
@@ -1729,47 +1754,35 @@ pub unsafe fn GetInterBPred(
                     lastListIdx = listIdx;
                     iMVs = pMv(listIdx, iPartIdx);
                     iRefIndex = pRef(listIdx, iPartIdx);
-                    let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, listIdx);
-                    if ret != ERR_NONE {
-                        return ret;
-                    }
                     if i != 0 {
-                        pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 3) as isize);
-                        pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 2) as isize);
-                        pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 2) as isize);
+                        at = at.blk(0, 8);
                     }
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
+                    mc0!(at, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
                     listCount += 1;
                     if listCount == 2 {
                         iMVs = pMv(LIST_1, iPartIdx);
                         iRefIndex1 = pRef(LIST_1, iPartIdx);
-                        let ret = GetRefPic(&mut pTempMCRefMem, pCtx, pRefs, iRefIndex1, LIST_1);
-                        if ret != ERR_NONE {
-                            return ret;
-                        }
                         if i != 0 {
-                            pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset((iDstLineLuma << 3) as isize);
-                            pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset((iDstLineChroma << 2) as isize);
-                            pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset((iDstLineChroma << 2) as isize);
+                            tat = tat.blk(0, 8);
                         }
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
-                        if bUseWeightedBiPredIdc {
-                            iRefIndex0 = pRef(LIST_0, iPartIdx);
-                            iRefIndex1 = pRef(LIST_1, iPartIdx);
-                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 16, 8);
-                        } else {
-                            BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 16, 8);
-                        }
+                        mc1!(tat, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx as i32, 16, 8, iMVs);
+                        iRefIndex0 = pRef(LIST_0, iPartIdx);
+                        iRefIndex1 = pRef(LIST_1, iPartIdx);
+                        blend!(at, tat, iRefIndex0, iRefIndex1, 16, 8);
                     }
                 }
             }
             if listCount == 1 && bWeightedBipredIdcIs1 {
                 iRefIndex = pRef(lastListIdx, iPartIdx);
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 16, 8);
+                WeightPrediction(pwt.as_ref(), pDec, at, lastListIdx, iRefIndex as i32, 16, 8);
             }
         }
     } else if IS_INTER_8x16(iMBType) {
+        // The 16x8 arm's accumulation, in columns (`rec_mb.cpp:794`).
+        let mut at = mb;
+        let mut tat = mb;
         for i in 0..2usize {
+            let iXOffset = iMBOffsetX + if i != 0 { 8 } else { 0 };
             let mut listCount = 0u32;
             let mut lastListIdx = LIST_0;
             for listIdx in LIST_0..LIST_A {
@@ -1777,48 +1790,32 @@ pub unsafe fn GetInterBPred(
                     lastListIdx = listIdx;
                     iMVs = pMv(listIdx, i << 1);
                     iRefIndex = pRef(listIdx, i << 1);
-                    let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, listIdx);
-                    if ret != ERR_NONE {
-                        return ret;
-                    }
                     if i != 0 {
-                        pMCRefMem.pDstY = pMCRefMem.pDstY.offset(8);
-                        pMCRefMem.pDstU = pMCRefMem.pDstU.offset(4);
-                        pMCRefMem.pDstV = pMCRefMem.pDstV.offset(4);
+                        at = at.blk(8, 0);
                     }
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, 8, 16, iMVs);
+                    mc0!(at, listIdx, iRefIndex, iXOffset, iMBOffsetY, 8, 16, iMVs);
                     listCount += 1;
                     if listCount == 2 {
                         iMVs = pMv(LIST_1, i << 1);
                         iRefIndex1 = pRef(LIST_1, i << 1);
-                        let ret = GetRefPic(&mut pTempMCRefMem, pCtx, pRefs, iRefIndex1, LIST_1);
-                        if ret != ERR_NONE {
-                            return ret;
-                        }
                         if i != 0 {
-                            pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset(8);
-                            pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset(4);
-                            pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset(4);
+                            tat = tat.blk(8, 0);
                         }
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX + if i != 0 { 8 } else { 0 }, iMBOffsetY, 8, 16, iMVs);
-                        if bUseWeightedBiPredIdc {
-                            iRefIndex0 = pRef(LIST_0, i << 1);
-                            iRefIndex1 = pRef(LIST_1, i << 1);
-                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 16);
-                        } else {
-                            BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 16);
-                        }
+                        mc1!(tat, LIST_1, iRefIndex1, iXOffset, iMBOffsetY, 8, 16, iMVs);
+                        iRefIndex0 = pRef(LIST_0, i << 1);
+                        iRefIndex1 = pRef(LIST_1, i << 1);
+                        blend!(at, tat, iRefIndex0, iRefIndex1, 8, 16);
                     }
                 }
             }
             if listCount == 1 && bWeightedBipredIdcIs1 {
                 iRefIndex = pRef(lastListIdx, i << 1);
-                WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, lastListIdx, iRefIndex as i32, 8, 16);
+                WeightPrediction(pwt.as_ref(), pDec, at, lastListIdx, iRefIndex as i32, 8, 16);
             }
         }
     } else if IS_Inter_8x8(iMBType) {
         // T5.I1: hoisted as in `GetInterPred`.
-        let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get(iMBXY);
+        let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMBXY);
         for i in 0..4usize {
             let iSubMBType = pSubMbType[i];
             let iBlk8X = ((i & 1) << 3) as i32;
@@ -1827,207 +1824,128 @@ pub unsafe fn GetInterBPred(
             let iYOffset = iMBOffsetY + iBlk8Y;
 
             let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
+            let blk8 = mb.blk(iBlk8X as isize, iBlk8Y as isize);
 
-            let pDstY = pPredYCbCr[0].offset((iBlk8X + iBlk8Y * iDstLineLuma) as isize);
-            let pDstU = pPredYCbCr[1].offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-            let pDstV = pPredYCbCr[2].offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-            pMCRefMem.pDstY = pDstY;
-            pMCRefMem.pDstU = pDstU;
-            pMCRefMem.pDstV = pDstV;
-
-            pTempMCRefMem = pMCRefMem;
-            let pDstY2 = pTempPredYCbCr[0].offset((iBlk8X + iBlk8Y * iDstLineLuma) as isize);
-            let pDstU2 = pTempPredYCbCr[1].offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-            let pDstV2 = pTempPredYCbCr[2].offset(((iBlk8X >> 1) + (iBlk8Y >> 1) * iDstLineChroma) as isize);
-
-            pTempMCRefMem.pDstY = pDstY2;
-            pTempMCRefMem.pDstU = pDstU2;
-            pTempMCRefMem.pDstV = pDstV2;
-
+            // Both destinations start at the sub-block; the C copies `pMCRefMem` into
+            // `pTempMCRefMem` and then re-points only the `pDst*` fields, so the two
+            // agree here and diverge only in the 4x4 arm below.
             if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                 iRefIndex0 = pRef(LIST_0, iIIdx);
-                let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex0, LIST_0);
-                if ret != ERR_NONE {
-                    return ret;
-                }
                 iRefIndex1 = pRef(LIST_1, iIIdx);
-                let ret = GetRefPic(&mut pTempMCRefMem, pCtx, pRefs, iRefIndex1, LIST_1);
-                if ret != ERR_NONE {
-                    return ret;
-                }
             } else {
-                let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
-                iRefIndex = pRef(listIdx, iIIdx);
-                let ret = GetRefPic(&mut pMCRefMem, pCtx, pRefs, iRefIndex, listIdx);
-                if ret != ERR_NONE {
-                    return ret;
-                }
+                iRefIndex = pRef(if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 }, iIIdx);
             }
 
             if IS_SUB_8x8(iSubMBType) {
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 8, iMVs);
-
+                    mc0!(blk8, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 8, iMVs);
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 8, iMVs);
-
-                    if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 8);
-                    } else {
-                        BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 8);
-                    }
+                    mc1!(blk8, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 8, iMVs);
+                    blend!(blk8, blk8, iRefIndex0, iRefIndex1, 8, 8);
                 } else {
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
+                    mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 8, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 8);
+                        WeightPrediction(pwt.as_ref(), pDec, blk8, listIdx, iRefIndex as i32, 8, 8);
                     }
                 }
             } else if IS_SUB_8x4(iSubMBType) {
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     // B_Bi_8x4
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 4, iMVs);
+                    mc0!(blk8, LIST_0, iRefIndex0, iXOffset, iYOffset, 8, 4, iMVs);
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 4, iMVs);
+                    mc1!(blk8, LIST_1, iRefIndex1, iXOffset, iYOffset, 8, 4, iMVs);
+                    blend!(blk8, blk8, iRefIndex0, iRefIndex1, 8, 4);
 
-                    if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
-                    } else {
-                        BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 4);
-                    }
-
-                    pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
-                    pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
-                    pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
+                    let lower = blk8.blk(0, 4);
                     iMVs = pMv(LIST_0, iIIdx + 4);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset + 4, 8, 4, iMVs);
-
-                    pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
-                    pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
-                    pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
+                    mc0!(lower, LIST_0, iRefIndex0, iXOffset, iYOffset + 4, 8, 4, iMVs);
                     iMVs = pMv(LIST_1, iIIdx + 4);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset + 4, 8, 4, iMVs);
-
-                    if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 8, 4);
-                    } else {
-                        BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 8, 4);
-                    }
+                    mc1!(lower, LIST_1, iRefIndex1, iXOffset, iYOffset + 4, 8, 4, iMVs);
+                    blend!(lower, lower, iRefIndex0, iRefIndex1, 8, 4);
                 } else {
                     // B_L0_8x4 B_L1_8x4
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
-                    pMCRefMem.pDstY = pMCRefMem.pDstY.offset((iDstLineLuma << 2) as isize);
-                    pMCRefMem.pDstU = pMCRefMem.pDstU.offset((iDstLineChroma << 1) as isize);
-                    pMCRefMem.pDstV = pMCRefMem.pDstV.offset((iDstLineChroma << 1) as isize);
+                    mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
+                    let lower = blk8.blk(0, 4);
                     iMVs = pMv(listIdx, iIIdx + 4);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
+                    mc0!(lower, listIdx, iRefIndex, iXOffset, iYOffset + 4, 8, 4, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 8, 4);
+                        WeightPrediction(pwt.as_ref(), pDec, lower, listIdx, iRefIndex as i32, 8, 4);
                     }
                 }
             } else if IS_SUB_4x8(iSubMBType) {
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     // B_Bi_4x8
                     iMVs = pMv(LIST_0, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset, iYOffset, 4, 8, iMVs);
+                    mc0!(blk8, LIST_0, iRefIndex0, iXOffset, iYOffset, 4, 8, iMVs);
                     iMVs = pMv(LIST_1, iIIdx);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iYOffset, 4, 8, iMVs);
+                    mc1!(blk8, LIST_1, iRefIndex1, iXOffset, iYOffset, 4, 8, iMVs);
+                    blend!(blk8, blk8, iRefIndex0, iRefIndex1, 4, 8);
 
-                    if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
-                    } else {
-                        BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 8);
-                    }
-
-                    pMCRefMem.pDstY = pMCRefMem.pDstY.offset(4);
-                    pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
-                    pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
+                    let right = blk8.blk(4, 0);
                     iMVs = pMv(LIST_0, iIIdx + 1);
-                    BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + 4, iYOffset, 4, 8, iMVs);
-
-                    pTempMCRefMem.pDstY = pTempMCRefMem.pDstY.offset(4);
-                    pTempMCRefMem.pDstU = pTempMCRefMem.pDstU.offset(2);
-                    pTempMCRefMem.pDstV = pTempMCRefMem.pDstV.offset(2);
+                    mc0!(right, LIST_0, iRefIndex0, iXOffset + 4, iYOffset, 4, 8, iMVs);
                     iMVs = pMv(LIST_1, iIIdx + 1);
-                    BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + 4, iYOffset, 4, 8, iMVs);
-
-                    if bUseWeightedBiPredIdc {
-                        BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 8);
-                    } else {
-                        BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 8);
-                    }
+                    mc1!(right, LIST_1, iRefIndex1, iXOffset + 4, iYOffset, 4, 8, iMVs);
+                    blend!(right, right, iRefIndex0, iRefIndex1, 4, 8);
                 } else {
                     // B_L0_4x8 B_L1_4x8
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
-                    pMCRefMem.pDstY = pMCRefMem.pDstY.offset(4);
-                    pMCRefMem.pDstU = pMCRefMem.pDstU.offset(2);
-                    pMCRefMem.pDstV = pMCRefMem.pDstV.offset(2);
+                    mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
+                    let right = blk8.blk(4, 0);
                     iMVs = pMv(listIdx, iIIdx + 1);
-                    BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
+                    mc0!(right, listIdx, iRefIndex, iXOffset + 4, iYOffset, 4, 8, iMVs);
                     if bWeightedBipredIdcIs1 {
-                        WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 8);
+                        WeightPrediction(pwt.as_ref(), pDec, right, listIdx, iRefIndex as i32, 4, 8);
                     }
                 }
             } else if IS_SUB_4x4(iSubMBType) {
                 if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                     for j in 0..4usize {
                         let iJIdx = ((j >> 1) << 2) + (j & 1);
-
                         let iBlk4X = ((j & 1) << 2) as i32;
                         let iBlk4Y = ((j >> 1) << 2) as i32;
 
-                        let iUVLineStride = (iBlk4X >> 1) + (iBlk4Y >> 1) * iDstLineChroma;
-                        pMCRefMem.pDstY = pDstY.offset((iBlk4X + iBlk4Y * iDstLineLuma) as isize);
-                        pMCRefMem.pDstU = pDstU.offset(iUVLineStride as isize);
-                        pMCRefMem.pDstV = pDstV.offset(iUVLineStride as isize);
+                        let at = blk8.blk(iBlk4X as isize, iBlk4Y as isize);
+                        // NOTE: C indexes the LIST_1 *luma* destination with
+                        // iBlk8X/iBlk8Y here, not iBlk4X/iBlk4Y, so the 8x8 offset is
+                        // applied twice — while its chroma takes the 4x4 offset like
+                        // everything else. Kept verbatim; `McDst`'s two coordinate
+                        // pairs exist for this line. See rec_mb.cpp:1014.
+                        let tat = blk8.split_blk(
+                            iBlk8X as isize,
+                            iBlk8Y as isize,
+                            (iBlk4X >> 1) as isize,
+                            (iBlk4Y >> 1) as isize,
+                        );
 
                         iMVs = pMv(LIST_0, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pMCRefMem, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
-
-                        // NOTE: C indexes the LIST_1 destination with iBlk8X/iBlk8Y here,
-                        // not iBlk4X/iBlk4Y, so the 8x8 offset is applied twice (pDstY2
-                        // already carries it). Kept verbatim - see rec_mb.cpp:1014.
-                        pTempMCRefMem.pDstY = pDstY2.offset((iBlk8X + iBlk8Y * iDstLineLuma) as isize);
-                        pTempMCRefMem.pDstU = pDstU2.offset(iUVLineStride as isize);
-                        pTempMCRefMem.pDstV = pDstV2.offset(iUVLineStride as isize);
-
+                        mc0!(at, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
                         iMVs = pMv(LIST_1, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pTempMCRefMem, LIST_1, iRefIndex1, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
-
-                        if bUseWeightedBiPredIdc {
-                            BiWeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, &pTempMCRefMem, iRefIndex0 as i32, iRefIndex1 as i32, bWeightedBipredIdcIs1, 4, 4);
-                        } else {
-                            BiPrediction(&mut pMCRefMem, &pTempMCRefMem, 4, 4);
-                        }
+                        mc1!(tat, LIST_1, iRefIndex1, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
+                        blend!(at, tat, iRefIndex0, iRefIndex1, 4, 4);
                     }
                 } else {
                     let listIdx = if IS_TYPE_L0(iSubMBType) { LIST_0 } else { LIST_1 };
                     iRefIndex = pRef(listIdx, iIIdx);
                     for j in 0..4usize {
                         let iJIdx = ((j >> 1) << 2) + (j & 1);
-
                         let iBlk4X = ((j & 1) << 2) as i32;
                         let iBlk4Y = ((j >> 1) << 2) as i32;
-
-                        let iUVLineStride = (iBlk4X >> 1) + (iBlk4Y >> 1) * iDstLineChroma;
-                        pMCRefMem.pDstY = pDstY.offset((iBlk4X + iBlk4Y * iDstLineLuma) as isize);
-                        pMCRefMem.pDstU = pDstU.offset(iUVLineStride as isize);
-                        pMCRefMem.pDstV = pDstV.offset(iUVLineStride as isize);
-
+                        let at = blk8.blk(iBlk4X as isize, iBlk4Y as isize);
                         iMVs = pMv(listIdx, iIIdx + iJIdx);
-                        BaseMC(pCtx, &mut pMCRefMem, listIdx, iRefIndex, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
+                        mc0!(at, listIdx, iRefIndex, iXOffset + iBlk4X, iYOffset + iBlk4Y, 4, 4, iMVs);
                         if bWeightedBipredIdcIs1 {
-                            WeightPrediction((*pCurDqLayer).sPredWeightTable.as_ref(), &mut pMCRefMem, listIdx, iRefIndex as i32, 4, 4);
+                            WeightPrediction(pwt.as_ref(), pDec, at, listIdx, iRefIndex as i32, 4, 4);
                         }
                     }
                 }
@@ -2037,17 +1955,15 @@ pub unsafe fn GetInterBPred(
     ERR_NONE
 }
 
-/// `pCtx->pTempDec` lazily allocated on first B macroblock, then the three
-/// plane pointers for this macroblock. Matches the `else` branch shared by
-/// `WelsMbInterConstruction` / `WelsMbInterPrediction` in `decode_slice.cpp`.
-#[allow(unsafe_code)] // decoder-internal raw cursor
-unsafe fn GetTempPredPlanes(
-    pCtx: &mut SliceCtx<'_>,
-    iMbX: i32,
-    iMbY: i32,
-    iLumaStride: i32,
-    iChromaStride: i32,
-) -> Option<[*mut u8; 3]> {
+/// `pCtx->pTempDec`, lazily allocated on the first B macroblock — the `else` branch
+/// shared by `WelsMbInterConstruction` / `WelsMbInterPrediction` in
+/// `decode_slice.cpp`, with the three plane pointers it used to hand back replaced by
+/// the picture itself (T5b.2).
+///
+/// **The borrow is on the field** (S29), so the caller's other reads of the view are
+/// disjoint field paths and the compiler separates them.
+#[inline]
+fn temp_pred_pic<'v>(pCtx: &'v mut SliceCtx<'_>) -> Option<&'v mut SPicture> {
     if pCtx.pTempDec.is_none() {
         let (iMbWidth, iMbHeight) = match pCtx.active_sps() {
             Some(sps) => (sps.iMbWidth, sps.iMbHeight),
@@ -2069,114 +1985,80 @@ unsafe fn GetTempPredPlanes(
             )
         };
     }
-    // The borrow is on the field (S29) and the three plane pointers derive from the
-    // picture's own plane allocations (S28, `data_ptr` from the allocation root), so
-    // nothing the caller does through `pCtx` can pop them — the only expression that
-    // re-derives this picture is this function, one macroblock later.
-    let pTempDec = pCtx.pTempDec.as_deref_mut()?;
-    Some([
-        pTempDec.data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize),
-        pTempDec.data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
-        pTempDec.data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize),
-    ])
+    pCtx.pTempDec.as_deref_mut()
 }
 
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsMbInterConstruction(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        let dq: &mut DqLayerState = pCurDqLayer;
-        let iMbX = (*dq).iMbX;
-        let iMbY = (*dq).iMbY;
-
-        if pDec.is_null() {
-            return ERR_NONE;
-        }
-        let iLumaStride = (*pDec).linesize(0);
-        let iChromaStride = (*pDec).linesize(1);
-
-        let pDstY = (*pDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-        let pDstCb = (*pDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-        let pDstCr = (*pDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-
-        if pCtx.eSliceType == EWelsSliceType::P_SLICE {
-            let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx, dq, pDec, pRefs);
-            if ret != ERR_NONE {
-                return ret;
-            }
-        } else {
-            let Some(pTempDstYCbCr) =
-                GetTempPredPlanes(pCtx, iMbX, iMbY, iLumaStride, iChromaStride)
-            else {
-                return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_MB_RECON_FAIL);
-            };
-            let ret = GetInterBPred([pDstY, pDstCb, pDstCr], pTempDstYCbCr, pCtx, dq, pDec, pRefs);
-            if ret != ERR_NONE {
-                return ret;
-            }
-        }
-
-        WelsMbInterSampleConstruction(pCtx, dq, pDec.as_mut());
-
-        // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
-        // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
-        // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
-        // so the guard is always true and is not transcribed.
-        crate::common::deblocking_common::WelsNonZeroCount_c(
-            (*dq).grid.nzc.get_mut((*dq).iMbXyIndex as usize).as_mut_ptr(),
-        );
-
-        ERR_NONE
+    let ret = inter_pred(pCtx, pDec, pRefs, pCurDqLayer);
+    if ret != ERR_NONE {
+        return ret;
     }
+
+    WelsMbInterSampleConstruction(pCtx, pCurDqLayer, Some(pDec));
+
+    // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
+    // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
+    // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
+    // so the guard is always true and is not transcribed.
+    //
+    // T5b.2: the safe kernel directly. The `WelsNonZeroCount_c` shim it went through
+    // existed to turn `*mut i8` into `&mut [i8; 24]`, and the grid already has one.
+    crate::common::deblocking_common::nonzero_count(
+        pCurDqLayer.grid.nzc.get_mut(pCurDqLayer.iMbXyIndex as usize),
+    );
+
+    ERR_NONE
 }
 
 /// MC-only reconstruction for inter macroblocks with cbp == 0 (incl. skip).
 /// Matches `WelsMbInterPrediction` in `decode_slice.cpp`.
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsMbInterPrediction(
     pCtx: &mut SliceCtx<'_>,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        if pDec.is_null() {
-            return ERR_NONE;
-        }
-        let dq: &mut DqLayerState = pCurDqLayer;
-        let iMbX = (*dq).iMbX;
-        let iMbY = (*dq).iMbY;
-        let iLumaStride = (*pDec).linesize(0);
-        let iChromaStride = (*pDec).linesize(1);
+    inter_pred(pCtx, pDec, pRefs, pCurDqLayer)
+}
 
-        let pDstY = (*pDec).data_ptr(0).offset(((iMbY * iLumaStride + iMbX) << 4) as isize);
-        let pDstCb = (*pDec).data_ptr(1).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-        let pDstCr = (*pDec).data_ptr(2).offset(((iMbY * iChromaStride + iMbX) << 3) as isize);
-
-        if pCtx.eSliceType == EWelsSliceType::P_SLICE {
-            let ret = GetInterPred(pDstY, pDstCb, pDstCr, pCtx, dq, pDec, pRefs);
-            if ret != ERR_NONE {
-                return ret;
-            }
-        } else {
-            let Some(pTempDstYCbCr) =
-                GetTempPredPlanes(pCtx, iMbX, iMbY, iLumaStride, iChromaStride)
-            else {
-                return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_MB_RECON_FAIL);
-            };
-            let ret = GetInterBPred([pDstY, pDstCb, pDstCr], pTempDstYCbCr, pCtx, dq, pDec, pRefs);
-            if ret != ERR_NONE {
-                return ret;
-            }
-        }
-        ERR_NONE
+/// The prediction step both of the two above open with, and the one place the
+/// P-slice and B-slice paths are told apart.
+///
+/// **The view is read field by field rather than through its methods**, and that is
+/// what lets the B path hold `pTempDec` mutably beside `sRefPic`: `(*pCtx).pTempDec`
+/// and `(*pCtx).sRefPic` are disjoint places, where `pCtx.ref_id(..)` would borrow
+/// the whole view.
+#[inline]
+fn inter_pred(
+    pCtx: &mut SliceCtx<'_>,
+    pDec: &mut SPicture,
+    pRefs: PicRefs<'_>,
+    pCurDqLayer: &mut DqLayerState,
+) -> i32 {
+    // A shared reference field copies out, so this borrow of the view ends here.
+    let sRefPic: &SRefPic = pCtx.sRefPic;
+    if pCtx.eSliceType == EWelsSliceType::P_SLICE {
+        return GetInterPred(sRefPic, pRefs, pDec, pCurDqLayer);
     }
+    let bWeightedBipredIdcIs1 = pCtx
+        .pps_of(pCurDqLayer.sLayerInfo.pps_id)
+        .is_some_and(|p| p.uiWeightedBipredIdc == 1);
+    let Some(pTempDec) = temp_pred_pic(pCtx) else {
+        return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_MB_RECON_FAIL);
+    };
+    GetInterBPred(
+        sRefPic,
+        pRefs,
+        pDec,
+        pTempDec,
+        pCurDqLayer,
+        bWeightedBipredIdcIs1,
+    )
 }
 
 pub fn WelsFillRecNeededMbInfo(
@@ -2456,42 +2338,46 @@ pub fn WelsMbIntraPredictionConstruction(
     ERR_NONE
 }
 
-#[allow(unsafe_code)] // PPicture survivor (F42)
-pub fn WelsTargetMbConstruction(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        let dq: &mut DqLayerState = pCurDqLayer;
-        let iMbXy = (*dq).iMbXyIndex as usize;
+pub fn WelsTargetMbConstruction(
+    pCtx: &mut SliceCtx<'_>,
+    pCurDqLayer: &mut DqLayerState,
+    pDec: Option<&mut SPicture>,
+    pRefs: PicRefs<'_>,
+) -> i32 {
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
-        if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
-            return ERR_NONE;
-        }
-        let mb_type = *(*pDec).pMbType.get(iMbXy);
+    // The C's `pDec == NULL` arm, as the `Option`.
+    let Some(pDec) = pDec else {
+        return ERR_NONE;
+    };
+    if pDec.pMbType.as_slice().is_empty() {
+        return ERR_NONE;
+    }
+    let mb_type = *pDec.pMbType.get(iMbXy);
 
-        if mb_type == MB_TYPE_INTRA_PCM {
-            ERR_NONE
-        } else if IS_INTRA(mb_type) {
-            WelsMbIntraPredictionConstruction(pCtx, pDec.as_mut(), pCurDqLayer, true);
-            ERR_NONE
-        } else if IS_INTER(mb_type) {
-            // T5.H12: a `pCbp.is_null()` guard returning `ERR_INFO_MB_RECON_FAIL` sat
-            // here. `WelsTargetMbConstruction` (`decode_slice.cpp:334-355`) has no such
-            // test — the port invented it, and it could only fire if the array's
-            // allocation had failed, which the C++ answers by dereferencing null. The
-            // grid makes it unrepresentable: `cbp` is a `Vec` sized with the layer.
-            let cbp = *(*dq).grid.cbp.get(iMbXy);
-            if cbp == 0 {
-                if !CheckRefPics(pCtx) {
-                    return ERR_INFO_MB_RECON_FAIL;
-                }
-                WelsMbInterPrediction(pCtx, pDec, pRefs, pCurDqLayer)
-            } else {
-                WelsMbInterConstruction(pCtx, pDec, pRefs, pCurDqLayer);
-                ERR_NONE
+    if mb_type == MB_TYPE_INTRA_PCM {
+        ERR_NONE
+    } else if IS_INTRA(mb_type) {
+        WelsMbIntraPredictionConstruction(pCtx, Some(pDec), pCurDqLayer, true);
+        ERR_NONE
+    } else if IS_INTER(mb_type) {
+        // T5.H12: a `pCbp.is_null()` guard returning `ERR_INFO_MB_RECON_FAIL` sat
+        // here. `WelsTargetMbConstruction` (`decode_slice.cpp:334-355`) has no such
+        // test — the port invented it, and it could only fire if the array's
+        // allocation had failed, which the C++ answers by dereferencing null. The
+        // grid makes it unrepresentable: `cbp` is a `Vec` sized with the layer.
+        let cbp = *pCurDqLayer.grid.cbp.get(iMbXy);
+        if cbp == 0 {
+            if !CheckRefPics(pCtx) {
+                return ERR_INFO_MB_RECON_FAIL;
             }
+            WelsMbInterPrediction(pCtx, pDec, pRefs, pCurDqLayer)
         } else {
-            ERR_INFO_MB_RECON_FAIL
+            WelsMbInterConstruction(pCtx, pDec, pRefs, pCurDqLayer);
+            ERR_NONE
         }
+    } else {
+        ERR_INFO_MB_RECON_FAIL
     }
 }
 
@@ -2507,6 +2393,12 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         // **The split** (T5.Y2), the third of the three: this bracket reconstructs
         // rather than parses, and reaches the context for exactly what the view carries.
         let (pDec, pRefs, mut view) = slice_split(pCtx, None);
+        // T5b.2: the picture is a borrow, so the one place its absence is tested is
+        // here rather than at every level below. `DecodeCurrentAccessUnit` prefetches
+        // it and returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply
+        // one, so this arm is unreachable from the decode path — same condition, same
+        // code, stated once.
+        let mut pDec = pDec;
         // The view's scope is the macroblock loop; the deblocking tail below it still
         // takes the context, and converts with the rest of `deblocking.rs`.
         let (iCurLayerWidth, iCurLayerHeight) = {
@@ -2533,14 +2425,16 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         }
         (*dq).iMbXyIndex = iNextMbXyIndex;
 
-        if iNextMbXyIndex == 0 && !pDec.is_null() {
-            if let Some(sps) = pCtx.active_sps() {
-                (*pDec).iSpsId = sps.iSpsId;
+        if iNextMbXyIndex == 0 {
+            if let Some(pDec) = pDec.as_deref_mut() {
+                if let Some(sps) = pCtx.active_sps() {
+                    pDec.iSpsId = sps.iSpsId;
+                }
+                if let Some(pps) = pCtx.active_pps() {
+                    pDec.iPpsId = pps.iPpsId;
+                }
+                pDec.uiQualityId = (*dq).sLayerInfo.sNalHeaderExt.uiQualityId;
             }
-            if let Some(pps) = pCtx.active_pps() {
-                (*pDec).iPpsId = pps.iPpsId;
-            }
-            (*pDec).uiQualityId = (*dq).sLayerInfo.sNalHeaderExt.uiQualityId;
         }
 
         loop {
@@ -2550,7 +2444,7 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 
             let bParseOnly = pCtx.bParseOnly;
             if !bParseOnly {
-                let ret = WelsTargetMbConstruction(pCtx, dq, pDec, pRefs);
+                let ret = WelsTargetMbConstruction(pCtx, dq, pDec.as_deref_mut(), pRefs);
                 if ret != ERR_NONE {
                     return ERR_INFO_MB_RECON_FAIL;
                 }
@@ -2561,8 +2455,8 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
             if !*(*dq).grid.mb_correctly_decoded_flag.get(idx) {
                 *(*dq).grid.mb_correctly_decoded_flag.get_mut(idx) = true;
                 if *(*dq).grid.mb_ref_concealed_flag.get(idx) {
-                    if !pDec.is_null() {
-                        (*pDec).iMbEcedPropNum += 1;
+                    if let Some(pDec) = pDec.as_deref_mut() {
+                        pDec.iMbEcedPropNum += 1;
                     }
                 }
                 *pCtx.iTotalNumMbRec += 1;
@@ -2592,9 +2486,9 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         (iCurLayerWidth, iCurLayerHeight)
         };
 
-        if !pDec.is_null() {
-            (*pDec).iWidthInPixel = iCurLayerWidth;
-            (*pDec).iHeightInPixel = iCurLayerHeight;
+        if let Some(pDec) = pDec.as_deref_mut() {
+            pDec.iWidthInPixel = iCurLayerWidth;
+            pDec.iHeightInPixel = iCurLayerHeight;
         }
 
         if (*dq).sLayerInfo.sSliceInLayer.eSliceType != EWelsSliceType::I_SLICE as u8
@@ -2711,7 +2605,7 @@ fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq:
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
+pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
@@ -3146,10 +3040,10 @@ fn WelsDecodeMbCavlcResidual(
     ERR_NONE
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCavlcISlice(
+pub fn WelsDecodeMbCavlcISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -3189,7 +3083,7 @@ pub extern "C" fn WelsDecodeMbCavlcISlice(
 
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
+pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
@@ -3227,7 +3121,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             // inter MB type
             let mut iMotionVector = [[[0i16; 2]; 30]; 2];
             let mut iRefIndex = [[0i8; 30]; 2];
-            *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
+            *pDec.pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
                 &sNeighAvail,
                 &mut pNonZeroCount,
@@ -3284,7 +3178,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                 return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
             } else if 0 == uiMbType {
                 let mut pIntraPredMode = [0i8; 48];
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
+                *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
                 if pCtx.bTransform8x8ModeFlag() {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
@@ -3292,7 +3186,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                     }
                     *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = uiCode != 0;
                     if uiCode != 0 {
-                        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
+                        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                     }
                 }
                 pCtx.eIntraPredConstraint.FillCacheIntraNxN(
@@ -3310,7 +3204,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                     return ret;
                 }
             } else {
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
+                *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
                 *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
                 *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
                 (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -3333,7 +3227,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             }
         }
 
-        if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.get(iMbXy) {
+        if MB_TYPE_INTRA16x16 != *pDec.pMbType.get(iMbXy) {
             let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
@@ -3345,7 +3239,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             if pCtx.uiChromaFormatIdc() == 0 && uiCbp > 15 {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
             }
-            let mb_type = *(*pDec).pMbType.get(iMbXy);
+            let mb_type = *pDec.pMbType.get(iMbXy);
             uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
                 if pCtx.uiChromaFormatIdc() != 0 {
                     crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3364,7 +3258,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             uiCbpC = uiCbp >> 4;
             uiCbpL = uiCbp & 15;
 
-            let mb_type = *(*pDec).pMbType.get(iMbXy);
+            let mb_type = *pDec.pMbType.get(iMbXy);
             let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
                 || *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy))
                 && mb_type != MB_TYPE_INTRA8x8
@@ -3384,7 +3278,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
         let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
         pNzc.fill(0);
 
-        let mb_type = *(*pDec).pMbType.get(iMbXy);
+        let mb_type = *pDec.pMbType.get(iMbXy);
         if *(*dq).grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
             let pps_sh_chroma_qp_offset = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             let pps_sh_entropy = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
@@ -3400,7 +3294,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             }
         }
 
-        if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
+        if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *pDec.pMbType.get(iMbXy) {
             let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
             scaled_tcoeff_mb.fill(0);
 
@@ -3449,10 +3343,10 @@ pub extern "C" fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCavlcPSlice(
+pub fn WelsDecodeMbCavlcPSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -3480,23 +3374,11 @@ pub extern "C" fn WelsDecodeMbCavlcPSlice(
         if bSkip {
             let mut iMv = [0i16; 2];
 
-            if !pDec.is_null() {
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
-            }
-            for j in 0..24 {
-                *(*dq).grid.nzc.get_mut(iMbXy).as_mut_ptr().add(j) = 0;
-            }
-            if !pDec.is_null() {
-                for j in 0..16 {
-                    (*pDec).pRefIndex[0].get_mut(iMbXy)[j] = 0;
-                }
-            }
-            crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec.as_ref(), &mut iMv);
-            if !pDec.is_null() {
-                for j in 0..16 {
-                    (*pDec).pMv[0].get_mut(iMbXy)[j] = iMv;
-                }
-            }
+            *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
+            (*dq).grid.nzc.get_mut(iMbXy).fill(0);
+            pDec.pRefIndex[0].get_mut(iMbXy).fill(0);
+            crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, Some(&*pDec), &mut iMv);
+            pDec.pMv[0].get_mut(iMbXy).fill(iMv);
 
             let iLastMbQp = (*dq).sLayerInfo.sSliceInLayer.iLastMbQp;
             *(*dq).grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
@@ -3546,7 +3428,7 @@ pub extern "C" fn WelsDecodeMbCavlcPSlice(
 /// `mb_type` split (23 instead of 5), the mb-type table and the motion parser,
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: PPicture, pRefs: PicRefs<'_>) -> i32 {
+pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
@@ -3584,7 +3466,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             // inter MB type
             let mut iMotionVector = [[[0i16; 2]; 30]; 2];
             let mut iRefIndex = [[0i8; 30]; 2];
-            *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
+            *pDec.pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInter(
                 &sNeighAvail,
                 &mut pNonZeroCount,
@@ -3641,7 +3523,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                 return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
             } else if 0 == uiMbType {
                 let mut pIntraPredMode = [0i8; 48];
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
+                *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
                 if pCtx.bTransform8x8ModeFlag() {
                     let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
@@ -3649,7 +3531,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                     }
                     *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = uiCode != 0;
                     if uiCode != 0 {
-                        *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
+                        *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA8x8;
                     }
                 }
                 pCtx.eIntraPredConstraint.FillCacheIntraNxN(
@@ -3667,7 +3549,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
                     return ret;
                 }
             } else {
-                *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
+                *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA16x16;
                 *(*dq).grid.transform_size8x8_flag.get_mut(iMbXy) = false;
                 *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
                 (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7] = ((uiMbType - 1) & 3) as i8;
@@ -3690,7 +3572,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             }
         }
 
-        if MB_TYPE_INTRA16x16 != *(*pDec).pMbType.get(iMbXy) {
+        if MB_TYPE_INTRA16x16 != *pDec.pMbType.get(iMbXy) {
             let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
@@ -3702,7 +3584,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             if pCtx.uiChromaFormatIdc() == 0 && uiCbp > 15 {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
             }
-            let mb_type = *(*pDec).pMbType.get(iMbXy);
+            let mb_type = *pDec.pMbType.get(iMbXy);
             uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
                 if pCtx.uiChromaFormatIdc() != 0 {
                     crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
@@ -3721,7 +3603,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             uiCbpC = uiCbp >> 4;
             uiCbpL = uiCbp & 15;
 
-            let mb_type = *(*pDec).pMbType.get(iMbXy);
+            let mb_type = *pDec.pMbType.get(iMbXy);
             let bNeedParseTransformSize8x8Flag = ((mb_type >= MB_TYPE_16x16 && mb_type <= MB_TYPE_8x16)
                 || *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get(iMbXy))
                 && mb_type != MB_TYPE_INTRA8x8
@@ -3741,7 +3623,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
         let pNzc = (*dq).grid.nzc.get_mut(iMbXy);
         pNzc.fill(0);
 
-        let mb_type = *(*pDec).pMbType.get(iMbXy);
+        let mb_type = *pDec.pMbType.get(iMbXy);
         if *(*dq).grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
             let pps_sh_chroma_qp_offset = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             let pps_sh_entropy = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
@@ -3757,7 +3639,7 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
             }
         }
 
-        if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *(*pDec).pMbType.get(iMbXy) {
+        if *(*dq).grid.cbp.get(iMbXy) != 0 || MB_TYPE_INTRA16x16 == *pDec.pMbType.get(iMbXy) {
             let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
             scaled_tcoeff_mb.fill(0);
 
@@ -3808,10 +3690,10 @@ pub extern "C" fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[
 
 /// Matches `WelsDecodeMbCavlcBSlice` in `decode_slice.cpp`.
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCavlcBSlice(
+pub fn WelsDecodeMbCavlcBSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -3819,8 +3701,15 @@ pub extern "C" fn WelsDecodeMbCavlcBSlice(
     // SAFETY: the family named at the item above.
     unsafe {
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
-        let ppRefPicL0 = pRefs.get(pCtx.ref_id(LIST_0, 0));
-        let ppRefPicL1 = pRefs.get(pCtx.ref_id(LIST_1, 0));
+        // Resolved to the one flag either is read for. **F42 lets a list entry name
+        // `pDec`**, so the shared borrow the resolution needs must not outlive the
+        // expression that takes it — the writes below go through the same picture.
+        let ppRefPicL0 = pRefs
+            .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
+            .map(|p| p.bIsComplete);
+        let ppRefPicL1 = pRefs
+            .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
+            .map(|p| p.bIsComplete);
         let iMbXy = (*dq).iMbXyIndex as usize;
         let mut uiCode = 0u32;
 
@@ -3849,16 +3738,16 @@ pub extern "C" fn WelsDecodeMbCavlcBSlice(
             let mut iMv = [[0i16; 2]; LIST_A];
             let mut iRef = [0i8; LIST_A];
 
-            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
+            *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
             let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
             nzc_mb.fill(0);
 
-            ((*pDec).pRefIndex[LIST_0].get_mut(iMbXy)).fill(0);
-            ((*pDec).pRefIndex[LIST_1].get_mut(iMbXy)).fill(0);
+            (pDec.pRefIndex[LIST_0].get_mut(iMbXy)).fill(0);
+            (pDec.pRefIndex[LIST_1].get_mut(iMbXy)).fill(0);
 
             let bIsPending = pCtx.iThreadCount > 1;
-            let is_complete0 = !ppRefPicL0.is_null() && ((*ppRefPicL0).bIsComplete || bIsPending);
-            let is_complete1 = !ppRefPicL1.is_null() && ((*ppRefPicL1).bIsComplete || bIsPending);
+            let is_complete0 = ppRefPicL0.is_some_and(|c| c || bIsPending);
+            let is_complete1 = ppRefPicL1.is_some_and(|c| c || bIsPending);
             *pCtx.bMbRefConcealed =
                 pCtx.bRPLRError || *pCtx.bMbRefConcealed || !is_complete0 || !is_complete1;
 
@@ -4803,11 +4692,11 @@ fn WelsDecodeMbCabacResidualHelper(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
+pub fn WelsDecodeMbCabacISliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     uiEosFlag: &mut u32,
 ) -> i32 {
@@ -4829,7 +4718,7 @@ pub extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
             &mut sNeighAvail,
             Some(&*dq),
-            pDec.as_ref(),
+            Some(&*pDec),
         );
         let mut ret = crate::decoder::parse_mb_syn_cabac::ParseMBTypeISliceCabac(
             pCtx,
@@ -4917,10 +4806,10 @@ pub extern "C" fn WelsDecodeMbCabacISliceBaseMode0(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacISlice(
+pub fn WelsDecodeMbCabacISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -4936,11 +4825,11 @@ pub extern "C" fn WelsDecodeMbCabacISlice(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
+pub fn WelsDecodeMbCabacPSliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: &mut u32,
@@ -4968,7 +4857,7 @@ pub extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
             let mut pMotionVector = [[[0i16; 2]; 30]; LIST_A];
             let mut pMvdCache = [[[0i16; 2]; 30]; LIST_A];
             let mut pRefIndex = [[0i8; 30]; LIST_A];
-            *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
+            *pDec.pMbType.get_mut(iMbXy) = g_ksInterPMbTypeInfo[uiMbType as usize].iType;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
                 pNeighAvail,
                 &mut pNonZeroCount,
@@ -5073,10 +4962,10 @@ pub extern "C" fn WelsDecodeMbCabacPSliceBaseMode0(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacPSlice(
+pub fn WelsDecodeMbCabacPSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -5096,7 +4985,7 @@ pub extern "C" fn WelsDecodeMbCabacPSlice(
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
             &mut sNeighAvail,
             Some(&*dq),
-            pDec.as_ref(),
+            Some(&*pDec),
         );
         let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
             pCtx,
@@ -5109,24 +4998,22 @@ pub extern "C" fn WelsDecodeMbCabacPSlice(
 
         if uiCode != 0 {
             let mut pMv = [0i16; 2];
-            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
+            *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_SKIP;
             let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
             nzc_mb.fill(0);
-            let ref_slice = (*pDec).pRefIndex[LIST_0].get_mut(iMbXy);
+            let ref_slice = pDec.pRefIndex[LIST_0].get_mut(iMbXy);
             ref_slice.fill(0);
 
             let bIsPending = pCtx.iThreadCount > 1;
-            let ppRefPic0 = pRefs.get(pCtx.ref_id(LIST_0, 0));
-            let is_complete0 = if !ppRefPic0.is_null() {
-                (*ppRefPic0).bIsComplete || bIsPending
-            } else {
-                false
-            };
+            // F42's clause, as above: resolve and take the flag in one expression.
+            let is_complete0 = pRefs
+                .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
+                .is_some_and(|p| p.bIsComplete || bIsPending);
             *pCtx.bMbRefConcealed =
                 pCtx.bRPLRError || *pCtx.bMbRefConcealed || !is_complete0;
 
-            crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, pDec.as_ref(), &mut pMv);
-            let mv_slice = (*pDec).pMv[LIST_0].get_mut(iMbXy);
+            crate::decoder::mv_pred::PredPSkipMvFromNeighbor(&mut *dq, Some(&*pDec), &mut pMv);
+            let mv_slice = pDec.pMv[LIST_0].get_mut(iMbXy);
             let mvd_slice = (*dq).grid.mvd[LIST_0].get_mut(iMbXy);
             for i in 0..16 {
                 mv_slice[i] = pMv;
@@ -5161,11 +5048,11 @@ pub extern "C" fn WelsDecodeMbCabacPSlice(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
+pub fn WelsDecodeMbCabacBSliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: &mut u32,
@@ -5194,7 +5081,7 @@ pub extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
             let mut pMvdCache = [[[0i16; 2]; 30]; LIST_A];
             let mut pRefIndex = [[0i8; 30]; LIST_A];
             let mut pDirect = [0i8; 30];
-            *(*pDec).pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
+            *pDec.pMbType.get_mut(iMbXy) = g_ksInterBMbTypeInfo[uiMbType as usize].iType;
             crate::decoder::parse_mb_syn_cavlc::WelsFillCacheInterCabac(
                 pNeighAvail,
                 &mut pNonZeroCount,
@@ -5305,10 +5192,10 @@ pub extern "C" fn WelsDecodeMbCabacBSliceBaseMode0(
     }
 }
 #[allow(unsafe_code)] // PPicture survivor (F42)
-pub extern "C" fn WelsDecodeMbCabacBSlice(
+pub fn WelsDecodeMbCabacBSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
@@ -5328,7 +5215,7 @@ pub extern "C" fn WelsDecodeMbCabacBSlice(
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(
             &mut sNeighAvail,
             Some(&*dq),
-            pDec.as_ref(),
+            Some(&*pDec),
         );
         let mut ret = crate::decoder::parse_mb_syn_cabac::ParseSkipFlagCabac(
             pCtx,
@@ -5351,26 +5238,19 @@ pub extern "C" fn WelsDecodeMbCabacBSlice(
             let mut ref_idx = [0i8; 2];
             let mut subMbType = 0u32;
 
-            *(*pDec).pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
+            *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_SKIP | MB_TYPE_DIRECT;
             let nzc_mb = (*dq).grid.nzc.get_mut(iMbXy);
             nzc_mb.fill(0);
-            let ref0_slice = (*pDec).pRefIndex[LIST_0].get_mut(iMbXy);
-            let ref1_slice = (*pDec).pRefIndex[LIST_1].get_mut(iMbXy);
-            ref0_slice.fill(0);
-            ref1_slice.fill(0);
+            pDec.pRefIndex[LIST_0].get_mut(iMbXy).fill(0);
+            pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(0);
 
-            let ppRefPic0 = pRefs.get(pCtx.ref_id(LIST_0, 0));
-            let ppRefPic1 = pRefs.get(pCtx.ref_id(LIST_1, 0));
-            let is_complete0 = if !ppRefPic0.is_null() {
-                (*ppRefPic0).bIsComplete || bIsPending
-            } else {
-                false
-            };
-            let is_complete1 = if !ppRefPic1.is_null() {
-                (*ppRefPic1).bIsComplete || bIsPending
-            } else {
-                false
-            };
+            // F42's clause, as above.
+            let is_complete0 = pRefs
+                .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
+                .is_some_and(|p| p.bIsComplete || bIsPending);
+            let is_complete1 = pRefs
+                .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
+                .is_some_and(|p| p.bIsComplete || bIsPending);
             *pCtx.bMbRefConcealed =
                 pCtx.bRPLRError || *pCtx.bMbRefConcealed || !is_complete0 || !is_complete1;
 
@@ -5527,6 +5407,13 @@ pub unsafe fn WelsDecodeSlice(
     // coexists with it because `pPicBuff` is not in the view.
     let (pDec, pRefs, mut view) =
         slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+    // T5b.2: with the picture a borrow, the one place its absence is tested is here
+    // rather than at every level below. `DecodeCurrentAccessUnit` prefetches it and
+    // returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply one, so this
+    // arm is unreachable from the decode path — same condition, same code.
+    let Some(pDec) = pDec else {
+        return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
+    };
     let pCtx = &mut view;
 
     let mut iNextMbXyIndex = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
@@ -5551,7 +5438,7 @@ pub unsafe fn WelsDecodeSlice(
 
         *(*pCurDqLayer).grid.slice_idc.get_mut(iNextMbXyIndex as usize) = iSliceIdc;
         *pCtx.bMbRefConcealed = false;
-        let iRet = pDecMbFunc(pCtx, pCurDqLayer, pDec, pRefs, pNalCur, &mut uiEosFlag);
+        let iRet = pDecMbFunc(pCtx, pCurDqLayer, &mut *pDec, pRefs, pNalCur, &mut uiEosFlag);
         *(*pCurDqLayer).grid.mb_ref_concealed_flag.get_mut(iNextMbXyIndex as usize) =
             *pCtx.bMbRefConcealed;
         if iRet != ERR_NONE {
@@ -5627,6 +5514,10 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         // nothing below the loop reaches the context again.
         let (pDec, pRefs, mut view) =
             slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+        // `WelsDecodeSlice`'s guard, same reason, same code.
+        let Some(pDec) = pDec else {
+            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
+        };
         let pCtx = &mut view;
 
         let mut iNextMbXyIndex = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
@@ -5648,13 +5539,13 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
             }
 
             *pCtx.bMbRefConcealed = false;
-            let iRet = pDecMbFunc(pCtx, dq, pDec, pRefs, pNalCur, &mut uiEosFlag);
+            let iRet = pDecMbFunc(pCtx, dq, &mut *pDec, pRefs, pNalCur, &mut uiEosFlag);
             *(*dq).grid.mb_ref_concealed_flag.get_mut(iNextMbXyIndex as usize) = *pCtx.bMbRefConcealed;
             if iRet != ERR_NONE {
                 return iRet;
             }
 
-            let ret = WelsTargetMbConstruction(pCtx, dq, pDec, pRefs);
+            let ret = WelsTargetMbConstruction(pCtx, dq, Some(&mut *pDec), pRefs);
             if ret != ERR_NONE {
                 return ERR_INFO_MB_RECON_FAIL;
             }
@@ -5663,9 +5554,7 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
             if !*(*dq).grid.mb_correctly_decoded_flag.get(idx) {
                 *(*dq).grid.mb_correctly_decoded_flag.get_mut(idx) = true;
                 if *(*dq).grid.mb_ref_concealed_flag.get(idx) {
-                    if !pDec.is_null() {
-                        (*pDec).iMbEcedPropNum += 1;
-                    }
+                    pDec.iMbEcedPropNum += 1;
                 }
                 *pCtx.iTotalNumMbRec += 1;
             }

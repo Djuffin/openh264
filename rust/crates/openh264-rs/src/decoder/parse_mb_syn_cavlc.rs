@@ -1080,7 +1080,7 @@ pub fn WelsFillCacheInter(
 pub unsafe fn ParseInterInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
@@ -1139,10 +1139,12 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pRefPic = pRefs.get(ppRefPic[iRefIdx as usize]);
+                // F42: resolved against the picture the bracket holds, and reduced to the
+                // one flag it is read for in the same expression.
+                let pRefPic = pRefs.resolve(ppRefPic[iRefIdx as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
+                    || !pRefPic.map_or(false, |c| c || bIsPending);
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
@@ -1159,7 +1161,7 @@ pub unsafe fn ParseInterInfo(
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), 0, iRefIdx as i8, &iMv);
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), 0, iRefIdx as i8, &iMv);
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
@@ -1190,10 +1192,12 @@ pub unsafe fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
+                // F42: resolved against the picture the bracket holds, and reduced to the
+                // one flag it is read for in the same expression.
+                let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
+                    || !pRefPic.map_or(false, |c| c || bIsPending);
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
@@ -1211,7 +1215,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1248,10 +1252,12 @@ pub unsafe fn ParseInterInfo(
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                         }
                     }
-                    let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
+                    // F42: resolved against the picture the bracket holds, and reduced to the
+                    // one flag it is read for in the same expression.
+                    let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                     *pCtx.bMbRefConcealed = pCtx.bRPLRError
                         || *pCtx.bMbRefConcealed
-                        || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
+                        || !pRefPic.map_or(false, |c| c || bIsPending);
                 } else {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                 }
@@ -1272,7 +1278,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1349,10 +1355,12 @@ pub unsafe fn ParseInterInfo(
                                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                             }
                         }
-                        let pRefPic = pRefs.get(ppRefPic[iRefIdx[i] as usize]);
+                        // F42: resolved against the picture the bracket holds, and reduced to the
+                        // one flag it is read for in the same expression.
+                        let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                         *pCtx.bMbRefConcealed = pCtx.bRPLRError
                             || *pCtx.bMbRefConcealed
-                            || !(!pRefPic.is_null() && ((*pRefPic).bIsComplete || bIsPending));
+                            || !pRefPic.map_or(false, |c| c || bIsPending);
 
                         let ref_idx_mb = (*pDec).pRefIndex[0].get_mut(iMbXy);
                         ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
@@ -1442,7 +1450,7 @@ pub unsafe fn ParseInterInfo(
 pub unsafe fn ParseInterBInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
@@ -1483,10 +1491,12 @@ pub unsafe fn ParseInterBInfo(
     ///  !(ppRefPic[list][ref] && (ppRefPic[list][ref]->bIsComplete || bIsPending))`
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
-            let p = pRefs.get(pCtx.ref_id($listIdx as usize, $iref as usize));
+            let p = pRefs
+                .resolve(pCtx.ref_id($listIdx as usize, $iref as usize), Some(&*pDec))
+                .map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
-                || !(!p.is_null() && ((*p).bIsComplete || bIsPending));
+                || !p.is_some_and(|c| c || bIsPending);
         }};
     }
 
@@ -1597,7 +1607,7 @@ pub unsafe fn ParseInterBInfo(
             }
             crate::decoder::mv_pred::UpdateP16x16MotionInfo(
                 &mut *pCurDqLayer,
-                pDec.as_mut(),
+                Some(&mut *pDec),
                 listIdx,
                 ref_idx_list[listIdx][0],
                 &iMv,
@@ -1666,7 +1676,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1737,7 +1747,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1756,7 +1766,9 @@ pub unsafe fn ParseInterBInfo(
             // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
-        let bIsLongRef = (*pRefs.get(pCtx.ref_id(LIST_1, 0))).bIsLongRef;
+        let bIsLongRef = pRefs
+            .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
+            .is_some_and(|p| p.bIsLongRef);
         let ref0Count = std::cmp::min(
             uiRefCountHdr[LIST_0],
             pCtx.sRefPic.uiRefCount[LIST_0] as i32,
@@ -1866,7 +1878,7 @@ pub unsafe fn ParseInterBInfo(
                 if iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec.as_mut(),
+                        Some(&mut *pDec),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -1890,6 +1902,7 @@ pub unsafe fn ParseInterBInfo(
                             iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
                                 pCtx,
                                 pRefs,
+                                Some(&*pDec),
                                 colocRefIndexL0,
                                 ref0Count,
                             );
@@ -1913,7 +1926,7 @@ pub unsafe fn ParseInterBInfo(
                     );
                     crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec.as_mut(),
+                        Some(&mut *pDec),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
