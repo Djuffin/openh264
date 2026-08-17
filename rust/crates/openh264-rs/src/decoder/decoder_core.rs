@@ -1059,13 +1059,13 @@ pub unsafe fn DecodeFrameConstruction(
     let kiActualHeight = kiHeight - ((*pCtx).sFrameCrop.iTopOffset + (*pCtx).sFrameCrop.iBottomOffset) * 2;
 
     if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
-        if !(*pCtx).pDecoderStatistics.is_null() {
-            if (*(*pCtx).pDecoderStatistics).uiWidth != kiActualWidth as u32
-                || (*(*pCtx).pDecoderStatistics).uiHeight != kiActualHeight as u32
+        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+            if stat.uiWidth != kiActualWidth as u32
+                || stat.uiHeight != kiActualHeight as u32
             {
-                (*(*pCtx).pDecoderStatistics).uiResolutionChangeTimes += 1;
-                (*(*pCtx).pDecoderStatistics).uiWidth = kiActualWidth as u32;
-                (*(*pCtx).pDecoderStatistics).uiHeight = kiActualHeight as u32;
+                stat.uiResolutionChangeTimes += 1;
+                stat.uiWidth = kiActualWidth as u32;
+                stat.uiHeight = kiActualHeight as u32;
             }
         }
         UpdateDecStatNoFreezingInfo(pCtx, Some(pCurDq));
@@ -1237,14 +1237,14 @@ pub unsafe fn DecodeFrameConstruction(
     (*pCtx).iMbEcedPropNum = pic!().iMbEcedPropNum;
 
     if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
-        if (*pDstInfo).iBufferStatus != 0
-            && !(*pCtx).pDecoderStatistics.is_null()
-            && ((*(*pCtx).pDecoderStatistics).uiWidth != kiActualWidth as u32
-                || (*(*pCtx).pDecoderStatistics).uiHeight != kiActualHeight as u32)
-        {
-            (*(*pCtx).pDecoderStatistics).uiResolutionChangeTimes += 1;
-            (*(*pCtx).pDecoderStatistics).uiWidth = kiActualWidth as u32;
-            (*(*pCtx).pDecoderStatistics).uiHeight = kiActualHeight as u32;
+        if (*pDstInfo).iBufferStatus != 0 {
+            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                if stat.uiWidth != kiActualWidth as u32 || stat.uiHeight != kiActualHeight as u32 {
+                    stat.uiResolutionChangeTimes += 1;
+                    stat.uiWidth = kiActualWidth as u32;
+                    stat.uiHeight = kiActualHeight as u32;
+                }
+            }
         }
         UpdateDecStat(pCtx, Some(pCurDq), (*pDstInfo).iBufferStatus != 0);
     }
@@ -1920,9 +1920,9 @@ pub unsafe fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut
     if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb = None;
     }
-    if !(*pCtx).pDecoderStatistics.is_null() {
-        (*(*pCtx).pDecoderStatistics).iAvgLumaQp = -1;
-        (*(*pCtx).pDecoderStatistics).iStatisticsLogInterval = 1000;
+    if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+        stat.iAvgLumaQp = -1;
+        stat.iStatisticsLogInterval = 1000;
     }
     (*pCtx).bUseScalingList = false;
     (*pCtx).iFeedbackNalRefIdc = -1;
@@ -2204,8 +2204,8 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     let iPpsId = uiCode as i32;
 
     if !(*pCtx).sSpsPpsCtx.bPpsAvailFlags[iPpsId as usize] {
-        if !(*pCtx).pDecoderStatistics.is_null() {
-            (*(*pCtx).pDecoderStatistics).iPpsReportErrorNum += 1;
+        if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+            stat.iPpsReportErrorNum += 1;
         }
         (*pCtx).iErrorCode |= dsNoParamSets;
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_PPS_ID);
@@ -2824,8 +2824,8 @@ pub unsafe fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
         }
         if uiActualIdx == pCurAu.uiActualUnitsNum {
             // No IDR in this access unit.
-            if !(*pCtx).pDecoderStatistics.is_null() {
-                (*(*pCtx).pDecoderStatistics).uiIDRLostNum += 1;
+            if let Some(stat) = api_alias_mut(&mut (*pCtx).pDecoderStatistics) {
+                stat.uiIDRLostNum += 1;
             }
             if !(*pCtx).bParamSetsLostFlag {
                 WelsLog(
