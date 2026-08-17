@@ -42,6 +42,20 @@ The three options:
 item, because 1 changes decoder behaviour on exactly the input class no gate here
 referees and 2 is a vocabulary change with an encoder blast radius.
 
+**RULED (steward, at `6b6dd9a3`): option 3, the recommendation ratified.**
+Grounds: option 1 diverges on exactly the input class D-par-1 spent three
+sessions bringing to a refereed **2707/0** — it is not a lint question, it is a
+parity question, and it stays **Eugene-level whenever proposed**; option 2
+changes the vocabulary of the hottest data in the decoder, reaches the encoder's
+picture type (F12/P10), and buys an unknown perf cost against a stop-line only
+just recovered to ≈+23.7…+24.3. Option 3 changes **no behaviour at all** — it is
+what the survivor list exists for: a named raw alias whose soundness argument
+(the shared tag, F42's contract) is written at the type. Execution: the 23 carry
+`#[allow(unsafe_code)]` at the item with the F42 pointer; exit condition 1 names
+the family beside `data_ptr` and counts it **by its own grep** (an alias
+spelling is invisible to the `*mut` count — AA's lesson); the option-1/2 revisit
+is **Phase 8's**, recorded in its inheritance list.
+
 ## 1. Face 0 — the 55 unblocked picture signatures
 
 Not blocked by §0 and convertible today — **41**, re-grepped at AA's close:
@@ -73,8 +87,13 @@ kernels are stranded in `encoder/`**, so the decoder cannot reach them without t
 dependency inversion `T5.AA3` just removed for `expand_pic`. The fix is to move
 `copy_8x8`, `copy_16x16` and `copy_shim` to `common/` and have both codecs import
 from there — which edits an encoder *file* while converting no encoder *site*.
-**Whether F12/P10 admits that is a question for the same person as §0**; AA left it
-alone rather than decide it.
+**RULED (steward, at `6b6dd9a3`): admitted.** `common/` is the C++'s **own home**
+for these kernels — `WelsCopy16x16_c` is defined in `codec/common/src/copy_mb.cpp`
+— so the move restores F22's rule (*home = the C++'s home*) rather than bending
+F12/P10: it converts **no encoder site**, changes only import spellings on the
+encoder side, and is byte-identical per commit. The rule it earns, one line: an
+encoder-file edit that moves a definition to its C++ home and changes only import
+spellings is not encoder work.
 
 The rest of the sweep is clean: `find_elem_byte_confusion.py` **0 suspects over 81
 files**, `find_unwritten_fields.py` clean, and every other F43 candidate on the
