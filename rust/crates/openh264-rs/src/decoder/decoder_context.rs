@@ -610,7 +610,7 @@ pub struct SVideoProperty {
 pub use crate::api::codec_api::SDecodingParam;
 
 
-pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo};
 
 
 pub use crate::decoder::nalu::SAccessUnit;

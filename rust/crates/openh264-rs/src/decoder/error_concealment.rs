@@ -193,7 +193,7 @@ pub use crate::safe::plane::PaddedPlane;
 
 
 pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
-pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo, MbDims};
+pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, MbDims};
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SRefPic};
 
 

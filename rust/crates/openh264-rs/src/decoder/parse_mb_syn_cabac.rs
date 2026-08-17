@@ -579,7 +579,7 @@ pub struct SSubPictureLimits {
 
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::slice::{SSlice, SSliceHeader, SSliceHeaderExt, EWelsSliceType};
-pub use crate::decoder::decoder_core::{DqLayerState, PDqLayer, SLayerInfo};
+pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo};
 use crate::safe::mb_grid::MbArray;
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SPicture, Picture, SRefPic, SLogContext, SDecodingParam as SDecoderParam};
 

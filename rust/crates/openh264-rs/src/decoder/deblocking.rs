@@ -194,7 +194,7 @@ pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
 pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
-pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState, PDqLayer};
+pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState};
 pub use crate::decoder::decoder_context::{
     SRefPic, SDeblockingFunc, SDeblockingFilter, PDeblockingFilter, PicId,
     MAX_DPB_COUNT,

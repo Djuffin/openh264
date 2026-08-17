@@ -585,7 +585,7 @@ pub use crate::decoder::parameter_sets::{SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSliceType};
 
 pub use crate::decoder::decoder_core::{
-    DqLayerState, PDqLayer, SLayerInfo, SPredWeightTable, ERR_INFO_INVALID_PTR, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM,
+    DqLayerState, SLayerInfo, SPredWeightTable, ERR_INFO_INVALID_PTR, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM,
     mb_grid_ptr,
 };
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
@@ -819,7 +819,7 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 /// **Why this seam is where the crate's oldest ratchet metric finally moves.** The
 /// three typedefs declared
 /// `pNeighAvail: *mut c_void` and `extern "C"`; the functions actually stored take
-/// `PWelsNeighAvail` / `PDqLayer` and two of them are not `extern "C"` at all. So
+/// `PWelsNeighAvail` / a layer pointer and two of them are not `extern "C"` at all. So
 /// *every* install and *every* fallback had to launder the mismatch through
 /// `mem::transmute` — **19 of the crate's 21 such calls, in this one family**.
 /// (T4b.3b took the remaining two, at `decoder_core.rs`'s expand wrapper. The
@@ -865,7 +865,7 @@ impl IntraPredConstraint {
         pNeighAvail: &SWelsNeighAvail,
         pNonZeroCount: &mut [u8; 48],
         pIntraPredMode: &mut [i8; 48],
-        pCurDqLayer: crate::decoder::decoder_core::PDqLayer,
+        pCurDqLayer: &DqLayerState,
     ) {
         match self {
             IntraPredConstraint::Constrain0 => {
@@ -873,7 +873,7 @@ impl IntraPredConstraint {
                     pNeighAvail,
                     pNonZeroCount,
                     pIntraPredMode,
-                    &*pCurDqLayer,
+                    pCurDqLayer,
                 )
             }
             IntraPredConstraint::Constrain1 => {
@@ -881,7 +881,7 @@ impl IntraPredConstraint {
                     pNeighAvail,
                     pNonZeroCount,
                     pIntraPredMode,
-                    &*pCurDqLayer,
+                    pCurDqLayer,
                 )
             }
         }
@@ -5612,31 +5612,25 @@ mod tests {
     fn test_wels_target_slice_construction_null_layer() {
         unsafe {
             let mut ctx = SWelsDecoderContext::new_boxed();
-            // The null-layer arm, at the boundary it moved to (T5.X3):
-            // `decoder_core`'s three forwarding shims are the only decoder sites
-            // left where a layer arrives as a raw pointer, and each answers a null
-            // one the way the per-macroblock callees used to.
+            // The missing-layer arm, at the boundary it moved to (T5.X3, T5.AA1):
+            // `decoder_core`'s three forwarding shims are where a layer may still be
+            // absent, and each answers `None` the way the per-macroblock callees
+            // answered a null pointer. The null is a `None` since the alias died.
             assert_eq!(
-                crate::decoder::decoder_core::WelsTargetSliceConstruction(
-                    &mut ctx,
-                    std::ptr::null_mut()
-                ),
+                crate::decoder::decoder_core::WelsTargetSliceConstruction(&mut ctx, None),
                 ERR_NONE
             );
             assert_eq!(
                 crate::decoder::decoder_core::WelsDecodeSlice(
                     &mut ctx,
-                    std::ptr::null_mut(),
+                    None,
                     false,
                     std::ptr::null_mut()
                 ),
                 ERR_NONE
             );
             assert_eq!(
-                crate::decoder::decoder_core::WelsDecodeAndConstructSlice(
-                    &mut ctx,
-                    std::ptr::null_mut()
-                ),
+                crate::decoder::decoder_core::WelsDecodeAndConstructSlice(&mut ctx, None),
                 ERR_NONE
             );
         }
