@@ -532,7 +532,7 @@ pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
 pub fn GetNeighborAvailMbType(
     pNeighAvail: &mut SWelsNeighAvail,
     pCurDqLayer: Option<&DqLayerState>,
-    pDec: PPicture,
+    pDec: Option<&SPicture>,
 ) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
@@ -590,23 +590,23 @@ pub fn GetNeighborAvailMbType(
             na.iTopCbp = 0;
         }
 
-        na.iLeftType = if na.iLeftAvail != 0 && !pDec.is_null() {
-            *(*pDec).pMbType.get(iLeftXy as usize)
+        na.iLeftType = if na.iLeftAvail != 0 && let Some(pic) = pDec {
+            *pic.pMbType.get(iLeftXy as usize)
         } else {
             0
         };
-        na.iTopType = if na.iTopAvail != 0 && !pDec.is_null() {
-            *(*pDec).pMbType.get(iTopXy as usize)
+        na.iTopType = if na.iTopAvail != 0 && let Some(pic) = pDec {
+            *pic.pMbType.get(iTopXy as usize)
         } else {
             0
         };
-        na.iLeftTopType = if na.iLeftTopAvail != 0 && !pDec.is_null() {
-            *(*pDec).pMbType.get(iLeftTopXy as usize)
+        na.iLeftTopType = if na.iLeftTopAvail != 0 && let Some(pic) = pDec {
+            *pic.pMbType.get(iLeftTopXy as usize)
         } else {
             0
         };
-        na.iRightTopType = if na.iRightTopAvail != 0 && !pDec.is_null() {
-            *(*pDec).pMbType.get(iRightTopXy as usize)
+        na.iRightTopType = if na.iRightTopAvail != 0 && let Some(pic) = pDec {
+            *pic.pMbType.get(iRightTopXy as usize)
         } else {
             0
         };
@@ -752,7 +752,7 @@ pub unsafe fn WelsFillCacheInterCabac(
     iMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
 ) {
     let na = &*pNeighAvail;
     let dq = &*pCurDqLayer;
@@ -787,9 +787,9 @@ pub unsafe fn WelsFillCacheInterCabac(
 
     for listIdx in 0..listCount {
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-            let pMv = (*pDec).pMv[listIdx].get(iLeftXy);
+            let pMv = pDec.pMv[listIdx].get(iLeftXy);
             let pMvd = dq.grid.mvd[listIdx].get(iLeftXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iLeftXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iLeftXy);
             iMvArray[listIdx][6] = pMv[3];
             iMvArray[listIdx][12] = pMv[7];
             iMvArray[listIdx][18] = pMv[11];
@@ -823,9 +823,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iLeftTopXy);
+            let pMv = pDec.pMv[listIdx].get(iLeftTopXy);
             let pMvd = dq.grid.mvd[listIdx].get(iLeftTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iLeftTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iLeftTopXy);
             iMvArray[listIdx][0] = pMv[15];
             iMvdCache[listIdx][0] = pMvd[15];
             iRefIdxArray[listIdx][0] = pRef[15];
@@ -837,9 +837,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iTopXy);
+            let pMv = pDec.pMv[listIdx].get(iTopXy);
             let pMvd = dq.grid.mvd[listIdx].get(iTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iTopXy);
             iMvArray[listIdx][1] = pMv[12];
             iMvArray[listIdx][2] = pMv[13];
             iMvArray[listIdx][3] = pMv[14];
@@ -873,9 +873,9 @@ pub unsafe fn WelsFillCacheInterCabac(
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iRightTopXy);
+            let pMv = pDec.pMv[listIdx].get(iRightTopXy);
             let pMvd = dq.grid.mvd[listIdx].get(iRightTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iRightTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iRightTopXy);
             iMvArray[listIdx][5] = pMv[12];
             iMvdCache[listIdx][5] = pMvd[12];
             iRefIdxArray[listIdx][5] = pRef[12];
@@ -913,7 +913,7 @@ pub unsafe fn WelsFillCacheInter(
     iMvArray: &mut [[[i16; 2]; 30]; LIST_A],
     iRefIdxArray: &mut [[i8; 30]; LIST_A],
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
 ) {
     let na = &*pNeighAvail;
     let dq = &*pCurDqLayer;
@@ -948,8 +948,8 @@ pub unsafe fn WelsFillCacheInter(
 
     for listIdx in 0..listCount {
         if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-            let pMv = (*pDec).pMv[listIdx].get(iLeftXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iLeftXy);
+            let pMv = pDec.pMv[listIdx].get(iLeftXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iLeftXy);
             iMvArray[listIdx][6] = pMv[3];
             iMvArray[listIdx][12] = pMv[7];
             iMvArray[listIdx][18] = pMv[11];
@@ -971,8 +971,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iLeftTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iLeftTopXy);
+            let pMv = pDec.pMv[listIdx].get(iLeftTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iLeftTopXy);
             iMvArray[listIdx][0] = pMv[15];
             iRefIdxArray[listIdx][0] = pRef[15];
         } else {
@@ -982,8 +982,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iTopXy);
+            let pMv = pDec.pMv[listIdx].get(iTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iTopXy);
             iMvArray[listIdx][1] = pMv[12];
             iMvArray[listIdx][2] = pMv[13];
             iMvArray[listIdx][3] = pMv[14];
@@ -1005,8 +1005,8 @@ pub unsafe fn WelsFillCacheInter(
         }
 
         if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-            let pMv = (*pDec).pMv[listIdx].get(iRightTopXy);
-            let pRef = (*pDec).pRefIndex[listIdx].get(iRightTopXy);
+            let pMv = pDec.pMv[listIdx].get(iRightTopXy);
+            let pRef = pDec.pRefIndex[listIdx].get(iRightTopXy);
             iMvArray[listIdx][5] = pMv[12];
             iRefIdxArray[listIdx][5] = pRef[12];
         } else {
@@ -1112,7 +1112,7 @@ pub unsafe fn ParseInterInfo(
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec, 0, iRefIdx as i8, &iMv);
+            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, pDec.as_mut(), 0, iRefIdx as i8, &iMv);
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
@@ -1164,7 +1164,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec,
+                    pDec.as_mut(),
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1225,7 +1225,7 @@ pub unsafe fn ParseInterInfo(
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec,
+                    pDec.as_mut(),
                     iMvArray,
                     iRefIdxArray,
                     0,
@@ -1543,7 +1543,7 @@ pub unsafe fn ParseInterBInfo(
             }
             crate::decoder::mv_pred::UpdateP16x16MotionInfo(
                 &mut *pCurDqLayer,
-                pDec,
+                pDec.as_mut(),
                 listIdx,
                 ref_idx_list[listIdx][0],
                 &iMv,
@@ -1612,7 +1612,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec,
+                    pDec.as_mut(),
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1683,7 +1683,7 @@ pub unsafe fn ParseInterBInfo(
                 }
                 crate::decoder::mv_pred::UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
-                    pDec,
+                    pDec.as_mut(),
                     iMvArray,
                     iRefIdxArray,
                     listIdx,
@@ -1812,7 +1812,7 @@ pub unsafe fn ParseInterBInfo(
                 if iDirectSpatialMvPredFlag != 0 {
                     crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec,
+                        pDec.as_mut(),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -1845,21 +1845,21 @@ pub unsafe fn ParseInterBInfo(
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         &mut *pCurDqLayer,
-                        pDec,
+                        &mut *pDec,
                         iIdx8,
                         LIST_0,
                         iRef[LIST_0],
                     );
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         &mut *pCurDqLayer,
-                        pDec,
+                        &mut *pDec,
                         iIdx8,
                         LIST_1,
                         iRef[LIST_1],
                     );
                     crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
                         &mut *pCurDqLayer,
-                        pDec,
+                        pDec.as_mut(),
                         iIdx8,
                         pSubPartCount[i],
                         pPartW[i],
@@ -1883,7 +1883,7 @@ pub unsafe fn ParseInterBInfo(
                     if iDirectSpatialMvPredFlag != 0 {
                         crate::decoder::mv_pred::Update8x8RefIdx(
                             &mut *pCurDqLayer,
-                            pDec,
+                            &mut *pDec,
                             iIdx8,
                             listIdx,
                             iRef[listIdx],
@@ -1910,7 +1910,7 @@ pub unsafe fn ParseInterBInfo(
                     }
                     crate::decoder::mv_pred::Update8x8RefIdx(
                         &mut *pCurDqLayer,
-                        pDec,
+                        &mut *pDec,
                         iIdx8,
                         listIdx,
                         iref,
