@@ -1407,7 +1407,11 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
 ) -> i32 {
     let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
-    let pMbType = crate::decoder::decoder_core::mb_grid_ptr(&mut (*pDec).pMbType, 0);
+    // T5.AA3: the array, not its base as a pointer. The two reads below are
+    // neighbour lookups — `mb_grid_ptr`'s whole reason to exist (S28's provenance
+    // clause) — and `MbArray::get` reaches every one of them with a bound. This was
+    // the helper's last production caller.
+    let pMbType = &(*pDec).pMbType;
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
@@ -1417,14 +1421,14 @@ pub unsafe fn ParseIntraPredModeChromaCabac(
     let iIdxB = if iTopAvail != 0 {
         let top_idx = (iMbXy - (*pCurDqLayer).iMbWidth) as usize;
         let mode = *(*pCurDqLayer).grid.chroma_pred_mode.get(top_idx);
-        (mode > 0 && mode <= 3 && *pMbType.add(top_idx) != MB_TYPE_INTRA_PCM) as i32
+        (mode > 0 && mode <= 3 && *pMbType.get(top_idx) != MB_TYPE_INTRA_PCM) as i32
     } else {
         0
     };
     let iIdxA = if iLeftAvail != 0 {
         let left_idx = (iMbXy - 1) as usize;
         let mode = *(*pCurDqLayer).grid.chroma_pred_mode.get(left_idx);
-        (mode > 0 && mode <= 3 && *pMbType.add(left_idx) != MB_TYPE_INTRA_PCM) as i32
+        (mode > 0 && mode <= 3 && *pMbType.get(left_idx) != MB_TYPE_INTRA_PCM) as i32
     } else {
         0
     };

@@ -1256,15 +1256,14 @@ fn nonzero_count_shim_stays_inside_its_span_and_normalises() {
 //   what an aligned real allocation has.
 
 use openh264_rs::common::expand_pic as exp;
-use openh264_rs::decoder::decoder_core as dcore;
 
 #[test]
 fn expand_shims_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0xE8_9A2D_0016);
     type RawExpand = unsafe extern "C" fn(*mut u8, i32, i32, i32);
     let variants: &[(usize, RawExpand, &str)] = &[
-        (32, dcore::ExpandPictureLuma_c as RawExpand, "luma"),
-        (16, dcore::ExpandPictureChroma_c as RawExpand, "chroma"),
+        (32, exp::ExpandPictureLuma_c as RawExpand, "luma"),
+        (16, exp::ExpandPictureChroma_c as RawExpand, "chroma"),
     ];
     for &(pad, shim, name) in variants {
         for &(w, h) in &[(16usize, 16usize), (9, 11)] {
