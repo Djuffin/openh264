@@ -440,6 +440,35 @@ impl TagAccessUnits {
         assert!(i < len, "NAL unit {i} outside an access unit of {len}");
         self.nal_units[i]
     }
+
+    /// Node `i` as a **shared** borrow, or `None` past the end of the list.
+    ///
+    /// **T5.AC5, and it is deliberately shared-only.** The `_mut` form this
+    /// obviously wants does not exist and must not: the whole reason the slots are
+    /// raw is that a container which lends `&mut` to a node invalidates the live
+    /// raw aliases into it (`pCtx->pNalCur`, and the `&mut BsCursor` the
+    /// slice-header parser holds into a node's bitstream) — the doc on
+    /// [`nal_units`](Self::nal_units) is the finding. A `SharedReadOnly` retag pops
+    /// nothing, so a *reading* consumer can have a borrow and the writers keep the
+    /// pointer. That is what every caller of this has: a look at a NAL header.
+    ///
+    /// The `unsafe` is the enumerated exception, and it is here — in the module
+    /// that owns the container — rather than at each reader. **Phase 8's** with
+    /// the rest of the parse tree's raw slots, whose real fix is the one `PicPool`
+    /// got at T5.Q1: owned slots, once nothing aliases into a node.
+    #[allow(unsafe_code)]
+    #[inline]
+    pub fn node(&self, i: usize) -> Option<&SNalUnit> {
+        let &pNal = self.nal_units.get(i)?;
+        if pNal.is_null() {
+            return None;
+        }
+        // SAFETY: every slot is one `Box::into_raw(Box::new(SNalUnit))` made by
+        // `with_nodes`/`ExpandNalUnitList` and reclaimed only by this struct's
+        // `Drop`, so a non-null slot names a live node for as long as `self` is
+        // borrowed. Shared, so it cannot invalidate an alias into the node.
+        unsafe { Some(&*pNal) }
+    }
 }
 
 impl Drop for TagAccessUnits {

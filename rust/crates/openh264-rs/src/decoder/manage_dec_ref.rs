@@ -11,6 +11,25 @@
 //!
 //! Translated from `codec/decoder/core/inc/manage_dec_ref.h` and `codec/decoder/core/src/manage_dec_ref.cpp`.
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC5 — the lint, allowing nothing.** The module's four raw
+// pointers were four different things and none of them was a pointer:
+//
+//   * `SetUnRef`'s `PPicture` was a **callback type** — the field that stores it
+//     is the only reason it could not be a borrow (T5.AC1).
+//   * `MMCO`'s `PRefPicMarking` was the **layer's alias into the NAL's slice
+//     header**, which the layer had already copied whole (T5.AC2).
+//   * `WelsMarkAsRef`'s `pLastDec` and its `pDec` local were **one binding
+//     unifying two arms** across `pCtx` re-entry; re-derived per use (T5.AC3).
+//   * `pCtx->pParam` / `pCtx->pLastDecPicInfo` were the **api-owned aliases**,
+//     which reach this module through `decoder_context`'s two accessors now
+//     (T5.AC4) — the enumerated exception is there, not here.
+//
+// What was left after those was the EC prefetch bracket, and it is the
+// concealment maneuver's fourth application: `pic_and_refs_mut` +
+// `PicRefs::classify`, where the overlap guard the copy needed becomes
+// `RefSlot::Current` instead of a comparison of two addresses (T5.AC5).
+
 use std::ffi::c_void;
 use crate::decoder::decoder_core::DqLayerState;
 use crate::decoder::parameter_sets::SSps;
@@ -63,7 +82,8 @@ pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
 
 
 pub use crate::decoder::decoder_context::SRefPic;
-use crate::decoder::decoder_context::{active_pps, active_sps, pps_of, ref_set, sps_of};
+use crate::decoder::decoder_context::{active_pps, active_sps, pic_and_refs_mut, pps_of, ref_set, sps_of};
+use crate::decoder::pic_queue::RefSlot;
 use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
 
@@ -641,7 +661,7 @@ pub fn RemainOneBufferInDpbForEC(
 /// Detects missing IDR frames during error concealment and constructs a synthetic reference frame.
 ///
 /// Matches `static int32_t WelsCheckAndRecoverForFutureDecoding (PWelsDecoderContext pCtx)`.
-pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
 
     if ((*pCtx).sRefPic.uiShortRefCount[LIST_0] + (*pCtx).sRefPic.uiLongRefCount[LIST_0] <= 0)
         && ((*pCtx).eSliceType != EWelsSliceType::I_SLICE && (*pCtx).eSliceType != EWelsSliceType::SI_SLICE)
@@ -664,110 +684,99 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContex
                 Some(pool) => pool.prefetch_free(),
                 None => None,
             };
-            let (pRef, pRefs) = pic_and_refs(&mut pCtx.pPicBuff, ec_slot);
-            if !pRef.is_null() {
-                (*pRef).bIsComplete = false;
+            // **T5.AC5 — the concealment bracket's fourth application** (the slice at
+            // Y, the pool at Q, the layer at AA1, `DoErrorConFrameCopy` at AB3). One
+            // borrow of the pool, split into the EC picture being built and a view of
+            // the rest; the previous DPB picture is *classified* rather than compared,
+            // so the `pic_slot(pRef) == pic_slot(prev_pic)` overlap test below is
+            // `RefSlot::Current` and its arm cannot also hold a second derivation of
+            // the same slot (F42's shape, and why the guard had to come out of one
+            // borrow).
+            let eSliceType = (*pCtx).eSliceType;
+            let prev = prev_dpb_id(&pCtx.pLastDecPicInfo);
+            let (pRef, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, ec_slot);
+            if let Some(pRef) = pRef {
+                pRef.bIsComplete = false;
                 if let Some(iSpsId) = sps_id {
-                    (*pRef).iSpsId = iSpsId;
+                    pRef.iSpsId = iSpsId;
                 }
                 if let Some(iPpsId) = pps_id {
-                    (*pRef).iPpsId = iPpsId;
+                    pRef.iPpsId = iPpsId;
                 }
-                if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
+                if eSliceType == EWelsSliceType::B_SLICE {
                     for list in 0..LIST_A {
                         for i in 0..MAX_DPB_COUNT {
-                            (*pRef).pRefPic[list][i] = None;
+                            pRef.pRefPic[list][i] = None;
                         }
                     }
                 }
+
                 (*pCtx).iErrorCode |= dsDataErrorConcealed;
 
-                let mut bCopyPrevious = false;
-                let prev_pic = pRefs.get(prev_dpb_id(&pCtx.pLastDecPicInfo));
-
-                if (ec_mode == ERROR_CON_FRAME_COPY_CROSS_IDR
+                let bCrossIdr = ec_mode == ERROR_CON_FRAME_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR
-                    || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)
-                    && !prev_pic.is_null()
-                {
-                    bCopyPrevious = (*pRef).iWidthInPixel == (*prev_pic).iWidthInPixel
-                        && (*pRef).iHeightInPixel == (*prev_pic).iHeightInPixel;
-                }
+                    || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE;
 
-                if !bCopyPrevious {
-                    if !(*pRef).data_ptr(0).is_null() {
-                        std::ptr::write_bytes(
-                            (*pRef).data_ptr(0),
-                            128,
-                            ((*pRef).linesize(0) * (*pRef).iHeightInPixel) as usize,
+                // The three arms are the pointer form's three, unchanged: gray-fill
+                // when there is nothing to copy from, log-and-skip when the source
+                // *is* the destination (`Current` — and the dimension test the old
+                // form ran there was trivially true), copy otherwise. A `Current`
+                // slot outside the cross-IDR modes gray-fills, exactly as a null
+                // `prev_pic` did.
+                let spans = |pic: &SPicture| {
+                    [
+                        (0usize, (pic.linesize(0) * pic.iHeightInPixel) as usize),
+                        (1, (pic.linesize(1) * pic.iHeightInPixel / 2) as usize),
+                        (2, (pic.linesize(2) * pic.iHeightInPixel / 2) as usize),
+                    ]
+                };
+                match pRefs.classify(prev) {
+                    RefSlot::Other(prev_pic)
+                        if bCrossIdr
+                            && pRef.iWidthInPixel == prev_pic.iWidthInPixel
+                            && pRef.iHeightInPixel == prev_pic.iHeightInPixel =>
+                    {
+                        // Disjoint by the classification rather than by a comparison
+                        // the compiler cannot see — which is what `copy_nonoverlapping`
+                        // needed an argument for (S25).
+                        for (i, len) in spans(pRef) {
+                            if pRef.plane(i).is_empty() || prev_pic.plane(i).is_empty() {
+                                continue;
+                            }
+                            let (src_base, dst_base) =
+                                (prev_pic.plane(i).origin(), pRef.plane(i).origin());
+                            let src = &prev_pic.plane(i).as_slice()[src_base..src_base + len];
+                            pRef.plane_mut(i).as_mut_slice()[dst_base..dst_base + len]
+                                .copy_from_slice(src);
+                        }
+                    }
+                    RefSlot::Current if bCrossIdr => {
+                        WelsLog(
+                            &(*pCtx).sLogCtx,
+                            WELS_LOG_WARNING,
+                            "WelsInitRefList()::EC memcpy overlap.",
                         );
                     }
-                    if !(*pRef).data_ptr(1).is_null() {
-                        std::ptr::write_bytes(
-                            (*pRef).data_ptr(1),
-                            128,
-                            ((*pRef).linesize(1) * (*pRef).iHeightInPixel / 2) as usize,
-                        );
-                    }
-                    if !(*pRef).data_ptr(2).is_null() {
-                        std::ptr::write_bytes(
-                            (*pRef).data_ptr(2),
-                            128,
-                            ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
-                        );
-                    }
-                } else if crate::decoder::picture::pic_slot(pRef.as_ref())
-                    == crate::decoder::picture::pic_slot(prev_pic.as_ref())
-                {
-                    WelsLog(
-                        &(*pCtx).sLogCtx,
-                        WELS_LOG_WARNING,
-                        "WelsInitRefList()::EC memcpy overlap.",
-                    );
-                } else {
-                    // S25: `pRef` and `prev_pic` are two slots of the same
-                    // `SPicBuff.ppPic`, and the `pRef == prev_pic` arm above is what
-                    // makes them provably distinct here — which is also what makes
-                    // `copy_nonoverlapping` legal. Both are named through their raw
-                    // pointers per use; the `let prev = &*prev_pic` binding that used
-                    // to span this block was a borrow held across three writes into
-                    // the other picture.
-                    if !(*pRef).data_ptr(0).is_null() && !(*prev_pic).data_ptr_ref(0).is_null() {
-                        std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr_ref(0),
-                            (*pRef).data_ptr(0),
-                            ((*pRef).linesize(0) * (*pRef).iHeightInPixel) as usize,
-                        );
-                    }
-                    if !(*pRef).data_ptr(1).is_null() && !(*prev_pic).data_ptr_ref(1).is_null() {
-                        std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr_ref(1),
-                            (*pRef).data_ptr(1),
-                            ((*pRef).linesize(1) * (*pRef).iHeightInPixel / 2) as usize,
-                        );
-                    }
-                    if !(*pRef).data_ptr(2).is_null() && !(*prev_pic).data_ptr_ref(2).is_null() {
-                        std::ptr::copy_nonoverlapping(
-                            (*prev_pic).data_ptr_ref(2),
-                            (*pRef).data_ptr(2),
-                            ((*pRef).linesize(2) * (*pRef).iHeightInPixel / 2) as usize,
-                        );
+                    _ => {
+                        for (i, len) in spans(pRef) {
+                            let plane = pRef.plane_mut(i);
+                            if plane.is_empty() {
+                                continue;
+                            }
+                            let base = plane.origin();
+                            plane.as_mut_slice()[base..base + len].fill(128);
+                        }
                     }
                 }
-                (*pRef).iFrameNum = 0;
-                (*pRef).iFramePoc = 0;
-                (*pRef).uiTemporalId = 0;
-                (*pRef).uiQualityId = 0;
-                (*pRef).eSliceType = (*pCtx).eSliceType;
+                pRef.iFrameNum = 0;
+                pRef.iFramePoc = 0;
+                pRef.uiTemporalId = 0;
+                pRef.uiQualityId = 0;
+                pRef.eSliceType = eSliceType;
 
-                crate::common::expand_pic::ExpandReferencingPicture(
-                    &[(*pRef).data_ptr(0), (*pRef).data_ptr(1), (*pRef).data_ptr(2)],
-                    (*pRef).iWidthInPixel,
-                    (*pRef).iHeightInPixel,
-                    &[(*pRef).linesize(0), (*pRef).linesize(1), (*pRef).linesize(2)],
-                );
+                pRef.expand_as_reference();
                 AddShortTermToList(pCtx, false, ec_slot);
             } else {
                 WelsLog(
@@ -943,7 +952,7 @@ pub fn MMCO(
 ///
 /// Matches `int32_t WelsInitRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
 pub fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, _iPoc: i32) -> i32 {
-    let err = unsafe { WelsCheckAndRecoverForFutureDecoding(pCtx) };
+    let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
@@ -978,7 +987,7 @@ pub fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut 
 ///
 /// Matches `int32_t WelsInitBSliceRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
 pub fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, iPoc: i32) -> i32 {
-    let err = unsafe { WelsCheckAndRecoverForFutureDecoding(pCtx) };
+    let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
@@ -1108,7 +1117,7 @@ pub fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option
 /// Modifies the active reference picture lists based on parsed RPLR commands.
 ///
 /// Matches `int32_t WelsReorderRefList (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     if (*pCtx).eSliceType == I_SLICE || (*pCtx).eSliceType == SI_SLICE {
         return ERR_NONE;
     }
@@ -1242,7 +1251,7 @@ pub unsafe fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Op
 /// Alternative test implementation of reference picture list reordering.
 ///
 /// Matches `int32_t WelsReorderRefList2 (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     if (*pCtx).eSliceType == I_SLICE || (*pCtx).eSliceType == SI_SLICE {
         return ERR_NONE;
     }
@@ -1369,7 +1378,7 @@ pub unsafe fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: O
 /// Commits the newly reconstructed picture into the reference picture buffer pool.
 ///
 /// Matches `int32_t WelsMarkAsRef (PWelsDecoderContext pCtx, PPicture pLastDec)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsMarkAsRef(
+pub fn WelsMarkAsRef(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     mut pLastDec: Option<&mut SPicture>,
@@ -1444,8 +1453,7 @@ pub unsafe fn WelsMarkAsRef(
         for j in au.uiStartPos..=au.uiEndPos {
             // T5.O4: the list owns its nodes, so `get` is the whole guard — the null
             // test this replaces could only ever fail past the end of the list.
-            if let Some(&pNal) = au.nal_units.get(j as usize) {
-                let nal = &*pNal;
+            if let Some(nal) = au.node(j as usize) {
                 if nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
                     || nal.sNalHeaderExt.bIdrFlag
                 {
@@ -1539,7 +1547,7 @@ mod tests {
         pic.bIsLongRef = true;
         pic.iFrameNum = 42;
 
-        unsafe {
+        {
             SetUnRef(&mut pic);
             assert!(!pic.bUsedAsRef);
             assert!(!pic.bIsLongRef);
@@ -1575,7 +1583,7 @@ mod tests {
         pic2.iFrameNum = 12;
 
 
-        unsafe {
+        {
             // T5.Q2: the pool owns the pictures, so the fixture hands them over and
             // resolves them back per call — which is the production shape, and it
             // retires the `addr_of_mut!` pair this test needed while the pool held
@@ -1613,7 +1621,7 @@ mod tests {
         let mut pic1 = SPicture::default();
         let mut pic2 = SPicture::default();
 
-        unsafe {
+        {
             let pool = crate::decoder::pic_queue::PicPool::over(vec![
                 Some(Box::new(pic1)),
                 Some(Box::new(pic2)),
@@ -1638,7 +1646,7 @@ mod tests {
         let mut pic = SPicture::default();
         pic.iFrameNum = 1;
 
-        unsafe {
+        {
             let pool = crate::decoder::pic_queue::PicPool::over(vec![Some(Box::new(pic))]);
             let s = Some(pool.id(0));
             let mut ctx = SWelsDecoderContext::new_boxed();

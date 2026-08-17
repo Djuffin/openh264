@@ -44,6 +44,25 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC6 — the lint, with the two `PPicture` survivors allowed by
+// name.** What was left after session AB's keyword sweep was one family and one
+// idiom, and neither was a pointer:
+//
+//   * the **coefficient cursors** — `sTCoeff: *mut i16`, `pScanTable: *const u8`,
+//     `pSignificantMap: *mut i32` — were subranges of arrays the *callers* own
+//     (`grid.scaled_tcoeff`'s macroblock, a `g_kuiZigzagScan*` constant, a stack
+//     `[i32; 16]`), so each becomes the slice it was addressing and every `.add(i)`
+//     becomes `[i]`. `ParseSignificantCoeffCabac`'s backward walk takes F30's
+//     `wrapping_offset` with it: an index reaching -1 forms no address.
+//   * the **`get_mut(iMbXy).as_mut_ptr()` + `.add(i)` writes**, which is T5.AB1's
+//     maneuver — the accessor already hands back the macroblock's own array.
+//   * `ParseIPCMInfoCabac`'s three plane cursors, which the picture parameter
+//     already reaches as `plane_mut(i)`.
+//
+// The two exceptions are the ruled `PPicture` survivors (§0's option 3, steward at
+// `6b6dd9a3`), each with the F42 argument at the item.
+
 use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 use crate::decoder::picture::PPicture;
 use std::ptr;
@@ -688,7 +707,7 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
 // IDCT Dequantization Primitives
 // ============================================================================
 
-pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: &mut SliceCtx<'_>) {
+pub fn WelsLumaDcDequantIdct(pBlock: &mut [i16], iQp: i32, pCtx: &mut SliceCtx<'_>) {
     let kiQMul = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
         pCtx.pDequant_coeff_buffer4x4[0][iQp as usize][0] as i32
     } else {
@@ -705,10 +724,10 @@ pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: &mut Slice
         let kiX2 = 16 + kiOffset;
         let kiX3 = kiOffset + kiXOffset[3];
         let kiI4 = i << 2;
-        let kiZ0 = *pBlock.add(kiOffset) as i32 + *pBlock.add(kiX1) as i32;
-        let kiZ1 = *pBlock.add(kiOffset) as i32 - *pBlock.add(kiX1) as i32;
-        let kiZ2 = *pBlock.add(kiX2) as i32 - *pBlock.add(kiX3) as i32;
-        let kiZ3 = *pBlock.add(kiX2) as i32 + *pBlock.add(kiX3) as i32;
+        let kiZ0 = pBlock[kiOffset] as i32 + pBlock[kiX1] as i32;
+        let kiZ1 = pBlock[kiOffset] as i32 - pBlock[kiX1] as i32;
+        let kiZ2 = pBlock[kiX2] as i32 - pBlock[kiX3] as i32;
+        let kiZ3 = pBlock[kiX2] as i32 + pBlock[kiX3] as i32;
 
         iTemp[kiI4] = kiZ0 + kiZ3;
         iTemp[1 + kiI4] = kiZ1 + kiZ2;
@@ -724,28 +743,28 @@ pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: &mut Slice
         let kiZ2 = iTemp[kiI4] - iTemp[8 + kiI4];
         let kiZ3 = iTemp[kiI4] + iTemp[8 + kiI4];
 
-        *pBlock.add(kiOffset) = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.add(kiYOffset[1] + kiOffset) = (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.add(kiYOffset[2] + kiOffset) = (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.add(kiYOffset[3] + kiOffset) = (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiOffset] = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[1] + kiOffset] = (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[2] + kiOffset] = (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[3] + kiOffset] = (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
     }
 }
 
-pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
-    let iA = *pBlock as i32;
-    let iB = *pBlock.add(16) as i32;
-    let iC = *pBlock.add(32) as i32;
-    let iD = *pBlock.add(48) as i32;
+pub fn WelsChromaDcIdct(pBlock: &mut [i16]) {
+    let iA = pBlock[0] as i32;
+    let iB = pBlock[16] as i32;
+    let iC = pBlock[32] as i32;
+    let iD = pBlock[48] as i32;
 
     let iE = iA - iB;
     let iA_sum = iA + iB;
     let iB_sub = iC - iD;
     let iC_sum = iC + iD;
 
-    *pBlock = (iA_sum + iC_sum) as i16;
-    *pBlock.add(16) = (iE + iB_sub) as i16;
-    *pBlock.add(32) = (iA_sum - iC_sum) as i16;
-    *pBlock.add(48) = (iE - iB_sub) as i16;
+    pBlock[0] = (iA_sum + iC_sum) as i16;
+    pBlock[16] = (iE + iB_sub) as i16;
+    pBlock[32] = (iA_sum - iC_sum) as i16;
+    pBlock[48] = (iE - iB_sub) as i16;
 }
 
 // ============================================================================
@@ -856,26 +875,26 @@ pub fn UpdateP8x8RefIdxCabac(
     pDecRef[iScan4Idx + 5] = iRef;
 }
 
-pub unsafe fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
+pub fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
-    *pDirect.add(iScan4Idx) = 1;
-    *pDirect.add(iScan4Idx + 1) = 1;
-    *pDirect.add(iScan4Idx + 4) = 1;
-    *pDirect.add(iScan4Idx + 5) = 1;
+    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy);
+    pDirect[iScan4Idx] = 1;
+    pDirect[iScan4Idx + 1] = 1;
+    pDirect[iScan4Idx + 4] = 1;
+    pDirect[iScan4Idx + 5] = 1;
 }
 
-pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
+pub fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy).as_mut_ptr();
+    let pDirect = (*pCurDqLayer).grid.direct.get_mut(iMbXy);
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
         let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
-        *pDirect.add(kuiScan4Idx) = 1;
-        *pDirect.add(kuiScan4Idx + 1) = 1;
-        *pDirect.add(kuiScan4IdxPlus4) = 1;
-        *pDirect.add(kuiScan4IdxPlus4 + 1) = 1;
+        pDirect[kuiScan4Idx] = 1;
+        pDirect[kuiScan4Idx + 1] = 1;
+        pDirect[kuiScan4IdxPlus4] = 1;
+        pDirect[kuiScan4IdxPlus4 + 1] = 1;
     }
 }
 
@@ -1654,6 +1673,13 @@ pub fn ParseMvdInfoCabac(
 // ============================================================================
 
 
+/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
+/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
+/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
+/// so the two share a tag, and a `&mut` on the picture held across a reference read
+/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
+/// revisits (retire the F42 arm, or give the planes interior mutability).
+#[allow(unsafe_code)]
 pub unsafe fn ParseInterPMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1985,6 +2011,13 @@ pub unsafe fn ParseInterPMotionInfoCabac(
     ERR_NONE
 }
 
+/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
+/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
+/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
+/// so the two share a tag, and a `&mut` on the picture held across a reference read
+/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
+/// revisits (retire the F42 arm, or give the planes interior mutability).
+#[allow(unsafe_code)]
 pub unsafe fn ParseInterBMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -2452,8 +2485,8 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pMvd[0] = 0; pMvd[1] = 0;
                     }
 
-                    let pDecMv = (*pDec).pMv[listIdx].get_mut(iMbXy).as_mut_ptr();
-                    let pLayerMvd = (*pCurDqLayer).grid.mvd[listIdx].get_mut(iMbXy).as_mut_ptr();
+                    let pDecMv = (*pDec).pMv[listIdx].get_mut(iMbXy);
+                    let pLayerMvd = (*pCurDqLayer).grid.mvd[listIdx].get_mut(iMbXy);
                     let mv2: [i16; 2] = [pMv[0], pMv[1]];
                     let mvd2: [i16; 2] = [pMvd[0], pMvd[1]];
 
@@ -2461,14 +2494,14 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         // MB_TYPE_8x8: duplicate the pair, then store 8 bytes (two blocks)
                         pMv[2] = pMv[0]; pMv[3] = pMv[1];
                         pMvd[2] = pMvd[0]; pMvd[3] = pMvd[1];
-                        *pDecMv.add(iScan4Idx) = mv2;
-                        *pDecMv.add(iScan4Idx + 1) = mv2;
-                        *pDecMv.add(iScan4Idx + 4) = mv2;
-                        *pDecMv.add(iScan4Idx + 5) = mv2;
-                        *pLayerMvd.add(iScan4Idx) = mvd2;
-                        *pLayerMvd.add(iScan4Idx + 1) = mvd2;
-                        *pLayerMvd.add(iScan4Idx + 4) = mvd2;
-                        *pLayerMvd.add(iScan4Idx + 5) = mvd2;
+                        pDecMv[iScan4Idx] = mv2;
+                        pDecMv[iScan4Idx + 1] = mv2;
+                        pDecMv[iScan4Idx + 4] = mv2;
+                        pDecMv[iScan4Idx + 5] = mv2;
+                        pLayerMvd[iScan4Idx] = mvd2;
+                        pLayerMvd[iScan4Idx + 1] = mvd2;
+                        pLayerMvd[iScan4Idx + 4] = mvd2;
+                        pLayerMvd[iScan4Idx + 5] = mvd2;
                         pMotionVector[listIdx][iCacheIdx] = mv2;
                         pMotionVector[listIdx][iCacheIdx + 1] = mv2;
                         pMotionVector[listIdx][iCacheIdx + 6] = mv2;
@@ -2479,16 +2512,16 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         pMvdCache[listIdx][iCacheIdx + 7] = mvd2;
                     } else if IS_SUB_4x4(subMbType) {
                         // MB_TYPE_4x4
-                        *pDecMv.add(iScan4Idx) = mv2;
-                        *pLayerMvd.add(iScan4Idx) = mvd2;
+                        pDecMv[iScan4Idx] = mv2;
+                        pLayerMvd[iScan4Idx] = mvd2;
                         pMotionVector[listIdx][iCacheIdx] = mv2;
                         pMvdCache[listIdx][iCacheIdx] = mvd2;
                     } else if IS_SUB_4x8(subMbType) {
                         // MB_TYPE_4x8 5, 7, 9
-                        *pDecMv.add(iScan4Idx) = mv2;
-                        *pDecMv.add(iScan4Idx + 4) = mv2;
-                        *pLayerMvd.add(iScan4Idx) = mvd2;
-                        *pLayerMvd.add(iScan4Idx + 4) = mvd2;
+                        pDecMv[iScan4Idx] = mv2;
+                        pDecMv[iScan4Idx + 4] = mv2;
+                        pLayerMvd[iScan4Idx] = mvd2;
+                        pLayerMvd[iScan4Idx + 4] = mvd2;
                         pMotionVector[listIdx][iCacheIdx] = mv2;
                         pMotionVector[listIdx][iCacheIdx + 6] = mv2;
                         pMvdCache[listIdx][iCacheIdx] = mvd2;
@@ -2497,10 +2530,10 @@ pub unsafe fn ParseInterBMotionInfoCabac(
                         // MB_TYPE_8x4 4, 6, 8
                         pMv[2] = pMv[0]; pMv[3] = pMv[1];
                         pMvd[2] = pMvd[0]; pMvd[3] = pMvd[1];
-                        *pDecMv.add(iScan4Idx) = mv2;
-                        *pDecMv.add(iScan4Idx + 1) = mv2;
-                        *pLayerMvd.add(iScan4Idx) = mvd2;
-                        *pLayerMvd.add(iScan4Idx + 1) = mvd2;
+                        pDecMv[iScan4Idx] = mv2;
+                        pDecMv[iScan4Idx + 1] = mv2;
+                        pLayerMvd[iScan4Idx] = mvd2;
+                        pLayerMvd[iScan4Idx + 1] = mvd2;
                         pMotionVector[listIdx][iCacheIdx] = mv2;
                         pMotionVector[listIdx][iCacheIdx + 1] = mv2;
                         pMvdCache[listIdx][iCacheIdx] = mvd2;
@@ -2736,12 +2769,17 @@ pub fn ParseCbfInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseSignificantMapCabac(
-    mut pSignificantMap: *mut i32,
+/// **T5.AC6: the cursor is an index into the caller's array.** `pSignificantMap`
+/// was a `*mut i32` walked forward with `.add(1)` and zero-filled with
+/// `write_bytes` — both callers pass a stack array (`[i32; 16]` / `[i32; 64]`),
+/// so the slice carries the bound the pointer form had to be trusted for.
+pub fn ParseSignificantMapCabac(
+    pSignificantMap: &mut [i32],
     iResProperty: i32,
     pCtx: &mut SliceCtx<'_>,
     uiCoeffNum: &mut u32,
 ) -> i32 {
+    let mut w = 0usize;
     let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let map_base = if iResProperty == LUMA_DC_AC_8 {
@@ -2773,8 +2811,8 @@ pub unsafe fn ParseSignificantMapCabac(
             return err;
         }
         if uiCode != 0 {
-            *pSignificantMap = 1;
-            pSignificantMap = pSignificantMap.add(1);
+            pSignificantMap[w] = 1;
+            w += 1;
             *uiCoeffNum += 1;
 
             let iLastCtx = if iResProperty == LUMA_DC_AC_8 {
@@ -2787,23 +2825,29 @@ pub unsafe fn ParseSignificantMapCabac(
                 return err;
             }
             if uiCode != 0 {
-                ptr::write_bytes(pSignificantMap, 0, (i1 - i) as usize);
+                pSignificantMap[w..w + (i1 - i) as usize].fill(0);
                 return ERR_NONE;
             }
         } else {
-            *pSignificantMap = 0;
-            pSignificantMap = pSignificantMap.add(1);
+            pSignificantMap[w] = 0;
+            w += 1;
         }
     }
 
-    *pSignificantMap = 1;
+    pSignificantMap[w] = 1;
     *uiCoeffNum += 1;
 
     ERR_NONE
 }
 
-pub unsafe fn ParseSignificantCoeffCabac(
-    pSignificant: *mut i32,
+/// **T5.AC6: the backward cursor becomes an index, and F30's `wrapping_offset`
+/// becomes the loop condition.** `pCoff` walked down from `pSignificant + i` and
+/// its last decrement landed one element *before* the array — legal in C, UB by
+/// arithmetic alone in Rust, which is why the pointer form needed
+/// `wrapping_offset`. An index has no such hazard: `i` is the position and the
+/// loop already ends on it.
+pub fn ParseSignificantCoeffCabac(
+    pSignificant: &mut [i32],
     iResProperty: i32,
     pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
@@ -2825,11 +2869,11 @@ pub unsafe fn ParseSignificantCoeffCabac(
 
     let iMaxType = g_kMaxC2[iResProperty as usize] as i32;
     let mut i = g_kMaxPos[iResProperty as usize] as i32;
-    let mut pCoff = pSignificant.offset(i as isize);
     let mut c1: i32 = 1;
     let mut c2: i32 = 0;
 
     while i >= 0 {
+        let pCoff = &mut pSignificant[i as usize];
         if *pCoff != 0 {
             let mut err = DecodeBinCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut pCtx.pCabacCtx[pOneCtx + c1 as usize], &mut uiCode);
             if err != ERR_NONE {
@@ -2861,27 +2905,24 @@ pub unsafe fn ParseSignificantCoeffCabac(
                 *pCoff = -*pCoff;
             }
         }
-        // `wrapping_offset`, not `offset` (F30). The C++ is `pCoff--`
-        // (`parse_mb_syn_cabac.cpp:1394`) and its last iteration lands one element
-        // *before* `pSignificant`, which `i` then ends the loop on without ever
-        // dereferencing. In C that is a benign idiom; in Rust `offset` past the start
-        // is UB by the arithmetic alone — F7's class, the one T3.3 deleted from
-        // `InitReadBits`. `wrapping_offset` computes the same address and removes the
-        // UB, so this is S6 parity and not a repair.
-        pCoff = pCoff.wrapping_offset(-1);
+        // F30's note used to stand here, about `pCoff--` landing one element before
+        // the array on the last iteration and needing `wrapping_offset` so the
+        // *arithmetic* was not UB. With the position as the index there is no
+        // address to compute past the start: `i` reaches -1, the loop ends, and
+        // nothing is formed.
         i -= 1;
     }
     ERR_NONE
 }
 
-pub unsafe fn ParseResidualBlockCabac8x8(
+pub fn ParseResidualBlockCabac8x8(
     _pNeighAvail: &SWelsNeighAvail,
     pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
-    pScanTable: *const u8,
+    pScanTable: &[u8],
     iResProperty: i32,
-    sTCoeff: *mut i16,
+    sTCoeff: &mut [i16],
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
@@ -2898,11 +2939,11 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         &g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
 
-    let mut err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx, &mut uiTotalCoeffNum);
+    let mut err = ParseSignificantMapCabac(&mut pSignificantMap, iResProp, pCtx, &mut uiTotalCoeffNum);
     if err != ERR_NONE {
         return err;
     }
-    err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx);
+    err = ParseSignificantCoeffCabac(&mut pSignificantMap, iResProp, pCtx);
     if err != ERR_NONE {
         return err;
     }
@@ -2920,10 +2961,10 @@ pub unsafe fn ParseResidualBlockCabac8x8(
         let qp_shift = uiQp / 6;
         for j in 0..64 {
             if pSignificantMap[j] != 0 {
-                let i = *pScanTable.add(j) as usize;
+                let i = pScanTable[j] as usize;
                 let dequant_val = pDeQuantMul[i] as i32;
                 let sig_val = pSignificantMap[j];
-                *sTCoeff.add(i) = if uiQp >= 36 {
+                sTCoeff[i] = if uiQp >= 36 {
                     ((sig_val * dequant_val) * (1 << (qp_shift - 6))) as i16
                 } else {
                     ((sig_val * dequant_val + (1 << (5 - qp_shift))) >> (6 - qp_shift)) as i16
@@ -2935,14 +2976,14 @@ pub unsafe fn ParseResidualBlockCabac8x8(
     ERR_NONE
 }
 
-pub unsafe fn ParseResidualBlockCabac(
+pub fn ParseResidualBlockCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCountCache: &mut [u8; 48],
     iIndex: i32,
     _iMaxNumCoeff: i32,
-    pScanTable: *const u8,
+    pScanTable: &[u8],
     iResProperty: i32,
-    sTCoeff: *mut i16,
+    sTCoeff: &mut [i16],
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
     iCurrBlkXy: i32,
@@ -2980,11 +3021,11 @@ pub unsafe fn ParseResidualBlockCabac(
         return err;
     }
     if uiCbpBit != 0 {
-        err = ParseSignificantMapCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx, &mut uiTotalCoeffNum);
+        err = ParseSignificantMapCabac(&mut pSignificantMap, iResProp, pCtx, &mut uiTotalCoeffNum);
         if err != ERR_NONE {
             return err;
         }
-        err = ParseSignificantCoeffCabac(pSignificantMap.as_mut_ptr(), iResProp, pCtx);
+        err = ParseSignificantCoeffCabac(&mut pSignificantMap, iResProp, pCtx);
         if err != ERR_NONE {
             return err;
         }
@@ -2998,41 +3039,41 @@ pub unsafe fn ParseResidualBlockCabac(
 
     if iResProp == I16_LUMA_DC {
         for j in 0..16 {
-            let scan_idx = *pScanTable.add(j) as usize;
-            *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
+            let scan_idx = pScanTable[j] as usize;
+            sTCoeff[scan_idx] = pSignificantMap[j] as i16;
         }
         WelsLumaDcDequantIdct(sTCoeff, uiQp as i32, pCtx);
     } else if iResProp == CHROMA_DC_U || iResProp == CHROMA_DC_V {
         for j in 0..4 {
-            let scan_idx = *pScanTable.add(j) as usize;
-            *sTCoeff.add(scan_idx) = pSignificantMap[j] as i16;
+            let scan_idx = pScanTable[j] as usize;
+            sTCoeff[scan_idx] = pSignificantMap[j] as i16;
         }
         WelsChromaDcIdct(sTCoeff);
         let dequant_mul0 = pDeQuantMul[0] as i64;
         if !pCtx.bUseScalingList {
             for j in 0..4 {
-                let scan_idx = *pScanTable.add(j) as usize;
-                let val = *sTCoeff.add(scan_idx) as i64;
-                *sTCoeff.add(scan_idx) = ((val * dequant_mul0) >> 1) as i16;
+                let scan_idx = pScanTable[j] as usize;
+                let val = sTCoeff[scan_idx] as i64;
+                sTCoeff[scan_idx] = ((val * dequant_mul0) >> 1) as i16;
             }
         } else {
             for j in 0..4 {
-                let scan_idx = *pScanTable.add(j) as usize;
-                let val = *sTCoeff.add(scan_idx) as i64;
-                *sTCoeff.add(scan_idx) = ((val * dequant_mul0) >> 5) as i16;
+                let scan_idx = pScanTable[j] as usize;
+                let val = sTCoeff[scan_idx] as i64;
+                sTCoeff[scan_idx] = ((val * dequant_mul0) >> 5) as i16;
             }
         }
     } else {
         for j in 0..16 {
             if pSignificantMap[j] != 0 {
-                let scan_idx = *pScanTable.add(j) as usize;
+                let scan_idx = pScanTable[j] as usize;
                 let sig_val = pSignificantMap[j] as i64;
                 if !pCtx.bUseScalingList {
                     let mul = pDeQuantMul[scan_idx & 0x07] as i32;
-                    *sTCoeff.add(scan_idx) = (pSignificantMap[j] * mul) as i16;
+                    sTCoeff[scan_idx] = (pSignificantMap[j] * mul) as i16;
                 } else {
                     let mul = pDeQuantMul[scan_idx] as i64;
-                    *sTCoeff.add(scan_idx) = (((sig_val * mul) + 8) >> 4) as i16;
+                    sTCoeff[scan_idx] = (((sig_val * mul) + 8) >> 4) as i16;
                 }
             }
         }
@@ -3040,7 +3081,7 @@ pub unsafe fn ParseResidualBlockCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIPCMInfoCabac(
+pub fn ParseIPCMInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pBsAux: &mut BsReader,
     pCurDqLayer: &mut DqLayerState,
@@ -3055,10 +3096,6 @@ pub unsafe fn ParseIPCMInfoCabac(
     let iMbOffsetLuma = (iMbX + iMbY * iDstStrideLuma) << 4;
     let iMbOffsetChroma = (iMbX + iMbY * iDstStrideChroma) << 3;
 
-    let mut pMbDstY = pDec.data_ptr(0).add(iMbOffsetLuma as usize);
-    let mut pMbDstU = pDec.data_ptr(1).add(iMbOffsetChroma as usize);
-    let mut pMbDstV = pDec.data_ptr(2).add(iMbOffsetChroma as usize);
-
     *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(&mut *pCtx.sCabacDecEngine, pBsAux);
 
@@ -3069,22 +3106,28 @@ pub unsafe fn ParseIPCMInfoCabac(
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
     let iPcmStart = pBsAux.cursor.pos();
-    let mut pPtrSrc = pCtx.sRawData.window_from(pBsAux.start)[iPcmStart..].as_ptr();
     if !pCtx.bParseOnly {
-        for _ in 0..16 {
-            ptr::copy_nonoverlapping(pPtrSrc, pMbDstY, 16);
-            pMbDstY = pMbDstY.add(iDstStrideLuma as usize);
-            pPtrSrc = pPtrSrc.add(16);
-        }
-        for _ in 0..8 {
-            ptr::copy_nonoverlapping(pPtrSrc, pMbDstU, 8);
-            pMbDstU = pMbDstU.add(iDstStrideChroma as usize);
-            pPtrSrc = pPtrSrc.add(8);
-        }
-        for _ in 0..8 {
-            ptr::copy_nonoverlapping(pPtrSrc, pMbDstV, 8);
-            pMbDstV = pMbDstV.add(iDstStrideChroma as usize);
-            pPtrSrc = pPtrSrc.add(8);
+        // **T5.AC6: the three destination cursors are row spans of the picture's own
+        // planes.** They were `data_ptr(i).add(mb_offset)` walked by a stride —
+        // `data_ptr` is the enumerated survivor, and this is one of the sites that
+        // kept it alive. The picture arrives here as an `&mut SPicture` already, so
+        // the plane is reachable directly; `origin() + mb_offset` is the index the
+        // pointer arithmetic computed, and the 384 source bytes are one slice the
+        // `iBytesLeft` test above has already bounded.
+        let src = &pCtx.sRawData.window_from(pBsAux.start)[iPcmStart..];
+        let mut s = 0usize;
+        for (plane_idx, rows, width, stride, mb_offset) in [
+            (0usize, 16usize, 16usize, iDstStrideLuma as usize, iMbOffsetLuma as usize),
+            (1, 8, 8, iDstStrideChroma as usize, iMbOffsetChroma as usize),
+            (2, 8, 8, iDstStrideChroma as usize, iMbOffsetChroma as usize),
+        ] {
+            let base = pDec.plane(plane_idx).origin() + mb_offset;
+            let dst = pDec.plane_mut(plane_idx).as_mut_slice();
+            for r in 0..rows {
+                let row = base + r * stride;
+                dst[row..row + width].copy_from_slice(&src[s..s + width]);
+                s += width;
+            }
         }
     }
 
