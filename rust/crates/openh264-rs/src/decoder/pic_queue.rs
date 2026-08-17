@@ -200,6 +200,10 @@ enum PicView<'a> {
         cur: PicId,
         cur_ptr: *mut SPicture,
     },
+    /// [`PicPool::cur_and_rest_mut`]'s half — the same split, with the current
+    /// picture handed to the caller as `&mut` instead of as an address, so there is
+    /// no `cur_ptr` to keep and none to invalidate.
+    SplitBorrowed { rest: PoolRest<'a, PicSlot>, cur: PicId },
 }
 
 impl<'a> PicRefs<'a> {
@@ -219,6 +223,12 @@ impl<'a> PicRefs<'a> {
     #[inline]
     fn split(rest: PoolRest<'a, PicSlot>, cur: PicId, cur_ptr: *mut SPicture) -> Self {
         Self { view: PicView::Split { rest, cur, cur_ptr } }
+    }
+
+    /// [`split`](Self::split) for the borrow bracket — see [`PicView::SplitBorrowed`].
+    #[inline]
+    fn split_borrowed(rest: PoolRest<'a, PicSlot>, cur: PicId) -> Self {
+        Self { view: PicView::SplitBorrowed { rest, cur } }
     }
 
     /// The picture a stored handle names, or null when there is no pool or no handle.
@@ -257,14 +267,73 @@ impl<'a> PicRefs<'a> {
                 if id == cur {
                     cur_ptr // F42 — never `rest.get(cur)`, which panics.
                 } else {
+                    slot_ptr(rest.get(id).as_deref())
+                }
+            }
+            // A borrow bracket has no address for its own picture to hand out, which
+            // is the point of it. Reaching here means a caller took
+            // `cur_and_rest_mut` and then asked for a *pointer* to the slot it is
+            // holding — `PoolRest::get`'s own panic, one level up, and unreachable
+            // from the two error-concealment brackets that use this form.
+            PicView::SplitBorrowed { rest, cur } => {
+                assert_ne!(id, cur, "this bracket holds slot {id:?} as a borrow; ask `classify`");
+                slot_ptr(rest.get(id).as_deref())
+            }
+        }
+    }
+
+    /// What a stored handle names, with **the picture this bracket is writing told
+    /// apart from the rest** — [`get`](Self::get)'s answer without the pointer.
+    ///
+    /// This is the type-level form of the test error concealment spells as
+    /// `same_picture(pSrcPic, pDstPic)`: its three copy paths resolve a reference,
+    /// compare it against the picture they are about to write, and skip when the two
+    /// are one. [`get`](Self::get) hands back an address for that case because
+    /// `mv_pred`'s and `decode_slice`'s survivors genuinely read through it (**F42**)
+    /// — but a caller that only wants to *skip* needs no address, and asking for one
+    /// is what forced those three paths to keep a raw pointer.
+    ///
+    /// [`RefSlot::Current`] carries no reference **by construction**, so the
+    /// `&SPicture` in [`RefSlot::Other`] is provably disjoint from the `&mut` the
+    /// bracket holds and the two travel together in safe code. No behaviour moves:
+    /// the arms are the same three the pointer form's callers were writing by hand,
+    /// and the current slot is still never resolved through `PoolRest::get`, which
+    /// panics on it.
+    #[inline]
+    pub fn classify(&self, slot: Option<PicId>) -> RefSlot<'a> {
+        let Some(id) = slot else {
+            return RefSlot::Empty;
+        };
+        match self.view {
+            PicView::None => RefSlot::Empty,
+            PicView::Whole(pool) => match pool.slot(id) {
+                Some(pic) => RefSlot::Other(pic),
+                None => RefSlot::Empty,
+            },
+            PicView::Split { rest, cur, .. } | PicView::SplitBorrowed { rest, cur } => {
+                if id == cur {
+                    RefSlot::Current // F42 — never `rest.get(cur)`, which panics.
+                } else {
                     match rest.get(id) {
-                        Some(pic) => &**pic as *const SPicture,
-                        None => std::ptr::null(),
+                        Some(pic) => RefSlot::Other(pic),
+                        None => RefSlot::Empty,
                     }
                 }
             }
         }
     }
+}
+
+/// [`PicRefs::classify`]'s answer — the three states its callers were testing for
+/// with a null check and a `same_picture` comparison.
+#[derive(Debug)]
+pub enum RefSlot<'a> {
+    /// No pool, no handle, or an empty slot — the pointer form's null.
+    Empty,
+    /// The handle names the picture the bracket holds mutably (**F42**).
+    Current,
+    /// A reference picture, disjoint from the bracket's mutable half.
+    Other(&'a SPicture),
 }
 
 /// The pointer form of a resolved slot, spelled **once** (S7).
@@ -369,6 +438,30 @@ impl PicPool {
     /// these the pool is not reached at all, so the whole scope runs on a single
     /// borrow. The returned pointer and every [`PicRefs::get`] answer for `cur` carry
     /// **one tag** (F42), which is what lets the C's aliasing survive the flip.
+    /// [`cur_and_rest`](Self::cur_and_rest)'s **borrow** form, for a bracket that
+    /// resolves references only through [`PicRefs::classify`] (T5.AB3).
+    ///
+    /// The split is the same one — `Pool::mut_and_rest` over the slot span, so the
+    /// two halves are disjoint by construction. What differs is the caller's
+    /// contract: this hands back the `&mut` the pointer form throws away, which is
+    /// sound exactly while nothing resolves the *current* slot out of the view. The
+    /// pointer form exists because `PicRefs::get`'s F42 arm answers that slot **with
+    /// the picture** and the decode path reads through it; a caller that only needs
+    /// to tell the current slot apart — error concealment's three copy paths, whose
+    /// whole use of the answer is to skip — asks `classify` and takes this.
+    ///
+    /// **The view carries no address for the current slot**, and that is structural
+    /// rather than documentary: handing back the `&mut` *and* a pointer to the same
+    /// picture would be two live derivations of one allocation, and the caller's
+    /// first retag would pop the pointer that `get`'s F42 arm reads through. There is
+    /// none to pop — [`PicView::SplitBorrowed`] does not have the field, and `get`
+    /// asserts rather than answering for that slot.
+    #[inline]
+    pub fn cur_and_rest_mut(&mut self, cur: PicId) -> (Option<&mut SPicture>, PicRefs<'_>) {
+        let (slot, rest) = self.slots.mut_and_rest(cur);
+        (slot.as_deref_mut(), PicRefs::split_borrowed(rest, cur))
+    }
+
     #[inline]
     pub fn cur_and_rest(&mut self, cur: PicId) -> (PPicture, PicRefs<'_>) {
         let (slot, rest) = self.slots.mut_and_rest(cur);
