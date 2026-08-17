@@ -11,6 +11,36 @@ survivors, each carrying `#[allow(unsafe_code)]` and the F42 argument at the ite
 counted by its own signature grep and not by `raw_ptr`. **Nothing below is blocked
 by a decision.** What is left is nine modules and a size each.
 
+## The terminal rule (Eugene, 2026-08-17: "make sure it doesn't stop until
+everything is done")
+
+**This session has no hand-off.** Its §3 close is the only exit: the session ends
+when exit conditions 1–3 read met **and** the close artifacts land — `phase6.md`,
+briefs historical, the checklist shut, §0 refreshed, every open finding owned.
+"Done" is the checklist's own definition, unchanged since it was written: every
+remaining occurrence **converts, or is enumerated** (survivor / exception / prose)
+with its argument at the item and its Phase pointer. A size is never a stop
+(S31 — the list is finite and every row above is measured). A question is never a
+stop either — it takes **the decision ladder**:
+
+1. **Settle by reading** (the W2b method): read the code, write the settlement in
+   the log, proceed. This has closed every design question of the phase's second
+   half.
+2. **Lint-scope questions** (where a keyword or an allow lives) default to **the
+   enumerated-survivor shape** with a Phase 8 pointer — always a legal move,
+   never a behavior change.
+3. **Behavior questions** (output, codes, API-visible anything) **never
+   default**: park exactly that item behind an item-level allow with a
+   one-paragraph record and its pointer, and continue with everything else. A
+   parked item joins the enumerated exceptions — which exit conditions 1–2 admit
+   by construction — so it does not block the close.
+
+The close's §0 statement **lists every item the ladder parked**; if the list is
+more than a handful, the close says so plainly and the phase still exits, with
+the list as Phase 8 inheritance. The only sentence that ends this session early
+is a named Eugene/steward blocker that survives all three rungs — and given the
+rungs, that set should be empty.
+
 ## 0. Start
 
 1. Commit the inherited doc tail.
@@ -104,7 +134,14 @@ do not start it as a spelling pass.
    on that. **No other perf work** (D-perf-6). Do not inherit a base from a
    previous brief without checking it was not already measured; AB's brief carried
    a stale one.
-3. **`prompts/phase6.md` per S19** — only if the phase actually exits.
+3. **`prompts/phase6.md` per S19 — unconditionally**: under the terminal rule the
+   phase exits this session by construction (everything converts or is
+   enumerated with its pointer), so the encoder brief is written, full stop. It
+   inherits the playbook: the ordering rule, cache-not-carrier,
+   take-what-you-reach, the bracket maneuver (four applications), the pointer
+   family as the working unit, the vestigial sweep run whole (session Z's rule),
+   settlements-in-writing, the decision ladder, the probe budget and S32, S31,
+   S33, and D-par-1's standing referee suite.
 4. Briefs stamped historical; phase5.md's checklist closed; §0 refreshed; open
    findings each with an owner (F3→Phase 7, F23/F38-class/F41 + the `api/`
    inventory→Phase 8, **`PPicture`'s option-1/2 revisit→Phase 8**, F36→threading-
