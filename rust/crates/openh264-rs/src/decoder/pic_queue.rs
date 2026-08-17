@@ -859,18 +859,16 @@ pub fn CreatePicBuff(
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
 #[allow(unsafe_code)] // exception 1 at the file head — family 14's `ResetReorderingPictureBuffers`
 pub unsafe fn DestroyPicBuff(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pool: Option<Box<PicPool>>,
     pMa: *mut CMemoryAlign,
 ) {
-    if !pCtx.is_null() {
-        unsafe {
-            crate::decoder::decoder_core::ResetReorderingPictureBuffers(
-                (*pCtx).pPictReoderingStatus,
-                (*pCtx).pPictInfoList,
-                false,
-            );
-        }
+    unsafe {
+        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+            (*pCtx).pPictReoderingStatus,
+            (*pCtx).pPictInfoList,
+            false,
+        );
     }
 
     // **T5.Q2: the release is the `Box` going out of scope.** The `FreePicture` loop
@@ -965,7 +963,7 @@ mod tests {
         ctx.pParam = &mut param as *mut SDecodingParam;
 
         unsafe {
-            let pCtx: PWelsDecoderContext = &mut *ctx;
+            let pCtx = &mut *ctx;
             assert!(
                 crate::decoder::decoder_context::parse_only(pCtx),
                 "the accessor reads the field the callee used to reach for itself"
@@ -994,7 +992,7 @@ mod tests {
         ctx.pParam = &mut param as *mut SDecodingParam;
 
         unsafe {
-            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+            let pCtx = &mut *ctx;
             let mut pool = CreatePicBuff(false, 4, 64, 64).expect("pool");
 
             // First prefetch gets index 1 (Pass 1 scan from iCurrentIdx + 1)
@@ -1065,7 +1063,7 @@ mod tests {
             assert_ne!(pOther, answered);
             assert_eq!((*pOther).pic_id(), Some(other));
 
-            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, Some(pool), &mut ma);
+            DestroyPicBuff(&mut *ctx, Some(pool), &mut ma);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -1189,7 +1187,7 @@ mod tests {
             assert!(!same_picture(None, a));
 
             DestroyPicBuff(
-                &mut *ctx as *mut SWelsDecoderContext,
+                &mut *ctx,
                 Some(pool),
                 &mut ma as *mut CMemoryAlign,
             );
@@ -1241,7 +1239,7 @@ mod tests {
             assert_eq!(pool.slot(got).unwrap().iPicBuffIdx, 0, "the winner learns its slot");
 
             DestroyPicBuff(
-                &mut *ctx as *mut SWelsDecoderContext,
+                &mut *ctx,
                 Some(pool),
                 &mut ma as *mut CMemoryAlign,
             );
@@ -1281,7 +1279,7 @@ mod tests {
             assert_eq!(pic_lookup, pic1);
             assert!(PrefetchPicForThread(None).is_null(), "the null test is the Option");
 
-            DestroyPicBuff(&mut *ctx as *mut SWelsDecoderContext, Some(pool), &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(&mut *ctx, Some(pool), &mut ma as *mut CMemoryAlign);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }

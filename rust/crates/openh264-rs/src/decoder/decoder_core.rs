@@ -717,7 +717,13 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut i32) -> i32 {
 /// `GetThreadCount(p_ctx) <= 0` to increment `uiDecodeTimeStamp`, so a `1` here would
 /// silently stop that branch running and change the decoding timestamp.
 #[inline]
-pub unsafe fn GetThreadCount(_pCtx: PWelsDecoderContext) -> i32 {
+/// **T5.Z4: it takes a shared borrow now, and the parameter is still unused.**
+/// F36 owns whether decoder threading returns at all; until then this is `0`. As a
+/// `&mut` it was worse than useless — a `Unique` function-entry retag over the whole
+/// context at every call site, which pops every live derivation from it. That is
+/// what the flip's one Miri failure was: `slice_ctx` derived `sRawData`, then read
+/// this, then built the struct, and the field borrow was already dead.
+pub fn GetThreadCount(_pCtx: &SWelsDecoderContext) -> i32 {
     0
 }
 
@@ -750,9 +756,8 @@ unsafe fn UpdateDecStatFreezingInfo(idr_flag: bool, pDecStat: *mut SDecoderStati
 }
 
 #[inline]
-pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext, pCurDq: PDqLayer) {
-    if pCtx.is_null()
-        || pCurDq.is_null()
+pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: PDqLayer) {
+    if pCurDq.is_null()
         || (*pCtx).pDec.is_none()
         || (*pCtx).pDecoderStatistics.is_null()
     {
@@ -813,10 +818,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: PWelsDecoderContext, pCurDq: PDq
 }
 
 #[inline]
-pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, pCurDq: PDqLayer, bOutput: bool) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: PDqLayer, bOutput: bool) {
     if (*pCtx).bFreezeOutput {
         if !pCurDq.is_null() {
             UpdateDecStatFreezingInfo(
@@ -830,7 +832,7 @@ pub unsafe fn UpdateDecStat(pCtx: PWelsDecoderContext, pCurDq: PDqLayer, bOutput
 }
 
 #[inline]
-pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
     match pCurDqLayer.as_mut() {
         Some(dq) => crate::decoder::decode_slice::WelsTargetSliceConstruction(pCtx, dq),
         None => ERR_NONE,
@@ -839,7 +841,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: PWelsDecoderContext, pCurDqLayer
 
 #[inline]
 pub unsafe fn WelsDecodeSlice(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: PDqLayer,
     bFreshSlice: bool,
     pCurNal: PNalUnit,
@@ -851,7 +853,7 @@ pub unsafe fn WelsDecodeSlice(
 }
 
 #[inline]
-pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+pub unsafe fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
     match pCurDqLayer.as_mut() {
         Some(dq) => crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq),
         None => ERR_NONE,
@@ -859,13 +861,13 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: PWelsDecoderContext, pCurDqLayer
 }
 
 #[inline]
-pub unsafe fn WelsInitRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer, iPoc: i32) -> i32 {
+pub unsafe fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer, iPoc: i32) -> i32 {
     crate::decoder::manage_dec_ref::WelsInitRefList(pCtx, pCurDqLayer.as_mut(), iPoc)
 }
 
 #[inline]
 pub unsafe fn WelsInitBSliceRefList(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: PDqLayer,
     iPoc: i32,
 ) -> i32 {
@@ -873,17 +875,17 @@ pub unsafe fn WelsInitBSliceRefList(
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+pub unsafe fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
     crate::decoder::manage_dec_ref::WelsReorderRefList(pCtx, pCurDqLayer.as_mut())
 }
 
 #[inline]
-pub unsafe fn WelsReorderRefList2(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+pub unsafe fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
     crate::decoder::manage_dec_ref::WelsReorderRefList2(pCtx, pCurDqLayer.as_mut())
 }
 
 #[inline]
-pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
+pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer.as_mut(), std::ptr::null_mut())
 }
 
@@ -899,12 +901,11 @@ pub unsafe fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) ->
 
 
 #[inline]
-pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
+pub unsafe fn ComputeColocatedTemporalScaling(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) {
     if let Some(dq) = pCurDqLayer.as_mut() {
         // T5.Y2: a slice bracket of its own — the pool view and the context view
         // come out of the same context, and the two are disjoint by construction.
-        let pRefs = pic_refs(pCtx);
-        let mut view = crate::decoder::decoder_context::slice_ctx(pCtx, None);
+        let (_, pRefs, mut view) = crate::decoder::decoder_context::slice_split(pCtx, None);
         let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
             &mut view,
             dq,
@@ -916,12 +917,9 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: PWelsDecoderContext, pCurDqL
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
 /// the EC MV copy exchange buffers).
 /// Matches `GetTargetRefListSize` in `decoder.cpp`.
-pub unsafe fn GetTargetRefListSize(pCtx: PWelsDecoderContext) -> i32 {
-    let kiNumRefFrames = if pCtx.is_null() {
-        None
-    } else {
-        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| sps.iNumRefFrames)
-    };
+pub unsafe fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
+    let kiNumRefFrames =
+        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| sps.iNumRefFrames);
     let mut iNumRefFrames = match kiNumRefFrames {
         None => MAX_REF_PIC_COUNT as i32 + 2,
         Some(kiNumRefFrames) => {
@@ -941,10 +939,7 @@ pub unsafe fn GetTargetRefListSize(pCtx: PWelsDecoderContext) -> i32 {
     iNumRefFrames
 }
 
-pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+pub unsafe fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHeight: u32) -> i32 {
     let iPicWidth = (iWidth << 4) as i32;
     let iPicHeight = (iHeight << 4) as i32;
     let iPicBufSize = GetTargetRefListSize(pCtx);
@@ -982,7 +977,7 @@ pub unsafe fn SyncPictureResolutionExt(pCtx: PWelsDecoderContext, iWidth: u32, i
 }
 
 #[inline]
-pub unsafe fn WelsResetRefPic(pCtx: PWelsDecoderContext) {
+pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     crate::decoder::manage_dec_ref::WelsResetRefPic(pCtx)
 }
 
@@ -1010,10 +1005,7 @@ use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, Nee
 
 #[inline]
 /// Matches `ResetActiveSPSForEachLayer` in `decoder_context.h`.
-pub unsafe fn ResetActiveSPSForEachLayer(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     if (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
             (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;
@@ -1022,10 +1014,10 @@ pub unsafe fn ResetActiveSPSForEachLayer(pCtx: PWelsDecoderContext) {
 }
 
 #[inline]
-pub unsafe fn GetVclNalTemporalId(pCtx: PWelsDecoderContext) {}
+pub unsafe fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {}
 
 #[inline]
-pub unsafe fn GetPrevFrameNum(pCtx: PWelsDecoderContext) -> i32 {
+pub unsafe fn GetPrevFrameNum(pCtx: &mut SWelsDecoderContext) -> i32 {
     0
 }
 
@@ -1055,24 +1047,31 @@ use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 // Core Functions Implemented in `decoder_core.cpp`
 
 pub unsafe fn DecodeFrameConstruction(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDq: PDqLayer,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
-    if pCtx.is_null() || ppDst.is_null() || pDstInfo.is_null() {
+    if ppDst.is_null() || pDstInfo.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     if pCurDq.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
-    // **One derivation for the whole function** (T5.Q2, and a borrow since T5.Z1):
-    // every use below is `pPic`'s, `pCtx->pDec` is not written anywhere in here, and
-    // the borrow is of `pPicBuff` alone — so the `sFrameCrop` reads and the
-    // parse-only descriptor below are disjoint fields, not a second derivation.
-    let Some(pPic) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) else {
+    // **T5.Z4: the picture is re-derived where it is written, not held.** T5.Q2 took
+    // one derivation for the whole function because a second one would invalidate the
+    // first; with the context a `&mut` the *statistics* calls in between take it too,
+    // so the borrow cannot span them. `pCtx->pDec` is not written anywhere in here,
+    // so every re-derivation names the same slot — which is what made one derivation
+    // safe in the first place, said the other way round.
+    if dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec).is_none() {
         return ERR_INFO_INVALID_PTR;
-    };
+    }
+    macro_rules! pic {
+        () => {
+            dec_pic(&mut pCtx.pPicBuff, pCtx.pDec).unwrap()
+        };
+    }
 
     let kiWidth = (*pCurDq).iMbWidth << 4;
     let kiHeight = (*pCurDq).iMbHeight << 4;
@@ -1187,7 +1186,7 @@ pub unsafe fn DecodeFrameConstruction(
                     (*pCtx).bFrameFinish = true;
                 } else if (*pCtx).iTotalNumMbRec != 0 {
                     (*pCtx).bFramePending = true;
-                    pPic.bIsComplete = false;
+                    pic!().bIsComplete = false;
                     (*pCtx).bFrameFinish = false;
                     (*pCtx).iErrorCode |= dsFramePending;
                     return ERR_INFO_PARSEONLY_PENDING;
@@ -1216,36 +1215,36 @@ pub unsafe fn DecodeFrameConstruction(
         // anywhere in this function — and under owned slots a second derivation of
         // one slot invalidates the first, which `pPic`'s twenty-odd uses below are.
         // One derivation at the top is what this whole function's region wants.
-        pPic.bIsComplete = true;
+        pic!().bIsComplete = true;
         (*pCtx).bFreezeOutput = false;
     }
 
     (*pCtx).iTotalNumMbRec = 0;
 
-    (*pDstInfo).uiOutYuvTimeStamp = pPic.uiTimeStamp;
-    *ppDst.add(0) = pPic.data_ptr(0);
-    *ppDst.add(1) = pPic.data_ptr(1);
-    *ppDst.add(2) = pPic.data_ptr(2);
+    (*pDstInfo).uiOutYuvTimeStamp = pic!().uiTimeStamp;
+    *ppDst.add(0) = pic!().data_ptr(0);
+    *ppDst.add(1) = pic!().data_ptr(1);
+    *ppDst.add(2) = pic!().data_ptr(2);
 
     (*pDstInfo).UsrData.sSystemBuffer.iFormat = videoFormatI420;
     (*pDstInfo).UsrData.sSystemBuffer.iWidth = kiActualWidth;
     (*pDstInfo).UsrData.sSystemBuffer.iHeight = kiActualHeight;
-    (*pDstInfo).UsrData.sSystemBuffer.iStride[0] = pPic.linesize(0);
-    (*pDstInfo).UsrData.sSystemBuffer.iStride[1] = pPic.linesize(1);
+    (*pDstInfo).UsrData.sSystemBuffer.iStride[0] = pic!().linesize(0);
+    (*pDstInfo).UsrData.sSystemBuffer.iStride[1] = pic!().linesize(1);
 
     if !(*ppDst.add(0)).is_null() {
         *ppDst.add(0) = (*ppDst.add(0)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * 2 * pPic.linesize(0) + (*pCtx).sFrameCrop.iLeftOffset * 2) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * 2 * pic!().linesize(0) + (*pCtx).sFrameCrop.iLeftOffset * 2) as usize
         );
     }
     if !(*ppDst.add(1)).is_null() {
         *ppDst.add(1) = (*ppDst.add(1)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * pPic.linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * pic!().linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
         );
     }
     if !(*ppDst.add(2)).is_null() {
         *ppDst.add(2) = (*ppDst.add(2)).add(
-            ((*pCtx).sFrameCrop.iTopOffset * pPic.linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
+            ((*pCtx).sFrameCrop.iTopOffset * pic!().linesize(1) + (*pCtx).sFrameCrop.iLeftOffset) as usize
         );
     }
 
@@ -1260,7 +1259,7 @@ pub unsafe fn DecodeFrameConstruction(
     (*pCtx).iLastImgHeightInPixel = (*pDstInfo).UsrData.sSystemBuffer.iHeight;
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
-        (*pDstInfo).iBufferStatus = (bFrameCompleteFlag && pPic.bIsComplete) as i32;
+        (*pDstInfo).iBufferStatus = (bFrameCompleteFlag && pic!().bIsComplete) as i32;
     } else if !(*pCtx).pParam.is_null()
         && ((*(*pCtx).pParam).eEcActiveIdc
             == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
@@ -1283,9 +1282,9 @@ pub unsafe fn DecodeFrameConstruction(
         (*pDstInfo).iBufferStatus = 0;
     }
 
-    (*pCtx).iMbEcedNum = pPic.iMbEcedNum;
-    (*pCtx).iMbNum = pPic.iMbNum;
-    (*pCtx).iMbEcedPropNum = pPic.iMbEcedPropNum;
+    (*pCtx).iMbEcedNum = pic!().iMbEcedNum;
+    (*pCtx).iMbNum = pic!().iMbNum;
+    (*pCtx).iMbEcedPropNum = pic!().iMbEcedPropNum;
 
     if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
         if (*pDstInfo).iBufferStatus != 0
@@ -1319,7 +1318,7 @@ pub unsafe fn GetTargetDqId(uiTargetDqId: u8, psParam: *mut SDecodingParam) -> u
 }
 
 #[inline]
-pub unsafe fn HandleReferenceLostL0(pCtx: PWelsDecoderContext, pCurNal: PNalUnit) {
+pub unsafe fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
     if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
         (*pCtx).bReferenceLostAtT0Flag = true;
     }
@@ -1327,7 +1326,7 @@ pub unsafe fn HandleReferenceLostL0(pCtx: PWelsDecoderContext, pCurNal: PNalUnit
 }
 
 #[inline]
-pub unsafe fn HandleReferenceLost(pCtx: PWelsDecoderContext, pCurNal: PNalUnit) {
+pub unsafe fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
     if !pCurNal.is_null()
         && ((*pCurNal).sNalHeaderExt.uiTemporalId == 0 || (*pCurNal).sNalHeaderExt.uiTemporalId == 1)
     {
@@ -1338,7 +1337,7 @@ pub unsafe fn HandleReferenceLost(pCtx: PWelsDecoderContext, pCurNal: PNalUnit) 
 
 #[inline]
 pub unsafe fn WelsDecodeConstructSlice(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: PDqLayer,
     pCurNal: PNalUnit,
 ) -> i32 {
@@ -1350,11 +1349,13 @@ pub unsafe fn WelsDecodeConstructSlice(
 }
 
 pub unsafe fn ParsePredWeightedTable(
-    pCtx: PWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBs: &mut BsCursor,
     pSh: PSliceHeader,
 ) -> i32 {
+    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
     if pSh.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -1463,8 +1464,8 @@ pub unsafe fn ParsePredWeightedTable(
     ERR_NONE
 }
 
-pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) {
-    if pCtx.is_null() || pCurDqLayer.is_null() {
+pub unsafe fn CreateImplicitWeightTable(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) {
+    if pCurDqLayer.is_null() {
         return;
     }
     let pSliceHeader = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
@@ -1527,11 +1528,13 @@ pub unsafe fn CreateImplicitWeightTable(pCtx: PWelsDecoderContext, pCurDqLayer: 
 }
 
 pub unsafe fn ParseRefPicListReordering(
-    pCtx: PWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBs: &mut BsCursor,
     pSh: PSliceHeader,
 ) -> i32 {
+    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
     if pSh.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -1600,14 +1603,25 @@ pub unsafe fn ParseRefPicListReordering(
 }
 
 pub unsafe fn ParseDecRefPicMarking(
-    pCtx: PWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBs: &mut BsCursor,
     pSh: PSliceHeader,
-    pSps: PSps,
+    sps_ref: Option<SpsRef>,
     kbIdrFlag: bool,
 ) -> i32 {
-    if pSh.is_null() || pSps.is_null() {
+    // The offset travels, not the slice — see `ParseSps` (T5.Z4).
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
+    // **And the SPS travels as a ref, not a pointer.** Its two scalars are read out
+    // here, above every use of the context: derived from `pCtx` and passed beside
+    // it, the pointer dies at this function's own entry retag — Y's verdict, arriving
+    // from a *caller-derived* alias rather than from an accessor.
+    let Some((uiLog2MaxFrameNum, iNumRefFrames)) = sps_of(&pCtx.sSpsPpsCtx, sps_ref)
+        .map(|sps| (sps.uiLog2MaxFrameNum, sps.iNumRefFrames))
+    else {
+        return ERR_INFO_INVALID_PTR;
+    };
+    if pSh.is_null() {
         return ERR_INFO_INVALID_PTR;
     }
     let kpRefMarking = &mut (*pSh).sRefMarking;
@@ -1651,7 +1665,7 @@ pub unsafe fn ParseDecRefPicMarking(
                     kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
                     kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = ((*pSh).iFrameNum
                         - kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum)
-                        & (((1 << (*pSps).uiLog2MaxFrameNum) - 1) as i32);
+                        & (((1 << uiLog2MaxFrameNum) - 1) as i32);
                 } else if kuiMmco == MMCO_LONG2UNUSED {
                     bAllowMmco5 = false;
                     if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
@@ -1679,7 +1693,7 @@ pub unsafe fn ParseDecRefPicMarking(
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     let iMaxLongTermFrameIdx = -1 + (uiCode as i32);
-                    if iMaxLongTermFrameIdx > (*pSps).iNumRefFrames {
+                    if iMaxLongTermFrameIdx > iNumRefFrames {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_MARKING);
                     }
                     kpRefMarking.sMmcoRef[iIdx].iMaxLongTermFrameIdx = iMaxLongTermFrameIdx;
@@ -1739,10 +1753,7 @@ pub unsafe fn FillDefaultSliceHeaderExt(
     true
 }
 
-pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+pub unsafe fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
     let pMa = (*pCtx).pMemAlign;
     // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
     // `sRawData.len()` — the `iMaxBsBufferSizeInByte` field died with the pointers,
@@ -1784,7 +1795,7 @@ pub unsafe fn InitBsBuffer(pCtx: PWelsDecoderContext) -> i32 {
 // it; the port's only trigger is the single-NAL-bigger-than-the-buffer check in
 // `WelsDecodeBs`, unchanged.
 
-pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i32 {
+pub unsafe fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 {
     if !parser_bs(&mut (*pCtx).pParserBsInfo)
         .is_some_and(|p| !p.pNalLenInByte.as_slice().is_empty())
     {
@@ -1808,10 +1819,7 @@ pub unsafe fn ExpandBsLenBuffer(pCtx: PWelsDecoderContext, kiCurrLen: i32) -> i3
     ERR_NONE
 }
 
-pub unsafe fn WelsInitDecoderFuncs(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
     let cpu_flag = (*pCtx).uiCpuFlag;
 
     // 0. Block helpers. `WelsBlockFuncInit` filled `sBlockFunc` here (`InitDecFuncs`
@@ -1913,10 +1921,7 @@ pub unsafe fn WelsCPUFeatureDetect(pCpuCores: *mut i32) -> u32 {
 /// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
 /// Fill data fields in default for decoder context.
 /// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
-pub unsafe fn WelsDecoderDefaults(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) {
     let mut iCpuCores = 1i32;
     (*pCtx).pArgDec = std::ptr::null_mut();
     (*pCtx).bHaveGotMemory = false;
@@ -2019,10 +2024,7 @@ pub unsafe fn ResetReorderingPictureBuffers(
     (*pPictReoderingStatus).bHasBSlice = false;
 }
 
-pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+pub unsafe fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext, _pLogCtx: *mut c_void) -> i32 {
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores) as u32;
     WelsInitDecoderFuncs(pCtx);
@@ -2038,10 +2040,7 @@ pub unsafe fn WelsOpenDecoder(pCtx: PWelsDecoderContext, _pLogCtx: *mut c_void) 
 /// Frees dynamically-grown decoder memory (DQ layers, FMO, reference
 /// pictures, picture buffer, CABAC engine).
 /// Matches `void WelsFreeDynamicMemory (PWelsDecoderContext pCtx)` in `decoder.cpp`.
-pub unsafe fn WelsFreeDynamicMemory(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
     let pMa = (*pCtx).pMemAlign;
 
     UninitialDqLayersContext(pCtx);
@@ -2075,10 +2074,7 @@ pub unsafe fn WelsFreeDynamicMemory(pCtx: PWelsDecoderContext) {
 
 /// Terminates decoder worker threads and cleans up internal decoding context.
 /// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
-pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
     WelsFreeDynamicMemory(pCtx);
     WelsFreeStaticMemory(pCtx);
     (*pCtx).bParamSetsLostFlag = false;
@@ -2088,10 +2084,7 @@ pub unsafe fn WelsEndDecoder(pCtx: PWelsDecoderContext) {
     (*pCtx).bFrameFinish = false;
 }
 
-pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+pub unsafe fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
     WelsOpenDecoder(pCtx, std::ptr::null_mut());
     // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
     // caller's argument, exactly as `decoder_core.cpp:763` passes it.
@@ -2105,10 +2098,7 @@ pub unsafe fn WelsInitStaticMemory(pCtx: PWelsDecoderContext) -> i32 {
     ERR_NONE
 }
 
-pub unsafe fn WelsFreeStaticMemory(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
     let pMa = (*pCtx).pMemAlign;
     // R4, first entry: the access unit's free is `Option::take`'s drop, and it happens
     // here rather than in the context's own `Drop` only because this function still
@@ -2155,15 +2145,25 @@ pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
 }
 
 pub unsafe fn ParseSliceHeaderSyntaxs(
-    pCtx: PWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBs: &mut BsCursor,
     kbExtensionFlag: bool,
 ) -> i32 {
+    // **The window is re-derived per read, not bound** (T5.Z4). This function
+    // interleaves reads with calls that take the context — the three sub-parsers and
+    // the parameter-set lookups — so a `let win!() = …` at the top is a shared borrow of
+    // `sRawData` live across a `&mut` of its parent. Each `win!()` ends with its
+    // expression; S25's shape, and the same one `ref_set` takes for the DPB.
+    macro_rules! win {
+        () => {
+            pCtx.sRawData.window_from(kiRbspStart)
+        };
+    }
     // The access unit is borrowed for exactly these three lines. `kpCurNal` outlives
     // it — it is a copy of a stored node pointer, and the whole 576-line body below
     // runs against the node, not against the list.
-    let kpCurNal = match cur_au(pCtx) {
+    let kpCurNal = match cur_au(&mut pCtx.access_unit) {
         None => return ERR_INFO_INVALID_PTR,
         Some(au) if au.uiAvailUnitsNum == 0 => return ERR_INFO_OUT_OF_MEMORY,
         Some(au) => au.nal((au.uiAvailUnitsNum - 1) as usize),
@@ -2196,7 +2196,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
 
-    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     if uiCode > 36863 {
@@ -2204,7 +2204,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
     (*pSliceHead).iFirstMbInSlice = uiCode as i32;
 
-    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     let mut uiSliceType = uiCode;
@@ -2229,7 +2229,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         _ => SI_SLICE,
     };
 
-    if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+    if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     if uiCode >= MAX_PPS_COUNT as u32 {
@@ -2263,15 +2263,22 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
     }
 
-    let pSps: PSps = if kbExtensionFlag {
-        std::ptr::addr_of_mut!(
-            (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize].sSps
-        )
-    } else {
-        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSpsBuffer[(*pPps).iSpsId as usize])
-    };
+    // **T5.Z4: the ref, not the address.** This derived a raw `SSps` alias out of
+    // the context and read it across two dozen calls that take the context — the
+    // same class the accessors shed at T5.Z1, arriving from a hand-written
+    // derivation. `sps!()` re-resolves in one expression, exactly as `win!()` does
+    // for the bitstream window above.
+    let sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
+    macro_rules! sps {
+        () => {
+            match sps_of(&pCtx.sSpsPpsCtx, sps_ref) {
+                Some(sps) => sps,
+                None => return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID),
+            }
+        };
+    }
 
-    if (*pSps).iNumRefFrames == 0
+    if sps!().iNumRefFrames == 0
         && (*pSliceHead).eSliceType != I_SLICE
         && (*pSliceHead).eSliceType != SI_SLICE
     {
@@ -2293,30 +2300,30 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         || (kbExtensionFlag && (*pNalHeaderExt).bIdrFlag);
     (*pSliceHead).bIdrFlag = bIdrFlag;
 
-    if (*pSps).uiLog2MaxFrameNum == 0 {
+    if sps!().uiLog2MaxFrameNum == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
     }
-    if ((*pSliceHead).iFirstMbInSlice as u32) > (*pSps).uiTotalMbCount - 1 {
+    if ((*pSliceHead).iFirstMbInSlice as u32) > sps!().uiTotalMbCount - 1 {
         return GENERATE_ERROR_NO(
             ERR_LEVEL_SLICE_HEADER,
             ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
         );
     }
-    if BsGetBits(buf, pBs, (*pSps).uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
+    if BsGetBits(win!(), pBs, sps!().uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     (*pSliceHead).iFrameNum = uiCode as i32;
-    if !(*pSps).bFrameMbsOnlyFlag {
+    if !sps!().bFrameMbsOnlyFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MBAFF);
     }
-    (*pSliceHead).iMbWidth = (*pSps).iMbWidth as i32;
-    (*pSliceHead).iMbHeight = (*pSps).iMbHeight as i32;
+    (*pSliceHead).iMbWidth = sps!().iMbWidth as i32;
+    (*pSliceHead).iMbHeight = sps!().iMbHeight as i32;
 
     if bIdrFlag {
         if (*pSliceHead).iFrameNum != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FRAME_NUM);
         }
-        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
@@ -2328,15 +2335,15 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     (*pSliceHead).iDeltaPicOrderCntBottom = 0;
     (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
     (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
-    if (*pSps).uiPocType == 0 {
-        if BsGetBits(buf, pBs, (*pSps).iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
+    if sps!().uiPocType == 0 {
+        if BsGetBits(win!(), pBs, sps!().iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        let iMaxPocLsb = 1 << (*pSps).iLog2MaxPocLsb;
+        let iMaxPocLsb = 1 << sps!().iLog2MaxPocLsb;
         let pocLsb = uiCode as i32;
         (*pSliceHead).iPicOrderCntLsb = pocLsb;
         if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
@@ -2366,13 +2373,13 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
         }
-    } else if (*pSps).uiPocType == 1 && !(*pSps).bDeltaPicOrderAlwaysZeroFlag {
-        if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+    } else if sps!().uiPocType == 1 && !sps!().bDeltaPicOrderAlwaysZeroFlag {
+        if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
         if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
@@ -2381,7 +2388,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     (*pSliceHead).iRedundantPicCnt = 0;
     if (*pPps).bRedundantPicCntPresentFlag {
-        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         if uiCode > SLICE_HEADER_REDUNDANT_PIC_CNT_MAX {
@@ -2400,7 +2407,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
 
     if (*pSliceHead).eSliceType == B_SLICE {
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
@@ -2415,12 +2422,12 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         bReadNumRefFlag &= (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID;
     }
     if bReadNumRefFlag {
-        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
         if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
-            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode > MAX_NUM_REF_IDX_L0_ACTIVE_MINUS1 {
@@ -2431,7 +2438,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             }
             (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
             if (*pSliceHead).eSliceType == B_SLICE {
-                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 if uiCode > MAX_NUM_REF_IDX_L1_ACTIVE_MINUS1 {
@@ -2451,7 +2458,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     }
 
     if (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID {
-        let iRet = ParseRefPicListReordering(pCtx, buf, pBs, pSliceHead);
+        let iRet = ParseRefPicListReordering(pCtx, kiRbspStart, pBs, pSliceHead);
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -2462,7 +2469,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
             || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
         {
-            let iRet = ParsePredWeightedTable(pCtx, buf, pBs, pSliceHead);
+            let iRet = ParsePredWeightedTable(pCtx, kiRbspStart, pBs, pSliceHead);
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -2474,7 +2481,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
 
         if (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
-            let iRet = ParseDecRefPicMarking(pCtx, buf, pBs, pSliceHead, pSps, bIdrFlag);
+            let iRet = ParseDecRefPicMarking(pCtx, kiRbspStart, pBs, pSliceHead, sps_ref, bIdrFlag);
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -2483,7 +2490,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]
                 );
                 if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
@@ -2503,7 +2510,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 
     if (*pPps).bEntropyCodingModeFlag {
         if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
-            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
@@ -2515,7 +2522,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
     }
 
-    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
         return ERR_INFO_INVALID_ACCESS;
     }
     (*pSliceHead).iSliceQpDelta = iCode;
@@ -2528,7 +2535,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
     (*pSliceHead).iSliceAlphaC0Offset = 0;
     (*pSliceHead).iSliceBetaOffset = 0;
     if (*pPps).bDeblockingFilterControlPresentFlag {
-        if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+        if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
         (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
@@ -2536,7 +2543,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
         }
         if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
-            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
@@ -2548,7 +2555,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
                 );
             }
-            if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+            if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceBetaOffset = iCode * 2;
@@ -2576,7 +2583,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                 as f64)
                 .log2()
                 .ceil() as u32;
-            if BsGetBits(buf, pBs, kiNumBits, &mut uiCode) != ERR_NONE {
+            if BsGetBits(win!(), pBs, kiNumBits, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
@@ -2592,7 +2599,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         // the slice header, so skipping them desynchronises the slice-data parse.
         (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
         // The borrow lives across the whole SVC extension parse below, which reads
-        // `buf`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
+        // `win!()`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
         // the context — so nothing here can invalidate it (T5.Z1). The `None` arm is
         // unreachable: the id is the PPS's own `iSpsId`, which `ParsePps` bounds to
         // `< MAX_SPS_COUNT` before the PPS is ever stored.
@@ -2604,12 +2611,12 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         if !(*pNalHeaderExt).bNoInterLayerPredFlag
             && BASE_QUALITY_ID == (*pNalHeaderExt).uiQualityId
         {
-            if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+            if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
             if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
-                if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
+                if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //disable_inter_layer_deblocking_filter_idc
@@ -2621,7 +2628,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     );
                 }
                 if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
-                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //inter_layer_slice_alpha_c0_offset_div2
@@ -2636,7 +2643,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                             ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2,
                         );
                     }
-                    if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
+                    if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //inter_layer_slice_beta_offset_div2
@@ -2659,7 +2666,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
                 (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
 
-            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
@@ -2667,9 +2674,9 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
             {
                 let scaled = &(*pSubsetSps).sSpsSvcExt.sSeqScaledRefLayer;
                 let iLeftOffset = scaled.iLeftOffset;
-                let iTopOffset = scaled.iTopOffset * (2 - (*pSps).bFrameMbsOnlyFlag as i32);
+                let iTopOffset = scaled.iTopOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
                 let iRightOffset = scaled.iRightOffset;
-                let iBottomOffset = scaled.iBottomOffset * (2 - (*pSps).bFrameMbsOnlyFlag as i32);
+                let iBottomOffset = scaled.iBottomOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
                 (*pSliceHeadExt).iScaledRefLayerPicWidthInSampleLuma =
                     ((*pSliceHead).iMbWidth << 4) - (iLeftOffset + iRightOffset);
                 (*pSliceHeadExt).iScaledRefLayerPicHeightInSampleLuma =
@@ -2697,31 +2704,31 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         };
 
         if !(*pNalHeaderExt).bNoInterLayerPredFlag {
-            if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+            if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
             if (*pSliceHeadExt).bSliceSkipFlag {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
             } else {
-                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
                 if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
-                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
                 }
                 if !(*pSliceHeadExt).bDefaultBaseModeFlag {
-                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //adaptive_motion_prediction_flag
                     (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
                     if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
-                        if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                        if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //default_motion_prediction_flag
@@ -2729,13 +2736,13 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                     }
                 }
 
-                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //adaptive_residual_prediction_flag
                 (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
                 if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
-                    if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                    if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //default_residual_prediction_flag
@@ -2743,7 +2750,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
                 }
             }
             if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
-                if BsGetOneBit(buf, pBs, &mut uiCode) != ERR_NONE {
+                if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 //tcoeff_level_prediction_flag
@@ -2752,11 +2759,11 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
         }
 
         if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
-            if BsGetBits(buf, pBs, 4, &mut uiCode) != ERR_NONE {
+            if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
-            if BsGetBits(buf, pBs, 4, &mut uiCode) != ERR_NONE {
+            if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
@@ -2773,7 +2780,7 @@ pub unsafe fn ParseSliceHeaderSyntaxs(
 }
 
 pub unsafe fn PrefetchNalHeaderExtSyntax(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kpDst: PNalUnit,
     kpSrc: *const SNalUnit,
 ) -> bool {
@@ -2801,8 +2808,8 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
     true
 }
 
-pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
-    let Some(pCurAu) = cur_au(pCtx) else {
+pub unsafe fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return ERR_INFO_INVALID_PTR;
     };
     let iIdx = pCurAu.uiEndPos as usize;
@@ -2873,11 +2880,11 @@ pub unsafe fn UpdateAccessUnit(pCtx: PWelsDecoderContext) -> i32 {
 }
 
 pub unsafe fn InitialDqLayersContext(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kiMaxWidth: i32,
     kiMaxHeight: i32,
 ) -> i32 {
-    if pCtx.is_null() || kiMaxWidth <= 0 || kiMaxHeight <= 0 {
+    if kiMaxWidth <= 0 || kiMaxHeight <= 0 {
         return ERR_INFO_INVALID_PARAM;
     }
 
@@ -2924,10 +2931,7 @@ pub unsafe fn InitialDqLayersContext(
     ERR_NONE
 }
 
-pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
     // T5.E2's `numMb` — the free path's copy of the allocation's dimensions, and the
     // one the closure got wrong — is gone with the raw arrays it sized. The layer's
     // drop glue needs no size at all, which is the whole argument for owning it, and
@@ -2939,8 +2943,8 @@ pub unsafe fn UninitialDqLayersContext(pCtx: PWelsDecoderContext) {
     (*pCtx).bInitialDqLayersMem = false;
 }
 
-pub unsafe fn ResetCurrentAccessUnit(pCtx: PWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(pCtx) else {
+pub unsafe fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return;
     };
     pCurAu.uiStartPos = 0;
@@ -2985,15 +2989,12 @@ pub fn ForceResetCurrentAccessUnit(pAu: &mut SAccessUnit) {
 // re-exported: the surviving copy takes `&mut SAccessUnit`, so the shapes had already
 // diverged and a re-export would have been a new fact rather than a preserved one.
 
-pub unsafe fn ForceResetParaSetStatusAndAUList(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = false;
     (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag = false;
     (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag = false;
 
-    if let Some(pAu) = cur_au(pCtx) {
+    if let Some(pAu) = cur_au(&mut pCtx.access_unit) {
         pAu.uiAvailUnitsNum = 0;
         pAu.uiActualUnitsNum = 0;
         pAu.uiStartPos = 0;
@@ -3003,11 +3004,11 @@ pub unsafe fn ForceResetParaSetStatusAndAUList(pCtx: PWelsDecoderContext) {
 }
 
 pub unsafe fn CheckAvailNalUnitsListContinuity(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     iStartIdx: i32,
     iEndIdx: i32,
 ) {
-    let Some(pCurAu) = cur_au(pCtx) else {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return;
     };
     let mut uiLastNuDependencyId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiDependencyId;
@@ -3120,8 +3121,8 @@ pub unsafe fn CheckPocOfCurValidNalUnits(pCurAu: &SAccessUnit, pIdxNoInterLayerP
     true
 }
 
-pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
-    let Some(pCurAu) = cur_au(pCtx) else {
+pub unsafe fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return false;
     };
     let kiEndPos = pCurAu.uiEndPos as i32;
@@ -3151,7 +3152,7 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
         // afterwards precisely because nothing owned the thing it pointed at.
         CheckAvailNalUnitsListContinuity(pCtx, iIdxNoInterLayerPred, kiEndPos);
 
-        let Some(pCurAu) = cur_au(pCtx) else {
+        let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
             return false;
         };
         if !CheckPocOfCurValidNalUnits(pCurAu, iIdxNoInterLayerPred) {
@@ -3178,8 +3179,8 @@ pub unsafe fn CheckIntegrityNalUnitsList(pCtx: PWelsDecoderContext) -> bool {
     true
 }
 
-pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(pCtx) else {
+pub unsafe fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return;
     };
     let iEndIdx = pCurAu.uiEndPos as usize;
@@ -3205,12 +3206,12 @@ pub unsafe fn CheckOnlyOneLayerInAu(pCtx: PWelsDecoderContext) {
     }
 }
 
-pub unsafe fn WelsDecodeAccessUnitStart(pCtx: PWelsDecoderContext) -> i32 {
+pub unsafe fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
     let iRet = UpdateAccessUnit(pCtx);
     if iRet != ERR_NONE {
         return iRet;
     }
-    if let Some(au) = cur_au(pCtx) {
+    if let Some(au) = cur_au(&mut pCtx.access_unit) {
         au.uiStartPos = 0;
     }
     if !(*pCtx).sSpsPpsCtx.bAvcBasedFlag && !CheckIntegrityNalUnitsList(pCtx) {
@@ -3223,8 +3224,8 @@ pub unsafe fn WelsDecodeAccessUnitStart(pCtx: PWelsDecoderContext) -> i32 {
     ERR_NONE
 }
 
-pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: PWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(pCtx) else {
+pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: &mut SWelsDecoderContext) {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return;
     };
     let endIdx = pCurAu.uiEndPos as usize;
@@ -3239,11 +3240,11 @@ pub unsafe fn WelsDecodeAccessUnitEnd(pCtx: PWelsDecoderContext) {
     ResetCurrentAccessUnit(pCtx);
 }
 
-pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: PWelsDecoderContext) -> bool {
+pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: &mut SWelsDecoderContext) -> bool {
     let mut bNewSeq = false;
     let mut pTmpLayerSps: [Option<SpsRef>; MAX_LAYER_NUM] = [None; MAX_LAYER_NUM];
 
-    let Some(pCurAu) = cur_au(pCtx) else {
+    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return false;
     };
     let start = pCurAu.uiStartPos as usize;
@@ -3297,10 +3298,7 @@ pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: PWelsDecoderContext)
     bNewSeq
 }
 
-pub unsafe fn WriteBackActiveParameters(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn WriteBackActiveParameters(pCtx: &mut SWelsDecoderContext) {
     if ((*pCtx).sSpsPpsCtx.iOverwriteFlags & OVERWRITE_PPS) != 0 {
         let ppsId = (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT].iPpsId as usize;
         if ppsId < MAX_PPS_COUNT {
@@ -3324,10 +3322,7 @@ pub unsafe fn WriteBackActiveParameters(pCtx: PWelsDecoderContext) {
     (*pCtx).sSpsPpsCtx.iOverwriteFlags = OVERWRITE_NONE;
 }
 
-pub unsafe fn DecodeFinishUpdate(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() {
-        return;
-    }
+pub unsafe fn DecodeFinishUpdate(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).bNewSeqBegin = false;
     WriteBackActiveParameters(pCtx);
     (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || (*pCtx).bNextNewSeqBegin;
@@ -3338,12 +3333,9 @@ pub unsafe fn DecodeFinishUpdate(pCtx: PWelsDecoderContext) {
 }
 
 pub unsafe fn WelsDecodeInitAccessUnitStart(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
     (*pCtx).bAuReadyFlag = false;
     if !(*pCtx).pLastDecPicInfo.is_null() {
         (*(*pCtx).pLastDecPicInfo).bLastHasMmco5 = false;
@@ -3364,7 +3356,7 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     GetVclNalTemporalId(pCtx);
 
     if iErr != ERR_NONE {
-        if let Some(au) = cur_au(pCtx) {
+        if let Some(au) = cur_au(&mut pCtx.access_unit) {
             ForceResetCurrentAccessUnit(au);
         }
         if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && !pDstInfo.is_null() {
@@ -3382,7 +3374,7 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     // `WelsDecodeAccessUnitStart` both derive the access unit in between, and the
     // second of them moves `uiStartPos`. Hoisting this was legal only while the field
     // was a raw pointer into memory nothing owned.
-    let pNal = match cur_au(pCtx) {
+    let pNal = match cur_au(&mut pCtx.access_unit) {
         Some(au) if (au.uiStartPos as usize) < au.count() as usize => {
             au.nal(au.uiStartPos as usize)
         }
@@ -3395,10 +3387,7 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     iErr
 }
 
-pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: PWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
+pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
     // T5.R6: the fallback scan now yields the *id* of the first initialized entry —
     // the same entry its `sps as *mut SSps` named, without the alias.
     let active = if (*pCtx).active_sps.is_some() {
@@ -3429,7 +3418,7 @@ pub unsafe fn AllocPicBuffOnNewSeqBegin(pCtx: PWelsDecoderContext) -> i32 {
 }
 
 pub unsafe fn InitConstructAccessUnit(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
     let mut iErr = WelsDecodeInitAccessUnitStart(pCtx, pDstInfo);
@@ -3446,7 +3435,7 @@ pub unsafe fn InitConstructAccessUnit(
 }
 
 pub unsafe fn ConstructAccessUnit(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
@@ -3469,16 +3458,13 @@ pub unsafe fn ConstructAccessUnit(
 /// Core bitstream decoding loop that demultiplexes Annex B NAL units and decodes them into an access unit.
 /// Matches `int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const int32_t kiBsLen, uint8_t** ppDst, SBufferInfo* pDstBufInfo, SParserBsInfo* pDstBsInfo)` in `decoder.cpp:741`.
 pub unsafe fn WelsDecodeBs(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kpBsBuf: *const u8,
     kiBsLen: i32,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
     _pDstBsInfo: *mut c_void,
 ) -> i32 {
-    if pCtx.is_null() {
-        return crate::api::codec_api::DECODING_STATE::dsInitialOptExpected.0;
-    }
     if !pDstInfo.is_null() {
         (*pDstInfo).iBufferStatus = 0;
     }
@@ -3600,7 +3586,7 @@ pub unsafe fn WelsDecodeBs(
         // Not `mark_au_ready`: the flush ends the access unit without setting
         // `bAuReadyFlag`, because it is about to decode it here rather than wait for
         // the parser to say so.
-        let bHasPending = match cur_au(pCtx) {
+        let bHasPending = match cur_au(&mut pCtx.access_unit) {
             Some(au) if au.uiAvailUnitsNum > 0 => {
                 au.uiEndPos = au.uiAvailUnitsNum - 1;
                 true
@@ -3620,7 +3606,7 @@ pub unsafe fn WelsDecodeBs(
 /// to observe it diverging from its source, which is what W2b's S23 check
 /// established. The readers derive; the parameter had nothing left to write.
 pub unsafe fn InitDqLayerInfo(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pDqLayer: PDqLayer,
     pLayerInfo: PLayerInfo,
     pNalUnit: PNalUnit,
@@ -3688,12 +3674,12 @@ pub unsafe fn InitDqLayerInfo(
 /// this face removes; resolved here, at the one line that reads them, nothing else
 /// of the context is borrowed.
 pub unsafe fn WelsDqLayerDecodeStart(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurNal: PNalUnit,
     sps_ref: Option<SpsRef>,
     pps_id: Option<i32>,
 ) {
-    if pCtx.is_null() || pCurNal.is_null() {
+    if pCurNal.is_null() {
         return;
     }
     // F24's shape, fourth site — and the one that escapes furthest: `(*pCtx).pSliceHeader`
@@ -3714,7 +3700,7 @@ pub unsafe fn WelsDqLayerDecodeStart(
 }
 
 pub unsafe fn InitRefPicList(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: PDqLayer,
     _kuiNRi: u8,
     iPoc: i32,
@@ -3741,11 +3727,11 @@ pub unsafe fn InitRefPicList(
 }
 
 pub unsafe fn DecodeCurrentAccessUnit(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> i32 {
-    let (mut iIdx, iEndIdx) = match cur_au(pCtx) {
+    let (mut iIdx, iEndIdx) = match cur_au(&mut pCtx.access_unit) {
         None => return ERR_INFO_INVALID_PTR,
         Some(au) => (au.uiStartPos as i32, au.uiEndPos as i32),
     };
@@ -3764,7 +3750,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     // Node pointers only, one derivation each. The slice loop below calls back into
     // the context on every iteration, so nothing about the access unit may be held
     // across it — but a node is its own allocation and outlives every retag (T5.O4).
-    let mut pNalCur = match cur_au(pCtx) {
+    let mut pNalCur = match cur_au(&mut pCtx.access_unit) {
         Some(au) => au.nal(iIdx as usize),
         None => return ERR_INFO_INVALID_PTR,
     };
@@ -4102,7 +4088,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             iLastIdQ = iCurrIdQ;
 
             iIdx += 1;
-            pNalCur = match cur_au(pCtx) {
+            pNalCur = match cur_au(&mut pCtx.access_unit) {
                 Some(au) if iIdx <= iEndIdx => au.nal(iIdx as usize),
                 _ => std::ptr::null_mut(),
             };
@@ -4220,7 +4206,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // number the gap test compares against went stale after the first frame,
             // so the gap test above would report a gap on **every** subsequent access
             // unit rather than on the one that actually skipped a frame.
-            let pStartNal = match cur_au(pCtx) {
+            let pStartNal = match cur_au(&mut pCtx.access_unit) {
                 Some(au) if (au.uiStartPos as usize) < au.count() as usize => {
                     au.nal(au.uiStartPos as usize)
                 }
@@ -4245,17 +4231,17 @@ pub unsafe fn DecodeCurrentAccessUnit(
 }
 
 pub unsafe fn CheckAndFinishLastPic(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> bool {
-    if pCtx.is_null() || (*pCtx).access_unit.is_none() {
+    if (*pCtx).access_unit.is_none() {
         return false;
     }
     let mut bAuBoundaryFlag = false;
 
     if IS_VCL_NAL((*pCtx).sCurNalHead.eNalUnitType, 1) {
-        let pCurNal = match cur_au(pCtx) {
+        let pCurNal = match cur_au(&mut pCtx.access_unit) {
             Some(au) => au.nal(au.uiEndPos as usize),
             None => return false,
         };
@@ -4349,7 +4335,7 @@ pub unsafe fn CheckAndFinishLastPic(
         }
         (*pCtx).pDec = None;
         // Re-derived: `ConstructAccessUnit` ran above, and it decodes.
-        let pStartNal = match cur_au(pCtx) {
+        let pStartNal = match cur_au(&mut pCtx.access_unit) {
             Some(au) if (au.uiStartPos as usize) < au.count() as usize => {
                 au.nal(au.uiStartPos as usize)
             }
@@ -4370,8 +4356,8 @@ pub unsafe fn CheckAndFinishLastPic(
     true
 }
 
-pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: PDqLayer) -> bool {
-    if pCtx.is_null() || pCurDqLayer.is_null() {
+pub unsafe fn CheckRefPicturesComplete(pCtx: &mut SWelsDecoderContext, pCurDqLayer: PDqLayer) -> bool {
+    if pCurDqLayer.is_null() {
         return true;
     }
     // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
@@ -4379,7 +4365,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
     // indices name, and a malformed stream can put the current picture in that list
     // (F42). One borrow, split — the same shape the slice brackets take, over a
     // whole-slice operation rather than a whole slice.
-    let (pDec, pRefs) = cur_and_refs(pCtx);
+    let (pDec, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
     if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
         return true;
     }
@@ -4393,7 +4379,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
             MB_TYPE_SKIP | MB_TYPE_16x16 => {
                 let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 if refIdx < MAX_REF_PIC_COUNT {
-                    let pRef = pRefs.get(ref_id(pCtx, LIST_0, refIdx));
+                    let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
                     if !pRef.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                     }
@@ -4403,13 +4389,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
                 let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = pRefs.get(ref_id(pCtx, LIST_0, refIdx0));
+                    let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = pRefs.get(ref_id(pCtx, LIST_0, refIdx1));
+                    let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4419,13 +4405,13 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
                 let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                 let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
                 if refIdx0 < MAX_REF_PIC_COUNT {
-                    let pRef0 = pRefs.get(ref_id(pCtx, LIST_0, refIdx0));
+                    let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
                     if !pRef0.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
                     }
                 }
                 if refIdx1 < MAX_REF_PIC_COUNT {
-                    let pRef1 = pRefs.get(ref_id(pCtx, LIST_0, refIdx1));
+                    let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
                     if !pRef1.is_null() {
                         bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
                     }
@@ -4436,7 +4422,7 @@ pub unsafe fn CheckRefPicturesComplete(pCtx: PWelsDecoderContext, pCurDqLayer: P
                 for &sub in &indices {
                     let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
-                        let pRef = pRefs.get(ref_id(pCtx, LIST_0, refIdx));
+                        let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
                         if !pRef.is_null() {
                             bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
                         }
@@ -4745,10 +4731,13 @@ mod tests {
     }
 
     #[test]
-    fn test_update_dec_stat_null() {
+    fn test_update_dec_stat_null_layer() {
         unsafe {
-            UpdateDecStatNoFreezingInfo(std::ptr::null_mut(), std::ptr::null_mut());
-            UpdateDecStat(std::ptr::null_mut(), std::ptr::null_mut(), true);
+            // T5.Z4: the null-*context* arm is gone with the raw parameter; the
+            // null-*layer* arm is what these two still answer.
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            UpdateDecStatNoFreezingInfo(&mut ctx, std::ptr::null_mut());
+            UpdateDecStat(&mut ctx, std::ptr::null_mut(), true);
         }
     }
 
@@ -4787,29 +4776,37 @@ mod tests {
     }
 
     #[test]
-    fn test_inline_delegation_stubs_null() {
+    fn test_inline_delegation_stubs_null_layer() {
         unsafe {
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            let pCtx = &mut *ctx;
             assert_eq!(
-                WelsTargetSliceConstruction(std::ptr::null_mut(), std::ptr::null_mut()),
-                ERR_NONE
-            );
-            assert_eq!(
-                WelsDecodeSlice(std::ptr::null_mut(), std::ptr::null_mut(), true, std::ptr::null_mut()),
+                WelsTargetSliceConstruction(pCtx, std::ptr::null_mut()),
                 ERR_NONE
             );
             assert_eq!(
-                WelsDecodeAndConstructSlice(std::ptr::null_mut(), std::ptr::null_mut()),
+                WelsDecodeSlice(pCtx, std::ptr::null_mut(), true, std::ptr::null_mut()),
                 ERR_NONE
             );
-            assert_ne!(WelsInitRefList(std::ptr::null_mut(), std::ptr::null_mut(), 0), ERR_NONE);
-            assert_ne!(
-                WelsInitBSliceRefList(std::ptr::null_mut(), std::ptr::null_mut(), 0),
+            assert_eq!(
+                WelsDecodeAndConstructSlice(pCtx, std::ptr::null_mut()),
                 ERR_NONE
             );
-            assert_ne!(WelsReorderRefList(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
-            assert_ne!(WelsReorderRefList2(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
-            assert_ne!(WelsMarkAsRef(std::ptr::null_mut(), std::ptr::null_mut()), ERR_NONE);
-            WelsResetRefPic(std::ptr::null_mut());
+            // **T5.Z4: these five asserted the null-*context* guard, not the
+            // null-layer one.** With the context a `&mut` the guard is gone and the
+            // remaining arm is the layer's, which every one of them answers by doing
+            // nothing — the values below are what the tree returns, read off the
+            // run rather than predicted (S33).
+            assert_eq!(WelsInitRefList(pCtx, std::ptr::null_mut(), 0), ERR_NONE);
+            assert_eq!(WelsInitBSliceRefList(pCtx, std::ptr::null_mut(), 0), ERR_NONE);
+            // `manage_dec_ref`'s `ERR_INFO_INVALID_PTR` is 3 where this module's own
+            // constant is 1 — the three shims below forward into the former, which is
+            // why the value is spelled through its owner.
+            const MDR_INVALID_PTR: i32 = crate::decoder::manage_dec_ref::ERR_INFO_INVALID_PTR;
+            assert_eq!(WelsReorderRefList(pCtx, std::ptr::null_mut()), MDR_INVALID_PTR);
+            assert_eq!(WelsReorderRefList2(pCtx, std::ptr::null_mut()), MDR_INVALID_PTR);
+            assert_eq!(WelsMarkAsRef(pCtx, std::ptr::null_mut()), MDR_INVALID_PTR);
+            WelsResetRefPic(pCtx);
         }
     }
 
@@ -4820,21 +4817,25 @@ mod tests {
             let mut cpu_cores = 0;
             assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
             assert_eq!(cpu_cores, 1);
+            // T5.Z4: this asserted the null-context guard too. `WelsOpenDecoder`
+            // on a real context is the success path `Initialize` takes.
             assert_eq!(
-                WelsOpenDecoder(std::ptr::null_mut(), std::ptr::null_mut()),
-                ERR_INFO_INVALID_PTR
+                WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut()),
+                ERR_NONE
             );
-            WelsEndDecoder(std::ptr::null_mut());
+            WelsEndDecoder(&mut SWelsDecoderContext::new_boxed());
+            // T5.Z4: the null-context arm is gone; a zero-length source on a real
+            // context is the flush path, which succeeds.
             assert_eq!(
                 WelsDecodeBs(
-                    std::ptr::null_mut(),
+                    &mut SWelsDecoderContext::new_boxed(),
                     std::ptr::null(),
                     0,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                 ),
-                crate::api::codec_api::DECODING_STATE::dsInitialOptExpected.0
+                ERR_NONE
             );
         }
     }
@@ -4843,7 +4844,7 @@ mod tests {
     fn test_decoder_open_end_and_init_static_memory_state_flags() {
         unsafe {
             let mut ctx = SWelsDecoderContext::new_boxed();
-            assert_eq!(WelsOpenDecoder(&mut *ctx as *mut _, std::ptr::null_mut()), ERR_NONE);
+            assert_eq!(WelsOpenDecoder(&mut *ctx, std::ptr::null_mut()), ERR_NONE);
             assert!(ctx.bParamSetsLostFlag);
             assert!(ctx.bNewSeqBegin);
             assert!(ctx.bPrintFrameErrorTraceFlag);
@@ -4851,7 +4852,7 @@ mod tests {
             assert!(ctx.bFrameFinish);
             assert_eq!(ctx.iSeqNum, 0);
 
-            WelsEndDecoder(&mut *ctx as *mut _);
+            WelsEndDecoder(&mut *ctx);
             assert!(!ctx.bParamSetsLostFlag);
             assert!(!ctx.bNewSeqBegin);
             assert!(!ctx.bPrintFrameErrorTraceFlag);
@@ -4863,19 +4864,19 @@ mod tests {
     fn test_chapter_7_frame_finalization() {
         unsafe {
             assert_eq!(
-                CheckAndFinishLastPic(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()),
+                CheckAndFinishLastPic(&mut SWelsDecoderContext::new_boxed(), std::ptr::null_mut(), std::ptr::null_mut()),
                 false
             );
             assert_eq!(
                 DecodeFrameConstruction(
-                    std::ptr::null_mut(),
+                    &mut SWelsDecoderContext::new_boxed(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut()
                 ),
                 ERR_INFO_INVALID_PTR
             );
-            WelsDecodeAccessUnitEnd(std::ptr::null_mut());
+            WelsDecodeAccessUnitEnd(&mut SWelsDecoderContext::new_boxed());
 
             let mut stat = SDecoderStatistics::default();
             let mut sps = SSps::default();
@@ -4894,10 +4895,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_slice_header_syntaxs_null() {
+    fn test_parse_slice_header_syntaxs_no_access_unit() {
         unsafe {
+            // T5.Z4: the null-*context* arm is gone with the raw parameter; what this
+            // still covers is the arm the body actually takes first — no access unit
+            // in flight, so no NAL to read a header out of.
             let mut cursor = crate::safe::bits::BsCursor::default();
-            let res = ParseSliceHeaderSyntaxs(std::ptr::null_mut(), &[], &mut cursor, false);
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            let res = ParseSliceHeaderSyntaxs(&mut ctx, 0, &mut cursor, false);
             assert_eq!(res, ERR_INFO_INVALID_PTR);
         }
     }

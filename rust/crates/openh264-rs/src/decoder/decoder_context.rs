@@ -630,11 +630,8 @@ pub use crate::decoder::nalu::SAccessUnit;
 /// `None` before `WelsInitStaticMemory` and after `WelsFreeStaticMemory` — the
 /// two states the old `.is_null()` guards were testing for.
 #[inline]
-pub unsafe fn cur_au<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SAccessUnit> {
-    if pCtx.is_null() {
-        return None;
-    }
-    (*pCtx).access_unit.as_deref_mut()
+pub fn cur_au(au: &mut Option<Box<SAccessUnit>>) -> Option<&mut SAccessUnit> {
+    au.as_deref_mut()
 }
 
 /// The picture a slot handle names, or null when there is none.
@@ -688,11 +685,8 @@ pub fn pool_pic_mut(pool: &mut Option<Box<SPicBuff>>, slot: Option<PicId>) -> Op
 /// field asks for, and the reason [`pool_pic`] above takes its own shared borrow
 /// rather than being handed one.
 #[inline]
-pub unsafe fn pic_pool_mut<'a>(pCtx: PWelsDecoderContext) -> Option<&'a mut SPicBuff> {
-    if pCtx.is_null() {
-        return None;
-    }
-    (*pCtx).pPicBuff.as_deref_mut()
+pub fn pic_pool_mut(pCtx: &mut SWelsDecoderContext) -> Option<&mut SPicBuff> {
+    pCtx.pPicBuff.as_deref_mut()
 }
 
 /// Which SPS buffer an id names, and the id (T5.R6).
@@ -885,8 +879,8 @@ pub fn active_pps(ps: &SWelsDecoderSpsPpsCTX, active: Option<i32>) -> Option<&SP
 /// # Safety
 /// `pCtx` must be null or point to a live decoder context.
 #[inline]
-pub unsafe fn parse_only(pCtx: PWelsDecoderContext) -> bool {
-    !pCtx.is_null() && !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly
+pub unsafe fn parse_only(pCtx: &mut SWelsDecoderContext) -> bool {
+    !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly
 }
 
 // **T5.Z3: `slice_bit_reader` stood here and is deleted.** It reached the slice's
@@ -955,12 +949,8 @@ pub fn pic_pool_ptr(pool: &mut Option<Box<SPicBuff>>) -> Option<&mut SPicBuff> {
 /// picture and `(*pCtx).pPicBuff` is not read at all. That invariant is what makes
 /// the flip a change of two lines per bracket instead of a change at every use.
 #[inline]
-pub unsafe fn pic_refs<'a>(pCtx: PWelsDecoderContext) -> PicRefs<'a> {
-    PicRefs::over(if pCtx.is_null() {
-        None
-    } else {
-        (*pCtx).pPicBuff.as_deref()
-    })
+pub fn pic_refs(pool: &Option<Box<SPicBuff>>) -> PicRefs<'_> {
+    PicRefs::over(pool.as_deref())
 }
 
 /// **The bracket top, both halves from one borrow** (T5.Q2).
@@ -978,22 +968,22 @@ pub unsafe fn pic_refs<'a>(pCtx: PWelsDecoderContext) -> PicRefs<'a> {
 /// exactly as `dec_pic`/`pic_refs` did — a null picture and a view that resolves
 /// everything to null or to the whole pool.
 #[inline]
-pub unsafe fn cur_and_refs<'a>(pCtx: PWelsDecoderContext) -> (PPicture, PicRefs<'a>) {
-    pic_and_refs(pCtx, if pCtx.is_null() { None } else { (*pCtx).pDec })
+pub fn cur_and_refs(
+    pool: &mut Option<Box<SPicBuff>>,
+    cur: Option<PicId>,
+) -> (PPicture, PicRefs<'_>) {
+    pic_and_refs(pool, cur)
 }
 
 /// [`cur_and_refs`] for a bracket whose mutable half is **not** `pCtx->pDec`: the
 /// error-concealment prefetch, which writes into the slot it just took from the pool
 /// while reading the previous DPB picture out of another one.
 #[inline]
-pub unsafe fn pic_and_refs<'a>(
-    pCtx: PWelsDecoderContext,
+pub fn pic_and_refs(
+    pool: &mut Option<Box<SPicBuff>>,
     slot: Option<PicId>,
-) -> (PPicture, PicRefs<'a>) {
-    if pCtx.is_null() {
-        return (std::ptr::null_mut(), PicRefs::over(None));
-    }
-    match ((*pCtx).pPicBuff.as_deref_mut(), slot) {
+) -> (PPicture, PicRefs<'_>) {
+    match (pool.as_deref_mut(), slot) {
         (Some(pool), Some(id)) => pool.cur_and_rest(id),
         (Some(pool), None) => (std::ptr::null_mut(), pool.refs()),
         (None, _) => (std::ptr::null_mut(), PicRefs::over(None)),
@@ -1006,8 +996,8 @@ pub unsafe fn pic_and_refs<'a>(
 /// top is not a pool access: `pRefs.get(ref_id(pCtx, list, i))` is [`ref_pic`] split
 /// at exactly the line the flip moves.
 #[inline]
-pub unsafe fn ref_id(pCtx: PWelsDecoderContext, list: usize, i: usize) -> Option<PicId> {
-    (*pCtx).sRefPic.pRefList[list][i]
+pub fn ref_id(refs: &SRefPic, list: usize, i: usize) -> Option<PicId> {
+    refs.pRefList[list][i]
 }
 
 /// The picture being decoded into — **the write target**, so this one is mutable.
@@ -1067,11 +1057,11 @@ pub fn long_ref_pic<'a>(
 /// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
 /// resolve it through their own [`PicRefs`].
 #[inline]
-pub unsafe fn prev_dpb_id(pCtx: PWelsDecoderContext) -> Option<PicId> {
-    if pCtx.is_null() || (*pCtx).pLastDecPicInfo.is_null() {
+pub unsafe fn prev_dpb_id(pLastDecPicInfo: *const SWelsLastDecPicInfo) -> Option<PicId> {
+    if pLastDecPicInfo.is_null() {
         return None;
     }
-    (*(*pCtx).pLastDecPicInfo).pPreviousDecodedPictureInDpb
+    (*pLastDecPicInfo).pPreviousDecodedPictureInDpb
 }
 
 /// [`prev_dpb_pic`]'s mutable form — the api layer's buffering path, which takes a
@@ -1092,8 +1082,8 @@ pub fn prev_dpb_pic_mut(
 /// The `!pCurAu.is_null() && pCurAu->uiAvailUnitsNum > 0` guard, which the port
 /// spelled at eight sites and which is the actual question every one of them asks.
 #[inline]
-pub unsafe fn au_has_nals(pCtx: PWelsDecoderContext) -> bool {
-    matches!(cur_au(pCtx), Some(au) if au.uiAvailUnitsNum > 0)
+pub fn au_has_nals(pCtx: &mut SWelsDecoderContext) -> bool {
+    matches!(cur_au(&mut pCtx.access_unit), Some(au) if au.uiAvailUnitsNum > 0)
 }
 
 /// Ends the access unit at the last NAL parsed and flags it ready for decode.
@@ -1106,11 +1096,12 @@ pub unsafe fn au_has_nals(pCtx: PWelsDecoderContext) -> bool {
 /// order is not observable; this one writes the access unit first, which is the
 /// ordering discipline T5.O8 cost a Miri round trip to learn.
 #[inline]
-pub unsafe fn mark_au_ready(pCtx: PWelsDecoderContext) -> bool {
-    match cur_au(pCtx) {
+pub fn mark_au_ready(pCtx: &mut SWelsDecoderContext) -> bool {
+    // Two disjoint fields, in the order T5.O8 cost a Miri round trip to learn.
+    match cur_au(&mut pCtx.access_unit) {
         Some(au) if au.uiAvailUnitsNum > 0 => {
             au.uiEndPos = au.uiAvailUnitsNum - 1;
-            (*pCtx).bAuReadyFlag = true;
+            pCtx.bAuReadyFlag = true;
             true
         }
         _ => false,
@@ -1324,8 +1315,17 @@ impl<'a> SliceCtx<'a> {
 /// sets and the dequantisation tables already selected for this slice — the
 /// scalars are copies, and a write to one of them behind the view's back is exactly
 /// what S23 asks each field to be checked against.
-pub unsafe fn slice_ctx<'a>(pCtx: PWelsDecoderContext, reader: Option<&BsReader>) -> SliceCtx<'a> {
+pub unsafe fn slice_ctx<'a>(
+    pCtx: &'a mut SWelsDecoderContext,
+    reader: Option<&BsReader>,
+) -> SliceCtx<'a> {
     use std::ptr::{addr_of, addr_of_mut};
+    // **Everything that reaches the context *as a whole* happens first** (T5.O8's
+    // lesson: only ordering fixes this). `GetThreadCount` takes a borrow of the
+    // context, and any retag of the whole object pops the field derivations below —
+    // which is exactly what the flip's one Miri failure was, with `sRawData`
+    // derived at the top of the struct literal and this call in the middle of it.
+    let iThreadCount = crate::decoder::decoder_core::GetThreadCount(pCtx);
     let pParam = (*pCtx).pParam;
     let raw: &'a RawDataBuffer = &*addr_of!((*pCtx).sRawData);
     SliceCtx {
@@ -1363,11 +1363,60 @@ pub unsafe fn slice_ctx<'a>(pCtx: PWelsDecoderContext, reader: Option<&BsReader>
             || (*pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE,
         bHasMemAlign: !(*pCtx).pMemAlign.is_null(),
         iCurSeqIntervalMaxPicWidth: (*pCtx).iCurSeqIntervalMaxPicWidth,
-        iThreadCount: crate::decoder::decoder_core::GetThreadCount(pCtx),
+        iThreadCount,
         active_sps: (*pCtx).active_sps,
         active_pps: (*pCtx).active_pps,
         fmo_id: (*pCtx).fmo_id,
     }
+}
+
+/// **The bracket top's split** (T5.Z4) — the pool's two halves *and* the view, out
+/// of one borrow of the context.
+///
+/// Session Y measured why this has to be one function: with the context a `&mut`,
+/// `cur_and_refs(pCtx)` followed by `slice_ctx(pCtx, …)` is two mutable borrows of
+/// one object, and no ordering of the two calls fixes it. Inside one function the
+/// disjointness is the compiler's business — `pPicBuff` goes to the pool half and
+/// every other field to the view, no field twice — which is why [`SliceCtx`] was
+/// built without the pool in it (T5.Y2's own clause).
+///
+/// The six bracket tops are `WelsDecodeSlice`, `WelsDecodeAndConstructSlice`,
+/// `WelsTargetSliceConstruction`, `ComputeColocatedTemporalScaling`,
+/// `CheckRefPicturesComplete` and `DoErrorConSliceMVCopy`.
+///
+/// # Safety
+/// [`slice_ctx`]'s contract, unchanged.
+#[inline]
+pub unsafe fn slice_split<'a>(
+    pCtx: &'a mut SWelsDecoderContext,
+    reader: Option<&BsReader>,
+) -> (PPicture, PicRefs<'a>, SliceCtx<'a>) {
+    // One raw pointer off the parameter, then two field-precise derivations from it
+    // (S29): no reference to the context as a whole is created, so the pool half and
+    // the view cannot overlap.
+    let raw: *mut SWelsDecoderContext = pCtx;
+    let cur = (*raw).pDec;
+    let (pDec, pRefs) = match ((*raw).pPicBuff.as_deref_mut(), cur) {
+        (Some(pool), Some(id)) => pool.cur_and_rest(id),
+        (Some(pool), None) => (std::ptr::null_mut(), pool.refs()),
+        (None, _) => (std::ptr::null_mut(), PicRefs::over(None)),
+    };
+    (pDec, pRefs, slice_ctx(&mut *raw, reader))
+}
+
+/// The reference set a DPB operation acts on — **the selector travels, not the
+/// borrow** (T5.Z4).
+///
+/// The marking family took `pRefPic: &mut SRefPic` beside `pCtx`, which is one of
+/// the context's own fields held across a borrow of its parent. The caller passes
+/// `bTmpRefSet` instead and every use re-acquires here, so no borrow outlives one
+/// expression — S25's fix shape, applied to the one family that needed it.
+///
+/// `sTmpRefPic` is the threading arm's set (F36 owns whether it survives at all);
+/// `sRefPic` is every other caller's.
+#[inline]
+pub fn ref_set(pCtx: &mut SWelsDecoderContext, tmp: bool) -> &mut SRefPic {
+    if tmp { &mut pCtx.sTmpRefPic } else { &mut pCtx.sRefPic }
 }
 
 /// A view over a test context, wired the way `Initialize` wires the real one.
@@ -1382,7 +1431,7 @@ pub(crate) unsafe fn test_slice_ctx<'a>(
     vlc: &'a mut SVlcTable,
 ) -> SliceCtx<'a> {
     ctx.pVlcTable = std::ptr::addr_of_mut!(*vlc).cast::<c_void>();
-    slice_ctx(std::ptr::addr_of_mut!(*ctx), None)
+    slice_ctx(ctx, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -1762,7 +1811,7 @@ mod tests {
         ctx.pMemAlign = &mut mem_align;
 
         unsafe {
-            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+            let pCtx = &mut *ctx;
             (*pCtx).pPicBuff = CreatePicBuff(false, 4, 64, 64);
             assert!((*pCtx).pPicBuff.is_some());
             assert_eq!(pic_pool_mut(pCtx).map(|pool| pool.capacity()), Some(4));

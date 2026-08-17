@@ -1511,9 +1511,9 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
             ctx_box.pPictReoderingStatus = ptr::addr_of_mut!((*dec_impl).sReoderingStatus);
             ctx_box.pStreamSeqNum = ptr::addr_of_mut!((*dec_impl).iStreamSeqNum);
             let p_ctx = Box::into_raw(ctx_box);
-            crate::decoder::decoder_core::WelsDecoderDefaults(p_ctx as *mut _, ptr::null_mut());
+            crate::decoder::decoder_core::WelsDecoderDefaults(&mut *p_ctx, ptr::null_mut());
             crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut (*p_ctx).sSpsPpsCtx);
-            let ret = crate::decoder::decoder_core::WelsInitStaticMemory(p_ctx as *mut _);
+            let ret = crate::decoder::decoder_core::WelsInitStaticMemory(&mut *p_ctx);
             if ret != 0 {
                 drop(Box::from_raw(p_ctx));
                 return CM_INIT_PARA_ERROR as c_long;
@@ -1537,7 +1537,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
         // It is placed outside the `pCtx.is_null()` block on purpose: the C++ runs it
         // on every `Initialize`, and the parameters it reads are re-copied above.
         if !(*dec_impl).pCtx.is_null() {
-            crate::decoder::error_concealment::InitErrorCon((*dec_impl).pCtx);
+            crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
         }
     }
     CM_RESULT_SUCCESS as c_long
@@ -1550,7 +1550,7 @@ unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
     let dec_impl = this as *mut CWelsDecoderImpl;
     unsafe {
         if !(*dec_impl).pCtx.is_null() {
-            crate::decoder::decoder_core::WelsEndDecoder((*dec_impl).pCtx as *mut _);
+            crate::decoder::decoder_core::WelsEndDecoder(&mut *(*dec_impl).pCtx);
             drop(Box::from_raw((*dec_impl).pCtx as *mut crate::decoder::decoder_context::SWelsDecoderContext));
             (*dec_impl).pCtx = ptr::null_mut();
         }
@@ -1640,8 +1640,8 @@ unsafe fn BufferingReadyPicture(
             // outside the decoder, nothing more.
             // The thread count is read before the pool borrow opens: the picture
             // is `pPicBuff`'s and `GetThreadCount` takes the context (T5.Z1).
-            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(pCtx) <= 1;
-            let prev_id = crate::decoder::decoder_context::prev_dpb_id(pCtx);
+            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&mut *pCtx) <= 1;
+            let prev_id = crate::decoder::decoder_context::prev_dpb_id((*pCtx).pLastDecPicInfo);
             if let Some(prev) =
                 crate::decoder::decoder_context::prev_dpb_pic_mut(&mut (*pCtx).pPicBuff, prev_id)
             {
@@ -1935,12 +1935,12 @@ unsafe extern "C" fn decoder_decode_frame2_c(
         (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
         if !kpSrc.is_null() && kiSrcLen > 0 {
             (*p_ctx).bEndOfStreamFlag = false;
-            if crate::decoder::decoder_core::GetThreadCount(p_ctx) <= 0 {
+            if crate::decoder::decoder_core::GetThreadCount(&mut *p_ctx) <= 0 {
                 (*dec_impl).uiDecodeTimeStamp += 1;
                 (*p_ctx).uiDecodingTimeStamp = (*dec_impl).uiDecodeTimeStamp as _;
             }
             crate::decoder::decoder_core::WelsDecodeBs(
-                p_ctx as *mut _,
+                &mut *p_ctx,
                 kpSrc,
                 kiSrcLen,
                 ppDst,
@@ -1966,7 +1966,7 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             // inside its first slice.
             (*p_ctx).bInstantDecFlag = true;
             crate::decoder::decoder_core::WelsDecodeBs(
-                p_ctx as *mut _,
+                &mut *p_ctx,
                 kpSrc,
                 0,
                 ppDst,
@@ -2019,7 +2019,7 @@ unsafe extern "C" fn decoder_set_opt_c(this: *mut ISVCDecoder, eOptionId: DECODE
                     // F44's second call site (`welsDecoderExt.cpp:536`): the mode
                     // selects which kernels `sCopyFunc` holds, so changing it without
                     // re-running the init leaves the previous mode's table in place.
-                    crate::decoder::error_concealment::InitErrorCon((*dec_impl).pCtx);
+                    crate::decoder::error_concealment::InitErrorCon(&mut *(*dec_impl).pCtx);
                 }
             }
             _ => {}
@@ -2182,7 +2182,7 @@ pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
         unsafe {
             let dec_impl = pDecoder as *mut CWelsDecoderImpl;
             if !(*dec_impl).pCtx.is_null() {
-                crate::decoder::decoder_core::WelsEndDecoder((*dec_impl).pCtx);
+                crate::decoder::decoder_core::WelsEndDecoder(&mut *(*dec_impl).pCtx);
                 drop(Box::from_raw((*dec_impl).pCtx));
                 (*dec_impl).pCtx = ptr::null_mut();
             }
