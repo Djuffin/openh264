@@ -1011,8 +1011,8 @@ pub fn pic_refs(pool: &Option<Box<SPicBuff>>) -> PicRefs<'_> {
 pub fn cur_and_refs(
     pool: &mut Option<Box<SPicBuff>>,
     cur: Option<PicId>,
-) -> (PPicture, PicRefs<'_>) {
-    pic_and_refs(pool, cur)
+) -> (Option<&mut SPicture>, PicRefs<'_>) {
+    pic_and_refs_mut(pool, cur)
 }
 
 /// [`cur_and_refs`] for a bracket whose mutable half is **not** `pCtx->pDec`: the
@@ -1022,20 +1022,6 @@ pub fn cur_and_refs(
 pub fn pic_and_refs(
     pool: &mut Option<Box<SPicBuff>>,
     slot: Option<PicId>,
-) -> (PPicture, PicRefs<'_>) {
-    match (pool.as_deref_mut(), slot) {
-        (Some(pool), Some(id)) => pool.cur_and_rest(id),
-        (Some(pool), None) => (std::ptr::null_mut(), pool.refs()),
-        (None, _) => (std::ptr::null_mut(), PicRefs::over(None)),
-    }
-}
-
-/// [`pic_and_refs`]'s borrow form — the bracket for a scope that resolves its
-/// references through [`PicRefs::classify`] rather than through `get` (T5.AB3).
-#[inline]
-pub fn pic_and_refs_mut(
-    pool: &mut Option<Box<SPicBuff>>,
-    slot: Option<PicId>,
 ) -> (Option<&mut SPicture>, PicRefs<'_>) {
     match (pool.as_deref_mut(), slot) {
         (Some(pool), Some(id)) => pool.cur_and_rest_mut(id),
@@ -1043,6 +1029,11 @@ pub fn pic_and_refs_mut(
         (None, _) => (None, PicRefs::over(None)),
     }
 }
+
+/// [`pic_and_refs`]'s former borrow-only name. The pointer bracket and the borrow
+/// bracket were the same split with two contracts (T5.AB3); **T5b.2 retired the
+/// pointer one**, so there is one bracket and this is an alias.
+pub use self::pic_and_refs as pic_and_refs_mut;
 
 /// Entry `i` of reference list `list` — the **handle**, without touching the pool.
 ///
@@ -1425,73 +1416,79 @@ impl<'a> SliceCtx<'a> {
 /// `window_from`'s clamp already takes; the alternative is the null dereference
 /// `cabac_rbsp_window` would have made, and no caller could survive that.
 ///
-/// # Safety
-/// `pCtx` must be a live decoder context inside a slice bracket, with the parameter
-/// sets and the dequantisation tables already selected for this slice — the
-/// scalars are copies, and a write to one of them behind the view's back is exactly
-/// what S23 asks each field to be checked against.
-/// **Enumerated exception — the per-slice view constructors** (W6's settlement,
-/// steward at `a158183c`: *"the constructor is the enumerated exception, and it
-/// does not live in `decode_slice.rs`"*). All three build field-precise borrows out
-/// of one context by `addr_of_mut!`, which is the only way to hand out disjoint
-/// borrows the compiler cannot prove disjoint through a method; `slice_split` also
-/// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
-/// `PPicture` option-1/2 revisit — everything below them is safe because they are
-/// not.
-#[allow(unsafe_code)]
-pub unsafe fn slice_ctx<'a>(
-    pCtx: &'a mut SWelsDecoderContext,
-    reader: Option<&BsReader>,
-) -> SliceCtx<'a> {
-    use std::ptr::{addr_of, addr_of_mut};
-    // **Everything that reaches the context *as a whole* happens first** (T5.O8's
-    // lesson: only ordering fixes this). `GetThreadCount` takes a borrow of the
-    // context, and any retag of the whole object pops the field derivations below —
-    // which is exactly what the flip's one Miri failure was, with `sRawData`
-    // derived at the top of the struct literal and this call in the middle of it.
+/// **T5b.2: the view is an ordinary disjoint-field split, and the macro is why it
+/// can be one.** Borrowing several *distinct* fields of one struct at once is safe
+/// Rust — but only inside a single function body, which is exactly the property a
+/// helper taking `&mut SWelsDecoderContext` destroys. `slice_split` needs
+/// `pPicBuff` mutably *beside* this construction, so the construction has to be
+/// expanded into its caller rather than called; a macro is the spelling for that.
+/// `addr_of_mut!` was the previous answer to the same problem and it needed the
+/// lint's permission to say what the borrow checker now checks.
+///
+/// The invariants each field rests on are S23's and unchanged — they are recorded
+/// at the field declarations in [`SliceCtx`].
+macro_rules! slice_view {
+    ($ctx:expr, $reader:expr, $threads:expr) => {{
+        // The `sRawData` borrow is named because two fields of the view are derived
+        // from it and the second one (`rbsp`) is a window into the first.
+        let raw: &RawDataBuffer = &$ctx.sRawData;
+        SliceCtx {
+            sRawData: raw,
+            rbsp: match $reader {
+                Some(reader) => raw.rbsp_window(reader),
+                None => &[],
+            },
+            sCabacDecEngine: &mut $ctx.sCabacDecEngine,
+            pCabacCtx: &mut $ctx.pCabacCtx,
+            bMbRefConcealed: &mut $ctx.bMbRefConcealed,
+            iErrorCode: &mut $ctx.iErrorCode,
+            iTotalNumMbRec: &mut $ctx.iTotalNumMbRec,
+            pTempDec: &mut $ctx.pTempDec,
+            sSpsPpsCtx: &$ctx.sSpsPpsCtx,
+            sFmoList: &$ctx.sFmoList,
+            sRefPic: &$ctx.sRefPic,
+            // The one api-owned field the view resolves eagerly, through the
+            // boundary accessor like the other eight. `Initialize` installs it
+            // before any slice reaches a bracket and nothing clears it, so `None`
+            // is unreachable — and the C++ dereferences the same `void*` with no
+            // test at all, so a named panic is strictly more defined than what it
+            // translates.
+            pVlcTable: api_alias(&$ctx.pVlcTable)
+                .expect("pVlcTable is installed by Initialize before any slice is decoded"),
+            pDequant_coeff_buffer4x4: &$ctx.pDequant_coeff_buffer4x4,
+            pDequant_coeff_buffer8x8: &$ctx.pDequant_coeff_buffer8x8,
+            pGetI16x16LumaPredFunc: &$ctx.pGetI16x16LumaPredFunc,
+            pGetI4x4LumaPredFunc: &$ctx.pGetI4x4LumaPredFunc,
+            pGetIChromaPredFunc: &$ctx.pGetIChromaPredFunc,
+            pGetI8x8LumaPredFunc: &$ctx.pGetI8x8LumaPredFunc,
+            pIdctResAddPredFunc: $ctx.pIdctResAddPredFunc,
+            pIdctFourResAddPredFunc: $ctx.pIdctFourResAddPredFunc,
+            pIdctResAddPredFunc8x8: $ctx.pIdctResAddPredFunc8x8,
+            eSliceType: $ctx.eSliceType,
+            eIntraPredConstraint: $ctx.eIntraPredConstraint,
+            bUseScalingList: $ctx.bUseScalingList,
+            bDequantCoeff4x4Init: $ctx.bDequantCoeff4x4Init,
+            bRPLRError: $ctx.bRPLRError,
+            bParseOnly: parse_only(&$ctx.pParam),
+            bEcActive: ec_active_idc(&$ctx.pParam)
+                != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE,
+            bHasMemAlign: !$ctx.pMemAlign.is_null(),
+            iCurSeqIntervalMaxPicWidth: $ctx.iCurSeqIntervalMaxPicWidth,
+            iThreadCount: $threads,
+            active_sps: $ctx.active_sps,
+            active_pps: $ctx.active_pps,
+            fmo_id: $ctx.fmo_id,
+        }
+    }};
+}
+
+/// The view alone, for the brackets that hold no picture.
+#[inline]
+pub fn slice_ctx<'a>(pCtx: &'a mut SWelsDecoderContext, reader: Option<&BsReader>) -> SliceCtx<'a> {
+    // Everything reaching the context *as a whole* happens before the first field
+    // borrow — T5.O8's ordering lesson, now a compile error rather than a comment.
     let iThreadCount = crate::decoder::decoder_core::GetThreadCount(pCtx);
-    let pParam = (*pCtx).pParam;
-    let raw: &'a RawDataBuffer = &*addr_of!((*pCtx).sRawData);
-    SliceCtx {
-        sRawData: raw,
-        rbsp: match reader {
-            Some(reader) => raw.rbsp_window(reader),
-            None => &[],
-        },
-        sCabacDecEngine: &mut *addr_of_mut!((*pCtx).sCabacDecEngine),
-        pCabacCtx: &mut *addr_of_mut!((*pCtx).pCabacCtx),
-        bMbRefConcealed: &mut *addr_of_mut!((*pCtx).bMbRefConcealed),
-        iErrorCode: &mut *addr_of_mut!((*pCtx).iErrorCode),
-        iTotalNumMbRec: &mut *addr_of_mut!((*pCtx).iTotalNumMbRec),
-        pTempDec: &mut *addr_of_mut!((*pCtx).pTempDec),
-        sSpsPpsCtx: &*addr_of!((*pCtx).sSpsPpsCtx),
-        sFmoList: &*addr_of!((*pCtx).sFmoList),
-        sRefPic: &*addr_of!((*pCtx).sRefPic),
-        pVlcTable: &*((*pCtx).pVlcTable as *const SVlcTable),
-        pDequant_coeff_buffer4x4: &*addr_of!((*pCtx).pDequant_coeff_buffer4x4),
-        pDequant_coeff_buffer8x8: &*addr_of!((*pCtx).pDequant_coeff_buffer8x8),
-        pGetI16x16LumaPredFunc: &*addr_of!((*pCtx).pGetI16x16LumaPredFunc),
-        pGetI4x4LumaPredFunc: &*addr_of!((*pCtx).pGetI4x4LumaPredFunc),
-        pGetIChromaPredFunc: &*addr_of!((*pCtx).pGetIChromaPredFunc),
-        pGetI8x8LumaPredFunc: &*addr_of!((*pCtx).pGetI8x8LumaPredFunc),
-        pIdctResAddPredFunc: (*pCtx).pIdctResAddPredFunc,
-        pIdctFourResAddPredFunc: (*pCtx).pIdctFourResAddPredFunc,
-        pIdctResAddPredFunc8x8: (*pCtx).pIdctResAddPredFunc8x8,
-        eSliceType: (*pCtx).eSliceType,
-        eIntraPredConstraint: (*pCtx).eIntraPredConstraint,
-        bUseScalingList: (*pCtx).bUseScalingList,
-        bDequantCoeff4x4Init: (*pCtx).bDequantCoeff4x4Init,
-        bRPLRError: (*pCtx).bRPLRError,
-        bParseOnly: !pParam.is_null() && (*pParam).bParseOnly,
-        bEcActive: pParam.is_null()
-            || (*pParam).eEcActiveIdc != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE,
-        bHasMemAlign: !(*pCtx).pMemAlign.is_null(),
-        iCurSeqIntervalMaxPicWidth: (*pCtx).iCurSeqIntervalMaxPicWidth,
-        iThreadCount,
-        active_sps: (*pCtx).active_sps,
-        active_pps: (*pCtx).active_pps,
-        fmo_id: (*pCtx).fmo_id,
-    }
+    slice_view!(pCtx, reader, iThreadCount)
 }
 
 /// **The bracket top's split** (T5.Z4) — the pool's two halves *and* the view, out
@@ -1508,33 +1505,26 @@ pub unsafe fn slice_ctx<'a>(
 /// `WelsTargetSliceConstruction`, `ComputeColocatedTemporalScaling`,
 /// `CheckRefPicturesComplete` and `DoErrorConSliceMVCopy`.
 ///
-/// # Safety
-/// [`slice_ctx`]'s contract, unchanged.
+/// **T5b.2: safe, and the pool half is a borrow.** What forced the raw spelling was
+/// `PicRefs::get`'s F42 arm — the view held an address into the current picture, so
+/// a `&mut` on that picture had to not exist. With F42 answered by *identity*
+/// (`RefSlot::Current`, `PicRefs::resolve`, `mc_luma_same`) the picture is an
+/// ordinary `&mut` and this is an ordinary disjoint-field split: `pPicBuff` to the
+/// pool half, every other field to the view, no field twice, and the compiler
+/// checks it rather than a comment claiming it.
 #[inline]
-/// **Enumerated exception — the per-slice view constructors** (W6's settlement,
-/// steward at `a158183c`: *"the constructor is the enumerated exception, and it
-/// does not live in `decode_slice.rs`"*). All three build field-precise borrows out
-/// of one context by `addr_of_mut!`, which is the only way to hand out disjoint
-/// borrows the compiler cannot prove disjoint through a method; `slice_split` also
-/// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
-/// `PPicture` option-1/2 revisit — everything below them is safe because they are
-/// not.
-#[allow(unsafe_code)]
-pub unsafe fn slice_split<'a>(
+pub fn slice_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
     reader: Option<&BsReader>,
-) -> (PPicture, PicRefs<'a>, SliceCtx<'a>) {
-    // One raw pointer off the parameter, then two field-precise derivations from it
-    // (S29): no reference to the context as a whole is created, so the pool half and
-    // the view cannot overlap.
-    let raw: *mut SWelsDecoderContext = pCtx;
-    let cur = (*raw).pDec;
-    let (pDec, pRefs) = match ((*raw).pPicBuff.as_deref_mut(), cur) {
-        (Some(pool), Some(id)) => pool.cur_and_rest(id),
-        (Some(pool), None) => (std::ptr::null_mut(), pool.refs()),
-        (None, _) => (std::ptr::null_mut(), PicRefs::over(None)),
-    };
-    (pDec, pRefs, slice_ctx(&mut *raw, reader))
+) -> (Option<&'a mut SPicture>, PicRefs<'a>, SliceCtx<'a>) {
+    // Everything reaching the context *as a whole* happens before the first field
+    // borrow (T5.O8's ordering lesson, now enforced by the borrow checker rather
+    // than by care).
+    let iThreadCount = crate::decoder::decoder_core::GetThreadCount(pCtx);
+    let cur = pCtx.pDec;
+    let (pDec, pRefs) = pic_and_refs(&mut pCtx.pPicBuff, cur);
+    let view = slice_view!(pCtx, reader, iThreadCount);
+    (pDec, pRefs, view)
 }
 
 /// **The bracket top's split for a scope that writes the picture and reads no
@@ -1563,15 +1553,13 @@ pub unsafe fn slice_split<'a>(
 /// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
 /// `PPicture` option-1/2 revisit — everything below them is safe because they are
 /// not.
-#[allow(unsafe_code)]
-pub unsafe fn pic_split<'a>(
+#[inline]
+pub fn pic_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
 ) -> (Option<&'a mut SPicture>, SliceCtx<'a>) {
-    // `slice_split`'s construction verbatim, with the reference half dropped: this
-    // adds no derivation of its own, so the disjointness argument is the one Miri
-    // has already accepted there.
+    // `slice_split`'s construction verbatim, with the reference half dropped.
     let (pDec, _refs, view) = slice_split(pCtx, None);
-    (pDec.as_mut(), view)
+    (pDec, view)
 }
 
 /// The reference set a DPB operation acts on — **the selector travels, not the
@@ -1600,9 +1588,8 @@ pub(crate) fn test_slice_ctx<'a>(
     ctx: &'a mut SWelsDecoderContext,
     vlc: &'a mut SVlcTable,
 ) -> SliceCtx<'a> {
-    ctx.pVlcTable = std::ptr::addr_of_mut!(*vlc).cast::<c_void>();
-    #[allow(unsafe_code)] // the view constructor's own test fixture
-    unsafe { slice_ctx(ctx, None) }
+    ctx.pVlcTable = vlc;
+    slice_ctx(ctx, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -1676,7 +1663,11 @@ pub struct SWelsDecoderContext {
     pub pTempDec: Option<Box<Picture>>,
     pub sRefPic: SRefPic,
     pub sTmpRefPic: SRefPic,
-    pub pVlcTable: *mut c_void,
+    /// `CWelsDecoderImpl::sVlcTable`, aliased. The C++ declares it `void*`; the
+    /// port names the type, because the erasure bought nothing and cost every
+    /// reader a cast — and with the type named, `api_alias` resolves it like the
+    /// other eight api-owned fields (T5b.2). Layout is unchanged: one pointer.
+    pub pVlcTable: *mut SVlcTable,
     pub sBs: BsReader,
     pub sSpsPpsCtx: SWelsDecoderSpsPpsCTX,
     pub bHasNewSps: bool,

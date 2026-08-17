@@ -742,30 +742,29 @@ pub fn GetColocatedMb(
 }
 
 /// Derives motion predictors and reference indices for B-slice spatial direct mode.
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn PredMvBDirectSpatial(
+/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
+/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
+/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
+/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
+/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
+/// address.
+pub fn PredMvBDirectSpatial(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pMbType = GetMbType(pCurDqLayer, pDec.as_ref());
+    let pMbType = GetMbType(pCurDqLayer, Some(&*pDec));
     let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    let colocPic = pRefs.get(pCtx.ref_id(LIST_1, 0));
-    let ret = GetColocatedMb(pCtx, pCurDqLayer, pDec.as_ref(), colocPic.as_ref(), &mut mbType, subMbType);
+    let colocPic = pRefs.resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec));
+    let ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPic, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
@@ -807,7 +806,7 @@ pub unsafe fn PredMvBDirectSpatial(
         }
     }
 
-    let pMbTypePtr = GetMbType(pCurDqLayer, pDec.as_ref());
+    let pMbTypePtr = GetMbType(pCurDqLayer, Some(&*pDec));
     let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.get(iLeftXy as usize) } else { 0 };
     let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.get(iTopXy as usize) } else { 0 };
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.get(iLeftTopXy as usize) } else { 0 };
@@ -824,54 +823,41 @@ pub unsafe fn PredMvBDirectSpatial(
     let mut iMvD = [[0i16; 2]; 2];
 
 
+    // **T5b.2 deleted a dead arm here, and named it rather than keeping it.** Each of
+    // the four neighbour reads had a `pDec.is_null()` fallback onto
+    // `pCurDqLayer.grid.mv` / `.ref_index` — a *different* pair of arrays, so it was
+    // not a spelling of the same read. With the picture a borrow the arm is
+    // unreachable: `WelsDecodeSlice` and `WelsDecodeAndConstructSlice` establish
+    // `Some` at their brackets, above every caller of this function. S18's
+    // deleted-dead disposition.
     for listIdx in 0..2 {
         if bLeftAvail && IS_INTER(iLeftType) {
-            if !pDec.is_null() {
-                iMvA[listIdx] = (*(*pDec).pMv[listIdx].get(iLeftXy as usize))[3];
-                iLeftRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iLeftXy as usize))[3];
-            } else {
-                iMvA[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftXy as usize)[3];
-                iLeftRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftXy as usize)[3];
-            }
+            iMvA[listIdx] = (*pDec.pMv[listIdx].get(iLeftXy as usize))[3];
+            iLeftRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iLeftXy as usize))[3];
         } else {
             iMvA[listIdx] = [0, 0];
             iLeftRef[listIdx] = if !bLeftAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bTopAvail && IS_INTER(iTopType) {
-            if !pDec.is_null() {
-                iMvB[listIdx] = (*(*pDec).pMv[listIdx].get(iTopXy as usize))[12];
-                iTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iTopXy as usize))[12];
-            } else {
-                iMvB[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iTopXy as usize)[12];
-                iTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iTopXy as usize)[12];
-            }
+            iMvB[listIdx] = (*pDec.pMv[listIdx].get(iTopXy as usize))[12];
+            iTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iTopXy as usize))[12];
         } else {
             iMvB[listIdx] = [0, 0];
             iTopRef[listIdx] = if !bTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bRightTopAvail && IS_INTER(iRightTopType) {
-            if !pDec.is_null() {
-                iMvC[listIdx] = (*(*pDec).pMv[listIdx].get(iRightTopXy as usize))[12];
-                iRightTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iRightTopXy as usize))[12];
-            } else {
-                iMvC[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iRightTopXy as usize)[12];
-                iRightTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iRightTopXy as usize)[12];
-            }
+            iMvC[listIdx] = (*pDec.pMv[listIdx].get(iRightTopXy as usize))[12];
+            iRightTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iRightTopXy as usize))[12];
         } else {
             iMvC[listIdx] = [0, 0];
             iRightTopRef[listIdx] = if !bRightTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bLeftTopAvail && IS_INTER(iLeftTopType) {
-            if !pDec.is_null() {
-                iMvD[listIdx] = (*(*pDec).pMv[listIdx].get(iLeftTopXy as usize))[15];
-                iLeftTopRef[listIdx] = (*(*pDec).pRefIndex[listIdx].get(iLeftTopXy as usize))[15];
-            } else {
-                iMvD[listIdx] = (*pCurDqLayer).grid.mv[listIdx].get(iLeftTopXy as usize)[15];
-                iLeftTopRef[listIdx] = (*pCurDqLayer).grid.ref_index[listIdx].get(iLeftTopXy as usize)[15];
-            }
+            iMvD[listIdx] = (*pDec.pMv[listIdx].get(iLeftTopXy as usize))[15];
+            iLeftTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iLeftTopXy as usize))[15];
         } else {
             iMvD[listIdx] = [0, 0];
             iLeftTopRef[listIdx] = if !bLeftTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
@@ -919,11 +905,12 @@ pub unsafe fn PredMvBDirectSpatial(
         mbType &= !MB_TYPE_L0;
         *subMbType &= !MB_TYPE_L0;
     }
-    SetMbType(pCurDqLayer, pDec.as_mut(), iMbXy, mbType);
+    SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
 
     let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
-    let colocPic = pRefs.get(pCtx.ref_id(LIST_1, 0));
-    let bIsLongRef = if !colocPic.is_null() { (*colocPic).bIsLongRef } else { false };
+    let bIsLongRef = pRefs
+        .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
+        .is_some_and(|p| p.bIsLongRef);
 
     if IS_INTER_16x16(mbType) {
         if iMvp[LIST_0] != [0, 0] || iMvp[LIST_1] != [0, 0] {
@@ -947,7 +934,7 @@ pub unsafe fn PredMvBDirectSpatial(
         }
         UpdateP16x16DirectCabac(pCurDqLayer);
         for listIdx in 0..2 {
-            UpdateP16x16MotionInfo(pCurDqLayer, pDec.as_mut(), listIdx, ref_idx[listIdx as usize], &iMvp[listIdx as usize]);
+            UpdateP16x16MotionInfo(pCurDqLayer, Some(&mut *pDec), listIdx, ref_idx[listIdx as usize], &iMvp[listIdx as usize]);
             UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, listIdx as i32);
         }
     } else {
@@ -970,7 +957,7 @@ pub unsafe fn PredMvBDirectSpatial(
                 }
                 FillSpatialDirect8x8Mv(
                     pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iIdx8,
                     pSubPartCount[i as usize],
                     pPartW[i as usize],
@@ -989,17 +976,16 @@ pub unsafe fn PredMvBDirectSpatial(
 }
 
 /// Derives motion predictors for B-slice temporal direct mode using POC distance scaling.
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn PredBDirectTemporal(
+/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
+/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
+/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
+/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
+/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
+/// address.
+pub fn PredBDirectTemporal(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pRefs: PicRefs<'_>,
     iMvp: &mut [[i16; 2]; 2],
     ref_idx: &mut [i8; 2],
@@ -1007,18 +993,18 @@ pub unsafe fn PredBDirectTemporal(
 ) -> i32 {
     let mut ret = ERR_NONE;
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let pMbType = GetMbType(pCurDqLayer, pDec.as_ref());
+    let pMbType = GetMbType(pCurDqLayer, Some(&*pDec));
     let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
 
     let mut mbType: MbType = 0;
-    let colocPicForMb = pRefs.get(pCtx.ref_id(LIST_1, 0));
-    ret = GetColocatedMb(pCtx, pCurDqLayer, pDec.as_ref(), colocPicForMb.as_ref(), &mut mbType, subMbType);
+    let colocPicForMb = pRefs.resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec));
+    ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPicForMb, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
 
-    SetMbType(pCurDqLayer, pDec.as_mut(), iMbXy, mbType);
+    SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
     // T5.W6: the two `&mut` bindings that stood here were held across sixteen calls
     // that take the layer, and **both of their uses are reads** — a ref count copied
     // out on the next line, and one `iMvScale` entry read at `:1160`. As raw pointers
@@ -1035,12 +1021,12 @@ pub unsafe fn PredBDirectTemporal(
         ref_idx[LIST_0] = 0;
         ref_idx[LIST_1] = 0;
         UpdateP16x16DirectCabac(pCurDqLayer);
-        UpdateP16x16RefIdx(pCurDqLayer, pDec.as_mut(), LIST_1 as i32, ref_idx[LIST_1]);
+        UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, ref_idx[LIST_1]);
         *iMvp = [[0, 0]; 2];
         if (*pCurDqLayer).iColocIntra[0] != 0 {
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec.as_mut(), LIST_0 as i32, &iMvp[LIST_0]);
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec.as_mut(), LIST_1 as i32, &iMvp[LIST_1]);
-            UpdateP16x16RefIdx(pCurDqLayer, pDec.as_mut(), LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, &iMvp[LIST_0]);
+            UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, &iMvp[LIST_1]);
+            UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
             // T5.X4: the selection is which *list*, and the value read out of it is
@@ -1049,22 +1035,22 @@ pub unsafe fn PredBDirectTemporal(
             // two loads and no pointer.
             let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][0];
             let colocList = if colocRefIndexL0 >= 0 {
-                ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
+                ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                 LIST_0
             } else {
                 LIST_1
             };
             let mv = (*pCurDqLayer).iColocMv[colocList][0];
-            UpdateP16x16RefIdx(pCurDqLayer, pDec.as_mut(), LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
 
             let scale = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
                 [ref_idx[LIST_0] as usize] as i32;
             iMvp[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
             iMvp[LIST_0][1] = ((scale * (mv[1] as i32) + 128) >> 8) as i16;
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec.as_mut(), LIST_0 as i32, &iMvp[LIST_0]);
+            UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, &iMvp[LIST_0]);
             iMvp[LIST_1][0] = iMvp[LIST_0][0] - mv[0];
             iMvp[LIST_1][1] = iMvp[LIST_0][1] - mv[1];
-            UpdateP16x16MotionOnly(pCurDqLayer, pDec.as_mut(), LIST_1 as i32, &iMvp[LIST_1]);
+            UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, &iMvp[LIST_1]);
         }
         UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, LIST_0 as i32);
         UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, LIST_1 as i32);
@@ -1088,7 +1074,7 @@ pub unsafe fn PredBDirectTemporal(
                     ref_idx[LIST_0] = 0;
                     let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][iScan4Idx];
                     if colocRefIndexL0 >= 0 {
-                        ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, colocRefIndexL0, ref0Count);
+                        ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                     } else {
                         colocList = LIST_1;
                     }
@@ -1105,7 +1091,7 @@ pub unsafe fn PredBDirectTemporal(
                 }
                 FillTemporalDirect8x8Mv(
                     pCurDqLayer,
-                    pDec.as_mut(),
+                    Some(&mut *pDec),
                     iIdx8,
                     pSubPartCount[i as usize],
                     pPartW[i as usize],
@@ -1122,33 +1108,33 @@ pub unsafe fn PredBDirectTemporal(
 }
 
 /// Maps collocated reference picture list 0 index into the current picture's List 0 reference list.
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn MapColToList0(
+/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
+/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
+/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
+/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
+/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
+/// address.
+pub fn MapColToList0(
     pCtx: &mut SliceCtx<'_>,
     pRefs: PicRefs<'_>,
+    pDec: Option<&SPicture>,
     colocRefIndexL0: i8,
     ref0Count: i32,
 ) -> i8 {
     if (*pCtx.iErrorCode & dsRefLost) == dsRefLost {
         return 0;
     }
-    let pic1 = pRefs.get(pCtx.ref_id(LIST_1, 0));
-    if !pic1.is_null() && (colocRefIndexL0 as usize) < 17 {
+    let pic1 = pRefs.resolve(pCtx.ref_id(LIST_1, 0), pDec);
+    if let Some(pic1) = pic1.filter(|_| (colocRefIndexL0 as usize) < 17) {
         // The one resolution in the decode path whose handle comes out of another
         // *picture* rather than out of the context: the colocated picture's own
         // list-0 entry. `pRefs` resolves it exactly as `pool_pic` did.
-        let ref_pic_ptr = pRefs.get((*pic1).pRefPic[LIST_0][colocRefIndexL0 as usize]);
-        if !ref_pic_ptr.is_null() {
-            let iFramePoc = (*ref_pic_ptr).iFramePoc;
+        let ref_pic = pRefs.resolve(pic1.pRefPic[LIST_0][colocRefIndexL0 as usize], pDec);
+        if let Some(ref_pic) = ref_pic {
+            let iFramePoc = ref_pic.iFramePoc;
             for i in 0..ref0Count {
-                let ref0 = pRefs.get(pCtx.ref_id(LIST_0, i as usize));
-                if !ref0.is_null() && (*ref0).iFramePoc == iFramePoc {
+                let ref0 = pRefs.resolve(pCtx.ref_id(LIST_0, i as usize), pDec);
+                if ref0.is_some_and(|r| r.iFramePoc == iFramePoc) {
                     return i as i8;
                 }
             }

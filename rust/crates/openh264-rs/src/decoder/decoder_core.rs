@@ -928,12 +928,16 @@ pub fn ComputeColocatedTemporalScaling(
         if let Some(dq) = pCurDqLayer {
             // T5.Y2: a slice bracket of its own — the pool view and the context view
             // come out of the same context, and the two are disjoint by construction.
-            let (_, pRefs, mut view) = unsafe { crate::decoder::decoder_context::slice_split(pCtx, None) };
-            let _ = unsafe { crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
+            let (pDec, pRefs, mut view) = crate::decoder::decoder_context::slice_split(pCtx, None);
+            // The picture travels as a shared borrow: this scan only reads POCs, and
+            // F42 lets a list entry name it (T5b.2).
+            let pDec = pDec.map(|p| &*p);
+            let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
                 &mut view,
                 dq,
                 pRefs,
-            ) };
+                pDec,
+            );
         }
     }
 }
@@ -4569,7 +4573,12 @@ pub fn CheckRefPicturesComplete(
         // (F42). One borrow, split — the same shape the slice brackets take, over a
         // whole-slice operation rather than a whole slice.
         let (pDec, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
-        if pDec.is_null() || (*pDec).pMbType.as_slice().is_empty() {
+        // T5b.2: the picture is a borrow, and the whole scan reads it — so F42's arm
+        // resolves through `PicRefs::resolve` and the two shared borrows coexist.
+        let Some(pDec) = pDec.map(|p| &*p) else {
+            return true;
+        };
+        if pDec.pMbType.as_slice().is_empty() {
             return true;
         }
         let mut bAllRefComplete = true;
@@ -4577,57 +4586,51 @@ pub fn CheckRefPicturesComplete(
         let totalMb = pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
 
         for iMbIdx in 0..totalMb {
-            let mbType = *(*pDec).pMbType.get(iRealMbIdx as usize);
+            let mbType = *pDec.pMbType.get(iRealMbIdx as usize);
             match mbType {
                 MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                    let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                    let refIdx = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
                     if refIdx < MAX_REF_PIC_COUNT {
-                        let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
-                        if !pRef.is_null() {
-                            bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
+                        if let Some(pRef) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx), Some(pDec)) {
+                            bAllRefComplete = bAllRefComplete && pRef.bIsComplete;
                         }
                     }
                 }
                 MB_TYPE_16x8 => {
-                    let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
-                    let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
+                    let refIdx0 = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                    let refIdx1 = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[8] as usize;
                     if refIdx0 < MAX_REF_PIC_COUNT {
-                        let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
-                        if !pRef0.is_null() {
-                            bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
+                        if let Some(pRef0) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx0), Some(pDec)) {
+                            bAllRefComplete = bAllRefComplete && pRef0.bIsComplete;
                         }
                     }
                     if refIdx1 < MAX_REF_PIC_COUNT {
-                        let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
-                        if !pRef1.is_null() {
-                            bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
+                        if let Some(pRef1) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx1), Some(pDec)) {
+                            bAllRefComplete = bAllRefComplete && pRef1.bIsComplete;
                         }
                     }
                 }
                 MB_TYPE_8x16 => {
-                    let refIdx0 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
-                    let refIdx1 = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
+                    let refIdx0 = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[0] as usize;
+                    let refIdx1 = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[2] as usize;
                     if refIdx0 < MAX_REF_PIC_COUNT {
-                        let pRef0 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx0));
-                        if !pRef0.is_null() {
-                            bAllRefComplete = bAllRefComplete && (*pRef0).bIsComplete;
+                        if let Some(pRef0) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx0), Some(pDec)) {
+                            bAllRefComplete = bAllRefComplete && pRef0.bIsComplete;
                         }
                     }
                     if refIdx1 < MAX_REF_PIC_COUNT {
-                        let pRef1 = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx1));
-                        if !pRef1.is_null() {
-                            bAllRefComplete = bAllRefComplete && (*pRef1).bIsComplete;
+                        if let Some(pRef1) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx1), Some(pDec)) {
+                            bAllRefComplete = bAllRefComplete && pRef1.bIsComplete;
                         }
                     }
                 }
                 MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
                     let indices = [0, 2, 8, 10];
                     for &sub in &indices {
-                        let refIdx = (*(*pDec).pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
+                        let refIdx = (*pDec.pRefIndex[0].get(iRealMbIdx as usize))[sub] as usize;
                         if refIdx < MAX_REF_PIC_COUNT {
-                            let pRef = pRefs.get(ref_id(&pCtx.sRefPic, LIST_0, refIdx));
-                            if !pRef.is_null() {
-                                bAllRefComplete = bAllRefComplete && (*pRef).bIsComplete;
+                            if let Some(pRef) = pRefs.resolve(ref_id(&pCtx.sRefPic, LIST_0, refIdx), Some(pDec)) {
+                                bAllRefComplete = bAllRefComplete && pRef.bIsComplete;
                             }
                         }
                     }

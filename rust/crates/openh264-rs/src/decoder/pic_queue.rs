@@ -192,18 +192,12 @@ enum PicView<'a> {
     None,
     /// A pool with no slot held mutably.
     Whole(&'a PicPool),
-    /// One slot held mutably, every other readable — [`Pool::mut_and_rest`]'s halves,
-    /// plus the mutable slot's own pointer so that [`PicRefs::get`] can answer for it
-    /// (**F42**).
-    Split {
-        rest: PoolRest<'a, PicSlot>,
-        cur: PicId,
-        cur_ptr: *mut SPicture,
-    },
-    /// [`PicPool::cur_and_rest_mut`]'s half — the same split, with the current
-    /// picture handed to the caller as `&mut` instead of as an address, so there is
-    /// no `cur_ptr` to keep and none to invalidate.
-    SplitBorrowed { rest: PoolRest<'a, PicSlot>, cur: PicId },
+    /// [`PicPool::cur_and_rest_mut`]'s half: one slot held mutably by the caller,
+    /// every other readable — [`Pool::mut_and_rest`]'s halves. The current picture
+    /// is the caller's `&mut`, so this side keeps its *identity* and no address:
+    /// there is nothing here for a retag on that borrow to invalidate, which is what
+    /// [`PicRefs::classify`] and [`PicRefs::resolve`] are built on (**F42**).
+    Split { rest: PoolRest<'a, PicSlot>, cur: PicId },
 }
 
 impl<'a> PicRefs<'a> {
@@ -218,80 +212,57 @@ impl<'a> PicRefs<'a> {
         }
     }
 
-    /// [`PicPool::cur_and_rest`]'s half — the split view, told which slot its sibling
-    /// `&mut` came from and what its address is.
+    /// [`PicPool::cur_and_rest_mut`]'s half — the split view, told which slot its
+    /// sibling `&mut` came from.
     #[inline]
-    fn split(rest: PoolRest<'a, PicSlot>, cur: PicId, cur_ptr: *mut SPicture) -> Self {
-        Self { view: PicView::Split { rest, cur, cur_ptr } }
+    fn split(rest: PoolRest<'a, PicSlot>, cur: PicId) -> Self {
+        Self { view: PicView::Split { rest, cur } }
     }
 
-    /// [`split`](Self::split) for the borrow bracket — see [`PicView::SplitBorrowed`].
+    /// **The reader's form of [`classify`](Self::classify)**: the picture a stored
+    /// handle names, resolved against the picture the bracket is holding.
+    ///
+    /// Most of what the decode path does below a bracket top is *read* a reference —
+    /// POCs, `bIsComplete`, `bIsLongRef`, the colocated macroblock's motion — and for
+    /// those the current picture is just another source: a shared reborrow of the
+    /// caller's `&mut` coexists with the `&SPicture` the rest hands out, because both
+    /// are shared. So **F42's arm costs a parameter here and nothing else**, where
+    /// the pointer form it replaces cost every caller its `unsafe`.
+    ///
+    /// The current slot is still never resolved through [`PoolRest::get`], which
+    /// panics on it — that is what `cur` is kept for. Motion compensation, which
+    /// writes while it reads, cannot use this and asks [`classify`](Self::classify)
+    /// directly.
+    ///
+    /// `cur` is an `Option` because a bracket can open on an empty slot: the pool
+    /// hands back no picture and this view still knows the slot's *identity*, which
+    /// is the state the pointer form answered with a null. `None` here is that null,
+    /// arm for arm.
     #[inline]
-    fn split_borrowed(rest: PoolRest<'a, PicSlot>, cur: PicId) -> Self {
-        Self { view: PicView::SplitBorrowed { rest, cur } }
-    }
-
-    /// The picture a stored handle names, or null when there is no pool or no handle.
-    ///
-    /// Identical in behaviour to `pool_pic(pCtx, slot)`, which is the point: the
-    /// hoist moves *where the pool is reached*, not what comes back.
-    ///
-    /// **`*const`, and that is W3's settled fact 1.** Below a bracket top the decode
-    /// path only ever *reads* a reference — POCs, `bIsComplete`, `bIsLongRef`, the
-    /// colocated macroblock's motion, the plane bytes MC samples — which was verified
-    /// by grep over every ref-bound local in the files this view reaches, and comes
-    /// out to zero writes. The `*const` makes that a compile error to violate rather
-    /// than a comment, and it is what lets the flip resolve references out of a
-    /// [`PoolRest`], which can only hand out `&SPicture`.
-    ///
-    /// # The current slot, which is **F42**
-    ///
-    /// A malformed stream can legally put the picture being decoded into a reference
-    /// list — `pRefList[i]` is filled from a `ref_idx` the bitstream chooses, and the
-    /// C++ resolves it to `pCtx->pDec` and reads on, aliasing what the slice is
-    /// writing. `PoolRest::get` *panics* on that slot, so answering out of the rest
-    /// would turn a decodable-with-garbage stream into an abort: a behaviour change
-    /// on exactly the input class no gate here owns (S6's never-widen default). It is
-    /// answered from the mutable half's own pointer instead, which is both the C's
-    /// behaviour and one borrow — the two pointers share a tag, so a read here and a
-    /// write through `pDec` are the same derivation and Miri sees no conflict.
-    #[inline]
-    pub fn get(&self, slot: Option<PicId>) -> *const SPicture {
-        let Some(id) = slot else {
-            return std::ptr::null();
-        };
-        match self.view {
-            PicView::None => std::ptr::null(),
-            PicView::Whole(pool) => slot_ptr(pool.slot(id)),
-            PicView::Split { rest, cur, cur_ptr } => {
-                if id == cur {
-                    cur_ptr // F42 — never `rest.get(cur)`, which panics.
-                } else {
-                    slot_ptr(rest.get(id).as_deref())
-                }
-            }
-            // A borrow bracket has no address for its own picture to hand out, which
-            // is the point of it. Reaching here means a caller took
-            // `cur_and_rest_mut` and then asked for a *pointer* to the slot it is
-            // holding — `PoolRest::get`'s own panic, one level up, and unreachable
-            // from the two error-concealment brackets that use this form.
-            PicView::SplitBorrowed { rest, cur } => {
-                assert_ne!(id, cur, "this bracket holds slot {id:?} as a borrow; ask `classify`");
-                slot_ptr(rest.get(id).as_deref())
-            }
+    pub fn resolve<'s>(
+        &self,
+        slot: Option<PicId>,
+        cur: Option<&'s SPicture>,
+    ) -> Option<&'s SPicture>
+    where
+        'a: 's,
+    {
+        match self.classify(slot) {
+            RefSlot::Empty => None,
+            RefSlot::Current => cur,
+            RefSlot::Other(pic) => Some(pic),
         }
     }
 
     /// What a stored handle names, with **the picture this bracket is writing told
-    /// apart from the rest** — [`get`](Self::get)'s answer without the pointer.
+    /// apart from the rest**.
     ///
     /// This is the type-level form of the test error concealment spells as
     /// `same_picture(pSrcPic, pDstPic)`: its three copy paths resolve a reference,
     /// compare it against the picture they are about to write, and skip when the two
-    /// are one. [`get`](Self::get) hands back an address for that case because
-    /// `mv_pred`'s and `decode_slice`'s survivors genuinely read through it (**F42**)
-    /// — but a caller that only wants to *skip* needs no address, and asking for one
-    /// is what forced those three paths to keep a raw pointer.
+    /// are one. It is also what **motion compensation** asks: the `Current` arm is
+    /// `mc_luma_same`'s (`common/mc.rs`), where source and destination are one
+    /// allocation and there is no second cursor to build.
     ///
     /// [`RefSlot::Current`] carries no reference **by construction**, so the
     /// `&SPicture` in [`RefSlot::Other`] is provably disjoint from the `&mut` the
@@ -310,7 +281,7 @@ impl<'a> PicRefs<'a> {
                 Some(pic) => RefSlot::Other(pic),
                 None => RefSlot::Empty,
             },
-            PicView::Split { rest, cur, .. } | PicView::SplitBorrowed { rest, cur } => {
+            PicView::Split { rest, cur } => {
                 if id == cur {
                     RefSlot::Current // F42 — never `rest.get(cur)`, which panics.
                 } else {
@@ -334,6 +305,20 @@ pub enum RefSlot<'a> {
     Current,
     /// A reference picture, disjoint from the bracket's mutable half.
     Other(&'a SPicture),
+}
+
+impl RefSlot<'_> {
+    /// The resolved picture's `iFramePoc`, or `None` for the two arms that carry no
+    /// picture. Error concealment's one read of a reference it may also be *writing*
+    /// — the `Current` arm answers `None` there, which is what the pointer form's
+    /// `map(|pic| pic.iFramePoc)` over a null answered.
+    #[inline]
+    pub fn poc(&self) -> Option<i32> {
+        match self {
+            RefSlot::Other(pic) => Some(pic.iFramePoc),
+            _ => None,
+        }
+    }
 }
 
 /// The pointer form of a resolved slot, spelled **once** (S7).
@@ -436,40 +421,22 @@ impl PicPool {
     /// This is what the three slice brackets, the DPB regions and error concealment's
     /// copy operations open with, and the reason the hoist came first: below one of
     /// these the pool is not reached at all, so the whole scope runs on a single
-    /// borrow. The returned pointer and every [`PicRefs::get`] answer for `cur` carry
-    /// **one tag** (F42), which is what lets the C's aliasing survive the flip.
-    /// [`cur_and_rest`](Self::cur_and_rest)'s **borrow** form, for a bracket that
-    /// resolves references only through [`PicRefs::classify`] (T5.AB3).
-    ///
-    /// The split is the same one — `Pool::mut_and_rest` over the slot span, so the
-    /// two halves are disjoint by construction. What differs is the caller's
-    /// contract: this hands back the `&mut` the pointer form throws away, which is
-    /// sound exactly while nothing resolves the *current* slot out of the view. The
-    /// pointer form exists because `PicRefs::get`'s F42 arm answers that slot **with
-    /// the picture** and the decode path reads through it; a caller that only needs
-    /// to tell the current slot apart — error concealment's three copy paths, whose
-    /// whole use of the answer is to skip — asks `classify` and takes this.
+    /// borrow.
     ///
     /// **The view carries no address for the current slot**, and that is structural
     /// rather than documentary: handing back the `&mut` *and* a pointer to the same
     /// picture would be two live derivations of one allocation, and the caller's
-    /// first retag would pop the pointer that `get`'s F42 arm reads through. There is
-    /// none to pop — [`PicView::SplitBorrowed`] does not have the field, and `get`
-    /// asserts rather than answering for that slot.
+    /// first retag would pop the pointer. There is none to pop —
+    /// [`PicView::Split`] does not have the field — so F42's arm is answered by
+    /// *identity* (`RefSlot::Current`) and the caller supplies the picture it is
+    /// already holding. **T5b.2 retired the pointer form of this bracket**: with
+    /// `PicRefs::resolve` for the readers and `mc_luma_same` for the one writer, no
+    /// caller in the decoder needs an address for the current picture, and the
+    /// twenty-three `#[allow(unsafe_code)]` signatures that carried one are gone.
     #[inline]
     pub fn cur_and_rest_mut(&mut self, cur: PicId) -> (Option<&mut SPicture>, PicRefs<'_>) {
         let (slot, rest) = self.slots.mut_and_rest(cur);
-        (slot.as_deref_mut(), PicRefs::split_borrowed(rest, cur))
-    }
-
-    #[inline]
-    pub fn cur_and_rest(&mut self, cur: PicId) -> (PPicture, PicRefs<'_>) {
-        let (slot, rest) = self.slots.mut_and_rest(cur);
-        let cur_ptr = match slot {
-            Some(pic) => &mut **pic as *mut SPicture,
-            None => std::ptr::null_mut(),
-        };
-        (cur_ptr, PicRefs::split(rest, cur, cur_ptr))
+        (slot.as_deref_mut(), PicRefs::split(rest, cur))
     }
 
     /// A whole-pool read view, for a bracket that holds no picture mutably.
@@ -1116,12 +1083,17 @@ mod tests {
     /// on exactly the input class the goldens, the sweeps and the conformance corpus
     /// never reach (S6's never-widen default).
     ///
-    /// **Red under revert**, per F21: make `PicRefs::get` answer the `id == cur` case
-    /// through `rest` and this test panics with "held mutably" — which is what the
-    /// decoder would do on that stream. The second half is the other clause of the
-    /// rule: the two pointers are **one tag**, so a read through the reference answer
-    /// and a write through the current picture are the same derivation, and Miri
-    /// agrees they do not conflict.
+    /// **Red under revert**, per F21: make [`PicRefs::classify`] answer the
+    /// `id == cur` case through `rest` and this test panics with "held mutably" —
+    /// which is what the decoder would do on that stream.
+    ///
+    /// **T5b.2 rewrote the test's second half, and the rewrite is the face.** It used
+    /// to assert that the reference answer and the current picture are *one address
+    /// with one tag*, because that was the only way a read through the reference could
+    /// coexist with a write through `pDec`. There is no address now: `classify`
+    /// answers by identity and [`PicRefs::resolve`] hands back the caller's own
+    /// borrow, so the coexistence is two shared borrows — the thing the compiler
+    /// checks rather than the thing Miri had to be asked about.
     #[test]
     fn f42_a_reference_list_entry_naming_the_current_picture_resolves_not_panics() {
         let mut ma = CMemoryAlign::new(32);
@@ -1130,32 +1102,42 @@ mod tests {
         ctx.pMemAlign = &mut ma;
         ctx.pParam = &mut param;
 
-        unsafe {
-            let mut pool = CreatePicBuff(false, 3, 64, 64)
-                .expect("pool");
-            let (cur, other) = (pool.id(1), pool.id(2));
+        let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
+        let (cur, other) = (pool.id(1), pool.id(2));
 
-            let (pCur, refs) = pool.cur_and_rest(cur);
-            assert!(!pCur.is_null());
+        {
+            let (pCur, refs) = pool.cur_and_rest_mut(cur);
+            let pCur = pCur.expect("the current slot holds a picture");
 
-            // The malformed case: a reference resolution naming the current slot.
-            let answered = refs.get(Some(cur));
-            assert_eq!(answered, pCur as *const SPicture, "one address, one tag");
+            // The malformed case: a reference resolution naming the current slot. It
+            // resolves — it does not panic through `rest`, and it does not answer
+            // `Empty`.
+            assert!(
+                matches!(refs.classify(Some(cur)), RefSlot::Current),
+                "a list entry naming the slot the bracket holds is `Current`"
+            );
 
-            // Interleaved read-through-reference and write-through-current, which is
-            // what motion compensation off a self-referencing list does.
-            (*pCur).iFramePoc = 77;
-            assert_eq!((*answered).iFramePoc, 77);
-            (*pCur).iFramePoc = 78;
-            assert_eq!((*answered).iFramePoc, 78, "the reference answer stays live");
+            // Interleaved write-through-current and read-through-reference, which is
+            // what motion compensation off a self-referencing list does. Each read
+            // resolves afresh, as the decode path's do.
+            pCur.iFramePoc = 77;
+            assert_eq!(refs.resolve(Some(cur), Some(pCur)).map(|p| p.iFramePoc), Some(77));
+            pCur.iFramePoc = 78;
+            assert_eq!(
+                refs.resolve(Some(cur), Some(pCur)).map(|p| p.iFramePoc),
+                Some(78),
+                "the reference answer is the caller's own borrow, so it cannot go stale"
+            );
 
             // The ordinary case still goes through the rest, and is a different
             // picture: the rule widens nothing.
-            let pOther = refs.get(Some(other));
-            assert!(!pOther.is_null());
-            assert_ne!(pOther, answered);
-            assert_eq!((*pOther).pic_id(), Some(other));
+            let pOther = refs.resolve(Some(other), Some(pCur)).expect("slot 2 holds a picture");
+            assert_eq!(pOther.pic_id(), Some(other));
+            assert_ne!(pOther.pic_id(), pCur.pic_id());
+        }
 
+        #[allow(unsafe_code)] // `DestroyPicBuff` is family 14's, per exception 1 above
+        unsafe {
             DestroyPicBuff(&mut *ctx, Some(pool), &mut ma);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
