@@ -1468,12 +1468,12 @@ pub fn ref_set(pCtx: &mut SWelsDecoderContext, tmp: bool) -> &mut SRefPic {
 /// `api/codec_api.rs:1509`; the fixture installs it from the caller's own table so
 /// the borrow the view hands out has a real owner.
 #[cfg(test)]
-pub(crate) unsafe fn test_slice_ctx<'a>(
+pub(crate) fn test_slice_ctx<'a>(
     ctx: &'a mut SWelsDecoderContext,
     vlc: &'a mut SVlcTable,
 ) -> SliceCtx<'a> {
     ctx.pVlcTable = std::ptr::addr_of_mut!(*vlc).cast::<c_void>();
-    slice_ctx(ctx, None)
+    unsafe { slice_ctx(ctx, None) }
 }
 
 // ---------------------------------------------------------------------------

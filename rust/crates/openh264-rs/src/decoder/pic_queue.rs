@@ -951,7 +951,7 @@ pub fn CreatePicBuff(
 /// - Every non-null slot of `pool` must be a live picture from [`AllocPicture`].
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
 #[allow(unsafe_code)] // exception 1 at the file head — family 14's `ResetReorderingPictureBuffers`
-pub unsafe fn DestroyPicBuff(
+pub fn DestroyPicBuff(
     pCtx: &mut SWelsDecoderContext,
     pool: Option<Box<PicPool>>,
     pMa: *mut CMemoryAlign,
