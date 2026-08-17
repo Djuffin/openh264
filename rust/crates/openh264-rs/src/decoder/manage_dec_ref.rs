@@ -502,10 +502,15 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
+    // The `sps_ref.is_none()` guard that stood here is the lookup's own `else` arm
+    // now — and it covers the out-of-range id the old `&*sps_of(…)` dereferenced
+    // (T5.Z1).
+    let Some(pSps) = sps_of(
+        &(*pCtx).sSpsPpsCtx,
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+    ) else {
         return;
-    }
-    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
+    };
 
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
@@ -534,11 +539,8 @@ pub unsafe fn SlidingWindow(pCtx: *mut SWelsDecoderContext, pRefPic: &mut SRefPi
     // function was handed, so a `let ref_pic = &mut *pRefPic` held across them is
     // the shape the rule names — invalidated by the callee's own `&mut`, and read
     // afterwards. See the module note above `SetUnRef`.
-    let num_ref_frames = if !active_sps(pCtx).is_null() {
-        (*active_sps(pCtx)).iNumRefFrames as u8
-    } else {
-        1
-    };
+    let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        .map_or(1, |sps| sps.iNumRefFrames as u8);
 
     if (*pRefPic).uiShortRefCount[LIST_0] + (*pRefPic).uiLongRefCount[LIST_0] >= num_ref_frames {
         if (*pRefPic).uiShortRefCount[LIST_0] == 0 {
@@ -579,11 +581,8 @@ pub unsafe fn RemainOneBufferInDpbForEC(
     // S25, as in `SlidingWindow`: the loop below *depends* on a re-entrant call
     // changing `uiLongRefCount`, so its condition has to read the live field and
     // not a borrow the call invalidated.
-    let num_ref_frames = if !active_sps(pCtx).is_null() {
-        (*active_sps(pCtx)).iNumRefFrames as u8
-    } else {
-        1
-    };
+    let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        .map_or(1, |sps| sps.iNumRefFrames as u8);
 
     if (*pRefPic).uiShortRefCount[0] + (*pRefPic).uiLongRefCount[0] < num_ref_frames {
         return ERR_NONE;
@@ -644,6 +643,11 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
             // of it — so both halves have to come out of one borrow, or the guard
             // would be deciding a question the second derivation had already answered
             // by invalidating the first.
+            // The two ids are read before the bracket opens: below it the pool is
+            // borrowed and the parameter sets cannot be reached through the same
+            // context (T5.Z1).
+            let sps_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|s| s.iSpsId);
+            let pps_id = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).map(|p| p.iPpsId);
             let ec_slot = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
                 None => None,
@@ -651,11 +655,11 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: *mut SWelsDecoderContex
             let (pRef, pRefs) = pic_and_refs(pCtx, ec_slot);
             if !pRef.is_null() {
                 (*pRef).bIsComplete = false;
-                if !active_sps(pCtx).is_null() {
-                    (*pRef).iSpsId = (*active_sps(pCtx)).iSpsId;
+                if let Some(iSpsId) = sps_id {
+                    (*pRef).iSpsId = iSpsId;
                 }
-                if !active_pps(pCtx).is_null() {
-                    (*pRef).iPpsId = (*active_pps(pCtx)).iPpsId;
+                if let Some(iPpsId) = pps_id {
+                    (*pRef).iPpsId = iPpsId;
                 }
                 if (*pCtx).eSliceType == EWelsSliceType::B_SLICE {
                     for list in 0..LIST_A {
@@ -850,11 +854,8 @@ pub unsafe fn MMCOProcess(
                 return ERR_INFO_INVALID_MMCO_LONG_TERM_IDX_EXCEED_MAX;
             }
             WelsDelLongFromListSetUnref(pCtx, pRefPic, iLongTermFrameIdx as u32);
-            let num_ref_frames = if !active_sps(pCtx).is_null() {
-                (*active_sps(pCtx)).iNumRefFrames as u8
-            } else {
-                1
-            };
+            let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                .map_or(1, |sps| sps.iNumRefFrames as u8);
             if (*pRefPic).uiLongRefCount[LIST_0] + (*pRefPic).uiShortRefCount[LIST_0]
                 >= num_ref_frames.max(1)
             {
@@ -883,17 +884,14 @@ pub unsafe fn MMCO(
     }
     let marking = &*pRefPicMarking;
 
-    let pSpsLayer = match pCurDqLayer {
-        None => std::ptr::null_mut(),
-        Some(ref layer) => sps_of(pCtx, layer.sLayerInfo.sps_ref),
-    };
-    let uiLog2MaxFrameNum = if !pSpsLayer.is_null() {
-        (*pSpsLayer).uiLog2MaxFrameNum
-    } else if !active_sps(pCtx).is_null() {
-        (*active_sps(pCtx)).uiLog2MaxFrameNum
-    } else {
-        4
-    };
+    // A scalar, not a borrow — the MMCO loop below re-enters through `pCtx` on
+    // every command (T5.Z1).
+    let ps = &(*pCtx).sSpsPpsCtx;
+    let uiLog2MaxFrameNum = pCurDqLayer
+        .as_ref()
+        .and_then(|layer| sps_of(ps, layer.sLayerInfo.sps_ref))
+        .or_else(|| active_sps(ps, (*pCtx).active_sps))
+        .map_or(4, |sps| sps.uiLog2MaxFrameNum);
 
     let mut i = 0usize;
     while i < MAX_MMCO_COUNT && marking.sMmcoRef[i].uiMmcoType != MMCO_END {
@@ -1119,10 +1117,13 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     }
     let reorder_syn = &*pRefPicListReorderSyn;
 
-    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
+    // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
+    let Some(pSps) = sps_of(
+        &(*pCtx).sSpsPpsCtx,
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+    ) else {
         return ERR_INFO_INVALID_PTR;
-    }
-    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
+    };
 
     let list_count = if (*pCtx).eSliceType == B_SLICE { 2 } else { 1 };
 
@@ -1253,10 +1254,13 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
     }
     let reorder_syn = &*pRefPicListReorderSyn;
 
-    if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
+    // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
+    let Some(pSps) = sps_of(
+        &(*pCtx).sSpsPpsCtx,
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+    ) else {
         return ERR_INFO_INVALID_PTR;
-    }
-    let pSps = &*(sps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref));
+    };
 
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
     let iLongRefCount = (*pCtx).sRefPic.uiLongRefCount[LIST_0] as usize;
@@ -1400,11 +1404,14 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Option<
 
     (*pDec).uiQualityId = (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId;
     (*pDec).uiTemporalId = (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiTemporalId;
-    if !active_sps(pCtx).is_null() {
-        (*pDec).iSpsId = (*active_sps(pCtx)).iSpsId;
+    // The ids are read as values above the picture's borrow: `pDec` is the pool's
+    // and the parameter sets are the context's, and the two travel together at
+    // every one of these stamps (T5.Z1).
+    if let Some(iSpsId) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|s| s.iSpsId) {
+        (*pDec).iSpsId = iSpsId;
     }
-    if !active_pps(pCtx).is_null() {
-        (*pDec).iPpsId = (*active_pps(pCtx)).iPpsId;
+    if let Some(iPpsId) = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).map(|p| p.iPpsId) {
+        (*pDec).iPpsId = iPpsId;
     }
 
     let mut bIsIDRAU = false;
@@ -1475,11 +1482,8 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Option<
     }
 
     if !(*pDec).bIsLongRef {
-        let num_ref_frames = if !active_sps(pCtx).is_null() {
-            (*active_sps(pCtx)).iNumRefFrames as u8
-        } else {
-            1
-        };
+        let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+            .map_or(1, |sps| sps.iNumRefFrames as u8);
         if (*pRefPic).uiLongRefCount[LIST_0] + (*pRefPic).uiShortRefCount[LIST_0]
             >= num_ref_frames.max(1)
         {

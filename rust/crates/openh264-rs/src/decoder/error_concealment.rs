@@ -294,11 +294,14 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: Op
     let Some(pCurDqLayer) = pCurDqLayer else {
         return false;
     };
-    if pCtx.is_null() || active_sps(pCtx).is_null() {
+    if pCtx.is_null() {
         return false;
     }
+    let Some(sps) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps) else {
+        return false;
+    };
 
-    let iMbNum = (*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight;
+    let iMbNum = sps.iMbWidth * sps.iMbHeight;
 
     for i in 0..iMbNum {
         if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(i as usize) {
@@ -310,9 +313,18 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: Op
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
 pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
-    if pCtx.is_null() || (*pCtx).pDec.is_none() || active_sps(pCtx).is_null() {
+    if pCtx.is_null() || (*pCtx).pDec.is_none() {
         return;
     }
+    // The two dimensions are read as **values** before the pool bracket below opens:
+    // an SPS borrow held across `cur_and_refs` would be a borrow of the context
+    // beside a borrow of one of its fields, which is the shape the flip cannot
+    // express (T5.Z1).
+    let Some((iMbWidth, iMbHeight)) =
+        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
+    else {
+        return;
+    };
 
     // **The concealment bracket** (T5.Q2): one borrow of the pool, split into the
     // picture being written and a view of the rest. The two derivations that stood
@@ -324,10 +336,10 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
 
-    let uiHeightInPixelY = ((*active_sps(pCtx)).iMbHeight as u32) << 4;
+    let uiHeightInPixelY = (iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).linesize(0);
     let iStrideUV = (*pDstPic).linesize(1);
-    (*pDstPic).iMbEcedNum = ((*active_sps(pCtx)).iMbWidth * (*active_sps(pCtx)).iMbHeight) as i32;
+    (*pDstPic).iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
     if !(*pCtx).pParam.is_null() && pCurDqLayer.is_some() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
@@ -388,12 +400,16 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLa
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() {
+    if pCtx.is_null() || (*pCtx).pDec.is_none() {
         return;
     }
 
-    let iMbWidth = (*active_sps(pCtx)).iMbWidth as usize;
-    let iMbHeight = (*active_sps(pCtx)).iMbHeight as usize;
+    // Values, not a borrow — the pool bracket opens on the next line (T5.Z1).
+    let Some((iMbWidth, iMbHeight)) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        .map(|sps| (sps.iMbWidth as usize, sps.iMbHeight as usize))
+    else {
+        return;
+    };
     // The concealment bracket — see `DoErrorConFrameCopy`.
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
@@ -612,7 +628,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
         let mut iPicWidthRightLimit = (*pMCRefMem).iPicWidth;
         let mut iPicHeightBottomLimit = (*pMCRefMem).iPicHeight;
 
-        if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).bFrameCroppingFlag {
+        if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).is_some_and(|sps| sps.bFrameCroppingFlag) {
             iPicWidthLeftLimit = (*pCtx).sFrameCrop.iLeftOffset * 2;
             iPicWidthRightLimit = (*pMCRefMem).iPicWidth - (*pCtx).sFrameCrop.iRightOffset * 2;
             iPicHeightTopLimit = (*pCtx).sFrameCrop.iTopOffset * 2;
@@ -663,12 +679,16 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCu
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() || active_sps(pCtx).is_null() {
+    if pCtx.is_null() {
         return;
     }
 
-    let iMbWidth = (*active_sps(pCtx)).iMbWidth;
-    let iMbHeight = (*active_sps(pCtx)).iMbHeight;
+    // Values, not a borrow — `dec_pic` reaches the pool on the next line (T5.Z1).
+    let Some((iMbWidth, iMbHeight)) =
+        active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| (sps.iMbWidth, sps.iMbHeight))
+    else {
+        return;
+    };
     let pDec = dec_pic(pCtx);
 
     if pDec.is_null() {
@@ -826,12 +846,16 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() || active_sps(pCtx).is_null() || (*pCtx).pDec.is_none() {
+    if pCtx.is_null() || (*pCtx).pDec.is_none() {
         return;
     }
 
-    let iMbWidth = (*active_sps(pCtx)).iMbWidth as usize;
-    let iMbHeight = (*active_sps(pCtx)).iMbHeight as usize;
+    // Values, not a borrow — the pool bracket opens on the next line (T5.Z1).
+    let Some((iMbWidth, iMbHeight)) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        .map(|sps| (sps.iMbWidth as usize, sps.iMbHeight as usize))
+    else {
+        return;
+    };
     // The concealment bracket — see `DoErrorConFrameCopy`.
     let (pDstPic, pRefs) = cur_and_refs(pCtx);
     let pSrcPic = pRefs.get(prev_dpb_id(pCtx));

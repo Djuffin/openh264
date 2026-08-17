@@ -343,7 +343,14 @@ pub struct SWelsDecoderSpsPpsCTX {
     pub sPpsBuffer: [SPps; MAX_PPS_COUNT + 1],
     pub sSubsetSpsBuffer: [SSubsetSps; MAX_SPS_COUNT + 1],
     pub sPrefixNal: SNalUnit,
-    pub pActiveLayerSps: [*mut SSps; MAX_LAYER_NUM],
+    /// Which SPS each dependency layer activated — **an id, not an address**
+    /// (T5.Z1). This held `*mut SSps` aliases into the two buffers above it, and
+    /// every one of its six readers used them for *identity* only: "is the SPS this
+    /// layer activated still the one this NAL names?". A raw alias into a container
+    /// blocks that container, so the alias becomes the id it was resolved from —
+    /// [`SpsRef`] equality is address equality, because [`sps_of`] maps distinct
+    /// refs to distinct slots.
+    pub pActiveLayerSps: [Option<SpsRef>; MAX_LAYER_NUM],
     pub bAvcBasedFlag: bool,
     pub bSpsExistAheadFlag: bool,
     pub bSubspsExistAheadFlag: bool,
@@ -373,7 +380,7 @@ impl Default for SWelsDecoderSpsPpsCTX {
             sPpsBuffer: [SPps::default(); MAX_PPS_COUNT + 1],
             sSubsetSpsBuffer: [SSubsetSps::default(); MAX_SPS_COUNT + 1],
             sPrefixNal: SNalUnit::default(),
-            pActiveLayerSps: [std::ptr::null_mut(); MAX_LAYER_NUM],
+            pActiveLayerSps: [None; MAX_LAYER_NUM],
             bAvcBasedFlag: true,
             bSpsExistAheadFlag: false,
             bSubspsExistAheadFlag: false,
@@ -704,101 +711,134 @@ pub struct SpsRef {
     pub subset: bool,
 }
 
-/// The SPS an [`SpsRef`] names, or null when there is none.
+/// The SPS an [`SpsRef`] names, or `None` when there is none.
 ///
-/// **The one place an SPS id becomes an address** (T5.R6). `addr_of_mut!` derives it
-/// from `pCtx` with no intermediate reference (S29), so the result carries the
-/// context's own provenance and two live results cannot conflict — which is the
-/// property the stored pointer had *only* because it was made the same way, and which
-/// nothing about a stored pointer said out loud.
+/// **The one place an SPS id becomes a borrow** (T5.R6; T5.Z1 made it one).
+///
+/// **Why the parameter is the field and not the context** (T5.Z1). This returned
+/// `*mut SSps` derived from `pCtx` until session Z. That was sound while the context
+/// was a pointer and undefined the moment it became a `&mut`: a `Unique`
+/// function-entry retag on the context pops every derivation through it, so the next
+/// read of a stored result is UB — session Y measured three instances in one probe
+/// run and reverted the flip on them. Returning a borrow makes the rule a compile
+/// error instead of a Miri verdict, and taking **`sSpsPpsCtx` rather than the whole
+/// context** is what keeps that error honest: a whole-context borrow would conflict
+/// with every disjoint field a caller touches beside it, and the one call the verdict
+/// could not repair site-locally — `FmoParamUpdate(fmo_of(…), sps_of(…), …)` — is
+/// exactly two disjoint fields. Same reasoning as [`SliceCtx`], one level up.
 #[inline]
-pub unsafe fn sps_of(pCtx: PWelsDecoderContext, r: Option<SpsRef>) -> *mut SSps {
-    let Some(r) = r else {
-        return std::ptr::null_mut();
-    };
-    if pCtx.is_null() || r.id < 0 {
-        return std::ptr::null_mut();
+pub fn sps_of(ps: &SWelsDecoderSpsPpsCTX, r: Option<SpsRef>) -> Option<&SSps> {
+    let r = r?;
+    if r.id < 0 || r.id as usize >= MAX_SPS_COUNT + 1 {
+        return None;
     }
     let i = r.id as usize;
-    if r.subset {
-        if i >= MAX_SPS_COUNT + 1 {
-            return std::ptr::null_mut();
-        }
-        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[i].sSps)
+    Some(if r.subset {
+        &ps.sSubsetSpsBuffer[i].sSps
     } else {
-        if i >= MAX_SPS_COUNT + 1 {
-            return std::ptr::null_mut();
-        }
-        std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSpsBuffer[i])
-    }
+        &ps.sSpsBuffer[i]
+    })
 }
 
-/// The PPS an id names, or null when there is none. [`sps_of`]'s shape.
+/// The [`SpsRef`] an id resolves to, or `None` where [`sps_of`] answers `None`.
+///
+/// The identity `pActiveLayerSps` used to carry as an address, normalized the way
+/// the address was: an out-of-range ref resolved to null, so it stores as `None`
+/// rather than as itself (T5.Z1).
 #[inline]
-pub unsafe fn pps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SPps {
-    let Some(id) = id else {
-        return std::ptr::null_mut();
-    };
-    if pCtx.is_null() || id < 0 || id as usize >= MAX_PPS_COUNT + 1 {
-        return std::ptr::null_mut();
-    }
-    std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[id as usize])
+pub fn sps_ref_of(ps: &SWelsDecoderSpsPpsCTX, r: Option<SpsRef>) -> Option<SpsRef> {
+    if sps_of(ps, r).is_some() { r } else { None }
 }
 
-/// The FMO entry a PPS id names, or null when there is none. [`pps_of`]'s shape
-/// (T5.S1, F43).
+/// [`sps_of`]'s mutable form, for the parse paths that fill a buffer entry.
+#[inline]
+pub fn sps_of_mut(ps: &mut SWelsDecoderSpsPpsCTX, r: Option<SpsRef>) -> Option<&mut SSps> {
+    let r = r?;
+    if r.id < 0 || r.id as usize >= MAX_SPS_COUNT + 1 {
+        return None;
+    }
+    let i = r.id as usize;
+    Some(if r.subset {
+        &mut ps.sSubsetSpsBuffer[i].sSps
+    } else {
+        &mut ps.sSpsBuffer[i]
+    })
+}
+
+/// The PPS an id names, or `None` when there is none. [`sps_of`]'s shape.
+#[inline]
+pub fn pps_of(ps: &SWelsDecoderSpsPpsCTX, id: Option<i32>) -> Option<&SPps> {
+    let id = id?;
+    if id < 0 || id as usize >= MAX_PPS_COUNT + 1 {
+        return None;
+    }
+    Some(&ps.sPpsBuffer[id as usize])
+}
+
+/// The FMO entry a PPS id names, or `None` when there is none. [`pps_of`]'s shape
+/// (T5.S1, F43; a borrow since T5.Z1).
 ///
 /// `sFmoList` is `MAX_PPS_COUNT` entries indexed by PPS id — one FMO state per
 /// parameter set, persisting across access units, which is why the entry lives in
 /// the context's array rather than being rebuilt per slice.
+///
+/// **This is the accessor whose old spelling had no site-local repair.**
+/// `FmoParamUpdate(fmo_of(pCtx, …), sps_of(pCtx, …), …)` derived two raw pointers
+/// from one context and passed them in one call, each invalidating the other under
+/// a `&mut` context — session Y's third Miri instance. Taking `sFmoList` and
+/// `sSpsPpsCtx` as the separate fields they are makes that call two disjoint
+/// borrows and a third for `iActiveFmoNum`, which is what the whole family's
+/// parameter choice is for.
 #[inline]
-pub unsafe fn fmo_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> PFmo {
-    let Some(id) = id else {
-        return std::ptr::null_mut();
-    };
-    if pCtx.is_null() || id < 0 || id as usize >= MAX_PPS_COUNT {
-        return std::ptr::null_mut();
+pub fn fmo_of(list: &[SFmo; MAX_PPS_COUNT], id: Option<i32>) -> Option<&SFmo> {
+    let id = id?;
+    if id < 0 || id as usize >= MAX_PPS_COUNT {
+        return None;
     }
-    std::ptr::addr_of_mut!((*pCtx).sFmoList[id as usize])
+    Some(&list[id as usize])
 }
 
-/// The active FMO entry — the context field `pFmo` was, resolved (T5.S1).
+/// [`fmo_of`]'s mutable form — `FmoParamUpdate`'s, which rebuilds the map.
 #[inline]
-pub unsafe fn active_fmo(pCtx: PWelsDecoderContext) -> PFmo {
-    if pCtx.is_null() {
-        return std::ptr::null_mut();
+pub fn fmo_of_mut(list: &mut [SFmo; MAX_PPS_COUNT], id: Option<i32>) -> Option<&mut SFmo> {
+    let id = id?;
+    if id < 0 || id as usize >= MAX_PPS_COUNT {
+        return None;
     }
-    fmo_of(pCtx, (*pCtx).fmo_id)
+    Some(&mut list[id as usize])
 }
 
-/// The subset SPS an id names, or null when there is none. [`sps_of`]'s shape.
+/// The active FMO entry — the context field `pFmo` was, resolved (T5.S1). The id
+/// travels beside the array for [`active_sps`]'s reason.
 #[inline]
-pub unsafe fn subset_sps_of(pCtx: PWelsDecoderContext, id: Option<i32>) -> *mut SSubsetSps {
-    let Some(id) = id else {
-        return std::ptr::null_mut();
-    };
-    if pCtx.is_null() || id < 0 || id as usize >= MAX_SPS_COUNT + 1 {
-        return std::ptr::null_mut();
+pub fn active_fmo(list: &[SFmo; MAX_PPS_COUNT], id: Option<i32>) -> Option<&SFmo> {
+    fmo_of(list, id)
+}
+
+/// The subset SPS an id names, or `None` when there is none. [`sps_of`]'s shape.
+#[inline]
+pub fn subset_sps_of(ps: &SWelsDecoderSpsPpsCTX, id: Option<i32>) -> Option<&SSubsetSps> {
+    let id = id?;
+    if id < 0 || id as usize >= MAX_SPS_COUNT + 1 {
+        return None;
     }
-    std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[id as usize])
+    Some(&ps.sSubsetSpsBuffer[id as usize])
 }
 
 /// The active SPS — the context field `pSps` was, resolved (T5.R6).
+///
+/// The id travels as a value beside the array because it lives in a **different**
+/// field of the context: `pCtx.active_sps` is `Copy`, so reading it takes no borrow
+/// and the returned reference borrows `sSpsPpsCtx` alone (T5.Z1).
 #[inline]
-pub unsafe fn active_sps(pCtx: PWelsDecoderContext) -> *mut SSps {
-    if pCtx.is_null() {
-        return std::ptr::null_mut();
-    }
-    sps_of(pCtx, (*pCtx).active_sps)
+pub fn active_sps(ps: &SWelsDecoderSpsPpsCTX, active: Option<SpsRef>) -> Option<&SSps> {
+    sps_of(ps, active)
 }
 
 /// The active PPS — the context field `pPps` was, resolved (T5.R6).
 #[inline]
-pub unsafe fn active_pps(pCtx: PWelsDecoderContext) -> *mut SPps {
-    if pCtx.is_null() {
-        return std::ptr::null_mut();
-    }
-    pps_of(pCtx, (*pCtx).active_pps)
+pub fn active_pps(ps: &SWelsDecoderSpsPpsCTX, active: Option<i32>) -> Option<&SPps> {
+    pps_of(ps, active)
 }
 
 /// The bit reader for the slice being parsed — **the one route to it** (T5.M3).
@@ -1624,6 +1664,18 @@ impl SWelsDecoderContext {
             for i in 0..MAX_PPS_COUNT {
                 fmo_list.add(i).write(SFmo::default());
             }
+            // **S21, T5.Z1 — and the first clause here that is not just not-redundant
+            // but *load-bearing in the other direction*.** `pActiveLayerSps` held
+            // `*mut SSps`, whose zero is its null; it holds `Option<SpsRef>` now, and
+            // that type's niche is in `SpsRef`'s `bool`, where `0` is a **valid**
+            // `false`. So all-zero reads back as `Some(SpsRef { id: 0, subset: false
+            // })` — the id of the first SPS every ordinary stream sends. Without this
+            // write `CheckSpsActive` answers "SPS 0 is already active" before one has
+            // ever been parsed, `ParseSps` stages the SPS instead of storing it,
+            // `bSpsExistAheadFlag` is never set, and every stream decodes to zero
+            // frames with `dsNoParamSets`. Two probes caught it; the rule predicted
+            // it, which is what the rule is for.
+            std::ptr::addr_of_mut!((*p).sSpsPpsCtx.pActiveLayerSps).write([None; MAX_LAYER_NUM]);
         }
     }
 
