@@ -252,7 +252,7 @@ impl<'a> PicRefs<'a> {
         };
         match self.view {
             PicView::None => std::ptr::null(),
-            PicView::Whole(pool) => pool.slot(id),
+            PicView::Whole(pool) => slot_ptr(pool.slot(id)),
             PicView::Split { rest, cur, cur_ptr } => {
                 if id == cur {
                     cur_ptr // F42 — never `rest.get(cur)`, which panics.
@@ -264,6 +264,31 @@ impl<'a> PicRefs<'a> {
                 }
             }
         }
+    }
+}
+
+/// The pointer form of a resolved slot, spelled **once** (S7).
+///
+/// [`PicPool::slot`] hands back a borrow since T5.Z1, and three consumers still
+/// need an address: `PicRefs::get`'s F42 arm, where a shared reference would alias
+/// the picture being written; `slot_at`, whose out-of-range arm is the C's own
+/// failed index test; and the thread prefetch F36 owns. Each of those would
+/// otherwise write the cast itself, which is four pointer types where the contract
+/// is one.
+#[inline]
+fn slot_ptr(p: Option<&SPicture>) -> *const SPicture {
+    match p {
+        Some(p) => p,
+        None => std::ptr::null(),
+    }
+}
+
+/// [`slot_ptr`]'s mutable form.
+#[inline]
+fn slot_ptr_mut(p: Option<&mut SPicture>) -> *mut SPicture {
+    match p {
+        Some(p) => p,
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -299,22 +324,16 @@ impl PicPool {
     /// — but a result that outlives the expression it was taken in wants a bracket
     /// ([`cur_and_rest`](Self::cur_and_rest)), not this.
     #[inline]
-    pub fn slot(&self, id: PicId) -> *const SPicture {
-        match self.slots.get(id) {
-            Some(pic) => &**pic as *const SPicture,
-            None => std::ptr::null(),
-        }
+    pub fn slot(&self, id: PicId) -> Option<&SPicture> {
+        self.slots.get(id).as_deref()
     }
 
     /// [`slot`](Self::slot)'s mutable form, for the paths that write through what they
     /// resolve: the DPB's marks and counts, the AU loop's per-picture stamps, error
     /// concealment's destination.
     #[inline]
-    pub fn slot_mut(&mut self, id: PicId) -> PPicture {
-        match self.slots.get_mut(id) {
-            Some(pic) => &mut **pic as *mut SPicture,
-            None => std::ptr::null_mut(),
-        }
+    pub fn slot_mut(&mut self, id: PicId) -> Option<&mut SPicture> {
+        self.slots.get_mut(id).as_deref_mut()
     }
 
     /// The picture in slot `index`, or null if `index` is outside the pool.
@@ -325,7 +344,7 @@ impl PicPool {
     #[inline]
     pub fn slot_at(&self, index: i32) -> *const SPicture {
         if index >= 0 && index < self.capacity() {
-            self.slot(self.id(index as usize))
+            slot_ptr(self.slot(self.id(index as usize)))
         } else {
             std::ptr::null()
         }
@@ -336,7 +355,7 @@ impl PicPool {
     pub fn slot_at_mut(&mut self, index: i32) -> PPicture {
         if index >= 0 && index < self.capacity() {
             let id = self.id(index as usize);
-            self.slot_mut(id)
+            slot_ptr_mut(self.slot_mut(id))
         } else {
             std::ptr::null_mut()
         }
@@ -737,7 +756,7 @@ pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> PPicture {
         return std::ptr::null_mut();
     };
     match pool.next_for_thread() {
-        Some(id) => pool.slot_mut(id),
+        Some(id) => slot_ptr_mut(pool.slot_mut(id)),
         None => std::ptr::null_mut(),
     }
 }
@@ -984,7 +1003,7 @@ mod tests {
             assert_eq!(pool.cursor(), 1);
 
             // Mark pic1 as used as reference
-            (*pool.slot_mut(slot1)).bUsedAsRef = true;
+            pool.slot_mut(slot1).unwrap().bUsedAsRef = true;
 
             // Second prefetch skips index 1, finds index 2
             let slot2 = pool.prefetch_free().expect("slot 2 is free");
@@ -1135,16 +1154,16 @@ mod tests {
                 .expect("pool");
             let (id_a, id_b) = (pool.id(0), pool.id(1));
 
-            assert_eq!((*pool.slot(id_a)).pic_id(), Some(id_a), "a picture knows its slot");
-            assert_eq!((*pool.slot(id_b)).pic_id(), Some(id_b));
+            assert_eq!(pool.slot(id_a).unwrap().pic_id(), Some(id_a), "a picture knows its slot");
+            assert_eq!(pool.slot(id_b).unwrap().pic_id(), Some(id_b));
 
             // Owned slots: each write derives its own borrow and ends it, rather than
             // holding two `&mut`s into one pool across both statements.
-            (*pool.slot_mut(id_a)).iFramePoc = 4;
-            (*pool.slot_mut(id_b)).iFramePoc = 4; // duplicate POC, distinct slots
+            pool.slot_mut(id_a).unwrap().iFramePoc = 4;
+            pool.slot_mut(id_b).unwrap().iFramePoc = 4; // duplicate POC, distinct slots
             let (a, b) = (pool.slot(id_a), pool.slot(id_b));
-            assert!(!same_picture(a.as_ref(), b.as_ref()), "two slots are two references");
-            assert!(same_picture(a.as_ref(), a.as_ref()));
+            assert!(!same_picture(a, b), "two slots are two references");
+            assert!(same_picture(a, a));
 
             // A picture outside the pool has no slot and is its own identity only.
             // Both writes happen before either address is taken, and the addresses
@@ -1162,12 +1181,12 @@ mod tests {
             assert_eq!((*l).pic_id(), None);
             assert!(same_picture(l.as_ref(), l.as_ref()));
             assert!(!same_picture(l.as_ref(), l2.as_ref()), "and POC joins nothing");
-            assert!(!same_picture(l.as_ref(), a.as_ref()));
+            assert!(!same_picture(l.as_ref(), a));
 
             // T5.W1: the two null pointers are two absent pictures now, and the
             // `as_ref()` above is the null test that used to live inside the callee.
             assert!(same_picture(None, None));
-            assert!(!same_picture(None, a.as_ref()));
+            assert!(!same_picture(None, a));
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,
@@ -1202,7 +1221,7 @@ mod tests {
             // climbs one per call and then stops at the capacity rather than past it.
             for i in 0..3 {
                 let id = pool.id(i);
-                (*pool.slot_mut(id)).bUsedAsRef = true;
+                pool.slot_mut(id).unwrap().bUsedAsRef = true;
             }
             assert!(pool.prefetch_free().is_none());
             assert_eq!(pool.cursor(), 1);
@@ -1215,11 +1234,11 @@ mod tests {
 
             // Free slot 0 — behind the cursor, so only the wrap can reach it.
             let zero = pool.id(0);
-            (*pool.slot_mut(zero)).bUsedAsRef = false;
+            pool.slot_mut(zero).unwrap().bUsedAsRef = false;
             let got = pool.prefetch_free().expect("the wrap reaches slot 0");
             assert_eq!(got, pool.id(0));
             assert_eq!(pool.cursor(), 0);
-            assert_eq!((*pool.slot(got)).iPicBuffIdx, 0, "the winner learns its slot");
+            assert_eq!(pool.slot(got).unwrap().iPicBuffIdx, 0, "the winner learns its slot");
 
             DestroyPicBuff(
                 &mut *ctx as *mut SWelsDecoderContext,

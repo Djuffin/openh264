@@ -689,11 +689,9 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCu
     else {
         return;
     };
-    let pDec = dec_pic(pCtx);
-
-    if pDec.is_null() {
+    let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) else {
         return;
-    }
+    };
 
     let mut iInterMbCorrectNum = [0i32; 16];
 
@@ -924,13 +922,14 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer
     }
 
     if !pCtx.is_null() && (*pCtx).pDec.is_some() {
-        let pDec = dec_pic(pCtx);
-        crate::common::expand_pic::ExpandReferencingPicture(
-            &[(*pDec).data_ptr(0), (*pDec).data_ptr(1), (*pDec).data_ptr(2)],
-            (*pDec).iWidthInPixel,
-            (*pDec).iHeightInPixel,
-            &[(*pDec).linesize(0), (*pDec).linesize(1), (*pDec).linesize(2)],
-        );
+        if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
+            crate::common::expand_pic::ExpandReferencingPicture(
+                &[pDec.data_ptr(0), pDec.data_ptr(1), pDec.data_ptr(2)],
+                pDec.iWidthInPixel,
+                pDec.iHeightInPixel,
+                &[pDec.linesize(0), pDec.linesize(1), pDec.linesize(2)],
+            );
+        }
     }
 
     ERR_NONE
@@ -964,8 +963,8 @@ pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext, mut pCurDq
     }
 
     (*pCtx).iErrorCode |= dsDataErrorConcealed;
-    if (*pCtx).pDec.is_some() {
-        (*dec_pic(pCtx)).bIsComplete = false;
+    if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
+        pDec.bIsComplete = false;
     }
 }
 
@@ -1120,7 +1119,7 @@ mod tests {
                 // The destination is the pool's now, so the marker is read back out
                 // of the slot instead of off the stack.
                 let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
-                (*pool.slot(dst_id)).plane(0).at(0, 0)
+                pool.slot(dst_id).expect("the fixture's slot").plane(0).at(0, 0)
             }
         };
 
