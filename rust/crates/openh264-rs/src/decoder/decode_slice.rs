@@ -2582,11 +2582,19 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDq
     if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 || (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice <= 0 {
         return ERR_NONE;
     } else {
-        crate::decoder::deblocking::WelsDeblockingFilterSlice(
-            pCtx, dq,
-            pDec,
-            Some(crate::decoder::deblocking::WelsDeblockingMb),
-        );
+        // **The deblocking bracket** (T5.AA2): its own split, taken here rather than
+        // inherited, because the reconstruction bracket above closed with the view.
+        // The picture is a borrow and the view is what deblocking reads of the
+        // context; `None` is no pool or no current picture, and the family below
+        // has nothing to filter then.
+        let (pDec, view) = crate::decoder::decoder_context::pic_split(pCtx);
+        if let Some(pDec) = pDec {
+            crate::decoder::deblocking::WelsDeblockingFilterSlice(
+                &view, dq,
+                pDec,
+                Some(crate::decoder::deblocking::WelsDeblockingMb),
+            );
+        }
     }
 
     ERR_NONE

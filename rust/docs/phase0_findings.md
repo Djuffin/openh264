@@ -1676,3 +1676,30 @@ disposed of the same way and for the same reason.
 
 Running total: **fifty-six measurements, seventeen alternations, twenty-nine
 acquittals.**
+
+### Fifty-seventh measurement — 2026-08-17, Phase 5 session AA: one hit, step 1 closed it
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 57 | `mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=0 rc=0` (**release**, `family` battery at T5.AA2) | 41938 | **0** |
+
+The same clip, the same `t=2 sm=3 n=600`, one `rc` value over from measurement 56 —
+which is the signature's own statement that `rc` is not part of it. The same
+battery's **debug** sweep read 341/341.
+
+**Step 0** does not apply as a shortcut and was not claimed as one: the diff is
+production decoder code (`deblocking.rs`, `decode_slice.rs`, `decoder_context.rs`,
+`picture.rs`), so the driver links a different `rust_enc` by construction. HEAD's
+release binary hashes `630dfab5…`.
+
+**Step 1, twice.** The hitting configuration re-ran **5/5 byte-identical** in
+release, and the whole `mt` preset re-ran **120/120 byte-identical** in release —
+reproduction failing at the isolated level and at the level S23b says the race
+needs.
+
+**Step 2 does not trigger**: one hit.
+
+**Acquitted as F3.**
+
+Running total: **fifty-seven measurements, seventeen alternations, thirty
+acquittals.**

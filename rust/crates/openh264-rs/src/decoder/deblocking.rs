@@ -34,6 +34,24 @@
 //! including boundary strength (bS) derivation for P-slices and B-slices, slice-level iteration,
 //! macroblock edge availability masks, and SIMD dispatch table initialization.
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AA2 — the `common/` boundary, executed here first (face 1).** The
+// module carries the lint with **one exception, allowed by name**: the test that
+// drives `common/`'s installer, whose raw signature stays for the encoder. Every
+// `unsafe fn` and every production `unsafe` block is gone.
+//
+// What removed them was not a spelling pass. The eight edge filters took
+// `pPix: *mut u8` and called `common/`'s `Deblock*_c` shims, which exist only to
+// rebuild a slice from that pointer (`shim_span` + `from_raw_parts_mut`); they take
+// a [`PlaneCursorMut`] anchored at the macroblock's own coordinate and call the
+// **safe** kernels beside those shims — `deblock_luma_lt4`, `deblock_chroma_eq42`
+// and their six siblings — so the span arithmetic is the plane's and the bound is
+// checked. The decoder's raw entry points into `common/deblocking_common` are down
+// to zero; the `_c` forms stay for the encoder (F12/P10) and Phase 6 deletes them.
+//
+// The picture arrives as `&mut SPicture` from `decoder_context::pic_split`, which
+// is what makes the plane borrows expressible at all.
+
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -231,15 +249,16 @@ pub use crate::decoder::decoder_context::{
 // boundary-strength arrays those same filters take by raw const pointer (spelled in
 // words, not in the type, so this note does not raise the file's own count — S16).
 
-pub type PDeblockingFilterMbFunc = unsafe extern "C" fn(
+pub type PDeblockingFilterMbFunc = fn(
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
-    filter: *mut SDeblockingFilter,
+    pDec: &mut SPicture,
+    filter: &mut SDeblockingFilter,
     boundry_flag: i32,
 );
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
-use crate::decoder::decoder_context::{active_fmo, pps_of, sps_of};
+use crate::decoder::decoder_context::{active_fmo, SliceCtx};
+use crate::safe::plane::PlaneCursorMut;
 
 
 // ============================================================================
@@ -545,15 +564,15 @@ pub fn DeblockingBSInsideMBAvsbase8x8(
 }
 
 #[inline(always)]
-pub unsafe fn DeblockingBSInsideMBNormal(
+pub fn DeblockingBSInsideMBNormal(
     pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: &[i8; 24],
     iMbXy: i32,
 ) {
-    let iRefIdx = *(*pDec).pRefIndex[LIST_0].get(iMbXy as usize);
+    let iRefIdx = *pDec.pRefIndex[LIST_0].get(iMbXy as usize);
     let mut iRefs: [Option<PicId>; MB_BLOCK4x4_NUM] = [None; MB_BLOCK4x4_NUM];
     for i in 0..MB_BLOCK4x4_NUM {
         if iRefIdx[i] > REF_NOT_IN_LIST {
@@ -566,7 +585,7 @@ pub unsafe fn DeblockingBSInsideMBNormal(
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     // T5.P′3: the picture's array is owned, and `BS_EDGE` reads one macroblock's
     // record by index, so the bridge is taken at the record rather than at the base.
-    let pMv = (*pDec).pMv[LIST_0].get(iMbXy as usize);
+    let pMv = pDec.pMv[LIST_0].get(iMbXy as usize);
 
     if is_8x8 {
         let mut i8x8NnzTab = [0u8; 4];
@@ -676,10 +695,10 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 }
 
 #[inline(always)]
-pub unsafe fn DeblockingBSliceBSInsideMBNormal(
+pub fn DeblockingBSliceBSInsideMBNormal(
     pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
     nBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: &[i8; 24],
     iMbXy: i32,
@@ -687,7 +706,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
     let mut iRefs: [[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A] = [[None; MB_BLOCK4x4_NUM]; LIST_A];
 
     for l in 0..LIST_A {
-        let iRefIdx = *(*pDec).pRefIndex[l].get(iMbXy as usize);
+        let iRefIdx = *pDec.pRefIndex[l].get(iMbXy as usize);
         for i in 0..MB_BLOCK4x4_NUM {
             if iRefIdx[i] > REF_NOT_IN_LIST {
                 iRefs[l][i] = (*pFilter).ref_ids[l][iRefIdx[i] as usize];
@@ -699,7 +718,7 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 
     // T5.P′3: two bridges, one per list, each from its own allocation root (S28) —
     // `IN_BS_EDGE` indexes them by macroblock address.
-    let pMv = [&(*pDec).pMv[LIST_0], &(*pDec).pMv[LIST_1]];
+    let pMv = [&pDec.pMv[LIST_0], &pDec.pMv[LIST_1]];
     let is_8x8 = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
 
     if is_8x8 {
@@ -825,10 +844,10 @@ pub unsafe fn DeblockingBSliceBSInsideMBNormal(
 // Marginal Boundary Strength Calculation Routines
 // ============================================================================
 
-pub unsafe fn DeblockingBsMarginalMBAvcbase(
+pub fn DeblockingBsMarginalMBAvcbase(
     pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -844,30 +863,15 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let pRefIdxArr = if !pDec.is_null() {
-        // T5.P′3: the picture's array joins the layer's on the same bridge.
-        &(*pDec).pRefIndex[LIST_0]
-    } else {
-        // T5.J3: the grid's array, derived from the allocation root (S28) — the
-        // consumer indexes it by macroblock address, so it must reach the whole
-        // array and a narrowing slice would be UB at the second index.
-        &(*pCurDqLayer).grid.ref_index[LIST_0]
-    };
+    // T5.P′3: the picture's array. The `else` arm read the layer's grid when `pDec`
+    // was null; the parameter is a borrow now (T5.AA2) and the arm is
+    // unrepresentable — see `WelsDeblockingMb` for why it was unreachable anyway.
+    let pRefIdxArr = &pDec.pRefIndex[LIST_0];
 
     let is_8x8_curr = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iMbXy as usize);
     let is_8x8_neigh = *(*pCurDqLayer).grid.transform_size8x8_flag.get(iNeighMb as usize);
 
-    let pMvArr = if !pDec.is_null() {
-        &(*pDec).pMv[LIST_0]
-    } else {
-        // T5.K1: the grid's array, derived from the allocation root (S28) — `MB_BS_MV`
-        // indexes it by macroblock address for the current macroblock *and* its
-        // neighbour, so a narrowing slice would be UB at the second index. Same shape
-        // as `pRefIdxArr` above, and a second bridge in this function is sound for the
-        // same reason the first one is: the two `&mut`s are of different fields, whose
-        // `Vec`s are different allocations.
-        &(*pCurDqLayer).grid.mv[LIST_0]
-    };
+    let pMvArr = &pDec.pMv[LIST_0];
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
@@ -1032,10 +1036,10 @@ pub unsafe fn DeblockingBsMarginalMBAvcbase(
     u32::from_ne_bytes(pBS)
 }
 
-pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
+pub fn DeblockingBSliceBsMarginalMBAvcbase(
     pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &SPicture,
     iEdge: i32,
     iNeighMb: i32,
     iMbXy: i32,
@@ -1051,8 +1055,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let iRefIdx0 = &(*pDec).pRefIndex[LIST_0];
-    let iRefIdx1 = &(*pDec).pRefIndex[LIST_1];
+    let iRefIdx0 = &pDec.pRefIndex[LIST_0];
+    let iRefIdx1 = &pDec.pRefIndex[LIST_1];
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
@@ -1108,8 +1112,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = &(*pDec).pMv[LIST_0];
-                    let pMv1 = &(*pDec).pMv[LIST_1];
+                    let pMv0 = &pDec.pMv[LIST_0];
+                    let pMv1 = &pDec.pMv[LIST_1];
                     let val = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1171,8 +1175,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = &(*pDec).pMv[LIST_0];
-                        let pMv1 = &(*pDec).pMv[LIST_1];
+                        let pMv0 = &pDec.pMv[LIST_0];
+                        let pMv1 = &pDec.pMv[LIST_1];
                         pBS[j + (i << 1)] = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1234,8 +1238,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                     {
-                        let pMv0 = &(*pDec).pMv[LIST_0];
-                        let pMv1 = &(*pDec).pMv[LIST_1];
+                        let pMv0 = &pDec.pMv[LIST_0];
+                        let pMv1 = &pDec.pMv[LIST_1];
                         pBS[j + (i << 1)] = ON_MB_BS(
                             ref_p0,
                             ref_q0,
@@ -1292,8 +1296,8 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
                 {
-                    let pMv0 = &(*pDec).pMv[LIST_0];
-                    let pMv1 = &(*pDec).pMv[LIST_1];
+                    let pMv0 = &pDec.pMv[LIST_0];
+                    let pMv1 = &pDec.pMv[LIST_1];
                     pBS[i] = ON_MB_BS(
                         ref_p0,
                         ref_q0,
@@ -1347,9 +1351,9 @@ pub fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i
 // ============================================================================
 
 #[inline]
-pub unsafe fn FilteringEdgeLumaH(
+pub fn FilteringEdgeLumaH(
     pFilter: &mut SDeblockingFilter,
-    pPix: *mut u8,
+    pPix: &mut PlaneCursorMut<'_>,
     iStride: i32,
     pBS: &[u8; 4],
 ) {
@@ -1369,14 +1373,14 @@ pub unsafe fn FilteringEdgeLumaH(
 
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 0);
-        DeblockLumaLt4V_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+        deblock_luma_lt4(pPix, iStride as isize, 1, iAlpha, iBeta, &tc);
     }
 }
 
 #[inline]
-pub unsafe fn FilteringEdgeLumaV(
+pub fn FilteringEdgeLumaV(
     pFilter: &mut SDeblockingFilter,
-    pPix: *mut u8,
+    pPix: &mut PlaneCursorMut<'_>,
     iStride: i32,
     pBS: &[u8; 4],
 ) {
@@ -1396,14 +1400,14 @@ pub unsafe fn FilteringEdgeLumaV(
 
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 0);
-        DeblockLumaLt4H_c(pPix, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+        deblock_luma_lt4(pPix, 1, iStride as isize, iAlpha, iBeta, &tc);
     }
 }
 
 #[inline]
-pub unsafe fn FilteringEdgeLumaIntraH(
+pub fn FilteringEdgeLumaIntraH(
     pFilter: &mut SDeblockingFilter,
-    pPix: *mut u8,
+    pPix: &mut PlaneCursorMut<'_>,
     iStride: i32,
 ) {
     let mut iIndexA = 0i32;
@@ -1420,14 +1424,14 @@ pub unsafe fn FilteringEdgeLumaIntraH(
     );
 
     if (iAlpha | iBeta) != 0 {
-        DeblockLumaEq4V_c(pPix, iStride, iAlpha, iBeta);
+        deblock_luma_eq4(pPix, iStride as isize, 1, iAlpha, iBeta);
     }
 }
 
 #[inline]
-pub unsafe fn FilteringEdgeLumaIntraV(
+pub fn FilteringEdgeLumaIntraV(
     pFilter: &mut SDeblockingFilter,
-    pPix: *mut u8,
+    pPix: &mut PlaneCursorMut<'_>,
     iStride: i32,
 ) {
     let mut iIndexA = 0i32;
@@ -1444,14 +1448,14 @@ pub unsafe fn FilteringEdgeLumaIntraV(
     );
 
     if (iAlpha | iBeta) != 0 {
-        DeblockLumaEq4H_c(pPix, iStride, iAlpha, iBeta);
+        deblock_luma_eq4(pPix, 1, iStride as isize, iAlpha, iBeta);
     }
 }
 
-pub unsafe fn FilteringEdgeChromaH(
+pub fn FilteringEdgeChromaH<'a>(
     pFilter: &mut SDeblockingFilter,
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
+    pPixCb: &mut PlaneCursorMut<'a>,
+    pPixCr: &mut PlaneCursorMut<'a>,
     iStride: i32,
     pBS: &[u8; 4],
 ) {
@@ -1471,7 +1475,7 @@ pub unsafe fn FilteringEdgeChromaH(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
-            DeblockChromaLt4V_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+            deblock_chroma_lt4(pPixCb, pPixCr, iStride as isize, 1, iAlpha, iBeta, &tc);
         }
     } else {
         for i in 0..2 {
@@ -1484,18 +1488,18 @@ pub unsafe fn FilteringEdgeChromaH(
                 &mut iBeta,
             );
             if (iAlpha | iBeta) != 0 {
-                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                    TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
-                DeblockChromaLt4V2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+                let pPixCbCr = if i == 0 { &mut *pPixCb } else { &mut *pPixCr };
+                TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
+                deblock_chroma_lt42(pPixCbCr, iStride as isize, 1, iAlpha, iBeta, &tc);
             }
         }
     }
 }
 
-pub unsafe fn FilteringEdgeChromaV(
+pub fn FilteringEdgeChromaV<'a>(
     pFilter: &mut SDeblockingFilter,
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
+    pPixCb: &mut PlaneCursorMut<'a>,
+    pPixCr: &mut PlaneCursorMut<'a>,
     iStride: i32,
     pBS: &[u8; 4],
 ) {
@@ -1515,7 +1519,7 @@ pub unsafe fn FilteringEdgeChromaV(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
-            DeblockChromaLt4H_c(pPixCb, pPixCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+            deblock_chroma_lt4(pPixCb, pPixCr, 1, iStride as isize, iAlpha, iBeta, &tc);
         }
     } else {
         for i in 0..2 {
@@ -1528,18 +1532,18 @@ pub unsafe fn FilteringEdgeChromaV(
                 &mut iBeta,
             );
             if (iAlpha | iBeta) != 0 {
-                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                    TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
-                DeblockChromaLt4H2_c(pPixCbCr, iStride, iAlpha, iBeta, tc.as_mut_ptr());
+                let pPixCbCr = if i == 0 { &mut *pPixCb } else { &mut *pPixCr };
+                TC0_TBL_LOOKUP(&mut tc, iIndexA, pBS, 1);
+                deblock_chroma_lt42(pPixCbCr, 1, iStride as isize, iAlpha, iBeta, &tc);
             }
         }
     }
 }
 
-pub unsafe fn FilteringEdgeChromaIntraH(
+pub fn FilteringEdgeChromaIntraH<'a>(
     pFilter: &mut SDeblockingFilter,
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
+    pPixCb: &mut PlaneCursorMut<'a>,
+    pPixCr: &mut PlaneCursorMut<'a>,
     iStride: i32,
 ) {
     let mut iIndexA = 0i32;
@@ -1556,7 +1560,7 @@ pub unsafe fn FilteringEdgeChromaIntraH(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            DeblockChromaEq4V_c(pPixCb, pPixCr, iStride, iAlpha, iBeta);
+            deblock_chroma_eq4(pPixCb, pPixCr, iStride as isize, 1, iAlpha, iBeta);
         }
     } else {
         for i in 0..2 {
@@ -1569,17 +1573,17 @@ pub unsafe fn FilteringEdgeChromaIntraH(
                 &mut iBeta,
             );
             if (iAlpha | iBeta) != 0 {
-                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                DeblockChromaEq4V2_c(pPixCbCr, iStride, iAlpha, iBeta);
+                let pPixCbCr = if i == 0 { &mut *pPixCb } else { &mut *pPixCr };
+                deblock_chroma_eq42(pPixCbCr, iStride as isize, 1, iAlpha, iBeta);
             }
         }
     }
 }
 
-pub unsafe fn FilteringEdgeChromaIntraV(
+pub fn FilteringEdgeChromaIntraV<'a>(
     pFilter: &mut SDeblockingFilter,
-    pPixCb: *mut u8,
-    pPixCr: *mut u8,
+    pPixCb: &mut PlaneCursorMut<'a>,
+    pPixCr: &mut PlaneCursorMut<'a>,
     iStride: i32,
 ) {
     let mut iIndexA = 0i32;
@@ -1596,7 +1600,7 @@ pub unsafe fn FilteringEdgeChromaIntraV(
             &mut iBeta,
         );
         if (iAlpha | iBeta) != 0 {
-            DeblockChromaEq4H_c(pPixCb, pPixCr, iStride, iAlpha, iBeta);
+            deblock_chroma_eq4(pPixCb, pPixCr, 1, iStride as isize, iAlpha, iBeta);
         }
     } else {
         for i in 0..2 {
@@ -1609,8 +1613,8 @@ pub unsafe fn FilteringEdgeChromaIntraV(
                 &mut iBeta,
             );
             if (iAlpha | iBeta) != 0 {
-                let pPixCbCr = if i == 0 { pPixCb } else { pPixCr };
-                DeblockChromaEq4H2_c(pPixCbCr, iStride, iAlpha, iBeta);
+                let pPixCbCr = if i == 0 { &mut *pPixCb } else { &mut *pPixCr };
+                deblock_chroma_eq42(pPixCbCr, 1, iStride as isize, iAlpha, iBeta);
             }
         }
     }
@@ -1620,9 +1624,9 @@ pub unsafe fn FilteringEdgeChromaIntraV(
 // Inter Macroblock Deblocking Sequence
 // ============================================================================
 
-unsafe fn DeblockingInterMb(
+fn DeblockingInterMb(
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pFilter: &mut SDeblockingFilter,
     nBS: &[[[u8; 4]; 4]; 2],
     iBoundryFlag: i32,
@@ -1635,12 +1639,17 @@ unsafe fn DeblockingInterMb(
     let pCurChromaQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
     // T5.N3: the picture, not the filter's copy of three of its pointers. See the
     // note at `WelsDeblockingFilterSlice` for why the layer's `pDec` is the route.
-    let iLineSize = (*pDec).linesize(0);
-    let iLineSizeUV = (*pDec).linesize(1);
+    let iLineSize = pDec.linesize(0);
+    let iLineSizeUV = pDec.linesize(1);
 
-    let pDestY = (*pDec).data_ptr(0).add(((iMbY * iLineSize + iMbX) << 4) as usize);
-    let pDestCb = (*pDec).data_ptr(1).add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
-    let pDestCr = (*pDec).data_ptr(2).add(((iMbY * iLineSizeUV + iMbX) << 3) as usize);
+    // **T5.AA2 — the macroblock's origin as a coordinate, not an address.** The three
+    // `data_ptr(i).add(...)` derivations were one `unsafe` each and handed the edge
+    // filters a bare `*mut u8`; the planes are disjoint borrows and each filter
+    // anchors its own cursor, so the sub-block offsets below (`add(1 << 2)`,
+    // `add((2 << 1) * iLineSizeUV)`) become the `+4`/`+4 rows` they always meant.
+    let [planeY, planeCb, planeCr] = pDec.planes_mut();
+    let (xY, yY) = ((iMbX << 4) as isize, (iMbY << 4) as isize);
+    let (xC, yC) = ((iMbX << 3) as isize, (iMbY << 3) as isize);
 
     // Vertical margin
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
@@ -1655,13 +1664,24 @@ unsafe fn DeblockingInterMb(
         }
 
         if nBS[0][0][0] == 0x04 {
-            FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize);
-            FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSizeUV);
+            FilteringEdgeLumaIntraV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
+            FilteringEdgeChromaIntraV(
+                pFilter,
+                &mut planeCb.cursor_mut(xC, yC),
+                &mut planeCr.cursor_mut(xC, yC),
+                iLineSizeUV,
+            );
         } else {
             let bs_word = u32::from_ne_bytes(nBS[0][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaV(pFilter, pDestY, iLineSize, &nBS[0][0]);
-                FilteringEdgeChromaV(pFilter, pDestCb, pDestCr, iLineSizeUV, &nBS[0][0]);
+                FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize, &nBS[0][0]);
+                FilteringEdgeChromaV(
+                    pFilter,
+                    &mut planeCb.cursor_mut(xC, yC),
+                    &mut planeCr.cursor_mut(xC, yC),
+                    iLineSizeUV,
+                    &nBS[0][0],
+                );
             }
         }
     }
@@ -1674,16 +1694,16 @@ unsafe fn DeblockingInterMb(
 
     let bs_01 = u32::from_ne_bytes(nBS[0][1]);
     if bs_01 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(1 << 2), iLineSize, &nBS[0][1]);
+        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 4, yY), iLineSize, &nBS[0][1]);
     }
 
     let bs_02 = u32::from_ne_bytes(nBS[0][2]);
     if bs_02 != 0 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(2 << 2), iLineSize, &nBS[0][2]);
+        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 8, yY), iLineSize, &nBS[0][2]);
         FilteringEdgeChromaV(
             pFilter,
-            pDestCb.add(2 << 1),
-            pDestCr.add(2 << 1),
+            &mut planeCb.cursor_mut(xC + 4, yC),
+            &mut planeCr.cursor_mut(xC + 4, yC),
             iLineSizeUV,
             &nBS[0][2],
         );
@@ -1691,7 +1711,7 @@ unsafe fn DeblockingInterMb(
 
     let bs_03 = u32::from_ne_bytes(nBS[0][3]);
     if bs_03 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, pDestY.add(3 << 2), iLineSize, &nBS[0][3]);
+        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 12, yY), iLineSize, &nBS[0][3]);
     }
 
     // Horizontal margin
@@ -1707,13 +1727,24 @@ unsafe fn DeblockingInterMb(
         }
 
         if nBS[1][0][0] == 0x04 {
-            FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize);
-            FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSizeUV);
+            FilteringEdgeLumaIntraH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
+            FilteringEdgeChromaIntraH(
+                pFilter,
+                &mut planeCb.cursor_mut(xC, yC),
+                &mut planeCr.cursor_mut(xC, yC),
+                iLineSizeUV,
+            );
         } else {
             let bs_word = u32::from_ne_bytes(nBS[1][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaH(pFilter, pDestY, iLineSize, &nBS[1][0]);
-                FilteringEdgeChromaH(pFilter, pDestCb, pDestCr, iLineSizeUV, &nBS[1][0]);
+                FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize, &nBS[1][0]);
+                FilteringEdgeChromaH(
+                    pFilter,
+                    &mut planeCb.cursor_mut(xC, yC),
+                    &mut planeCr.cursor_mut(xC, yC),
+                    iLineSizeUV,
+                    &nBS[1][0],
+                );
             }
         }
     }
@@ -1724,26 +1755,16 @@ unsafe fn DeblockingInterMb(
 
     let bs_11 = u32::from_ne_bytes(nBS[1][1]);
     if bs_11 != 0 && !is_8x8 {
-        FilteringEdgeLumaH(
-            pFilter,
-            pDestY.add(((1 << 2) * iLineSize) as usize),
-            iLineSize,
-            &nBS[1][1],
-        );
+        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 4), iLineSize, &nBS[1][1]);
     }
 
     let bs_12 = u32::from_ne_bytes(nBS[1][2]);
     if bs_12 != 0 {
-        FilteringEdgeLumaH(
-            pFilter,
-            pDestY.add(((2 << 2) * iLineSize) as usize),
-            iLineSize,
-            &nBS[1][2],
-        );
+        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 8), iLineSize, &nBS[1][2]);
         FilteringEdgeChromaH(
             pFilter,
-            pDestCb.add(((2 << 1) * iLineSizeUV) as usize),
-            pDestCr.add(((2 << 1) * iLineSizeUV) as usize),
+            &mut planeCb.cursor_mut(xC, yC + 4),
+            &mut planeCr.cursor_mut(xC, yC + 4),
             iLineSizeUV,
             &nBS[1][2],
         );
@@ -1751,12 +1772,7 @@ unsafe fn DeblockingInterMb(
 
     let bs_13 = u32::from_ne_bytes(nBS[1][3]);
     if bs_13 != 0 && !is_8x8 {
-        FilteringEdgeLumaH(
-            pFilter,
-            pDestY.add(((3 << 2) * iLineSize) as usize),
-            iLineSize,
-            &nBS[1][3],
-        );
+        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 12), iLineSize, &nBS[1][3]);
     }
 }
 
@@ -1764,9 +1780,9 @@ unsafe fn DeblockingInterMb(
 // Intra Macroblock Deblocking Pipelines
 // ============================================================================
 
-pub unsafe fn FilteringEdgeLumaHV(
+pub fn FilteringEdgeLumaHV(
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1774,9 +1790,11 @@ pub unsafe fn FilteringEdgeLumaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let iLineSize = (*pDec).linesize(0);
+    let iLineSize = pDec.linesize(0);
 
-    let pDestY = (*pDec).data_ptr(0).add(((iMbY * iLineSize + iMbX) << 4) as usize);
+    // The macroblock's origin as a coordinate (T5.AA2), and the plane it walks.
+    let planeY = pDec.plane_mut(0);
+    let (xY, yY) = ((iMbX << 4) as isize, (iMbY << 4) as isize);
     let iCurQp = *(*pCurDqLayer).grid.luma_qp.get(iMbXyIndex as usize) as i32;
 
     let mut iTc = [0i8; 4];
@@ -1788,7 +1806,7 @@ pub unsafe fn FilteringEdgeLumaHV(
             + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
             + 1)
             >> 1) as i8;
-        FilteringEdgeLumaIntraV(pFilter, pDestY, iLineSize);
+        FilteringEdgeLumaIntraV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
     }
 
     (*pFilter).iLumaQP = iCurQp as i8;
@@ -1811,13 +1829,13 @@ pub unsafe fn FilteringEdgeLumaHV(
         TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
 
         if !is_8x8 {
-            DeblockLumaLt4H_c(pDestY.add(1 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+            deblock_luma_lt4(&mut planeY.cursor_mut(xY + 4, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
         }
 
-        DeblockLumaLt4H_c(pDestY.add(2 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+        deblock_luma_lt4(&mut planeY.cursor_mut(xY + 8, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
 
         if !is_8x8 {
-            DeblockLumaLt4H_c(pDestY.add(3 << 2), iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+            deblock_luma_lt4(&mut planeY.cursor_mut(xY + 12, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
         }
     }
 
@@ -1827,44 +1845,26 @@ pub unsafe fn FilteringEdgeLumaHV(
             + *(*pCurDqLayer).grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
             + 1)
             >> 1) as i8;
-        FilteringEdgeLumaIntraH(pFilter, pDestY, iLineSize);
+        FilteringEdgeLumaIntraH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
     }
 
     (*pFilter).iLumaQP = iCurQp as i8;
     if (iAlpha | iBeta) != 0 {
         if !is_8x8 {
-            DeblockLumaLt4V_c(
-                pDestY.add(((1 << 2) * iLineSize) as usize),
-                iLineSize,
-                iAlpha,
-                iBeta,
-                iTc.as_mut_ptr(),
-            );
+            deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 4), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
         }
 
-        DeblockLumaLt4V_c(
-            pDestY.add(((2 << 2) * iLineSize) as usize),
-            iLineSize,
-            iAlpha,
-            iBeta,
-            iTc.as_mut_ptr(),
-        );
+        deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 8), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
 
         if !is_8x8 {
-            DeblockLumaLt4V_c(
-                pDestY.add(((3 << 2) * iLineSize) as usize),
-                iLineSize,
-                iAlpha,
-                iBeta,
-                iTc.as_mut_ptr(),
-            );
+            deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 12), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
         }
     }
 }
 
-pub unsafe fn FilteringEdgeChromaHV(
+pub fn FilteringEdgeChromaHV(
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -1872,10 +1872,10 @@ pub unsafe fn FilteringEdgeChromaHV(
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let iLineSize = (*pDec).linesize(1);
+    let iLineSize = pDec.linesize(1);
 
-    let pDestCb = (*pDec).data_ptr(1).add(((iMbY * iLineSize + iMbX) << 3) as usize);
-    let pDestCr = (*pDec).data_ptr(2).add(((iMbY * iLineSize + iMbX) << 3) as usize);
+    let [_, planeCb, planeCr] = pDec.planes_mut();
+    let (xC, yC) = ((iMbX << 3) as isize, (iMbY << 3) as isize);
     let pCurQp = *(*pCurDqLayer).grid.chroma_qp.get(iMbXyIndex as usize);
 
     let mut iTc = [0i8; 4];
@@ -1889,7 +1889,12 @@ pub unsafe fn FilteringEdgeChromaHV(
                 + 1)
                 >> 1) as i8;
         }
-        FilteringEdgeChromaIntraV(pFilter, pDestCb, pDestCr, iLineSize);
+        FilteringEdgeChromaIntraV(
+            pFilter,
+            &mut planeCb.cursor_mut(xC, yC),
+            &mut planeCr.cursor_mut(xC, yC),
+            iLineSize,
+        );
     }
 
     (*pFilter).iChromaQP[0] = pCurQp[0];
@@ -1910,13 +1915,14 @@ pub unsafe fn FilteringEdgeChromaHV(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-            DeblockChromaLt4H_c(
-                pDestCb.add(2 << 1),
-                pDestCr.add(2 << 1),
-                iLineSize,
+            deblock_chroma_lt4(
+                &mut planeCb.cursor_mut(xC + 4, yC),
+                &mut planeCr.cursor_mut(xC + 4, yC),
+                1,
+                iLineSize as isize,
                 iAlpha,
                 iBeta,
-                iTc.as_mut_ptr(),
+                &iTc,
             );
         }
     } else {
@@ -1930,13 +1936,13 @@ pub unsafe fn FilteringEdgeChromaHV(
                 &mut iBeta,
             );
             if (iAlpha | iBeta) != 0 {
-                let pDestCbCr = if i == 0 {
-                    pDestCb.add(2 << 1)
+                let mut pDestCbCr = if i == 0 {
+                    planeCb.cursor_mut(xC + 4, yC)
                 } else {
-                    pDestCr.add(2 << 1)
+                    planeCr.cursor_mut(xC + 4, yC)
                 };
                 TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-                DeblockChromaLt4H2_c(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+                deblock_chroma_lt42(&mut pDestCbCr, 1, iLineSize as isize, iAlpha, iBeta, &iTc);
             }
         }
     }
@@ -1949,7 +1955,12 @@ pub unsafe fn FilteringEdgeChromaHV(
                 + 1)
                 >> 1) as i8;
         }
-        FilteringEdgeChromaIntraH(pFilter, pDestCb, pDestCr, iLineSize);
+        FilteringEdgeChromaIntraH(
+            pFilter,
+            &mut planeCb.cursor_mut(xC, yC),
+            &mut planeCr.cursor_mut(xC, yC),
+            iLineSize,
+        );
     }
 
     (*pFilter).iChromaQP[0] = pCurQp[0];
@@ -1966,13 +1977,14 @@ pub unsafe fn FilteringEdgeChromaHV(
         );
         if (iAlpha | iBeta) != 0 {
             TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-            DeblockChromaLt4V_c(
-                pDestCb.add(((2 << 1) * iLineSize) as usize),
-                pDestCr.add(((2 << 1) * iLineSize) as usize),
-                iLineSize,
+            deblock_chroma_lt4(
+                &mut planeCb.cursor_mut(xC, yC + 4),
+                &mut planeCr.cursor_mut(xC, yC + 4),
+                iLineSize as isize,
+                1,
                 iAlpha,
                 iBeta,
-                iTc.as_mut_ptr(),
+                &iTc,
             );
         }
     } else {
@@ -1987,21 +1999,21 @@ pub unsafe fn FilteringEdgeChromaHV(
             );
             if (iAlpha | iBeta) != 0 {
                 TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 1);
-                let pDestCbCr = if i == 0 {
-                    pDestCb.add(((2 << 1) * iLineSize) as usize)
+                let mut pDestCbCr = if i == 0 {
+                    planeCb.cursor_mut(xC, yC + 4)
                 } else {
-                    pDestCr.add(((2 << 1) * iLineSize) as usize)
+                    planeCr.cursor_mut(xC, yC + 4)
                 };
-                DeblockChromaLt4V2_c(pDestCbCr, iLineSize, iAlpha, iBeta, iTc.as_mut_ptr());
+                deblock_chroma_lt42(&mut pDestCbCr, iLineSize as isize, 1, iAlpha, iBeta, &iTc);
             }
         }
     }
 }
 
 #[inline]
-unsafe fn DeblockingIntraMb(
+fn DeblockingIntraMb(
     pCurDqLayer: &DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
@@ -2013,43 +2025,40 @@ unsafe fn DeblockingIntraMb(
 // Macroblock-Level Top-Level Deblocking Dispatcher
 // ============================================================================
 
-pub unsafe extern "C" fn WelsDeblockingMb(
+pub fn WelsDeblockingMb(
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
-    pFilter: *mut SDeblockingFilter,
+    pDec: &mut SPicture,
+    pFilter: &mut SDeblockingFilter,
     iBoundryFlag: i32,
 ) {
     let mut nBS = [[[0u8; 4]; 4]; 2];
 
     let iMbXyIndex = (*pCurDqLayer).iMbXyIndex;
-    let iCurMbType = if !pDec.is_null() {
-        *(*pDec).pMbType.get(iMbXyIndex as usize)
-    } else {
-        *(*pCurDqLayer).grid.mb_type.get(iMbXyIndex as usize)
-    };
+    // **The picture's own macroblock types, with the null arm gone** (T5.AA2): the
+    // parameter is a borrow now, so the `else` that read the layer's grid was the
+    // arm for a null pointer and is unrepresentable. `pMbType` is `MbArray::empty()`
+    // on a picture that never went through `AllocPicture`, which is the state the
+    // null was standing for, and `get` is bounds-checked against it.
+    let iCurMbType = *pDec.pMbType.get(iMbXyIndex as usize);
 
     let pSliceHeader = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
     let bBSlice = pSliceHeader.eSliceType == EWelsSliceType::B_SLICE;
 
     match iCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA8x8 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(pCurDqLayer, pDec, &mut *pFilter, iBoundryFlag);
+            DeblockingIntraMb(pCurDqLayer, pDec, pFilter, iBoundryFlag);
         }
         _ => {
             if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - 1;
-                let uiMbType = if !pDec.is_null() {
-                    *(*pDec).pMbType.get(iMbNb as usize)
-                } else {
-                    *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
-                };
+                let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
                 nBS[0][0] = val.to_ne_bytes();
             } else {
@@ -2058,18 +2067,14 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 
             if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
                 let iMbNb = iMbXyIndex - (*pCurDqLayer).iMbWidth;
-                let uiMbType = if !pDec.is_null() {
-                    *(*pDec).pMbType.get(iMbNb as usize)
-                } else {
-                    *(*pCurDqLayer).grid.mb_type.get(iMbNb as usize)
-                };
+                let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(&mut *pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
                 nBS[1][0] = val.to_ne_bytes();
             } else {
@@ -2092,7 +2097,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 }
             } else if bBSlice {
                 DeblockingBSliceBSInsideMBNormal(
-                    &mut *pFilter,
+                    pFilter,
                     pCurDqLayer,
                     pDec,
                     &mut nBS,
@@ -2101,7 +2106,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 );
             } else {
                 DeblockingBSInsideMBNormal(
-                    &mut *pFilter,
+                    pFilter,
                     pCurDqLayer,
                     pDec,
                     &mut nBS,
@@ -2110,7 +2115,7 @@ pub unsafe extern "C" fn WelsDeblockingMb(
                 );
             }
 
-            DeblockingInterMb(pCurDqLayer, pDec, &mut *pFilter, &nBS, iBoundryFlag);
+            DeblockingInterMb(pCurDqLayer, pDec, pFilter, &nBS, iBoundryFlag);
         }
     }
 }
@@ -2167,24 +2172,33 @@ fn snapshot_ref_ids(refs: &SRefPic) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] 
     refs.pRefList
 }
 
-pub unsafe fn WelsDeblockingFilterSlice(
-    pCtx: &mut SWelsDecoderContext,
+/// **The deblocking bracket takes the slice view, not the context** (T5.AA2).
+///
+/// Everything this function reaches on the context is a *shared read* of four
+/// fields — `sSpsPpsCtx` twice, `fmo_id`, `sRefPic`, `sFmoList` — and every one of
+/// them is already in [`SliceCtx`]. Taking the view instead of the context is what
+/// lets the picture arrive as a `&mut`: `pDec` lives in `pPicBuff`, which
+/// [`SliceCtx`] deliberately does not carry, so `pic_split` hands the two back
+/// disjoint and the whole family below converts.
+pub fn WelsDeblockingFilterSlice(
+    pCtx: &SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
 ) {
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
     // A value, not a borrow: the count is constant across the loop below and the loop
     // writes the layer and the picture through the same context (T5.Z1).
-    let iTotalMbCount = sps_of(&(*pCtx).sSpsPpsCtx, pSliceHeaderExt.sSliceHeader.sps_ref)
+    let iTotalMbCount = pCtx
+        .sps_of(pSliceHeaderExt.sSliceHeader.sps_ref)
         .map_or(0, |sps| sps.uiTotalMbCount as i32);
 
     let mut pFilter = SDeblockingFilter::default();
     // T5.Z4: the id, not the entry — the loop below writes the layer and the
     // picture through the same context, and `active_fmo` re-resolves in one
     // expression at the one line that walks the map.
-    let fmo_id = (*pCtx).fmo_id;
+    let fmo_id = pCtx.fmo_id;
     let mut iNextMbXyIndex: i32;
     let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;
@@ -2212,7 +2226,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
     // F38/S29: `addr_of_mut!`, not `&mut` — this pointer is stored into another
     // struct and read for the whole macroblock loop, which is S29's worst class.
-    pFilter.ref_ids = snapshot_ref_ids(&pCtx.sRefPic);
+    pFilter.ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 
     // T5.W7: `pps_id` is the slice header's and constant across the loop, so it is
     // read once here rather than through a shared borrow of the layer held across the
@@ -2238,10 +2252,12 @@ pub unsafe fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            if pps_of(&(*pCtx).sSpsPpsCtx, pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
+            if pCtx.pps_of(pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex =
-                    crate::decoder::fmo::FmoNextMb(active_fmo(&pCtx.sFmoList, fmo_id), iNextMbXyIndex);
+                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(
+                    active_fmo(pCtx.sFmoList, fmo_id),
+                    iNextMbXyIndex,
+                );
             } else {
                 iNextMbXyIndex += 1;
             }
@@ -2257,11 +2273,11 @@ pub unsafe fn WelsDeblockingFilterSlice(
     }
 }
 
-pub unsafe fn WelsDeblockingInitFilter(
-    pCtx: &mut SWelsDecoderContext,
+pub fn WelsDeblockingInitFilter(
+    pCtx: &SliceCtx<'_>,
     pCurDqLayer: &DqLayerState,
     pFilter: &mut SDeblockingFilter,
-    iFilterIdc: *mut i32,
+    iFilterIdc: &mut i32,
 ) {
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
 
@@ -2274,12 +2290,12 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     // F38/S29, as above.
-    (*pFilter).ref_ids = snapshot_ref_ids(&pCtx.sRefPic);
+    (*pFilter).ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 }
 
-pub unsafe fn WelsDeblockingFilterMB(
+pub fn WelsDeblockingFilterMB(
     pCurDqLayer: &mut DqLayerState,
-    pDec: PPicture,
+    pDec: &mut SPicture,
     pFilter: &mut SDeblockingFilter,
     iFilterIdc: i32,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
@@ -2296,22 +2312,12 @@ pub unsafe fn WelsDeblockingFilterMB(
 // SIMD Function Pointer Dispatch Initialization
 // ============================================================================
 
-pub unsafe fn DeblockingInit(pFunc: *mut SDeblockingFunc, iCpu: i32) {
-    (*pFunc).pfLumaDeblockingLT4Ver = Some(DeblockLumaLt4V_c);
-    (*pFunc).pfLumaDeblockingEQ4Ver = Some(DeblockLumaEq4V_c);
-    (*pFunc).pfLumaDeblockingLT4Hor = Some(DeblockLumaLt4H_c);
-    (*pFunc).pfLumaDeblockingEQ4Hor = Some(DeblockLumaEq4H_c);
-
-    (*pFunc).pfChromaDeblockingLT4Ver = Some(DeblockChromaLt4V_c);
-    (*pFunc).pfChromaDeblockingEQ4Ver = Some(DeblockChromaEq4V_c);
-    (*pFunc).pfChromaDeblockingLT4Hor = Some(DeblockChromaLt4H_c);
-    (*pFunc).pfChromaDeblockingEQ4Hor = Some(DeblockChromaEq4H_c);
-
-    (*pFunc).pfChromaDeblockingLT4Ver2 = Some(DeblockChromaLt4V2_c);
-    (*pFunc).pfChromaDeblockingEQ4Ver2 = Some(DeblockChromaEq4V2_c);
-    (*pFunc).pfChromaDeblockingLT4Hor2 = Some(DeblockChromaLt4H2_c);
-    (*pFunc).pfChromaDeblockingEQ4Hor2 = Some(DeblockChromaEq4H2_c);
-}
+// **T5.AA2, S18: `DeblockingInit` stood here and was a dead duplicate.** It
+// installed the twelve `_c` kernels one assignment at a time; production has always
+// called `common::deblocking_common::DeblockingInit` (`decoder_core.rs:1872`), which
+// does the same by assigning `SDeblockingFunc::default()`. The only caller of this
+// copy was the test below it — F2's shape, one module over — and the test now
+// exercises the installer the decoder actually runs.
 
 #[cfg(test)]
 mod tests {
@@ -2356,7 +2362,7 @@ mod tests {
         // fixture is a two-macroblock `MbArray` rather than a `[_; 2]` and a cast.
         let mvs = MbArray::from_vec(vec![[[0i16; MV_A]; MB_BLOCK4x4_NUM]; 2], MbDims::new(2, 1));
 
-        unsafe {
+        {
             let mv = &mvs;
             assert_eq!(
                 MB_BS_MV(a, b, mv, 0, 1, 0, 0),
@@ -2381,7 +2387,7 @@ mod tests {
         let (a, b) = two_refs();
         let mvs = [[0i16; MV_A]; MB_BLOCK4x4_NUM];
 
-        unsafe {
+        {
             let mut refs: [Option<PicId>; MB_BLOCK4x4_NUM] = [a; MB_BLOCK4x4_NUM];
             assert_eq!(SMB_EDGE_MV(&refs, &mvs, 0, 1), 0, "one slot, equal MVs");
 
@@ -2412,7 +2418,7 @@ mod tests {
         mv_l0.get_mut(0)[0][0] = 64; // current MB, list 0
         mv_l1.get_mut(1)[0][0] = 64; // neighbour MB, list 1
 
-        unsafe {
+        {
             let m0 = &mv_l0;
             let m1 = &mv_l1;
 
@@ -2427,11 +2433,18 @@ mod tests {
         }
     }
 
+    /// The installer the decoder actually calls (`decoder_core.rs:1872`) — this
+    /// module's own copy of it was a dead duplicate and is deleted (T5.AA2, S18).
+    /// The one `unsafe` this module still spells, and it is the boundary's own:
+    /// `common/`'s installer keeps its raw signature for the encoder (F12/P10), so
+    /// calling it needs the block. Phase 6 deletes the raw form and this goes with
+    /// it — the module's only exception, allowed by name rather than by silence.
+    #[allow(unsafe_code)]
     #[test]
     fn test_deblocking_init() {
         unsafe {
             let mut func = SDeblockingFunc::default();
-            DeblockingInit(&mut func, 0);
+            crate::common::deblocking_common::DeblockingInit(&mut func, 0);
             assert!(func.pfLumaDeblockingLT4Ver.is_some());
             assert!(func.pfLumaDeblockingEQ4Ver.is_some());
             assert!(func.pfLumaDeblockingLT4Hor.is_some());

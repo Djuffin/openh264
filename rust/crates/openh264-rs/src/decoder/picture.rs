@@ -422,6 +422,18 @@ impl SPicture {
         &mut self.planes[i]
     }
 
+    /// All three planes at once, as **disjoint** mutable borrows (T5.AA2).
+    ///
+    /// [`plane_mut`](Self::plane_mut) takes `&mut self` per call, so two planes
+    /// cannot be held together through it — and the chroma deblocking kernels take
+    /// Cb and Cr in one call, which is what the three raw `data_ptr` derivations
+    /// were expressing. Destructuring the array is how safe Rust says the same
+    /// thing: `let [y, cb, cr] = pic.planes_mut();`.
+    #[inline]
+    pub fn planes_mut(&mut self) -> &mut [PaddedPlane; 3] {
+        &mut self.planes
+    }
+
     /// Checks if the picture buffer is free and available for recycling in the DPB pool.
     ///
     /// A picture node in `SPicBuff` is eligible for reuse if and only if:
