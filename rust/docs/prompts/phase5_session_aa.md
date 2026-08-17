@@ -1,5 +1,13 @@
 # Phase 5, session AA — the deny-clean sweep, the `common/` boundary, and the close
 
+> **SPENT — historical (S19).** Executed 2026-08-16/17 in 4 commits,
+> `00a281bb`…`2de8703f`. Faces 0, 1 and 2 landed and a fourth was added; the phase
+> did not close. The record is `safety_refactor_log.md` §"Phase 5, session AA"; the
+> successor is [`phase5_session_ab.md`](phase5_session_ab.md). **Two of this
+> brief's own facts were wrong and are corrected there**: `PDqLayer` is not the
+> largest family left (16 signatures against `PPicture`'s 78), and two of its
+> per-module `unsafe fn` figures were short by 3 and 4.
+
 Exit conditions 1–3 unmet. Condition 5 met and closed (D-perf-6).
 **D-par-1**, **D-fid-1**, **D-perf-6**, **S31**–**S33**, forcing rules v2 and
 **the finish rule** (`phase5_session_z.md` §"The finish rule") all in force.
