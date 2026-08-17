@@ -155,6 +155,14 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**AC** = **the terminal session** ([`phase5_session_ac.md`](phase5_session_ac.md)),
+under **the terminal rule** (Eugene, 2026-08-17: no hand-off exists; done = every
+occurrence converted or enumerated with its argument and pointer; sizes are never
+stops, questions take the decision ladder — settle by reading / survivor-default
+for lint scope / park-with-record for behavior, never a behavioral default): the
+nine modules by the table, the EC concealment bracket (the split maneuver's
+fourth application), then **the close, unconditionally** — `phase6.md` written,
+briefs historical, this checklist shut.
 **AB** = **spent** (5 commits, `41149605`…`dc4d8177`;
 [`phase5_session_ab.md`](phase5_session_ab.md)) — **and it did not close the
 phase**, for a reason that is arithmetic rather than a blocker. Decoder `raw_ptr`
