@@ -636,6 +636,45 @@ impl SPicture {
     // The live unreferencing path is the callback, invoked directly at
     // `api/codec_api.rs:1607` and by `manage_dec_ref.rs`'s seven `SetUnRef` calls.
 
+    /// `ExpandReferencingPicture` for a picture the caller holds as a borrow —
+    /// **the decoder's three call sites, in safe code** (T5.AC5).
+    ///
+    /// `common::expand_pic::ExpandReferencingPicture` takes a slice of raw plane pointers because
+    /// it is shared with the encoder, whose pictures are not `SPicture`; each of
+    /// its two kernels then rebuilds the whole allocation out of the mid-plane
+    /// pointer it was handed (`expand_shim_span`, which is the only place in the
+    /// port that does that arithmetic). A picture *owns* its planes, so there is
+    /// nothing to rebuild: `plane_mut(i).as_mut_slice()` **is** the padded
+    /// allocation the kernel wants, `origin()` is the `pad * stride + pad` the
+    /// shim computed, and `expand_picture` — already safe, already the single
+    /// copy of the C++ body — takes it directly.
+    ///
+    /// The per-plane null guards the raw form carries are `plane(i).is_empty()`,
+    /// which is what the null answered (T5.C3). The encoder's two call sites keep
+    /// the raw entry point: converting them is **Phase 6's** (F12/P10).
+    pub fn expand_as_reference(&mut self) {
+        let (kiWidthY, kiHeightY) = (self.iWidthInPixel, self.iHeightInPixel);
+        let planes = [
+            (0usize, kiWidthY, kiHeightY, PADDING_LENGTH as usize),
+            (1, kiWidthY >> 1, kiHeightY >> 1, (PADDING_LENGTH >> 1) as usize),
+            (2, kiWidthY >> 1, kiHeightY >> 1, (PADDING_LENGTH >> 1) as usize),
+        ];
+        for (i, pic_w, pic_h, pad) in planes {
+            let stride = self.linesize(i) as usize;
+            let plane = self.plane_mut(i);
+            if plane.is_empty() {
+                continue;
+            }
+            crate::common::expand_pic::expand_picture(
+                plane.as_mut_slice(),
+                stride,
+                pic_w as usize,
+                pic_h as usize,
+                pad,
+            );
+        }
+    }
+
     // T5.C3: `unsafe fn calculate_data_pointers(&mut self, padding_length: i32)` sat
     // here, recomputing `pData[i]` from `pBuffer[i]` and `iLinesize[i]` with the
     // border formula. It had **no callers** — `AllocPicture` writes the same

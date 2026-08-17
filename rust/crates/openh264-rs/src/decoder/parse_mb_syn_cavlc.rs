@@ -44,6 +44,26 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC7 — the lint, with the two `PPicture` survivors allowed by
+// name, and family 8's blocker is gone.** Session W named what stood between this
+// module and the lint: `SVlcTable`'s fields, raw *"because the sub-tables have
+// varying lengths and the C indexes them by a computed VLC bucket"*, and it called
+// that a table-representation change rather than a parameter flip. It is — and the
+// representation it wanted is the slice, because **the number of bits read to form
+// the index is `log2` of the table it indexes**, at every one of the sixteen
+// coeff-token buckets and every total-zeros and zero-left row. That agreement is
+// what a pointer could not carry and what
+// `vlc_sub_tables_are_exactly_as_wide_as_their_index` now measures, so the bounds
+// check the slice adds is one no bitstream can reach.
+//
+// Three smaller families went with it: the bit cache carries the **window** rather
+// than a `*mut u8` into it (`SHIFT_BUFFER` re-slices, and the two look-ahead bytes
+// are checked against the reader's own window); the neighbour-nzc reads are
+// T5.AB1's `get(i).as_mut_ptr()` maneuver again; and `CheckIntra*PredMode`'s
+// out-parameters are `&mut i8` / `&[i32]`, where the scan index's offsets are all
+// backward from a position `g_kuiCache30ScanIdx` never puts below 7.
+
 use crate::safe::bits::BsCursor;
 
 // ============================================================================
@@ -239,21 +259,27 @@ pub const I_SLICE: i32 = 2;
 // ============================================================================
 
 /// 32-bit big-endian bit window cache for CAVLC parsing
-#[repr(C)]
+///
+/// **T5.AC7: `pBuf` is the window, not a pointer into it.** The C's
+/// `uint8_t* pBuf` walks the RBSP two bytes at a time and reads two more ahead of
+/// itself; the port's copy was a `*mut u8` derived from the same slice the caller
+/// already holds. The window travels instead, and `SHIFT_BUFFER` re-slices it —
+/// which makes the two look-ahead reads bounds-checked by the window the bit
+/// reader was given, rather than by the four bytes of headroom the C assumes.
 #[derive(Debug, Copy, Clone)]
-pub struct TagReadBitsCache {
+pub struct TagReadBitsCache<'a> {
     pub uiCache32Bit: u32,
     pub uiRemainBits: u8,
-    pub pBuf: *mut u8,
+    pub pBuf: &'a [u8],
 }
-pub type SReadBitsCache = TagReadBitsCache;
+pub type SReadBitsCache<'a> = TagReadBitsCache<'a>;
 
-impl Default for TagReadBitsCache {
+impl Default for TagReadBitsCache<'_> {
     fn default() -> Self {
         Self {
             uiCache32Bit: 0,
             uiRemainBits: 0,
-            pBuf: std::ptr::null_mut(),
+            pBuf: &[],
         }
     }
 }
@@ -305,12 +331,26 @@ pub struct SI4PredInfo {
 /// Matches `SVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`:
 /// `const uint8_t (*kpCoeffTokenVlcTable[4][8])[2];` etc. Each pointer refers
 /// to a table of `[value, bit-count]` pairs of varying length.
-#[repr(C)]
+///
+/// **T5.AC7: the sub-tables are slices, and the bound is the same fact as the
+/// index width.** Each field was a raw pointer because the C indexes tables of
+/// *varying length* by a computed VLC bucket — 2, 4, 8, 64 or 256 entries — and a
+/// pointer carries no length. It did not need to: the number of bits read to form
+/// the index **is** the table's `log2(len)`, at every one of the sixteen
+/// coeff-token buckets and at every total-zeros and zero-left row. Making the
+/// field a slice makes that agreement the type's, and
+/// `vlc_sub_tables_are_exactly_as_wide_as_their_index` measures it rather than
+/// arguing it — so no bitstream can reach the bounds check, and the check that
+/// cannot fire is what lets this module carry the lint.
+///
+/// `'static`, because every entry is a `static` table in `vlc_tables.rs` and this
+/// struct is built once per decoder by [`InitVlcTable`].
+#[derive(Clone, Copy)]
 pub struct SVlcTable {
-    pub kpCoeffTokenVlcTable: [[*const [u8; 2]; 8]; 4],
-    pub kpChromaCoeffTokenVlcTable: *const [u8; 2],
-    pub kpZeroTable: [*const [u8; 2]; 7],
-    pub kpTotalZerosTable: [[*const [u8; 2]; 15]; 2],
+    pub kpCoeffTokenVlcTable: [[&'static [[u8; 2]]; 8]; 4],
+    pub kpChromaCoeffTokenVlcTable: &'static [[u8; 2]],
+    pub kpZeroTable: [&'static [[u8; 2]]; 7],
+    pub kpTotalZerosTable: [[&'static [[u8; 2]]; 15]; 2],
 }
 
 // T5.W4 (W6, family 8, partial): the CAVLC leaf parameters became borrows.
@@ -343,59 +383,59 @@ pub struct SVlcTable {
 /// Matches `InitVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`.
 pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
     use crate::decoder::vlc_tables::*;
-    pVlcTable.kpChromaCoeffTokenVlcTable = g_kuiVlcChromaTable.as_ptr();
+    pVlcTable.kpChromaCoeffTokenVlcTable = &g_kuiVlcChromaTable;
 
-    pVlcTable.kpCoeffTokenVlcTable = [[std::ptr::null(); 8]; 4];
-    pVlcTable.kpCoeffTokenVlcTable[0][0] = g_kuiVlcTable_0.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[0][1] = g_kuiVlcTable_1.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[0][2] = g_kuiVlcTable_2.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[0][3] = g_kuiVlcTable_3.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable = [[&[]; 8]; 4];
+    pVlcTable.kpCoeffTokenVlcTable[0][0] = &g_kuiVlcTable_0;
+    pVlcTable.kpCoeffTokenVlcTable[0][1] = &g_kuiVlcTable_1;
+    pVlcTable.kpCoeffTokenVlcTable[0][2] = &g_kuiVlcTable_2;
+    pVlcTable.kpCoeffTokenVlcTable[0][3] = &g_kuiVlcTable_3;
 
-    pVlcTable.kpCoeffTokenVlcTable[1][0] = g_kuiVlcTable_0_0.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[1][1] = g_kuiVlcTable_0_1.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[1][2] = g_kuiVlcTable_0_2.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[1][3] = g_kuiVlcTable_0_3.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[1][0] = &g_kuiVlcTable_0_0;
+    pVlcTable.kpCoeffTokenVlcTable[1][1] = &g_kuiVlcTable_0_1;
+    pVlcTable.kpCoeffTokenVlcTable[1][2] = &g_kuiVlcTable_0_2;
+    pVlcTable.kpCoeffTokenVlcTable[1][3] = &g_kuiVlcTable_0_3;
 
-    pVlcTable.kpCoeffTokenVlcTable[2][0] = g_kuiVlcTable_1_0.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[2][1] = g_kuiVlcTable_1_1.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[2][2] = g_kuiVlcTable_1_2.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[2][3] = g_kuiVlcTable_1_3.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[2][0] = &g_kuiVlcTable_1_0;
+    pVlcTable.kpCoeffTokenVlcTable[2][1] = &g_kuiVlcTable_1_1;
+    pVlcTable.kpCoeffTokenVlcTable[2][2] = &g_kuiVlcTable_1_2;
+    pVlcTable.kpCoeffTokenVlcTable[2][3] = &g_kuiVlcTable_1_3;
 
-    pVlcTable.kpCoeffTokenVlcTable[3][0] = g_kuiVlcTable_2_0.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][1] = g_kuiVlcTable_2_1.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][2] = g_kuiVlcTable_2_2.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][3] = g_kuiVlcTable_2_3.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][4] = g_kuiVlcTable_2_4.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][5] = g_kuiVlcTable_2_5.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][6] = g_kuiVlcTable_2_6.as_ptr();
-    pVlcTable.kpCoeffTokenVlcTable[3][7] = g_kuiVlcTable_2_7.as_ptr();
+    pVlcTable.kpCoeffTokenVlcTable[3][0] = &g_kuiVlcTable_2_0;
+    pVlcTable.kpCoeffTokenVlcTable[3][1] = &g_kuiVlcTable_2_1;
+    pVlcTable.kpCoeffTokenVlcTable[3][2] = &g_kuiVlcTable_2_2;
+    pVlcTable.kpCoeffTokenVlcTable[3][3] = &g_kuiVlcTable_2_3;
+    pVlcTable.kpCoeffTokenVlcTable[3][4] = &g_kuiVlcTable_2_4;
+    pVlcTable.kpCoeffTokenVlcTable[3][5] = &g_kuiVlcTable_2_5;
+    pVlcTable.kpCoeffTokenVlcTable[3][6] = &g_kuiVlcTable_2_6;
+    pVlcTable.kpCoeffTokenVlcTable[3][7] = &g_kuiVlcTable_2_7;
 
-    pVlcTable.kpZeroTable[0] = g_kuiZeroLeftTable0.as_ptr();
-    pVlcTable.kpZeroTable[1] = g_kuiZeroLeftTable1.as_ptr();
-    pVlcTable.kpZeroTable[2] = g_kuiZeroLeftTable2.as_ptr();
-    pVlcTable.kpZeroTable[3] = g_kuiZeroLeftTable3.as_ptr();
-    pVlcTable.kpZeroTable[4] = g_kuiZeroLeftTable4.as_ptr();
-    pVlcTable.kpZeroTable[5] = g_kuiZeroLeftTable5.as_ptr();
-    pVlcTable.kpZeroTable[6] = g_kuiZeroLeftTable6.as_ptr();
+    pVlcTable.kpZeroTable[0] = &g_kuiZeroLeftTable0;
+    pVlcTable.kpZeroTable[1] = &g_kuiZeroLeftTable1;
+    pVlcTable.kpZeroTable[2] = &g_kuiZeroLeftTable2;
+    pVlcTable.kpZeroTable[3] = &g_kuiZeroLeftTable3;
+    pVlcTable.kpZeroTable[4] = &g_kuiZeroLeftTable4;
+    pVlcTable.kpZeroTable[5] = &g_kuiZeroLeftTable5;
+    pVlcTable.kpZeroTable[6] = &g_kuiZeroLeftTable6;
 
-    pVlcTable.kpTotalZerosTable[0][0] = g_kuiTotalZerosTable0.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][1] = g_kuiTotalZerosTable1.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][2] = g_kuiTotalZerosTable2.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][3] = g_kuiTotalZerosTable3.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][4] = g_kuiTotalZerosTable4.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][5] = g_kuiTotalZerosTable5.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][6] = g_kuiTotalZerosTable6.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][7] = g_kuiTotalZerosTable7.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][8] = g_kuiTotalZerosTable8.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][9] = g_kuiTotalZerosTable9.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][10] = g_kuiTotalZerosTable10.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][11] = g_kuiTotalZerosTable11.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][12] = g_kuiTotalZerosTable12.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][13] = g_kuiTotalZerosTable13.as_ptr();
-    pVlcTable.kpTotalZerosTable[0][14] = g_kuiTotalZerosTable14.as_ptr();
-    pVlcTable.kpTotalZerosTable[1][0] = g_kuiTotalZerosChromaTable0.as_ptr();
-    pVlcTable.kpTotalZerosTable[1][1] = g_kuiTotalZerosChromaTable1.as_ptr();
-    pVlcTable.kpTotalZerosTable[1][2] = g_kuiTotalZerosChromaTable2.as_ptr();
+    pVlcTable.kpTotalZerosTable[0][0] = &g_kuiTotalZerosTable0;
+    pVlcTable.kpTotalZerosTable[0][1] = &g_kuiTotalZerosTable1;
+    pVlcTable.kpTotalZerosTable[0][2] = &g_kuiTotalZerosTable2;
+    pVlcTable.kpTotalZerosTable[0][3] = &g_kuiTotalZerosTable3;
+    pVlcTable.kpTotalZerosTable[0][4] = &g_kuiTotalZerosTable4;
+    pVlcTable.kpTotalZerosTable[0][5] = &g_kuiTotalZerosTable5;
+    pVlcTable.kpTotalZerosTable[0][6] = &g_kuiTotalZerosTable6;
+    pVlcTable.kpTotalZerosTable[0][7] = &g_kuiTotalZerosTable7;
+    pVlcTable.kpTotalZerosTable[0][8] = &g_kuiTotalZerosTable8;
+    pVlcTable.kpTotalZerosTable[0][9] = &g_kuiTotalZerosTable9;
+    pVlcTable.kpTotalZerosTable[0][10] = &g_kuiTotalZerosTable10;
+    pVlcTable.kpTotalZerosTable[0][11] = &g_kuiTotalZerosTable11;
+    pVlcTable.kpTotalZerosTable[0][12] = &g_kuiTotalZerosTable12;
+    pVlcTable.kpTotalZerosTable[0][13] = &g_kuiTotalZerosTable13;
+    pVlcTable.kpTotalZerosTable[0][14] = &g_kuiTotalZerosTable14;
+    pVlcTable.kpTotalZerosTable[1][0] = &g_kuiTotalZerosChromaTable0;
+    pVlcTable.kpTotalZerosTable[1][1] = &g_kuiTotalZerosChromaTable1;
+    pVlcTable.kpTotalZerosTable[1][2] = &g_kuiTotalZerosChromaTable2;
 }
 
 // Forward definitions matching OpenH264 decoder C ABI structs
@@ -422,22 +462,22 @@ pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountSca
 // and `ST64` had no use in this file at all.
 
 #[inline(always)]
-pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache, iCount: u32) {
-    unsafe {
+pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache<'_>, iCount: u32) {
+    {
         (*pBitsCache).uiCache32Bit = (*pBitsCache).uiCache32Bit.wrapping_shl(iCount);
         (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_sub(iCount as u8);
     }
 }
 
 #[inline(always)]
-pub fn SHIFT_BUFFER(pBitsCache: &mut SReadBitsCache) {
-    unsafe {
+pub fn SHIFT_BUFFER(pBitsCache: &mut SReadBitsCache<'_>) {
+    {
         // Matches the C++ macro: pBuf is advanced FIRST, so the two bytes
         // shifted in are the original pBuf[4] and pBuf[5].
-        (*pBitsCache).pBuf = (*pBitsCache).pBuf.add(2);
+        (*pBitsCache).pBuf = &(*pBitsCache).pBuf[2..];
         let pBuf = (*pBitsCache).pBuf;
-        let b2 = *pBuf.add(2) as u32;
-        let b3 = *pBuf.add(3) as u32;
+        let b2 = pBuf[2] as u32;
+        let b3 = pBuf[3] as u32;
         (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_add(16);
         let shift = 32u32.wrapping_sub((*pBitsCache).uiRemainBits as u32);
         (*pBitsCache).uiCache32Bit |= ((b2 << 8) | b3).wrapping_shl(shift);
@@ -537,7 +577,7 @@ pub fn GetNeighborAvailMbType(
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    unsafe {
+    {
         let dq = &*pCurDqLayer;
         let na = &mut *pNeighAvail;
 
@@ -622,7 +662,7 @@ pub fn WelsFillCacheNonZeroCount(
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    unsafe {
+    {
         let na = &*pNeighAvail;
         let dq = &*pCurDqLayer;
         let iCurXy = dq.iMbXyIndex;
@@ -634,16 +674,16 @@ pub fn WelsFillCacheNonZeroCount(
             // T5.R5: the C's `ST32`/`ST16` moved four and two counts at a time; the
             // counts are bytes in a byte array, so the same bytes in the same order
             // are four and two element copies.
-            let pTopNzc = dq.grid.nzc.get(iTopXy as usize).as_ptr();
+            let pTopNzc = dq.grid.nzc.get(iTopXy as usize);
             for k in 0..4 {
-                pNonZeroCount[1 + k] = *pTopNzc.add(12 + k) as u8;
+                pNonZeroCount[1 + k] = pTopNzc[12 + k] as u8;
             }
             pNonZeroCount[0] = 0;
             pNonZeroCount[5] = 0;
             pNonZeroCount[29] = 0;
             for k in 0..2 {
-                pNonZeroCount[6 + k] = *pTopNzc.add(20 + k) as u8;
-                pNonZeroCount[30 + k] = *pTopNzc.add(22 + k) as u8;
+                pNonZeroCount[6 + k] = pTopNzc[20 + k] as u8;
+                pNonZeroCount[30 + k] = pTopNzc[22 + k] as u8;
             }
         } else {
             for k in 0..4 {
@@ -660,16 +700,16 @@ pub fn WelsFillCacheNonZeroCount(
 
         if na.iLeftAvail != 0 {
             iLeftXy = iCurXy - 1;
-            let pLeftNzc = dq.grid.nzc.get(iLeftXy as usize).as_ptr();
-            pNonZeroCount[8 * 1] = *pLeftNzc.add(3) as u8;
-            pNonZeroCount[8 * 2] = *pLeftNzc.add(7) as u8;
-            pNonZeroCount[8 * 3] = *pLeftNzc.add(11) as u8;
-            pNonZeroCount[8 * 4] = *pLeftNzc.add(15) as u8;
+            let pLeftNzc = dq.grid.nzc.get(iLeftXy as usize);
+            pNonZeroCount[8 * 1] = pLeftNzc[3] as u8;
+            pNonZeroCount[8 * 2] = pLeftNzc[7] as u8;
+            pNonZeroCount[8 * 3] = pLeftNzc[11] as u8;
+            pNonZeroCount[8 * 4] = pLeftNzc[15] as u8;
 
-            pNonZeroCount[5 + 8 * 1] = *pLeftNzc.add(17) as u8;
-            pNonZeroCount[5 + 8 * 2] = *pLeftNzc.add(21) as u8;
-            pNonZeroCount[5 + 8 * 4] = *pLeftNzc.add(19) as u8;
-            pNonZeroCount[5 + 8 * 5] = *pLeftNzc.add(23) as u8;
+            pNonZeroCount[5 + 8 * 1] = pLeftNzc[17] as u8;
+            pNonZeroCount[5 + 8 * 2] = pLeftNzc[21] as u8;
+            pNonZeroCount[5 + 8 * 4] = pLeftNzc[19] as u8;
+            pNonZeroCount[5 + 8 * 5] = pLeftNzc[23] as u8;
         } else {
             pNonZeroCount[8 * 1] = 0xFF;
             pNonZeroCount[8 * 2] = 0xFF;
@@ -690,7 +730,7 @@ pub fn WelsFillCacheConstrain1IntraNxN(
     pIntraPredMode: &mut [i8; 48],
     pCurDqLayer: &DqLayerState,
 ) {
-    unsafe {
+    {
         WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
         let na = &*pNeighAvail;
@@ -710,9 +750,9 @@ pub fn WelsFillCacheConstrain1IntraNxN(
             // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
             // fills below are the same byte four times, which is what the C's word
             // store was spelling.
-            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
+            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
             for k in 0..4 {
-                pIntraPredMode[1 + k] = *pTopMode.add(k);
+                pIntraPredMode[1 + k] = pTopMode[k];
             }
         } else {
             let iPred: i8 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
@@ -726,11 +766,11 @@ pub fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
-            pIntraPredMode[0 + 8] = *pLeftMode.add(4);
-            pIntraPredMode[0 + 8 * 2] = *pLeftMode.add(5);
-            pIntraPredMode[0 + 8 * 3] = *pLeftMode.add(6);
-            pIntraPredMode[0 + 8 * 4] = *pLeftMode.add(3);
+            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize);
+            pIntraPredMode[0 + 8] = pLeftMode[4];
+            pIntraPredMode[0 + 8 * 2] = pLeftMode[5];
+            pIntraPredMode[0 + 8 * 3] = pLeftMode[6];
+            pIntraPredMode[0 + 8 * 4] = pLeftMode[3];
         } else {
             let iPred: i8 = if IS_INTRA16x16(na.iLeftType) || (MB_TYPE_INTRA_PCM == na.iLeftType) {
                 2
@@ -1030,6 +1070,13 @@ pub fn WelsFillCacheInter(
 }
 
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
+/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
+/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
+/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
+/// so the two share a tag, and a `&mut` on the picture held across a reference read
+/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
+/// revisits (retire the F42 arm, or give the planes interior mutability).
+#[allow(unsafe_code)]
 pub unsafe fn ParseInterInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1385,6 +1432,13 @@ pub unsafe fn ParseInterInfo(
 ///
 /// `WELS_CHECK_SE_BOTH_WARNING` on the vertical mv is warning-only in C (see
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
+/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
+/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
+/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
+/// so the two share a tag, and a `&mut` on the picture held across a reference read
+/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
+/// revisits (retire the F42 arm, or give the planes interior mutability).
+#[allow(unsafe_code)]
 pub unsafe fn ParseInterBInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -2000,7 +2054,7 @@ pub unsafe fn ParseInterBInfo(
     ERR_NONE
 }
 
-pub unsafe fn WelsFillDirectCacheCabac(
+pub fn WelsFillDirectCacheCabac(
     pNeighAvail: &SWelsNeighAvail,
     iDirect: &mut [i8; 30],
     pCurDqLayer: &DqLayerState,
@@ -2028,26 +2082,26 @@ pub unsafe fn WelsFillDirectCacheCabac(
 
     iDirect.fill(0);
     if na.iLeftAvail != 0 && IS_INTER(na.iLeftType) {
-        let pDir = dq.grid.direct.get(iLeftXy).as_ptr();
-        iDirect[6] = *pDir.add(3);
-        iDirect[12] = *pDir.add(7);
-        iDirect[18] = *pDir.add(11);
-        iDirect[24] = *pDir.add(15);
+        let pDir = dq.grid.direct.get(iLeftXy);
+        iDirect[6] = pDir[3];
+        iDirect[12] = pDir[7];
+        iDirect[18] = pDir[11];
+        iDirect[24] = pDir[15];
     }
     if na.iLeftTopAvail != 0 && IS_INTER(na.iLeftTopType) {
-        let pDir = dq.grid.direct.get(iLeftTopXy).as_ptr();
-        iDirect[0] = *pDir.add(15);
+        let pDir = dq.grid.direct.get(iLeftTopXy);
+        iDirect[0] = pDir[15];
     }
     if na.iTopAvail != 0 && IS_INTER(na.iTopType) {
-        let pDir = dq.grid.direct.get(iTopXy).as_ptr();
-        iDirect[1] = *pDir.add(12);
-        iDirect[2] = *pDir.add(13);
-        iDirect[3] = *pDir.add(14);
-        iDirect[4] = *pDir.add(15);
+        let pDir = dq.grid.direct.get(iTopXy);
+        iDirect[1] = pDir[12];
+        iDirect[2] = pDir[13];
+        iDirect[3] = pDir[14];
+        iDirect[4] = pDir[15];
     }
     if na.iRightTopAvail != 0 && IS_INTER(na.iRightTopType) {
-        let pDir = dq.grid.direct.get(iRightTopXy).as_ptr();
-        iDirect[5] = *pDir.add(12);
+        let pDir = dq.grid.direct.get(iRightTopXy);
+        iDirect[5] = pDir[12];
     }
 }
 
@@ -2057,7 +2111,7 @@ pub fn WelsFillCacheConstrain0IntraNxN(
     pIntraPredMode: &mut [i8; 48],
     pCurDqLayer: &DqLayerState,
 ) {
-    unsafe {
+    {
         WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
         let na = &*pNeighAvail;
@@ -2077,9 +2131,9 @@ pub fn WelsFillCacheConstrain0IntraNxN(
             // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
             // fills below are the same byte four times, which is what the C's word
             // store was spelling.
-            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize).as_ptr();
+            let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
             for k in 0..4 {
-                pIntraPredMode[1 + k] = *pTopMode.add(k);
+                pIntraPredMode[1 + k] = pTopMode[k];
             }
         } else {
             let iPred: i8 = if na.iTopAvail != 0 { 0x02 } else { -1 };
@@ -2089,11 +2143,11 @@ pub fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iLeftAvail != 0 && IS_INTRANxN(na.iLeftType) {
-            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize).as_ptr();
-            pIntraPredMode[0 + 8 * 1] = *pLeftMode.add(4);
-            pIntraPredMode[0 + 8 * 2] = *pLeftMode.add(5);
-            pIntraPredMode[0 + 8 * 3] = *pLeftMode.add(6);
-            pIntraPredMode[0 + 8 * 4] = *pLeftMode.add(3);
+            let pLeftMode = dq.grid.intra_pred_mode.get(iLeftXy as usize);
+            pIntraPredMode[0 + 8 * 1] = pLeftMode[4];
+            pIntraPredMode[0 + 8 * 2] = pLeftMode[5];
+            pIntraPredMode[0 + 8 * 3] = pLeftMode[6];
+            pIntraPredMode[0 + 8 * 4] = pLeftMode[3];
         } else {
             let iPred: i8 = if na.iLeftAvail != 0 { 2 } else { -1 };
             pIntraPredMode[0 + 8 * 1] = iPred;
@@ -2153,8 +2207,8 @@ fn CHECK_I4_MODE(a: i8, b: i32, c: i32, d: i32) -> bool {
         && (d >= info.iLeftTopAvail as i32)
 }
 
-pub fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: *mut i8) -> i32 {
-    unsafe {
+pub fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
+    {
         let iLeftAvail = (uiSampleAvail & 0x04) as i32;
         let bLeftTopAvail = (uiSampleAvail & 0x02) as i32;
         let iTopAvail = (uiSampleAvail & 0x01) as i32;
@@ -2215,18 +2269,22 @@ pub fn CheckIntraChromaPredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
 }
 
 pub fn CheckIntraNxNPredMode(
-    pSampleAvail: *const i32,
-    pMode: *mut i8,
+    pSampleAvail: &[i32],
+    pMode: &mut i8,
     iIndex: i32,
     b8x8: bool,
 ) -> i32 {
-    unsafe {
-        let iIdx = g_kuiCache30ScanIdx[iIndex as usize] as isize;
+    {
+        // T5.AC7: the scan index is a position in the caller's `[i32; 30]` cache,
+        // and every offset below it is negative — `iIdx` is at least 7 for every
+        // entry of `g_kuiCache30ScanIdx`, which is what made the pointer form's
+        // backward reads in-bounds and is now the slice's own arithmetic.
+        let iIdx = g_kuiCache30ScanIdx[iIndex as usize] as usize;
 
-        let iLeftAvail = *pSampleAvail.offset(iIdx - 1);
-        let iTopAvail = *pSampleAvail.offset(iIdx - 6);
-        let bLeftTopAvail = *pSampleAvail.offset(iIdx - 7);
-        let bRightTopAvail = *pSampleAvail.offset(iIdx - if b8x8 { 4 } else { 5 });
+        let iLeftAvail = pSampleAvail[iIdx - 1];
+        let iTopAvail = pSampleAvail[iIdx - 6];
+        let bLeftTopAvail = pSampleAvail[iIdx - 7];
+        let bRightTopAvail = pSampleAvail[iIdx - if b8x8 { 4 } else { 5 }];
 
         if *pMode < 0 || *pMode > MAX_PRED_MODE_ID_I4x4 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INVALID_INTRA4X4_MODE);
@@ -2272,28 +2330,25 @@ pub fn CheckIntraNxNPredMode(
 // Inverse Quantization and Transforms (IDCT)
 // ============================================================================
 
-pub fn WelsChromaDcIdct(pBlock: *mut i16) {
-    unsafe {
-        let iStride: isize = 32;
-        let iXStride: isize = 16;
-        let iStride1 = iXStride + iStride;
-        let pBlk = pBlock;
+pub fn WelsChromaDcIdct(pBlock: &mut [i16]) {
+    const STRIDE: usize = 32;
+    const X_STRIDE: usize = 16;
+    const STRIDE1: usize = X_STRIDE + STRIDE;
 
-        let mut iA = *pBlk as i32;
-        let mut iB = *pBlk.offset(iXStride) as i32;
-        let mut iC = *pBlk.offset(iStride) as i32;
-        let iD = *pBlk.offset(iStride1) as i32;
+    let mut iA = pBlock[0] as i32;
+    let mut iB = pBlock[X_STRIDE] as i32;
+    let mut iC = pBlock[STRIDE] as i32;
+    let iD = pBlock[STRIDE1] as i32;
 
-        let iE = iA - iB;
-        iA += iB;
-        iB = iC - iD;
-        iC += iD;
+    let iE = iA - iB;
+    iA += iB;
+    iB = iC - iD;
+    iC += iD;
 
-        *pBlk = (iA + iC) as i16;
-        *pBlk.offset(iXStride) = (iE + iB) as i16;
-        *pBlk.offset(iStride) = (iA - iC) as i16;
-        *pBlk.offset(iStride1) = (iE - iB) as i16;
-    }
+    pBlock[0] = (iA + iC) as i16;
+    pBlock[X_STRIDE] = (iE + iB) as i16;
+    pBlock[STRIDE] = (iA - iC) as i16;
+    pBlock[STRIDE1] = (iE - iB) as i16;
 }
 
 #[inline(always)]
@@ -2355,50 +2410,47 @@ pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCav
     }
 }
 
-pub fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: &mut SliceCtx<'_>) {
-    unsafe {
-        let kiQMul: i32 = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
-            pCtx.pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
-        } else {
-            (g_kuiDequantCoeff[uiQp as usize][0] as i32) << 4
-        };
+pub fn WelsLumaDcDequantIdct(pBlock: &mut [i16], uiQp: u8, pCtx: &mut SliceCtx<'_>) {
+    let kiQMul: i32 = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
+        pCtx.pDequant_coeff_buffer4x4[0][uiQp as usize][0] as i32
+    } else {
+        (g_kuiDequantCoeff[uiQp as usize][0] as i32) << 4
+    };
 
-        const STRIDE: isize = 16;
-        let mut iTemp = [0i32; 16];
-        let pBlk = pBlock;
-        let kiXOffset: [isize; 4] = [0, STRIDE, STRIDE << 2, 5 * STRIDE];
-        let kiYOffset: [isize; 4] = [0, STRIDE << 1, STRIDE << 3, 10 * STRIDE];
+    const STRIDE: usize = 16;
+    let mut iTemp = [0i32; 16];
+    let kiXOffset: [usize; 4] = [0, STRIDE, STRIDE << 2, 5 * STRIDE];
+    let kiYOffset: [usize; 4] = [0, STRIDE << 1, STRIDE << 3, 10 * STRIDE];
 
-        for i in 0..4 {
-            let kiOffset = kiYOffset[i];
-            let kiX1 = kiOffset + kiXOffset[2];
-            let kiX2 = STRIDE + kiOffset;
-            let kiX3 = kiOffset + kiXOffset[3];
-            let kiI4 = i << 2;
-            let kiZ0 = *pBlk.offset(kiOffset) as i32 + *pBlk.offset(kiX1) as i32;
-            let kiZ1 = *pBlk.offset(kiOffset) as i32 - *pBlk.offset(kiX1) as i32;
-            let kiZ2 = *pBlk.offset(kiX2) as i32 - *pBlk.offset(kiX3) as i32;
-            let kiZ3 = *pBlk.offset(kiX2) as i32 + *pBlk.offset(kiX3) as i32;
+    for i in 0..4 {
+        let kiOffset = kiYOffset[i];
+        let kiX1 = kiOffset + kiXOffset[2];
+        let kiX2 = STRIDE + kiOffset;
+        let kiX3 = kiOffset + kiXOffset[3];
+        let kiI4 = i << 2;
+        let kiZ0 = pBlock[kiOffset] as i32 + pBlock[kiX1] as i32;
+        let kiZ1 = pBlock[kiOffset] as i32 - pBlock[kiX1] as i32;
+        let kiZ2 = pBlock[kiX2] as i32 - pBlock[kiX3] as i32;
+        let kiZ3 = pBlock[kiX2] as i32 + pBlock[kiX3] as i32;
 
-            iTemp[kiI4] = kiZ0 + kiZ3;
-            iTemp[1 + kiI4] = kiZ1 + kiZ2;
-            iTemp[2 + kiI4] = kiZ1 - kiZ2;
-            iTemp[3 + kiI4] = kiZ0 - kiZ3;
-        }
+        iTemp[kiI4] = kiZ0 + kiZ3;
+        iTemp[1 + kiI4] = kiZ1 + kiZ2;
+        iTemp[2 + kiI4] = kiZ1 - kiZ2;
+        iTemp[3 + kiI4] = kiZ0 - kiZ3;
+    }
 
-        for i in 0..4 {
-            let kiOffset = kiXOffset[i];
-            let kiI4 = 4 + i;
-            let kiZ0 = iTemp[i] + iTemp[4 + kiI4];
-            let kiZ1 = iTemp[i] - iTemp[4 + kiI4];
-            let kiZ2 = iTemp[kiI4] - iTemp[8 + kiI4];
-            let kiZ3 = iTemp[kiI4] + iTemp[8 + kiI4];
+    for i in 0..4 {
+        let kiOffset = kiXOffset[i];
+        let kiI4 = 4 + i;
+        let kiZ0 = iTemp[i] + iTemp[4 + kiI4];
+        let kiZ1 = iTemp[i] - iTemp[4 + kiI4];
+        let kiZ2 = iTemp[kiI4] - iTemp[8 + kiI4];
+        let kiZ3 = iTemp[kiI4] + iTemp[8 + kiI4];
 
-            *pBlk.offset(kiOffset) = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
-            *pBlk.offset(kiYOffset[1] + kiOffset) = (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-            *pBlk.offset(kiYOffset[2] + kiOffset) = (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-            *pBlk.offset(kiYOffset[3] + kiOffset) = (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
-        }
+        pBlock[kiOffset] = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[1] + kiOffset] = (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[2] + kiOffset] = (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
+        pBlock[kiYOffset[3] + kiOffset] = (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
     }
 }
 
@@ -2406,24 +2458,24 @@ pub fn WelsLumaDcDequantIdct(pBlock: *mut i16, uiQp: u8, pCtx: &mut SliceCtx<'_>
 // CAVLC Residual Parsing & Decoding Implementation
 // ============================================================================
 
-pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
+pub fn CavlcGetTrailingOnesAndTotalCoeff(
     uiTotalCoeff: &mut u8,
     uiTrailingOnes: &mut u8,
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
-    let kpVlcTableMoreBitsCountList: [*const u8; 3] = [
-        g_kuiVlcTableMoreBitsCount0.as_ptr(),
-        g_kuiVlcTableMoreBitsCount1.as_ptr(),
-        g_kuiVlcTableMoreBitsCount2.as_ptr(),
+    let kpVlcTableMoreBitsCountList: [&[u8]; 3] = [
+        &g_kuiVlcTableMoreBitsCount0,
+        &g_kuiVlcTableMoreBitsCount1,
+        &g_kuiVlcTableMoreBitsCount2,
     ];
     let mut iUsedBits: i32 = 0;
 
     if bChromaDc {
         let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
-        let vlc_entry = *(*pVlcTable).kpChromaCoeffTokenVlcTable.add(uiValue);
+        let vlc_entry = (*pVlcTable).kpChromaCoeffTokenVlcTable[uiValue];
         let iIndexVlc = vlc_entry[0] as usize;
         let uiCount = vlc_entry[1] as u32;
         POP_BUFFER(pBitsCache, uiCount);
@@ -2437,19 +2489,19 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
             if uiValue < g_kuiVlcTableNeedMoreBitsThread[iNcMapIdx] as usize {
                 POP_BUFFER(pBitsCache, 8);
                 iUsedBits += 8;
-                let more_bits_shift = 32 - *kpVlcTableMoreBitsCountList[iNcMapIdx].add(uiValue) as usize;
+                let more_bits_shift = 32 - kpVlcTableMoreBitsCountList[iNcMapIdx][uiValue] as usize;
                 let iIndexValue = ((*pBitsCache).uiCache32Bit >> more_bits_shift) as usize;
-                let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1][uiValue].add(iIndexValue);
-                let iIndexVlc = (*entry_ptr)[0] as usize;
-                let uiCount = (*entry_ptr)[1] as u32;
+                let entry = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1][uiValue][iIndexValue];
+                let iIndexVlc = entry[0] as usize;
+                let uiCount = entry[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
                 iUsedBits += uiCount as i32;
                 *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
                 *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
             } else {
-                let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0][iNcMapIdx].add(uiValue);
-                let iIndexVlc = (*entry_ptr)[0] as usize;
-                let uiCount = (*entry_ptr)[1] as u32;
+                let entry = (*pVlcTable).kpCoeffTokenVlcTable[0][iNcMapIdx][uiValue];
+                let iIndexVlc = entry[0] as usize;
+                let uiCount = entry[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
                 iUsedBits += uiCount as i32;
                 *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
@@ -2459,8 +2511,8 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
             let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - 6)) as usize;
             POP_BUFFER(pBitsCache, 6);
             iUsedBits += 6;
-            let entry_ptr = (*pVlcTable).kpCoeffTokenVlcTable[0][3].add(uiValue);
-            let iIndexVlc = (*entry_ptr)[0] as usize;
+            let entry = (*pVlcTable).kpCoeffTokenVlcTable[0][3][uiValue];
+            let iIndexVlc = entry[0] as usize;
             *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
             *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
         }
@@ -2471,17 +2523,17 @@ pub unsafe fn CavlcGetTrailingOnesAndTotalCoeff(
 pub fn ParseCoeffToken(
     uiTotalCoeff: &mut u8,
     uiTrailingOnes: &mut u8,
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
-    unsafe { CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC) }
+    { CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC) }
 }
 
 pub fn CavlcGetLevelVal(
     iLevel: &mut [i32; 16],
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     uiTotalCoeff: u8,
     uiTrailingOnes: u8,
 ) -> i32 {
@@ -2548,9 +2600,9 @@ pub fn CavlcGetLevelVal(
     iUsedBits
 }
 
-pub unsafe fn CavlcGetTotalZeros(
+pub fn CavlcGetTotalZeros(
     iZerosLeft: &mut i32,
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
@@ -2569,8 +2621,7 @@ pub unsafe fn CavlcGetTotalZeros(
         SHIFT_BUFFER(pBitsCache);
     }
     let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - iCount)) as usize;
-    let table_ptr = (*pVlcTable).kpTotalZerosTable[uiTableType][iTotalZeroVlcIdx - 1];
-    let entry = *table_ptr.add(uiValue);
+    let entry = (*pVlcTable).kpTotalZerosTable[uiTableType][iTotalZeroVlcIdx - 1][uiValue];
     let consumed_bits = entry[1] as u32;
     POP_BUFFER(pBitsCache, consumed_bits);
     iUsedBits += consumed_bits as i32;
@@ -2580,17 +2631,17 @@ pub unsafe fn CavlcGetTotalZeros(
 
 pub fn ParseTotalZeros(
     iZerosLeft: &mut i32,
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
 ) -> i32 {
-    unsafe { CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc) }
+    { CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc) }
 }
 
-pub unsafe fn CavlcGetRunBefore(
+pub fn CavlcGetRunBefore(
     iRun: &mut [i32; 16],
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     mut iZerosLeft: i32,
@@ -2606,8 +2657,7 @@ pub unsafe fn CavlcGetRunBefore(
             }
             let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - uiCount)) as usize;
             if iZerosLeft < 7 {
-                let table_ptr = (*pVlcTable).kpZeroTable[(iZerosLeft - 1) as usize];
-                let entry = *table_ptr.add(uiValue);
+                let entry = (*pVlcTable).kpZeroTable[(iZerosLeft - 1) as usize][uiValue];
                 let consumed = entry[1] as u32;
                 POP_BUFFER(pBitsCache, consumed);
                 iUsedBits += consumed as i32;
@@ -2615,8 +2665,7 @@ pub unsafe fn CavlcGetRunBefore(
             } else {
                 POP_BUFFER(pBitsCache, uiCount);
                 iUsedBits += uiCount as i32;
-                let table_ptr = (*pVlcTable).kpZeroTable[6];
-                let entry = *table_ptr.add(uiValue);
+                let entry = (*pVlcTable).kpZeroTable[6][uiValue];
                 if entry[0] < 7 {
                     iRun[i] = entry[0] as i32;
                 } else {
@@ -2646,15 +2695,15 @@ pub unsafe fn CavlcGetRunBefore(
 
 pub fn ParseRunBefore(
     iRun: &mut [i32; 16],
-    pBitsCache: &mut SReadBitsCache,
+    pBitsCache: &mut SReadBitsCache<'_>,
     uiTotalCoeff: u8,
     pVlcTable: &SVlcTable,
     iZerosLeft: i32,
 ) -> i32 {
-    unsafe { CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft) }
+    { CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft) }
 }
 
-pub unsafe fn WelsResidualBlockCavlc(
+pub fn WelsResidualBlockCavlc(
     pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
@@ -2663,7 +2712,7 @@ pub unsafe fn WelsResidualBlockCavlc(
     iMaxNumCoeff: i32,
     kpZigzagTable: &[u8],
     mut iResidualProperty: i32,
-    pTCoeff: *mut i16,
+    pTCoeff: &mut [i16],
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
@@ -2685,14 +2734,14 @@ pub unsafe fn WelsResidualBlockCavlc(
     let mut uiTrailingOnes: u8 = 0;
     let mut iUsedBits: i32 = 0;
     let iCurIdx = pBs.cavlc_bit_pos() as usize;
-    let pBuf = buf.as_ptr().add(iCurIdx >> 3) as *mut u8;
+    let pBuf = &buf[iCurIdx >> 3..];
     let bChromaDc = CHROMA_DC == iResidualProperty;
     let bChroma = bChromaDc || CHROMA_AC == iResidualProperty;
 
-    let uiCache32Bit = ((*pBuf.add(0) as u32) << 24)
-        | ((*pBuf.add(1) as u32) << 16)
-        | ((*pBuf.add(2) as u32) << 8)
-        | (*pBuf.add(3) as u32);
+    let uiCache32Bit = ((pBuf[0] as u32) << 24)
+        | ((pBuf[1] as u32) << 16)
+        | ((pBuf[2] as u32) << 8)
+        | (pBuf[3] as u32);
 
     let mut sReadBitsCache = SReadBitsCache {
         uiCache32Bit: uiCache32Bit << (iCurIdx & 0x07),
@@ -2750,25 +2799,25 @@ pub unsafe fn WelsResidualBlockCavlc(
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
             let j = kpZigzagTable[iCoeffNum as usize] as usize;
-            *pTCoeff.add(j) = iLevel[i] as i16;
+            pTCoeff[j] = iLevel[i] as i16;
         }
         WelsChromaDcIdct(pTCoeff);
         if !pCtx.bUseScalingList {
             for j in 0..4 {
                 let idx = kpZigzagTable[j] as usize;
-                *pTCoeff.add(idx) = ((*pTCoeff.add(idx) as i32 * kpDequantCoeff[0] as i32) >> 1) as i16;
+                pTCoeff[idx] = ((pTCoeff[idx] as i32 * kpDequantCoeff[0] as i32) >> 1) as i16;
             }
         } else {
             for j in 0..4 {
                 let idx = kpZigzagTable[j] as usize;
-                *pTCoeff.add(idx) = (((*pTCoeff.add(idx) as i64) * (kpDequantCoeff[0] as i64)) >> 5) as i16;
+                pTCoeff[idx] = (((pTCoeff[idx] as i64) * (kpDequantCoeff[0] as i64)) >> 5) as i16;
             }
         }
     } else if iResidualProperty == I16_LUMA_DC {
         for i in (0..(uiTotalCoeff as usize)).rev() {
             iCoeffNum += iRun[i] + 1;
             let j = kpZigzagTable[iCoeffNum as usize] as usize;
-            *pTCoeff.add(j) = iLevel[i] as i16;
+            pTCoeff[j] = iLevel[i] as i16;
         }
         WelsLumaDcDequantIdct(pTCoeff, uiQp, pCtx);
     } else {
@@ -2776,9 +2825,9 @@ pub unsafe fn WelsResidualBlockCavlc(
             iCoeffNum += iRun[i] + 1;
             let j = kpZigzagTable[iCoeffNum as usize] as usize;
             if !pCtx.bUseScalingList {
-                *pTCoeff.add(j) = (iLevel[i] * kpDequantCoeff[j & 0x07] as i32) as i16;
+                pTCoeff[j] = (iLevel[i] * kpDequantCoeff[j & 0x07] as i32) as i16;
             } else {
-                *pTCoeff.add(j) = ((iLevel[i] * kpDequantCoeff[j] as i32 + 8) >> 4) as i16;
+                pTCoeff[j] = ((iLevel[i] * kpDequantCoeff[j] as i32 + 8) >> 4) as i16;
             }
         }
     }
@@ -2786,7 +2835,7 @@ pub unsafe fn WelsResidualBlockCavlc(
 }
 
 /// Matches `WelsResidualBlockCavlc8x8` in `parse_mb_syn_cavlc.cpp`.
-pub unsafe fn WelsResidualBlockCavlc8x8(
+pub fn WelsResidualBlockCavlc8x8(
     pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],
     buf: &[u8],
@@ -2795,7 +2844,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     iMaxNumCoeff: i32,
     kpZigzagTable: &[u8],
     mut iResidualProperty: i32,
-    pTCoeff: *mut i16,
+    pTCoeff: &mut [i16],
     iIdx4x4: i32,
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
@@ -2815,13 +2864,13 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
     let mut uiTrailingOnes: u8 = 0;
     let mut iUsedBits: i32 = 0;
     let iCurIdx = pBs.cavlc_bit_pos() as usize;
-    let pBuf = buf.as_ptr().add(iCurIdx >> 3) as *mut u8;
+    let pBuf = &buf[iCurIdx >> 3..];
     let bChromaDc = CHROMA_DC == iResidualProperty;
 
-    let uiCache32Bit = ((*pBuf.add(0) as u32) << 24)
-        | ((*pBuf.add(1) as u32) << 16)
-        | ((*pBuf.add(2) as u32) << 8)
-        | (*pBuf.add(3) as u32);
+    let uiCache32Bit = ((pBuf[0] as u32) << 24)
+        | ((pBuf[1] as u32) << 16)
+        | ((pBuf[2] as u32) << 8)
+        | (pBuf[3] as u32);
 
     let mut sReadBitsCache = SReadBitsCache {
         uiCache32Bit: uiCache32Bit << (iCurIdx & 0x07),
@@ -2884,7 +2933,7 @@ pub unsafe fn WelsResidualBlockCavlc8x8(
         } else {
             (iLevel[i] * kpDequantCoeff[j] as i32 + (1 << (5 - uiQp as i32 / 6))) >> (6 - uiQp as i32 / 6)
         };
-        *pTCoeff.add(j) = coeff as i16;
+        pTCoeff[j] = coeff as i16;
     }
 
     ERR_NONE
@@ -2899,11 +2948,11 @@ pub fn WelsParseMbCavlcResidual(
     iMaxNumCoeff: i32,
     kpZigzagTable: &[u8],
     iResidualProperty: i32,
-    pTCoeff: *mut i16,
+    pTCoeff: &mut [i16],
     uiQp: u8,
     pCtx: &mut SliceCtx<'_>,
 ) -> i32 {
-    unsafe { WelsResidualBlockCavlc(
+    { WelsResidualBlockCavlc(
         pVlcTable,
         pNonZeroCountCache,
         buf,
@@ -2953,7 +3002,7 @@ mod tests {
     #[test]
     fn test_check_intra16x16_pred_mode() {
         let mut mode: i8 = I16_PRED_DC;
-        unsafe {
+        {
             let err = CheckIntra16x16PredMode(0x04, &mut mode);
             assert_eq!(err, ERR_NONE);
             assert_eq!(mode, I16_PRED_DC_L);
@@ -2968,8 +3017,8 @@ mod tests {
         blk[32] = 4;
         blk[48] = 1;
 
-        unsafe {
-            WelsChromaDcIdct(blk.as_mut_ptr());
+        {
+            WelsChromaDcIdct(&mut blk);
         }
 
         // iA=10, iB=2, iC=4, iD=1 -> iE=8, iA=12, iB=3, iC=5
@@ -3002,14 +3051,14 @@ mod tests {
         let mut coeffs = [0i16; 16];
         let zigzag = [0u8; 16];
         let mut vlc_table = SVlcTable {
-            kpCoeffTokenVlcTable: [[std::ptr::null(); 8]; 4],
-            kpChromaCoeffTokenVlcTable: std::ptr::null(),
-            kpZeroTable: [std::ptr::null(); 7],
-            kpTotalZerosTable: [[std::ptr::null(); 15]; 2],
+            kpCoeffTokenVlcTable: [[&[]; 8]; 4],
+            kpChromaCoeffTokenVlcTable: &[],
+            kpZeroTable: [&[]; 7],
+            kpTotalZerosTable: [[&[]; 15]; 2],
         };
         InitVlcTable(&mut vlc_table);
 
-        unsafe {
+        {
             // T5.Y2: the residual parser takes the slice view, so the null context
             // this passed is unrepresentable. The fixture is a zeroed context wired
             // the way `Initialize` wires the real one — `bUseScalingList` false is
@@ -3025,12 +3074,97 @@ mod tests {
                 16,
                 &zigzag,
                 0,
-                coeffs.as_mut_ptr(),
+                &mut coeffs,
                 26,
                 &mut view,
             );
             assert_eq!(res, ERR_NONE);
             assert_eq!(non_zero_cache[g_kuiCache48CountScan4Idx[0] as usize], 0);
         }
+    }
+
+    /// **T5.AC7's instrument.** `SVlcTable`'s sub-tables carry lengths now, and the
+    /// claim that no bitstream can index past one is not an argument here — it is
+    /// this test: for every coeff-token bucket, the number of bits the parser reads
+    /// to form the index is exactly `log2` of the table it then indexes, so the
+    /// largest representable index is the last element. The same for the
+    /// total-zeros rows and the zero-left rows, whose widths come from
+    /// `g_kuiTotalZerosBitNumMap` / `g_kuiTotalZerosBitNumChromaMap` /
+    /// `g_kuiZeroLeftBitNumMap`.
+    ///
+    /// A table that ever gained or lost a row would fail here rather than panic
+    /// inside a decode — which is the difference between a bound the type knows and
+    /// a bound the prose asserted (S9's exact-span trim, at table scale).
+    #[test]
+    fn vlc_sub_tables_are_exactly_as_wide_as_their_index() {
+        let mut t = SVlcTable {
+            kpCoeffTokenVlcTable: [[&[]; 8]; 4],
+            kpChromaCoeffTokenVlcTable: &[],
+            kpZeroTable: [&[]; 7],
+            kpTotalZerosTable: [[&[]; 15]; 2],
+        };
+        InitVlcTable(&mut t);
+
+        // Coeff-token, the more-bits path: `[iNcMapIdx + 1][bucket]` is indexed by
+        // `g_kuiVlcTableMoreBitsCount{idx}[bucket]` bits.
+        let counts: [&[u8]; 3] = [
+            &g_kuiVlcTableMoreBitsCount0,
+            &g_kuiVlcTableMoreBitsCount1,
+            &g_kuiVlcTableMoreBitsCount2,
+        ];
+        for idx in 0..3usize {
+            let threshold = g_kuiVlcTableNeedMoreBitsThread[idx] as usize;
+            assert_eq!(threshold, counts[idx].len(), "bucket count for nc map {idx}");
+            for bucket in 0..threshold {
+                let bits = counts[idx][bucket] as usize;
+                assert_eq!(
+                    1usize << bits,
+                    t.kpCoeffTokenVlcTable[idx + 1][bucket].len(),
+                    "coeff-token sub-table [{}][{bucket}] is not 2^{bits}",
+                    idx + 1
+                );
+            }
+        }
+        // Coeff-token, the direct path: eight bits for nc maps 0-2, six for 3.
+        for idx in 0..3usize {
+            assert_eq!(1usize << 8, t.kpCoeffTokenVlcTable[0][idx].len(), "direct table {idx}");
+        }
+        assert_eq!(1usize << 6, t.kpCoeffTokenVlcTable[0][3].len(), "direct table 3");
+        assert_eq!(1usize << 8, t.kpChromaCoeffTokenVlcTable.len(), "chroma coeff-token");
+
+        // Total zeros: row `i` is read with `g_kuiTotalZerosBitNumMap[i]` bits.
+        for i in 0..15usize {
+            assert_eq!(
+                1usize << g_kuiTotalZerosBitNumMap[i],
+                t.kpTotalZerosTable[0][i].len(),
+                "total-zeros row {i}"
+            );
+        }
+        for i in 0..3usize {
+            assert_eq!(
+                1usize << g_kuiTotalZerosBitNumChromaMap[i],
+                t.kpTotalZerosTable[1][i].len(),
+                "total-zeros chroma row {i}"
+            );
+        }
+
+        // Zero-left: row `z - 1` is read with `g_kuiZeroLeftBitNumMap[z]` bits, for
+        // `z` in 1..=6; row 6 serves every `z >= 7` and is read with the width of
+        // the largest of them, which the map holds constant from 3 upward.
+        for z in 1..=6usize {
+            assert_eq!(
+                1usize << g_kuiZeroLeftBitNumMap[z],
+                t.kpZeroTable[z - 1].len(),
+                "zero-left row {}",
+                z - 1
+            );
+        }
+        for z in 7..16usize {
+            assert_eq!(
+                g_kuiZeroLeftBitNumMap[z], g_kuiZeroLeftBitNumMap[7],
+                "zero-left width is not constant above 6"
+            );
+        }
+        assert_eq!(1usize << g_kuiZeroLeftBitNumMap[7], t.kpZeroTable[6].len(), "zero-left row 6");
     }
 }

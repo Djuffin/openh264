@@ -1825,3 +1825,74 @@ The trigger is not "the change looks cosmetic" — it is the hash.
 
 Running total: **sixty-one measurements, nineteen alternations, thirty-four
 acquittals.**
+
+### Sixty-second measurement — 2026-08-17, Phase 5 session AC: three hits, the twentieth alternation, and a dead heat
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 62a | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=1 rc=1` (**debug**, `family` battery at T5.AC5) | 42281 | **40645** (short) |
+| 62b | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1` (**debug**, same battery) | 40992 | **38203** (short) |
+| 62c | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**, same battery) | 39981 | **37837** (short) |
+
+Three hits in one sweep, every one inside the signature (`mt`, `sm=3`, `t=4`,
+`n=600`, wrong length); the release sweep in the same battery read 341/341.
+
+**Step 0 does not apply and was measured rather than judged.** The commit converts
+decoder code (the api-owned alias family, the concealment bracket), and the driver
+links the whole library, so `rust_enc` differs: `e5b3ce4d…` at head against
+`30aa1921…` at base, one forced build each. Session P's clause, again: *"decoder-only"
+is not the trigger; "test-only" is.*
+
+**Step 1: each of the three configurations re-ran 5× in isolation — 15 runs, 0
+hits.** Byte-identical every time, which is the finding's own criterion pointing at
+a race rather than a divergence: a deterministic port bug repeats its bytes, and
+these do not repeat their *wrong* ones at all.
+
+**Step 2 — the twentieth alternation.** 12 whole `mt` presets per side, 1440
+configurations each, both binaries built once and swapped inside one loop, machine
+otherwise idle:
+
+**base (`a7a78954`) 3 hits / 12 sweeps, head (T5.AC5) 3 hits / 12 sweeps.**
+
+A dead heat, and the second exact tie in twenty alternations (the eighteenth was
+6–6). Given six hits split 3–3, P(head ≥ 3 | equal rates) ≈ 0.66. **HEAD is not
+worse.**
+
+Two details beyond the count, both of which strengthen the race reading:
+
+1. **One configuration produced two different wrong lengths across the run** —
+   `320x192 t=4 sm=3 n=600 cabac=0 rc=0` gave **0 bytes** on the base side at sweep 2
+   and **40918** on the head side at sweep 7, against a stable C++ 40992. That is
+   the "a deterministic port bug repeats its bytes" criterion satisfied directly,
+   not by symmetry.
+2. **`t=2` drew a hit** (head, sweep 10, `320x192 sm=3 n=600 cabac=0 rc=0`, 0 bytes).
+   `t=4` predominates the way `n=600` does, and this is the reminder that it is the
+   same rate artifact rather than a condition.
+
+Six hits over 2880 configurations is ≈1/480 — between the battery-interleaved
+≈1/800 and the sustained back-to-back ≈1/307, which is what an alternation's load
+profile sits at.
+
+**Acquitted as F3.**
+
+Running total: **sixty-two measurements, twenty alternations, thirty-five
+acquittals.**
+
+### Sixty-third measurement — 2026-08-17, Phase 5 session AC: one hit, one preset re-run, no alternation owed
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 63 | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=1` (**debug**, `family` battery at T5.AC7) | 42538 | **0** |
+
+One hit, inside the signature; release sweep 341/341 in the same battery.
+
+**Step 1: the configuration re-ran 5×, byte-identical every time.** One hit is
+step 1's threshold, not step 2's, and the alternation this session already owes it
+was run **one commit earlier** on the same tree lineage (measurement 62, 3–3 over
+2880 configurations) — so a second one would be re-measuring the same pair of
+binaries' race rate against itself.
+
+**Acquitted as F3.**
+
+Running total: **sixty-three measurements, twenty alternations, thirty-six
+acquittals.**

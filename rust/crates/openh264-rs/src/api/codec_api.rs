@@ -2140,7 +2140,16 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
         sPictInfoList: unsafe { std::mem::zeroed() },
         sReoderingStatus: Default::default(),
         iStreamSeqNum: 0,
-        sVlcTable: unsafe { std::mem::zeroed() },
+        // T5.AC7: `SVlcTable`'s sub-tables are `&'static` slices now, so a zeroed
+        // shell is an invalid value rather than a null-pointer one — the empty
+        // slice is what "not yet initialised" spells, and `InitVlcTable` below
+        // overwrites every field either way.
+        sVlcTable: crate::decoder::parse_mb_syn_cavlc::SVlcTable {
+            kpCoeffTokenVlcTable: [[&[]; 8]; 4],
+            kpChromaCoeffTokenVlcTable: &[],
+            kpZeroTable: [&[]; 7],
+            kpTotalZerosTable: [[&[]; 15]; 2],
+        },
         bIsBaseline: false,
         iLastBufferedIdx: 0,
         pPicBuff: ptr::null_mut(),

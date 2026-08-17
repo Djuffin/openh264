@@ -728,78 +728,20 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 // Inverse Transform & Dequantization Functions
 // ============================================================================
 
-pub unsafe fn WelsLumaDcDequantIdct(pBlock: *mut i16, iQp: i32, pCtx: &mut SliceCtx<'_>) {
-    if pBlock.is_null() {
-        return;
-    }
-    let qp = WELS_CLIP3(iQp, 0, 51) as usize;
-    let kiQMul: i32 = (g_kuiDequantCoeff[qp][0] as i32) << 4;
-
-    let stride = 16;
-    let kiXOffset: [i32; 4] = [0, stride, stride << 2, 5 * stride];
-    let kiYOffset: [i32; 4] = [0, stride << 1, stride << 3, 10 * stride];
-    let mut iTemp = [0i32; 16];
-
-    for i in 0..4 {
-        let kiOffset = kiYOffset[i] as isize;
-        let kiX1 = (kiYOffset[i] + kiXOffset[2]) as isize;
-        let kiX2 = (stride + kiYOffset[i]) as isize;
-        let kiX3 = (kiYOffset[i] + kiXOffset[3]) as isize;
-        let kiI4 = i << 2;
-
-        let kiZ0 = (*pBlock.offset(kiOffset) as i32) + (*pBlock.offset(kiX1) as i32);
-        let kiZ1 = (*pBlock.offset(kiOffset) as i32) - (*pBlock.offset(kiX1) as i32);
-        let kiZ2 = (*pBlock.offset(kiX2) as i32) - (*pBlock.offset(kiX3) as i32);
-        let kiZ3 = (*pBlock.offset(kiX2) as i32) + (*pBlock.offset(kiX3) as i32);
-
-        iTemp[kiI4] = kiZ0 + kiZ3;
-        iTemp[1 + kiI4] = kiZ1 + kiZ2;
-        iTemp[2 + kiI4] = kiZ1 - kiZ2;
-        iTemp[3 + kiI4] = kiZ0 - kiZ3;
-    }
-
-    for i in 0..4 {
-        let kiOffset = kiXOffset[i] as isize;
-        let kiI4 = 4 + i;
-
-        let kiZ0 = iTemp[i] + iTemp[4 + kiI4];
-        let kiZ1 = iTemp[i] - iTemp[4 + kiI4];
-        let kiZ2 = iTemp[kiI4] - iTemp[8 + kiI4];
-        let kiZ3 = iTemp[kiI4] + iTemp[8 + kiI4];
-
-        *pBlock.offset(kiOffset) = (((kiZ0 + kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.offset((kiYOffset[1] as isize) + kiOffset) =
-            (((kiZ1 + kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.offset((kiYOffset[2] as isize) + kiOffset) =
-            (((kiZ1 - kiZ2) * kiQMul + (1 << 5)) >> 6) as i16;
-        *pBlock.offset((kiYOffset[3] as isize) + kiOffset) =
-            (((kiZ0 - kiZ3) * kiQMul + (1 << 5)) >> 6) as i16;
-    }
-}
-
-pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
-    if pBlock.is_null() {
-        return;
-    }
-    let iStride: isize = 32;
-    let iXStride: isize = 16;
-    let iStride1: isize = iXStride + iStride;
-
-    let mut iA = *pBlock.offset(0) as i32;
-    let mut iB = *pBlock.offset(iXStride) as i32;
-    let mut iC = *pBlock.offset(iStride) as i32;
-    let iD = *pBlock.offset(iStride1) as i32;
-
-    let iE = iA - iB;
-    iA += iB;
-    iB = iC - iD;
-    iC += iD;
-
-    *pBlock.offset(0) = (iA + iC) as i16;
-    *pBlock.offset(iXStride) = (iE + iB) as i16;
-    *pBlock.offset(iStride) = (iA - iC) as i16;
-    *pBlock.offset(iStride1) = (iE - iB) as i16;
-}
+// **T5.AC6: `WelsLumaDcDequantIdct` and `WelsChromaDcIdct` stood here and are
+// deleted, not converted.** They were this file's copies of the two DC transforms
+// and they had **zero callers anywhere in the crate** — `parse_mb_syn_cavlc.rs` and
+// `parse_mb_syn_cabac.rs` each call their own. Worse, this pair had *drifted*: its
+// luma form clipped the QP and read `g_kuiDequantCoeff` unconditionally, with no
+// scaling-list arm at all, so it was the pre-`bUseScalingList` version preserved by
+// having no user. S18's shape — a raw duplicate beside the live one — found by the
+// signature conversion that would otherwise have had to convert it too.
+//
+// The surviving pair is still two copies of one C++ function (`decode_slice.cpp`'s
+// `WelsLumaDcDequantIdct` and `WelsChromaDcIdct`), which is **F22's class and not
+// this phase's**: they are allowlisted in the duplicate census and their C++ home
+// is a decoder file both parsers include. Deduplicating them is a Phase 8 item with
+// the rest of the census's 59.
 
 // ============================================================================
 // Neighbor Availability Mapping
@@ -2926,7 +2868,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
             16,
             &g_kuiLumaDcZigzagScan,
             I16_LUMA_DC,
-            scaled_tcoeff_mb.as_mut_ptr(),
+            &mut scaled_tcoeff_mb[..],
             *iLumaQp as u8,
             pCtx,
         );
@@ -2947,7 +2889,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     len,
                     &g_kuiZigzagScan[max_idx..],
                     I16_LUMA_AC,
-                    scaled_tcoeff_mb.as_mut_ptr().add(i << 4),
+                    &mut scaled_tcoeff_mb[i << 4..],
                     *iLumaQp as u8,
                     pCtx,
                 );
@@ -2978,7 +2920,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             len,
                             &g_kuiZigzagScan8x8[iScanIdxStart..],
                             iMbResProperty,
-                            scaled_tcoeff_mb.as_mut_ptr().add(iId8x8 << 6),
+                            &mut scaled_tcoeff_mb[iId8x8 << 6..],
                             iId4x4,
                             *iLumaQp as u8,
                             pCtx,
@@ -3017,7 +2959,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                             len,
                             &g_kuiZigzagScan[iScanIdxStart..],
                             iMbResProperty,
-                            scaled_tcoeff_mb.as_mut_ptr().add((iIndex as usize) << 4),
+                            &mut scaled_tcoeff_mb[(iIndex as usize) << 4..],
                             *iLumaQp as u8,
                             pCtx,
                         );
@@ -3060,7 +3002,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                 4,
                 &g_kuiChromaDcScan,
                 iMbResProperty,
-                scaled_tcoeff_mb.as_mut_ptr().add(256 + (i << 6)),
+                &mut scaled_tcoeff_mb[256 + (i << 6)..],
                 (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
                 pCtx,
             );
@@ -3090,7 +3032,7 @@ unsafe fn WelsDecodeMbCavlcResidual(
                     len,
                     &g_kuiZigzagScan[max_idx..],
                     iMbResProperty,
-                    scaled_tcoeff_mb.as_mut_ptr().add(iIndex << 4),
+                    &mut scaled_tcoeff_mb[iIndex << 4..],
                     (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
                     pCtx,
                 );
@@ -3975,7 +3917,7 @@ pub unsafe fn ParseIntra4x4Mode(
         }
 
         let iFinalMode = crate::decoder::parse_mb_syn_cavlc::CheckIntraNxNPredMode(
-            iSampleAvail.as_ptr(),
+            &iSampleAvail,
             &mut iBestMode,
             i,
             false,
@@ -4122,7 +4064,7 @@ pub unsafe fn ParseIntra8x8Mode(
         }
 
         let iFinalMode = crate::decoder::parse_mb_syn_cavlc::CheckIntraNxNPredMode(
-            iSampleAvail.as_ptr(),
+            &iSampleAvail,
             &mut iBestMode,
             (i << 2) as i32,
             true,
@@ -4218,7 +4160,7 @@ pub unsafe fn ParseIntra16x16Mode(
         .eIntraPredConstraint
         .Map16x16NeighToSample(pNeighAvail, &mut uiNeighAvail);
 
-    let pMode = (*dq).grid.intra_pred_mode.get_mut(iMbXy).as_mut_ptr().add(7);
+    let pMode = &mut (*dq).grid.intra_pred_mode.get_mut(iMbXy)[7];
     if crate::decoder::parse_mb_syn_cavlc::CheckIntra16x16PredMode(uiNeighAvail, pMode) != 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_I16x16_PRED_MODE);
     }
@@ -4493,9 +4435,9 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 pNonZeroCount,
                 0,
                 16,
-                g_kuiLumaDcZigzagScan.as_ptr(),
+                &g_kuiLumaDcZigzagScan,
                 I16_LUMA_DC,
-                scaled_tcoeff_mb.as_mut_ptr(),
+                &mut scaled_tcoeff_mb[..],
                 *iLumaQp as u8,
                 pCtx,
                 iMbXyIndex,
@@ -4510,8 +4452,8 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 for i in 0..16 {
                     let max_idx = std::cmp::max(iScanIdxStart, 1);
                     let len = (iScanIdxEnd as isize - max_idx as isize + 1) as i32;
-                    let scan_ptr = g_kuiZigzagScan.as_ptr().add(max_idx);
-                    let coeff_ptr = scaled_tcoeff_mb.as_mut_ptr().add(i * 16);
+                    let scan_ptr = &g_kuiZigzagScan[max_idx..];
+                    let coeff_ptr = &mut scaled_tcoeff_mb[i * 16..];
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail,
                         pNonZeroCount,
@@ -4550,13 +4492,13 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                     if (uiCbpLuma & (1 << iId8x8)) != 0 {
                         let iIdx = iId8x8 * 4;
                         let len = (iScanIdxEnd as isize - iScanIdxStart as isize + 1) as i32;
-                        let scan_ptr = g_kuiZigzagScan8x8.as_ptr().add(iScanIdxStart);
+                        let scan_ptr = &g_kuiZigzagScan8x8[iScanIdxStart..];
                         let res_prop = if is_intra {
                             LUMA_DC_AC_INTRA_8
                         } else {
                             LUMA_DC_AC_INTER_8
                         };
-                        let coeff_ptr = scaled_tcoeff_mb.as_mut_ptr().add(iId8x8 * 64);
+                        let coeff_ptr = &mut scaled_tcoeff_mb[iId8x8 * 64..];
                         let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac8x8(
                             pNeighAvail,
                             pNonZeroCount,
@@ -4594,8 +4536,8 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         let mut iIdx = iId8x8 * 4;
                         for _ in 0..4 {
                             let len = (iScanIdxEnd as isize - iScanIdxStart as isize + 1) as i32;
-                            let scan_ptr = g_kuiZigzagScan.as_ptr().add(iScanIdxStart);
-                            let coeff_ptr = scaled_tcoeff_mb.as_mut_ptr().add(iIdx * 16);
+                            let scan_ptr = &g_kuiZigzagScan[iScanIdxStart..];
+                            let coeff_ptr = &mut scaled_tcoeff_mb[iIdx * 16..];
                             let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                                 pNeighAvail,
                                 pNonZeroCount,
@@ -4646,13 +4588,13 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                         CHROMA_DC_U_INTER
                     }
                 };
-                let coeff_ptr = scaled_tcoeff_mb.as_mut_ptr().add(256 + i * 64);
+                let coeff_ptr = &mut scaled_tcoeff_mb[256 + i * 64..];
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                     pNeighAvail,
                     pNonZeroCount,
                         16 + (i as i32 * 4),
                     4,
-                    g_kuiChromaDcScan.as_ptr(),
+                    &g_kuiChromaDcScan,
                     res_prop,
                     coeff_ptr,
                     (*dq).grid.chroma_qp.get_mut(iMbXy)[i] as u8,
@@ -4687,8 +4629,8 @@ unsafe fn WelsDecodeMbCabacResidualHelper(
                 for _ in 0..4 {
                     let max_idx = std::cmp::max(iScanIdxStart, 1);
                     let len = (iScanIdxEnd as isize - max_idx as isize + 1) as i32;
-                    let scan_ptr = g_kuiZigzagScan.as_ptr().add(max_idx);
-                    let coeff_ptr = scaled_tcoeff_mb.as_mut_ptr().add(index * 16);
+                    let scan_ptr = &g_kuiZigzagScan[max_idx..];
+                    let coeff_ptr = &mut scaled_tcoeff_mb[index * 16..];
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseResidualBlockCabac(
                         pNeighAvail,
                         pNonZeroCount,

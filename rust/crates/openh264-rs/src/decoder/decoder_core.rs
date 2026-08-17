@@ -4192,12 +4192,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     }
                     if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) && (*pCtx).pDec.is_some() {
                         if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
-                            crate::common::expand_pic::ExpandReferencingPicture(
-                                &[pDec.data_ptr(0), pDec.data_ptr(1), pDec.data_ptr(2)],
-                                pDec.iWidthInPixel,
-                                pDec.iHeightInPixel,
-                                &[pDec.linesize(0), pDec.linesize(1), pDec.linesize(2)],
-                            );
+                            pDec.expand_as_reference();
                         }
                     }
                 }
