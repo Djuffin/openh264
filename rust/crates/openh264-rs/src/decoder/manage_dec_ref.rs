@@ -85,24 +85,13 @@ pub use crate::decoder::pic_queue::PicId;
 // Internal Logging & Picture Helpers
 // ============================================================================
 
-/// The handle a picture goes into a reference list as — **and the invariant the
-/// whole conversion rests on** (T5.P′2).
-///
-/// `None` is the C's null slot, so a picture that is *not* in the pool would enter
-/// a list as "no entry" and two different references would compare equal. It cannot
-/// happen on any live path: the DPB is filled from `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)` and from
-/// `PrefetchPic(pPicBuff)`, both of which are pool slots, and `CreatePicBuff` stamps
-/// every slot it makes (T5.N2). The assert is T5.N4's, moved from the deblocking
-/// snapshot — which existed because the *lists* were pointers — to the one door the
-/// lists now have.
-#[inline]
-unsafe fn insert_ref(pPic: *mut SPicture) -> Option<PicId> {
-    debug_assert!(
-        pPic.is_null() || (*pPic).pic_id().is_some(),
-        "a reference list holds pool pictures; this one has no slot"
-    );
-    crate::decoder::picture::pic_slot(pPic.as_ref())
-}
+// **T5.AA4: `insert_ref` is deleted, and the invariant it asserted is now the
+// type's.** It answered "what handle does this picture go into a reference list
+// as?" for a `*mut SPicture`, with a `debug_assert!` (T5.N4's, moved here at
+// T5.P′2) that the picture had a pool slot at all — the check that a list entry
+// cannot be a picture the pool does not own. The two doors into the lists take
+// `Option<PicId>` now, so a caller has nothing else to pass: the assertion is
+// discharged by the parameter type rather than at run time in one profile.
 
 #[inline(always)]
 pub fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
@@ -355,31 +344,34 @@ pub unsafe fn WelsDelLongFromListSetUnref(
 /// Inserts a decoded picture at index 0 of `pShortRefList[0]`.
 ///
 /// Matches `static int32_t AddShortTermToList (PRefPic pRefPic, PPicture pPic)`.
-pub unsafe fn AddShortTermToList(
+pub fn AddShortTermToList(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
-    pPic: *mut SPicture,
+    slot: Option<PicId>,
 ) -> i32 {
-    if pPic.is_null() {
+    // **T5.AA4: the handle travels, not the picture.** The parameter was a
+    // `*mut SPicture` the caller derived from `pCtx.pPicBuff` and passed *beside*
+    // `pCtx` — the layer bracket's shape one container over, and the phase's own
+    // rule says the answer before the compiler does: aliases become ids. Everything
+    // this function did with the picture was name its slot and write four fields,
+    // and both are reachable from the handle, one borrow at a time.
+    //
+    // The ordering note that stood here — take the slot before the borrow, because
+    // naming the picture's own slot under a live `&mut` over the same allocation
+    // pops it — is discharged by construction: there is no second path to the
+    // picture left to order against.
+    let Some(_) = slot else {
         return ERR_INFO_INVALID_PTR;
-    }
-    // **The slot is taken before the borrow, and the order is the whole of it**
-    // (S29's boundary, T5.O8's lesson, found by the probe this face budgeted).
-    // `insert_ref` reads `pPic` to name its slot; `let pic = &mut *pPic` is a Unique
-    // retag over the same allocation. Taking the borrow first and reading the raw
-    // pointer under it pops the borrow, and every `pic.` access after that is UB —
-    // spelling makes no difference, only sequence does.
-    let slot = insert_ref(pPic);
-    let pic = &mut *pPic;
+    };
+    let Some(pic) = pool_pic_mut(&mut pCtx.pPicBuff, slot) else {
+        return ERR_INFO_INVALID_PTR;
+    };
     pic.bUsedAsRef = true;
     pic.bIsLongRef = false;
     pic.iLongTermFrameIdx = -1;
-    // **T5.Q2 extends the same rule one loop further out.** `pic.iFrameNum` used to
-    // be read *inside* the scan below, under the borrow above and after each
-    // `pool_pic` resolution — and a resolution of `pPic`'s own slot is exactly what
-    // this scan is looking for (it is the duplicate-frame-num test). Owned slots make
-    // that resolution a second derivation of one allocation, which pops the borrow.
-    // The value is read once, here, and the borrow is not used past this line.
+    // The comparison value out from under the borrow: the scan below resolves other
+    // slots of the same pool, and this one's own slot is exactly what it is looking
+    // for (it is the duplicate-frame-num test).
     let iPicFrameNum = pic.iFrameNum;
 
     // **T5.Z4: the reference set is re-acquired per use, not held.** The scan below
@@ -412,19 +404,20 @@ pub unsafe fn AddShortTermToList(
 /// Inserts a decoded picture into `pLongRefList[0]`, keeping it sorted in ascending order of `iLongTermFrameIdx`.
 ///
 /// Matches `static int32_t AddLongTermToList (PRefPic pRefPic, PPicture pPic, int32_t iLongTermFrameIdx, uint32_t uiLongTermPicNum)`.
-pub unsafe fn AddLongTermToList(
+pub fn AddLongTermToList(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
-    pPic: *mut SPicture,
+    slot: Option<PicId>,
     iLongTermFrameIdx: i32,
     uiLongTermPicNum: u32,
 ) -> i32 {
-    if pPic.is_null() {
+    // The handle travels — see `AddShortTermToList` (T5.AA4).
+    let Some(_) = slot else {
         return ERR_INFO_INVALID_PTR;
-    }
-    // The slot before the borrow — see `AddShortTermToList`.
-    let slot = insert_ref(pPic);
-    let pic = &mut *pPic;
+    };
+    let Some(pic) = pool_pic_mut(&mut pCtx.pPicBuff, slot) else {
+        return ERR_INFO_INVALID_PTR;
+    };
     pic.bUsedAsRef = true;
     pic.bIsLongRef = true;
     pic.iLongTermFrameIdx = iLongTermFrameIdx;
@@ -488,8 +481,8 @@ pub unsafe fn MarkAsLongTerm(
         let matched = pool_pic(&(*pCtx).pPicBuff, slot)
             .is_some_and(|p| p.iFrameNum == iFrameNum && !p.bIsLongRef);
         if matched {
-            let pPic = pool_pic_mut(&mut (*pCtx).pPicBuff, slot).map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            iRet = AddLongTermToList(pCtx, bTmpRefSet, pPic, iLongTermFrameIdx, uiLongTermPicNum);
+            // T5.AA4: the handle the scan already found, not a pointer resolved from it.
+            iRet = AddLongTermToList(pCtx, bTmpRefSet, slot, iLongTermFrameIdx, uiLongTermPicNum);
             break;
         }
     }
@@ -774,7 +767,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContex
                     (*pRef).iHeightInPixel,
                     &[(*pRef).linesize(0), (*pRef).linesize(1), (*pRef).linesize(2)],
                 );
-                AddShortTermToList(pCtx, false, pRef);
+                AddShortTermToList(pCtx, false, ec_slot);
             } else {
                 WelsLog(
                     &(*pCtx).sLogCtx,
@@ -878,9 +871,13 @@ pub unsafe fn MMCOProcess(
             }
             (*pCtx).bCurAuContainLtrMarkSeFlag = true;
             (*pCtx).iFrameNumOfAuMarkedLtr = (*pCtx).iFrameNum;
-            let pDec = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)
-                .map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            iRet = AddLongTermToList(pCtx, bTmpRefSet, pDec, iLongTermFrameIdx, uiLongTermPicNum);
+            iRet = AddLongTermToList(
+                pCtx,
+                bTmpRefSet,
+                (*pCtx).pDec,
+                iLongTermFrameIdx,
+                uiLongTermPicNum,
+            );
         }
         _ => {}
     }
@@ -1437,7 +1434,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
     if bIsIDRAU {
         if (*pRefPicMarking).bLongTermRefFlag {
             ref_set(pCtx, bTmpRefSet).iMaxLongTermFrameIdx = 0;
-            AddLongTermToList(pCtx, bTmpRefSet, pDec, 0, 0);
+            AddLongTermToList(pCtx, bTmpRefSet, pCtx.pDec, 0, 0);
         } else {
             ref_set(pCtx, bTmpRefSet).iMaxLongTermFrameIdx = -1;
         }
@@ -1504,7 +1501,7 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
                 return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW;
             }
         }
-        iRet = AddShortTermToList(pCtx, bTmpRefSet, pDec);
+        iRet = AddShortTermToList(pCtx, bTmpRefSet, pCtx.pDec);
     }
 
     iRet
@@ -1577,14 +1574,12 @@ mod tests {
             let pCtx = &mut *ctx;
             let pRefPic = &mut (*pCtx).sRefPic;
 
-            let p1 = pool_pic_mut(&mut (*pCtx).pPicBuff, s1).map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            let res1 = AddShortTermToList(pCtx, false, p1);
+            let res1 = AddShortTermToList(pCtx, false, s1);
             assert_eq!(res1, ERR_NONE);
             assert_eq!(ref_set(pCtx, false).uiShortRefCount[LIST_0], 1);
             assert_eq!(ref_set(pCtx, false).pShortRefList[LIST_0][0], s1);
 
-            let p2 = pool_pic_mut(&mut (*pCtx).pPicBuff, s2).map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            let res2 = AddShortTermToList(pCtx, false, p2);
+            let res2 = AddShortTermToList(pCtx, false, s2);
             assert_eq!(res2, ERR_NONE);
             assert_eq!(ref_set(pCtx, false).uiShortRefCount[LIST_0], 2);
             assert_eq!(ref_set(pCtx, false).pShortRefList[LIST_0][0], s2);
@@ -1613,12 +1608,8 @@ mod tests {
             let pCtx = &mut *ctx;
             let pRefPic = &mut (*pCtx).sRefPic;
 
-            let pic_s1 = pool_pic_mut(&mut pCtx.pPicBuff, s1)
-                .map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            AddLongTermToList(pCtx, false, pic_s1, 5, 5);
-            let pic_s2 = pool_pic_mut(&mut pCtx.pPicBuff, s2)
-                .map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            AddLongTermToList(pCtx, false, pic_s2, 2, 2);
+            AddLongTermToList(pCtx, false, s1, 5, 5);
+            AddLongTermToList(pCtx, false, s2, 2, 2);
 
             assert_eq!(ref_set(pCtx, false).uiLongRefCount[LIST_0], 2);
             assert_eq!(ref_set(pCtx, false).pLongRefList[LIST_0][0], s2);
@@ -1650,8 +1641,7 @@ mod tests {
             // `WelsResetRefPic` holds one borrow of `sRefPic` and the calls inside it
             // (`pool_pic_mut`, `SetUnRef`) reach `pPicBuff` and a picture, disjoint
             // fields, which is why the `exit` battery is where this surfaced (S22).
-            let ps = pool_pic_mut(&mut (*pCtx).pPicBuff, s).map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
-            AddShortTermToList(pCtx, false, ps);
+            AddShortTermToList(pCtx, false, s);
             assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 1);
             WelsResetRefPic(pCtx);
             assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 0);
