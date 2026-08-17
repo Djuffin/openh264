@@ -90,7 +90,7 @@ pub use crate::decoder::pic_queue::PicId;
 ///
 /// `None` is the C's null slot, so a picture that is *not* in the pool would enter
 /// a list as "no entry" and two different references would compare equal. It cannot
-/// happen on any live path: the DPB is filled from `dec_pic(pCtx)` and from
+/// happen on any live path: the DPB is filled from `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)` and from
 /// `PrefetchPic(pPicBuff)`, both of which are pool slots, and `CreatePicBuff` stamps
 /// every slot it makes (T5.N2). The assert is T5.N4's, moved from the deblocking
 /// snapshot — which existed because the *lists* were pointers — to the one door the
@@ -213,8 +213,7 @@ pub unsafe fn WelsResetRefPic(pCtx: *mut SWelsDecoderContext) {
     (*pRefPic).uiRefCount[LIST_1] = 0;
 
     for i in 0..MAX_DPB_COUNT {
-        let pPic = pool_pic_mut(pCtx, (*pRefPic).pShortRefList[LIST_0][i]);
-        if !pPic.is_null() {
+        if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, (*pRefPic).pShortRefList[LIST_0][i]) {
             SetUnRef(pPic);
             (*pRefPic).pShortRefList[LIST_0][i] = None;
         }
@@ -222,8 +221,7 @@ pub unsafe fn WelsResetRefPic(pCtx: *mut SWelsDecoderContext) {
     (*pRefPic).uiShortRefCount[LIST_0] = 0;
 
     for i in 0..MAX_DPB_COUNT {
-        let pPic = pool_pic_mut(pCtx, (*pRefPic).pLongRefList[LIST_0][i]);
-        if !pPic.is_null() {
+        if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, (*pRefPic).pLongRefList[LIST_0][i]) {
             SetUnRef(pPic);
             (*pRefPic).pLongRefList[LIST_0][i] = None;
         }
@@ -263,16 +261,24 @@ pub unsafe fn WelsDelShortFromList(
     pCtx: *mut SWelsDecoderContext,
     pRefPic: &mut SRefPic,
     iFrameNum: i32,
-) -> *mut SPicture {
+) -> Option<PicId> {
     let ref_pic = &mut *pRefPic;
     let count = ref_pic.uiShortRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic_mut(pCtx, ref_pic.pShortRefList[LIST_0][i]);
-        if !pPic.is_null() && (*pPic).iFrameNum == iFrameNum {
+        let slot = ref_pic.pShortRefList[LIST_0][i];
+        // The mark and the list surgery are two disjoint fields — the picture is
+        // the pool's, the list is `pRefPic`'s — so the borrow ends at the mark and
+        // the **handle** is what travels out (T5.Z1).
+        let matched = match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
+            Some(pic) if pic.iFrameNum == iFrameNum => {
+                pic.bUsedAsRef = false;
+                true
+            }
+            _ => false,
+        };
+        if matched {
             let iMoveSize = count - i - 1;
-            let pic = &mut *pPic;
-            pic.bUsedAsRef = false;
             ref_pic.pShortRefList[LIST_0][i] = None;
 
             if iMoveSize > 0 {
@@ -281,10 +287,10 @@ pub unsafe fn WelsDelShortFromList(
             ref_pic.uiShortRefCount[LIST_0] -= 1;
             let new_count = ref_pic.uiShortRefCount[LIST_0] as usize;
             ref_pic.pShortRefList[LIST_0][new_count] = None;
-            return pPic;
+            return slot;
         }
     }
-    std::ptr::null_mut()
+    None
 }
 
 /// Deletes a short-term reference picture and immediately calls `SetUnRef`.
@@ -292,12 +298,12 @@ pub unsafe fn WelsDelShortFromListSetUnref(
     pCtx: *mut SWelsDecoderContext,
     pRefPic: &mut SRefPic,
     iFrameNum: i32,
-) -> *mut SPicture {
-    let pPic = WelsDelShortFromList(pCtx, pRefPic, iFrameNum);
-    if !pPic.is_null() {
+) -> Option<PicId> {
+    let slot = WelsDelShortFromList(pCtx, pRefPic, iFrameNum);
+    if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
         SetUnRef(pPic);
     }
-    pPic
+    slot
 }
 
 /// Deletes a long-term reference picture with `uiLongTermFrameIdx` from `pLongRefList[0]`.
@@ -307,17 +313,23 @@ pub unsafe fn WelsDelLongFromList(
     pCtx: *mut SWelsDecoderContext,
     pRefPic: &mut SRefPic,
     uiLongTermFrameIdx: u32,
-) -> *mut SPicture {
+) -> Option<PicId> {
     let ref_pic = &mut *pRefPic;
     let count = ref_pic.uiLongRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic_mut(pCtx, ref_pic.pLongRefList[LIST_0][i]);
-        if !pPic.is_null() && (*pPic).iLongTermFrameIdx == uiLongTermFrameIdx as i32 {
+        let slot = ref_pic.pLongRefList[LIST_0][i];
+        // `WelsDelShortFromList`'s shape — the handle travels out (T5.Z1).
+        let matched = match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
+            Some(pic) if pic.iLongTermFrameIdx == uiLongTermFrameIdx as i32 => {
+                pic.bUsedAsRef = false;
+                pic.bIsLongRef = false;
+                true
+            }
+            _ => false,
+        };
+        if matched {
             let iMoveSize = count - i - 1;
-            let pic = &mut *pPic;
-            pic.bUsedAsRef = false;
-            pic.bIsLongRef = false;
 
             if iMoveSize > 0 {
                 shift_dpb_entries(&mut ref_pic.pLongRefList[LIST_0], i + 1, i, iMoveSize);
@@ -325,10 +337,10 @@ pub unsafe fn WelsDelLongFromList(
             ref_pic.uiLongRefCount[LIST_0] -= 1;
             let new_count = ref_pic.uiLongRefCount[LIST_0] as usize;
             ref_pic.pLongRefList[LIST_0][new_count] = None;
-            return pPic;
+            return slot;
         }
     }
-    std::ptr::null_mut()
+    None
 }
 
 /// Deletes a long-term reference picture and immediately calls `SetUnRef`.
@@ -336,12 +348,12 @@ pub unsafe fn WelsDelLongFromListSetUnref(
     pCtx: *mut SWelsDecoderContext,
     pRefPic: &mut SRefPic,
     uiLongTermFrameIdx: u32,
-) -> *mut SPicture {
-    let pPic = WelsDelLongFromList(pCtx, pRefPic, uiLongTermFrameIdx);
-    if !pPic.is_null() {
+) -> Option<PicId> {
+    let slot = WelsDelLongFromList(pCtx, pRefPic, uiLongTermFrameIdx);
+    if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
         SetUnRef(pPic);
     }
-    pPic
+    slot
 }
 
 /// Inserts a decoded picture at index 0 of `pShortRefList[0]`.
@@ -379,11 +391,12 @@ pub unsafe fn AddShortTermToList(
 
     if short_count > 0 {
         for iPos in 0..short_count {
-            let cur = pool_pic(pCtx, ref_pic.pShortRefList[LIST_0][iPos]);
-            if cur.is_null() {
+            let Some(iCurFrameNum) =
+                pool_pic(&(*pCtx).pPicBuff, ref_pic.pShortRefList[LIST_0][iPos]).map(|p| p.iFrameNum)
+            else {
                 return ERR_INFO_INVALID_PTR;
-            }
-            if iPicFrameNum == (*cur).iFrameNum {
+            };
+            if iPicFrameNum == iCurFrameNum {
                 ref_pic.pShortRefList[LIST_0][iPos] = slot;
                 return ERR_INFO_DUPLICATE_FRAME_NUM;
             }
@@ -426,11 +439,12 @@ pub unsafe fn AddLongTermToList(
     } else {
         let mut insert_idx = long_count.min(MAX_REF_PIC_COUNT);
         for i in 0..insert_idx {
-            let cur = pool_pic(pCtx, ref_pic.pLongRefList[LIST_0][i]);
-            if cur.is_null() {
+            let Some(iCurLongTermFrameIdx) =
+                pool_pic(&(*pCtx).pPicBuff, ref_pic.pLongRefList[LIST_0][i]).map(|p| p.iLongTermFrameIdx)
+            else {
                 return ERR_INFO_INVALID_PTR;
-            }
-            if (*cur).iLongTermFrameIdx > iPicLongTermFrameIdx {
+            };
+            if iCurLongTermFrameIdx > iPicLongTermFrameIdx {
                 insert_idx = i;
                 break;
             }
@@ -466,8 +480,11 @@ pub unsafe fn MarkAsLongTerm(
     let count = (*pRefPic).uiRefCount[LIST_0] as usize;
 
     for i in 0..count {
-        let pPic = pool_pic_mut(pCtx, (*pRefPic).pRefList[LIST_0][i]);
-        if !pPic.is_null() && (*pPic).iFrameNum == iFrameNum && !(*pPic).bIsLongRef {
+        let slot = (*pRefPic).pRefList[LIST_0][i];
+        let matched = pool_pic(&(*pCtx).pPicBuff, slot)
+            .is_some_and(|p| p.iFrameNum == iFrameNum && !p.bIsLongRef);
+        if matched {
+            let pPic = pool_pic_mut(&mut (*pCtx).pPicBuff, slot).map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
             iRet = AddLongTermToList(pCtx, pRefPic, pPic, iLongTermFrameIdx, uiLongTermPicNum);
             break;
         }
@@ -484,9 +501,10 @@ pub unsafe fn GetLTRFrameIndex(
     let ref_pic = &*pRefPic;
     let long_count = ref_pic.uiLongRefCount[LIST_0] as usize;
     for i in 0..long_count {
-        let pPic = pool_pic(pCtx, ref_pic.pLongRefList[LIST_0][i]);
-        if !pPic.is_null() && (*pPic).iFrameNum == iAncLTRFrameNum {
-            return (*pPic).iLongTermFrameIdx;
+        if let Some(pPic) = pool_pic(&(*pCtx).pPicBuff, ref_pic.pLongRefList[LIST_0][i]) {
+            if pPic.iFrameNum == iAncLTRFrameNum {
+                return pPic.iLongTermFrameIdx;
+            }
         }
     }
     -1
@@ -515,14 +533,18 @@ pub unsafe fn WrapShortRefPicNum(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
 
+    // The slice's frame number is read once, above the loop: it is the NAL's and
+    // the pictures are the pool's, so nothing here holds two borrows (T5.Z1).
+    let iSliceFrameNum =
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
     for i in 0..iShortRefCount {
-        let pPic = short_ref_pic_mut(pCtx, i);
-        if !pPic.is_null() {
-            if (*pPic).iFrameNum > (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum {
-                (*pPic).iFrameWrapNum = (*pPic).iFrameNum - iMaxPicNum;
+        let slot = (*pCtx).sRefPic.pShortRefList[LIST_0][i];
+        if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
+            pPic.iFrameWrapNum = if pPic.iFrameNum > iSliceFrameNum {
+                pPic.iFrameNum - iMaxPicNum
             } else {
-                (*pPic).iFrameWrapNum = (*pPic).iFrameNum;
-            }
+                pPic.iFrameNum
+            };
         }
     }
 }
@@ -553,14 +575,16 @@ pub unsafe fn SlidingWindow(pCtx: *mut SWelsDecoderContext, pRefPic: &mut SRefPi
         }
         let short_count = (*pRefPic).uiShortRefCount[LIST_0] as isize;
         for i in (0..short_count).rev() {
-            let pCur = pool_pic(pCtx, (*pRefPic).pShortRefList[LIST_0][i as usize]);
-            if !pCur.is_null() {
-                let pPic = WelsDelShortFromList(pCtx, &mut *pRefPic, (*pCur).iFrameNum);
-                if !pPic.is_null() {
-                    SetUnRef(pPic);
-                    break;
-                } else {
-                    return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW;
+            let iCurFrameNum =
+                pool_pic(&(*pCtx).pPicBuff, (*pRefPic).pShortRefList[LIST_0][i as usize]).map(|p| p.iFrameNum);
+            if let Some(iCurFrameNum) = iCurFrameNum {
+                let slot = WelsDelShortFromList(pCtx, &mut *pRefPic, iCurFrameNum);
+                match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
+                    Some(pPic) => {
+                        SetUnRef(pPic);
+                        break;
+                    }
+                    None => return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW,
                 }
             }
         }
@@ -794,8 +818,7 @@ pub unsafe fn MMCOProcess(
 
     match uiMmcoType {
         MMCO_SHORT2UNUSED => {
-            let pPic = WelsDelShortFromListSetUnref(pCtx, pRefPic, iShortFrameNum);
-            if pPic.is_null() {
+            if WelsDelShortFromListSetUnref(pCtx, pRefPic, iShortFrameNum).is_none() {
                 WelsLog(
                     &(*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
@@ -804,8 +827,7 @@ pub unsafe fn MMCOProcess(
             }
         }
         MMCO_LONG2UNUSED => {
-            let pPic = WelsDelLongFromListSetUnref(pCtx, pRefPic, uiLongTermPicNum);
-            if pPic.is_null() {
+            if WelsDelLongFromListSetUnref(pCtx, pRefPic, uiLongTermPicNum).is_none() {
                 WelsLog(
                     &(*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
@@ -817,8 +839,7 @@ pub unsafe fn MMCOProcess(
             if iLongTermFrameIdx > (*pRefPic).iMaxLongTermFrameIdx {
                 return ERR_INFO_INVALID_MMCO_LONG_TERM_IDX_EXCEED_MAX;
             }
-            let pPic = WelsDelShortFromList(pCtx, pRefPic, iShortFrameNum);
-            if pPic.is_null() {
+            if WelsDelShortFromList(pCtx, pRefPic, iShortFrameNum).is_none() {
                 WelsLog(
                     &(*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
@@ -835,11 +856,13 @@ pub unsafe fn MMCOProcess(
             (*pRefPic).iMaxLongTermFrameIdx = iMaxLongTermFrameIdx;
             let mut i = 0;
             while i < ((*pRefPic).uiLongRefCount[LIST_0] as usize) {
-                let pCur = pool_pic(pCtx, (*pRefPic).pLongRefList[LIST_0][i]);
-                if !pCur.is_null() && (*pCur).iLongTermFrameIdx > (*pRefPic).iMaxLongTermFrameIdx {
-                    WelsDelLongFromListSetUnref(pCtx, pRefPic, (*pCur).iLongTermFrameIdx as u32);
-                } else {
-                    i += 1;
+                let iCurLongTermFrameIdx =
+                    pool_pic(&(*pCtx).pPicBuff, (*pRefPic).pLongRefList[LIST_0][i]).map(|p| p.iLongTermFrameIdx);
+                match iCurLongTermFrameIdx {
+                    Some(idx) if idx > (*pRefPic).iMaxLongTermFrameIdx => {
+                        WelsDelLongFromListSetUnref(pCtx, pRefPic, idx as u32);
+                    }
+                    _ => i += 1,
                 }
             }
         }
@@ -863,7 +886,9 @@ pub unsafe fn MMCOProcess(
             }
             (*pCtx).bCurAuContainLtrMarkSeFlag = true;
             (*pCtx).iFrameNumOfAuMarkedLtr = (*pCtx).iFrameNum;
-            iRet = AddLongTermToList(pCtx, pRefPic, dec_pic(pCtx), iLongTermFrameIdx, uiLongTermPicNum);
+            let pDec = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)
+                .map_or(std::ptr::null_mut(), |p| p as *mut SPicture);
+            iRet = AddLongTermToList(pCtx, pRefPic, pDec, iLongTermFrameIdx, uiLongTermPicNum);
         }
         _ => {}
     }
@@ -989,15 +1014,15 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
 
     let short_count = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
     for i in 0..short_count {
-        let pPic = short_ref_pic(pCtx, i);
-        if !pPic.is_null() && (*pPic).iFramePoc < iPoc {
+        let poc = short_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, i).map(|p| p.iFramePoc);
+        if matches!(poc, Some(poc) if poc < iPoc) {
             pLSCurrPocList0[iLSCurrPocCount] = (*pCtx).sRefPic.pShortRefList[LIST_0][i];
             iLSCurrPocCount += 1;
         }
     }
     for i in (0..short_count).rev() {
-        let pPic = short_ref_pic(pCtx, i);
-        if !pPic.is_null() && (*pPic).iFramePoc > iPoc {
+        let poc = short_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, i).map(|p| p.iFramePoc);
+        if matches!(poc, Some(poc) if poc > iPoc) {
             pLTCurrPocList0[iLTCurrPocCount] = (*pCtx).sRefPic.pShortRefList[LIST_0][i];
             iLTCurrPocCount += 1;
         }
@@ -1007,9 +1032,9 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
     if long_count > 1 {
         for i in 0..long_count {
             for j in (i + 1)..long_count {
-                let pj = long_ref_pic(pCtx, j);
-                let pi = long_ref_pic(pCtx, i);
-                if !pj.is_null() && !pi.is_null() && (*pj).iFramePoc < (*pi).iFramePoc {
+                let poc_j = long_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, j).map(|p| p.iFramePoc);
+                let poc_i = long_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, i).map(|p| p.iFramePoc);
+                if matches!((poc_j, poc_i), (Some(pj), Some(pi)) if pj < pi) {
                     (*pCtx).sRefPic.pLongRefList[LIST_0].swap(i, j);
                 }
             }
@@ -1027,9 +1052,9 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
     if iLSCurrPocCount > 1 {
         for i in 0..iLSCurrPocCount {
             for j in (i + 1)..iLSCurrPocCount {
-                let pj = ref_pic(pCtx, LIST_0, j);
-                let pi = ref_pic(pCtx, LIST_0, i);
-                if !pj.is_null() && !pi.is_null() && (*pj).iFramePoc > (*pi).iFramePoc {
+                let poc_j = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_0, j).map(|p| p.iFramePoc);
+                let poc_i = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_0, i).map(|p| p.iFramePoc);
+                if matches!((poc_j, poc_i), (Some(pj), Some(pi)) if pj > pi) {
                     (*pCtx).sRefPic.pRefList[LIST_0].swap(i, j);
                 }
             }
@@ -1042,9 +1067,9 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
     if iLTCurrPocCount > 1 {
         for i in iLSCurrPocCount..iCurrPocCount {
             for j in (i + 1)..iCurrPocCount {
-                let pj = ref_pic(pCtx, LIST_0, j);
-                let pi = ref_pic(pCtx, LIST_0, i);
-                if !pj.is_null() && !pi.is_null() && (*pj).iFramePoc < (*pi).iFramePoc {
+                let poc_j = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_0, j).map(|p| p.iFramePoc);
+                let poc_i = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_0, i).map(|p| p.iFramePoc);
+                if matches!((poc_j, poc_i), (Some(pj), Some(pi)) if pj < pi) {
                     (*pCtx).sRefPic.pRefList[LIST_0].swap(i, j);
                 }
             }
@@ -1065,9 +1090,9 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
     if iLTCurrPocCount > 1 {
         for i in 0..iLTCurrPocCount {
             for j in (i + 1)..iLTCurrPocCount {
-                let pj = ref_pic(pCtx, LIST_1, j);
-                let pi = ref_pic(pCtx, LIST_1, i);
-                if !pj.is_null() && !pi.is_null() && (*pj).iFramePoc < (*pi).iFramePoc {
+                let poc_j = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_1, j).map(|p| p.iFramePoc);
+                let poc_i = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_1, i).map(|p| p.iFramePoc);
+                if matches!((poc_j, poc_i), (Some(pj), Some(pi)) if pj < pi) {
                     (*pCtx).sRefPic.pRefList[LIST_1].swap(i, j);
                 }
             }
@@ -1080,9 +1105,9 @@ pub unsafe fn WelsInitBSliceRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer:
     if iLSCurrPocCount > 1 {
         for i in iLTCurrPocCount..iCurrPocCount {
             for j in (i + 1)..iCurrPocCount {
-                let pj = ref_pic(pCtx, LIST_1, j);
-                let pi = ref_pic(pCtx, LIST_1, i);
-                if !pj.is_null() && !pi.is_null() && (*pj).iFramePoc > (*pi).iFramePoc {
+                let poc_j = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_1, j).map(|p| p.iFramePoc);
+                let poc_i = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_1, i).map(|p| p.iFramePoc);
+                if matches!((poc_j, poc_i), (Some(pj), Some(pi)) if pj > pi) {
                     (*pCtx).sRefPic.pRefList[LIST_1].swap(i, j);
                 }
             }
@@ -1159,11 +1184,12 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
                     iPredFrameNum &= iMaxPicNum - 1;
 
                     for i in (0..iMaxRefIdx).rev() {
-                        let cur = ref_pic(pCtx, listIdx, i);
-                        if !cur.is_null() && (*cur).iFrameNum == iPredFrameNum && !(*cur).bIsLongRef
-                        {
-                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == (*cur).uiQualityId
-                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != (*cur).iSpsId
+                        let cur = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, listIdx, i)
+                            .filter(|c| c.iFrameNum == iPredFrameNum && !c.bIsLongRef)
+                            .map(|c| (c.uiQualityId, c.iSpsId));
+                        if let Some((uiQualityId, iSpsId)) = cur {
+                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == uiQualityId
+                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
                             {
                                 WelsLog(
                                     &(*pCtx).sLogCtx,
@@ -1182,13 +1208,12 @@ pub unsafe fn WelsReorderRefList(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Op
                     let target_long = reorder_syn.sReorderingSyn[listIdx][iReorderingIndex]
                         .uiLongTermPicNum as i32;
                     for i in (0..iMaxRefIdx).rev() {
-                        let cur = ref_pic(pCtx, listIdx, i);
-                        if !cur.is_null()
-                            && (*cur).bIsLongRef
-                            && (*cur).iLongTermFrameIdx == target_long
-                        {
-                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == (*cur).uiQualityId
-                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != (*cur).iSpsId
+                        let cur = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, listIdx, i)
+                            .filter(|c| c.bIsLongRef && c.iLongTermFrameIdx == target_long)
+                            .map(|c| (c.uiQualityId, c.iSpsId));
+                        if let Some((uiQualityId, iSpsId)) = cur {
+                            if (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId == uiQualityId
+                                && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
                             {
                                 WelsLog(
                                     &(*pCtx).sLogCtx,
@@ -1307,8 +1332,8 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
                         iPredFrameNum -= iMaxPicNum;
                     }
                     for j in 0..iShortRefCount {
-                        let cur = short_ref_pic(pCtx, j);
-                        if !cur.is_null() && (*cur).iFrameWrapNum == iPredFrameNum {
+                        let cur = short_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, j);
+                        if cur.is_some_and(|c| c.iFrameWrapNum == iPredFrameNum) {
                             (*pCtx).sRefPic.pRefList[listIdx][iCount] =
                                 (*pCtx).sRefPic.pShortRefList[LIST_0][j];
                             iCount += 1;
@@ -1318,10 +1343,8 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
                     let k = iCount;
                     let mut k_write = k;
                     for j in k..=iRefCount {
-                        let cur = ref_pic(pCtx, listIdx, j);
-                        if !cur.is_null()
-                            && ((*cur).bIsLongRef || (*cur).iFrameWrapNum != iPredFrameNum)
-                        {
+                        let cur = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, listIdx, j);
+                        if cur.is_some_and(|c| c.bIsLongRef || c.iFrameWrapNum != iPredFrameNum) {
                             (*pCtx).sRefPic.pRefList[listIdx][k_write] =
                                 (*pCtx).sRefPic.pRefList[listIdx][j];
                             k_write += 1;
@@ -1331,8 +1354,8 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
                     iPredFrameNum =
                         reorder_syn.sReorderingSyn[listIdx][i].uiLongTermPicNum as i32;
                     for j in 0..iLongRefCount {
-                        let cur = long_ref_pic(pCtx, j);
-                        if !cur.is_null() && (*cur).uiLongTermPicNum == iPredFrameNum as u32 {
+                        let cur = long_ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, j);
+                        if cur.is_some_and(|c| c.uiLongTermPicNum == iPredFrameNum as u32) {
                             (*pCtx).sRefPic.pRefList[listIdx][iCount] =
                                 (*pCtx).sRefPic.pLongRefList[LIST_0][j];
                             iCount += 1;
@@ -1342,11 +1365,10 @@ pub unsafe fn WelsReorderRefList2(pCtx: *mut SWelsDecoderContext, pCurDqLayer: O
                     let k = iCount;
                     let mut k_write = k;
                     for j in k..=iRefCount {
-                        let cur = ref_pic(pCtx, listIdx, j);
-                        if !cur.is_null()
-                            && (!(*cur).bIsLongRef
-                                || (*cur).uiLongTermPicNum != iPredFrameNum as u32)
-                        {
+                        let cur = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, listIdx, j);
+                        if cur.is_some_and(|c| {
+                            !c.bIsLongRef || c.uiLongTermPicNum != iPredFrameNum as u32
+                        }) {
                             (*pCtx).sRefPic.pRefList[listIdx][k_write] =
                                 (*pCtx).sRefPic.pRefList[listIdx][j];
                             k_write += 1;
@@ -1375,11 +1397,16 @@ pub unsafe fn WelsMarkAsRef(pCtx: *mut SWelsDecoderContext, pCurDqLayer: Option<
         return ERR_INFO_INVALID_PTR;
     }
     let mut isThreadCtx = true;
+    // `pLastDec` is the caller's picture (F36's threading arm, never taken here);
+    // the fallback is the pool's, and the arms unify on a pointer because the whole
+    // body below re-enters through `pCtx` (T5.Z1 — the borrow cannot span it, so it
+    // ends at this line and the pointer carries the pool allocation's provenance).
     let pDec = if !pLastDec.is_null() {
         pLastDec
     } else {
         isThreadCtx = false;
-        dec_pic(pCtx)
+        dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)
+            .map_or(std::ptr::null_mut(), |p| p as *mut SPicture)
     };
 
     if pDec.is_null() {
@@ -1574,19 +1601,19 @@ mod tests {
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = &mut (*pCtx).sRefPic;
 
-            let res1 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s1));
+            let res1 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(&mut (*pCtx).pPicBuff, s1).map_or(std::ptr::null_mut(), |p| p as *mut SPicture));
             assert_eq!(res1, ERR_NONE);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s1);
 
-            let res2 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s2));
+            let res2 = AddShortTermToList(pCtx, pRefPic, pool_pic_mut(&mut (*pCtx).pPicBuff, s2).map_or(std::ptr::null_mut(), |p| p as *mut SPicture));
             assert_eq!(res2, ERR_NONE);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 2);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s2);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][1], s1);
 
             let deleted = WelsDelShortFromList(pCtx, pRefPic, 10);
-            assert_eq!(crate::decoder::picture::pic_slot(deleted.as_ref()), s1);
+            assert_eq!(deleted, s1);
             assert_eq!((*pRefPic).uiShortRefCount[LIST_0], 1);
             assert_eq!((*pRefPic).pShortRefList[LIST_0][0], s2);
         }
@@ -1608,8 +1635,8 @@ mod tests {
             let pCtx: *mut SWelsDecoderContext = &mut *ctx;
             let pRefPic = &mut (*pCtx).sRefPic;
 
-            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s1), 5, 5);
-            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(pCtx, s2), 2, 2);
+            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(&mut (*pCtx).pPicBuff, s1).map_or(std::ptr::null_mut(), |p| p as *mut SPicture), 5, 5);
+            AddLongTermToList(pCtx, pRefPic, pool_pic_mut(&mut (*pCtx).pPicBuff, s2).map_or(std::ptr::null_mut(), |p| p as *mut SPicture), 2, 2);
 
             assert_eq!((*pRefPic).uiLongRefCount[LIST_0], 2);
             assert_eq!((*pRefPic).pLongRefList[LIST_0][0], s2);
@@ -1641,7 +1668,7 @@ mod tests {
             // `WelsResetRefPic` holds one borrow of `sRefPic` and the calls inside it
             // (`pool_pic_mut`, `SetUnRef`) reach `pPicBuff` and a picture, disjoint
             // fields, which is why the `exit` battery is where this surfaced (S22).
-            AddShortTermToList(pCtx, &mut (*pCtx).sRefPic, pool_pic_mut(pCtx, s));
+            AddShortTermToList(pCtx, &mut (*pCtx).sRefPic, pool_pic_mut(&mut (*pCtx).pPicBuff, s).map_or(std::ptr::null_mut(), |p| p as *mut SPicture));
             assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 1);
             WelsResetRefPic(pCtx);
             assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 0);

@@ -1638,12 +1638,18 @@ unsafe fn BufferingReadyPicture(
             // resolve happens here rather than the pointer being stored. `api/` is
             // Phase 8's; this is the field's type change reaching its one consumer
             // outside the decoder, nothing more.
-            let prev = crate::decoder::decoder_context::prev_dpb_pic_mut(pCtx);
-            if !prev.is_null() {
-                (*dec_impl).sPictInfoList[i].iPicBuffIdx = (*prev).iPicBuffIdx;
-                if crate::decoder::decoder_core::GetThreadCount(pCtx) <= 1 {
-                    (*prev).iRefCount += 1;
+            // The thread count is read before the pool borrow opens: the picture
+            // is `pPicBuff`'s and `GetThreadCount` takes the context (T5.Z1).
+            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(pCtx) <= 1;
+            let prev_id = crate::decoder::decoder_context::prev_dpb_id(pCtx);
+            if let Some(prev) =
+                crate::decoder::decoder_context::prev_dpb_pic_mut(&mut (*pCtx).pPicBuff, prev_id)
+            {
+                let iPicBuffIdx = prev.iPicBuffIdx;
+                if bSingleThreaded {
+                    prev.iRefCount += 1;
                 }
+                (*dec_impl).sPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
             }
             (*dec_impl).iLastBufferedIdx = i as i32;
             (*pDstInfo).iBufferStatus = 0;
