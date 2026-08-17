@@ -676,13 +676,32 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
     if pCtx.is_null() {
         return ERR_NONE;
     }
-    if active_sps(pCtx).is_null() || active_pps(pCtx).is_null() {
+    // **The lists travel as values, not as borrows** (T5.Z1). The loop below writes
+    // `pDequant_coeff_buffer*` through the context on every iteration, so a borrow of
+    // the parameter sets held across it is the shape this face removes — and the two
+    // lists are `[[i8; 16]; 6]` and `[[i8; 64]; 6]`, small enough that copying them
+    // out is cheaper than re-resolving the active set 40 thousand times, which is
+    // what the per-use spelling did.
+    let ps = &(*pCtx).sSpsPpsCtx;
+    let (Some(sps), Some(pps)) = (
+        active_sps(ps, (*pCtx).active_sps),
+        active_pps(ps, (*pCtx).active_pps),
+    ) else {
         return ERR_NONE;
-    }
-    if (*active_sps(pCtx)).bSeqScalingMatrixPresentFlag || (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
+    };
+    let bPicScaling = pps.bPicScalingMatrixPresentFlag;
+    let bAnyScaling = sps.bSeqScalingMatrixPresentFlag || bPicScaling;
+    let iPpsId = pps.iPpsId;
+    let (kList4x4, kList8x8) = if bPicScaling {
+        (pps.iScalingList4x4, pps.iScalingList8x8)
+    } else {
+        (sps.iScalingList4x4, sps.iScalingList8x8)
+    };
+
+    if bAnyScaling {
         (*pCtx).bUseScalingList = true;
 
-        if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != (*active_pps(pCtx)).iPpsId {
+        if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != iPpsId {
             for i in 0..6 {
                 // T5.Y1: the two alias stores that stood here (`pDequant_coeff4x4[i]
                 // = pDequant_coeff_buffer4x4[i]`'s first row, and the 8x8 twin) are
@@ -690,27 +709,19 @@ pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32
                 // `i` the alias was derived from.
                 for q in 0..51 {
                     for x in 0..16 {
-                        let scale4 = if (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
-                            (*active_pps(pCtx)).iScalingList4x4[i][x] as u32
-                        } else {
-                            (*active_sps(pCtx)).iScalingList4x4[i][x] as u32
-                        };
+                        let scale4 = kList4x4[i][x] as u32;
                         (*pCtx).pDequant_coeff_buffer4x4[i][q][x] =
                             (scale4 * (g_kuiDequantCoeff[q][x & 0x07] as u32)) as u16;
                     }
                     for y in 0..64 {
-                        let scale8 = if (*active_pps(pCtx)).bPicScalingMatrixPresentFlag {
-                            (*active_pps(pCtx)).iScalingList8x8[i][y] as u32
-                        } else {
-                            (*active_sps(pCtx)).iScalingList8x8[i][y] as u32
-                        };
+                        let scale8 = kList8x8[i][y] as u32;
                         (*pCtx).pDequant_coeff_buffer8x8[i][q][y] =
                             (scale8 * (g_kuiMatrixV[q % 6][y / 8][y % 8] as u32)) as u16;
                     }
                 }
             }
             (*pCtx).bDequantCoeff4x4Init = true;
-            (*pCtx).iDequantCoeffPpsid = (*active_pps(pCtx)).iPpsId;
+            (*pCtx).iDequantCoeffPpsid = iPpsId;
         }
     } else {
         (*pCtx).bUseScalingList = false;
@@ -5372,8 +5383,8 @@ pub unsafe fn WelsDecodeSlice(
 
     (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
 
-    let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null()
-        && (*active_pps(pCtx)).bEntropyCodingModeFlag
+    let pDecMbFunc: PWelsDecMbFunc = if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+        .is_some_and(|pps| pps.bEntropyCodingModeFlag)
     {
         if (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
@@ -5395,14 +5406,17 @@ pub unsafe fn WelsDecodeSlice(
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id);
-    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
-        !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
-    );
+    let bConstrainedIntra = pps_of(
+        &(*pCtx).sSpsPpsCtx,
+        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id,
+    )
+    .is_some_and(|pps| pps.bConstainedIntraPredFlag);
+    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(bConstrainedIntra);
 
     (*pCtx).eSliceType = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType;
-    let pPpsLayer = pps_of(pCtx, (*pCurDqLayer).sLayerInfo.pps_id);
-    if !pPpsLayer.is_null() && (*pPpsLayer).bEntropyCodingModeFlag {
+    if pps_of(&(*pCtx).sSpsPpsCtx, (*pCurDqLayer).sLayerInfo.pps_id)
+        .is_some_and(|pps| pps.bEntropyCodingModeFlag)
+    {
         let iQp = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSliceQp;
         let iCabacInitIdc = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iCabacInitIdc;
         crate::decoder::cabac_decoder::WelsCabacContextInit(
@@ -5492,7 +5506,9 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
 
     (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
 
-    let pDecMbFunc: PWelsDecMbFunc = if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).bEntropyCodingModeFlag {
+    let pDecMbFunc: PWelsDecMbFunc = if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+        .is_some_and(|pps| pps.bEntropyCodingModeFlag)
+    {
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::P_SLICE {
             WelsDecodeMbCabacPSlice
         } else if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
@@ -5513,10 +5529,12 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
     // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
     // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
-    let pPpsForIntra = pps_of(pCtx, (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id);
-    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(
-        !pPpsForIntra.is_null() && (*pPpsForIntra).bConstainedIntraPredFlag,
-    );
+    let bConstrainedIntra = pps_of(
+        &(*pCtx).sSpsPpsCtx,
+        (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id,
+    )
+    .is_some_and(|pps| pps.bConstainedIntraPredFlag);
+    (*pCtx).eIntraPredConstraint = IntraPredConstraint::from_flag(bConstrainedIntra);
 
     (*pCtx).eSliceType = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType;
     WelsCalcDeqCoeffScalingList(pCtx);
@@ -5741,11 +5759,11 @@ mod tests {
     #[test]
     fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         const GRID_48X32: &[u8] = include_bytes!("../../../../../res/grid_48x32.264");
-        let (frames, dims, _) = drive_decoder_over(GRID_48X32);
+        let (frames, dims, states) = drive_decoder_over(GRID_48X32);
         assert!(
             frames > 0,
             "no frame came out of grid_48x32.264 — the slice loop was never entered, \
-             so this test is not measuring what it claims to"
+             so this test is not measuring what it claims to (states = {states:#x})"
         );
         assert_eq!(
             dims,

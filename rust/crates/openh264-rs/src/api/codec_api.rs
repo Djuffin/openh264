@@ -1611,9 +1611,14 @@ unsafe fn BufferingReadyPicture(
     if (*pDstInfo).iBufferStatus == 0 {
         return;
     }
-    let sps = crate::decoder::decoder_context::active_sps(pCtx);
-    if !sps.is_null() {
-        (*dec_impl).bIsBaseline = (*sps).uiProfileIdc == 66 || (*sps).uiProfileIdc == 83;
+    // The null guard stays here — this is the boundary that still holds a pointer,
+    // and `active_sps` takes the parameter-set field by reference now (T5.Z1).
+    if !pCtx.is_null() {
+        if let Some(sps) =
+            crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+        {
+            (*dec_impl).bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
+        }
     }
     if !(*dec_impl).bIsBaseline {
         let sh = (*pCtx).pSliceHeader;
@@ -1854,11 +1859,19 @@ unsafe fn ReorderPicturesInDisplay(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) {
-    let sps = crate::decoder::decoder_context::active_sps(pCtx);
-    if pCtx.is_null() || sps.is_null() {
+    // **The null test moves ahead of the lookup** (T5.Z1). It used to sit after it,
+    // and only the accessor's own internal `pCtx.is_null()` arm made that safe; with
+    // the parameter-set field taken by reference the guard has to precede the call,
+    // which is the same order the C++ has.
+    if pCtx.is_null() {
         return;
     }
-    let profile = (*sps).uiProfileIdc;
+    let Some(profile) =
+        crate::decoder::decoder_context::active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+            .map(|sps| sps.uiProfileIdc)
+    else {
+        return;
+    };
     (*dec_impl).bIsBaseline = profile == 66 || profile == 83;
     if (*dec_impl).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
         return;

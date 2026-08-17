@@ -2175,11 +2175,15 @@ pub unsafe fn WelsDeblockingFilterSlice(
 ) {
     let pSliceHeaderExt = &(*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt;
     let iMbWidth = (*pCurDqLayer).iMbWidth;
-    let pSps = sps_of(pCtx, pSliceHeaderExt.sSliceHeader.sps_ref);
-    let iTotalMbCount = if !pSps.is_null() { (*pSps).uiTotalMbCount as i32 } else { 0 };
+    // A value, not a borrow: the count is constant across the loop below and the loop
+    // writes the layer and the picture through the same context (T5.Z1).
+    let iTotalMbCount = sps_of(&(*pCtx).sSpsPpsCtx, pSliceHeaderExt.sSliceHeader.sps_ref)
+        .map_or(0, |sps| sps.uiTotalMbCount as i32);
 
     let mut pFilter = SDeblockingFilter::default();
-    let pFmo = active_fmo(pCtx);
+    // The FMO entry is read-only across the macroblock loop and lives in its own
+    // context field, disjoint from everything the loop writes (T5.Z1).
+    let pFmo = active_fmo(&(*pCtx).sFmoList, (*pCtx).fmo_id);
     let mut iNextMbXyIndex: i32;
     let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;
@@ -2233,10 +2237,9 @@ pub unsafe fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            let pPps = pps_of(pCtx, pps_id);
-            if !pPps.is_null() && (*pPps).uiNumSliceGroups > 1 {
+            if pps_of(&(*pCtx).sSpsPpsCtx, pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo.as_ref(), iNextMbXyIndex);
+                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);
             } else {
                 iNextMbXyIndex += 1;
             }

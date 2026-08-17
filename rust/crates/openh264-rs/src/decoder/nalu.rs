@@ -866,7 +866,10 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            let p_last_sps = sps_of(pCtx, (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
+            let p_last_sps = sps_ref_of(
+                &(*pCtx).sSpsPpsCtx,
+                (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+            );
 
             if uiAvailNalNum == 1 && CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps) {
                 crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
@@ -977,7 +980,7 @@ pub unsafe fn CheckAccessUnitBoundary(
     pCtx: *mut SWelsDecoderContext,
     kpCurNal: *const SNalUnit,
     kpLastNal: *const SNalUnit,
-    kpSps: *const SSps,
+    kpSpsRef: Option<SpsRef>,
 ) -> bool {
     let kpLastNalHeaderExt = &(*kpLastNal).sNalHeaderExt;
     let kpCurNalHeaderExt = &(*kpCurNal).sNalHeaderExt;
@@ -987,7 +990,7 @@ pub unsafe fn CheckAccessUnitBoundary(
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
         let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
-        if !active_sps.is_null() && active_sps as *const _ != kpSps {
+        if active_sps.is_some() && active_sps != kpSpsRef {
             return true;
         }
     }
@@ -1028,15 +1031,15 @@ pub unsafe fn CheckAccessUnitBoundary(
             return true;
         }
     }
-    if !kpSps.is_null() {
-        if (*kpSps).uiPocType == 0 {
+    if let Some(kpSps) = sps_of(&(*pCtx).sSpsPpsCtx, kpSpsRef) {
+        if kpSps.uiPocType == 0 {
             if kpLastSliceHeader.iPicOrderCntLsb != kpCurSliceHeader.iPicOrderCntLsb {
                 return true;
             }
             if kpLastSliceHeader.iDeltaPicOrderCntBottom != kpCurSliceHeader.iDeltaPicOrderCntBottom {
                 return true;
             }
-        } else if (*kpSps).uiPocType == 1 {
+        } else if kpSps.uiPocType == 1 {
             if kpLastSliceHeader.iDeltaPicOrderCnt[0] != kpCurSliceHeader.iDeltaPicOrderCnt[0] {
                 return true;
             }
@@ -1053,13 +1056,13 @@ pub unsafe fn CheckAccessUnitBoundary(
 pub unsafe fn CheckNextAuNewSeq(
     pCtx: *mut SWelsDecoderContext,
     kpCurNal: *const SNalUnit,
-    kpSps: *const SSps,
+    kpSpsRef: Option<SpsRef>,
 ) -> bool {
     let kpCurNalHeaderExt = &(*kpCurNal).sNalHeaderExt;
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
         let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
-        if !active_sps.is_null() && active_sps as *const _ != kpSps {
+        if active_sps.is_some() && active_sps != kpSpsRef {
             return true;
         }
     }
@@ -1345,57 +1348,56 @@ pub fn GetLevelLimits(iLevelIdx: i32, bConstraint3: bool) -> Option<&'static SLe
 }
 
 /// Checks whether an SPS is actively in use by any layer context.
+/// **The ref travels, not the pointer** (T5.Z1). This took `pSps: *const SSps`, and
+/// its two callers derived that pointer *from the context they pass beside it* —
+/// session Y's first Miri instance, and the one it fixed "by passing the index".
+/// With [`SpsRef`] the identity compare below is a value compare and the SPS is
+/// resolved inside, where nothing else is borrowed.
 pub unsafe fn CheckSpsActive(
     pCtx: *mut SWelsDecoderContext,
-    pSps: *const SSps,
+    r: Option<SpsRef>,
     bUseSubsetFlag: bool,
 ) -> bool {
     for i in 0..MAX_LAYER_NUM {
-        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] as *const _ == pSps {
+        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] == r && r.is_some() {
             return true;
         }
     }
-    if pSps.is_null() {
+    let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, r) else {
         return false;
-    }
-    let sps_id = (*pSps).iSpsId as usize;
+    };
+    let (iSpsId, iMbWidth, iMbHeight) = (pSps.iSpsId, pSps.iMbWidth, pSps.iMbHeight);
+    let sps_id = iSpsId as usize;
     if sps_id >= MAX_SPS_COUNT {
         return false;
     }
 
-    if bUseSubsetFlag {
-        if (*pSps).iMbWidth > 0 && (*pSps).iMbHeight > 0 && (*pCtx).sSpsPpsCtx.bSubspsAvailFlags[sps_id] {
-            if (*pCtx).iTotalNumMbRec > 0 {
-                return true;
-            }
-            if let Some(pCurAu) = cur_au(pCtx) {
-                let iNum = pCurAu.uiAvailUnitsNum as usize;
-                for i in 0..iNum {
-                    let pNalUnit = pCurAu.nal(i);
-                    if !pNalUnit.is_null() && (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = sps_of(pCtx, (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
-                        if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
+    let avail = if bUseSubsetFlag {
+        (*pCtx).sSpsPpsCtx.bSubspsAvailFlags[sps_id]
     } else {
-        if (*pSps).iMbWidth > 0 && (*pSps).iMbHeight > 0 && (*pCtx).sSpsPpsCtx.bSpsAvailFlags[sps_id] {
-            if (*pCtx).iTotalNumMbRec > 0 {
-                return true;
-            }
-            if let Some(pCurAu) = cur_au(pCtx) {
-                let iNum = pCurAu.uiAvailUnitsNum as usize;
-                for i in 0..iNum {
-                    let pNalUnit = pCurAu.nal(i);
-                    if !pNalUnit.is_null() && !(*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag {
-                        let pNextUsedSps = sps_of(pCtx, (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
-                        if !pNextUsedSps.is_null() && (*pNextUsedSps).iSpsId == (*pSps).iSpsId {
-                            return true;
-                        }
-                    }
+        (*pCtx).sSpsPpsCtx.bSpsAvailFlags[sps_id]
+    };
+    if iMbWidth > 0 && iMbHeight > 0 && avail {
+        if (*pCtx).iTotalNumMbRec > 0 {
+            return true;
+        }
+        // The access unit is its own allocation, so the NAL walk below and the SPS
+        // lookups inside it borrow two disjoint things (T5.O4).
+        if let Some(pCurAu) = cur_au(pCtx) {
+            let iNum = pCurAu.uiAvailUnitsNum as usize;
+            for i in 0..iNum {
+                let pNalUnit = pCurAu.nal(i);
+                if pNalUnit.is_null()
+                    || (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag != bUseSubsetFlag
+                {
+                    continue;
+                }
+                let next = sps_of(
+                    &(*pCtx).sSpsPpsCtx,
+                    (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+                );
+                if next.is_some_and(|n| n.iSpsId == iSpsId) {
+                    return true;
                 }
             }
         }
@@ -1679,16 +1681,18 @@ pub unsafe fn ParseSps(
     *pPicHeight = (pSps.iMbHeight << 4) as i32;
 
     let idx = iSpsId as usize;
+    let tmp_ref = Some(SpsRef { id: iSpsId, subset: kbUseSubsetFlag });
     if kbUseSubsetFlag {
-        let pTmpSps = &(*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx].sSps;
-        if CheckSpsActive(pCtx, pTmpSps, true) {
+        if CheckSpsActive(pCtx, tmp_ref, true) {
             // Overwriting the active subset SPS: only act when it actually changed.
             if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx], pSubsetSps) {
                 if au_has_nals(pCtx) {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], pSubsetSps);
                     mark_au_ready(pCtx);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
-                } else if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).iSpsId == (*pSubsetSps).sSps.iSpsId {
+                } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                    .is_some_and(|s| s.iSpsId == (*pSubsetSps).sSps.iSpsId)
+                {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], pSubsetSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
                 } else {
@@ -1701,15 +1705,16 @@ pub unsafe fn ParseSps(
             (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag = true;
         }
     } else {
-        let pTmpSps = &(*pCtx).sSpsPpsCtx.sSpsBuffer[idx];
-        if CheckSpsActive(pCtx, pTmpSps, false) {
+        if CheckSpsActive(pCtx, tmp_ref, false) {
             // Overwriting the active SPS: only act when it actually changed.
             if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], pSps) {
                 if au_has_nals(pCtx) {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
-                } else if !active_sps(pCtx).is_null() && (*active_sps(pCtx)).iSpsId == (*pSps).iSpsId {
+                } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                    .is_some_and(|s| s.iSpsId == pSps.iSpsId)
+                {
                     bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
@@ -1874,9 +1879,13 @@ pub unsafe fn ParsePps(
     }
 
     let pps_idx = uiPpsId as usize;
-    if !active_pps(pCtx).is_null() && (*active_pps(pCtx)).iPpsId == pPps.iPpsId {
+    if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).is_some_and(|p| p.iPpsId == pPps.iPpsId) {
         // Re-sent PPS for the active id: only flag an overwrite when it changed.
-        if !bytes_equal(active_pps(pCtx) as *const SPps, pPps) {
+        // The comparison is against the active entry, resolved once as a value so
+        // the borrow ends before the copies below write the same array (T5.Z1).
+        let unchanged = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+            .is_some_and(|active| bytes_equal(active, pPps));
+        if !unchanged {
             bytes_copy(&mut (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], pPps);
             (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
             mark_au_ready(pCtx);
@@ -2340,7 +2349,7 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
 pub unsafe fn ResetActiveSPSForEachLayer(pCtx: *mut SWelsDecoderContext) {
     if !pCtx.is_null() && (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
-            (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = std::ptr::null_mut();
+            (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;
         }
     }
 }
