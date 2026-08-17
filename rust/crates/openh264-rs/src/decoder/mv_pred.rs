@@ -481,7 +481,7 @@ pub unsafe fn PredPSkipMvFromNeighbor(
 }
 
 /// General median motion vector prediction kernel for 4x4, 8x8, or 16x16 block partitions.
-pub unsafe fn PredMv(
+pub fn PredMv(
     iMotionVector: &[[[i16; 2]; 30]; 2],
     iRefIndex: &[[i8; 30]; 2],
     listIdx: usize,
@@ -536,7 +536,7 @@ pub unsafe fn PredMv(
 }
 
 /// Motion vector predictor for 8x16 macroblock partitions.
-pub unsafe fn PredInter8x16Mv(
+pub fn PredInter8x16Mv(
     iMotionVector: &[[[i16; 2]; 30]; 2],
     iRefIndex: &[[i8; 30]; 2],
     listIdx: usize,
@@ -567,7 +567,7 @@ pub unsafe fn PredInter8x16Mv(
 }
 
 /// Motion vector predictor for 16x8 macroblock partitions.
-pub unsafe fn PredInter16x8Mv(
+pub fn PredInter16x8Mv(
     iMotionVector: &[[[i16; 2]; 30]; 2],
     iRefIndex: &[[i8; 30]; 2],
     listIdx: usize,

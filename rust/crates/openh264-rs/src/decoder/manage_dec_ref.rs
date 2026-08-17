@@ -105,7 +105,7 @@ unsafe fn insert_ref(pPic: *mut SPicture) -> Option<PicId> {
 }
 
 #[inline(always)]
-pub unsafe fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
+pub fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
 
     // Logging stub for no-std / embedded compatibility
 }
@@ -231,7 +231,7 @@ pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
 /// Clears reference list pointers and counts without invoking `SetUnRef`.
 ///
 /// Matches `void WelsResetRefPicWithoutUnRef (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsResetRefPicWithoutUnRef(pCtx: &mut SWelsDecoderContext) {
+pub fn WelsResetRefPicWithoutUnRef(pCtx: &mut SWelsDecoderContext) {
     let bTmpRefSet = false;
     ref_set(pCtx, bTmpRefSet).uiLongRefCount[LIST_0] = 0;
     ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0] = 0;
@@ -253,7 +253,7 @@ pub unsafe fn WelsResetRefPicWithoutUnRef(pCtx: &mut SWelsDecoderContext) {
 /// Deletes a short-term reference picture with `iFrameNum` from `pShortRefList[0]`.
 ///
 /// Matches `static PPicture WelsDelShortFromList (PRefPic pRefPic, int32_t iFrameNum)`.
-pub unsafe fn WelsDelShortFromList(
+pub fn WelsDelShortFromList(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     iFrameNum: i32,
@@ -305,7 +305,7 @@ pub unsafe fn WelsDelShortFromListSetUnref(
 /// Deletes a long-term reference picture with `uiLongTermFrameIdx` from `pLongRefList[0]`.
 ///
 /// Matches `static PPicture WelsDelLongFromList (PRefPic pRefPic, uint32_t uiLongTermFrameIdx)`.
-pub unsafe fn WelsDelLongFromList(
+pub fn WelsDelLongFromList(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     uiLongTermFrameIdx: u32,
@@ -497,7 +497,7 @@ pub unsafe fn MarkAsLongTerm(
 }
 
 /// Locates the long-term frame index corresponding to `iAncLTRFrameNum`.
-pub unsafe fn GetLTRFrameIndex(
+pub fn GetLTRFrameIndex(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     iAncLTRFrameNum: i32,
@@ -517,7 +517,7 @@ pub unsafe fn GetLTRFrameIndex(
 /// Evaluates short-term frame number wrapping modulo `1 << uiLog2MaxFrameNum`.
 ///
 /// Matches `static void WrapShortRefPicNum (PWelsDecoderContext pCtx)`.
-pub unsafe fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };

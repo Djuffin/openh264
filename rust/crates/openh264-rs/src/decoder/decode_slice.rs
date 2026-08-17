@@ -671,7 +671,7 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: &mut SliceCtx<'_>, pCurDqLay
     true
 }
 
-pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
     // **The lists travel as values, not as borrows** (T5.Z1). The loop below writes
     // `pDequant_coeff_buffer*` through the context on every iteration, so a borrow of
     // the parameter sets held across it is the shape this face removes — and the two
@@ -892,7 +892,7 @@ impl IntraPredConstraint {
     /// # Safety
     /// Both pointers must be non-null and writable for their element counts.
     #[inline]
-    pub unsafe fn MapNxNNeighToSample(
+    pub fn MapNxNNeighToSample(
         self,
         pNeighAvail: &mut SWelsNeighAvail,
         pSampleAvail: &mut [i32; 30],
@@ -912,7 +912,7 @@ impl IntraPredConstraint {
     /// # Safety
     /// Both pointers must be non-null and writable.
     #[inline]
-    pub unsafe fn Map16x16NeighToSample(
+    pub fn Map16x16NeighToSample(
         self,
         pNeighAvail: &mut SWelsNeighAvail,
         pSampleAvail: &mut u8,
@@ -928,7 +928,7 @@ impl IntraPredConstraint {
     }
 }
 
-pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
+pub extern "C" fn WelsMapNxNNeighToSampleNormal(
     pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: &mut [i32; 30],
 ) {
@@ -953,7 +953,7 @@ pub unsafe extern "C" fn WelsMapNxNNeighToSampleNormal(
     }
 }
 
-pub unsafe extern "C" fn WelsMapNxNNeighToSampleConstrain1(
+pub extern "C" fn WelsMapNxNNeighToSampleConstrain1(
     pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: &mut [i32; 30],
 ) {
@@ -978,7 +978,7 @@ pub unsafe extern "C" fn WelsMapNxNNeighToSampleConstrain1(
     }
 }
 
-pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
+pub extern "C" fn WelsMap16x16NeighToSampleNormal(
     pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: &mut u8,
 ) {
@@ -996,7 +996,7 @@ pub unsafe extern "C" fn WelsMap16x16NeighToSampleNormal(
     *pSampleAvail = mask;
 }
 
-pub unsafe extern "C" fn WelsMap16x16NeighToSampleConstrain1(
+pub extern "C" fn WelsMap16x16NeighToSampleConstrain1(
     pNeighAvail: &mut SWelsNeighAvail,
     pSampleAvail: &mut u8,
 ) {

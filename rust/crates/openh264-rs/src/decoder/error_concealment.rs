@@ -290,7 +290,7 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
 }
 
 /// Evaluates if error concealment is required by inspecting the macroblock decoding flags.
-pub unsafe extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
+pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return false;
     };
@@ -679,7 +679,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 }
 
 /// Gathers motion vector statistics from correctly decoded macroblocks in the current picture.
-pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };

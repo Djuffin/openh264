@@ -1186,7 +1186,7 @@ pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize,
 }
 
 /// Parses reference base picture marking syntax for SVC temporal/spatial reference layers.
-pub unsafe fn ParseRefBasePicMarking(
+pub fn ParseRefBasePicMarking(
     buf: &[u8],
     pBs: &mut BsCursor,
     pRefBasePicMarking: &mut SRefBasePicMarking,
@@ -1279,7 +1279,7 @@ pub unsafe fn ParsePrefixNalUnit(
 /// Decodes the SVC extension syntax block within a Subset SPS (`SSubsetSps`).
 /// **T5.Z4: the context parameter is deleted.** It was read nowhere in the body,
 /// and it is what made the window and the cursor collide in one call (S18).
-pub unsafe fn DecodeSpsSvcExt(
+pub fn DecodeSpsSvcExt(
     pSpsExt: &mut SSubsetSps,
     buf: &[u8],
     pBs: &mut BsCursor,
@@ -1941,7 +1941,7 @@ pub unsafe fn ParsePps(
 
 /// Parses Video Usability Information (VUI) parameters inside an SPS.
 /// **T5.Z4: the context parameter is deleted** — see `DecodeSpsSvcExt` (S18).
-pub unsafe fn ParseVui(
+pub fn ParseVui(
     pSps: &mut SSps,
     buf: &[u8],
     pBsAux: &mut BsCursor,
@@ -2271,7 +2271,7 @@ pub fn ParseScalingList(
 /// happen to match the new sequence's kept its stale map, because
 /// `FmoParamSetsChanged`'s first term — the one that exists to catch exactly this —
 /// is `!bActiveFlag`.
-pub unsafe fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
     let iCountNum = (*pCtx).iActiveFmoNum;
     crate::decoder::fmo::UninitFmoList(&mut (*pCtx).sFmoList, iCountNum);
     (*pCtx).iActiveFmoNum = 0;
@@ -2384,7 +2384,7 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
 }
 
 /// Resets active SPS pointers for each layer if MB reconstruction has not started.
-pub unsafe fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
+pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     if (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
             (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;

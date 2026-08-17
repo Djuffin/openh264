@@ -270,7 +270,7 @@ pub fn TC0_TBL_LOOKUP(tc: &mut [i8; 4], iIndexA: i32, pBS: &[u8], bChroma: i8) {
 }
 
 #[inline(always)]
-pub unsafe fn MB_BS_MV(
+pub fn MB_BS_MV(
     pRefPic0: Option<PicId>,
     pRefPic1: Option<PicId>,
     iMotionVector: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
@@ -294,7 +294,7 @@ pub unsafe fn MB_BS_MV(
 }
 
 #[inline(always)]
-pub unsafe fn ON_MB_BS_MV_DIFF(
+pub fn ON_MB_BS_MV_DIFF(
     iMV_A: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMV_B: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
@@ -308,7 +308,7 @@ pub unsafe fn ON_MB_BS_MV_DIFF(
 }
 
 #[inline(always)]
-pub unsafe fn IN_MB_BS_MV_DIFF(
+pub fn IN_MB_BS_MV_DIFF(
     iMV_A: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMV_B: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,
@@ -321,7 +321,7 @@ pub unsafe fn IN_MB_BS_MV_DIFF(
 }
 
 #[inline(always)]
-pub unsafe fn ON_MB_BS(
+pub fn ON_MB_BS(
     ref_p0: Option<PicId>,
     ref_q0: Option<PicId>,
     ref_p1: Option<PicId>,
@@ -351,7 +351,7 @@ pub unsafe fn ON_MB_BS(
 }
 
 #[inline(always)]
-pub unsafe fn SMB_EDGE_MV(
+pub fn SMB_EDGE_MV(
     pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
     iMotionVector: &[[i16; MV_A]; MB_BLOCK4x4_NUM],
     iIndex: usize,
@@ -374,7 +374,7 @@ pub unsafe fn SMB_EDGE_MV(
 }
 
 #[inline(always)]
-pub unsafe fn BS_EDGE(
+pub fn BS_EDGE(
     bsx1: u8,
     pRefIds: &[Option<PicId>; MB_BLOCK4x4_NUM],
     iMotionVector: &[[i16; MV_A]; MB_BLOCK4x4_NUM],
@@ -386,7 +386,7 @@ pub unsafe fn BS_EDGE(
 }
 
 #[inline(always)]
-pub unsafe fn IN_SMB_EDGE_MV(
+pub fn IN_SMB_EDGE_MV(
     refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
     mv: &[&MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>; LIST_A],
     iMbXy: usize,
@@ -430,7 +430,7 @@ pub unsafe fn IN_SMB_EDGE_MV(
 }
 
 #[inline(always)]
-pub unsafe fn IN_BS_EDGE(
+pub fn IN_BS_EDGE(
     bsx1: u8,
     refs: &[[Option<PicId>; MB_BLOCK4x4_NUM]; LIST_A],
     mv: &[&MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>; LIST_A],
@@ -470,7 +470,7 @@ pub fn GetPNzc(pCurDqLayer: &DqLayerState, iMbXy: i32) -> &[i8; 24] {
 // ============================================================================
 
 #[inline(always)]
-pub unsafe fn DeblockingBSInsideMBAvsbase(
+pub fn DeblockingBSInsideMBAvsbase(
     pNnzTab: &[i8; 24],
     nBS: &mut [[[u8; 4]; 4]; 2],
     iLShiftFactor: i32,
@@ -510,7 +510,7 @@ pub unsafe fn DeblockingBSInsideMBAvsbase(
 }
 
 #[inline(always)]
-pub unsafe fn DeblockingBSInsideMBAvsbase8x8(
+pub fn DeblockingBSInsideMBAvsbase8x8(
     pNnzTab: &[i8; 24],
     nBS: &mut [[[u8; 4]; 4]; 2],
     iLShiftFactor: i32,
@@ -1319,7 +1319,7 @@ pub unsafe fn DeblockingBSliceBsMarginalMBAvcbase(
 // ============================================================================
 
 #[inline]
-pub unsafe fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i32) -> i32 {
+pub fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i32) -> i32 {
     let iMbY = (*pCurDqLayer).iMbY;
     let iMbX = (*pCurDqLayer).iMbX;
     let iMbXy = (*pCurDqLayer).iMbXyIndex;
