@@ -150,6 +150,11 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**AA** = **the close** ([`phase5_session_aa.md`](phase5_session_aa.md)), under the
+finish rule: the residue families (the layer bracket first — `slice_split`'s
+maneuver one container over), the decided `common/` boundary executed, W7's
+closure, the combined Y-close→AA span (Z's five commits went unmeasured), and
+**the phase close** — phase6.md, briefs historical, this checklist shut.
 **Z** = **spent** (5 commits, `92add69d`…`2a0e0330`;
 [`phase5_session_z.md`](phase5_session_z.md)) — **faces 0, 1 and 2 landed whole,
 and the phase did not close**. Decoder `raw_ptr` **383 → 310**, decoder
