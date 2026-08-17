@@ -178,7 +178,7 @@ pub use crate::decoder::picture::{SPicture, PPicture};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
-pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState, PDqLayer};
+pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
 
 
 pub use crate::decoder::decoder_context::{SRefPic};
