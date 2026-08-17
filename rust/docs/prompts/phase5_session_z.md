@@ -9,6 +9,23 @@ Counts at `dff3f78b`; re-grep at each face's open (S24).
 slice view (`SliceCtx`, `slice_split`) is **landed and green**; the flip above it was
 attempted, compiled whole, and reverted on a Miri verdict whose fix is face 0 below.
 
+## The finish rule (Eugene, 2026-08-16: "finish the work without stopping in half
+done state")
+
+1. **This session ends with the phase closed**, or with a blocker only Eugene or
+   the steward can clear, named in the hand-off. Nothing else ends it: not a
+   tidy boundary (forcing rule 1), not context (S31 — compact, re-read,
+   continue), and **not a revert**. A revert inside this session is a
+   checkpoint: fix the blocker, re-attempt in-session. X and Y reverted and
+   *handed off* because their blockers were unmeasured; Z's are measured and
+   their fixes are faces 0–1 — "the flip reverted again" is no longer a valid
+   end state.
+2. **Face 1 does not open before face 0's done-test reads met.** The accessor
+   class is the only named reason the flip has ever failed; running the flip
+   early recreates session Y.
+3. Half-landed is still forbidden the other way too: a face lands whole and
+   gated, or is reverted **and then fixed** — never committed part-way.
+
 ## 0. Start
 
 1. Commit the inherited doc tail.
