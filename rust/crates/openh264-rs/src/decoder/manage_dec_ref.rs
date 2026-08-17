@@ -190,7 +190,7 @@ pub unsafe extern "C" fn SetUnRef(pRef: *mut SPicture) {
 /// Flushes all reference pictures from short-term and long-term lists and invokes `SetUnRef`.
 ///
 /// Matches `void WelsResetRefPic (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
+pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     let bTmpRefSet = false;
     ref_set(pCtx, bTmpRefSet).uiLongRefCount[LIST_0] = 0;
     ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0] = 0;
@@ -201,7 +201,7 @@ pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     for i in 0..MAX_DPB_COUNT {
         let entry = ref_set(pCtx, bTmpRefSet).pShortRefList[LIST_0][i];
         if let Some(pPic) = pool_pic_mut(&mut pCtx.pPicBuff, entry) {
-            SetUnRef(pPic);
+            unsafe { SetUnRef(pPic) };
             ref_set(pCtx, bTmpRefSet).pShortRefList[LIST_0][i] = None;
         }
     }
@@ -210,7 +210,7 @@ pub unsafe fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     for i in 0..MAX_DPB_COUNT {
         let entry = ref_set(pCtx, bTmpRefSet).pLongRefList[LIST_0][i];
         if let Some(pPic) = pool_pic_mut(&mut pCtx.pPicBuff, entry) {
-            SetUnRef(pPic);
+            unsafe { SetUnRef(pPic) };
             ref_set(pCtx, bTmpRefSet).pLongRefList[LIST_0][i] = None;
         }
     }
@@ -279,14 +279,14 @@ pub fn WelsDelShortFromList(
 }
 
 /// Deletes a short-term reference picture and immediately calls `SetUnRef`.
-pub unsafe fn WelsDelShortFromListSetUnref(
+pub fn WelsDelShortFromListSetUnref(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     iFrameNum: i32,
 ) -> Option<PicId> {
     let slot = WelsDelShortFromList(pCtx, bTmpRefSet, iFrameNum);
     if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
-        SetUnRef(pPic);
+        unsafe { SetUnRef(pPic) };
     }
     slot
 }
@@ -329,14 +329,14 @@ pub fn WelsDelLongFromList(
 }
 
 /// Deletes a long-term reference picture and immediately calls `SetUnRef`.
-pub unsafe fn WelsDelLongFromListSetUnref(
+pub fn WelsDelLongFromListSetUnref(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     uiLongTermFrameIdx: u32,
 ) -> Option<PicId> {
     let slot = WelsDelLongFromList(pCtx, bTmpRefSet, uiLongTermFrameIdx);
     if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
-        SetUnRef(pPic);
+        unsafe { SetUnRef(pPic) };
     }
     slot
 }
@@ -465,7 +465,7 @@ pub fn AddLongTermToList(
 }
 
 /// Converts a short-term reference picture to a long-term reference picture.
-pub unsafe fn MarkAsLongTerm(
+pub fn MarkAsLongTerm(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     iFrameNum: i32,
@@ -546,7 +546,7 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 /// Evicts the oldest short-term reference picture when DPB reaches capacity.
 ///
 /// Matches `static int32_t SlidingWindow (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
-pub unsafe fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
+pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
     // S25: no borrow of `*pCtx` or `*pRefPic` outlives one expression here. Both
     // `WelsDelShortFromList` and `SetUnRef` re-enter through the raw pointers this
     // function was handed, so a `let ref_pic = &mut *pRefPic` held across them is
@@ -574,7 +574,7 @@ pub unsafe fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) ->
                 let slot = WelsDelShortFromList(pCtx, bTmpRefSet, iCurFrameNum);
                 match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
                     Some(pPic) => {
-                        SetUnRef(pPic);
+                        unsafe { SetUnRef(pPic) };
                         break;
                     }
                     None => return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW,
@@ -588,7 +588,7 @@ pub unsafe fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) ->
 /// Ensures at least 1 free slot in the DPB for error concealment operations.
 ///
 /// Matches `static int32_t RemainOneBufferInDpbForEC (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
-pub unsafe fn RemainOneBufferInDpbForEC(
+pub fn RemainOneBufferInDpbForEC(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
 ) -> i32 {
@@ -942,8 +942,8 @@ pub unsafe fn MMCO(
 /// Populates `pRefList[LIST_0]` for standard P-slices.
 ///
 /// Matches `int32_t WelsInitRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, _iPoc: i32) -> i32 {
-    let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
+pub fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, _iPoc: i32) -> i32 {
+    let err = unsafe { WelsCheckAndRecoverForFutureDecoding(pCtx) };
     if err != ERR_NONE {
         return err;
     }
@@ -977,8 +977,8 @@ pub unsafe fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Optio
 /// Populates dual reference picture lists (`pRefList[0]` and `pRefList[1]`) for B-slices.
 ///
 /// Matches `int32_t WelsInitBSliceRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, iPoc: i32) -> i32 {
-    let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
+pub fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, iPoc: i32) -> i32 {
+    let err = unsafe { WelsCheckAndRecoverForFutureDecoding(pCtx) };
     if err != ERR_NONE {
         return err;
     }
