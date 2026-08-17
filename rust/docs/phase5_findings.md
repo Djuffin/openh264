@@ -2619,3 +2619,54 @@ byte on every real target — `iLastMbQp` is where it always was. Only the alias
 objects. `gates.sh exit` at `574bd987` reported it; the repaired probe
 (`decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`, 391s under
 Miri) passes, and nothing else in the battery moved.
+
+---
+
+## F54 — a niche in a `bool` makes `Option<SpsRef>` valid at all-zero, so the zeroed shell pre-activated SPS 0
+
+*Phase 5 session Z, at `92add69d`, found by two decoder probes within minutes of
+the conversion that created it. Fixed in the same commit. **S21 predicted it**, which
+is the point of recording it.*
+
+`SWelsDecoderSpsPpsCTX.pActiveLayerSps` held `[*mut SSps; MAX_LAYER_NUM]` — raw
+aliases into the two SPS buffers, used by all six of their readers for **identity
+only** ("is the SPS this layer activated still the one this NAL names?"). T5.Z1
+converted them to `[Option<SpsRef>; MAX_LAYER_NUM]`, the ids-before-ownership
+maneuver the phase has run a dozen times.
+
+The context is built from a zeroed shell (`SWelsDecoderContext::new_boxed`, plan
+§7.6 S21), and `make_zeroed_shell_valid` writes only the fields whose zero is not
+their value. Every prior conversion of this kind was **redundant** there:
+`Option<Box<T>>`'s `None` *is* all-zero through the null-pointer niche, and the four
+existing writes say so in their comments.
+
+`Option<SpsRef>` is the first one where that reasoning inverts. `SpsRef` is
+`{ id: i32, subset: bool }`, and the layout algorithm puts the enum's niche in
+`bool` — whose invalid bit patterns are `2..=255`. `0` is a **valid** `false`. So
+all-zero decodes as `Some(SpsRef { id: 0, subset: false })`: the id of the first SPS
+every ordinary stream sends.
+
+**The failure, end to end.** `CheckSpsActive` scans `pActiveLayerSps` for the ref it
+was handed and answers "already active" on the first slot. `ParseSps` then takes its
+*overwrite* arm — staging the SPS into `sSpsBuffer[MAX_SPS_COUNT]` instead of storing
+it at `sSpsBuffer[id]` — so `bSpsAvailFlags[id]` and `bSpsExistAheadFlag` are never
+set. `WelsParseOneNal` rejects the next VCL NAL with `dsNoParamSets`, and every
+stream decodes to **zero frames**.
+
+**What found it**: `decode_slice_loop_runs_over_a_macroblock_grid_…` and
+`fmo_slice_group_walk_…`, both immediately, both with "no frame came out". What
+*identified* it was adding the returned state bits to the first one's assertion
+message — `states = 0x10` is `dsNoParamSets`, which named the arm in one run. That
+assertion now carries the state bits permanently, as its sibling concealment probe
+already did.
+
+**Fix**: one line in `make_zeroed_shell_valid`, with the reasoning at it —
+`addr_of_mut!((*p).sSpsPpsCtx.pActiveLayerSps).write([None; MAX_LAYER_NUM])`.
+
+**The general rule, sharpened.** S21 says a struct gaining an owned field gets its
+construction paths audited in the same commit. This was not an *owned* field — it is
+`Copy`, 8 bytes, no allocation — and the audit was still the thing that mattered.
+The clause that generalises: **when a field's type changes, ask what its all-zero
+bit pattern now means, not whether it owns anything.** A niche-carrying `Option` over
+a type with a `bool` or a small enum is valid at zero and reads as `Some(default)`;
+a raw pointer's zero was `None`. The two look identical in a diff.

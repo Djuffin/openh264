@@ -9,8 +9,8 @@
 )]
 
 use crate::decoder::decoder_context::{
-    PicRefs, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_and_refs, pps_of, ref_id,
-    slice_ctx, sps_of,
+    PicRefs, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, pps_of, ref_id, slice_split,
+    sps_of,
 };
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::BsReader;
@@ -671,10 +671,7 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: &mut SliceCtx<'_>, pCurDqLay
     true
 }
 
-pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: *mut SWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
-        return ERR_NONE;
-    }
+pub unsafe fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
     // **The lists travel as values, not as borrows** (T5.Z1). The loop below writes
     // `pDequant_coeff_buffer*` through the context on every iteration, so a borrow of
     // the parameter sets held across it is the shape this face removes — and the two
@@ -2472,10 +2469,7 @@ pub unsafe fn WelsTargetMbConstruction(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mu
     }
 }
 
-pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
-    if pCtx.is_null() {
-        return ERR_NONE;
-    }
+pub unsafe fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
     let dq: &mut DqLayerState = pCurDqLayer;
 
     if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
@@ -2483,8 +2477,7 @@ pub unsafe fn WelsTargetSliceConstruction(pCtx: *mut SWelsDecoderContext, pCurDq
     }
     // **The split** (T5.Y2), the third of the three: this bracket reconstructs
     // rather than parses, and reaches the context for exactly what the view carries.
-    let (pDec, pRefs) = cur_and_refs(pCtx);
-    let mut view = slice_ctx(pCtx, None);
+    let (pDec, pRefs, mut view) = slice_split(pCtx, None);
     // The view's scope is the macroblock loop; the deblocking tail below it still
     // takes the context, and converts with the rest of `deblocking.rs`.
     let (iCurLayerWidth, iCurLayerHeight) = {
@@ -5351,14 +5344,11 @@ pub unsafe extern "C" fn WelsDecodeMbCabacBSlice(
 // ============================================================================
 
 pub unsafe fn WelsDecodeSlice(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
     bFirstSliceInLayer: bool,
     pNalCur: *mut SNalUnit,
 ) -> i32 {
-    if pCtx.is_null() {
-        return ERR_NONE;
-    }
     // **The bracket top** (T5.Y2): the slice header's parameter sets are selected,
     // the CABAC engine is initialized and the scaling lists are computed *before*
     // the split, because the view copies those scalars; below the split the context
@@ -5441,8 +5431,8 @@ pub unsafe fn WelsDecodeSlice(
     // **The split.** Everything above this line is the context's; everything below
     // it is the view's, and the pool borrow the two halves of `cur_and_refs` carry
     // coexists with it because `pPicBuff` is not in the view.
-    let (pDec, pRefs) = cur_and_refs(pCtx);
-    let mut view = slice_ctx(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+    let (pDec, pRefs, mut view) =
+        slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
     let pCtx = &mut view;
 
     let mut iNextMbXyIndex = (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
@@ -5494,10 +5484,7 @@ pub unsafe fn WelsDecodeSlice(
     ERR_NONE
 }
 
-pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
-    if pCtx.is_null() {
-        return ERR_NONE;
-    }
+pub unsafe fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
     let Some(pNalCur) = (*pCtx).pNalCur.as_mut() else {
         return ERR_NONE;
     };
@@ -5541,8 +5528,8 @@ pub unsafe fn WelsDecodeAndConstructSlice(pCtx: *mut SWelsDecoderContext, pCurDq
     // **The split** — `WelsDecodeSlice`'s, one function down: the pool's two halves
     // and the view come out of the same context in the same statement group, and
     // nothing below the loop reaches the context again.
-    let (pDec, pRefs) = cur_and_refs(pCtx);
-    let mut view = slice_ctx(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+    let (pDec, pRefs, mut view) =
+        slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
     let pCtx = &mut view;
 
     let mut iNextMbXyIndex = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
@@ -5613,35 +5600,32 @@ mod tests {
     // (`decoder_core`'s forwarding shims, which own the `as_mut()`). The tests
     // follow the behaviour: the null-context arm is still asserted at these three
     // functions, and the null-*layer* arm is asserted where it now lives.
-    // **T5.Y2: the null-*context* arm moved the way the null-layer arm did at
-    // T5.X3.** `WelsMbIntraPredictionConstruction` and `WelsTargetMbConstruction`
-    // take the slice view, so a null context is unrepresentable at them; the guard
-    // did not disappear, it sits at the three bracket tops that still take the
-    // context (`WelsTargetSliceConstruction`, `WelsDecodeSlice`,
-    // `WelsDecodeAndConstructSlice`), and the test below asserts it there — through
-    // `decoder_core`'s forwarding shims, which is how the api layer reaches them.
+    // **T5.Z4: the null-*context* arm is unrepresentable everywhere in the decoder
+    // now.** T5.Y2 moved it to the three bracket tops that still took a raw context;
+    // the flip took the context off them too, so there is no decoder site left where
+    // a null context can be constructed to test. The guard did not disappear — it is
+    // `api/codec_api.rs`'s, at the five entry points that still hold a pointer, and
+    // the api tests below drive it there. What remains testable here is the
+    // null-*layer* arm, which `decoder_core`'s three forwarding shims still own.
 
     #[test]
-    fn test_wels_target_slice_construction_null_ptrs() {
+    fn test_wels_target_slice_construction_null_layer() {
         unsafe {
-            let mut layer = DqLayerState::for_grid(MbDims::new(1, 1));
-            let res = WelsTargetSliceConstruction(std::ptr::null_mut(), &mut layer);
-            assert_eq!(res, ERR_NONE);
-
-            // And the null-*layer* arm, at the boundary it moved to (T5.X3):
+            let mut ctx = SWelsDecoderContext::new_boxed();
+            // The null-layer arm, at the boundary it moved to (T5.X3):
             // `decoder_core`'s three forwarding shims are the only decoder sites
             // left where a layer arrives as a raw pointer, and each answers a null
-            // one the way the callee here used to.
+            // one the way the per-macroblock callees used to.
             assert_eq!(
                 crate::decoder::decoder_core::WelsTargetSliceConstruction(
-                    std::ptr::null_mut(),
+                    &mut ctx,
                     std::ptr::null_mut()
                 ),
                 ERR_NONE
             );
             assert_eq!(
                 crate::decoder::decoder_core::WelsDecodeSlice(
-                    std::ptr::null_mut(),
+                    &mut ctx,
                     std::ptr::null_mut(),
                     false,
                     std::ptr::null_mut()
@@ -5650,7 +5634,7 @@ mod tests {
             );
             assert_eq!(
                 crate::decoder::decoder_core::WelsDecodeAndConstructSlice(
-                    std::ptr::null_mut(),
+                    &mut ctx,
                     std::ptr::null_mut()
                 ),
                 ERR_NONE
@@ -5948,8 +5932,8 @@ mod tests {
     #[test]
     fn fmo_slice_group_walk_runs_under_the_aliasing_checker() {
         const FMO: &[u8] = include_bytes!("../../../../../res/fmo_2groups_64x64.264");
-        let (frames, dims, _) = drive_decoder_over(FMO);
-        assert_eq!(frames, 1, "fmo_2groups_64x64.264 is one frame");
+        let (frames, dims, states) = drive_decoder_over(FMO);
+        assert_eq!(frames, 1, "fmo_2groups_64x64.264 is one frame (states = {states:#x})");
         assert_eq!(dims, Some((64, 64)));
     }
 }

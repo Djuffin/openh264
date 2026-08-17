@@ -623,14 +623,13 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
 /// pointer, `None` where it returned null. Every read below is an index into the
 /// owning buffer.
 pub unsafe fn ParseNalHeader(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pNalUnitHeader: &mut SNalUnitHeader,
     kiRbspStart: usize,
     iSrcRbspLen: i32,
     pConsumedBytes: &mut i32,
 ) -> Option<usize> {
     let pCurNal: *mut SNalUnit;
-    let bytes = (*pCtx).sRawData.bytes();
     let mut iNal = kiRbspStart;
     let mut iNalSize = iSrcRbspLen;
 
@@ -639,7 +638,7 @@ pub unsafe fn ParseNalHeader(
     // Remove consecutive ZERO bytes at the end of current NAL in reverse order
     let mut iIndex = iSrcRbspLen - 1;
     while iIndex >= 0 {
-        if bytes[kiRbspStart + iIndex as usize] == 0 {
+        if pCtx.sRawData.bytes()[kiRbspStart + iIndex as usize] == 0 {
             iNalSize -= 1;
             *pConsumedBytes += 1;
             iIndex -= 1;
@@ -648,14 +647,14 @@ pub unsafe fn ParseNalHeader(
         }
     }
 
-    pNalUnitHeader.uiForbiddenZeroBit = bytes[iNal] >> 7;
+    pNalUnitHeader.uiForbiddenZeroBit = pCtx.sRawData.bytes()[iNal] >> 7;
     if pNalUnitHeader.uiForbiddenZeroBit != 0 {
         (*pCtx).iErrorCode |= dsBitstreamError;
         return None;
     }
 
-    pNalUnitHeader.uiNalRefIdc = (bytes[iNal] >> 5) & 0x03;
-    pNalUnitHeader.eNalUnitType = match bytes[iNal] & 0x1F {
+    pNalUnitHeader.uiNalRefIdc = (pCtx.sRawData.bytes()[iNal] >> 5) & 0x03;
+    pNalUnitHeader.eNalUnitType = match pCtx.sRawData.bytes()[iNal] & 0x1F {
         0 => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
         1 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE,
         2 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPA,
@@ -738,7 +737,7 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            DecodeNalHeaderExt(&mut *pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
+            DecodeNalHeaderExt(&mut *pCurNal, &pCtx.sRawData.bytes()[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
             if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                 || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
             {
@@ -757,14 +756,18 @@ pub unsafe fn ParseNalHeader(
             (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
 
             if pNalUnitHeader.uiNalRefIdc != 0 {
-                let iBitSize = rbsp_bit_size(bytes, iNal, iNalSize);
+                let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
                 let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iNal, iBitSize);
                 if iErr != ERR_NONE {
                     (*pCtx).iErrorCode |= dsBitstreamError;
                     return None;
                 }
-                let (buf, cursor) = (*pCtx).sBs.split(&(*pCtx).sRawData);
-                ParsePrefixNalUnit(pCtx, buf, cursor);
+                // The cursor travels as a value and is written back: `sBs` and
+                // `sRawData` are two fields of the context the parse takes whole
+                // (T5.Z4).
+                let (start, mut cursor) = ((*pCtx).sBs.start, (*pCtx).sBs.cursor);
+                ParsePrefixNalUnit(pCtx, start, &mut cursor);
+                (*pCtx).sBs.cursor = cursor;
             }
             (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
         }
@@ -778,7 +781,7 @@ pub unsafe fn ParseNalHeader(
         | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR => {
             let bExtensionFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
 
-            pCurNal = match cur_au(pCtx) {
+            pCurNal = match cur_au(&mut pCtx.access_unit) {
                 Some(au) => MemGetNextNal(au),
                 None => std::ptr::null_mut(),
             };
@@ -795,7 +798,7 @@ pub unsafe fn ParseNalHeader(
             // needs to carry across `ParseSliceHeaderSyntaxs`, which derives the access
             // unit itself. `pCurNal` survives too, because a node is its own allocation
             // (T5.O4) — that is what makes an owning `Box` legal at this level at all.
-            let uiAvailNalNum = match cur_au(pCtx) {
+            let uiAvailNalNum = match cur_au(&mut pCtx.access_unit) {
                 Some(au) => au.uiAvailUnitsNum,
                 None => 0,
             };
@@ -807,7 +810,7 @@ pub unsafe fn ParseNalHeader(
                     return None;
                 }
 
-                DecodeNalHeaderExt(&mut *pCurNal, &bytes[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
+                DecodeNalHeaderExt(&mut *pCurNal, &pCtx.sRawData.bytes()[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
                 if (*pCurNal).sNalHeaderExt.uiQualityId != 0
                     || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
                 {
@@ -824,7 +827,11 @@ pub unsafe fn ParseNalHeader(
                     == EWelsNalUnitType::NAL_UNIT_PREFIX
                 {
                     if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalData.sPrefixNal.bPrefixNalCorrectFlag {
-                        PrefetchNalHeaderExtSyntax(pCtx, pCurNal, &mut (*pCtx).sSpsPpsCtx.sPrefixNal);
+                        // The prefix NAL is copied out first: it is a field of the
+                        // context this call takes whole (T5.Z4). `SNalUnit` is plain
+                        // data, and the callee only reads the source.
+                        let mut prefix = (*pCtx).sSpsPpsCtx.sPrefixNal;
+                        PrefetchNalHeaderExtSyntax(pCtx, pCurNal, &mut prefix);
                     }
                 }
 
@@ -840,13 +847,13 @@ pub unsafe fn ParseNalHeader(
             // that `pBs` becomes and `ParseSliceHeaderSyntaxs` holds as a
             // strongly-protected argument, which is the pair T5.O7 was convicted on.
             // (The port already derived this node twice, before and after the parse.)
-            let p_last_nal = match cur_au(pCtx) {
+            let p_last_nal = match cur_au(&mut pCtx.access_unit) {
                 Some(au) => au.nal((uiAvailNalNum - 1) as usize),
                 None => return None,
             };
 
             let pBs = &mut (*p_last_nal).sNalData.sVclNal.sSliceBitsRead;
-            let iBitSize = rbsp_bit_size(bytes, iNal, iNalSize);
+            let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
             let mut iErr =
                 crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iNal, iBitSize);
             if iErr != ERR_NONE {
@@ -855,8 +862,19 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
-            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(pCtx, buf, cursor, bExtensionFlag);
+            // The cursor travels as a value and is written back **into the NAL's own
+            // reader**, which is where the slice's bit position lives and where the
+            // slice-data parse picks it up (T5.M3, T5.Y2). It is not `pCtx.sBs`: that
+            // one is the non-VCL parser's, and writing this back there would leave
+            // every slice header re-read from its first bit.
+            let (start, mut cursor) = (pBs.start, pBs.cursor);
+            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(
+                pCtx,
+                start,
+                &mut cursor,
+                bExtensionFlag,
+            );
+            (*p_last_nal).sNalData.sVclNal.sSliceBitsRead.cursor = cursor;
             if iErr != ERR_NONE {
                 if uiAvailNalNum == 1 && (*pCurNal).sNalHeaderExt.bIdrFlag {
                     crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
@@ -875,12 +893,12 @@ pub unsafe fn ParseNalHeader(
                 crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
             }
             if uiAvailNalNum > 1 {
-                let p_prev_nal = match cur_au(pCtx) {
+                let p_prev_nal = match cur_au(&mut pCtx.access_unit) {
                     Some(au) => au.nal((uiAvailNalNum - 2) as usize),
                     None => return None,
                 };
                 if CheckAccessUnitBoundary(pCtx, p_last_nal, p_prev_nal, p_last_sps) {
-                    if let Some(au) = cur_au(pCtx) {
+                    if let Some(au) = cur_au(&mut pCtx.access_unit) {
                         au.uiEndPos = uiAvailNalNum - 2;
                     }
                     (*pCtx).bAuReadyFlag = true;
@@ -977,7 +995,7 @@ pub fn CheckAccessUnitBoundaryExt(
 
 /// Evaluates whether the current NAL begins a new picture / Access Unit boundary.
 pub unsafe fn CheckAccessUnitBoundary(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kpCurNal: *const SNalUnit,
     kpLastNal: *const SNalUnit,
     kpSpsRef: Option<SpsRef>,
@@ -1054,7 +1072,7 @@ pub unsafe fn CheckAccessUnitBoundary(
 
 /// Checks whether the current NAL begins a brand-new coded video sequence.
 pub unsafe fn CheckNextAuNewSeq(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kpCurNal: *const SNalUnit,
     kpSpsRef: Option<SpsRef>,
 ) -> bool {
@@ -1078,7 +1096,7 @@ pub unsafe fn CheckNextAuNewSeq(
 /// dead `pSrcNal`/`kSrcNalLen` pair — unused in this port, upstream's parse-only
 /// SPS/PPS caching was never carried — is deleted (S18). The trailing-bits read is
 /// an index, in bounds because the `kiSrcLen <= 0` guard has always preceded it.
-pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize, kiSrcLen: i32) -> i32 {
+pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcLen: i32) -> i32 {
     if kiSrcLen <= 0 {
         return ERR_NONE;
     }
@@ -1109,8 +1127,9 @@ pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize,
                     return iErr;
                 }
             }
-            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
-            iErr = ParseSps(pCtx, buf, cursor, &mut iPicWidth, &mut iPicHeight);
+            let (start, mut cursor) = (pBs.start, pBs.cursor);
+            iErr = ParseSps(pCtx, start, &mut cursor, &mut iPicWidth, &mut iPicHeight);
+            (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
                     && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1138,8 +1157,9 @@ pub unsafe fn ParseNonVclNal(pCtx: *mut SWelsDecoderContext, kiRbspStart: usize,
                     return iErr;
                 }
             }
-            let (buf, cursor) = pBs.split(&(*pCtx).sRawData);
-            iErr = ParsePps(pCtx, buf, cursor);
+            let (start, mut cursor) = (pBs.start, pBs.cursor);
+            iErr = ParsePps(pCtx, start, &mut cursor);
+            (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
                 if !(*pCtx).pParam.is_null()
                     && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
@@ -1213,10 +1233,16 @@ pub unsafe fn ParseRefBasePicMarking(
 
 /// Parses prefix NAL unit syntax elements (NAL type 14).
 pub unsafe fn ParsePrefixNalUnit(
-    pCtx: *mut SWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBs: &mut BsCursor,
 ) -> i32 {
+    // **T5.Z4: the offset travels, not the slice.** The caller cannot hand a window
+    // out of `sRawData` *and* the context, because both are the same object once the
+    // context is a `&mut`. The window is derived here from the field, and the
+    // borrow ends before the parameter-set activation this function closes with —
+    // which is the whole reason the two sub-parsers below stopped taking a context.
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
     let pCurNal = &mut (*pCtx).sSpsPpsCtx.sPrefixNal;
     let mut uiCode: u32 = 0;
 
@@ -1251,8 +1277,9 @@ pub unsafe fn ParsePrefixNalUnit(
 }
 
 /// Decodes the SVC extension syntax block within a Subset SPS (`SSubsetSps`).
+/// **T5.Z4: the context parameter is deleted.** It was read nowhere in the body,
+/// and it is what made the window and the cursor collide in one call (S18).
 pub unsafe fn DecodeSpsSvcExt(
-    pCtx: *mut SWelsDecoderContext,
     pSpsExt: &mut SSubsetSps,
     buf: &[u8],
     pBs: &mut BsCursor,
@@ -1354,7 +1381,7 @@ pub fn GetLevelLimits(iLevelIdx: i32, bConstraint3: bool) -> Option<&'static SLe
 /// With [`SpsRef`] the identity compare below is a value compare and the SPS is
 /// resolved inside, where nothing else is borrowed.
 pub unsafe fn CheckSpsActive(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     r: Option<SpsRef>,
     bUseSubsetFlag: bool,
 ) -> bool {
@@ -1383,7 +1410,7 @@ pub unsafe fn CheckSpsActive(
         }
         // The access unit is its own allocation, so the NAL walk below and the SPS
         // lookups inside it borrow two disjoint things (T5.O4).
-        if let Some(pCurAu) = cur_au(pCtx) {
+        if let Some(pCurAu) = cur_au(&mut pCtx.access_unit) {
             let iNum = pCurAu.uiAvailUnitsNum as usize;
             for i in 0..iNum {
                 let pNalUnit = pCurAu.nal(i);
@@ -1407,12 +1434,19 @@ pub unsafe fn CheckSpsActive(
 
 /// Parses Sequence Parameter Sets (SPS and Subset SPS).
 pub unsafe fn ParseSps(
-    pCtx: *mut SWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBsAux: &mut BsCursor,
     pPicWidth: &mut i32,
     pPicHeight: &mut i32,
 ) -> i32 {
+    // **T5.Z4: the offset travels, not the slice.** The caller cannot hand a window
+    // out of `sRawData` *and* the context, because both are the same object once the
+    // context is a `&mut`. The window is derived here from the field, and the
+    // borrow ends before the parameter-set activation this function closes with —
+    // which is the whole reason the two sub-parsers below stopped taking a context.
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
+
     // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in au_parser.cpp. Zeroing the
     // raw bytes (rather than using Default) also clears the struct's padding, which
     // the byte-wise comparison against the stored SPS below relies on: leftover
@@ -1657,7 +1691,7 @@ pub unsafe fn ParseSps(
         // and answered `dsErrorFree` where the C++ answers `dsBitstreamError`. All 22
         // truncation rows still disagreeing after T5.T2 are this one arm, and closing
         // it takes the corpus to **2318 / 0** on codes.
-        let iRetVui = ParseVui(pCtx, pSps, buf, pBsAux);
+        let iRetVui = ParseVui(pSps, buf, pBsAux);
         if iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
             // Currently no support for VUI with HRD enabled in a subset SPS.
             if kbUseSubsetFlag {
@@ -1669,7 +1703,7 @@ pub unsafe fn ParseSps(
     }
 
     if kbUseSubsetFlag && (uiProfileIdc == PRO_SCALABLE_BASELINE || uiProfileIdc == PRO_SCALABLE_HIGH) {
-        let iRet = DecodeSpsSvcExt(pCtx, &mut *pSubsetSps, buf, pBsAux);
+        let iRet = DecodeSpsSvcExt(&mut *pSubsetSps, buf, pBsAux);
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -1733,10 +1767,17 @@ pub unsafe fn ParseSps(
 
 /// Parses Picture Parameter Sets (PPS).
 pub unsafe fn ParsePps(
-    pCtx: *mut SWelsDecoderContext,
-    buf: &[u8],
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
     pBsAux: &mut BsCursor,
 ) -> i32 {
+    // **T5.Z4: the offset travels, not the slice.** The caller cannot hand a window
+    // out of `sRawData` *and* the context, because both are the same object once the
+    // context is a `&mut`. The window is derived here from the field, and the
+    // borrow ends before the parameter-set activation this function closes with —
+    // which is the whole reason the two sub-parsers below stopped taking a context.
+    let buf = pCtx.sRawData.window_from(kiRbspStart);
+
     // T5.X6: `pPpsList: *mut SPps` stood here — the context's PPS buffer base,
     // passed by every caller and **read nowhere in the body**, which reaches the
     // buffer through `pCtx` instead. Dead since the function was written; deleted
@@ -1899,8 +1940,8 @@ pub unsafe fn ParsePps(
 }
 
 /// Parses Video Usability Information (VUI) parameters inside an SPS.
+/// **T5.Z4: the context parameter is deleted** — see `DecodeSpsSvcExt` (S18).
 pub unsafe fn ParseVui(
-    pCtx: *mut SWelsDecoderContext,
     pSps: &mut SSps,
     buf: &[u8],
     pBsAux: &mut BsCursor,
@@ -2230,10 +2271,7 @@ pub fn ParseScalingList(
 /// happen to match the new sequence's kept its stale map, because
 /// `FmoParamSetsChanged`'s first term — the one that exists to catch exactly this —
 /// is `!bActiveFlag`.
-pub unsafe fn ResetFmoList(pCtx: *mut SWelsDecoderContext) -> i32 {
-    if pCtx.is_null() {
-        return 0;
-    }
+pub unsafe fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
     let iCountNum = (*pCtx).iActiveFmoNum;
     crate::decoder::fmo::UninitFmoList(&mut (*pCtx).sFmoList, iCountNum);
     (*pCtx).iActiveFmoNum = 0;
@@ -2307,8 +2345,8 @@ pub fn ForceClearCurrentNal(pAu: &mut SAccessUnit) {
 ///
 /// The access-unit borrow ends before `pParam` is read: nothing requires that here,
 /// and everything is easier to check when a derivation covers one statement.
-unsafe fn discard_nal_and_close_au(pCtx: PWelsDecoderContext, uiAvailNalNum: u32) {
-    if let Some(au) = cur_au(pCtx) {
+unsafe fn discard_nal_and_close_au(pCtx: &mut SWelsDecoderContext, uiAvailNalNum: u32) {
+    if let Some(au) = cur_au(&mut pCtx.access_unit) {
         ForceClearCurrentNal(au);
         if uiAvailNalNum > 1 {
             au.uiEndPos = uiAvailNalNum - 2;
@@ -2324,7 +2362,7 @@ unsafe fn discard_nal_and_close_au(pCtx: PWelsDecoderContext, uiAvailNalNum: u32
 
 /// Prefetches and synchronizes prefix NAL header extension parameters into slice headers.
 pub unsafe fn PrefetchNalHeaderExtSyntax(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     kppDst: *mut SNalUnit,
     kpSrc: *mut SNalUnit,
 ) -> bool {
@@ -2346,8 +2384,8 @@ pub unsafe fn PrefetchNalHeaderExtSyntax(
 }
 
 /// Resets active SPS pointers for each layer if MB reconstruction has not started.
-pub unsafe fn ResetActiveSPSForEachLayer(pCtx: *mut SWelsDecoderContext) {
-    if !pCtx.is_null() && (*pCtx).iTotalNumMbRec == 0 {
+pub unsafe fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
+    if (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
             (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;
         }
@@ -2432,7 +2470,7 @@ mod au_list_tests {
     fn reset_fmo_list_clears_the_entries_the_cpp_clears() {
         unsafe {
             let mut ctx = SWelsDecoderContext::new_boxed();
-            let pCtx: *mut SWelsDecoderContext = &mut *ctx;
+            let pCtx = &mut *ctx;
 
             // One active entry with a map, exactly as `FmoParamUpdate` leaves it.
             (*pCtx).sFmoList[0].bActiveFlag = true;

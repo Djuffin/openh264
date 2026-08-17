@@ -2163,12 +2163,12 @@ pub unsafe extern "C" fn WelsDeblockingMb(
 /// reference list during deblocking, so the loop's `ref_ids` and the context's lists
 /// cannot diverge.
 #[inline]
-unsafe fn snapshot_ref_ids(pCtx: *mut SWelsDecoderContext) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] {
-    (*pCtx).sRefPic.pRefList
+fn snapshot_ref_ids(refs: &SRefPic) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] {
+    refs.pRefList
 }
 
 pub unsafe fn WelsDeblockingFilterSlice(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
     pDec: PPicture,
     pDeblockMb: Option<PDeblockingFilterMbFunc>,
@@ -2181,9 +2181,10 @@ pub unsafe fn WelsDeblockingFilterSlice(
         .map_or(0, |sps| sps.uiTotalMbCount as i32);
 
     let mut pFilter = SDeblockingFilter::default();
-    // The FMO entry is read-only across the macroblock loop and lives in its own
-    // context field, disjoint from everything the loop writes (T5.Z1).
-    let pFmo = active_fmo(&(*pCtx).sFmoList, (*pCtx).fmo_id);
+    // T5.Z4: the id, not the entry — the loop below writes the layer and the
+    // picture through the same context, and `active_fmo` re-resolves in one
+    // expression at the one line that walks the map.
+    let fmo_id = (*pCtx).fmo_id;
     let mut iNextMbXyIndex: i32;
     let iTotalNumMb = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
     let mut iCountNumMb = 0i32;
@@ -2211,7 +2212,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
     // F38/S29: `addr_of_mut!`, not `&mut` — this pointer is stored into another
     // struct and read for the whole macroblock loop, which is S29's worst class.
-    pFilter.ref_ids = snapshot_ref_ids(pCtx);
+    pFilter.ref_ids = snapshot_ref_ids(&pCtx.sRefPic);
 
     // T5.W7: `pps_id` is the slice header's and constant across the loop, so it is
     // read once here rather than through a shared borrow of the layer held across the
@@ -2239,7 +2240,8 @@ pub unsafe fn WelsDeblockingFilterSlice(
 
             if pps_of(&(*pCtx).sSpsPpsCtx, pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(pFmo, iNextMbXyIndex);
+                iNextMbXyIndex =
+                    crate::decoder::fmo::FmoNextMb(active_fmo(&pCtx.sFmoList, fmo_id), iNextMbXyIndex);
             } else {
                 iNextMbXyIndex += 1;
             }
@@ -2256,7 +2258,7 @@ pub unsafe fn WelsDeblockingFilterSlice(
 }
 
 pub unsafe fn WelsDeblockingInitFilter(
-    pCtx: *mut SWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &DqLayerState,
     pFilter: &mut SDeblockingFilter,
     iFilterIdc: *mut i32,
@@ -2272,7 +2274,7 @@ pub unsafe fn WelsDeblockingInitFilter(
     (*pFilter).iSliceBetaOffset = pSliceHeaderExt.sSliceHeader.iSliceBetaOffset as i8;
 
     // F38/S29, as above.
-    (*pFilter).ref_ids = snapshot_ref_ids(pCtx);
+    (*pFilter).ref_ids = snapshot_ref_ids(&pCtx.sRefPic);
 }
 
 pub unsafe fn WelsDeblockingFilterMB(

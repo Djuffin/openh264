@@ -266,8 +266,8 @@ pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mu
 // for `ExpandReferencingPicture` and reaches no other picture at all.
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
-pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
-    if pCtx.is_null() || (*pCtx).pParam.is_null() {
+pub unsafe extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
+    if (*pCtx).pParam.is_null() {
         return;
     }
 
@@ -290,13 +290,10 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: PWelsDecoderContext) {
 }
 
 /// Evaluates if error concealment is required by inspecting the macroblock decoding flags.
-pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
+pub unsafe extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return false;
     };
-    if pCtx.is_null() {
-        return false;
-    }
     let Some(sps) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps) else {
         return false;
     };
@@ -312,8 +309,8 @@ pub unsafe extern "C" fn NeedErrorCon(pCtx: PWelsDecoderContext, pCurDqLayer: Op
 }
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
-pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
-    if pCtx.is_null() || (*pCtx).pDec.is_none() {
+pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+    if (*pCtx).pDec.is_none() {
         return;
     }
     // The two dimensions are read as **values** before the pool bracket below opens:
@@ -333,8 +330,9 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
     // under owned slots the second would have invalidated the first before the guard
     // ever ran. `PicRefs::get` answers for the current slot from the mutable half's
     // own pointer (F42), so one tag covers both.
-    let (pDstPic, pRefs) = cur_and_refs(pCtx);
-    let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
+    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
+    let mut pSrcPic = pRefs.get(prev);
 
     let uiHeightInPixelY = (iMbHeight as u32) << 4;
     let iStrideY = (*pDstPic).linesize(0);
@@ -396,11 +394,11 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: PWelsDecoderContext, pCurDqLa
 }
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
-pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() || (*pCtx).pDec.is_none() {
+    if (*pCtx).pDec.is_none() {
         return;
     }
 
@@ -411,8 +409,9 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLa
         return;
     };
     // The concealment bracket — see `DoErrorConFrameCopy`.
-    let (pDstPic, pRefs) = cur_and_refs(pCtx);
-    let mut pSrcPic = pRefs.get(prev_dpb_id(pCtx));
+    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
+    let mut pSrcPic = pRefs.get(prev);
 
     if !(*pCtx).pParam.is_null() {
         if (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_SLICE_COPY
@@ -495,13 +494,17 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: PWelsDecoderContext, pCurDqLa
 /// Fallback motion compensation handler for macroblock reconstruction.
 #[inline]
 pub unsafe extern "C" fn BaseMC(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pMCRefMem: *mut sMCRefMember,
     _listIdx: i32,
     _iRefIdx: i8,
     iXOffset: i32,
     iYOffset: i32,
-    _pMCFunc: *mut SMcFunc,
+    // **T5.Z4: `_pMCFunc: *mut SMcFunc` stood here and is deleted.** It had a
+    // leading underscore since Phase 2 — the body dispatches through `sCopyFunc`,
+    // never through it — and its one caller passed `&mut pCtx->sMcFunc` for it,
+    // which is a field borrow beside a whole borrow of its parent. A dead parameter
+    // is not a conversion problem; it is S18's third option.
     _iBlkWidth: i32,
     _iBlkHeight: i32,
     iMVs: *mut [i16; 2],
@@ -542,18 +545,20 @@ pub unsafe extern "C" fn BaseMC(
 
 /// Applies motion-compensated error concealment for a single lost macroblock.
 pub unsafe extern "C" fn DoMbECMvCopy(
-    pCtx: PWelsDecoderContext,
+    pCtx: &mut SWelsDecoderContext,
     pDec: PPicture,
     // T5.Q2: the reference side is `*const` — this function reads the reference's
     // motion and samples and writes only into `pDec`, which is what the flip needs
     // the type to say. Two live results from one pool are fine while one of them is
     // shared; they would not be if this kept the C's `PPicture` on both sides.
     pRef: *const SPicture,
-    // T5.Q2: the concealment bracket's view, threaded rather than re-derived. The
-    // `ec_ref_pic(pCtx, 0)` call below reached the pool from under `pDec`'s borrow,
-    // and `pECRefPic[0]` is a reference-list entry, so a malformed stream can make it
-    // name the picture being written — F42 again, one call deeper.
-    pRefs: PicRefs<'_>,
+    // **T5.Z4: the POC, not the view.** T5.Q2 threaded the bracket's `PicRefs` here
+    // because the `ec_ref_pic(pCtx, 0)` it replaced reached the pool from under
+    // `pDec`'s borrow (F42, one call deeper). With the context a `&mut` the view and
+    // the context cannot both travel, and the whole of what the view was asked for
+    // is one picture's `iFramePoc` — so the caller, which holds the bracket, reads
+    // it and passes the value.
+    iEcRefFramePoc: Option<i32>,
     _iMbXy: i32,
     iMbX: i32,
     iMbY: i32,
@@ -563,7 +568,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
     // handed a pointer it must not read. Both arms return, so the order is not
     // observable; `pDec == pRef` with both null took the first arm before and takes
     // the second now.
-    if pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || pCtx.is_null() || same_picture(pDec.as_ref(), pRef.as_ref()) {
+    if pDec.is_null() || pRef.is_null() || pMCRefMem.is_null() || same_picture(pDec.as_ref(), pRef.as_ref()) {
         return;
     }
 
@@ -602,7 +607,7 @@ pub unsafe extern "C" fn DoMbECMvCopy(
             iMVs[0] = (*pCtx).iECMVs[0][0] as i16;
             iMVs[1] = (*pCtx).iECMVs[0][1] as i16;
         } else {
-            let iScale0 = (*pRefs.get((*pCtx).pECRefPic[0])).iFramePoc - iCurrPoc;
+            let iScale0 = iEcRefFramePoc.unwrap_or(0) - iCurrPoc;
             let iScale1 = (*pRef).iFramePoc - iCurrPoc;
             iMVs[0] = if iScale0 == 0 {
                 0
@@ -666,7 +671,6 @@ pub unsafe extern "C" fn DoMbECMvCopy(
             -1,
             iMbXInPix,
             iMbYInPix,
-            &mut (*pCtx).sMcFunc,
             16,
             16,
             &mut iMVs,
@@ -675,13 +679,10 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 }
 
 /// Gathers motion vector statistics from correctly decoded macroblocks in the current picture.
-pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() {
-        return;
-    }
 
     // Values, not a borrow — `dec_pic` reaches the pool on the next line (T5.Z1).
     let Some((iMbWidth, iMbHeight)) =
@@ -840,11 +841,11 @@ pub unsafe extern "C" fn GetAvilInfoFromCorrectMb(pCtx: PWelsDecoderContext, pCu
 }
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
-pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    if pCtx.is_null() || (*pCtx).pDec.is_none() {
+    if (*pCtx).pDec.is_none() {
         return;
     }
 
@@ -854,10 +855,14 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
     else {
         return;
     };
-    // The concealment bracket — see `DoErrorConFrameCopy`.
-    let (pDstPic, pRefs) = cur_and_refs(pCtx);
-    let pSrcPic = pRefs.get(prev_dpb_id(pCtx));
-
+    // The concealment bracket — see `DoErrorConFrameCopy`. The EC reference's POC is
+    // read *inside* it and travels as a value, because `DoMbECMvCopy` below takes the
+    // context and the view cannot travel beside it (T5.Z4).
+    let prev = prev_dpb_id(pCtx.pLastDecPicInfo);
+    let ec_ref = pCtx.pECRefPic[0];
+    let (pDstPic, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
+    let pSrcPic = pRefs.get(prev);
+    let iEcRefFramePoc = pRefs.get(ec_ref).as_ref().map(|pic| pic.iFramePoc);
 
     let iDstStride = (*pDstPic).linesize(0) as usize;
     let mut sMCRefMem = TagMCRefMember::default();
@@ -884,7 +889,7 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
             if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
                 (*pDstPic).iMbEcedNum += 1;
                 if !pSrcPic.is_null() {
-                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, pRefs, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
+                    DoMbECMvCopy(pCtx, pDstPic, pSrcPic, iEcRefFramePoc, iMbXyIndex as i32, iMbX as i32, iMbY as i32, &mut sMCRefMem);
                 } else {
                     let mut pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
                     for _ in 0..16 {
@@ -910,18 +915,18 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: PWelsDecoderContext, pCurDq
 }
 
 /// Fallback DPB reference marking routine.
-pub unsafe extern "C" fn WelsMarkAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub unsafe extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut())
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
-pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     let iRet = WelsMarkAsRef(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
         return iRet;
     }
 
-    if !pCtx.is_null() && (*pCtx).pDec.is_some() {
+    if (*pCtx).pDec.is_some() {
         if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
             crate::common::expand_pic::ExpandReferencingPicture(
                 &[pDec.data_ptr(0), pDec.data_ptr(1), pDec.data_ptr(2)],
@@ -936,8 +941,8 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: PWelsDecoderContext, pCurDqLayer
 }
 
 /// Top-level error concealment dispatcher.
-pub unsafe extern "C" fn ImplementErrorCon(pCtx: PWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
-    if pCtx.is_null() || (*pCtx).pParam.is_null() {
+pub unsafe extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
+    if (*pCtx).pParam.is_null() {
         return;
     }
 
@@ -1167,7 +1172,7 @@ mod tests {
 
         unsafe {
             let p: *mut SPicture = &mut pic;
-            DoMbECMvCopy(&mut *ctx, p, p, PicRefs::over(None), 0, 0, 0, &mut mc);
+            DoMbECMvCopy(&mut *ctx, p, p, None, 0, 0, 0, &mut mc);
         }
 
         assert!(
