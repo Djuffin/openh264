@@ -1,3 +1,8 @@
+> **HISTORICAL — Phase 5 closed at session AC (2026-08-17, `5ebaf904`).**
+> This brief is the record of what one session was asked to do. It is not an
+> instruction to anyone now: read [`phase5.md`](phase5.md) for the phase's
+> close and [`phase6.md`](phase6.md) for what follows.
+
 # Phase 5, session Q — the flip through the instruments: W3's flip + W4–W7
 
 *(Naming: primes retired — the letter sequence resumes after P″. In older docs "Q"

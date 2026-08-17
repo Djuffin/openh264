@@ -10250,6 +10250,222 @@ context — and it is the last instance of a shape this phase has now done three
 `phase6.md` stays unwritten for the eighth session running, because exit conditions
 1–3 are unmet.
 
+## Phase 5, session AC — the lint reaches every decoder module, and the phase closes
+
+**Commits:** `9ca56c46` (doc tail, the terminal rule), `a7a78954` (T5.AC1–AC4, the
+callback, the layer's slice-header aliases, `WelsMarkAsRef`, and **the api-owned
+alias family**), `73ab0103` (T5.AC5–AC7, `manage_dec_ref` + both parsers,
+**family 8's blocker**), `f161ac51` (T5.AC8/AC9, `error_concealment` + `nalu`),
+`5ebaf904` (T5.AC10–AC12, `decoder_context`, `decoder_core`, `decode_slice`,
+`mod.rs`).
+
+**Metrics.** Decoder `raw_ptr` **276 → 236**, split **223 → 173 code** and
+**53 → 63 prose** (S16 — the prose share rose because the enumerations are written
+down). Decoder `unsafe fn` **125 → 42 (−66%)**. Modules carrying
+`#![deny(unsafe_code)]` **13 → 22 of 22**. `SHIM(` **3** and `PPicture`'s own
+signature grep **30** unmoved, both as ruled. Crate-wide from the ratchet:
+`raw_ptr` −38, `unsafe_fn` −73, `unsafe_block` +59 — S16's shape, and §3 below says
+why the last number is the honest one.
+
+**The phase closes.** Exit conditions are reported honestly in
+`phase5.md` §"Phase exit conditions": **2 and 3 met**, **1 met by the terminal
+rule's definition and not by its ≈0 reading**, 4–6 met. `phase6.md` is written.
+
+### The method that closed it, and it was one move repeated
+
+Every module went the same way, and the way is **strip-and-build**: put the lint
+on, strip the keyword, and let the compiler print the exact list of what is left,
+grouped by item. It is faster than any grep and it cannot miss. What the lists
+showed, over nine modules, is that **most of the decoder's remaining "raw pointers"
+were not pointers** —
+
+* `SetUnRef`'s `PPicture` was a **callback type** (T5.AC1).
+* The layer's four aliases into the NAL's slice header addressed a header the layer
+  had **already copied whole** one statement earlier (T5.AC2). What they carried was
+  not a datum but a *retention rule*, which is the part a naive read of the copy
+  would have lost — and an `Option` written in the same `kuiQualityId` block
+  reproduces it exactly.
+* `WelsMarkAsRef`'s picture was **one binding unifying two arms** across `pCtx`
+  re-entry (T5.AC3).
+* The coefficient cursors were **subranges of arrays the callers own** (T5.AC6).
+* `SVlcTable`'s sub-tables were **slices whose length is the index width** (T5.AC7).
+* `sCopyFunc` was **a flag** (T5.AC8).
+* Seven typedefs were **dead** (T5.AC10).
+
+### The one family that was every module's blocker, and it is two items now
+
+**Nine context fields point at objects the context does not own** — `pParam`,
+`pLastDecPicInfo`, `pDecoderStatistics`, `pStreamSeqNum`, `pMemAlign`, `pVlcTable`,
+`pPictInfoList`, `pPictReoderingStatus`, `pArgDec` — all stamped in
+`api/codec_api.rs` from `CWelsDecoderImpl`'s fields, which is the C++'s own
+arrangement. **~200 decoder sites dereference them**, and that, not any conversion,
+is what `deny(unsafe_code)` had been firing on in eight modules.
+
+`api_alias` / `api_alias_mut` in `decoder_context.rs` are the whole of it: two
+items, the safety argument written once at the section, and every other site in the
+decoder reaching these objects through a safe `Option<&_>`. `parse_only`,
+`ec_active_idc`, `prev_dpb_id` and `GetTargetDqId` became safe on top of them and
+each takes **the field**, not the context (session Z's rule).
+
+**The clause worth carrying**: the two `eEcActiveIdc` idioms have *different* null
+defaults — one reads a null `pParam` as "not disabled", the other as
+`ERROR_CON_DISABLE` — and unifying them would have widened behaviour on a path no
+gate drives. Each site kept its own (S6).
+
+### Family 8's blocker, and the bound that was the index all along
+
+Session W named `SVlcTable`'s varying-length sub-tables as what stood between
+`parse_mb_syn_cavlc.rs` and the lint, and called it *"a table-representation
+change, not a parameter flip."* It is — and the representation it wanted is the
+slice, because **the number of bits read to form the index is `log2` of the table
+indexed**, at all sixteen coeff-token buckets and every total-zeros and zero-left
+row. The sub-tables really are 2, 4, 8, 64 and 256 entries; the more-bits count that
+produces the index is 1, 2, 3, 6 and 8.
+
+That agreement is what a pointer could not carry, and it is **not argued here**:
+`vlc_sub_tables_are_exactly_as_wide_as_their_index` measures it, so the bounds check
+the slice adds is one no bitstream can reach. S9's exact-span trim, at table scale.
+
+**And the conversion found a latent UB the type system had been hiding**:
+`api/codec_api.rs` built its `SVlcTable` with `mem::zeroed()`, which is an invalid
+value the moment the fields are references. It aborted the debug test run on the
+first build after the change — a hard error where five phases of gates had seen
+nothing, because a null function pointer is a *valid* `Option<fn>` and a null
+reference is not.
+
+### The concealment maneuver's fourth and fifth applications
+
+`WelsCheckAndRecoverForFutureDecoding`'s EC prefetch bracket is the same shape the
+phase has now done five times: one borrow of the pool split into the picture being
+written and a view of the rest, so the `pic_slot(pRef) == pic_slot(prev_pic)`
+overlap test — a comparison of two addresses that had to come out of one borrow —
+becomes the `RefSlot::Current` arm. `DoErrorConSliceCopy`'s macroblock loop is the
+fifth, on plane cursors.
+
+**And `sCopyFunc` was never a dispatch.** In the whole port each slot holds one
+function or none, because the C++'s indirection selects a SIMD form and this port
+has none — `SExpandPicFunc` at T4b.3b, one subsystem over. It is a `bool` now, with
+the `None` arm kept exactly, because that arm is **F44**: the reason slice-copy
+concealment copied nothing for five phases.
+
+### What is enumerated rather than converted, and the honest number
+
+**168 items across the decoder carry `#[allow(unsafe_code)]`**, and they resolve to
+five families, each argued at the top of the file that holds them:
+
+| family | where | why it is not a conversion | owner |
+|---|---|---|---|
+| `PPicture` (23 signatures) | `decode_slice` 16, `mv_pred` 2, both parsers 2 each, EC 1 | F42 — a reference list can name the picture being decoded, and sharing a tag is what makes that sound | **Phase 8** (option 1/2 revisit) |
+| the parse tree | `nalu` 9, `decoder_core`'s slice-header writers | the AU's slots are raw by a **Miri verdict**, not an omission: a container that lends `&mut` to a node invalidates the live aliases into it | **Phase 8** |
+| the api boundary | `decoder_core`, `decoder_context` | `ppDst`, `pDstInfo`, `kpBsBuf`, the twelve api-owned fields — types `api/` owns | **Phase 8** (F23/F41, the `api/` inventory) |
+| `sMCRefMember` | `error_concealment` 5, `decode_slice`'s MC path | the C++'s MC descriptor, `#[repr(C)]`, shared between two consumers — a vocabulary change, scoped out by the brief's §2 | **Phase 8** |
+| the shells | `decoder_context`, `decoder_core` | session O's standing constraint: the context is created zeroed and two fields are written *through* the shell | **Phase 8** |
+
+**Exit condition 1 is met by the terminal rule's definition — every occurrence
+converts or is enumerated with its argument and its Phase pointer — and it is not
+met by its own ≈0 reading.** 173 code occurrences remain. Saying that plainly is
+the point: the condition as written asks for a number, the terminal rule asks for a
+disposition, and this session delivered the disposition. The number's remaining
+mass is one boundary (`api/`) and one ruled survivor (`PPicture`), and both are
+named in Phase 8's inheritance.
+
+### Session Z's rule, got backwards once and caught by the ratchet
+
+T5.AC11's first pass marked every enumerated item `unsafe fn`. That took
+`unsafe_fn` **up by 18** — the exact inverse of AB5's finding, which was that 51 of
+176 did not need the keyword. The ratchet caught it before any gate did.
+
+Re-run under the rule session Z actually wrote — *a signature that names a raw
+pointer keeps the keyword; a body that merely contains an unsafe operation gets a
+block* — 20 items kept it and 65 became safe `fn`s with one block each:
+`unsafe_fn` **−47**, `unsafe_block` **+81**. Plan §7.1 predicted that trade in
+Phase 2 and it is worth restating: the counted blocks replace the *uncounted*
+unguarded derefs that `#![allow(unsafe_op_in_unsafe_fn)]` hides inside every
+`unsafe fn` body. **The metric got more honest, not worse.**
+
+### Gates, F3, and the span
+
+**The `exit` battery at `5ebaf904` reads `OVERALL: PASS` — 13 passed / 0 failed / 1
+skipped**, and it is the phase's **fourth** fully clean one and the first whose
+*both* sweeps came back 341/341 in the same run with no F3 hit: tests 475/469/20,
+census 59, ratchet clean, `--all-targets` compiling, both benches bit-identical,
+Miri `--lib` **330/0** plus the three differential targets (**20 / 7 / 3**). The
+three decoder probes ran per seam as well — **3/3 four times**, once at each of
+T5.AC4, AC7, AC9 and AC12, roughly 18 minutes each.
+
+**F3 three times, and one of them taught the protocol something.**
+
+* **Measurement 62** (T5.AC5, debug, three hits) went the whole way: step 0 measured
+  and *not* applicable (`e5b3ce4d…` vs `30aa1921…`), step 1's 15 re-runs clean, then
+  **the twentieth alternation — 3 hits base, 3 hits head over 2880 configurations.**
+  A dead heat, the second exact tie in twenty. One configuration produced **two
+  different wrong lengths across the run** (0 bytes on one side at sweep 2, 40918 on
+  the other at sweep 7, against a stable C++ 40992), which satisfies the finding's
+  own race criterion directly rather than by symmetry.
+* **Measurement 63** (T5.AC7, debug, one hit) cleared at step 1, 5/5.
+* **Measurement 64** (T5.AC11/AC12, release, two hits) is the one worth carrying:
+  **step 0's hash shortcut applied to a commit that changes decoder code**, which it
+  never had before. The two trees differ — 70 enumerated-survivor stamps against 0,
+  checked before each build — and their release `rust_enc` binaries hash
+  **identically**, one clean build per side. The reason refines session P's clause
+  rather than contradicting it: P's rule (*"decoder-only" is not the trigger; the
+  driver links the whole lib*) is true **in debug**, and measurement 62 measured
+  exactly that four commits earlier. In release the driver's decoder code is
+  unreachable and eliminated. **So the rule that survives is the one P actually
+  wrote — hash it, one build each — with the qualifier that the answer depends on
+  the profile, and the hash to take is the one for the profile the hit occurred
+  in.**
+
+Running total: **64 measurements, 20 alternations, 37 acquittals.**
+
+**The span** (`11002e4c` → `5ebaf904`, four commits, 7 pairs, null re-run at the
+verdict's own pair count): decode median **+0.03%**, encode median **+0.19%**, both
+inside their nulls (decode band −0.25%…+0.08%, the tightest this phase has
+measured; encode −1.43%…+1.45%). **One row is outside and it is the one the work
+touched**: CB, the corpus's only **CAVLC** stream, at +0.51% — 0.43 points above a
+0.33-point floor — while Main and High, the CABAC rows, read +0.03% and −0.27%.
+
+The candidate mechanism is named and not claimed (S2b): `parse_mb_syn_cavlc.rs`
+changed most this session, and both of its conversions add a bounds check to a
+**per-coefficient** path CABAC does not take — `SVlcTable`'s lookups and
+`SHIFT_BUFFER`'s two look-ahead bytes. The row pattern is exactly what that
+predicts, which is why it is written down; it is *at* the resolution limit rather
+than above it, and session L's law says a cost this size is measured by the
+cumulative span, not by this one. **No day two is owed**: D-perf-6 already
+dispositions recovery to the Phase 9 perf pass, so no verdict here turns on 0.43
+points. What Phase 9 inherits is the mechanism, which is more useful than the
+number — if a CAVLC cost is real it is bounds checks on the coefficient path, and
+that is the one place an S8 exception could ever be argued.
+
+**Cumulative CB ≈ +24.3…+24.9%** if that row is real, ≈+23.7…+24.3% if it is floor.
+The ≈+23% stop-line stays breached; D-perf-4's +25% *median* tripwire stays
+unbreached. Neither is re-baselined to fit the result. Full entry in
+`perf_baseline.md`.
+
+### Where it stops, and this time it is the exit
+
+**Exit conditions 2, 3, 4, 5 and 6 are met; 1 is met by the done-test's definition
+and not by its own ≈0 reading**, and `phase5.md` §"Phase exit conditions" states
+both lines rather than one. 173 code occurrences remain, every one inside an item
+carrying `#[allow(unsafe_code)]` with its family's argument and its Phase pointer —
+168 items, five families, all Phase 8's. The terminal rule's definition of done is
+*converts, or is enumerated*; this session delivered the second for what would not
+take the first, and named the gap.
+
+**The ladder parked nothing.** Every question this session met was settled at rung 1
+by reading (the layer's retention rule, the two `eEcActiveIdc` defaults, the VLC
+bound, `sCopyFunc`'s arity) or at rung 2 by the enumerated-survivor shape (the five
+families). Rung 3 — park a behaviour question behind an item-level allow — was
+never reached, and the close's list of parked items is therefore empty. That is
+worth recording because the rule was written expecting it not to be.
+
+**`phase6.md` is written**, and it carries the playbook rather than the plan's step
+list: the ordering rule, cache-not-carrier, take-what-you-reach, the bracket
+maneuver's five applications, the pointer family as the working unit, the vestigial
+sweep run whole, strip-and-build as the enumerator, settlements in writing, the
+decision ladder, the probe budget, and D-par-1's standing referee suite. **Phase 5
+is closed.**
+
 ## Phase 5, session AB — `PPicture` executed, the kernels come home, and the guard becomes a type
 
 **Scope**: `prompts/phase5_session_ab.md` under **the finish rule**, with both of

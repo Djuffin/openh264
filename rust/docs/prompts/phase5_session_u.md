@@ -1,3 +1,8 @@
+> **HISTORICAL — Phase 5 closed at session AC (2026-08-17, `5ebaf904`).**
+> This brief is the record of what one session was asked to do. It is not an
+> instruction to anyone now: read [`phase5.md`](phase5.md) for the phase's
+> close and [`phase6.md`](phase6.md) for what follows.
+
 # Phase 5, session U — the last session: instruments, W6, W7, W8 whole
 
 This session **closes Phase 5**: T's two named instrument fixes, then W6, W7,

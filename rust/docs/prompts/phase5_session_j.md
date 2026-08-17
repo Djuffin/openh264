@@ -1,3 +1,8 @@
+> **HISTORICAL — Phase 5 closed at session AC (2026-08-17, `5ebaf904`).**
+> This brief is the record of what one session was asked to do. It is not an
+> instruction to anyone now: read [`phase5.md`](phase5.md) for the phase's
+> close and [`phase6.md`](phase6.md) for what follows.
+
 # Phase 5, session J — T5.J: the multi-MB probe stream, then the hot eleven
 
 Governing: [`phase5.md`](phase5.md) §0/§2 verbatim; plan §7.4 — **D-perf-5's
