@@ -529,7 +529,7 @@ pub static g_kuiVlcTrailingOneTotalCoeffTable: [[u8; 2]; 62] = [
 
 /// Evaluates spatial neighborhood availability (Left, Top, Top-Left, Top-Right)
 /// for the current macroblock across slice boundaries.
-pub unsafe fn GetNeighborAvailMbType(
+pub fn GetNeighborAvailMbType(
     pNeighAvail: &mut SWelsNeighAvail,
     pCurDqLayer: Option<&DqLayerState>,
     pDec: PPicture,
@@ -614,7 +614,7 @@ pub unsafe fn GetNeighborAvailMbType(
 }
 
 /// Fills the 48-entry local cache `pNonZeroCount` from neighboring macroblocks.
-pub unsafe fn WelsFillCacheNonZeroCount(
+pub fn WelsFillCacheNonZeroCount(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pCurDqLayer: Option<&DqLayerState>,
@@ -684,7 +684,7 @@ pub unsafe fn WelsFillCacheNonZeroCount(
     }
 }
 
-pub unsafe fn WelsFillCacheConstrain1IntraNxN(
+pub fn WelsFillCacheConstrain1IntraNxN(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: &mut [i8; 48],
@@ -2051,7 +2051,7 @@ pub unsafe fn WelsFillDirectCacheCabac(
     }
 }
 
-pub unsafe fn WelsFillCacheConstrain0IntraNxN(
+pub fn WelsFillCacheConstrain0IntraNxN(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
     pIntraPredMode: &mut [i8; 48],

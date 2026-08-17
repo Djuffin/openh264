@@ -676,6 +676,9 @@ pub type PPredWeightTable = *mut SPredWeightTable;
 
 // Logging and Bitstream Reading Helpers
 
+/// The C++'s logging entry point, stubbed. It keeps `unsafe` although the body is
+/// empty: the parameter is a raw log context and any real implementation
+/// dereferences it, so the contract is the signature's, not today's body's.
 pub unsafe fn WelsLog(_pLogCtx: *mut SLogContext, _iLevel: i32, _fmt: &str) {}
 
 #[inline]
@@ -917,7 +920,7 @@ pub unsafe fn ComputeColocatedTemporalScaling(pCtx: &mut SWelsDecoderContext, pC
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
 /// the EC MV copy exchange buffers).
 /// Matches `GetTargetRefListSize` in `decoder.cpp`.
-pub unsafe fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
     let kiNumRefFrames =
         active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| sps.iNumRefFrames);
     let mut iNumRefFrames = match kiNumRefFrames {
@@ -1005,7 +1008,7 @@ use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, Nee
 
 #[inline]
 /// Matches `ResetActiveSPSForEachLayer` in `decoder_context.h`.
-pub unsafe fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
+pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     if (*pCtx).iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
             (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;
@@ -1014,15 +1017,15 @@ pub unsafe fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
 }
 
 #[inline]
-pub unsafe fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {}
+pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {}
 
 #[inline]
-pub unsafe fn GetPrevFrameNum(pCtx: &mut SWelsDecoderContext) -> i32 {
+pub fn GetPrevFrameNum(pCtx: &mut SWelsDecoderContext) -> i32 {
     0
 }
 
 #[inline]
-pub unsafe fn CopySpsPps(pSrcCtx: PWelsDecoderContext, pDstCtx: PWelsDecoderContext) {}
+pub fn CopySpsPps(pSrcCtx: PWelsDecoderContext, pDstCtx: PWelsDecoderContext) {}
 
 // **F43, T5.S1: the other two stubs.** `FmoParamUpdate` returned `ERR_NONE`
 // without building a map and `FmoNextMb` returned `iMbIdx + 1` — raster order, the
@@ -1795,7 +1798,7 @@ pub unsafe fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
 // it; the port's only trigger is the single-NAL-bigger-than-the-buffer check in
 // `WelsDecodeBs`, unchanged.
 
-pub unsafe fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 {
+pub fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 {
     if !parser_bs(&mut (*pCtx).pParserBsInfo)
         .is_some_and(|p| !p.pNalLenInByte.as_slice().is_empty())
     {
@@ -2879,7 +2882,7 @@ pub unsafe fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
     ERR_NONE
 }
 
-pub unsafe fn InitialDqLayersContext(
+pub fn InitialDqLayersContext(
     pCtx: &mut SWelsDecoderContext,
     kiMaxWidth: i32,
     kiMaxHeight: i32,
@@ -2931,7 +2934,7 @@ pub unsafe fn InitialDqLayersContext(
     ERR_NONE
 }
 
-pub unsafe fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
+pub fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
     // T5.E2's `numMb` — the free path's copy of the allocation's dimensions, and the
     // one the closure got wrong — is gone with the raw arrays it sized. The layer's
     // drop glue needs no size at all, which is the whole argument for owning it, and
@@ -2943,7 +2946,7 @@ pub unsafe fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).bInitialDqLayersMem = false;
 }
 
-pub unsafe fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
+pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
     let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
         return;
     };
@@ -2989,7 +2992,7 @@ pub fn ForceResetCurrentAccessUnit(pAu: &mut SAccessUnit) {
 // re-exported: the surviving copy takes `&mut SAccessUnit`, so the shapes had already
 // diverged and a re-export would have been a new fact rather than a preserved one.
 
-pub unsafe fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
+pub fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = false;
     (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag = false;
     (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag = false;
@@ -3298,7 +3301,7 @@ pub unsafe fn CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx: &mut SWelsDecoderCon
     bNewSeq
 }
 
-pub unsafe fn WriteBackActiveParameters(pCtx: &mut SWelsDecoderContext) {
+pub fn WriteBackActiveParameters(pCtx: &mut SWelsDecoderContext) {
     if ((*pCtx).sSpsPpsCtx.iOverwriteFlags & OVERWRITE_PPS) != 0 {
         let ppsId = (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT].iPpsId as usize;
         if ppsId < MAX_PPS_COUNT {
@@ -3322,7 +3325,7 @@ pub unsafe fn WriteBackActiveParameters(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).sSpsPpsCtx.iOverwriteFlags = OVERWRITE_NONE;
 }
 
-pub unsafe fn DecodeFinishUpdate(pCtx: &mut SWelsDecoderContext) {
+pub fn DecodeFinishUpdate(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).bNewSeqBegin = false;
     WriteBackActiveParameters(pCtx);
     (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || (*pCtx).bNextNewSeqBegin;

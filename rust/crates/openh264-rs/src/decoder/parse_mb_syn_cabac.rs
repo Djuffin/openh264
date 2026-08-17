@@ -752,7 +752,7 @@ pub unsafe fn WelsChromaDcIdct(pBlock: *mut i16) {
 // Cache Update & Spatial Availability Helpers
 // ============================================================================
 
-pub unsafe fn DecodeCabacIntraMbType(
+pub fn DecodeCabacIntraMbType(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     ctx_base: i32,
@@ -879,7 +879,7 @@ pub unsafe fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
     }
 }
 
-pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: &[i16; 2], iListIdx: i8) {
+pub fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: &[i16; 2], iListIdx: i8) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let [mvd_x, mvd_y] = *pMvd;
     let pMvdTarget = (*pCurDqLayer).grid.mvd[iListIdx as usize].get_mut(iMbXy);
@@ -888,7 +888,7 @@ pub unsafe fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: &[i16; 
     }
 }
 
-pub unsafe fn UpdateP16x8MvdCabac(
+pub fn UpdateP16x8MvdCabac(
     pCurDqLayer: &mut DqLayerState,
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
@@ -914,7 +914,7 @@ pub unsafe fn UpdateP16x8MvdCabac(
     }
 }
 
-pub unsafe fn UpdateP8x16MvdCabac(
+pub fn UpdateP8x16MvdCabac(
     pCurDqLayer: &mut DqLayerState,
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     mut iPartIdx: i32,
@@ -940,7 +940,7 @@ pub unsafe fn UpdateP8x16MvdCabac(
     }
 }
 
-pub unsafe fn UpdateP8x8RefCacheIdxCabac(
+pub fn UpdateP8x8RefCacheIdxCabac(
     pRefIndex: &mut [[i8; 30]; LIST_A],
     iPartIdx: i16,
     listIdx: i32,
@@ -957,7 +957,7 @@ pub unsafe fn UpdateP8x8RefCacheIdxCabac(
 // Macroblock Header & Syntax Parsing Functions
 // ============================================================================
 
-pub unsafe fn ParseEndOfSliceCabac(pCtx: &mut SliceCtx<'_>, uiBinVal: &mut u32) -> i32 {
+pub fn ParseEndOfSliceCabac(pCtx: &mut SliceCtx<'_>, uiBinVal: &mut u32) -> i32 {
     let cabac_win = pCtx.rbsp;
     *uiBinVal = 0;
     let err = DecodeTerminateCabac(cabac_win,&mut *pCtx.sCabacDecEngine,&mut *(uiBinVal));
@@ -967,7 +967,7 @@ pub unsafe fn ParseEndOfSliceCabac(pCtx: &mut SliceCtx<'_>, uiBinVal: &mut u32) 
     ERR_NONE
 }
 
-pub unsafe fn ParseSkipFlagCabac(
+pub fn ParseSkipFlagCabac(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiSkip: &mut u32,
@@ -989,7 +989,7 @@ pub unsafe fn ParseSkipFlagCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseMBTypeISliceCabac(
+pub fn ParseMBTypeISliceCabac(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiBinVal: &mut u32,
@@ -1058,7 +1058,7 @@ pub unsafe fn ParseMBTypeISliceCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseMBTypePSliceCabac(
+pub fn ParseMBTypePSliceCabac(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
@@ -1153,7 +1153,7 @@ pub unsafe fn ParseMBTypePSliceCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseMBTypeBSliceCabac(
+pub fn ParseMBTypeBSliceCabac(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
@@ -1233,7 +1233,7 @@ pub unsafe fn ParseMBTypeBSliceCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseTransformSize8x8FlagCabac(
+pub fn ParseTransformSize8x8FlagCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pNeighAvail: &SWelsNeighAvail,
@@ -1265,7 +1265,7 @@ pub unsafe fn ParseTransformSize8x8FlagCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseSubMBTypeCabac(
+pub fn ParseSubMBTypeCabac(
     pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
@@ -1298,7 +1298,7 @@ pub unsafe fn ParseSubMBTypeCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseBSubMBTypeCabac(
+pub fn ParseBSubMBTypeCabac(
     pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     uiSubMbType: &mut u32,
@@ -1364,7 +1364,7 @@ pub unsafe fn ParseBSubMBTypeCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseIntraPredModeLumaCabac(pCtx: &mut SliceCtx<'_>, iBinVal: &mut i32) -> i32 {
+pub fn ParseIntraPredModeLumaCabac(pCtx: &mut SliceCtx<'_>, iBinVal: &mut i32) -> i32 {
     let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     *iBinVal = 0;
@@ -1578,7 +1578,7 @@ pub unsafe fn ParseRefIdxCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseMvdInfoCabac(
+pub fn ParseMvdInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     _pNeighAvail: &SWelsNeighAvail,
     pRefIndex: &[[i8; 30]; LIST_A],
@@ -2513,7 +2513,7 @@ pub unsafe fn ParseInterBMotionInfoCabac(
 // Coded Block Pattern & Delta QP Parsing
 // ============================================================================
 
-pub unsafe fn ParseCbpInfoCabac(
+pub fn ParseCbpInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pNeighAvail: &SWelsNeighAvail,
     uiCbp: &mut u32,
@@ -2626,7 +2626,7 @@ pub unsafe fn ParseCbpInfoCabac(
     ERR_NONE
 }
 
-pub unsafe fn ParseDeltaQpCabac(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState, iQpDelta: &mut i32) -> i32 {
+pub fn ParseDeltaQpCabac(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState, iQpDelta: &mut i32) -> i32 {
     let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
     let pCurrSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
@@ -2668,7 +2668,7 @@ pub unsafe fn ParseDeltaQpCabac(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLay
 /// split borrow is the compiler's, with no new API on the grid. `mb_type` is
 /// `(*pDec).pMbType`, the **picture's** family, not `grid.mb_type`: the two paths
 /// coexist in this decoder and the residual chain reads the picture's (S24).
-pub unsafe fn ParseCbfInfoCabac(
+pub fn ParseCbfInfoCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNzcCache: &[u8; 48],
     pCtx: &mut SliceCtx<'_>,
