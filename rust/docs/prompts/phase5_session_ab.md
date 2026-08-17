@@ -1,5 +1,18 @@
 # Phase 5, session AB — `PPicture`, and the phase close
 
+> **SPENT — historical (S19).** Executed 2026-08-17 in 3 commits,
+> `41149605`…`11002e4c`. Faces 0 and 1 landed, face 2's W7 closure and phase-close
+> items landed, and **the phase did not close** — exit conditions 1 and 2 are size,
+> not blockers. The record is `safety_refactor_log.md` §"Phase 5, session AB"; the
+> successor is [`phase5_session_ac.md`](phase5_session_ac.md). **Three of this
+> brief's own facts were wrong and are corrected there**: the unblocked count is
+> **39, not 41** (`manage_dec_ref`'s two are prose), the family total omits **7
+> producer signatures** in `pic_queue`/`decoder_context`, and §3.3's perf base
+> (`y_head`) is inherited from AA's brief where it was correct — AB's own span is
+> measured against `aa_head`. §2's "the `common/` boundary's three named files,
+> complete" also does not land: `error_concealment.rs` is blocked on the context,
+> not on `common/`.
+
 Exit conditions 1–3 unmet. Condition 5 met and closed (D-perf-6).
 **D-par-1**, **D-fid-1**, **D-perf-6**, **S31**–**S33**, forcing rules v2 and
 **the finish rule** (`phase5_session_z.md` §"The finish rule") all in force.

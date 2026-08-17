@@ -1740,3 +1740,61 @@ Step 1 also ran, before the alternation: each of the two configurations re-ran
 
 Running total: **fifty-eight measurements, eighteen alternations, thirty-one
 acquittals.**
+
+### Fifty-ninth measurement — 2026-08-17, Phase 5 session AB: two hits, and the nineteenth alternation is the widest margin yet
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 59a | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**debug**, `family` battery at T5.AB2) | 39981 | **0** |
+| 59b | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1` (same sweep) | 39981 | **37837** (short) |
+
+Inside the signature, one zero and one short, and the same battery's **release**
+sweep read 341/341 — the profile asymmetry again, and again the reverse of the
+measurement before it.
+
+**Step 0 first, and it did not apply.** T5.AB2 moves seven copy kernels between
+modules without changing a line of their bodies, which looks like the hash
+shortcut's case and is not: the two trees build **different** `rust_enc` binaries
+(`5d539824…` vs `b429b7de…`, one build each). Moving a definition is a production
+change even when the code is identical, and session P's clause — *"decoder-only" is
+not the trigger; "test-only" is* — extends to it.
+
+Step 1 re-ran the preset: **120/120**. Two hits, so **step 2**: both binaries built
+once and swapped inside one loop, 12 whole `mt` presets per side, 120 configurations
+each = **1440 per side**, machine otherwise idle.
+
+| side | hits | presets | configurations |
+|---|---|---|---|
+| HEAD (`5d539824…`, at T5.AB2) | **2** | 12 | 1440 |
+| control (`b429b7de…`, `41149605` — T5.AB1) | **12** | 12 | 1440 |
+
+**HEAD drew a sixth of the control's hits** — the widest margin in either direction
+in nineteen alternations. The verdict is still an *acquittal* and nothing more:
+F3's rate is load-dependent (≈1/720 and ≈1/120 per side here, against ≈1/240 the
+measurement before), the two sides ran interleaved on one machine, and no mechanism
+in T5.AB2 touches the slice-list growth the race lives in. Reading 2-vs-12 as
+"the move fixed something" would be the mirror of the mistake S23b warns about.
+Every hit on both sides is `mt sm=3`; none outside the signature.
+
+**Acquitted as F3.**
+
+Running total: **fifty-nine measurements, nineteen alternations, thirty-two
+acquittals.**
+
+### Sixtieth measurement — 2026-08-17, Phase 5 session AB: one hit, acquitted at step 1
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 60 | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0` (**debug**, `family` battery at T5.AB3) | 40992 | **40918** (short) |
+
+One hit, inside the signature, release sweep 341/341 in the same battery.
+
+**Step 1: the preset re-ran 5×, 0 hits over 600 configurations.** No alternation
+owed. The commit under it is decoder-only (error concealment's copy brackets), and
+the sweep drives the encoder — which is *not* an acquittal on its own (S14 step 0's
+clause again), so the re-runs are what acquits it.
+
+**Acquitted as F3.**
+
+Running total: **sixty measurements, nineteen alternations, thirty-three
+acquittals.**
