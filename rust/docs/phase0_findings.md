@@ -1798,3 +1798,30 @@ clause again), so the re-runs are what acquits it.
 
 Running total: **sixty measurements, nineteen alternations, thirty-three
 acquittals.**
+
+### Sixty-first measurement — 2026-08-17, Phase 5 session AB: the hash shortcut applies, for the first time in this phase
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 61 | `mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=1 rc=1` (**release**, `family` battery at T5.AB5) | 42088 | **0** |
+
+**Step 0, and it resolves it outright.** T5.AB5 removes the `unsafe` keyword from 51
+function definitions and adds 35 narrow `unsafe { }` blocks — type-system markers
+with no ABI or codegen meaning. `rust_enc` built from that tree and from its parent
+`03e4d138` hash **identically**: `a6e454ca9cbe472f5b0ae58a20a0569282dc7a8d14e41f2e48b72b17d3200a26`
+on both sides, one build each.
+
+Base and head are **one binary**, so the hit is a property of the run and not of
+either tree — acquitted by construction, and no re-run or alternation can say more
+(session D's clause). The same hash is the commit's own soundness evidence: it is a
+direct measurement that the sweep changed no generated code.
+
+**This is the shortcut's first application in Phase 5**, and it is worth naming why
+the two preceding measurements did not qualify: 59's commit *moved definitions
+between modules* and 60's *changed decoder code*, and both build a different binary.
+The trigger is not "the change looks cosmetic" — it is the hash.
+
+**Acquitted as F3.**
+
+Running total: **sixty-one measurements, nineteen alternations, thirty-four
+acquittals.**

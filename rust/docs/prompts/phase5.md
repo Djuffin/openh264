@@ -9,12 +9,12 @@ log and git — this file carries only what remains.
 **The anti-circles contract.** This checklist is **closed**: work enters it only
 via an F-finding or Eugene. Every session's commits map to W-items in its log
 entry. The progress metric is monotone and grep-able — **decoder `raw_ptr`
-occurrences 276 at session AB's close** (1283 at the re-plan, 1237 at R's open, 980
+occurrences 276 at session AB's close**, and decoder `unsafe fn` **125** (1283 at the re-plan, 1237 at R's open, 980
 at V's, 974 at W's, 765 at X's, 456 at Y's, 310 at Z's, 278 at AA's), → ~0 at exit
 (excluding the named survivors and prose); a session that closes no W-item and moves
 no metric is a stall and says so.
 **The metric has two floors and both are now measured** (session AB): a *visible*
-one — **52 of the 276 are prose**, so report the split or the number is a fifth
+one — **53 of the 276 are prose**, so report the split or the number is a fifth
 wrong — and a *hidden* one, which is `PPicture`. An alias spelling reads **1** in
 this instrument however many signatures carry it, so exit condition 1 counts that
 family by **its own signature grep** (30 at AB's close, all of them the enumerated
@@ -155,11 +155,11 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
-**AB** = **spent** (3 commits, `41149605`…`11002e4c`;
+**AB** = **spent** (5 commits, `41149605`…`dc4d8177`;
 [`phase5_session_ab.md`](phase5_session_ab.md)) — **and it did not close the
 phase**, for a reason that is arithmetic rather than a blocker. Decoder `raw_ptr`
-**278 → 276**, `unsafe fn` **204 → 184**, deny-clean **12 → 13 of 22**, `SHIM(`
-**3** unmoved, `exit` battery **13/0/1 — the phase's second fully clean one**.
+**278 → 276**, `unsafe fn` **204 → 125 (−39%)**, deny-clean **12 → 13 of 22**,
+`SHIM(` **3** unmoved, **two** `exit` batteries both **13/0/1**.
 Both of AA's rulings were executed as ruled. **`PPicture` is done**: its
 convertible half is converted and the family's own grep reads **69 → 30** — 23
 survivors named at their items with the F42 argument, and the 7 producers that
@@ -173,9 +173,12 @@ the encoder's is. **The brief's own measurable question is answered yes**:
 and two of its three copy brackets run on borrows. **The session's own S24
 corrections are three**: the brief's 41/23 split was 39/23 over 69 (two prose,
 seven producers uncounted), and its perf base was inherited stale from AA's brief.
-**What is left is size, and it is now measured**: decoder `raw_ptr` 276 = **224
-code + 52 prose**, over nine modules, with no open design question in front of any
-of them. The next brief is a Phase 5 one
+**And the vestigial keyword is gone decoder-wide** (T5.AB4/AB5): all 176 `unsafe
+fn` stripped at once, **125 keep it and 51 did not need it** — the sweep run the
+way session Z's rule says, after a one-module run contradicted session AA's. **What
+is left is size, and it is now measured**: decoder `raw_ptr` 276 = **223 code + 53
+prose** and `unsafe fn` **125, every one load-bearing**, over nine modules, with no
+open design question in front of any of them. The next brief is a Phase 5 one
 ([`phase5_session_ac.md`](phase5_session_ac.md)); `phase6.md` stays unwritten for
 the eighth session running.
 **AA** = **spent** (4 commits, `00a281bb`…`2de8703f`;
@@ -770,16 +773,16 @@ stays **Eugene-level whenever proposed**.
 
 ## Phase exit conditions (the definition of done)
 
-**Status at session AB's close** (`11002e4c`): **1 unmet, and measured rather
-than estimated** — decoder `raw_ptr` **276**, of which **224 are code and 52 are
+**Status at session AB's close** (`dc4d8177`): **1 unmet, and measured rather
+than estimated** — decoder `raw_ptr` **276**, of which **223 are code and 53 are
 prose** (S16's floor, counted this session); nine modules hold the 224, and
 `PPicture`'s own grep reads **30**, all of them the enumerated survivor or its
 producers. **2 unmet** (**13 of 22** modules deny-clean — `mv_pred.rs` added at
 T5.AB1 with three exceptions named at their items). **3 met in substance, and the
 list is restated below** (`SHIM(` **3**: one prose tombstone in `decode_mb_aux.rs`
 and `SPicture::data_ptr` with its shared form `data_ptr_ref` — the real remainder
-is **0**). **4 met** (`exit` battery at `11002e4c` **13 passed / 0 failed / 1
-skipped**: tests 474/468/20, census 59, ratchet clean, both benches
+is **0**). **4 met** (`exit` battery **13 passed / 0 failed / 1
+skipped**, twice — at `11002e4c` and at `dc4d8177`: tests 474/468/20, census 59, ratchet clean, both benches
 bit-identical, **both sweeps 341/341**, Miri `--lib` 329/0 plus 20/7/3). **5 met
 and closed** (D-perf-6; AB's own span is flat inside its null). **6 unmet** and
 deliberately so — `phase6.md` is written at the exit, and the phase has not
