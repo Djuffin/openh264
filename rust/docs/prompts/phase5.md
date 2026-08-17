@@ -150,6 +150,14 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
+**Z** = **the final session** ([`phase5_session_z.md`](phase5_session_z.md)),
+under **the finish rule** (Eugene, 2026-08-16: finish without stopping half-done —
+a revert is a checkpoint, not an end state; face 1 does not open before face 0's
+done-test; the session ends with the phase closed or a named Eugene/steward
+blocker): the accessors return borrows (60 bindings, ~180 sites, measured at Y's
+revert), the 153-signature flip on top of them with Y's five shapes as the
+recipe, the `unsafe fn` shed by ratio, the decided `common/` boundary executed,
+W7's closure, and **the phase close**.
 **Y** = **spent** (4 commits, `ab7ec744`…`dff3f78b`;
 [`phase5_session_y.md`](phase5_session_y.md)) — **and it did not close the phase**.
 Decoder `raw_ptr` **456 → 383**, `SHIM(` **7 → 6**, deny-clean **11 of 22** unmoved.
