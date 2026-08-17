@@ -44,6 +44,28 @@
     unused_unsafe
 )]
 
+#![deny(unsafe_code)]
+// **Phase 5, T5.AC8 — the lint, with one family allowed by name.** The module's
+// two copy paths converted and its third did not, and the line between them is a
+// data structure rather than a difficulty:
+//
+//   * `DoErrorConSliceCopy`'s macroblock loop runs on **plane cursors**. It walked
+//     `data_ptr(i).add(offset)` into a dispatch slot — and `sCopyFunc` was never a
+//     dispatch: in the whole port each slot holds one function or none, because the
+//     C++'s indirection is there to select a SIMD form and this port has none
+//     (`SExpandPicFunc` at T4b.3b, one subsystem over). It is a `bool` now, and the
+//     `None` arm it used to spell is kept exactly, because that arm is **F44** —
+//     the reason slice-copy concealment copied nothing for five phases.
+//   * `BaseMC`, `DoMbECMvCopy`, `DoErrorConSliceMVCopy` and the two `WelsCopy*_c`
+//     shims they call keep the keyword, and the reason is `sMCRefMember`: the
+//     C++'s own MC descriptor, `#[repr(C)]`, six raw plane cursors, **shared
+//     with `decode_slice.rs`'s inter-prediction path**. Converting it is a
+//     vocabulary change across both consumers, which is a Phase 8 item and not a
+//     spelling pass — `phase5_session_ac.md` §2 says so and this session did not
+//     re-open it.
+//
+// So the exceptions are five items of one family, each carrying that argument.
+
 use crate::decoder::decoder_context::{
     PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, dec_pic, pps_of, prev_dpb_id, sps_of,
 };
@@ -118,22 +140,27 @@ pub fn WELS_MIN<T: Ord>(x: T, y: T) -> T {
 // Function Pointer Types & Helper Structs
 // ============================================================================
 
-pub type PCopyLumaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
-pub type PCopyChromaFunc = Option<unsafe extern "C" fn(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32)>;
-
-#[repr(C)]
+/// **T5.AC8: the "dispatch table" is a flag, and always was.** `SCopyFunc` held two
+/// `Option<unsafe extern "C" fn>` slots over raw plane pointers, and in the
+/// whole port there is exactly one value each can take: `InitErrorCon` installs
+/// `WelsCopy16x16_c` / `WelsCopy8x8_c` together or installs neither. The C++ needs
+/// the indirection because it selects a SIMD form from the CPU flags; this port has
+/// no SIMD, so the table selected between one function and itself — `SExpandPicFunc`
+/// at T4b.3b, in the other subsystem.
+///
+/// **The `None` arm is behaviour and is kept exactly**: it is F44's, and it is why
+/// slice-copy concealment silently copied nothing for five phases. A zeroed context
+/// shell reads `false` here, where it read null function pointers before, and
+/// [`Default`] reads `true` where it read `Some`. Neither the flag nor the copies
+/// below can drift from each other now, because there is nothing to install.
 #[derive(Debug, Copy, Clone)]
 pub struct SCopyFunc {
-    pub pCopyLumaFunc: PCopyLumaFunc,
-    pub pCopyChromaFunc: PCopyChromaFunc,
+    pub bInstalled: bool,
 }
 
 impl Default for SCopyFunc {
     fn default() -> Self {
-        Self {
-            pCopyLumaFunc: Some(WelsCopy16x16_c),
-            pCopyChromaFunc: Some(WelsCopy8x8_c),
-        }
+        Self { bInstalled: true }
     }
 }
 
@@ -222,6 +249,13 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 /// # Safety
 /// See [`copy_shim`] with `W = 16`, `H = 16`.
 #[inline]
+/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
+/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
+/// inter-prediction path) are plane cursors written as pointers, and converting
+/// them is a **vocabulary change across both consumers**, not a spelling pass —
+/// which is why it is scoped out of this phase and named here instead.
+/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
+#[allow(unsafe_code)]
 pub extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
     unsafe { copy_shim::<16, 16>(pDst, iDstStride, pSrc, iSrcStride, copy_16x16) }
 }
@@ -231,6 +265,13 @@ pub extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8,
 /// # Safety
 /// See [`copy_shim`] with `W = 8`, `H = 8`.
 #[inline]
+/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
+/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
+/// inter-prediction path) are plane cursors written as pointers, and converting
+/// them is a **vocabulary change across both consumers**, not a spelling pass —
+/// which is why it is scoped out of this phase and named here instead.
+/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
+#[allow(unsafe_code)]
 pub extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
     unsafe { copy_shim::<8, 8>(pDst, iDstStride, pSrc, iSrcStride, copy_8x8) }
 }
@@ -293,7 +334,7 @@ pub extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, i
 // for `ExpandReferencingPicture` and reaches no other picture at all.
 
 /// Initializes error concealment function pointer dispatch table and resets freeze output flag.
-pub unsafe extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
+pub extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
     // T5.AC4: the early return is `None` and the read is the `Some` arm.
     let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
         return;
@@ -310,8 +351,7 @@ pub unsafe extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
             (*pCtx).bFreezeOutput = false;
         }
 
-        (*pCtx).sCopyFunc.pCopyLumaFunc = Some(WelsCopy16x16_c);
-        (*pCtx).sCopyFunc.pCopyChromaFunc = Some(WelsCopy8x8_c);
+        (*pCtx).sCopyFunc.bInstalled = true;
     }
 }
 
@@ -335,7 +375,7 @@ pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Opti
 }
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
-pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     if (*pCtx).pDec.is_none() {
         return;
     }
@@ -418,7 +458,7 @@ pub unsafe extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCu
 }
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
-pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
@@ -463,66 +503,49 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
         _ => None,
     };
 
-    let iDstStride = pDstPic.linesize(0) as usize;
+    // **T5.AC8: the macroblock copies run on plane cursors.** They walked
+    // `data_ptr(i).add(mb offset)` into a dispatch slot that only ever held
+    // `WelsCopy16x16_c` / `WelsCopy8x8_c`, which are one-line shims over
+    // `common/copy_mb.rs`'s safe kernels since T5.AB2 — so the pointer round trip
+    // existed to reach a function that immediately rebuilt the slices from it. The
+    // source is an `&SPicture` out of `PicRefs::classify` and the destination the
+    // `&mut` the bracket holds, so the two cursors are disjoint by the type.
+    let installed = (*pCtx).sCopyFunc.bInstalled;
 
     for iMbY in 0..iMbHeight {
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = iMbY * iMbWidth + iMbX;
-            if !*(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
-                pDstPic.iMbEcedNum += 1;
-                if let Some(pSrcPic) = pSrcPic {
-                    let iSrcStride = pSrcPic.linesize(0) as usize;
-
-                    // Y Component
-                    let pDstData = pDstPic.data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
-                    let pSrcData = pSrcPic.data_ptr_ref(0).add(iMbY * 16 * iSrcStride + iMbX * 16);
-                    if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
-                        f(pDstData, iDstStride as i32, pSrcData, iSrcStride as i32);
-                    }
-
-                    // U Component
-                    let pDstDataU = pDstPic.data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataU = pSrcPic.data_ptr_ref(1).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
-                    if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-                        f(
-                            pDstDataU,
-                            (iDstStride / 2) as i32,
-                            pSrcDataU,
-                            (iSrcStride / 2) as i32,
-                        );
-                    }
-
-                    // V Component
-                    let pDstDataV = pDstPic.data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    let pSrcDataV = pSrcPic.data_ptr_ref(2).add(iMbY * 8 * (iSrcStride / 2) + iMbX * 8);
-                    if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-                        f(
-                            pDstDataV,
-                            (iDstStride / 2) as i32,
-                            pSrcDataV,
-                            (iSrcStride / 2) as i32,
-                        );
-                    }
-                } else {
-                    // Fill lost MB with neutral gray (128)
-                    let mut pDstData = (*pDstPic).data_ptr(0).add(iMbY * 16 * iDstStride + iMbX * 16);
-                    for _ in 0..16 {
-                        ptr::write_bytes(pDstData, 128, 16);
-                        pDstData = pDstData.add(iDstStride);
-                    }
-
-                    let mut pDstDataU = (*pDstPic).data_ptr(1).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    for _ in 0..8 {
-                        ptr::write_bytes(pDstDataU, 128, 8);
-                        pDstDataU = pDstDataU.add(iDstStride / 2);
-                    }
-
-                    let mut pDstDataV = (*pDstPic).data_ptr(2).add(iMbY * 8 * (iDstStride / 2) + iMbX * 8);
-                    for _ in 0..8 {
-                        ptr::write_bytes(pDstDataV, 128, 8);
-                        pDstDataV = pDstDataV.add(iDstStride / 2);
+            if *(*pCurDqLayer).grid.mb_correctly_decoded_flag.get(iMbXyIndex) {
+                continue;
+            }
+            pDstPic.iMbEcedNum += 1;
+            match pSrcPic {
+                Some(pSrcPic) if installed => {
+                    for (plane, size) in [(0usize, 16isize), (1, 8), (2, 8)] {
+                        let (x, y) = ((iMbX as isize) * size, (iMbY as isize) * size);
+                        let src = pSrcPic.plane(plane).cursor(x, y);
+                        let mut dst = pDstPic.plane_mut(plane).cursor_mut(x, y);
+                        if plane == 0 {
+                            copy_16x16(&src, &mut dst);
+                        } else {
+                            copy_8x8(&src, &mut dst);
+                        }
                     }
                 }
+                // The installed-but-no-source arm and the not-installed arm are
+                // **different**, and the difference is F44's: with no source the C++
+                // gray-fills, and with no kernels installed it called through a null
+                // slot, which this port answered by doing nothing. Both are kept.
+                None => {
+                    for (plane, size) in [(0usize, 16isize), (1, 8), (2, 8)] {
+                        let (x, y) = ((iMbX as isize) * size, (iMbY as isize) * size);
+                        let mut p = pDstPic.plane_mut(plane);
+                        for r in 0..size {
+                            p.row_mut(y + r, x, size as usize).fill(128);
+                        }
+                    }
+                }
+                Some(_) => {}
             }
         }
     }
@@ -530,6 +553,13 @@ pub unsafe extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCu
 
 /// Fallback motion compensation handler for macroblock reconstruction.
 #[inline]
+/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
+/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
+/// inter-prediction path) are plane cursors written as pointers, and converting
+/// them is a **vocabulary change across both consumers**, not a spelling pass —
+/// which is why it is scoped out of this phase and named here instead.
+/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn BaseMC(
     pCtx: &mut SWelsDecoderContext,
     pMCRefMem: *mut sMCRefMember,
@@ -560,27 +590,34 @@ pub unsafe extern "C" fn BaseMC(
     if !(*pMCRefMem).pDstY.is_null() && !(*pMCRefMem).pSrcY.is_null() {
         let pSrc = (*pMCRefMem).pSrcY.offset(iSrcPixOffsetLuma as isize);
         let pDst = (*pMCRefMem).pDstY;
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
-            f(pDst, (*pMCRefMem).iDstLineLuma, pSrc, (*pMCRefMem).iSrcLineLuma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy16x16_c(pDst, (*pMCRefMem).iDstLineLuma, pSrc, (*pMCRefMem).iSrcLineLuma);
         }
     }
     if !(*pMCRefMem).pDstU.is_null() && !(*pMCRefMem).pSrcU.is_null() {
         let pSrc = (*pMCRefMem).pSrcU.offset(iSrcPixOffsetChroma as isize);
         let pDst = (*pMCRefMem).pDstU;
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-            f(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy8x8_c(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
         }
     }
     if !(*pMCRefMem).pDstV.is_null() && !(*pMCRefMem).pSrcV.is_null() {
         let pSrc = (*pMCRefMem).pSrcV.offset(iSrcPixOffsetChroma as isize);
         let pDst = (*pMCRefMem).pDstV;
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-            f(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy8x8_c(pDst, (*pMCRefMem).iDstLineChroma, pSrc, (*pMCRefMem).iSrcLineChroma);
         }
     }
 }
 
 /// Applies motion-compensated error concealment for a single lost macroblock.
+/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
+/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
+/// inter-prediction path) are plane cursors written as pointers, and converting
+/// them is a **vocabulary change across both consumers**, not a spelling pass —
+/// which is why it is scoped out of this phase and named here instead.
+/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DoMbECMvCopy(
     pCtx: &mut SWelsDecoderContext,
     pDec: PPicture,
@@ -620,18 +657,18 @@ pub unsafe extern "C" fn DoMbECMvCopy(
 
     if (*pDec).bIdrFlag || (*pCtx).pECRefPic[0].is_none() {
         let pSrcY = (*pMCRefMem).pSrcY.add((iMbY * 16 * (*pMCRefMem).iSrcLineLuma + iMbX * 16) as usize);
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyLumaFunc {
-            f(pDst0, (*pMCRefMem).iDstLineLuma, pSrcY, (*pMCRefMem).iSrcLineLuma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy16x16_c(pDst0, (*pMCRefMem).iDstLineLuma, pSrcY, (*pMCRefMem).iSrcLineLuma);
         }
 
         let pSrcU = (*pMCRefMem).pSrcU.add((iMbY * 8 * (*pMCRefMem).iSrcLineChroma + iMbX * 8) as usize);
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-            f(pDst1, (*pMCRefMem).iDstLineChroma, pSrcU, (*pMCRefMem).iSrcLineChroma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy8x8_c(pDst1, (*pMCRefMem).iDstLineChroma, pSrcU, (*pMCRefMem).iSrcLineChroma);
         }
 
         let pSrcV = (*pMCRefMem).pSrcV.add((iMbY * 8 * (*pMCRefMem).iSrcLineChroma + iMbX * 8) as usize);
-        if let Some(f) = (*pCtx).sCopyFunc.pCopyChromaFunc {
-            f(pDst2, (*pMCRefMem).iDstLineChroma, pSrcV, (*pMCRefMem).iSrcLineChroma);
+        if (*pCtx).sCopyFunc.bInstalled {
+            WelsCopy8x8_c(pDst2, (*pMCRefMem).iDstLineChroma, pSrcV, (*pMCRefMem).iSrcLineChroma);
         }
         return;
     }
@@ -878,6 +915,13 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
 }
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
+/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
+/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
+/// inter-prediction path) are plane cursors written as pointers, and converting
+/// them is a **vocabulary change across both consumers**, not a spelling pass —
+/// which is why it is scoped out of this phase and named here instead.
+/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
+#[allow(unsafe_code)]
 pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
@@ -953,11 +997,11 @@ pub unsafe extern "C" fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, p
 
 /// Fallback DPB reference marking routine.
 pub extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None) }
+    crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None)
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
-pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
     let iRet = WelsMarkAsRef(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
         return iRet;
@@ -973,7 +1017,7 @@ pub unsafe extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDq
 }
 
 /// Top-level error concealment dispatcher.
-pub unsafe extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
     // T5.AC4: the early return is `None` and the read is the `Some` arm.
     let Some(ec_mode) = api_alias(&(*pCtx).pParam).map(|p| p.eEcActiveIdc) else {
         return;
@@ -995,7 +1039,12 @@ pub unsafe extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut p
         || ec_mode == ERROR_CON_IDC::ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
     {
         GetAvilInfoFromCorrectMb(pCtx, pCurDqLayer.as_deref_mut());
-        DoErrorConSliceMVCopy(pCtx, pCurDqLayer.as_deref_mut());
+        // The one call into the `sMCRefMember` family from outside it — the
+        // exception is at the callee's item, and this is its whole caller set.
+        #[allow(unsafe_code)]
+        unsafe {
+            DoErrorConSliceMVCopy(pCtx, pCurDqLayer.as_deref_mut());
+        }
     }
 
     (*pCtx).iErrorCode |= dsDataErrorConcealed;
@@ -1017,6 +1066,7 @@ mod tests {
         let mut src_buf = vec![0xABu8; 512];
         let mut dst_buf = vec![0u8; 512];
 
+        #[allow(unsafe_code)] // the `sMCRefMember` family's own test
         unsafe {
             WelsCopy16x16_c(dst_buf.as_mut_ptr(), 32, src_buf.as_mut_ptr(), 32);
         }
@@ -1055,7 +1105,7 @@ mod tests {
         ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
         ctx.active_sps = Some(SpsRef { id: 0, subset: false });
 
-        unsafe {
+        {
             assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), false);
             *dq_layer.grid.mb_correctly_decoded_flag.get_mut(2) = false;
             assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), true);
@@ -1125,7 +1175,7 @@ mod tests {
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
 
-            unsafe {
+            {
                 // T5.Q2: the pool owns, so the pictures go *into* it rather than
                 // being aliased from the stack — and with them goes the whole S29
                 // dance this fixture used to need (`addr_of_mut!` on two locals the
@@ -1201,6 +1251,7 @@ mod tests {
         };
         let mut ctx = SWelsDecoderContext::new_boxed();
 
+        #[allow(unsafe_code)] // the `sMCRefMember` family's own test
         unsafe {
             let p: *mut SPicture = &mut pic;
             DoMbECMvCopy(&mut *ctx, p, p, None, 0, 0, 0, &mut mc);
@@ -1221,7 +1272,7 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = &mut param as *mut _;
 
-        unsafe {
+        {
             ImplementErrorCon(&mut *ctx, None);
             assert_eq!(ctx.iErrorCode & dsBitstreamError, dsBitstreamError);
         }
