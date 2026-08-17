@@ -1,3 +1,4 @@
+pub mod copy_mb;
 pub mod cpu_core;
 pub mod deblocking_common;
 pub mod expand_pic;

@@ -272,7 +272,7 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
 ///
 /// The bounds check lands once per row either way.
 #[inline(always)]
-fn copy_rows<const WIDTH: usize>(
+pub(crate) fn copy_rows<const WIDTH: usize>(
     src: &PlaneCursor<'_>,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,

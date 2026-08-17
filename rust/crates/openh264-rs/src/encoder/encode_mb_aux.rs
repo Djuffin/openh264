@@ -235,6 +235,7 @@ pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(pLevel: *mut i16) -> i32;
 // conversions, kept where the C++ has them.
 // ---------------------------------------------------------------------------
 
+use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8, copy_shim};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
@@ -554,65 +555,12 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
     16 - level.iter().filter(|&&v| v == 0).count() as i32
 }
 
-/// Fixed-width strided block copy. The width is a const parameter for the same
-/// measured reason as `mc.rs`'s `copy_rows`: a runtime length lowers to a
-/// `memmove` call per row, a const one to a pair of wide moves
-/// (`docs/perf_baseline.md` §Phase 2 T4).
-#[inline(always)]
-fn copy_rows<const WIDTH: usize>(
-    src: &PlaneCursor<'_>,
-    dst: &mut PlaneCursorMut<'_>,
-    height: usize,
-) {
-    for dy in 0..height as isize {
-        let s: &[u8; WIDTH] = src.row(dy, 0, WIDTH).try_into().unwrap();
-        let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
-        *d = *s;
-    }
-}
-
-/// C++: `WelsCopy4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
-#[inline(always)]
-pub fn copy_4x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4>(src, dst, 4);
-}
-
-/// C++: `WelsCopy8x4_c`.
-#[inline(always)]
-pub fn copy_8x4(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 4);
-}
-
-/// C++: `WelsCopy4x8_c`.
-#[inline(always)]
-pub fn copy_4x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4>(src, dst, 8);
-}
-
-/// C++: `WelsCopy8x8_c`. (The decoder's error-concealment module has its own
-/// same-named kernel — different function, never unify.)
-#[inline(always)]
-pub fn copy_8x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 8);
-}
-
-/// C++: `WelsCopy16x8_c`.
-#[inline(always)]
-pub fn copy_16x8(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<16>(src, dst, 8);
-}
-
-/// C++: `WelsCopy8x16_c`.
-#[inline(always)]
-pub fn copy_8x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8>(src, dst, 16);
-}
-
-/// C++: `WelsCopy16x16_c`. (Same name-collision note as [`copy_8x8`].)
-#[inline(always)]
-pub fn copy_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<16>(src, dst, 16);
-}
+// **T5.AB2: the seven safe copy kernels and `copy_rows` moved to
+// `common/copy_mb.rs`** — the C++ defines them in `codec/common/src/copy_mb.cpp`
+// and both codecs include `copy_mb.h`, so `common/` is their home (F22). The
+// decoder's error-concealment module had translated the same C++ functions a
+// second time as raw row loops and could not reach these while they lived here.
+// No call site in this file changed; the `use` below is the whole of the edit.
 
 // ============================================================================
 // Forward Discrete Cosine Transform (FDCT)
@@ -909,33 +857,6 @@ pub unsafe extern "C" fn WelsGetNoneZeroCount_c(pLevel: *mut i16) -> i32 {
 // ============================================================================
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
 // ============================================================================
-
-/// One span construction for the seven fixed-shape copy shims (rule R-c: the
-/// span arithmetic lives in one place). Builds exact-reach views —
-/// `(H-1)*stride + W` bytes each side — and hands them to the named safe
-/// kernel.
-///
-/// # Safety
-/// `pDst` addresses a writable `(H-1)*iStrideD + W` byte span, `pSrc` a
-/// readable `(H-1)*iStrideS + W` byte span (both reach forward only from
-/// their block's `(0, 0)`); the spans are disjoint; strides `>= W` and
-/// positive.
-#[inline(always)]
-unsafe fn copy_shim<const W: usize, const H: usize>(
-    pDst: *mut u8,
-    iStrideD: i32,
-    pSrc: *mut u8,
-    iStrideS: i32,
-    kernel: fn(&PlaneCursor<'_>, &mut PlaneCursorMut<'_>),
-) {
-    let (sd, ss) = (iStrideD as usize, iStrideS as usize);
-    let dst = unsafe { std::slice::from_raw_parts_mut(pDst, (H - 1) * sd + W) };
-    let src = unsafe { std::slice::from_raw_parts(pSrc, (H - 1) * ss + W) };
-    kernel(
-        &PlaneCursor::new(src, 0, ss),
-        &mut PlaneCursorMut::new(dst, 0, sd),
-    );
-}
 
 /// # Safety
 /// See [`copy_shim`] with `W = 4`, `H = 4`.
