@@ -232,6 +232,7 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 // Data Structures Matching C/C++ Layout
 
 pub use crate::decoder::decoder_context::SPosOffset;
+use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
 
 
 pub use crate::decoder::decoder_context::SParserBsInfo;
@@ -402,10 +403,24 @@ pub struct DqLayerState {
     pub iInterLayerSliceBetaOffset: i32,
     pub iSliceGroupChangeCycle: i32,
 
-    pub pRefPicListReordering: *mut SRefPicListReorderSyn,
-    pub pPredWeightTable: *mut SPredWeightTable,
-    pub pRefPicMarking: *mut SRefPicMarking,
-    pub pRefPicBaseMarking: *mut SRefBasePicMarking,
+    // **T5.AC2 — the layer's four aliases into the NAL's slice header, converted
+    // and one of them deleted.** Each was `addr_of_mut!` of a field of the slice
+    // header the layer had *already copied whole* one statement earlier
+    // (`sLayerInfo.sSliceInLayer.sSliceHeaderExt`), so the pointer carried no
+    // datum the layer did not own — it carried a **retention rule**, which is the
+    // part a naive read of the copy would have lost: all four are stamped only
+    // when `uiQualityId == BASE_QUALITY_ID`, and at an SVC quality-enhancement
+    // slice they keep the base slice's values while `sLayerInfo` is overwritten
+    // with the enhancement slice's. That is exactly what an `Option` written in
+    // the same block reproduces: the field is assigned nowhere else, so it
+    // retains, and `None` is the null the readers already tested for.
+    //
+    // `pRefPicBaseMarking` is **deleted rather than converted** — one stamp
+    // (`:3619`), zero readers anywhere in the crate, the same shape as
+    // `DqLayerState::pRef` at T5.P′1.
+    pub sRefPicListReordering: Option<SRefPicListReorderSyn>,
+    pub sPredWeightTable: Option<SPredWeightTable>,
+    pub sRefPicMarking: Option<SRefPicMarking>,
 
     // **T5.P′1 (W2b) — `pRef` and `pDec` sat here, and both are gone.**
     //
@@ -688,7 +703,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq
 
     let mut iTotalQp = 0i64;
     let kiMbNum = (pCurDq.iMbWidth * pCurDq.iMbHeight) as usize;
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
         for iMb in 0..kiMbNum {
             iTotalQp += *pCurDq.grid.luma_qp.get(iMb) as i64;
         }
@@ -725,7 +740,7 @@ pub unsafe fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq
     if pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag {
         if pPic.bIsComplete {
             (*pDecStat).uiIDRCorrectNum += 1;
-        } else if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+        } else if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
             (*pDecStat).uiEcIDRNum += 1;
         }
     }
@@ -819,7 +834,7 @@ pub fn WelsMarkAsRef(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
 ) -> i32 {
-    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, std::ptr::null_mut()) }
+    unsafe { crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None) }
 }
 
 // T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
@@ -889,7 +904,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
             return 1;
         }
         let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
-            unsafe { crate::decoder::decoder_context::parse_only(pCtx) },
+            crate::decoder::decoder_context::parse_only(&pCtx.pParam),
             iPicBufSize,
             iPicWidth,
             iPicHeight,
@@ -1043,7 +1058,7 @@ pub unsafe fn DecodeFrameConstruction(
     let kiActualWidth = kiWidth - ((*pCtx).sFrameCrop.iLeftOffset + (*pCtx).sFrameCrop.iRightOffset) * 2;
     let kiActualHeight = kiHeight - ((*pCtx).sFrameCrop.iTopOffset + (*pCtx).sFrameCrop.iBottomOffset) * 2;
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
         if !(*pCtx).pDecoderStatistics.is_null() {
             if (*(*pCtx).pDecoderStatistics).uiWidth != kiActualWidth as u32
                 || (*(*pCtx).pDecoderStatistics).uiHeight != kiActualHeight as u32
@@ -1056,7 +1071,7 @@ pub unsafe fn DecodeFrameConstruction(
         UpdateDecStatNoFreezingInfo(pCtx, Some(pCurDq));
     }
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
         if (*pCtx).iErrorCode == dsErrorFree {
             // The cropped dimensions as values, above the descriptor's borrow: the
             // parse-only descriptor is the context's own `Box` and the SPS is the
@@ -1194,13 +1209,12 @@ pub unsafe fn DecodeFrameConstruction(
     (*pCtx).iLastImgWidthInPixel = (*pDstInfo).UsrData.sSystemBuffer.iWidth;
     (*pCtx).iLastImgHeightInPixel = (*pDstInfo).UsrData.sSystemBuffer.iHeight;
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
         (*pDstInfo).iBufferStatus = (bFrameCompleteFlag && pic!().bIsComplete) as i32;
-    } else if !(*pCtx).pParam.is_null()
-        && ((*(*pCtx).pParam).eEcActiveIdc
-            == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
-            || (*(*pCtx).pParam).eEcActiveIdc
-                == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE)
+    } else if api_alias(&(*pCtx).pParam).is_some_and(|p| {
+        p.eEcActiveIdc == ERROR_CON_SLICE_COPY_CROSS_IDR_FREEZE_RES_CHANGE
+            || p.eEcActiveIdc == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE
+    })
         && (*pCtx).iErrorCode != dsErrorFree
         && bOutResChange
     {
@@ -1222,7 +1236,7 @@ pub unsafe fn DecodeFrameConstruction(
     (*pCtx).iMbNum = pic!().iMbNum;
     (*pCtx).iMbEcedPropNum = pic!().iMbEcedPropNum;
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
         if (*pDstInfo).iBufferStatus != 0
             && !(*pCtx).pDecoderStatistics.is_null()
             && ((*(*pCtx).pDecoderStatistics).uiWidth != kiActualWidth as u32
@@ -1244,12 +1258,9 @@ pub fn CheckSliceNeedReconstruct(uiLayerDqId: u8, uiTargetDqId: u8) -> bool {
 }
 
 #[inline]
-pub unsafe fn GetTargetDqId(uiTargetDqId: u8, psParam: *mut SDecodingParam) -> u8 {
-    let uiRequiredDqId = if !psParam.is_null() {
-        (*psParam).uiTargetDqLayer
-    } else {
-        255
-    };
+pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &*mut SDecodingParam) -> u8 {
+    // T5.AC4: the field, and the `Option`'s default is the 255 the null arm had.
+    let uiRequiredDqId = api_alias(psParam).map_or(255, |p| p.uiTargetDqLayer);
     WELS_MIN(uiTargetDqId, uiRequiredDqId)
 }
 
@@ -1441,9 +1452,14 @@ pub unsafe fn CreateImplicitWeightTable(
             }
         }
 
-        if !pCurDqLayer.pPredWeightTable.is_null() {
-            (*pCurDqLayer.pPredWeightTable).uiLumaLog2WeightDenom = 5;
-            (*pCurDqLayer.pPredWeightTable).uiChromaLog2WeightDenom = 5;
+        // T5.AC2: the table is the layer's own now, so the null test is the
+        // `Option` and the writes below are field writes. The `&mut` is taken once
+        // for the whole block and every reference resolution inside it reads the
+        // *context*'s pool — a disjoint object, which is why the borrow can span
+        // them (the layer arrives as its own `&mut` parameter).
+        if let Some(pred_weight_table) = pCurDqLayer.sPredWeightTable.as_mut() {
+            pred_weight_table.uiLumaLog2WeightDenom = 5;
+            pred_weight_table.uiChromaLog2WeightDenom = 5;
             for iRef0 in 0..(uiRefCount[0] as usize) {
                 // The two poc/long-ref pairs are read as **values**, so the
                 // reference borrow ends before the inner loop resolves the second
@@ -1456,7 +1472,7 @@ pub unsafe fn CreateImplicitWeightTable(
                         let ref1_poc = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_1, iRef1)
                             .map(|p| (p.iFramePoc, p.bIsLongRef));
                         if let Some((iPoc1, bIsLongRef1)) = ref1_poc {
-                            (*pCurDqLayer.pPredWeightTable).iImplicitWeight[iRef0][iRef1] = 32;
+                            pred_weight_table.iImplicitWeight[iRef0][iRef1] = 32;
                             if !bIsLongRef0 && !bIsLongRef1 {
                                 let iTd = WELS_CLIP3(iPoc1 - iPoc0, -128, 127);
                                 if iTd != 0 {
@@ -1464,7 +1480,7 @@ pub unsafe fn CreateImplicitWeightTable(
                                     let iTx = (16384 + (WELS_ABS(iTd) >> 1)) / iTd;
                                     let iDistScaleFactor = (iTb * iTx + 32) >> 8;
                                     if iDistScaleFactor >= -64 && iDistScaleFactor <= 128 {
-                                        (*pCurDqLayer.pPredWeightTable).iImplicitWeight[iRef0][iRef1] =
+                                        pred_weight_table.iImplicitWeight[iRef0][iRef1] =
                                             64 - iDistScaleFactor;
                                     }
                                 }
@@ -1714,7 +1730,7 @@ pub unsafe fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
         Err(()) => return ERR_INFO_OUT_OF_MEMORY,
     }
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
         // T5.R4: three `WelsMallocz` blocks — the descriptor and its two buffers —
         // become one owned value. The `ERR_INFO_OUT_OF_MEMORY` arms go with the null
         // returns they tested for; `RawDataBuffer::try_new_zeroed` beside them keeps
@@ -2060,7 +2076,7 @@ pub unsafe fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
     // free-cascade entries for sRawData/sSavedData died with the pointers).
     (*pCtx).sRawData.reset();
 
-    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
+    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
         (*pCtx).sSavedData.reset();
     }
     // **Outside the `bParseOnly` arm on purpose (T5.R4, and it is half of F41).** The
@@ -2819,7 +2835,7 @@ pub unsafe fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
                 );
             }
             (*pCtx).iErrorCode |= dsRefLost;
-            if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+            if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                 (*pCtx).iErrorCode |= dsNoParamSets;
                 return dsNoParamSets;
             }
@@ -3309,7 +3325,7 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
         if let Some(au) = cur_au(&mut pCtx.access_unit) {
             ForceResetCurrentAccessUnit(au);
         }
-        if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && !pDstInfo.is_null() {
+        if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) && !pDstInfo.is_null() {
             (*pDstInfo).iBufferStatus = 0;
         }
         (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || (*pCtx).bNextNewSeqBegin;
@@ -3489,8 +3505,7 @@ pub unsafe fn WelsDecodeBs(
                         (*pCtx).iErrorCode |= dsOutOfMemory;
                         return (*pCtx).iErrorCode;
                     }
-                    if !(*pCtx).pParam.is_null()
-                        && (*(*pCtx).pParam).bParseOnly
+                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly)
                         && (*pCtx).sSavedData.grow_to((*pCtx).sRawData.len()).is_err()
                     {
                         (*pCtx).iErrorCode |= dsOutOfMemory;
@@ -3604,8 +3619,21 @@ pub unsafe fn InitDqLayerInfo(
     pDqLayer.bUseWeightedBiPredIdc = false;
 
     if kuiQualityId == BASE_QUALITY_ID {
-        pDqLayer.pRefPicListReordering = std::ptr::addr_of_mut!((*pSh).pRefPicListReordering);
-        pDqLayer.pRefPicMarking = std::ptr::addr_of_mut!((*pSh).sRefMarking);
+        // **T5.AC2: the four `addr_of_mut!`s are three copies and a deletion.** Each
+        // addressed a field of `(*pSh)` / `(*pShExt)` — the very slice header
+        // `pDqLayer.sLayerInfo = *pLayerInfo` copied whole at the top of this
+        // function — so the value is taken here instead of the address. The
+        // assignment stays inside this `kuiQualityId` block, which is what keeps
+        // the retention rule the pointers carried: at a quality-enhancement slice
+        // nothing writes these three and they still read the base slice's.
+        //
+        // Nothing wrote *through* two of the three (the marking and the
+        // reordering syntax are read-only below this point); the third,
+        // `sPredWeightTable`, is written by `CreateImplicitWeightTable`, whose
+        // writes now land in the layer's own copy and are read back through it —
+        // the NAL's copy had no other reader.
+        pDqLayer.sRefPicListReordering = Some((*pSh).pRefPicListReordering);
+        pDqLayer.sRefPicMarking = Some((*pSh).sRefMarking);
         if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
             pps_of(&(*pCtx).sSpsPpsCtx, (*pSh).pps_id)
                 .map(|pps| (pps.bWeightedPredFlag, pps.uiWeightedBipredIdc))
@@ -3613,10 +3641,9 @@ pub unsafe fn InitDqLayerInfo(
             pDqLayer.bUseWeightPredictionFlag = bWeightedPredFlag;
             pDqLayer.bUseWeightedBiPredIdc = uiWeightedBipredIdc != 0;
             if bWeightedPredFlag || uiWeightedBipredIdc != 0 {
-                pDqLayer.pPredWeightTable = std::ptr::addr_of_mut!((*pSh).sPredWeightTable);
+                pDqLayer.sPredWeightTable = Some((*pSh).sPredWeightTable);
             }
         }
-        pDqLayer.pRefPicBaseMarking = std::ptr::addr_of_mut!((*pShExt).sRefBasePicMarking);
     }
     pDqLayer.uiLayerDqId = (*pNalHdrExt).uiLayerDqId;
     pDqLayer.bUseRefBasePicFlag = (*pNalHdrExt).bUseRefBasePicFlag;
@@ -3690,7 +3717,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
     };
     let iThreadCount = GetThreadCount(pCtx);
 
-    let kuiTargetLayerDqId = GetTargetDqId((*pCtx).uiTargetDqId, (*pCtx).pParam);
+    let kuiTargetLayerDqId = GetTargetDqId((*pCtx).uiTargetDqId, &(*pCtx).pParam);
     let kuiDependencyIdMax = (kuiTargetLayerDqId & 0x7F) >> 4;
     (*pCtx).uiNalRefIdc = 0;
 
@@ -3987,8 +4014,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         );
                         bAllRefComplete = false;
                         (*pCtx).iErrorCode |= dsRefLost;
-                        if !(*pCtx).pParam.is_null()
-                            && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE
+                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE)
                         {
                             (*pCtx).bParamSetsLostFlag = true;
                             break 'au GENERATE_ERROR_NO(
@@ -4010,7 +4036,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         (*pCtx).bRPLRError = true;
                         bAllRefComplete = false;
                         HandleReferenceLost(pCtx, pNalCur);
-                        if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                             if (*pCtx).iTotalNumMbRec == 0 {
                                 (*pCtx).pDec = None;
                             }
@@ -4032,7 +4058,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 if iRet != ERR_NONE {
                     bAllRefComplete = false;
                     HandleReferenceLostL0(pCtx, pNalCur);
-                    if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                         if (*pCtx).iTotalNumMbRec == 0 {
                             (*pCtx).pDec = None;
                         }
@@ -4095,9 +4121,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
         if dq_cur.as_deref().is_some_and(|dq| dq.uiLayerDqId == kuiTargetLayerDqId) {
             if !(*pCtx).bInstantDecFlag {
-                if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly {
+                if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) {
                     if NeedErrorCon(pCtx, dq_cur.as_deref_mut())
-                        && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE
+                        && ec_active_idc(&(*pCtx).pParam) != ERROR_CON_DISABLE
                     {
                         ImplementErrorCon(pCtx, dq_cur.as_deref_mut());
                         // Values first, then the picture: `dec_pic` borrows the
@@ -4159,12 +4185,12 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         if iRet == ERR_INFO_DUPLICATE_FRAME_NUM {
                             (*pCtx).iErrorCode |= dsBitstreamError;
                         }
-                        if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_DISABLE {
+                        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                             (*pCtx).pDec = None;
                             break 'au iRet;
                         }
                     }
-                    if !(*pCtx).pParam.is_null() && !(*(*pCtx).pParam).bParseOnly && (*pCtx).pDec.is_some() {
+                    if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) && (*pCtx).pDec.is_some() {
                         if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
                             crate::common::expand_pic::ExpandReferencingPicture(
                                 &[pDec.data_ptr(0), pDec.data_ptr(1), pDec.data_ptr(2)],
@@ -4269,7 +4295,7 @@ pub unsafe fn CheckAndFinishLastPic(
     let mut dq_cur = owned_layer.as_deref_mut();
     let bRet = 'ec: {
     if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur.as_deref_mut()) {
-        if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).eEcActiveIdc != ERROR_CON_DISABLE {
+        if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc != ERROR_CON_DISABLE) {
             ImplementErrorCon(pCtx, dq_cur.as_deref_mut());
             // Values first, then the picture — see `ConstructAccessUnit` (T5.Z1).
             let sps_dims_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
@@ -4296,7 +4322,7 @@ pub unsafe fn CheckAndFinishLastPic(
                     }
                 }
             }
-        } else if !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly {
+        } else if api_alias(&(*pCtx).pParam).is_some_and(|p| p.bParseOnly) {
             let pParser = parser_bs(&mut (*pCtx).pParserBsInfo);
             if let Some(pParser) = pParser {
                 pParser.iNalNum = 0;

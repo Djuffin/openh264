@@ -1117,8 +1117,7 @@ pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize,
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if !(*pCtx).pParam.is_null()
-                        && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE)
                     {
                         (*pCtx).iErrorCode |= dsNoParamSets;
                     } else {
@@ -1131,8 +1130,7 @@ pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize,
             iErr = ParseSps(pCtx, start, &mut cursor, &mut iPicWidth, &mut iPicHeight);
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if !(*pCtx).pParam.is_null()
-                    && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE)
                 {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                 } else {
@@ -1147,8 +1145,7 @@ pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize,
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if !(*pCtx).pParam.is_null()
-                        && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE)
                     {
                         (*pCtx).iErrorCode |= dsNoParamSets;
                     } else {
@@ -1161,8 +1158,7 @@ pub unsafe fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize,
             iErr = ParsePps(pCtx, start, &mut cursor);
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if !(*pCtx).pParam.is_null()
-                    && (*(*pCtx).pParam).eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE)
                 {
                     (*pCtx).iErrorCode |= dsNoParamSets;
                 } else {
@@ -2353,8 +2349,7 @@ unsafe fn discard_nal_and_close_au(pCtx: &mut SWelsDecoderContext, uiAvailNalNum
         }
     }
     if uiAvailNalNum > 1
-        && !(*pCtx).pParam.is_null()
-        && (*(*pCtx).pParam).eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
+        && api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE)
     {
         (*pCtx).bAuReadyFlag = true;
     }

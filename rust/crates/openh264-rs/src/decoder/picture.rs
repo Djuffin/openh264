@@ -186,7 +186,16 @@ pub struct SPicture {
     pub iRefCount: i8,
 
     /// Callback function pointer invoked to clear reference marking and unreference the picture.
-    pub pSetUnRef: Option<unsafe extern "C" fn(*mut SPicture)>,
+    ///
+    /// **T5.AC1: the callback takes a borrow, so it is a safe function pointer.**
+    /// The C++'s `void (*pSetUnRef) (PPicture pPic)` (`picture.h:73`) is a raw
+    /// pointer because C has nothing else; here it is `&mut SPicture` and the
+    /// `extern "C"` ABI is unchanged, because a `&mut T` parameter has the same
+    /// ABI as a `*mut T` one. The null test the C would need before the call is
+    /// discharged by the parameter type at both of the two call sites — the pool
+    /// release in `api/codec_api.rs` and `manage_dec_ref`'s reinstall — each of
+    /// which already holds the picture as something it has proved non-null.
+    pub pSetUnRef: Option<extern "C" fn(&mut SPicture)>,
 
     /// `true` if all macroblocks in this picture were completely and cleanly decoded from the bitstream.
     pub bIsComplete: bool,

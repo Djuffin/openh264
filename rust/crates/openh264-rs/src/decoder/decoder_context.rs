@@ -876,11 +876,24 @@ pub fn active_pps(ps: &SWelsDecoderSpsPpsCTX, active: Option<i32>) -> Option<&SP
 /// conversion needed the answer without the context: `alloc_picture` reached two
 /// pointers deep for one `bool`, and the callers that hold `pCtx` read it for it now.
 ///
-/// # Safety
-/// `pCtx` must be null or point to a live decoder context.
+/// **T5.AC4: safe, and it takes the field.** The body is [`api_alias`]'s
+/// `Option` with the same null default the five hand-written copies had.
 #[inline]
-pub unsafe fn parse_only(pCtx: &mut SWelsDecoderContext) -> bool {
-    !(*pCtx).pParam.is_null() && (*(*pCtx).pParam).bParseOnly
+pub fn parse_only(pParam: &*mut SDecodingParam) -> bool {
+    api_alias(pParam).is_some_and(|p| p.bParseOnly)
+}
+
+/// `pCtx->pParam->eEcActiveIdc`, with the **null-is-disabled** default that 12 of
+/// the decoder's hand-written copies of this chain carry (T5.AC4).
+///
+/// The other shape — `!pParam.is_null() && eEcActiveIdc == X`, where a null
+/// `pParam` makes the whole test *false* rather than "disabled" — is **not** this
+/// function and is spelled at its sites as `api_alias(..).is_some_and(..)`. The
+/// two defaults disagree, so unifying them would be a behaviour change on a path
+/// no gate drives (S6's never-widen default); each site keeps the one it had.
+#[inline]
+pub fn ec_active_idc(pParam: &*mut SDecodingParam) -> ERROR_CON_IDC {
+    api_alias(pParam).map_or(ERROR_CON_IDC::ERROR_CON_DISABLE, |p| p.eEcActiveIdc)
 }
 
 // **T5.Z3: `slice_bit_reader` stood here and is deleted.** It reached the slice's
@@ -1067,15 +1080,76 @@ pub fn long_ref_pic<'a>(
     pool_pic(pool, refs.pLongRefList[LIST_0][i])
 }
 
+// ============================================================================
+// The api-owned aliases — the decoder's last raw field class (T5.AC4)
+// ============================================================================
+//
+// **The context holds nine pointers to objects it does not own.** `pParam`,
+// `pLastDecPicInfo`, `pDecoderStatistics`, `pStreamSeqNum`, `pMemAlign`,
+// `pVlcTable`, `pPictInfoList`, `pPictReoderingStatus` and `pArgDec` are all
+// stamped in `api/codec_api.rs` from fields of `CWelsDecoderImpl`, which
+// outlives the context — the C++'s own arrangement (`welsDecoderExt.cpp`
+// assigns each in `InitDecoder`). They are the reason `deny(unsafe_code)`
+// could not go on eight decoder modules: not one of the ~200 use sites owns a
+// pointer, they all *dereference the context's*, and a dereference is what the
+// lint forbids.
+//
+// **The two functions below are the whole of it, and they are the enumerated
+// exception.** Everything else in the decoder reaches these objects through a
+// safe `Option<&_>` and never writes `unsafe` again. The obligation is stated
+// once, here:
+//
+//   SAFETY. A non-null value in one of these fields was written by
+//   `api/codec_api.rs` from `addr_of_mut!` of a field of the `CWelsDecoderImpl`
+//   that owns this context, or (in tests) from a stack local that outlives the
+//   call. The impl owns the context by `Box`, so the referent outlives every
+//   borrow the context can hand out. Uniqueness holds field-by-field because the
+//   accessor takes **the field**, not the context (session Z's rule): two
+//   different fields cannot produce two borrows of one object, because no two
+//   of the nine are ever stamped from one address — the one pair that *does*
+//   overlap, `pSliceHeader` inside `pNalCur`'s NAL, is shared-only below and
+//   has no `_mut` form.
+//
+// **Whose it is**: the fields themselves are **Phase 8's**, with the `api/`
+// inventory (F23/F41) — the fix is for `CWelsDecoderImpl` to hand the context
+// borrows or owned values at construction, which is api-shaped work this phase
+// puts outside its own scope (F12/P10's sibling clause). What this phase owes is
+// that the raw dereference exists at exactly two items and is argued at both.
+
+/// One api-owned alias, as a shared borrow. `None` is the null the C++ tests for.
+///
+/// See the section note above for the safety argument; the parameter is the
+/// **field**, so the borrow is field-precise and cannot conflict with a
+/// disjoint one taken beside it.
+#[allow(unsafe_code)]
+#[inline]
+pub fn api_alias<T>(field: &*mut T) -> Option<&T> {
+    if field.is_null() {
+        return None;
+    }
+    // SAFETY: the section note above, discharged at the stamp sites in `api/`.
+    unsafe { Some(&**field) }
+}
+
+/// [`api_alias`]'s mutable form, for the four fields the decoder writes back
+/// through (`pLastDecPicInfo`, `pDecoderStatistics`, `pStreamSeqNum` and the
+/// reordering status).
+#[allow(unsafe_code)]
+#[inline]
+pub fn api_alias_mut<T>(field: &mut *mut T) -> Option<&mut T> {
+    if field.is_null() {
+        return None;
+    }
+    // SAFETY: the section note above, discharged at the stamp sites in `api/`.
+    unsafe { Some(&mut **field) }
+}
+
 /// The previous decoded picture's **handle**, without touching the pool — the
 /// `ref_id`-shaped half of [`prev_dpb_pic`], for the error-concealment brackets that
 /// resolve it through their own [`PicRefs`].
 #[inline]
-pub unsafe fn prev_dpb_id(pLastDecPicInfo: *const SWelsLastDecPicInfo) -> Option<PicId> {
-    if pLastDecPicInfo.is_null() {
-        return None;
-    }
-    (*pLastDecPicInfo).pPreviousDecodedPictureInDpb
+pub fn prev_dpb_id(pLastDecPicInfo: &*mut SWelsLastDecPicInfo) -> Option<PicId> {
+    api_alias(pLastDecPicInfo)?.pPreviousDecodedPictureInDpb
 }
 
 /// [`prev_dpb_pic`]'s mutable form — the api layer's buffering path, which takes a

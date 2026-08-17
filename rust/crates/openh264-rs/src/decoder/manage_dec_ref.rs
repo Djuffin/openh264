@@ -64,6 +64,7 @@ pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
 
 pub use crate::decoder::decoder_context::SRefPic;
 use crate::decoder::decoder_context::{active_pps, active_sps, pps_of, ref_set, sps_of};
+use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
 pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
 
 
@@ -152,12 +153,16 @@ fn shift_dpb_entries(list: &mut [Option<PicId>], src: usize, dst: usize, len: us
 /// **The same applies to `pCtx`, which is not a separate object** — every caller
 /// passes `&mut ctx.sRefPic` as `pRefPic`, so `&mut *pCtx` and `&mut *pRefPic`
 /// overlap. Anything added here inherits the rule.
-pub unsafe extern "C" fn SetUnRef(pRef: *mut SPicture) {
-    if pRef.is_null() {
-        return;
-    }
-    let ref_pic = &mut *pRef;
-
+///
+/// **T5.AC1: the picture arrives as a borrow.** The parameter was `*mut SPicture`
+/// because the field that stores this function — `SPicture::pSetUnRef` — is a
+/// callback type, and the C++ spells a callback's parameter as a pointer. Every
+/// one of the seven call sites in this module already holds the picture as an
+/// `&mut` out of `pool_pic_mut`, so the null test at the top ran on a pointer no
+/// caller could make null; the two indirect sites (`api/codec_api.rs`'s pool
+/// release and the reinstall below) each guard before they call. The test is the
+/// parameter type now, and this function is safe.
+pub extern "C" fn SetUnRef(ref_pic: &mut SPicture) {
     if ref_pic.iRefCount <= 0 {
         ref_pic.bUsedAsRef = false;
         ref_pic.bIsLongRef = false;
@@ -201,7 +206,7 @@ pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     for i in 0..MAX_DPB_COUNT {
         let entry = ref_set(pCtx, bTmpRefSet).pShortRefList[LIST_0][i];
         if let Some(pPic) = pool_pic_mut(&mut pCtx.pPicBuff, entry) {
-            unsafe { SetUnRef(pPic) };
+            SetUnRef(pPic);
             ref_set(pCtx, bTmpRefSet).pShortRefList[LIST_0][i] = None;
         }
     }
@@ -210,7 +215,7 @@ pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     for i in 0..MAX_DPB_COUNT {
         let entry = ref_set(pCtx, bTmpRefSet).pLongRefList[LIST_0][i];
         if let Some(pPic) = pool_pic_mut(&mut pCtx.pPicBuff, entry) {
-            unsafe { SetUnRef(pPic) };
+            SetUnRef(pPic);
             ref_set(pCtx, bTmpRefSet).pLongRefList[LIST_0][i] = None;
         }
     }
@@ -286,7 +291,7 @@ pub fn WelsDelShortFromListSetUnref(
 ) -> Option<PicId> {
     let slot = WelsDelShortFromList(pCtx, bTmpRefSet, iFrameNum);
     if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
-        unsafe { SetUnRef(pPic) };
+        SetUnRef(pPic);
     }
     slot
 }
@@ -336,7 +341,7 @@ pub fn WelsDelLongFromListSetUnref(
 ) -> Option<PicId> {
     let slot = WelsDelLongFromList(pCtx, bTmpRefSet, uiLongTermFrameIdx);
     if let Some(pPic) = pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
-        unsafe { SetUnRef(pPic) };
+        SetUnRef(pPic);
     }
     slot
 }
@@ -574,7 +579,7 @@ pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
                 let slot = WelsDelShortFromList(pCtx, bTmpRefSet, iCurFrameNum);
                 match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
                     Some(pPic) => {
-                        unsafe { SetUnRef(pPic) };
+                        SetUnRef(pPic);
                         break;
                     }
                     None => return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW,
@@ -641,11 +646,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContex
     if ((*pCtx).sRefPic.uiShortRefCount[LIST_0] + (*pCtx).sRefPic.uiLongRefCount[LIST_0] <= 0)
         && ((*pCtx).eSliceType != EWelsSliceType::I_SLICE && (*pCtx).eSliceType != EWelsSliceType::SI_SLICE)
     {
-        let ec_mode = if !(*pCtx).pParam.is_null() {
-            (*(*pCtx).pParam).eEcActiveIdc
-        } else {
-            crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
-        };
+        let ec_mode = ec_active_idc(&(*pCtx).pParam);
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
             // **The EC prefetch bracket** (T5.Q2). The region below writes into the
@@ -682,7 +683,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContex
                 (*pCtx).iErrorCode |= dsDataErrorConcealed;
 
                 let mut bCopyPrevious = false;
-                let prev_pic = pRefs.get(prev_dpb_id(pCtx.pLastDecPicInfo));
+                let prev_pic = pRefs.get(prev_dpb_id(&pCtx.pLastDecPicInfo));
 
                 if (ec_mode == ERROR_CON_FRAME_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_COPY_CROSS_IDR
@@ -785,7 +786,7 @@ pub unsafe fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContex
 /// Processes an individual MMCO memory management command.
 ///
 /// Matches `static int32_t MMCOProcess (...)` in `manage_dec_ref.cpp`.
-pub unsafe fn MMCOProcess(
+pub fn MMCOProcess(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
     uiMmcoType: u32,
@@ -853,8 +854,8 @@ pub unsafe fn MMCOProcess(
         }
         MMCO_RESET => {
             WelsResetRefPic(pCtx);
-            if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).bLastHasMmco5 = true;
+            if let Some(last) = api_alias_mut(&mut (*pCtx).pLastDecPicInfo) {
+                last.bLastHasMmco5 = true;
             }
         }
         MMCO_LONG => {
@@ -887,22 +888,21 @@ pub unsafe fn MMCOProcess(
 /// Executes all parsed MMCO memory management commands in sequence.
 ///
 /// Matches `static int32_t MMCO (PWelsDecoderContext pCtx, PRefPic pRefPic, PRefPicMarking pRefPicMarking)`.
-pub unsafe fn MMCO(
+pub fn MMCO(
     pCtx: &mut SWelsDecoderContext,
-    pCurDqLayer: Option<&mut DqLayerState>,
+    pCurDqLayer: Option<&DqLayerState>,
     bTmpRefSet: bool,
-    pRefPicMarking: *mut SRefPicMarking,
+    marking: &SRefPicMarking,
 ) -> i32 {
-    if pRefPicMarking.is_null() {
-        return ERR_INFO_INVALID_PTR;
-    }
-    let marking = &*pRefPicMarking;
+    // T5.AC2: the marking arrives as a borrow of the layer's own copy, and the
+    // layer arrives shared beside it — this function only reads it, and the two
+    // borrows have to coexist at the one call site (`WelsMarkAsRef`). The null
+    // test the C++ needs is discharged by the parameter type.
 
     // A scalar, not a borrow — the MMCO loop below re-enters through `pCtx` on
     // every command (T5.Z1).
     let ps = &(*pCtx).sSpsPpsCtx;
     let uiLog2MaxFrameNum = pCurDqLayer
-        .as_ref()
         .and_then(|layer| sps_of(ps, layer.sLayerInfo.sps_ref))
         .or_else(|| active_sps(ps, (*pCtx).active_sps))
         .map_or(4, |sps| sps.uiLog2MaxFrameNum);
@@ -1116,11 +1116,11 @@ pub unsafe fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Op
         return ERR_INFO_INVALID_PTR;
     };
 
-    let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
-    if pRefPicListReorderSyn.is_null() {
+    // T5.AC2: the reordering syntax is the layer's own copy, taken at the base-
+    // quality slice; the null test the pointer needed is the `Option`.
+    let Some(reorder_syn) = (*pCurDqLayer).sRefPicListReordering.as_ref() else {
         return ERR_INFO_INVALID_PTR;
-    }
-    let reorder_syn = &*pRefPicListReorderSyn;
+    };
 
     // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
     let Some(pSps) = sps_of(
@@ -1250,11 +1250,11 @@ pub unsafe fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: O
         return ERR_INFO_INVALID_PTR;
     };
 
-    let pRefPicListReorderSyn = (*pCurDqLayer).pRefPicListReordering;
-    if pRefPicListReorderSyn.is_null() {
+    // T5.AC2: the reordering syntax is the layer's own copy, taken at the base-
+    // quality slice; the null test the pointer needed is the `Option`.
+    let Some(reorder_syn) = (*pCurDqLayer).sRefPicListReordering.as_ref() else {
         return ERR_INFO_INVALID_PTR;
-    }
-    let reorder_syn = &*pRefPicListReorderSyn;
+    };
 
     // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
     let Some(pSps) = sps_of(
@@ -1369,21 +1369,34 @@ pub unsafe fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: O
 /// Commits the newly reconstructed picture into the reference picture buffer pool.
 ///
 /// Matches `int32_t WelsMarkAsRef (PWelsDecoderContext pCtx, PPicture pLastDec)` in `manage_dec_ref.cpp`.
-pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, pLastDec: *mut SPicture) -> i32 {
-    let mut isThreadCtx = true;
-    // `pLastDec` is the caller's picture (F36's threading arm, never taken here);
-    // the fallback is the pool's, and the arms unify on a pointer because the whole
-    // body below re-enters through `pCtx` (T5.Z1 — the borrow cannot span it, so it
-    // ends at this line and the pointer carries the pool allocation's provenance).
-    let pDec = if !pLastDec.is_null() {
-        pLastDec
-    } else {
-        isThreadCtx = false;
-        dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)
-            .map_or(std::ptr::null_mut(), |p| p as *mut SPicture)
-    };
+pub unsafe fn WelsMarkAsRef(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+    mut pLastDec: Option<&mut SPicture>,
+) -> i32 {
+    // **T5.AC3: the picture is re-derived at each use, never held.** It was a
+    // `*mut SPicture` because the two arms had to unify on one binding and the
+    // body below re-enters `pCtx` between every pair of stamps (T5.Z1) — a
+    // borrow out of `pCtx.pPicBuff` dies at the next call that takes the context,
+    // which is session Y's verdict. `dec!()` is that same derivation written at
+    // each use instead of once: the thread arm re-borrows the caller's picture,
+    // the pool arm re-resolves the handle, and neither result outlives its own
+    // statement. No expression below holds one across a call.
+    //
+    // `pLastDec` is F36's threading arm and both callers pass `None`; it stays
+    // (the non-goal is explicit about the arm), and it is what `isThreadCtx`
+    // reads — one `is_some()` instead of the old null test.
+    macro_rules! dec {
+        () => {
+            match pLastDec {
+                Some(ref mut p) => Some(&mut **p),
+                None => dec_pic(&mut pCtx.pPicBuff, pCtx.pDec),
+            }
+        };
+    }
+    let isThreadCtx = pLastDec.is_some();
 
-    if pDec.is_null() {
+    if dec!().is_none() {
         return ERR_INFO_INVALID_PTR;
     }
 
@@ -1396,21 +1409,34 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
     let Some(pCurDqLayer) = pCurDqLayer else {
         return ERR_INFO_INVALID_PTR;
     };
-    let pRefPicMarking = (*pCurDqLayer).pRefPicMarking;
-    if pRefPicMarking.is_null() {
+    // Shared from here down: nothing in this function writes the layer, and the
+    // marking below is a borrow *of* it that has to coexist with the `MMCO` call
+    // that also takes it (T5.AC2).
+    let pCurDqLayer = &*pCurDqLayer;
+    let Some(pRefPicMarking) = pCurDqLayer.sRefPicMarking.as_ref() else {
         return ERR_INFO_INVALID_PTR;
-    }
+    };
 
-    (*pDec).uiQualityId = (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiQualityId;
-    (*pDec).uiTemporalId = (*pCurDqLayer).sLayerInfo.sNalHeaderExt.uiTemporalId;
+    let (uiQualityId, uiTemporalId) = (
+        pCurDqLayer.sLayerInfo.sNalHeaderExt.uiQualityId,
+        pCurDqLayer.sLayerInfo.sNalHeaderExt.uiTemporalId,
+    );
+    if let Some(pDec) = dec!() {
+        pDec.uiQualityId = uiQualityId;
+        pDec.uiTemporalId = uiTemporalId;
+    }
     // The ids are read as values above the picture's borrow: `pDec` is the pool's
     // and the parameter sets are the context's, and the two travel together at
     // every one of these stamps (T5.Z1).
     if let Some(iSpsId) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|s| s.iSpsId) {
-        (*pDec).iSpsId = iSpsId;
+        if let Some(pDec) = dec!() {
+            pDec.iSpsId = iSpsId;
+        }
     }
     if let Some(iPpsId) = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).map(|p| p.iPpsId) {
-        (*pDec).iPpsId = iPpsId;
+        if let Some(pDec) = dec!() {
+            pDec.iPpsId = iPpsId;
+        }
     }
 
     let mut bIsIDRAU = false;
@@ -1432,21 +1458,17 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
 
     let mut iRet = ERR_NONE;
     if bIsIDRAU {
-        if (*pRefPicMarking).bLongTermRefFlag {
+        if pRefPicMarking.bLongTermRefFlag {
             ref_set(pCtx, bTmpRefSet).iMaxLongTermFrameIdx = 0;
             AddLongTermToList(pCtx, bTmpRefSet, pCtx.pDec, 0, 0);
         } else {
             ref_set(pCtx, bTmpRefSet).iMaxLongTermFrameIdx = -1;
         }
     } else {
-        if (*pRefPicMarking).bAdaptiveRefPicMarkingModeFlag {
-            iRet = MMCO(pCtx, Some(&mut *pCurDqLayer), bTmpRefSet, pRefPicMarking);
+        if pRefPicMarking.bAdaptiveRefPicMarkingModeFlag {
+            iRet = MMCO(pCtx, Some(pCurDqLayer), bTmpRefSet, pRefPicMarking);
             if iRet != ERR_NONE {
-                let ec_mode = if !(*pCtx).pParam.is_null() {
-                    (*(*pCtx).pParam).eEcActiveIdc
-                } else {
-                    ERROR_CON_DISABLE
-                };
+                let ec_mode = ec_active_idc(&(*pCtx).pParam);
                 if ec_mode != ERROR_CON_DISABLE {
                     iRet = RemainOneBufferInDpbForEC(pCtx, bTmpRefSet);
                     if iRet != ERR_NONE {
@@ -1456,18 +1478,16 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
                     return iRet;
                 }
             }
-            if !(*pCtx).pLastDecPicInfo.is_null() && (*(*pCtx).pLastDecPicInfo).bLastHasMmco5 {
-                (*pDec).iFrameNum = 0;
-                (*pDec).iFramePoc = 0;
+            if api_alias(&(*pCtx).pLastDecPicInfo).is_some_and(|l| l.bLastHasMmco5) {
+                if let Some(pDec) = dec!() {
+                    pDec.iFrameNum = 0;
+                    pDec.iFramePoc = 0;
+                }
             }
         } else {
             iRet = SlidingWindow(pCtx, bTmpRefSet);
             if iRet != ERR_NONE {
-                let ec_mode = if !(*pCtx).pParam.is_null() {
-                    (*(*pCtx).pParam).eEcActiveIdc
-                } else {
-                    ERROR_CON_DISABLE
-                };
+                let ec_mode = ec_active_idc(&(*pCtx).pParam);
                 if ec_mode != ERROR_CON_DISABLE {
                     iRet = RemainOneBufferInDpbForEC(pCtx, bTmpRefSet);
                     if iRet != ERR_NONE {
@@ -1480,18 +1500,14 @@ pub unsafe fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<
         }
     }
 
-    if !(*pDec).bIsLongRef {
+    if !dec!().is_some_and(|pDec| pDec.bIsLongRef) {
         let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
             .map_or(1, |sps| sps.iNumRefFrames as u8);
         let counts = ref_set(pCtx, bTmpRefSet);
         let bDpbFull =
             counts.uiLongRefCount[LIST_0] + counts.uiShortRefCount[LIST_0] >= num_ref_frames.max(1);
         if bDpbFull {
-            let ec_mode = if !(*pCtx).pParam.is_null() {
-                (*(*pCtx).pParam).eEcActiveIdc
-            } else {
-                ERROR_CON_DISABLE
-            };
+            let ec_mode = ec_active_idc(&(*pCtx).pParam);
             if ec_mode != ERROR_CON_DISABLE {
                 iRet = RemainOneBufferInDpbForEC(pCtx, bTmpRefSet);
                 if iRet != ERR_NONE {
