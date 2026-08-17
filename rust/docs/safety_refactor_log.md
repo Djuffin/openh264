@@ -10254,10 +10254,10 @@ context — and it is the last instance of a shape this phase has now done three
 
 **Scope**: `prompts/phase5_session_ab.md` under **the finish rule**, with both of
 session AA's open rulings made by the steward at `6b6dd9a3`. Three commits,
-`41149605`…`11002e4c`. Decoder `raw_ptr` **278 → 276**, decoder `unsafe fn`
-**204 → 184**, deny-clean **12 → 13 of 22**, `SHIM(` **3** unmoved. The `exit`
-battery reads **13 passed / 0 failed / 1 skipped — the phase's second fully clean
-one**. **The phase did not close**, and §"Where it stops" says what is actually left.
+`41149605`…`dc4d8177`. Decoder `raw_ptr` **278 → 276**, decoder `unsafe fn`
+**204 → 125 (−39%)**, deny-clean **12 → 13 of 22**, `SHIM(` **3** unmoved. **Two**
+`exit` batteries, both **13 passed / 0 failed / 1 skipped** — at `11002e4c` and
+again at `dc4d8177`, the phase's second and third fully clean ones. **The phase did not close**, and §"Where it stops" says what is actually left.
 
 ### S24 at the face — the brief's own split was wrong in both directions
 
@@ -10386,6 +10386,52 @@ phase has produced, and what three commits of pointer-to-borrow, one inlined
 relocation and one match arm predict. Cumulative CB stays **≈ +23.7…+24.3%**; the
 ≈+23% stop-line stays breached by ≈0.7…1.3 points; D-perf-6's disposition does not
 change. Full entry in `perf_baseline.md`.
+
+### The vestigial-keyword sweep, run the way the rule says (T5.AB4, T5.AB5)
+
+The brief's faces were spent, the phase was not closed and nothing was blocked, so
+the finish rule says keep going. What was available is the cheapest thing on the
+board and it turned out to be the largest.
+
+**T5.AB4 — one module, and it contradicted session AA.** AA's log records a
+strip-and-build over `manage_dec_ref.rs` concluding **"all fifteen survivors need
+the keyword"**. Re-run here: **7 do, 8 do not**, and none of the 8 contains an
+`unsafe` block either. Session Z's rule holds on the other side — all three
+definitions that *name* a raw pointer (`SetUnRef`, `MMCO`, `WelsMarkAsRef`) are
+inside the 7. `SetUnRef` in particular cannot lose its raw signature even though
+all five callers hold a `&mut SPicture`: it is stored into `SPicture::pSetUnRef`,
+the C++'s callback field, and `api/codec_api.rs:1694` calls it through there.
+
+**T5.AB5 — every module at once, which is what the rule actually says.** The
+disagreement above is the reason to run it properly. All **176** decoder `unsafe fn`
+stripped simultaneously, then compiled: **125 report an unsafe operation and keep
+the keyword; 51 do not** — `decoder_core` 23, `decode_slice` 13,
+`parse_mb_syn_cavlc` 10, `error_concealment` 3, `decoder_context` 1, `pic_queue` 1.
+Decoder `unsafe fn` **176 → 125 (−29%)**, the largest single move since session Z's
+own 68.
+
+**Why the per-module run gets the wrong answer, stated once**: a stripped function
+calling a still-`unsafe` one errors, so a per-module sweep counts the *callee's*
+keyword against the caller. Strip everything and the only errors left are genuine
+unsafe operations. Then re-strip exactly the 51 and the 34 calls that newly cross
+into the 125 take a narrow `unsafe { }` block each.
+
+**The attribution instrument was wrong once and a hand check caught it** (S33's
+corollary): its first pass grepped the build output for the file path without
+filtering on `error`, so `deblocking.rs` — deny-clean, zero `unsafe fn` — appeared
+with two "errors" that were `unused_parens` warnings. Filtered properly, `deblocking`
+reads 0 and the total moves 128 → 125. The anomaly is what exposed it: a module
+that cannot have unsafe functions reported two.
+
+**Two gates earned their keep on this pair.** `--all-targets` caught what
+`cargo build` could not: `test_slice_ctx`, a `#[cfg(test)]` fixture, calls
+`slice_ctx`, which stays unsafe — T5.T5's hole, closed mechanically, found in the
+same battery rather than five commits later. And **F3 step 0 applied for the first
+time this session**: `rust_enc` built from T5.AB5 and from its parent are
+**byte-identical** (`a6e454ca…` both sides), so the release sweep's one hit cannot
+be a divergence this commit introduced — acquitted by construction, and the same
+fact proves the stronger thing directly: `unsafe fn` → `fn` plus narrow blocks is
+**codegen-neutral**.
 
 ### Where it stops, and it is arithmetic rather than a blocker
 
