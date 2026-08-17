@@ -54,7 +54,10 @@ alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut DqLa
                                     # — a REAL type divergence, the T4b.3a shape. Owner: 5.4.
 alias PIdctResAddPredFunc x3        # decode_mb_aux/decode_slice/decoder_context. Owner: 5.6.
 alias PIdctFourResAddPredFunc x2    # Owner: 5.6.
-alias PCopyFunc x3                  # decoder_context + two encoder modules. Owner: 5.6/6.3.
+alias PCopyFunc x2                  # T5.AC10: the decoder's third copy is deleted (it had zero
+                                    # users on either side, S18). The remaining pair is
+                                    # `encode_mb_aux.rs` and `md.rs` — both encoder, F22's class.
+                                    # Owner: **Phase 6**.
 alias PGetIntraPredFunc x3          # decoder_context, common/intra_pred_common, encoder/func_ptr_def
                                     # (x4 until T5.X8 deleted get_intra_predictor's, which described
                                     #  the deleted Phase-2 wrappers and had no use of its own)

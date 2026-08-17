@@ -1896,3 +1896,42 @@ binaries' race rate against itself.
 
 Running total: **sixty-three measurements, twenty alternations, thirty-six
 acquittals.**
+
+### Sixty-fourth measurement — 2026-08-17, Phase 5 session AC: the hash shortcut applies in release where it did not in debug
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 64a | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=1` (**release**, `family` battery at T5.AC11/AC12) | 42538 | **40857** (short) |
+| 64b | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (**release**, same battery) | 39981 | **0** |
+
+Two hits, both inside the signature; the debug sweep in the same battery read
+341/341.
+
+**Step 0 applies, and this is the first time it has applied to a commit that
+changes decoder *code*.** The two trees differ — 70 enumerated-survivor stamps in
+`decoder_core.rs` on one side, 0 on the other, checked before each build — and
+their `rust_enc` binaries hash **identically**:
+`8ae7dc34b6967d823301215a75c4bdd2bcf4c5629dd14dfb154c5e67ac6830f0`, one clean
+build per side with the binary deleted first.
+
+**Why, and it refines session P's clause rather than contradicting it.** P's rule
+is *"decoder-only" is not the trigger; "test-only" is — the driver links the whole
+lib, so production decoder code changes the encoder binary.* That is true **in
+debug**, and it is what measurement 62 measured four commits ago (`e5b3ce4d…` vs
+`30aa1921…`, same session, same class of change). In **release** the driver's
+decoder code is unreachable — `rust_enc` calls the encoder API and nothing else —
+so it is eliminated, and a decoder-side change that does not touch a symbol the
+encoder reaches produces the same bytes.
+
+The rule that survives is the one P actually wrote: **hash it before assuming,
+one build each.** What is new is that the answer can depend on the profile, so
+the hash to take is the one for *the profile the hit occurred in*. Both hits here
+are release hits and the release hash resolves them.
+
+Base and head are one binary, so the hits are a property of the run and not of
+either tree. No re-run and no alternation can say more (session D's clause).
+
+**Acquitted as F3.**
+
+Running total: **sixty-four measurements, twenty alternations, thirty-seven
+acquittals.**
