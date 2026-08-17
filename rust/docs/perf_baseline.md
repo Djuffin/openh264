@@ -2141,6 +2141,47 @@ S2b's clause attaches to readings a decision rests on, and this one changes no
 disposition. Both binaries stay stashed (`.perfpair/y_base` = `3e2f43e6`,
 `.perfpair/y_head` = `dff3f78b`) so a later session can chain the span for free.
 
+### Session AB's span — three commits, and the instrument cannot tell them from nothing
+
+`2de8703f` (session AA's close) → `11002e4c` (session AB's close): **three
+commits**. Decode and encode benches, machine otherwise idle, S1/S2 protocol through
+`perfpair.py`, null re-run at the verdict's own pair count (session K's clause).
+
+**The base is AA's close, not Y's, and the brief said Y's.** `phase5_session_ab.md`
+§3.3 names `dff3f78b`/`y_head` as the base and says "sessions Z and AA are both
+inside it" — a sentence inherited verbatim from AA's brief, where it was correct
+because Z's five commits had gone unmeasured. AA paid that debt (the entry below).
+Re-using the same base here would re-measure an adjudicated span and attribute Z's
+and AA's movement to AB. Corrected at the face and recorded, which is S24 aimed at
+our own documents for the third time this phase.
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `2de8703f` → `11002e4c` | **7** | −0.04% | −0.09% | −0.19% | **−0.09%** | **+0.00%** |
+| 7-pair null (`ab_head` both slots) | **7** | −0.40% | +0.12% | −0.07% | **−0.07%** | **+0.00%** |
+
+Null bands at 7 pairs: decode **−0.40% … +0.12%** (0.52 points wide), encode
+**−1.43% … +1.45%** (2.88 points).
+
+**Every row of both benches is inside its own null's band**, and the two decode
+medians differ by 0.02 points. This is the flattest span the phase has produced, and
+it is what the three commits predict: T5.AB1 changed 39 signatures from a raw pointer
+to a borrow and 71 pointer-arithmetic writes to indexing on arrays whose bound was
+already known; T5.AB2 moved seven kernels between modules with `#[inline(always)]` on
+every one; T5.AB3 replaced a `same_picture` comparison with a match on a view the
+bracket already held. None of the three adds or removes work per macroblock.
+
+**Cumulative CB stays ≈ +23.7…+24.3%.** A −0.04% row inside a 0.52-point floor moves
+no cumulative figure; the honest statement is that AB neither spent nor recovered.
+The ≈+23% stop-line remains breached by ≈0.7…1.3 points, D-perf-4's +25% *median*
+tripwire remains unbreached, and **D-perf-6's disposition does not change**: recovery
+belongs to the Phase 9 perf pass, and nothing here is attributed.
+
+**No day two is owed** — S2b's clause attaches to readings a decision rests on, and a
+reading indistinguishable from its own null supports no decision either way. Both
+binaries stay stashed (`.perfpair/aa_head` = `2de8703f`, `.perfpair/ab_head` =
+`11002e4c`) so a later session chains the span for free.
+
 ### Sessions Z and AA's combined span — the debt Z named, paid, and it reads *faster*
 
 `dff3f78b` (session Y's close) → `2de8703f` (session AA's close): **nine commits**,

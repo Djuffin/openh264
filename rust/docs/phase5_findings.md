@@ -1663,6 +1663,40 @@ two handles equal?* Where it can, the assert is a behaviour change and the resol
 has to come from the side that already holds the borrow. The encoder's picture pool
 (6.1/6.2) takes the same `Pool` and will meet it in `MarkPicAsRef`'s shape.
 
+### F42's disposition (steward at `6b6dd9a3`, executed session AB) — the arm stays, and it costs 23 signatures
+
+Session AA measured what the F42 arm is worth: **23 of `PPicture`'s signatures carry
+`PicRefs` beside the picture**, and there the raw pointer is load-bearing rather than
+vestigial — as a borrow, every function-entry retag on the picture pops `cur_ptr` and
+the next read through the arm is undefined (`mv_pred`'s strip-and-build priced it at
+470 errors, every one a dereference of `pDec`).
+
+**Ruled: `PPicture` becomes the phase's second enumerated survivor.** No behaviour
+moves. The 23 carry `#[allow(unsafe_code)]` at the item with this finding's pointer;
+exit condition 1 counts the family by its **own signature grep**, because an alias
+spelling is invisible to `raw_ptr`. Executed at T5.AB1 — 69 signatures at session AB's
+open, **30** at its close (23 survivors + 7 producers), nothing convertible left.
+
+**The revisit is Phase 8's**, and it is two options, neither a lint question:
+
+1. **`PicRefs::get` returns `Option<&SPicture>` and the arm goes.** A reference list
+   naming the current picture then resolves to nothing instead of to the picture — a
+   divergence on exactly the input class D-par-1 spent three sessions bringing to a
+   refereed 2707/0. **It is a parity question, and it stays Eugene-level whenever
+   proposed.**
+2. **Interior mutability on the picture's planes**, so a shared alias of the picture
+   being written is legal. A vocabulary change to the hottest data in the decoder, it
+   reaches the encoder's picture type (F12/P10), and its perf cost is unknown against
+   a stop-line only just recovered to ≈+23.7…+24.3%.
+
+**A third thing the arm does not block, and session AB measured it**: a caller that
+resolves a handle only to *skip* when it names the current picture needs no address at
+all. `PicRefs::classify` answers `RefSlot::Current` without a reference, which is what
+took error concealment's two whole-picture copy paths off the pointer (T5.AB3) without
+touching this arm. Where the next reader of this finding wants "can I avoid the
+pointer here?", that is the first question: **do I need the picture, or only to know
+that it is the one I am writing?**
+
 ## F43 — `decoder_core.rs` declares stubs that shadow the real error-concealment and FMO implementations, so neither subsystem runs
 
 *Found Phase 5 session R (2026-08-14), while threading the layer parameter through

@@ -10233,6 +10233,181 @@ to Phase 9 and the stop-line is already breached and adjudicated — but the spa
 a number the next session should take rather than one this session may skip
 silently, and it is named in `phase5_session_aa.md` §3.
 
+### Hand-off: Phase 5, session AC — the raw families that are left, by module
+
+Brief: [`prompts/phase5_session_ac.md`](prompts/phase5_session_ac.md). **Nothing in
+it is blocked.** `PPicture` is settled and executed: its 39 convertible signatures
+are gone and the 23 that remain are the phase's second enumerated survivor, named at
+their items with the F42 argument. What is left is **224 raw-pointer occurrences in
+decoder *code*** (53 more are prose — S16's floor, measured this session rather than
+assumed) over nine non-deny modules, and the brief carries the split per file.
+
+The one structural item is `error_concealment.rs`'s: `DoMbECMvCopy` takes the whole
+context, so its bracket cannot hold a picture borrow beside it. That is
+`slice_split`'s maneuver aimed at the concealment bracket — an EC view of the
+context — and it is the last instance of a shape this phase has now done three times.
+
+`phase6.md` stays unwritten for the eighth session running, because exit conditions
+1–3 are unmet.
+
+## Phase 5, session AB — `PPicture` executed, the kernels come home, and the guard becomes a type
+
+**Scope**: `prompts/phase5_session_ab.md` under **the finish rule**, with both of
+session AA's open rulings made by the steward at `6b6dd9a3`. Three commits,
+`41149605`…`11002e4c`. Decoder `raw_ptr` **278 → 276**, decoder `unsafe fn`
+**204 → 184**, deny-clean **12 → 13 of 22**, `SHIM(` **3** unmoved. The `exit`
+battery reads **13 passed / 0 failed / 1 skipped — the phase's second fully clean
+one**. **The phase did not close**, and §"Where it stops" says what is actually left.
+
+### S24 at the face — the brief's own split was wrong in both directions
+
+The brief's §1 gave `PPicture` as **41 unblocked / 23 blocked over 64**. Measured by
+a signature-unit grep at the open (a `fn` name to the `{` or `;` that ends the
+declaration, parens balanced, so a multi-line parameter list counts once and a body
+mention counts not at all): **69 signatures**, of which
+
+  * **39** are unblocked, not 41 — `manage_dec_ref`'s two are **prose**, doc
+    comments quoting the C++ signature. T5.AA4 had already converted the real ones.
+  * **23** are blocked, which the brief had right.
+  * **7 are producers** the brief did not count at all: `pic_queue`'s `cur_and_rest`,
+    `slot_at_mut` and the two thread prefetches, `decoder_context`'s `cur_and_refs`,
+    `pic_and_refs` and `slice_split`. Those are the survivor's own home.
+
+Both errors are S16's floor arriving from opposite sides — one counts prose as code,
+the other omits code because it lives in the type's own module. **Exit condition 1
+now needs this grep by name**, because an alias spelling is invisible to `raw_ptr`;
+the ruling said so and the number is 69 → **30**.
+
+### Face 0 — the 39 convert, and the survivor is named at 23 items (T5.AB1)
+
+`decode_slice` 34 → 16, `mv_pred` 14 → 2, `parse_mb_syn_cabac` 8 → 2,
+`parse_mb_syn_cavlc` 5 → 2, `error_concealment` 1 → 1. **Not one convertible
+signature is left.**
+
+The picture takes three shapes and the choice is per-signature, not per-module:
+`Option<&SPicture>` where the site guards and reads, `Option<&mut SPicture>` where
+it guards and writes, and a **bare `&mut SPicture`/`&SPicture` where the C++
+dereferences unconditionally** — `Update8x8RefIdx`, the three `Update*RefIdxCabac`,
+the two `WelsFillCache*`, the reconstruction family. That last shape is the one
+worth keeping: an `Option` there would need either a silent `None` arm (widening
+behaviour on malformed input) or an `expect` (narrowing it to a panic), and the C++
+does neither. **The null contract stays at the boundary that still holds a pointer**
+— which is session Y's own sentence, arriving one container down.
+
+The 23 survivors call the converted callees with a borrow made **at the call site,
+for one call** (`pDec.as_ref()`, `pDec.as_mut()`, `&mut *pDec`). That is what option
+3 buys, concretely: the raw alias is named at 23 items and exists nowhere below them.
+
+`mv_pred.rs` carries `#![deny(unsafe_code)]` with **three exceptions allowed by
+name**, `unsafe fn` **18 → 3**. What removed the other fifteen was not the picture
+parameter: **71 `as_mut_ptr()` + `.add(i)` writes became indexing**, because
+`MbArray::get_mut(iMbXy)` already hands back the macroblock's own `[T; 16]` and the
+raw base *was* that array — T5.R5's maneuver one container down, no value moved. The
+same read made `ParseRefIdxCabac` safe (its `pDirect` was `get_mut(..).as_mut_ptr()`
+and read-only).
+
+### Face 1a — the copy kernels come home (T5.AB2)
+
+AA's straggler, ruled admitted: the seven `WelsCopy*_c` live in
+`codec/common/src/copy_mb.cpp`, so `common/copy_mb.rs` is their home (F22), and the
+decoder's raw row loops become the same one-line shim the encoder's have been since
+Phase 2. **No encoder site is converted** — `encode_mb_aux.rs`'s seven shims stay
+where they are, spelled as they were, and the whole encoder-side edit is one `use`.
+
+`copy_rows` **deduplicates rather than moving**: `common/mc.rs` already held a
+byte-identical private copy, so the relocation removes a duplicate instead of making
+a third. `find_shadowing_stubs.py` **21 → 19 candidates**, and the two that went are
+exactly AA's two real hits.
+
+### Face 1b — the guard becomes a type, and the brief's question is answered (T5.AB3)
+
+The brief asked whether `cur_and_rest` can express the guard error concealment
+spells as `same_picture`. **It can.** `PicRefs::classify` returns `RefSlot` —
+`Empty` / `Current` / `Other(&SPicture)` — and `Current` carries no reference **by
+construction**, so `Other`'s borrow is provably disjoint from the `&mut` the bracket
+holds. `DoErrorConFrameCopy` and `DoErrorConSliceCopy` run on it; the frame copy's
+six plane operations are `fill(128)` and `copy_from_slice` over
+`plane_mut(i).as_mut_slice()[origin..origin + len]`, which is the same span
+`data_ptr(i)` addressed.
+
+**The borrow bracket carries no address for its own slot, and that is structural.**
+The first draft stored `cur_ptr` beside the returned `&mut` — two live derivations
+of one allocation, where the caller's first retag pops the pointer. That is exactly
+why §0's 23 keep theirs. `PicView::SplitBorrowed` does not have the field.
+
+**The third copy path is blocked and the reason is not `PPicture`**:
+`DoMbECMvCopy` takes `&mut SWelsDecoderContext` and its caller invokes it inside the
+bracket, so a picture borrow from `pCtx.pPicBuff` would travel beside a borrow of
+the whole context. So `error_concealment.rs` does **not** go deny-clean and the
+brief's "the `common/` boundary's three named files, complete" does not land — the
+third file is blocked on the context, not on `common/`. Recorded at the module's S25
+table with its pointer.
+
+### The gate that earned its keep, and it is a test written three sessions ago
+
+The first draft of `RefSlot` had a `reference() -> Option<&SPicture>` helper. It
+**collapses `Current` onto `Empty`**, and those are different behaviours: the frame
+copy gray-fills on `Empty` and does nothing on `Current`; the slice copy runs its
+loop counting `iMbEcedNum` on `Empty` and returns **before** the loop on `Current`.
+`p3_slice_copy_self_copy_guard_is_by_identity` failed on the first —
+`left: 128, right: 170`, a destination gray-filled where the C++ leaves it alone.
+S6's never-widen default, convicted by a P3 identity test, **measured red then
+green** rather than reasoned about (S33). The helper is deleted rather than fixed:
+an `Option` cannot carry three states, and offering one invites the same mistake.
+
+### Gates, F3, and the span
+
+**The `exit` battery at `11002e4c` reads `OVERALL: PASS` — 13 passed / 0 failed / 1
+skipped**: tests 474/468/20, census 59, ratchet clean, `--all-targets` compiling,
+both benches bit-identical, **both sweeps 341/341**, Miri `--lib` **329/0** plus the
+three differential targets (**20 / 7 / 3**). Miri's three decoder probes ran per
+seam as well: 3/3 at T5.AB1 and 3/3 at T5.AB3, the second including
+`error_concealment_runs_under_the_aliasing_checker`, which is the probe that face
+moves.
+
+**F3 twice.** Measurement **59** (T5.AB2, two hits) went to the alternation, and
+step 0's hash shortcut was checked first and **did not apply** — moving a definition
+between modules builds a different binary even with identical bodies. Nineteenth
+alternation, 1440 configurations per side: **HEAD 2, control 12** — the widest
+margin yet, and still only an acquittal (F3's rate is load-dependent and nothing in
+that commit touches the slice-list growth the race lives in; reading it as a fix
+would be S23b's mistake mirrored). Measurement **60** (T5.AB3, one hit) closed at
+step 1: the preset re-ran **5× for 600 configurations, zero hits**. Running total
+**60 measurements, 19 alternations, 33 acquittals**.
+
+**The span reads flat, and the base is AA's close rather than the brief's.**
+`phase5_session_ab.md` §3.3 names `dff3f78b`/`y_head`, a sentence inherited verbatim
+from AA's brief where it was right because Z's commits were unmeasured — AA paid
+that debt, so re-using the base would attribute Z's and AA's movement to AB. At 7
+pairs, `2de8703f` → `11002e4c`: CB **−0.04%**, decode median **−0.09%**, encode
+median **+0.00%**, against a 7-pair null of CB −0.40%, decode −0.07%, encode +0.00%.
+**Every row of both benches is inside its own null's band** — the flattest span the
+phase has produced, and what three commits of pointer-to-borrow, one inlined
+relocation and one match arm predict. Cumulative CB stays **≈ +23.7…+24.3%**; the
+≈+23% stop-line stays breached by ≈0.7…1.3 points; D-perf-6's disposition does not
+change. Full entry in `perf_baseline.md`.
+
+### Where it stops, and it is arithmetic rather than a blocker
+
+The finish rule ends this session on **exhaustion of the brief's faces**, not on a
+blocker: §0's decision was made before the session started and every face it named
+has been executed or measured and recorded. What remains is not blocked by anything
+a session cannot decide — it is **size**, and this session measured it rather than
+estimating it:
+
+**Decoder `raw_ptr` 276 = 224 in code + 52 in prose.** Per module, code only:
+`decoder_core` 43, `decoder_context` 36, `pic_queue` 28, `decode_slice` 23,
+`nalu` 23, `error_concealment` 21, `parse_mb_syn_cavlc` 16, `slice` 10,
+`parse_mb_syn_cabac` 8, `parameter_sets` 6, `manage_dec_ref` 4, `picture` 4,
+`fmo` 1. Exit condition 1 is nine modules' worth of ordinary conversion away, not
+one session's; exit condition 2 is the same nine modules. **Exit condition 3 is met
+in substance and the list is restated** (below); **4 is met**; **5 is met and
+closed** (D-perf-6).
+
+That is the honest reading, and it is the one the checklist now carries: the phase's
+remaining work is a named list of nine modules with a size each, no open design
+question in front of any of them.
+
 ### Hand-off: Phase 5, session AA — the deny-clean sweep, `common/`, and the close
 
 Brief: [`prompts/phase5_session_aa.md`](prompts/phase5_session_aa.md). **Nothing
