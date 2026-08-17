@@ -1703,3 +1703,40 @@ needs.
 
 Running total: **fifty-seven measurements, seventeen alternations, thirty
 acquittals.**
+
+### Fifty-eighth measurement — 2026-08-17, Phase 5 session AA: two hits, and the eighteenth alternation ties
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 58a | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=0` (**debug**, `family` battery at T5.AA3) | 40992 | **0** |
+| 58b | `mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=0` (same sweep) | 39981 | **37837** |
+
+Both inside the signature — `mt`, `sm=3`, wrong length, one zero and one short,
+which is the clause session N's measurement 37 wrote when it took `320x192` *out*
+of the exclusions. The same battery's **release** sweep read 341/341: the profile
+asymmetry is the reverse of measurement 57's, one commit later, on the same
+machine — load, not a property of either build.
+
+**Two hits, so step 2.** Both binaries built once and swapped inside one loop, 12
+whole `mt` presets per side, 120 configurations each = **1440 per side**, machine
+otherwise idle.
+
+| side | hits | presets | configurations |
+|---|---|---|---|
+| HEAD (`ab8ba549…`, at T5.AA3) | **6** | 12 | 1440 |
+| control (`f7e9043f…`, `ee9a3c4c` — session AA's base) | **6** | 12 | 1440 |
+
+**A tie, and the first exact one at this pair count.** Rate ≈**1/240** per side,
+denser than session K's ≈1/307 under sustained presets and in the same band as
+session Y's ≈1/160 and ≈1/144 — a machine that has been running batteries all
+session, which is the load dependence rather than a change in either tree. Every
+hit on both sides is `mt sm=3`; the hitting configurations move between rounds and
+between sides. No hit outside the signature on either side.
+
+Step 1 also ran, before the alternation: each of the two configurations re-ran
+**3/3 byte-identical** in isolation.
+
+**Acquitted as F3.**
+
+Running total: **fifty-eight measurements, eighteen alternations, thirty-one
+acquittals.**

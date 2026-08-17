@@ -123,9 +123,68 @@ pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize,
 /// `iStride[0..=2]`; see [`expand_picture`] for the geometry each kernel asserts.
 /// Slices shorter than three entries panic rather than read out of bounds — the
 /// C++ parameter is `uint8_t* pData[3]` decayed to a pointer and checks nothing.
-pub unsafe fn ExpandReferencingPicture(pData: &[*mut u8], iWidth: i32, iHeight: i32, iStride: &[i32]) {
-    use crate::decoder::decoder_core::{ExpandPictureChroma_c, ExpandPictureLuma_c};
+/// The one place a mid-plane `pDst` becomes the full allocation slice
+/// (R-c: nothing else does this arithmetic). Every caller of the expand
+/// functions hands `pData[i]`, which both codecs' `AllocPicture`s place at
+/// `pBuffer + (1 + stride) * pad` — i.e. `pad` rows plus `pad` bytes into the
+/// allocation (`decoder/pic_queue.rs:177-330`, `encoder/wels_preprocess.rs:
+/// 764-806`; chroma divides the same expression by two, which is the same
+/// layout at `pad = 16`). The reconstructed span is the padded plane:
+/// `(h + 2*pad)` rows of `stride`. The real allocation may be taller (row
+/// counts are aligned up); claiming the prefix is exactly what the kernel may
+/// touch.
+///
+/// # Safety
+/// `pDst` must point at `(0, 0)` of a picture plane laid out as above, `pad`
+/// rows and `pad` bytes into a live allocation of at least
+/// `(kiPicH + 2*pad) * kiStride` bytes, with no other live reference to it.
+unsafe fn expand_shim_span<'a>(pDst: *mut u8, kiStride: i32, kiPicH: i32, pad: usize) -> &'a mut [u8] {
+    let stride = kiStride as usize;
+    let h = kiPicH as usize;
+    std::slice::from_raw_parts_mut(pDst.sub(pad * stride + pad), (h + 2 * pad) * stride)
+}
 
+/// Matches `ExpandPictureLuma_c` in `codec/common/src/expand_pic.cpp`.
+///
+/// # Safety
+/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 32`
+/// (`crate::decoder::decoder_core::PADDING_LENGTH` — the luma border); `kiPicW + 64 <= kiStride`; positive
+/// width and height.
+pub unsafe extern "C" fn ExpandPictureLuma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
+    // SHIM(phase2) -> expand_picture
+    unsafe {
+        let buf = expand_shim_span(pDst, kiStride, kiPicH, crate::decoder::decoder_core::PADDING_LENGTH);
+        crate::common::expand_pic::expand_picture(
+            buf,
+            kiStride as usize,
+            kiPicW as usize,
+            kiPicH as usize,
+            crate::decoder::decoder_core::PADDING_LENGTH,
+        );
+    }
+}
+
+/// Matches `ExpandPictureChroma_c` in `codec/common/src/expand_pic.cpp`.
+///
+/// # Safety
+/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 16`
+/// (`crate::decoder::decoder_core::PADDING_LENGTH >> 1` — the chroma border); `kiPicW + 32 <= kiStride`;
+/// positive width and height.
+pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
+    // SHIM(phase2) -> expand_picture
+    unsafe {
+        let buf = expand_shim_span(pDst, kiStride, kiPicH, crate::decoder::decoder_core::PADDING_LENGTH >> 1);
+        crate::common::expand_pic::expand_picture(
+            buf,
+            kiStride as usize,
+            kiPicW as usize,
+            kiPicH as usize,
+            crate::decoder::decoder_core::PADDING_LENGTH >> 1,
+        );
+    }
+}
+
+pub unsafe fn ExpandReferencingPicture(pData: &[*mut u8], iWidth: i32, iHeight: i32, iStride: &[i32]) {
     let pPicY = pData[0];
     let pPicCb = pData[1];
     let pPicCr = pData[2];

@@ -484,51 +484,15 @@ impl DqLayerState {
     }
 }
 
-/// `SHIM(phase5)` — a raw pointer at macroblock `mb_xy` of one of [`MbGrid`]'s
-/// arrays, for the callers 5.2 has not converted yet.
-///
-/// The raw bridge lives here, on the consumer side, and **not** in
-/// `safe/mb_grid.rs`, which is `#![forbid(unsafe_code)]` and stays that way:
-/// `SPicture::data_ptr` (`picture.rs`, T5.C3) set the precedent. It retires as the
-/// families that still hand a bare element pointer to a kernel convert; nothing new
-/// may call it.
-///
-/// # The provenance, which is the whole point (S28)
-///
-/// The pointer is derived from the **allocation root** — the whole `Vec`'s slice —
-/// and then moved with `wrapping_add`. It is *not*
-/// `a.as_mut_slice()[mb_xy..].as_mut_ptr()`, which produces the identical address,
-/// compiles under `forbid(unsafe_code)`, passes every byte gate in the battery, and
-/// is UB the moment a kernel walks backwards from it, because slicing narrows
-/// provenance to `[mb_xy..]`. That is not hypothetical here: `pCbfDc`'s consumers
-/// take the array's base and index it later, and `GetMbType`'s seven callers index
-/// the base they are handed at *neighbour* addresses (T5.K2).
-///
-/// **`GetPNzc` was named here as a third example and it is not one** (checked at
-/// T5.L1, when the family actually converted): its callers read the neighbour's
-/// counts through a *second* `GetPNzc` call, never by walking off the first
-/// pointer, and all four consumers bound themselves with
-/// `from_raw_parts(pNnzTab, 24)`. It is a shared borrow now, not a bridge. A
-/// scouted claim about a family's reach is a lead until the family converts (S24).
-/// Miri is the only instrument that can see the difference — see the full-reach
-/// tests in this file's `mod tests`.
-///
-/// # Panics
-///
-/// If `mb_xy` is past one-past-the-end of the array. The C computed
-/// `base + iMbXy` with no check at all, so this is P13's bargain: a panic here is
-/// a port bug that the C would have turned into a silent out-of-bounds write. It
-/// is the check F32 did not have — two arrays sized `numMb` and indexed
-/// `numMb * 8`.
-#[inline]
-pub fn mb_grid_ptr<T>(a: &mut MbArray<T>, mb_xy: usize) -> *mut T {
-    let len = a.as_slice().len();
-    assert!(
-        mb_xy <= len,
-        "macroblock {mb_xy} outside a per-macroblock array of {len}"
-    );
-    a.as_mut_slice().as_mut_ptr().wrapping_add(mb_xy)
-}
+// **T5.AA3: `mb_grid_ptr` is deleted.** It was the phase's last raw bridge into
+// [`MbGrid`]'s per-macroblock arrays — the base as a pointer, for callers that
+// index at *neighbour* addresses and so could not take a narrowing slice (S28).
+// Its final production caller was `ParseIntraPredModeChromaCabac`'s two neighbour
+// reads of the picture's `pMbType`, and `MbArray::get` reaches both with a bound.
+// The seven Miri provenance tests that pinned its reach go with it: the accessor
+// they instrument no longer exists. `SPicture::data_ptr` is the phase's one
+// remaining bridge of this shape, and it is the named survivor (Phase 8's).
+
 
 pub use crate::decoder::decoder_context::SRefPic;
 
@@ -589,66 +553,14 @@ pub use crate::decoder::fmo::SFmo;
 /// `codec/common/inc/expand_pic.h`).
 pub const PADDING_LENGTH: usize = 32;
 
-/// The one place a mid-plane `pDst` becomes the full allocation slice
-/// (R-c: nothing else does this arithmetic). Every caller of the expand
-/// functions hands `pData[i]`, which both codecs' `AllocPicture`s place at
-/// `pBuffer + (1 + stride) * pad` — i.e. `pad` rows plus `pad` bytes into the
-/// allocation (`decoder/pic_queue.rs:177-330`, `encoder/wels_preprocess.rs:
-/// 764-806`; chroma divides the same expression by two, which is the same
-/// layout at `pad = 16`). The reconstructed span is the padded plane:
-/// `(h + 2*pad)` rows of `stride`. The real allocation may be taller (row
-/// counts are aligned up); claiming the prefix is exactly what the kernel may
-/// touch.
-///
-/// # Safety
-/// `pDst` must point at `(0, 0)` of a picture plane laid out as above, `pad`
-/// rows and `pad` bytes into a live allocation of at least
-/// `(kiPicH + 2*pad) * kiStride` bytes, with no other live reference to it.
-unsafe fn expand_shim_span<'a>(pDst: *mut u8, kiStride: i32, kiPicH: i32, pad: usize) -> &'a mut [u8] {
-    let stride = kiStride as usize;
-    let h = kiPicH as usize;
-    std::slice::from_raw_parts_mut(pDst.sub(pad * stride + pad), (h + 2 * pad) * stride)
-}
-
-/// Matches `ExpandPictureLuma_c` in `codec/common/src/expand_pic.cpp`.
-///
-/// # Safety
-/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 32`
-/// (`PADDING_LENGTH` — the luma border); `kiPicW + 64 <= kiStride`; positive
-/// width and height.
-pub unsafe extern "C" fn ExpandPictureLuma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    // SHIM(phase2) -> expand_picture
-    unsafe {
-        let buf = expand_shim_span(pDst, kiStride, kiPicH, PADDING_LENGTH);
-        crate::common::expand_pic::expand_picture(
-            buf,
-            kiStride as usize,
-            kiPicW as usize,
-            kiPicH as usize,
-            PADDING_LENGTH,
-        );
-    }
-}
-
-/// Matches `ExpandPictureChroma_c` in `codec/common/src/expand_pic.cpp`.
-///
-/// # Safety
-/// `pDst`, `kiStride`, `kiPicH` as [`expand_shim_span`] with `pad = 16`
-/// (`PADDING_LENGTH >> 1` — the chroma border); `kiPicW + 32 <= kiStride`;
-/// positive width and height.
-pub unsafe extern "C" fn ExpandPictureChroma_c(pDst: *mut u8, kiStride: i32, kiPicW: i32, kiPicH: i32) {
-    // SHIM(phase2) -> expand_picture
-    unsafe {
-        let buf = expand_shim_span(pDst, kiStride, kiPicH, PADDING_LENGTH >> 1);
-        crate::common::expand_pic::expand_picture(
-            buf,
-            kiStride as usize,
-            kiPicW as usize,
-            kiPicH as usize,
-            PADDING_LENGTH >> 1,
-        );
-    }
-}
+// **T5.AA3: `expand_shim_span`, `ExpandPictureLuma_c` and `ExpandPictureChroma_c`
+// moved to `common/expand_pic.rs`.** They were phase-2 shim wrappers living in
+// `src/decoder/` whose only consumer is `common::expand_pic::ExpandReferencingPicture`
+// — a `common/` function importing from the decoder, the dependency the wrong way
+// round, and the reason two of the decoder's six shim markers were not the
+// decoder's work at all. Both codecs call them through that one consumer, so the
+// move touches no encoder line (F12/P10) and Phase 6 deletes them with the rest of
+// the raw entry points.
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
@@ -4549,217 +4461,6 @@ mod tests {
         assert_eq!(g.mv.len(), LIST_A);
         assert_eq!(g.mvd.len(), LIST_A);
         assert_eq!(g.ref_index.len(), LIST_A);
-    }
-
-    /// **S28, forwards and backwards.** A pointer taken at the last macroblock
-    /// must reach every earlier one — that is what `GetPNzc`'s callers do when
-    /// they read the left neighbour's counts, and what `pCbfDc`'s consumers do
-    /// when they keep the base and index it later.
-    ///
-    /// Under Miri this fails against `as_mut_slice()[mb_xy..].as_mut_ptr()` at
-    /// the first backwards write and passes against the `wrapping_add` form.
-    /// Under the ordinary test runner both pass, which is the whole reason the
-    /// rule needed a finding to discover.
-    #[test]
-    fn mb_grid_ptr_reaches_the_whole_array_in_both_directions() {
-        let dims = MbDims::new(11, 9);
-        let n = dims.count();
-        let mut g = MbGrid::new(dims);
-
-        // From the last macroblock, walk back over every element and forward to
-        // the end, writing through the raw pointer the shim handed out.
-        let last = n - 1;
-        let p = mb_grid_ptr(&mut g.luma_qp, last);
-        unsafe {
-            for back in 0..=last {
-                *p.sub(back) = (back % 128) as i8;
-            }
-            assert_eq!(*p, 0);
-            assert_eq!(*p.sub(last), ((n - 1) % 128) as i8);
-        }
-        // and the safe view agrees with what the raw writes did
-        assert_eq!(*g.luma_qp.get(0), ((n - 1) % 128) as i8);
-        assert_eq!(*g.luma_qp.get(last), 0);
-
-        // From macroblock 0 forward.
-        let p0 = mb_grid_ptr(&mut g.luma_qp, 0);
-        unsafe {
-            for fwd in 0..n {
-                *p0.add(fwd) = 7;
-            }
-        }
-        assert!(g.luma_qp.as_slice().iter().all(|&q| q == 7));
-    }
-
-    /// The same reach on a **composite** element, cast to the element type the
-    /// kernels take: a pointer taken at one macroblock and walked over the whole
-    /// flattened array is what `mb_grid_ptr` promises, and this is where that
-    /// promise is checked.
-    ///
-    /// **The family it was written for turned out not to need it** (T5.L5):
-    /// `pScaledTCoeff`'s consumers spell `.add(iMbXy) as *mut i16` and then index
-    /// 0..384, which is the record's *own* length — `pScoeffLevel.add(256 + (i << 6))`
-    /// with `i < 2` is the furthest any of them reaches — so that family derives
-    /// per-record now and this test outlives it as the composite case of the
-    /// accessor's contract. The scouted claim was that those consumers needed the
-    /// flattened extent; walking them at conversion time said otherwise (S24).
-    #[test]
-    fn mb_grid_ptr_reaches_a_composite_arrays_flattened_extent() {
-        let dims = MbDims::new(3, 2);
-        let n = dims.count();
-        let mut g = MbGrid::new(dims);
-
-        let p = mb_grid_ptr(&mut g.scaled_tcoeff, n - 1) as *mut i16;
-        unsafe {
-            // this macroblock's own 384 coefficients
-            for i in 0..384 {
-                *p.add(i) = (i as i16) & 0x7f;
-            }
-            // and backwards into the previous macroblock's, which is where a
-            // narrowed provenance dies
-            for i in 1..=384 {
-                *p.sub(i) = -1;
-            }
-        }
-        assert_eq!(g.scaled_tcoeff.get(n - 1)[383], 383 & 0x7f);
-        assert!(g.scaled_tcoeff.get(n - 2).iter().all(|&c| c == -1));
-
-        // `[i8; 24]` likewise: `GetPNzc` hands out `*mut i8` at one macroblock and
-        // the deblocking filter reads the neighbour's 24 through it.
-        let q = mb_grid_ptr(&mut g.nzc, 1) as *mut i8;
-        unsafe {
-            for i in 0..24 {
-                *q.add(i) = 2;
-            }
-            for i in 1..=24 {
-                *q.sub(i) = 3;
-            }
-        }
-        assert_eq!(g.nzc.get(1), &[2i8; 24]);
-        assert_eq!(g.nzc.get(0), &[3i8; 24]);
-    }
-
-    /// The reach `pRefIndex`'s one surviving raw consumer actually takes (T5.J3).
-    ///
-    /// `DeblockingBsMarginalMBAvcbase` keeps the array **base** and then indexes it
-    /// by macroblock address for the current macroblock *and* its neighbour —
-    /// `(*pRefIdxArr.add(iMbXy))[k]`, `(*pRefIdxArr.add(iNeighMb))[k]` — so the
-    /// legal reach of the pointer taken at 0 is every macroblock in the array, and a
-    /// derivation narrowed to `[0..]`-of-something-shorter would die at the first
-    /// neighbour. It also pins the element type: this bridge stays `*mut [i8; 16]`
-    /// rather than flattening, because the consumer indexes inside the record with a
-    /// scan-order index of its own.
-    #[test]
-    fn mb_grid_ptr_reaches_every_macroblock_of_ref_index_from_the_base() {
-        let dims = MbDims::new(4, 3);
-        let n = dims.count();
-        let mut g = MbGrid::new(dims);
-
-        let base = mb_grid_ptr(&mut g.ref_index[LIST_1], 0);
-        unsafe {
-            for mb in 0..n {
-                for k in 0..16 {
-                    (*base.add(mb))[k] = ((mb * 16 + k) % 128) as i8;
-                }
-            }
-            // and read back across a neighbour pair, the consumer's own shape
-            assert_eq!((*base.add(n - 1))[15], (((n - 1) * 16 + 15) % 128) as i8);
-            assert_eq!((*base.add(n - 2))[0], (((n - 2) * 16) % 128) as i8);
-        }
-        assert_eq!(g.ref_index[LIST_1].get(0)[0], 0);
-        assert_eq!(g.ref_index[LIST_1].get(n - 1)[15], (((n - 1) * 16 + 15) % 128) as i8);
-        // LIST_0 is untouched: two arrays of one grid are two values, which the raw
-        // pair of pointers this replaces could only promise by inspection.
-        assert!(g.ref_index[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|&r| r == 0)));
-    }
-
-    /// The reach `pMv`'s one surviving raw consumer actually takes (T5.K1).
-    ///
-    /// `MB_BS_MV` is handed the array **base** and reads
-    /// `(*iMotionVector.add(iMbXy))[i]` beside `(*iMotionVector.add(iMbBn))[j]`, so —
-    /// exactly as for `pRefIndex` above — the legal reach of the pointer taken at 0
-    /// is every macroblock, and the element type must stay `[[i16; 2]; 16]` rather
-    /// than flattening, because the consumer indexes inside the record.
-    ///
-    /// It also pins what this family lands on where F35's alignment question used to
-    /// be: the `Vec` behind `MbArray<[[i16; 2]; 16]>` is align **2** where
-    /// `WelsMallocz` returned 16, and **T5.R5 stopped anything from wanting more** —
-    /// the MV cache helpers write `[i16; 2]` values, not 4-byte words, so the question
-    /// the `ST32`/`LD32` round trip that stood here was asking no longer has a site to
-    /// be asked at. The write below is the helpers' own, at the alignment the flip
-    /// hands them.
-    #[test]
-    fn mb_grid_ptr_reaches_every_macroblock_of_mv_from_the_base() {
-        let dims = MbDims::new(4, 3);
-        let n = dims.count();
-        let mut g = MbGrid::new(dims);
-
-        let base = mb_grid_ptr(&mut g.mv[LIST_1], 0);
-        unsafe {
-            for mb in 0..n {
-                let row = (*base.add(mb)).as_mut_ptr();
-                for k in 0..16 {
-                    *row.add(k) = [mb as i16, k as i16];
-                }
-            }
-            // read back across a neighbour pair, the consumer's own shape
-            assert_eq!((*base.add(n - 1))[15], [n as i16 - 1, 15]);
-            assert_eq!((*base.add(n - 2))[0], [n as i16 - 2, 0]);
-        }
-        assert_eq!(g.mv[LIST_1].get(0)[0], [0, 0]);
-        // LIST_0 is untouched: two arrays of one grid are two values.
-        assert!(g.mv[LIST_0].as_slice().iter().all(|mb| mb.iter().all(|v| v == &[0, 0])));
-    }
-
-    /// The reach `pMbType`'s one surviving raw consumer actually takes (T5.K2).
-    ///
-    /// `GetMbType` hands its caller the array **base**, and every caller then
-    /// indexes it at *neighbour* addresses — `*pMbType.add(iLeftXy)`,
-    /// `.add(iTopXy)`, `.add(iLeftTopXy)`, `.add(iRightTopXy)` — around a current
-    /// macroblock that may be anywhere in the picture. So the pointer taken at 0
-    /// must reach every macroblock in both directions, and the element stays a
-    /// plain `u32`: this is the one family of the twenty-two whose record *is* a
-    /// scalar, so there is nothing inside it to index.
-    #[test]
-    fn mb_grid_ptr_reaches_every_macroblock_of_mb_type_from_the_base() {
-        let dims = MbDims::new(4, 3);
-        let n = dims.count();
-        let mut g = MbGrid::new(dims);
-
-        let base = mb_grid_ptr(&mut g.mb_type, 0);
-        unsafe {
-            for mb in 0..n {
-                *base.add(mb) = 0xDEAD_0000 | mb as u32;
-            }
-            // the caller's own shape: a current macroblock and its four neighbours,
-            // read backwards from the interior through the pointer taken at 0
-            let cur = dims.mb_xy(2, 2);
-            assert_eq!(*base.add(cur), 0xDEAD_0000 | cur as u32);
-            for nb in [dims.left(cur), dims.top(cur), dims.top_left(cur), dims.top_right(cur)] {
-                let nb = nb.expect("interior macroblock has all four neighbours");
-                assert_eq!(*base.add(nb), 0xDEAD_0000 | nb as u32);
-            }
-        }
-        assert_eq!(*g.mb_type.get(n - 1), 0xDEAD_0000 | (n as u32 - 1));
-    }
-
-    /// One past the end is a pointer you may form and not one you may read —
-    /// exactly what `base + numMb` meant in the C. Past *that* is the F32 shape
-    /// and it is a panic now.
-    #[test]
-    fn mb_grid_ptr_allows_one_past_the_end() {
-        let dims = MbDims::new(2, 2);
-        let mut g = MbGrid::new(dims);
-        let end = mb_grid_ptr(&mut g.cbp, dims.count());
-        let base = mb_grid_ptr(&mut g.cbp, 0);
-        assert_eq!(end as usize - base as usize, dims.count());
-    }
-
-    #[test]
-    #[should_panic(expected = "outside a per-macroblock array of 4")]
-    fn mb_grid_ptr_rejects_an_index_past_one_past_the_end() {
-        let mut g = MbGrid::new(MbDims::new(2, 2));
-        mb_grid_ptr(&mut g.cbp, 5);
     }
 
     /// **S21's discharge for T5.H3.** The layer's construction is a zeroed shell

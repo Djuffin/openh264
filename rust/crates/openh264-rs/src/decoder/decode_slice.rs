@@ -586,7 +586,6 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, EWelsSlic
 
 pub use crate::decoder::decoder_core::{
     DqLayerState, SLayerInfo, SPredWeightTable, ERR_INFO_INVALID_PTR, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM,
-    mb_grid_ptr,
 };
 pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
