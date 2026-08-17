@@ -137,6 +137,7 @@ impl Default for SCopyFunc {
     }
 }
 
+pub use crate::common::copy_mb::{copy_16x16, copy_8x8, copy_shim};
 pub use crate::common::mc::SMcFunc;
 
 /// Motion compensation reference frame descriptor (`sMCRefMember`).
@@ -201,28 +202,34 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 // Memory Block Copy Functions (C Reference & SIMD Implementations)
 // ============================================================================
 
+// **T5.AB2 (F43's class, in the other codec): these two were the port's second
+// translation of `codec/common/src/copy_mb.cpp`.** The encoder's same-named pair
+// (`encoder/encode_mb_aux.rs`) has been a Phase-2 shim over the safe kernels
+// since Phase 2; these stayed raw row loops, because the kernels were stranded
+// in `encoder/` and the decoder cannot import from it. They live in
+// `common/copy_mb.rs` now — the C++'s own home — and these two are the same
+// shim the encoder's are, over the same kernel. One C++ function, one port.
+//
+// The raw signature stays because it *is* the contract: both are installed into
+// `sCopyFunc`'s `unsafe extern "C" fn` slots, which is how the C++ dispatches
+// between the `_c` fallback and its SIMD forms.
+
 /// C reference fallback for 16x16 macroblock luma copying.
+///
+/// # Safety
+/// See [`copy_shim`] with `W = 16`, `H = 16`.
 #[inline]
 pub unsafe extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    let mut dst = pDst;
-    let mut src = pSrc;
-    for _ in 0..16 {
-        ptr::copy_nonoverlapping(src, dst, 16);
-        dst = dst.offset(iDstStride as isize);
-        src = src.offset(iSrcStride as isize);
-    }
+    unsafe { copy_shim::<16, 16>(pDst, iDstStride, pSrc, iSrcStride, copy_16x16) }
 }
 
 /// C reference fallback for 8x8 chroma block copying.
+///
+/// # Safety
+/// See [`copy_shim`] with `W = 8`, `H = 8`.
 #[inline]
 pub unsafe extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    let mut dst = pDst;
-    let mut src = pSrc;
-    for _ in 0..8 {
-        ptr::copy_nonoverlapping(src, dst, 8);
-        dst = dst.offset(iDstStride as isize);
-        src = src.offset(iSrcStride as isize);
-    }
+    unsafe { copy_shim::<8, 8>(pDst, iDstStride, pSrc, iSrcStride, copy_8x8) }
 }
 
 // ============================================================================
