@@ -150,14 +150,26 @@ across a call that takes the same object, including T5.I1's window across
 `PredMvBDirectSpatial` — F24/F25/F28's shape, in two files. No value moved anywhere.
 Two `exit` batteries `OVERALL: PASS` 13/0/1, corpus **2690/17 and 2707/0** unmoved,
 F3 measurement 46 adjudicated. **The phase stays open**: exit conditions 1–3 unmet.
-**Z** = **the final session** ([`phase5_session_z.md`](phase5_session_z.md)),
-under **the finish rule** (Eugene, 2026-08-16: finish without stopping half-done —
-a revert is a checkpoint, not an end state; face 1 does not open before face 0's
-done-test; the session ends with the phase closed or a named Eugene/steward
-blocker): the accessors return borrows (60 bindings, ~180 sites, measured at Y's
-revert), the 153-signature flip on top of them with Y's five shapes as the
-recipe, the `unsafe fn` shed by ratio, the decided `common/` boundary executed,
-W7's closure, and **the phase close**.
+**Z** = **spent** (5 commits, `92add69d`…`2a0e0330`;
+[`phase5_session_z.md`](phase5_session_z.md)) — **faces 0, 1 and 2 landed whole,
+and the phase did not close**. Decoder `raw_ptr` **383 → 310**, decoder
+`unsafe fn` **326 → 230**, `SHIM(` 6 and deny-clean 11 of 22 unmoved.
+**The context flip that X and Y each attempted and reverted is landed and
+Miri-green**: the crate-wide grep for `pCtx: *mut SWelsDecoderContext` reads
+**0**. Face 0 shed the accessor class Y's verdict named — and the clause that
+made the difference is the *parameter*, not the return type: every accessor takes
+the **field** it reaches, which is what repairs `FmoParamUpdate`'s four-things-
+from-one-context call and what kept face 1 at Y's measured size instead of adding
+an error per accessor site. **F54** is what that cost: `Option<SpsRef>`'s niche is
+in a `bool`, so the zeroed shell read `Some(SpsRef { id: 0, … })` and every stream
+decoded to zero frames until S21's audit clause was applied. Face 2 shed **68**
+vestigial `unsafe fn` by strip-and-build, and added the rule the compiler cannot
+supply: a signature that names a raw pointer keeps the keyword. **The session
+reverted the flip once, mid-way, on scope, and was told to keep going** (Eugene,
+in-session) — the re-attempt reached the same 27 errors in three scripted steps.
+Faces 3 and 4 (`common/`, W7) did not start. The next brief is a Phase 5 one
+([`phase5_session_aa.md`](phase5_session_aa.md)); `phase6.md` stays unwritten for
+the sixth session running.
 **Y** = **spent** (4 commits, `ab7ec744`…`dff3f78b`;
 [`phase5_session_y.md`](phase5_session_y.md)) — **and it did not close the phase**.
 Decoder `raw_ptr` **456 → 383**, `SHIM(` **7 → 6**, deny-clean **11 of 22** unmoved.
@@ -599,17 +611,63 @@ structural news: the modules the slice view converted hold three to five times m
 `unsafe fn` than raw pointers, because the keyword outlived the pointers it was there
 for.
 
+## The context, closed — sessions X, Y and Z
+
+X flipped the whole decoder and reverted (145 errors, one shape). Y split the
+slice off it, landed that, and reverted the flip again on a Miri verdict one
+level deeper. **Z removed what the verdict named and landed the flip.** The
+crate-wide grep for `pCtx: *mut SWelsDecoderContext` reads **0**.
+
+**What made the third attempt land was a parameter choice, not a return type.**
+Face 0's accessors return borrows — that is what Y's hand-off asked for — but the
+clause that mattered is that each takes **the field it reaches** (`sSpsPpsCtx`,
+`sFmoList`, `pPicBuff`, `sRefPic`, `pDqLayersList`, `pParserBsInfo`,
+`access_unit`) rather than the context. A whole-context borrow satisfies the
+return-type requirement and is still wrong: it conflicts with every disjoint
+field a caller touches beside the result, so the flip would have gained one error
+per accessor site — roughly 180 — instead of none. It is also the only shape that
+repairs the call Y's verdict called unfixable: `FmoParamUpdate(fmo_of(…),
+sps_of(…), pps_of(…), &mut iActiveFmoNum)` is four disjoint field borrows.
+
+**The flip's own measurement**, for the record: 138 signatures, **79** errors at
+the open — 62 `is_null()` on a reference, 11 api-boundary type mismatches, **5
+genuine borrow conflicts**, 1 unbounded lifetime — closing on Y's five shapes.
+Two of them cost more than the brief implied. `slice_split` **was not in the
+tree**: this file and session Z's brief both said Y landed it, and it was part of
+Y's *reverted* flip (S24, aimed at our own documents). And the reference set's
+thirteen functions **cannot be converted mechanically** — a blind rewrite catches
+`pRefPicMarking` and `pRefPicListReorderSyn` and lands the helper where neither
+name is in scope, turning 27 errors into 113.
+
+**Miri's two findings were ordering, not aliasing**, which is T5.O8's sentence
+confirmed at scale: `slice_ctx` called `GetThreadCount(pCtx)` in the middle of
+its struct literal, and that function had taken `&mut` for a parameter unused
+since F36 stubbed it — a `Unique` retag over the whole context, popping every
+field borrow above it. And `ParseDecRefPicMarking` took an `SSps` pointer its
+*caller* derived from the context it passes beside it: Y's verdict arriving from
+a hand-written alias rather than from an accessor.
+
+**What is left is no longer blocked by any of this.** Decoder `unsafe fn` 230 and
+`raw_ptr` 310 at Z's close, and the two are proportional again — the vestigial
+keyword is gone (face 2 shed 68 of it by strip-and-build), so what remains is
+genuinely raw: the layer bracket (`PDqLayer`), the parse tree's `PNalUnit` /
+`PSliceHeader`, and `common/`'s kernels. The order and sizes are
+[`phase5_session_aa.md`](phase5_session_aa.md) §1.
+
+
 ## Phase exit conditions (the definition of done)
 
-**Status at session Y's close** (`dff3f78b`), so the next session opens against
-facts rather than against this list's prose: **1 unmet** (decoder `raw_ptr` 383);
-**2 unmet** (11 of 22 modules deny-clean — unmoved at Y, and the sweep that moves it
-is named in the section above); **3 unmet** (`SHIM(` 6 against a survivor list of 1 —
-3 are prose and 2 are `decoder_core`'s `expand_picture` bridges, so the real
-remainder is 3); **4 met** at Y's close (`exit` battery 12/1/1, the one failure a
-single F3 hit at the documented signature); **5 met and closed** (D-perf-6);
-**6 unmet** and deliberately so — `phase6.md` is written at the exit, and the phase
-has not exited.
+**Status at session Z's close** (`2a0e0330`): **1 unmet** (decoder `raw_ptr`
+**310**, 383 at Z's open); **2 unmet** (11 of 22 modules deny-clean — unmoved, and
+the sweep that moves it is `phase5_session_aa.md` §1, now sized against a decoder
+`unsafe fn` count of **230** rather than 326); **3 unmet** (`SHIM(` 6 against a
+survivor list of 1 — 2 are prose and 2 are `decoder_core`'s `expand_picture`
+bridges, so the real remainder is 2); **4 met** (`exit` battery 12/1/1 — tests
+481/475/20, census 59, ratchet clean, both benches bit-identical, debug sweep
+341/341, Miri `--lib` 336/0 plus 20/7/3; the one failure is a single F3 hit,
+acquitted at step 1, measurement 56); **5 met and closed** (D-perf-6); **6 unmet**
+and deliberately so — `phase6.md` is written at the exit, and the phase has not
+exited.
 
 1. Decoder `raw_ptr` ≈ 0: every occurrence in `src/decoder/` is on the survivor
    list (the output-contract consumer) or is prose.
