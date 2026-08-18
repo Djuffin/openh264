@@ -5021,6 +5021,55 @@ mod tests {
         );
     }
 
+    /// **The arm F56 unblocked (T5b.8).** `AllocPicBuffOnNewSeqBegin` opens with
+    /// "the active SPS, or else the first initialized entry of `sSpsBuffer`". While
+    /// `active_sps` was born `Some(SpsRef { id: 0 })` — the `Option<SpsRef>` niche
+    /// reading out of the zeroed shell, not anything the C wrote — the `else` could
+    /// not run on a first access unit, and the scan had no test because it had no
+    /// caller.
+    ///
+    /// **No stream in either gate reaches it even now**, and this test says so
+    /// rather than implying otherwise: `WelsDecodeInitAccessUnitStart` writes
+    /// `active_sps` from the start NAL's slice header before this runs, so on the
+    /// corpus and the conformance set the `if` arm is always the one taken. The
+    /// scan is exercised here directly, which is the only way it is exercised.
+    ///
+    /// **What it selects, and against what reference.** The scan is the *port's*
+    /// guard, not a transcription: the C++ reads `pCtx->pSps->iMbWidth` with no null
+    /// test, so this state is a null dereference there. What the port has always
+    /// done — before T5.R6 by taking the entry's address, after it by taking the
+    /// entry's id — is select the first `sSpsBuffer` entry with
+    /// `uiTotalMbCount > 0`. That equivalence is what is asserted.
+    #[test]
+    fn the_fallback_scan_takes_the_first_initialized_sps() {
+        use crate::decoder::decoder_context::SpsRef;
+
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        assert!(ctx.active_sps.is_none(), "F56: the context is born with no active SPS");
+
+        // Entries 0 and 1 are the zeroed buffer; 2 is the first one a `ParseSps` has
+        // filled. `uiTotalMbCount > 0` is the initialized test the null test was.
+        ctx.sSpsPpsCtx.sSpsBuffer[2].iSpsId = 2;
+        ctx.sSpsPpsCtx.sSpsBuffer[2].iMbWidth = 5;
+        ctx.sSpsPpsCtx.sSpsBuffer[2].iMbHeight = 3;
+        ctx.sSpsPpsCtx.sSpsBuffer[2].uiTotalMbCount = 15;
+        // A later entry, to show the scan stops at the first rather than the last.
+        ctx.sSpsPpsCtx.sSpsBuffer[7].iSpsId = 7;
+        ctx.sSpsPpsCtx.sSpsBuffer[7].uiTotalMbCount = 99;
+
+        // `pMemAlign` is null on a bare context, so `SyncPictureResolutionExt`
+        // returns 1 at its own guard — after the scan has run and stored its answer,
+        // which is the step under test.
+        let _ = AllocPicBuffOnNewSeqBegin(&mut ctx);
+        assert_eq!(ctx.active_sps, Some(SpsRef { id: 2, subset: false }));
+
+        // And with nothing initialized the scan finds nothing, which is the C++'s
+        // null `pSps` reached without dereferencing it.
+        let mut empty = SWelsDecoderContext::new_boxed();
+        assert_eq!(AllocPicBuffOnNewSeqBegin(&mut empty), ERR_INFO_INVALID_PTR);
+        assert!(empty.active_sps.is_none());
+    }
+
     #[test]
     fn test_parse_slice_header_syntaxs_no_access_unit() {
         {
