@@ -1,3 +1,12 @@
+> **Session A ran this brief and closed at `e39cfaaf`** — two of five faces
+> landed (F42 retired by identity; the parse tree failed at 11/60 B-slice
+> assets and is preserved as a patch). The continuation is two sessions
+> (Eugene, 2026-08-17): **B** = the divergence alone, diagnosed and landed at
+> 60/60 ([`phase5b_session_b.md`](phase5b_session_b.md)); **C** = the shells,
+> the sweep, and the four-item close
+> ([`phase5b_session_c.md`](phase5b_session_c.md)). This file stays as the
+> charter and the record of what was asked.
+
 # Phase 5b — the decoder goes safe, one session
 
 **Eugene, 2026-08-17: "I want next session to focus on making decoder safe…
