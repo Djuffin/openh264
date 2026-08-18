@@ -309,7 +309,7 @@ pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 use crate::safe::bits::BsCursor;
 pub use crate::safe::mb_grid::{MbArray, MbDims, MbGrid, LIST_COUNT};
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
-pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice, PSlice};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice};
 
 
 
@@ -633,7 +633,7 @@ pub const PADDING_LENGTH: usize = 32;
 
 pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
 
-pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
+pub use crate::decoder::nalu::{SNalUnit};
 
 // `PDqLayer` stood here — the C's `typedef SDqLayer*`, and the last raw alias into
 // the layer. **T5.AA1 deleted it**: the two brackets that derived it move the layer
@@ -643,16 +643,7 @@ pub use crate::decoder::nalu::{SNalUnit, PNalUnit};
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SPicBuff};
 
-pub use crate::decoder::parameter_sets::{PSps, PPps, PSubsetSps};
 
-pub type PSliceHeader = *mut SSliceHeader;
-pub type PSliceHeaderExt = *mut SSliceHeaderExt;
-pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
-pub type PLayerInfo = *mut SLayerInfo;
-pub type PRefPicListReorderSyn = *mut SRefPicListReorderSyn;
-pub type PRefPicMarking = *mut SRefPicMarking;
-pub type PRefBasePicMarking = *mut SRefBasePicMarking;
-pub type PPredWeightTable = *mut SPredWeightTable;
 
 // Logging and Bitstream Reading Helpers
 

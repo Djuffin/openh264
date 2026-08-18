@@ -448,7 +448,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 pub use crate::decoder::decoder_core::{
     DqLayerState, SWelsDecoderContext, PWelsDecoderContext,
-    SSlice, PSlice, SLayerInfo, PLayerInfo,
+    SSlice, SLayerInfo, 
 };
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::dec_golomb::{g_kuiPrefix8BitsTable};

@@ -150,7 +150,6 @@ pub struct TagVui {
 }
 
 pub type SVui = TagVui;
-pub type PVui = *mut SVui;
 
 impl Default for TagVui {
     fn default() -> Self {
@@ -306,7 +305,6 @@ impl TagSps {
 }
 
 pub type SSps = TagSps;
-pub type PSps = *mut SSps;
 
 impl Default for TagSps {
     fn default() -> Self {
@@ -371,7 +369,6 @@ pub struct TagSpsSvcExt {
 }
 
 pub type SSpsSvcExt = TagSpsSvcExt;
-pub type PSpsSvcExt = *mut SSpsSvcExt;
 
 /// Subset Sequence Parameter Set syntax (NAL Unit Type 15).
 #[repr(C)]
@@ -402,7 +399,6 @@ impl TagSubsetSps {
 }
 
 pub type SSubsetSps = TagSubsetSps;
-pub type PSubsetSps = *mut SSubsetSps;
 
 /// Picture Parameter Set (PPS) structure, refer to Section 7.3.2.2 in ITU-T H.264 Rec.
 #[repr(C)]
@@ -497,7 +493,6 @@ impl TagPps {
 }
 
 pub type SPps = TagPps;
-pub type PPps = *mut SPps;
 
 impl Default for TagPps {
     fn default() -> Self {

@@ -84,10 +84,10 @@ pub use crate::decoder::decoder_context::SRefPic;
 use crate::decoder::decoder_context::{active_pps, active_sps, pic_and_refs_mut, pps_of, ref_set, sps_of};
 use crate::decoder::pic_queue::RefSlot;
 use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
-pub use crate::decoder::slice::{SRefPicListReorderSyn, PRefPicListReorderSyn, SRefPicMarking, PRefPicMarking};
+pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking};
 
 
-pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
 pub use crate::decoder::decoder_context::SLogContext;

@@ -32,7 +32,7 @@
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::bit_stream::BsReader;
 use crate::safe::plane::PlaneCursorMut;
-use crate::decoder::fmo::{PFmo, SFmo};
+use crate::decoder::fmo::{SFmo};
 use crate::decoder::slice::EWelsSliceType;
 use crate::decoder::decode_slice::IntraPredConstraint;
 use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
@@ -346,22 +346,21 @@ pub struct SDeblockingFilter {
     /// construction (`InitRefPicList`) ran before the slice decode.
     pub ref_ids: [[Option<PicId>; MAX_DPB_COUNT]; LIST_A],
 }
-pub type PDeblockingFilter = *mut SDeblockingFilter;
 
 pub use crate::decoder::parameter_sets::SPosOffset;
 
 
-pub use crate::decoder::parameter_sets::{SSps, SPps, PSps, PPps, SSubsetSps, PSubsetSps};
+pub use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps};
 
 
 pub use crate::decoder::nalu::{
-    SNalUnitHeader, SNalUnitHeaderExt, SNalUnit, PNalUnit,
+    SNalUnitHeader, SNalUnitHeaderExt, SNalUnit, 
 };
 
 
 
 pub use crate::decoder::slice::{
-    SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt, SRefBasePicMarking, PRefBasePicMarking,
+    SSliceHeader, SSliceHeaderExt, SRefBasePicMarking, 
 };
 
 

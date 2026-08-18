@@ -250,7 +250,6 @@ pub struct TagNalUnitHeader {
 }
 
 pub type SNalUnitHeader = TagNalUnitHeader;
-pub type PNalUnitHeader = *mut SNalUnitHeader;
 
 /// Extended NAL unit header containing standard AVC and SVC extension parameters.
 ///
@@ -273,7 +272,6 @@ pub struct TagNalUnitHeaderExt {
 }
 
 pub type SNalUnitHeaderExt = TagNalUnitHeaderExt;
-pub type PNalUnitHeaderExt = *mut SNalUnitHeaderExt;
 
 /// Video Coding Layer (VCL) slice payload representation.
 ///
@@ -306,7 +304,6 @@ pub struct TagPrefixNalUnit {
 }
 
 pub type SPrefixNalUnit = TagPrefixNalUnit;
-pub type PPrefixNalUnit = *mut SPrefixNalUnit;
 
 /// The payload inside [`SNalUnit`] — the C++'s discriminated union, **as a struct**
 /// (T5b.3).
@@ -347,7 +344,6 @@ pub struct TagNalUnit {
 }
 
 pub type SNalUnit = TagNalUnit;
-pub type PNalUnit = *mut SNalUnit;
 
 impl TagNalUnit {
     /// `memset (pNu, 0, sizeof (SNalUnit))` — `MemGetNextNal`'s reset, as a value

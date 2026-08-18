@@ -209,11 +209,11 @@ pub use crate::common::deblocking_common::*;
 use crate::safe::mb_grid::MbArray;
 pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::picture::{SPicture, PPicture};
-pub use crate::decoder::parameter_sets::{SSps, PSps, SPps, PPps};
-pub use crate::decoder::slice::{SSliceHeader, PSliceHeader, SSliceHeaderExt, PSliceHeaderExt};
-pub use crate::decoder::decoder_core::{SSlice, PSlice, SLayerInfo, DqLayerState};
+pub use crate::decoder::parameter_sets::{SSps, SPps};
+pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
+pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
 pub use crate::decoder::decoder_context::{
-    SRefPic, SDeblockingFunc, SDeblockingFilter, PDeblockingFilter, PicId,
+    SRefPic, SDeblockingFunc, SDeblockingFilter, PicId,
     MAX_DPB_COUNT,
     PLumaDeblockingLT4Func, PLumaDeblockingEQ4Func, PChromaDeblockingLT4Func,
     PChromaDeblockingEQ4Func, PChromaDeblockingLT4Func2, PChromaDeblockingEQ4Func2,

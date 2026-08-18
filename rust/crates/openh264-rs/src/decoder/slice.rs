@@ -94,9 +94,6 @@ pub enum EListIndex {
 }
 
 /// Forward declaration type aliases for Parameter Sets.
-pub type PSps = *mut c_void;
-pub type PPps = *mut c_void;
-pub type PSubsetSps = *mut c_void;
 
 /// Single reference picture list reordering command syntax element.
 #[repr(C)]
@@ -119,7 +116,6 @@ pub struct TagRefPicListReorderSyntax {
 }
 
 pub type SRefPicListReorderSyn = TagRefPicListReorderSyntax;
-pub type PRefPicListReorderSyn = *mut SRefPicListReorderSyn;
 
 impl Default for TagRefPicListReorderSyntax {
     fn default() -> Self {
@@ -169,7 +165,6 @@ pub struct TagPredWeightTabSyntax {
 }
 
 pub type SPredWeightTabSyn = TagPredWeightTabSyntax;
-pub type PPredWeightTabSyn = *mut SPredWeightTabSyn;
 pub type SPredWeightTable = SPredWeightTabSyn;
 pub type SPredList = SPredWeightList;
 
@@ -211,7 +206,6 @@ pub struct TagRefPicMarking {
 }
 
 pub type SRefPicMarking = TagRefPicMarking;
-pub type PRefPicMarking = *mut SRefPicMarking;
 
 impl Default for TagRefPicMarking {
     fn default() -> Self {
@@ -246,7 +240,6 @@ pub struct TagRefBasePicMarkingSyn {
 }
 
 pub type SRefBasePicMarking = TagRefBasePicMarkingSyn;
-pub type PRefBasePicMarking = *mut SRefBasePicMarking;
 
 impl Default for TagRefBasePicMarkingSyn {
     fn default() -> Self {
@@ -311,7 +304,6 @@ pub struct TagSliceHeaders {
 }
 
 pub type SSliceHeader = TagSliceHeaders;
-pub type PSliceHeader = *mut SSliceHeader;
 
 impl Default for TagSliceHeaders {
     fn default() -> Self {
@@ -394,7 +386,6 @@ pub struct TagSliceHeaderExt {
 }
 
 pub type SSliceHeaderExt = TagSliceHeaderExt;
-pub type PSliceHeaderExt = *mut SSliceHeaderExt;
 
 impl Default for TagSliceHeaderExt {
     fn default() -> Self {
@@ -454,7 +445,6 @@ pub struct TagSlice {
 }
 
 pub type SSlice = TagSlice;
-pub type PSlice = *mut SSlice;
 
 impl Default for TagSlice {
     fn default() -> Self {
