@@ -266,3 +266,75 @@ Phase 6 measures its own spans per D-gate-1 and S1/S2/S2b (interleaved pairs, a
 null per session at the verdict's own pair count, a second day for any reading a
 decision rests on) and **does not** open recovery work. 6.3 is the hot path; watch
 the bench budget per seam, because that is where the decoder's cost came from.
+
+## 5. The family census — the checklist, measured at `5f2bd711`
+
+**Schedule families; report modules** (§1). Phase 5 spent sessions R–V learning
+that the module is the wrong unit; Phase 6 starts from the unit that worked.
+`src/encoder/` holds **2212 raw-pointer occurrences in code** (the totals in §0
+include prose) and **671 `unsafe fn` definitions**. By pointee, with its Phase 5
+analogue and the recipe that closed it:
+
+| family | code sites | analogue | recipe |
+|---|---|---|---|
+| `*mut c_void` | 222 | — | **deletion, not conversion** (S18): `wels_preprocess`'s `IWelsVP` shape (`pCtx: *mut c_void` + `Init`/`Uninit` fn-pointer pairs) is Phase 4b's dissolved-vtable residue; the rest is MT plumbing (Phase 7's) and log/task fields |
+| `*mut u8` | 277 | the decoder's plane/scratch pointers | `PlaneCursor`/`PlaneCursorMut` (`safe/plane.rs`) — **eight encoder files already consume them** |
+| `*mut sWelsEncCtx` | 258 | `*mut SWelsDecoderContext` | the flip — **accessors first, view struct last** (X→Z's forced order: `deny` fires on the *call*, so callees convert first) |
+| `*mut SMB` + `SMB`'s five raw arrays (`sMv`, `pRefIndex`, `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`, `md.rs:294–306`) | 131 | **5.2's `MbGrid`, exactly** | one `MbArray` family per array, allocation-dimensioned, converted across every module at once |
+| `*mut SSlice` 134 + `*mut SDqLayer` 72 | 206 | the layer/slice brackets | the bracket maneuver (5 applications) |
+| `*mut SMbCache` (12 raw fields, `md.rs:354–375`) | 102 | `DqLayerState`'s scratch caches (session M's 45 params) | take-what-you-reach |
+| `*mut SPicture` | 64 | `PPicture`/F42 | `Pool<Box<SPicture>>` + `classify` — `MarkPicAsRef` has the same shape (§0.1) |
+| `*mut SWelsFuncPtrList` | 57 | the dispatch tables | the table is already `Option<fn>` fields; the **pointer to it** is the residue |
+| ME/MD/RC/CABAC records (`SWelsMD` 55, `SWelsME` 41, `SMVUnitXY` 78, `SMeRefinePointer` 17, `SCabacCtx` 28) | ~220 | the parse scratch | take-what-you-reach |
+| scalars (`i32` 109, `i16` 107, `u16` 52, `i8` 35, `u32` 24) | ~330 | the coefficient cursors | slices/`&mut [T; N]`, per family |
+
+Two assets the decoder did not have at its open: the encoder **already consumes
+the safe vocabulary** in eight files (Phase 2's kernels landed on both sides), and
+`abi_guard.rs`'s **53 assertions** mean every struct that de-`repr(C)`s has a
+proof to delete in the same commit — the check is free and it is mechanical.
+
+## 6. Session plan — revised at Phase 6's open (steward, 2026-08-18)
+
+The plan's §4 step list (6.1–6.6) is the *scope*; this is the **order**, and it
+differs in three places, each earned by Phase 5:
+
+1. **The probe comes before the first conversion.** The encoder has **zero
+   encode-path Miri probes** — the only encoder-adjacent Miri test is a
+   table-install check that is `#[cfg_attr(miri, ignore)]`. F47 is the precedent:
+   real UB on the *ordinary* CAVLC path sat undetected for five phases because no
+   probe covered it, and the probe that finally ran found it on its first
+   execution. **Build the probe first and budget it to fire.**
+2. **`c_void` and F52 are cleared before anything lands on them.** A conversion
+   that lands on a shadow rather than a body is invisible (F43/F52), and a
+   conversion of a dissolved vtable's residue is work spent on dead shape (S18).
+3. **The context flip is last, not first** — V's measured order, and it cost
+   three sessions to learn on the decoder: `deny(unsafe_code)` fires on *calling*
+   an `unsafe fn`, so the callees must be safe before the caller can be.
+
+**Sessions** (each large, per S31 and the terminal rule; drop-from-the-end only
+at a family boundary, and only with a written reason):
+
+* **A** — **the encoder Miri probe, and the Miri budget** (Eugene, 2026-08-18:
+  session A does the probe only, and Miri must not get slow). One subject: the
+  probe built on `drive_decoder_over`'s pattern with its coverage proved, today's
+  Miri cost measured per step, whether **S32 transfers to the encoder** settled by
+  measurement, and the probe's gate placement decided with the numbers.
+  [`phase6_session_a.md`](phase6_session_a.md)
+* **B** — the clearing: F52's six adjudicated; the `c_void` residue deleted; the
+  two blocker settlements written (`pBsBuffer`, `pRawData`); then `SPicture`/pool
+  ids (6.1's head) if the face boundary allows.
+* **C** — `SMB`'s five arrays → `MbArray` (the encoder's 5.2), with
+  `svc_base_layer_md`/`svc_mode_decision`/`deblocking` as its consumers.
+* **D** — the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up to
+  Phase 7's boundary (`pBsBuffer` excepted by settlement).
+* **E** — `SMbCache` + the ME/MD/RC/CABAC records (6.3's scratch), and the third
+  attempt at the parked SIMD families (plan §4; SATD owes its own measurement).
+* **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
+  callers (§3).
+* **G** — the context flip and the deny sweep (6.6), then the phase close.
+
+**Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
+a plan of nine to twelve, and the difference was discovery, which this phase has
+already done. A session that closes no family and moves no metric is a stall and
+says so — with session A the one exception, because its deliverable is coverage
+and a cost model, not a converted family.
