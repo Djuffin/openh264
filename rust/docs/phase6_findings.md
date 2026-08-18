@@ -90,6 +90,45 @@ segfault, F14 behind F13's skip, and now this behind F57).
 
 ---
 
+## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
+
+`phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the
+six encoder-side names it then printed for Phase 6 to adjudicate before converting
+anything they touch (`phase6.md` §3). Each was adjudicated by **opening both lines
+the sweep names** — the "trivial" definition and the "substantial" one — and none
+is F43's shape:
+
+| name | trivial | substantial | reading |
+|---|---|---|---|
+| `Uninit` | `wels_task_management.rs:662` | `:748`, `common/wels_thread_pool.rs:688` | `unsafe fn Uninit(&mut self);` — a trait method **declaration** in `IWelsTaskManage`. There is no body to shadow with; `:748` is `CWelsTaskManageBase`'s impl and `:688` is `CWelsThreadPool::Uninit`, a different type. |
+| `InitFrame` | `wels_task_management.rs:663` | `:926` | same trait, declaration; `:926` is the one impl. |
+| `ExecuteTasks` | `wels_task_management.rs:664` | `:941`, `:1010` | same trait, declaration; the two impls are the C++ base class and `CWelsTaskManageOne`'s override, both real. |
+| `OnTaskStop` | `common/wels_thread_pool.rs:97` | `:442` | declaration in `IWelsTaskThreadSink` (five-line signature ending in `;`); `:442` is the impl. |
+| `WelsRcPostFrameSkipping` | `rc.rs:1860` (`false`) | `rc.rs:651` | the free `extern "C" fn` is the **faithful** port of `ratectl.cpp:1015` — `//TODO: put in the decision of rate-control` / `return false;` — and `:651` is T4b's `SWelsRcFunc::WelsRcPostFrameSkipping`, the `RCMode` dispatcher that *calls* it in the two bitrate arms and returns `false` itself in the others. Caller and callee, not stub and body. |
+| `push_back` | `common/wels_thread_pool.rs:131` | `wels_task_management.rs:578` | `CWelsList<T>::push_back` and `CWelsTaskList::push_back` — two methods on two types, resolved by receiver; no shadowing is possible. |
+
+**The instrument learns the first four.** A `fn` whose signature ends in `;`
+before any `{` is a declaration, not an empty body: the sweep had scanned forward
+from the declaration to the *next* item's brace and scored the nothing in between
+as a trivial body. `find_shadowing_stubs.py` now skips declarations, with the
+reason at the line, and carries a `--self-test` that proves the original F52 stub
+shape (`fn X(a, b, c, d) -> bool { true }` across five signature lines, beside a
+real `X`) **still prints** while a declaration beside a real body does not. Sweep
+count at `ef8bf25b`, measured: **22 candidate names before, 18 after** — the four
+declarations gone, nothing else moved (the brief's "21 → 17" was a lead — S24: the
+code is identical between the commit it cites and `HEAD`). The self-test was run
+against three deliberately broken copies before the claim was written: the
+declaration filter removed (the pre-session tool) fails on `Uninit`; the body
+counted from the `fn` line (the pre-F52 tool) fails on the stub; a *contains* `;`
+filter fails on the array-type signature — all three FAIL, the shipped tool
+PASSes. `WelsRcPostFrameSkipping` and `push_back` remain in
+the output by design: the tool prints candidates, not verdicts, and a free
+function returning a constant is F43 until read — which it now has been.
+
+**F52 is closed.** `phase5.md`'s open-findings list and the plan's §0 row say so.
+
+---
+
 ## F13's remaining production site — closed
 
 Not a new finding; recorded here because Phase 6 is where it closed.

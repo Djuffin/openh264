@@ -999,8 +999,12 @@ this is the list that leaves Phase 5:
   **decoder threading, or deletion**. `WelsMarkAsRef`'s `pLastDec` parameter is the
   arm's last visible surface and both callers pass `None`.
 * **F37** — `DestroyPicBuff` omits the reordering-buffer reset. Owner: **Phase 8**.
-* **F52** — six encoder-side shadowing-stub candidates. Owner: **Phase 6**, and
-  `phase6.md` §3 says adjudicate them before converting anything they touch.
+* ~~**F52** — six encoder-side shadowing-stub candidates. Owner: **Phase 6**, and
+  `phase6.md` §3 says adjudicate them before converting anything they touch.~~
+  **CLOSED at Phase 6 session B (2026-08-18)** — all six adjudicated by opening both
+  lines: four trait-method *declarations* (no body to shadow with), a faithful
+  `return false` beside its dispatcher, and two methods on two types; the sweep now
+  skips declarations and self-tests F52's own shape. `phase6_findings.md`.
 * **F54**'s rule is folded into S21 (a zeroed shell must be audited per owned
   field; `Option<SpsRef>`'s niche lives in a `bool`).
 * **F4, F6, F7** (S6-parity class) and **F8–F12, F14** plus F13's remaining sites —
