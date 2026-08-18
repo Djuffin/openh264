@@ -1935,3 +1935,51 @@ either tree. No re-run and no alternation can say more (session D's clause).
 
 Running total: **sixty-four measurements, twenty alternations, thirty-seven
 acquittals.**
+### Sixty-fifth measurement — 2026-08-17, Phase 5b session C: step 0 is taken and does **not** acquit, because this window is not decoder-only
+
+| # | configuration | C++ bytes | Rust bytes |
+|---|---|---|---|
+| 65a | `mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0` (**release**, `exit` battery at `f5ba2395`) | 42538 | **40857** (short) |
+| 65b | `mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=0 rc=1` (**release**, the isolated `mt` re-run below) | 40809 | **0** |
+
+One hit in the battery, inside the signature on every clause; the debug sweep in
+the same battery read **341/341**.
+
+**Step 0, run rather than assumed — and it does not acquit.** Base `5105cf44`
+(session B's code plus a docs-only commit) and head `f5ba2395`, one clean release
+build of `rust_enc` each, **both at the same filesystem path** — a second worktree,
+checked out to each ref in turn, binary deleted between builds — so the comparison
+is of code and not of paths the compiler embeds. The hashes are
+`8da0d911c9e4ed9821b624f32d77b3249cf6779797d2329a11dc59ffee2a308d` and
+`91d1a21c576b25709592c42fd05770bb9984022257197c4e6cab387fa41c0da3`: **different**.
+
+**Why measurement 64's shortcut does not reach this window, and the clause survives
+intact.** AC's finding was that in *release* the driver's decoder code is
+unreachable, so a decoder-side change produces the same encoder bytes. That is still
+true and is still the right question to ask — it simply does not apply here, because
+**this window is not decoder-only**: `common/deblocking_common.rs`'s `DeblockingInit`
+and `common/mc.rs`'s `InitMcFunc` stopped taking `*mut T` and a null test at T5b.6,
+and `encoder/encoder_context.rs::InitFunctionPointers` calls both. The rule that
+survives is the one session P wrote and AC refined and neither weakened: **hash it
+before assuming, and hash the profile the hit occurred in.** The answer is a
+measurement each time, never a rule.
+
+**Step 1 — one hit, so the configuration is re-run 5×, machine idle.** All five
+**BYTE-IDENTICAL**. Then the whole release `mt` preset was re-run once on its own:
+**119/120, and the failure is a different configuration** — a different clip, a
+different thread count, a different `iRCMode`, and a zero-length output rather than
+a short one, while 65a's own configuration passes.
+
+**That pair is the acquittal, and it is the cleanest instance this ledger has.**
+S14's step 1 says a deterministic port bug repeats its bytes on its own
+configuration; this one does not repeat at all, and the same binary produces a hit
+somewhere else the moment the load returns. Both hits sit inside the signature on
+every clause (`mt`, `sm=3`, `t ∈ {2,4}`, wrong *length* rather than wrong bytes,
+release), and step 3's escape hatch — anything outside the signature is real —
+does not open.
+
+**Acquitted as F3.**
+
+Running total: **sixty-five measurements, twenty alternations, thirty-eight
+acquittals.**
+

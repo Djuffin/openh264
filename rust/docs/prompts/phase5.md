@@ -820,24 +820,48 @@ stays **Eugene-level whenever proposed**.
 
 ## Phase exit conditions (the definition of done)
 
-### Phase 5b addendum (2026-08-17, `7a4ad7b5`) — one session, two of the five faces
+### Phase 5b addendum (2026-08-17, sessions A/B/C, closed at `f5ba2395`) — the decoder is safe
 
-`prompts/phase5b.md` set out to take the enumerated survivors to **four named FFI
-items**. It did not: the decoder stands at **147 `#[allow(unsafe_code)]` items** (143
-code + 4 prose), `unsafe fn` **42 → 30**, `unsafe {` blocks **160 → 148**, decoder
-`raw_ptr` **236 → 219** (156 code + 63 prose). `mv_pred.rs` is at zero.
+`prompts/phase5b.md` set out to take AC's five enumerated families to **four named
+FFI items**. **It landed at three**, over three sessions: allow items **167 → 3**,
+`unsafe fn` **42 → 0**, `unsafe {` blocks **160 → 6**, decoder `raw_ptr` **236 → 131**
+(67 code + 64 prose). Every family closed.
 
 | family (AC's five) | Phase 5b |
 |---|---|
-| `PPicture` (F42, 23 signatures) | **CLOSED** — and by neither Phase 8 option. The arm was answered by **identity**: `PicRefs::resolve` for the 15 readers, `mc_luma_same`/`mc_chroma_same` for the one writer. `PicRefs::get`, `PicView::Split::cur_ptr` and `PicPool::cur_and_rest` are deleted. |
-| `sMCRefMember` | **CLOSED** — `McDst` + `McSrc` in `decode_slice.rs`, cursors in `error_concealment.rs`; **both `mem::zeroed()` sites gone**. |
-| the parse tree | **open, with a measured lead.** Built whole — owned slots, `pNalCur`/`pSliceHeader` as indices, the NAL union as a struct, the header parsed into a scratch — and **reverted at the gate**: 11 of 60 conformance assets, every one a B-slice stream, frame counts correct. Patch preserved; two hypotheses eliminated by measurement (`bytes_equal` structural; the scratch itself). |
-| the api boundary | **open**, minus the pieces face 0 took with it. |
-| the zeroed shells | **open** — and Phase 5b measured something about them: `SSps::default()` and `SPps::default()` are **not** all-zero (bit depths 8, `bFrameMbsOnlyFlag`, `uiNumSliceGroups` 1, `iPicInitQp` 26), so the C's `memset` has a real answer at `ParseSps`/`ParsePps`/`MemGetNextNal` and "replace the shell with `Default`" is a **wrong** recipe — it takes eleven assets red. S21's question, answered by measurement. |
+| `PPicture` (F42, 23 signatures) | **CLOSED at T5b.2 (A)** — and by neither Phase 8 option. The arm was answered by **identity**: `PicRefs::resolve` for the 15 readers, `mc_luma_same`/`mc_chroma_same` for the one writer. `PicRefs::get`, `PicView::Split::cur_ptr` and `PicPool::cur_and_rest` are deleted. |
+| `sMCRefMember` | **CLOSED at T5b.2 (A)** — `McDst` + `McSrc` in `decode_slice.rs`, cursors in `error_concealment.rs`; both `mem::zeroed()` sites gone. |
+| the parse tree | **CLOSED at T5b.3 (B)** — the access unit's slots own; `pNalCur`/`pSliceHeader` are indices and the NAL union is a struct. What it cost is **F55**, generalised as **S34**: an index is not a pointer under a container that permutes its slots, and the two AU rotations left `slice_hdr_nal` naming the successor's NAL. Session A read the resulting 11-of-60 as a pixel divergence; one hash-**set** comparison says reordering. |
+| the zeroed shells | **CLOSED at T5b.4/T5b.5 (C)** — and the 5b gate is what allowed it: `size_of::<SWelsDecoderContext>()` is **573,576 bytes**, not the "several MiB" the shell's own doc asserted. Both shells are field-wise constructors; the C's `memset` is a value (`memset_zero`) on the seven types whose `Default` is deliberately not their zero. The eleven-asset measurement T5b.3 recorded is carried by a type now. |
+| the api boundary | **CLOSED at T5b.6 (C)** — `ppDst` is `&mut [*mut u8; 3]`, `pDstInfo` a `&mut SBufferInfo`, `kpBsBuf` a `&[u8]`, `pPictInfoList` the `[SPictInfo; 16]` whose address `api/` stamps; the api-owned context fields go through `api_alias`/`api_alias_mut`. `api/` does the one raw-to-borrow conversion, at the C ABI. |
 
-Gates at `7a4ad7b5`: `exit` battery **`OVERALL: PASS` 13/0/1**, tests 479/473/20, both
-sweeps **341/341** with no F3 hit, Miri `--lib` **334/0** plus 20/7/3, the three decoder
-probes **3/3**, both benches bit-identical, **no test file changed all session**.
+**What is left, and it is three items, all in two files.** `api_alias` and
+`api_alias_mut` (`decoder_context.rs`) — the twelve api-owned context fields, which
+dissolve when `CWelsDecoderImpl` hands the context borrows at construction (F23/F41,
+**Phase 8's**); and `SPicture::data_ptr` (`picture.rs`), whose one production use is
+`DecodeFrameConstruction`'s three `ppDst[i]` writes, with the one Miri provenance
+test S28 mandates for it. `data_ptr_ref` is **deleted** (S18): its last consumer
+went with `sMCRefMember` at T5b.2.
+
+**New and open: F56**, F54's artifact on two fields F54 did not reach —
+`SWelsDecoderContext::active_sps` and every fresh NAL node read back as
+`Some(SpsRef { id: 0 })` where the C memsets a null. **Parked by the decision
+ladder's third rung**, transcribed unchanged at both sites, two lines to close.
+
+Gates at `f5ba2395`: `exit` battery **12 passed / 1 failed / 1 skipped**, tests
+479/473/20, debug sweep **341/341**, both benches bit-identical, Miri `--lib`
+**334/0** plus the differential targets 20/7/3, the three decoder probes **3/3**,
+conformance **60/60** and corpus **2690/17 + 2707/0** unmoved. The one failure is the
+release sweep at F3's signature, **adjudicated to a verdict**: step 0's hash shortcut
+was taken and does *not* acquit (this window is not decoder-only), step 1 re-ran the
+configuration 5/5 byte-identical, and an isolated `mt` preset then failed at a
+different configuration. Acquitted as F3, measurement 65.
+
+**Condition 1's gap is closed by Phase 5b, and the number the condition asked for
+is met now**: the 173 code occurrences inside 168 enumerated items are **67 code
+occurrences inside 3**, and `PPicture`'s own signature grep reads **0**. The
+sentences below are AC's and stay as written — they are the record of what was true
+at the phase's close, and the addendum above is the record of what changed.
 
 **STATUS AT THE PHASE'S CLOSE** (`5ebaf904`, 2026-08-17, session AC). Read
 condition 1's two lines together; they answer different questions and the phase

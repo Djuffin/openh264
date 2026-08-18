@@ -2141,6 +2141,59 @@ S2b's clause attaches to readings a decision rests on, and this one changes no
 disposition. Both binaries stay stashed (`.perfpair/y_base` = `3e2f43e6`,
 `.perfpair/y_head` = `dff3f78b`) so a later session can chain the span for free.
 
+### Phase 5b's window — three sessions as one span, and the row the ledger tracks reads *faster*
+
+*Session C, 2026-08-17. Base `ac_head` = `5ebaf904` (Phase 5's exit), head
+`5bc_head` = `f5ba2395`. D-gate-1 puts the whole of 5b in one span, so this covers
+sessions A, B and C: the F42 arm becoming an identity and the same-picture MC
+family (T5b.1/T5b.2), the parse tree's owned slots and F55's `swap_au_nodes`
+(T5b.3), the two zeroed shells becoming field-wise constructors (T5b.4/T5b.5), the
+vestigial-keyword sweep and the api boundary (T5b.6), and the straggler sweep
+(T5b.7).*
+
+**The null, this session's floor** (S2, two runs, 5 pairs each): decode median
+**−0.21%** (min −0.68%, max −0.02%) and **+0.00% / +0.12%** on encode's 28 rows. A
+tight floor, and the tightest this phase has measured.
+
+**The span, at 5 and 7 pairs** — S2b's clause applied without being asked, because
+the first decode median landed outside the floor:
+
+| row | 5 pairs | 7 pairs |
+|---|---|---|
+| Constrained Baseline (CAVLC, no B-frames) | **−0.42%** | **−0.87%** |
+| Main (CABAC, B-frames) | +1.06% | +0.88% |
+| High (CABAC, B-frames, 8x8 transform) | +1.04% | +1.14% |
+| encode, 28 rows | median −0.17% | median +0.10% |
+
+**The sign holds row by row across both pair counts**, which is what makes this
+readable at all: session K's lesson is that a ≈0.3% per-family number is below this
+harness's resolution, and what is stable here is a ≈1% split *between* row classes,
+three times the floor.
+
+**CB is the ledger's row and CB is negative.** The cumulative figure has always been
+carried on Constrained Baseline, and the whole 5b window reads **−0.87%** on it.
+Carrying AC's two exit readings forward unchanged: **cumulative CB ≈ +23.2…+23.8%**
+on the higher, **≈ +22.6…+23.2%** on the lower. So the ≈+23% stop-line is breached
+by ≈0.2…0.8 points on the first and is **at or just under it** on the second — the
+second time the phase's cumulative figure has moved *down*, and the closest it has
+been to the line since session N. D-perf-4's +25% median tripwire is unbreached
+(this span's decode median +0.88%).
+
+**The two B-slice rows are what moved, and the mechanism is a candidate, not a
+claim** (S33). Both rows that rise are the CABAC B-frame profiles, and the work in
+this window that is specific to them is T5b.1's: every reference resolution on a
+B-slice path goes through `PicRefs::classify`/`resolve` — a match on Same-vs-Distinct
+— where it used to be a pointer read out of `PicRefs::get`. The *Same* arm is cold
+(malformed streams only), but the classification is not: it runs on every resolve.
+That is the only mechanism on the table that distinguishes B rows from CB, and it is
+**unverified** — no bisect was run, because D-perf-6 sends recovery to the Phase 9
+perf pass and no disposition here rests on the number.
+
+**No day two is owed.** S2b's clause attaches to readings a decision rests on; this
+one changes no disposition. Both binaries stay stashed (`.perfpair/ac_head` =
+`5ebaf904`, `.perfpair/5bc_head` = `f5ba2395`), so Phase 6 chains from 5b's exit for
+free.
+
 ### Session AC's span — the phase's last, and the one row that moves is the one the work touched
 
 `11002e4c` (session AB's close, `.perfpair/ab_head`) → `5ebaf904` (session AC's
