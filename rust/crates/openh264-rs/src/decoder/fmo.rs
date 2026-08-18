@@ -106,7 +106,6 @@ pub struct TagFmo {
 }
 
 pub type SFmo = TagFmo;
-pub type PFmo = *mut TagFmo;
 
 impl Default for TagFmo {
     fn default() -> Self {

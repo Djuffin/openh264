@@ -2808,3 +2808,57 @@ to an index, grep the container for `swap`, `rotate`, `retain`, `remove`, `sort`
 `drain`: each one is a site the new spelling has to be told about and the old one did
 not. Where the identity has to outlive a reorder, either carry the index through the
 permutation (this fix) or give the node an identity that is not its position.
+
+## F56 — F54's two siblings: `active_sps` and every fresh NAL node also read back as `Some(SpsRef { id: 0 })`, and neither was reached
+
+*Phase 5b session C, at `1abc379a`, found by writing the two zeroed shells out
+field by field — which is what made the values readable. **Parked, not fixed**:
+this is a behaviour question, and the decision ladder's third rung says a
+behaviour question is never defaulted. Both sites are transcribed unchanged, with
+the artifact spelled at each.*
+
+F54 is the rule: `SpsRef` is `{ id: i32, subset: bool }`, the layout algorithm
+puts `Option`'s niche in the `bool`, and `0` is a valid `false` — so an all-zero
+`Option<SpsRef>` decodes as `Some(SpsRef { id: 0, subset: false })` where a zeroed
+raw pointer decoded as `None`. T5.Z1 found it on `sSpsPpsCtx.pActiveLayerSps` and
+fixed that field. **The type occurs in three more places, and the same zeroing
+reaches all of them.**
+
+**Measured, both by byte comparison against the shell each replaced** (S33):
+
+| site | zero image | `Default` | reachable? |
+|---|---|---|---|
+| `SWelsDecoderContext::active_sps` | `Some(SpsRef { id: 0 })` | `None` | **yes**, 30+ readers |
+| `SNalUnit`'s `…sSliceHeader.sps_ref`, per `MemGetNextNal` reset | `Some(SpsRef { id: 0 })` | `None` | **yes**, one reader |
+| `sSpsPpsCtx.sPrefixNal`'s VCL arm | `Some(SpsRef { id: 0 })` | `None` | **no** — the prefix NAL's VCL arm is written by nothing and read by nothing |
+
+The context comparison is the sharper of the two: the new field-wise constructor
+and the old `MaybeUninit::zeroed` shell agree on **573,574 of 573,576 bytes**, and
+the two that differ are one padding byte inside `sPredList[0]` and the third row
+above. `SNalUnit`'s differ in **1 of 6,056**, and it is the second row.
+
+**What the artifact does.** `AllocPicBuffOnNewSeqBegin` opens with
+
+```rust
+let active = if (*pCtx).active_sps.is_some() { (*pCtx).active_sps } else { …scan… };
+```
+
+and the `else` arm — a scan for the first SPS with `uiTotalMbCount > 0`, which is
+T5.R6's replacement for the C++'s `sps as *mut SSps` fallback — **cannot run on a
+first access unit**, because the field is never `None`. Nothing in the corpus or
+the conformance set distinguishes the two arms today: `WelsDecodeInitAccessUnitStart`
+writes `active_sps` from the start NAL's slice header before this runs on every
+stream either gate contains. That is why it is a finding and not a defect report —
+what is measured is the *state*, not a divergence.
+
+**Why `None` is the faithful value.** The C memsets an `SSps*` to NULL, and the
+port's spelling of that null is `None`. The `Some` is the niche, not the C. This
+is exactly the argument T5.Z1 accepted for `pActiveLayerSps`; the reason it is not
+applied here in the same commit is plan §2.1's — refactoring and behaviour change
+do not share one — and the reason it is not applied in a *following* commit is the
+decision ladder's rung 3.
+
+**Owner: Eugene or the steward, at Phase 5b's close.** The change is two lines
+(`active_sps: None` in `SWelsDecoderContext::default`, and dropping the one
+overwrite in `SNalUnit::memset_zero`), and what it needs is a decision plus the
+corpus and conformance run beside it, not more reading.
