@@ -11041,3 +11041,68 @@ remains untested is the `SNalData` union-to-struct change, the index semantics o
 work that landed is one design face rather than a phase, and the honest reading is that
 a two-commit span at the resolution session L measured would say nothing (S2b). The
 `OVERALL: PASS` bench rows are the correctness half and they are bit-identical.
+
+## Phase 5b session B — the divergence was a reordering, not a corruption (2026-08-17)
+
+**Commits:** `c466f93a` (doc tail), `6fe88832` (**T5b.3**, the parse tree + F55's fix).
+**The done-test the brief set is met: conformance 60/60.**
+
+**Metrics.** `#[allow(unsafe_code)]` items **147 → 137** (133 code + 4 prose),
+`unsafe fn` **30 → 20 (−33%)**, `unsafe {` blocks **148 → 143**, decoder `raw_ptr`
+**219 → 204** (139 code + 65 prose).
+
+### The measured cause
+
+The brief's leading hypothesis was eliminated first, in one run per side: the whole
+`SSliceHeaderExt` at every `InitDqLayerInfo` entry is **identical** on both builds,
+6 calls of 6, the three B-slice fields included.
+
+What separated them was found by hashing **per frame** instead of per stream. On
+`grid_48x32` the six output hashes are the *same six values in a different order* —
+`5d62 b2e6 3e36 08c6 159f 582d` became `5d62 159f 3e36 b2e6 08c6 582d`. **Not one
+pixel differed anywhere in the stream.** Session A read "counts held, hashes moved"
+as a pixel divergence and spent the face there; one hash-**set** comparison separates
+a reordering from a corruption, and the frame-count check that stood in for it cannot.
+
+**F55.** `pCtx->pSliceHeader` and `pCtx->pNalCur` were raw pointers *into* an
+access-unit node — the two stored aliases that kept `TagAccessUnits` from owning its
+slots, and the whole reason this face exists. Indices replace them, which is faithful
+everywhere except at the two rotations: `ResetCurrentAccessUnit` and
+`ForceResetCurrentAccessUnit` bring the successor AU's already-parsed NAL to the
+front, and the C rotates a **pointer array** — a pointer keeps naming its node across
+the rotation, an index does not. After it, `slice_hdr_nal` still read `Some(0)`, now
+the successor's NAL, and the api's three reordering sites judged every picture by the
+**next** picture's slice header. All three sit behind `bIsBaseline` and `B_SLICE`, so
+only B-slice streams can see it — the 11, and no others. Nothing in the diff was near
+the swap. **Fix**: `swap_au_nodes`, one helper both rotations route through, applying
+the swap and carrying the two indices with it. Recorded as F55; generalised as **S34**.
+
+### Two experiments removed rather than landed
+
+The preserved patch still carried session A's in-attempt probes — byte-wise
+`bytes_equal`/`bytes_copy`, and a raw-pointer in-place slice-header parse. Each had
+already been measured *not* to be the cause and each costs an `unsafe` this face
+exists to delete; the ratchet caught the second before the commit (`raw_ptr` 43 → 44).
+
+### Gates
+
+Per commit: both profiles + `--all-targets`, tests **481 / 475 / 20**, ratchet clean,
+census 59. The three decoder probes under Miri at the landing tree: **3/3** in 1099.7s.
+Corpus refereed end to end against the C++ at **2690/17 output, 2707/0 codes**.
+
+**The `exit` battery at `6fe88832` reads `OVERALL: PASS` — 13 passed / 0 failed / 1
+skipped**: both sweeps **341/341** with no F3 hit, both benches bit-identical, Miri
+`--lib` **336/0** (AC's 334 plus this session's two) and the differential targets
+**20 / 7 / 3**. **No test file changed all session** — `git diff 6c3e7301..HEAD --
+tests/` is empty, so the goldens and the corpus's 2707 rows are unmoved by
+construction. **Red-under-revert, measured** (S33): reverting `swap_au_nodes`' remap
+to a bare `nal_units.swap` turns both new tests red — the first reads `(P_SLICE, 99)`,
+the successor's header, by name — and conformance returns to exactly **49/11**.
+
+**No span.** D-gate-1 puts the 5b window at session C's close, base `ac_head`.
+
+### Hand-off
+
+**Session C**, unchanged: the shells, the sweep, the four-item close
+(`phase5b_session_c.md`). Its four shell line numbers are refreshed to this tree.
+F55 needs no owner — it is fixed here.
