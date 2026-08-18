@@ -11233,3 +11233,13 @@ One item is owed to Eugene or the steward and to nobody else: **F56's two lines.
      under the unit test). Gate before commit: corpus 2690/17 + 2707/0 over 2707 rows,
      conformance 60/60, e2e 16/16 — unmoved. Per-commit PASS, tests 482/476/20, census 59,
      decoder raw_ptr unchanged at 131. -->
+<!-- Face 1 closed at `00a702ed` (T5b.9). Deleted: `sMCRefMember`+typedef+`Default`;
+     `CopySpsPps` and `PWelsDecoderContext` (+11 re-exports); `PicPool::slot_at` and
+     `slot_ptr`; `PDeblockingFilterMbFunc`'s second declaration (allowlist entry retired,
+     census 59->58); `DestroyPicBuff`'s dead `pMa` (+4 call-site casts);
+     `SSps::pSLevelLimits` (write-only; T5.Y2's ruling) — context 573,576 -> 572,784 bytes
+     measured; `pic_queue.rs`'s vestigial test-module allow. Kept with Phase 8 pointers:
+     `PPicture`, `PPicBuff` (both api-live). Decoder raw_ptr 131 -> 113 (47 code + 66
+     prose); allow 3, unsafe fn 0, blocks 6. Residue: (a) api fields+accessors 16,
+     (b) log callback 6, (c) C-ABI/pool values 10, (d) fixtures feeding (a) 15 = 47.
+     Gates PASS, tests 482/476/20, census 58, conformance 60/60 at the seam. -->
