@@ -2165,7 +2165,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kuiChromaQpIndexOffset = (*(*pCurLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
-    pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(pSlice);
+    pSOverRc.iBsPosSlice = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
 
     if (*pWelsSvcRc).bEnableGomQp != 0 {
         if (*pWelsSvcRc).iNumberMbGom != 0
@@ -2213,7 +2213,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice as usize;
 
-    let cur_bs = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(pSlice);
+    let cur_bs = (*(*pEncCtx).pFuncList).eEntropyCoder.GetBsPosition(crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice), pSlice);
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;

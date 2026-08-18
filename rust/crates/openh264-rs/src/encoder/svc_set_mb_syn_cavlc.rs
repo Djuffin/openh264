@@ -398,7 +398,7 @@ pub unsafe fn WelsSpatialWriteMbPred(
     pCurMb: *mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = (*pSlice).pSliceBsa;
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
     let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
@@ -522,7 +522,7 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
     pCurMb: *mut SMB,
 ) {
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pBs = (*pSlice).pSliceBsa;
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
     let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
 
@@ -694,7 +694,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
-    let pBs = (*pSlice).pSliceBsa;
+    let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
     let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
     let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let kuiChromaQpIndexOffset = (*(*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
@@ -988,6 +988,7 @@ pub unsafe fn WelsWriteMbResidual(
 ///
 /// [`EntropyCoder`]: crate::encoder::wels_func_ptr_def::EntropyCoder
 pub unsafe fn StashMBStatusCavlc(
+    pBs: *mut BsWriter,
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
     iMbSkipRun: i32,
@@ -995,7 +996,6 @@ pub unsafe fn StashMBStatusCavlc(
     if pDss.is_null() || pSlice.is_null() {
         return;
     }
-    let pBs = (*pSlice).pSliceBsa;
     if !pBs.is_null() {
         // Three cursor fields become one value. `BsWriter` is `Copy`, which is
         // the whole point of a detached cursor. The CABAC twin below now reads
@@ -1011,13 +1011,13 @@ pub unsafe fn StashMBStatusCavlc(
 
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
 pub unsafe fn StashPopMBStatusCavlc(
+    pBs: *mut BsWriter,
     pDss: *mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
     pSlice: *mut SSlice,
 ) -> i32 {
     if pDss.is_null() || pSlice.is_null() {
         return 0;
     }
-    let pBs = (*pSlice).pSliceBsa;
     if !pBs.is_null() {
         *pBs = (*pDss).sBsStack;
     }
@@ -1121,11 +1121,14 @@ pub unsafe fn GetBsPosCabac(pSlice: *mut SSlice) -> i32 {
 // slot; with no slot there is no slot type, and the thunk was pure deletion.
 
 /// `extern "C"` came off at T4b.1 with the slot that required it.
-pub unsafe fn GetBsPosCavlc(pSlice: *mut SSlice) -> i32 {
-    if pSlice.is_null() || (*pSlice).pSliceBsa.is_null() {
+///
+/// Takes the slice's writer (`slice_writer`) rather than the slice: the writer is
+/// all this reads, and the slice no longer stores it (Phase 6 session B).
+pub unsafe fn GetBsPosCavlc(pBs: *mut BsWriter) -> i32 {
+    if pBs.is_null() {
         return 0;
     }
-    crate::encoder::vlc_encoder::BsGetBitsPos(&*(*pSlice).pSliceBsa)
+    crate::encoder::vlc_encoder::BsGetBitsPos(&*pBs)
 }
 
 #[cfg(test)]

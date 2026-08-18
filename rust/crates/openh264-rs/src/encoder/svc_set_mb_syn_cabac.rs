@@ -1077,7 +1077,7 @@ pub unsafe fn WelsInitSliceCabac(
 ) {
     unsafe {
         /* alignment needed */
-        let pBs = (*pSlice).pSliceBsa;
+        let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
         let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
         BsAlign(buf, &mut *pBs);
 
