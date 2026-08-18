@@ -11355,3 +11355,28 @@ this window changes encoder production code, so base and head cannot build the s
 binary in either profile — this phase's clause in `phase6.md` §3, met on its first session. **No session span** (D-perf-6, S2b): every production change is
 provenance or ordering, none is arithmetic, and all of it is init-path — a span over it measures
 nothing.
+
+## Phase 6, session B — the encode probe goes live, and the clearing (2026-08-18)
+
+*Breadcrumbs, one per face as it closes (S31); compacted into the entry at the close.*
+
+* **§0** — S27 open at `6cecbf51`: `commit` battery `OVERALL: PASS` (484 / 478 / 20, ratchet
+  clean, census 58). **T6.B0** (`ef8bf25b`): the initialisation probe's `PLACEHOLDER_REVERT`
+  replaced by the measured F21 sentence; `--skip encoder_ext` **deleted** — the filter matched
+  exactly two tests (`request_memory_svc_*`, no `wels_encoder_ext` test exists) and both ran
+  green under the step's flags (2 / 0, 16.92s Miri clock). The `--lib` step skips
+  `wels_thread_pool` (F12) and nothing else. Battery PASS.
+* **Face 0 — F52's six, adjudicated by reading (T6.B1).** Both lines of each opened: `Uninit`
+  / `InitFrame` / `ExecuteTasks` (`wels_task_management.rs:662–664`) and `OnTaskStop`
+  (`wels_thread_pool.rs:97`) are trait-method **declarations** — the sweep had scanned forward to
+  the next item's brace and scored the nothing between as an empty body; `WelsRcPostFrameSkipping`
+  (`rc.rs:1860`, `false`) is faithful to `ratectl.cpp:1015`'s `return false;` and `:651` is T4b's
+  `RCMode` dispatcher that calls it; `push_back` is `CWelsList<T>::` and `CWelsTaskList::`, two
+  types. **F52 closed** in `phase6_findings.md`, `phase5.md`'s open list and plan §0. The sweep
+  now skips a `fn` whose signature ends in `;` before any `{`: **22 → 18** candidate names,
+  measured (the brief's 21 → 17 was a lead, S24 — same code at both commits). Guard:
+  `--self-test` over a two-file fixture holding F52's own stub shape (five-line signature, body
+  `true`, beside the real body) plus a declaration beside its impl — the stub prints, the
+  declaration does not, and the array-type `;` in a signature is not a declaration; run against
+  the pre-session tool, the pre-F52 tool and a *contains*-`;` filter it FAILs on each, and PASSes
+  as shipped. Nothing in the encoder was converted before this face was recorded. Battery PASS.
