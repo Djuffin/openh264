@@ -1,9 +1,14 @@
 # Phase 5b, session C — the shells, the sweep, the four-item close
 
-Runs after session B lands the parse tree at 60/60. This session ends Phase 5b:
+Session B landed the parse tree at 60/60 (`535feb05`; **F55** — an index is not a
+pointer under a container that permutes its slots; **S34** generalises it, and
+it applies to any index this session introduces). This session ends Phase 5b:
 **allow items → 4, `unsafe fn` → 0**. **D-par-1**, **D-fid-1**, **D-perf-6**,
-**S31**–**S33**, the terminal rule and the decision ladder in force. Counts at
-session B's close; re-grep at each face's open (S24, code/prose split).
+**S31**–**S34**, the terminal rule and the decision ladder in force. Counts at
+session B's close (`535feb05`: allow **137 (133+4)**, `unsafe fn` **20**
+definitions, blocks **143**, raw_ptr **204 (139+65)**); re-grep at each face's
+open (S24, code/prose split — and *definitions*, not mentions: a `unsafe fn`
+grep over doc comments reads 37 against the 20 that exist).
 
 ## 0. Start
 
