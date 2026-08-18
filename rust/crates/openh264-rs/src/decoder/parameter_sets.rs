@@ -240,7 +240,16 @@ pub struct TagSps {
     pub iScalingList4x4: [[u8; 16]; 6],
     pub iScalingList8x8: [[u8; 64]; 6],
     pub sVui: SVui,
-    pub pSLevelLimits: *const SLevelLimits,
+    // **T5b.9: `pSLevelLimits` is deleted, and T5.Y2 is the ruling it follows.** The
+    // C++ stores the level's limit row here and reads it back in exactly four
+    // places, all `WELS_CHECK_SE_BOTH_WARNING (pMv[1], iMinVmv, iMaxVmv, …)` — a
+    // `WelsLog` warning and nothing else (`dec_golomb.h:288`). T5.Y2 deleted the
+    // parse paths' local lookups on that argument; what it left behind was the
+    // field, written once by `ParseSubsetSps` and read by nothing in the port, plus
+    // two null initializers. `au_parser.cpp`'s frame-size checks use a *local*
+    // `pSLevelLimits`, not this field, so nothing in the C++ reaches it except the
+    // warnings. Porting those warnings re-adds it; until then it is dead data with a
+    // pointer's spelling.
 }
 
 impl TagSps {
@@ -299,7 +308,6 @@ impl TagSps {
             sVui: SVui::default(),
             // The zero of a pointer is its null, and this one is resolved from
             // `g_ksLevelLimits` at parse time.
-            pSLevelLimits: std::ptr::null(),
         }
     }
 }
@@ -346,7 +354,6 @@ impl Default for TagSps {
             iScalingList4x4: [[0; 16]; 6],
             iScalingList8x8: [[0; 64]; 6],
             sVui: SVui::default(),
-            pSLevelLimits: std::ptr::null(),
         }
     }
 }

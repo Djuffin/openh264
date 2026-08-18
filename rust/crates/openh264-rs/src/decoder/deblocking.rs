@@ -208,7 +208,7 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
 pub use crate::common::deblocking_common::*;
 use crate::safe::mb_grid::MbArray;
 pub use crate::decoder::slice::EWelsSliceType;
-pub use crate::decoder::picture::{SPicture, PPicture};
+pub use crate::decoder::picture::SPicture;
 pub use crate::decoder::parameter_sets::{SSps, SPps};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
@@ -255,7 +255,7 @@ pub type PDeblockingFilterMbFunc = fn(
     boundry_flag: i32,
 );
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 use crate::decoder::decoder_context::{active_fmo, SliceCtx};
 use crate::safe::plane::PlaneCursorMut;
 

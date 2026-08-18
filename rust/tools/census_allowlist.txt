@@ -49,9 +49,9 @@ alias PRefBasePicMarking x2         # ditto
 alias PPps x2                       # parameter_sets.rs vs slice.rs. Owner: 5.5 (P4).
 alias PSps x2                       # ditto
 alias PSubsetSps x2                 # ditto
-alias PDeblockingFilterMbFunc x2    # decoder/deblocking.rs:203 is `fn(*mut DqLayerState, ..)`,
-                                    # decoder_context.rs:212 is `Option<fn(*mut c_void, ..)>`
-                                    # — a REAL type divergence, the T4b.3a shape. Owner: 5.4.
+# T5b.9: `PDeblockingFilterMbFunc` is no longer a duplicate — `decoder_context.rs`'s
+# C-callback copy had zero importers and is deleted, leaving `decoder/deblocking.rs`'s
+# safe `fn` as the only declaration. The entry retires with the divergence it named.
 alias PIdctResAddPredFunc x3        # decode_mb_aux/decode_slice/decoder_context. Owner: 5.6.
 alias PIdctFourResAddPredFunc x2    # Owner: 5.6.
 alias PCopyFunc x2                  # T5.AC10: the decoder's third copy is deleted (it had zero

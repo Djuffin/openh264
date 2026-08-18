@@ -319,6 +319,13 @@ pub struct SPicture {
 }
 
 /// Pointer typedef for reconstructed pictures matching `typedef struct SPicture* PPicture;`.
+///
+/// **Phase 8's, and the last thing that names it is the boundary** (T5b.9). Every
+/// decoder re-export of this name was dead after T5b.1 turned the reference arm into
+/// an identity; what is left is [`PicPool::slot_at_mut`](crate::decoder::pic_queue::PicPool::slot_at_mut)'s
+/// return, whose one consumer is `api/codec_api.rs`'s `iPicBuffIdx` release path
+/// across the C ABI. The typedef *is* the boundary's spelling, so it retires with
+/// the boundary and not before.
 pub type PPicture = *mut SPicture;
 
 impl Default for SPicture {

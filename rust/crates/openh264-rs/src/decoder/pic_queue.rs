@@ -28,9 +28,10 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
-// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
-// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
+// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
+// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
+// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
+// with `data_ptr_ref`). Nothing here is one of them.
 
 //! # Decoded Picture Buffer Pool & Recycled Picture Queue (`pic_queue.rs`)
 //!
@@ -136,6 +137,9 @@ pub type PicSlot = Option<Box<SPicture>>;
 /// `PDqLayer` keeps its own (T5.M1): it is a pointer *to* the pool, and Phase 5's
 /// remaining steps delete it rather than convert it.
 pub type SPicBuff = PicPool;
+/// **Phase 8's** (T5b.9). Nothing in `src/decoder/` names this type; its two uses
+/// are `api/codec_api.rs`'s `pCtx ? pCtx->pPicBuff : m_pPicBuff` pair, which is the
+/// C++'s own expression at the boundary F23 owns. It retires with the boundary.
 pub type PPicBuff = *mut PicPool;
 
 /// **A decode bracket's view of the pool** (T5.P″2): `PicId` → picture, with the
@@ -301,23 +305,15 @@ impl RefSlot<'_> {
     }
 }
 
-/// The pointer form of a resolved slot, spelled **once** (S7).
-///
-/// [`PicPool::slot`] hands back a borrow since T5.Z1, and three consumers still
-/// need an address: `PicRefs::get`'s F42 arm, where a shared reference would alias
-/// the picture being written; `slot_at`, whose out-of-range arm is the C's own
-/// failed index test; and the thread prefetch F36 owns. Each of those would
-/// otherwise write the cast itself, which is four pointer types where the contract
-/// is one.
-#[inline]
-fn slot_ptr(p: Option<&SPicture>) -> *const SPicture {
-    match p {
-        Some(p) => p,
-        None => std::ptr::null(),
-    }
-}
+// **T5b.9: `slot_ptr` deleted dead with `slot_at` (S18).** Its doc named three
+// consumers needing an address — `PicRefs::get`'s F42 arm, `slot_at`, and the
+// thread prefetch F36 owns. The first became an identity at T5b.1 and the third
+// went with F36's probe, so the shared form was left serving only `slot_at`, which
+// had no callers of its own. The mutable form below still has one, across the ABI.
 
-/// [`slot_ptr`]'s mutable form.
+/// The pointer form of a resolved slot, spelled **once** (S7) — so that
+/// [`PicPool::slot_at_mut`], the boundary's accessor, is the only place in the
+/// decoder that writes the cast.
 #[inline]
 fn slot_ptr_mut(p: Option<&mut SPicture>) -> *mut SPicture {
     match p {
@@ -370,21 +366,17 @@ impl PicPool {
         self.slots.get_mut(id).as_deref_mut()
     }
 
+    // **T5b.9: the shared `slot_at` is deleted dead (S18).** Of the two C++ index
+    // paths its doc named, `PrefetchLastPicForThread` is D3's threaded decoder and
+    // `welsDecoderExt.cpp`'s release path reaches the *mutable* form below; the
+    // shared one has had no caller since T5b.1.
+
     /// The picture in slot `index`, or null if `index` is outside the pool.
     ///
-    /// The out-of-range arm is the C's own: `PrefetchLastPicForThread` and
-    /// `welsDecoderExt.cpp`'s release paths both test the index against `iCapacity`
-    /// before indexing, and both mean "no picture" by a failed test.
-    #[inline]
-    pub fn slot_at(&self, index: i32) -> *const SPicture {
-        if index >= 0 && index < self.capacity() {
-            slot_ptr(self.slot(self.id(index as usize)))
-        } else {
-            std::ptr::null()
-        }
-    }
-
-    /// [`slot_at`](Self::slot_at)'s mutable form.
+    /// The out-of-range arm is the C's own: `welsDecoderExt.cpp`'s release path
+    /// tests the index against `iCapacity` before indexing and means "no picture"
+    /// by a failed test. **Phase 8's**, with [`PPicture`]: the one consumer is
+    /// `api/codec_api.rs`, across the C ABI.
     #[inline]
     pub fn slot_at_mut(&mut self, index: i32) -> PPicture {
         if index >= 0 && index < self.capacity() {
@@ -580,7 +572,7 @@ impl PicPool {
     }
 }
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 // ============================================================================
 // Helper Macros / Inline Functions
@@ -895,17 +887,15 @@ pub fn CreatePicBuff(
 /// `pCtx->pPicBuff` and its two jobs were to read the pool and to null the field;
 /// `(*pCtx).pPicBuff.take()` at the call site does both, in one expression, and the
 /// "null it afterwards" step cannot be forgotten because there is nothing left to
-/// null. `pMa` being null used to abandon the pool; it now only abandons the
-/// *pictures*, which is the same C behaviour with the pool's own leak removed.
+/// null. A null `pMa` used to abandon the pool; by T5.Q2 it abandoned nothing at
+/// all, which is the same C behaviour with the pool's own leak removed.
 ///
-/// # Safety
-/// - Every non-null slot of `pool` must be a live picture from [`AllocPicture`].
-/// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
-pub fn DestroyPicBuff(
-    pCtx: &mut SWelsDecoderContext,
-    pool: Option<Box<PicPool>>,
-    pMa: *mut CMemoryAlign,
-) {
+/// **T5b.9: `pMa` is gone too.** T5.Q2 left the parameter in place with `let _ =
+/// pMa;` under it, because the teardown had stopped going through the C's
+/// allocator; what stayed was a raw pointer no line read and four
+/// `&mut ma` casts at the call sites keeping it fed. The signature says what
+/// the body does now.
+pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>) {
     // Both reordering buffers are `CWelsDecoderImpl`'s; the C++'s two null tests are
     // the two `Option`s, and the pair is disjoint so one `if let` chain serves.
     let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
@@ -921,9 +911,9 @@ pub fn DestroyPicBuff(
     // abandon every picture in the pool — is drop glue: `pool` owns its slots, each
     // slot owns its picture, and each picture has owned its planes and its four
     // per-macroblock families since T5.P′3. R4's equivalence (the port frees what the
-    // C++ frees) is discharged by construction, and `pMa` is unused because nothing
-    // in this teardown goes through the C's allocator any more.
-    let _ = pMa;
+    // C++ frees) is discharged by construction, and the C's allocator is not reached
+    // from this teardown at all — which is why the `pMa` parameter went with the
+    // loop rather than outliving it.
     drop(pool);
 }
 
@@ -933,7 +923,11 @@ pub fn DestroyPicBuff(
 
 #[cfg(test)]
 mod tests {
-    #![allow(unsafe_code)] // exception 2 at the file head — the resolver family's raw answers (W3 fact 1)
+    // **T5b.9: the file head's exception 2 is vestigial and the allow is deleted.**
+    // It covered the resolver family's raw answers (W3 fact 1); those became
+    // identities at T5b.1 and the module's `unsafe` went with them. With this gone,
+    // `#[allow(unsafe_code)]` in `src/decoder/` reads **three by grep** — the two
+    // api aliases and `picture.rs`'s Miri test — which is what the module heads say.
     use crate::decoder::decoder_context::parse_only;
     use super::*;
     
@@ -1057,7 +1051,7 @@ mod tests {
             assert_eq!(slot2.index(), 2);
             assert_eq!(pool.cursor(), 2);
 
-            DestroyPicBuff(pCtx, Some(pool), &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(pCtx, Some(pool));
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -1126,7 +1120,7 @@ mod tests {
         }
 
         {
-            DestroyPicBuff(&mut *ctx, Some(pool), &mut ma);
+            DestroyPicBuff(&mut *ctx, Some(pool));
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -1180,7 +1174,7 @@ mod tests {
         {
             let pool = CreatePicBuff(false, 4, 64, 64);
             assert!(pool.is_some());
-            DestroyPicBuff(&mut *ctx, pool, &mut ma);
+            DestroyPicBuff(&mut *ctx, pool);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
 
@@ -1249,11 +1243,7 @@ mod tests {
             assert!(same_picture(None, None));
             assert!(!same_picture(None, a));
 
-            DestroyPicBuff(
-                &mut *ctx,
-                Some(pool),
-                &mut ma as *mut CMemoryAlign,
-            );
+            DestroyPicBuff(&mut *ctx, Some(pool));
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -1301,11 +1291,7 @@ mod tests {
             assert_eq!(pool.cursor(), 0);
             assert_eq!(pool.slot(got).unwrap().iPicBuffIdx, 0, "the winner learns its slot");
 
-            DestroyPicBuff(
-                &mut *ctx,
-                Some(pool),
-                &mut ma as *mut CMemoryAlign,
-            );
+            DestroyPicBuff(&mut *ctx, Some(pool));
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }
@@ -1345,7 +1331,7 @@ mod tests {
                 "the null test is the Option"
             );
 
-            DestroyPicBuff(&mut *ctx, Some(pool), &mut ma as *mut CMemoryAlign);
+            DestroyPicBuff(&mut *ctx, Some(pool));
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
     }

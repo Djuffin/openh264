@@ -23,6 +23,11 @@
 //   * **The four exceptions below**: the three per-slice view constructors, which
 //     W6's settlement named as the enumerated exception before they were written,
 //     and the zeroed shell, which is session O's standing constraint.
+//
+// **All four are gone** (T5b.5/T5b.6): the views take borrows, the shell is a
+// field-wise constructor, and what this file allows now is `api_alias` and
+// `api_alias_mut` — two of the decoder's three remaining items, the third being
+// `picture.rs`'s Miri test for `data_ptr`.
 
 //! Master decoder execution context, function dispatch tables, DPB memory pool management,
 //! bitstream demuxing, and statistics aggregation.
@@ -244,8 +249,13 @@ pub type PGetIntraPred8x8Func =
 // edited — the duplicate that goes is the decoder's, which is what makes this S18
 // rather than F22, and the encoder's remaining pair is Phase 6's.
 
-pub type PDeblockingFilterMbFunc =
-    Option<unsafe extern "C" fn(pCurDqLayer: *mut c_void, filter: *mut SDeblockingFilter, boundry_flag: i32)>;
+// **T5b.9: the second `PDeblockingFilterMbFunc` declaration is deleted (S18/F22's
+// class).** It was the C-callback shape — `Option<unsafe extern "C" fn(pCurDqLayer,
+// filter, boundry_flag)>` over two raw pointers — and the census allowlisted the
+// duplicate as "a REAL type divergence" against `deblocking.rs`'s. That divergence
+// resolved itself when T5.AB2 made the live declaration a safe `fn` taking the
+// layer and the filter by reference: nothing has imported this copy since, and the
+// two call sites in `deblocking.rs` resolve to that module's own.
 // The six deblocking kernel-pointer types and the table that holds them
 // (`SDeblockingFunc`, C++ `decoder_context.h:196-209`) are declared **once**, in
 // `common/deblocking_common.rs`, where the decoder's `DeblockingInit`
@@ -483,11 +493,11 @@ impl Default for SWelsDecoderSpsPpsCTX {
     }
 }
 
-pub use crate::decoder::picture::{SPicture, PPicture, SPicture as Picture};
+pub use crate::decoder::picture::{SPicture, SPicture as Picture};
 
 
 
-pub use crate::decoder::pic_queue::{PicPool, PicId, PicRefs, SPicBuff, PPicBuff};
+pub use crate::decoder::pic_queue::{PicPool, PicId, PicRefs, SPicBuff};
 
 /// The decoder picture buffer's three lists, as **slot handles**.
 ///
@@ -1963,14 +1973,20 @@ pub struct SWelsDecoderContext {
     pub pPictInfoList: *mut [SPictInfo; 16],
     pub pPictReoderingStatus: *mut SPictReoderingStatus,
 }
-pub type PWelsDecoderContext = *mut SWelsDecoderContext;
+// **T5b.9: `PWelsDecoderContext` deleted (S18).** Every use in `src/decoder/` was
+// a re-export chain or a doc comment quoting the C++'s signature; the one code use
+// was `CopySpsPps`, an empty stub of the threaded decoder D3 deletes. No function
+// in the port takes the context by pointer — T5.G1 closed that inventory — so the
+// typedef named a shape nothing has.
 
 /// **T5b.5 — the shell is retired and the constructor is the answer to S21's
 /// question.** The context was built from `MaybeUninit::zeroed()` with the owning
 /// fields written through the raw shell, because the struct "is several MiB" and a
 /// by-value constructor was said not to be an option at any point in the phase.
-/// Measured at this session's open, it is **573,576 bytes** — Phase 5 moved the bulk
-/// into owned containers, and the premise expired with them.
+/// Measured at T5b.5's open, it was **573,576 bytes** — Phase 5 moved the bulk into
+/// owned containers, and the premise expired with them. It is **572,784** at T5b.9,
+/// which deleted `SSps::pSLevelLimits` and so 8 bytes from each of the 99 parameter
+/// sets the context carries.
 ///
 /// What the shell cost was not the `unsafe`. It was that *every field's initial value
 /// was unreadable*: 109 fields whose meaning was "whatever all-zero happens to be for
@@ -2129,7 +2145,7 @@ impl Default for SWelsDecoderContext {
 }
 
 impl SWelsDecoderContext {
-    /// The context on the heap, which is where every caller wants it: 573,576 bytes is
+    /// The context on the heap, which is where every caller wants it: 572,784 bytes is
     /// under a test thread's 2 MiB stack but not by a margin worth spending, and
     /// `Box::new` of a struct literal is the one shape the optimizer can build in
     /// place.
@@ -2229,7 +2245,7 @@ mod tests {
             // leaves the context naming nothing, which is what the C's
             // `*ppPicBuf = NULL` was for.
             let pool = (*pCtx).pPicBuff.take();
-            DestroyPicBuff(pCtx, pool, (*pCtx).pMemAlign);
+            DestroyPicBuff(pCtx, pool);
             assert!((*pCtx).pPicBuff.is_none());
         }
     }

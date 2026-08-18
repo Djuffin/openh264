@@ -703,7 +703,7 @@ pub struct SWelsCabacDecEngine {
 
 pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 
 // 1. CABAC context initialization

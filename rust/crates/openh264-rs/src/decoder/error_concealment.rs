@@ -68,7 +68,6 @@
 use crate::decoder::decoder_context::{
     PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, dec_pic, pps_of, prev_dpb_id, sps_of,
 };
-use std::ptr;
 
 // ============================================================================
 // Constants and Error Concealment Modes
@@ -175,54 +174,19 @@ impl Default for SCopyFunc {
 pub use crate::common::copy_mb::{copy_16x16, copy_8x8};
 pub use crate::common::mc::SMcFunc;
 
-/// Motion compensation reference frame descriptor (`sMCRefMember`).
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagMCRefMember {
-    pub pDstY: *mut u8,
-    pub pDstU: *mut u8,
-    pub pDstV: *mut u8,
-
-    pub pSrcY: *mut u8,
-    pub pSrcU: *mut u8,
-    pub pSrcV: *mut u8,
-
-    pub iSrcLineLuma: i32,
-    pub iSrcLineChroma: i32,
-
-    pub iDstLineLuma: i32,
-    pub iDstLineChroma: i32,
-
-    pub iPicWidth: i32,
-    pub iPicHeight: i32,
-}
-
-pub type sMCRefMember = TagMCRefMember;
-
-impl Default for TagMCRefMember {
-    fn default() -> Self {
-        Self {
-            pDstY: ptr::null_mut(),
-            pDstU: ptr::null_mut(),
-            pDstV: ptr::null_mut(),
-            pSrcY: ptr::null_mut(),
-            pSrcU: ptr::null_mut(),
-            pSrcV: ptr::null_mut(),
-            iSrcLineLuma: 0,
-            iSrcLineChroma: 0,
-            iDstLineLuma: 0,
-            iDstLineChroma: 0,
-            iPicWidth: 0,
-            iPicHeight: 0,
-        }
-    }
-}
+// **T5b.9: `TagMCRefMember`/`sMCRefMember` deleted dead (S18).** The C++'s MC
+// descriptor — six raw plane cursors, four line strides and the picture geometry —
+// had two consumers and both died at T5b.1/T5b.2: `decode_slice.rs`'s inter
+// prediction takes the destination as coordinates and the source as a `PicRefs`
+// identity, and `GetRefPic`'s whole body was filling one of these. What was left
+// was the definition, its typedef and a `Default` impl nothing called, carrying
+// twelve `*mut u8` for no consumer.
 
 // ============================================================================
 // Core Decoder Context Structs
 // ============================================================================
 
-pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SDecodingParam};
+pub use crate::decoder::decoder_context::{Picture, SPicture, SDecodingParam};
 pub use crate::decoder::decoder_context::pic_and_refs_mut;
 use crate::decoder::decoder_context::{api_alias, api_alias_mut, ec_active_idc};
 pub use crate::decoder::pic_queue::{PicId, RefSlot};
@@ -233,7 +197,7 @@ pub use crate::safe::plane::PaddedPlane;
 
 pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
 pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, MbDims};
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SRefPic};
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, SRefPic};
 
 
 // ============================================================================
@@ -311,8 +275,8 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 // deriving `data_ptr(0..2)` in sequence does not invalidate the earlier results.
 //
 // Nothing here holds a plane pointer across a call that could reach the same picture
-// a second time: `sCopyFunc`'s kernels and `sMcFunc`'s take the pointers by value,
-// and `sMCRefMember` is a per-call scratch that dies with the frame's concealment.
+// a second time: `sCopyFunc`'s kernels and `sMcFunc`'s take what they read by value,
+// and the `sMCRefMember` scratch that used to stand beside them is deleted (T5b.9).
 //
 // The remaining site, `MarkECFrameAsRef`, derives all three planes of `pCtx->pDec`
 // for `ExpandReferencingPicture` and reaches no other picture at all.

@@ -45,7 +45,7 @@
 
 #![deny(unsafe_code)]
 // **Phase 5, T5.AC6 — the lint, with the two `PPicture` survivors allowed by
-// name.** What was left after session AB's keyword sweep was one family and one
+// name; T5b.1 converted both and this module allows nothing today.** What was left after session AB's keyword sweep was one family and one
 // idiom, and neither was a pointer:
 //
 //   * the **coefficient cursors** — `sTCoeff: *mut i16`, `pScanTable: *const u8`,
@@ -59,11 +59,12 @@
 //   * `ParseIPCMInfoCabac`'s three plane cursors, which the picture parameter
 //     already reaches as `plane_mut(i)`.
 //
-// The two exceptions are the ruled `PPicture` survivors (§0's option 3, steward at
-// `6b6dd9a3`), each with the F42 argument at the item.
+// The two exceptions were the ruled `PPicture` survivors (§0's option 3, steward at
+// `6b6dd9a3`), each with the F42 argument at the item. Neither survived T5b.1, which
+// took a third option the ruling had not reserved; T5b.9 deleted the dead import
+// they left behind.
 
 use crate::decoder::decoder_context::{PicRefs, SliceCtx};
-use crate::decoder::picture::PPicture;
 use std::ptr;
 
 
@@ -599,7 +600,7 @@ pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::slice::{SSlice, SSliceHeader, SSliceHeaderExt, EWelsSliceType};
 pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo};
 use crate::safe::mb_grid::MbArray;
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext, SPicture, Picture, SRefPic, SLogContext, SDecodingParam as SDecoderParam};
+pub use crate::decoder::decoder_context::{SWelsDecoderContext, SPicture, Picture, SRefPic, SLogContext, SDecodingParam as SDecoderParam};
 
 
 // ============================================================================
