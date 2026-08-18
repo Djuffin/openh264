@@ -1,3 +1,8 @@
+> **CLOSED at `f5ba2395`, 2026-08-17, over three sessions — and reopened once, for
+> session D (2026-08-18, `00a702ed`), which fixed the F56 this brief parked and
+> deleted the decoder's dead pointer spellings. See
+> [`phase5b_session_d.md`](phase5b_session_d.md).**
+>
 > **CLOSED at `f5ba2395`, 2026-08-17, over three sessions.** **A** landed two of
 > five faces (F42 retired by identity; the parse tree failed at 11/60 B-slice
 > assets and was preserved as a patch, `e39cfaaf`). **B** took the divergence
