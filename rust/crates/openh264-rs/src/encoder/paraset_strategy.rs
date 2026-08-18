@@ -420,13 +420,16 @@ pub unsafe fn WelsGenerateNewSps(
     }
 
     let pParam = (*pCtx).pSvcParam;
-    let pDlayerParam = &mut (*pParam).sSpatialLayers[iDlayerIndex as usize] as *mut _;
+    // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
+    // reference here only existed to retag and be cast away — and its retag is
+    // what invalidated `InitDqLayers`'s live pointer into the same layer.
+    let pDlayerParam = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
     // Need port pSps/pPps initialization due to spatial scalability changed
     if !kbUseSubsetSps {
         iRet = WelsInitSps(
             *pSps,
             pDlayerParam,
-            &mut (*pParam).sDependencyLayers[iDlayerIndex as usize],
+            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
             (*pParam).iMaxNumRefFrame,
             kiSpsId as u32,
@@ -439,7 +442,7 @@ pub unsafe fn WelsGenerateNewSps(
         iRet = WelsInitSubsetSps(
             *pSubsetSps,
             pDlayerParam,
-            &mut (*pParam).sDependencyLayers[iDlayerIndex as usize],
+            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
             (*pParam).iMaxNumRefFrame,
             kiSpsId as u32,
@@ -637,14 +640,17 @@ pub unsafe fn FindExistingSps(
     pSubsetArray: *mut SSubsetSps,
     bSVCBaseLayer: bool,
 ) -> i32 {
-    let pDlayerParam = &mut (*pParam).sSpatialLayers[iDlayerIndex as usize] as *mut _;
+    // S29's named shape. `WelsInitSps` takes `*mut SSpatialLayerConfig`, so the
+    // reference here only existed to retag and be cast away — and its retag is
+    // what invalidated `InitDqLayers`'s live pointer into the same layer.
+    let pDlayerParam = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
 
     if !kbUseSubsetSps {
         let mut sTmpSps = SWelsSPS::default();
         WelsInitSps(
             &mut sTmpSps,
             pDlayerParam,
-            &mut (*pParam).sDependencyLayers[iDlayerIndex as usize],
+            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
             (*pParam).iMaxNumRefFrame,
             0,
@@ -663,7 +669,7 @@ pub unsafe fn FindExistingSps(
         WelsInitSubsetSps(
             &mut sTmpSubsetSps,
             pDlayerParam,
-            &mut (*pParam).sDependencyLayers[iDlayerIndex as usize],
+            std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]),
             (*pParam).uiIntraPeriod,
             (*pParam).iMaxNumRefFrame,
             0,

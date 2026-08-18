@@ -784,8 +784,19 @@ pub unsafe fn AllocPicture(
     let iLumaSize = iPicWidth * iPicHeight;
     let iChromaSize = iPicChromaWidth * iPicChromaHeight;
 
+    // **F58, and it is F14/F57's accommodation a third time.** `WelsMallocz`, where
+    // the C++ (`picture_handle.cpp:76`) and this port both had `WelsMalloc`: on the
+    // **first** frame `AnalyzeSpatialPic` hands `VaaCalculation` a reference picture
+    // that nothing has written yet — `wels_preprocess.cpp:289` does the same — and
+    // `VAACalcSad` reads its *visible* luma. Reading uninitialised bytes is
+    // indeterminate-but-tolerated in C and **Undefined Behaviour in Rust**, so the
+    // port cannot transliterate it. Zeroing is the smallest thing that makes the
+    // read defined, and it is what both implementations observe in practice: a
+    // fresh 18 KB `malloc` is served from zero pages, which is why 341/341 has
+    // always agreed. Found by the encoder aliasing probe, Phase 6 session A, at
+    // `processing/vaacalc.rs:307`.
     (*pPic).pBuffer =
-        (*pMa).WelsMalloc((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
+        (*pMa).WelsMallocz((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
     if (*pPic).pBuffer.is_null() {
         let mut p = pPic;
         FreePicture(pMa, &mut p);
@@ -1164,8 +1175,16 @@ impl CWelsPreProcess {
             (*(*pCtx).pVaa).bIdrPeriodFlag = false;
         }
 
-        let pScaledPic = std::ptr::addr_of_mut!(self.m_sScaledPicture);
-        let iRet = self.SingleLayerPreprocess(pCtx, kpSrcPic, pScaledPic, pSpatialNum);
+        // The `pScaledPic` argument stood here — `addr_of_mut!(self.m_sScaledPicture)`
+        // handed to a method that takes `&mut self`. Miri rejects the callee's first
+        // read through it: a `&mut` argument is strongly protected for the call, so
+        // reaching the same object through a sibling raw pointer would remove a
+        // protected `Unique`. It is `phase6.md` §1's "cache, not carrier" — the
+        // parameter was a copy of something the holder already reaches — so it dies
+        // rather than converts. Deriving one pointer at the callee's top would not
+        // do either: the `self.` calls between the uses reborrow `self` and pop it.
+        // Found by the encoder aliasing probe, Phase 6 session A.
+        let iRet = self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
         }
@@ -1177,14 +1196,16 @@ impl CWelsPreProcess {
         &mut self,
         pCtx: *mut sWelsEncCtx,
         kpSrc: *const SSourcePicture,
-        pScaledPicture: *mut Scaled_Picture,
         pSpatialNum: *mut i32,
     ) -> i32 {
         let pSvcParam = (*pCtx).pSvcParam;
         let mut iDependencyId = (*pSvcParam).iSpatialLayerNum - 1;
 
         let depIdx = iDependencyId as usize;
-        let pDlayerParamInternal = &mut (*pSvcParam).sDependencyLayers[depIdx];
+        // S29: this binding is read again at the bottom of the function, and the
+        // shared reborrows of the same array in between (the `iClosestDid` scan)
+        // pop a `Unique` where they would leave a `SharedReadWrite` alone.
+        let pDlayerParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[depIdx]);
         let pDlayerParam = &(*pSvcParam).sSpatialLayers[depIdx];
         let iTargetWidth = pDlayerParam.iVideoWidth;
         let iTargetHeight = pDlayerParam.iVideoHeight;
@@ -1192,12 +1213,12 @@ impl CWelsPreProcess {
         let iSrcHeight = (*pSvcParam).SUsedPicRect.iHeight;
 
         if (*pSvcParam).uiIntraPeriod != 0 && !(*pCtx).pVaa.is_null() {
-            (*(*pCtx).pVaa).bIdrPeriodFlag = (1 + pDlayerParamInternal.iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
+            (*(*pCtx).pVaa).bIdrPeriodFlag = (1 + (*pDlayerParamInternal).iFrameIndex) >= (*pSvcParam).uiIntraPeriod as i32;
         }
 
         *pSpatialNum = 0;
-        let pSrcPic = if !(*pScaledPicture).pScaledInputPicture.is_null() {
-            (*pScaledPicture).pScaledInputPicture
+        let pSrcPic = if !self.m_sScaledPicture.pScaledInputPicture.is_null() {
+            self.m_sScaledPicture.pScaledInputPicture
         } else {
             self.GetCurrentOrigFrame(iDependencyId)
         };
@@ -1214,10 +1235,10 @@ impl CWelsPreProcess {
         let mut iShrinkWidth = iSrcWidth;
         let mut iShrinkHeight = iSrcHeight;
         let mut pDstPic = pSrcPic;
-        if !(*pScaledPicture).pScaledInputPicture.is_null() {
+        if !self.m_sScaledPicture.pScaledInputPicture.is_null() {
             pDstPic = self.GetCurrentOrigFrame(iDependencyId);
-            iShrinkWidth = (*pScaledPicture).iScaledWidth[depIdx];
-            iShrinkHeight = (*pScaledPicture).iScaledHeight[depIdx];
+            iShrinkWidth = self.m_sScaledPicture.iScaledWidth[depIdx];
+            iShrinkHeight = self.m_sScaledPicture.iScaledHeight[depIdx];
         }
 
         self.DownsamplePadding(
@@ -1234,15 +1255,15 @@ impl CWelsPreProcess {
 
         if (*pSvcParam).bEnableSceneChangeDetect && !(*pCtx).pVaa.is_null() && !(*(*pCtx).pVaa).bIdrPeriodFlag {
             if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-                let idc = if pDlayerParamInternal.bEncCurFrmAsIdrFlag {
+                let idc = if (*pDlayerParamInternal).bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
                 } else {
                     self.DetectSceneChange(pDstPic, std::ptr::null_mut())
                 };
                 (*(*pCtx).pVaa).eSceneChangeIdc = idc;
                 (*(*pCtx).pVaa).bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
-            } else if !pDlayerParamInternal.bEncCurFrmAsIdrFlag
-                && (pDlayerParamInternal.iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
+            } else if !(*pDlayerParamInternal).bEncCurFrmAsIdrFlag
+                && ((*pDlayerParamInternal).iCodingIndex & ((*pSvcParam).uiGopSize as i32 - 1)) == 0
             {
                 let pRefPic = if (*(*pCtx).pLtr.add(depIdx)).bReceivedT0LostFlag {
                     let pos = self.m_uiSpatialLayersInTemporal[depIdx] as usize
@@ -1267,7 +1288,7 @@ impl CWelsPreProcess {
         }
 
         let gopMask = (*pSvcParam).uiGopSize as i32 - 1;
-        let tid = pDlayerParamInternal.uiCodingIdx2TemporalId[(pDlayerParamInternal.iCodingIndex & gopMask) as usize];
+        let tid = (*pDlayerParamInternal).uiCodingIdx2TemporalId[((*pDlayerParamInternal).iCodingIndex & gopMask) as usize];
         let mut iActualSpatialNum = iSpatialNum - 1;
         if tid != INVALID_TEMPORAL_ID {
             WelsUpdateSpatialIdxMap(pCtx, iActualSpatialNum, pDstPic, iDependencyId);
@@ -1288,11 +1309,11 @@ impl CWelsPreProcess {
                 let iTargetH = pLay.iVideoHeight;
                 let tId = pInt.uiCodingIdx2TemporalId[(pInt.iCodingIndex & gopMask) as usize];
 
-                let iSrcW = (*pScaledPicture).iScaledWidth[iClosestDid as usize];
-                let iSrcH = (*pScaledPicture).iScaledHeight[iClosestDid as usize];
+                let iSrcW = self.m_sScaledPicture.iScaledWidth[iClosestDid as usize];
+                let iSrcH = self.m_sScaledPicture.iScaledHeight[iClosestDid as usize];
                 let pDst = self.GetCurrentOrigFrame(iDependencyId);
-                let iShrinkW = (*pScaledPicture).iScaledWidth[curDepIdx];
-                let iShrinkH = (*pScaledPicture).iScaledHeight[curDepIdx];
+                let iShrinkW = self.m_sScaledPicture.iScaledWidth[curDepIdx];
+                let iShrinkH = self.m_sScaledPicture.iScaledHeight[curDepIdx];
 
                 self.DownsamplePadding(
                     pSrcPic,

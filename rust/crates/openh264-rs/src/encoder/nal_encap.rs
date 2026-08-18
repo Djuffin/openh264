@@ -322,13 +322,27 @@ pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
     }
     let pWelsEncoderOuput = &mut *pEncoderOuput;
     let kiEndPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
-    let pIdx = &mut pWelsEncoderOuput.iNalIndex;
-    let pRawNal = &mut pWelsEncoderOuput.sNalList[*pIdx as usize];
+    let iIdx = pWelsEncoderOuput.iNalIndex as usize;
+
+    // **Re-stamped here rather than at `WelsLoadNal`, and the order is the whole
+    // fix.** `pRawData` and `iStartPos` are redundant — the comment at the stamp
+    // site says so — but `WelsLoadNal` derives the pointer *before* the writer
+    // runs, and the writer takes `&mut (&mut *pOut).sBsBuffer[..]`, a fresh
+    // `Unique` over the same allocation that pops it. `WelsEncodeNal` then read
+    // through the dead tag. Deriving from the offset the record already carries,
+    // after every write for this NAL has happened, is value-identical by
+    // construction and needs neither a type change nor the two NAL lists unified
+    // — which is what `SWelsNalRaw.pRawData` is excluded for (6.4, and the
+    // phase-3 shim markers). S29's boundary clause: only ordering fixes a
+    // write through the parent. Found by the encoder aliasing probe, session A.
+    let base = pWelsEncoderOuput.sBsBuffer.as_mut_ptr();
+    let pRawNal = &mut pWelsEncoderOuput.sNalList[iIdx];
+    pRawNal.pRawData = base.wrapping_add(pRawNal.iStartPos as usize);
 
     /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
 
-    *pIdx += 1;
+    pWelsEncoderOuput.iNalIndex += 1;
 }
 
 /// Initializes a raw NAL unit entry for a thread-local slice bitstream context.

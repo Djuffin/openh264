@@ -2356,4 +2356,205 @@ pub(crate) mod abi_test_driver {
             }
         }
     }
+
+    /// One encoded frame, as the probe sees it: what the encoder called the frame
+    /// and how many bytes of NAL it produced.
+    pub(crate) struct EncodedFrame {
+        pub(crate) kind: EVideoFrameType,
+        pub(crate) bytes: usize,
+    }
+
+    /// Fills `buf` with frame `f` of a synthetic I420 sequence that **moves**.
+    ///
+    /// Two motions at different velocities, and both halves of that matter. The
+    /// whole picture translates by (2, 1) samples per frame, so every macroblock
+    /// has a non-zero motion vector; a bright block crosses it at (3, 2), so the
+    /// macroblocks it touches disagree with their neighbours and the *predicted*
+    /// vector is wrong for them. One velocity everywhere would run the search and
+    /// then code `mvd = 0` at every macroblock but the first.
+    ///
+    /// The texture is a xor/quotient pattern rather than a gradient for the same
+    /// reason the motion has to be there at all: **a translated gradient is a
+    /// gradient plus a constant**, so the search answers (0, 0) with a DC residual
+    /// and nothing about motion estimation is measured.
+    fn moving_i420(width: i32, height: i32, f: usize, buf: &mut [u8]) {
+        fn texture(u: i32, v: i32) -> u8 {
+            let a = (u.wrapping_mul(3) ^ v.wrapping_mul(5)) as u32;
+            let b = (u / 7).wrapping_mul(37).wrapping_add((v / 5).wrapping_mul(53)) as u32;
+            (16 + ((a ^ b) & 0x7f)) as u8
+        }
+        let (w, h) = (width as usize, height as usize);
+        let (dx, dy) = (2 * f as i32, f as i32);
+        // The bright block's own track, wrapped so it stays inside the picture.
+        let (bw, bh) = (20.min(w / 2) as i32, 12.min(h / 2) as i32);
+        let bx = (3 * f as i32) % (width - bw).max(1);
+        let by = (2 * f as i32) % (height - bh).max(1);
+
+        for y in 0..h {
+            for x in 0..w {
+                let inside = (x as i32) >= bx
+                    && (x as i32) < bx + bw
+                    && (y as i32) >= by
+                    && (y as i32) < by + bh;
+                buf[y * w + x] = if inside {
+                    235
+                } else {
+                    texture(x as i32 + dx, y as i32 + dy)
+                };
+            }
+        }
+        let luma = w * h;
+        let (cw, ch) = (w / 2, h / 2);
+        for y in 0..ch {
+            for x in 0..cw {
+                let t = texture(2 * x as i32 + dx, 2 * y as i32 + dy);
+                buf[luma + y * cw + x] = 112u8.wrapping_add(t & 0x1f);
+                buf[luma + cw * ch + y * cw + x] = 144u8.wrapping_sub(t & 0x1f);
+            }
+        }
+    }
+
+    /// Encodes `frames` frames of [`moving_i420`] at `width` x `height` through the
+    /// C ABI, and returns what came out frame by frame together with the encoder's
+    /// **own** report of the resolution it is configured for.
+    ///
+    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
+    /// convenience methods, and that is deliberate — F23 has an encoder twin.**
+    /// `ISVCEncoder` is one pointer wide, exactly as `ISVCDecoder` is, and every
+    /// encoder thunk casts `this` to `*mut CWelsH264SVCEncoderImpl` and reaches
+    /// `inner` past the `base`/`pVtbl` pair at offset 0x10 — so
+    /// `(*p_encoder).InitializeExt(&param)` would hand Miri a `&mut` covering eight
+    /// bytes and then write far outside it, and Miri would reject the call before
+    /// any encoding began. The twin is Phase 8's with F23 itself; this driver
+    /// spells the calls the way a C caller does and routes around it.
+    ///
+    /// The configuration is `rust_enc`'s — the driver the 341-configuration
+    /// diffharness sweeps run — with three deliberate departures, each for
+    /// determinism the probe's assertions rest on: scene-change detection off (a
+    /// detected cut would make frame 1 an IDR and there would be no inter frame),
+    /// frame skip off (a skipped frame emits no NAL), and `uiIntraPeriod = 0` (no
+    /// periodic IDR). Entropy coding is CABAC over `PRO_HIGH`, because a baseline
+    /// layer forces CAVLC and the CABAC writers are the larger raw surface of the
+    /// two (66 raw-pointer occurrences and 30 `unsafe fn` against 35 and 12).
+    pub(crate) fn drive_encoder_over(
+        width: i32,
+        height: i32,
+        frames: usize,
+    ) -> (Vec<EncodedFrame>, (i32, i32)) {
+        assert!(
+            width % 16 == 0 && height % 16 == 0 && width >= 16 && height >= 16,
+            "the driver synthesises whole macroblocks: {width}x{height} is not one"
+        );
+        // SAFETY: `WelsCreateSVCEncoder` hands out `Box::into_raw(enc) as *mut
+        // ISVCEncoder`, so the pointer carries provenance for the whole
+        // implementation object, and every call below is the sequence a C caller
+        // makes.
+        unsafe {
+            let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
+            assert_eq!(WelsCreateSVCEncoder(&mut p_encoder), CM_RESULT_SUCCESS);
+            assert!(!p_encoder.is_null());
+            let vtbl = (*p_encoder).lpVtbl;
+
+            let mut param = SEncParamExt::default();
+            assert_eq!(
+                ((*vtbl).GetDefaultParams)(p_encoder, &mut param),
+                CM_RESULT_SUCCESS
+            );
+            param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+            param.iPicWidth = width;
+            param.iPicHeight = height;
+            param.iTargetBitrate = 500_000;
+            param.iMaxBitrate = UNSPECIFIED_BIT_RATE;
+            param.iRCMode = RC_MODES::RC_QUALITY_MODE;
+            param.fMaxFrameRate = 30.0;
+            param.iTemporalLayerNum = 1;
+            param.iSpatialLayerNum = 1;
+            param.iComplexityMode = ECOMPLEXITY_MODE::LOW_COMPLEXITY;
+            param.uiIntraPeriod = 0;
+            param.iNumRefFrame = AUTO_REF_PIC_COUNT;
+            param.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
+            param.iEntropyCodingModeFlag = 1;
+            param.bEnableFrameSkip = false;
+            param.iMaxQp = 51;
+            param.iMinQp = 0;
+            param.iMultipleThreadIdc = 1;
+            param.bEnableDenoise = false;
+            param.bEnableBackgroundDetection = false;
+            param.bEnableAdaptiveQuant = false;
+            param.bEnableSceneChangeDetect = false;
+            param.bEnableLongTermReference = false;
+            param.bEnableFrameCroppingFlag = true;
+            param.iLoopFilterDisableIdc = 0;
+            param.sSpatialLayers[0].uiProfileIdc = EProfileIdc::PRO_HIGH;
+            param.sSpatialLayers[0].uiLevelIdc = ELevelIdc::LEVEL_UNKNOWN;
+            param.sSpatialLayers[0].iVideoWidth = width;
+            param.sSpatialLayers[0].iVideoHeight = height;
+            param.sSpatialLayers[0].fFrameRate = 30.0;
+            param.sSpatialLayers[0].iSpatialBitrate = 500_000;
+            param.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+            param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+            param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+            assert_eq!(
+                ((*vtbl).InitializeExt)(p_encoder, &param as *const SEncParamExt),
+                CM_RESULT_SUCCESS
+            );
+
+            // The encoder's own answer for the geometry it is configured for, rather
+            // than the geometry we asked for: the grid assertion has to be the
+            // encoder's report or it asserts the test's own argument.
+            let mut effective = SEncParamExt::default();
+            assert_eq!(
+                ((*vtbl).GetOption)(
+                    p_encoder,
+                    ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                    &mut effective as *mut SEncParamExt as *mut std::ffi::c_void,
+                ),
+                CM_RESULT_SUCCESS
+            );
+
+            let luma = (width * height) as usize;
+            let mut buf = vec![0u8; luma * 3 / 2];
+            let mut out = Vec::with_capacity(frames);
+            for f in 0..frames {
+                moving_i420(width, height, f, &mut buf);
+                // One derivation for all three planes. Three `as_mut_ptr()` calls
+                // would each retag and pop the previous one, which is F13's class
+                // manufactured by the test — Phase 2 fixed four of exactly this.
+                let base = buf.as_mut_ptr();
+                let mut pic = SSourcePicture::default();
+                pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+                pic.iPicWidth = width;
+                pic.iPicHeight = height;
+                pic.iStride[0] = width;
+                pic.iStride[1] = width / 2;
+                pic.iStride[2] = width / 2;
+                pic.pData[0] = base;
+                pic.pData[1] = base.add(luma);
+                pic.pData[2] = base.add(luma + luma / 4);
+                pic.uiTimeStamp = (f as i64) * 1000 / 30;
+
+                let mut info = SFrameBSInfo::default();
+                assert_eq!(
+                    ((*vtbl).EncodeFrame)(p_encoder, &pic as *const SSourcePicture, &mut info),
+                    CM_RESULT_SUCCESS,
+                    "EncodeFrame failed at frame {f}"
+                );
+                let mut bytes = 0usize;
+                for l in 0..info.iLayerNum as usize {
+                    let lay = &info.sLayerInfo[l];
+                    if lay.pNalLengthInByte.is_null() {
+                        continue;
+                    }
+                    for n in 0..lay.iNalCount as usize {
+                        bytes += *lay.pNalLengthInByte.add(n) as usize;
+                    }
+                }
+                out.push(EncodedFrame { kind: info.eFrameType, bytes });
+            }
+
+            ((*vtbl).Uninitialize)(p_encoder);
+            WelsDestroySVCEncoder(p_encoder);
+            (out, (effective.iPicWidth, effective.iPicHeight))
+        }
+    }
 }

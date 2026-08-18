@@ -375,7 +375,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
     }
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
     let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
-    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     for i in 0..LONG_TERM_REF_NUM {
         let pPic = (*pRefList).pLongRefList[i as usize];
@@ -391,7 +391,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
                 DeleteLTRFromLongList(pCtx, i);
                 pLtr.bLTRMarkEnable = true;
                 if (*pRefList).uiLongRefCount == 0 {
-                    pParamInternal.bEncCurFrmAsIdrFlag = true;
+                    (*pParamInternal).bEncCurFrmAsIdrFlag = true;
                 }
             } else {
                 let cond2 = CompareFrameNum((*pPic).iMarkFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
@@ -406,7 +406,7 @@ pub unsafe fn DeleteInvalidLTR(pCtx: *mut sWelsEncCtx) {
                     DeleteLTRFromLongList(pCtx, i);
                     pLtr.bLTRMarkEnable = true;
                     if (*pRefList).uiLongRefCount == 0 {
-                        pParamInternal.bEncCurFrmAsIdrFlag = true;
+                        (*pParamInternal).bEncCurFrmAsIdrFlag = true;
                     }
                 }
             }
@@ -425,7 +425,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
         return;
     }
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
-    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
         for i in 0..((*pRefList).uiLongRefCount as i32) {
@@ -478,7 +478,7 @@ pub unsafe fn HandleLTRMarkFeedback(pCtx: *mut sWelsEncCtx) {
         pLtr.bLTRMarkEnable = true;
 
         if pLtr.iLTRMarkSuccessNum == 0 {
-            pParamInternal.bEncCurFrmAsIdrFlag = true;
+            (*pParamInternal).bEncCurFrmAsIdrFlag = true;
         }
     }
 }
@@ -503,7 +503,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
     let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
     let mut i = 0usize;
     let mut bMoveLtrFromShortToLong = false;
-    let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     if (*pCtx).eSliceType == EWelsSliceType::I_SLICE {
         i = 0;
@@ -521,7 +521,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
                 let pShort = (*pRefList).pShortRefList[idx];
                 if !pShort.is_null() {
                     if CompareFrameNum(
-                        pParamInternal.iFrameNum,
+                        (*pParamInternal).iFrameNum,
                         (*pShort).iFrameNum + iGoPFrameNumInterval,
                         iMaxFrameNumPlus1,
                     ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
@@ -539,7 +539,7 @@ pub unsafe fn LTRMarkProcess(pCtx: *mut sWelsEncCtx) {
         if !pShort.is_null() {
             (*pShort).bIsLongRef = true;
             (*pShort).iLongTermPicNum = pLtr.iCurLtrIdx;
-            (*pShort).iMarkFrameNum = pParamInternal.iFrameNum;
+            (*pShort).iMarkFrameNum = (*pParamInternal).iFrameNum;
         }
     }
 
@@ -659,14 +659,14 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
     }
 
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
-    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
     let kuiDid = (*pCtx).uiDependencyId;
     let keSliceType = (*pCtx).eSliceType;
 
     if !(*pCtx).pDecPic.is_null() {
         let pDecPic = (*pCtx).pDecPic;
-        if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId as i32 {
+        if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: the `pFuncList` null guard went with the table it guarded.
             // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
             // here unconditionally, so dropping it is the closer reading.
@@ -691,14 +691,14 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                         sum = sum.wrapping_add(x);
                     }
                 }
-                eprintln!("REC plane={} poc={} sum={}", pl, pParamD.iPOC, sum);
+                eprintln!("REC plane={} poc={} sum={}", pl, (*pParamD).iPOC, sum);
             }
         }
 
         (*pDecPic).uiTemporalId = kuiTid;
         (*pDecPic).uiSpatialId = kuiDid;
-        (*pDecPic).iFrameNum = pParamD.iFrameNum;
-        (*pDecPic).iFramePoc = pParamD.iPOC;
+        (*pDecPic).iFrameNum = (*pParamD).iFrameNum;
+        (*pDecPic).iFramePoc = (*pParamD).iPOC;
         (*pDecPic).uiRecieveConfirmed = RECIEVE_UNKOWN;
         (*pDecPic).bUsedAsRef = true;
 
@@ -735,7 +735,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
             }
             if (*pRefList).uiShortRefCount > 0 {
                 let p0 = (*pRefList).pShortRefList[0];
-                if !p0.is_null() && ((*p0).uiTemporalId > 0 || (*p0).iFrameNum != pParamD.iFrameNum) {
+                if !p0.is_null() && ((*p0).uiTemporalId > 0 || (*p0).iFrameNum != (*pParamD).iFrameNum) {
                     (*p0).SetUnref();
                     DeleteSTRFromShortList(pCtx, 0);
                 }
@@ -927,8 +927,8 @@ pub unsafe fn FilterLTRRecoveryRequest(
     }
     if !(*(*pCtx).pSvcParam).bEnableLongTermReference {
         for iDid in 0..((*(*pCtx).pSvcParam).iSpatialLayerNum as usize) {
-            let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iDid];
-            pParamInternal.bEncCurFrmAsIdrFlag = true;
+            let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iDid]);
+            (*pParamInternal).bEncCurFrmAsIdrFlag = true;
         }
     } else {
         let pRequest = pLTRRecoverRequest;
@@ -939,11 +939,11 @@ pub unsafe fn FilterLTRRecoveryRequest(
 
         let pLtr = &mut *(*pCtx).pLtr.add((iLayerId as usize) as usize);
         let iMaxFrameNumPlus1 = 1 << (*(*pCtx).pSps).uiLog2MaxFrameNum;
-        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize];
+        let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize]);
 
-        if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == pParamInternal.uiIdrPicId as u32 {
+        if (*pRequest).uiFeedbackType == LTR_RECOVERY_REQUEST && (*pRequest).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32 {
             if (*pRequest).iLastCorrectFrameNum == -1 {
-                pParamInternal.bEncCurFrmAsIdrFlag = true;
+                (*pParamInternal).bEncCurFrmAsIdrFlag = true;
                 return 1;
             } else if (*pRequest).iCurrentFrameNum == -1 {
                 pLtr.bReceivedT0LostFlag = true;
@@ -983,8 +983,8 @@ pub unsafe fn FilterLTRMarkingFeedback(
     }
     let pLtr = &mut *(*pCtx).pLtr.add((iLayerId as usize) as usize);
     if (*(*pCtx).pSvcParam).bEnableLongTermReference {
-        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize];
-        if (*pLTRMarkingFeedback).uiIDRPicId == pParamInternal.uiIdrPicId as u32
+        let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iLayerId as usize]);
+        if (*pLTRMarkingFeedback).uiIDRPicId == (*pParamInternal).uiIdrPicId as u32
             && ((*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_SUCCESS
                 || (*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_FAILED)
         {
@@ -1011,7 +1011,7 @@ pub unsafe fn WelsBuildRefList(
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
     let kiNumRef = (*(*pCtx).pSvcParam).iNumRefFrame;
     let kuiTid = (*pCtx).uiTemporalId;
-    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
 
     (*pCtx).iNumRef0 = 0;
     if (*pCtx).eSliceType != EWelsSliceType::I_SLICE {
@@ -1023,7 +1023,7 @@ pub unsafe fn WelsBuildRefList(
                     (*(*pCtx).pCurDqLayer).pRefOri[numRef0] = pLong;
                     (*pCtx).pRefList0[numRef0] = pLong;
                     (*pCtx).iNumRef0 += 1;
-                    pLtr.iLastRecoverFrameNum = pParamD.iFrameNum;
+                    pLtr.iLastRecoverFrameNum = (*pParamD).iFrameNum;
                     break;
                 }
             }
@@ -1232,12 +1232,12 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         return false;
     }
     let pLtr = &mut *(*pCtx).pLtr.add((uiDid) as usize);
-    let pParamD = &mut (*(*pCtx).pSvcParam).sDependencyLayers[uiDid];
+    let pParamD = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[uiDid]);
     let kuiTid = (*pCtx).uiTemporalId;
 
     if !(*pCtx).pDecPic.is_null() {
         let pDecPic = (*pCtx).pDecPic;
-        if pParamD.iHighestTemporalId == 0 || (kuiTid as i32) < pParamD.iHighestTemporalId as i32 {
+        if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
             // encoder's two identical expand sites.
             ExpandReferencingPicture(
@@ -1250,8 +1250,8 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
 
         (*pDecPic).uiTemporalId = (*pCtx).uiTemporalId;
         (*pDecPic).uiSpatialId = (*pCtx).uiDependencyId;
-        (*pDecPic).iFrameNum = pParamD.iFrameNum;
-        (*pDecPic).iFramePoc = pParamD.iPOC;
+        (*pDecPic).iFrameNum = (*pParamD).iFrameNum;
+        (*pDecPic).iFramePoc = (*pParamD).iPOC;
         (*pDecPic).bUsedAsRef = true;
         (*pDecPic).bIsLongRef = true;
         (*pDecPic).bIsSceneLTR = pLtr.bLTRMarkingFlag
