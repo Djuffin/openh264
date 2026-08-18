@@ -11,32 +11,50 @@ because the playbook is what turned the decoder from "16 modules, 439 `unsafe fn
 
 ## 0. What Phase 5 delivered, as the starting position
 
-| | at Phase 5's open | at its exit | after Phase 5b |
+| | at Phase 5's open | at its exit | **after Phase 5b** |
 |---|---|---|---|
-| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) | **219** (156 + 63) |
-| decoder `unsafe fn` | ~1400 | **42** | **30** |
-| decoder `#[allow(unsafe_code)]` items | — | 167 | **147** (143 + 4 prose) |
+| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) | **131** (67 code + 64 prose) |
+| decoder `unsafe fn` | ~1400 | **42** | **0** |
+| decoder `unsafe {` blocks | — | 160 | **6** |
+| decoder `#[allow(unsafe_code)]` items | — | 167 | **3** |
 | decoder modules with `#![deny(unsafe_code)]` | **0** | **22 of 22** | 22 of 22 |
 | corpus (output / codes) | 641 agree / 541 differ on truncation rows | **2707 / 0** | unmoved |
 
-**Phase 5b (2026-08-17, `7a4ad7b5`) closed two of the five enumerated families** —
-`PPicture`/F42 and `sMCRefMember` — and the *method* it closed F42 with is the one this
-phase should reach for at 6.1/6.2, because the encoder's picture pool meets the same
-shape in `MarkPicAsRef`: **a safe container can hand back the identity of the slot it
-lends out for free**, and a caller that already holds the borrow supplies the rest. The
-address was what the raw pointer was protecting, not the aliasing. `phase5_findings.md`
-§"CLOSED at Phase 5b" carries it. The parse tree, the api boundary and the zeroed
-shells stay Phase 8's, the first with a measured lead and the last with a measured
-*negative* — `SSps::default()`/`SPps::default()` are not all-zero, so "replace the
-shell with `Default`" is a wrong recipe, not an unexplored one.
+**Phase 5b (2026-08-17, sessions A/B/C, closed at `f5ba2395`) closed all five
+enumerated families**, and `src/decoder/` now carries **three** `#[allow(unsafe_code)]`
+items and no `unsafe fn` at all. Four of its results are this phase's to reuse:
+
+1. **F42's method, for 6.1/6.2.** The encoder's picture pool meets the same shape in
+   `MarkPicAsRef`: **a safe container can hand back the identity of the slot it lends
+   out for free**, and a caller that already holds the borrow supplies the rest. The
+   address was what the raw pointer was protecting, not the aliasing.
+2. **S34/F55, for every index this phase introduces.** An alias converted to an index
+   is faithful only while the container never reorders — grep the container for
+   `swap`, `rotate`, `retain`, `remove`, `sort`, `drain` before converting. It cost
+   session A a whole face and eleven conformance assets.
+3. **The zeroed shells' recipe, and its measured negative.** `SSps::default()`/
+   `SPps::default()` are *not* all-zero, so "replace the shell with `Default`" is a
+   wrong recipe; what works is a `memset_zero` beside the `Default`, each field's zero
+   *meaning* written out, and a temporary byte-comparison test against the shell it
+   replaces to prove the equivalence rather than argue it. `size_of` first: the
+   decoder context measured 573,576 bytes against a doc that said "several MiB".
+4. **F56 is open and it is this class's trap.** `Option<T>` over a type with a `bool`
+   or small-enum niche is **valid at all-zero and reads as `Some(default)`**, where a
+   raw pointer's zero was `None`. The encoder's structs will meet it the moment their
+   aliases become ids.
 
 The encoder is where the decoder was. Measured at Phase 5's exit:
 
 | directory | files | `raw_ptr` | `unsafe fn` | deny-clean |
 |---|---|---|---|---|
-| `src/encoder/` | 32 | **2535** | **671** | 0 |
-| `src/common/` | 11 | **239** | **74** | 0 |
-| `src/api/` | 3 | **226** | **48** | 0 (exempt until Phase 8) |
+| `src/encoder/` | 32 | **2534** | **671** | 0 |
+| `src/common/` | 11 | **237** | **72** | 0 |
+| `src/api/` | 3 | **240** | **48** | 0 (exempt until Phase 8) |
+
+*(Re-measured at Phase 5b's close. `common/` lost `DeblockingInit` and `InitMcFunc`,
+which took `*mut T` and a null test and now take `&mut T`; `api/` gained the three
+aliasing probes' vtable driver, which belongs there — see the log entry for T5b.6.
+S24 still applies: re-grep at every face open.)*
 
 Largest first: `wels_preprocess` 251/53, `svc_encode_slice` 251/64,
 `svc_mode_decision` 245/61, `encoder_ext` 217/40, `svc_base_layer_md` 177/27,

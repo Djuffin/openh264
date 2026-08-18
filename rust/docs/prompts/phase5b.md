@@ -1,11 +1,15 @@
-> **Session A ran this brief and closed at `e39cfaaf`** — two of five faces
-> landed (F42 retired by identity; the parse tree failed at 11/60 B-slice
-> assets and is preserved as a patch). The continuation is two sessions
-> (Eugene, 2026-08-17): **B** = the divergence alone, diagnosed and landed at
-> 60/60 ([`phase5b_session_b.md`](phase5b_session_b.md)); **C** = the shells,
-> the sweep, and the four-item close
-> ([`phase5b_session_c.md`](phase5b_session_c.md)). This file stays as the
-> charter and the record of what was asked.
+> **CLOSED at `f5ba2395`, 2026-08-17, over three sessions.** **A** landed two of
+> five faces (F42 retired by identity; the parse tree failed at 11/60 B-slice
+> assets and was preserved as a patch, `e39cfaaf`). **B** took the divergence
+> alone and landed the parse tree at 60/60 — F55/S34, `535feb05`. **C** took the
+> shells, the sweep and the close: `f5ba2395`, and the decoder ends at **three**
+> `#[allow(unsafe_code)]` items and **zero** `unsafe fn`, one better than the
+> four this brief asked for, because `data_ptr_ref`'s last consumer had gone with
+> `sMCRefMember` and S18 deletes it. One item is parked and named: **F56**, the
+> `Option<SpsRef>` niche artifact on `active_sps` and on every fresh NAL node — a
+> behaviour question, which the decision ladder never defaults.
+>
+> This file stays as the charter and the record of what was asked.
 
 # Phase 5b — the decoder goes safe, one session
 

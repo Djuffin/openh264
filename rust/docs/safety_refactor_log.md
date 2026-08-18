@@ -11106,3 +11106,116 @@ the successor's header, by name — and conformance returns to exactly **49/11**
 **Session C**, unchanged: the shells, the sweep, the four-item close
 (`phase5b_session_c.md`). Its four shell line numbers are refreshed to this tree.
 F55 needs no owner — it is fixed here.
+
+## Phase 5b session C — the decoder is safe, and the last family was the api boundary (2026-08-17)
+
+**Commits:** `5105cf44` (doc tail), `9fab5e03` (**T5b.4**), `1abc379a` (**T5b.5**),
+`328a66b0` (**T5b.6**), `f5ba2395` (**T5b.7**).
+**The done-test is met and beaten by one**: `#[allow(unsafe_code)]` in
+`src/decoder/` = **3**, `unsafe fn` = **0**, every `unsafe {` inside those three.
+
+**Metrics.** allow items **137 → 3**, `unsafe fn` **20 → 0**, `unsafe {` blocks
+**143 → 6**, decoder `raw_ptr` **204 → 131** (67 code + 64 prose). Crate: `unsafe_fn`
+874 → 830, `unsafe_block` 615 → 456, `raw_ptr` 3371 → 3277.
+
+### The 5b gate, run at the open, and it retired the shells
+
+`size_of::<SWelsDecoderContext>()` is **573,576 bytes**. The shell's own doc said
+"several MiB" and concluded a by-value constructor "is not an option at any point in
+the phase"; Phase 5's owned containers had spent that size. Both shells become
+field-wise constructors, and what they cost was never the `unsafe` — it was that
+**109 field values were unreadable**. Seven types turn out to carry a `Default` that
+is deliberately not their zero, and each now says so beside it: three parameter-set
+types (T5b.4 — the eleven-asset measurement T5b.3 recorded, carried by a type instead
+of a byte write), plus `SRefPic`, `SWelsDecoderSpsPpsCTX`, `SCopyFunc`,
+`SDeblockingFunc`.
+
+**The equivalence is measured, not argued** (S33). A temporary test rebuilt the old
+shell and byte-compared the two 573,576-byte images with every differing run
+attributed by `offset_of!`: **two bytes differ** — one padding byte inside
+`sPredList[0]`, and one niche byte in the prefix NAL's VCL arm, which nothing writes
+and nothing reads.
+
+### F56 — parked, and it is the ladder's third rung working
+
+That second byte is F54's artifact on two fields F54 did not reach: `Option<SpsRef>`
+keeps its niche in a `bool`, so all-zero reads back as `Some(SpsRef { id: 0 })` where
+the C memsets a null. `SWelsDecoderContext::active_sps` has 30+ readers and
+`AllocPicBuffOnNewSeqBegin`'s fallback scan is dead because of it; `MemGetNextNal`'s
+node reset is the same one byte, of 6,056. Both are **transcribed unchanged** — a
+behaviour question is never defaulted, and a refactor and a behaviour change do not
+share a commit. Two lines and a corpus run close it; the decision is not this
+session's.
+
+### The sweep, and the api boundary was the last family
+
+Strip-and-build over the whole decoder at once (Z's rule) left **169 load-bearing
+sites** against 143 blocks and 20 `unsafe fn` — so almost all of the keyword was
+vestigial, and what remained was four families, all converted rather than
+re-enumerated. The api-owned context fields go through `api_alias`/`api_alias_mut`,
+with each of the C++'s null tests as the `Option`. `ppDst`, `pDstInfo` and `kpBsBuf`
+become `&mut [*mut u8; 3]`, `&mut SBufferInfo` and `&[u8]` through the whole
+`WelsDecodeBs` thread, with `api/` doing the one raw-to-borrow conversion at the C
+ABI. `pPictInfoList` is retyped as the `[SPictInfo; 16]` whose address `api/` already
+stamps into it. The residue: I_PCM as three plane-row copies, and
+`DeblockingInit`/`InitMcFunc`/`WelsCPUFeatureDetect` taking `&mut T`.
+**F27's hazard is spent** — `ParseIntra4x4Mode`'s cursor is a borrow, because since
+W6 step 3 the CABAC arm reads the view's `rbsp` and its engine, not the NAL node's
+`BsCursor`.
+
+**Three, not four, and S18 is why.** `data_ptr_ref`'s last consumer went with
+`sMCRefMember` at T5b.2 and only its own test has called it since; the straggler
+sweep deletes both, with twenty dead pointer typedefs (29 declarations — six were
+declared twice). What remains is `api_alias`, `api_alias_mut` and `data_ptr`, whose
+one production use is the three `ppDst[i]` writes, with the Miri test S28 mandates.
+`drive_decoder_over` moved to `api/codec_api.rs`: it drives the vtable through a raw
+`*mut ISVCDecoder` on purpose (F23), so its unsafe is the ABI's, and the ratchet
+records the move (`api/codec_api.rs` raw_ptr 226 → 240) rather than hiding it.
+
+### Gates
+
+Per commit: both profiles + `--all-targets`, tests **479 / 473 / 20**, ratchet clean,
+census **59**, conformance **60/60** at every seam. Corpus refereed end to end against
+the C++ at **2690/17 output, 2707/0 codes** — unmoved, the 17 being `CABA2_SVA_B`'s
+recorded expected-divergent rows. The three decoder probes under Miri at T5b.6's
+tree: **3/3 in 1100.3s**.
+
+**The `exit` battery at `f5ba2395` reads `OVERALL: FAIL` — 12 passed / 1 failed / 1
+skipped — and the one failure is adjudicated.** Both benches bit-identical, Miri
+`--lib` **334/0** (session B's 336 minus the two tests deleted with their subjects)
+plus the differential targets **20 / 7 / 3**, debug sweep **341/341**. The release
+sweep read 340/341 at F3's signature, and **S14 ran to a verdict rather than to a
+citation**: step 0's hash shortcut was *taken and does not acquit* — this window is
+not decoder-only, so base and head build different `rust_enc` binaries
+(`8da0d911…` vs `91d1a21c…`, one clean release build each at one path) and
+measurement 64's release-elimination argument does not reach it. Step 1 did: the
+configuration re-ran **5/5 byte-identical**, and a single isolated release `mt`
+preset then failed at a **different** configuration — different clip, thread count
+and `iRCMode`, zero-length rather than short. A deterministic port bug repeats its
+bytes on its own configuration; this one does not repeat at all. **Acquitted as F3**,
+measurement 65 (sixty-five measurements, twenty alternations, thirty-eight
+acquittals).
+
+### The span — the 5b window, and the ledger's own row reads faster
+
+D-gate-1 puts sessions A, B and C in one span: `ac_head` (`5ebaf904`) → `f5ba2395`,
+against a null floor of **−0.21%** on decode. S2b's clause applied without being
+asked, because the first decode median landed outside it — at 5 and 7 pairs, CB
+**−0.42% / −0.87%**, Main **+1.06% / +0.88%**, High **+1.04% / +1.14%**, encode
+median −0.17% / +0.10%. The sign holds row by row across both counts, so what is
+readable is a ≈1% split *between* row classes, three times the floor. **Cumulative
+CB ≈ +23.2…+23.8%** carrying AC's higher exit reading, **≈ +22.6…+23.2%** carrying
+its lower — the second time the phase's cumulative figure has moved down, and the
+closest it has been to the ≈+23% stop-line since session N. The two CABAC B-frame
+rows are what moved, and `PicRefs::classify` on every B-slice resolution is named as
+a **candidate, not the explanation** (S33); no bisect was run, because D-perf-6
+already sends recovery to Phase 9 and no disposition rests on it.
+
+### Hand-off
+
+**None — Phase 5b is closed.** Next is **Phase 6**, `prompts/phase6.md`, whose
+starting position is re-measured here (`src/encoder/` 2534/671, `src/common/`
+237/72, `src/api/` 240/48) and whose §0 now carries the four 5b results it should
+reuse: F42's method for 6.1/6.2, S34 before any alias becomes an index, the shells'
+recipe with its measured negative, and **F56 as the trap that class carries**.
+One item is owed to Eugene or the steward and to nobody else: **F56's two lines.**
