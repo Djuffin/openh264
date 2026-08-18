@@ -813,7 +813,7 @@ pub unsafe fn WelsInitPps(
         if pSubsetSps.is_null() {
             return 1;
         }
-        pUsedSps = &mut (*pSubsetSps).pSps;
+        pUsedSps = std::ptr::addr_of_mut!((*pSubsetSps).pSps);
     }
 
     /* fill picture parameter set syntax */

@@ -252,7 +252,7 @@ impl CWelsBaseTask {
             return iReturn;
         }
         self.m_pSlice = pSlice;
-        self.m_pSliceBs = &mut (*self.m_pSlice).sSliceBs;
+        self.m_pSliceBs = std::ptr::addr_of_mut!((*self.m_pSlice).sSliceBs);
 
         iReturn = SetSliceBoundaryInfo((*pCtx).pCurDqLayer, self.m_pSlice, self.m_iSliceIdx);
         if iReturn != ENC_RETURN_SUCCESS {
@@ -411,7 +411,7 @@ impl CWelsBaseTask {
                 return iReturn;
             }
             self.m_pSlice = pSlice;
-            self.m_pSliceBs = &mut (*self.m_pSlice).sSliceBs;
+            self.m_pSliceBs = std::ptr::addr_of_mut!((*self.m_pSlice).sSliceBs);
             (*self.m_pSliceBs).sBsWrite = BsWriter::new();
 
             self.WritePrefixNal();

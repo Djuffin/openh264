@@ -1670,7 +1670,7 @@ impl CWelsPreProcess {
         calc_param.iCalcVar = bCalculateVar;
         calc_param.iCalcBgd = bCalculateBGD;
         calc_param.iCalcSsd = bCalculateSQDiff;
-        calc_param.pCalcResult = &mut (*pVaaInfo).sVaaCalcInfo;
+        calc_param.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
 
         let method = EMethods::METHOD_VAA_STATISTICS as i32;
         (*self.m_pInterfaceVp).Set(method, &mut calc_param as *mut _ as *mut c_void);
@@ -1726,7 +1726,7 @@ impl CWelsPreProcess {
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
             BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
-            BGDParam.pCalcRes = &mut (*pVaaInfo).sVaaCalcInfo;
+            BGDParam.pCalcRes = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
 
             let method = EMethods::METHOD_BACKGROUND_DETECTION as i32;
             (*self.m_pInterfaceVp).Set(method, &mut BGDParam as *mut _ as *mut c_void);
@@ -1751,7 +1751,7 @@ impl CWelsPreProcess {
         if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() || self.m_pInterfaceVp.is_null() {
             return;
         }
-        (*pVaaInfo).sAdaptiveQuantParam.pCalcResult = &mut (*pVaaInfo).sVaaCalcInfo;
+        (*pVaaInfo).sAdaptiveQuantParam.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
         (*pVaaInfo).sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp = 0;
 
         let method = EMethods::METHOD_ADAPTIVE_QUANT as i32;
@@ -2549,7 +2549,7 @@ impl CWelsPreProcess {
             };
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
-            sComplexityAnalysisParam.pCalcResult = &mut (*pVaaInfo).sVaaCalcInfo;
+            sComplexityAnalysisParam.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
             sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
             if !pRefPicture.is_null() {
                 self.SetRefMbType(
