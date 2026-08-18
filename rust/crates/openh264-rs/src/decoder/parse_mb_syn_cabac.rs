@@ -40,8 +40,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
@@ -1679,8 +1678,7 @@ pub fn ParseMvdInfoCabac(
 /// so the two share a tag, and a `&mut` on the picture held across a reference read
 /// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
 /// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn ParseInterPMotionInfoCabac(
+pub fn ParseInterPMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: &mut SPicture,
@@ -2025,8 +2023,7 @@ pub unsafe fn ParseInterPMotionInfoCabac(
 /// so the two share a tag, and a `&mut` on the picture held across a reference read
 /// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
 /// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn ParseInterBMotionInfoCabac(
+pub fn ParseInterBMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: &mut SPicture,

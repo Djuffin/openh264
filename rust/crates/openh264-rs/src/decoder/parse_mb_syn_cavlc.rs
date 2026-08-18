@@ -40,8 +40,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
@@ -1076,8 +1075,7 @@ pub fn WelsFillCacheInter(
 /// so the two share a tag, and a `&mut` on the picture held across a reference read
 /// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
 /// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn ParseInterInfo(
+pub fn ParseInterInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: &mut SPicture,
@@ -1446,8 +1444,7 @@ pub unsafe fn ParseInterInfo(
 /// so the two share a tag, and a `&mut` on the picture held across a reference read
 /// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
 /// revisits (retire the F42 arm, or give the planes interior mutability).
-#[allow(unsafe_code)]
-pub unsafe fn ParseInterBInfo(
+pub fn ParseInterBInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
     pDec: &mut SPicture,
@@ -2541,7 +2538,7 @@ pub fn ParseCoeffToken(
     bChromaDc: bool,
     nC: i8,
 ) -> i32 {
-    { CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC) }
+    CavlcGetTrailingOnesAndTotalCoeff(uiTotalCoeff, uiTrailingOnes, pBitsCache, pVlcTable, bChromaDc, nC)
 }
 
 pub fn CavlcGetLevelVal(
@@ -2649,7 +2646,7 @@ pub fn ParseTotalZeros(
     pVlcTable: &SVlcTable,
     bChromaDc: bool,
 ) -> i32 {
-    { CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc) }
+    CavlcGetTotalZeros(iZerosLeft, pBitsCache, uiTotalCoeff, pVlcTable, bChromaDc)
 }
 
 pub fn CavlcGetRunBefore(
@@ -2713,7 +2710,7 @@ pub fn ParseRunBefore(
     pVlcTable: &SVlcTable,
     iZerosLeft: i32,
 ) -> i32 {
-    { CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft) }
+    CavlcGetRunBefore(iRun, pBitsCache, uiTotalCoeff, pVlcTable, iZerosLeft)
 }
 
 pub fn WelsResidualBlockCavlc(

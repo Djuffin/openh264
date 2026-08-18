@@ -4,49 +4,14 @@
     non_upper_case_globals,
     dead_code,
     unused_variables,
-    unused_unsafe,
     unused_mut
 )]
 
 #![deny(unsafe_code)]
-// **Phase 5, T5.AC11 — the lint, with every survivor enumerated at its item.**
-// Each `#[allow(unsafe_code)]` below carries a family tag, and the four families
-// are these, with the argument and the Phase pointer written once:
-//
-//   * **`PPicture survivor (F42)`** — `pDec` and `pRefs` come out of one
-//     `PicPool::cur_and_rest`, and `PicRefs::get` answers the current slot from
-//     `pDec`'s own pointer, because a malformed stream can legally put the picture
-//     being decoded into a reference list and the C++ resolves it and reads on.
-//     Sharing a tag is what makes that sound; as a borrow, every function-entry
-//     retag on the picture pops `cur_ptr`. Ruled the phase's second enumerated
-//     survivor by the steward at `6b6dd9a3`. **Phase 8's**, with the option-1/2
-//     revisit (retire the F42 arm, or give the planes interior mutability).
-//
-//   * **`parse tree`** — `PNalUnit` / `PSliceHeader` / `PSliceHeaderExt` and the
-//     `sNalData` **union** whose VCL arm only the NAL type licenses. The access
-//     unit's slots are raw by a Miri verdict rather than by omission
-//     (`TagAccessUnits::nal_units`' note): a container that lends `&mut` to a node
-//     invalidates the live aliases into it. Reading a node is safe
-//     (`SAccessUnit::node`, T5.AC5); writing one is **Phase 8's**, when the slots
-//     can own the way `PicPool`'s did at T5.Q1.
-//
-//   * **`api boundary`** — `ppDst`, `pDstInfo`, `kpBsBuf`, the picture-info and
-//     reordering-status arrays: the decoder's own entry and exit points, whose
-//     types are `api/`'s. **Phase 8's**, with F23/F41 and the `api/` inventory.
-//
-//   * **`sMCRefMember`** — the C++'s MC descriptor, six raw plane cursors,
-//     `#[repr(C)]`, shared with `error_concealment.rs`. A vocabulary change across
-//     both consumers, scoped out by `phase5_session_ac.md` §2. **Phase 8's**.
-//
-//   * **`decoder-internal raw cursor`** — the residue: `BsCursor` derivations off a
-//     NAL's own storage, `data_ptr`-based plane walks in the reconstruction and
-//     I_PCM paths, and the two zeroed-shell constructors. Each is a *use* of one of
-//     the four families above rather than a fifth family, and each retires with the
-//     family it reaches — which is why they are tagged rather than argued
-//     separately.
-//
-// A tag ending `the family's own test` marks a test that drives one of these
-// deliberately; those retire with their subject.
+// **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
+// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
+// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
+// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
 
 use crate::decoder::decoder_context::{
     PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
@@ -262,10 +227,8 @@ pub fn IS_SUB_4x8(sub_type: u32) -> bool {
 }
 
 #[inline(always)]
-#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn IS_SUB_4x4(sub_type: u32) -> bool {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         (sub_type & SUB_MB_TYPE_4x4) != 0
     }
 }
@@ -2381,10 +2344,8 @@ pub fn WelsTargetMbConstruction(
     }
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let dq: &mut DqLayerState = pCurDqLayer;
 
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
@@ -2536,23 +2497,18 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 /// re-deriving `&mut *slice_bit_reader(pCtx)` below callers that already hold the
 /// split, which removes their strongly-protected `&mut` argument. The all-I_PCM
 /// FMO asset is what reached it: no probe before T5.S2 decoded a PCM macroblock.
-#[allow(unsafe_code)] // decoder-internal raw cursor
 fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iMbX = (*dq).iMbX;
         let iMbY = (*dq).iMbY;
         let iMbXy = (*dq).iMbXyIndex as usize;
 
-        let iDecStrideL = pDec.linesize(0);
-        let iDecStrideC = pDec.linesize(1);
-
-        let iOffsetL = ((iMbX + iMbY * iDecStrideL) << 4) as isize;
-        let iOffsetC = ((iMbX + iMbY * iDecStrideC) << 3) as isize;
-
-        let mut pDecY = pDec.data_ptr(0).offset(iOffsetL);
-        let mut pDecU = pDec.data_ptr(1).offset(iOffsetC);
-        let mut pDecV = pDec.data_ptr(2).offset(iOffsetC);
+        // T5b.6: the macroblock's top-left in plane coordinates. The C++ computes
+        // `(iMbX + iMbY * stride) << 4` — one linear offset off `pData[i]` — and the
+        // two halves of it are exactly `x = iMbX * 16` and `y = iMbY * 16`, which is
+        // what a padded plane is addressed by.
+        let (iPcmX, iPcmY) = ((iMbX as isize) << 4, (iMbY as isize) << 4);
+        let (iPcmXC, iPcmYC) = ((iMbX as isize) << 3, (iMbY as isize) << 3);
 
         let iIndex = ((-pBs.left_bits()) >> 3) + 2;
 
@@ -2566,24 +2522,33 @@ fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq:
         let iPcmStart = (pBs.pos() as isize - iIndex as isize) as usize;
         pBs.set_pos(iPcmStart);
 
-        // step 2: copy pixels from the bit-stream into the decoded picture
-        let mut pTmpBsBuf = buf[iPcmStart..].as_ptr();
+        // step 2: copy pixels from the bit-stream into the decoded picture.
+        //
+        // **The 384 bytes are taken as one window.** The C++ walks a pointer off
+        // `pCurBuf - iIndex` and reads 384 bytes with no test at all, so a PCM
+        // macroblock announced within `iIndex` of the end of the RBSP reads past the
+        // allocation. Here the window either exists or the copy does not run — and
+        // the error the C++ eventually reports is unchanged either way, because
+        // `InitReadBits` below is handed `iPcmStart + 384` and fails on exactly that
+        // arithmetic.
         let bParseOnly = pCtx.bParseOnly;
         if !bParseOnly {
-            for _ in 0..16 {
-                std::ptr::copy_nonoverlapping(pTmpBsBuf, pDecY, 16);
-                pDecY = pDecY.offset(iDecStrideL as isize);
-                pTmpBsBuf = pTmpBsBuf.add(16);
-            }
-            for _ in 0..8 {
-                std::ptr::copy_nonoverlapping(pTmpBsBuf, pDecU, 8);
-                pDecU = pDecU.offset(iDecStrideC as isize);
-                pTmpBsBuf = pTmpBsBuf.add(8);
-            }
-            for _ in 0..8 {
-                std::ptr::copy_nonoverlapping(pTmpBsBuf, pDecV, 8);
-                pDecV = pDecV.offset(iDecStrideC as isize);
-                pTmpBsBuf = pTmpBsBuf.add(8);
+            if let Some(pcm) = buf.get(iPcmStart..iPcmStart + 384) {
+                for r in 0..16 {
+                    pDec.plane_mut(0)
+                        .row_mut(iPcmY + r as isize, iPcmX, 16)
+                        .copy_from_slice(&pcm[r * 16..][..16]);
+                }
+                for r in 0..8 {
+                    pDec.plane_mut(1)
+                        .row_mut(iPcmYC + r as isize, iPcmXC, 8)
+                        .copy_from_slice(&pcm[256 + r * 8..][..8]);
+                }
+                for r in 0..8 {
+                    pDec.plane_mut(2)
+                        .row_mut(iPcmYC + r as isize, iPcmXC, 8)
+                        .copy_from_slice(&pcm[320 + r * 8..][..8]);
+                }
             }
         }
 
@@ -2604,10 +2569,8 @@ fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq:
 }
 
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
         // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
@@ -2653,7 +2616,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         }
 
         if 25 == uiMbType {
-            return unsafe { DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec) };
+            return DecodeMbCavlcPcm(pCtx, buf, pBs, dq, &mut *pDec);
         } else if 0 == uiMbType {
             let mut pIntraPredMode = [0i8; 48];
             *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
@@ -2675,9 +2638,9 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 dq,
             );
             let ret = if !*(*dq).grid.transform_size8x8_flag.get(iMbXy) {
-                unsafe { ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq) }
+                ParseIntra4x4Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             } else {
-                unsafe { ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq) }
+                ParseIntra8x8Mode(pCtx, &mut *pDec, &mut sNeighAvail, &mut pIntraPredMode, buf, pBs, dq)
             };
             if ret != ERR_NONE {
                 return ret;
@@ -2719,7 +2682,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 &mut pNonZeroCount,
                 Some(&*dq),
             );
-            let ret = unsafe { ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq) };
+            let ret = { ParseIntra16x16Mode(pCtx, &mut *pDec, &mut sNeighAvail, buf, pBs, dq) };
             if ret != ERR_NONE {
                 return ret;
             }
@@ -2768,7 +2731,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
 
             pBs.start_cavlc();
 
-            let ret = unsafe { WelsDecodeMbCavlcResidual(
+            let ret = { WelsDecodeMbCavlcResidual(
                 pCtx,
                 buf,
                 pBs,
@@ -3039,7 +3002,6 @@ fn WelsDecodeMbCavlcResidual(
 
     ERR_NONE
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCavlcISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -3048,8 +3010,7 @@ pub fn WelsDecodeMbCavlcISlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
         let mut uiCode = 0u32;
         let iBaseModeFlag;
@@ -3082,10 +3043,8 @@ pub fn WelsDecodeMbCavlcISlice(
 }
 
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
         // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
@@ -3342,7 +3301,6 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCavlcPSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -3351,8 +3309,7 @@ pub fn WelsDecodeMbCavlcPSlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
         let iMbXy = (*dq).iMbXyIndex as usize;
         let mut uiCode = 0u32;
@@ -3427,10 +3384,8 @@ pub fn WelsDecodeMbCavlcPSlice(
 /// Identical to [`WelsActualDecodeMbCavlcPSlice`] apart from the inter/intra
 /// `mb_type` split (23 instead of 5), the mb-type table and the motion parser,
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // T5.W4: the table is read-only — no `SVlcTable` field is written outside
         // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
@@ -3689,7 +3644,6 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
 }
 
 /// Matches `WelsDecodeMbCavlcBSlice` in `decode_slice.cpp`.
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCavlcBSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -3698,8 +3652,7 @@ pub fn WelsDecodeMbCavlcBSlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
         // Resolved to the one flag either is read for. **F42 lets a list entry name
         // `pDec`**, so the shared borrow the resolution needs must not outlive the
@@ -3842,18 +3795,19 @@ pub fn WelsDecodeMbCavlcBSlice(
     }
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
-pub unsafe fn ParseIntra4x4Mode(
+pub fn ParseIntra4x4Mode(
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
-    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
-    // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
-    // — S29's spelling, S25's rule that no borrow outlives one expression.
-    pBsAux: *mut BsCursor,
+    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
+    // hazard was that the CABAC arm re-reached *this* cursor through the context;
+    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
+    // derived once at the bracket top — and the arithmetic engine beside it, so the
+    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
+    // different allocations, and the aliasing probes are the instrument that says so.
+    pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
     let dq: &mut DqLayerState = pCurDqLayer;
@@ -3934,14 +3888,14 @@ pub unsafe fn ParseIntra4x4Mode(
         iSampleAvail[g_kCache30ScanIdx[i as usize] as usize] = 1;
     }
 
-    let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy).as_mut_ptr();
-    *dst_modes.add(0) = pIntraPredMode[1 + 8 * 4];
-    *dst_modes.add(1) = pIntraPredMode[2 + 8 * 4];
-    *dst_modes.add(2) = pIntraPredMode[3 + 8 * 4];
-    *dst_modes.add(3) = pIntraPredMode[4 + 8 * 4];
-    *dst_modes.add(4) = pIntraPredMode[4 + 8 * 1];
-    *dst_modes.add(5) = pIntraPredMode[4 + 8 * 2];
-    *dst_modes.add(6) = pIntraPredMode[4 + 8 * 3];
+    let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy);
+    dst_modes[0] = pIntraPredMode[1 + 8 * 4];
+    dst_modes[1] = pIntraPredMode[2 + 8 * 4];
+    dst_modes[2] = pIntraPredMode[3 + 8 * 4];
+    dst_modes[3] = pIntraPredMode[4 + 8 * 4];
+    dst_modes[4] = pIntraPredMode[4 + 8 * 1];
+    dst_modes[5] = pIntraPredMode[4 + 8 * 2];
+    dst_modes[6] = pIntraPredMode[4 + 8 * 3];
 
     if pCtx.uiChromaFormatIdc() == 0 {
         return ERR_NONE;
@@ -3988,18 +3942,19 @@ pub unsafe fn ParseIntra4x4Mode(
     ERR_NONE
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
-pub unsafe fn ParseIntra8x8Mode(
+pub fn ParseIntra8x8Mode(
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
-    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
-    // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
-    // — S29's spelling, S25's rule that no borrow outlives one expression.
-    pBsAux: *mut BsCursor,
+    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
+    // hazard was that the CABAC arm re-reached *this* cursor through the context;
+    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
+    // derived once at the bracket top — and the arithmetic engine beside it, so the
+    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
+    // different allocations, and the aliasing probes are the instrument that says so.
+    pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
     let dq: &mut DqLayerState = pCurDqLayer;
@@ -4088,14 +4043,14 @@ pub unsafe fn ParseIntra8x8Mode(
     // `ST32 (&pIntraPredMode[iMbXy][0], LD32 (&pIntraPredMode[1 + 8 * 4]))` copies
     // four modes, not one; entries 1..3 feed the left-neighbour cache of the next
     // macroblock (WelsFillCacheConstrain0IntraNxN reads [3]).
-    let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy).as_mut_ptr();
-    *dst_modes.add(0) = pIntraPredMode[1 + 8 * 4];
-    *dst_modes.add(1) = pIntraPredMode[2 + 8 * 4];
-    *dst_modes.add(2) = pIntraPredMode[3 + 8 * 4];
-    *dst_modes.add(3) = pIntraPredMode[4 + 8 * 4];
-    *dst_modes.add(4) = pIntraPredMode[4 + 8 * 1];
-    *dst_modes.add(5) = pIntraPredMode[4 + 8 * 2];
-    *dst_modes.add(6) = pIntraPredMode[4 + 8 * 3];
+    let dst_modes = (*dq).grid.intra_pred_mode.get_mut(iMbXy);
+    dst_modes[0] = pIntraPredMode[1 + 8 * 4];
+    dst_modes[1] = pIntraPredMode[2 + 8 * 4];
+    dst_modes[2] = pIntraPredMode[3 + 8 * 4];
+    dst_modes[3] = pIntraPredMode[4 + 8 * 4];
+    dst_modes[4] = pIntraPredMode[4 + 8 * 1];
+    dst_modes[5] = pIntraPredMode[4 + 8 * 2];
+    dst_modes[6] = pIntraPredMode[4 + 8 * 3];
 
     if pCtx.uiChromaFormatIdc() == 0 {
         return ERR_NONE;
@@ -4142,17 +4097,18 @@ pub unsafe fn ParseIntra8x8Mode(
     ERR_NONE
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
-pub unsafe fn ParseIntra16x16Mode(
+pub fn ParseIntra16x16Mode(
     pCtx: &mut SliceCtx<'_>,
     pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     buf: &[u8],
-    // `*mut`, not `&mut`: a borrow here is *strongly protected* for the call's
-    // whole duration, and the CABAC arm below re-reaches this very cursor through
-    // `decoder_context::slice_bit_reader` (F27). Raw in, `&mut` re-derived per use
-    // — S29's spelling, S25's rule that no borrow outlives one expression.
-    pBsAux: *mut BsCursor,
+    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
+    // hazard was that the CABAC arm re-reached *this* cursor through the context;
+    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
+    // derived once at the bracket top — and the arithmetic engine beside it, so the
+    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
+    // different allocations, and the aliasing probes are the instrument that says so.
+    pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
     let dq: &mut DqLayerState = pCurDqLayer;
@@ -4219,7 +4175,6 @@ pub unsafe fn ParseIntra16x16Mode(
     ERR_NONE
 }
 
-#[allow(unsafe_code)] // PPicture survivor (F42)
 fn WelsDecodeMbCabacIntraModeHelper(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
@@ -4230,8 +4185,7 @@ fn WelsDecodeMbCabacIntraModeHelper(
     pIntraPredMode: &mut [i8; 48],
     uiMbType: u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
         // function then passes down as a strongly protected argument — while the CABAC
         // engine underneath reaches the *same* `BsReader` whole through
@@ -4241,7 +4195,7 @@ fn WelsDecodeMbCabacIntraModeHelper(
         // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
         let pBsRd: &mut BsReader = &mut pNalCur.sNalData.sVclNal.sSliceBitsRead;
         let buf = pCtx.sRawData.window_from((*pBsRd).start);
-        let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
+        let pBsAux: &mut BsCursor = &mut pBsRd.cursor;
         let iMbXy = (*dq).iMbXyIndex as usize;
 
         if uiMbType == 0 {
@@ -4297,7 +4251,6 @@ fn WelsDecodeMbCabacIntraModeHelper(
     }
 }
 
-#[allow(unsafe_code)] // PPicture survivor (F42)
 fn WelsDecodeMbCabacResidualHelper(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
@@ -4308,8 +4261,7 @@ fn WelsDecodeMbCabacResidualHelper(
     iScanIdxStart: usize,
     iScanIdxEnd: usize,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
         // function then passes down as a strongly protected argument — while the CABAC
         // engine underneath reaches the *same* `BsReader` whole through
@@ -4319,7 +4271,7 @@ fn WelsDecodeMbCabacResidualHelper(
         // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
         let pBsRd: &mut BsReader = &mut pNalCur.sNalData.sVclNal.sSliceBitsRead;
         let buf = pCtx.sRawData.window_from((*pBsRd).start);
-        let pBsAux: *mut BsCursor = std::ptr::addr_of_mut!((*pBsRd).cursor);
+        let pBsAux: &mut BsCursor = &mut pBsRd.cursor;
         let pps_sh_chroma_qp_offset = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
         let pps_sh_entropy = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
         let pps_sh_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
@@ -4691,7 +4643,6 @@ fn WelsDecodeMbCabacResidualHelper(
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacISliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
@@ -4700,8 +4651,7 @@ pub fn WelsDecodeMbCabacISliceBaseMode0(
     pRefs: PicRefs<'_>,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
         let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
         let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4805,7 +4755,6 @@ pub fn WelsDecodeMbCabacISliceBaseMode0(
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -4814,9 +4763,8 @@ pub fn WelsDecodeMbCabacISlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
-        let ret = unsafe { WelsDecodeMbCabacISliceBaseMode0(pCtx,
+    {
+        let ret = { WelsDecodeMbCabacISliceBaseMode0(pCtx,
             pNalCur, dq, pDec, pRefs, uiEosFlag) };
         if ret != ERR_NONE {
             return ret;
@@ -4824,7 +4772,6 @@ pub fn WelsDecodeMbCabacISlice(
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacPSliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
@@ -4834,8 +4781,7 @@ pub fn WelsDecodeMbCabacPSliceBaseMode0(
     pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
         let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
         let iMbXy = (*dq).iMbXyIndex as usize;
@@ -4961,7 +4907,6 @@ pub fn WelsDecodeMbCabacPSliceBaseMode0(
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacPSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -4970,8 +4915,7 @@ pub fn WelsDecodeMbCabacPSlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iMbXy = (*dq).iMbXyIndex as usize;
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut uiCode = 0u32;
@@ -5047,7 +4991,6 @@ pub fn WelsDecodeMbCabacPSlice(
             pNalCur, dq, pDec, pRefs, &mut sNeighAvail, uiEosFlag)
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacBSliceBaseMode0(
     pCtx: &mut SliceCtx<'_>,
     pNalCur: &mut SNalUnit,
@@ -5057,8 +5000,7 @@ pub fn WelsDecodeMbCabacBSliceBaseMode0(
     pNeighAvail: &mut SWelsNeighAvail,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
         let iScanIdxEnd = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxEnd as usize;
         let iMbXy = (*dq).iMbXyIndex as usize;
@@ -5191,7 +5133,6 @@ pub fn WelsDecodeMbCabacBSliceBaseMode0(
         ERR_NONE
     }
 }
-#[allow(unsafe_code)] // PPicture survivor (F42)
 pub fn WelsDecodeMbCabacBSlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
@@ -5200,8 +5141,7 @@ pub fn WelsDecodeMbCabacBSlice(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         let iMbXy = (*dq).iMbXyIndex as usize;
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut uiCode = 0u32;
@@ -5316,8 +5256,7 @@ pub fn WelsDecodeMbCabacBSlice(
 // Top-Level Slice Decoding Orchestrators
 // ============================================================================
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
-pub unsafe fn WelsDecodeSlice(
+pub fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
     bFirstSliceInLayer: bool,
@@ -5394,9 +5333,14 @@ pub unsafe fn WelsDecodeSlice(
         }) {
             Some(nal) => {
                 let reader = &mut nal.sNalData.sVclNal.sSliceBitsRead;
-                let engine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
-                let raw = std::ptr::addr_of!((*pCtx).sRawData);
-                crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(&mut *engine, reader, &*raw)
+                // Three disjoint fields, split at the context rather than derived
+                // through it: the node comes out of `access_unit`, and the engine and
+                // the raw buffer are named beside it.
+                crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
+                    &mut pCtx.sCabacDecEngine,
+                    reader,
+                    &pCtx.sRawData,
+                )
             }
             None => return ERR_NONE,
         };
@@ -5471,10 +5415,8 @@ pub unsafe fn WelsDecodeSlice(
     ERR_NONE
 }
 
-#[allow(unsafe_code)] // decoder-internal raw cursor
 pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    {
         // T5b.3: `pCtx->pNalCur` is an index now, and `slice_split` resolves it in the
         // same statement it splits the context — which is what lets the node's bit
         // reader travel beside the view. The `None` arm is the C's null `pNalCur`; F36
@@ -5608,11 +5550,9 @@ mod tests {
     // null-*layer* arm, which `decoder_core`'s three forwarding shims still own.
 
     #[test]
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_wels_target_slice_construction_null_layer() {
-        #[allow(unsafe_code)] // the family's own test drives its raw items
-        unsafe {
-            unsafe {
+        {
+            {
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 // The missing-layer arm, at the boundary it moved to (T5.X3, T5.AA1):
                 // `decoder_core`'s three forwarding shims are where a layer may still be
@@ -5635,11 +5575,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn test_wels_calc_deq_coeff_scaling_list() {
-        #[allow(unsafe_code)] // the family's own test drives its raw items
-        unsafe {
-            unsafe {
+        {
+            {
                 // T5.R6: the active parameter sets are ids into the context's own
                 // buffers, so the fixture fills the buffers rather than pointing the
                 // context at two stack locals — which is the aliasing the ids remove.
@@ -5736,10 +5674,8 @@ mod tests {
     /// silently came out 16x16 would still pass "a frame came out" while covering
     /// nothing this test exists for, which is exactly how F34 survived.
     #[test]
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
-        #[allow(unsafe_code)] // the family's own test drives its raw items
-        unsafe {
+        {
             const GRID_48X32: &[u8] = include_bytes!("../../../../../res/grid_48x32.264");
             let (frames, dims, states) = drive_decoder_over(GRID_48X32);
             assert!(
@@ -5756,127 +5692,12 @@ mod tests {
         }
     }
 
-    /// Decodes `stream` through the C ABI and returns `(frames out, last frame's
-    /// dimensions)`.
-    ///
-    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
-    /// convenience methods, and that is deliberate — see F23.** The first draft
-    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
-    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
-    /// over a struct that is **one pointer wide**, and the thunk immediately casts
-    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
-    /// eight bytes the borrow covers. That is a real defect on the public API path
-    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
-    /// spelling the call the way a C caller does keeps these tests measuring the
-    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
-    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
-    /// whole implementation object, so the raw-pointer spelling is sound.
-    /// Returns `(frames, dims, states)`, where `states` is the bitwise OR of every
-    /// `DecodeFrame2` return. The third element exists for T5.S1's probes: a
-    /// concealment path that does not run looks exactly like one that runs and
-    /// changes nothing, and `dsDataErrorConcealed` in the OR is the difference.
-    #[allow(unsafe_code)] // decoder-internal raw cursor
-    fn drive_decoder_over(stream: &[u8]) -> (usize, Option<(i32, i32)>, i32) {
-        // SAFETY: the family named at the item above.
-        unsafe {
-            use crate::api::codec_api::*;
-
-            unsafe {
-                let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
-                assert_eq!(
-                    i64::from(WelsCreateDecoder(&mut p_decoder)),
-                    CM_RESULT_SUCCESS as i64
-                );
-                assert!(!p_decoder.is_null());
-                let vtbl = (*p_decoder).lpVtbl;
-
-                let mut dec_param = SDecodingParam::default();
-                dec_param.uiTargetDqLayer = u8::MAX;
-                dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
-                dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
-                assert_eq!(
-                    i64::from(((*vtbl).Initialize)(p_decoder, &dec_param as *const SDecodingParam)),
-                    CM_RESULT_SUCCESS as i64
-                );
-
-                let mut frames = 0;
-                let mut dims = None;
-                let mut states = 0i32;
-                for unit in crate::split_annexb_units(stream) {
-                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
-                    let mut buf_info = SBufferInfo::default();
-                    let ret = ((*vtbl).DecodeFrame2)(
-                        p_decoder,
-                        unit.as_ptr(),
-                        unit.len() as i32,
-                        p_dst.as_mut_ptr(),
-                        &mut buf_info,
-                    );
-                    states |= ret.0;
-                    if buf_info.iBufferStatus == 1 {
-                        frames += 1;
-                        let sys = buf_info.UsrData.sSystemBuffer;
-                        dims = Some((sys.iWidth, sys.iHeight));
-                    }
-                }
-
-                // End of stream, then the zero-length call that flushes it — the same
-                // tail `decoder_conformance_test.rs` and `malformed_stream_parity.rs`
-                // use. T5.S1 added it: without it this helper never drove the flush
-                // path at all, and a stream whose only frame arrives there (the FMO
-                // asset, any truncated stream) looked to it like a stream that decodes
-                // nothing. It cannot cost the two probes above a verdict — they assert
-                // `frames > 0` and the dimensions, and a flush only ever adds frames.
-                let mut eos_flag = 1i32;
-                ((*vtbl).SetOption)(
-                    p_decoder,
-                    DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
-                    &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
-                );
-                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
-                let mut buf_info = SBufferInfo::default();
-                let ret = ((*vtbl).DecodeFrame2)(
-                    p_decoder,
-                    std::ptr::null(),
-                    0,
-                    p_dst.as_mut_ptr(),
-                    &mut buf_info,
-                );
-                states |= ret.0;
-                if buf_info.iBufferStatus == 1 {
-                    frames += 1;
-                    let sys = buf_info.UsrData.sSystemBuffer;
-                    dims = Some((sys.iWidth, sys.iHeight));
-                }
-
-                // …and the drain the flush announces. Leaving it out cost a frame on
-                // every stream whose last picture is still buffered at EOS, which read
-                // as the port being one frame short of the C++ until the helper was
-                // compared against `rust/tools/ecref` rather than against itself.
-                let mut remaining = 0i32;
-                ((*vtbl).GetOption)(
-                    p_decoder,
-                    DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
-                    &mut remaining as *mut i32 as *mut std::ffi::c_void,
-                );
-                for _ in 0..remaining.clamp(0, 24) {
-                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
-                    let mut buf_info = SBufferInfo::default();
-                    let ret = ((*vtbl).FlushFrame)(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
-                    states |= ret.0;
-                    if buf_info.iBufferStatus == 1 {
-                        frames += 1;
-                        let sys = buf_info.UsrData.sSystemBuffer;
-                        dims = Some((sys.iWidth, sys.iHeight));
-                    }
-                }
-
-                ((*vtbl).Uninitialize)(p_decoder);
-                WelsDestroyDecoder(p_decoder);
-                (frames, dims, states)
-            }
-        }
-    }
+    // **T5b.6: `drive_decoder_over` moved to `api/codec_api.rs`.** It drives the
+    // vtable thunks through a raw `*mut ISVCDecoder` rather than through the
+    // `&mut self` convenience methods, deliberately and for F23's reason — which
+    // makes its `unsafe` the C ABI's, not this module's. The three probes below are
+    // unchanged and call it by path.
+    use crate::api::codec_api::abi_test_driver::drive_decoder_over;
 
     /// **The error-concealment probe** — Phase 5 session S, F43/F44/F45.
     ///
@@ -5908,10 +5729,8 @@ mod tests {
     /// in every syntactic dimension, so the geometry check moves here rather than
     /// disappearing with it.
     #[test]
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn error_concealment_runs_under_the_aliasing_checker() {
-        #[allow(unsafe_code)] // the family's own test drives its raw items
-        unsafe {
+        {
             const IDR_LOST: &[u8] = include_bytes!("../../../../../res/narrow_16x16_idr_lost.264");
             let (frames, dims, states) = drive_decoder_over(IDR_LOST);
             assert!(frames > 0, "no frame came out of narrow_16x16_idr_lost.264");
@@ -5938,10 +5757,8 @@ mod tests {
     /// interleaved groups, all I_PCM, one frame — the cheapest thing that makes the
     /// map decide anything.
     #[test]
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     fn fmo_slice_group_walk_runs_under_the_aliasing_checker() {
-        #[allow(unsafe_code)] // the family's own test drives its raw items
-        unsafe {
+        {
             const FMO: &[u8] = include_bytes!("../../../../../res/fmo_2groups_64x64.264");
             let (frames, dims, states) = drive_decoder_over(FMO);
             assert_eq!(frames, 1, "fmo_2groups_64x64.264 is one frame (states = {states:#x})");
