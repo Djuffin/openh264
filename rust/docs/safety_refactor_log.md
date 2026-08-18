@@ -11328,13 +11328,30 @@ The cost is the instantiation, exactly as on the decoder, so the probe's geometr
 48x32 is kept for F34's reason rather than for budget. **The frame-count axis is owed, not
 answered**: the encode loop is blocked, and the decoder's own numbers say frames are not free.
 Placement is `full`/`exit` beside the decoder's three — the brief's cheaper placement was
-conditional on the probe being expensive and irreducible, and it is neither. **The budget: Miri's
-share of `exit` 955s → 986s, +31s, +3.2%**, nothing retired because nothing could be. The
-target "the encoder gains coverage while the total does not grow" is **not met and was not
-available**; what replaced it is the cheapest probe in the tree by a factor of six. No forbidden
-flag is used or proposed, and `-Zmiri-disable-isolation` proved **unnecessary** — `WelsTime` is
+conditional on the probe being expensive and irreducible, and it is neither.
+
+**The budget, measured at the close, and in the right unit.** Miri's `finished in` is its own
+**virtual** clock, not host time: face 0's two `--lib` runs read **1349.57s both times, to the
+hundredth**, where their wall clocks differed 0.8%. That makes it the better instrument and it
+is the one quoted here — but it also means face 2's per-configuration figures are virtual, and
+reading them as wall clock would overstate the probe. In the deterministic clock, `--lib` goes
+**1349.57 → 1381.33s (+31.76s, +2.35%)** and the three differential targets are **unchanged**
+(231.17 / 8.55 / 35.67), so **Miri total 1624.96 → 1656.72s, +1.95%**. Scaled to host wall
+clock by the same ratio, Miri's share of `exit` is **≈955s → ≈975s, +20s, +2.1%**. Nothing was
+retired because face 0 measured that nothing could be. The target "the encoder gains coverage
+while the total does not grow" is **not met and was not available**; what replaced it is the
+cheapest probe in the tree by a factor of six, at **2%** of the Miri battery. No forbidden flag
+is used or proposed, and `-Zmiri-disable-isolation` proved **unnecessary** — `WelsTime` is
 `SystemTime::now()`, the library's one clock site, and it sits on the encode path only.
 
-**Gates.** GATES_PLACEHOLDER **No session span** (D-perf-6, S2b): every production change is
+**Gates.** `exit` battery **`OVERALL: PASS` — 13 passed / 0 failed / 1 skipped** at `75d5647b`: tests
+**484 / 478 / 20** (the two new probes; the ignored count is unmoved at 20, because the encode
+probe is Miri-ignored and not suite-ignored), ratchet clean against a regenerated baseline
+(`api/codec_api.rs` raw_ptr 240 → 246 and unsafe_block 44 → 45 — the encoder driver's own cost,
+recorded rather than hidden, per T5b.6), census **58**, **both sweeps 341/341 with no F3 hit in
+either profile**, both benches bit-identical, Miri `--lib` **338/0** (337 plus the live encoder
+probe) with the differential targets **20 / 7 / 3**. **S14 step 0 does not apply and says so**:
+this window changes encoder production code, so base and head cannot build the same `rust_enc`
+binary in either profile — this phase's clause in `phase6.md` §3, met on its first session. **No session span** (D-perf-6, S2b): every production change is
 provenance or ordering, none is arithmetic, and all of it is init-path — a span over it measures
 nothing.
