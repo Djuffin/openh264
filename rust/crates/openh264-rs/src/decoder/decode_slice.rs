@@ -9,9 +9,10 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
-// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
-// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
+// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
+// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
+// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
+// with `data_ptr_ref`). Nothing here is one of them.
 
 use crate::decoder::decoder_context::{
     PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
@@ -601,7 +602,7 @@ pub use crate::decoder::nalu::{SNalUnit};
 
 
 
-pub use crate::decoder::picture::{SPicture, PPicture};
+pub use crate::decoder::picture::SPicture;
 
 
 
@@ -619,7 +620,7 @@ pub struct SSpsPpsCtx {
     pub bAvcBasedFlag: bool,
 }
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 
 // ============================================================================

@@ -37,9 +37,11 @@
 
 #![deny(unsafe_code)]
 // **Phase 5, T5.AB1 — `PPicture`'s first module, and the survivor named at its
-// items (face 0).** The module carries the lint with **three exceptions, allowed
-// by name**, and every one of them holds `PicRefs` beside the picture being
-// decoded.
+// items (face 0).** The module carried the lint with **three exceptions, allowed
+// by name**, and every one of them held `PicRefs` beside the picture being decoded.
+// **T5b.1 closed all three** — the arm stopped being an address and became an
+// identity (`PicRefs::resolve`) — so this module allows nothing today, and T5b.9
+// deleted the last dead `PPicture` re-export it carried.
 //
 // The twelve signatures that carry the picture *without* a reference view take a
 // borrow — `Option<&SPicture>` where they read, `Option<&mut SPicture>` where they
@@ -188,7 +190,7 @@ pub fn IS_SUB_4x4(sub_mb_type: u32) -> bool {
 // Data Structures matching C++ Dec Core
 // ============================================================================
 
-pub use crate::decoder::picture::{SPicture, PPicture};
+pub use crate::decoder::picture::SPicture;
 
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
@@ -201,7 +203,7 @@ use crate::decoder::decoder_context::{SliceCtx, active_pps, active_sps, pps_of, 
 // The real decoder context and SPS, not local stand-ins: these are reached through
 // raw pointers from decode_slice, so the layouts must be the genuine ones.
 pub use crate::decoder::decoder_context::{
-    SWelsDecoderContext, PWelsDecoderContext, PicRefs, ref_id,
+    SWelsDecoderContext, PicRefs, ref_id,
 };
 pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};

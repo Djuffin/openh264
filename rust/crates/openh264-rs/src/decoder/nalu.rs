@@ -8,9 +8,10 @@
 
 #![deny(unsafe_code)]
 // **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
-// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
-// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
+// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, and they
+// are all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the
+// one Miri provenance test S28 mandates for `data_ptr` — T5b.7 retired the second
+// with `data_ptr_ref`). Nothing here is one of them.
 
 //! # H.264 / AVC and SVC NAL Unit and Access Unit Parser (`nalu.h` & `au_parser.cpp`)
 //!
@@ -57,7 +58,7 @@ use crate::safe::bits::BsCursor;
 
 use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
 use crate::decoder::decoder_context::{
-    SWelsDecoderContext, PWelsDecoderContext, MAX_LAYER_NUM, SPosOffset, active_pps, active_sps,
+    SWelsDecoderContext, MAX_LAYER_NUM, SPosOffset, active_pps, active_sps,
     pps_of, sps_of, subset_sps_of, SpsRef,
 };
 use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps, SLevelLimits, MAX_SPS_COUNT, MAX_PPS_COUNT, MAX_MB_SIZE, MAX_SLICEGROUP_IDS};
@@ -1615,12 +1616,15 @@ pub fn ParseSps(
     }
     let iSpsId = uiCode as i32;
 
-    let pSLevelLimits = match GetLevelLimits(uiLevelIdc as i32, bConstraintSetFlags[3]) {
-        Some(limits) => limits as *const SLevelLimits,
-        None => return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE),
-    };
+    // The lookup stays for its `None` arm, which is live: an unrecognized level is
+    // `ERR_INFO_UNSUPPORTED_NON_BASELINE` and the subset SPS is refused. The row it
+    // finds is no longer stored — T5b.9 deleted `SSps::pSLevelLimits`, whose only
+    // C++ readers are the four `WELS_CHECK_SE_BOTH_WARNING` log sites T5.Y2 already
+    // ruled on.
+    if GetLevelLimits(uiLevelIdc as i32, bConstraintSetFlags[3]).is_none() {
+        return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
+    }
 
-    pSubsetSps.sSps.pSLevelLimits = pSLevelLimits;
     pSubsetSps.sSps.uiChromaFormatIdc = 1;
     pSubsetSps.sSps.uiChromaArrayType = 1;
     pSubsetSps.sSps.uiProfileIdc = uiProfileIdc;
@@ -2533,13 +2537,17 @@ mod au_list_tests {
             // Fill the list through the path the parser uses, stamping each node so a
             // move would be visible, and remember where every node lives.
             // T5b.3: the slots own, so "did a node move" is asked of its *address*,
-            // taken through the borrow rather than stored as the answer.
+            // taken through the borrow rather than stored as the answer. T5b.9:
+            // `std::ptr::from_ref(..).addr()` is that question spelled without a cast
+            // — the `as *const SNalUnit as usize` pair it replaces was the last raw
+            // pointer type written in `src/decoder/` that named neither the api
+            // boundary nor a kernel argument.
             let mut addrs: Vec<usize> = Vec::new();
             for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
                 let idx = MemGetNextNal(&mut au).expect("a free slot");
                 let nal = au.nal(idx);
                 nal.uiTimeStamp = 1000 + i as u64;
-                addrs.push(nal as *const SNalUnit as usize);
+                addrs.push(std::ptr::from_ref(&*nal).addr());
             }
             assert_eq!(au.uiAvailUnitsNum, MAX_NAL_UNIT_NUM_IN_AU as u32);
 
@@ -2553,7 +2561,7 @@ mod au_list_tests {
 
             for (i, &p) in addrs.iter().enumerate() {
                 let nal = au.nal(i);
-                assert_eq!(nal as *const SNalUnit as usize, p, "node {i} moved across the growth");
+                assert_eq!(std::ptr::from_ref(&*nal).addr(), p, "node {i} moved across the growth");
                 assert_eq!(nal.uiTimeStamp, 1000 + i as u64, "node {i} lost its contents");
             }
             // `MemGetNextNal` zeroes the node it hands out.

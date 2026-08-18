@@ -77,7 +77,7 @@ pub const WELS_LOG_INFO: i32 = 3;
 // Data Structures
 // ============================================================================
 
-pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture};
+pub use crate::decoder::decoder_context::{Picture, SPicture};
 
 
 pub use crate::decoder::decoder_context::SRefPic;
@@ -93,7 +93,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 pub use crate::decoder::decoder_context::SLogContext;
 
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 use crate::decoder::decoder_context::{
     cur_au, dec_pic, long_ref_pic, pic_and_refs, pic_pool_mut, pool_pic, pool_pic_mut,
     prev_dpb_id, ref_pic, short_ref_pic, short_ref_pic_mut,

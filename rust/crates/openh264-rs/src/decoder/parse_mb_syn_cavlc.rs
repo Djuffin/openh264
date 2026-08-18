@@ -45,7 +45,8 @@
 
 #![deny(unsafe_code)]
 // **Phase 5, T5.AC7 — the lint, with the two `PPicture` survivors allowed by
-// name, and family 8's blocker is gone.** Session W named what stood between this
+// name (both converted at T5b.1; this module allows nothing today), and family 8's
+// blocker is gone.** Session W named what stood between this
 // module and the lint: `SVlcTable`'s fields, raw *"because the sub-tables have
 // varying lengths and the C indexes them by a computed VLC bucket"*, and it called
 // that a table-representation change rather than a parameter flip. It is — and the
@@ -438,7 +439,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
 }
 
 // Forward definitions matching OpenH264 decoder C ABI structs
-pub use crate::decoder::picture::{SPicture, PPicture};
+pub use crate::decoder::picture::SPicture;
 use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 
 pub use crate::decoder::parameter_sets::{SLevelLimits, SSps, SPps};
@@ -447,7 +448,7 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
 
 pub use crate::decoder::decoder_core::{
-    DqLayerState, SWelsDecoderContext, PWelsDecoderContext,
+    DqLayerState, SWelsDecoderContext,
     SSlice, SLayerInfo, 
 };
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};

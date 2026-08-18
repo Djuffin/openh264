@@ -50,9 +50,9 @@
 // `api_alias`/`api_alias_mut`, and the reordering buffers are the api's own
 // `[SPictInfo; 16]`.
 //
-// `src/decoder/` carries **four** `#[allow(unsafe_code)]` items in total, none of
-// them here: `decoder_context.rs`'s two api aliases and `picture.rs`'s two Miri
-// provenance tests for `data_ptr`. What is still owed is Phase 8's — the twelve
+// `src/decoder/` carries **three** `#[allow(unsafe_code)]` items in total, none of
+// them here: `decoder_context.rs`'s two api aliases and `picture.rs`'s one Miri
+// provenance test for `data_ptr` (T5b.7 retired the second with `data_ptr_ref`). What is still owed is Phase 8's — the twelve
 // api-owned fields stop being pointers when `CWelsDecoderImpl` hands the context
 // borrows at construction (F23/F41), and `data_ptr` retires with them.
 
@@ -631,7 +631,7 @@ pub const PADDING_LENGTH: usize = 32;
 // move touches no encoder line (F12/P10) and Phase 6 deletes them with the rest of
 // the raw entry points.
 
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderContext};
+pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 pub use crate::decoder::nalu::{SNalUnit};
 
@@ -641,7 +641,7 @@ pub use crate::decoder::nalu::{SNalUnit};
 // `Option<&mut DqLayerState>` and the compiler checks what the round trip through a
 // pointer was hiding.
 
-pub use crate::decoder::decoder_context::{Picture, SPicture, PPicture, SPicBuff};
+pub use crate::decoder::decoder_context::{Picture, SPicture, SPicBuff};
 
 
 
@@ -1044,8 +1044,11 @@ pub fn GetPrevFrameNum(pCtx: &mut SWelsDecoderContext) -> i32 {
     0
 }
 
-#[inline]
-pub fn CopySpsPps(pSrcCtx: PWelsDecoderContext, pDstCtx: PWelsDecoderContext) {}
+// **T5b.9: `CopySpsPps` deleted dead (S18, D3).** The C++ calls it only from the
+// threaded decoder (`decoder_core.cpp:2875`, `welsDecoderExt.cpp:1308`) — the
+// subsystem this port stubbed out and the plan deletes. Here it was an empty body
+// with zero callers, and the last thing in `src/decoder/` that spelled
+// `PWelsDecoderContext` in code; the typedef goes with it.
 
 // **F43, T5.S1: the other two stubs.** `FmoParamUpdate` returned `ERR_NONE`
 // without building a map and `FmoNextMb` returned `iMbIdx + 1` — raster order, the
@@ -2112,7 +2115,7 @@ pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
         // the field in one expression, so `DestroyPicBuff` cannot return with the
         // context still naming a pool it has freed.
         let pool = (*pCtx).pPicBuff.take();
-        crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool, pMa);
+        crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool);
     }
 
     // T5.P″1: `FreePicture((*pCtx).pTempDec, pMa)` followed by a null store. One
