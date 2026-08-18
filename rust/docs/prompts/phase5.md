@@ -820,6 +820,25 @@ stays **Eugene-level whenever proposed**.
 
 ## Phase exit conditions (the definition of done)
 
+### Phase 5b addendum (2026-08-17, `7a4ad7b5`) — one session, two of the five faces
+
+`prompts/phase5b.md` set out to take the enumerated survivors to **four named FFI
+items**. It did not: the decoder stands at **147 `#[allow(unsafe_code)]` items** (143
+code + 4 prose), `unsafe fn` **42 → 30**, `unsafe {` blocks **160 → 148**, decoder
+`raw_ptr` **236 → 219** (156 code + 63 prose). `mv_pred.rs` is at zero.
+
+| family (AC's five) | Phase 5b |
+|---|---|
+| `PPicture` (F42, 23 signatures) | **CLOSED** — and by neither Phase 8 option. The arm was answered by **identity**: `PicRefs::resolve` for the 15 readers, `mc_luma_same`/`mc_chroma_same` for the one writer. `PicRefs::get`, `PicView::Split::cur_ptr` and `PicPool::cur_and_rest` are deleted. |
+| `sMCRefMember` | **CLOSED** — `McDst` + `McSrc` in `decode_slice.rs`, cursors in `error_concealment.rs`; **both `mem::zeroed()` sites gone**. |
+| the parse tree | **open, with a measured lead.** Built whole — owned slots, `pNalCur`/`pSliceHeader` as indices, the NAL union as a struct, the header parsed into a scratch — and **reverted at the gate**: 11 of 60 conformance assets, every one a B-slice stream, frame counts correct. Patch preserved; two hypotheses eliminated by measurement (`bytes_equal` structural; the scratch itself). |
+| the api boundary | **open**, minus the pieces face 0 took with it. |
+| the zeroed shells | **open** — and Phase 5b measured something about them: `SSps::default()` and `SPps::default()` are **not** all-zero (bit depths 8, `bFrameMbsOnlyFlag`, `uiNumSliceGroups` 1, `iPicInitQp` 26), so the C's `memset` has a real answer at `ParseSps`/`ParsePps`/`MemGetNextNal` and "replace the shell with `Default`" is a **wrong** recipe — it takes eleven assets red. S21's question, answered by measurement. |
+
+Gates at `7a4ad7b5`: `exit` battery **`OVERALL: PASS` 13/0/1**, tests 479/473/20, both
+sweeps **341/341** with no F3 hit, Miri `--lib` **334/0** plus 20/7/3, the three decoder
+probes **3/3**, both benches bit-identical, **no test file changed all session**.
+
 **STATUS AT THE PHASE'S CLOSE** (`5ebaf904`, 2026-08-17, session AC). Read
 condition 1's two lines together; they answer different questions and the phase
 closes on the second.

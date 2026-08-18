@@ -11,12 +11,24 @@ because the playbook is what turned the decoder from "16 modules, 439 `unsafe fn
 
 ## 0. What Phase 5 delivered, as the starting position
 
-| | at Phase 5's open | at its exit |
-|---|---|---|
-| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) |
-| decoder `unsafe fn` | ~1400 | **42** |
-| decoder modules with `#![deny(unsafe_code)]` | **0** | **22 of 22** |
-| corpus (output / codes) | 641 agree / 541 differ on truncation rows | **2707 / 0** |
+| | at Phase 5's open | at its exit | after Phase 5b |
+|---|---|---|---|
+| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) | **219** (156 + 63) |
+| decoder `unsafe fn` | ~1400 | **42** | **30** |
+| decoder `#[allow(unsafe_code)]` items | — | 167 | **147** (143 + 4 prose) |
+| decoder modules with `#![deny(unsafe_code)]` | **0** | **22 of 22** | 22 of 22 |
+| corpus (output / codes) | 641 agree / 541 differ on truncation rows | **2707 / 0** | unmoved |
+
+**Phase 5b (2026-08-17, `7a4ad7b5`) closed two of the five enumerated families** —
+`PPicture`/F42 and `sMCRefMember` — and the *method* it closed F42 with is the one this
+phase should reach for at 6.1/6.2, because the encoder's picture pool meets the same
+shape in `MarkPicAsRef`: **a safe container can hand back the identity of the slot it
+lends out for free**, and a caller that already holds the borrow supplies the rest. The
+address was what the raw pointer was protecting, not the aliasing. `phase5_findings.md`
+§"CLOSED at Phase 5b" carries it. The parse tree, the api boundary and the zeroed
+shells stay Phase 8's, the first with a measured lead and the last with a measured
+*negative* — `SSps::default()`/`SPps::default()` are not all-zero, so "replace the
+shell with `Default`" is a wrong recipe, not an unexplored one.
 
 The encoder is where the decoder was. Measured at Phase 5's exit:
 

@@ -1697,6 +1697,41 @@ touching this arm. Where the next reader of this finding wants "can I avoid the
 pointer here?", that is the first question: **do I need the picture, or only to know
 that it is the one I am writing?**
 
+### CLOSED at Phase 5b (T5b.1/T5b.2, `7a4ad7b5`) — and by neither of the two options
+
+The revisit above framed the choice as *retire the arm* (option 1, a parity divergence
+on the class D-par-1 spent three sessions refereeing) or *interior mutability on the
+planes* (option 2, a vocabulary change to the hottest data in the decoder). It is
+neither. **The arm was answered by identity rather than by address**, and that turned
+out to cost one parameter at the readers and one kernel family at the single writer:
+
+* **The readers** — 15 sites in `mv_pred`, both parsers, `CheckRefPicturesComplete` and
+  error concealment — take `PicRefs::resolve(slot, cur)`, which answers `Current` with
+  the caller's own borrow. Everything they read through a reference is a POC, a flag or
+  the colocated macroblock's motion, so the current picture is just another **shared**
+  source and two shared borrows coexist. The third question this finding told its next
+  reader to ask has a fourth: *do I need it mutably, or only to read it?*
+* **The writer** is motion compensation, and it is why the arm looked structural.
+  `common/mc.rs` gained `mc_luma_same`/`mc_chroma_same` — one `PlaneCursorMut` anchored
+  at the destination plus the source anchor **relative to it**, legal because one plane
+  has one stride. Only four of the sixteen quarter-pel arms are rewritten: the
+  composites already build their intermediates into 16-stride scratch, so their source
+  reads finish before the first destination write and they reuse the two-cursor kernels
+  through a shared borrow. **Ordering is the specification** where the windows overlap
+  — the four reproduce the C++'s loop order, and the integer-MV path is `copy_within`
+  rather than a block copy, so an overlapping row is *defined* instead of UB.
+
+`PicRefs::get` is deleted, `PicView::Split::cur_ptr` with it, and `PicPool` has one
+bracket instead of two. **No behaviour moves**: conformance 60/60 with no golden
+touched, both sweeps 341/341, the malformed corpus's 2707 rows unmoved, and the three
+decoder probes 3/3 under Miri.
+
+**What the F42 arm was actually protecting, restated for Phase 6**: not the aliasing —
+the *address*. A safe container can hand back the identity of the slot it lends out for
+free, and a caller that already holds the borrow can supply the rest. The encoder's
+picture pool meets the same shape in `MarkPicAsRef` (6.1/6.2), and this is the answer it
+should reach for first.
+
 ## F43 — `decoder_core.rs` declares stubs that shadow the real error-concealment and FMO implementations, so neither subsystem runs
 
 *Found Phase 5 session R (2026-08-14), while threading the layer parameter through
