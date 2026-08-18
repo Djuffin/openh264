@@ -322,8 +322,14 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   #
   #   wels_thread_pool  F12  every worker takes `&mut` to the one shared pool
   #                          (data race on the retag; Phase 7 owns it)
-  #   encoder_ext       F13  `InitDqLayers` holds `&mut` into `sSpatialLayers`
-  #                          across an aliasing use
+  #
+  # `encoder_ext` was here for F13's last production site — `InitDqLayers` holding
+  # `&mut` into `sSpatialLayers` across an aliasing use. Phase 6 session A's
+  # encoder probe reproduced it exactly and closed it as a 20-derivation family
+  # (T6.A1); session B then ran the only two tests the filter matched
+  # (`request_memory_svc_builds_the_parameter_sets`, `..._the_dq_layers`) under
+  # this step's flags — 2 passed / 0 failed, Miri clock 16.92s — and deleted the
+  # line, S15's "deleting the line is part of fixing what it names".
   #
   # `svc_mode_decision` was here for F13's fourth site — `SWelsFuncPtrList` being
   # self-referential, `pfMdCost` pointing into `pfSampleSad`/`pfSampleSatd` in the
@@ -336,8 +342,8 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
   # the three tests that took a second `&mut` to a picture the list already held
   # — which is what the skip had been hiding, and is F18's lesson again: the
   # backlog behind a skip is not confined to the code the skip was written for.
-  MIRI_SKIPS=(--skip wels_thread_pool --skip encoder_ext)
-  hdr "miri (--lib, minus the F12/F13 skips)"
+  MIRI_SKIPS=(--skip wels_thread_pool)
+  hdr "miri (--lib, minus the F12 skip)"
   if ! rustup toolchain list 2>/dev/null | grep -q nightly; then
     skip "miri: no nightly toolchain (rustup toolchain install nightly)"
   else
@@ -346,7 +352,7 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # destructors the unit tests mostly do not call, so leak-checking a mid-refactor
     # transliteration reports the design rather than a defect. Phase 8 (the API layer)
     # is where ownership becomes Rust's and the leak check becomes meaningful.
-    run_miri lib "--lib (whole library, minus the F12/F13 skips)" \
+    run_miri lib "--lib (whole library, minus the F12 skip)" \
       "-Zmiri-ignore-leaks" --lib -- "${MIRI_SKIPS[@]}"
   fi
 fi
