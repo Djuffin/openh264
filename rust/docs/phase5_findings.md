@@ -357,6 +357,17 @@ battery rather than once per phase — but it deliberately spells the calls the 
 it does **not** cover the `&mut self` layer. Covering that needs a test that is expected
 to fail until F23 is fixed, which is Phase 8's to add with the fix.
 
+**The encode path has one too, from Phase 6 session A** (2026-08-18):
+`encoder_initialisation_runs_under_the_aliasing_checker`
+(`encoder/svc_encode_slice.rs`), over `drive_encoder_over` in the same
+`abi_test_driver` module. It spells the calls the C way for the same reason and it
+was not a precaution: **the encoder twin is structural and was confirmed by
+construction** — `CWelsH264SVCEncoderImpl` reaches `inner` past the `base`/`pVtbl`
+pair, so `(*p_encoder).InitializeExt(&param)` narrows the borrow to eight bytes
+exactly as `ISVCDecoder::Initialize` does. Both codecs' probes therefore route
+around F23 rather than covering it, and Phase 8 still owes the covering test with
+the fix.
+
 ---
 
 ## F24 — `ParseSliceHeaderSyntaxs` holds three overlapping `&mut` borrows of one NAL unit, and the outer one invalidates the inner

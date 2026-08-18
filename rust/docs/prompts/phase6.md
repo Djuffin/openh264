@@ -314,15 +314,31 @@ differs in three places, each earned by Phase 5:
 **Sessions** (each large, per S31 and the terminal rule; drop-from-the-end only
 at a family boundary, and only with a written reason):
 
-* **A** — **the encoder Miri probe, and the Miri budget** (Eugene, 2026-08-18:
-  session A does the probe only, and Miri must not get slow). One subject: the
-  probe built on `drive_decoder_over`'s pattern with its coverage proved, today's
-  Miri cost measured per step, whether **S32 transfers to the encoder** settled by
-  measurement, and the probe's gate placement decided with the numbers.
+* **A** — **SPENT** (2026-08-18). **the encoder Miri probe, and the Miri budget.**
+  Delivered: `drive_encoder_over` beside `drive_decoder_over`, raw-pointer-based
+  (F23's encoder twin is structural and was confirmed by construction); the probe
+  **found real UB on its first execution and nine more times after that**, and all
+  ten are closed — **F13's last production site** and its 20-derivation family,
+  **F57** (`MvdCostInit` off the end of the MVD table) and **F58** (VAA reading a
+  never-written picture's visible luma) both new in
+  [`phase6_findings.md`](../phase6_findings.md), two escaping borrows and four
+  ordering defects. Miri's cost is measured per step (`--lib` 835s, of which the
+  three decoder probes are 665s), **S32 transfers to the encoder** on picture size
+  (flat to 1.3% across 64x the area) and the plan's §7.6 carries the amendment, and
+  **no decoder probe could be retired** — measured reach says each reaches code no
+  other reaches. The live probe costs **31s, +3.2%** of the Miri battery.
   [`phase6_session_a.md`](phase6_session_a.md)
-* **B** — the clearing: F52's six adjudicated; the `c_void` residue deleted; the
-  two blocker settlements written (`pBsBuffer`, `pRawData`); then `SPicture`/pool
-  ids (6.1's head) if the face boundary allows.
+* **B — NEXT, and it inherits a diagnosed blocker.** The clearing: F52's six
+  adjudicated; the `c_void` residue deleted; the two blocker settlements written
+  (`pBsBuffer`, `pRawData`); then `SPicture`/pool ids (6.1's head) if the face
+  boundary allows. **`pBsBuffer`'s settlement now has a Miri reproduction in front
+  of it**: `InitSliceBsBuffer` caches the shared `pOut->sBsWrite` in every slice at
+  init and `InitBitStream` replaces that writer every frame, so
+  `WelsSliceHeaderWrite` reads a dead pointer (`svc_encode_slice.rs:815`). It is
+  the **one thing standing between the encoder and a live encode-path Miri probe** —
+  `encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker` is in the
+  tree carrying `#[cfg_attr(miri, ignore)]`, and deleting that attribute is the
+  settlement's done-test.
 * **C** — `SMB`'s five arrays → `MbArray` (the encoder's 5.2), with
   `svc_base_layer_md`/`svc_mode_decision`/`deblocking` as its consumers.
 * **D** — the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up to

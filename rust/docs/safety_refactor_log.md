@@ -11272,3 +11272,69 @@ span (no hot-path change; D-perf-6 stands, its disposition unchanged).
 carries the refreshed decoder row and the residue by category; F56 is closed in
 `phase5_findings.md` with the run's figures. **Next is Phase 6 session A, and its brief is the
 steward's next item.**
+
+## Phase 6, session A — the encoder probe, and the ten defects behind it (2026-08-18)
+
+**The probe found real UB on its first execution, and nine more times after that.** F47's
+precedent said it would; F24's said it would not be one function. Both held. The encoder had
+**zero encode-path** Miri coverage — precisely that, and the brief's premise was wrong by grep:
+the `--lib` step already runs **117 encoder unit tests** across 23 modules. What no test had
+ever done is drive `WelsEncoderEncodeExt`.
+
+**Face 0 — the baseline, and a retirement lever that turned out not to exist.** Per step,
+machine idle: `--lib` **835s / 842s** (a **0.8%** null band), of which the three decoder probes
+are **665s** and the other 334 tests **164s**; grid **249s**, ec **248s**, fmo **186s**;
+differentials **101 / 4 / 15s**; invocation floor **5s**; compile share **2s** — cargo-miri
+emits MIR, so a Miri step is all interpretation. Miri's share of `exit` is **≈955s**. S32 holds
+on the decoder and gains one **refinement**: fmo decodes one frame where grid and ec decode ~30
+and costs 63s less, so the floor is ~186s and decoding runs ~2s a frame — shortening a stream
+saves about a quarter, not nothing. **Reach was measured by whole-library source coverage**,
+because the brief's six-block instrument is not usable: four of the six `unsafe {` blocks in
+`src/decoder/` are inside **one unit test no probe runs**, and `data_ptr` is safe code, so the
+production surface is two blocks every probe drives. grid executes 688 functions, ec 622, fmo
+351, and **each reaches code no other reaches** — 142 / 73 / 9 unique — so **none is retired**.
+The two cheap-looking candidates are the worst to lose: ec uniquely drives the **CAVLC P-slice
+residual family, which is F47's own**, `manage_dec_ref`'s reordering, and **five `common/mc.rs`
+kernels — code this phase edits**; fmo uniquely drives `DecodeMbCavlcPcm`, which nothing else in
+the tree runs. **The budget cannot be made by retirement, and that is a measurement.**
+
+**Face 1 — ten defects, all closed** (T6.A1, `4f62f074`). `drive_encoder_over` sits beside
+`drive_decoder_over` and spells the calls the C way, because **F23's encoder twin is
+structural**. In order: **F13's remaining production site** (`InitDqLayers`, reproduced exactly
+— a *cross-module* pair, which is why no single-module reading found it) and its family, S29's
+spelling at **20** derivations; **F57**, new, `MvdCostInit`'s second cursor ending 1042 bytes
+past the MVD table — F14's class and F14's accommodation; `SingleLayerPreprocess` taking a
+pointer into the very `self` it borrows (deleted — cache, not carrier); `pRawData` stored at
+load and killed by the writer, re-stamped in `WelsUnloadNal` from the offset the record already
+carries; **F58**, new, VAA reading the *visible luma* of a never-written reference picture,
+which the C++ does too — indeterminate in C, UB in Rust; and four ordering defects where a
+pointer was taken before the parent wrote through it. **F21 is met by measurement**: deleting
+F57's term takes the live probe red at `md.rs:1544` and restoring it takes it green, and each of
+the other nine was observed red before its fix and green after.
+
+**The eleventh is 6.4's, and the probe stops at the owner boundary.** Every slice caches the
+shared `pOut->sBsWrite` at init and `InitBitStream` replaces that writer every frame; the other
+branch of `InitSliceBsBuffer` needs `iMultipleThreadIdc > 1`, which is F12 and Phase 7's. That
+is `SWelsSliceBs.pBsBuffer` — Phase 3's deliberate exclusion, already on session B's list, now
+handed over **diagnosed with a Miri reproduction**. So the probe is split and the encoder keeps
+**one live** probe: `encoder_initialisation_runs_under_the_aliasing_checker` (green in `--lib`),
+which is what keeps the ten fixes fixed; the encode probe carries `#[cfg_attr(miri, ignore)]`
+naming the blocker and its owner, and **deleting that attribute is the settlement's done-test**.
+
+**Faces 2 and 3 — S32 transfers, and the probe is cheap.** Encoder initialisation under Miri
+reads **30.79 / 30.85 / 30.85 / 31.19s** at 48x32, 96x64, 192x128 and 384x256 — **flat to 1.3%
+across 64x the picture area**, against a **0.13%** null band (48x32 twice, 30.79 both times).
+The cost is the instantiation, exactly as on the decoder, so the probe's geometry is free and
+48x32 is kept for F34's reason rather than for budget. **The frame-count axis is owed, not
+answered**: the encode loop is blocked, and the decoder's own numbers say frames are not free.
+Placement is `full`/`exit` beside the decoder's three — the brief's cheaper placement was
+conditional on the probe being expensive and irreducible, and it is neither. **The budget: Miri's
+share of `exit` 955s → 986s, +31s, +3.2%**, nothing retired because nothing could be. The
+target "the encoder gains coverage while the total does not grow" is **not met and was not
+available**; what replaced it is the cheapest probe in the tree by a factor of six. No forbidden
+flag is used or proposed, and `-Zmiri-disable-isolation` proved **unnecessary** — `WelsTime` is
+`SystemTime::now()`, the library's one clock site, and it sits on the encode path only.
+
+**Gates.** GATES_PLACEHOLDER **No session span** (D-perf-6, S2b): every production change is
+provenance or ordering, none is arithmetic, and all of it is init-path — a span over it measures
+nothing.
