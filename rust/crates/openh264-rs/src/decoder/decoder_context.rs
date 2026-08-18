@@ -417,9 +417,10 @@ impl SWelsDecoderSpsPpsCTX {
             // The prefix NAL's *prefix* arm is the only one this field's five readers
             // touch (`nalu.rs`, `ParsePrefixNalUnit` and `WelsParseNalHeaderExt`);
             // its VCL arm — and so the `Option<SpsRef>` buried in that arm's slice
-            // header — is written by nothing and read by nothing, so `Default`'s
-            // `None` there is a value no path can tell from the zero pattern's
-            // `Some(SpsRef { id: 0 })`.
+            // header — is written by nothing and read by nothing. That made this the
+            // third site of F56 and the only one whose value no path could observe;
+            // T5b.8 rules `None` faithful at all three, so it is now the same answer
+            // the other two give rather than an unobservable divergence from them.
             sPrefixNal: SNalUnit::default(),
             // T5.Z1, and the reason this one write predates this constructor:
             // `Option<SpsRef>` keeps its niche in a `bool`, so all-zero reads back as
@@ -2024,13 +2025,20 @@ impl Default for SWelsDecoderContext {
             pPicBuff: None,
             iPicQueueNumber: 0,
             access_unit: None,
-            // **Preserved exactly as the zeroed shell left it, and it is not `None`.**
-            // `Option<SpsRef>` keeps its niche in a `bool`, so all-zero materializes
-            // as `Some(SpsRef { id: 0, subset: false })` — T5.Z1's class, on a field
-            // T5.Z1 did not reach. Transcribed rather than corrected here, because a
-            // refactor and a behaviour change do not share a commit (plan §2.1);
-            // T5b.5b is the change and carries the measurement.
-            active_sps: Some(SpsRef { id: 0, subset: false }),
+            // **T5b.8, F56's ruling: `None` is the faithful value, and the `Some` the
+            // zeroed shell produced here was a layout artifact.** The C memsets an
+            // `SSps*` to NULL; the port's spelling of that null is `None`. What the
+            // shell wrote instead was `Some(SpsRef { id: 0, subset: false })`, because
+            // `Option<SpsRef>` keeps its niche in `SpsRef`'s `bool` and `0` is a valid
+            // `false` — F54's class, on a field T5.Z1 did not reach. Nothing
+            // transcribed that `Some`; the layout algorithm chose it.
+            //
+            // What the correction buys is a live arm: `AllocPicBuffOnNewSeqBegin`'s
+            // `else` scan — T5.R6's replacement for the C++'s pointer-valued
+            // fallback — could not run while this field was never `None`. It can now.
+            // Gated on the full malformed corpus and the conformance set, both
+            // unmoved — see the commit and F56's close.
+            active_sps: None,
             active_pps: None,
             pDqLayersList: None,
             nal_cur: None,
@@ -2161,6 +2169,34 @@ mod tests {
         for &val in &pred {
             assert_eq!(val, 128);
         }
+    }
+
+    /// **F56's red-under-revert test (T5b.8).** The context is born with no active
+    /// SPS: the C memsets an `SSps*` to NULL and `None` is that null. What made this
+    /// worth a test is that the wrong answer was *invisible* — `Option<SpsRef>` keeps
+    /// its niche in `SpsRef`'s `bool`, so the zeroed shell read back as
+    /// `Some(SpsRef { id: 0, subset: false })` and every reader saw "SPS 0 is
+    /// already active" before a stream had sent one. Restore that `Some` in
+    /// [`SWelsDecoderContext::default`] and this assertion is the one that fails.
+    #[test]
+    fn the_context_is_born_with_no_active_sps() {
+        let ctx = SWelsDecoderContext::new_boxed();
+        assert!(
+            ctx.active_sps.is_none(),
+            "active_sps was {:?}; the C's memset leaves a null SSps*",
+            ctx.active_sps
+        );
+        // The third site F56 names — the prefix NAL's VCL arm, which nothing
+        // writes and nothing reads, now agrees with the two that are read.
+        assert!(ctx
+            .sSpsPpsCtx
+            .sPrefixNal
+            .sNalData
+            .sVclNal
+            .sSliceHeaderExt
+            .sSliceHeader
+            .sps_ref
+            .is_none());
     }
 
     #[test]

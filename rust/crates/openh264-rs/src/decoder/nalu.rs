@@ -345,26 +345,15 @@ pub struct TagNalUnit {
 
 pub type SNalUnit = TagNalUnit;
 
-impl TagNalUnit {
-    /// `memset (pNu, 0, sizeof (SNalUnit))` — `MemGetNextNal`'s reset, as a value
-    /// (T5b.6).
-    ///
-    /// **Measured, not argued** (S33): the zeroed image and [`Default`]'s differ in
-    /// **one** of 6,056 bytes, and it is `sSliceHeader.sps_ref`'s niche byte. That
-    /// field is `Option<SpsRef>`, whose niche lives in a `bool`, so all-zero reads
-    /// back as `Some(SpsRef { id: 0, subset: false })` where `Default` says `None` —
-    /// T5.Z1's class, on a third field it did not reach. The C zeroes a `pSps`
-    /// pointer here, so `None` is the faithful value and the `Some` is a port
-    /// artifact; it is transcribed rather than corrected because a refactor and a
-    /// behaviour change do not share a commit, and the correction is parked with
-    /// `SWelsDecoderContext::active_sps`, which is the same artifact one field over.
-    pub fn memset_zero() -> Self {
-        let mut nu = Self::default();
-        nu.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref =
-            Some(crate::decoder::decoder_context::SpsRef { id: 0, subset: false });
-        nu
-    }
-}
+// **T5b.8: `SNalUnit::memset_zero` is gone, because [`Default`] became the C's
+// memset.** T5b.6 introduced it for one field — the zeroed image and `Default`'s
+// differ in exactly **one** of 6,056 bytes, `sSliceHeader.sps_ref`'s niche byte,
+// where `Option<SpsRef>`'s niche in a `bool` makes all-zero read back as
+// `Some(SpsRef { id: 0, subset: false })` (F54's class). F56 ruled that `Some` a
+// layout artifact rather than a transcription: the C zeroes a `pSps` pointer here
+// and `None` is that null. With the overwrite dropped the two constructors
+// coincide, and a `memset_zero` beside a `Default` that *is* its zero would state
+// the opposite of what is true — so `MemGetNextNal` spells `SNalUnit::default()`.
 
 impl Default for TagNalUnit {
     fn default() -> Self {
@@ -2427,9 +2416,11 @@ pub fn MemGetNextNal(pAu: &mut SAccessUnit) -> Option<usize> {
     pAu.uiAvailUnitsNum += 1;
     // **T5b.3: the index, not the node.** The caller re-acquires through it, so
     // nothing outlives the expression that took it and the container is free to own.
-    // T5b.6: the C's `memset (pNu, 0, sizeof (SNalUnit))` is a value now — see
-    // [`SNalUnit::memset_zero`] for the one byte it does not share with `Default`.
-    *pAu.nal(idx) = SNalUnit::memset_zero();
+    // T5b.6: the C's `memset (pNu, 0, sizeof (SNalUnit))` is a value. T5b.8: that
+    // value is [`SNalUnit::default`] — measured identical to the zero image on
+    // 6,055 of 6,056 bytes, the exception being `sSliceHeader.sps_ref`'s niche,
+    // which F56 ruled belongs to `None` (the C zeroes a `pSps` pointer there).
+    *pAu.nal(idx) = SNalUnit::default();
     Some(idx)
 }
 
@@ -2494,6 +2485,35 @@ pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
 #[cfg(test)]
 mod au_list_tests {
     use super::*;
+
+    /// **F56's red-under-revert test at the NAL node (T5b.8).** `MemGetNextNal`
+    /// hands out a node the C has just `memset` to zero, and the C's zero for
+    /// `pSliceHeader->pSps` is a null pointer. The port spelled that memset as
+    /// `SNalUnit::memset_zero`, which wrote `Some(SpsRef { id: 0, subset: false })`
+    /// into `sSliceHeader.sps_ref` — not because anything transcribed it, but
+    /// because `Option<SpsRef>` keeps its niche in `SpsRef`'s `bool` and the zero
+    /// image reads back that way (F54's class). Restore that overwrite and this
+    /// assertion is the one that fails.
+    #[test]
+    fn a_fresh_nal_node_has_parsed_no_sps() {
+        let mut au = SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU);
+        // Dirty the slot first, so the assertion is about the reset and not about
+        // what `with_nodes` happened to leave there.
+        au.nal(0).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref =
+            Some(crate::decoder::decoder_context::SpsRef { id: 3, subset: true });
+        let idx = MemGetNextNal(&mut au).expect("a node");
+        assert_eq!(idx, 0);
+        assert!(
+            au.nal(idx)
+                .sNalData
+                .sVclNal
+                .sSliceHeaderExt
+                .sSliceHeader
+                .sps_ref
+                .is_none(),
+            "MemGetNextNal's memset leaves a null pSps, which is None"
+        );
+    }
 
     /// T5.O4/F39: growing the node list keeps every existing node where it was, and
     /// keeps what was in it.
