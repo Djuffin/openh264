@@ -13,16 +13,24 @@ because the playbook is what turned the decoder from "16 modules, 439 `unsafe fn
 
 | | at Phase 5's open | at its exit | **after Phase 5b** |
 |---|---|---|---|
-| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) | **131** (67 code + 64 prose) |
+| decoder `raw_ptr` | 1283 | **236** (173 code + 63 prose) | **113** (47 code + 66 prose) |
 | decoder `unsafe fn` | ~1400 | **42** | **0** |
 | decoder `unsafe {` blocks | — | 160 | **6** |
 | decoder `#[allow(unsafe_code)]` items | — | 167 | **3** |
 | decoder modules with `#![deny(unsafe_code)]` | **0** | **22 of 22** | 22 of 22 |
 | corpus (output / codes) | 641 agree / 541 differ on truncation rows | **2707 / 0** | unmoved |
 
-**Phase 5b (2026-08-17, sessions A/B/C, closed at `f5ba2395`) closed all five
-enumerated families**, and `src/decoder/` now carries **three** `#[allow(unsafe_code)]`
-items and no `unsafe fn` at all. Four of its results are this phase's to reuse:
+**Phase 5b (2026-08-17/18, sessions A–D, closed at `00a702ed`) closed all five
+enumerated families and then F56**, and `src/decoder/` now carries **three**
+`#[allow(unsafe_code)]` items and no `unsafe fn` at all. **The 47 code occurrences
+that remain are enumerated by category and they are Phase 8's, not this phase's**
+(T5b.9's done-test): **16** api-owned context fields and their accessors, **6** the
+log callback's C shape, **10** values crossing the C ABI or the pool's own machinery
+(`ppDst`, `PPicture`/`PPicBuff`, `slot_ptr_mut`, `data_ptr`), **15** unit-test
+fixtures feeding the first group. The other **66** are prose — comment text
+recording what a pointer used to be, which is S16's floor and cannot fall.
+
+Four of Phase 5b's results are this phase's to reuse:
 
 1. **F42's method, for 6.1/6.2.** The encoder's picture pool meets the same shape in
    `MarkPicAsRef`: **a safe container can hand back the identity of the slot it lends
@@ -37,11 +45,19 @@ items and no `unsafe fn` at all. Four of its results are this phase's to reuse:
    wrong recipe; what works is a `memset_zero` beside the `Default`, each field's zero
    *meaning* written out, and a temporary byte-comparison test against the shell it
    replaces to prove the equivalence rather than argue it. `size_of` first: the
-   decoder context measured 573,576 bytes against a doc that said "several MiB".
-4. **F56 is open and it is this class's trap.** `Option<T>` over a type with a `bool`
-   or small-enum niche is **valid at all-zero and reads as `Some(default)`**, where a
-   raw pointer's zero was `None`. The encoder's structs will meet it the moment their
-   aliases become ids.
+   decoder context measured 573,576 bytes at T5b.5 against a doc that said "several
+   MiB" (572,784 after T5b.9 deleted a dead pointer field from `SSps`).
+4. **F56 is closed, and it is this class's trap.** `Option<T>` over a type with a
+   `bool` or small-enum niche is **valid at all-zero and reads as `Some(default)`**,
+   where a raw pointer's zero was `None`. The encoder's structs will meet it the
+   moment their aliases become ids. What Phase 5b learned closing it is the part to
+   carry: **no gate this project owns can see the difference** — the corpus and the
+   conformance set were byte-identical either way, because on every stream both
+   values take the same arm — so the instrument is the **byte comparison against the
+   zero image, with every differing offset attributed by `offset_of!`**, and the
+   decision is a ruling rather than a default (the ladder's rung 3). T5b.8 ran both:
+   573,574 of 573,576 bytes identical, the two exceptions named, corpus 2690/17 +
+   2707/0 and conformance 60/60 unmoved.
 
 The encoder is where the decoder was. Measured at Phase 5's exit:
 

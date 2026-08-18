@@ -11220,26 +11220,55 @@ reuse: F42's method for 6.1/6.2, S34 before any alias becomes an index, the shel
 recipe with its measured negative, and **F56 as the trap that class carries**.
 One item is owed to Eugene or the steward and to nobody else: **F56's two lines.**
 
-<!-- Phase 5b session D breadcrumbs — consolidated into the session's entry at close. -->
-<!-- Open (S27 cheap subset, at `a74ed53b`): both profiles + `--all-targets` clean, tests
-     479/473/20, ratchet clean, census PASS/59. Recount (S24): decoder raw_ptr 131
-     (67 code + 64 prose), allow items 3 production + 1 test-module inner, `unsafe fn` 0,
-     blocks 6. Five files' prose still says "four" allow items — stale since T5b.7. -->
-<!-- Face 0 closed at `318c9f87` (T5b.8). F56 fixed at all three sites. Byte comparison:
-     context vs the rebuilt shell 573,574/573,576, differing at offsets 249816 and 256260
-     (the two Option<SpsRef> niche bytes); SNalUnit::default vs its zero image 6,055/6,056
-     at offset 96. Three covering tests, each measured red under its own revert. The
-     `else` arm is taken 0 times across conformance/corpus/e2e (instrument sound: 2 hits
-     under the unit test). Gate before commit: corpus 2690/17 + 2707/0 over 2707 rows,
-     conformance 60/60, e2e 16/16 — unmoved. Per-commit PASS, tests 482/476/20, census 59,
-     decoder raw_ptr unchanged at 131. -->
-<!-- Face 1 closed at `00a702ed` (T5b.9). Deleted: `sMCRefMember`+typedef+`Default`;
-     `CopySpsPps` and `PWelsDecoderContext` (+11 re-exports); `PicPool::slot_at` and
-     `slot_ptr`; `PDeblockingFilterMbFunc`'s second declaration (allowlist entry retired,
-     census 59->58); `DestroyPicBuff`'s dead `pMa` (+4 call-site casts);
-     `SSps::pSLevelLimits` (write-only; T5.Y2's ruling) — context 573,576 -> 572,784 bytes
-     measured; `pic_queue.rs`'s vestigial test-module allow. Kept with Phase 8 pointers:
-     `PPicture`, `PPicBuff` (both api-live). Decoder raw_ptr 131 -> 113 (47 code + 66
-     prose); allow 3, unsafe fn 0, blocks 6. Residue: (a) api fields+accessors 16,
-     (b) log callback 6, (c) C-ABI/pool values 10, (d) fixtures feeding (a) 15 = 47.
-     Gates PASS, tests 482/476/20, census 58, conformance 60/60 at the seam. -->
+
+## Phase 5b session D — F56 fixed under the referee, and the dead pointers deleted (2026-08-18)
+
+**F56 closed by a ruling, not by a default** (T5b.8, `318c9f87`). `None` is the faithful value at
+all three sites: the C memsets an `SSps*` to NULL, and the `Some(SpsRef { id: 0 })` the zeroed
+image produced was `Option`'s niche living in a `bool` — a layout artifact, not a transcription.
+**The change landed only with the referee beside it**: corpus **2690 / 17 output, 2707 / 0 codes
+over 2707 rows** and conformance **60 / 60**, unmoved, run before the commit and again at the
+session's HEAD. The equivalence is a measurement, by T5b.5's method: the rebuilt `MaybeUninit`
+shell against the constructor is **573,574 of 573,576** bytes, differing at `offset_of!` **249816**
+and **256260** and nowhere else; `SNalUnit::default()` against its zero image is **6,055 of 6,056**,
+at offset 96. Three covering tests, **each measured red under its own revert** before the claim was
+written. **The arm the fix unblocks is still unreached, and instrumented rather than argued**:
+`AllocPicBuffOnNewSeqBegin`'s `else` scan takes **0** hits across conformance, corpus and e2e, and
+**2** under the new unit test, so the instrument is sound and the test's doc says so. That is the
+finding's lasting content — **no gate this project owns can see this class**, which is exactly why
+it needed a ruling and why the byte comparison, not the corpus, is its instrument.
+
+**Face 1 was subtraction only** (T5b.9, `00a702ed`), each item read before it was touched:
+`sMCRefMember`; `CopySpsPps` with the `PWelsDecoderContext` typedef; `PicPool::slot_at` and
+`slot_ptr`; `PDeblockingFilterMbFunc`'s second declaration — census 59 → 58, and the scan now finds
+no duplicate rather than allowlisting one; `DestroyPicBuff`'s dead `pMa`; and `SSps::pSLevelLimits`,
+**write-only**, whose only C++ readers are four log-warning sites T5.Y2 already ruled on — the
+context measures **572,784 bytes** now against 573,576. `PPicture` and `PPicBuff` stay: both are
+live in `api/` and nowhere else, so each keeps a Phase 8 pointer at its definition. Eight module
+heads carried stale counts (four allow items, `PPicture` survivors, five exceptions) and were
+corrected to what a grep says. Decoder `raw_ptr` **131 → 113 (67+64 → 47+66)**, allow items **3 by
+grep**, `unsafe fn` 0, blocks 6.
+
+**The residue, and it is Phase 8's inheritance stated exactly** — every one of the 47 code
+occurrences is one of four, hand-counted and confirmed by a classifier: **(a) 16** api-owned
+context fields and their six accessors; **(b) 6** the log callback's C shape (`pfLog`/`pLogCtx`
+and three `_pLogCtx` parameters); **(c) 10** values crossing the C ABI or the pool's own machinery
+(five `ppDst: &mut [*mut u8; 3]`, `_pDstBsInfo`, `PPicBuff`, `slot_ptr_mut`, `PPicture`,
+`data_ptr`); **(d) 15** unit-test fixtures feeding (a). The remaining **66** are prose — S16's
+floor, comment text recording what a pointer used to be.
+
+**Gates.** `exit` battery **`OVERALL: PASS` — 13 passed / 0 failed / 1 skipped** at `19c0ba48`:
+tests **482 / 476 / 20**, ratchet clean (crate `raw_ptr` 3277 → 3259), census **58**, both sweeps
+**341/341** with **no F3 hit in either profile**, both benches bit-identical, Miri `--lib` **337/0**
+(session C's 334 plus this session's three covering tests) with the differential targets **20 / 7 /
+3**. **F3's step 0 was still run as a build rather than a judgement**, and it is informational here
+because nothing hit: base `f5ba2395` and head build **different** `rust_enc` binaries in *both*
+profiles (debug `ef8477b3…` vs `cad0acbd…`, release `6b1be2a4…` vs `50d1e52d…`, one clean build
+each at one path). So AC's clause — that release can eliminate a decoder-only change — does not
+reach this window: deleting decoder types and a struct field moves the release binary too. No perf
+span (no hot-path change; D-perf-6 stands, its disposition unchanged).
+
+**Hand-off. Phase 5b is closed for the second and last time, and it owes nothing.** `phase6.md`
+carries the refreshed decoder row and the residue by category; F56 is closed in
+`phase5_findings.md` with the run's figures. **Next is Phase 6 session A, and its brief is the
+steward's next item.**

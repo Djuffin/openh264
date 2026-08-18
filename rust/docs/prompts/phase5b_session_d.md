@@ -1,5 +1,12 @@
 # Phase 5b, session D — F56 fixed, and the decoder's dead pointers deleted
 
+> **CLOSED at `00a702ed`, 2026-08-18. Both faces landed.** F56 fixed at all three
+> sites (T5b.8, `318c9f87`) with corpus 2690/17 + 2707/0 and conformance 60/60
+> unmoved; the dead pointer spellings deleted (T5b.9, `00a702ed`), decoder
+> `raw_ptr` 131 → 113 with the residue enumerated in four categories. `exit`
+> battery `OVERALL: PASS` 13/0/1. Superseded-historical; the record is the log
+> entry and F56's close in `phase5_findings.md`.
+
 A short session between Phase 5b's close and Phase 6's open. Two faces: the
 F56 fix (a **behavior change, ruled by the steward**, gated by the referee suite),
 and the deletion of the pointer spellings that survive only as dead code. No

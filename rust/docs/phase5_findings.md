@@ -2872,3 +2872,58 @@ with the full corpus and conformance run unmoved, with the byte-comparison test
 extended to assert the changed offsets and a red-under-revert constructor test.
 If the referee disputes it, the session stops the face and the finding records
 the mover for re-ruling.
+
+**CLOSED (Phase 5b session D, T5b.8 at `318c9f87`).** Fixed at all three sites:
+`active_sps: None` in the context's constructor, the overwrite dropped from
+`MemGetNextNal`'s node reset — which retired `SNalUnit::memset_zero`, since
+`Default` *is* the C's memset once the overwrite is gone — and the prefix NAL's
+VCL arm, which already carried `None` on unobservability grounds and now carries
+it for the reason the other two do.
+
+**The measurement** (T5b.5's method, re-run: the `MaybeUninit::zeroed` shell
+rebuilt as zeros plus exactly the writes `make_zeroed_shell_valid` performed at
+`1abc379a^`, then byte-compared). The constructor and that shell agree on
+**573,574 of 573,576 bytes**, and the two that differ are `offset_of!`
+**249816** and **256260** — the niche byte of the prefix NAL's VCL-arm `sps_ref`
+and the niche byte of `active_sps`. Nothing else moved. `SNalUnit::default()`
+against its zero image is **6,055 of 6,056**, the exception being offset 96,
+`sps_ref` at 92 plus its niche. (T5b.5's run also recorded a padding byte inside
+`sPredList[0]`; padding is not written by a constructor, so whether it differs is
+a property of the stack the value was built on. This run saw none. The harness is
+temporary in both sessions, for the same reason: it reads padding.)
+
+**The gate that decided it**, run before the commit: the full malformed corpus
+refereed against the C++ end to end — **2690 / 17 output, 2707 / 0 codes over
+2707 rows**, the 17 being `CABA2_SVA_B`'s recorded expected-divergent rows — and
+conformance **60 / 60**, e2e 16 / 16. Both unmoved from `f5ba2395`. Nothing the
+referee holds distinguishes the two values, which is what the finding predicted
+and is now measured rather than argued.
+
+**Three covering tests, each measured red under its own revert** (F21, S33):
+`the_context_is_born_with_no_active_sps`, `a_fresh_nal_node_has_parsed_no_sps`,
+and `the_fallback_scan_takes_the_first_initialized_sps`. Restoring the `Some` in
+the constructor reddens the first and third (and the byte comparison, at
+`[249816]` against `[249816, 256260]`); restoring `MemGetNextNal`'s overwrite
+reddens the second alone.
+
+**The arm the fix unblocks is still unreached, and that too is measured.**
+Instrumented, `AllocPicBuffOnNewSeqBegin`'s `else` scan is taken **0 times**
+across conformance (60 assets), the malformed corpus (15 tables) and e2e (16) —
+`WelsDecodeInitAccessUnitStart` writes `active_sps` from the start NAL before it
+runs on every stream either gate holds. The probe fired twice under the new unit
+test, so the instrument is sound. The test's doc says so rather than implying a
+stream covers it. **And the scan is the port's own guard, not a transcription**:
+the C++ reads `pCtx->pSps->iMbWidth` with no null test, so the state this arm
+handles is a null dereference there. What the port has always done — before
+T5.R6 by taking the entry's address, after it by taking its id — is select the
+first `sSpsBuffer` entry with `uiTotalMbCount > 0`, and that equivalence is what
+the test asserts.
+
+**What the finding is worth keeping for.** F54's niche is not a bug you find by
+reading a diff; it is found by *writing the zero image out field by field* and
+comparing it to the constructor, which is what T5b.4/T5b.5 did and what turned
+three invisible values into a table. The corollary for Phase 6, where the
+encoder's aliases become ids: when a raw pointer becomes an `Option<T>` and `T`
+has a `bool` or small-enum niche, the all-zero image stops meaning `None` — and
+no gate this project owns will say so, because on every stream either value
+takes the same arm. Only the byte comparison says it.
