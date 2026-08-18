@@ -11219,3 +11219,17 @@ starting position is re-measured here (`src/encoder/` 2534/671, `src/common/`
 reuse: F42's method for 6.1/6.2, S34 before any alias becomes an index, the shells'
 recipe with its measured negative, and **F56 as the trap that class carries**.
 One item is owed to Eugene or the steward and to nobody else: **F56's two lines.**
+
+<!-- Phase 5b session D breadcrumbs — consolidated into the session's entry at close. -->
+<!-- Open (S27 cheap subset, at `a74ed53b`): both profiles + `--all-targets` clean, tests
+     479/473/20, ratchet clean, census PASS/59. Recount (S24): decoder raw_ptr 131
+     (67 code + 64 prose), allow items 3 production + 1 test-module inner, `unsafe fn` 0,
+     blocks 6. Five files' prose still says "four" allow items — stale since T5b.7. -->
+<!-- Face 0 closed at `318c9f87` (T5b.8). F56 fixed at all three sites. Byte comparison:
+     context vs the rebuilt shell 573,574/573,576, differing at offsets 249816 and 256260
+     (the two Option<SpsRef> niche bytes); SNalUnit::default vs its zero image 6,055/6,056
+     at offset 96. Three covering tests, each measured red under its own revert. The
+     `else` arm is taken 0 times across conformance/corpus/e2e (instrument sound: 2 hits
+     under the unit test). Gate before commit: corpus 2690/17 + 2707/0 over 2707 rows,
+     conformance 60/60, e2e 16/16 — unmoved. Per-commit PASS, tests 482/476/20, census 59,
+     decoder raw_ptr unchanged at 131. -->
