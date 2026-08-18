@@ -402,6 +402,57 @@ pub struct SWelsDecoderSpsPpsCTX {
     pub iOverwriteFlags: i32,
 }
 
+impl SWelsDecoderSpsPpsCTX {
+    /// The parameter-set context the decoder context is *born* with — `WelsMallocz`'s
+    /// zero, field by field (S21/F54).
+    ///
+    /// **Not [`SWelsDecoderSpsPpsCTX::default`]**, which is `WelsDecoderDefaults`'
+    /// value and disagrees on eight fields: `bAvcBasedFlag` is `true` there and the
+    /// five `i*LastInvalidId`/`iSeqId` fields are `-1`. Both values are real and the
+    /// decoder reaches them in that order.
+    pub fn memset_zero() -> Self {
+        Self {
+            sFrameCrop: SPosOffset::default(),
+            sSpsBuffer: [SSps::memset_zero(); MAX_SPS_COUNT + 1],
+            sPpsBuffer: [SPps::memset_zero(); MAX_PPS_COUNT + 1],
+            sSubsetSpsBuffer: [SSubsetSps::memset_zero(); MAX_SPS_COUNT + 1],
+            // The prefix NAL's *prefix* arm is the only one this field's five readers
+            // touch (`nalu.rs`, `ParsePrefixNalUnit` and `WelsParseNalHeaderExt`);
+            // its VCL arm — and so the `Option<SpsRef>` buried in that arm's slice
+            // header — is written by nothing and read by nothing, so `Default`'s
+            // `None` there is a value no path can tell from the zero pattern's
+            // `Some(SpsRef { id: 0 })`.
+            sPrefixNal: SNalUnit::default(),
+            // T5.Z1, and the reason this one write predates this constructor:
+            // `Option<SpsRef>` keeps its niche in a `bool`, so all-zero reads back as
+            // `Some(SpsRef { id: 0, subset: false })` — "SPS 0 is already active"
+            // before one has ever been parsed, which takes every stream to zero
+            // frames with `dsNoParamSets`.
+            pActiveLayerSps: [None; MAX_LAYER_NUM],
+            // `true` in `Default`.
+            bAvcBasedFlag: false,
+            bSpsExistAheadFlag: false,
+            bSubspsExistAheadFlag: false,
+            bPpsExistAheadFlag: false,
+            iSpsErrorIgnored: 0,
+            iSubSpsErrorIgnored: 0,
+            iPpsErrorIgnored: 0,
+            bSpsAvailFlags: [false; MAX_SPS_COUNT],
+            bSubspsAvailFlags: [false; MAX_SPS_COUNT],
+            bPpsAvailFlags: [false; MAX_PPS_COUNT],
+            // The six `-1`s of `Default`.
+            iPPSLastInvalidId: 0,
+            iPPSInvalidNum: 0,
+            iSPSLastInvalidId: 0,
+            iSPSInvalidNum: 0,
+            iSubSPSLastInvalidId: 0,
+            iSubSPSInvalidNum: 0,
+            iSeqId: 0,
+            iOverwriteFlags: 0,
+        }
+    }
+}
+
 impl Default for SWelsDecoderSpsPpsCTX {
     fn default() -> Self {
         Self {
@@ -472,6 +523,23 @@ pub struct SRefPic {
 // `manage_dec_ref.rs` took the set by borrow; the name survives only in doc comments
 // quoting the C++ signatures, which is the C's name and not this crate's type. The
 // fourth dead pointer typedef of session W (S18, at the definition).
+
+impl SRefPic {
+    /// The reference-list set `WelsMallocz`'s zeroing leaves inside the context —
+    /// **not** [`SRefPic::default`], whose `iMaxLongTermFrameIdx` is `-1` because that
+    /// is what `WelsResetRefPic` writes when it initialises the set for use.
+    pub fn memset_zero() -> Self {
+        Self {
+            pRefList: [[None; MAX_DPB_COUNT]; LIST_A],
+            pShortRefList: [[None; MAX_DPB_COUNT]; LIST_A],
+            pLongRefList: [[None; MAX_DPB_COUNT]; LIST_A],
+            uiRefCount: [0; LIST_A],
+            uiShortRefCount: [0; LIST_A],
+            uiLongRefCount: [0; LIST_A],
+            iMaxLongTermFrameIdx: 0,
+        }
+    }
+}
 
 impl Default for SRefPic {
     fn default() -> Self {
@@ -1894,87 +1962,172 @@ pub struct SWelsDecoderContext {
 }
 pub type PWelsDecoderContext = *mut SWelsDecoderContext;
 
-/// **Enumerated exception — the shell is the constructor** (session O's correction,
-/// a standing constraint of this phase). The context is created zeroed because
-/// every value field's zero is its C default; two fields own heap allocations,
-/// whose zero is not a valid value, so they are written *through* the uninitialized
-/// shell and no invalid value ever exists. **Phase 8's**, with the `api/` inventory
-/// that owns the lifecycle.
-#[allow(unsafe_code)]
+/// **T5b.5 — the shell is retired and the constructor is the answer to S21's
+/// question.** The context was built from `MaybeUninit::zeroed()` with the owning
+/// fields written through the raw shell, because the struct "is several MiB" and a
+/// by-value constructor was said not to be an option at any point in the phase.
+/// Measured at this session's open, it is **573,576 bytes** — Phase 5 moved the bulk
+/// into owned containers, and the premise expired with them.
+///
+/// What the shell cost was not the `unsafe`. It was that *every field's initial value
+/// was unreadable*: 109 fields whose meaning was "whatever all-zero happens to be for
+/// this type", which is how `pActiveLayerSps` spent a session reading back as
+/// `Some(SpsRef { id: 0 })` (T5.Z1) and how [`SRefPic`], [`SCopyFunc`],
+/// [`SDeblockingFunc`] and [`SWelsDecoderSpsPpsCTX`] each acquired a `Default` that is
+/// deliberately *not* their zero. Each of those now has a `memset_zero` beside its
+/// `Default`, and this constructor names which of the two the context is born with.
 impl Default for SWelsDecoderContext {
     fn default() -> Self {
-        // The context has always been created zeroed (`WelsMallocz` semantics, and
-        // every value field's zero is its C default). Since T3.3 two fields own heap
-        // allocations, and a zeroed `Vec` is not a valid `Vec` — so those are written
-        // through the uninitialized shell before the value materializes, and no
-        // invalid value ever exists.
-        let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
-        Self::make_zeroed_shell_valid(shell.as_mut_ptr());
-        unsafe { shell.assume_init() }
+        Self {
+            // `SLogContext::default()` is a null handler and a null cookie.
+            sLogCtx: SLogContext::default(),
+            pArgDec: std::ptr::null_mut(),
+            // The two owning buffers. A zeroed `Vec` is a null pointer where a
+            // dangling-aligned one is required — this is the pair the shell existed
+            // to write, and the whole of what it could not express as a value.
+            sRawData: RawDataBuffer::default(),
+            sSavedData: RawDataBuffer::default(),
+            pParam: std::ptr::null_mut(),
+            uiCpuFlag: 0,
+            eVideoType: VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC,
+            bHaveGotMemory: false,
+            iImgWidthInPixel: 0,
+            iImgHeightInPixel: 0,
+            iLastImgWidthInPixel: 0,
+            iLastImgHeightInPixel: 0,
+            bFreezeOutput: false,
+            sCurNalHead: SNalUnitHeader::default(),
+            eSliceType: EWelsSliceType::P_SLICE,
+            bUsedAsRef: false,
+            iFrameNum: 0,
+            iErrorCode: 0,
+            // **Not the zero pattern, and it never was**: `TagFmo::default`'s
+            // `iSliceGroupType` is `-1` (T5.R3), and the shell wrote this array
+            // element by element for exactly that reason — the map is a `Vec` and a
+            // zeroed `Vec` is invalid. `SFmo` is not `Copy`, so this is 256 calls
+            // rather than a repeat expression.
+            sFmoList: std::array::from_fn(|_| SFmo::default()),
+            fmo_id: None,
+            iActiveFmoNum: 0,
+            pDec: None,
+            pTempDec: None,
+            // `WelsResetRefPic`'s `-1` belongs to `Default`, not to the zeroing.
+            sRefPic: SRefPic::memset_zero(),
+            sTmpRefPic: SRefPic::memset_zero(),
+            pVlcTable: std::ptr::null_mut(),
+            sBs: BsReader::default(),
+            sSpsPpsCtx: SWelsDecoderSpsPpsCTX::memset_zero(),
+            bHasNewSps: false,
+            sFrameCrop: SPosOffset::default(),
+            pPicBuff: None,
+            iPicQueueNumber: 0,
+            access_unit: None,
+            // **Preserved exactly as the zeroed shell left it, and it is not `None`.**
+            // `Option<SpsRef>` keeps its niche in a `bool`, so all-zero materializes
+            // as `Some(SpsRef { id: 0, subset: false })` — T5.Z1's class, on a field
+            // T5.Z1 did not reach. Transcribed rather than corrected here, because a
+            // refactor and a behaviour change do not share a commit (plan §2.1);
+            // T5b.5b is the change and carries the measurement.
+            active_sps: Some(SpsRef { id: 0, subset: false }),
+            active_pps: None,
+            pDqLayersList: None,
+            nal_cur: None,
+            slice_hdr_nal: None,
+            uiNalRefIdc: 0,
+            iPicWidthReq: 0,
+            iPicHeightReq: 0,
+            uiTargetDqId: 0,
+            bEndOfStreamFlag: false,
+            bInstantDecFlag: false,
+            bInitialDqLayersMem: false,
+            bOnlyOneLayerInCurAuFlag: false,
+            bReferenceLostAtT0Flag: false,
+            iTotalNumMbRec: 0,
+            bParamSetsLostFlag: false,
+            bCurAuContainLtrMarkSeFlag: false,
+            iFrameNumOfAuMarkedLtr: 0,
+            uiCurIdrPicId: 0,
+            bNewSeqBegin: false,
+            bNextNewSeqBegin: false,
+            pStreamSeqNum: std::ptr::null_mut(),
+            iSeqNum: 0,
+            bFramePending: false,
+            bFrameFinish: false,
+            iNalNum: 0,
+            sSpsBsInfo: [SSpsBsInfo::default(); MAX_SPS_COUNT],
+            sSubsetSpsBsInfo: [SSpsBsInfo::default(); MAX_PPS_COUNT],
+            sPpsBsInfo: [SPpsBsInfo::default(); MAX_PPS_COUNT],
+            pParserBsInfo: None,
+            // The dispatch tables are uninstalled until `WelsInitDecoderFuncs`; the
+            // C's zero is a null function pointer and `None` is that null.
+            pGetI16x16LumaPredFunc: [None; 7],
+            pGetI4x4LumaPredFunc: [None; 14],
+            pGetIChromaPredFunc: [None; 7],
+            pIdctResAddPredFunc: None,
+            pIdctFourResAddPredFunc: None,
+            sMcFunc: crate::decoder::error_concealment::SMcFunc::default(),
+            pGetI8x8LumaPredFunc: [None; 14],
+            pIdctResAddPredFunc8x8: None,
+            sCopyFunc: SCopyFunc::memset_zero(),
+            sDeblockingFunc: SDeblockingFunc::memset_zero(),
+            iCurSeqIntervalTargetDependId: 0,
+            iCurSeqIntervalMaxPicWidth: 0,
+            iCurSeqIntervalMaxPicHeight: 0,
+            // `Constrain0 = 0` is the zero pattern *and* the fallback every former
+            // uninstalled slot named — `decode_slice.rs`'s note is the authority.
+            eIntraPredConstraint: crate::decoder::decode_slice::IntraPredConstraint::Constrain0,
+            iFeedbackVclNalInAu: 0,
+            iFeedbackTidInAu: 0,
+            iFeedbackNalRefIdc: 0,
+            bAuReadyFlag: false,
+            bPrintFrameErrorTraceFlag: false,
+            iIgnoredErrorInfoPacketCount: 0,
+            pTraceHandle: std::ptr::null_mut(),
+            pLastDecPicInfo: std::ptr::null_mut(),
+            // 191,360 bytes of it, and `WelsCabacGlobalInit` overwrites every entry on
+            // the first CABAC access unit — `bCabacInited` below is the guard.
+            sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
+            bCabacInited: false,
+            pCabacCtx: [SWelsCabacCtx::default(); WELS_CONTEXT_COUNT],
+            // A zeroed engine is inert rather than null-pointered: `pos = 0` against an
+            // empty window takes the ladder's error arm (T5.O2).
+            sCabacDecEngine: SWelsCabacDecEngine::default(),
+            dDecTime: 0.0,
+            pDecoderStatistics: std::ptr::null_mut(),
+            iMbEcedNum: 0,
+            iMbEcedPropNum: 0,
+            iMbNum: 0,
+            bMbRefConcealed: false,
+            bRPLRError: false,
+            iECMVs: [[0; 2]; 16],
+            pECRefPic: [None; 16],
+            uiTimeStamp: 0,
+            uiDecodingTimeStamp: 0,
+            pDequant_coeff_buffer4x4: [[[0; 16]; 52]; 6],
+            pDequant_coeff_buffer8x8: [[[0; 64]; 52]; 6],
+            iDequantCoeffPpsid: 0,
+            // `WelsCalcDeqCoeffScalingList` writes both buffers and this flag in one
+            // block; the flag is the initialized test the null test used to be.
+            bDequantCoeff4x4Init: false,
+            bUseScalingList: false,
+            pMemAlign: std::ptr::null_mut(),
+            lastReadyHeightOffset: [[0; MAX_REF_PIC_COUNT]; LIST_A],
+            pPictInfoList: std::ptr::null_mut(),
+            pPictReoderingStatus: std::ptr::null_mut(),
+        }
     }
 }
 
 impl SWelsDecoderContext {
-    /// Writes valid values into the `Vec`-bearing fields of a zeroed, not yet
-    /// materialized context. Everything else's zero is its C default.
-    #[allow(unsafe_code)]
-    fn make_zeroed_shell_valid(p: *mut Self) {
-        unsafe {
-            std::ptr::addr_of_mut!((*p).sRawData).write(RawDataBuffer::default());
-            std::ptr::addr_of_mut!((*p).sSavedData).write(RawDataBuffer::default());
-            // S21, T5.P1. `Option<Box<T>>`'s `None` *is* all-zero via the null-pointer
-            // niche, so this write is redundant today — and it is here anyway, because
-            // the alternative is a field whose validity rests on a layout guarantee
-            // that no test states and no reader of the shell can see.
-            std::ptr::addr_of_mut!((*p).access_unit).write(None);
-            // S21, T5.P″1: the same clause for the two owned pictures/pool. Each was a
-            // raw pointer whose zero *was* its null; the write says so rather than
-            // relying on it.
-            std::ptr::addr_of_mut!((*p).pTempDec).write(None);
-            std::ptr::addr_of_mut!((*p).pPicBuff).write(None);
-            // S21, T5.R2: the layer joins them. Its zero was a null `PDqLayer` and is
-            // now `None` through the same niche; the write states it either way.
-            std::ptr::addr_of_mut!((*p).pDqLayersList).write(None);
-            // S21, T5.R4: the parse-only descriptor, `None` through the same niche.
-            std::ptr::addr_of_mut!((*p).pParserBsInfo).write(None);
-            // S21, T5.R3, and the one clause here that is **not** redundant: `TagFmo`
-            // owns its map as a `Vec` now, and a zeroed `Vec` is an invalid value with
-            // no niche to rescue it. 256 entries, written where the array is.
-            let fmo_list = std::ptr::addr_of_mut!((*p).sFmoList) as *mut SFmo;
-            for i in 0..MAX_PPS_COUNT {
-                fmo_list.add(i).write(SFmo::default());
-            }
-            // **S21, T5.Z1 — and the first clause here that is not just not-redundant
-            // but *load-bearing in the other direction*.** `pActiveLayerSps` held
-            // `*mut SSps`, whose zero is its null; it holds `Option<SpsRef>` now, and
-            // that type's niche is in `SpsRef`'s `bool`, where `0` is a **valid**
-            // `false`. So all-zero reads back as `Some(SpsRef { id: 0, subset: false
-            // })` — the id of the first SPS every ordinary stream sends. Without this
-            // write `CheckSpsActive` answers "SPS 0 is already active" before one has
-            // ever been parsed, `ParseSps` stages the SPS instead of storing it,
-            // `bSpsExistAheadFlag` is never set, and every stream decodes to zero
-            // frames with `dsNoParamSets`. Two probes caught it; the rule predicted
-            // it, which is what the rule is for.
-            std::ptr::addr_of_mut!((*p).sSpsPpsCtx.pActiveLayerSps).write([None; MAX_LAYER_NUM]);
-        }
-    }
-
-    /// A zeroed context constructed **on the heap**: the struct is several MiB, so
-    /// `Box::default()`'s by-value path overflows a 2 MiB test-thread stack. This is
-    /// the replacement for the `Box::new_zeroed().assume_init()` idiom, which stopped
-    /// being legal at T3.3 (a zeroed `Vec` is an invalid value).
+    /// The context on the heap, which is where every caller wants it: 573,576 bytes is
+    /// under a test thread's 2 MiB stack but not by a margin worth spending, and
+    /// `Box::new` of a struct literal is the one shape the optimizer can build in
+    /// place.
     ///
-    /// **This is the context's real constructor, and 5.5 does not replace it** (session
-    /// O's closure). The shell is here for the *size*, not for the owned fields —
-    /// `make_zeroed_shell_valid` writes two of 114 — so a by-value constructor is not
-    /// an option at any point in the phase, and "retire the shell" was never a step
-    /// anything could perform. What 5.5 owes is to keep the shell honest per owned
-    /// field (S21), which is what T5.O3 did when the CABAC engine moved in.
-    #[allow(unsafe_code)] // the shell, as above
+    /// **This is the context's real constructor** and the name every call site already
+    /// spells; only its body changed at T5b.5.
     pub fn new_boxed() -> Box<Self> {
-        let mut shell = Box::<Self>::new_zeroed();
-        Self::make_zeroed_shell_valid(shell.as_mut_ptr());
-        unsafe { shell.assume_init() }
+        Box::new(Self::default())
     }
 }
 
@@ -2044,3 +2197,4 @@ mod tests {
         }
     }
 }
+
