@@ -2862,3 +2862,13 @@ decision ladder's rung 3.
 (`active_sps: None` in `SWelsDecoderContext::default`, and dropping the one
 overwrite in `SNalUnit::memset_zero`), and what it needs is a decision plus the
 corpus and conformance run beside it, not more reading.
+
+**RULED (steward, 2026-08-18): fix it — `None` is the faithful value.** The
+`Some` is a niche-layout artifact, not a transcription; the argument is the one
+T5.Z1 accepted for `pActiveLayerSps`; and a behavior question becomes
+answerable exactly when the referee suite runs beside the change. Executed as
+Phase 5b session D, face 0 (`prompts/phase5b_session_d.md`): the fix lands only
+with the full corpus and conformance run unmoved, with the byte-comparison test
+extended to assert the changed offsets and a red-under-revert constructor test.
+If the referee disputes it, the session stops the face and the finding records
+the mover for re-ruling.
