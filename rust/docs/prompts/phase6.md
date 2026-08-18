@@ -326,7 +326,8 @@ at a family boundary, and only with a written reason):
   three decoder probes are 665s), **S32 transfers to the encoder** on picture size
   (flat to 1.3% across 64x the area) and the plan's §7.6 carries the amendment, and
   **no decoder probe could be retired** — measured reach says each reaches code no
-  other reaches. The live probe costs **31s, +3.2%** of the Miri battery.
+  other reaches. The live probe costs **+1.95%** of the Miri battery in Miri's own
+  deterministic clock (1624.96 -> 1656.72s), about **+20s** of wall clock.
   [`phase6_session_a.md`](phase6_session_a.md)
 * **B — NEXT, and it inherits a diagnosed blocker.** The clearing: F52's six
   adjudicated; the `c_void` residue deleted; the two blocker settlements written
