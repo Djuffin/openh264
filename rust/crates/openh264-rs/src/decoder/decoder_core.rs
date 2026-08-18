@@ -518,27 +518,62 @@ impl DqLayerState {
     /// carry provenance, which is what lets Miri *see* that heap — it does not make
     /// a zeroed `Vec` valid.
     ///
-    /// The shape is `SWelsDecoderContext::new_boxed`'s, from T3.3: zero a
-    /// `MaybeUninit` shell, write the owning fields through it with
-    /// `addr_of_mut!` (S29 — no `&mut` to a field of a not-yet-valid struct), and
-    /// only then materialize. There is no shell left over to delete afterwards,
-    /// because the grid is the only owning field and it is written here.
+    /// **T5b.5: the shell is gone and the constructor says what the zeroing meant.**
+    /// It used to be `SWelsDecoderContext::new_boxed`'s shape (zero a `MaybeUninit`,
+    /// write the owning field through it with `addr_of_mut!`, materialize) — a
+    /// spelling that put every *other* field's initial value beyond reading. Written
+    /// out, the C's `WelsMallocz` zero is a value like any other, and the two the C++
+    /// constructor overwrites stop being a fixup after the fact.
     ///
     /// `Default` is not reinstated on top of this: a layer cannot be constructed
     /// without dimensions any more, and a `Default` that invented some would be the
     /// same lie the wholesale zeroing was.
-    #[allow(unsafe_code)] // decoder-internal raw cursor
     pub fn for_grid(dims: MbDims) -> Self {
-        // SAFETY: the family named at the item above.
-        unsafe {
-            let mut shell = std::mem::MaybeUninit::<Self>::zeroed();
-            unsafe {
-                std::ptr::addr_of_mut!((*shell.as_mut_ptr()).grid).write(MbGrid::new(dims));
-                let mut layer = shell.assume_init();
-                layer.uiRefLayerDqId = 255;
-                layer.uiRefLayerChromaPhaseYPlus1 = 1;
-                layer
-            }
+        Self {
+            // The one owning field, and the reason the shell existed: a zeroed `Vec`
+            // is a null pointer where a dangling-aligned one is required.
+            grid: MbGrid::new(dims),
+            // `SLayerInfo`'s `Default` is `WelsMallocz`'s zero field for field, with
+            // one deliberate difference and it is T5.Z1's: `Option<SpsRef>` keeps its
+            // niche in a `bool`, so the all-zero pattern reads back as
+            // `Some(SpsRef { id: 0, subset: false })` where the C's memset leaves a
+            // null `pSps`. `None` is the faithful spelling; the zero pattern was not.
+            sLayerInfo: SLayerInfo::default(),
+            iLumaStride: 0,
+            iChromaStride: 0,
+            iMbX: 0,
+            iMbY: 0,
+            iMbXyIndex: 0,
+            // Not the allocation's dimensions: these are the *current slice's*, and
+            // the C leaves them zero until `InitDqLayerInfo` writes them (T5.E2).
+            iMbWidth: 0,
+            iMbHeight: 0,
+            iSliceIdcBackup: 0,
+            uiSpsId: 0,
+            uiPpsId: 0,
+            uiDisableInterLayerDeblockingFilterIdc: 0,
+            iInterLayerSliceAlphaC0Offset: 0,
+            iInterLayerSliceBetaOffset: 0,
+            iSliceGroupChangeCycle: 0,
+            // The three the C++ carries as pointers into the slice header; `None` is
+            // the null it memsets them to.
+            sRefPicListReordering: None,
+            sPredWeightTable: None,
+            sRefPicMarking: None,
+            iColocMv: [[[0; 2]; 16]; 2],
+            iColocRefIndex: [[0; 16]; 2],
+            iColocIntra: [0; 16],
+            bUseWeightPredictionFlag: false,
+            bUseWeightedBiPredIdc: false,
+            bStoreRefBasePicFlag: false,
+            bTCoeffLevelPredFlag: false,
+            bConstrainedIntraResamplingFlag: false,
+            // The two the C++ constructor overwrites after its own zeroing.
+            uiRefLayerDqId: 255,
+            uiRefLayerChromaPhaseXPlus1Flag: 0,
+            uiRefLayerChromaPhaseYPlus1: 1,
+            uiLayerDqId: 0,
+            bUseRefBasePicFlag: false,
         }
     }
 }

@@ -158,6 +158,15 @@ pub struct SCopyFunc {
     pub bInstalled: bool,
 }
 
+impl SCopyFunc {
+    /// The zero pattern — `bInstalled: false`, the state the decoder context is born
+    /// in and leaves at `WelsInitDecoderFuncs`. [`Default`] is the *installed* table,
+    /// which is what every other constructor of this type wants.
+    pub fn memset_zero() -> Self {
+        Self { bInstalled: false }
+    }
+}
+
 impl Default for SCopyFunc {
     fn default() -> Self {
         Self { bInstalled: true }

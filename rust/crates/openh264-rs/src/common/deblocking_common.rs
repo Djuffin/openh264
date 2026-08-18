@@ -695,6 +695,27 @@ pub struct SDeblockingFunc {
     pub pfChromaDeblockingEQ4Hor2: PChromaDeblockingEQ4Func2,
 }
 
+impl SDeblockingFunc {
+    /// The all-`None` table `WelsMallocz`'s zeroing leaves — the decoder context's
+    /// state until `WelsInitDecoderFuncs` installs [`Default`]'s twelve kernels.
+    pub fn memset_zero() -> Self {
+        Self {
+            pfLumaDeblockingLT4Ver: None,
+            pfLumaDeblockingEQ4Ver: None,
+            pfLumaDeblockingLT4Hor: None,
+            pfLumaDeblockingEQ4Hor: None,
+            pfChromaDeblockingLT4Ver: None,
+            pfChromaDeblockingEQ4Ver: None,
+            pfChromaDeblockingLT4Hor: None,
+            pfChromaDeblockingEQ4Hor: None,
+            pfChromaDeblockingLT4Ver2: None,
+            pfChromaDeblockingEQ4Ver2: None,
+            pfChromaDeblockingLT4Hor2: None,
+            pfChromaDeblockingEQ4Hor2: None,
+        }
+    }
+}
+
 impl Default for SDeblockingFunc {
     fn default() -> Self {
         Self {
