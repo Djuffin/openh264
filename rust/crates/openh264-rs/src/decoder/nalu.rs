@@ -317,20 +317,31 @@ pub struct TagPrefixNalUnit {
 pub type SPrefixNalUnit = TagPrefixNalUnit;
 pub type PPrefixNalUnit = *mut SPrefixNalUnit;
 
-/// Discriminated payload union inside [`SNalUnit`].
+/// The payload inside [`SNalUnit`] — the C++'s discriminated union, **as a struct**
+/// (T5b.3).
+///
+/// The C declares `union { SVclNal sVclNal; SPrefixNalUnit sPrefixNal; }` and the NAL
+/// type is the discriminant, carried out of band in `sNalHeaderExt`. That is the whole
+/// of what made reading a node `unsafe`: a union field read is UB unless the arm is
+/// the one last written, and no type in the port could say which.
+///
+/// **Both arms live side by side now**, which costs `size_of::<SPrefixNalUnit>()` — a
+/// small-field struct, against `SVclNal`'s slice-header extension — per node, at
+/// thirty-two nodes per access unit. Nothing else changes: the paths that write the
+/// prefix arm and the paths that write the VCL arm are the same paths, selected by
+/// the same `eNalUnitType`, and no site reads one after writing the other. What is
+/// bought is that *reading a node is safe*, which is what the access unit's slots
+/// needed in order to own (`TagAccessUnits::nal_units`).
+///
+/// An `enum` would say more, and it is deliberately not that: the two arms are
+/// written field-by-field by the parsers, several statements apart, so a sum type
+/// would need a builder at every site. This is the change that removes the
+/// unsoundness; tightening it further is a design question, not this face's.
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub union SNalData {
+#[derive(Copy, Clone, Default)]
+pub struct SNalData {
     pub sVclNal: SVclNal,
     pub sPrefixNal: SPrefixNalUnit,
-}
-
-impl Default for SNalData {
-    fn default() -> Self {
-        SNalData {
-            sVclNal: SVclNal::default(),
-        }
-    }
 }
 
 /// In-memory representation of an individual NAL Unit.
@@ -372,19 +383,25 @@ pub struct TagAccessUnits {
     /// for the picture pool and for the same reason: the port had **two** allocators
     /// for this list, of different shapes, and a growth path that mixed them.
     ///
-    /// **Slots are raw, and the ownership is in [`Drop`], exactly as `PicPool`'s
-    /// are** — the design session N reached for the picture pool, re-derived here by
-    /// Miri. `Vec<Box<SNalUnit>>` was the obvious spelling and it is *unsound in this
-    /// consumer*: handing out a node pointer means `&mut *the_box`, whose Unique retag
-    /// covers the whole node, and `ParseSliceHeaderSyntaxs` is already holding a
-    /// `&mut BsCursor` **into that same node** as a strongly-protected argument. The
-    /// aliases have to go before the container may lend.
+    /// **The slots own** (T5b.3), and what made that possible is that the last stored
+    /// alias into a node is gone.
     ///
-    /// One node per `Box::into_raw`, stable across a growth. The C++ moves the nodes
+    /// The paragraph that stood here explained why they could not: *"handing out a
+    /// node pointer means `&mut *the_box`, whose Unique retag covers the whole node,
+    /// and `ParseSliceHeaderSyntaxs` is already holding a `&mut BsCursor` into that
+    /// same node"* — a Miri verdict, and the reason the design copied `PicPool`'s
+    /// pre-T5.Q1 shape. Both halves of it have been removed rather than argued away:
+    /// `pCtx->pNalCur` is an **index** since T5b.3, and the `&mut BsCursor` the slice
+    /// parser holds is derived from *this* container's own borrow through
+    /// [`node_mut`](Self::node_mut), so it is one borrow chain instead of two
+    /// derivations. `PicPool`'s slots took exactly this step at T5.Q1, for exactly
+    /// this reason.
+    ///
+    /// One node per `Box`, stable across a growth — the C++ moves the nodes
     /// (`ExpandNalUnitList` copies into a new block and frees the old), which dangles
-    /// every outstanding `SNalUnit*` — P5's hazard in its original habitat; pushing
-    /// onto a `Vec` makes it unrepresentable rather than repaired.
-    pub nal_units: Vec<PNalUnit>,
+    /// every outstanding `SNalUnit*`; P5's hazard in its original habitat, and a
+    /// `Vec<Box<_>>` makes it unrepresentable rather than repaired.
+    pub nal_units: Vec<Box<SNalUnit>>,
     pub uiAvailUnitsNum: u32,
     pub uiActualUnitsNum: u32,
     pub uiStartPos: u32,
@@ -423,7 +440,7 @@ impl TagAccessUnits {
         let mut au = Box::new(Self::default());
         au.nal_units.reserve_exact(count);
         for _ in 0..count {
-            au.nal_units.push(Box::into_raw(Box::new(SNalUnit::default())));
+            au.nal_units.push(Box::new(SNalUnit::default()));
         }
         au
     }
@@ -437,68 +454,48 @@ impl TagAccessUnits {
 
     /// The pointer to node `i`.
     ///
-    /// This **copies a stored pointer**; it does not derive one. That is the whole
-    /// difference between this and the `Vec<Box<_>>` version Miri rejected: a
-    /// container that lends `&mut` to a node invalidates every raw alias into it, and
-    /// this list has live ones (`pCtx->pNalCur`, and the `&mut BsCursor` arguments the
-    /// slice-header parser holds into a node's bitstream). Same reasoning as
-    /// `PicPool`'s slots (T5.N1), reached the same way — by a probe.
+    /// Node `i`, mutably — the C's `pNalUnitsList[i]`.
+    ///
+    /// **T5b.3: a borrow, from the container's own borrow.** This was
+    /// `nal(&self) -> *mut SNalUnit`, a *copy of a stored pointer* rather than a
+    /// derivation, and the whole design above existed to keep it that way. With
+    /// `pCtx->pNalCur` an index there is no second path to a node, so one `&mut` at a
+    /// time is all any consumer wants — the slice-header parser's `&mut BsCursor` is
+    /// reborrowed *out of this*, which is one chain rather than two.
     ///
     /// # Panics
-    /// If `i` is out of range. The C indexed `pNalUnitsList[i]` unchecked and the port
-    /// paired every index with a hand-written `i < MAX_NAL_UNIT_NUM_IN_AU` test; this
-    /// is the same check, in one place (P13).
+    /// If `i` is out of range. The C indexed unchecked and the port paired every index
+    /// with a hand-written `i < MAX_NAL_UNIT_NUM_IN_AU` test; this is that check, in
+    /// one place (P13).
     #[inline]
-    pub fn nal(&self, i: usize) -> *mut SNalUnit {
+    pub fn nal(&mut self, i: usize) -> &mut SNalUnit {
         let len = self.nal_units.len();
         assert!(i < len, "NAL unit {i} outside an access unit of {len}");
-        self.nal_units[i]
+        &mut self.nal_units[i]
     }
 
-    /// Node `i` as a **shared** borrow, or `None` past the end of the list.
+    /// [`nal`](Self::nal)'s shared form, or `None` past the end of the list.
     ///
-    /// **T5.AC5, and it is deliberately shared-only.** The `_mut` form this
-    /// obviously wants does not exist and must not: the whole reason the slots are
-    /// raw is that a container which lends `&mut` to a node invalidates the live
-    /// raw aliases into it (`pCtx->pNalCur`, and the `&mut BsCursor` the
-    /// slice-header parser holds into a node's bitstream) — the doc on
-    /// [`nal_units`](Self::nal_units) is the finding. A `SharedReadOnly` retag pops
-    /// nothing, so a *reading* consumer can have a borrow and the writers keep the
-    /// pointer. That is what every caller of this has: a look at a NAL header.
-    ///
-    /// The `unsafe` is the enumerated exception, and it is here — in the module
-    /// that owns the container — rather than at each reader. **Phase 8's** with
-    /// the rest of the parse tree's raw slots, whose real fix is the one `PicPool`
-    /// got at T5.Q1: owned slots, once nothing aliases into a node.
-    #[allow(unsafe_code)]
+    /// T5.AC5 introduced this as the safe reader while the slots were raw; it stays
+    /// because most consumers only look at a NAL header, and a shared borrow lets two
+    /// of them coexist.
     #[inline]
     pub fn node(&self, i: usize) -> Option<&SNalUnit> {
-        let &pNal = self.nal_units.get(i)?;
-        if pNal.is_null() {
-            return None;
-        }
-        // SAFETY: every slot is one `Box::into_raw(Box::new(SNalUnit))` made by
-        // `with_nodes`/`ExpandNalUnitList` and reclaimed only by this struct's
-        // `Drop`, so a non-null slot names a live node for as long as `self` is
-        // borrowed. Shared, so it cannot invalidate an alias into the node.
-        unsafe { Some(&*pNal) }
+        self.nal_units.get(i).map(|n| &**n)
+    }
+
+    /// [`node`](Self::node)'s mutable form.
+    #[inline]
+    pub fn node_mut(&mut self, i: usize) -> Option<&mut SNalUnit> {
+        self.nal_units.get_mut(i).map(|n| &mut **n)
     }
 }
 
-impl Drop for TagAccessUnits {
-    /// F19's answer for every node, in one place: the nodes are `Box::into_raw`'d at
-    /// construction and reclaimed here. The context's drop glue runs this.
-    fn drop(&mut self) {
-        for &pNal in &self.nal_units {
-            if !pNal.is_null() {
-                // The list owns its nodes and this is where it gives them back —
-                // the other half of the raw-slot design above (T5.AC9).
-                #[allow(unsafe_code)]
-                drop(unsafe { Box::from_raw(pNal) });
-            }
-        }
-    }
-}
+// **`Drop` is deleted, not converted** (T5b.3). It existed to `Box::from_raw` every
+// slot — F19's answer for the nodes, hand-written because the slots were raw. Owned
+// slots make the same answer the compiler's drop glue, and R4's equivalence argument
+// ("the port frees exactly what the C++ frees") holds by construction rather than by
+// inspection: there is no spelling in which a slot can be dropped without its node.
 
 // ============================================================================
 // Lookup Tables
@@ -566,56 +563,29 @@ pub const g_kuiDequantScaling8x8Default: [[u8; 64]; 2] = [
 /// Returns a pointer to the byte immediately following `0x01` (the NAL header byte),
 /// or null if no valid start code prefix is found.
 
-/// Byte-wise equality of two POD parameter-set structs, matching the `memcmp`
+/// Equality of two POD parameter-set structs, standing in for the `memcmp`
 /// guards in `ParseSps` / `ParsePps` (`au_parser.cpp`).
 ///
-/// **Every byte of both operands must be initialized, padding included** — this
-/// reads the struct as `[u8]` and uninitialized padding makes that UB. See
-/// [`bytes_copy`] for the half of the contract that keeps it true.
-///
-/// **T5.AC9: the operands are borrows and the `unsafe` is at this item.** Reading a
-/// struct as `[u8]` is what the function *is* — the padding is the point — so this
-/// is an enumerated exception rather than a conversion, and it is one item instead
-/// of one per caller. **Phase 8's**, with the parameter-set structs themselves.
-#[allow(unsafe_code)]
-fn bytes_equal<T>(a: &T, b: &T) -> bool {
-    // SAFETY: `a` and `b` are live `T`s, and every byte of both is initialized —
-    // `bytes_copy` below is the other half of that contract, and `ParseSps`'s
-    // zeroing is the third.
-    unsafe {
-        std::slice::from_raw_parts(a as *const T as *const u8, std::mem::size_of::<T>())
-            == std::slice::from_raw_parts(b as *const T as *const u8, std::mem::size_of::<T>())
-    }
+/// **T5.AC9 enumerated this as an exception; T5b.3 retires it instead.** The
+/// `unsafe` was a `from_raw_parts` pair reading each struct as `[u8]`, which made
+/// *padding* part of the comparison and put "every byte initialized, padding
+/// included" on the caller — F31's zeroing and the `MaybeUninit` scratch in
+/// `ParseSps` existed to discharge exactly that. The field comparison is what the
+/// `memcmp` was for and cannot see padding at all.
+fn bytes_equal<T: PartialEq>(a: &T, b: &T) -> bool {
+    // **T5b.3: structural, not byte-wise.** The C++ `memcmp`s two parameter sets, and
+    // the port reproduced that literally — which is why `ParseSps` had to zero the
+    // *padding* of its scratch (F31) and why the scratch had to be a `MaybeUninit`
+    // shell. Comparing the fields is what the `memcmp` was for, it cannot see padding
+    // at all, and the two agree on every value either side can hold: both operands
+    // are written through this module's own copy, out of a zero-initialised scratch.
+    a == b
 }
 
-/// Byte-wise copy of a POD parameter-set struct — `memcpy (dst, src, sizeof (T))`
-/// in `au_parser.cpp`, spelled so that it is one (F31).
-///
-/// The port wrote these stores as `copy_nonoverlapping::<T>(src, dst, 1)`, a
-/// **typed** copy, and a typed copy does not carry the source's padding: Rust
-/// leaves the destination's padding bytes uninitialized. The `memcmp` guard
-/// standing next to every one of these stores then reads exactly those bytes.
-/// `ParseSps`'s `memset`-to-zero exists to make the comparison meaningful — the
-/// comment there has said so since the function was written — and the typed copy
-/// was quietly discarding it one line later.
-///
-/// The three-way pairing is the C++'s and it only works whole: **`memset` the
-/// source, `memcpy` it in, `memcmp` it back.** Break any leg and the guard reads
-/// undefined bytes; the consequence on the stream is a spurious "SPS changed",
-/// which resets the DPB mid-sequence.
-///
-/// **T5.AC9**: `bytes_equal`'s note applies, with the same enumeration.
-#[allow(unsafe_code)]
-fn bytes_copy<T>(dst: &mut T, src: &T) {
-    // SAFETY: both are live `T`s of the same type, so the spans are equal and
-    // disjoint (a `&mut` and a `&` cannot name one object).
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            src as *const T as *const u8,
-            dst as *mut T as *mut u8,
-            std::mem::size_of::<T>(),
-        );
-    }
+fn bytes_copy<T: Copy>(dst: &mut T, src: &T) {
+    // The `memcpy`'s value form. `T` is a POD parameter set, so the assignment moves
+    // the same bytes the C's did — minus the padding, which nothing reads.
+    *dst = *src;
 }
 
 // `DetectStartCodePrefix` was deleted dead at T3.3 (S18): it had no callers — the
@@ -690,24 +660,13 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
 /// past the consumed headers — `Some(offset)` where the C returned an advanced
 /// pointer, `None` where it returned null. Every read below is an index into the
 /// owning buffer.
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn ParseNalHeader(
+pub fn ParseNalHeader(
     pCtx: &mut SWelsDecoderContext,
     pNalUnitHeader: &mut SNalUnitHeader,
     kiRbspStart: usize,
     iSrcRbspLen: i32,
     pConsumedBytes: &mut i32,
 ) -> Option<usize> {
-    let pCurNal: *mut SNalUnit;
     let mut iNal = kiRbspStart;
     let mut iNalSize = iSrcRbspLen;
 
@@ -805,22 +764,33 @@ pub unsafe fn ParseNalHeader(
         }
 
         EWelsNalUnitType::NAL_UNIT_PREFIX => {
-            pCurNal = &mut (*pCtx).sSpsPpsCtx.sPrefixNal;
-            (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
+            // T5b.3: the prefix NAL is a *field* of the context, not a node of the
+            // access unit, so it is reached as one — `pCtx.sSpsPpsCtx.sPrefixNal`
+            // per statement, which is what the raw local was standing in for.
+            macro_rules! pCurNal {
+                () => {
+                    pCtx.sSpsPpsCtx.sPrefixNal
+                };
+            }
+            pCurNal!().uiTimeStamp = (*pCtx).uiTimeStamp;
 
             if iNalSize < NAL_UNIT_HEADER_EXT_SIZE as i32 {
                 mark_au_ready(pCtx);
-                (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
+                pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
                 (*pCtx).iErrorCode |= dsBitstreamError;
                 return None;
             }
 
-            DecodeNalHeaderExt(&mut *pCurNal, &pCtx.sRawData.bytes()[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
-            if (*pCurNal).sNalHeaderExt.uiQualityId != 0
-                || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
+                        let hdr: [u8; NAL_UNIT_HEADER_EXT_SIZE] = pCtx.sRawData.bytes()
+                [iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]
+                .try_into()
+                .unwrap();
+            DecodeNalHeaderExt(&mut pCurNal!(), &hdr);
+            if pCurNal!().sNalHeaderExt.uiQualityId != 0
+                || pCurNal!().sNalHeaderExt.bUseRefBasePicFlag
             {
                 mark_au_ready(pCtx);
-                (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
+                pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
                 (*pCtx).iErrorCode |= dsBitstreamError;
                 return None;
             }
@@ -829,9 +799,9 @@ pub unsafe fn ParseNalHeader(
             iNalSize -= NAL_UNIT_HEADER_EXT_SIZE as i32;
             *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
 
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
+            pCurNal!().sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
+            pCurNal!().sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
+            pCurNal!().sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
 
             if pNalUnitHeader.uiNalRefIdc != 0 {
                 let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
@@ -847,7 +817,7 @@ pub unsafe fn ParseNalHeader(
                 ParsePrefixNalUnit(pCtx, start, &mut cursor);
                 (*pCtx).sBs.cursor = cursor;
             }
-            (*pCurNal).sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
+            pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
         }
 
         // `case NAL_UNIT_CODED_SLICE_EXT: bExtensionFlag = true;` falls through into
@@ -859,18 +829,19 @@ pub unsafe fn ParseNalHeader(
         | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR => {
             let bExtensionFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
 
-            pCurNal = match cur_au(&mut pCtx.access_unit) {
-                Some(au) => MemGetNextNal(au),
-                None => std::ptr::null_mut(),
-            };
-            if pCurNal.is_null() {
+            // **T5b.3: the node is an index from here down.** Every write below
+            // re-acquires it, and no borrow crosses a call that re-enters the context.
+            let Some(cur_idx) = cur_au(&mut pCtx.access_unit).and_then(MemGetNextNal) else {
                 (*pCtx).iErrorCode |= dsOutOfMemory;
                 return None;
+            };
+            let uiTimeStamp = (*pCtx).uiTimeStamp;
+            if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx)) {
+                nal.uiTimeStamp = uiTimeStamp;
+                nal.sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
+                nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
+                nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
             }
-            (*pCurNal).uiTimeStamp = (*pCtx).uiTimeStamp;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = pNalUnitHeader.uiNalRefIdc;
-            (*pCurNal).sNalHeaderExt.sNalUnitHeader.eNalUnitType = pNalUnitHeader.eNalUnitType;
 
             // The count is a scalar copy, not a borrow: it is the one thing this branch
             // needs to carry across `ParseSliceHeaderSyntaxs`, which derives the access
@@ -888,10 +859,21 @@ pub unsafe fn ParseNalHeader(
                     return None;
                 }
 
-                DecodeNalHeaderExt(&mut *pCurNal, &pCtx.sRawData.bytes()[iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]);
-                if (*pCurNal).sNalHeaderExt.uiQualityId != 0
-                    || (*pCurNal).sNalHeaderExt.bUseRefBasePicFlag
-                {
+                // The header bytes are copied out first: the slice they come from is
+                // `sRawData`, a *field* of the context the node also lives in.
+                let hdr: [u8; NAL_UNIT_HEADER_EXT_SIZE] = pCtx.sRawData.bytes()
+                    [iNal..iNal + NAL_UNIT_HEADER_EXT_SIZE]
+                    .try_into()
+                    .unwrap();
+                let (qid, base_pic) =
+                    match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx)) {
+                        Some(nal) => {
+                            DecodeNalHeaderExt(nal, &hdr);
+                            (nal.sNalHeaderExt.uiQualityId, nal.sNalHeaderExt.bUseRefBasePicFlag)
+                        }
+                        None => return None,
+                    };
+                if qid != 0 || base_pic {
                     // MGS not supported.
                     discard_nal_and_close_au(pCtx, uiAvailNalNum);
                     (*pCtx).iErrorCode |= dsBitstreamError;
@@ -908,32 +890,45 @@ pub unsafe fn ParseNalHeader(
                         // The prefix NAL is copied out first: it is a field of the
                         // context this call takes whole (T5.Z4). `SNalUnit` is plain
                         // data, and the callee only reads the source.
-                        let mut prefix = (*pCtx).sSpsPpsCtx.sPrefixNal;
-                        PrefetchNalHeaderExtSyntax(pCtx, pCurNal, &mut prefix);
+                        let prefix = (*pCtx).sSpsPpsCtx.sPrefixNal;
+                        // T5b.3: the destination node is re-acquired by index, and the
+                        // source is a *copy* of the context's prefix NAL — so the two
+                        // borrows the call needs cannot be the same object.
+                        if let Some(dst) =
+                            cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))
+                        {
+                            prefetch_nal_header_ext(dst, &prefix);
+                        }
                     }
                 }
 
                 // SHOULD update this flag for AVC if no prefix NAL.
-                (*pCurNal).sNalHeaderExt.bIdrFlag =
-                    eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
-                (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag = true;
+                if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))
+                {
+                    nal.sNalHeaderExt.bIdrFlag =
+                        eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+                    nal.sNalHeaderExt.bNoInterLayerPredFlag = true;
+                }
             }
 
-            // The node this NAL parses into, taken once. It is a copy of a stored
-            // pointer into the node's *own* allocation, so every later derivation of
-            // the access unit leaves it alone — including across the `&mut BsCursor`
-            // that `pBs` becomes and `ParseSliceHeaderSyntaxs` holds as a
-            // strongly-protected argument, which is the pair T5.O7 was convicted on.
-            // (The port already derived this node twice, before and after the parse.)
-            let p_last_nal = match cur_au(&mut pCtx.access_unit) {
-                Some(au) => au.nal((uiAvailNalNum - 1) as usize),
+            // **T5b.3: nothing is held across a call any more.** `p_last_nal` used to be
+            // a raw pointer copied out of the list and dereferenced on both sides of
+            // `ParseSliceHeaderSyntaxs`, which re-enters the context and therefore the
+            // access unit; with owned slots that is a borrow conflict, and S25's fix
+            // shape applies — re-acquire at each use, and no borrow outlives one
+            // expression. Everything read out of a node here is a scalar.
+            let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
+            // `MemGetNextNal` post-increments, so the node it handed back is the last
+            // available one — the two indices are one, and this states it once.
+            let last = (uiAvailNalNum - 1) as usize;
+            debug_assert_eq!(last, cur_idx);
+            let iErr = match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
+                Some(nal) => {
+                    let pBs = &mut nal.sNalData.sVclNal.sSliceBitsRead;
+                    crate::decoder::bit_stream::DecInitBits(pBs, &pCtx.sRawData, iNal, iBitSize)
+                }
                 None => return None,
             };
-
-            let pBs = &mut (*p_last_nal).sNalData.sVclNal.sSliceBitsRead;
-            let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
-            let mut iErr =
-                crate::decoder::bit_stream::DecInitBits(pBs, &(*pCtx).sRawData, iNal, iBitSize);
             if iErr != ERR_NONE {
                 discard_nal_and_close_au(pCtx, uiAvailNalNum);
                 (*pCtx).iErrorCode |= dsBitstreamError;
@@ -945,16 +940,29 @@ pub unsafe fn ParseNalHeader(
             // slice-data parse picks it up (T5.M3, T5.Y2). It is not `pCtx.sBs`: that
             // one is the non-VCL parser's, and writing this back there would leave
             // every slice header re-read from its first bit.
-            let (start, mut cursor) = (pBs.start, pBs.cursor);
-            iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(
+            let Some((start, mut cursor)) = cur_au(&mut pCtx.access_unit)
+                .and_then(|au| au.node(last))
+                .map(|nal| {
+                    let r = &nal.sNalData.sVclNal.sSliceBitsRead;
+                    (r.start, r.cursor)
+                })
+            else {
+                return None;
+            };
+            let iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(
                 pCtx,
                 start,
                 &mut cursor,
                 bExtensionFlag,
             );
-            (*p_last_nal).sNalData.sVclNal.sSliceBitsRead.cursor = cursor;
+            if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
+                nal.sNalData.sVclNal.sSliceBitsRead.cursor = cursor;
+            }
             if iErr != ERR_NONE {
-                if uiAvailNalNum == 1 && (*pCurNal).sNalHeaderExt.bIdrFlag {
+                let bIdr = cur_au(&mut pCtx.access_unit)
+                    .and_then(|au| au.node(cur_idx))
+                    .is_some_and(|nal| nal.sNalHeaderExt.bIdrFlag);
+                if uiAvailNalNum == 1 && bIdr {
                     crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
                 }
                 discard_nal_and_close_au(pCtx, uiAvailNalNum);
@@ -962,25 +970,40 @@ pub unsafe fn ParseNalHeader(
                 return None;
             }
 
-            let p_last_sps = sps_ref_of(
-                &(*pCtx).sSpsPpsCtx,
-                (*p_last_nal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
-            );
+            let last_sps_ref = cur_au(&mut pCtx.access_unit)
+                .and_then(|au| au.node(last))
+                .and_then(|nal| nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref);
+            let p_last_sps = sps_ref_of(&pCtx.sSpsPpsCtx, last_sps_ref);
 
-            if uiAvailNalNum == 1 && CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps) {
+            // The two predicates read `sSpsPpsCtx` and the nodes, all shared — so the
+            // access unit and the parameter-set context are borrowed side by side out of
+            // the one context rather than one of them being copied out.
+            let new_seq = |pCtx: &SWelsDecoderContext| -> bool {
+                match pCtx.access_unit.as_deref().and_then(|au| au.node(cur_idx)) {
+                    Some(cur) => CheckNextAuNewSeq(&pCtx.sSpsPpsCtx, cur, p_last_sps),
+                    None => false,
+                }
+            };
+            if uiAvailNalNum == 1 && new_seq(pCtx) {
                 crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
             }
             if uiAvailNalNum > 1 {
-                let p_prev_nal = match cur_au(&mut pCtx.access_unit) {
-                    Some(au) => au.nal((uiAvailNalNum - 2) as usize),
+                let prev = (uiAvailNalNum - 2) as usize;
+                let boundary = match pCtx.access_unit.as_deref() {
+                    Some(au) => match (au.node(last), au.node(prev)) {
+                        (Some(l), Some(pv)) => {
+                            CheckAccessUnitBoundary(&pCtx.sSpsPpsCtx, l, pv, p_last_sps)
+                        }
+                        _ => return None,
+                    },
                     None => return None,
                 };
-                if CheckAccessUnitBoundary(pCtx, p_last_nal, p_prev_nal, p_last_sps) {
+                if boundary {
                     if let Some(au) = cur_au(&mut pCtx.access_unit) {
                         au.uiEndPos = uiAvailNalNum - 2;
                     }
                     (*pCtx).bAuReadyFlag = true;
-                    (*pCtx).bNextNewSeqBegin = CheckNextAuNewSeq(pCtx, pCurNal, p_last_sps);
+                    (*pCtx).bNextNewSeqBegin = new_seq(pCtx);
                 }
             }
         }
@@ -1072,30 +1095,25 @@ pub fn CheckAccessUnitBoundaryExt(
 }
 
 /// Evaluates whether the current NAL begins a new picture / Access Unit boundary.
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn CheckAccessUnitBoundary(
-    pCtx: &mut SWelsDecoderContext,
-    kpCurNal: *const SNalUnit,
-    kpLastNal: *const SNalUnit,
+// **T5b.3: both predicates take the field they reach, not the context.** They read
+// `pCtx->sSpsPpsCtx` and nothing else, and the two nodes they compare are two shared
+// borrows out of one access unit — which cannot coexist with a `&mut` of the context
+// the access unit lives in. Take-what-you-reach turns a three-way conflict into three
+// shared borrows.
+pub fn CheckAccessUnitBoundary(
+    spsPps: &SWelsDecoderSpsPpsCTX,
+    kpCurNal: &SNalUnit,
+    kpLastNal: &SNalUnit,
     kpSpsRef: Option<SpsRef>,
 ) -> bool {
-    let kpLastNalHeaderExt = &(*kpLastNal).sNalHeaderExt;
-    let kpCurNalHeaderExt = &(*kpCurNal).sNalHeaderExt;
-    let kpLastSliceHeader = &(*kpLastNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-    let kpCurSliceHeader = &(*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+    let kpLastNalHeaderExt = &kpLastNal.sNalHeaderExt;
+    let kpCurNalHeaderExt = &kpCurNal.sNalHeaderExt;
+    let kpLastSliceHeader = &kpLastNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+    let kpCurSliceHeader = &kpCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
 
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
-        let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
+        let active_sps = spsPps.pActiveLayerSps[dep_id];
         if active_sps.is_some() && active_sps != kpSpsRef {
             return true;
         }
@@ -1137,7 +1155,7 @@ pub unsafe fn CheckAccessUnitBoundary(
             return true;
         }
     }
-    if let Some(kpSps) = sps_of(&(*pCtx).sSpsPpsCtx, kpSpsRef) {
+    if let Some(kpSps) = sps_of(spsPps, kpSpsRef) {
         if kpSps.uiPocType == 0 {
             if kpLastSliceHeader.iPicOrderCntLsb != kpCurSliceHeader.iPicOrderCntLsb {
                 return true;
@@ -1159,25 +1177,15 @@ pub unsafe fn CheckAccessUnitBoundary(
 }
 
 /// Checks whether the current NAL begins a brand-new coded video sequence.
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn CheckNextAuNewSeq(
-    pCtx: &mut SWelsDecoderContext,
-    kpCurNal: *const SNalUnit,
+pub fn CheckNextAuNewSeq(
+    spsPps: &SWelsDecoderSpsPpsCTX,
+    kpCurNal: &SNalUnit,
     kpSpsRef: Option<SpsRef>,
 ) -> bool {
-    let kpCurNalHeaderExt = &(*kpCurNal).sNalHeaderExt;
+    let kpCurNalHeaderExt = &kpCurNal.sNalHeaderExt;
     let dep_id = kpCurNalHeaderExt.uiDependencyId as usize;
     if dep_id < MAX_LAYER_NUM {
-        let active_sps = (*pCtx).sSpsPpsCtx.pActiveLayerSps[dep_id];
+        let active_sps = spsPps.pActiveLayerSps[dep_id];
         if active_sps.is_some() && active_sps != kpSpsRef {
             return true;
         }
@@ -1334,17 +1342,7 @@ pub fn ParseRefBasePicMarking(
 }
 
 /// Parses prefix NAL unit syntax elements (NAL type 14).
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn ParsePrefixNalUnit(
+pub fn ParsePrefixNalUnit(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
@@ -1492,17 +1490,7 @@ pub fn GetLevelLimits(iLevelIdx: i32, bConstraint3: bool) -> Option<&'static SLe
 /// session Y's first Miri instance, and the one it fixed "by passing the index".
 /// With [`SpsRef`] the identity compare below is a value compare and the SPS is
 /// resolved inside, where nothing else is borrowed.
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn CheckSpsActive(
+pub fn CheckSpsActive(
     pCtx: &mut SWelsDecoderContext,
     r: Option<SpsRef>,
     bUseSubsetFlag: bool,
@@ -1535,10 +1523,10 @@ pub unsafe fn CheckSpsActive(
         if let Some(pCurAu) = cur_au(&mut pCtx.access_unit) {
             let iNum = pCurAu.uiAvailUnitsNum as usize;
             for i in 0..iNum {
-                let pNalUnit = pCurAu.nal(i);
-                if pNalUnit.is_null()
-                    || (*pNalUnit).sNalData.sVclNal.bSliceHeaderExtFlag != bUseSubsetFlag
-                {
+                let Some(pNalUnit) = pCurAu.node(i) else {
+                    continue;
+                };
+                if pNalUnit.sNalData.sVclNal.bSliceHeaderExtFlag != bUseSubsetFlag {
                     continue;
                 }
                 let next = sps_of(
@@ -1555,17 +1543,7 @@ pub unsafe fn CheckSpsActive(
 }
 
 /// Parses Sequence Parameter Sets (SPS and Subset SPS).
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn ParseSps(
+pub fn ParseSps(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBsAux: &mut BsCursor,
@@ -1579,29 +1557,25 @@ pub unsafe fn ParseSps(
     // which is the whole reason the two sub-parsers below stopped taking a context.
     let buf = pCtx.sRawData.window_from(kiRbspStart);
 
-    // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in au_parser.cpp. Zeroing the
-    // raw bytes (rather than using Default) also clears the struct's padding, which
-    // the byte-wise comparison against the stored SPS below relies on: leftover
-    // padding would otherwise read as a changed SPS and force a spurious new
-    // sequence, resetting the DPB mid-stream.
+    // **The shell stays, and T5b.3 measured why.** `memset (pSubsetSps, 0,
+    // sizeof (SSubsetSps))` in `au_parser.cpp` is an *all-zero* start, and
+    // `SSps::default()` is **not** all-zero — it sets `uiBitDepthLuma`/`Chroma` to 8
+    // and `bFrameMbsOnlyFlag` to true, which the parse then reads on the paths that
+    // do not write them. Replacing the shell with `Default::default()` was tried and
+    // took eleven conformance assets red, `test_scalinglist_jm` among them; S21's
+    // question — *what does the all-zero pattern mean here* — has a real answer at
+    // this site, and it is "the C's initial state, which is not this type's".
     //
-    // F31: a zeroing *initializer* alone does not do that. It produces a zeroed
-    // value, and moving that value into this binding is a typed copy — which leaves
-    // the binding's padding uninitialized however zero the source was. The
-    // `write_bytes` is the `memset`, applied to the storage the comparison reads.
-    // (Spelled without naming the intrinsic: the ratchet counts that token in prose
-    // too, and `mem_zeroed` is S21's live instrument — S16.)
-    // **T5.R8: one zeroing, not two.** The `mem::zeroed()` initializer produced a
-    // zeroed *value* and moving it into the binding was a typed copy that left the
-    // binding's padding uninitialized — which is why the `write_bytes` had to follow
-    // it, and which makes the initializer itself redundant work with a misleading
-    // meaning. `MaybeUninit` says what is actually happening: uninitialized storage,
-    // zeroed as bytes, then read through a reference that never moves the value.
-    let mut sTempSubsetSps = std::mem::MaybeUninit::<SSubsetSps>::uninit();
-    let pSubsetSps = sTempSubsetSps.as_mut_ptr();
-    std::ptr::write_bytes(pSubsetSps as *mut u8, 0, std::mem::size_of::<SSubsetSps>());
-    let sTempSubsetSps = &mut *pSubsetSps;
-    let pSps = unsafe { &mut (*pSubsetSps).sSps };
+    // What T5b.3 *did* remove is the second reason it was here: `bytes_equal`
+    // compares fields now, so the padding no longer has to be zeroed. The shell is
+    // down to the one job the C gives it.
+    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
+    let mut sTempSubsetSps = unsafe {
+        let mut t = std::mem::MaybeUninit::<SSubsetSps>::uninit();
+        std::ptr::write_bytes(t.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SSubsetSps>());
+        t.assume_init()
+    };
+    let pSubsetSps = &mut sTempSubsetSps;
 
     let kbUseSubsetFlag = IS_SUBSET_SPS_NAL((*pCtx).sCurNalHead.eNalUnitType);
 
@@ -1659,12 +1633,12 @@ pub unsafe fn ParseSps(
         None => return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE),
     };
 
-    pSps.pSLevelLimits = pSLevelLimits;
-    pSps.uiChromaFormatIdc = 1;
-    pSps.uiChromaArrayType = 1;
-    pSps.uiProfileIdc = uiProfileIdc;
-    pSps.uiLevelIdc = uiLevelIdc;
-    pSps.iSpsId = iSpsId;
+    pSubsetSps.sSps.pSLevelLimits = pSLevelLimits;
+    pSubsetSps.sSps.uiChromaFormatIdc = 1;
+    pSubsetSps.sSps.uiChromaArrayType = 1;
+    pSubsetSps.sSps.uiProfileIdc = uiProfileIdc;
+    pSubsetSps.sSps.uiLevelIdc = uiLevelIdc;
+    pSubsetSps.sSps.iSpsId = iSpsId;
 
     if uiProfileIdc == PRO_SCALABLE_BASELINE
         || uiProfileIdc == PRO_SCALABLE_HIGH
@@ -1676,41 +1650,41 @@ pub unsafe fn ParseSps(
         || uiProfileIdc == 44
     {
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.uiChromaFormatIdc = uiCode as u8;
-        if pSps.uiChromaFormatIdc > 1 {
+        pSubsetSps.sSps.uiChromaFormatIdc = uiCode as u8;
+        if pSubsetSps.sSps.uiChromaFormatIdc > 1 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
-        pSps.uiChromaArrayType = pSps.uiChromaFormatIdc;
+        pSubsetSps.sSps.uiChromaArrayType = pSubsetSps.sSps.uiChromaFormatIdc;
 
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
-        pSps.uiBitDepthLuma = 8;
+        pSubsetSps.sSps.uiBitDepthLuma = 8;
 
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode != 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
         }
-        pSps.uiBitDepthChroma = 8;
+        pSubsetSps.sSps.uiBitDepthChroma = 8;
 
         if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.bQpPrimeYZeroTransfBypassFlag = uiCode != 0;
+        pSubsetSps.sSps.bQpPrimeYZeroTransfBypassFlag = uiCode != 0;
 
         if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
+        pSubsetSps.sSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
 
-        if pSps.bSeqScalingMatrixPresentFlag {
-            let src = ScalingListSource::of(pSps);
+        if pSubsetSps.sSps.bSeqScalingMatrixPresentFlag {
+            let src = ScalingListSource::of((&mut pSubsetSps.sSps));
             ParseScalingList(
                 &src,
                 buf,
                 pBsAux,
                 false,
                 false,
-                &mut pSps.bSeqScalingListPresentFlag,
-                &mut pSps.iScalingList4x4,
-                &mut pSps.iScalingList8x8,
+                &mut pSubsetSps.sSps.bSeqScalingListPresentFlag,
+                &mut pSubsetSps.sSps.iScalingList4x4,
+                &mut pSubsetSps.sSps.iScalingList8x8,
             );
         }
     }
@@ -1719,101 +1693,101 @@ pub unsafe fn ParseSps(
     if uiCode > SPS_LOG2_MAX_FRAME_NUM_MINUS4_MAX {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_LOG2_MAX_FRAME_NUM_MINUS4);
     }
-    pSps.uiLog2MaxFrameNum = LOG2_MAX_FRAME_NUM_OFFSET + uiCode;
+    pSubsetSps.sSps.uiLog2MaxFrameNum = LOG2_MAX_FRAME_NUM_OFFSET + uiCode;
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.uiPocType = uiCode;
+    pSubsetSps.sSps.uiPocType = uiCode;
 
-    if pSps.uiPocType == 0 {
+    if pSubsetSps.sSps.uiPocType == 0 {
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode > SPS_LOG2_MAX_PIC_ORDER_CNT_LSB_MINUS4_MAX {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_LOG2_MAX_PIC_ORDER_CNT_LSB_MINUS4);
         }
-        pSps.iLog2MaxPocLsb = LOG2_MAX_PIC_ORDER_CNT_LSB_OFFSET + uiCode as i32;
-    } else if pSps.uiPocType == 1 {
+        pSubsetSps.sSps.iLog2MaxPocLsb = LOG2_MAX_PIC_ORDER_CNT_LSB_OFFSET + uiCode as i32;
+    } else if pSubsetSps.sSps.uiPocType == 1 {
         if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.bDeltaPicOrderAlwaysZeroFlag = uiCode != 0;
+        pSubsetSps.sSps.bDeltaPicOrderAlwaysZeroFlag = uiCode != 0;
 
         if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-        pSps.iOffsetForNonRefPic = iCode;
+        pSubsetSps.sSps.iOffsetForNonRefPic = iCode;
 
         if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-        pSps.iOffsetForTopToBottomField = iCode;
+        pSubsetSps.sSps.iOffsetForTopToBottomField = iCode;
 
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
         if uiCode > SPS_NUM_REF_FRAMES_IN_PIC_ORDER_CNT_CYCLE_MAX {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_NUM_REF_FRAME_IN_PIC_ORDER_CNT_CYCLE);
         }
-        pSps.iNumRefFramesInPocCycle = uiCode as i32;
+        pSubsetSps.sSps.iNumRefFramesInPocCycle = uiCode as i32;
 
-        for i in 0..pSps.iNumRefFramesInPocCycle as usize {
+        for i in 0..pSubsetSps.sSps.iNumRefFramesInPocCycle as usize {
             if BsGetSe(buf, pBsAux, &mut iCode) != ERR_NONE { return ERR_INVALID_PARAMETERS; }
-            pSps.iOffsetForRefFrame[i] = iCode as i8;
+            pSubsetSps.sSps.iOffsetForRefFrame[i] = iCode as i8;
         }
     }
 
-    if pSps.uiPocType > 2 {
+    if pSubsetSps.sSps.uiPocType > 2 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_POC_TYPE);
     }
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.iNumRefFrames = uiCode as i32;
+    pSubsetSps.sSps.iNumRefFrames = uiCode as i32;
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.bGapsInFrameNumValueAllowedFlag = uiCode != 0;
+    pSubsetSps.sSps.bGapsInFrameNumValueAllowedFlag = uiCode != 0;
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.iMbWidth = (PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32) as u32;
-    if pSps.iMbWidth > MAX_MB_SIZE as u32 || pSps.iMbWidth == 0 {
+    pSubsetSps.sSps.iMbWidth = (PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32) as u32;
+    if pSubsetSps.sSps.iMbWidth > MAX_MB_SIZE as u32 || pSubsetSps.sSps.iMbWidth == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.iMbHeight = (PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32) as u32;
-    if pSps.iMbHeight > MAX_MB_SIZE as u32 || pSps.iMbHeight == 0 {
+    pSubsetSps.sSps.iMbHeight = (PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32) as u32;
+    if pSubsetSps.sSps.iMbHeight > MAX_MB_SIZE as u32 || pSubsetSps.sSps.iMbHeight == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
-    let uiTmp64 = pSps.iMbWidth as u64 * pSps.iMbHeight as u64;
-    pSps.uiTotalMbCount = uiTmp64 as u32;
+    let uiTmp64 = pSubsetSps.sSps.iMbWidth as u64 * pSubsetSps.sSps.iMbHeight as u64;
+    pSubsetSps.sSps.uiTotalMbCount = uiTmp64 as u32;
 
-    if pSps.iNumRefFrames as u32 > SPS_MAX_NUM_REF_FRAMES_MAX_VAL {
+    if pSubsetSps.sSps.iNumRefFrames as u32 > SPS_MAX_NUM_REF_FRAMES_MAX_VAL {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_NUM_REF_FRAMES);
     }
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.bFrameMbsOnlyFlag = uiCode != 0;
-    if !pSps.bFrameMbsOnlyFlag {
+    pSubsetSps.sSps.bFrameMbsOnlyFlag = uiCode != 0;
+    if !pSubsetSps.sSps.bFrameMbsOnlyFlag {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_MBAFF);
     }
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.bDirect8x8InferenceFlag = uiCode != 0;
+    pSubsetSps.sSps.bDirect8x8InferenceFlag = uiCode != 0;
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.bFrameCroppingFlag = uiCode != 0;
+    pSubsetSps.sSps.bFrameCroppingFlag = uiCode != 0;
 
-    if pSps.bFrameCroppingFlag {
+    if pSubsetSps.sSps.bFrameCroppingFlag {
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.sFrameCrop.iLeftOffset = uiCode as i32;
+        pSubsetSps.sSps.sFrameCrop.iLeftOffset = uiCode as i32;
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.sFrameCrop.iRightOffset = uiCode as i32;
-        if (pSps.sFrameCrop.iLeftOffset + pSps.sFrameCrop.iRightOffset) > (pSps.iMbWidth as i32 * 16 / 2) {
+        pSubsetSps.sSps.sFrameCrop.iRightOffset = uiCode as i32;
+        if (pSubsetSps.sSps.sFrameCrop.iLeftOffset + pSubsetSps.sSps.sFrameCrop.iRightOffset) > (pSubsetSps.sSps.iMbWidth as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
 
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.sFrameCrop.iTopOffset = uiCode as i32;
+        pSubsetSps.sSps.sFrameCrop.iTopOffset = uiCode as i32;
         if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        pSps.sFrameCrop.iBottomOffset = uiCode as i32;
-        if (pSps.sFrameCrop.iTopOffset + pSps.sFrameCrop.iBottomOffset) > (pSps.iMbHeight as i32 * 16 / 2) {
+        pSubsetSps.sSps.sFrameCrop.iBottomOffset = uiCode as i32;
+        if (pSubsetSps.sSps.sFrameCrop.iTopOffset + pSubsetSps.sSps.sFrameCrop.iBottomOffset) > (pSubsetSps.sSps.iMbHeight as i32 * 16 / 2) {
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_CROPPING_DATA);
         }
     }
 
     if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-    pSps.bVuiParamPresentFlag = uiCode != 0;
-    if pSps.bVuiParamPresentFlag {
+    pSubsetSps.sSps.bVuiParamPresentFlag = uiCode != 0;
+    if pSubsetSps.sSps.bVuiParamPresentFlag {
         // **F46, T5.T3 — the arms were inverted** (`au_parser.cpp:1156`). The C++
         // reads: *if* the VUI failed because it carries HRD, tolerate it — except on a
         // subset SPS, where it is fatal — and **otherwise propagate whatever it
@@ -1823,7 +1797,7 @@ pub unsafe fn ParseSps(
         // and answered `dsErrorFree` where the C++ answers `dsBitstreamError`. All 22
         // truncation rows still disagreeing after T5.T2 are this one arm, and closing
         // it takes the corpus to **2318 / 0** on codes.
-        let iRetVui = ParseVui(pSps, buf, pBsAux);
+        let iRetVui = ParseVui((&mut pSubsetSps.sSps), buf, pBsAux);
         if iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
             // Currently no support for VUI with HRD enabled in a subset SPS.
             if kbUseSubsetFlag {
@@ -1835,7 +1809,7 @@ pub unsafe fn ParseSps(
     }
 
     if kbUseSubsetFlag && (uiProfileIdc == PRO_SCALABLE_BASELINE || uiProfileIdc == PRO_SCALABLE_HIGH) {
-        let iRet = DecodeSpsSvcExt(&mut *pSubsetSps, buf, pBsAux);
+        let iRet = DecodeSpsSvcExt(pSubsetSps, buf, pBsAux);
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -1843,8 +1817,8 @@ pub unsafe fn ParseSps(
         (*pSubsetSps).bSvcVuiParamPresentFlag = uiCode != 0;
     }
 
-    *pPicWidth = (pSps.iMbWidth << 4) as i32;
-    *pPicHeight = (pSps.iMbHeight << 4) as i32;
+    *pPicWidth = (pSubsetSps.sSps.iMbWidth << 4) as i32;
+    *pPicHeight = (pSubsetSps.sSps.iMbHeight << 4) as i32;
 
     let idx = iSpsId as usize;
     let tmp_ref = Some(SpsRef { id: iSpsId, subset: kbUseSubsetFlag });
@@ -1873,22 +1847,22 @@ pub unsafe fn ParseSps(
     } else {
         if CheckSpsActive(pCtx, tmp_ref, false) {
             // Overwriting the active SPS: only act when it actually changed.
-            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], pSps) {
+            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps)) {
                 if au_has_nals(pCtx) {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], (&mut pSubsetSps.sSps));
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
                 } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
-                    .is_some_and(|s| s.iSpsId == pSps.iSpsId)
+                    .is_some_and(|s| s.iSpsId == pSubsetSps.sSps.iSpsId)
                 {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], pSps);
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], (&mut pSubsetSps.sSps));
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], pSps);
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps));
                 }
             }
         } else {
-            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], pSps);
+            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps));
             (*pCtx).sSpsPpsCtx.bSpsAvailFlags[idx] = true;
             (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = true;
         }
@@ -1898,17 +1872,7 @@ pub unsafe fn ParseSps(
 }
 
 /// Parses Picture Parameter Sets (PPS).
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn ParsePps(
+pub fn ParsePps(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBsAux: &mut BsCursor,
@@ -1931,9 +1895,16 @@ pub unsafe fn ParsePps(
     // whose padding the `write_bytes` then had to fix. Zeroed *storage*, read through
     // a reference that never moves it, is one operation with the meaning the
     // byte-wise comparison below depends on.
-    let mut sTempPpsStore = std::mem::MaybeUninit::<SPps>::uninit();
-    std::ptr::write_bytes(sTempPpsStore.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SPps>());
-    let pPps = &mut *sTempPpsStore.as_mut_ptr();
+    // The shell stays, as in `ParseSps`: `SPps::default()` sets `uiNumSliceGroups`,
+    // `uiNumRefIdxL0Active`/`L1Active` to 1 and `iPicInitQp`/`Qs` to 26, and the C
+    // starts from all-zero.
+    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
+    let mut sTempPpsStore = unsafe {
+        let mut t = std::mem::MaybeUninit::<SPps>::uninit();
+        std::ptr::write_bytes(t.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SPps>());
+        t.assume_init()
+    };
+    let pPps = &mut sTempPpsStore;
 
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
@@ -2442,7 +2413,7 @@ pub fn ExpandNalUnitList(pAu: &mut SAccessUnit, kiOrgSize: i32, kiExpSize: i32) 
         return ERR_INFO_OUT_OF_MEMORY;
     }
     while pAu.nal_units.len() < want {
-        pAu.nal_units.push(Box::into_raw(Box::new(SNalUnit::default())));
+        pAu.nal_units.push(Box::new(SNalUnit::default()));
     }
     ERR_NONE
 }
@@ -2452,22 +2423,12 @@ pub fn ExpandNalUnitList(pAu: &mut SAccessUnit, kiOrgSize: i32, kiExpSize: i32) 
 /// The returned pointer is a **copy of a stored node pointer**, so it outlives every
 /// later retag of the access unit — which is what lets the caller hold it while the
 /// context's `access_unit` is derived again. See [`TagAccessUnits::nal`].
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn MemGetNextNal(pAu: &mut SAccessUnit) -> *mut SNalUnit {
+pub fn MemGetNextNal(pAu: &mut SAccessUnit) -> Option<usize> {
     if pAu.uiAvailUnitsNum >= pAu.count() {
         let kuiExpandingSize = pAu.count() + (MAX_NAL_UNIT_NUM_IN_AU as u32 >> 1);
         let org = pAu.count() as i32;
         if ExpandNalUnitList(pAu, org, kuiExpandingSize as i32) != ERR_NONE {
-            return std::ptr::null_mut();
+            return None;
         }
         // No re-read of the access unit: growth no longer moves it, which is the whole
         // point of T5.O4's ownership (the C++ replaces the block here).
@@ -2475,10 +2436,16 @@ pub unsafe fn MemGetNextNal(pAu: &mut SAccessUnit) -> *mut SNalUnit {
 
     let idx = pAu.uiAvailUnitsNum as usize;
     pAu.uiAvailUnitsNum += 1;
-    let pNu = pAu.nal(idx);
-
-    std::ptr::write_bytes(pNu, 0, 1);
-    pNu
+    // **T5b.3: the index, not the node.** The caller re-acquires through it, so
+    // nothing outlives the expression that took it and the container is free to own.
+    // The C's `memset (pNu, 0, sizeof (SNalUnit))` keeps its byte semantics for the
+    // reason `ParseSps`'s shell does — `SNalUnit::default()` reaches
+    // `SSliceHeaderExt::default()`, which is not all-zero.
+    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
+    unsafe {
+        std::ptr::write_bytes(pAu.nal(idx) as *mut SNalUnit, 0, 1);
+    }
+    Some(idx)
 }
 
 /// Clears the most recently added corrupted NAL unit from the AU list.
@@ -2512,27 +2479,9 @@ fn discard_nal_and_close_au(pCtx: &mut SWelsDecoderContext, uiAvailNalNum: u32) 
 }
 
 /// Prefetches and synchronizes prefix NAL header extension parameters into slice headers.
-/// **Enumerated exception — the parse tree's raw nodes** (`PNalUnit`,
-/// `PSliceHeader`, `PSliceHeaderExt`, `PNalUnitHeaderExt`). The access unit's slots
-/// are raw *by design* and the design is Miri's: a container that lends `&mut` to a
-/// node invalidates every outstanding alias into it, and this one has live ones —
-/// `pCtx->pNalCur`, and the `&mut BsCursor` the slice-header parser holds into a
-/// node's own bitstream (`TagAccessUnits::nal_units`' note). Reading a node is safe
-/// through [`TagAccessUnits::node`]; *writing* one is what these functions do.
-/// **Phase 8's**: the real fix is the one `PicPool` got at T5.Q1 — owned slots,
-/// once nothing aliases into a node.
-#[allow(unsafe_code)]
-pub unsafe fn PrefetchNalHeaderExtSyntax(
-    pCtx: &mut SWelsDecoderContext,
-    kppDst: *mut SNalUnit,
-    kpSrc: *mut SNalUnit,
-) -> bool {
-    if kppDst.is_null() || kpSrc.is_null() {
-        return false;
-    }
-
-    let pNalHdrExtD = &mut (*kppDst).sNalHeaderExt;
-    let pNalHdrExtS = &(*kpSrc).sNalHeaderExt;
+pub fn prefetch_nal_header_ext(kppDst: &mut SNalUnit, kpSrc: &SNalUnit) -> bool {
+    let pNalHdrExtD = &mut kppDst.sNalHeaderExt;
+    let pNalHdrExtS = &kpSrc.sNalHeaderExt;
 
     pNalHdrExtD.uiDependencyId = pNalHdrExtS.uiDependencyId;
     pNalHdrExtD.uiQualityId = pNalHdrExtS.uiQualityId;
@@ -2572,25 +2521,25 @@ mod au_list_tests {
     /// and this pins the property directly rather than hoping a stream reaches it.
     #[test]
     fn growing_the_nal_list_moves_no_node() {
-        #[allow(unsafe_code)] // the parse tree's own tests drive its raw nodes
-        unsafe {
+        {
             let mut au = SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU);
             assert_eq!(au.count(), MAX_NAL_UNIT_NUM_IN_AU as u32);
 
             // Fill the list through the path the parser uses, stamping each node so a
             // move would be visible, and remember where every node lives.
-            let mut addrs = Vec::new();
+            // T5b.3: the slots own, so "did a node move" is asked of its *address*,
+            // taken through the borrow rather than stored as the answer.
+            let mut addrs: Vec<usize> = Vec::new();
             for i in 0..MAX_NAL_UNIT_NUM_IN_AU {
-                let pNu = MemGetNextNal(&mut au);
-                assert!(!pNu.is_null());
-                (*pNu).uiTimeStamp = 1000 + i as u64;
-                addrs.push(pNu);
+                let idx = MemGetNextNal(&mut au).expect("a free slot");
+                let nal = au.nal(idx);
+                nal.uiTimeStamp = 1000 + i as u64;
+                addrs.push(nal as *const SNalUnit as usize);
             }
             assert_eq!(au.uiAvailUnitsNum, MAX_NAL_UNIT_NUM_IN_AU as u32);
 
             // One past the end: this is the growth.
-            let pGrown = MemGetNextNal(&mut au);
-            assert!(!pGrown.is_null());
+            let grown = MemGetNextNal(&mut au).expect("the growth hands back a slot");
             assert_eq!(
                 au.count(),
                 (MAX_NAL_UNIT_NUM_IN_AU + (MAX_NAL_UNIT_NUM_IN_AU >> 1)) as u32,
@@ -2598,11 +2547,12 @@ mod au_list_tests {
             );
 
             for (i, &p) in addrs.iter().enumerate() {
-                assert_eq!(au.nal(i), p, "node {i} moved across the growth");
-                assert_eq!((*p).uiTimeStamp, 1000 + i as u64, "node {i} lost its contents");
+                let nal = au.nal(i);
+                assert_eq!(nal as *const SNalUnit as usize, p, "node {i} moved across the growth");
+                assert_eq!(nal.uiTimeStamp, 1000 + i as u64, "node {i} lost its contents");
             }
             // `MemGetNextNal` zeroes the node it hands out.
-            assert_eq!((*pGrown).uiTimeStamp, 0);
+            assert_eq!(au.nal(grown).uiTimeStamp, 0);
         }
     }
 

@@ -49,8 +49,8 @@
 // deliberately; those retire with their subject.
 
 use crate::decoder::decoder_context::{
-    PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, pps_of, ref_id,
-    slice_split, sps_of,
+    PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
+    ref_id, slice_split, sps_of,
 };
 use crate::decoder::pic_queue::RefSlot;
 use crate::safe::bits::BsCursor;
@@ -2392,7 +2392,7 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         }
         // **The split** (T5.Y2), the third of the three: this bracket reconstructs
         // rather than parses, and reaches the context for exactly what the view carries.
-        let (pDec, pRefs, mut view) = slice_split(pCtx, None);
+        let (pDec, pRefs, mut view, _nal) = slice_split(pCtx, None);
         // T5b.2: the picture is a borrow, so the one place its absence is tested is
         // here rather than at every level below. `DecodeCurrentAccessUnit` prefetches
         // it and returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply
@@ -5321,17 +5321,13 @@ pub unsafe fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
     bFirstSliceInLayer: bool,
-    pNalCur: *mut SNalUnit,
+    nal_idx: Option<usize>,
 ) -> i32 {
     // **The bracket top** (T5.Y2): the slice header's parameter sets are selected,
     // the CABAC engine is initialized and the scaling lists are computed *before*
     // the split, because the view copies those scalars; below the split the context
     // is not reachable at all and `pDec`/`pRefs` travel as their own parameters.
-    let Some(pNalCur) = pNalCur.as_mut() else {
-        // No NAL means no bit reader, which is the state the old spelling
-        // dereferenced through `slice_bit_reader`. Nothing to decode.
-        return ERR_NONE;
-    };
+
     // **The loop this function's aliasing probe was written for, and the prediction
     // session D read out of the code is now a Miri finding (T5.E1).** This held
     // `ctx = &mut *pCtx`, `dq = &mut *pCurDqLayer` and two reborrows of `dq` across
@@ -5391,11 +5387,19 @@ pub unsafe fn WelsDecodeSlice(
             iQp,
         );
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
-        let err = crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
-            &mut (*pCtx).sCabacDecEngine,
-            &mut pNalCur.sNalData.sVclNal.sSliceBitsRead,
-            &(*pCtx).sRawData,
-        );
+        // T5b.3: the node's own reader, reached the way everything else in this
+        // function reaches the access unit — by index, in one expression.
+        let err = match nal_idx.and_then(|i| {
+            cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(i))
+        }) {
+            Some(nal) => {
+                let reader = &mut nal.sNalData.sVclNal.sSliceBitsRead;
+                let engine = std::ptr::addr_of_mut!((*pCtx).sCabacDecEngine);
+                let raw = std::ptr::addr_of!((*pCtx).sRawData);
+                crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(&mut *engine, reader, &*raw)
+            }
+            None => return ERR_NONE,
+        };
         if err != ERR_NONE {
             return err;
         }
@@ -5405,8 +5409,10 @@ pub unsafe fn WelsDecodeSlice(
     // **The split.** Everything above this line is the context's; everything below
     // it is the view's, and the pool borrow the two halves of `cur_and_refs` carry
     // coexists with it because `pPicBuff` is not in the view.
-    let (pDec, pRefs, mut view) =
-        slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+    let (pDec, pRefs, mut view, nal) = slice_split(pCtx, nal_idx);
+    let Some(pNalCur) = nal else {
+        return ERR_NONE;
+    };
     // T5b.2: with the picture a borrow, the one place its absence is tested is here
     // rather than at every level below. `DecodeCurrentAccessUnit` prefetches it and
     // returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply one, so this
@@ -5469,7 +5475,11 @@ pub unsafe fn WelsDecodeSlice(
 pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
-        let Some(pNalCur) = (*pCtx).pNalCur.as_mut() else {
+        // T5b.3: `pCtx->pNalCur` is an index now, and `slice_split` resolves it in the
+        // same statement it splits the context — which is what lets the node's bit
+        // reader travel beside the view. The `None` arm is the C's null `pNalCur`; F36
+        // owns it as before.
+        let Some(iNalCur) = (*pCtx).nal_cur else {
             return ERR_NONE;
         };
         let dq: &mut DqLayerState = pCurDqLayer;
@@ -5512,8 +5522,10 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         // **The split** — `WelsDecodeSlice`'s, one function down: the pool's two halves
         // and the view come out of the same context in the same statement group, and
         // nothing below the loop reaches the context again.
-        let (pDec, pRefs, mut view) =
-            slice_split(pCtx, Some(&pNalCur.sNalData.sVclNal.sSliceBitsRead));
+        let (pDec, pRefs, mut view, nal) = slice_split(pCtx, Some(iNalCur));
+        let Some(pNalCur) = nal else {
+            return ERR_NONE;
+        };
         // `WelsDecodeSlice`'s guard, same reason, same code.
         let Some(pDec) = pDec else {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
@@ -5611,12 +5623,7 @@ mod tests {
                     ERR_NONE
                 );
                 assert_eq!(
-                    crate::decoder::decoder_core::WelsDecodeSlice(
-                        &mut ctx,
-                        None,
-                        false,
-                        std::ptr::null_mut()
-                    ),
+                    crate::decoder::decoder_core::WelsDecodeSlice(&mut ctx, None, false, None),
                     ERR_NONE
                 );
                 assert_eq!(

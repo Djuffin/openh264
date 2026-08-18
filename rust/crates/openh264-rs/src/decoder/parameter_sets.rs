@@ -193,7 +193,7 @@ impl Default for TagVui {
 
 /// Sequence Parameter Set (SPS) structure, refer to Section 7.3.2.1.1 in ITU-T H.264 Rec.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct TagSps {
     pub iSpsId: i32,
     pub iMbWidth: u32,
@@ -315,7 +315,7 @@ pub type PSpsSvcExt = *mut SSpsSvcExt;
 
 /// Subset Sequence Parameter Set syntax (NAL Unit Type 15).
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(PartialEq, Debug, Copy, Clone, Default)]
 pub struct TagSubsetSps {
     pub sSps: SSps,
     pub sSpsSvcExt: SSpsSvcExt,
@@ -329,7 +329,7 @@ pub type PSubsetSps = *mut SSubsetSps;
 
 /// Picture Parameter Set (PPS) structure, refer to Section 7.3.2.2 in ITU-T H.264 Rec.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct TagPps {
     pub iSpsId: i32,
     pub iPpsId: i32,

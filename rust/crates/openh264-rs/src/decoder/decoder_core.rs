@@ -826,12 +826,14 @@ pub fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
     bFreshSlice: bool,
-    pCurNal: PNalUnit,
+    pCurNal: Option<usize>,
 ) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         match pCurDqLayer {
-            Some(dq) => unsafe { crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal) },
+            Some(dq) => unsafe {
+                crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal)
+            },
             None => ERR_NONE,
         }
     }
@@ -928,7 +930,8 @@ pub fn ComputeColocatedTemporalScaling(
         if let Some(dq) = pCurDqLayer {
             // T5.Y2: a slice bracket of its own — the pool view and the context view
             // come out of the same context, and the two are disjoint by construction.
-            let (pDec, pRefs, mut view) = crate::decoder::decoder_context::slice_split(pCtx, None);
+            let (pDec, pRefs, mut view, _nal) =
+                crate::decoder::decoder_context::slice_split(pCtx, None);
             // The picture travels as a shared borrow: this scan only reads POCs, and
             // F42 lets a list entry name it (T5b.2).
             let pDec = pDec.map(|p| &*p);
@@ -1186,8 +1189,8 @@ pub unsafe fn DecodeFrameConstruction(
                 // next writer of this buffer (Phase 8's `DecodeParser`) needs it.
                 let mut iIdx = pCurAu.uiStartPos as i32;
                 let iEndIdx = pCurAu.uiEndPos as i32;
-                if !(pCurAu.nal(iIdx as usize)).is_null() {
-                    (*pParser).uiOutBsTimeStamp = (*(pCurAu.nal(iIdx as usize))).uiTimeStamp;
+                if let Some(nal) = pCurAu.node(iIdx as usize) {
+                    (*pParser).uiOutBsTimeStamp = nal.uiTimeStamp;
                 }
                 if let Some((w, h)) = sps_dims {
                     (*pParser).iSpsWidthInPixel = w;
@@ -1195,9 +1198,9 @@ pub unsafe fn DecodeFrameConstruction(
                 }
 
                 while iIdx <= iEndIdx {
-                    let pCurNal = pCurAu.nal(iIdx as usize);
-                    if !pCurNal.is_null() {
-                        let iNalLen = (*pCurNal).sNalData.sVclNal.iNalLength;
+                    let pCurNal = pCurAu.node(iIdx as usize);
+                    if let Some(pCurNal) = pCurNal {
+                        let iNalLen = pCurNal.sNalData.sVclNal.iNalLength;
                         let iSlot = (*pParser).iNalNum as usize;
                         let lens = (*pParser).pNalLenInByte.as_mut_slice();
                         if let Some(slot) = lens.get_mut(iSlot) {
@@ -1345,12 +1348,23 @@ pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &*mut SDecodingParam) -> u8 {
     WELS_MIN(uiTargetDqId, uiRequiredDqId)
 }
 
+/// The header of NAL `i` of the access unit under construction, or `None` — the
+/// `!pNalCur.is_null()` test, once (T5b.3).
+#[inline]
+fn nal_hdr(pCtx: &SWelsDecoderContext, i: Option<usize>) -> Option<&SNalUnitHeaderExt> {
+    let i = i?;
+    pCtx.access_unit
+        .as_deref()
+        .and_then(|au| au.node(i))
+        .map(|nal| &nal.sNalHeaderExt)
+}
+
 #[inline]
 #[allow(unsafe_code)] // decoder-internal raw cursor
-pub fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
+pub fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: Option<&SNalUnitHeaderExt>) {
     // SAFETY: the family named at the item above.
     unsafe {
-        if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.uiTemporalId == 0 {
+        if pCurNal.is_some_and(|h| h.uiTemporalId == 0) {
             (*pCtx).bReferenceLostAtT0Flag = true;
         }
         (*pCtx).iErrorCode |= dsBitstreamError;
@@ -1359,11 +1373,11 @@ pub fn HandleReferenceLostL0(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) 
 
 #[inline]
 #[allow(unsafe_code)] // decoder-internal raw cursor
-pub fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
+pub fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: Option<&SNalUnitHeaderExt>) {
     // SAFETY: the family named at the item above.
     unsafe {
-        if !pCurNal.is_null()
-            && ((*pCurNal).sNalHeaderExt.uiTemporalId == 0 || (*pCurNal).sNalHeaderExt.uiTemporalId == 1)
+        if pCurNal
+            .is_some_and(|h| h.uiTemporalId == 0 || h.uiTemporalId == 1)
         {
             (*pCtx).bReferenceLostAtT0Flag = true;
         }
@@ -1376,13 +1390,14 @@ pub fn HandleReferenceLost(pCtx: &mut SWelsDecoderContext, pCurNal: PNalUnit) {
 pub fn WelsDecodeConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: Option<&mut DqLayerState>,
-    pCurNal: PNalUnit,
+    pCurNal: Option<usize>,
 ) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         let iRet = WelsTargetSliceConstruction(pCtx, pCurDqLayer);
         if iRet != ERR_NONE {
-            unsafe { HandleReferenceLostL0(pCtx, pCurNal) };
+            let h = nal_hdr(pCtx, pCurNal).copied();
+            HandleReferenceLostL0(pCtx, h.as_ref());
         }
         iRet
     }
@@ -1393,15 +1408,12 @@ pub fn ParsePredWeightedTable(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
-    pSh: PSliceHeader,
+    pSh: &mut SSliceHeader,
 ) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         // The offset travels, not the slice — see `ParseSps` (T5.Z4).
         let buf = pCtx.sRawData.window_from(kiRbspStart);
-        if pSh.is_null() {
-            return ERR_INFO_INVALID_PTR;
-        }
         let mut uiCode: u32 = 0;
         let mut iCode: i32 = 0;
 
@@ -1411,7 +1423,7 @@ pub fn ParsePredWeightedTable(
         if uiCode > 7 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_LOG2_WEIGHT_DENOM);
         }
-        (*pSh).sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
+        pSh.sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
 
         // `Option`, not a defaulted scalar: the two arms below distinguish "no SPS" from
         // "monochrome SPS" and they distinguish them *in opposite directions* — the
@@ -1419,7 +1431,7 @@ pub fn ParsePredWeightedTable(
         // *because* there is none. A `map_or(0, …)` collapses them and desynchronises
         // the slice header (T5.Z1).
         let uiChromaArrayType =
-            sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref).map(|sps| sps.uiChromaArrayType);
+            sps_of(&(*pCtx).sSpsPpsCtx, pSh.sps_ref).map(|sps| sps.uiChromaArrayType);
 
         if uiChromaArrayType.is_some_and(|t| t != 0) {
             if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
@@ -1428,16 +1440,16 @@ pub fn ParsePredWeightedTable(
             if uiCode > 7 {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_LOG2_WEIGHT_DENOM);
             }
-            (*pSh).sPredWeightTable.uiChromaLog2WeightDenom = uiCode;
+            pSh.sPredWeightTable.uiChromaLog2WeightDenom = uiCode;
         }
 
-        if ((*pSh).sPredWeightTable.uiLumaLog2WeightDenom | (*pSh).sPredWeightTable.uiChromaLog2WeightDenom) > 7 {
+        if (pSh.sPredWeightTable.uiLumaLog2WeightDenom | pSh.sPredWeightTable.uiChromaLog2WeightDenom) > 7 {
             return ERR_NONE;
         }
 
         let mut iList = 0;
         while iList < LIST_A {
-            for i in 0..((*pSh).uiRefCount[iList] as usize) {
+            for i in 0..(pSh.uiRefCount[iList] as usize) {
                 if i >= MAX_REF_PIC_COUNT {
                     break;
                 }
@@ -1451,7 +1463,7 @@ pub fn ParsePredWeightedTable(
                     if iCode < -128 || iCode > 127 {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_WEIGHT);
                     }
-                    (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] = iCode;
+                    pSh.sPredWeightTable.sPredList[iList].iLumaWeight[i] = iCode;
 
                     if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
@@ -1459,11 +1471,11 @@ pub fn ParsePredWeightedTable(
                     if iCode < -128 || iCode > 127 {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_LUMA_OFFSET);
                     }
-                    (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = iCode;
+                    pSh.sPredWeightTable.sPredList[iList].iLumaOffset[i] = iCode;
                 } else {
-                    (*pSh).sPredWeightTable.sPredList[iList].iLumaWeight[i] =
-                        1 << (*pSh).sPredWeightTable.uiLumaLog2WeightDenom;
-                    (*pSh).sPredWeightTable.sPredList[iList].iLumaOffset[i] = 0;
+                    pSh.sPredWeightTable.sPredList[iList].iLumaWeight[i] =
+                        1 << pSh.sPredWeightTable.uiLumaLog2WeightDenom;
+                    pSh.sPredWeightTable.sPredList[iList].iLumaOffset[i] = 0;
                 }
 
                 if uiChromaArrayType == Some(0) {
@@ -1481,7 +1493,7 @@ pub fn ParsePredWeightedTable(
                         if iCode < -128 || iCode > 127 {
                             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_WEIGHT);
                         }
-                        (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] = iCode;
+                        pSh.sPredWeightTable.sPredList[iList].iChromaWeight[i][j] = iCode;
 
                         if BsGetSe(buf, pBs, &mut iCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
@@ -1489,18 +1501,18 @@ pub fn ParsePredWeightedTable(
                         if iCode < -128 || iCode > 127 {
                             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_CHROMA_OFFSET);
                         }
-                        (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = iCode;
+                        pSh.sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = iCode;
                     }
                 } else {
                     for j in 0..2 {
-                        (*pSh).sPredWeightTable.sPredList[iList].iChromaWeight[i][j] =
-                            1 << (*pSh).sPredWeightTable.uiChromaLog2WeightDenom;
-                        (*pSh).sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = 0;
+                        pSh.sPredWeightTable.sPredList[iList].iChromaWeight[i][j] =
+                            1 << pSh.sPredWeightTable.uiChromaLog2WeightDenom;
+                        pSh.sPredWeightTable.sPredList[iList].iChromaOffset[i][j] = 0;
                     }
                 }
             }
             iList += 1;
-            if (*pSh).eSliceType != B_SLICE {
+            if pSh.eSliceType != B_SLICE {
                 break;
             }
         }
@@ -1595,21 +1607,18 @@ pub fn ParseRefPicListReordering(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
-    pSh: PSliceHeader,
+    pSh: &mut SSliceHeader,
 ) -> i32 {
     // SAFETY: the family named at the item above.
     unsafe {
         // The offset travels, not the slice — see `ParseSps` (T5.Z4).
         let buf = pCtx.sRawData.window_from(kiRbspStart);
-        if pSh.is_null() {
-            return ERR_INFO_INVALID_PTR;
-        }
-        let keSt = (*pSh).eSliceType;
+        let keSt = pSh.eSliceType;
         if keSt == I_SLICE || keSt == SI_SLICE {
             return ERR_NONE;
         }
-        let pRefPicListReordering = &mut (*pSh).pRefPicListReordering;
-        let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, (*pSh).sps_ref) else {
+        let pRefPicListReordering = &mut pSh.pRefPicListReordering;
+        let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, pSh.sps_ref) else {
             return ERR_INFO_INVALID_PTR;
         };
 
@@ -1636,7 +1645,7 @@ pub fn ParseRefPicListReordering(
                     if kuiIdc == 3 {
                         break;
                     }
-                    if iIdx >= (*pSh).uiRefCount[iList] as usize || iIdx >= MAX_REF_PIC_COUNT {
+                    if iIdx >= pSh.uiRefCount[iList] as usize || iIdx >= MAX_REF_PIC_COUNT {
                         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_REF_REORDERING);
                     }
                     if kuiIdc == 0 || kuiIdc == 1 {
@@ -1674,7 +1683,7 @@ pub fn ParseDecRefPicMarking(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
-    pSh: PSliceHeader,
+    pSh: &mut SSliceHeader,
     sps_ref: Option<SpsRef>,
     kbIdrFlag: bool,
 ) -> i32 {
@@ -1691,10 +1700,7 @@ pub fn ParseDecRefPicMarking(
         else {
             return ERR_INFO_INVALID_PTR;
         };
-        if pSh.is_null() {
-            return ERR_INFO_INVALID_PTR;
-        }
-        let kpRefMarking = &mut (*pSh).sRefMarking;
+        let kpRefMarking = &mut pSh.sRefMarking;
         let mut uiCode: u32 = 0;
 
         if kbIdrFlag {
@@ -1733,7 +1739,7 @@ pub fn ParseDecRefPicMarking(
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
-                        kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = ((*pSh).iFrameNum
+                        kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = (pSh.iFrameNum
                             - kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum)
                             & (((1 << uiLog2MaxFrameNum) - 1) as i32);
                     } else if kuiMmco == MMCO_LONG2UNUSED {
@@ -1776,9 +1782,20 @@ pub fn ParseDecRefPicMarking(
                             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = 0;
                             (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = 0;
                         }
-                        (*pSh).iPicOrderCntLsb = 0;
-                        if !(*pCtx).pSliceHeader.is_null() {
-                            (*(*pCtx).pSliceHeader).iPicOrderCntLsb = 0;
+                        pSh.iPicOrderCntLsb = 0;
+                        // **T5b.3: through the index, not a stored alias.**
+                        // `pCtx->pSliceHeader` was a raw pointer *into* the current
+                        // NAL — the second of the parse tree's two stored aliases, and
+                        // the one that escaped furthest (it outlived the call that set
+                        // it by a whole slice decode). It is deleted; the NAL under
+                        // decode is `pCtx->nal_cur`, and this — its only reader —
+                        // resolves it. `pSh` above is the *layer's* copy and is a
+                        // different object, which is why both writes are here.
+                        let nal_cur = (*pCtx).slice_hdr_nal;
+                        if let Some(nal) = nal_cur
+                            .and_then(|i| cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(i)))
+                        {
+                            nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb = 0;
                         }
                     }
                     iIdx += 1;
@@ -1791,39 +1808,36 @@ pub fn ParseDecRefPicMarking(
 
 #[allow(unsafe_code)] // parse tree
 pub fn FillDefaultSliceHeaderExt(
-    pShExt: PSliceHeaderExt,
-    pNalExt: PNalUnitHeaderExt,
+    pShExt: &mut SSliceHeaderExt,
+    pNalExt: &SNalUnitHeaderExt,
 ) -> bool {
     // SAFETY: the family named at the item above.
     unsafe {
-        if pShExt.is_null() || pNalExt.is_null() {
-            return false;
-        }
-        if (*pNalExt).bNoInterLayerPredFlag || (*pNalExt).uiQualityId > 0 {
+        if pNalExt.bNoInterLayerPredFlag || pNalExt.uiQualityId > 0 {
 
-            (*pShExt).bBasePredWeightTableFlag = false;
+            pShExt.bBasePredWeightTableFlag = false;
         } else {
-            (*pShExt).bBasePredWeightTableFlag = true;
+            pShExt.bBasePredWeightTableFlag = true;
         }
-        (*pShExt).uiRefLayerDqId = 255;
-        (*pShExt).uiDisableInterLayerDeblockingFilterIdc = 0;
-        (*pShExt).iInterLayerSliceAlphaC0Offset = 0;
-        (*pShExt).iInterLayerSliceBetaOffset = 0;
-        (*pShExt).bConstrainedIntraResamplingFlag = false;
-        (*pShExt).uiRefLayerChromaPhaseXPlus1Flag = 0;
-        (*pShExt).uiRefLayerChromaPhaseYPlus1 = 1;
-        (*pShExt).iScaledRefLayerPicWidthInSampleLuma = (*pShExt).sSliceHeader.iMbWidth << 4;
-        (*pShExt).iScaledRefLayerPicHeightInSampleLuma = (*pShExt).sSliceHeader.iMbHeight << 4;
-        (*pShExt).bSliceSkipFlag = false;
-        (*pShExt).bAdaptiveBaseModeFlag = false;
-        (*pShExt).bDefaultBaseModeFlag = false;
-        (*pShExt).bAdaptiveMotionPredFlag = false;
-        (*pShExt).bDefaultMotionPredFlag = false;
-        (*pShExt).bAdaptiveResidualPredFlag = false;
-        (*pShExt).bDefaultResidualPredFlag = false;
-        (*pShExt).bTCoeffLevelPredFlag = false;
-        (*pShExt).uiScanIdxStart = 0;
-        (*pShExt).uiScanIdxEnd = 15;
+        pShExt.uiRefLayerDqId = 255;
+        pShExt.uiDisableInterLayerDeblockingFilterIdc = 0;
+        pShExt.iInterLayerSliceAlphaC0Offset = 0;
+        pShExt.iInterLayerSliceBetaOffset = 0;
+        pShExt.bConstrainedIntraResamplingFlag = false;
+        pShExt.uiRefLayerChromaPhaseXPlus1Flag = 0;
+        pShExt.uiRefLayerChromaPhaseYPlus1 = 1;
+        pShExt.iScaledRefLayerPicWidthInSampleLuma = pShExt.sSliceHeader.iMbWidth << 4;
+        pShExt.iScaledRefLayerPicHeightInSampleLuma = pShExt.sSliceHeader.iMbHeight << 4;
+        pShExt.bSliceSkipFlag = false;
+        pShExt.bAdaptiveBaseModeFlag = false;
+        pShExt.bDefaultBaseModeFlag = false;
+        pShExt.bAdaptiveMotionPredFlag = false;
+        pShExt.bDefaultMotionPredFlag = false;
+        pShExt.bAdaptiveResidualPredFlag = false;
+        pShExt.bDefaultResidualPredFlag = false;
+        pShExt.bTCoeffLevelPredFlag = false;
+        pShExt.uiScanIdxStart = 0;
+        pShExt.uiScanIdxEnd = 15;
         true
     }
 }
@@ -2237,14 +2251,55 @@ pub unsafe fn UpdateDecoderStatisticsForActiveParaset(
 }
 
 #[allow(unsafe_code)] // parse tree
+/// **T5b.3: the header is parsed into a scratch and written back once.**
+///
+/// The body below took three `addr_of_mut!` derivations into the access unit's last
+/// node and held them across its whole 576 lines — which is sound only while the
+/// container's slots are raw, and they own now. A local scratch, copied in and copied
+/// back at the single exit, is behaviour-identical: the C++ parses in place, and
+/// nothing between the two copies reads that node (the sub-parsers take the scratch;
+/// `ParseDecRefPicMarking`'s second POC write targets a *different* NAL, the decode
+/// loop's, through `slice_hdr_nal`). What it buys is that the parse can keep taking
+/// the context — which it does five times, for `sRawData`, `sSpsPpsCtx`,
+/// `iErrorCode`, `pLastDecPicInfo` and `pDecoderStatistics`.
 pub fn ParseSliceHeaderSyntaxs(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
     pBs: &mut BsCursor,
     kbExtensionFlag: bool,
 ) -> i32 {
-    // SAFETY: the family named at the item above.
-    unsafe {
+    let last = match pCtx.access_unit.as_deref() {
+        None => return ERR_INFO_INVALID_PTR,
+        Some(au) if au.uiAvailUnitsNum == 0 => return ERR_INFO_OUT_OF_MEMORY,
+        Some(au) => (au.uiAvailUnitsNum - 1) as usize,
+    };
+    let (mut ext, mut hdr) = match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
+        Some(nal) => {
+            nal.sNalData.sVclNal.bSliceHeaderExtFlag = kbExtensionFlag;
+            (nal.sNalData.sVclNal.sSliceHeaderExt, nal.sNalHeaderExt)
+        }
+        None => return ERR_INFO_INVALID_PTR,
+    };
+    let iRet = parse_slice_header_into(pCtx, kiRbspStart, pBs, kbExtensionFlag, &mut ext, &mut hdr);
+    // The single exit's copy-back. It is unconditional on `iRet` because the in-place
+    // parse it replaces left every field it had written behind on an error return, and
+    // `WelsParseOneNal`'s error arms read the node afterwards.
+    if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
+        nal.sNalData.sVclNal.sSliceHeaderExt = ext;
+        nal.sNalHeaderExt = hdr;
+    }
+    iRet
+}
+
+fn parse_slice_header_into(
+    pCtx: &mut SWelsDecoderContext,
+    kiRbspStart: usize,
+    pBs: &mut BsCursor,
+    kbExtensionFlag: bool,
+    pSliceHeadExt: &mut SSliceHeaderExt,
+    pNalHeaderExt: &mut SNalUnitHeaderExt,
+) -> i32 {
+    {
         // **The window is re-derived per read, not bound** (T5.Z4). This function
         // interleaves reads with calls that take the context — the three sub-parsers and
         // the parameter-set lookups — so a `let win!() = …` at the top is a shared borrow of
@@ -2255,38 +2310,8 @@ pub fn ParseSliceHeaderSyntaxs(
                 pCtx.sRawData.window_from(kiRbspStart)
             };
         }
-        // The access unit is borrowed for exactly these three lines. `kpCurNal` outlives
-        // it — it is a copy of a stored node pointer, and the whole 576-line body below
-        // runs against the node, not against the list.
-        let kpCurNal = match cur_au(&mut pCtx.access_unit) {
-            None => return ERR_INFO_INVALID_PTR,
-            Some(au) if au.uiAvailUnitsNum == 0 => return ERR_INFO_OUT_OF_MEMORY,
-            Some(au) => au.nal((au.uiAvailUnitsNum - 1) as usize),
-        };
-        if kpCurNal.is_null() {
-            return ERR_INFO_OUT_OF_MEMORY;
-        }
 
-        // **S25 (F24) — none of these three is a borrow, and that is the fix.**
-        // `sSliceHeader` sits *inside* `sSliceHeaderExt`, so taking `&mut` of each puts the
-        // outer's Unique retag on top of the inner's and every later write through the inner
-        // is UB — Miri, byte-exact: `[0x28..0xf00]` created here, invalidated by the retag at
-        // `[0x28..0x1350]`, caught at the `iFirstMbInSlice` store 13 lines down. `pSliceHead`
-        // is used 74 times after that point and `pSliceHeadExt` 50, so the whole 576-line
-        // function ran on an invalid borrow stack. `addr_of_mut!` creates no reference: all
-        // three pointers carry `kpCurNal`'s own provenance, none can invalidate another, and
-        // the raw `bSliceHeaderExtFlag` write below is no longer racing two live borrows.
-        // `pNalHeaderExt` is a sibling field and was never part of the defect; it moves with
-        // them so the rule reads uniformly. T5.B2's shape (`manage_dec_ref.rs`, `SetUnRef`):
-        // no borrow outlives one expression. Anything added here inherits it.
-        let pNalHeaderExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*kpCurNal).sNalHeaderExt);
-        let pSliceHead: PSliceHeader =
-            std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
-        let eNalType = (*pNalHeaderExt).sNalUnitHeader.eNalUnitType;
-        let pSliceHeadExt: PSliceHeaderExt =
-            std::ptr::addr_of_mut!((*kpCurNal).sNalData.sVclNal.sSliceHeaderExt);
-
-        (*kpCurNal).sNalData.sVclNal.bSliceHeaderExtFlag = kbExtensionFlag;
+        let eNalType = pNalHeaderExt.sNalUnitHeader.eNalUnitType;
 
         let mut uiCode: u32 = 0;
         let mut iCode: i32 = 0;
@@ -2297,7 +2322,7 @@ pub fn ParseSliceHeaderSyntaxs(
         if uiCode > 36863 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FIRST_MB_IN_SLICE);
         }
-        (*pSliceHead).iFirstMbInSlice = uiCode as i32;
+        pSliceHeadExt.sSliceHeader.iFirstMbInSlice = uiCode as i32;
 
         if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
@@ -2316,7 +2341,7 @@ pub fn ParseSliceHeaderSyntaxs(
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
         }
 
-        (*pSliceHead).eSliceType = match uiSliceType {
+        pSliceHeadExt.sSliceHeader.eSliceType = match uiSliceType {
             0 => P_SLICE,
             1 => B_SLICE,
             2 => I_SLICE,
@@ -2349,11 +2374,19 @@ pub fn ParseSliceHeaderSyntaxs(
         // stream. **No gate reaches it**: `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
         // (`nalu.rs:684`) and the probe decodes AVC, so it was found by reading while fixing
         // the pair above and dies in the same commit rather than waiting for a test that
-        // does not exist. The stored `(*pSliceHead).pps_id` / `pSps` pointers get the
+        // does not exist. The stored `pSliceHeadExt.sSliceHeader.pps_id` / `pSps` pointers get the
         // context's provenance for free, which is what S28 asks of a pointer that outlives
         // the expression that made it.
-        let pPps: PPps = std::ptr::addr_of_mut!((*pCtx).sSpsPpsCtx.sPpsBuffer[iPpsId as usize]);
-        if (*pPps).uiNumSliceGroups == 0 {
+        // T5b.3: an index, not an address. The `addr_of_mut!` was S29's spelling for a
+        // *raw* parent; the parse has the context as a borrow and re-resolves per read,
+        // exactly as `win!()` and `sps!()` below do.
+        let pps_idx = iPpsId as usize;
+        macro_rules! pps {
+            () => {
+                pCtx.sSpsPpsCtx.sPpsBuffer[pps_idx]
+            };
+        }
+        if pps!().uiNumSliceGroups == 0 {
             (*pCtx).iErrorCode |= dsNoParamSets;
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
         }
@@ -2363,7 +2396,7 @@ pub fn ParseSliceHeaderSyntaxs(
         // same class the accessors shed at T5.Z1, arriving from a hand-written
         // derivation. `sps!()` re-resolves in one expression, exactly as `win!()` does
         // for the bitstream window above.
-        let sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
+        let sps_ref = Some(SpsRef { id: pps!().iSpsId, subset: kbExtensionFlag });
         macro_rules! sps {
             () => {
                 match sps_of(&pCtx.sSpsPpsCtx, sps_ref) {
@@ -2374,31 +2407,31 @@ pub fn ParseSliceHeaderSyntaxs(
         }
 
         if sps!().iNumRefFrames == 0
-            && (*pSliceHead).eSliceType != I_SLICE
-            && (*pSliceHead).eSliceType != SI_SLICE
+            && pSliceHeadExt.sSliceHeader.eSliceType != I_SLICE
+            && pSliceHeadExt.sSliceHeader.eSliceType != SI_SLICE
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SLICE_TYPE);
         }
 
-        (*pSliceHead).iPpsId = iPpsId;
-        (*pSliceHead).iSpsId = (*pPps).iSpsId;
+        pSliceHeadExt.sSliceHeader.iPpsId = iPpsId;
+        pSliceHeadExt.sSliceHeader.iSpsId = pps!().iSpsId;
         // T5.R6: what the two stored pointers carried — an id and, for the SPS, which of
         // the two buffers it indexes. `kbExtensionFlag` is that choice, made three lines
         // above where `pSps` was derived.
-        (*pSliceHead).pps_id = Some(iPpsId);
-        (*pSliceHead).sps_ref = Some(SpsRef { id: (*pPps).iSpsId, subset: kbExtensionFlag });
+        pSliceHeadExt.sSliceHeader.pps_id = Some(iPpsId);
+        pSliceHeadExt.sSliceHeader.sps_ref = Some(SpsRef { id: pps!().iSpsId, subset: kbExtensionFlag });
         if kbExtensionFlag {
-            (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
+            pSliceHeadExt.subset_sps_id = Some(pps!().iSpsId);
         }
 
         let bIdrFlag = (!kbExtensionFlag && eNalType == NAL_UNIT_CODED_SLICE_IDR)
-            || (kbExtensionFlag && (*pNalHeaderExt).bIdrFlag);
-        (*pSliceHead).bIdrFlag = bIdrFlag;
+            || (kbExtensionFlag && pNalHeaderExt.bIdrFlag);
+        pSliceHeadExt.sSliceHeader.bIdrFlag = bIdrFlag;
 
         if sps!().uiLog2MaxFrameNum == 0 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
         }
-        if ((*pSliceHead).iFirstMbInSlice as u32) > sps!().uiTotalMbCount - 1 {
+        if (pSliceHeadExt.sSliceHeader.iFirstMbInSlice as u32) > sps!().uiTotalMbCount - 1 {
             return GENERATE_ERROR_NO(
                 ERR_LEVEL_SLICE_HEADER,
                 ERR_INFO_INVALID_FIRST_MB_IN_SLICE,
@@ -2407,15 +2440,15 @@ pub fn ParseSliceHeaderSyntaxs(
         if BsGetBits(win!(), pBs, sps!().uiLog2MaxFrameNum, &mut uiCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSliceHead).iFrameNum = uiCode as i32;
+        pSliceHeadExt.sSliceHeader.iFrameNum = uiCode as i32;
         if !sps!().bFrameMbsOnlyFlag {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MBAFF);
         }
-        (*pSliceHead).iMbWidth = sps!().iMbWidth as i32;
-        (*pSliceHead).iMbHeight = sps!().iMbHeight as i32;
+        pSliceHeadExt.sSliceHeader.iMbWidth = sps!().iMbWidth as i32;
+        pSliceHeadExt.sSliceHeader.iMbHeight = sps!().iMbHeight as i32;
 
         if bIdrFlag {
-            if (*pSliceHead).iFrameNum != 0 {
+            if pSliceHeadExt.sSliceHeader.iFrameNum != 0 {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_FRAME_NUM);
             }
             if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
@@ -2424,35 +2457,28 @@ pub fn ParseSliceHeaderSyntaxs(
             if uiCode > SLICE_HEADER_IDR_PIC_ID_MAX {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
             }
-            (*pSliceHead).uiIdrPicId = uiCode as u16;
+            pSliceHeadExt.sSliceHeader.uiIdrPicId = uiCode as u16;
         }
 
-        (*pSliceHead).iDeltaPicOrderCntBottom = 0;
-        (*pSliceHead).iDeltaPicOrderCnt[0] = 0;
-        (*pSliceHead).iDeltaPicOrderCnt[1] = 0;
+        pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom = 0;
+        pSliceHeadExt.sSliceHeader.iDeltaPicOrderCnt[0] = 0;
+        pSliceHeadExt.sSliceHeader.iDeltaPicOrderCnt[1] = 0;
         if sps!().uiPocType == 0 {
             if BsGetBits(win!(), pBs, sps!().iLog2MaxPocLsb as u32, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
             let iMaxPocLsb = 1 << sps!().iLog2MaxPocLsb;
             let pocLsb = uiCode as i32;
-            (*pSliceHead).iPicOrderCntLsb = pocLsb;
-            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+            pSliceHeadExt.sSliceHeader.iPicOrderCntLsb = pocLsb;
+            if pps!().bPicOrderPresentFlag && !pSliceHeadExt.sSliceHeader.bFieldPicFlag {
                 if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHead).iDeltaPicOrderCntBottom = iCode;
+                pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom = iCode;
             }
-            let prevLsb = if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb
-            } else {
-                0
-            };
-            let prevMsb = if !(*pCtx).pLastDecPicInfo.is_null() {
-                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb
-            } else {
-                0
-            };
+            // The api-owned alias family, through its accessor (T5.AC4).
+            let prevLsb = api_alias(&pCtx.pLastDecPicInfo).map_or(0, |i| i.iPrevPicOrderCntLsb);
+            let prevMsb = api_alias(&pCtx.pLastDecPicInfo).map_or(0, |i| i.iPrevPicOrderCntMsb);
             let pocMsb = if pocLsb < prevLsb && (prevLsb - pocLsb) >= (iMaxPocLsb / 2) {
                 prevMsb + iMaxPocLsb
             } else if pocLsb > prevLsb && (pocLsb - prevLsb) > (iMaxPocLsb / 2) {
@@ -2460,29 +2486,31 @@ pub fn ParseSliceHeaderSyntaxs(
             } else {
                 prevMsb
             };
-            (*pSliceHead).iPicOrderCntLsb = pocMsb + pocLsb;
-            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
-                (*pSliceHead).iPicOrderCntLsb += (*pSliceHead).iDeltaPicOrderCntBottom;
+            pSliceHeadExt.sSliceHeader.iPicOrderCntLsb = pocMsb + pocLsb;
+            if pps!().bPicOrderPresentFlag && !pSliceHeadExt.sSliceHeader.bFieldPicFlag {
+                pSliceHeadExt.sSliceHeader.iPicOrderCntLsb += pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom;
             }
-            if !(*pCtx).pLastDecPicInfo.is_null() && (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
-                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntLsb = pocLsb;
-                (*(*pCtx).pLastDecPicInfo).iPrevPicOrderCntMsb = pocMsb;
+            if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
+                if let Some(info) = api_alias_mut(&mut pCtx.pLastDecPicInfo) {
+                    info.iPrevPicOrderCntLsb = pocLsb;
+                    info.iPrevPicOrderCntMsb = pocMsb;
+                }
             }
         } else if sps!().uiPocType == 1 && !sps!().bDeltaPicOrderAlwaysZeroFlag {
             if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
-            (*pSliceHead).iDeltaPicOrderCnt[0] = iCode;
-            if (*pPps).bPicOrderPresentFlag && !(*pSliceHead).bFieldPicFlag {
+            pSliceHeadExt.sSliceHeader.iDeltaPicOrderCnt[0] = iCode;
+            if pps!().bPicOrderPresentFlag && !pSliceHeadExt.sSliceHeader.bFieldPicFlag {
                 if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHead).iDeltaPicOrderCnt[1] = iCode;
+                pSliceHeadExt.sSliceHeader.iDeltaPicOrderCnt[1] = iCode;
             }
         }
 
-        (*pSliceHead).iRedundantPicCnt = 0;
-        if (*pPps).bRedundantPicCntPresentFlag {
+        pSliceHeadExt.sSliceHeader.iRedundantPicCnt = 0;
+        if pps!().bRedundantPicCntPresentFlag {
             if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
@@ -2492,8 +2520,8 @@ pub fn ParseSliceHeaderSyntaxs(
                     ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
                 );
             }
-            (*pSliceHead).iRedundantPicCnt = uiCode as i32;
-            if (*pSliceHead).iRedundantPicCnt > 0 {
+            pSliceHeadExt.sSliceHeader.iRedundantPicCnt = uiCode as i32;
+            if pSliceHeadExt.sSliceHeader.iRedundantPicCnt > 0 {
                 return GENERATE_ERROR_NO(
                     ERR_LEVEL_SLICE_HEADER,
                     ERR_INFO_INVALID_REDUNDANT_PIC_CNT,
@@ -2501,27 +2529,27 @@ pub fn ParseSliceHeaderSyntaxs(
             }
         }
 
-        if (*pSliceHead).eSliceType == B_SLICE {
+        if pSliceHeadExt.sSliceHeader.eSliceType == B_SLICE {
             if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
-            (*pSliceHead).iDirectSpatialMvPredFlag = uiCode as i32;
+            pSliceHeadExt.sSliceHeader.iDirectSpatialMvPredFlag = uiCode as i32;
         }
 
-        (*pSliceHead).uiRefCount[0] = (*pPps).uiNumRefIdxL0Active as i32;
-        (*pSliceHead).uiRefCount[1] = (*pPps).uiNumRefIdxL1Active as i32;
+        pSliceHeadExt.sSliceHeader.uiRefCount[0] = pps!().uiNumRefIdxL0Active as i32;
+        pSliceHeadExt.sSliceHeader.uiRefCount[1] = pps!().uiNumRefIdxL1Active as i32;
 
-        let mut bReadNumRefFlag = (*pSliceHead).eSliceType == P_SLICE
-            || (*pSliceHead).eSliceType == B_SLICE;
+        let mut bReadNumRefFlag = pSliceHeadExt.sSliceHeader.eSliceType == P_SLICE
+            || pSliceHeadExt.sSliceHeader.eSliceType == B_SLICE;
         if kbExtensionFlag {
-            bReadNumRefFlag &= (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID;
+            bReadNumRefFlag &= pNalHeaderExt.uiQualityId == BASE_QUALITY_ID;
         }
         if bReadNumRefFlag {
             if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
-            (*pSliceHead).bNumRefIdxActiveOverrideFlag = uiCode != 0;
-            if (*pSliceHead).bNumRefIdxActiveOverrideFlag {
+            pSliceHeadExt.sSliceHeader.bNumRefIdxActiveOverrideFlag = uiCode != 0;
+            if pSliceHeadExt.sSliceHeader.bNumRefIdxActiveOverrideFlag {
                 if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
@@ -2531,8 +2559,8 @@ pub fn ParseSliceHeaderSyntaxs(
                         ERR_INFO_INVALID_NUM_REF_IDX_L0_ACTIVE_MINUS1,
                     );
                 }
-                (*pSliceHead).uiRefCount[0] = (1 + uiCode) as i32;
-                if (*pSliceHead).eSliceType == B_SLICE {
+                pSliceHeadExt.sSliceHeader.uiRefCount[0] = (1 + uiCode) as i32;
+                if pSliceHeadExt.sSliceHeader.eSliceType == B_SLICE {
                     if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
@@ -2542,18 +2570,18 @@ pub fn ParseSliceHeaderSyntaxs(
                             ERR_INFO_INVALID_NUM_REF_IDX_L1_ACTIVE_MINUS1,
                         );
                     }
-                    (*pSliceHead).uiRefCount[1] = (1 + uiCode) as i32;
+                    pSliceHeadExt.sSliceHeader.uiRefCount[1] = (1 + uiCode) as i32;
                 }
             }
         }
-        if ((*pSliceHead).uiRefCount[0] as usize) > MAX_REF_PIC_COUNT
-            || ((*pSliceHead).uiRefCount[1] as usize) > MAX_REF_PIC_COUNT
+        if (pSliceHeadExt.sSliceHeader.uiRefCount[0] as usize) > MAX_REF_PIC_COUNT
+            || (pSliceHeadExt.sSliceHeader.uiRefCount[1] as usize) > MAX_REF_PIC_COUNT
         {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_REF_COUNT_OVERFLOW);
         }
 
-        if (*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID {
-            let iRet = ParseRefPicListReordering(pCtx, kiRbspStart, pBs, pSliceHead);
+        if pNalHeaderExt.uiQualityId == BASE_QUALITY_ID {
+            let iRet = ParseRefPicListReordering(pCtx, kiRbspStart, pBs, (&mut pSliceHeadExt.sSliceHeader));
             if iRet != ERR_NONE {
                 return iRet;
             }
@@ -2561,36 +2589,37 @@ pub fn ParseSliceHeaderSyntaxs(
             // pred_weight_table(): present for weighted P slices and for B slices when
             // weighted_bipred_idc == 1. Skipping it desynchronises the rest of the
             // slice header (`decoder_core.cpp`).
-            if ((*pPps).bWeightedPredFlag && uiSliceType == P_SLICE as u32)
-                || ((*pPps).uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
+            if (pps!().bWeightedPredFlag && uiSliceType == P_SLICE as u32)
+                || (pps!().uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
             {
-                let iRet = ParsePredWeightedTable(pCtx, kiRbspStart, pBs, pSliceHead);
+                let iRet = ParsePredWeightedTable(pCtx, kiRbspStart, pBs, (&mut pSliceHeadExt.sSliceHeader));
                 if iRet != ERR_NONE {
                     return iRet;
                 }
             }
 
             if kbExtensionFlag {
-                (*pSliceHeadExt).bBasePredWeightTableFlag =
-                    !((*pNalHeaderExt).bNoInterLayerPredFlag || (*pNalHeaderExt).uiQualityId > 0);
+                pSliceHeadExt.bBasePredWeightTableFlag =
+                    !(pNalHeaderExt.bNoInterLayerPredFlag || pNalHeaderExt.uiQualityId > 0);
             }
 
-            if (*pNalHeaderExt).sNalUnitHeader.uiNalRefIdc != 0 {
-                let iRet = ParseDecRefPicMarking(pCtx, kiRbspStart, pBs, pSliceHead, sps_ref, bIdrFlag);
+            if pNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
+                let iRet = ParseDecRefPicMarking(pCtx, kiRbspStart, pBs, (&mut pSliceHeadExt.sSliceHeader), sps_ref, bIdrFlag);
                 if iRet != ERR_NONE {
                     return iRet;
                 }
                 if kbExtensionFlag {
-                    let pSubsetSps: PSubsetSps = std::ptr::addr_of_mut!(
-                        (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[(*pPps).iSpsId as usize]
-                    );
-                    if !(*pSubsetSps).sSpsSvcExt.bSliceHeaderRestrictionFlag {
+                    let subset_idx = pps!().iSpsId as usize;
+                    if !pCtx.sSpsPpsCtx.sSubsetSpsBuffer[subset_idx]
+                        .sSpsSvcExt
+                        .bSliceHeaderRestrictionFlag
+                    {
                         if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
-                        (*pSliceHeadExt).bStoreRefBasePicFlag = uiCode != 0;
-                        if ((*pNalHeaderExt).bUseRefBasePicFlag
-                            || (*pSliceHeadExt).bStoreRefBasePicFlag)
+                        pSliceHeadExt.bStoreRefBasePicFlag = uiCode != 0;
+                        if (pNalHeaderExt.bUseRefBasePicFlag
+                            || pSliceHeadExt.bStoreRefBasePicFlag)
                             && !bIdrFlag
                         {
                             return GENERATE_ERROR_NO(
@@ -2603,47 +2632,47 @@ pub fn ParseSliceHeaderSyntaxs(
             }
         }
 
-        if (*pPps).bEntropyCodingModeFlag {
-            if (*pSliceHead).eSliceType != I_SLICE && (*pSliceHead).eSliceType != SI_SLICE {
+        if pps!().bEntropyCodingModeFlag {
+            if pSliceHeadExt.sSliceHeader.eSliceType != I_SLICE && pSliceHeadExt.sSliceHeader.eSliceType != SI_SLICE {
                 if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
                 if uiCode > SLICE_HEADER_CABAC_INIT_IDC_MAX {
                     return ERR_INFO_INVALID_CABAC_INIT_IDC;
                 }
-                (*pSliceHead).iCabacInitIdc = uiCode as i32;
+                pSliceHeadExt.sSliceHeader.iCabacInitIdc = uiCode as i32;
             } else {
-                (*pSliceHead).iCabacInitIdc = 0;
+                pSliceHeadExt.sSliceHeader.iCabacInitIdc = 0;
             }
         }
 
         if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
             return ERR_INFO_INVALID_ACCESS;
         }
-        (*pSliceHead).iSliceQpDelta = iCode;
-        (*pSliceHead).iSliceQp = (*pPps).iPicInitQp + (*pSliceHead).iSliceQpDelta;
-        if (*pSliceHead).iSliceQp < 0 || (*pSliceHead).iSliceQp > 51 {
+        pSliceHeadExt.sSliceHeader.iSliceQpDelta = iCode;
+        pSliceHeadExt.sSliceHeader.iSliceQp = pps!().iPicInitQp + pSliceHeadExt.sSliceHeader.iSliceQpDelta;
+        if pSliceHeadExt.sSliceHeader.iSliceQp < 0 || pSliceHeadExt.sSliceHeader.iSliceQp > 51 {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_QP);
         }
 
-        (*pSliceHead).uiDisableDeblockingFilterIdc = 0;
-        (*pSliceHead).iSliceAlphaC0Offset = 0;
-        (*pSliceHead).iSliceBetaOffset = 0;
-        if (*pPps).bDeblockingFilterControlPresentFlag {
+        pSliceHeadExt.sSliceHeader.uiDisableDeblockingFilterIdc = 0;
+        pSliceHeadExt.sSliceHeader.iSliceAlphaC0Offset = 0;
+        pSliceHeadExt.sSliceHeader.iSliceBetaOffset = 0;
+        if pps!().bDeblockingFilterControlPresentFlag {
             if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                 return ERR_INFO_INVALID_ACCESS;
             }
-            (*pSliceHead).uiDisableDeblockingFilterIdc = uiCode;
-            if (*pSliceHead).uiDisableDeblockingFilterIdc > 6 {
+            pSliceHeadExt.sSliceHeader.uiDisableDeblockingFilterIdc = uiCode;
+            if pSliceHeadExt.sSliceHeader.uiDisableDeblockingFilterIdc > 6 {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_DBLOCKING_IDC);
             }
-            if (*pSliceHead).uiDisableDeblockingFilterIdc != 1 {
+            if pSliceHeadExt.sSliceHeader.uiDisableDeblockingFilterIdc != 1 {
                 if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHead).iSliceAlphaC0Offset = iCode * 2;
-                if (*pSliceHead).iSliceAlphaC0Offset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
-                    || (*pSliceHead).iSliceAlphaC0Offset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+                pSliceHeadExt.sSliceHeader.iSliceAlphaC0Offset = iCode * 2;
+                if pSliceHeadExt.sSliceHeader.iSliceAlphaC0Offset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                    || pSliceHeadExt.sSliceHeader.iSliceAlphaC0Offset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
                 {
                     return GENERATE_ERROR_NO(
                         ERR_LEVEL_SLICE_HEADER,
@@ -2653,9 +2682,9 @@ pub fn ParseSliceHeaderSyntaxs(
                 if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHead).iSliceBetaOffset = iCode * 2;
-                if (*pSliceHead).iSliceBetaOffset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
-                    || (*pSliceHead).iSliceBetaOffset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
+                pSliceHeadExt.sSliceHeader.iSliceBetaOffset = iCode * 2;
+                if pSliceHeadExt.sSliceHeader.iSliceBetaOffset < SLICE_HEADER_ALPHAC0_BETA_OFFSET_MIN
+                    || pSliceHeadExt.sSliceHeader.iSliceBetaOffset > SLICE_HEADER_ALPHAC0_BETA_OFFSET_MAX
                 {
                     return GENERATE_ERROR_NO(
                         ERR_LEVEL_SLICE_HEADER,
@@ -2665,25 +2694,25 @@ pub fn ParseSliceHeaderSyntaxs(
             }
         }
 
-        let mut bSgChangeCycleInvolved = (*pPps).uiNumSliceGroups > 1
-            && (*pPps).uiSliceGroupMapType >= 3
-            && (*pPps).uiSliceGroupMapType <= 5;
+        let mut bSgChangeCycleInvolved = pps!().uiNumSliceGroups > 1
+            && pps!().uiSliceGroupMapType >= 3
+            && pps!().uiSliceGroupMapType <= 5;
         if kbExtensionFlag && bSgChangeCycleInvolved {
             bSgChangeCycleInvolved =
-                bSgChangeCycleInvolved && ((*pNalHeaderExt).uiQualityId == BASE_QUALITY_ID);
+                bSgChangeCycleInvolved && (pNalHeaderExt.uiQualityId == BASE_QUALITY_ID);
         }
         if bSgChangeCycleInvolved {
-            if (*pPps).uiSliceGroupChangeRate > 0 {
-                let kiNumBits = ((1 + (*pPps).uiPicSizeInMapUnits / (*pPps).uiSliceGroupChangeRate)
+            if pps!().uiSliceGroupChangeRate > 0 {
+                let kiNumBits = ((1 + pps!().uiPicSizeInMapUnits / pps!().uiSliceGroupChangeRate)
                     as f64)
                     .log2()
                     .ceil() as u32;
                 if BsGetBits(win!(), pBs, kiNumBits, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHead).iSliceGroupChangeCycle = uiCode as i32;
+                pSliceHeadExt.sSliceHeader.iSliceGroupChangeCycle = uiCode as i32;
             } else {
-                (*pSliceHead).iSliceGroupChangeCycle = 0;
+                pSliceHeadExt.sSliceHeader.iSliceGroupChangeCycle = 0;
             }
         }
 
@@ -2692,45 +2721,45 @@ pub fn ParseSliceHeaderSyntaxs(
         } else {
             // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
             // the slice header, so skipping them desynchronises the slice-data parse.
-            (*pSliceHeadExt).subset_sps_id = Some((*pPps).iSpsId);
+            pSliceHeadExt.subset_sps_id = Some(pps!().iSpsId);
             // The borrow lives across the whole SVC extension parse below, which reads
             // `win!()`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
             // the context — so nothing here can invalidate it (T5.Z1). The `None` arm is
             // unreachable: the id is the PPS's own `iSpsId`, which `ParsePps` bounds to
             // `< MAX_SPS_COUNT` before the PPS is ever stored.
-            let Some(pSubsetSps) = subset_sps_of(&(*pCtx).sSpsPpsCtx, (*pSliceHeadExt).subset_sps_id)
+            let Some(pSubsetSps) = subset_sps_of(&(*pCtx).sSpsPpsCtx, pSliceHeadExt.subset_sps_id)
             else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID);
             };
 
-            if !(*pNalHeaderExt).bNoInterLayerPredFlag
-                && BASE_QUALITY_ID == (*pNalHeaderExt).uiQualityId
+            if !pNalHeaderExt.bNoInterLayerPredFlag
+                && BASE_QUALITY_ID == pNalHeaderExt.uiQualityId
             {
                 if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHeadExt).uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
+                pSliceHeadExt.uiRefLayerDqId = uiCode as u8; //ref_layer_dq_id
                 if (*pSubsetSps).sSpsSvcExt.bInterLayerDeblockingFilterCtrlPresentFlag {
                     if BsGetUe(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //disable_inter_layer_deblocking_filter_idc
-                    (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc = uiCode;
-                    if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc > 6 {
+                    pSliceHeadExt.uiDisableInterLayerDeblockingFilterIdc = uiCode;
+                    if pSliceHeadExt.uiDisableInterLayerDeblockingFilterIdc > 6 {
                         return GENERATE_ERROR_NO(
                             ERR_LEVEL_SLICE_HEADER,
                             ERR_INFO_INVALID_DBLOCKING_IDC,
                         );
                     }
-                    if (*pSliceHeadExt).uiDisableInterLayerDeblockingFilterIdc != 1 {
+                    if pSliceHeadExt.uiDisableInterLayerDeblockingFilterIdc != 1 {
                         if BsGetSe(win!(), pBs, &mut iCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //inter_layer_slice_alpha_c0_offset_div2
-                        (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset = iCode * 2;
-                        if (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                        pSliceHeadExt.iInterLayerSliceAlphaC0Offset = iCode * 2;
+                        if pSliceHeadExt.iInterLayerSliceAlphaC0Offset
                             < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
-                            || (*pSliceHeadExt).iInterLayerSliceAlphaC0Offset
+                            || pSliceHeadExt.iInterLayerSliceAlphaC0Offset
                                 > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
                         {
                             return GENERATE_ERROR_NO(
@@ -2742,10 +2771,10 @@ pub fn ParseSliceHeaderSyntaxs(
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //inter_layer_slice_beta_offset_div2
-                        (*pSliceHeadExt).iInterLayerSliceBetaOffset = iCode * 2;
-                        if (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                        pSliceHeadExt.iInterLayerSliceBetaOffset = iCode * 2;
+                        if pSliceHeadExt.iInterLayerSliceBetaOffset
                             < SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MIN
-                            || (*pSliceHeadExt).iInterLayerSliceBetaOffset
+                            || pSliceHeadExt.iInterLayerSliceBetaOffset
                                 > SLICE_HEADER_INTER_LAYER_ALPHAC0_BETA_OFFSET_MAX
                         {
                             return GENERATE_ERROR_NO(
@@ -2756,15 +2785,15 @@ pub fn ParseSliceHeaderSyntaxs(
                     }
                 }
 
-                (*pSliceHeadExt).uiRefLayerChromaPhaseXPlus1Flag =
+                pSliceHeadExt.uiRefLayerChromaPhaseXPlus1Flag =
                     (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseXPlus1Flag;
-                (*pSliceHeadExt).uiRefLayerChromaPhaseYPlus1 =
+                pSliceHeadExt.uiRefLayerChromaPhaseYPlus1 =
                     (*pSubsetSps).sSpsSvcExt.uiSeqRefLayerChromaPhaseYPlus1;
 
                 if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHeadExt).bConstrainedIntraResamplingFlag = uiCode != 0;
+                pSliceHeadExt.bConstrainedIntraResamplingFlag = uiCode != 0;
 
                 {
                     let scaled = &(*pSubsetSps).sSpsSvcExt.sSeqScaledRefLayer;
@@ -2772,62 +2801,62 @@ pub fn ParseSliceHeaderSyntaxs(
                     let iTopOffset = scaled.iTopOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
                     let iRightOffset = scaled.iRightOffset;
                     let iBottomOffset = scaled.iBottomOffset * (2 - sps!().bFrameMbsOnlyFlag as i32);
-                    (*pSliceHeadExt).iScaledRefLayerPicWidthInSampleLuma =
-                        ((*pSliceHead).iMbWidth << 4) - (iLeftOffset + iRightOffset);
-                    (*pSliceHeadExt).iScaledRefLayerPicHeightInSampleLuma =
-                        ((*pSliceHead).iMbHeight << 4)
-                            - (iTopOffset + iBottomOffset) / (1 + (*pSliceHead).bFieldPicFlag as i32);
+                    pSliceHeadExt.iScaledRefLayerPicWidthInSampleLuma =
+                        (pSliceHeadExt.sSliceHeader.iMbWidth << 4) - (iLeftOffset + iRightOffset);
+                    pSliceHeadExt.iScaledRefLayerPicHeightInSampleLuma =
+                        (pSliceHeadExt.sSliceHeader.iMbHeight << 4)
+                            - (iTopOffset + iBottomOffset) / (1 + pSliceHeadExt.sSliceHeader.bFieldPicFlag as i32);
                 }
-            } else if (*pNalHeaderExt).uiQualityId > BASE_QUALITY_ID {
+            } else if pNalHeaderExt.uiQualityId > BASE_QUALITY_ID {
                 // MGS not supported.
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
             } else {
-                (*pSliceHeadExt).uiRefLayerDqId = u8::MAX;
+                pSliceHeadExt.uiRefLayerDqId = u8::MAX;
             }
 
-            (*pSliceHeadExt).bSliceSkipFlag = false;
-            (*pSliceHeadExt).bAdaptiveBaseModeFlag = false;
-            (*pSliceHeadExt).bDefaultBaseModeFlag = false;
-            (*pSliceHeadExt).bAdaptiveMotionPredFlag = false;
-            (*pSliceHeadExt).bDefaultMotionPredFlag = false;
-            (*pSliceHeadExt).bAdaptiveResidualPredFlag = false;
-            (*pSliceHeadExt).bDefaultResidualPredFlag = false;
-            (*pSliceHeadExt).bTCoeffLevelPredFlag = if (*pNalHeaderExt).bNoInterLayerPredFlag {
+            pSliceHeadExt.bSliceSkipFlag = false;
+            pSliceHeadExt.bAdaptiveBaseModeFlag = false;
+            pSliceHeadExt.bDefaultBaseModeFlag = false;
+            pSliceHeadExt.bAdaptiveMotionPredFlag = false;
+            pSliceHeadExt.bDefaultMotionPredFlag = false;
+            pSliceHeadExt.bAdaptiveResidualPredFlag = false;
+            pSliceHeadExt.bDefaultResidualPredFlag = false;
+            pSliceHeadExt.bTCoeffLevelPredFlag = if pNalHeaderExt.bNoInterLayerPredFlag {
                 false
             } else {
                 (*pSubsetSps).sSpsSvcExt.bSeqTCoeffLevelPredFlag
             };
 
-            if !(*pNalHeaderExt).bNoInterLayerPredFlag {
+            if !pNalHeaderExt.bNoInterLayerPredFlag {
                 if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHeadExt).bSliceSkipFlag = uiCode != 0; //slice_skip_flag
-                if (*pSliceHeadExt).bSliceSkipFlag {
+                pSliceHeadExt.bSliceSkipFlag = uiCode != 0; //slice_skip_flag
+                if pSliceHeadExt.bSliceSkipFlag {
                     return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_SLICESKIP);
                 } else {
                     if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                         return ERR_INFO_INVALID_ACCESS;
                     }
-                    (*pSliceHeadExt).bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
-                    if !(*pSliceHeadExt).bAdaptiveBaseModeFlag {
+                    pSliceHeadExt.bAdaptiveBaseModeFlag = uiCode != 0; //adaptive_base_mode_flag
+                    if !pSliceHeadExt.bAdaptiveBaseModeFlag {
                         if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
-                        (*pSliceHeadExt).bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
+                        pSliceHeadExt.bDefaultBaseModeFlag = uiCode != 0; //default_base_mode_flag
                     }
-                    if !(*pSliceHeadExt).bDefaultBaseModeFlag {
+                    if !pSliceHeadExt.bDefaultBaseModeFlag {
                         if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //adaptive_motion_prediction_flag
-                        (*pSliceHeadExt).bAdaptiveMotionPredFlag = uiCode != 0;
-                        if !(*pSliceHeadExt).bAdaptiveMotionPredFlag {
+                        pSliceHeadExt.bAdaptiveMotionPredFlag = uiCode != 0;
+                        if !pSliceHeadExt.bAdaptiveMotionPredFlag {
                             if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                                 return ERR_INFO_INVALID_ACCESS;
                             }
                             //default_motion_prediction_flag
-                            (*pSliceHeadExt).bDefaultMotionPredFlag = uiCode != 0;
+                            pSliceHeadExt.bDefaultMotionPredFlag = uiCode != 0;
                         }
                     }
 
@@ -2835,13 +2864,13 @@ pub fn ParseSliceHeaderSyntaxs(
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //adaptive_residual_prediction_flag
-                    (*pSliceHeadExt).bAdaptiveResidualPredFlag = uiCode != 0;
-                    if !(*pSliceHeadExt).bAdaptiveResidualPredFlag {
+                    pSliceHeadExt.bAdaptiveResidualPredFlag = uiCode != 0;
+                    if !pSliceHeadExt.bAdaptiveResidualPredFlag {
                         if BsGetOneBit(win!(), pBs, &mut uiCode) != ERR_NONE {
                             return ERR_INFO_INVALID_ACCESS;
                         }
                         //default_residual_prediction_flag
-                        (*pSliceHeadExt).bDefaultResidualPredFlag = uiCode != 0;
+                        pSliceHeadExt.bDefaultResidualPredFlag = uiCode != 0;
                     }
                 }
                 if (*pSubsetSps).sSpsSvcExt.bAdaptiveTCoeffLevelPredFlag {
@@ -2849,7 +2878,7 @@ pub fn ParseSliceHeaderSyntaxs(
                         return ERR_INFO_INVALID_ACCESS;
                     }
                     //tcoeff_level_prediction_flag
-                    (*pSliceHeadExt).bTCoeffLevelPredFlag = uiCode != 0;
+                    pSliceHeadExt.bTCoeffLevelPredFlag = uiCode != 0;
                 }
             }
 
@@ -2857,17 +2886,17 @@ pub fn ParseSliceHeaderSyntaxs(
                 if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHeadExt).uiScanIdxStart = uiCode as u8; //scan_idx_start
+                pSliceHeadExt.uiScanIdxStart = uiCode as u8; //scan_idx_start
                 if BsGetBits(win!(), pBs, 4, &mut uiCode) != ERR_NONE {
                     return ERR_INFO_INVALID_ACCESS;
                 }
-                (*pSliceHeadExt).uiScanIdxEnd = uiCode as u8; //scan_idx_end
-                if (*pSliceHeadExt).uiScanIdxStart != 0 || (*pSliceHeadExt).uiScanIdxEnd != 15 {
+                pSliceHeadExt.uiScanIdxEnd = uiCode as u8; //scan_idx_end
+                if pSliceHeadExt.uiScanIdxStart != 0 || pSliceHeadExt.uiScanIdxEnd != 15 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_UNSUPPORTED_MGS);
                 }
             } else {
-                (*pSliceHeadExt).uiScanIdxStart = 0;
-                (*pSliceHeadExt).uiScanIdxEnd = 15;
+                pSliceHeadExt.uiScanIdxStart = 0;
+                pSliceHeadExt.uiScanIdxEnd = 15;
             }
         }
 
@@ -2876,32 +2905,30 @@ pub fn ParseSliceHeaderSyntaxs(
 }
 
 #[allow(unsafe_code)] // parse tree
-pub unsafe fn PrefetchNalHeaderExtSyntax(
+pub fn PrefetchNalHeaderExtSyntax(
     pCtx: &mut SWelsDecoderContext,
-    kpDst: PNalUnit,
-    kpSrc: *const SNalUnit,
+    dst_idx: usize,
+    kpSrc: &SNalUnit,
 ) -> bool {
-    if kpDst.is_null() || kpSrc.is_null() {
+    let Some(kpDst) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(dst_idx)) else {
         return false;
-    }
-    let pNalHdrExtD = &mut (*kpDst).sNalHeaderExt;
-    let pNalHdrExtS = &(*kpSrc).sNalHeaderExt;
-    let pShExtD = &mut (*kpDst).sNalData.sVclNal.sSliceHeaderExt;
-    let pPrefixS = &(*kpSrc).sNalData.sPrefixNal;
+    };
+    let pNalHdrExtS = kpSrc.sNalHeaderExt;
+    let pPrefixS = kpSrc.sNalData.sPrefixNal;
 
-    pNalHdrExtD.uiDependencyId = pNalHdrExtS.uiDependencyId;
-    pNalHdrExtD.uiQualityId = pNalHdrExtS.uiQualityId;
-    pNalHdrExtD.uiTemporalId = pNalHdrExtS.uiTemporalId;
-    pNalHdrExtD.uiPriorityId = pNalHdrExtS.uiPriorityId;
-    pNalHdrExtD.bIdrFlag = pNalHdrExtS.bIdrFlag;
-    pNalHdrExtD.bNoInterLayerPredFlag = pNalHdrExtS.bNoInterLayerPredFlag;
-    pNalHdrExtD.bDiscardableFlag = pNalHdrExtS.bDiscardableFlag;
-    pNalHdrExtD.bOutputFlag = pNalHdrExtS.bOutputFlag;
-    pNalHdrExtD.bUseRefBasePicFlag = pNalHdrExtS.bUseRefBasePicFlag;
-    pNalHdrExtD.uiLayerDqId = pNalHdrExtS.uiLayerDqId;
+    kpDst.sNalHeaderExt.uiDependencyId = pNalHdrExtS.uiDependencyId;
+    kpDst.sNalHeaderExt.uiQualityId = pNalHdrExtS.uiQualityId;
+    kpDst.sNalHeaderExt.uiTemporalId = pNalHdrExtS.uiTemporalId;
+    kpDst.sNalHeaderExt.uiPriorityId = pNalHdrExtS.uiPriorityId;
+    kpDst.sNalHeaderExt.bIdrFlag = pNalHdrExtS.bIdrFlag;
+    kpDst.sNalHeaderExt.bNoInterLayerPredFlag = pNalHdrExtS.bNoInterLayerPredFlag;
+    kpDst.sNalHeaderExt.bDiscardableFlag = pNalHdrExtS.bDiscardableFlag;
+    kpDst.sNalHeaderExt.bOutputFlag = pNalHdrExtS.bOutputFlag;
+    kpDst.sNalHeaderExt.bUseRefBasePicFlag = pNalHdrExtS.bUseRefBasePicFlag;
+    kpDst.sNalHeaderExt.uiLayerDqId = pNalHdrExtS.uiLayerDqId;
 
-    (*pShExtD).bStoreRefBasePicFlag = pPrefixS.bStoreRefBasePicFlag;
-    (*pShExtD).sRefBasePicMarking = pPrefixS.sRefPicBaseMarking;
+    kpDst.sNalData.sVclNal.sSliceHeaderExt.bStoreRefBasePicFlag = pPrefixS.bStoreRefBasePicFlag;
+    kpDst.sNalData.sVclNal.sSliceHeaderExt.sRefBasePicMarking = pPrefixS.sRefPicBaseMarking;
     true
 }
 
@@ -2914,7 +2941,7 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
         };
         let iIdx = pCurAu.uiEndPos as usize;
         let dq_id = if iIdx < pCurAu.count() as usize {
-            Some((*pCurAu.nal(iIdx)).sNalHeaderExt.uiLayerDqId)
+            pCurAu.node(iIdx).map(|n| n.sNalHeaderExt.uiLayerDqId)
         } else {
             None
         };
@@ -2944,11 +2971,10 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
         if waiting_for_key {
             let mut uiActualIdx = 0u32;
             while uiActualIdx < pCurAu.uiActualUnitsNum {
-                let nal = pCurAu.nal(uiActualIdx as usize);
-                if nal.is_null() {
+                let Some(nal) = pCurAu.node(uiActualIdx as usize) else {
                     break;
-                }
-                let hdr = &(*nal).sNalHeaderExt;
+                };
+                let hdr = &nal.sNalHeaderExt;
                 if hdr.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
                     || hdr.bIdrFlag
                 {
@@ -3048,8 +3074,39 @@ pub fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).bInitialDqLayersMem = false;
 }
 
+/// **The rotation moves nodes, so the indices that name nodes move with it** (F55).
+///
+/// `pCtx->pNalCur` and `pCtx->pSliceHeader` were raw pointers *into* a node, and the
+/// C's rotation exchanges two entries of a **pointer array** — the node objects do not
+/// move, so a pointer that named one before the rotation still names it after. The
+/// port's slots own their nodes and the rotation is a `Vec::swap`, which likewise
+/// leaves the boxed node where it is; what it does move is the node's **index**, and an
+/// index is what [`SWelsDecoderContext::nal_cur`] and
+/// [`SWelsDecoderContext::slice_hdr_nal`] hold. Carrying them through the swap is what
+/// makes the index spelling mean what the pointer spelling meant.
+#[inline]
+fn swap_au_nodes(
+    pAu: &mut SAccessUnit,
+    nal_cur: &mut Option<usize>,
+    slice_hdr_nal: &mut Option<usize>,
+    a: usize,
+    b: usize,
+) {
+    pAu.nal_units.swap(a, b);
+    for idx in [nal_cur, slice_hdr_nal] {
+        match *idx {
+            Some(i) if i == a => *idx = Some(b),
+            Some(i) if i == b => *idx = Some(a),
+            _ => {}
+        }
+    }
+}
+
 pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
-    let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
+    // The three fields are disjoint, and spelling them as a split is what lets the
+    // rotation carry the two indices (T5.Z1's shape, `swap_au_nodes`' reason).
+    let SWelsDecoderContext { access_unit, nal_cur, slice_hdr_nal, .. } = pCtx;
+    let Some(pCurAu) = cur_au(access_unit) else {
         return;
     };
     pCurAu.uiStartPos = 0;
@@ -3062,18 +3119,36 @@ pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
         for iIdx in 0..kuiLeftNum as usize {
             // The C swapped two entries of the pointer array; the nodes are owned
             // now, so the same rotation is a `Vec` swap and no node moves.
-            pCurAu.nal_units.swap(kuiActualNum as usize + iIdx, iIdx);
+            swap_au_nodes(
+                pCurAu,
+                nal_cur,
+                slice_hdr_nal,
+                kuiActualNum as usize + iIdx,
+                iIdx,
+            );
         }
         pCurAu.uiActualUnitsNum = kuiLeftNum;
         pCurAu.uiAvailUnitsNum = kuiLeftNum;
     }
 }
 
-pub fn ForceResetCurrentAccessUnit(pAu: &mut SAccessUnit) {
+/// **The two indices travel with the rotation** — `swap_au_nodes`' reason, and why
+/// this takes them rather than the access unit alone.
+pub fn ForceResetCurrentAccessUnit(
+    pAu: &mut SAccessUnit,
+    nal_cur: &mut Option<usize>,
+    slice_hdr_nal: &mut Option<usize>,
+) {
     let mut uiSucAuIdx = pAu.uiEndPos + 1;
     let mut uiCurAuIdx = 0;
     while uiSucAuIdx < pAu.uiAvailUnitsNum {
-        pAu.nal_units.swap(uiSucAuIdx as usize, uiCurAuIdx as usize);
+        swap_au_nodes(
+            pAu,
+            nal_cur,
+            slice_hdr_nal,
+            uiSucAuIdx as usize,
+            uiCurAuIdx as usize,
+        );
         uiSucAuIdx += 1;
         uiCurAuIdx += 1;
     }
@@ -3177,14 +3252,14 @@ pub fn RefineIdxNoInterLayerPred(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: &mu
         let mut iCurIdx = (*pIdxNoInterLayerPred) - 1;
 
         while iCurIdx >= 0 {
-            let pCurNal = (*pCurAu).nal(iCurIdx as usize);
-            if !pCurNal.is_null() && (*pCurNal).sNalHeaderExt.bNoInterLayerPredFlag {
-                let iCurNalDependId = (*pCurNal).sNalHeaderExt.uiDependencyId;
-                let iCurNalQualityId = (*pCurNal).sNalHeaderExt.uiQualityId;
-                let iCurNalTId = (*pCurNal).sNalHeaderExt.uiTemporalId;
-                let iCurNalFrameNum = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
-                let iCurNalPoc = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
-                let iCurNalFirstMb = (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+            let pCurNal = pCurAu.node(iCurIdx as usize);
+            if let Some(pCurNal) = pCurNal.filter(|n| n.sNalHeaderExt.bNoInterLayerPredFlag) {
+                let iCurNalDependId = pCurNal.sNalHeaderExt.uiDependencyId;
+                let iCurNalQualityId = pCurNal.sNalHeaderExt.uiQualityId;
+                let iCurNalTId = pCurNal.sNalHeaderExt.uiTemporalId;
+                let iCurNalFrameNum = pCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFrameNum;
+                let iCurNalPoc = pCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb;
+                let iCurNalFirstMb = pCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
                 if iCurNalDependId == iLastNalDependId
                     && iCurNalQualityId == iLastNalQualityId
@@ -3215,20 +3290,20 @@ pub fn CheckPocOfCurValidNalUnits(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: i3
     // SAFETY: the family named at the item above.
     unsafe {
         let iEndIdx = pCurAu.uiEndPos as i32;
-        let iCurAuPoc = (*pCurAu.nal(pIdxNoInterLayerPred as usize))
-            .sNalData
-            .sVclNal
-            .sSliceHeaderExt
-            .sSliceHeader
-            .iPicOrderCntLsb;
+        let Some(iCurAuPoc) = pCurAu
+            .node(pIdxNoInterLayerPred as usize)
+            .map(|n| n.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb)
+        else {
+            return true;
+        };
 
         for i in (pIdxNoInterLayerPred + 1)..iEndIdx {
-            let iTmpPoc = (*pCurAu.nal(i as usize))
-                .sNalData
-                .sVclNal
-                .sSliceHeaderExt
-                .sSliceHeader
-                .iPicOrderCntLsb;
+            let Some(iTmpPoc) = pCurAu
+                .node(i as usize)
+                .map(|n| n.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb)
+            else {
+                continue;
+            };
             if iTmpPoc != iCurAuPoc {
                 return false;
             }
@@ -3492,8 +3567,9 @@ pub unsafe fn WelsDecodeInitAccessUnitStart(
     GetVclNalTemporalId(pCtx);
 
     if iErr != ERR_NONE {
-        if let Some(au) = cur_au(&mut pCtx.access_unit) {
-            ForceResetCurrentAccessUnit(au);
+        let SWelsDecoderContext { access_unit, nal_cur, slice_hdr_nal, .. } = &mut *pCtx;
+        if let Some(au) = cur_au(access_unit) {
+            ForceResetCurrentAccessUnit(au, nal_cur, slice_hdr_nal);
         }
         if api_alias(&(*pCtx).pParam).is_some_and(|p| !p.bParseOnly) && !pDstInfo.is_null() {
             (*pDstInfo).iBufferStatus = 0;
@@ -3755,14 +3831,14 @@ pub fn InitDqLayerInfo(
     pCtx: &mut SWelsDecoderContext,
     pDqLayer: Option<&mut DqLayerState>,
     pLayerInfo: PLayerInfo,
-    pNalUnit: PNalUnit,
+    pNalUnit: Option<&SNalUnit>,
 ) {
     // SAFETY: the family named at the item above.
     unsafe {
         let Some(pDqLayer) = pDqLayer else {
             return;
         };
-        if pLayerInfo.is_null() || pNalUnit.is_null() {
+        if pLayerInfo.is_null() {
             return;
         }
         // F24's shape, third site (T5.E1). `pSh` was a `&mut` *inside* `pShExt`'s `&mut`,
@@ -3771,33 +3847,38 @@ pub fn InitDqLayerInfo(
         // the layer that outlive this function, and as `&mut` they died at the next use of
         // their parent. Raw derivations from `pNalUnit` carry the NAL unit's provenance and
         // nothing pops anything.
-        let pNalHdrExt: PNalUnitHeaderExt = std::ptr::addr_of_mut!((*pNalUnit).sNalHeaderExt);
-        let pShExt: PSliceHeaderExt =
-            std::ptr::addr_of_mut!((*pNalUnit).sNalData.sVclNal.sSliceHeaderExt);
-        let pSh: PSliceHeader = std::ptr::addr_of_mut!((*pShExt).sSliceHeader);
-        let kuiQualityId = (*pNalHdrExt).uiQualityId;
+        // T5b.3: the node is a borrow, so the three `addr_of_mut!` chains — S29's
+        // spelling for a *raw* parent — are ordinary field paths, and the four
+        // "escaping borrows" the note above worried about are the layer's own copies.
+        let Some(pNalUnit) = pNalUnit else {
+            return;
+        };
+        let pNalHdrExt = &pNalUnit.sNalHeaderExt;
+        let pShExt = &pNalUnit.sNalData.sVclNal.sSliceHeaderExt;
+        let pSh = &pShExt.sSliceHeader;
+        let kuiQualityId = pNalHdrExt.uiQualityId;
 
         pDqLayer.sLayerInfo = *pLayerInfo;
-        pDqLayer.iMbWidth = (*pSh).iMbWidth;
-        pDqLayer.iMbHeight = (*pSh).iMbHeight;
-        pDqLayer.iSliceIdcBackup = ((*pSh).iFirstMbInSlice << 7)
-            | (((*pNalHdrExt).uiDependencyId as i32) << 4)
-            | ((*pNalHdrExt).uiQualityId as i32);
+        pDqLayer.iMbWidth = pSh.iMbWidth;
+        pDqLayer.iMbHeight = pSh.iMbHeight;
+        pDqLayer.iSliceIdcBackup = (pSh.iFirstMbInSlice << 7)
+            | ((pNalHdrExt.uiDependencyId as i32) << 4)
+            | (pNalHdrExt.uiQualityId as i32);
 
         if let Some(iPpsId) = (*pLayerInfo).pps_id {
             // T5.R6: the id *is* what the pointer was carried for here.
             pDqLayer.uiPpsId = iPpsId as u32;
         }
-        pDqLayer.uiDisableInterLayerDeblockingFilterIdc = (*pShExt).uiDisableInterLayerDeblockingFilterIdc;
-        pDqLayer.iInterLayerSliceAlphaC0Offset = (*pShExt).iInterLayerSliceAlphaC0Offset;
-        pDqLayer.iInterLayerSliceBetaOffset = (*pShExt).iInterLayerSliceBetaOffset;
-        pDqLayer.iSliceGroupChangeCycle = (*pSh).iSliceGroupChangeCycle;
-        pDqLayer.bStoreRefBasePicFlag = (*pShExt).bStoreRefBasePicFlag;
-        pDqLayer.bTCoeffLevelPredFlag = (*pShExt).bTCoeffLevelPredFlag;
-        pDqLayer.bConstrainedIntraResamplingFlag = (*pShExt).bConstrainedIntraResamplingFlag;
-        pDqLayer.uiRefLayerDqId = (*pShExt).uiRefLayerDqId;
-        pDqLayer.uiRefLayerChromaPhaseXPlus1Flag = (*pShExt).uiRefLayerChromaPhaseXPlus1Flag;
-        pDqLayer.uiRefLayerChromaPhaseYPlus1 = (*pShExt).uiRefLayerChromaPhaseYPlus1;
+        pDqLayer.uiDisableInterLayerDeblockingFilterIdc = pShExt.uiDisableInterLayerDeblockingFilterIdc;
+        pDqLayer.iInterLayerSliceAlphaC0Offset = pShExt.iInterLayerSliceAlphaC0Offset;
+        pDqLayer.iInterLayerSliceBetaOffset = pShExt.iInterLayerSliceBetaOffset;
+        pDqLayer.iSliceGroupChangeCycle = pSh.iSliceGroupChangeCycle;
+        pDqLayer.bStoreRefBasePicFlag = pShExt.bStoreRefBasePicFlag;
+        pDqLayer.bTCoeffLevelPredFlag = pShExt.bTCoeffLevelPredFlag;
+        pDqLayer.bConstrainedIntraResamplingFlag = pShExt.bConstrainedIntraResamplingFlag;
+        pDqLayer.uiRefLayerDqId = pShExt.uiRefLayerDqId;
+        pDqLayer.uiRefLayerChromaPhaseXPlus1Flag = pShExt.uiRefLayerChromaPhaseXPlus1Flag;
+        pDqLayer.uiRefLayerChromaPhaseYPlus1 = pShExt.uiRefLayerChromaPhaseYPlus1;
         pDqLayer.bUseWeightPredictionFlag = false;
         pDqLayer.bUseWeightedBiPredIdc = false;
 
@@ -3815,21 +3896,21 @@ pub fn InitDqLayerInfo(
             // `sPredWeightTable`, is written by `CreateImplicitWeightTable`, whose
             // writes now land in the layer's own copy and are read back through it —
             // the NAL's copy had no other reader.
-            pDqLayer.sRefPicListReordering = Some((*pSh).pRefPicListReordering);
-            pDqLayer.sRefPicMarking = Some((*pSh).sRefMarking);
+            pDqLayer.sRefPicListReordering = Some(pSh.pRefPicListReordering);
+            pDqLayer.sRefPicMarking = Some(pSh.sRefMarking);
             if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
-                pps_of(&(*pCtx).sSpsPpsCtx, (*pSh).pps_id)
+                pps_of(&(*pCtx).sSpsPpsCtx, pSh.pps_id)
                     .map(|pps| (pps.bWeightedPredFlag, pps.uiWeightedBipredIdc))
             {
                 pDqLayer.bUseWeightPredictionFlag = bWeightedPredFlag;
                 pDqLayer.bUseWeightedBiPredIdc = uiWeightedBipredIdc != 0;
                 if bWeightedPredFlag || uiWeightedBipredIdc != 0 {
-                    pDqLayer.sPredWeightTable = Some((*pSh).sPredWeightTable);
+                    pDqLayer.sPredWeightTable = Some(pSh.sPredWeightTable);
                 }
             }
         }
-        pDqLayer.uiLayerDqId = (*pNalHdrExt).uiLayerDqId;
-        pDqLayer.bUseRefBasePicFlag = (*pNalHdrExt).bUseRefBasePicFlag;
+        pDqLayer.uiLayerDqId = pNalHdrExt.uiLayerDqId;
+        pDqLayer.bUseRefBasePicFlag = pNalHdrExt.bUseRefBasePicFlag;
     }
 }
 
@@ -3840,29 +3921,38 @@ pub fn InitDqLayerInfo(
 #[allow(unsafe_code)] // parse tree
 pub fn WelsDqLayerDecodeStart(
     pCtx: &mut SWelsDecoderContext,
-    pCurNal: PNalUnit,
+    nal_idx: Option<usize>,
     sps_ref: Option<SpsRef>,
     pps_id: Option<i32>,
 ) {
-    // SAFETY: the family named at the item above.
+    // T5b.3: the two scalars this lifted out of the slice header travel as values.
+    // `pCtx->pSliceHeader` — the raw alias it used to stamp — is deleted; the NAL
+    // under decode is `pCtx->nal_cur`, an index, and its one reader resolves it.
+    let Some(nal_idx) = nal_idx else {
+        return;
+    };
+    let Some((eSliceType, iFrameNum)) = pCtx
+        .access_unit
+        .as_deref()
+        .and_then(|au| au.node(nal_idx))
+        .map(|nal| {
+            let sh = &nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+            (sh.eSliceType, sh.iFrameNum)
+        })
+    else {
+        return;
+    };
+    pCtx.eSliceType = eSliceType;
+    pCtx.bUsedAsRef = false;
+    pCtx.iFrameNum = iFrameNum;
+    // `pCtx->pSliceHeader = pSh`'s replacement: the node, by index.
+    pCtx.slice_hdr_nal = Some(nal_idx);
+    #[allow(unsafe_code)] // api boundary — `pDecoderStatistics` is `CWelsDecoderImpl`'s
     unsafe {
-        if pCurNal.is_null() {
-            return;
-        }
-        // F24's shape, fourth site — and the one that escapes furthest: `(*pCtx).pSliceHeader`
-        // outlives this call by the whole slice decode, so as a `&mut`-derived pointer it
-        // was dead the moment any other borrow of this NAL unit was taken (which
-        // `InitDqLayerInfo` does, immediately after, at the same call site).
-        let pSh: PSliceHeader =
-            std::ptr::addr_of_mut!((*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
-        (*pCtx).eSliceType = (*pSh).eSliceType;
-        (*pCtx).pSliceHeader = pSh;
-        (*pCtx).bUsedAsRef = false;
-        (*pCtx).iFrameNum = (*pSh).iFrameNum;
         UpdateDecoderStatisticsForActiveParaset(
-            (*pCtx).pDecoderStatistics,
-            sps_of(&(*pCtx).sSpsPpsCtx, sps_ref),
-            pps_of(&(*pCtx).sSpsPpsCtx, pps_id),
+            pCtx.pDecoderStatistics,
+            sps_of(&pCtx.sSpsPpsCtx, sps_ref),
+            pps_of(&pCtx.sSpsPpsCtx, pps_id),
         );
     }
 }
@@ -3917,11 +4007,15 @@ pub unsafe fn DecodeCurrentAccessUnit(
     // Node pointers only, one derivation each. The slice loop below calls back into
     // the context on every iteration, so nothing about the access unit may be held
     // across it — but a node is its own allocation and outlives every retag (T5.O4).
-    let pNalCur = match cur_au(&mut pCtx.access_unit) {
-        Some(au) => au.nal(iIdx as usize),
-        None => return ERR_INFO_INVALID_PTR,
-    };
-    (*pCtx).pNalCur = pNalCur;
+    // **T5b.3: the index travels, not the node.** This local was a raw pointer held
+    // across the whole slice loop, which calls back into the context — the second half
+    // of what kept the access unit's slots raw. It is `Some(iIdx)` while `iIdx` names a
+    // NAL and `None` past the end, which is what the null tests below were reading.
+    if cur_au(&mut pCtx.access_unit).is_none() {
+        return ERR_INFO_INVALID_PTR;
+    }
+    let pNalCur: Option<usize> = Some(iIdx as usize);
+    (*pCtx).nal_cur = pNalCur;
 
     // **The access-unit bracket owns the layer** (T5.AA1). It is `slice_split`'s
     // maneuver one container over, and it takes the other of the two available
@@ -3977,7 +4071,9 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
         // The two stamps travel as values: the picture is the pool's borrow and
         // both sources are read before it opens (T5.Z1).
-        let uiTimeStamp = if pNalCur.is_null() { None } else { Some((*pNalCur).uiTimeStamp) };
+        let uiTimeStamp = pNalCur
+            .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
+            .map(|nal| nal.uiTimeStamp);
         let uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp as u32;
         if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
             if let Some(uiTimeStamp) = uiTimeStamp {
@@ -4034,43 +4130,43 @@ pub unsafe fn DecodeCurrentAccessUnit(
         // picture's two strides. The reconstruction path addresses blocks by sample
         // coordinate now (`decode_slice.rs`'s `blk4_xy`), so there is no table.
 
-        if !pNalCur.is_null() && (*pNalCur).sNalHeaderExt.uiLayerDqId > kuiTargetLayerDqId {
+        if nal_hdr(pCtx, pNalCur).is_some_and(|h| h.uiLayerDqId > kuiTargetLayerDqId) {
             break;
         }
 
         while iIdx <= iEndIdx {
-            if pNalCur.is_null() || dq_cur.is_none() {
+            if pNalCur.is_none() || dq_cur.is_none() {
                 break;
             }
-            let iCurrIdQ = (*pNalCur).sNalHeaderExt.uiQualityId as i16;
-            let iCurrIdD = (*pNalCur).sNalHeaderExt.uiDependencyId as i16;
-            // F24's shape, second site — this is the pair Miri reported once the
-            // `ParseSliceHeaderSyntaxs` fix let it get this far. Byte-identical
-            // diagnosis: `[0x28..0xf00]` created here, invalidated by the retag at
-            // `[0x28..0x1350]` on the next line, caught at the `iFrameNum` read below.
-            let pSh: PSliceHeader =
-                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader);
-            let pShExt: PSliceHeaderExt =
-                std::ptr::addr_of_mut!((*pNalCur).sNalData.sVclNal.sSliceHeaderExt);
-            // The C++ declares `pSh` at function scope, so after the slice loop it
-            // still names the *last* slice header — which is the one the frame_num
-            // update below wants. Here `pSh` is a per-iteration derivation (T5.O4's
-            // rule: nothing about the access unit survives a call back into the
-            // context), so the one field that outlives the iteration is carried out
-            // by value rather than the pointer by reference.
-            iLastSliceFrameNum = (*pSh).iFrameNum;
-            (*pCtx).bRPLRError = false;
-            let bReconstructSlice = CheckSliceNeedReconstruct((*pNalCur).sNalHeaderExt.uiLayerDqId, kuiTargetLayerDqId);
+            // **T5b.3: the node's fields are copied out once, and nothing is held.**
+            // The C++ declares `pSh`/`pShExt` at function scope and re-derives them
+            // per iteration; the port spelled that with `addr_of_mut!` because the
+            // node was raw. It is a borrow now, so the shape that works is the one
+            // T5.Z1 already uses everywhere else — read what this iteration needs, in
+            // one expression, then let the borrow end before the calls that re-enter
+            // the context.
+            let Some(nal) = pNalCur
+                .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
+            else {
+                break;
+            };
+            let hdr_ext = nal.sNalHeaderExt;
+            let pShExt = nal.sNalData.sVclNal.sSliceHeaderExt;
+            let pSh = pShExt.sSliceHeader;
+            let bSliceHeaderExtFlag = nal.sNalData.sVclNal.bSliceHeaderExtFlag;
 
-            pLayerInfo.sNalHeaderExt = (*pNalCur).sNalHeaderExt;
-            // The four slice-header values first, then one borrow of the pool
-            // (T5.Z1) — `pSh` and `pNalCur` reach the NAL, `pDec` reaches the pool.
-            let stamp = (
-                (*pSh).iFrameNum,
-                (*pSh).iPicOrderCntLsb,
-                (*pNalCur).sNalHeaderExt.bIdrFlag,
-                (*pSh).eSliceType,
-            );
+            let iCurrIdQ = hdr_ext.uiQualityId as i16;
+            let iCurrIdD = hdr_ext.uiDependencyId as i16;
+            // The C++'s `pSh` outlives the slice loop and names the *last* slice
+            // header, which is what the frame_num update below wants; the one field
+            // that outlives the iteration is carried out by value.
+            iLastSliceFrameNum = pSh.iFrameNum;
+            (*pCtx).bRPLRError = false;
+            let bReconstructSlice =
+                CheckSliceNeedReconstruct(hdr_ext.uiLayerDqId, kuiTargetLayerDqId);
+
+            pLayerInfo.sNalHeaderExt = hdr_ext;
+            let stamp = (pSh.iFrameNum, pSh.iPicOrderCntLsb, hdr_ext.bIdrFlag, pSh.eSliceType);
             if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
                 pDec.iFrameNum = stamp.0;
                 pDec.iFramePoc = stamp.1;
@@ -4078,11 +4174,11 @@ pub unsafe fn DecodeCurrentAccessUnit(
                 pDec.eSliceType = stamp.3;
             }
 
-            pLayerInfo.sSliceInLayer.sSliceHeaderExt = *pShExt;
-            pLayerInfo.sSliceInLayer.bSliceHeaderExtFlag = (*pNalCur).sNalData.sVclNal.bSliceHeaderExtFlag;
-            pLayerInfo.sSliceInLayer.eSliceType = (*pSh).eSliceType as u8;
+            pLayerInfo.sSliceInLayer.sSliceHeaderExt = pShExt;
+            pLayerInfo.sSliceInLayer.bSliceHeaderExtFlag = bSliceHeaderExtFlag;
+            pLayerInfo.sSliceInLayer.eSliceType = pSh.eSliceType as u8;
 
-            pLayerInfo.sSliceInLayer.iLastMbQp = (*pSh).iSliceQp;
+            pLayerInfo.sSliceInLayer.iLastMbQp = pSh.iSliceQp;
             // **T5.M3 — where `dq_cur->pBitStringAux` was written.** The layer mirrored
             // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` here and every reader in
             // `decode_slice.rs` and `parse_mb_syn_cabac.rs` went through the mirror;
@@ -4105,13 +4201,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
             // `decode_slice.cpp:1621` reader — the same dead MT arm — reads NULL. The
             // port already diverged by writing the first NAL; this makes the divergence
             // *useful* instead of merely different, and F36 owns the arm either way.
-            (*pCtx).pNalCur = pNalCur;
+            (*pCtx).nal_cur = Some(iIdx as usize);
 
-            (*pCtx).uiNalRefIdc = (*pNalCur).sNalHeaderExt.sNalUnitHeader.uiNalRefIdc;
-            let iPpsId = (*pSh).iPpsId;
-            pLayerInfo.pps_id = (*pSh).pps_id;
-            pLayerInfo.sps_ref = (*pSh).sps_ref;
-            pLayerInfo.subset_sps_id = (*pShExt).subset_sps_id;
+            (*pCtx).uiNalRefIdc = hdr_ext.sNalUnitHeader.uiNalRefIdc;
+            let iPpsId = pSh.iPpsId;
+            pLayerInfo.pps_id = pSh.pps_id;
+            pLayerInfo.sps_ref = pSh.sps_ref;
+            pLayerInfo.subset_sps_id = pShExt.subset_sps_id;
 
             // **FMO activation** (`decoder_core.cpp:2651-2663`), restored at T5.S1.
             // Nothing wrote `pFmo` in this port — F43's other half — so `fmo.rs` was
@@ -4159,7 +4255,10 @@ pub unsafe fn DecodeCurrentAccessUnit(
             WelsDqLayerDecodeStart(pCtx, pNalCur, pLayerInfo.sps_ref, pLayerInfo.pps_id);
 
             if iLastIdD < 0 || iLastIdD == iCurrIdD {
-                InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &mut pLayerInfo, pNalCur);
+                let nal_copy = pNalCur
+                    .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
+                    .copied();
+                InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &mut pLayerInfo, nal_copy.as_ref());
 
                 // **F46, T5.T2 — subclause 8.2.5.2, gaps in `frame_num`**
                 // (`decoder_core.cpp:2675`), the second of the C++'s four `dsRefLost`
@@ -4197,8 +4296,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     };
                     let wrap = (1i32 << uiLog2MaxFrameNum) - 1;
                     if !kbIdrFlag
-                        && (*pSh).iFrameNum != iPrevFrameNum
-                        && (*pSh).iFrameNum != ((iPrevFrameNum + 1) & wrap)
+                        && pSh.iFrameNum != iPrevFrameNum
+                        && pSh.iFrameNum != ((iPrevFrameNum + 1) & wrap)
                     {
                         WelsLog(
                             std::ptr::addr_of_mut!((*pCtx).sLogCtx),
@@ -4223,12 +4322,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
                         pCtx,
                         dq_cur.as_deref_mut(),
                         (*pCtx).uiNalRefIdc,
-                        (*pSh).iPicOrderCntLsb,
+                        pSh.iPicOrderCntLsb,
                     );
                     if iRet != ERR_NONE {
                         (*pCtx).bRPLRError = true;
                         bAllRefComplete = false;
-                        HandleReferenceLost(pCtx, pNalCur);
+                        let h = nal_hdr(pCtx, pNalCur).copied();
+                        HandleReferenceLost(pCtx, h.as_ref());
                         if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                             if (*pCtx).iTotalNumMbRec == 0 {
                                 (*pCtx).pDec = None;
@@ -4238,7 +4338,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
                     }
                 }
 
-                if (*pSh).eSliceType == B_SLICE && (*pSh).iDirectSpatialMvPredFlag == 0 {
+                if pSh.eSliceType == B_SLICE && pSh.iDirectSpatialMvPredFlag == 0 {
                     ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                 }
 
@@ -4250,7 +4350,8 @@ pub unsafe fn DecodeCurrentAccessUnit(
 
                 if iRet != ERR_NONE {
                     bAllRefComplete = false;
-                    HandleReferenceLostL0(pCtx, pNalCur);
+                    let h = nal_hdr(pCtx, pNalCur).copied();
+                    HandleReferenceLostL0(pCtx, h.as_ref());
                     if api_alias(&(*pCtx).pParam).is_some_and(|p| p.eEcActiveIdc == ERROR_CON_DISABLE) {
                         if (*pCtx).iTotalNumMbRec == 0 {
                             (*pCtx).pDec = None;
@@ -4285,16 +4386,13 @@ pub unsafe fn DecodeCurrentAccessUnit(
             iLastIdQ = iCurrIdQ;
 
             iIdx += 1;
-            pNalCur = match cur_au(&mut pCtx.access_unit) {
-                Some(au) if iIdx <= iEndIdx => au.nal(iIdx as usize),
-                _ => std::ptr::null_mut(),
-            };
+            pNalCur = if iIdx <= iEndIdx { Some(iIdx as usize) } else { None };
 
-            if pNalCur.is_null()
-                || iLastIdD != ((*pNalCur).sNalHeaderExt.uiDependencyId as i16)
-                || iLastIdQ != ((*pNalCur).sNalHeaderExt.uiQualityId as i16)
-            {
-                break;
+            match nal_hdr(pCtx, pNalCur) {
+                Some(h)
+                    if iLastIdD == (h.uiDependencyId as i16)
+                        && iLastIdQ == (h.uiQualityId as i16) => {}
+                _ => break,
             }
         }
 
@@ -4417,7 +4515,7 @@ pub unsafe fn DecodeCurrentAccessUnit(
             }
         }
 
-        if pNalCur.is_null() {
+        if pNalCur.is_none() {
             break;
         }
     }
@@ -4439,21 +4537,25 @@ pub unsafe fn CheckAndFinishLastPic(
     let mut bAuBoundaryFlag = false;
 
     if IS_VCL_NAL((*pCtx).sCurNalHead.eNalUnitType, 1) {
-        let pCurNal = match cur_au(&mut pCtx.access_unit) {
-            Some(au) => au.nal(au.uiEndPos as usize),
+        let sps_ref = match pCtx.access_unit.as_deref() {
+            Some(au) => au
+                .node(au.uiEndPos as usize)
+                .and_then(|n| n.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref),
             None => return false,
         };
-        if !pCurNal.is_null() && !(*pCtx).pLastDecPicInfo.is_null() {
+        let cur_nal = pCtx
+            .access_unit
+            .as_deref()
+            .and_then(|au| au.node(au.uiEndPos as usize))
+            .copied();
+        if let (Some(pCurNal), false) = (cur_nal.as_ref(), (*pCtx).pLastDecPicInfo.is_null()) {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
                 && crate::decoder::nalu::CheckAccessUnitBoundaryExt(
-                    sps_of(
-                        &(*pCtx).sSpsPpsCtx,
-                        (*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
-                    ),
+                    sps_of(&(*pCtx).sSpsPpsCtx, sps_ref),
                     &(*(*pCtx).pLastDecPicInfo).sLastNalHdrExt,
-                    &(*pCurNal).sNalHeaderExt,
+                    &pCurNal.sNalHeaderExt,
                     &(*(*pCtx).pLastDecPicInfo).sLastSliceHeader,
-                    &(*pCurNal).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader,
+                    &pCurNal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader,
                 );
         }
     } else {
@@ -4804,7 +4906,7 @@ mod tests {
                     ERR_NONE
                 );
                 assert_eq!(
-                    WelsDecodeSlice(pCtx, None, true, std::ptr::null_mut()),
+                    WelsDecodeSlice(pCtx, None, true, None),
                     ERR_NONE
                 );
                 assert_eq!(
@@ -4924,6 +5026,88 @@ mod tests {
                 assert_eq!(stat.uiLevel, 31);
             }
         }
+    }
+
+    /// **F55's red-under-revert test.** `ResetCurrentAccessUnit`'s rotation moves the
+    /// access unit's slots; the C rotates a *pointer array*, so `pCtx->pSliceHeader` —
+    /// a pointer *into* a node — still names the same slice header afterwards. The port
+    /// holds that reference as an index, so the rotation has to carry it: without
+    /// `swap_au_nodes`' remap the index keeps naming slot 0, which the rotation has just
+    /// filled with the **next** access unit's NAL, and every reader downstream — the
+    /// api's three reordering sites among them — reads a slice header one access unit
+    /// ahead of the picture it is describing.
+    ///
+    /// The shape is the measured one: one decoded slice at slot 0, the successor AU's
+    /// already-parsed NAL at slot 1, `uiActualUnitsNum` 1 and `uiAvailUnitsNum` 2.
+    /// Revert `swap_au_nodes` to a bare `nal_units.swap` and the first assertion reads
+    /// `P_SLICE`/`99`.
+    #[test]
+    fn the_au_rotation_carries_the_two_node_indices_with_it() {
+        use crate::decoder::decoder_context::slice_header_of;
+        use crate::decoder::slice::EWelsSliceType;
+
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.access_unit = Some(SAccessUnit::with_nodes(4));
+        {
+            let au = cur_au(&mut ctx.access_unit).unwrap();
+            let decoded = &mut au.node_mut(0).unwrap().sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+            decoded.eSliceType = EWelsSliceType::B_SLICE;
+            decoded.iPicOrderCntLsb = 41;
+            let successor =
+                &mut au.node_mut(1).unwrap().sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
+            successor.eSliceType = EWelsSliceType::P_SLICE;
+            successor.iPicOrderCntLsb = 99;
+            au.uiActualUnitsNum = 1;
+            au.uiAvailUnitsNum = 2;
+        }
+        ctx.nal_cur = Some(0);
+        ctx.slice_hdr_nal = Some(0);
+
+        ResetCurrentAccessUnit(&mut ctx);
+
+        assert_eq!(
+            slice_header_of(&ctx).map(|sh| (sh.eSliceType, sh.iPicOrderCntLsb)),
+            Some((EWelsSliceType::B_SLICE, 41)),
+            "the decoded slice's header, not the successor AU's"
+        );
+        assert_eq!(ctx.slice_hdr_nal, Some(1), "the index followed its node");
+        assert_eq!(ctx.nal_cur, Some(1), "and so did the NAL under decode");
+        assert_eq!(
+            cur_au(&mut ctx.access_unit)
+                .and_then(|au| au.node(0))
+                .map(|n| n.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.iPicOrderCntLsb),
+            Some(99),
+            "slot 0 is the successor's, which is the point of the rotation"
+        );
+    }
+
+    /// [`ForceResetCurrentAccessUnit`]'s half of the same rule — the error path's
+    /// rotation, driven from `uiEndPos` instead of `uiActualUnitsNum`.
+    #[test]
+    fn the_error_path_rotation_carries_them_too() {
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.access_unit = Some(SAccessUnit::with_nodes(4));
+        {
+            let au = cur_au(&mut ctx.access_unit).unwrap();
+            au.node_mut(0).unwrap().uiTimeStamp = 10;
+            au.node_mut(2).unwrap().uiTimeStamp = 12;
+            au.uiEndPos = 1;
+            au.uiAvailUnitsNum = 3;
+        }
+        ctx.nal_cur = Some(2);
+        ctx.slice_hdr_nal = Some(0);
+
+        let SWelsDecoderContext { access_unit, nal_cur, slice_hdr_nal, .. } = &mut *ctx;
+        ForceResetCurrentAccessUnit(cur_au(access_unit).unwrap(), nal_cur, slice_hdr_nal);
+
+        // The one swap is (2, 0): `uiSucAuIdx` starts at `uiEndPos + 1` = 2 and
+        // `uiCurAuIdx` at 0, and the loop stops at `uiAvailUnitsNum` = 3.
+        assert_eq!(ctx.nal_cur, Some(0));
+        assert_eq!(ctx.slice_hdr_nal, Some(2));
+        assert_eq!(
+            cur_au(&mut ctx.access_unit).and_then(|au| au.node(0)).map(|n| n.uiTimeStamp),
+            Some(12)
+        );
     }
 
     #[test]

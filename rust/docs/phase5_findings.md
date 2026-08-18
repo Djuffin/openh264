@@ -2739,3 +2739,72 @@ The clause that generalises: **when a field's type changes, ask what its all-zer
 bit pattern now means, not whether it owns anything.** A niche-carrying `Option` over
 a type with a `bool` or a small enum is valid at zero and reads as `Some(default)`;
 a raw pointer's zero was `None`. The two look identical in a diff.
+
+## F55 — an index is not a pointer under a container that permutes its slots: the access unit's rotation left `pSliceHeader`'s replacement one access unit ahead
+
+*Phase 5b session B, found by measuring session A's preserved face-1 patch (11 of 60
+conformance assets, every one a B-slice stream). Fixed at T5b.3, in the commit that
+lands the conversion.*
+
+**The conversion.** `pCtx->pSliceHeader` and `pCtx->pNalCur` were raw pointers *into*
+a node of the access unit's list — the two stored aliases that kept `TagAccessUnits`
+from owning its slots. T5b.3 replaces both with indices (`slice_hdr_nal`, `nal_cur`)
+so the slots can become `Vec<Box<SNalUnit>>`. Cache-not-carrier, the same maneuver the
+phase had run a dozen times.
+
+**What the maneuver misses.** `ResetCurrentAccessUnit` and
+`ForceResetCurrentAccessUnit` **rotate** the list: the successor access unit's NAL is
+already parsed and sitting behind the decoded one, and the rotation brings it to the
+front. In the C++ the rotation exchanges two entries of a **pointer array** — the node
+objects do not move, so a pointer that named a node before the rotation names the same
+node after it, at a different array index. `Vec::swap` on owned nodes also leaves the
+boxed node where it is; what it moves is the node's **index**, which is precisely what
+the converted fields hold. Nothing in the diff shows this: the swap line is unchanged,
+and the fields it invalidates are named nowhere near it.
+
+**The failure, end to end.** After the rotation, `slice_hdr_nal` still reads `Some(0)`
+— and slot 0 is now the *successor* access unit's NAL. The api's three reordering
+sites (`BufferingReadyPicture`'s `bHasBSlice` and `iPOC`,
+`ReleaseBufferedReadyPictureReorder`'s `iLastPOC`, `ReorderPicturesInDisplay`'s
+write-out test) all run after the rotation, so every one of them judges a picture by
+the **next** picture's slice header. The three sites are guarded by `bIsBaseline` and
+`B_SLICE`, which is why the failure set is exactly the B-slice assets and why the
+decode itself is untouched.
+
+**The signature, and why it was misread as a pixel divergence.** Frame counts held and
+frame hashes moved, so session A recorded a pixel divergence. Measured per frame on
+`grid_48x32`, the six output hashes are the **same six values in a different order**:
+`5d62 b2e6 3e36 08c6 159f 582d` became `5d62 159f 3e36 b2e6 08c6 582d`. Not one pixel
+differed anywhere in the stream — the divergence is entirely in *which* buffered
+picture the api writes out when. **A hash-set comparison separates a reordering from a
+corruption in one run, and the frame-count check that stood in for it cannot.**
+
+**The measurement that named it**, both sides instrumented at the same three api sites:
+
+| output | pre-patch `pSliceHeader` | patched `slice_header_of` |
+|---|---|---|
+| 1st | `(I_SLICE, 0)` | `(P_SLICE, 2)` |
+| 2nd | `(P_SLICE, 2)` | `(P_SLICE, 8)` |
+| 3rd | `(P_SLICE, 8)` | `(B_SLICE, 4)` |
+
+— the new readings are the old ones shifted by one, which is the rotation, stated.
+
+The leading hypothesis in the brief (a lost write-back of the three B-slice fields
+`InitDqLayerInfo` reads out of the node) was **eliminated first, by measurement**: the
+whole `SSliceHeaderExt` at every `InitDqLayerInfo` entry is identical on both sides,
+6 calls of 6.
+
+**Fix**: `swap_au_nodes` — one helper both rotations route through, which applies the
+swap and carries `nal_cur`/`slice_hdr_nal` with it. Covered by
+`the_au_rotation_carries_the_two_node_indices_with_it` and
+`the_error_path_rotation_carries_them_too`; under a revert of the remap the first
+reads `(P_SLICE, 99)` — the successor's header — and conformance returns to 49/11.
+
+**The general rule.** S28 and S29 are about a pointer's *provenance*; this is about its
+*identity*. **Replacing a stored alias with an index is only faithful while the
+container never reorders**, and a container that owns its slots reorders by moving
+them, where the C reordered by moving pointers past them. Before converting an alias
+to an index, grep the container for `swap`, `rotate`, `retain`, `remove`, `sort` and
+`drain`: each one is a site the new spelling has to be told about and the old one did
+not. Where the identity has to outlive a reorder, either carry the index through the
+permutation (this fix) or give the node an identity that is not its position.

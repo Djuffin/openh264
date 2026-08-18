@@ -1264,6 +1264,22 @@ S6=R-e, S7=R-c, S8=R-i, S9=R-o, S10=R-d, S14=R-g, S16=R-f+R-p.*
   awk reading `0x0` as hex): *an instrument that disagrees with a hand count is
   wrong until proven otherwise* — the hand count arbitrates.
 
+- **S34 — an alias converted to an index is faithful only while the container never
+  reorders** (Phase 5b session B, F55 — the measured record is `phase5_findings.md`'s
+  F55 entry). The C stores a pointer *into* a node and reorders the **pointer array**
+  around it, so the alias survives; the port's owned slots reorder by moving the slots,
+  and the index the alias became is exactly what moves. The access unit's two rotations
+  left `slice_hdr_nal` naming the successor access unit's NAL, and the api judged every
+  B-slice picture by the next picture's slice header — 11 of 60 conformance assets, and
+  no line of the diff was near the swap. **Before converting a stored alias to an index,
+  grep the container for `swap`, `rotate`, `retain`, `remove`, `sort` and `drain`**: each
+  hit is a site the index spelling has to be told about and the pointer spelling did not.
+  Carry the index through the permutation, or give the node an identity that is not its
+  position. Corollary for the gates, from the same finding: **when frame counts hold and
+  hashes move, compare the hash *sets* before calling it a pixel divergence** — session A
+  spent a face on "corruption" that was a reordering, and one set comparison separates
+  them.
+
 ---
 
 ## 8. Sequencing rationale & parallelism
