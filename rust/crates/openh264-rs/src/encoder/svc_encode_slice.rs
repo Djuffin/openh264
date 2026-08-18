@@ -2987,7 +2987,13 @@ mod tests {
     ///   above any all-skip frame and a third below the real one. (The three frames
     ///   read 728 / 618 / 549 moving and 728 / 12 / 94 static.)
     ///
-    /// **Coverage is proven, not asserted** (the F21 rule): PLACEHOLDER_REVERT
+    /// **Coverage is proven, not asserted** (the F21 rule): with F57's
+    /// `+ kuiMvdCostTableOvershoot` deleted, the live probe goes red under Miri at
+    /// `md.rs:1544` — "attempting to offset pointer by 1042 bytes ... only 11 bytes
+    /// from the end" — and green when it is restored (measured, session A, both
+    /// directions). Each of the other nine defects it found was observed red before
+    /// its fix and green after, which is the same evidence taken the natural way.
+    ///
     /// **The live half of the encoder probe: initialisation, under the checker.**
     ///
     /// `frames = 0` drives create -> `GetDefaultParams` -> `InitializeExt` ->

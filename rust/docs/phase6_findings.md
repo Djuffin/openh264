@@ -103,8 +103,16 @@ pair, which is why no single-module reading had ever found it.
 It closed as a family rather than a site, S29's spelling at **20** derivations of
 `&mut (*<raw>).sSpatialLayers[i]` / `.sDependencyLayers[i]` across
 `encoder_ext.rs`, `paraset_strategy.rs`, `ref_list_mgr_svc.rs`,
-`encoder_context.rs`, `wels_encoder_ext.rs` and `wels_preprocess.rs`. The
-`--skip encoder_ext` line in `gates.sh` names F13 and **stays** for now: it is a
-test-name filter, the production site behind it is fixed, and what remains is the
-`encoder_ext` unit tests' own backlog, which 6.6 owns along with deleting the
-line. See the session A log entry for the enumeration.
+`encoder_context.rs`, `wels_encoder_ext.rs` and `wels_preprocess.rs`. See the
+session A log entry for the enumeration.
+
+**The `--skip encoder_ext` line is deleted (session B, 2026-08-18).** Session A
+left it as a test-name filter over "the `encoder_ext` unit tests' own backlog";
+session B measured the backlog: the filter matched exactly two tests
+(`request_memory_svc_builds_the_parameter_sets`,
+`request_memory_svc_builds_the_dq_layers` — `cargo test --lib -- --list | grep
+encoder_ext`, and no `wels_encoder_ext` test exists to be caught by the
+substring), and both ran green under the `--lib` step's flags
+(`MIRIFLAGS=-Zmiri-ignore-leaks`, **2 passed / 0 failed**, Miri clock 16.92s).
+There was no backlog behind the skip; S15's clause applied and the line went
+with the finding it named. F13 has no open site anywhere in the tree.
