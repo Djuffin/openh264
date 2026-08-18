@@ -11388,3 +11388,40 @@ nothing.
   *mut T` shape (10 sites: `svc_mode_decision.rs` ×5, `svc_set_mb_syn_cavlc.rs` ×2,
   `svc_enc_slice_segment.rs` ×2, `encoder_ext.rs:3522`) is one function's borrow each, not this
   sweep's, and is left for the walk to fire on. No behaviour, no layout. Battery PASS.
+* **Face 1.2 — the three settlements, written before the first edit.** All three are
+  *cache, not carrier* (`phase6.md` §1), confirmed by reading at `8e23d488`:
+  **(a) `SSlice.pSliceBsa`** is a cache of one bit. `InitSliceBsBuffer` (`svc_encode_slice.rs:2294`)
+  aims it at the slice's own `sSliceBs.sBsWrite` exactly when it also allocates `sSliceBs.pBs`, and
+  at `pOut->sBsWrite` exactly when it leaves `pBs` null; `ReallocateSliceList`'s re-stamp loop
+  (`:2610–2615`) re-derives the same bit from `bIndependenceBsBuffer`, which is the same expression
+  (`iMultipleThreadIdc > 1 && uiSliceMode != SM_SINGLE_SLICE`) `bSliceBsBufferFlag` (`:2490`) fed
+  `InitSliceList`. So `!pBs.is_null()` *is* the choice, and it travels with the struct through
+  `copy_nonoverlapping` where the pointer had to be re-stamped. `slice_writer(pEncCtx, pSlice) ->
+  *mut BsWriter` beside `slice_bs_buffer` derives it fresh at every use (`addr_of_mut!` on either
+  parent), `slice_bs_buffer` takes the same discriminator, the twelve `let pBs = (*pSlice).pSliceBsa`
+  readers become `slice_writer(..)`, and the four without a ctx take the writer from callers that have
+  it (`StashMBStatusCavlc`/`StashPopMBStatusCavlc` through `EntropyCoder::StashMBStatus`/`StashPopMBStatus`,
+  `WelsWriteSliceEndSyn` from `WelsCodeOneSlice`, `GetBsPosCavlc` through `EntropyCoder::GetBsPosition`
+  — callers `rc.rs:2168`, `:2216`, `svc_encode_slice.rs:1332`, `:1711`, all with `pEncCtx`). The field,
+  both `pBsWrite` parameters and the re-stamp loop go. No `bool` is added.
+  **(c) `SWelsNalRaw.pRawData`** is redundant with `iStartPos`: `WelsLoadNal`/`WelsLoadNalForSlice`
+  stamp `buffer + iStartPos` and `WelsUnloadNal` re-derives exactly that (session A). The type keeps the
+  offset; the caller names the buffer: `WelsEncodeNal(raw: &SWelsNalRaw, src: &[u8], ext:
+  Option<&SNalUnitHeaderExt>, dst: *mut u8, dst_len: i32, out_len: &mut i32)` reads
+  `src[iStartPos..iStartPos+iPayloadSize]`. Eight production callers pass `&(*pOut).sBsBuffer[..]`
+  (`encoder_ext.rs` ×5, `wels_encoder_ext.rs` ×3), `WriteSliceBs` passes the thread buffer, three
+  `nal_encap.rs` tests pass their local payload with `iStartPos = 0`. `assert_size!(SWelsNalRaw, 40)`
+  re-pinned to the measured size. **Executed second, not third**: `WelsLoadNalForSlice`
+  (`nal_encap.rs:367`) is a *third* reader of `pBsBuffer`, through `pRawData`, that the brief's list
+  of two did not carry — (b) cannot delete the field while (c)'s stamp still needs it.
+  **(b) `SWelsSliceBs.pBsBuffer`** is a cache of `pThreadBsBuffer[uiBufferIdx]`: both stamps
+  (`svc_encode_slice.rs:2414`, `slice_multi_threading.rs:942`) write `pThreadBsBuffer[idx]` with the
+  `idx` `InitOneSliceInThread` stores in `uiBufferIdx` (`:2409`) — the task passes its `m_iThreadIdx`
+  to both. The readers (`slice_bs_buffer`'s first arm, `WritePrefixNal` at `wels_task_management.rs:313`,
+  and after (c) `WriteSliceBs`'s `src`) resolve `(*(*pCtx).pSliceThreading).pThreadBsBuffer[(*pSlice).uiBufferIdx]`
+  through `bs_buffer`, whose one job that remains is the thread pool's own buffers (Phase 7 — the
+  SHIM(phase3) docs at `nal_encap.rs:98` and `svc_encode_slice.rs:1877` say exactly that).
+  `WriteSliceBs` takes `pSlice: *mut SSlice` (both callers hold `self.m_pSlice`) to reach
+  `uiBufferIdx`. `SetOneSliceBsBufferUnderMultithread` is left with `uiBsPos = 0`, which
+  `InitOneSliceInThread` did one call earlier — deleted with its call (S18). `pThreadBsBuffer` itself
+  is Phase 7's (F12/P10). One commit each, `gates.sh commit` each, `family` after the third.

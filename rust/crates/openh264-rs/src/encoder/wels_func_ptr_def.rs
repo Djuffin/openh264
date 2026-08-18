@@ -31,7 +31,7 @@ use crate::encoder::md::{
 use crate::encoder::md::SMbCache;
 use crate::encoder::rc::SWelsRcFunc;
 use crate::encoder::svc_encode_mb::{PDeQuantizationFunc, PIDctFunc, PSetMemoryZero};
-use crate::encoder::svc_encode_slice::{SDqLayer, SDynamicSlicingStack, SSlice};
+use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
     PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
     PCheckDirectionalMv, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc,
@@ -224,23 +224,26 @@ impl EntropyCoder {
     /// overflow or a slice-boundary step-back can re-encode it.
     ///
     /// `buf` is the slice's output buffer and is **used by the CABAC arm only**;
-    /// see the type-level note. It is still a parameter here because the caller
-    /// cannot know which arm it is calling.
+    /// `pBs` is the slice's writer (`slice_writer`) and is **used by the CAVLC arm
+    /// only** — see the type-level note. Both are parameters here because the
+    /// caller cannot know which arm it is calling, and every caller holds the
+    /// context both derive from.
     ///
     /// # Safety
-    /// `pDss` and `pSlice` must be live, and `buf` must be the buffer
-    /// `pSlice`'s writer is positioned in.
+    /// `pDss` and `pSlice` must be live, `pBs` must be `pSlice`'s writer and `buf`
+    /// the buffer that writer is positioned in.
     #[inline]
     pub unsafe fn StashMBStatus(
         self,
         buf: &mut [u8],
+        pBs: *mut BsWriter,
         pDss: *mut SDynamicSlicingStack,
         pSlice: *mut SSlice,
         iMbSkipRun: i32,
     ) {
         match self {
             EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc(
-                pDss, pSlice, iMbSkipRun,
+                pBs, pDss, pSlice, iMbSkipRun,
             ),
             EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac(
                 buf, pDss, pSlice, iMbSkipRun,
@@ -249,7 +252,7 @@ impl EntropyCoder {
     }
 
     /// `pfStashPopMBStatus` — restores what [`StashMBStatus`] saved, returning the
-    /// stashed `iMbSkipRun`. See there for `buf`.
+    /// stashed `iMbSkipRun`. See there for `buf` and `pBs`.
     ///
     /// # Safety
     /// As [`StashMBStatus`].
@@ -259,12 +262,13 @@ impl EntropyCoder {
     pub unsafe fn StashPopMBStatus(
         self,
         buf: &mut [u8],
+        pBs: *mut BsWriter,
         pDss: *mut SDynamicSlicingStack,
         pSlice: *mut SSlice,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pDss, pSlice)
+                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pBs, pDss, pSlice)
             }
             EntropyCoder::Cabac => {
                 crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac(buf, pDss, pSlice)
@@ -274,14 +278,15 @@ impl EntropyCoder {
 
     /// `pfGetBsPosition` — the slice writer's bit position, in the units each coder
     /// counts in. Needs no buffer on either arm: CAVLC reads the writer's own
-    /// position and CABAC subtracts two offsets (T3.5).
+    /// position (`pBs`, from `slice_writer`) and CABAC subtracts two offsets held
+    /// in the slice's coder state (T3.5).
     ///
     /// # Safety
-    /// `pSlice` must be live.
+    /// `pSlice` must be live and `pBs` must be its writer.
     #[inline]
-    pub unsafe fn GetBsPosition(self, pSlice: *mut SSlice) -> i32 {
+    pub unsafe fn GetBsPosition(self, pBs: *mut BsWriter, pSlice: *mut SSlice) -> i32 {
         match self {
-            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pSlice),
+            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pBs),
             EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac(pSlice),
         }
     }
