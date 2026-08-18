@@ -10902,3 +10902,142 @@ kernel stranded in `encoder/` — needs the same person's ruling on whether movi
 definition into `common/` counts as an encoder site under F12/P10.
 
 `phase6.md` stays unwritten for the seventh session running.
+
+## Phase 5b — the F42 arm becomes a type, and the parse tree does not land (2026-08-17)
+
+**Commits:** `6dd3f11e` (doc tail, plan §0), `9a3714d7` (**T5b.1**, the same-picture MC
+kernels), `7a4ad7b5` (**T5b.2**, `PPicture` + `sMCRefMember`).
+
+**Metrics.** `#[allow(unsafe_code)]` items **167 → 147** (143 code + 4 prose),
+`unsafe fn` **42 → 30 (−29%)**, `unsafe {` blocks **160 → 148**, decoder `raw_ptr`
+**236 → 219** (156 code + 63 prose). `mv_pred.rs` is at **zero** allows.
+
+**The done-test is not met, and this entry says so first**: the target was four items
+and the session delivered 147 (143 code + 4 prose). What it delivered instead is **the face the brief called
+the one design face**, complete and gated — and an honest account of the face that
+failed.
+
+### Face 0, and F42 stops being an address
+
+`PicRefs::get` is deleted. Everything followed from that one move.
+
+The arm the whole family existed for — *a malformed stream can put the picture being
+decoded into its own reference list* — was answered with a **pointer sharing the
+mutable half's tag**, and that pointer is what made `pDec` un-borrowable in 23
+signatures. It is answered by **identity** now: `classify` says `Current`, and the two
+consumers take it from there.
+
+* **The readers** — 15 sites across `mv_pred`, both parsers, `decoder_core`'s
+  completeness scan, EC's POC read — take `PicRefs::resolve(slot, cur)`, which
+  answers `Current` with the caller's own borrow. Everything they read through a
+  reference is a POC, a flag, or the colocated macroblock's motion, so the current
+  picture is just another **shared** source and two shared borrows coexist. **F42 costs
+  a parameter and nothing else** where the pointer form cost every caller its `unsafe`.
+* **The one writer** is motion compensation, and it needed kernels: T5b.1 added the
+  same-picture forms of `mc_luma`/`mc_chroma` to `common/mc.rs`. Only four of the
+  sixteen quarter-pel arms are rewritten — the composites already build their
+  intermediates into 16-stride scratch, so their source reads finish before the first
+  destination write and they reuse the two-cursor kernels through a shared borrow.
+  Ordering is the specification, not an implementation detail: when the source window
+  overlaps the destination block MC reads samples it has already written, so the four
+  reproduce the C++'s loop order, and the integer-MV path is `copy_within` rather than
+  a block copy.
+* Proof, and the mutation that kills it: all **16** arms × **7** block shapes, plus the
+  chroma twin over all **64** eighth-pel fractions, compared against the two-cursor
+  kernels with the windows disjoint inside one buffer — **whole buffer** compared, so a
+  kernel writing outside its block is caught too. Mis-anchoring one arm turns it red.
+  The overlapping case, which the two-cursor form cannot state, is pinned against a
+  transliteration of `McHorVer20_c`'s own loop.
+
+### Face 2 came with it, because S20 says it must
+
+`sMCRefMember`'s six raw cursors are what `pDec`'s address was *for*. The descriptor is
+gone from `decode_slice.rs` and **both `mem::zeroed()` sites with it** — S21's question
+had no answer at those sites, since a zeroed descriptor is six null cursors every path
+overwrites. `McDst` carries where a partition lands, `McSrc` where it reads from.
+
+Error concealment's half converted too, and it is **the pair session AC recorded as
+blocked**: `DoMbECMvCopy` took the context beside two pictures derived from that
+context's pool. Both halves went — `classify` removes the picture-vs-picture comparison
+that needed two pointers, and `EcMvCtx` carries the six values the context was being
+passed for.
+
+### The divergence the gate caught, and it is the session's most useful fact
+
+The first landing of T5b.2 failed **8 of 60** conformance assets, every one a B-slice or
+temporal-direct stream. `rec_mb.cpp:749`/`:794` advance `pMCRefMem.pDst*` **inside** the
+list loop under `if (i)`, and `pMCRefMem` is function-scoped — so a second-half 16x8 or
+8x16 partition predicted from **both** lists advances the destination **twice**, and the
+LIST_1 hypothesis lands eight rows (or columns) further on. A fixed per-partition
+coordinate is wrong on exactly the bi-predicted macroblock. The two walks are carried
+across the `i` loop now, as the C carries its two descriptors, and `McDst` keeps luma
+and chroma independent for the same class of reason (`rec_mb.cpp:1014`, where the 8x8
+offset is applied twice to one and once to the other).
+
+**Two tests retargeted rather than simplified** (AB's `RefSlot` lesson). The F42
+covering test asserted *one address with one tag*; it asserts identity and a live
+reborrow now, and stays red under a revert of the arm. The P3 self-copy guard moved
+from inside `DoMbECMvCopy` to `DoErrorConSliceMVCopy`'s `RefSlot::Current` arm — and
+its fixture has to set `sCopyFunc.bInstalled`, **F44's flag**, which a zeroed context
+leaves `false`; without that line the copy arm would have passed for the wrong reason.
+
+### Face 1 did not land, and this is where it stopped
+
+The parse tree was converted and **reverted at the gate**. What was built compiles
+whole and is preserved (`git stash@{0}`, and `/tmp/phase5b_face1_parse_tree.patch`):
+
+* the access unit's slots **own** (`Vec<Box<SNalUnit>>`), because both stored aliases
+  into a node were removed first — `pCtx->pNalCur` and `pCtx->pSliceHeader` are
+  **indices** (`nal_cur`, `slice_hdr_nal`), and `MemGetNextNal` hands back one;
+* `SNalData` — the C's discriminated union, and the reason *reading* a node was unsafe
+  — became a **struct** with both arms;
+* `ParseSliceHeaderSyntaxs` parses into a scratch and writes back once, so its context
+  parameter survives;
+* the four slice-header parameters became borrows, `CheckAccessUnitBoundary` and
+  `CheckNextAuNewSeq` take the `sSpsPpsCtx` field they reach, and `slice_split` hands
+  the NAL node out of the same disjoint-field split as the view.
+
+**The failure signature, measured**: 11 of 60 conformance assets, **every one a B-slice
+stream** (both `bframe_9` clips, all six `temporal_direct`, `grid_48x32`,
+`test_scalinglist_jm`), frame counts correct — so a pixel divergence, not a dropped
+frame. Two zeroing changes were tried and reverted *inside* the attempt and are not the
+cause: `SSps::default()` and `SPps::default()` are **not** all-zero (bit depths 8,
+`bFrameMbsOnlyFlag`, `uiNumSliceGroups` 1, `iPicInitQp` 26), so the C's `memset`
+semantics have a real answer at those sites and the shells stay — S21's question,
+answered by measurement rather than by inspection.
+
+The leading hypothesis is the scratch: `InitDqLayerInfo` reads `sPredWeightTable`,
+`sRefPicListReordering` and `sRefMarking` **out of the node**, and those are exactly the
+B-slice fields the sub-parsers write — so a write-back that loses them would produce
+this failure set and no other. It is a hypothesis and not a finding: it was not
+measured, and S33 keeps it in that column.
+
+### Gates
+
+Per-commit at both landings: build both profiles + `--all-targets`, tests
+**479 / 473 / 20**, decode conformance **60/60** with no golden literal touched,
+ratchet clean, census 59.
+
+**The probe fired where the brief said it would.** The three decoder probes ran under
+Miri at T5b.2's tree — the aliasing-sensitive face, and the one the probe budget exists
+for — and read **3/3** in 1099.7s (`decode_slice_loop_runs_over_a_macroblock_grid`,
+`error_concealment_runs`, `fmo_slice_group_walk`).
+
+**The `exit` battery at `7a4ad7b5` reads `OVERALL: PASS` — 13 passed / 0 failed / 1
+skipped**: tests 479/473/20, census 59, ratchet clean, `--all-targets` compiling, both
+benches bit-identical, **both sweeps 341/341 with no F3 hit**, Miri `--lib` **334/0**
+(AC's 330 plus T5b.1's four) and the three differential targets **20 / 7 / 3**. **No
+test file changed all session** — `git diff 6c3e7301..HEAD -- tests/` is empty, so the
+conformance goldens and the malformed corpus's 2707 rows are unmoved by construction
+rather than by re-derivation.
+
+**Two hypotheses eliminated for face 1, measured rather than reasoned** (S33). Neither
+is the cause: making `bytes_equal`/`bytes_copy` byte-wise again left the same 11 red,
+and so did parsing the slice header **in place** instead of into a scratch. What
+remains untested is the `SNalData` union-to-struct change, the index semantics of
+`nal_cur`/`slice_hdr_nal` across access units, and `slice_split`'s reader-by-value.
+
+**No span was measured.** D-gate-1 puts perf at the phase exit and this is not one; the
+work that landed is one design face rather than a phase, and the honest reading is that
+a two-commit span at the resolution session L measured would say nothing (S2b). The
+`OVERALL: PASS` bench rows are the correctness half and they are bit-identical.
