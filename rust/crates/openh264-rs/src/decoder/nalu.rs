@@ -1557,24 +1557,16 @@ pub fn ParseSps(
     // which is the whole reason the two sub-parsers below stopped taking a context.
     let buf = pCtx.sRawData.window_from(kiRbspStart);
 
-    // **The shell stays, and T5b.3 measured why.** `memset (pSubsetSps, 0,
-    // sizeof (SSubsetSps))` in `au_parser.cpp` is an *all-zero* start, and
-    // `SSps::default()` is **not** all-zero — it sets `uiBitDepthLuma`/`Chroma` to 8
-    // and `bFrameMbsOnlyFlag` to true, which the parse then reads on the paths that
-    // do not write them. Replacing the shell with `Default::default()` was tried and
-    // took eleven conformance assets red, `test_scalinglist_jm` among them; S21's
-    // question — *what does the all-zero pattern mean here* — has a real answer at
-    // this site, and it is "the C's initial state, which is not this type's".
-    //
-    // What T5b.3 *did* remove is the second reason it was here: `bytes_equal`
-    // compares fields now, so the padding no longer has to be zeroed. The shell is
-    // down to the one job the C gives it.
-    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
-    let mut sTempSubsetSps = unsafe {
-        let mut t = std::mem::MaybeUninit::<SSubsetSps>::uninit();
-        std::ptr::write_bytes(t.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SSubsetSps>());
-        t.assume_init()
-    };
+    // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in `au_parser.cpp`, as a value
+    // (T5b.4). The distinction T5b.3 measured is now carried by the *type* rather than
+    // by a byte-writing shell: `SSubsetSps::default()` is **not** all-zero — it sets
+    // `uiBitDepthLuma`/`Chroma` to 8 and `bFrameMbsOnlyFlag` to true through `sSps`,
+    // which the parse then reads on the paths that do not write them, and substituting
+    // it took eleven conformance assets red (`test_scalinglist_jm` among them).
+    // [`SSubsetSps::memset_zero`] is the C's start, spelled out field by field, and
+    // it is the only thing `write_bytes` was still here for: `bytes_equal` compares
+    // fields since T5b.3, so the padding no longer has to be zeroed either.
+    let mut sTempSubsetSps = SSubsetSps::memset_zero();
     let pSubsetSps = &mut sTempSubsetSps;
 
     let kbUseSubsetFlag = IS_SUBSET_SPS_NAL((*pCtx).sCurNalHead.eNalUnitType);
@@ -1888,22 +1880,13 @@ pub fn ParsePps(
     // passed by every caller and **read nowhere in the body**, which reaches the
     // buffer through `pCtx` instead. Dead since the function was written; deleted
     // rather than converted (S18).
-    // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp; zeroing the raw bytes also
-    // clears padding, which the byte-wise comparison against the active PPS relies on.
-    // F31: the `write_bytes` is what makes that true — see `ParseSps`.
-    // T5.R8, and see `ParseSps`: the `mem::zeroed()` initializer was a typed copy
-    // whose padding the `write_bytes` then had to fix. Zeroed *storage*, read through
-    // a reference that never moves it, is one operation with the meaning the
-    // byte-wise comparison below depends on.
-    // The shell stays, as in `ParseSps`: `SPps::default()` sets `uiNumSliceGroups`,
+    // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp, as a value (T5b.4), for the
+    // reason `ParseSps` gives: `SPps::default()` sets `uiNumSliceGroups`,
     // `uiNumRefIdxL0Active`/`L1Active` to 1 and `iPicInitQp`/`Qs` to 26, and the C
-    // starts from all-zero.
-    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
-    let mut sTempPpsStore = unsafe {
-        let mut t = std::mem::MaybeUninit::<SPps>::uninit();
-        std::ptr::write_bytes(t.as_mut_ptr() as *mut u8, 0, std::mem::size_of::<SPps>());
-        t.assume_init()
-    };
+    // starts from all-zero. The padding clause F31 and T5.R8 argued over is spent —
+    // the comparison against the active PPS is field-wise since T5b.3, so nothing
+    // downstream depends on the bytes behind the fields.
+    let mut sTempPpsStore = SPps::memset_zero();
     let pPps = &mut sTempPpsStore;
 
     let mut uiCode: u32 = 0;
