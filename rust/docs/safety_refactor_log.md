@@ -11380,3 +11380,11 @@ nothing.
   declaration does not, and the array-type `;` in a signature is not a declaration; run against
   the pre-session tool, the pre-F52 tool and a *contains*-`;` filter it FAILs on each, and PASSes
   as shipped. Nothing in the encoder was converted before this face was recorded. Battery PASS.
+* **Face 1.1 — S29's stored class, respelled (T6.B2).** Nine `= &mut (*p).f` assignments into
+  struct fields (`au_set.rs:816`, `paraset_strategy.rs:419`, `encoder_ext.rs:2255` — `pSpsP`;
+  `wels_preprocess.rs:1673/1729/1754/2552` — `pCalcResult`/`pCalcRes`; `wels_task_management.rs:255/414`
+  — `m_pSliceBs`) → `addr_of_mut!`. Grep after: only the two `pSliceBsa` stamps remain
+  (`svc_encode_slice.rs:2306`, `:2613`), which 2.2(a) deletes. The narrower `let x = &mut (*p).f as
+  *mut T` shape (10 sites: `svc_mode_decision.rs` ×5, `svc_set_mb_syn_cavlc.rs` ×2,
+  `svc_enc_slice_segment.rs` ×2, `encoder_ext.rs:3522`) is one function's borrow each, not this
+  sweep's, and is left for the walk to fire on. No behaviour, no layout. Battery PASS.

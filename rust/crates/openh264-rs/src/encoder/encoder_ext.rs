@@ -2252,7 +2252,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     (*pBaseSlice).sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
     if kbUseSubsetSpsFlag {
         (*pCurDq).sLayerInfo.pSubsetSpsP = (*pCtx).pSubsetArray.add(iCurSpsId as usize);
-        (*pCurDq).sLayerInfo.pSpsP = &mut (*(*pCurDq).sLayerInfo.pSubsetSpsP).pSps;
+        (*pCurDq).sLayerInfo.pSpsP = std::ptr::addr_of_mut!((*(*pCurDq).sLayerInfo.pSubsetSpsP).pSps);
         (*pBaseSlice).sSliceHeaderExt.sSliceHeader.pSps = (*pCurDq).sLayerInfo.pSpsP;
     } else {
         (*pCurDq).sLayerInfo.pSubsetSpsP = null_mut();

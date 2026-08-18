@@ -416,7 +416,7 @@ pub unsafe fn WelsGenerateNewSps(
         *pSps = (*pCtx).pSpsArray.add(kiSpsId as usize);
     } else {
         *pSubsetSps = (*pCtx).pSubsetArray.add(kiSpsId as usize);
-        *pSps = &mut (**pSubsetSps).pSps;
+        *pSps = std::ptr::addr_of_mut!((**pSubsetSps).pSps);
     }
 
     let pParam = (*pCtx).pSvcParam;
