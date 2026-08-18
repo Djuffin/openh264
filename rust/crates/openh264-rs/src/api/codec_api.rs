@@ -15,6 +15,7 @@
 
 use std::ffi::{c_char, c_long, c_void};
 use std::ptr;
+use crate::decoder::decoder_context::slice_header_of;
 
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
@@ -1621,9 +1622,10 @@ unsafe fn BufferingReadyPicture(
         }
     }
     if !(*dec_impl).bIsBaseline {
-        let sh = (*pCtx).pSliceHeader;
-        if !sh.is_null()
-            && (*sh).eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE
+        // T5b.3: `pCtx->pSliceHeader` was a raw alias into a NAL node; the node is an
+        // index now (`slice_hdr_nal`) and this resolves it.
+        if slice_header_of(&*pCtx)
+            .is_some_and(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
         {
             (*dec_impl).sReoderingStatus.bHasBSlice = true;
         }
@@ -1631,7 +1633,8 @@ unsafe fn BufferingReadyPicture(
     for i in 0..16usize {
         if (*dec_impl).sPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
             (*dec_impl).sPictInfoList[i].sBufferInfo = *pDstInfo;
-            (*dec_impl).sPictInfoList[i].iPOC = (*(*pCtx).pSliceHeader).iPicOrderCntLsb;
+            (*dec_impl).sPictInfoList[i].iPOC =
+                slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb);
             (*dec_impl).sPictInfoList[i].iSeqNum = (*pCtx).iSeqNum;
             (*dec_impl).sPictInfoList[i].uiDecodingTimeStamp = (*pCtx).uiDecodingTimeStamp;
             // T5.P′2: the DPB's "previous picture" is a slot handle now, so the
@@ -1840,10 +1843,9 @@ unsafe fn ReleaseBufferedReadyPictureReorder(
         let mut isReady = true;
         if !isFlush {
             let last_idx = (*dec_impl).iLastBufferedIdx as usize;
-            let iLastPOC = if !pCtx.is_null() && !(*pCtx).pSliceHeader.is_null() {
-                (*(*pCtx).pSliceHeader).iPicOrderCntLsb
-            } else {
-                (*dec_impl).sPictInfoList[last_idx].iPOC
+            let iLastPOC = match if pCtx.is_null() { None } else { slice_header_of(&*pCtx) } {
+                Some(sh) => sh.iPicOrderCntLsb,
+                None => (*dec_impl).sPictInfoList[last_idx].iPOC,
             };
             let iLastSeqNum = if !pCtx.is_null() {
                 (*pCtx).iSeqNum
@@ -1892,17 +1894,19 @@ unsafe fn ReorderPicturesInDisplay(
     if (*dec_impl).bIsBaseline || (*pDstInfo).iBufferStatus != 1 {
         return;
     }
-    let sh = (*pCtx).pSliceHeader;
-    if !sh.is_null() && (*sh).eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE {
+    let sh_poc = slice_header_of(&*pCtx)
+        .filter(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
+        .map(|sh| sh.iPicOrderCntLsb);
+    if let Some(sh_poc) = sh_poc {
         let st = (*dec_impl).sReoderingStatus;
         let follows = if (*pCtx).iSeqNum == st.iLastWrittenSeqNum {
-            (*sh).iPicOrderCntLsb <= st.iLastWrittenPOC + 2
+            sh_poc <= st.iLastWrittenPOC + 2
         } else {
-            (*pCtx).iSeqNum - st.iLastWrittenSeqNum == 1 && (*sh).iPicOrderCntLsb == 0
+            (*pCtx).iSeqNum - st.iLastWrittenSeqNum == 1 && sh_poc == 0
         };
         if follows {
             // issue #3478: B-slice type is a more reliable ordering signal than POC.
-            (*dec_impl).sReoderingStatus.iLastWrittenPOC = (*sh).iPicOrderCntLsb;
+            (*dec_impl).sReoderingStatus.iLastWrittenPOC = sh_poc;
             (*dec_impl).sReoderingStatus.iLastWrittenSeqNum = (*pCtx).iSeqNum;
             *ppDst.add(0) = (*pDstInfo).pDst[0];
             *ppDst.add(1) = (*pDstInfo).pDst[1];

@@ -1035,6 +1035,17 @@ pub fn pic_and_refs(
 /// pointer one**, so there is one bracket and this is an alias.
 pub use self::pic_and_refs as pic_and_refs_mut;
 
+/// The slice header the decode loop last started on — `pCtx->pSliceHeader`'s
+/// replacement (T5b.3), resolved from [`SWelsDecoderContext::slice_hdr_nal`].
+#[inline]
+pub fn slice_header_of(pCtx: &SWelsDecoderContext) -> Option<&SSliceHeader> {
+    let i = pCtx.slice_hdr_nal?;
+    pCtx.access_unit
+        .as_deref()
+        .and_then(|au| au.node(i))
+        .map(|nal| &nal.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader)
+}
+
 /// Entry `i` of reference list `list` — the **handle**, without touching the pool.
 ///
 /// The lists live in the context, not in the pool, so reading one below a bracket
@@ -1512,19 +1523,34 @@ pub fn slice_ctx<'a>(pCtx: &'a mut SWelsDecoderContext, reader: Option<&BsReader
 /// ordinary `&mut` and this is an ordinary disjoint-field split: `pPicBuff` to the
 /// pool half, every other field to the view, no field twice, and the compiler
 /// checks it rather than a comment claiming it.
+/// **T5b.3: the NAL node comes out of the same split.** The slice bracket needs the
+/// node's own bit reader beside the view, and the node lives in `access_unit` — a
+/// *field*, disjoint from every field the view takes and from `pPicBuff`. Handing it
+/// back here is what lets the caller hold all three at once; deriving it outside would
+/// be a second borrow of the context.
 #[inline]
 pub fn slice_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
-    reader: Option<&BsReader>,
-) -> (Option<&'a mut SPicture>, PicRefs<'a>, SliceCtx<'a>) {
+    nal: Option<usize>,
+) -> (
+    Option<&'a mut SPicture>,
+    PicRefs<'a>,
+    SliceCtx<'a>,
+    Option<&'a mut SNalUnit>,
+) {
     // Everything reaching the context *as a whole* happens before the first field
     // borrow (T5.O8's ordering lesson, now enforced by the borrow checker rather
     // than by care).
     let iThreadCount = crate::decoder::decoder_core::GetThreadCount(pCtx);
     let cur = pCtx.pDec;
     let (pDec, pRefs) = pic_and_refs(&mut pCtx.pPicBuff, cur);
-    let view = slice_view!(pCtx, reader, iThreadCount);
-    (pDec, pRefs, view)
+    let node = nal.and_then(|i| pCtx.access_unit.as_deref_mut().and_then(|au| au.node_mut(i)));
+    // The window the view carries is derived from the reader's *position*, and the
+    // slice borrows `sRawData` rather than the node — so the reader travels by value
+    // and the node's borrow is free to leave with it.
+    let reader = node.as_deref().map(|n| n.sNalData.sVclNal.sSliceBitsRead);
+    let view = slice_view!(pCtx, reader.as_ref(), iThreadCount);
+    (pDec, pRefs, view, node)
 }
 
 /// **The bracket top's split for a scope that writes the picture and reads no
@@ -1558,7 +1584,7 @@ pub fn pic_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
 ) -> (Option<&'a mut SPicture>, SliceCtx<'a>) {
     // `slice_split`'s construction verbatim, with the reference half dropped.
-    let (pDec, _refs, view) = slice_split(pCtx, None);
+    let (pDec, _refs, view, _nal) = slice_split(pCtx, None);
     (pDec, view)
 }
 
@@ -1672,7 +1698,6 @@ pub struct SWelsDecoderContext {
     pub sSpsPpsCtx: SWelsDecoderSpsPpsCTX,
     pub bHasNewSps: bool,
     pub sFrameCrop: SPosOffset,
-    pub pSliceHeader: *mut SSliceHeader,
     /// The decoded-picture pool — **owned since T5.P″1**.
     ///
     /// It was `*mut SPicBuff`, one `Box::into_raw` in `CreatePicBuff` reclaimed by one
@@ -1722,7 +1747,29 @@ pub struct SWelsDecoderContext {
     /// `None` is the C's null list: before `InitialDqLayersContext` and after
     /// `UninitialDqLayersContext`.
     pub pDqLayersList: Option<Box<DqLayerState>>,
-    pub pNalCur: *mut SNalUnit,
+    /// **The NAL under decode, as its index in the access unit** (T5b.3).
+    ///
+    /// It was `*mut SNalUnit` — a stored alias *into* a node, and the reason the
+    /// access unit's slots have to stay raw (`TagAccessUnits::nal_units`' note: a
+    /// container that lends `&mut` to a node invalidates every live alias into it).
+    /// An index aliases nothing, so the field costs its one reader an `au.node(i)`
+    /// and buys the container the right to own.
+    ///
+    /// `None` is the C's `pCtx->pNalCur = NULL`, which is also the state that reader
+    /// sees in the C++ — `decoder_core.cpp:2491` nulls it and never writes it again
+    /// (T5.M3's note, and F36 owns the arm that reads it).
+    pub nal_cur: Option<usize>,
+    /// The NAL whose slice header the *decode* loop last started on — `pSliceHeader`'s
+    /// index (T5b.3).
+    ///
+    /// `pCtx->pSliceHeader` was a raw pointer into that node, and its one reader is
+    /// `ParseDecRefPicMarking`'s MMCO_RESET arm, which zeroes the POC of the header the
+    /// decode loop is on *as well as* the one being parsed. The two are different NALs,
+    /// so this is a separate field from [`nal_cur`](Self::nal_cur) rather than a second
+    /// name for it: `nal_cur` is stamped when the access-unit loop picks a NAL up, this
+    /// one when `WelsDqLayerDecodeStart` starts decoding it, and before the first slice
+    /// decode it is `None` — the null the pointer held.
+    pub slice_hdr_nal: Option<usize>,
     pub uiNalRefIdc: u8,
     pub iPicWidthReq: i32,
     pub iPicHeightReq: i32,
