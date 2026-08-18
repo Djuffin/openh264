@@ -3,8 +3,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
@@ -1647,7 +1646,6 @@ pub fn slice_split<'a>(
 /// carries the `PPicture` survivor's producer half (F42). **Phase 8's**, with the
 /// `PPicture` option-1/2 revisit — everything below them is safe because they are
 /// not.
-#[inline]
 pub fn pic_split<'a>(
     pCtx: &'a mut SWelsDecoderContext,
 ) -> (Option<&'a mut SPicture>, SliceCtx<'a>) {
@@ -1957,7 +1955,12 @@ pub struct SWelsDecoderContext {
     pub bUseScalingList: bool,
     pub pMemAlign: *mut CMemoryAlign,
     pub lastReadyHeightOffset: [[i16; MAX_REF_PIC_COUNT]; LIST_A],
-    pub pPictInfoList: *mut SPictInfo,
+    /// The api's `CWelsDecoderImpl::sPictInfoList`, **as the array it points at**
+    /// (T5b.6). The field held `*mut SPictInfo` — the C's decayed first-element
+    /// pointer — and its one decoder-side reader walked it with `.add(i)` against a
+    /// `16` spelled at the call site. The api stamps it with `addr_of_mut!` over the
+    /// whole array, so the array type is what the address already was.
+    pub pPictInfoList: *mut [SPictInfo; 16],
     pub pPictReoderingStatus: *mut SPictReoderingStatus,
 }
 pub type PWelsDecoderContext = *mut SWelsDecoderContext;
@@ -2181,8 +2184,7 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pMemAlign = &mut mem_align;
 
-        #[allow(unsafe_code)] // the shell's own test
-        unsafe {
+        {
             let pCtx = &mut *ctx;
             (*pCtx).pPicBuff = CreatePicBuff(false, 4, 64, 64);
             assert!((*pCtx).pPicBuff.is_some());
@@ -2197,4 +2199,6 @@ mod tests {
         }
     }
 }
+
+
 

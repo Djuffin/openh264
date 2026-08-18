@@ -2216,11 +2216,8 @@ pub unsafe extern "C" fn McChroma_c(
     };
 }
 
-pub unsafe extern "C" fn InitMcFunc(pMcFuncs: *mut SMcFunc, _uiCpuFlag: u32) {
-    if pMcFuncs.is_null() {
-        return;
-    }
-    let mc = &mut *pMcFuncs;
+pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
+    let mc = pMcFuncs;
     mc.pfLumaHalfpelHor = Some(McHorVer20_c);
     mc.pfLumaHalfpelVer = Some(McHorVer02_c);
     mc.pfLumaHalfpelCen = Some(McHorVer22_c);
@@ -2459,7 +2456,7 @@ mod tests {
             WELS_CPU_AVX2, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX,
         ];
         let mut base = SMcFunc::default();
-        unsafe { InitMcFunc(&mut base, 0) };
+        InitMcFunc(&mut base, 0);
         let addrs = |t: &SMcFunc| -> [usize; 6] {
             [
                 t.pfLumaHalfpelHor.unwrap() as usize,
@@ -2477,7 +2474,7 @@ mod tests {
         let want = addrs(&base);
         for flag in flags {
             let mut t = SMcFunc::default();
-            unsafe { InitMcFunc(&mut t, flag) };
+            InitMcFunc(&mut t, flag);
             for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
                 assert_eq!(
                     got, expected,
@@ -2511,7 +2508,7 @@ mod tests {
             "a default SMcFunc must be all-None, or the post-init claim proves nothing"
         );
         let mut t = SMcFunc::default();
-        unsafe { InitMcFunc(&mut t, 0) };
+        InitMcFunc(&mut t, 0);
         assert!(
             t.pMcLumaFunc.is_some() && t.pMcChromaFunc.is_some() && t.pfSampleAveraging.is_some()
                 && t.pfLumaHalfpelHor.is_some() && t.pfLumaHalfpelVer.is_some()

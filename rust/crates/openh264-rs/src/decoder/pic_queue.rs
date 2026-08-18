@@ -27,30 +27,10 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 #![deny(unsafe_code)]
-// Phase 5 W6 (family 5, T5.W3). Six of the module's seven `unsafe fn` are gone and
-// the lint is on, **with two exceptions that are allowed by name rather than by
-// silence** — this file is not in the clean list, it is in the list with a footnote:
-//
-//   1. `DestroyPicBuff`, below. It is `unsafe` for exactly one reason: F37's
-//      reordering reset, which calls `decoder_core.rs`'s
-//      `ResetReorderingPictureBuffers` — an `unsafe fn` of **family 14** — through
-//      two context fields. The reset's *position* is settled (T5.Q2/F37: before the
-//      early returns, exactly where `decoder.cpp:260` has it), so it does not move to
-//      the caller; the exception retires when family 14 does.
-//   2. `mod tests`, whose blocks deref what the resolver family hands out. `slot`,
-//      `slot_mut`, `slot_at`, `cur_and_rest` and `PicRefs::get` return raw pointers
-//      **by W3's settled design** (fact 1, T5.Q1) — safe functions, so the lint has no
-//      quarrel with them — and the fixtures that read through those answers are the
-//      only code in the module that must. They retire as the consumers convert
-//      (families 6, 11, 14, 16), not before.
-//
-// What the six conversions cost: `prefetch_free` and `next_for_thread` were `unsafe`
-// for a `# Safety` clause that had been stale since the flip — it cited
-// `is_recyclable`, which became safe at T5.Q2 — plus a stamp that went out through
-// `slot_at_mut` and back in through a deref, now one owned-slot write shared by both
-// scans. `PrefetchPicForThread`/`PrefetchLastPicForThread` take `Option<&mut PicPool>`
-// with the null test as the `Option`. `alloc_picture` and `CreatePicBuff` stopped
-// taking the context: what they wanted from it was one `bool`.
+// **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
+// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
+// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
+// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
 
 //! # Decoded Picture Buffer Pool & Recycled Picture Queue (`pic_queue.rs`)
 //!
@@ -65,13 +45,13 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 use std::ffi::{c_char, c_void};
 use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::decoder_context::SDecodingParam;
+use crate::decoder::decoder_context::api_alias_mut;
 
 // ============================================================================
 // Constants & Geometry Macro Definitions
@@ -809,26 +789,30 @@ pub fn alloc_picture(
 /// Retrieves the next circular picture node in round-robin FIFO sequence for multi-threaded decoding.
 ///
 /// T5.W3: the pool arrives as `Option<&mut PicPool>` and the null test is the
-/// `Option`, unmoved. The `PPicture` return is the resolver family's settled
-/// spelling (W3's fact 1), not this function's.
-pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> PPicture {
-    let Some(pool) = pPicBuf else {
-        return std::ptr::null_mut();
-    };
-    match pool.next_for_thread() {
-        Some(id) => slot_ptr_mut(pool.slot_mut(id)),
-        None => std::ptr::null_mut(),
-    }
+/// `Option`, unmoved. T5b.6 takes the return the same way — the two have no
+/// production caller (F36's list), so nothing outside this module's own test ever
+/// wanted the pointer.
+pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> Option<&mut SPicture> {
+    let pool = pPicBuf?;
+    let id = pool.next_for_thread()?;
+    pool.slot_mut(id)
 }
 
 /// Retrieves an explicit picture node by its recorded buffer pool index (`iLastPicBuffIdx`).
 ///
 /// T5.W3, as [`PrefetchPicForThread`].
-pub fn PrefetchLastPicForThread(pPicBuf: Option<&mut PicPool>, iLastPicBuffIdx: i32) -> PPicture {
-    let Some(pool) = pPicBuf else {
-        return std::ptr::null_mut();
-    };
-    pool.slot_at_mut(iLastPicBuffIdx)
+pub fn PrefetchLastPicForThread(
+    pPicBuf: Option<&mut PicPool>,
+    iLastPicBuffIdx: i32,
+) -> Option<&mut SPicture> {
+    let pool = pPicBuf?;
+    // `slot_at_mut`'s range test, spelled here because that accessor's raw return is
+    // the api boundary's (`codec_api.rs`'s release path) and not this one's.
+    if iLastPicBuffIdx < 0 || iLastPicBuffIdx >= pool.capacity() {
+        return None;
+    }
+    let id = pool.id(iLastPicBuffIdx as usize);
+    pool.slot_mut(id)
 }
 
 // ============================================================================
@@ -917,18 +901,19 @@ pub fn CreatePicBuff(
 /// # Safety
 /// - Every non-null slot of `pool` must be a live picture from [`AllocPicture`].
 /// - `pMa` must point to the [`CMemoryAlign`] allocator instance.
-#[allow(unsafe_code)] // exception 1 at the file head — family 14's `ResetReorderingPictureBuffers`
 pub fn DestroyPicBuff(
     pCtx: &mut SWelsDecoderContext,
     pool: Option<Box<PicPool>>,
     pMa: *mut CMemoryAlign,
 ) {
-    unsafe {
-        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
-            (*pCtx).pPictReoderingStatus,
-            (*pCtx).pPictInfoList,
-            false,
-        );
+    // Both reordering buffers are `CWelsDecoderImpl`'s; the C++'s two null tests are
+    // the two `Option`s, and the pair is disjoint so one `if let` chain serves.
+    let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
+    if let (Some(status), Some(list)) = (
+        api_alias_mut(pPictReoderingStatus),
+        api_alias_mut(pPictInfoList),
+    ) {
+        crate::decoder::decoder_core::ResetReorderingPictureBuffers(status, list, false);
     }
 
     // **T5.Q2: the release is the `Box` going out of scope.** The `FreePicture` loop
@@ -973,12 +958,14 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             // T5.Q3: `AllocPicture`'s raw pair is gone, so the fixture holds the
             // owner the pool holds and the `Box` is what releases it.
             let mut pic = alloc_picture(false, 160, 120)
                 .expect("the picture allocates");
-            let p_pic: PPicture = &mut *pic;
+            // T5b.6: a borrow — the fixture never needed the alias, and `(*p_pic)`
+            // reads the same either way.
+            let p_pic: &mut SPicture = &mut *pic;
             assert_eq!((*p_pic).iWidthInPixel, 160);
             assert_eq!((*p_pic).iHeightInPixel, 120);
             assert!(!(*p_pic).data_ptr(0).is_null());
@@ -1022,7 +1009,7 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             let pCtx = &mut *ctx;
             assert!(
                 crate::decoder::decoder_context::parse_only(&pCtx.pParam),
@@ -1030,7 +1017,9 @@ mod tests {
             );
             let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
                 .expect("the picture allocates");
-            let p_pic: PPicture = &mut *pic;
+            // T5b.6: a borrow — the fixture never needed the alias, and `(*p_pic)`
+            // reads the same either way.
+            let p_pic: &mut SPicture = &mut *pic;
             assert_eq!((*p_pic).linesize(0), 224);
             assert_eq!((*p_pic).linesize(1), 112);
             assert_eq!((*p_pic).linesize(2), 112);
@@ -1051,7 +1040,7 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             let pCtx = &mut *ctx;
             let mut pool = CreatePicBuff(false, 4, 64, 64).expect("pool");
 
@@ -1136,8 +1125,7 @@ mod tests {
             assert_ne!(pOther.pic_id(), pCur.pic_id());
         }
 
-        #[allow(unsafe_code)] // `DestroyPicBuff` is family 14's, per exception 1 above
-        unsafe {
+        {
             DestroyPicBuff(&mut *ctx, Some(pool), &mut ma);
         }
         assert_eq!(ma.WelsGetMemoryUsage(), 0);
@@ -1186,10 +1174,10 @@ mod tests {
         // local, and a raw sibling does not pop a raw derivation. Here the write is
         // through the local itself, so nothing but ordering helps. S13's law reaches
         // the code you write while applying it.
-        ctx.pPictInfoList = pict_info.as_mut_ptr();
+        ctx.pPictInfoList = &mut pict_info;
         ctx.pPictReoderingStatus = &mut status;
 
-        unsafe {
+        {
             let pool = CreatePicBuff(false, 4, 64, 64);
             assert!(pool.is_some());
             DestroyPicBuff(&mut *ctx, pool, &mut ma);
@@ -1222,7 +1210,7 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             let mut pool = CreatePicBuff(false, 2, 64, 64)
                 .expect("pool");
             let (id_a, id_b) = (pool.id(0), pool.id(1));
@@ -1249,12 +1237,12 @@ mod tests {
             let mut loose2 = SPicture::default();
             loose.iFramePoc = 4;
             loose2.iFramePoc = 4; // same POC as each other and as the pooled pair
-            let l: *const SPicture = std::ptr::addr_of!(loose);
-            let l2: *const SPicture = std::ptr::addr_of!(loose2);
-            assert_eq!((*l).pic_id(), None);
-            assert!(same_picture(l.as_ref(), l.as_ref()));
-            assert!(!same_picture(l.as_ref(), l2.as_ref()), "and POC joins nothing");
-            assert!(!same_picture(l.as_ref(), a));
+            let l: &SPicture = &loose;
+            let l2: &SPicture = &loose2;
+            assert_eq!(l.pic_id(), None);
+            assert!(same_picture(Some(l), Some(l)));
+            assert!(!same_picture(Some(l), Some(l2)), "and POC joins nothing");
+            assert!(!same_picture(Some(l), a));
 
             // T5.W1: the two null pointers are two absent pictures now, and the
             // `as_ref()` above is the null test that used to live inside the callee.
@@ -1285,7 +1273,7 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             let mut pool = CreatePicBuff(false, 3, 64, 64)
                 .expect("pool");
             assert_eq!(pool.capacity(), 3);
@@ -1330,7 +1318,7 @@ mod tests {
         ctx.pMemAlign = &mut ma as *mut CMemoryAlign;
         ctx.pParam = &mut param as *mut SDecodingParam;
 
-        unsafe {
+        {
             let mut pool = CreatePicBuff(false, 3, 64, 64)
                 .expect("pool");
             // T5.W3: the two thread prefetches take `Option<&mut PicPool>` now, so
@@ -1338,21 +1326,24 @@ mod tests {
             // pointer and holding it across all four. They still have no production
             // caller (F36's list) and W7's straggler sweep still decides them; what
             // changed is only that the null test is the `Option`.
-            let pic0 = PrefetchPicForThread(Some(&mut pool));
-            assert_eq!((*pic0).iPicBuffIdx, 0);
+            let pic0 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
+            assert_eq!(pic0, Some(0));
             assert_eq!(pool.cursor(), 1);
 
-            let pic1 = PrefetchPicForThread(Some(&mut pool));
-            assert_eq!((*pic1).iPicBuffIdx, 1);
+            let pic1 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
+            assert_eq!(pic1, Some(1));
             assert_eq!(pool.cursor(), 2);
 
-            let pic2 = PrefetchPicForThread(Some(&mut pool));
-            assert_eq!((*pic2).iPicBuffIdx, 2);
+            let pic2 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
+            assert_eq!(pic2, Some(2));
             assert_eq!(pool.cursor(), 0); // Wraps around
 
-            let pic_lookup = PrefetchLastPicForThread(Some(&mut pool), 1);
+            let pic_lookup = PrefetchLastPicForThread(Some(&mut pool), 1).map(|p| p.iPicBuffIdx);
             assert_eq!(pic_lookup, pic1);
-            assert!(PrefetchPicForThread(None).is_null(), "the null test is the Option");
+            assert!(
+                PrefetchPicForThread(None).is_none(),
+                "the null test is the Option"
+            );
 
             DestroyPicBuff(&mut *ctx, Some(pool), &mut ma as *mut CMemoryAlign);
         }

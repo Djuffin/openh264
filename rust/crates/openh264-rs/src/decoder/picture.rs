@@ -50,8 +50,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
@@ -763,8 +762,8 @@ mod tests {
             "one sample diagonally behind the origin — an MV past the picture edge"
         );
         // `expand_shim_span`'s reconstruction, byte for byte.
-        let whole = unsafe {
-            std::slice::from_raw_parts(p.sub(pad * stride + pad), (h + 2 * pad) * stride)
+        let whole = {
+            unsafe { std::slice::from_raw_parts(p.sub(pad * stride + pad), (h + 2 * pad) * stride) }
         };
         assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
         assert_eq!(whole.len(), len, "the padded picture is the whole allocation here");

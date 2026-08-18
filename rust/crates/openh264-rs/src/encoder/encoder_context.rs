@@ -694,7 +694,7 @@ pub unsafe fn InitFunctionPointers(
     crate::encoder::md::InitIntraAnalysisVaaInfo(pFuncList, _uiCpuFlag);
 
     /* Motion compensation */
-    crate::common::mc::InitMcFunc(&mut (*pFuncList).sMcFuncs as *mut _, _uiCpuFlag);
+    crate::common::mc::InitMcFunc(&mut (*pFuncList).sMcFuncs, _uiCpuFlag);
     InitCoeffFunc(pFuncList, _uiCpuFlag, (*pParam).iEntropyCodingModeFlag);
 
     crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(pFuncList, _uiCpuFlag);

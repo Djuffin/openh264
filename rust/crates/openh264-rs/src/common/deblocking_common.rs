@@ -737,12 +737,8 @@ impl Default for SDeblockingFunc {
     }
 }
 
-pub unsafe extern "C" fn DeblockingInit(pFunc: *mut SDeblockingFunc, _iCpu: i32) {
-    if !pFunc.is_null() {
-        unsafe {
-            *pFunc = SDeblockingFunc::default();
-        }
-    }
+pub fn DeblockingInit(pFunc: &mut SDeblockingFunc, _iCpu: i32) {
+    *pFunc = SDeblockingFunc::default();
 }
 
 // ============================================================================
@@ -840,11 +836,11 @@ mod dispatch_tests {
             "ChromaLT4Ver2", "ChromaEQ4Ver2", "ChromaLT4Hor2", "ChromaEQ4Hor2",
         ];
         let mut base = SDeblockingFunc::default();
-        unsafe { DeblockingInit(&mut base, 0) };
+        DeblockingInit(&mut base, 0);
         let want = addrs(&base);
         for flag in flags {
             let mut t = SDeblockingFunc::default();
-            unsafe { DeblockingInit(&mut t, flag) };
+            DeblockingInit(&mut t, flag);
             for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
                 assert_eq!(got, expected, "cpu flag {flag:#x} changed slot {}", NAMES[i]);
             }
@@ -861,7 +857,7 @@ mod dispatch_tests {
     #[test]
     fn deblocking_table_is_fully_populated_after_init() {
         let mut t = SDeblockingFunc::default();
-        unsafe { DeblockingInit(&mut t, 0) };
+        DeblockingInit(&mut t, 0);
         assert!(
             t.pfLumaDeblockingLT4Ver.is_some() && t.pfLumaDeblockingEQ4Ver.is_some()
                 && t.pfLumaDeblockingLT4Hor.is_some() && t.pfLumaDeblockingEQ4Hor.is_some()

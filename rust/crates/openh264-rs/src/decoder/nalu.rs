@@ -3,23 +3,14 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
-// **Phase 5, T5.AC9 — the lint, with the parse tree enumerated.** Two families
-// converted and one is named:
-//
-//   * `pCtx->pDecoderStatistics` went with the api-owned aliases (T5.AC4).
-//   * `bytes_equal` / `bytes_copy` take borrows; the `unsafe` is at those two items
-//     because reading a struct's padding as `[u8]` is what they *are* — the
-//     three-way `memset`/`memcpy`/`memcmp` pairing they exist to keep whole.
-//   * **The nine writers of the parse tree keep the keyword.** The access unit's
-//     slots are raw by design and the design is a Miri verdict, not an omission:
-//     `TagAccessUnits::nal_units`' own note records it. Reading a node is safe now
-//     (`node`, shared-only, added at T5.AC5); writing one is Phase 8's, when the
-//     slots can own the way `PicPool`'s did at T5.Q1.
+// **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
+// `src/decoder/` carries four `#[allow(unsafe_code)]` items in total, and they are
+// all in `decoder_context.rs` (`api_alias`/`api_alias_mut`) and `picture.rs` (the two
+// Miri provenance tests S28 mandates for `data_ptr`). Nothing here is one of them.
 
 //! # H.264 / AVC and SVC NAL Unit and Access Unit Parser (`nalu.h` & `au_parser.cpp`)
 //!
@@ -357,6 +348,27 @@ pub struct TagNalUnit {
 
 pub type SNalUnit = TagNalUnit;
 pub type PNalUnit = *mut SNalUnit;
+
+impl TagNalUnit {
+    /// `memset (pNu, 0, sizeof (SNalUnit))` — `MemGetNextNal`'s reset, as a value
+    /// (T5b.6).
+    ///
+    /// **Measured, not argued** (S33): the zeroed image and [`Default`]'s differ in
+    /// **one** of 6,056 bytes, and it is `sSliceHeader.sps_ref`'s niche byte. That
+    /// field is `Option<SpsRef>`, whose niche lives in a `bool`, so all-zero reads
+    /// back as `Some(SpsRef { id: 0, subset: false })` where `Default` says `None` —
+    /// T5.Z1's class, on a third field it did not reach. The C zeroes a `pSps`
+    /// pointer here, so `None` is the faithful value and the `Some` is a port
+    /// artifact; it is transcribed rather than corrected because a refactor and a
+    /// behaviour change do not share a commit, and the correction is parked with
+    /// `SWelsDecoderContext::active_sps`, which is the same artifact one field over.
+    pub fn memset_zero() -> Self {
+        let mut nu = Self::default();
+        nu.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref =
+            Some(crate::decoder::decoder_context::SpsRef { id: 0, subset: false });
+        nu
+    }
+}
 
 impl Default for TagNalUnit {
     fn default() -> Self {
@@ -1235,9 +1247,8 @@ pub fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcL
             let (start, mut cursor) = (pBs.start, pBs.cursor);
             // The parse-tree exception's caller side — the argument is at the
             // callee's item (T5.AC9).
-            #[allow(unsafe_code)]
             {
-                iErr = unsafe { ParseSps(pCtx, start, &mut cursor, &mut iPicWidth, &mut iPicHeight) };
+                iErr = ParseSps(pCtx, start, &mut cursor, &mut iPicWidth, &mut iPicHeight);
             }
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
@@ -1266,9 +1277,8 @@ pub fn ParseNonVclNal(pCtx: &mut SWelsDecoderContext, kiRbspStart: usize, kiSrcL
                 }
             }
             let (start, mut cursor) = (pBs.start, pBs.cursor);
-            #[allow(unsafe_code)]
             {
-                iErr = unsafe { ParsePps(pCtx, start, &mut cursor) };
+                iErr = ParsePps(pCtx, start, &mut cursor);
             }
             (*pCtx).sBs.cursor = cursor;
             if iErr != ERR_NONE {
@@ -1667,7 +1677,7 @@ pub fn ParseSps(
         pSubsetSps.sSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
 
         if pSubsetSps.sSps.bSeqScalingMatrixPresentFlag {
-            let src = ScalingListSource::of((&mut pSubsetSps.sSps));
+            let src = ScalingListSource::of(&mut pSubsetSps.sSps);
             ParseScalingList(
                 &src,
                 buf,
@@ -1789,7 +1799,7 @@ pub fn ParseSps(
         // and answered `dsErrorFree` where the C++ answers `dsBitstreamError`. All 22
         // truncation rows still disagreeing after T5.T2 are this one arm, and closing
         // it takes the corpus to **2318 / 0** on codes.
-        let iRetVui = ParseVui((&mut pSubsetSps.sSps), buf, pBsAux);
+        let iRetVui = ParseVui(&mut pSubsetSps.sSps, buf, pBsAux);
         if iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
             // Currently no support for VUI with HRD enabled in a subset SPS.
             if kbUseSubsetFlag {
@@ -1839,22 +1849,22 @@ pub fn ParseSps(
     } else {
         if CheckSpsActive(pCtx, tmp_ref, false) {
             // Overwriting the active SPS: only act when it actually changed.
-            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps)) {
+            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps) {
                 if au_has_nals(pCtx) {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], (&mut pSubsetSps.sSps));
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
                 } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
                     .is_some_and(|s| s.iSpsId == pSubsetSps.sSps.iSpsId)
                 {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], (&mut pSubsetSps.sSps));
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
                     (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps));
+                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
                 }
             }
         } else {
-            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], (&mut pSubsetSps.sSps));
+            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
             (*pCtx).sSpsPpsCtx.bSpsAvailFlags[idx] = true;
             (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = true;
         }
@@ -2421,13 +2431,9 @@ pub fn MemGetNextNal(pAu: &mut SAccessUnit) -> Option<usize> {
     pAu.uiAvailUnitsNum += 1;
     // **T5b.3: the index, not the node.** The caller re-acquires through it, so
     // nothing outlives the expression that took it and the container is free to own.
-    // The C's `memset (pNu, 0, sizeof (SNalUnit))` keeps its byte semantics for the
-    // reason `ParseSps`'s shell does — `SNalUnit::default()` reaches
-    // `SSliceHeaderExt::default()`, which is not all-zero.
-    #[allow(unsafe_code)] // the zeroed shells — `memset` semantics, S21's live answer
-    unsafe {
-        std::ptr::write_bytes(pAu.nal(idx) as *mut SNalUnit, 0, 1);
-    }
+    // T5b.6: the C's `memset (pNu, 0, sizeof (SNalUnit))` is a value now — see
+    // [`SNalUnit::memset_zero`] for the one byte it does not share with `Default`.
+    *pAu.nal(idx) = SNalUnit::memset_zero();
     Some(idx)
 }
 
@@ -2543,8 +2549,7 @@ mod au_list_tests {
     /// used to exchange two entries of a pointer array; they exchange owned nodes now.
     #[test]
     fn swapping_two_nodes_exchanges_their_contents_and_nothing_else() {
-        #[allow(unsafe_code)] // the parse tree's own tests drive its raw nodes
-        unsafe {
+        {
             let mut au = SAccessUnit::with_nodes(4);
             for i in 0..4usize {
                 (*au.nal(i)).uiTimeStamp = i as u64;
@@ -2564,8 +2569,7 @@ mod au_list_tests {
     /// claims to be active.
     #[test]
     fn reset_fmo_list_clears_the_entries_the_cpp_clears() {
-        #[allow(unsafe_code)] // the parse tree's own tests drive its raw nodes
-        unsafe {
+        {
             let mut ctx = SWelsDecoderContext::new_boxed();
             let pCtx = &mut *ctx;
 

@@ -57,8 +57,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 
@@ -923,7 +922,7 @@ pub fn DeblockingBsMarginalMBAvcbase(
         for i in 0..2 {
             let mut uiNzc = 0u8;
             for j in 0..4 {
-                uiNzc |= (pNzcCurr[pB8x8Idx[i * 4 + j] as usize] as u8);
+                uiNzc |= pNzcCurr[pB8x8Idx[i * 4 + j] as usize] as u8;
             }
             for j in 0..2 {
                 let bn_idx = pBnIdx[bn_idx_pos] as usize;
@@ -963,7 +962,7 @@ pub fn DeblockingBsMarginalMBAvcbase(
         for i in 0..2 {
             let mut uiNzc = 0u8;
             for j in 0..4 {
-                uiNzc |= (pNzcNeigh[pBn8x8Idx[i * 4 + j] as usize] as u8);
+                uiNzc |= pNzcNeigh[pBn8x8Idx[i * 4 + j] as usize] as u8;
             }
             for j in 0..2 {
                 let b_idx = pBIdx[b_idx_pos] as usize;
@@ -1136,7 +1135,7 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
         for i in 0..2 {
             let mut uiNzc = 0u8;
             for j in 0..4 {
-                uiNzc |= (pNzcCurr[pB8x8Idx[i * 4 + j] as usize] as u8);
+                uiNzc |= pNzcCurr[pB8x8Idx[i * 4 + j] as usize] as u8;
             }
             for j in 0..2 {
                 let bn_idx = pBnIdx[bn_idx_pos] as usize;
@@ -1199,7 +1198,7 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
         for i in 0..2 {
             let mut uiNzc = 0u8;
             for j in 0..4 {
-                uiNzc |= (pNzcNeigh[pBn8x8Idx[i * 4 + j] as usize] as u8);
+                uiNzc |= pNzcNeigh[pBn8x8Idx[i * 4 + j] as usize] as u8;
             }
             for j in 0..2 {
                 let b_idx = pBIdx[b_idx_pos] as usize;
@@ -2439,10 +2438,9 @@ mod tests {
     /// `common/`'s installer keeps its raw signature for the encoder (F12/P10), so
     /// calling it needs the block. Phase 6 deletes the raw form and this goes with
     /// it — the module's only exception, allowed by name rather than by silence.
-    #[allow(unsafe_code)]
     #[test]
     fn test_deblocking_init() {
-        unsafe {
+        {
             let mut func = SDeblockingFunc::default();
             crate::common::deblocking_common::DeblockingInit(&mut func, 0);
             assert!(func.pfLumaDeblockingLT4Ver.is_some());

@@ -896,6 +896,31 @@ pub union SBufferInfoUsrData {
     pub sSystemBuffer: SSysMEMBuffer,
 }
 
+impl SBufferInfoUsrData {
+    /// The union's one arm, as a value.
+    ///
+    /// **T5b.6, and it is why this lives in `api/`.** `SBufferInfo` is the drop-in
+    /// ABI's own type and its `UsrData` is declared a union because upstream's header
+    /// declares one (`codec_app_def.h`) — with exactly one member, so there is no
+    /// discriminant question and never was. Reading a union field is `unsafe` wherever
+    /// it is spelled, though, so the two spellings live here rather than in
+    /// `src/decoder/`, which is the whole of what this accessor is for.
+    #[allow(unsafe_code)] // the ABI union — one arm, so every read is the arm last written
+    #[inline]
+    pub fn sys(&self) -> &SSysMEMBuffer {
+        // SAFETY: `SBufferInfoUsrData` declares exactly one variant.
+        unsafe { &self.sSystemBuffer }
+    }
+
+    /// [`sys`](Self::sys)'s mutable form.
+    #[allow(unsafe_code)] // the ABI union — one arm, so every read is the arm last written
+    #[inline]
+    pub fn sys_mut(&mut self) -> &mut SSysMEMBuffer {
+        // SAFETY: `SBufferInfoUsrData` declares exactly one variant.
+        unsafe { &mut self.sSystemBuffer }
+    }
+}
+
 impl std::fmt::Debug for SBufferInfoUsrData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         unsafe { write!(f, "SBufferInfoUsrData({:?})", self.sSystemBuffer) }
@@ -1573,14 +1598,14 @@ unsafe extern "C" fn decoder_decode_frame_c(
     if buf_info.iBufferStatus == 1 {
         unsafe {
             if !pStride.is_null() {
-                *pStride.offset(0) = buf_info.UsrData.sSystemBuffer.iStride[0];
-                *pStride.offset(1) = buf_info.UsrData.sSystemBuffer.iStride[1];
+                *pStride.offset(0) = buf_info.UsrData.sys().iStride[0];
+                *pStride.offset(1) = buf_info.UsrData.sys().iStride[1];
             }
             if !iWidth.is_null() {
-                *iWidth = buf_info.UsrData.sSystemBuffer.iWidth;
+                *iWidth = buf_info.UsrData.sys().iWidth;
             }
             if !iHeight.is_null() {
-                *iHeight = buf_info.UsrData.sSystemBuffer.iHeight;
+                *iHeight = buf_info.UsrData.sys().iHeight;
             }
         }
     }
@@ -1948,10 +1973,10 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             }
             crate::decoder::decoder_core::WelsDecodeBs(
                 &mut *p_ctx,
-                kpSrc,
+                std::slice::from_raw_parts(kpSrc, kiSrcLen as usize),
                 kiSrcLen,
-                ppDst,
-                pDstInfo,
+                &mut *(ppDst as *mut [*mut u8; 3]),
+                &mut *pDstInfo,
                 ptr::null_mut(),
             );
         } else if (*dec_impl).bEndOfStream || (*p_ctx).bEndOfStreamFlag || kpSrc.is_null() || kiSrcLen == 0 {
@@ -1974,10 +1999,10 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             (*p_ctx).bInstantDecFlag = true;
             crate::decoder::decoder_core::WelsDecodeBs(
                 &mut *p_ctx,
-                kpSrc,
+                &[],
                 0,
-                ppDst,
-                pDstInfo,
+                &mut *(ppDst as *mut [*mut u8; 3]),
+                &mut *pDstInfo,
                 ptr::null_mut(),
             );
             (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
@@ -2161,13 +2186,11 @@ pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> 
     });
     crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut dec.sVlcTable);
     crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(&mut dec.sLastDecPicInfo);
-    unsafe {
-        crate::decoder::decoder_core::ResetReorderingPictureBuffers(
-            &mut dec.sReoderingStatus,
-            dec.sPictInfoList.as_mut_ptr(),
-            true,
-        );
-    }
+    crate::decoder::decoder_core::ResetReorderingPictureBuffers(
+        &mut dec.sReoderingStatus,
+        &mut dec.sPictInfoList,
+        true,
+    );
     dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
     *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
     CM_RESULT_SUCCESS as c_long
@@ -2203,6 +2226,134 @@ pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
                 (*dec_impl).pCtx = ptr::null_mut();
             }
             drop(Box::from_raw(dec_impl));
+        }
+    }
+}
+
+
+#[cfg(test)]
+pub(crate) mod abi_test_driver {
+    use super::*;
+
+    /// Decodes `stream` through the C ABI and returns `(frames out, last frame's
+    /// dimensions)`.
+    ///
+    /// **It calls the vtable thunks through the raw pointer, not the `&mut self`
+    /// convenience methods, and that is deliberate — see F23.** The first draft
+    /// used `(*p_decoder).Initialize(&param)`, and Miri rejected it before the
+    /// decoder was even initialized: `ISVCDecoder::Initialize` takes `&mut self`
+    /// over a struct that is **one pointer wide**, and the thunk immediately casts
+    /// that to `*mut CWelsDecoderImpl` and writes at offset `0x20` — outside the
+    /// eight bytes the borrow covers. That is a real defect on the public API path
+    /// and it is not this phase's (`api/codec_api.rs` is T10/§2.2.8, Phase 8's);
+    /// spelling the call the way a C caller does keeps these tests measuring the
+    /// decoder instead of the ABI shim. `WelsCreateDecoder` hands out
+    /// `Box::into_raw(dec) as *mut ISVCDecoder`, which carries provenance for the
+    /// whole implementation object, so the raw-pointer spelling is sound.
+    /// Returns `(frames, dims, states)`, where `states` is the bitwise OR of every
+    /// `DecodeFrame2` return. The third element exists for T5.S1's probes: a
+    /// concealment path that does not run looks exactly like one that runs and
+    /// changes nothing, and `dsDataErrorConcealed` in the OR is the difference.
+    pub(crate) fn drive_decoder_over(stream: &[u8]) -> (usize, Option<(i32, i32)>, i32) {
+        // SAFETY: `WelsCreateDecoder` hands out `Box::into_raw(dec) as *mut
+        // ISVCDecoder`, so the pointer carries provenance for the whole
+        // implementation object and every call below is the sequence a C caller
+        // makes.
+        unsafe {
+            {
+                let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
+                assert_eq!(
+                    i64::from(WelsCreateDecoder(&mut p_decoder)),
+                    CM_RESULT_SUCCESS as i64
+                );
+                assert!(!p_decoder.is_null());
+                let vtbl = (*p_decoder).lpVtbl;
+
+                let mut dec_param = SDecodingParam::default();
+                dec_param.uiTargetDqLayer = u8::MAX;
+                dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+                dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+                assert_eq!(
+                    i64::from(((*vtbl).Initialize)(p_decoder, &dec_param as *const SDecodingParam)),
+                    CM_RESULT_SUCCESS as i64
+                );
+
+                let mut frames = 0;
+                let mut dims = None;
+                let mut states = 0i32;
+                for unit in crate::split_annexb_units(stream) {
+                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                    let mut buf_info = SBufferInfo::default();
+                    let ret = ((*vtbl).DecodeFrame2)(
+                        p_decoder,
+                        unit.as_ptr(),
+                        unit.len() as i32,
+                        p_dst.as_mut_ptr(),
+                        &mut buf_info,
+                    );
+                    states |= ret.0;
+                    if buf_info.iBufferStatus == 1 {
+                        frames += 1;
+                        let sys = *buf_info.UsrData.sys();
+                        dims = Some((sys.iWidth, sys.iHeight));
+                    }
+                }
+
+                // End of stream, then the zero-length call that flushes it — the same
+                // tail `decoder_conformance_test.rs` and `malformed_stream_parity.rs`
+                // use. T5.S1 added it: without it this helper never drove the flush
+                // path at all, and a stream whose only frame arrives there (the FMO
+                // asset, any truncated stream) looked to it like a stream that decodes
+                // nothing. It cannot cost the two probes above a verdict — they assert
+                // `frames > 0` and the dimensions, and a flush only ever adds frames.
+                let mut eos_flag = 1i32;
+                ((*vtbl).SetOption)(
+                    p_decoder,
+                    DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                    &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
+                );
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                let ret = ((*vtbl).DecodeFrame2)(
+                    p_decoder,
+                    std::ptr::null(),
+                    0,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                );
+                states |= ret.0;
+                if buf_info.iBufferStatus == 1 {
+                    frames += 1;
+                    let sys = *buf_info.UsrData.sys();
+                    dims = Some((sys.iWidth, sys.iHeight));
+                }
+
+                // …and the drain the flush announces. Leaving it out cost a frame on
+                // every stream whose last picture is still buffered at EOS, which read
+                // as the port being one frame short of the C++ until the helper was
+                // compared against `rust/tools/ecref` rather than against itself.
+                let mut remaining = 0i32;
+                ((*vtbl).GetOption)(
+                    p_decoder,
+                    DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                    &mut remaining as *mut i32 as *mut std::ffi::c_void,
+                );
+                for _ in 0..remaining.clamp(0, 24) {
+                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                    let mut buf_info = SBufferInfo::default();
+                    let ret = ((*vtbl).FlushFrame)(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
+                    states |= ret.0;
+                    if buf_info.iBufferStatus == 1 {
+                        frames += 1;
+                        let sys = *buf_info.UsrData.sys();
+                        dims = Some((sys.iWidth, sys.iHeight));
+                    }
+                }
+
+                ((*vtbl).Uninitialize)(p_decoder);
+                WelsDestroyDecoder(p_decoder);
+                (frames, dims, states)
+            }
         }
     }
 }

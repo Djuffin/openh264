@@ -40,8 +40,7 @@
     non_camel_case_types,
     non_upper_case_globals,
     dead_code,
-    unused_variables,
-    unused_unsafe
+    unused_variables
 )]
 
 #![deny(unsafe_code)]
@@ -173,7 +172,7 @@ impl Default for SCopyFunc {
     }
 }
 
-pub use crate::common::copy_mb::{copy_16x16, copy_8x8, copy_shim};
+pub use crate::common::copy_mb::{copy_16x16, copy_8x8};
 pub use crate::common::mc::SMcFunc;
 
 /// Motion compensation reference frame descriptor (`sMCRefMember`).
@@ -253,37 +252,13 @@ pub use crate::decoder::decoder_context::{SWelsDecoderContext, PWelsDecoderConte
 // `sCopyFunc`'s `unsafe extern "C" fn` slots, which is how the C++ dispatches
 // between the `_c` fallback and its SIMD forms.
 
-/// C reference fallback for 16x16 macroblock luma copying.
-///
-/// # Safety
-/// See [`copy_shim`] with `W = 16`, `H = 16`.
-#[inline]
-/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
-/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
-/// inter-prediction path) are plane cursors written as pointers, and converting
-/// them is a **vocabulary change across both consumers**, not a spelling pass —
-/// which is why it is scoped out of this phase and named here instead.
-/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
-#[allow(unsafe_code)]
-pub extern "C" fn WelsCopy16x16_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    unsafe { copy_shim::<16, 16>(pDst, iDstStride, pSrc, iSrcStride, copy_16x16) }
-}
-
-/// C reference fallback for 8x8 chroma block copying.
-///
-/// # Safety
-/// See [`copy_shim`] with `W = 8`, `H = 8`.
-#[inline]
-/// **Enumerated exception — `sMCRefMember`, the C++'s own MC descriptor.** The six
-/// raw plane cursors in `sMCRefMember` (`#[repr(C)]`, shared with `decode_slice.rs`'s
-/// inter-prediction path) are plane cursors written as pointers, and converting
-/// them is a **vocabulary change across both consumers**, not a spelling pass —
-/// which is why it is scoped out of this phase and named here instead.
-/// **Phase 8's**, with the `api/` inventory and `data_ptr`.
-#[allow(unsafe_code)]
-pub extern "C" fn WelsCopy8x8_c(pDst: *mut u8, iDstStride: i32, pSrc: *mut u8, iSrcStride: i32) {
-    unsafe { copy_shim::<8, 8>(pDst, iDstStride, pSrc, iSrcStride, copy_8x8) }
-}
+// **T5b.6, S18: `WelsCopy16x16_c` and `WelsCopy8x8_c` stood here and were dead.**
+// They were the two raw-pointer entry points `SCopyFunc` used to install; T5.AC8
+// established that the "table" is a flag, and the concealment paths call
+// `copy_16x16`/`copy_8x8` over plane cursors directly (`:538`, `:540`, `:622`,
+// `:630`). Their last caller in the crate was their own unit test, which asserted
+// that `copy_shim` copies — a property of `common/copy_mb.rs`, tested there.
+// `copy_shim` itself stays: the encoder still has six users of it (F12/P10).
 
 // ============================================================================
 // Core Error Concealment Functions
@@ -548,7 +523,7 @@ pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
                 None => {
                     for (plane, size) in [(0usize, 16isize), (1, 8), (2, 8)] {
                         let (x, y) = ((iMbX as isize) * size, (iMbY as isize) * size);
-                        let mut p = pDstPic.plane_mut(plane);
+                        let p = pDstPic.plane_mut(plane);
                         for r in 0..size {
                             p.row_mut(y + r, x, size as usize).fill(128);
                         }
@@ -1024,8 +999,7 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
         GetAvilInfoFromCorrectMb(pCtx, pCurDqLayer.as_deref_mut());
         // The one call into the `sMCRefMember` family from outside it — the
         // exception is at the callee's item, and this is its whole caller set.
-        #[allow(unsafe_code)]
-        unsafe {
+        {
             DoErrorConSliceMVCopy(pCtx, pCurDqLayer.as_deref_mut());
         }
     }
@@ -1044,23 +1018,6 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
 mod tests {
     use super::*;
     
-    #[test]
-    fn test_copy_16x16_and_8x8() {
-        let mut src_buf = vec![0xABu8; 512];
-        let mut dst_buf = vec![0u8; 512];
-
-        #[allow(unsafe_code)] // the `sMCRefMember` family's own test
-        unsafe {
-            WelsCopy16x16_c(dst_buf.as_mut_ptr(), 32, src_buf.as_mut_ptr(), 32);
-        }
-
-        for row in 0..16 {
-            for col in 0..16 {
-                assert_eq!(dst_buf[row * 32 + col], 0xAB);
-            }
-        }
-    }
-
     /// **T5.L6 deleted this test's hazard rather than its subject.** The flag array
     /// used to be a raw pointer the layer held, so the test had to mutate it
     /// *through that pointer*: writing `mb_flags[2]` directly would reborrow the
@@ -1080,8 +1037,7 @@ mod tests {
         // T5.H3: `..Default::default()` zeroed the whole struct, which stopped
         // being legal when the layer gained an owned grid. `for_grid` replaced it,
         // and the dimensions are the ones the SPS above states.
-        #[allow(unsafe_code)] // the layer's zeroed-shell constructor (decoder_core)
-        let mut dq_layer = unsafe { DqLayerState::for_grid(MbDims::new(2, 2)) };
+        let mut dq_layer = { DqLayerState::for_grid(MbDims::new(2, 2)) };
         dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
 
@@ -1155,8 +1111,7 @@ mod tests {
             // every MB lost, so EC has work to do. `MbGrid::new` zero-fills, and
             // `false` is this array's zero, so the fill is the state the layer
             // starts a sequence in rather than one the test invents (T5.L6).
-            #[allow(unsafe_code)] // the layer's zeroed-shell constructor (decoder_core)
-            let mut dq_layer = unsafe { DqLayerState::for_grid(MbDims::new(W, H)) };
+            let mut dq_layer = { DqLayerState::for_grid(MbDims::new(W, H)) };
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
 
@@ -1239,8 +1194,7 @@ mod tests {
             src.iFramePoc = 7; // duplicate POC on purpose, as at site 2
 
             let sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
-            #[allow(unsafe_code)] // the layer's zeroed-shell constructor (decoder_core)
-            let mut dq_layer = unsafe { DqLayerState::for_grid(MbDims::new(W, H)) };
+            let mut dq_layer = { DqLayerState::for_grid(MbDims::new(W, H)) };
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
 
