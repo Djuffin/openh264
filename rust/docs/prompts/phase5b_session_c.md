@@ -20,12 +20,12 @@ session B's close; re-grep at each face's open (S24, code/prose split).
 
 1. Measure `size_of::<SWelsDecoderContext>()` first (the 5b gate, still
    unrun). If plain-constructible, the two `MaybeUninit::zeroed` shells
-   (`decoder_core.rs:534`, `decoder_context.rs:1873`) become **explicit
+   (`decoder_core.rs:534`, `decoder_context.rs:1911`) become **explicit
    field-wise constructors whose values are the C's `memset` semantics** —
    every field's all-zero *meaning* written out (S21/F54), which is exactly
    what `Default` gets wrong. If still MiB-scale: Box the remaining inline
    arrays first, then construct plainly.
-2. `nalu.rs`'s two `MaybeUninit` temp stores (`:1600`, `:1934`): same
+2. `nalu.rs`'s two `MaybeUninit` temp stores (`:1574`, `:1903`): same
    treatment; ladder rung 2 if a full initializer is disproportionate — try
    first.
 
