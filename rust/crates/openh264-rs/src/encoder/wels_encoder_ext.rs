@@ -966,19 +966,19 @@ pub unsafe fn WelsEncoderApplyFrameRate(pParam: *mut SWelsSvcCodingParam) {
 
     // set input frame rate to each layer
     for i in 0..kiNumLayer as usize {
-        let pLayerParamInternal = &mut (*pParam).sDependencyLayers[i];
-        let fRatio = pLayerParamInternal.fOutputFrameRate / pLayerParamInternal.fInputFrameRate;
-        if (kfMaxFrameRate - pLayerParamInternal.fInputFrameRate) > kfEpsn
-            || (kfMaxFrameRate - pLayerParamInternal.fInputFrameRate) < -kfEpsn
+        let pLayerParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[i]);
+        let fRatio = (*pLayerParamInternal).fOutputFrameRate / (*pLayerParamInternal).fInputFrameRate;
+        if (kfMaxFrameRate - (*pLayerParamInternal).fInputFrameRate) > kfEpsn
+            || (kfMaxFrameRate - (*pLayerParamInternal).fInputFrameRate) < -kfEpsn
         {
-            pLayerParamInternal.fInputFrameRate = kfMaxFrameRate;
+            (*pLayerParamInternal).fInputFrameRate = kfMaxFrameRate;
             let fTargetOutputFrameRate = kfMaxFrameRate * fRatio;
-            pLayerParamInternal.fOutputFrameRate = if fTargetOutputFrameRate >= 6.0 {
+            (*pLayerParamInternal).fOutputFrameRate = if fTargetOutputFrameRate >= 6.0 {
                 fTargetOutputFrameRate
             } else {
-                pLayerParamInternal.fInputFrameRate
+                (*pLayerParamInternal).fInputFrameRate
             };
-            let fOut = pLayerParamInternal.fOutputFrameRate;
+            let fOut = (*pLayerParamInternal).fOutputFrameRate;
             (*pParam).sSpatialLayers[i].fFrameRate = fOut;
         }
     }

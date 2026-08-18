@@ -777,7 +777,7 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
         return;
     }
-    let pParamInternal = &mut (*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -786,10 +786,10 @@ pub unsafe fn UpdateFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
 
     if bNeedFrameNumIncreasing {
         let max_frame_num_minus1 = (1 << (*(*pEncCtx).pSps).uiLog2MaxFrameNum) - 1;
-        if pParamInternal.iFrameNum < max_frame_num_minus1 {
-            pParamInternal.iFrameNum += 1;
+        if (*pParamInternal).iFrameNum < max_frame_num_minus1 {
+            (*pParamInternal).iFrameNum += 1;
         } else {
-            pParamInternal.iFrameNum = 0;
+            (*pParamInternal).iFrameNum = 0;
         }
     }
 
@@ -804,7 +804,7 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
         return;
     }
-    let pParamInternal = &mut (*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
     let mut bNeedFrameNumIncreasing = false;
 
     if (*pEncCtx).eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST {
@@ -812,10 +812,10 @@ pub unsafe fn LoadBackFrameNum(pEncCtx: *mut sWelsEncCtx, kiDidx: i32) {
     }
 
     if bNeedFrameNumIncreasing {
-        if pParamInternal.iFrameNum != 0 {
-            pParamInternal.iFrameNum -= 1;
+        if (*pParamInternal).iFrameNum != 0 {
+            (*pParamInternal).iFrameNum -= 1;
         } else {
-            pParamInternal.iFrameNum = (1 << (*(*pEncCtx).pSps).uiLog2MaxFrameNum) - 1;
+            (*pParamInternal).iFrameNum = (1 << (*(*pEncCtx).pSps).uiLog2MaxFrameNum) - 1;
         }
     }
 }
@@ -852,16 +852,16 @@ pub unsafe fn InitFrameCoding(
     if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() || (*pEncCtx).pSps.is_null() {
         return;
     }
-    let pParamInternal = &mut (*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize];
+    let pParamInternal = std::ptr::addr_of_mut!((*(*pEncCtx).pSvcParam).sDependencyLayers[kiDidx as usize]);
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
-        pParamInternal.iFrameIndex += 1;
+        (*pParamInternal).iFrameIndex += 1;
 
         let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
-        if pParamInternal.iPOC < max_poc_boundary {
-            pParamInternal.iPOC += 2;
+        if (*pParamInternal).iPOC < max_poc_boundary {
+            (*pParamInternal).iPOC += 2;
         } else {
-            pParamInternal.iPOC = 0;
+            (*pParamInternal).iPOC = 0;
         }
 
         UpdateFrameNum(pEncCtx, kiDidx);
@@ -870,22 +870,22 @@ pub unsafe fn InitFrameCoding(
         (*pEncCtx).eSliceType = EWelsSliceType::P_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
-        pParamInternal.iFrameNum = 0;
-        pParamInternal.iPOC = 0;
-        pParamInternal.bEncCurFrmAsIdrFlag = false;
-        pParamInternal.iFrameIndex = 0;
+        (*pParamInternal).iFrameNum = 0;
+        (*pParamInternal).iPOC = 0;
+        (*pParamInternal).bEncCurFrmAsIdrFlag = false;
+        (*pParamInternal).iFrameIndex = 0;
 
         (*pEncCtx).eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
         (*pEncCtx).eSliceType = EWelsSliceType::I_SLICE;
         (*pEncCtx).eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
 
-        pParamInternal.iCodingIndex = 0;
+        (*pParamInternal).iCodingIndex = 0;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
         let max_poc_boundary = (1 << (*(*pEncCtx).pSps).iLog2MaxPocLsb) - 2;
-        if pParamInternal.iPOC < max_poc_boundary {
-            pParamInternal.iPOC += 2;
+        if (*pParamInternal).iPOC < max_poc_boundary {
+            (*pParamInternal).iPOC += 2;
         } else {
-            pParamInternal.iPOC = 0;
+            (*pParamInternal).iPOC = 0;
         }
 
         UpdateFrameNum(pEncCtx, kiDidx);
@@ -910,7 +910,7 @@ pub unsafe fn DecideFrameType(
         return EVideoFrameType::videoFrameTypeInvalid;
     }
     let pSvcParam = (*pEncCtx).pSvcParam;
-    let pParamInternal = &mut (*pSvcParam).sDependencyLayers[kiDidx as usize];
+    let pParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[kiDidx as usize]);
     let mut iFrameType: EVideoFrameType;
     let mut bSceneChangeFlag = false;
 
@@ -928,7 +928,7 @@ pub unsafe fn DecideFrameType(
         }
 
         if vaa_idr
-            || pParamInternal.bEncCurFrmAsIdrFlag
+            || (*pParamInternal).bEncCurFrmAsIdrFlag
             || (!(*pSvcParam).bEnableLongTermReference && bSceneChangeFlag && !bSkipFrameFlag)
         {
             iFrameType = EVideoFrameType::videoFrameTypeIDR;
@@ -966,7 +966,7 @@ pub unsafe fn DecideFrameType(
         if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
             iFrameType = EVideoFrameType::videoFrameTypeSkip;
         } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
-            pParamInternal.iCodingIndex = 0;
+            (*pParamInternal).iCodingIndex = 0;
             (*pEncCtx).bCurFrameMarkedAsSceneLtr = true;
         }
     } else {
@@ -976,14 +976,14 @@ pub unsafe fn DecideFrameType(
         if !(*pSvcParam).bEnableSceneChangeDetect
             || vaa_idr
             || ((kiSpatialNum as i32) < (*pSvcParam).iSpatialLayerNum)
-            || (pParamInternal.iFrameIndex < (VGOP_SIZE << 1))
+            || ((*pParamInternal).iFrameIndex < (VGOP_SIZE << 1))
         {
             bSceneChangeFlag = false;
         } else if !pVaa.is_null() {
             bSceneChangeFlag = (*pVaa).bSceneChangeFlag;
         }
 
-        iFrameType = if vaa_idr || bSceneChangeFlag || pParamInternal.bEncCurFrmAsIdrFlag {
+        iFrameType = if vaa_idr || bSceneChangeFlag || (*pParamInternal).bEncCurFrmAsIdrFlag {
             EVideoFrameType::videoFrameTypeIDR
         } else {
             EVideoFrameType::videoFrameTypeP
@@ -992,7 +992,7 @@ pub unsafe fn DecideFrameType(
         if iFrameType == EVideoFrameType::videoFrameTypeP && bSkipFrameFlag {
             iFrameType = EVideoFrameType::videoFrameTypeSkip;
         } else if iFrameType == EVideoFrameType::videoFrameTypeIDR {
-            pParamInternal.iCodingIndex = 0;
+            (*pParamInternal).iCodingIndex = 0;
         }
     }
 

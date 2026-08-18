@@ -2476,13 +2476,22 @@ pub unsafe fn InitSliceInLayer(
     kiDlayerIndex: i32,
     pMa: *mut CMemoryAlign,
 ) -> i32 {
-    let pSliceArgument = &mut (*(*pCtx).pSvcParam).sSpatialLayers[kiDlayerIndex as usize].sSliceArgument;
+    // S29, and F13's remaining production site. This was `&mut ...sSliceArgument`,
+    // whose Unique retag popped the tag of `InitDqLayers`'s `pDlayer` — a pointer
+    // into the *same* layer, derived one call up and read again after this function
+    // returns. `addr_of_mut!` creates no reference, so the pointer carries the
+    // parameter struct's own provenance and there is no retag to pop anything.
+    // Found by the encoder aliasing probe (Phase 6 session A) on its first run,
+    // reported at `encoder_ext.rs:822`.
+    let pSliceArgument = std::ptr::addr_of_mut!(
+        (*(*pCtx).pSvcParam).sSpatialLayers[kiDlayerIndex as usize].sSliceArgument
+    );
 
     (*pDqLayer).bSliceBsBufferFlag = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
-        && pSliceArgument.uiSliceMode != SliceMode::SM_SINGLE_SLICE;
+        && (*pSliceArgument).uiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
     (*pDqLayer).bThreadSlcBufferFlag = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
-        && pSliceArgument.uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
+        && (*pSliceArgument).uiSliceMode == SliceMode::SM_SIZELIMITED_SLICE;
 
     let iRet = InitSliceThreadInfo(pCtx, pDqLayer, kiDlayerIndex, pMa);
     if iRet != ENC_RETURN_SUCCESS {
@@ -2939,3 +2948,122 @@ pub unsafe fn WelsInitSliceEncodingFuncs(uiCpuFlag: u32) {
 
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+mod tests {
+    use crate::api::codec_api::EVideoFrameType;
+    use crate::api::codec_api::abi_test_driver::drive_encoder_over;
+
+    /// **The encoder's aliasing probe** — Phase 6 session A, and the first Miri
+    /// coverage the encode path has ever had.
+    ///
+    /// Before this test the only encoder-adjacent Miri test in the tree installed a
+    /// deblocking table and was `#[cfg_attr(miri, ignore)]` besides, so **no
+    /// encoder line had ever been executed under the aliasing checker**. F47 is
+    /// what that costs: real UB on the *ordinary* CAVLC path survived five phases
+    /// of green gates because no probe drove it, and the probe that finally did
+    /// found it on its first execution.
+    ///
+    /// **Every assertion below carries the reason it exists** — the decoder probes'
+    /// pattern (`decoder/decode_slice.rs`), and for the decoder's reason: an encode
+    /// that merely "produced bytes" can cover almost nothing.
+    ///
+    /// * **48 x 32, read back from the encoder rather than from this test's own
+    ///   argument.** That is a 3 x 2 macroblock grid, so MB(1, 1) has all four
+    ///   neighbours, MB(0, 1) is missing only its left and MB(2, 1) only its
+    ///   top-right. **F34's lesson, on the encoder side**: a single-macroblock
+    ///   picture has no neighbour, so no neighbour-dependent mode-decision or
+    ///   motion-vector-prediction path runs, and a probe over one can return green
+    ///   on UB that is simply unreachable in it.
+    /// * **At least two frames and the second inter-coded.** An all-intra sequence
+    ///   executes no motion estimation and no inter mode decision at all — the
+    ///   larger half of what this phase converts.
+    /// * **The second frame's payload is far above the all-skip floor.** Two
+    ///   identical input pictures encode to all-skip macroblocks and motion
+    ///   estimation does essentially nothing, so the driver synthesises a sequence
+    ///   that moves. **Measured on this exact configuration**, by running it both
+    ///   ways: a static source encodes frame 1 to **12** bytes and this one encodes
+    ///   it to **618** — 51x — so the 200-byte assertion sits an order of magnitude
+    ///   above any all-skip frame and a third below the real one. (The three frames
+    ///   read 728 / 618 / 549 moving and 728 / 12 / 94 static.)
+    ///
+    /// **Coverage is proven, not asserted** (the F21 rule): PLACEHOLDER_REVERT
+    /// **The live half of the encoder probe: initialisation, under the checker.**
+    ///
+    /// `frames = 0` drives create -> `GetDefaultParams` -> `InitializeExt` ->
+    /// `GetOption` -> `Uninitialize` -> destroy and stops there. That is not a
+    /// consolation prize: encoder initialisation is where the multi-MiB context,
+    /// the DQ layers, the slice buffers, the MVD cost table and the parameter sets
+    /// are all built, and **every defect this probe found on that path is fixed**,
+    /// so this test is what keeps them fixed. It is the encoder's one *live* Miri
+    /// probe until 6.4 unblocks the encode loop below.
+    ///
+    /// What it covers, measured rather than claimed — each of these was red here
+    /// before its fix and green after: F13's remaining production site
+    /// (`InitDqLayers`), **F57** (`MvdCostInit`'s cursor leaving the table), and the
+    /// `sSpatialLayers` / `sDependencyLayers` `&mut`-through-a-raw-parent family.
+    #[test]
+    fn encoder_initialisation_runs_under_the_aliasing_checker() {
+        let (frames, dims) = drive_encoder_over(48, 32, 0);
+        assert!(frames.is_empty(), "frames = 0 encodes nothing; this drives init only");
+        assert_eq!(
+            dims,
+            (48, 32),
+            "the encoder must come up configured for a 3x2 macroblock grid, read back \
+             from the encoder rather than from this test's own argument"
+        );
+    }
+
+    /// **Blocked under Miri by the slice/bitstream-writer ownership, which is 6.4's.**
+    ///
+    /// `InitSliceBsBuffer` caches the *shared* writer in every slice at init —
+    /// `(*pSlice).pSliceBsa = pBsWrite`, where `pBsWrite` is
+    /// `&mut (*(*pCtx).pOut).sBsWrite` — and `InitBitStream` then replaces that
+    /// writer wholesale on every frame (`encoder_context.rs:840`). The write through
+    /// the parent kills every slice's cached pointer, and `WelsSliceHeaderWrite`
+    /// reads through one at `svc_encode_slice.rs:815`. No spelling or ordering fix
+    /// reaches it: the other branch of `InitSliceBsBuffer` gives each slice its own
+    /// buffer but is only taken when `iMultipleThreadIdc > 1`, which is F12 and
+    /// Phase 7's. **This is `SWelsSliceBs.pBsBuffer`** — one of Phase 3's two
+    /// deliberate exclusions, inherited by 6.4 and guarded by the port's last two
+    /// phase-3 shim markers (`phase6.md` §3), and session B is already scheduled
+    /// to write its settlement.
+    ///
+    /// **The skip retires when that settlement lands**, and this test is the
+    /// instrument that says so: delete the attribute and run the `--lib` Miri step.
+    /// It runs in the ordinary suite meanwhile, and it is green there.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
+        let (frames, dims) = drive_encoder_over(48, 32, 3);
+
+        assert_eq!(
+            dims,
+            (48, 32),
+            "the encoder must be configured for a 3x2 macroblock grid; a picture \
+             without neighbours covers nothing this test exists for"
+        );
+        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            frames[0].kind,
+            EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert_eq!(
+            frames[1].kind,
+            EVideoFrameType::videoFrameTypeP,
+            "the second frame must be inter-coded, or no ME/MD path executes at all"
+        );
+        assert!(
+            frames[1].bytes > 200,
+            "the inter frame coded {} bytes, which is at the all-skip floor: the \
+             source did not move, so motion estimation did nothing",
+            frames[1].bytes
+        );
+    }
+}

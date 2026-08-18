@@ -159,7 +159,9 @@ pub unsafe fn AcquireLayersNals(
     let iNumDependencyLayers = (*pParam).iSpatialLayerNum;
 
     loop {
-        let pDLayer = &mut (*pParam).sSpatialLayers[iDIndex as usize] as *mut SSpatialLayerConfig;
+        // S29: `&mut X as *mut T` is the defect with the cast already written.
+        // The callee takes `*mut`, so the reference existed only to be discarded.
+        let pDLayer = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDIndex as usize]);
         let iOrgNumNals = iCountNumNals;
 
         // Note (Sep. 2010, upstream): the memory over-use here counts little towards
@@ -774,17 +776,21 @@ pub unsafe fn InitDqLayers(
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let pDlayer = &mut (*pParam).sSpatialLayers[iDlayerIndex as usize] as *mut SSpatialLayerConfig;
-        let pParamInternal = &mut (*pParam).sDependencyLayers[iDlayerIndex as usize];
+        // S29's named shape — `&mut X as *mut T` is the defect with the cast already
+        // written: the reference retags before the cast discards it, and the tag is
+        // what `InitSliceInLayer` used to pop. `addr_of_mut!` derives from the raw
+        // parent and creates no reference at all.
+        let pDlayer = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
+        let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[iDlayerIndex as usize]);
         let kiMbW = ((*pDlayer).iVideoWidth + 0x0f) >> 4;
         let kiMbH = ((*pDlayer).iVideoHeight + 0x0f) >> 4;
 
-        pParamInternal.iCodingIndex = 0;
-        pParamInternal.iFrameIndex = 0;
-        pParamInternal.iFrameNum = 0;
-        pParamInternal.iPOC = 0;
-        pParamInternal.uiIdrPicId = 0;
-        pParamInternal.bEncCurFrmAsIdrFlag = true; // make sure the first frame is IDR
+        (*pParamInternal).iCodingIndex = 0;
+        (*pParamInternal).iFrameIndex = 0;
+        (*pParamInternal).iFrameNum = 0;
+        (*pParamInternal).iPOC = 0;
+        (*pParamInternal).uiIdrPicId = 0;
+        (*pParamInternal).bEncCurFrmAsIdrFlag = true; // make sure the first frame is IDR
 
         let pDqLayer = (*pMa).WelsMallocz(
             std::mem::size_of::<SDqLayer>() as u32,
@@ -910,7 +916,10 @@ pub unsafe fn InitDqLayers(
     while iDlayerIndex < iDlayerCount {
         let pDqIdc = (**ppCtx).pDqIdcMap.add(iDlayerIndex as usize);
         let bUseSubsetSps = !(*pParam).bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
-        let pDlayerParam = &mut (*pParam).sSpatialLayers[iDlayerIndex as usize];
+        // S29, and the second site the encoder probe reached: `paraset_strategy.rs`
+        // re-derives this same layer inside `GenerateNewSps` below, which popped
+        // this binding's Unique tag before `InitSlicePEncCtx` read through it.
+        let pDlayerParam = std::ptr::addr_of_mut!((*pParam).sSpatialLayers[iDlayerIndex as usize]);
         let bSvcBaselayer = !(*pParam).bSimulcastAVC
             && (iDlayerCount > BASE_DEPENDENCY_ID as i32)
             && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
@@ -954,7 +963,7 @@ pub unsafe fn InitDqLayers(
             false,
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
-            &mut pDlayerParam.sSliceArgument,
+            std::ptr::addr_of_mut!((*pDlayerParam).sSliceArgument),
             pPps as *mut c_void,
         );
         if iResult != 0 {
@@ -1328,8 +1337,23 @@ pub unsafe fn RequestMemorySvc(
 
     (**ppCtx).iMvdCostTableSize = kuiMvdInterTableSize;
     (**ppCtx).iMvdCostTableStride = kuiMvdInterTableStride;
+    // **F57, and it is F14's accommodation a second time (S12, S6-parity).**
+    // `MvdCostInit` walks two cursors one stride per row for 52 rows. `pNegMvd`
+    // starts at the table's base and ends exactly one past it, which is legal.
+    // `pPosMvd` starts `(kiSz + 1)` elements in and advances by the same stride,
+    // so after the 52nd row it lands `(kiSz + 1)` elements *beyond* the table —
+    // 1042 bytes on this configuration. The pointer is formed and never
+    // dereferenced, which is why nothing has ever observed it: it is UB in Rust
+    // and in C alike, and the C++ upstream forms the same pointer.
+    //
+    // Sizing the buffer is the move that does not touch the kernel — F14's
+    // reasoning exactly. The extra bytes are never read, never written and never
+    // addressed except by the one bump this exists to keep in bounds, so no
+    // encoded byte can move. Deleting the term restores the UB and the encoder
+    // aliasing probe catches it, which is how it was found.
+    let kuiMvdCostTableOvershoot = 2 * ((kuiMvdInterTableStride >> 1) + 1);
     (**ppCtx).pMvdCostTable = (*pMa).WelsMallocz(
-        (52 * kuiMvdCacheAlignedSize) as u32,
+        (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as u32,
         tag!("pMvdCostTable"),
     ) as *mut u16;
     if (**ppCtx).pMvdCostTable.is_null() {
@@ -2560,11 +2584,11 @@ pub unsafe fn WriteSsvcParaset(
     }
 
     for iSpatialId in 0..kiSpatialNum as usize {
-        let pParamInternal = &mut (*(*pCtx).pSvcParam).sDependencyLayers[iSpatialId];
-        if pParamInternal.uiIdrPicId < 65535 {
-            pParamInternal.uiIdrPicId += 1;
+        let pParamInternal = std::ptr::addr_of_mut!((*(*pCtx).pSvcParam).sDependencyLayers[iSpatialId]);
+        if (*pParamInternal).uiIdrPicId < 65535 {
+            (*pParamInternal).uiIdrPicId += 1;
         } else {
-            pParamInternal.uiIdrPicId = 0;
+            (*pParamInternal).uiIdrPicId = 0;
         }
     }
 
@@ -3095,9 +3119,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     if pCtx.is_null() {
         return ENC_RETURN_MEMALLOCERR;
     }
-    let mut pLayerBsInfo: *mut SLayerBSInfo = (*pFbi).sLayerInfo.as_mut_ptr();
     let pSvcParam = (*pCtx).pSvcParam;
-    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
     let mut fsnr: *mut SPicture;
     let mut pEncPic: *mut SPicture;
     let mut iLayerNum = 0i32;
@@ -3129,6 +3151,12 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pFbi).sLayerInfo[iNalIdx].iNalCount = 0;
     }
 
+    // Derived after the reset loop above, for the same reason `pSpatialIndexMap`
+    // is derived after `BuildSpatialPicList`: that loop **writes**
+    // `(*pFbi).sLayerInfo[..]` through `pFbi`, and a write through the parent pops
+    // a child taken before it. Every use of this cursor is below.
+    let mut pLayerBsInfo: *mut SLayerBSInfo = (*pFbi).sLayerInfo.as_mut_ptr();
+
     // perform csc/denoise/downsample/padding, generate spatial layers
     let iRet = (*(*pCtx).pVpp).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum);
     if iRet != ENC_RETURN_SUCCESS {
@@ -3148,6 +3176,14 @@ pub unsafe fn WelsEncoderEncodeExt(
         return ENC_RETURN_SUCCESS;
     }
 
+    // Derived here rather than at the top of the function, and the order is the
+    // fix: `BuildSpatialPicList` above **writes** this array (through
+    // `wels_preprocess.rs`'s `(*pEncCtx).sSpatialIndexMap[idx].iDid = ...`), and a
+    // write through the parent pops a `SharedReadOnly` child taken before it. S29's
+    // own boundary clause — the spelling rescues derivations through a raw parent,
+    // but only ordering rescues one the parent then writes through. Every use of
+    // this pointer is below. Found by the encoder aliasing probe, Phase 6 session A.
+    let pSpatialIndexMap = (*pCtx).sSpatialIndexMap.as_ptr();
     crate::encoder::encoder_context::InitBitStream(pCtx);
     (*pLayerBsInfo).pBsBuf = (*pCtx).pFrameBs;
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
@@ -3220,10 +3256,18 @@ pub unsafe fn WelsEncoderEncodeExt(
         crate::encoder::encoder_context::InitFrameCoding(pCtx, eFrameType, iCurDid as i32);
         (*(*pCtx).pVpp).AnalyzeSpatialPic(pCtx, iCurDid as i32);
 
+        // **`iPOC` is read at each use below rather than through a held pointer.**
+        // Every call in this loop — `InitFrameCoding`, `AnalyzeSpatialPic`,
+        // `BuildRefList` — writes this record through its own derivation, and a
+        // write through the parent kills a pointer taken before it. No spelling
+        // rescues that (S29's boundary clause); only ordering does, and deriving at
+        // the use is the ordering that holds however the calls are rearranged. The
+        // binding above stays correct for `iDecompositionStages`, read before any
+        // of them. Found by the encoder aliasing probe, Phase 6 session A.
         pEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize)).pSrc;
         (*pCtx).pEncPic = pEncPic;
         (*pEncPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*pEncPic).iFramePoc = (*pParamInternal).iPOC;
+        (*pEncPic).iFramePoc = (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC;
 
         iCurWidth = (*pParam).iVideoWidth;
         iCurHeight = (*pParam).iVideoHeight;
@@ -3296,13 +3340,13 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pCtx).pDecPic = (**(*pCtx).ppRefPicListExt.add(iCurDid as usize)).pNextBuffer;
         fsnr = (*pCtx).pDecPic;
         (*(*pCtx).pDecPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*(*pCtx).pDecPic).iFramePoc = (*pParamInternal).iPOC;
+        (*(*pCtx).pDecPic).iFramePoc = (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC;
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
         let eRefStrategy = (*pCtx).eRefStrategy;
         eRefStrategy.MarkPic(pCtx);
-        if !eRefStrategy.BuildRefList(pCtx, (*pParamInternal).iPOC, 0) {
+        if !eRefStrategy.BuildRefList(pCtx, (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC, 0) {
             eFrameType = EVideoFrameType::videoFrameTypeIDR;
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
             break;
@@ -3329,7 +3373,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         // get reordering syntax used for writing the slice header
         crate::encoder::ref_list_mgr_svc::WelsUpdateRefSyntax(
             pCtx,
-            (*pParamInternal).iPOC,
+            (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC,
             eFrameType as i32,
         );
         // update reference picture for the current DQ layer
