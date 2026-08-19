@@ -457,12 +457,12 @@ pub unsafe extern "C" fn WelsRecPskip(
     (*pFuncList).pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
         pCsMb[0],
         iRecStride[0],
-        (*pMbCache).pSkipMb,
+        crate::encoder::md::skip_mb(pMbCache),
         16,
     );
     let copy8 = (*pFuncList).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
-    copy8(pCsMb[1], iRecStride[1], (*pMbCache).pSkipMb.add(256), 8);
-    copy8(pCsMb[2], iRecStride[2], (*pMbCache).pSkipMb.add(320), 8);
+    copy8(pCsMb[1], iRecStride[1], crate::encoder::md::skip_mb(pMbCache).add(256), 8);
+    copy8(pCsMb[2], iRecStride[2], crate::encoder::md::skip_mb(pMbCache).add(320), 8);
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
     (*pCurMb).iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
@@ -534,14 +534,14 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     let iLineSizeY = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let iLineSizeUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
 
-    let mut pDstLuma = (*pMbCache).pSkipMb;
-    let mut pDstCb = (*pMbCache).pSkipMb.add(256);
-    let mut pDstCr = (*pMbCache).pSkipMb.add(256 + 64);
+    let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
+    let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
+    let mut pDstCr = crate::encoder::md::skip_mb(pMbCache).add(256 + 64);
 
     if !bSkipMbFlag {
-        pDstLuma = (*pMbCache).pMemPredLuma;
-        pDstCb = (*pMbCache).pMemPredChroma;
-        pDstCr = (*pMbCache).pMemPredChroma.add(64);
+        pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
+        pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
+        pDstCr = crate::encoder::md::mem_pred_chroma(pMbCache).add(64);
     }
 
     // MC
@@ -626,7 +626,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         copy16(
             (*pMbCache).SPicData.pCsMb[0],
             (*pCurDqLayer).iCsStride[0],
-            (*pMbCache).pMemPredLuma,
+            crate::encoder::md::mem_pred_luma(pMbCache),
             16,
         );
     }
@@ -634,13 +634,13 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         copy8(
             (*pMbCache).SPicData.pCsMb[1],
             (*pCurDqLayer).iCsStride[1],
-            (*pMbCache).pMemPredChroma,
+            crate::encoder::md::mem_pred_chroma(pMbCache),
             8,
         );
         copy8(
             (*pMbCache).SPicData.pCsMb[2],
             (*pCurDqLayer).iCsStride[1],
-            (*pMbCache).pMemPredChroma.add(64),
+            crate::encoder::md::mem_pred_chroma(pMbCache).add(64),
             8,
         );
     }
@@ -1141,7 +1141,7 @@ pub unsafe extern "C" fn WelsMdI16x16(
     // pMemPredMb; this function then *moves* pMemPredLuma to the losing ping-pong
     // half before returning, so reading pMemPredLuma here would follow the previous
     // macroblock's pointer whenever WelsMdIntraInit had not just run.
-    let pPredI16x16: [*mut u8; 2] = [(*pMbCache).pMemPredMb, (*pMbCache).pMemPredMb.add(256)];
+    let pPredI16x16: [*mut u8; 2] = [crate::encoder::md::mem_pred_mb(pMbCache), crate::encoder::md::mem_pred_mb(pMbCache).add(256)];
     let mut pDst = pPredI16x16[0];
     let pDec = (*pMbCache).SPicData.pCsMb[0];
     let pEnc = (*pMbCache).SPicData.pEncMb[0];
@@ -1180,8 +1180,9 @@ pub unsafe extern "C" fn WelsMdI16x16(
             pDst = pPredI16x16[iIdx];
         }
     }
-    (*pMbCache).pMemPredChroma = pPredI16x16[iIdx];
-    (*pMbCache).pMemPredLuma = pPredI16x16[iIdx ^ 0x01];
+    // The two pointers carried one bit between them and the selector *is* that bit:
+    // chroma keeps the half the search last wrote (`iIdx`), luma takes the other.
+    (*pMbCache).uiMemPredLumaHalf = (iIdx ^ 0x01) as u8;
     (*pMbCache).uiLumaI16x16Mode = iBestMode as u8;
     iBestCost
 }
@@ -1387,10 +1388,10 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
         return;
     }
 
-    let pCoeffLevel = (*pMbCache).pCoeffLevel;
+    let pCoeffLevel = crate::encoder::md::coeff_level(pMbCache);
     let pEncMb = (*pMbCache).SPicData.pEncMb[0];
     let iEncStride = (*pCurDqLayer).iEncStride[0];
-    let pMemPredLuma = (*pMbCache).pMemPredLuma;
+    let pMemPredLuma = crate::encoder::md::mem_pred_luma(pMbCache);
 
     if !pCoeffLevel.is_null() && !pEncMb.is_null() && !pMemPredLuma.is_null() {
         if let Some(dct_fn) = (*pFuncList).pfDctFourT4 {
@@ -1906,17 +1907,17 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     let iLineSizeY = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let iLineSizeUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
 
-    let mut pDstLuma = (*pMbCache).pSkipMb;
-    let mut pDstCb = (*pMbCache).pSkipMb.add(256);
-    let mut pDstCr = (*pMbCache).pSkipMb.add(256 + 64);
+    let mut pDstLuma = crate::encoder::md::skip_mb(pMbCache);
+    let mut pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
+    let mut pDstCr = crate::encoder::md::skip_mb(pMbCache).add(256 + 64);
 
     let iOffsetY = (sCandidateMv.iMvX as i32 >> 2) + (sCandidateMv.iMvY as i32 >> 2) * iLineSizeY;
     let iOffsetUV = (sCandidateMv.iMvX as i32 >> 3) + (sCandidateMv.iMvY as i32 >> 3) * iLineSizeUV;
 
     if !bQpSimilarFlag || !bMbSkipFlag {
-        pDstLuma = (*pMbCache).pMemPredLuma;
-        pDstCb = (*pMbCache).pMemPredChroma;
-        pDstCr = (*pMbCache).pMemPredChroma.add(64);
+        pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
+        pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
+        pDstCr = crate::encoder::md::mem_pred_chroma(pMbCache).add(64);
     }
 
     // Motion Compensation
@@ -2014,7 +2015,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         copy16(
             (*pMbCache).SPicData.pCsMb[0],
             (*pCurDqLayer).iCsStride[0],
-            (*pMbCache).pMemPredLuma,
+            crate::encoder::md::mem_pred_luma(pMbCache),
             16,
         );
     }
@@ -2022,13 +2023,13 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         copy8(
             (*pMbCache).SPicData.pCsMb[1],
             (*pCurDqLayer).iCsStride[1],
-            (*pMbCache).pMemPredChroma,
+            crate::encoder::md::mem_pred_chroma(pMbCache),
             8,
         );
         copy8(
             (*pMbCache).SPicData.pCsMb[2],
             (*pCurDqLayer).iCsStride[1],
-            (*pMbCache).pMemPredChroma.add(64),
+            crate::encoder::md::mem_pred_chroma(pMbCache).add(64),
             8,
         );
     }
@@ -2436,11 +2437,11 @@ mod tests {
                     enc_plane[(y + 16) * STRIDE + (x + 16)] = 138;
                 }
             }
-            // 2*256 + 16, matching the real allocation in
-            // `svc_encode_slice.rs` — see F14 there for why the +16 exists (the
-            // raw 16x16 SAD bumps its row pointer one stride past its last read).
-            let mut pred_buf = [0u8; 2 * 256 + 16];
-
+            // The prediction ping-pong is `SMbCache::sMemPredMb` since T6.C3 —
+            // `[u8; 2 * 256 + 16]`, and the `+ 16` is F14's accommodation, documented
+            // on the field. **This test is the instrument that keeps it**: delete the
+            // `+ 16` and the raw 16x16 SAD's one-past-the-row pointer takes this test
+            // red under Miri.
             let mut mb_cache = SMbCache {
                 SPicData: SPicData {
                     pEncMb: [
@@ -2456,7 +2457,6 @@ mod tests {
                         std::ptr::null_mut(),
                     ],
                 },
-                pMemPredMb: pred_buf.as_mut_ptr(),
                 uiNeighborIntra: 0x07, // left + top + top-left available
                 ..Default::default()
             };
@@ -2485,11 +2485,13 @@ mod tests {
             assert_eq!(mb_cache.uiLumaI16x16Mode, I16_PRED_V as u8);
             assert_eq!(cost, 2560 + iLambda);
 
-            // The winning prediction lands in pMemPredLuma and the scratch half is
-            // handed to the chroma search as pMemPredChroma.
-            assert_eq!(mb_cache.pMemPredLuma, pred_buf.as_mut_ptr());
-            assert_eq!(mb_cache.pMemPredChroma, pred_buf.as_mut_ptr().add(256));
-            assert!(std::slice::from_raw_parts(mb_cache.pMemPredLuma, 256).iter().all(|&b| b == 128));
+            // The winning prediction lands in the luma half and the scratch half is
+            // handed to the chroma search — one selector bit, two halves of one array.
+            let pPredBuf = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>();
+            assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
+            assert_eq!(crate::encoder::md::mem_pred_luma(&mut mb_cache), pPredBuf);
+            assert_eq!(crate::encoder::md::mem_pred_chroma(&mut mb_cache), pPredBuf.add(256));
+            assert!(std::slice::from_raw_parts(pPredBuf, 256).iter().all(|&b| b == 128));
         }
     }
 

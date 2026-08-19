@@ -108,6 +108,8 @@ pub const REF_NOT_AVAIL: i8 = -2;
 /// `MB_BLOCK8x8_NUM` — `wels_const_common.h:58`, the width of `SMB::iRefIndex`.
 /// Re-exported rather than re-declared: `encoder_ext.rs:96` already owns the copy.
 pub use crate::encoder::encoder_ext::MB_BLOCK8x8_NUM;
+/// `MB_COEFF_LIST_SIZE` — `wels_const.h`, the width of `SMbCache::sCoeffLevel`.
+pub use crate::encoder::svc_encode_slice::MB_COEFF_LIST_SIZE;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
 /// `INTRA_4x4_MODE_NUM` — `wels_const.h:48`. **8**, not 16; this is the per-macroblock
@@ -355,7 +357,7 @@ impl Default for SMB {
     }
 }
 
-/// `TagMbCache` — `codec/encoder/core/inc/mb_cache.h:72`. 576 bytes.
+/// `TagMbCache` — `codec/encoder/core/inc/mb_cache.h:72`.
 ///
 /// C++ declares the first three members with `ALIGNED_DECLARE (..., 16)`, which
 /// aligns each *variable* to 16 bytes and gives the struct 16-byte alignment. Rust
@@ -364,7 +366,7 @@ impl Default for SMB {
 /// after `sMvComponents` (146 bytes) to bring `iNonZeroCoeffCount` to offset 160.
 /// The two `[i8; 48]` arrays are already 16-multiples and need no further padding.
 #[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct SMbCache {
     pub sMvComponents: SMVComponentUnit,
     pub _pad_after_sMvComponents: [u8; 14],
@@ -372,21 +374,59 @@ pub struct SMbCache {
     pub iIntraPredMode: [i8; 48],
     pub iSadCost: [i32; 4],
     pub sMbMvp: [SMVUnitXY; MB_BLOCK4x4_NUM],
-    pub pCoeffLevel: *mut i16,
-    pub pSkipMb: *mut u8,
-    pub pMemPredMb: *mut u8,
-    pub pMemPredLuma: *mut u8,
-    pub pMemPredChroma: *mut u8,
-    pub pBestPredIntraChroma: *mut u8,
-    pub pMemPredBlk4: *mut u8,
-    pub pBestPredI4x4Blk4: *mut u8,
-    pub pBufferInterPredMe: *mut u8,
-    pub pPrevIntra4x4PredModeFlag: *mut bool,
-    pub pRemIntra4x4PredModeFlag: *mut i8,
+    // **T6.C3**: the eight buffers `AllocMbCacheAligned` malloc'd per slice are
+    // inline here, and the four aliases into two of them are the three half-selectors
+    // below. Every one is scratch the slice always owned; the C++ allocated exactly
+    // these sizes and `SSlice` grows by their sum. Reach them through the accessors
+    // (`mem_pred_luma` and friends) rather than by taking a pointer at a site: those
+    // derive from the array root, which is what S28 costs when it is got wrong.
+    pub sCoeffLevel: [i16; MB_COEFF_LIST_SIZE],
+    pub sSkipMb: [u8; 384],
+    /// `2 * 256` in the C++, and **the `+ 16` is this port's** — a soundness
+    /// accommodation, not a size the codec uses (F14, `phase2_findings.md`).
+    ///
+    /// The two 256-byte halves are the I16x16 prediction ping-pong. `WelsMdI16x16`
+    /// scores a candidate in the upper half with `WelsSampleSad16x16_c`, whose last
+    /// 8x8 sub-block starts at +392 and reads through byte 511 — *exactly* in bounds.
+    /// But the raw kernel is a C transliteration that bumps its row pointer after the
+    /// final row (`sad_common.rs:158`), computing `base + 520` and never
+    /// dereferencing it. Forming that pointer is UB in Rust and in C alike; nothing
+    /// observable ever came of it, which is why it survived the port.
+    ///
+    /// This is S12's rule met in production rather than in a test: a raw kernel's
+    /// pointer footprint is one stride larger than its read footprint. The `+ 16` is
+    /// one luma row at the ping-pong's stride of 16 — the smallest thing that makes
+    /// the arithmetic legal. It cannot change any encoded byte: the extra bytes are
+    /// never read, never written, and never addressed except by the one-past bump
+    /// this exists to keep in bounds.
+    ///
+    /// It goes away on its own if `common/sad_common.rs` re-lands from its park: the
+    /// safe kernels take exact spans and stop at the last row. Until then, deleting
+    /// this `+ 16` restores the UB and Miri's `--lib` gate catches it in
+    /// `svc_mode_decision::tests::test_wels_md_i16x16_cost`.
+    pub sMemPredMb: [u8; 2 * 256 + 16],
+    pub sMemPredBlk4: [u8; 2 * 16],
+    pub sBufferInterPredMe: [u8; 4 * 640],
+    pub bPrevIntra4x4PredModeFlag: [bool; MB_BLOCK4x4_NUM],
+    pub iRemIntra4x4PredModeFlag: [i8; MB_BLOCK4x4_NUM],
+    /// Which 256-byte half of [`SMbCache::sMemPredMb`] currently holds the luma
+    /// prediction; chroma is the other one. `pMemPredLuma`/`pMemPredChroma` were two
+    /// pointers carrying this one bit, swapped as a pair by `WelsMdI16x16`.
+    pub uiMemPredLumaHalf: u8,
+    /// Which 128-byte half *of the chroma half* holds the winning chroma prediction
+    /// (`pBestPredIntraChroma`). Composed with `uiMemPredLumaHalf`, because the chroma
+    /// half is itself whichever half lost the I16x16 ping-pong.
+    pub uiBestPredIntraChromaHalf: u8,
+    /// Which 16-byte half of [`SMbCache::sMemPredBlk4`] holds the winning I4x4 block
+    /// prediction (`pBestPredI4x4Blk4`).
+    pub uiBestPredI4x4Blk4Half: u8,
     pub iSadCostSkip: [i32; 4],
     pub bMbTypeSkip: [bool; 4],
+    /// The one alias that stays: it names a slot of a *picture*
+    /// (`pDecPic->pMbSkipSad + kiMbXY`), and the `SPicture` family is 6.1/6.2's.
+    /// Re-derived per macroblock, exactly as the C++ does.
     pub pEncSad: *mut i32,
-    pub pDct: *mut SDCTCoeff,
+    pub sDct: SDCTCoeff,
     pub uiNeighborIntra: u8,
     pub uiLumaI16x16Mode: u8,
     pub uiChmaI8x8Mode: u8,
@@ -406,21 +446,20 @@ impl Default for SMbCache {
             iIntraPredMode: [0; 48],
             iSadCost: [0; 4],
             sMbMvp: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
-            pCoeffLevel: std::ptr::null_mut(),
-            pSkipMb: std::ptr::null_mut(),
-            pMemPredMb: std::ptr::null_mut(),
-            pMemPredLuma: std::ptr::null_mut(),
-            pMemPredChroma: std::ptr::null_mut(),
-            pBestPredIntraChroma: std::ptr::null_mut(),
-            pMemPredBlk4: std::ptr::null_mut(),
-            pBestPredI4x4Blk4: std::ptr::null_mut(),
-            pBufferInterPredMe: std::ptr::null_mut(),
-            pPrevIntra4x4PredModeFlag: std::ptr::null_mut(),
-            pRemIntra4x4PredModeFlag: std::ptr::null_mut(),
+            sCoeffLevel: [0; MB_COEFF_LIST_SIZE],
+            sSkipMb: [0; 384],
+            sMemPredMb: [0; 2 * 256 + 16],
+            sMemPredBlk4: [0; 2 * 16],
+            sBufferInterPredMe: [0; 4 * 640],
+            bPrevIntra4x4PredModeFlag: [false; MB_BLOCK4x4_NUM],
+            iRemIntra4x4PredModeFlag: [0; MB_BLOCK4x4_NUM],
+            uiMemPredLumaHalf: 0,
+            uiBestPredIntraChromaHalf: 0,
+            uiBestPredI4x4Blk4Half: 0,
             iSadCostSkip: [0; 4],
             bMbTypeSkip: [false; 4],
             pEncSad: std::ptr::null_mut(),
-            pDct: std::ptr::null_mut(),
+            sDct: SDCTCoeff::default(),
             uiNeighborIntra: 0,
             uiLumaI16x16Mode: 0,
             uiChmaI8x8Mode: 0,
@@ -429,6 +468,79 @@ impl Default for SMbCache {
             SPicData: SPicData::default(),
         }
     }
+}
+
+/// The scratch accessors — **T6.C3**, and the one rule they exist to enforce.
+///
+/// Each of the eight buffers below is an inline array of [`SMbCache`], which callers
+/// reach through a `*mut SMbCache`. A raw pointer into such an array must be derived
+/// from the array *root* with [`std::ptr::addr_of_mut!`]: taking it through a slice
+/// (`sMemPredMb[256..].as_mut_ptr()`) narrows the tag to that slice, and the very
+/// first read the kernel makes outside it is UB that no byte-level gate can see —
+/// **S28**, nine sites in Phase 6 session B and a tenth in session C's face 1. Taking
+/// it through `&mut` (`(*p).field.as_mut_ptr()`) is the same defect one step earlier —
+/// **S29**.
+///
+/// The prediction, copy and DCT kernels take `*mut u8` / `*mut i16` and keep doing so
+/// (that family is session E's and F's), so these hand them exactly what they took
+/// before: the same address, with the whole array's provenance.
+#[inline]
+pub unsafe fn coeff_level(pMbCache: *mut SMbCache) -> *mut i16 {
+    std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>()
+}
+
+/// `pMbCache->pSkipMb` — 256 luma + 2x64 chroma bytes of the P_SKIP reconstruction.
+#[inline]
+pub unsafe fn skip_mb(pMbCache: *mut SMbCache) -> *mut u8 {
+    std::ptr::addr_of_mut!((*pMbCache).sSkipMb).cast::<u8>()
+}
+
+/// `pMbCache->pMemPredMb` — the base of the I16x16 ping-pong, half 0.
+#[inline]
+pub unsafe fn mem_pred_mb(pMbCache: *mut SMbCache) -> *mut u8 {
+    std::ptr::addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>()
+}
+
+/// `pMbCache->pMemPredLuma` — the ping-pong half holding the luma prediction.
+#[inline]
+pub unsafe fn mem_pred_luma(pMbCache: *mut SMbCache) -> *mut u8 {
+    mem_pred_mb(pMbCache).add(256 * (*pMbCache).uiMemPredLumaHalf as usize)
+}
+
+/// `pMbCache->pMemPredChroma` — the other half, by construction.
+#[inline]
+pub unsafe fn mem_pred_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
+    mem_pred_mb(pMbCache).add(256 * ((*pMbCache).uiMemPredLumaHalf ^ 0x01) as usize)
+}
+
+/// `pMbCache->pBestPredIntraChroma` — one of the chroma half's two 128-byte halves.
+#[inline]
+pub unsafe fn best_pred_intra_chroma(pMbCache: *mut SMbCache) -> *mut u8 {
+    mem_pred_chroma(pMbCache).add(128 * (*pMbCache).uiBestPredIntraChromaHalf as usize)
+}
+
+/// `pMbCache->pMemPredBlk4` — the base of the I4x4 block ping-pong, half 0.
+#[inline]
+pub unsafe fn mem_pred_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
+    std::ptr::addr_of_mut!((*pMbCache).sMemPredBlk4).cast::<u8>()
+}
+
+/// `pMbCache->pBestPredI4x4Blk4` — whichever 16-byte half won.
+#[inline]
+pub unsafe fn best_pred_i4x4_blk4(pMbCache: *mut SMbCache) -> *mut u8 {
+    mem_pred_blk4(pMbCache).add(16 * (*pMbCache).uiBestPredI4x4Blk4Half as usize)
+}
+
+/// `pMbCache->pBufferInterPredMe` — four 640-byte planes for the ME refinement.
+#[inline]
+pub unsafe fn buffer_inter_pred_me(pMbCache: *mut SMbCache) -> *mut u8 {
+    std::ptr::addr_of_mut!((*pMbCache).sBufferInterPredMe).cast::<u8>()
+}
+
+/// `pMbCache->pDct` — the macroblock's transform coefficients.
+#[inline]
+pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
+    std::ptr::addr_of_mut!((*pMbCache).sDct)
 }
 
 pub type PFillInterNeighborCacheFunc = unsafe extern "C" fn(
@@ -1127,10 +1239,10 @@ pub unsafe extern "C" fn InitMeRefinePointer(
     pMbCache: *mut SMbCache,
     iStride: i32,
 ) {
-    (*pMeRefine).pHalfPixH = (*pMbCache).pBufferInterPredMe.add(iStride as usize);
-    (*pMeRefine).pHalfPixV = (*pMbCache).pBufferInterPredMe.add(640 + iStride as usize);
-    (*pMeRefine).pQuarPixBest = (*pMbCache).pBufferInterPredMe.add(1280 + iStride as usize);
-    (*pMeRefine).pQuarPixTmp = (*pMbCache).pBufferInterPredMe.add(1920 + iStride as usize);
+    (*pMeRefine).pHalfPixH = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(iStride as usize);
+    (*pMeRefine).pHalfPixV = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(640 + iStride as usize);
+    (*pMeRefine).pQuarPixBest = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(1280 + iStride as usize);
+    (*pMeRefine).pQuarPixTmp = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(1920 + iStride as usize);
 }
 
 #[inline(always)]

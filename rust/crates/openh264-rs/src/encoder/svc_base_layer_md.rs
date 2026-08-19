@@ -360,17 +360,18 @@ pub unsafe fn WelsMdIntraInit(
     //step 1. load neighbor cache
     FillNeighborCacheIntra(pMbCache, pCurMb, (*pCurLayer).iMbWidth as i32);
     // in WelsMdI16x16() will be changed, so re-init here!
-    (*pMbCache).pMemPredLuma = (*pMbCache).pMemPredMb;
-    // Init with default, maybe change in WelsMdI16x16 and svc_md_i16x16_sad
-    (*pMbCache).pMemPredChroma = (*pMbCache).pMemPredMb.add(256);
+    // Init with default, maybe change in WelsMdI16x16 and svc_md_i16x16_sad:
+    // luma is the first 256-byte half of `sMemPredMb` and chroma the second.
+    (*pMbCache).uiMemPredLumaHalf = 0;
 }
 
 /// `svc_base_layer_md.cpp:418`. The full 16-mode-per-block I4x4 search, used on the
 /// non-`LOW_COMPLEXITY` path via [`WelsMdIntraFinePartition`].
 ///
 /// # Safety
-/// See [`WelsMdIntraInit`]; additionally `pMbCache` must have `pMemPredBlk4`,
-/// `pPrevIntra4x4PredModeFlag` and `pRemIntra4x4PredModeFlag` allocated.
+/// See [`WelsMdIntraInit`]. The I4x4 scratch (`sMemPredBlk4`) and both intra-mode
+/// flag arrays are inline in `SMbCache` since T6.C3, so there is nothing left for a
+/// caller to have allocated.
 pub unsafe extern "C" fn WelsMdI4x4(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: *mut SWelsMD,
@@ -387,8 +388,6 @@ pub unsafe extern "C" fn WelsMdI4x4(
     let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
-    let mut pPrevIntra4x4PredModeFlag = (*pMbCache).pPrevIntra4x4PredModeFlag;
-    let mut pRemIntra4x4PredModeFlag = (*pMbCache).pRemIntra4x4PredModeFlag;
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
@@ -425,7 +424,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
             let iCurMode = kpAvailMode[j] as i32;
             debug_assert!((0..14).contains(&iCurMode));
 
-            let pDst = (*pMbCache).pMemPredBlk4.offset(((1 - iBestPredBufferNum) << 4) as isize);
+            let pDst = crate::encoder::md::mem_pred_blk4(pMbCache).offset(((1 - iBestPredBufferNum) << 4) as isize);
 
             (*pFunc).pfGetLumaI4x4Pred[iCurMode as usize].unwrap()(pDst, pCurDec, kiLineSizeDec);
             let iCurCost = pfSatd4x4(pDst, 4, pCurEnc, kiLineSizeEnc)
@@ -438,8 +437,7 @@ pub unsafe extern "C" fn WelsMdI4x4(
             }
         }
 
-        (*pMbCache).pBestPredI4x4Blk4 =
-            (*pMbCache).pMemPredBlk4.offset((iBestPredBufferNum << 4) as isize);
+        (*pMbCache).uiBestPredI4x4Blk4Half = iBestPredBufferNum as u8;
         iCosti4x4 += iBestCost;
         if iCosti4x4 >= iBestCostLuma {
             break;
@@ -448,14 +446,12 @@ pub unsafe extern "C" fn WelsMdI4x4(
         //step 5: update pred mode and sample avail cache
         let iFinalMode = g_kiMapModeI4x4[iBestMode as usize] as i32;
         if iPredMode == iFinalMode {
-            *pPrevIntra4x4PredModeFlag = true;
+            (*pMbCache).bPrevIntra4x4PredModeFlag[i] = true;
         } else {
-            *pPrevIntra4x4PredModeFlag = false;
-            *pRemIntra4x4PredModeFlag =
+            (*pMbCache).bPrevIntra4x4PredModeFlag[i] = false;
+            (*pMbCache).iRemIntra4x4PredModeFlag[i] =
                 (if iFinalMode < iPredMode { iFinalMode } else { iFinalMode - 1 }) as i8;
         }
-        pPrevIntra4x4PredModeFlag = pPrevIntra4x4PredModeFlag.add(1);
-        pRemIntra4x4PredModeFlag = pRemIntra4x4PredModeFlag.add(1);
         (*pMbCache).iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode as i8;
 
         //step 6: encoding I_4x4
@@ -504,8 +500,6 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
     let kiLineSizeDec = (*pCurDqLayer).iCsStride[0];
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
-    let mut pPrevIntra4x4PredModeFlag = (*pMbCache).pPrevIntra4x4PredModeFlag;
-    let mut pRemIntra4x4PredModeFlag = (*pMbCache).pRemIntra4x4PredModeFlag;
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[(*pMbCache).uiNeighborIntra as usize];
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
@@ -548,7 +542,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         }
         macro_rules! alt_buf {
             () => {
-                (*pMbCache).pMemPredBlk4.offset(((1 - iBestPredBufferNum) << 4) as isize)
+                crate::encoder::md::mem_pred_blk4(pMbCache).offset(((1 - iBestPredBufferNum) << 4) as isize)
             };
         }
         // `if (iCurCost < iBestCost) { best = cur; iBestPredBufferNum = 1 - …; }`
@@ -565,7 +559,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         if iAvailCount == 9 || iAvailCount == 7 {
             //I4_PRED_DC(2)
             iBestMode = I4_PRED_DC;
-            let pDst = (*pMbCache).pMemPredBlk4.offset((iBestPredBufferNum << 4) as isize);
+            let pDst = crate::encoder::md::mem_pred_blk4(pMbCache).offset((iBestPredBufferNum << 4) as isize);
             iBestCost = score!(I4_PRED_DC, pDst);
 
             //I4_PRED_H(1)
@@ -656,8 +650,7 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
             }
         }
 
-        (*pMbCache).pBestPredI4x4Blk4 =
-            (*pMbCache).pMemPredBlk4.offset((iBestPredBufferNum << 4) as isize);
+        (*pMbCache).uiBestPredI4x4Blk4Half = iBestPredBufferNum as u8;
         iCosti4x4 += iBestCost;
         if iCosti4x4 >= iBestCostLuma {
             break;
@@ -666,14 +659,12 @@ pub unsafe extern "C" fn WelsMdI4x4Fast(
         //step 5: update pred mode and sample avail cache
         let iFinalMode = g_kiMapModeI4x4[iBestMode as usize];
         if iPredMode == iFinalMode {
-            *pPrevIntra4x4PredModeFlag = true;
+            (*pMbCache).bPrevIntra4x4PredModeFlag[i] = true;
         } else {
-            *pPrevIntra4x4PredModeFlag = false;
-            *pRemIntra4x4PredModeFlag =
+            (*pMbCache).bPrevIntra4x4PredModeFlag[i] = false;
+            (*pMbCache).iRemIntra4x4PredModeFlag[i] =
                 if iFinalMode < iPredMode { iFinalMode } else { iFinalMode - 1 };
         }
-        pPrevIntra4x4PredModeFlag = pPrevIntra4x4PredModeFlag.add(1);
-        pRemIntra4x4PredModeFlag = pRemIntra4x4PredModeFlag.add(1);
         (*pMbCache).iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode;
         //step 6: encoding I_4x4
         WelsEncRecI4x4Y(pEncCtx, pCurMb, pMbCache, i as u8);
@@ -698,7 +689,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
 ) -> i32 {
     let mut iChmaIdx: usize = 0;
     let pPredIntraChma: [*mut u8; 2] =
-        [(*pMbCache).pMemPredChroma, (*pMbCache).pMemPredChroma.add(128)];
+        [crate::encoder::md::mem_pred_chroma(pMbCache), crate::encoder::md::mem_pred_chroma(pMbCache).add(128)];
     let mut pDstChma = pPredIntraChma[0];
     let pEncCb = (*pMbCache).SPicData.pEncMb[1];
     let pEncCr = (*pMbCache).SPicData.pEncMb[2];
@@ -735,7 +726,7 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
         }
     }
 
-    (*pMbCache).pBestPredIntraChroma = pPredIntraChma[iChmaIdx ^ 0x01];
+    (*pMbCache).uiBestPredIntraChromaHalf = (iChmaIdx ^ 0x01) as u8;
     (*pMbCache).uiChmaI8x8Mode = iBestMode as u8;
     iBestCost
 }
@@ -1394,9 +1385,9 @@ pub unsafe fn WelsMdPSkipEnc(
     let iLineSizeY = (*(*pCurLayer).pRefPic).iLineSize[0];
     let iLineSizeUV = (*(*pCurLayer).pRefPic).iLineSize[1];
 
-    let pDstLuma = (*pMbCache).pSkipMb;
-    let pDstCb = (*pMbCache).pSkipMb.add(256);
-    let pDstCr = (*pMbCache).pSkipMb.add(256 + 64);
+    let pDstLuma = crate::encoder::md::skip_mb(pMbCache);
+    let pDstCb = crate::encoder::md::skip_mb(pMbCache).add(256);
+    let pDstCr = crate::encoder::md::skip_mb(pMbCache).add(256 + 64);
 
     let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
     let mut n: i32;
@@ -1480,7 +1471,7 @@ pub unsafe fn WelsMdPSkipEnc(
     }
 
     WelsDctMb(
-        (*pMbCache).pCoeffLevel,
+        crate::encoder::md::coeff_level(pMbCache),
         pEncMb,
         iEncStride,
         pDstLuma,
@@ -1492,20 +1483,20 @@ pub unsafe fn WelsMdPSkipEnc(
         pEncMb = (*pMbCache).SPicData.pEncMb[1];
         pEncBlockOffset = pStrideEncBlockOffset.add(16);
         (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-            (*pMbCache).pCoeffLevel.add(256),
+            crate::encoder::md::coeff_level(pMbCache).add(256),
             pEncMb.offset(*pEncBlockOffset as isize),
             iEncStride,
-            (*pMbCache).pSkipMb.add(256),
+            crate::encoder::md::skip_mb(pMbCache).add(256),
             8,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
             pEncMb = (*pMbCache).SPicData.pEncMb[2];
             pEncBlockOffset = pStrideEncBlockOffset.add(20);
             (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset")(
-                (*pMbCache).pCoeffLevel.add(320),
+                crate::encoder::md::coeff_level(pMbCache).add(320),
                 pEncMb.offset(*pEncBlockOffset as isize),
                 iEncStride,
-                (*pMbCache).pSkipMb.add(320),
+                crate::encoder::md::skip_mb(pMbCache).add(320),
                 8,
             );
             if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 2) {
@@ -1586,9 +1577,9 @@ pub unsafe fn WelsMdInterMbRefinement(
 
     let pRefCb = (*pMbCache).SPicData.pRefMb[1];
     let pRefCr = (*pMbCache).SPicData.pRefMb[2];
-    let pDstCb = (*pMbCache).pMemPredChroma;
-    let pDstCr = (*pMbCache).pMemPredChroma.add(64);
-    let pDstLuma = (*pMbCache).pMemPredLuma;
+    let pDstCb = crate::encoder::md::mem_pred_chroma(pMbCache);
+    let pDstCr = crate::encoder::md::mem_pred_chroma(pMbCache).add(64);
+    let pDstLuma = crate::encoder::md::mem_pred_luma(pMbCache);
 
     let iLineSizeRefUV = (*(*pCurDqLayer).pRefPic).iLineSize[1];
 
@@ -2256,20 +2247,20 @@ pub unsafe fn WelsMdInterEncode(
     (*pFunc).pfCopy16x16Aligned.expect("pfCopy16x16Aligned unset")(
         (*pMbCache).SPicData.pCsMb[0],
         kiCsStrideY,
-        (*pMbCache).pMemPredLuma,
+        crate::encoder::md::mem_pred_luma(pMbCache),
         16,
     );
     let copy8 = (*pFunc).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
     copy8(
         (*pMbCache).SPicData.pCsMb[1],
         kiCsStrideUV,
-        (*pMbCache).pMemPredChroma,
+        crate::encoder::md::mem_pred_chroma(pMbCache),
         8,
     );
     copy8(
         (*pMbCache).SPicData.pCsMb[2],
         kiCsStrideUV,
-        (*pMbCache).pMemPredChroma.add(64),
+        crate::encoder::md::mem_pred_chroma(pMbCache).add(64),
         8,
     );
 }
