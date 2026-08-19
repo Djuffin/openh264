@@ -280,9 +280,9 @@ analogue and the recipe that closed it:
 | `*mut c_void` | 222 | — | **deletion, not conversion** (S18): `wels_preprocess`'s `IWelsVP` shape (`pCtx: *mut c_void` + `Init`/`Uninit` fn-pointer pairs) is Phase 4b's dissolved-vtable residue; the rest is MT plumbing (Phase 7's) and log/task fields |
 | `*mut u8` | 277 | the decoder's plane/scratch pointers | `PlaneCursor`/`PlaneCursorMut` (`safe/plane.rs`) — **eight encoder files already consume them** |
 | `*mut sWelsEncCtx` | 258 | `*mut SWelsDecoderContext` | the flip — **accessors first, view struct last** (X→Z's forced order: `deny` fires on the *call*, so callees convert first) |
-| `*mut SMB` + `SMB`'s five raw arrays (`sMv`, `pRefIndex`, `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`, `md.rs:294–306`) | 131 | **5.2's `MbGrid`, exactly** | one `MbArray` family per array, allocation-dimensioned, converted across every module at once |
+| `*mut SMB` + `SMB`'s five raw arrays (`sMv`, `pRefIndex`, `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`, `md.rs:294–306`) | 131 | 5.2's `MbGrid` in spirit — **ruled inline at session C's brief** | the five arrays become inline POD arrays in `SMB` (S21: the `SMB` block is `WelsMallocz`'d, so an inline array is valid at zero and an `MbArray` field is not until 6.6); the `*mut SMB` list and parameter family go with the layer bracket (D) |
 | `*mut SSlice` 134 + `*mut SDqLayer` 72 | 206 | the layer/slice brackets | the bracket maneuver (5 applications) |
-| `*mut SMbCache` (12 raw fields, `md.rs:354–375`) | 102 | `DqLayerState`'s scratch caches (session M's 45 params) | take-what-you-reach |
+| `*mut SMbCache` (12 raw fields, `md.rs:354–375`) | 102 | `DqLayerState`'s scratch caches (session M's 45 params) | the eight malloc'd buffers go inline and the four ping-pong aliases become half-selectors (session C, same recipe as `SMB`); the `*mut SMbCache` parameters take-what-you-reach (E) |
 | `*mut SPicture` | 64 | `PPicture`/F42 | `Pool<Box<SPicture>>` + `classify` — `MarkPicAsRef` has the same shape (§0.1) |
 | `*mut SWelsFuncPtrList` | 57 | the dispatch tables | the table is already `Option<fn>` fields; the **pointer to it** is the residue |
 | ME/MD/RC/CABAC records (`SWelsMD` 55, `SWelsME` 41, `SMVUnitXY` 78, `SMeRefinePointer` 17, `SCabacCtx` 28) | ~220 | the parse scratch | take-what-you-reach |
@@ -366,12 +366,30 @@ at a family boundary, and only with a written reason):
   **341/0**, 1034.61 s; both sweeps 341/341, both benches identical) — and its first run **failed**,
   on a defect this session's own typing introduced (`InitPic` given `*const` where the C++ casts the
   const away and writes): fixed at T6.B9, re-run green, recorded rather than hidden.
-* **C — NEXT.** `SMB`'s five arrays → `MbArray` (the encoder's 5.2), with
-  `svc_base_layer_md`/`svc_mode_decision`/`deblocking` as its consumers.
+* **C — NEXT.** **The scratch goes inline** — brief:
+  [`phase6_session_c.md`](phase6_session_c.md). Two families, one recipe: `SMB`'s
+  five outward pointers become inline arrays (`sMv`, `iRefIndex`, `iSadCost`,
+  `iIntra4x4PredMode`, `iNonZeroCount`; the five context arrays, their two parity
+  banks, allocations, frees and `InitMbInfo`'s wiring die), and `SMbCache`'s eight
+  malloc'd scratch buffers go inline with its four ping-pong aliases becoming three
+  half-selectors (`pEncSad` stays — it aliases a picture, F's). **Why inline and not
+  `MbArray`, ruled by the steward**: `SMB` and `SSlice` live in `WelsMallocz`'d
+  blocks, and an inline POD array is valid at zero (S21) where a `Vec`/`MbArray`
+  field is not until 6.6 makes the hosts constructible; the two banks' sharing is
+  unobservable in any configuration the port can run (≥ 3 equal-size spatial layers
+  needs the untranslated downsampler). Both faces are the hot path, so the session
+  owes a span against `2666a83c` with the SoA-behind-a-raw-field shape named as the
+  fallback. It also adds the **second encoder probe** — one test flipping CAVLC and a
+  non-LOW complexity mode together, the two knobs the CABAC/LOW probe leaves dark.
 * **D** — the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up to
-  Phase 7's boundary (`pBsBuffer` excepted by settlement).
-* **E** — `SMbCache` + the ME/MD/RC/CABAC records (6.3's scratch), and the third
-  attempt at the parked SIMD families (plan §4; SATD owes its own measurement).
+  Phase 7's boundary (`pBsBuffer` excepted by settlement); **the `SMB` list's
+  ownership goes here with the layer** (`sMbDataP`/`ppMbListD`, and the
+  `pCurMb: *mut SMB` parameter family with the bracket), and the size-limited
+  dynamic-slice path gets its probe here.
+* **E** — the ME/MD/RC/CABAC records (6.3's scratch — `SWelsMD`, `SWelsME`,
+  `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, take-what-you-reach; `SMbCache`'s
+  fields moved to C, its `*mut` parameters stay here), and the third attempt at the
+  parked SIMD families (plan §4; SATD owes its own measurement).
 * **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
   callers (§3), **and 6.1's recon-pool alias family**, handed over by session B with
   its settlement written and its size measured (~184 sites, nine files).
