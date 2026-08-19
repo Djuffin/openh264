@@ -11677,7 +11677,7 @@ prose `*mut ` in T6.C4's own comment, S16's floor) and the debug sweep (measurem
 **Session D inherits, named**: the `SMB` list (`sMbDataP`, `ppMbListD`) with the layer bracket, the `pCurMb`/`pMbCache` parameter families, the still-unprobed dynamic-slice path
 (`WelsMdInterMbLoopOverDynamicSlice`), and the `sSliceBs.pBs` half of `ReallocateSliceList`'s error-path aliasing — the `SMbCache` half closed here.
 
-### Session D's close — the layer owns, and the slice banks with it
+## Phase 6, session D — the layer owns, and the slice banks with it (2026-08-19)
 
 **All five faces landed, and the enabler is one argument used twice.** `SDqLayer` is reached only through a pointer in the zeroed context, which is T3.6's `pOut` precedent — so the layer became **`Box`-built with a real constructor** (T6.D3) and could then own what a `WelsMallocz`'d struct may not. Everything after is the same move at four scales. **The order was forced, not chosen, and the brief's alternative is the one that cannot work**: a `Vec` field in a zeroed block is UB at its first drop (S21), and `Option<LayerIdx>` has **no niche to borrow**, so its `None` cannot be inherited from a zero image — F56 read from the other side. Construction first, ownership after.
 
