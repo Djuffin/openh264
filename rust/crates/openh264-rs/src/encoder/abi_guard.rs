@@ -126,7 +126,10 @@ assert_size!(SMcFunc, 48);
 // entirely as the structs de-C-ify. Nothing crosses the C ABI with this layout:
 // `SWelsFuncPtrList` is encoder-internal and `api/abi_guard.rs` guards the
 // public surface separately.
-assert_size!(SSampleDealingFunc, 240);
+// Phase 6 session B took the eight `pfIntra*Combined3*` slots (`*mut c_void`,
+// never assigned on any target, guarded by `assert_no_combined3`) out with the
+// guard: -64, measured 176.
+assert_size!(SSampleDealingFunc, 176);
 assert_size!(SRCSlicing, 44);
 assert_size!(SSpatialPicIndex, 16);
 assert_size!(SStrideTables, 160);
@@ -195,7 +198,10 @@ assert_size!(SDqLayer, 512);
 // could not, and the reason is the same one stated above -- size measures bytes of
 // members, so it sees a 24-byte struct leave and cannot see a vtable leave. Both
 // seams were the same size of change; only one of them is legible here.
-assert_size!(SWelsFuncPtrList, 1160);
+// -64 at Phase 6 session B for `SSampleDealingFunc`'s eight deleted slots (above),
+// and -24 more for the three `pfSetMemZeroSize*` slots deleted in the same face:
+// 1072, measured.
+assert_size!(SWelsFuncPtrList, 1072);
 
 // codec/encoder/core/inc/encoder_context.h:116. C++ is 98008 bytes, but that number
 // embeds WELS_MUTEX (pthread_mutex_t, 64 B on darwin) by value where this port models

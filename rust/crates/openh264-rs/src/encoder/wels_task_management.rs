@@ -11,7 +11,6 @@
     unused_unsafe
 )]
 
-use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Arc, Condvar, Mutex};
 pub use crate::encoder::encoder_context::SLogContext;

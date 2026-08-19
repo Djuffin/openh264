@@ -340,11 +340,9 @@ pub unsafe fn WelsInitSampleSadFunc(pFuncList: *mut SWelsFuncPtrList, _uiCpuFlag
     sdf.pfSample4Sad[BLOCK_8x4] = Some(WelsSampleSadFour8x4_c);
     sdf.pfSample4Sad[BLOCK_4x8] = Some(WelsSampleSadFour4x8_c);
 
-    sdf.pfIntra4x4Combined3Satd = core::ptr::null_mut();
-    sdf.pfIntra8x8Combined3Satd = core::ptr::null_mut();
-    sdf.pfIntra8x8Combined3Sad = core::ptr::null_mut();
-    sdf.pfIntra16x16Combined3Satd = core::ptr::null_mut();
-    sdf.pfIntra16x16Combined3Sad = core::ptr::null_mut();
+    // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
+    // were never anything else on any target this port builds for, and the fields
+    // are deleted (S18, Phase 6 session B).
 }
 
 #[cfg(test)]
@@ -435,10 +433,5 @@ mod tests {
             assert!(fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(), "satd[{b}]");
             assert!(fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(), "sad4[{b}]");
         }
-        assert!(fl.sSampleDealingFuncs.pfIntra4x4Combined3Satd.is_null());
-        assert!(fl.sSampleDealingFuncs.pfIntra8x8Combined3Satd.is_null());
-        assert!(fl.sSampleDealingFuncs.pfIntra8x8Combined3Sad.is_null());
-        assert!(fl.sSampleDealingFuncs.pfIntra16x16Combined3Satd.is_null());
-        assert!(fl.sSampleDealingFuncs.pfIntra16x16Combined3Sad.is_null());
     }
 }

@@ -964,7 +964,6 @@ pub unsafe fn InitDqLayers(
             (*pSps).iMbWidth as i32,
             (*pSps).iMbHeight as i32,
             std::ptr::addr_of_mut!((*pDlayerParam).sSliceArgument),
-            pPps as *mut c_void,
         );
         if iResult != 0 {
             return iResult;
@@ -1582,7 +1581,7 @@ pub unsafe fn WelsInitEncoderExt(
     }
 
     if (*pCodingParam).iEntropyCodingModeFlag != 0 {
-        crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx as *mut c_void);
+        crate::encoder::set_mb_syn_cabac::WelsCabacInit(pCtx);
     }
     crate::encoder::rc::WelsRcInitModule(pCtx, (*(*pCtx).pSvcParam).iRCMode);
 
@@ -2432,8 +2431,8 @@ unsafe fn SetFastCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
         Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartitionVaa);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Sad;
-    sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Sad;
-    sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Sad;
+    // The C++ also aims three `pfIntra*Combined3` slots at their `*Sad` twins here;
+    // both sides were NULL on every target and the fields are deleted (S18).
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
@@ -2441,9 +2440,7 @@ unsafe fn SetNormalCodingFunc(pFuncList: *mut SWelsFuncPtrList) {
     (*pFuncList).pfIntraFineMd = Some(crate::encoder::svc_base_layer_md::WelsMdIntraFinePartition);
     let sdf = &mut (*pFuncList).sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Satd;
-    sdf.pfIntra16x16Combined3 = sdf.pfIntra16x16Combined3Satd;
-    sdf.pfIntra8x8Combined3 = sdf.pfIntra8x8Combined3Satd;
-    sdf.pfIntra4x4Combined3 = sdf.pfIntra4x4Combined3Satd;
+    // As `SetFastCodingFunc`: the three `Combined3` aims are deleted with the fields.
 }
 
 /// `encoder_ext.cpp:2643`. Returns false when the requested method has no dedicated
@@ -2875,7 +2872,7 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
         (*pCurDq).NumSliceCodedOfPartition[i] = 0;
 
         crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
-            (*pCurDq).sSliceEncCtx.pOverallMbMap.add(iFirstMbIdx as usize) as *mut c_void,
+            (*pCurDq).sSliceEncCtx.pOverallMbMap.add(iFirstMbIdx as usize),
             i as u32,
             iCountMbNumInPartition,
             std::mem::size_of::<u16>() as i32,
@@ -3725,9 +3722,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         let mut fSnrV: f32 = 0.0;
         if !fsnr.is_null() && ((*pSvcParam).bPsnrY || (*pSrcPic).bPsnrY) {
             fSnrY = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[0] as *const c_void,
+                (*fsnr).pData[0],
                 (*fsnr).iLineSize[0],
-                (*pEncPic).pData[0] as *const c_void,
+                (*pEncPic).pData[0],
                 (*pEncPic).iLineSize[0],
                 iCurWidth,
                 iCurHeight,
@@ -3735,9 +3732,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
         if !fsnr.is_null() && ((*pSvcParam).bPsnrU || (*pSrcPic).bPsnrU) {
             fSnrU = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[1] as *const c_void,
+                (*fsnr).pData[1],
                 (*fsnr).iLineSize[1],
-                (*pEncPic).pData[1] as *const c_void,
+                (*pEncPic).pData[1],
                 (*pEncPic).iLineSize[1],
                 iCurWidth >> 1,
                 iCurHeight >> 1,
@@ -3745,9 +3742,9 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
         if !fsnr.is_null() && ((*pSvcParam).bPsnrV || (*pSrcPic).bPsnrV) {
             fSnrV = crate::common::wels_common_defs::WelsCalcPsnr(
-                (*fsnr).pData[2] as *const c_void,
+                (*fsnr).pData[2],
                 (*fsnr).iLineSize[2],
-                (*pEncPic).pData[2] as *const c_void,
+                (*pEncPic).pData[2],
                 (*pEncPic).iLineSize[2],
                 iCurWidth >> 1,
                 iCurHeight >> 1,

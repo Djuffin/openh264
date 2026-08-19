@@ -11513,3 +11513,26 @@ nothing.
   `SComplexityAnalysisParam` 64 → 56, `SVAAFrameInfo` 264 → 248 (embeds both), `SVAAFrameInfoExt`
   1280 → 1264. Five VP-calling methods went `&self` → `&mut self` (their callers pass plain values).
   `wels_preprocess.rs` 61 → 7 (`WelsFree` casts, 3.3), `processing/` 24 → 0.
+  **3.2 — the typed-at-both-ends casts deleted (T6.B8).** `WelsMdInterMbLoop`/`OverDynamicSlice`
+  (`pWelsMd`), `DynSlcJudgeSliceBoundaryStepBack` (both parameters), `WelsCabacInit`,
+  `WelsCabacContextInit`, `SetBlockStaticIdcToMd`, `AssignMbMapSingleSlice` and
+  `WelsSetMemMultiplebytes_c` (`*mut u16`, all four callers pass the macroblock map), `InitPic`
+  (`*const SSourcePicture`), `WelsCalcPsnr`'s pair (`*const u8`, six call sites). Deleted rather
+  than converted (S18): `InitSlicePEncCtx`'s unused `_pPpsArg` and the `pPps` cast that fed it;
+  `PWriteBlockResidualCabac`, a prototype with no slot, installer or caller; **the three
+  `pfSetMemZeroSize*` slots and `PSetMemoryZero`** — installed with the one `WelsSetMemZero_c` body
+  and nothing else, so the seven call sites call it directly and each already had that exact
+  fallback in its `else` arm; **the eight `pfIntra*Combined3*` fields, `assert_no_combined3` and its
+  three call sites** — never assigned on any target, and the scalar branch each guard protected is
+  now unconditional. Eight dead `c_void` imports went with them. Sizes re-pinned, measured:
+  `SSampleDealingFunc` 240 → **176**, `SWelsFuncPtrList` 1160 → **1072** (−64 Combined3, −24 the
+  three memset slots). **Face done-test: `c_void` 268 → 131 (122 code, 9 prose), and every code
+  occurrence is in one of 3.3's three lines** — the allocator and the `WelsFree` cascade
+  (`memory_align.rs` 16, and ~95 casts across `encoder_ext.rs`, `wels_preprocess.rs`,
+  `svc_encode_slice.rs`, `svc_motion_estimate.rs`, `svc_enc_slice_segment.rs`, `param_svc.rs`, each
+  dying with its allocation's ownership conversion — C/D/E/F/G, and **not** genericized, F19's check
+  at 6.6); the C ABI's `void*` (the log/trace callback `encoder_context.rs:89–91`,
+  `wels_encoder_ext.rs:235/246/266`, `SetOption`/`GetOption` at `:1945`, `:2318`, `:2483`, `:2492`,
+  `:2303` — Phase 8); MT plumbing (`pTaskManage`, `mutexEncoderError`, `slice_multi_threading.rs`'s
+  handles/events/mutexes/`pWelsPEncCtx`, `wels_task_management.rs` — Phase 7). `IWelsVP` = 0,
+  `Combined3` = 0.

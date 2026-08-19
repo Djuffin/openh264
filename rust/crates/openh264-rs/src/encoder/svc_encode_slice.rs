@@ -1339,8 +1339,8 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
-            pEncCtx as *mut c_void,
-            pSlice as *mut c_void,
+            pEncCtx,
+            pSlice,
             pSliceCtx,
             pCurMb,
             &mut sDss,
@@ -1422,13 +1422,13 @@ unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) 
 pub unsafe fn WelsMdInterMbLoop(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pWelsMd: *mut c_void,
+    pWelsMd: *mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
     if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
-    let pMd = pWelsMd as *mut SWelsMD;
+    let pMd = pWelsMd;
     let pBs = slice_writer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
@@ -1582,13 +1582,13 @@ pub unsafe fn WelsMdInterMbLoop(
 pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pEncCtx: *mut sWelsEncCtx,
     pSlice: *mut SSlice,
-    pWelsMd: *mut c_void,
+    pWelsMd: *mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
     if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
-    let pMd = pWelsMd as *mut SWelsMD;
+    let pMd = pWelsMd;
     let pBs = slice_writer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
@@ -1723,8 +1723,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         if DynSlcJudgeSliceBoundaryStepBack(
-            pEncCtx as *mut c_void,
-            pSlice as *mut c_void,
+            pEncCtx,
+            pSlice,
             pSliceCtx,
             pCurMb,
             &mut sDss,
@@ -1786,7 +1786,7 @@ pub unsafe fn WelsPSliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kb
     sMd.bMdUsingSad = (*(*pEncCtx).pSvcParam).iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd as *mut SWelsMD as *mut c_void, kiSliceFirstMbXY)
+    WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
 }
 
 pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, kbIsHighestDlayerFlag: bool) -> i32 {
@@ -1801,7 +1801,7 @@ pub unsafe fn WelsPSliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     sMd.bMdUsingSad = (*(*pEncCtx).pSvcParam).iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd as *mut SWelsMD as *mut c_void, kiSliceFirstMbXY)
+    WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY)
 }
 
 pub unsafe fn WelsCodePSlice(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> i32 {
@@ -2128,7 +2128,7 @@ pub unsafe fn AddSliceBoundary(
         // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
         // when the boundary landed past the end of the partition.
         crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
-            (*pSliceCtx).pOverallMbMap.add(iFirstMbIdxOfNextSlice as usize) as *mut c_void,
+            (*pSliceCtx).pOverallMbMap.add(iFirstMbIdxOfNextSlice as usize),
             iNextSliceIdc as u32,
             kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1,
             std::mem::size_of::<u16>() as i32,
@@ -2139,14 +2139,12 @@ pub unsafe fn AddSliceBoundary(
 }
 
 pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
-    pCtx: *mut c_void,
-    pSlice: *mut c_void,
+    pEncCtx: *mut sWelsEncCtx,
+    pCurSlice: *mut SSlice,
     pSliceCtx: *mut SSliceCtx,
     pCurMb: *mut SMB,
     pDss: *mut SDynamicSlicingStack,
 ) -> bool {
-    let pEncCtx = pCtx as *mut sWelsEncCtx;
-    let pCurSlice = pSlice as *mut SSlice;
     let iCurMbIdx = (*pCurMb).iMbXY;
     let kiActiveThreadsNum = (*pEncCtx).iActiveThreadsNum;
     let kiPartitionId = ((*pCurSlice).iSliceIdx % (kiActiveThreadsNum as i32)) as usize;

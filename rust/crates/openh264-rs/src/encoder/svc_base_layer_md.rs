@@ -269,19 +269,11 @@ pub const g_kiMapModeI4x4: [i8; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 2, 2, 2, 3, 7]
 // Helpers
 // ============================================================================
 
-/// Guards the three untranslated `Combined3` SIMD fast paths. See the module docs:
-/// the reference leaves these slots NULL on every target this port builds for, and
-/// this port never assigns them, so the scalar branch is always the live one. Panics
-/// rather than silently taking the wrong branch if that ever stops being true.
-#[inline]
-pub unsafe fn assert_no_combined3(p: *mut core::ffi::c_void, which: &str) {
-    assert!(
-        p.is_null(),
-        "sSampleDealingFuncs.{which} is non-null, but its Combined3 fast path in \
-         svc_base_layer_md.cpp is not translated (see the module docs). Taking the \
-         scalar branch here would silently diverge from the C++."
-    );
-}
+// `assert_no_combined3` was here, guarding the three untranslated `Combined3` SIMD
+// fast paths against a slot that was never non-null: the reference leaves them NULL
+// on every target this port builds for and the port never assigned them. The eight
+// `*mut c_void` fields are deleted (S18, Phase 6 session B) and there is nothing
+// left to guard — the scalar branch each guard protected is now unconditional.
 
 /// `svc_base_layer_md.cpp:246`.
 pub unsafe fn PredIntra4x4Mode(pIntraPredMode: *const i8, iIdx4: i32) -> i32 {
@@ -401,7 +393,6 @@ pub unsafe extern "C" fn WelsMdI4x4(
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    assert_no_combined3((*pFunc).sSampleDealingFuncs.pfIntra4x4Combined3, "pfIntra4x4Combined3");
     let pfSatd4x4 = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_4x4].unwrap();
 
     for i in 0..16usize {
@@ -725,7 +716,6 @@ pub unsafe extern "C" fn WelsMdIntraChroma(
     let iAvailCount = g_kiIntraChromaAvailMode[iOffset][4] as i32;
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
-    assert_no_combined3((*pFunc).sSampleDealingFuncs.pfIntra8x8Combined3, "pfIntra8x8Combined3");
     let pfMdCost8x8 = (*pFunc).sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
 
     let mut iBestMode = kpAvailMode[0] as i32;

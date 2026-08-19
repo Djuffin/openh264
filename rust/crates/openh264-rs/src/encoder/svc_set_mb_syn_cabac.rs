@@ -41,7 +41,6 @@
 //! Translated from `codec/encoder/core/src/svc_set_mb_syn_cabac.cpp`,
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
-use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
@@ -1086,7 +1085,7 @@ pub unsafe fn WelsInitSliceCabac(
         /* init cabac */
         let iCabacInitIdc = (*pSlice).iCabacInitIdc;
         crate::encoder::set_mb_syn_cabac::WelsCabacContextInit(
-            pEncCtx as *mut c_void,
+            pEncCtx,
             &mut (*pSlice).sCabacCtx,
             iCabacInitIdc,
         );

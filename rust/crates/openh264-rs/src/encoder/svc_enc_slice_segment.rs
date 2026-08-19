@@ -373,8 +373,10 @@ pub unsafe fn SliceArgumentValidationFixedSliceMode(
 ///
 /// # Safety
 /// `pMbMap` must point to at least `kiCountMbNum * kiMapUnitSize` writable bytes.
+/// (`*mut u16` since Phase 6 session B: the C++ takes `void*` and every caller
+/// passes `pOverallMbMap`, which is `uint16_t*` at both ends.)
 pub unsafe fn AssignMbMapSingleSlice(
-    pMbMap: *mut c_void,
+    pMbMap: *mut u16,
     kiCountMbNum: i32,
     kiMapUnitSize: i32,
 ) -> i32 {
@@ -416,7 +418,7 @@ pub unsafe fn AssignMbMapMultipleSlices(
         while iSliceIdx < iSliceNum {
             let kiFirstMb = iSliceIdx * kiMbWidth;
             WelsSetMemMultiplebytes_c(
-                (*pSliceSeg).pOverallMbMap.add(kiFirstMb as usize) as *mut c_void,
+                (*pSliceSeg).pOverallMbMap.add(kiFirstMb as usize),
                 iSliceIdx as u32,
                 kiMbWidth,
                 2,
@@ -542,7 +544,7 @@ pub unsafe fn InitSliceSegment(
         (*pSliceSeg).iMbHeight = kiMbHeight as i16;
         (*pSliceSeg).iMbNumInFrame = kiCountMbNum;
 
-        AssignMbMapSingleSlice((*pSliceSeg).pOverallMbMap as *mut c_void, kiCountMbNum, 2)
+        AssignMbMapSingleSlice((*pSliceSeg).pOverallMbMap, kiCountMbNum, 2)
     } else {
         if uiSliceMode != SM_FIXEDSLCNUM_SLICE
             && uiSliceMode != SM_RASTER_SLICE
@@ -560,7 +562,7 @@ pub unsafe fn InitSliceSegment(
         }
 
         WelsSetMemMultiplebytes_c(
-            (*pSliceSeg).pOverallMbMap as *mut c_void,
+            (*pSliceSeg).pOverallMbMap,
             0,
             kiCountMbNum,
             2,
@@ -632,7 +634,6 @@ pub unsafe fn InitSlicePEncCtx(
     iMbWidth: i32,
     iMbHeight: i32,
     pSliceArgument: *mut SSliceArgument,
-    _pPpsArg: *mut c_void,
 ) -> i32 {
     if pCurDq.is_null() {
         return 1;

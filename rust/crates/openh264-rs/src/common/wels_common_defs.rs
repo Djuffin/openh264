@@ -11,7 +11,6 @@
 //! header in C++, so these types have exactly one definition here rather than one
 //! copy per module.
 
-use std::ffi::c_void;
 
 // `TagBitStringAux` / `SBitStringAux` / `PBitStringAux` were declared here — the
 // pointer-triple bitstream cursor of `codec/common/inc/wels_common_defs.h:232`
@@ -264,16 +263,16 @@ pub fn CALC_PSNR(w: i32, h: i32, s: i64) -> f32 {
 /// Both planes must be readable for `kiHeight` rows of `kiWidth` bytes at the
 /// given strides.
 pub unsafe fn WelsCalcPsnr(
-    kpTarPic: *const c_void,
+    kpTarPic: *const u8,
     kiTarStride: i32,
-    kpRefPic: *const c_void,
+    kpRefPic: *const u8,
     kiRefStride: i32,
     kiWidth: i32,
     kiHeight: i32,
 ) -> f32 {
     let mut iSqe: i64 = 0;
-    let pTar = kpTarPic as *const u8;
-    let pRef = kpRefPic as *const u8;
+    let pTar = kpTarPic;
+    let pRef = kpRefPic;
 
     if pTar.is_null() || pRef.is_null() {
         return -1.0;
@@ -309,9 +308,9 @@ mod psnr_tests {
 
         let call = |t: &[u8], ts: i32, r: &[u8], rs: i32, w: i32, h: i32| unsafe {
             WelsCalcPsnr(
-                t.as_ptr() as *const c_void,
+                t.as_ptr(),
                 ts,
-                r.as_ptr() as *const c_void,
+                r.as_ptr(),
                 rs,
                 w,
                 h,
@@ -343,7 +342,7 @@ mod psnr_tests {
             WelsCalcPsnr(
                 std::ptr::null(),
                 W,
-                b.as_ptr() as *const c_void,
+                b.as_ptr(),
                 W,
                 W,
                 H,
