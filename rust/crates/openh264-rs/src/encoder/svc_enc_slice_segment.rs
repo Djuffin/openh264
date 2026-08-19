@@ -375,16 +375,13 @@ pub unsafe fn SliceArgumentValidationFixedSliceMode(
 /// `pMbMap` must point to at least `kiCountMbNum * kiMapUnitSize` writable bytes.
 /// (`*mut u16` since Phase 6 session B: the C++ takes `void*` and every caller
 /// passes `pOverallMbMap`, which is `uint16_t*` at both ends.)
-pub unsafe fn AssignMbMapSingleSlice(
-    pMbMap: *mut u16,
-    kiCountMbNum: i32,
-    kiMapUnitSize: i32,
-) -> i32 {
-    if pMbMap.is_null() || kiCountMbNum <= 0 {
+pub fn AssignMbMapSingleSlice(pMbMap: &mut [u16], kiCountMbNum: i32) -> i32 {
+    if pMbMap.is_empty() || kiCountMbNum <= 0 {
         return 1;
     }
 
-    std::ptr::write_bytes(pMbMap as *mut u8, 0, (kiCountMbNum * kiMapUnitSize) as usize);
+    let n = (kiCountMbNum as usize).min(pMbMap.len());
+    pMbMap[..n].fill(0);
 
     0
 }
@@ -417,11 +414,12 @@ pub unsafe fn AssignMbMapMultipleSlices(
         iSliceIdx = 0;
         while iSliceIdx < iSliceNum {
             let kiFirstMb = iSliceIdx * kiMbWidth;
-            WelsSetMemMultiplebytes_c(
-                (*pSliceSeg).pOverallMbMap.add(kiFirstMb as usize),
-                iSliceIdx as u32,
+            let map: &mut Vec<u16> = &mut (*pSliceSeg).pOverallMbMap;
+            crate::encoder::slice_multi_threading::fill_mb_map(
+                map,
+                kiFirstMb,
                 kiMbWidth,
-                2,
+                iSliceIdx as u16,
             );
             iSliceIdx += 1;
         }
@@ -443,7 +441,8 @@ pub unsafe fn AssignMbMapMultipleSlices(
             // the mb_assign_map has to be validated against the input data here, so
             // this cannot be a memset
             loop {
-                *(*pSliceSeg).pOverallMbMap.add((iMbIdx + iRunIdx) as usize) = iSliceIdx as u16;
+                let map: &mut Vec<u16> = &mut (*pSliceSeg).pOverallMbMap;
+                map[(iMbIdx + iRunIdx) as usize] = iSliceIdx as u16;
                 iRunIdx += 1;
                 if !(iRunIdx < kiCurRunLength && iMbIdx + iRunIdx < kiCountNumMbInFrame) {
                     break;
@@ -509,17 +508,11 @@ pub unsafe fn InitSliceSegment(
         && (*pSliceSeg).iMbWidth as i32 == kiMbWidth
         && (*pSliceSeg).iMbHeight as i32 == kiMbHeight
         && (*pSliceSeg).uiSliceMode == uiSliceMode
-        && !(*pSliceSeg).pOverallMbMap.is_null()
+        && !(*pSliceSeg).pOverallMbMap.is_empty()
     {
         return 0;
     } else if (*pSliceSeg).iMbNumInFrame != kiCountMbNum {
-        if !(*pSliceSeg).pOverallMbMap.is_null() {
-            (*pMa).WelsFree(
-                (*pSliceSeg).pOverallMbMap as *mut c_void,
-                b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
-            );
-            (*pSliceSeg).pOverallMbMap = std::ptr::null_mut();
-        }
+        (*pSliceSeg).pOverallMbMap = Vec::new();
 
         // just for safe
         (*pSliceSeg).iSliceNumInFrame = 0;
@@ -530,13 +523,7 @@ pub unsafe fn InitSliceSegment(
     }
 
     if SM_SINGLE_SLICE == uiSliceMode {
-        (*pSliceSeg).pOverallMbMap = (*pMa).WelsMallocz(
-            (kiCountMbNum as u32) * 2,
-            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
-        ) as *mut u16;
-        if (*pSliceSeg).pOverallMbMap.is_null() {
-            return 1;
-        }
+        (*pSliceSeg).pOverallMbMap = vec![0u16; kiCountMbNum as usize];
         (*pSliceSeg).iSliceNumInFrame = 1;
 
         (*pSliceSeg).uiSliceMode = uiSliceMode;
@@ -544,7 +531,7 @@ pub unsafe fn InitSliceSegment(
         (*pSliceSeg).iMbHeight = kiMbHeight as i16;
         (*pSliceSeg).iMbNumInFrame = kiCountMbNum;
 
-        AssignMbMapSingleSlice((*pSliceSeg).pOverallMbMap, kiCountMbNum, 2)
+        AssignMbMapSingleSlice(&mut (*pSliceSeg).pOverallMbMap, kiCountMbNum)
     } else {
         if uiSliceMode != SM_FIXEDSLCNUM_SLICE
             && uiSliceMode != SM_RASTER_SLICE
@@ -553,20 +540,9 @@ pub unsafe fn InitSliceSegment(
             return 1;
         }
 
-        (*pSliceSeg).pOverallMbMap = (*pMa).WelsMallocz(
-            (kiCountMbNum as u32) * 2,
-            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
-        ) as *mut u16;
-        if (*pSliceSeg).pOverallMbMap.is_null() {
-            return 1;
-        }
-
-        WelsSetMemMultiplebytes_c(
-            (*pSliceSeg).pOverallMbMap,
-            0,
-            kiCountMbNum,
-            2,
-        );
+        // `WelsMallocz` zeroed the block and the `WelsSetMemMultiplebytes_c` that
+        // followed zeroed it again; `vec![0; n]` is both.
+        (*pSliceSeg).pOverallMbMap = vec![0u16; kiCountMbNum as usize];
 
         // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame = 1
         (*pSliceSeg).iSliceNumInFrame = GetInitialSliceNum(pSliceArgument);
@@ -603,13 +579,10 @@ pub unsafe fn InitSliceSegment(
 /// `pCurDq` and `pMa` must be non-null.
 pub unsafe fn UninitSliceSegment(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
     let pSliceSeg = &mut (*pCurDq).sSliceEncCtx as *mut SSliceCtx;
-    if !(*pSliceSeg).pOverallMbMap.is_null() {
-        (*pMa).WelsFree(
-            (*pSliceSeg).pOverallMbMap as *mut c_void,
-            b"pSliceSeg->pOverallMbMap\0".as_ptr() as *const c_char,
-        );
-        (*pSliceSeg).pOverallMbMap = std::ptr::null_mut();
-    }
+    // The map is a `Vec<u16>` since T6.D7 — clearing it releases the storage the
+    // explicit `WelsFree` used to, and the layer's `Drop` covers the paths that never
+    // reach here at all.
+    (*pSliceSeg).pOverallMbMap = Vec::new();
 
     (*pSliceSeg).uiSliceMode = SM_SINGLE_SLICE; // single in default
     (*pSliceSeg).iMbWidth = 0;

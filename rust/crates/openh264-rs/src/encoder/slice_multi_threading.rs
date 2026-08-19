@@ -110,6 +110,27 @@ pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) 
 /// `iDataLengthOfData` must be 1, 2 or 4. (`*mut u16` since Phase 6 session B: the C++
 /// takes `void*`, and all four callers pass a `uint16_t` macroblock map with
 /// `iDataLengthOfData == 2`. The other two widths are the C++ macro's, kept.)
+/// `WelsSetMemMultiplebytes_c` over the macroblock map, as a `fill` on a subslice —
+/// **T6.D7**.
+///
+/// The raw call it replaces is `WelsSetMemMultiplebytes_c(map + first, value, count,
+/// 2)`, which reaches `WelsSetMemUint16_c`'s `for i in 0..count as usize`: a negative
+/// `count` wraps to ~2^64 there and a `first + count` past the end writes off the
+/// allocation. Neither is reachable — 341/341 has held over both — so the guard and
+/// the clamp below change nothing that is defined today, and make the two
+/// preconditions the raw spelling relied on explicit instead of latent.
+#[inline]
+pub fn fill_mb_map(map: &mut [u16], kiFirstMb: i32, kiCount: i32, uiValue: u16) {
+    if kiFirstMb < 0 || kiCount <= 0 {
+        return;
+    }
+    let a = kiFirstMb as usize;
+    let b = a.saturating_add(kiCount as usize).min(map.len());
+    if a < b {
+        map[a..b].fill(uiValue);
+    }
+}
+
 pub unsafe fn WelsSetMemMultiplebytes_c(
     pDst: *mut u16,
     iValue: u32,
@@ -206,15 +227,20 @@ pub type TagWelsSliceBs = SWelsSliceBs;
 
 pub type TagSlice = SSlice;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+// Not `repr(C)` and not `Copy` since **T6.D7**: `pOverallMbMap` is a `Vec<u16>`,
+// which has no C shape and owns its storage. Nothing in the crate copied this struct
+// by value — the compiler's answer, not an argument.
+#[derive(Debug)]
 pub struct SSliceCtx {
     pub uiSliceMode: SliceMode,
     pub iMbWidth: i16,
     pub iMbHeight: i16,
     pub iSliceNumInFrame: i32,
     pub iMbNumInFrame: i32,
-    pub pOverallMbMap: *mut u16,
+    /// One slice index per macroblock, in raster order — **owned since T6.D7**
+    /// (plan §4's "maps -> `Vec<u16>`"). Allocated by `InitSlicePEncCtx`, released by
+    /// the layer's `Drop` where `UninitSlicePEncCtx` used to free it.
+    pub pOverallMbMap: Vec<u16>,
     pub uiSliceSizeConstraint: u32,
     pub iMaxSliceNumConstraint: i32,
 }
@@ -227,7 +253,7 @@ impl Default for SSliceCtx {
             iMbHeight: 0,
             iSliceNumInFrame: 0,
             iMbNumInFrame: 0,
-            pOverallMbMap: std::ptr::null_mut(),
+            pOverallMbMap: Vec::new(),
             uiSliceSizeConstraint: 0,
             iMaxSliceNumConstraint: 0,
         }
@@ -574,11 +600,9 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
             count[iSliceIdx as usize] = kiSliceRun;
         }
 
-        if !pSliceCtx.pOverallMbMap.is_null() {
-            let map_ptr = pSliceCtx.pOverallMbMap.add(iFirstMbIdx as usize);
-            for k in 0..kiSliceRun {
-                *map_ptr.add(k as usize) = iSliceIdx as u16;
-            }
+        {
+            let map: &mut Vec<u16> = &mut pSliceCtx.pOverallMbMap;
+            fill_mb_map(map, iFirstMbIdx, kiSliceRun, iSliceIdx as u16);
         }
 
         iFirstMbIdx += kiSliceRun;
