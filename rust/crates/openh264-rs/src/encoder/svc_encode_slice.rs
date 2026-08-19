@@ -980,8 +980,8 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB, p
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
-    let pCurRS = (*pMbCache).pCoeffLevel;
-    let pBestPred = (*pMbCache).pBestPredIntraChroma;
+    let pCurRS = crate::encoder::md::coeff_level(pMbCache);
+    let pBestPred = crate::encoder::md::best_pred_intra_chroma(pMbCache);
     let pCsCb = (*pMbCache).SPicData.pCsMb[1];
     let pCsCr = (*pMbCache).SPicData.pCsMb[2];
 
@@ -1018,8 +1018,8 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pCurRS = (*pMbCache).pCoeffLevel.add(256);
-    let pBestPred = (*pMbCache).pMemPredChroma;
+    let pCurRS = crate::encoder::md::coeff_level(pMbCache).add(256);
+    let pBestPred = crate::encoder::md::mem_pred_chroma(pMbCache);
 
     let pFunc = (*pEncCtx).pFuncList;
     let dct = (*pFunc).pfDctFourT4.expect("pfDctFourT4 unset");
@@ -1045,7 +1045,7 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
         let pDecY = (*pMbCache).SPicData.pDecMb[0];
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
-        let pScaledTcoeff = (*pMbCache).pCoeffLevel;
+        let pScaledTcoeff = crate::encoder::md::coeff_level(pMbCache);
         let kiDecStrideLuma = (*(*pDq).pDecPic).iLineSize[0];
         let kiDecStrideChroma = (*(*pDq).pDecPic).iLineSize[1];
         let pfIdctFour4x4 = (*(*pCtx).pFuncList).pfIDctFourT4.expect("pfIDctFourT4 unset");
@@ -2176,119 +2176,14 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
 // Memory Management, Buffer Allocation & Dynamic Expansion
 // ============================================================================
 
-pub unsafe fn AllocMbCacheAligned(pMbCache: *mut SMbCache, pMa: *mut CMemoryAlign) -> i32 {
-    if pMbCache.is_null() || pMa.is_null() {
-        return ENC_RETURN_INVALIDINPUT;
-    }
-    let tag = c"SMbCache_alloc".as_ptr();
-
-    // C++: `WelsMallocz(2 * 256)` (`svc_encode_slice.cpp`). The `+ 16` is this
-    // port's, and it is a soundness accommodation rather than a size the codec
-    // uses — F14, `phase2_findings.md`.
-    //
-    // The two 256-byte halves are the I16x16 prediction ping-pong
-    // (`pMemPredLuma` / `pMemPredChroma`, split at +256 in
-    // `svc_base_layer_md.rs:371-373`). `WelsMdI16x16` scores a candidate in the
-    // upper half with `WelsSampleSad16x16_c`, whose last 8x8 sub-block starts at
-    // +392 and reads through byte 511 — *exactly* in bounds. But the raw kernel
-    // is a C transliteration that bumps its row pointer after the final row
-    // (`sad_common.rs:158`), computing `base + 520` and never dereferencing it.
-    // Forming that pointer is UB in Rust and in C alike; nothing observable ever
-    // came of it, which is why it survived the port.
-    //
-    // This is S12's rule met in production rather than in a test: a raw kernel's
-    // pointer footprint is one stride larger than its read footprint. The `+ 16`
-    // is one luma row at the ping-pong's stride of 16 — the smallest thing that
-    // makes the arithmetic legal. It cannot change any encoded byte: the extra
-    // bytes are never read, never written, and never addressed except by the
-    // one-past bump this exists to keep in bounds.
-    //
-    // It goes away on its own if `common/sad_common.rs` re-lands from its park:
-    // the safe kernels take exact spans and stop at the last row. Until then,
-    // deleting this `+ 16` restores the UB and Miri's `--lib` gate catches it in
-    // `svc_mode_decision::tests::test_wels_md_i16x16_cost`.
-    (*pMbCache).pMemPredMb = (*pMa).WelsMallocz((2 * 256 + 16) as u32, tag) as *mut u8;
-    if (*pMbCache).pMemPredMb.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pCoeffLevel = (*pMa).WelsMallocz((MB_COEFF_LIST_SIZE * std::mem::size_of::<i16>()) as u32, tag) as *mut i16;
-    if (*pMbCache).pCoeffLevel.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pSkipMb = (*pMa).WelsMallocz(384, tag) as *mut u8;
-    if (*pMbCache).pSkipMb.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pMemPredBlk4 = (*pMa).WelsMallocz((2 * 16) as u32, tag) as *mut u8;
-    if (*pMbCache).pMemPredBlk4.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pBufferInterPredMe = (*pMa).WelsMallocz((4 * 640) as u32, tag) as *mut u8;
-    if (*pMbCache).pBufferInterPredMe.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pPrevIntra4x4PredModeFlag = (*pMa).WelsMallocz(16 * std::mem::size_of::<bool>() as u32, tag) as *mut bool;
-    if (*pMbCache).pPrevIntra4x4PredModeFlag.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pRemIntra4x4PredModeFlag = (*pMa).WelsMallocz(16, tag) as *mut i8;
-    if (*pMbCache).pRemIntra4x4PredModeFlag.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    (*pMbCache).pDct = (*pMa).WelsMallocz(std::mem::size_of::<SDCTCoeff>() as u32, tag) as *mut SDCTCoeff;
-    if (*pMbCache).pDct.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-
-    ENC_RETURN_SUCCESS
-}
-
-pub unsafe fn FreeMbCache(pMbCache: *mut SMbCache, pMa: *mut CMemoryAlign) {
-    if pMbCache.is_null() || pMa.is_null() {
-        return;
-    }
-    let tag = c"SMbCache_free".as_ptr();
-
-    if !(*pMbCache).pCoeffLevel.is_null() {
-        (*pMa).WelsFree((*pMbCache).pCoeffLevel as *mut c_void, tag);
-        (*pMbCache).pCoeffLevel = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pMemPredMb.is_null() {
-        (*pMa).WelsFree((*pMbCache).pMemPredMb as *mut c_void, tag);
-        (*pMbCache).pMemPredMb = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pSkipMb.is_null() {
-        (*pMa).WelsFree((*pMbCache).pSkipMb as *mut c_void, tag);
-        (*pMbCache).pSkipMb = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pMemPredBlk4.is_null() {
-        (*pMa).WelsFree((*pMbCache).pMemPredBlk4 as *mut c_void, tag);
-        (*pMbCache).pMemPredBlk4 = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pBufferInterPredMe.is_null() {
-        (*pMa).WelsFree((*pMbCache).pBufferInterPredMe as *mut c_void, tag);
-        (*pMbCache).pBufferInterPredMe = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pPrevIntra4x4PredModeFlag.is_null() {
-        (*pMa).WelsFree((*pMbCache).pPrevIntra4x4PredModeFlag as *mut c_void, tag);
-        (*pMbCache).pPrevIntra4x4PredModeFlag = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pRemIntra4x4PredModeFlag.is_null() {
-        (*pMa).WelsFree((*pMbCache).pRemIntra4x4PredModeFlag as *mut c_void, tag);
-        (*pMbCache).pRemIntra4x4PredModeFlag = std::ptr::null_mut();
-    }
-    if !(*pMbCache).pDct.is_null() {
-        (*pMa).WelsFree((*pMbCache).pDct as *mut c_void, tag);
-        (*pMbCache).pDct = std::ptr::null_mut();
-    }
-}
+// `AllocMbCacheAligned` and `FreeMbCache` stood here: eight `WelsMallocz` calls per
+// slice and their eight `WelsFree`s, for scratch the slice always owned alone.
+// **T6.C3** made all eight inline arrays of `SMbCache`, so the slice's block carries
+// them and there is nothing to allocate, nothing to fail, and nothing to free —
+// including on `ReallocateSliceList`'s error paths, which freed the *new* list while
+// the first `kiMaxSliceNumOld` entries still held the old list's copied pointers.
+// The `+ 16` accommodation (F14) and its reasoning moved onto `SMbCache::sMemPredMb`
+// with the buffer.
 
 pub unsafe fn InitSliceBoundaryInfo(
     pCurLayer: *mut SDqLayer,
@@ -2358,13 +2253,9 @@ pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice
     ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn AllocateSliceMBBuffer(pSlice: *mut SSlice, pMa: *mut CMemoryAlign) -> i32 {
-    if AllocMbCacheAligned(&mut (*pSlice).sMbCacheInfo, pMa) != 0 {
-        ENC_RETURN_MEMALLOCERR
-    } else {
-        ENC_RETURN_SUCCESS
-    }
-}
+// `AllocateSliceMBBuffer` stood here and forwarded to `AllocMbCacheAligned`. With the
+// cache's eight buffers inline it had an empty body and two callers that checked its
+// return, so it went with them (S18).
 
 /// `bIndependenceBsBuffer` is recorded as `sSliceBs.pBs`'s nullness and nowhere
 /// else — `slice_writer` and `slice_bs_buffer` read it back from there. The C++'s
@@ -2400,7 +2291,6 @@ pub unsafe fn FreeSliceBuffer(pSliceList: *mut *mut SSlice, kiMaxSliceNum: i32, 
         let slice_array = *pSliceList;
         for iSliceIdx in 0..kiMaxSliceNum {
             let pSlice = slice_array.add(iSliceIdx as usize);
-            FreeMbCache(&mut (*pSlice).sMbCacheInfo, pMa);
             if !(*pSlice).sSliceBs.pBs.is_null() {
                 (*pMa).WelsFree((*pSlice).sSliceBs.pBs as *mut c_void, c"sSliceBs.pBs".as_ptr());
                 (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
@@ -2438,10 +2328,6 @@ pub unsafe fn InitSliceList(
             return iRet;
         }
 
-        let iRet2 = AllocateSliceMBBuffer(pSlice, pMa);
-        if iRet2 != ENC_RETURN_SUCCESS {
-            return iRet2;
-        }
     }
 
     ENC_RETURN_SUCCESS
@@ -2694,13 +2580,6 @@ pub unsafe fn ReallocateSliceList(
         (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = 0;
 
         let mut iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, iMaxSliceBufferSize, pMA);
-        if iRet != ENC_RETURN_SUCCESS {
-            let mut tmp = pNewSliceList;
-            FreeSliceBuffer(&mut tmp, kiMaxSliceNumNew, pMA, c"pSliceBuffer".as_ptr());
-            return iRet;
-        }
-
-        iRet = AllocateSliceMBBuffer(pSlice, pMA);
         if iRet != ENC_RETURN_SUCCESS {
             let mut tmp = pNewSliceList;
             FreeSliceBuffer(&mut tmp, kiMaxSliceNumNew, pMA, c"pSliceBuffer".as_ptr());

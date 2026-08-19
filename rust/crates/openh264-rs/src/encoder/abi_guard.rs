@@ -166,7 +166,14 @@ assert_size!(SSliceCtx, 32);
 
 
 // codec/encoder/core/inc/mb_cache.h, svc_enc_macroblock.h, svc_enc_frame.h
-assert_size!(SMbCache, 576);
+// 576 in the C++ and in this port until **T6.C3**, which moved the eight scratch
+// buffers `AllocMbCacheAligned` malloc'd per slice into the struct as inline arrays
+// and replaced their four ping-pong aliases with three half-selectors: -96 bytes of
+// pointers, +5120 of buffers (528 + 768 + 384 + 32 + 2560 + 16 + 16 + 816), +3 of
+// selectors and the alignment padding around them. **5600, measured** — and it is the
+// same memory the C++ allocates per slice, in one block instead of eight.
+// `SSlice`, which embeds it, is **6544** (was 1520).
+assert_size!(SMbCache, 5600);
 // 152 in the C++ and in this port until **T6.C1**, which moved the five
 // per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
 // `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline
@@ -272,5 +279,7 @@ assert_ctx_offset!(pMemAlign, 1784);
 assert_size!(SSpatialPicIndex, 16);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
+
+
 
 

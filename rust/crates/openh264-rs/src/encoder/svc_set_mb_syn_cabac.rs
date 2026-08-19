@@ -312,8 +312,8 @@ pub unsafe fn WelsCabacMbType(
 pub unsafe fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: *mut SCabacCtx, pMbCache: *mut SMbCache) {
     unsafe {
         for iMode in 0..16 {
-            let bPredFlag = *(*pMbCache).pPrevIntra4x4PredModeFlag.add(iMode);
-            let iRemMode = *(*pMbCache).pRemIntra4x4PredModeFlag.add(iMode) as i32;
+            let bPredFlag = (*pMbCache).bPrevIntra4x4PredModeFlag[iMode];
+            let iRemMode = (*pMbCache).iRemIntra4x4PredModeFlag[iMode] as i32;
 
             if bPredFlag {
                 WelsCabacEncodeDecision(buf, pCabacCtx, 68, 1);
@@ -911,7 +911,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
             WelsCabacMbDeltaQp(buf, pCurMb, pCabacCtx, (*pCurMb).iMbXY == iSliceFirstMbXY);
             (*pSlice).uiLastMbQp = (*pCurMb).uiLumaQp;
 
-            let pDct = (*pMbCache).pDct;
+            let pDct = crate::encoder::md::dct(pMbCache);
 
             if uiMbType == MB_TYPE_INTRA16x16 {
                 let dc_buf = (*pDct).iLumaI16x16Dc.as_mut_ptr();
