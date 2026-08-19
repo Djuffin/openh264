@@ -985,28 +985,27 @@ mod tests {
     /// A layer with one bank of `n` slices and `ppSliceInLayer` naming them in
     /// order — the shape `InitSliceInLayer` builds, in the two lines a test needs.
     /// The bank is returned so it outlives the layer that points into it.
-    fn layer_with_bank(n: usize) -> (SDqLayer, Vec<SSlice>) {
-        let mut bank: Vec<SSlice> = (0..n).map(|_| SSlice::default()).collect();
+    fn layer_with_bank(n: usize) -> SDqLayer {
         let mut dq_layer = SDqLayer::default();
-        dq_layer.sSliceBufferInfo[0].pSliceBuffer = bank.as_mut_ptr();
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer = (0..n).map(|_| SSlice::new()).collect();
         dq_layer.sSliceBufferInfo[0].iMaxSliceNum = n as i32;
         dq_layer.ppSliceInLayer = (0..n)
             .map(|i| crate::encoder::svc_encode_slice::SliceIdx { bank: 0, offset: i as i32 })
             .collect();
-        (dq_layer, bank)
+        dq_layer
     }
 
     #[test]
     fn test_need_dynamic_adjust_zero_consume() {
-        let (mut dq_layer, _bank) = layer_with_bank(2);
+        let mut dq_layer = layer_with_bank(2);
         let ret = unsafe { NeedDynamicAdjust(&mut dq_layer, 2) };
         assert_eq!(ret, 0);
     }
 
     #[test]
     fn test_calc_slice_complex_ratio() {
-        let (mut dq_layer, mut bank) = layer_with_bank(2);
-        for slice in bank.iter_mut() {
+        let mut dq_layer = layer_with_bank(2);
+        for slice in dq_layer.sSliceBufferInfo[0].pSliceBuffer.iter_mut() {
             slice.iCountMbNumInSlice = 100;
             slice.uiSliceConsumeTime = 1000;
         }
@@ -1016,7 +1015,7 @@ mod tests {
             CalcSliceComplexRatio(&mut dq_layer);
         }
 
-        assert_eq!(bank[0].iSliceComplexRatio, 50);
-        assert_eq!(bank[1].iSliceComplexRatio, 50);
+        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
+        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
     }
 }

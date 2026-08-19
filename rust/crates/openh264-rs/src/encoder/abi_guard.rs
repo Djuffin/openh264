@@ -191,7 +191,10 @@ assert_size!(SLayerInfo, 48);
 // `SWelsSliceBs` note above; `SSlice` embeds it by value.
 
 // codec/encoder/core/inc/svc_enc_frame.h
-assert_size!(SSliceBufferInfo, 16);
+// 16 in the C++ and in this port until **T6.D8**, which made `pSliceBuffer` a
+// `Vec<SSlice>` — a pointer becomes three words, and `repr(C)` comes off with it.
+// **32, measured**, and the number tracks the port from here.
+assert_size!(SSliceBufferInfo, 32);
 // 512 in the C++, 504 after **T6.D2** deleted the dead `pFeatureSearchPreparation`
 // pointer (S18), and **480 after T6.D3**, which made `pRefLayer` an
 // `Option<LayerIdx>` (8 bytes of address -> 2 of position), added the layer's own
