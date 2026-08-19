@@ -132,8 +132,13 @@ assert_size!(SSpatialPicIndex, 16);
 assert_size!(SStrideTables, 160);
 assert_size!(SWelsME, 96);
 assert_size!(SWelsMD, 4000);
-assert_size!(SVAAFrameInfo, 264);
-assert_size!(SVAAFrameInfoExt, 1280);
+// `SVAAFrameInfo`: 264 in the C++. Phase 6 session B dissolved the `IWelsVP`
+// vtable and deleted the stored `pCalcResult` pointer from the two parameter
+// blocks this embeds (`sAdaptiveQuantParam`, `sComplexityAnalysisParam` — the
+// VAA result is handed to each plugin at its `Process` call instead), 8 bytes
+// each: 248. `SVAAFrameInfoExt` embeds this one and moved by the same 16.
+assert_size!(SVAAFrameInfo, 248);
+assert_size!(SVAAFrameInfoExt, 1264);
 // SSliceThreading is deliberately NOT asserted. C++ (mt_defs.h:68) embeds
 // WELS_EVENT (pthread_cond_t, 48 B) and WELS_MUTEX (pthread_mutex_t, 64 B) by
 // value, reaching 1256 bytes on darwin; those sizes are libc-specific, and this
@@ -142,8 +147,10 @@ assert_size!(SVAAFrameInfoExt, 1280);
 // does not apply. Revisit if the threading types are ever given real bodies.
 assert_size!(SVAACalcResult, 72);
 assert_size!(SScrollDetectionParam, 32);
-assert_size!(SAdaptiveQuantizationParam, 40);
-assert_size!(SComplexityAnalysisParam, 64);
+// 40 and 64 in the C++; each lost its stored `pCalcResult` pointer at Phase 6
+// session B (see `SVAAFrameInfo` above): 32 and 56, measured.
+assert_size!(SAdaptiveQuantizationParam, 32);
+assert_size!(SComplexityAnalysisParam, 56);
 assert_size!(SComplexityAnalysisScreenParam, 72);
 
 // Mid-tier types.

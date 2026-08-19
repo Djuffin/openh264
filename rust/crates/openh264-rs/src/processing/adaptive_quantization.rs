@@ -27,8 +27,7 @@
 //! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
 //! so the truncation happens at the store.
 
-use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap};
-use core::ffi::c_void;
+use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -172,44 +171,30 @@ impl Default for CAdaptiveQuantization {
 }
 
 impl CAdaptiveQuantization {
-    /// `CAdaptiveQuantization::Set`.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SAdaptiveQuantizationParam`.
-    pub unsafe fn Set(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        self.m_sAdaptiveQuantParam = *(pParam as *const SAdaptiveQuantizationParam);
+    /// `CAdaptiveQuantization::Set`. Typed since Phase 6 session B (the `IWelsVP`
+    /// vtable's `void*` is gone).
+    pub fn Set(&mut self, param: &SAdaptiveQuantizationParam) -> i32 {
+        self.m_sAdaptiveQuantParam = *param;
         RET_SUCCESS
     }
 
     /// `CAdaptiveQuantization::Get` — writes back only the frame average.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SAdaptiveQuantizationParam`.
-    pub unsafe fn Get(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        (*(pParam as *mut SAdaptiveQuantizationParam)).iAverMotionTextureIndexToDeltaQp =
-            self.m_sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp;
+    pub fn Get(&self, param: &mut SAdaptiveQuantizationParam) -> i32 {
+        param.iAverMotionTextureIndexToDeltaQp = self.m_sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp;
         RET_SUCCESS
     }
 
-    /// `CAdaptiveQuantization::Process` — `AdaptiveQuantization.cpp:57`.
+    /// `CAdaptiveQuantization::Process` — `AdaptiveQuantization.cpp:57`. `calc` is
+    /// the VAA statistics of this picture pair, handed over at the call (the C++
+    /// stored `pCalcResult` in the parameter block; take what you reach).
     ///
     /// # Safety
     /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
-    /// and both pixel maps must describe readable luma planes.
-    pub unsafe fn Process(
-        &mut self,
-        _iType: i32,
-        pSrcPixMap: *mut SPixMap,
-        pRefPixMap: *mut SPixMap,
-    ) -> i32 {
-        let iWidth = (*pSrcPixMap).sRect.iRectWidth;
-        let iHeight = (*pSrcPixMap).sRect.iRectHeight;
+    /// both pixel maps must describe readable luma planes, and `calc`'s arrays must
+    /// cover the picture's macroblocks.
+    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
+        let iWidth = pSrcPixMap.sRect.iRectWidth;
+        let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iMbWidth = iWidth >> 4;
         let iMbHeight = iHeight >> 4;
         let iMbTotalNum = iMbWidth * iMbHeight;
@@ -217,13 +202,13 @@ impl CAdaptiveQuantization {
         let mut iAverageMotionIndex: i64 = 0;
         let mut iAverageTextureIndex: i64 = 0;
 
-        let mut pRefFrameY = (*pRefPixMap).pPixel[0] as *const u8;
-        let mut pCurFrameY = (*pSrcPixMap).pPixel[0] as *const u8;
-        let iRefStride = (*pRefPixMap).iStride[0];
-        let iCurStride = (*pSrcPixMap).iStride[0];
+        let mut pRefFrameY = pRefPixMap.pPixel[0] as *const u8;
+        let mut pCurFrameY = pSrcPixMap.pPixel[0] as *const u8;
+        let iRefStride = pRefPixMap.iStride[0];
+        let iCurStride = pSrcPixMap.iStride[0];
 
         let mut pMotionTexture = self.m_sAdaptiveQuantParam.pMotionTextureUnit;
-        let pVaaCalcResults = self.m_sAdaptiveQuantParam.pCalcResult;
+        let pVaaCalcResults: *const SVAACalcResult = calc;
 
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock.

@@ -15,7 +15,6 @@
 
 use crate::common::sad_common::WelsSampleSad8x8_c;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, SPixMap, SSceneChangeResult};
-use core::ffi::c_void;
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -34,27 +33,16 @@ pub struct CSceneChangeDetection {
 }
 
 impl CSceneChangeDetection {
-    /// `CSceneChangeDetection::Set`.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SSceneChangeResult`.
-    pub unsafe fn Set(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        self.m_sSceneChangeParam = *(pParam as *const SSceneChangeResult);
+    /// `CSceneChangeDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
+    /// vtable's `void*` is gone).
+    pub fn Set(&mut self, param: &SSceneChangeResult) -> i32 {
+        self.m_sSceneChangeParam = *param;
         RET_SUCCESS
     }
 
     /// `CSceneChangeDetection::Get` — copies the whole result struct back.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SSceneChangeResult`.
-    pub unsafe fn Get(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        *(pParam as *mut SSceneChangeResult) = self.m_sSceneChangeParam;
+    pub fn Get(&self, param: &mut SSceneChangeResult) -> i32 {
+        *param = self.m_sSceneChangeParam;
         RET_SUCCESS
     }
 
@@ -63,21 +51,13 @@ impl CSceneChangeDetection {
     ///
     /// # Safety
     /// Both pixel maps must describe readable luma planes of the stated size.
-    pub unsafe fn Process(
-        &mut self,
-        _iType: i32,
-        pSrcPixMap: *mut SPixMap,
-        pRefPixMap: *mut SPixMap,
-    ) -> i32 {
-        if pSrcPixMap.is_null() || pRefPixMap.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        let iWidth = (*pSrcPixMap).sRect.iRectWidth;
-        let iHeight = (*pSrcPixMap).sRect.iRectHeight;
+    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap) -> i32 {
+        let iWidth = pSrcPixMap.sRect.iRectWidth;
+        let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iBlock8x8Width = iWidth >> 3;
         let iBlock8x8Height = iHeight >> 3;
-        let pRefY = (*pRefPixMap).pPixel[0] as *mut u8;
-        let pCurY = (*pSrcPixMap).pPixel[0] as *mut u8;
+        let pRefY = pRefPixMap.pPixel[0];
+        let pCurY = pSrcPixMap.pPixel[0];
         let iRefStride = (*pRefPixMap).iStride[0];
         let iCurStride = (*pSrcPixMap).iStride[0];
 
