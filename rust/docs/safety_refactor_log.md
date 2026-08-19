@@ -11586,3 +11586,15 @@ nothing.
   construction** — `pDecPic` is `pNextBuffer`, chosen in `ref_list_mgr_svc.rs:628–643` as a slot
   *not* in either ref list, and `pRefPic` is `pRefList0[0]`, which is in one. No site needs
   `classify`.
+  **The head does not land, and the reason is a measured size.** 6.1's first move is the recon
+  pool's aliases becoming ids, and the consumer surface is **~184 sites across nine files**:
+  `pDecPic` 37, `pRefPic` 60 (of 90 `pRefPic` tokens — S24's unit clause again: 30 are
+  `wels_preprocess.rs` locals naming *spatial* pictures, and the wider token count is 232 because
+  `pRefPicture`/`pRefPicListExt`/`pRefPicMark` share the prefix), `pRefList0` 13, `pShortRefList` 20,
+  `pLongRefList` 28, `pNextBuffer` 12, `pRef[]` 14. They interconvert — a picture flows
+  `pRef` → `pNextBuffer` → `pShortRefList` → `pRefList0` → `pRefPic` — so the family converts whole
+  or not at all, and the deref-heavy consumers (`svc_base_layer_md.rs` 20, `svc_mode_decision.rs` 16)
+  read plane data through the alias and each needs a resolve while the container is still a raw
+  array. That is session P's shape on the decoder, which took a session. **Named for session F**
+  with the alias table above as its work list; every row is *not done*, and the settlement is what
+  lets it land in one pass.
