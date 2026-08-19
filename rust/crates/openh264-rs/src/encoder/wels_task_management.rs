@@ -452,7 +452,7 @@ impl IWelsTask for CWelsBaseTask {
                 ETaskKind::UpdateMbMap => {
                     UpdateMbListNeighborParallel(
                         (*self.m_pCtx).pCurDqLayer,
-                        (*(*self.m_pCtx).pCurDqLayer).sMbDataP,
+                        crate::encoder::svc_encode_slice::mb_list_root((*self.m_pCtx).pCurDqLayer),
                         self.m_iSliceIdx,
                     );
                     ENC_RETURN_SUCCESS

@@ -1308,7 +1308,7 @@ pub unsafe fn DeblockingMbAvcbase(
 // ============================================================================
 
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
-    if pCurDq.is_null() || (*pCurDq).sMbDataP.is_null() || (*pCurDq).pDecPic.is_null() {
+    if pCurDq.is_null() || (*pCurDq).pDecPic.is_null() {
         return;
     }
     let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
@@ -1317,7 +1317,7 @@ pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SW
     }
     let kiMbWidth = (*pCurDq).iMbWidth;
     let kiMbHeight = (*pCurDq).iMbHeight;
-    let mut pCurrentMbBlock = (*pCurDq).sMbDataP;
+    let mut pCurrentMbBlock = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
 
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
@@ -1375,7 +1375,7 @@ pub unsafe extern "C" fn DeblockingFilterSliceAvcbase(
     pFunc: *mut SWelsFuncPtrList,
     pSlice: *mut SSlice,
 ) {
-    let pMbList = (*pCurDq).sMbDataP;
+    let pMbList = crate::encoder::svc_encode_slice::mb_list_root(pCurDq);
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
     let kiMbWidth: i32 = (*pCurDq).iMbWidth as i32;
