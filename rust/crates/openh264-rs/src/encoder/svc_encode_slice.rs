@@ -1249,9 +1249,13 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     }
     let pBs = slice_writer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
-    // S29: raw, not `&mut` — held across the MB loop, whose callees derive their
-    // own borrows of the same fields (the encode probe's fourth red, session B).
+    // S29: raw, not `&mut` — both of these are held across the macroblock loop,
+    // whose callees derive their own borrows of the same fields. `sSliceEncCtx` is
+    // the dynamic-slice probe's third red (session D): `WelsGetNextMbOfSlice` takes
+    // its own `&mut (*pCurDq).sSliceEncCtx` every iteration, which pops the `Unique`
+    // this binding held, and `DynSlcJudgeSliceBoundaryStepBack` then reads through
+    // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
+    let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let pMbList = (*pCurLayer).sMbDataP;
@@ -1590,8 +1594,9 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     let pMd = pWelsMd;
     let pBs = slice_writer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
-    // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
+    // S29, both: held across the MB loop, whose callees re-derive the same fields.
+    // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
+    let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = (*pCurLayer).sMbDataP;
     let mut iNumMbCoded = 0;
@@ -2831,6 +2836,12 @@ pub unsafe fn GetCurrentSliceNum(pCurDq: *const SDqLayer) -> i32 {
     }
 }
 
+/// `FrameBsRealloc` — svc_encode_slice.cpp:1562.
+///
+/// # Safety
+/// `pCtx` must be a context built by `WelsInitEncoderExt`; `pLayerBsInfo` must be
+/// one of `(*pFrameBsInfo).sLayerInfo`'s entries, which is what every caller
+/// passes and what the C++'s own `while (pLBI1 != pLayerBsInfo)` assumes.
 pub unsafe fn FrameBsRealloc(
     pCtx: *mut sWelsEncCtx,
     pFrameBsInfo: *mut SFrameBSInfo,
@@ -2849,6 +2860,37 @@ pub unsafe fn FrameBsRealloc(
     // (`WelsMallocz` zeroed it too).
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen.resize(iCountNals as usize, 0);
+    let pNalLen = pOut.sNalLen.as_mut_ptr();
+
+    // **F60**, and the C++'s closing loop is the fix (`svc_encode_slice.cpp:1589`).
+    // The resize moves `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed
+    // out before it — `wels_encoder_ext.rs:617`, `encoder_ext.rs:2077`/`:3113`, and
+    // every `.add(iCountNal)` derived from those — names the freed block from here
+    // on. The C++ re-stamps them from the new root, layer by layer, each layer's
+    // cursor being the previous layer's plus that layer's own NAL count, and the
+    // port dropped the loop when the two allocations became `Vec`s.
+    //
+    // **Every write below goes through `pLayerBsInfo`, not through
+    // `pFrameBsInfo`** — the probe's fourth red, and the first spelling of this fix
+    // caused it. `WelsEncoderEncodeExt` builds its layer cursor once, as
+    // `(*pFbi).sLayerInfo.as_mut_ptr()` (`encoder_ext.rs`), which retags the whole
+    // array; `addr_of_mut!((*pFrameBsInfo).sLayerInfo[i])` creates no retag at all,
+    // so it writes with the *parent's* tag and pops that array-wide child — and the
+    // caller then reads `pNalLengthInByte` through it. Walking from `pLayerBsInfo`
+    // instead keeps every store inside the tag the caller is still holding. S28's
+    // rule in its other direction: derive from the root the consumers share.
+    let pFirstLayer = std::ptr::addr_of_mut!((*pFrameBsInfo).sLayerInfo).cast::<SLayerBSInfo>();
+    let kiLayersBefore = pLayerBsInfo.offset_from(pFirstLayer);
+    debug_assert!(
+        kiLayersBefore >= 0 && (kiLayersBefore as usize) < MAX_LAYER_NUM_OF_FRAME,
+        "FrameBsRealloc: pLayerBsInfo is not one of pFrameBsInfo's layers"
+    );
+    let mut cursor = pNalLen;
+    for iBack in (0..=kiLayersBefore).rev() {
+        let pLBI = pLayerBsInfo.offset(-iBack);
+        (*pLBI).pNalLengthInByte = cursor;
+        cursor = cursor.add((*pLBI).iNalCount as usize);
+    }
 
     ENC_RETURN_SUCCESS
 }
@@ -2902,6 +2944,7 @@ static MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 mod tests {
     use crate::api::codec_api::EVideoFrameType;
     use crate::api::codec_api::ECOMPLEXITY_MODE;
+    use crate::api::codec_api::SliceModeEnum;
     use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
 
     /// **The encoder's aliasing probe** — Phase 6 session A, and the first Miri
@@ -3059,7 +3102,11 @@ mod tests {
             48,
             32,
             3,
-            EncoderProbeOptions { cabac: false, complexity: ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY },
+            EncoderProbeOptions {
+                cabac: false,
+                complexity: ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY,
+                ..Default::default()
+            },
         );
 
         assert_eq!(
@@ -3091,4 +3138,136 @@ mod tests {
             frames[1].bytes
         );
     }
+
+    /// **The dynamic-slice probe — `SM_SIZELIMITED_SLICE`, Phase 6 session D,
+    /// face 0.**
+    ///
+    /// The two probes above encode one slice a frame, so an entire encode path was
+    /// dark under Miri: `SM_SIZELIMITED_SLICE` is the only mode with a
+    /// macroblock loop of its own (`WelsMdInterMbLoopOverDynamicSlice`,
+    /// `WelsISliceMdEncDynamic`), the only caller of the stash-and-rollback pair
+    /// (`StashMBStatus`/`StashPopMBStatus`, `wels_func_ptr_def.rs`) and of
+    /// `pDynamicBsBuffer`, and the only path that reaches
+    /// `CalculateNewSliceNum` → `ReallocSliceBuffer` → `ExtendLayerBuffer` →
+    /// `ReOrderSliceInLayer` — **the machinery this session's faces 2 to 4
+    /// rewrite**. It found `F60` on its first execution.
+    ///
+    /// **It is single-threaded, and that is settled by reading rather than by
+    /// configuration**: the two flags that put a size-limited encode on Phase 7's
+    /// multi-threaded slice path, `bSliceBsBufferFlag` and `bThreadSlcBufferFlag`,
+    /// both require `iMultipleThreadIdc > 1` (`InitSliceInLayer`, this file), and
+    /// the driver fixes `iMultipleThreadIdc = 1`. The `st` sweep preset already
+    /// encodes `sm=3` at constraints 1500 and 600 with one thread.
+    ///
+    /// **112x96 and a 401-byte constraint, and both numbers are measured.** A slice
+    /// closes when its payload passes `uiSliceSizeConstraint - AVER_MARGIN_BYTES`
+    /// (100 bytes), and validation refuses any constraint at or below
+    /// `MAX_MACROBLOCK_SIZE_IN_BYTE` (400) — so 401 is the finest split the API
+    /// allows. At that constraint this source encodes **37 / 9 / 3** slices in its
+    /// three frames, against **1 / 1 / 1** at the 1500-byte constraint the sweep
+    /// runs, so the multi-slice half is non-vacuous by measurement rather than by
+    /// assumption.
+    ///
+    /// **The geometry is what reaches the realloc, and that is the whole reason it
+    /// is not 48x32 like the probes above.** `GetInitialSliceNum` answers
+    /// `AVERSLICENUM_CONSTRAINT` = `MAX_SLICES_NUM` = **35** for this mode, so the
+    /// layer opens with `iMaxSliceNum = 35`, and `WelsCodeOnePicPartition` calls
+    /// `DynSliceRealloc` when `iSliceIdx >= iMaxSliceNum - iActiveThreadsNum`,
+    /// i.e. at the 35th slice. A frame therefore has to code **at least 35 slices**
+    /// to reach it, which needs at least 35 macroblocks. Measured at the 401-byte
+    /// constraint on this source: 48x32 (6 MB) codes 3 slices, 96x64 (24 MB) 21,
+    /// 96x96 (36 MB) 31, and **112x96 (42 MB) 37 — the smallest geometry on the
+    /// grid that crosses**. `frames[0].vcl_nals >= 35` is the assertion, and it is
+    /// exactly the realloc's own trigger condition rather than a proxy for it.
+    ///
+    /// **`bytes == frame_size` is F60's covering assertion.** `bytes` is summed
+    /// through `sLayerInfo[..].pNalLengthInByte`, which is what `FrameBsRealloc`
+    /// invalidates and re-stamps; `iFrameSizeInBytes` is accumulated as the slices
+    /// are written and survives independently. With the re-stamp deleted this test
+    /// reads **686,479,506 bytes against a frame_size of 10,244** at 128x128 and
+    /// then dies — measured in both directions.
+    ///
+    /// The remaining assertions are the first probe's, for the first probe's
+    /// reasons: the grid read back from the encoder (F34), three frames with the
+    /// second inter-coded, and an inter frame an order of magnitude above the
+    /// all-skip floor.
+    #[test]
+    fn encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker() {
+        let (frames, dims) = drive_encoder_over(
+            112,
+            96,
+            3,
+            EncoderProbeOptions {
+                slice_mode: SliceModeEnum::SM_SIZELIMITED_SLICE,
+                slice_constraint: 401,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            dims,
+            (112, 96),
+            "the encoder must be configured for a 7x6 macroblock grid; below 35 \
+             macroblocks no frame can code the 35 slices the realloc needs"
+        );
+        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert_eq!(
+            frames[0].kind,
+            EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert_eq!(
+            frames[1].kind,
+            EVideoFrameType::videoFrameTypeP,
+            "the second frame must be inter-coded, or WelsMdInterMbLoopOverDynamicSlice \
+             never runs and this probe covers only the I-slice half"
+        );
+
+        // Non-vacuity. A size-limited probe that codes one slice a frame drives the
+        // ordinary single-slice path under a different name.
+        let slices: Vec<usize> = frames.iter().map(|f| f.vcl_nals).collect();
+        assert!(
+            slices.iter().all(|&n| n >= 2),
+            "every frame must split: {slices:?} slices (measured 37/9/3 at a 401-byte \
+             constraint; 1/1/1 at the 1500-byte constraint the sweep runs)"
+        );
+
+        // The realloc ran. `iMaxSliceNum` opens at GetInitialSliceNum's answer for
+        // this mode (AVERSLICENUM_CONSTRAINT = MAX_SLICES_NUM = 35) and
+        // WelsCodeOnePicPartition reallocates before coding slice index
+        // `iMaxSliceNum - iActiveThreadsNum` = 34, so >= 35 coded slices is the
+        // trigger itself.
+        assert!(
+            slices[0] >= 35,
+            "the IDR coded {} slices, under the 35 that make WelsCodeOnePicPartition \
+             call DynSliceRealloc -> ReallocSliceBuffer -> ExtendLayerBuffer: the \
+             realloc path this probe exists for did not run",
+            slices[0]
+        );
+
+        // F60. The NAL-length cursors and the frame size are two independent
+        // accountings of the same bytes; FrameBsRealloc moves the array the first
+        // one reads through, and until this session did not re-stamp it.
+        for (i, f) in frames.iter().enumerate() {
+            assert_eq!(
+                f.bytes as i32, f.frame_size,
+                "frame {i}: the NAL lengths sum to {} where the encoder reports a \
+                 frame of {} bytes — sLayerInfo[..].pNalLengthInByte is stale (F60)",
+                f.bytes, f.frame_size
+            );
+        }
+
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        assert!(
+            frames[1].bytes > 200,
+            "the inter frame coded {} bytes, which is at the all-skip floor: the \
+             source did not move, so motion estimation did nothing",
+            frames[1].bytes
+        );
+    }
+
 }

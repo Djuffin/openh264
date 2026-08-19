@@ -138,6 +138,91 @@ documented aliasing contract is a claim; the probe is the check.
 
 ---
 
+## F60 — `FrameBsRealloc` moves the NAL-length array and never re-aims the layers at it
+
+**Status: FIXED 2026-08-19 (Phase 6 session D, face 0), by transcribing the loop
+the port dropped.** Found by the dynamic-slice probe
+(`encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker`)
+on its first execution — the third encoder probe, and the first thing it did.
+
+### What it is
+
+`FrameBsRealloc` (`svc_encode_slice.rs`) grows the frame's NAL bookkeeping when a
+frame codes more slices than the list was sized for. The C++
+(`svc_encode_slice.cpp:1562`) allocates a bigger `pOut->pNalLen`, copies, frees the
+old one — and then closes with the part that matters:
+
+```c
+  pLBI1 = &pFrameBsInfo->sLayerInfo[0];
+  pLBI1->pNalLengthInByte = pCtx->pOut->pNalLen;
+  while (pLBI1 != pLayerBsInfo) {
+    pLBI2 = pLBI1;
+    ++ pLBI1;
+    pLBI1->pNalLengthInByte = pLBI2->pNalLengthInByte + pLBI2->iNalCount;
+  }
+```
+
+Every `SLayerBSInfo` handed to the caller carries a cursor **into** that array —
+stamped at frame start (`wels_encoder_ext.rs:617`, `encoder_ext.rs:2077`, `:3113`)
+and advanced per layer by `.add(iCountNal)`. The reallocation moves the array, so
+without that loop every one of those cursors names the freed block. The port kept
+the two allocations (as `Vec::resize`, T3-era) and **dropped the loop entirely**.
+
+The result is a use-after-free on the encoder's ordinary output path: slice sizes
+are written through the stale cursor, the api sums frame statistics through it
+(`wels_encoder_ext.rs:1851`), and every C caller reads `pNalLengthInByte` to find
+its NALs.
+
+### What it takes to reach it, and why no gate had
+
+`iMaxSliceNum` opens at `GetInitialSliceNum`'s answer, which for
+`SM_SIZELIMITED_SLICE` is `AVERSLICENUM_CONSTRAINT` = `MAX_SLICES_NUM` = **35**;
+`WelsCodeOnePicPartition` reallocates only when `iSliceIdx >= iMaxSliceNum -
+iActiveThreadsNum`. So a frame must code **35 slices** — and the diffharness's two
+size-limited configurations (`3 1500` and `3 600`) at the sweep's fixed `qp=26`
+code at most nine on the largest clip. **The path is 341/341-green because no
+configuration in the sweep reaches it**, not because it works. The three earlier
+Miri probes each encode one slice a frame and never call `FrameBsRealloc` at all.
+
+### Measured, both directions
+
+Against the C++ encoder through `tools/diffharness/compare.sh`, `st`,
+single-threaded, `res/CiscoVT2people_320x192_12fps.yuv`, 5 frames, CAVLC,
+`rc=-1`, twelve configurations:
+
+| constraint | qp 6 | qp 12 | qp 20 | qp 26 |
+|---|---|---|---|---|
+| 401 | **SIGBUS** (C++ 165576, Rust 0) | **SIGBUS** | DIFFER 48171 / 39750 | DIFFER 20062 / 11540 |
+| 600 | **SIGBUS** | DIFFER 108546 / 94390 | DIFFER 47025 / 31735 | identical |
+| 1500 | identical | identical | identical | identical |
+
+Seven divergences and three hard crashes, in **both** build profiles, in `st` — S14
+step 3's "anything outside F3's signature is real". After the fix **all twelve are
+`BYTE-IDENTICAL`** and every stream decodes to a full 460800-byte YUV.
+
+The probe's own reading, at 128x128 with a 401-byte constraint: the summed NAL
+lengths read **686,479,506** against an `iFrameSizeInBytes` of **10,244** with the
+re-stamp deleted, and **10,244 / 10,244** with it restored.
+
+### The fix, and the spelling it took two goes to get right
+
+The C++'s loop, walking **from `pLayerBsInfo` backwards** to `sLayerInfo[0]` rather
+than forwards from `sLayerInfo[0]`. The first spelling walked forwards through
+`addr_of_mut!((*pFrameBsInfo).sLayerInfo[i])` and the probe went red on it
+immediately: `WelsEncoderEncodeExt` builds its layer cursor once as
+`(*pFbi).sLayerInfo.as_mut_ptr()`, which retags the **whole array**, and
+`addr_of_mut!` creates no retag at all — so those stores went through the parent's
+tag and popped the array-wide child the caller was still reading through. Walking
+back from `pLayerBsInfo` keeps every store inside that tag. **S28's rule in its
+other direction: derive from the root the consumers share.** The layer index comes
+from `offset_from` against the array base, which touches no memory.
+
+The probe carries `bytes == frame_size` as its covering assertion — two independent
+accountings of one frame's bytes, of which only the first reads through the array
+this function moves.
+
+---
+
 ## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
 
 `phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the

@@ -2357,11 +2357,22 @@ pub(crate) mod abi_test_driver {
         }
     }
 
-    /// One encoded frame, as the probe sees it: what the encoder called the frame
-    /// and how many bytes of NAL it produced.
+    /// One encoded frame, as the probe sees it: what the encoder called the frame,
+    /// how many bytes of NAL it produced, and **how many NALs those bytes came in**.
+    ///
+    /// The NAL counts are Phase 6 session D's, and `vcl_nals` is the one that
+    /// carries a claim. A frame's slices are exactly the NALs of its
+    /// `VIDEO_CODING_LAYER` layers (`uiLayerType`), so `vcl_nals` **is** the coded
+    /// slice count — where `nals` also counts the parameter sets an IDR carries in
+    /// its `NON_VIDEO_CODING_LAYER`. A `SM_SIZELIMITED_SLICE` probe that encodes
+    /// one slice covers nothing it exists for, so the split matters: on the IDR,
+    /// `nals` is ≥ 2 whatever the slice mode does.
     pub(crate) struct EncodedFrame {
         pub(crate) kind: EVideoFrameType,
         pub(crate) bytes: usize,
+        pub(crate) nals: usize,
+        pub(crate) vcl_nals: usize,
+        pub(crate) frame_size: i32,
     }
 
     /// Fills `buf` with frame `f` of a synthetic I420 sequence that **moves**.
@@ -2427,17 +2438,36 @@ pub(crate) mod abi_test_driver {
     ///   runs the fine intra partition search (`WelsMdIntraFinePartition`,
     ///   `WelsMdI4x4`) and the `pMemPredBlk4` ping-pong that session C's face 2 moves.
     ///
-    /// **Both defaults are what the first probe has always used** (CABAC,
-    /// `LOW_COMPLEXITY`), so `Default::default()` leaves that probe unchanged.
+    /// * `slice_mode`/`slice_constraint` pick the *slicing* machinery — **Phase 6
+    ///   session D**. `SM_SIZELIMITED_SLICE` is the only encode path with a loop of
+    ///   its own (`WelsMdInterMbLoopOverDynamicSlice`), the only caller of the
+    ///   CAVLC/CABAC stash-and-rollback pair (`StashMBStatus`/`StashPopMBStatus`)
+    ///   and of `pDynamicBsBuffer`, and the only reader of
+    ///   `CalculateNewSliceNum` → `ReallocSliceBuffer` → `ExtendLayerBuffer` →
+    ///   `ReOrderSliceInLayer`. `slice_constraint` is `uiSliceSizeConstraint` in
+    ///   bytes and is ignored by every other mode; validation refuses anything
+    ///   ≤ `MAX_MACROBLOCK_SIZE_IN_BYTE` (400), and a slice closes at
+    ///   `constraint - AVER_MARGIN_BYTES` (100) bytes of payload.
+    ///
+    /// **All four defaults are what the first probe has always used** (CABAC,
+    /// `LOW_COMPLEXITY`, one slice per frame), so `Default::default()` leaves the
+    /// three existing probes unchanged.
     #[derive(Debug, Copy, Clone)]
     pub(crate) struct EncoderProbeOptions {
         pub cabac: bool,
         pub complexity: ECOMPLEXITY_MODE,
+        pub slice_mode: SliceModeEnum,
+        pub slice_constraint: u32,
     }
 
     impl Default for EncoderProbeOptions {
         fn default() -> Self {
-            Self { cabac: true, complexity: ECOMPLEXITY_MODE::LOW_COMPLEXITY }
+            Self {
+                cabac: true,
+                complexity: ECOMPLEXITY_MODE::LOW_COMPLEXITY,
+                slice_mode: SliceModeEnum::SM_SINGLE_SLICE,
+                slice_constraint: 0,
+            }
         }
     }
 
@@ -2523,8 +2553,9 @@ pub(crate) mod abi_test_driver {
             param.sSpatialLayers[0].fFrameRate = 30.0;
             param.sSpatialLayers[0].iSpatialBitrate = 500_000;
             param.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
-            param.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+            param.sSpatialLayers[0].sSliceArgument.uiSliceMode = opts.slice_mode;
             param.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+            param.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = opts.slice_constraint;
             assert_eq!(
                 ((*vtbl).InitializeExt)(p_encoder, &param as *const SEncParamExt),
                 CM_RESULT_SUCCESS
@@ -2571,16 +2602,28 @@ pub(crate) mod abi_test_driver {
                     "EncodeFrame failed at frame {f}"
                 );
                 let mut bytes = 0usize;
+                let mut nals = 0usize;
+                let mut vcl_nals = 0usize;
                 for l in 0..info.iLayerNum as usize {
                     let lay = &info.sLayerInfo[l];
                     if lay.pNalLengthInByte.is_null() {
                         continue;
                     }
+                    nals += lay.iNalCount as usize;
+                    if lay.uiLayerType == LAYER_TYPE::VIDEO_CODING_LAYER as u8 {
+                        vcl_nals += lay.iNalCount as usize;
+                    }
                     for n in 0..lay.iNalCount as usize {
                         bytes += *lay.pNalLengthInByte.add(n) as usize;
                     }
                 }
-                out.push(EncodedFrame { kind: info.eFrameType, bytes });
+                out.push(EncodedFrame {
+                    kind: info.eFrameType,
+                    bytes,
+                    nals,
+                    vcl_nals,
+                    frame_size: info.iFrameSizeInBytes,
+                });
             }
 
             ((*vtbl).Uninitialize)(p_encoder);

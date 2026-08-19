@@ -821,11 +821,21 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
     if ppSliceList.is_null() || pBaseSlice.is_null() {
         return;
     }
-    let pBaseMarking = &(*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    // **Read the base out by value before the loop, and it is not a style
+    // preference** (S29, and the dynamic-slice probe's second red, session D).
+    // Both callers pass `pBaseSlice = ppSliceList[0]`, so iteration 0 writes the
+    // very bytes a held `&` names: the `SharedReadOnly` tag is popped by that
+    // write and iteration 1 reads through a tag that no longer exists. With one
+    // slice the write is the last use and nothing ever reads after it, which is
+    // why three probes and 341/341 have run over this.
+    //
+    // The copy is byte-identical to the C++'s `memcpy` from the live field: the
+    // first store is `base = base`.
+    let kBaseMarking = (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
     for iSliceIdx in 0..kiCountSliceNum {
         let pSlice = *ppSliceList.add(iSliceIdx as usize);
         if !pSlice.is_null() {
-            (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = *pBaseMarking;
+            (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
         }
     }
 }
