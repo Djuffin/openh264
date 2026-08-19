@@ -204,9 +204,10 @@ assert_size!(SSliceBufferInfo, 32);
 // `Vec`), **528 after T6.D5** gave the layer its own `MbArray<SMB>` (the same
 // trade again), and **560 after T6.D6** made `pFirstMbIdxOfSlice` and
 // `pCountMbNumInSlice` `Vec<i32>` (two more pointers become two more three-word
-// `Vec`s). **Measured** at each step; the number tracks the port, not the C++.
-
-
+// `Vec`s), **576 after T6.D7** grew the inline `sSliceEncCtx` by the same trade, and
+// **640 after T6.D8** grew the four inline `sSliceBufferInfo` banks by 16 apiece.
+// **Measured** at each step; the number tracks the port, not the C++.
+assert_size!(SDqLayer, 640);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
