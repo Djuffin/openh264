@@ -11602,3 +11602,39 @@ then `FreeSliceBuffer` the *new* list, whose first `kiMaxSliceNumOld` entries ca
 scratch removes the `SMbCache` half of that aliasing entirely. The `sSliceBs.pBs` half
 is unchanged and stays with the thread-buffer redesign (Phase 7, and session D's slice
 structures before it).
+
+### Face 2 breadcrumb — closed at `2919ffb1` (T6.C3, and the harness knob)
+
+**`SMbCache` holds no raw pointer but `pEncSad`.** The eight buffers are inline, the
+four aliases are three `u8` selectors, and every consumer reads through an accessor
+that derives from the array root (`addr_of_mut!`, S28/S29). `AllocMbCacheAligned`,
+`FreeMbCache` and `AllocateSliceMBBuffer` are gone with them, and so is
+`ReallocateSliceList`'s error-path aliasing over the copied scratch pointers.
+`SMbCache` **lost `Copy`/`Clone` with nothing to fix**: no site in the crate copies it
+by value, which is the compiler's answer rather than an argument. Measured and
+re-pinned: `SMbCache` 576 → **5600**, `SSlice` 1520 → **6544**.
+
+**The two selectors that compose, and why the recomputation is exact.**
+`pBestPredIntraChroma` was an absolute address inside *whichever* half lost the
+I16x16 ping-pong, so the selector spelling recomputes it from the current luma bit —
+which is only faithful if nothing moves the luma bit between the chroma search and the
+chroma encode. Both `WelsIMbChromaEncode` call sites sit immediately after
+`WelsMdIntraChroma` in the same function, and only `WelsMdIntraInit` and `WelsMdI16x16`
+write the bit; both run before. `pBestPredI4x4Blk4` composes with nothing and is set
+and read inside one loop iteration. Checked by reading, then by the gate below.
+
+**The harness gained the knob the gate never had.** All 341 sweep configurations run
+`LOW_COMPLEXITY`, so the fine mode-decision family — `WelsMdI4x4`,
+`WelsMdIntraFinePartition`, and the `pMemPredBlk4` ping-pong this face converts — was
+byte-checked by nothing. Both drivers now take an optional complexity argument
+(default `LOW`, so no sweep configuration changes and the count stays 341), and ten
+configurations across all three clips, both entropy coders and four `iRCMode`s read
+**BYTE-IDENTICAL** at `MEDIUM` and `HIGH` with this session's three commits in the
+tree. The knob is not vacuous: LOW encodes 44292/44109 bytes where MEDIUM and HIGH
+encode 44068/44223 on the same input.
+
+**Gates at the face's close.** `gates.sh family` **all green**: 485 / 479 / 20,
+ratchet clean against the baseline regenerated at T6.C3, census 58, **both sweeps
+341/341 with no F3 hit in either profile**. Miri, `--lib` step flags: **both encode
+probes ok, 101.60 s** for the pair (96.70 s at face 1 — the cost of a slice that now
+carries 5 KB of scratch through the interpreter).
