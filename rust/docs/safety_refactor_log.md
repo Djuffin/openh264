@@ -11536,3 +11536,52 @@ nothing.
   `:2303` — Phase 8); MT plumbing (`pTaskManage`, `mutexEncoderError`, `slice_multi_threading.rs`'s
   handles/events/mutexes/`pWelsPEncCtx`, `wels_task_management.rs` — Phase 7). `IWelsVP` = 0,
   `Combined3` = 0.
+* **Face 3 — the `SPicture` settlement, written before the first edit** (read at `ffa78a87`; 59
+  `*mut SPicture` occurrences over `src/encoder src/common`, of which 17 are fields).
+  **Three owners, confirmed**: the **reconstruction pool** `SRefList.pRef[0..=iMaxNumRefFrame]`
+  (allocated `encoder_ext.rs:752`, freed `:1684`, one `SRefList` per dependency layer through
+  `ppRefPicListExt`); the **spatial source pool** `CWelsPreProcess.m_pSpatialPic[did][0..=MAX_REF_PIC_COUNT]`
+  (allocated `wels_preprocess.rs:1068`, freed `:1098`); and the **one scaled input picture**
+  `Scaled_Picture.pScaledInputPicture` (`:890`, freed with `FreeScaledPic`). Everything else that
+  stores `*mut SPicture` is an alias into one of the three.
+  **The alias table** (field → owner → what it becomes):
+  | field | owner | becomes |
+  |---|---|---|
+  | `sWelsEncCtx.pEncPic` (`encoder_context.rs:462`) | spatial | `Option<SrcPicId>` |
+  | `sWelsEncCtx.pDecPic` (`:463`) | recon (`pRef[0]` at `encoder_ext.rs:1364`, `pNextBuffer` at `:3343`/`ref_list_mgr_svc.rs:647`) | `Option<RecPicId>` |
+  | `sWelsEncCtx.pRefPic` (`:464`) | recon (`pRefList0[0]`, `encoder_ext.rs:2133`) | `Option<RecPicId>` |
+  | `sWelsEncCtx.pRefList0[16]` (`:468`) | recon | `[Option<RecPicId>; 16]` |
+  | `SRefList.pShortRefList[]`, `pLongRefList[]` (`:332`, `:333`) | recon | `[Option<RecPicId>; N]` |
+  | `SRefList.pNextBuffer` (`:334`) | recon | `Option<RecPicId>` |
+  | `SRefList.pRef[]` (`:335`) | **is** the recon pool | `Pool<Box<SPicture>>` |
+  | `SSpatialPicIndex.pSrc` (`:398`) | spatial | `Option<SrcPicId>` |
+  | `SDqLayer.pRefPic`, `pDecPic` (`svc_encode_slice.rs:417`, `:418`) | recon | `Option<RecPicId>` |
+  | `SDqLayer.pRefOri[]` (`:419`) | spatial (`ref_list_mgr_svc.rs:1023/1039/1321/1335`) | `[Option<SrcPicId>; N]` |
+  | `CWelsPreProcess.m_pSpatialPic[][]` (`wels_preprocess.rs:950`) | **is** the spatial pool | `Pool<Box<SPicture>>` + an id array |
+  | `CWelsPreProcess.m_pLastSpatialPicture[][2]` (`:947`) | spatial | `[[Option<SrcPicId>; 2]; N]` |
+  | `SRefInfoParam.pRefPicture` (`:234`) | spatial | `Option<SrcPicId>` |
+  | `Scaled_Picture.pScaledInputPicture` (`:194`) | **is** its own one-slot owner | `Option<Box<SPicture>>` |
+  **S34, measured**: the only permutation in either pool is `WelsExchangeSpatialPictures`
+  (`wels_preprocess.rs:1787`) — it swaps two `*mut SPicture` *slots* (`let tmp = *ppPic1; ...`),
+  called five times over `m_pSpatialPic[d][..]` and `m_pLastSpatialPicture[d][..]`
+  (`:1461`, `:1475`, `:1481`, `:2611`, `:2619`, `:2654`). The reference lists shift with explicit
+  index loops (`ref_list_mgr_svc.rs:273`, `:296` and their neighbours), also on the *pointer*
+  arrays. **No `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches a pool's storage anywhere**
+  — the pictures never move. So a *position* in `m_pSpatialPic` or a ref list is not an identity and
+  the pool slot is: `safe/pool.rs`'s `Pool<Box<SPicture>>` per owner (stable slots), the arrays hold
+  ids and permute freely, aliases become `Option<PicId>` with `None` where the C++ has null (F56's
+  rule: rule the zero, do not default it).
+  **Two id types, not one.** `pEncPic` (spatial) and `pDecPic`/`pRefPic` (recon) meet inside
+  `WelsEncoderEncodeExt` — `:3270` reads `pEncPic` from the spatial index map and `:3343` takes
+  `pDecPic` from the recon list, in the same loop iteration, and `UpdateOriginalPicInfo`
+  (`ref_list_mgr_svc.rs:1169`) takes one of each. One id type would let either be passed where the
+  other belongs, at no benefit: two types, `SrcPicId` and `RecPicId`, each resolved by its own pool.
+  **The ordering rule** (plan §4's 6.1-before-6.2), confirmed rather than re-derived: the aliases
+  become ids first, then the containers own — recon list before `SRefList.pRef` becomes the pool,
+  spatial aliases before `m_pSpatialPic` does.
+  **F42's arm**: no identity comparison between picture pointers exists anywhere in `src/encoder`
+  (grepped: no `==` between two `*mut SPicture`, no `same_picture`), and the sites where MC/VAA read
+  one picture and write another take `pDecPic` and `pRefPic`, which are **distinct pool slots by
+  construction** — `pDecPic` is `pNextBuffer`, chosen in `ref_list_mgr_svc.rs:628–643` as a slot
+  *not* in either ref list, and `pRefPic` is `pRefList0[0]`, which is in one. No site needs
+  `classify`.
