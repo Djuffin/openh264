@@ -823,11 +823,11 @@ pub unsafe fn InitDqLayers(
 
         // Screen-content feature search storage is not ported; C++ allocates
         // pFeatureSearchPreparation here when kiNeedFeatureStorage is set, which only
-        // happens for SCREEN_CONTENT_REAL_TIME.
+        // happens for SCREEN_CONTENT_REAL_TIME, and this returns before that. The
+        // field it used to null out is gone with the machinery behind it (T6.D2).
         if kiNeedFeatureStorage != 0 && iDlayerIndex == iDlayerCount - 1 {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }
-        (*pDqLayer).pFeatureSearchPreparation = null_mut();
 
         *(**ppCtx).ppDqLayerList.add(iDlayerIndex as usize) = pDqLayer;
 
@@ -1603,9 +1603,6 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
         );
         (*p).pCountMbNumInSlice = null_mut();
     }
-    // pFeatureSearchPreparation is only allocated for screen content, which
-    // InitDqLayers rejects; nothing to release.
-
     crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
     (*p).iMaxSliceNum = 0;
 

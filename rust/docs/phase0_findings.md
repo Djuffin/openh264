@@ -2082,3 +2082,29 @@ gate configurations.
 
 Running total: **sixty-seven measurements, twenty-one alternations, forty
 acquittals.**
+
+### Sixty-eighth measurement — 2026-08-19, Phase 6 session D, T6.D2's `family` gate: one hit, acquitted at step 1
+
+The `family` battery after face 1a (`pFeatureSearchPreparation` and its dead machinery
+deleted, S18) read **341/341 release** and **340/341 debug**. The debug failure:
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=1 rc=1 ::  C++ 39981   Rust 0
+```
+
+`mt`, `sm=3`, `t=4`, **zero-length** output, debug — the signature on every clause. The
+commit deletes a struct field and five functions no caller reaches; it touches no
+threading machinery and no slice machinery.
+
+**Step 0 does not apply**: the commit moves encoder production code, so base and head are
+different binaries by construction.
+
+**Step 1 — the configuration re-run 5×, machine otherwise idle: `BYTE-IDENTICAL` all
+five**, 39981 bytes against 39981 every time, where the gate run produced 0. One hit, so
+no alternation is owed (S14 step 2); it becomes owed if a second gate hit lands in this
+session.
+
+**Acquitted as F3.**
+
+Running total: **sixty-eight measurements, twenty-one alternations, forty-one
+acquittals.**
