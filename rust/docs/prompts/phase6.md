@@ -329,37 +329,52 @@ at a family boundary, and only with a written reason):
   other reaches. The live probe costs **+1.95%** of the Miri battery in Miri's own
   deterministic clock (1624.96 -> 1656.72s), about **+20s** of wall clock.
   [`phase6_session_a.md`](phase6_session_a.md)
-* **B — NEXT.** Four faces, in order — brief:
-  [`phase6_session_b.md`](phase6_session_b.md). (1) **F52's six adjudicated** —
-  pre-read by the steward: four are trait method *declarations* the sweep mistook
-  for empty bodies, `WelsRcPostFrameSkipping` is faithful to a `return false` in
-  `ratectl.cpp:1015`, `push_back` is two methods on two types; the sweep learns
-  to skip declarations. (2) **The encode probe goes live**: session A's diagnosis
-  is that `InitSliceBsBuffer` caches the shared writer in every slice
-  (`SSlice.pSliceBsa`) and `InitBitStream` replaces it every frame, so
-  `WelsSliceHeaderWrite` reads a dead pointer (`svc_encode_slice.rs:815`); the
-  steward's reading is that the pointer is a **cache of a one-bit choice** already
-  recorded in `sSliceBs.pBs`'s nullness, and that `pBsBuffer` is a cache of
-  `pThreadBsBuffer[uiBufferIdx]` and `pRawData` of `iStartPos` — all three die
-  (cache-not-carrier), an S29 spelling sweep of the encoder's nine stored
-  `= &mut (*p).f` sites goes first, then the `#[cfg_attr(miri, ignore)]` comes
-  off `encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker` and
-  the session walks the encode path under Miri until green, fixing what is Phase
-  6's and parking what is Phase 7's. S32's owed frame-count clause is measured
-  there. (3) **The `c_void` clearing**: `IWelsVP` dissolved (S18), the
-  typed-at-both-ends casts deleted, the eight dead `Combined3` fields deleted,
-  and the residue enumerated by owner (allocator / C ABI / MT). (4) **The
-  `SPicture` settlement** — three owners, the alias table, S34's permutation
-  sites (`WelsExchangeSpatialPictures` swaps pointers, not pictures), the pool
-  shape — and 6.1's head if the boundary allows.
-* **C** — `SMB`'s five arrays → `MbArray` (the encoder's 5.2), with
+* **B — SPENT** (2026-08-18). **the encode probe goes live, and the clearing.** Brief:
+  [`phase6_session_b.md`](phase6_session_b.md). Delivered, all four faces:
+  **F52 closed** — all six adjudicated by opening both lines (four trait-method
+  *declarations*, a faithful `return false` beside its dispatcher, two methods on two
+  types); `find_shadowing_stubs.py` skips declarations now (22 → 18 names) and carries
+  a `--self-test` that keeps F52's own stub shape printing, red under three
+  deliberately broken copies. **The encode probe is live and green in the `--lib` Miri
+  step** — the three settlements executed first (`SSlice.pSliceBsa`,
+  `SWelsSliceBs.pBsBuffer`, `SWelsNalRaw.pRawData`, all three caches of something the
+  holder already reaches; `WelsEncodeNal` typed; `SetOneSliceBsBufferUnderMultithread`
+  deleted; both `SHIM(phase3)` markers now name `pThreadBsBuffer` and **Phase 7** and
+  nothing else), then the walk: **eight reds**, each read, classified, fixed and
+  observed gone — S29 nested and its boundary clause, **S28's provenance class** (nine
+  walking cursors re-derived from the whole array), **F14's class** (twelve neighbour
+  pointers before their guard), F13's family in the `as_mut_ptr()` spelling, a
+  protected shared borrow beside a write into the same struct, and **F59** (new): the
+  IDCT-reconstruction shims built `&mut` and `&` over one span because the inter
+  reconstruction is *in place*. **No Phase 7 blocker was reached.** **`c_void` 268 →
+  131** (122 code, 9 prose): `IWelsVP` dissolved with its seven thunks and its
+  create/destroy pair (`m_vp: Box<SWelsVpContext>`, typed plugin `Set`/`Get`/`Process`,
+  the five untranslated methods keeping their exact behaviour), the typed-at-both-ends
+  casts deleted, and four dead dispatch families with them — the three
+  `pfSetMemZeroSize*` slots, `PSetMemoryZero`, `PWriteBlockResidualCabac`, the eight
+  `Combined3` fields with `assert_no_combined3`. Every remaining code occurrence is in
+  one of three enumerated lines (allocator / C ABI → Phase 8 / MT → Phase 7). **The
+  `SPicture` settlement is written** — three owners, a fourteen-row alias table, S34
+  measured (`WelsExchangeSpatialPictures` swaps *slots*; no pool storage ever
+  permutes), two id types with the reading that decides it, and F42's arm answered (no
+  identity comparison exists; `pDecPic` and `pRefPic` are distinct slots by
+  construction). **6.1's head did not land** and is named for session F with the table
+  as its work list: measured at ~184 consumer sites over nine files, converting whole
+  or not at all. S32's frame-count clause is measured (2 / 3 / 6 frames = 71.29 /
+  80.53 / 102.28 s, ≈7.7 s a frame — scaling, unlike picture size) and §7.6 carries it
+  with the unit change `-Zmiri-disable-isolation` brings. `exit` **PASS 13/0/1** (Miri `--lib`
+  **341/0**, 1034.61 s; both sweeps 341/341, both benches identical) — and its first run **failed**,
+  on a defect this session's own typing introduced (`InitPic` given `*const` where the C++ casts the
+  const away and writes): fixed at T6.B9, re-run green, recorded rather than hidden.
+* **C — NEXT.** `SMB`'s five arrays → `MbArray` (the encoder's 5.2), with
   `svc_base_layer_md`/`svc_mode_decision`/`deblocking` as its consumers.
 * **D** — the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up to
   Phase 7's boundary (`pBsBuffer` excepted by settlement).
 * **E** — `SMbCache` + the ME/MD/RC/CABAC records (6.3's scratch), and the third
   attempt at the parked SIMD families (plan §4; SATD owes its own measurement).
 * **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
-  callers (§3).
+  callers (§3), **and 6.1's recon-pool alias family**, handed over by session B with
+  its settlement written and its size measured (~184 sites, nine files).
 * **G** — the context flip and the deny sweep (6.6), then the phase close.
 
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
