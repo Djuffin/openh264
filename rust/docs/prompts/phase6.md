@@ -366,26 +366,47 @@ at a family boundary, and only with a written reason):
   **341/0**, 1034.61 s; both sweeps 341/341, both benches identical) — and its first run **failed**,
   on a defect this session's own typing introduced (`InitPic` given `*const` where the C++ casts the
   const away and writes): fixed at T6.B9, re-run green, recorded rather than hidden.
-* **C — NEXT.** **The scratch goes inline** — brief:
-  [`phase6_session_c.md`](phase6_session_c.md). Two families, one recipe: `SMB`'s
-  five outward pointers become inline arrays (`sMv`, `iRefIndex`, `iSadCost`,
-  `iIntra4x4PredMode`, `iNonZeroCount`; the five context arrays, their two parity
-  banks, allocations, frees and `InitMbInfo`'s wiring die), and `SMbCache`'s eight
-  malloc'd scratch buffers go inline with its four ping-pong aliases becoming three
-  half-selectors (`pEncSad` stays — it aliases a picture, F's). **Why inline and not
-  `MbArray`, ruled by the steward**: `SMB` and `SSlice` live in `WelsMallocz`'d
-  blocks, and an inline POD array is valid at zero (S21) where a `Vec`/`MbArray`
-  field is not until 6.6 makes the hosts constructible; the two banks' sharing is
-  unobservable in any configuration the port can run (≥ 3 equal-size spatial layers
-  needs the untranslated downsampler). Both faces are the hot path, so the session
-  owes a span against `2666a83c` with the SoA-behind-a-raw-field shape named as the
-  fallback. It also adds the **second encoder probe** — one test flipping CAVLC and a
-  non-LOW complexity mode together, the two knobs the CABAC/LOW probe leaves dark.
-* **D** — the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up to
-  Phase 7's boundary (`pBsBuffer` excepted by settlement); **the `SMB` list's
+* **C — SPENT** (2026-08-19). **The scratch goes inline** — brief:
+  [`phase6_session_c.md`](phase6_session_c.md). Delivered, all three faces. **`SMB`
+  holds no raw pointer**: its five outward pointers are inline arrays (`sMv`,
+  `iRefIndex`, `iSadCost`, `iIntra4x4PredMode`, `iNonZeroCount`) and the five context
+  arrays, their two parity banks, allocations, frees and `InitMbInfo`'s wiring half are
+  gone, along with `deblocking.rs`'s dead `TagMB` — a field-for-field second copy of
+  `SMB` a name-matching census could not see (F43's class). **`SMbCache` holds no raw
+  pointer but `pEncSad`**: eight buffers inline, the four ping-pong aliases three `u8`
+  selectors, `AllocMbCacheAligned`/`FreeMbCache`/`AllocateSliceMBBuffer` deleted, and
+  `ReallocateSliceList`'s error-path aliasing over copied scratch pointers closed with
+  them. Every surviving raw pointer into the inline arrays is derived from the array
+  root (`addr_of_mut!`, S28/S29), and rustc's deny-by-default
+  `dangerous_implicit_autorefs` turned out to enforce that spelling for free — fifteen
+  sites. Sizes measured and re-pinned: `SMB` **152 → 208**, `SMbCache` **576 → 5600**,
+  `SSlice` **1520 → 6544**, `sWelsEncCtx` **97952 → 97912** with all fifteen
+  `assert_ctx_offset!` pins, which sat behind the five deleted pointers and are the
+  port's own layout from here. **The second encode probe is live** (CAVLC + the fine
+  mode-decision family in one encode) and **found two reds on its first execution** —
+  the CAVLC writer holding a frame buffer and `sMbCacheInfo` across the callee that
+  re-derives them, and the ninth cursor of session B's S28 family, on a path no CABAC
+  probe reaches. Solo cost **24.96 s** against the first probe's **79.02 s**. It also
+  exposed a hole in the *byte* gate — all 341 sweep configurations are `LOW_COMPLEXITY`
+  — so both diffharness drivers gained an optional complexity argument (default `LOW`;
+  the 341 count is unchanged) and ten configurations at `MEDIUM`/`HIGH` read
+  byte-identical. **The span is measured** (7 pairs against `2666a83c`): encode median
+  **−0.97%**, decode **+0.25%**, both inside the null band, tripwire unbreached by ≈24.5
+  points, cumulative ≈ **+10…+12%** — the AoS cost face 1 predicted is below the
+  instrument's resolution and **the SoA fallback stays named, not opened**. Encoder-side
+  `raw_ptr` **2446 → 2389**, `unsafe_fn` **686 → 684**. `exit` **PASS 13/0/1** with Miri
+  `--lib` **342/0**; its first two runs failed — once on this session's own covering
+  test (T6.C4) and once on a prose `*mut ` in that fix's comment plus **F3 measurement
+  67**, whose alternation (12 `mt` presets a side, 1 hit each) was run and acquitted.
+* **D — NEXT.** the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up
+  to Phase 7's boundary (`pBsBuffer` excepted by settlement); **the `SMB` list's
   ownership goes here with the layer** (`sMbDataP`/`ppMbListD`, and the
-  `pCurMb: *mut SMB` parameter family with the bracket), and the size-limited
-  dynamic-slice path gets its probe here.
+  `pCurMb: *mut SMB` parameter family with the bracket, joined by `SMbCache`'s own
+  `*mut` parameter family), and **the size-limited dynamic-slice path
+  (`WelsMdInterMbLoopOverDynamicSlice`) gets its probe here** — session C left it the
+  one encode path no probe drives, and both slices' `sSliceBs.pBs` half of
+  `ReallocateSliceList`'s error-path aliasing is still open. `SSlice` carries 5 KB of
+  inline scratch now (6544 bytes), which is the shape the bracket has to move.
 * **E** — the ME/MD/RC/CABAC records (6.3's scratch — `SWelsMD`, `SWelsME`,
   `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, take-what-you-reach; `SMbCache`'s
   fields moved to C, its `*mut` parameters stay here), and the third attempt at the
