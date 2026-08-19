@@ -902,7 +902,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
         return 0;
     }
 
-    let kbModelingFromSpatial = !(*(*pCtx).pCurDqLayer).pRefLayer.is_null()
+    let kbModelingFromSpatial = (*(*pCtx).pCurDqLayer).pRefLayer.is_some()
         && iCurDid > 0
         && (iCurDid as usize - 1 < MAX_SPATIAL_LAYER_NUM)
         && ((*pSvcParam).sSpatialLayers[iCurDid as usize - 1].sSliceArgument.uiSliceMode

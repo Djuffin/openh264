@@ -45,7 +45,7 @@ use crate::encoder::svc_mode_decision::{
 use crate::encoder::svc_motion_estimate::{FME_DEFAULT_FEATURE_INDEX, ME_DIA_CROSS, ME_DIA_CROSS_FME};
 use crate::encoder::wels_preprocess::AllocPicture;
 use crate::encoder::svc_encode_slice::{
-    SDqLayer, SMB, MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM,
+    LayerIdx, SDqLayer, SMB, MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM,
 };
 use crate::encoder::svc_motion_estimate::{
     CAMERA_HIGHLAYER_MVD_RANGE, CAMERA_MVD_RANGE, CAMERA_STARTMV_RANGE, EXPANDED_MVD_RANGE,
@@ -775,15 +775,14 @@ pub unsafe fn InitDqLayers(
         (*pParamInternal).uiIdrPicId = 0;
         (*pParamInternal).bEncCurFrmAsIdrFlag = true; // make sure the first frame is IDR
 
-        let pDqLayer = (*pMa).WelsMallocz(
-            std::mem::size_of::<SDqLayer>() as u32,
-            tag!("pDqLayer"),
-        ) as *mut SDqLayer;
-        if pDqLayer.is_null() {
-            return 1;
-        }
-
-        (*pDqLayer).bNeedAdjustingSlicing = false;
+        // **`Box`, not `WelsMallocz` — T6.D3, and it is the enabler for everything
+        // this session's later faces do.** `SDqLayer` is reached only through a
+        // pointer in the zeroed context (`ppDqLayerList[i]`), which is T3.6's `pOut`
+        // precedent: the context's zeroing never reaches these fields, so a
+        // `Box`-built layer may own `Vec`/`MbArray` where an inline-in-a-zeroed-block
+        // struct may not (S21, read the other way). `SDqLayer::new` writes every
+        // field the zero block used to stand in for.
+        let pDqLayer = Box::into_raw(Box::new(SDqLayer::new(LayerIdx(iDlayerIndex as u8))));
 
         (*pDqLayer).iMbWidth = kiMbW as i16;
         (*pDqLayer).iMbHeight = kiMbH as i16;
@@ -1606,7 +1605,9 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
     crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
     (*p).iMaxSliceNum = 0;
 
-    (*pMa).WelsFree(p as *mut c_void, tag!("pDqLayer"));
+    // The layer is `Box`-built (T6.D3), so its own storage is Rust's to release;
+    // the member frees above go one at a time as each member becomes owned.
+    drop(Box::from_raw(p));
     *pDq = null_mut();
 }
 
@@ -2034,9 +2035,12 @@ pub unsafe fn GetSubSequenceId(pCtx: *mut sWelsEncCtx, eFrameType: EVideoFrameTy
 /// outgoing layer the reference.
 pub unsafe fn WelsSwapDqLayers(pCtx: *mut sWelsEncCtx, kiNextDqIdx: i32) {
     let pTmpLayer = *(*pCtx).ppDqLayerList.add(kiNextDqIdx as usize);
-    let pRefLayer = (*pCtx).pCurDqLayer;
+    // The outgoing layer's *position*, not its address — T6.D3. It carries its own
+    // index (`iDqIdx`, stamped at construction) precisely because this is the one
+    // site that has to name a layer it holds only a pointer to.
+    let kRefIdx = (*(*pCtx).pCurDqLayer).iDqIdx;
     (*pCtx).pCurDqLayer = pTmpLayer;
-    (*(*pCtx).pCurDqLayer).pRefLayer = pRefLayer;
+    (*(*pCtx).pCurDqLayer).pRefLayer = Some(kRefIdx);
 }
 
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
@@ -2223,7 +2227,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     (*pCurDq).iCsStride[1] = (*pDecPic).iLineSize[1];
     (*pCurDq).iCsStride[2] = (*pDecPic).iLineSize[2];
 
-    (*pCurDq).bBaseLayerAvailableFlag = !(*pCurDq).pRefLayer.is_null();
+    (*pCurDq).bBaseLayerAvailableFlag = (*pCurDq).pRefLayer.is_some();
 
     if !(*pCtx).pTaskManage.is_null() {
         let pTaskManage =
@@ -3110,7 +3114,7 @@ pub unsafe fn WelsEncoderEncodeExt(
     (*pLayerBsInfo).pNalLengthInByte = (*(*pCtx).pOut).sNalLen.as_mut_ptr();
     iCurDid = (*pSpatialIndexMap).iDid as i8;
     (*pCtx).pCurDqLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
-    (*(*pCtx).pCurDqLayer).pRefLayer = null_mut();
+    (*(*pCtx).pCurDqLayer).pRefLayer = None;
 
     if !(*pSvcParam).bSimulcastAVC {
         eFrameType = PrepareEncodeFrame(

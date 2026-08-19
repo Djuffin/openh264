@@ -188,10 +188,13 @@ assert_size!(SLayerInfo, 48);
 
 // codec/encoder/core/inc/svc_enc_frame.h
 assert_size!(SSliceBufferInfo, 16);
-// 512 in the C++ and in this port until **T6.D2**, which deleted the dead
-// `pFeatureSearchPreparation` pointer (S18): -8 bytes, no padding change.
-// **504, measured** — and the number tracks the port from here, not the C++.
-assert_size!(SDqLayer, 504);
+// 512 in the C++, 504 after **T6.D2** deleted the dead `pFeatureSearchPreparation`
+// pointer (S18), and **480 after T6.D3**, which made `pRefLayer` an
+// `Option<LayerIdx>` (8 bytes of address -> 2 of position), added the layer's own
+// 1-byte `iDqIdx`, and dropped `repr(C)` with them — so the compiler now packs the
+// struct's fifteen small scalars into the holes the C layout left. **Measured**;
+// the number tracks the port, not the C++.
+assert_size!(SDqLayer, 480);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,

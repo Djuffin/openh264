@@ -1414,9 +1414,18 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
 // ============================================================================
 
 /// Retrieves the collocated base-layer reference macroblock in dyadic SVC downsampling.
+///
+/// **Takes the context rather than the layer since T6.D3**: `pRefLayer` is a
+/// position in `ppDqLayerList` now, so resolving it is one lookup in the list and
+/// the list is reachable only through the context. The base layer is a *different*
+/// `SDqLayer` than `pCurDqLayer`, which is why this reads through the list rather
+/// than through the current layer.
 #[inline(always)]
-pub unsafe extern "C" fn GetRefMb(pCurLayer: *mut SDqLayer, pCurMb: *mut SMB) -> *mut SMB {
-    let kpRefLayer = (*pCurLayer).pRefLayer;
+pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB) -> *mut SMB {
+    let kRefIdx = (*(*pEncCtx).pCurDqLayer)
+        .pRefLayer
+        .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
+    let kpRefLayer = *(*pEncCtx).ppDqLayerList.add(kRefIdx.get());
     let kiRefMbIdx =
         (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + ((*pCurMb).iMbX as i32 >> 1);
     (*kpRefLayer).sMbDataP.offset(kiRefMbIdx as isize)
@@ -1553,8 +1562,7 @@ pub unsafe extern "C" fn WelsMdInterMbEnhancelayer(
     pCurMb: *mut SMB,
     _pMbCache: *mut SMbCache,
 ) {
-    let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let kpInterLayerRefMb = GetRefMb(pCurLayer, pCurMb);
+    let kpInterLayerRefMb = GetRefMb(pEncCtx, pCurMb);
     let kuiInterLayerRefMbType = (*kpInterLayerRefMb).uiMbType;
 
     SetMvBaseEnhancelayer(pMd, pCurMb, kpInterLayerRefMb);

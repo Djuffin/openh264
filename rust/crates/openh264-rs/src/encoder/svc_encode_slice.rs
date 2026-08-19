@@ -386,8 +386,34 @@ pub use crate::encoder::encoder_context::SPicture;
 /// (`slice_multi_threading.rs`) still stood `sSliceBufferInfo` in for
 /// `[SSliceBufferInfo; MAX_THREADS_NUM]` with `[u8; 64 * MAX_THREADS_NUM]` — four
 /// times the real 64 bytes — and left four pointers as `*mut c_void`.
-#[repr(C)]
+/// A layer's position in `sWelsEncCtx::ppDqLayerList` — Phase 6 session D.
+///
+/// The list is `iSpatialLayerNum` entries built once in `InitDqLayers` and freed
+/// once in `FreeDqLayer`, and **nothing permutes it**: `WelsSwapDqLayers`
+/// reassigns `pCurDqLayer` and stamps the outgoing layer's index, and no
+/// `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches the list anywhere in
+/// the tree (S34, grepped at this face's open — 28 occurrences, zero hits). So a
+/// position is a stable identity and an index is faithful where the raw
+/// `*mut SDqLayer` was.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LayerIdx(pub u8);
+
+impl LayerIdx {
+    #[inline(always)]
+    pub fn get(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Not `repr(C)`: `pRefLayer` is an `Option<LayerIdx>`, which has no C shape.
+/// `assert_size!(SDqLayer, ...)` is re-pinned to the measured size in the same
+/// commit (phase6.md §5).
 pub struct SDqLayer {
+    /// This layer's own position in `ppDqLayerList`, stamped at construction —
+    /// `WelsSwapDqLayers` needs the *outgoing* layer's index and holds only its
+    /// pointer.
+    pub iDqIdx: LayerIdx,
+
     pub sLayerInfo: SLayerInfo,
     pub sSliceBufferInfo: [SSliceBufferInfo; MAX_THREADS_NUM],
     pub ppSliceInLayer: *mut *mut SSlice,
@@ -434,12 +460,98 @@ pub struct SDqLayer {
     // configuration that would have allocated it, so `RequestFeatureSearchPreparation`
     // and `UpdateFMESwitch` had no reachable caller at all — S18, deleted rather than
     // converted (T6.D2).
-    pub pRefLayer: *mut SDqLayer,
+    /// The base layer this one predicts from, as a position in `ppDqLayerList`
+    /// rather than as an address — T6.D3, the ordering rule's first application on
+    /// this struct. `None` is the raw spelling's null, and it is **written**, never
+    /// inherited from a zero image: `Option<LayerIdx>` has no niche to borrow, so
+    /// all-zero is not a defined `None` (F56's trap, read the other way), which is
+    /// why this conversion lands in the same commit as the constructor below.
+    pub pRefLayer: Option<LayerIdx>,
+}
+
+impl SDqLayer {
+    /// A layer exactly as `InitDqLayers` used to find it the moment `WelsMallocz`
+    /// returned — every field is that allocation's zero, with what the zero *meant*
+    /// written beside it (T5b's shells recipe).
+    ///
+    /// **Why there is a constructor at all**: the layer is now `Box`-built, which is
+    /// what lets it own containers a `WelsMallocz`'d block may not (S21, read the
+    /// way T3.6's `pOut` reads it). A zeroed `Vec` field is UB the moment it drops,
+    /// so the construction changes before the ownership does.
+    pub fn new(idx: LayerIdx) -> Self {
+        Self {
+            // Its own position, and the only field here that is not a zero: the
+            // C++ never needed it because it compared addresses.
+            iDqIdx: idx,
+            // `InitDqLayers` fills the whole of this from the parameter sets before
+            // the first frame; its `Default` is the same zero block the C++ memset.
+            sLayerInfo: SLayerInfo::default(),
+            // No bank allocated yet — `InitSliceThreadInfo` fills bank 0 (and, under
+            // MT, one per thread) two calls later.
+            sSliceBufferInfo: std::array::from_fn(|_| SSliceBufferInfo::default()),
+            // The slice pointer array, allocated by `InitSliceInLayer`.
+            ppSliceInLayer: std::ptr::null_mut(),
+            // Zero here means "no slice segmentation yet"; `InitSlicePEncCtx` sets
+            // the mode, the geometry and the map.
+            sSliceEncCtx: SSliceCtx::default(),
+            // Plane aliases into the reconstructed and source pictures, re-aimed at
+            // every frame by `WelsInitCurrentLayer`; null means "no frame started".
+            pCsData: [std::ptr::null_mut(); 3],
+            iCsStride: [0; 3],
+            pEncData: [std::ptr::null_mut(); 3],
+            iEncStride: [0; 3],
+            // The macroblock list, handed to the layer by `InitMbListD`.
+            sMbDataP: std::ptr::null_mut(),
+            // Overwritten by the caller on the next two lines; zero is "unsized".
+            iMbWidth: 0,
+            iMbHeight: 0,
+            // `WelsInitCurrentLayer` recomputes this from `pRefLayer` every frame.
+            bBaseLayerAvailableFlag: false,
+            // Set per frame from the mode-decision configuration.
+            bSatdInMdFlag: false,
+            // Deblocking parameters, all set by `InitDqLayers` immediately below the
+            // allocation; zero is the C++'s "filter on, no offsets".
+            iLoopFilterDisableIdc: 0,
+            iLoopFilterAlphaC0Offset: 0,
+            iLoopFilterBetaOffset: 0,
+            uiDisableInterLayerDeblockingFilterIdc: 0,
+            iInterLayerSliceAlphaC0Offset: 0,
+            iInterLayerSliceBetaOffset: 0,
+            bDeblockingParallelFlag: false,
+            // Picture slots, aimed per frame; null is "no picture bound".
+            pRefPic: std::ptr::null_mut(),
+            pDecPic: std::ptr::null_mut(),
+            pRefOri: [std::ptr::null_mut(); MAX_REF_PIC_COUNT as usize],
+            // Both are `iMultipleThreadIdc > 1` predicates that `InitSliceInLayer`
+            // computes; false is the single-threaded answer and the honest default.
+            bThreadSlcBufferFlag: false,
+            bSliceBsBufferFlag: false,
+            // Summed from the banks by `InitSliceInLayer`.
+            iMaxSliceNum: 0,
+            // Partition bookkeeping, reset per frame by `InitSliceBoundaryInfo` and
+            // `WelsInitCurrentQBLayerMltslc`.
+            NumSliceCodedOfPartition: [0; MAX_THREADS_NUM],
+            LastCodedMbIdxOfPartition: [0; MAX_THREADS_NUM],
+            FirstMbIdxOfPartition: [0; MAX_THREADS_NUM],
+            EndMbIdxOfPartition: [0; MAX_THREADS_NUM],
+            // The two per-slice-index arrays, allocated by `InitSliceInLayer`.
+            pFirstMbIdxOfSlice: std::ptr::null_mut(),
+            pCountMbNumInSlice: std::ptr::null_mut(),
+            // "The slicing does not need re-deriving"; `NeedDynamicAdjust` sets it.
+            bNeedAdjustingSlicing: false,
+            // No base layer until `WelsSwapDqLayers` names one — the raw spelling's
+            // null, written rather than inherited.
+            pRefLayer: None,
+        }
+    }
 }
 
 impl Default for SDqLayer {
+    /// The layer at index 0, which is what the two test fixtures that call this
+    /// want (`slice_multi_threading.rs`, `wels_task_management.rs`): both build a
+    /// single-layer context. It is no longer `mem::zeroed()` — see `new`.
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        Self::new(LayerIdx(0))
     }
 }
 
