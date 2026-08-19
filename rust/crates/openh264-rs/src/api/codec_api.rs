@@ -2414,6 +2414,33 @@ pub(crate) mod abi_test_driver {
         }
     }
 
+    /// The two configuration knobs the encoder probes vary — **Phase 6 session C**.
+    ///
+    /// Everything else about the driver's configuration is fixed (`rust_enc`'s, with
+    /// session A's three determinism departures); these two are separated because each
+    /// selects a *different body of code*, not a different parameter value:
+    ///
+    /// * `cabac` picks the entropy writers — `svc_set_mb_syn_cabac.rs` or
+    ///   `svc_set_mb_syn_cavlc.rs`, sixteen conversion sites in session C's face 1.
+    /// * `complexity` picks the mode-decision family: `LOW_COMPLEXITY` installs
+    ///   `SetFastCodingFunc` (`encoder_ext.rs:2485`, `bFastMode`) and anything else
+    ///   runs the fine intra partition search (`WelsMdIntraFinePartition`,
+    ///   `WelsMdI4x4`) and the `pMemPredBlk4` ping-pong that session C's face 2 moves.
+    ///
+    /// **Both defaults are what the first probe has always used** (CABAC,
+    /// `LOW_COMPLEXITY`), so `Default::default()` leaves that probe unchanged.
+    #[derive(Debug, Copy, Clone)]
+    pub(crate) struct EncoderProbeOptions {
+        pub cabac: bool,
+        pub complexity: ECOMPLEXITY_MODE,
+    }
+
+    impl Default for EncoderProbeOptions {
+        fn default() -> Self {
+            Self { cabac: true, complexity: ECOMPLEXITY_MODE::LOW_COMPLEXITY }
+        }
+    }
+
     /// Encodes `frames` frames of [`moving_i420`] at `width` x `height` through the
     /// C ABI, and returns what came out frame by frame together with the encoder's
     /// **own** report of the resolution it is configured for.
@@ -2433,13 +2460,17 @@ pub(crate) mod abi_test_driver {
     /// determinism the probe's assertions rest on: scene-change detection off (a
     /// detected cut would make frame 1 an IDR and there would be no inter frame),
     /// frame skip off (a skipped frame emits no NAL), and `uiIntraPeriod = 0` (no
-    /// periodic IDR). Entropy coding is CABAC over `PRO_HIGH`, because a baseline
-    /// layer forces CAVLC and the CABAC writers are the larger raw surface of the
-    /// two (66 raw-pointer occurrences and 30 `unsafe fn` against 35 and 12).
+    /// periodic IDR). The profile is `PRO_HIGH`, because a baseline layer forces
+    /// CAVLC and the probe has to be able to ask for either writer; entropy coding
+    /// and complexity come from [`EncoderProbeOptions`] and default to CABAC over
+    /// `LOW_COMPLEXITY` — the CABAC writers were the larger raw surface of the two
+    /// (66 raw-pointer occurrences and 30 `unsafe fn` against 35 and 12), which is
+    /// why the first probe took them.
     pub(crate) fn drive_encoder_over(
         width: i32,
         height: i32,
         frames: usize,
+        opts: EncoderProbeOptions,
     ) -> (Vec<EncodedFrame>, (i32, i32)) {
         assert!(
             width % 16 == 0 && height % 16 == 0 && width >= 16 && height >= 16,
@@ -2469,11 +2500,11 @@ pub(crate) mod abi_test_driver {
             param.fMaxFrameRate = 30.0;
             param.iTemporalLayerNum = 1;
             param.iSpatialLayerNum = 1;
-            param.iComplexityMode = ECOMPLEXITY_MODE::LOW_COMPLEXITY;
+            param.iComplexityMode = opts.complexity;
             param.uiIntraPeriod = 0;
             param.iNumRefFrame = AUTO_REF_PIC_COUNT;
             param.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
-            param.iEntropyCodingModeFlag = 1;
+            param.iEntropyCodingModeFlag = if opts.cabac { 1 } else { 0 };
             param.bEnableFrameSkip = false;
             param.iMaxQp = 51;
             param.iMinQp = 0;
