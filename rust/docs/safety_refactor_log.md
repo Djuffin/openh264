@@ -11638,3 +11638,66 @@ ratchet clean against the baseline regenerated at T6.C3, census 58, **both sweep
 341/341 with no F3 hit in either profile**. Miri, `--lib` step flags: **both encode
 probes ok, 101.60 s** for the pair (96.70 s at face 1 — the cost of a slice that now
 carries 5 KB of scratch through the interpreter).
+### Session C's close — the scratch is inline, and the numbers
+
+**Both families converted in the recipe the brief ruled, and no encoded byte moved.** `SMB`'s five
+outward pointers and `SMbCache`'s eleven are inline arrays of the structs that always owned them
+(`pEncSad`, the twelfth, aliases a picture and stays for F). Gone with them: five context allocations
+and their frees, eight per-slice allocations,
+`AllocMbCacheAligned`/`FreeMbCache`/`AllocateSliceMBBuffer`, `InitMbInfo`'s wiring half and its
+`kiMaxMbNum` parameter, the two parity banks, three port-added null guards, and `deblocking.rs`'s dead
+`TagMB` duplicate of `SMB` (S18).
+
+**Metrics, encoder-side** (`src/encoder` + `src/processing`, the ratchet's own patterns — `raw_ptr`
+counts `*mut `/`*const ` occurrences, `unsafe_fn` line-anchored definitions), `2666a83c` → close:
+`raw_ptr` **2446 → 2389 (−57)**, `unsafe_fn` **686 → 684**, `unsafe_block` **289 → 288**, `mem_zeroed`
+22 unmoved; crate-wide `raw_ptr` **3037 → 2980**. **Two per-file rises, recorded not hidden** — `md.rs`
+`unsafe_fn` 17 → 26 and `raw_ptr` 80 → 84: eleven pointer *fields* left `SMbCache` and ten root-deriving
+accessors arrived, which is the trade the settlement made. **Sizes, measured and re-pinned in the commit
+that moved each**: `SMB` **152 → 208**, `sWelsEncCtx` **97952 → 97912** (with all fifteen
+`assert_ctx_offset!` pins, which sat behind five deleted pointers), `SMbCache` **576 → 5600**, `SSlice`
+**1520 → 6544** — the same bytes the C++ malloc'd per slice, in one block instead of eight, with no
+per-slice allocation left to fail.
+
+**The second probe and the knob it exposed.**
+`encode_loop_runs_with_cavlc_and_fine_mode_decision_under_the_aliasing_checker` (name read out of the
+`--lib` output, F17/F18) found **two reds on its first execution**, both fixed red-before/green-after;
+coverage measured, not argued — 0/0 calls into the fine partition search and the CAVLC writer from the
+first probe, 6/18 from this one. Solo cost **24.96 s** against the first probe's **79.02 s** (**101.60
+s** the pair): the brief budgeted ≈80 s, and the two probes are not the same price. It also exposed a
+hole in the *byte* gate — every one of the 341 sweep configurations is `LOW_COMPLEXITY` — so both
+diffharness drivers took an optional complexity argument (default `LOW`: the 341 count and every
+existing configuration unchanged), and ten configurations across three clips, both entropy coders and
+four `iRCMode`s read **BYTE-IDENTICAL** at `MEDIUM` and `HIGH`.
+
+**The span** (7 pairs against `2666a83c`, `perf_baseline.md`): encode median **−0.97%** against a
+**−2.99 … +0.82%** null band, decode **+0.25%** against **+0.41%** — both inside, worst single row
+**+0.49%** against D-perf-4's **+25% median** tripwire. Cumulative encoder deficit ≈ +11…+13% → ≈
+**+10…+12%**. Face 1's predicted AoS cost is below this instrument's resolution; the **SoA fallback is
+named, not opened** (Phase 9, D-perf-6). **F3, measurements 66 and 67** (S14, at adjudication, `phase0_findings.md`): face 1's release sweep
+read 340/341 on `mt sm=3 t=2` and the close's debug sweep 340/341 on `t=4` — the signature on every
+clause both times, and each configuration byte-identical on re-run (6× and 5×). The second **gate** hit
+triggered the alternation measurement 66 had written down as owed: **12 `mt` presets a side, base
+`2666a83c` against head, 2880 configurations, one hit each side, both zero-length — HEAD is not worse**.
+Twenty-first alternation, fortieth acquittal.
+
+**The `exit` battery's first run failed one step, and it was this session's own test** (T6.C4):
+`test_wels_md_i16x16_cost` derived a pointer from `sMemPredMb`, then passed `&mut mb_cache` to two
+accessors — a `Unique` retag over all 5600 bytes that pops that tag — and read through it after.
+Production is unaffected (every call site already holds a raw pointer); fixed by ordering. Second
+session running in which `exit` caught a defect the session itself introduced.
+
+**Gates.** `exit` battery **`OVERALL: PASS` — 13 passed / 0 failed / 1 skipped** at `a516ebab`: tests
+**485 / 479 / 20**, ratchet clean, census **58**, **both sweeps 341/341 in both profiles**, both benches
+bit-identical, Miri `--lib` **342 / 0** with **both** encoder probe names read out of the output
+(F17/F18), differential targets **20 / 7 / 3**. The `--lib` step reads **1022.46 s** at 342 tests
+against session B's 1034.61 s at 341 — the new probe's 25 s sits inside the step's own run-to-run
+spread, which session B measured at 3.3% with isolation off. A `commit` battery in each code commit, `family` at
+each face's close, and **three `exit` runs**: the first failed the Miri step on T6.C4's defect, the
+second failed the ratchet (a prose `*mut ` in T6.C4's own comment, S16's floor) and the debug sweep
+(measurement 67), and the third is the one quoted here. Both failures are recorded above, not hidden.
+
+**Session D inherits, named**: the `SMB` list (`sMbDataP`, `ppMbListD`) with the layer bracket, the
+`pCurMb`/`pMbCache` parameter families, the still-unprobed dynamic-slice path
+(`WelsMdInterMbLoopOverDynamicSlice`), and the `sSliceBs.pBs` half of `ReallocateSliceList`'s
+error-path aliasing — the `SMbCache` half closed here.
