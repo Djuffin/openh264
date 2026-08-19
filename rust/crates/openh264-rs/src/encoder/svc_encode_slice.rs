@@ -270,8 +270,8 @@ use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 
 /// `TagSlice` — `codec/encoder/core/inc/slice.h:170`. 1584 bytes in the C++; the
-/// port's is not pinned (`abi_guard.rs`) and measures 1536 at Phase 6 session B,
-/// after `pSliceBsa` went.
+/// port's is not pinned (`abi_guard.rs`) and measures 1520 at Phase 6 session B,
+/// after `pSliceBsa`, `sSliceBs.pBsBuffer` and the NAL records' `pRawData` went.
 #[repr(C)]
 pub struct SSlice {
     pub sMbCacheInfo: SMbCache,
@@ -1882,14 +1882,15 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 
 /// The buffer a slice's writer is positioned in.
 ///
-/// SHIM(phase3) -> **the MT-aliased slice allocation only.** T3.6 made the frame
-/// output owned, so this function's second branch is now a plain borrow of a
-/// `Vec` and only the first still goes through `bs_buffer`. What is left here
-/// retires with the thread buffer pool, in **Phase 6** — see `SWelsSliceBs`.
+/// SHIM(phase3) -> **the thread pool's own bitstream buffers only.** T3.6 made the
+/// frame output owned, so this function's second branch is a plain borrow of a
+/// `Vec`; the first resolves the pool slot the slice was claimed into
+/// (`thread_bs_buffer`) and goes through `bs_buffer` for the slice. What is left
+/// here retires with `pThreadBsBuffer` itself, in **Phase 7** (F12/P10).
 ///
 /// A `BsWriter` is a position and carries no buffer, so every write has to be told
-/// which one. A slice writes into exactly one of two: its own thread-local
-/// `sSliceBs.pBsBuffer` when `InitSliceBsBuffer` gave it an independent buffer, or
+/// which one. A slice writes into exactly one of two: the thread buffer it was
+/// claimed into when `InitSliceBsBuffer` gave it an independent output buffer, or
 /// the frame-level `pOut->sBsBuffer` when it shares. **The discriminator is
 /// `sSliceBs.pBs`'s nullness** — `InitSliceBsBuffer` allocates `pBs` exactly when
 /// it gives the slice its own writer and leaves it null exactly when the slice
@@ -1910,10 +1911,31 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 #[inline]
 pub unsafe fn slice_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
     if !(*pSlice).sSliceBs.pBs.is_null() {
-        bs_buffer((*pSlice).sSliceBs.pBsBuffer, (*pSlice).sSliceBs.uiSize)
+        thread_bs_buffer(pEncCtx, pSlice)
     } else {
         &mut (&mut *(*pEncCtx).pOut).sBsBuffer[..]
     }
+}
+
+/// The thread bitstream buffer a slice was claimed into:
+/// `pSliceThreading->pThreadBsBuffer[uiBufferIdx]`, `uiSize` bytes.
+///
+/// This replaces `SWelsSliceBs.pBsBuffer`, which was a cache of exactly this:
+/// both C++ stamp sites (`InitOneSliceInThread`, `SetOneSliceBsBufferUnderMultithread`)
+/// wrote `pThreadBsBuffer[idx]` with the same `idx` the first stores in
+/// `uiBufferIdx`. Resolved at each use, the pool's slot is named by index and no
+/// struct aliases its allocation. The pool itself is **Phase 7's** (F12/P10) — see
+/// `bs_buffer`, whose one remaining job this is.
+///
+/// # Safety
+/// `pEncCtx`, `(*pEncCtx).pSliceThreading` and `pSlice` must be live, and the slice
+/// must have been claimed into a thread slot (`InitOneSliceInThread`).
+#[inline]
+pub unsafe fn thread_bs_buffer<'a>(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) -> &'a mut [u8] {
+    bs_buffer(
+        (*(*pEncCtx).pSliceThreading).pThreadBsBuffer[(*pSlice).uiBufferIdx as usize],
+        (*pSlice).sSliceBs.uiSize,
+    )
 }
 
 /// The writer a slice's bitstream is positioned by — the other half of
@@ -2450,9 +2472,8 @@ pub unsafe fn InitOneSliceInThread(
 
     (*slc_ptr).sSliceBs.uiBsPos = 0;
     (*slc_ptr).sSliceBs.iNalIndex = 0;
-    if !(*pCtx).pSliceThreading.is_null() {
-        (*slc_ptr).sSliceBs.pBsBuffer = (*(*pCtx).pSliceThreading).pThreadBsBuffer[kiSlcBuffIdx as usize];
-    }
+    // The C++ stamped `sSliceBs.pBsBuffer = pThreadBsBuffer[kiSlcBuffIdx]` here;
+    // `uiBufferIdx` above already names that slot, and `thread_bs_buffer` reads it.
     (*slc_ptr).sSliceBs.uiSize = (*pCtx).iFrameBsSize as u32;
 
     ENC_RETURN_SUCCESS

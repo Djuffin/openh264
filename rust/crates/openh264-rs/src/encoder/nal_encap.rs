@@ -102,18 +102,20 @@ impl Default for SWelsNalRaw {
 
 /// The one place that turns an encoder output buffer back into a slice.
 ///
-/// SHIM(phase3) -> **`SWelsSliceBs`'s** raw `pBsBuffer`, and nothing else now.
-/// `BsWriter` is a position and nothing else, so the buffer has to be expressed
-/// at each write, and for that struct it still means rebuilding a slice from a
-/// `WelsMallocz`'d pointer and the `uiSize` recorded beside it. One helper does
-/// that arithmetic and nothing else does it, exactly as T3.1b's reader-side
-/// helper did until T3.3 deleted it.
+/// SHIM(phase3) -> **the thread pool's own bitstream buffers, and nothing else
+/// now** — `SSliceThreading.pThreadBsBuffer[i]`, one raw allocation per worker,
+/// **Phase 7's** (F12/P10) with the pool that claims them. `BsWriter` is a position
+/// and nothing else, so the buffer has to be expressed at each write, and for those
+/// buffers it still means rebuilding a slice from a raw pointer and the `uiSize`
+/// recorded beside it. One helper does that arithmetic and nothing else does it,
+/// exactly as T3.1b's reader-side helper did until T3.3 deleted it.
 ///
 /// **T3.6 took `SWelsEncoderOutput` off this path**: its buffer is a `Vec<u8>`,
 /// so its callers slice it directly and the length is `len()` rather than a
-/// field. What is left on the far side of this shim is the MT-aliased slice
-/// buffer alone — see `SWelsSliceBs` for why that one could not follow, and
-/// which phase takes it.
+/// field. **Phase 6 session B took `SWelsSliceBs.pBsBuffer` off it**: that field
+/// was a cache of `pThreadBsBuffer[uiBufferIdx]` and is gone; the three readers
+/// (`slice_bs_buffer`'s thread arm, the task's prefix NAL, `WriteSliceBs`) resolve
+/// the pool slot by index through `thread_bs_buffer` and come here for the slice.
 ///
 /// **T3.5 narrowed what this guards.** The CABAC arithmetic coder used to hold
 /// its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd` pointer triple and reach the
@@ -124,8 +126,9 @@ impl Default for SWelsNalRaw {
 ///
 /// # Safety
 /// `ptr` must be non-null and point to `len` writable bytes that outlive `'a`, with
-/// no other live reference to them — which is what `pBsBuffer` plus its own
-/// `uiSize` is, and what the task-claiming invariant gives per thread.
+/// no other live reference to them — which is what a claimed `pThreadBsBuffer[i]`
+/// plus the slice's `uiSize` is, and what the task-claiming invariant gives per
+/// thread.
 #[inline]
 pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
     debug_assert!(!ptr.is_null(), "a writer's buffer must be allocated first");
@@ -212,24 +215,24 @@ impl SWelsEncoderOutput {
 
 /// Thread-local bitstream state allocated per slice.
 ///
-/// **Deliberately still raw, and not Phase 3's to fix.** T3.6 made
-/// `SWelsEncoderOutput`'s buffers owned; this one is excluded, because it is not
-/// singly owned: in multi-threaded mode `SetOneSliceBsBufferUnderMultithread`
-/// (`slice_multi_threading.rs:942`) binds `pBsBuffer` to
-/// `pSliceThreading->pThreadBsBuffer[kiThreadIdx]`, so the field is an *alias*
-/// into the thread-claimed buffer pool rather than an allocation this struct
-/// holds. Making it a `Vec` would give two owners of one allocation.
-///
-/// The pool, its claiming discipline, and `pBs` alongside it are **Phase 6's**
-/// (F12/P10). Until then these stay pointers and reach the writer through
-/// `bs_buffer` above.
+/// **`pBsBuffer` is gone (Phase 6 session B).** The C++ field was the thread
+/// bitstream buffer the slice's writer is positioned in, and it was a cache:
+/// both stamp sites wrote `pSliceThreading->pThreadBsBuffer[idx]` with the same
+/// `idx` `InitOneSliceInThread` stores in `SSlice.uiBufferIdx`, so the slot is
+/// already named and `thread_bs_buffer` resolves it at each use — nothing aliases
+/// the pool's allocation from inside this struct any more. What is still raw here
+/// is `pBs`, the slice's *own* output buffer (`WelsMallocz`'d by
+/// `InitSliceBsBuffer` when the slice writes independently, null when it shares
+/// the frame's; its nullness is the one bit `slice_writer`/`slice_bs_buffer` read),
+/// and the pool's buffers themselves, which are **Phase 7's** (F12/P10) with the
+/// claiming discipline. `uiSize` is the thread buffer's length and stays beside
+/// the writer that is positioned in it.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsSliceBs {
     pub pBs: *mut u8,
     pub uiBsSize: u32,
     pub uiBsPos: u32,
-    pub pBsBuffer: *mut u8,
     pub uiSize: u32,
     pub sBsWrite: BsWriter,
     pub sNalList: [SWelsNalRaw; 2],
@@ -243,7 +246,6 @@ impl Default for SWelsSliceBs {
             pBs: core::ptr::null_mut(),
             uiBsSize: 0,
             uiBsPos: 0,
-            pBsBuffer: core::ptr::null_mut(),
             uiSize: 0,
             sBsWrite: BsWriter::new(),
             sNalList: [SWelsNalRaw::default(), SWelsNalRaw::default()],
@@ -620,7 +622,6 @@ mod tests {
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
         let mut slice_bs = SWelsSliceBs::default();
-        slice_bs.pBsBuffer = bs_buf.as_mut_ptr();
         slice_bs.uiSize = 1024;
         slice_bs.sBsWrite = BsWriter::new();
 

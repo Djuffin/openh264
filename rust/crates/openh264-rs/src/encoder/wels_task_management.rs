@@ -25,14 +25,14 @@ use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 // declared a second, inline-executing `CWelsThreadPool` here that shadowed it.
 use crate::common::wels_thread_pool::{CWelsThreadPool, IWelsTask, IWelsTaskSink, TaskPtr};
 use crate::encoder::nal_encap::{
-    bs_buffer, SWelsSliceBs, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal,
+    SWelsSliceBs, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal,
 };
 use crate::encoder::slice_multi_threading::{
-    with_wels_mutex, SetOneSliceBsBufferUnderMultithread, UpdateMbListNeighborParallel,
-    WriteSliceBs, MAX_THREADS_NUM,
+    with_wels_mutex, UpdateMbListNeighborParallel, WriteSliceBs, MAX_THREADS_NUM,
 };
 use crate::encoder::svc_encode_slice::{
-    InitOneSliceInThread, ReallocateSliceInThread, SSlice, SetSliceBoundaryInfo, WelsCodeOneSlice,
+    thread_bs_buffer, InitOneSliceInThread, ReallocateSliceInThread, SSlice, SetSliceBoundaryInfo,
+    WelsCodeOneSlice,
 };
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
@@ -259,7 +259,9 @@ impl CWelsBaseTask {
             return iReturn;
         }
 
-        SetOneSliceBsBufferUnderMultithread(pCtx, self.m_iThreadIdx, self.m_pSlice);
+        // `SetOneSliceBsBufferUnderMultithread(pCtx, m_iThreadIdx, m_pSlice)` was
+        // called here; `InitOneSliceInThread` above already stored the same index
+        // in `uiBufferIdx` and zeroed `uiBsPos` (Phase 6 session B).
 
         // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
         // where they were; the writer is a position, and resetting it is all `InitBits`
@@ -310,7 +312,7 @@ impl CWelsBaseTask {
                     self.m_eNalRefIdc as i32,
                 );
                 WelsWriteSVCPrefixNal(
-                    bs_buffer((*self.m_pSliceBs).pBsBuffer, (*self.m_pSliceBs).uiSize),
+                    thread_bs_buffer(self.m_pCtx, self.m_pSlice),
                     &mut (*self.m_pSliceBs).sBsWrite,
                     self.m_eNalRefIdc as i32,
                     EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR == self.m_eNalType,
@@ -343,7 +345,7 @@ impl CWelsBaseTask {
         WelsUnloadNalForSlice(self.m_pSliceBs);
 
         self.m_iSliceSize = 0;
-        iReturn = WriteSliceBs(pCtx, self.m_pSliceBs, self.m_iSliceIdx, &mut self.m_iSliceSize);
+        iReturn = WriteSliceBs(pCtx, self.m_pSlice, self.m_iSliceIdx, &mut self.m_iSliceSize);
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
@@ -425,7 +427,7 @@ impl CWelsBaseTask {
             }
             WelsUnloadNalForSlice(self.m_pSliceBs);
 
-            iReturn = WriteSliceBs(pCtx, self.m_pSliceBs, iLocalSliceIdx, &mut self.m_iSliceSize);
+            iReturn = WriteSliceBs(pCtx, self.m_pSlice, iLocalSliceIdx, &mut self.m_iSliceSize);
             if ENC_RETURN_SUCCESS != iReturn {
                 return iReturn;
             }

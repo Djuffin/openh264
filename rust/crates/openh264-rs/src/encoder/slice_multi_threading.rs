@@ -45,7 +45,8 @@
 
 use std::ffi::{c_char, c_void};
 
-use crate::encoder::nal_encap::{bs_buffer, WelsEncodeNal, SWelsNalRaw};
+use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
+use crate::encoder::svc_encode_slice::thread_bs_buffer;
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
@@ -799,15 +800,21 @@ pub unsafe fn AppendSliceToFrameBs(
 }
 
 /// Encapsulates Raw Byte Sequence Payload (RBSP) data into Annex B NAL units for a slice.
+///
+/// Takes the slice rather than its `sSliceBs` (the C++ took `SWelsSliceBs*`):
+/// the NAL list is offsets into the thread buffer the slice was claimed into, and
+/// that buffer is `pThreadBsBuffer[pSlice->uiBufferIdx]` — the field that used to
+/// cache it is gone (Phase 6 session B).
 pub unsafe fn WriteSliceBs(
     pCtx: *mut sWelsEncCtx,
-    pSliceBs: *mut SWelsSliceBs,
+    pSlice: *mut SSlice,
     _iSliceIdx: i32,
     iSliceSize: &mut i32,
 ) -> i32 {
-    if pCtx.is_null() || pSliceBs.is_null() || (*pCtx).pCurDqLayer.is_null() {
+    if pCtx.is_null() || pSlice.is_null() || (*pCtx).pCurDqLayer.is_null() {
         return 0;
     }
+    let pSliceBs = std::ptr::addr_of_mut!((*pSlice).sSliceBs);
 
     let kiNalCnt = (*pSliceBs).iNalIndex;
     let mut iNalIdx = 0i32;
@@ -827,7 +834,7 @@ pub unsafe fn WriteSliceBs(
         // positioned in; that buffer is named here, beside the entry.
         iReturn = WelsEncodeNal(
             &(*pSliceBs).sNalList[iNalIdx as usize],
-            &*bs_buffer((*pSliceBs).pBsBuffer, (*pSliceBs).uiSize),
+            &*thread_bs_buffer(pCtx, pSlice),
             Some(&*pNalHdrExt),
             pDst,
             iTotalLeftLength - *iSliceSize,
@@ -931,19 +938,12 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
     iNeedAdj
 }
 
-/// Binds a thread-local bitstream buffer to a specific slice object.
-pub unsafe fn SetOneSliceBsBufferUnderMultithread(
-    pCtx: *mut sWelsEncCtx,
-    kiThreadIdx: i32,
-    pSlice: *mut SSlice,
-) {
-    if pCtx.is_null() || pSlice.is_null() || (*pCtx).pSliceThreading.is_null() {
-        return;
-    }
-    let pSliceBs = &mut (*pSlice).sSliceBs;
-    pSliceBs.pBsBuffer = (*(*pCtx).pSliceThreading).pThreadBsBuffer[kiThreadIdx as usize];
-    pSliceBs.uiBsPos = 0;
-}
+// `SetOneSliceBsBufferUnderMultithread(pCtx, kiThreadIdx, pSlice)` was here. It
+// re-stamped `sSliceBs.pBsBuffer = pThreadBsBuffer[kiThreadIdx]` and zeroed
+// `uiBsPos`; the task called it with the same `kiThreadIdx` it had just passed to
+// `InitOneSliceInThread`, which stores that index in `uiBufferIdx` and zeroes
+// `uiBsPos` itself. With the cached pointer gone it did nothing the previous call
+// had not — deleted with its call (S18), Phase 6 session B.
 
 // ============================================================================
 // Unit Tests
