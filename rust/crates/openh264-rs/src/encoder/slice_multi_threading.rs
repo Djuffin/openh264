@@ -45,7 +45,7 @@
 
 use std::ffi::{c_char, c_void};
 
-use crate::encoder::nal_encap::{WelsEncodeNal, SWelsNalRaw};
+use crate::encoder::nal_encap::{bs_buffer, WelsEncodeNal, SWelsNalRaw};
 use crate::{
     RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
@@ -813,8 +813,7 @@ pub unsafe fn WriteSliceBs(
     let mut iNalIdx = 0i32;
     let mut iReturn = ENC_RETURN_SUCCESS;
     let iTotalLeftLength = ((*pSliceBs).uiBsSize - (*pSliceBs).uiBsPos) as i32;
-    let pNalHdrExt =
-        &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void;
+    let pNalHdrExt = std::ptr::addr_of!((*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt);
     let mut pDst = (*pSliceBs).pBs;
 
     if kiNalCnt > 2 {
@@ -824,11 +823,14 @@ pub unsafe fn WriteSliceBs(
     *iSliceSize = 0;
     while iNalIdx < kiNalCnt {
         let mut iNalSize = 0i32;
+        // The slice's NAL list is offsets into the thread buffer its writer is
+        // positioned in; that buffer is named here, beside the entry.
         iReturn = WelsEncodeNal(
-            &mut (*pSliceBs).sNalList[iNalIdx as usize],
-            pNalHdrExt,
+            &(*pSliceBs).sNalList[iNalIdx as usize],
+            &*bs_buffer((*pSliceBs).pBsBuffer, (*pSliceBs).uiSize),
+            Some(&*pNalHdrExt),
+            pDst,
             iTotalLeftLength - *iSliceSize,
-            pDst as *mut c_void,
             &mut iNalSize,
         );
 

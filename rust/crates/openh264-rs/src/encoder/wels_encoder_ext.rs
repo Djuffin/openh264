@@ -427,12 +427,13 @@ pub unsafe fn WelsWriteOneSPS(pCtx: *mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: *
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &mut (&mut *pOut).sNalList[iNal as usize],
-        null_mut(),
+        &(&*pOut).sNalList[iNal as usize],
+        &(&*pOut).sBsBuffer[..],
+        None,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
         // available buffer to be written, so need to subtract the used length
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-        iNalSize,
+        &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
@@ -462,11 +463,12 @@ pub unsafe fn WelsWriteOnePPS(pCtx: *mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: *
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &mut (&mut *pOut).sNalList[iNal as usize],
-        null_mut(),
+        &(&*pOut).sNalList[iNal as usize],
+        &(&*pOut).sBsBuffer[..],
+        None,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-        iNalSize,
+        &mut *iNalSize,
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
@@ -557,10 +559,11 @@ pub unsafe fn WelsWriteParameterSets(
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &mut (&mut *(*pCtx).pOut).sNalList[iNal as usize],
-            null_mut(),
+            &(&*(*pCtx).pOut).sNalList[iNal as usize],
+            &(&*(*pCtx).pOut).sBsBuffer[..],
+            None,
+            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
             &mut iNalLength,
         );
         if iReturn != ENC_RETURN_SUCCESS {

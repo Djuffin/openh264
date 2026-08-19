@@ -43,7 +43,6 @@
     unused_unsafe
 )]
 
-use core::ffi::c_void;
 
 // ============================================================================
 // Constants & Return Codes
@@ -73,10 +72,19 @@ pub use crate::common::wels_common_defs::{
 pub use crate::safe::bits::BsWriter;
 
 /// Raw payload data descriptor for a NAL unit before encapsulation.
+///
+/// **The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record
+/// does not name.** The C++ `pRawData` (`buffer + iStartPos`, stamped at load) is
+/// gone: it was redundant with the offset from the day it was written, and storing
+/// it was the encoder probe's fourth finding (session A) — the writer's fresh
+/// `&mut sBsBuffer[..]` killed the stored pointer between load and encode. Phase 3
+/// left it because one type cannot hold offsets into two owners; it can hold an
+/// offset into *no* owner, and the caller of [`WelsEncodeNal`] names the buffer —
+/// the frame's `pOut->sBsBuffer` for the frame list, the thread buffer for a
+/// slice's list. Phase 6 session B.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsNalRaw {
-    pub pRawData: *mut u8,
     pub iPayloadSize: i32,
     pub sNalExt: SNalUnitHeaderExt,
     pub iStartPos: i32,
@@ -85,7 +93,6 @@ pub struct SWelsNalRaw {
 impl Default for SWelsNalRaw {
     fn default() -> Self {
         Self {
-            pRawData: core::ptr::null_mut(),
             iPayloadSize: 0,
             sNalExt: SNalUnitHeaderExt::default(),
             iStartPos: 0,
@@ -138,10 +145,9 @@ pub unsafe fn bs_buffer<'a>(ptr: *mut u8, len: u32) -> &'a mut [u8] {
 /// bitwise copy of an owner is a double free waiting to happen. Nothing copied
 /// it — the compiler confirmed that when the derive came off.
 ///
-/// The `sNalList` entries' `pRawData` stays a raw pointer, and that is
-/// deliberate: `SWelsNalRaw` is shared with `SWelsSliceBs`, whose own list
-/// points into the MT-aliased slice buffer that this phase excludes. See
-/// `SWelsSliceBs` below.
+/// The `sNalList` entries carry offsets into `sBsBuffer` and no pointer: see
+/// `SWelsNalRaw` — the caller of `WelsEncodeNal` passes `&sBsBuffer[..]` beside
+/// the entry.
 #[derive(Debug)]
 pub struct SWelsEncoderOutput {
     pub sBsBuffer: Vec<u8>,
@@ -291,7 +297,6 @@ pub unsafe extern "C" fn WelsLoadNal(
     let pWelsEncoderOuput = &mut *pEncoderOuput;
     let iNalIndex = pWelsEncoderOuput.iNalIndex as usize;
     let kiStartPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
-    let pRawData = pWelsEncoderOuput.sBsBuffer[kiStartPos as usize..].as_mut_ptr();
     let pRawNal = &mut pWelsEncoderOuput.sNalList[iNalIndex];
     let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
 
@@ -299,14 +304,6 @@ pub unsafe extern "C" fn WelsLoadNal(
     sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
     sNalUnitHeader.uiForbiddenZeroBit = 0;
 
-    // Still a raw pointer, and still `sBsBuffer + iStartPos` — the two are
-    // redundant and always have been. It cannot become a slice or an offset
-    // here because `SWelsNalRaw` is shared with `SWelsSliceBs`, whose entries
-    // point into the MT-aliased slice buffer this phase excludes; one type
-    // cannot hold offsets into two different owners. Deleting it in favour of
-    // `iStartPos` is a caller-side change across both lists, and belongs with
-    // the phase that unifies them.
-    pRawNal.pRawData = pRawData;
     pRawNal.iStartPos = kiStartPos;
     pRawNal.iPayloadSize = 0;
 }
@@ -323,21 +320,7 @@ pub unsafe extern "C" fn WelsUnloadNal(pEncoderOuput: *mut SWelsEncoderOutput) {
     let pWelsEncoderOuput = &mut *pEncoderOuput;
     let kiEndPos = BsGetBitsPos(&pWelsEncoderOuput.sBsWrite) >> 3;
     let iIdx = pWelsEncoderOuput.iNalIndex as usize;
-
-    // **Re-stamped here rather than at `WelsLoadNal`, and the order is the whole
-    // fix.** `pRawData` and `iStartPos` are redundant — the comment at the stamp
-    // site says so — but `WelsLoadNal` derives the pointer *before* the writer
-    // runs, and the writer takes `&mut (&mut *pOut).sBsBuffer[..]`, a fresh
-    // `Unique` over the same allocation that pops it. `WelsEncodeNal` then read
-    // through the dead tag. Deriving from the offset the record already carries,
-    // after every write for this NAL has happened, is value-identical by
-    // construction and needs neither a type change nor the two NAL lists unified
-    // — which is what `SWelsNalRaw.pRawData` is excluded for (6.4, and the
-    // phase-3 shim markers). S29's boundary clause: only ordering fixes a
-    // write through the parent. Found by the encoder aliasing probe, session A.
-    let base = pWelsEncoderOuput.sBsBuffer.as_mut_ptr();
     let pRawNal = &mut pWelsEncoderOuput.sNalList[iIdx];
-    pRawNal.pRawData = base.wrapping_add(pRawNal.iStartPos as usize);
 
     /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
@@ -364,7 +347,6 @@ pub unsafe extern "C" fn WelsLoadNalForSlice(
     sNalUnitHeader.uiNalRefIdc = kiNalRefIdc as u8;
     sNalUnitHeader.uiForbiddenZeroBit = 0;
 
-    pRawNal.pRawData = pSlice.pBsBuffer.add(kiStartPos as usize);
     pRawNal.iStartPos = kiStartPos;
     pRawNal.iPayloadSize = 0;
 }
@@ -390,28 +372,35 @@ pub unsafe extern "C" fn WelsUnloadNalForSlice(pSliceBs: *mut SWelsSliceBs) {
 /// Prepends the 4-byte start code prefix (`0x00000001`), packs the 1-byte base NAL header
 /// or 4-byte SVC extension header, and performs emulation prevention byte insertion (`0x03`).
 ///
+/// The payload is `src[raw.iStartPos .. raw.iStartPos + raw.iPayloadSize]`: the
+/// record carries the offset and **the caller names the buffer** it is an offset
+/// into — the frame's `pOut->sBsBuffer` for the frame NAL list, the thread buffer
+/// for a slice's own list — which is what let `SWelsNalRaw` drop its `pRawData`
+/// pointer (see the type). `ext` is the SVC extension header, needed exactly when
+/// the NAL type is a prefix or an extension slice; the C++ took it as `void*` and
+/// cast back to the one type here.
+///
 /// # Safety
-/// - `pRawNal` must point to a valid `SWelsNalRaw` descriptor.
-/// - If `kbNALExt` is true, `pNalHeaderExt` must point to a valid `SNalUnitHeaderExt`.
-/// - `pDst` must point to a writable memory region of at least `kiDstBufferLen` bytes.
+/// `dst` must be null (rejected with `ENC_RETURN_INVALIDINPUT`, as the C++ did) or
+/// point to `dst_len` writable bytes that do not overlap `src`.
 #[inline]
-pub unsafe extern "C" fn WelsEncodeNal(
-    pRawNal: *mut SWelsNalRaw,
-    pNalHeaderExt: *mut c_void,
-    kiDstBufferLen: i32,
-    pDst: *mut c_void,
-    pDstLen: *mut i32,
+pub unsafe fn WelsEncodeNal(
+    raw: &SWelsNalRaw,
+    src: &[u8],
+    ext: Option<&SNalUnitHeaderExt>,
+    dst: *mut u8,
+    dst_len: i32,
+    out_len: &mut i32,
 ) -> i32 {
-    if pRawNal.is_null() || pDst.is_null() || pDstLen.is_null() {
+    if dst.is_null() {
         return ENC_RETURN_INVALIDINPUT;
     }
-    let raw_nal = &*pRawNal;
-    let nal_type = raw_nal.sNalExt.sNalUnitHeader.eNalUnitType;
+    let nal_type = raw.sNalExt.sNalUnitHeader.eNalUnitType;
     let kbNALExt = nal_type == EWelsNalUnitType::NAL_UNIT_PREFIX
         || nal_type == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
 
     let iAssumedNeededLength =
-        (NAL_HEADER_SIZE as i32) + (if kbNALExt { 3 } else { 0 }) + raw_nal.iPayloadSize + 1;
+        (NAL_HEADER_SIZE as i32) + (if kbNALExt { 3 } else { 0 }) + raw.iPayloadSize + 1;
 
     if iAssumedNeededLength <= 0 {
         return ENC_RETURN_UNEXPECTED;
@@ -419,19 +408,16 @@ pub unsafe extern "C" fn WelsEncodeNal(
 
     // Since for each 0x000 need a 0x03, the needed length will not exceed (iAssumedNeededLength + iAssumedNeededLength / 3).
     // Here adjusted to >> 1 to omit division.
-    if kiDstBufferLen < (iAssumedNeededLength + (iAssumedNeededLength >> 1)) {
+    if dst_len < (iAssumedNeededLength + (iAssumedNeededLength >> 1)) {
         return ENC_RETURN_MEMALLOCERR;
     }
 
-    let pDstStart = pDst as *mut u8;
+    let pDstStart = dst;
     let mut pDstPointer = pDstStart;
-    let mut pSrcPointer = raw_nal.pRawData;
-    let pSrcEnd = raw_nal.pRawData.add(raw_nal.iPayloadSize as usize);
+    let payload = &src[raw.iStartPos as usize..(raw.iStartPos + raw.iPayloadSize) as usize];
     let mut iZeroCount: i32 = 0;
 
-    if !pDstLen.is_null() {
-        *pDstLen = 0;
-    }
+    *out_len = 0;
 
     // 4-byte Annex B start code prefix: 0x00 0x00 0x00 0x01
     let kuiStartCodePrefix: [u8; 4] = [0, 0, 0, 1];
@@ -439,13 +425,15 @@ pub unsafe extern "C" fn WelsEncodeNal(
     pDstPointer = pDstPointer.add(4);
 
     // 1-Byte NAL Unit Header
-    let nri = raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc;
-    let utype = raw_nal.sNalExt.sNalUnitHeader.eNalUnitType as u8;
+    let nri = raw.sNalExt.sNalUnitHeader.uiNalRefIdc;
+    let utype = raw.sNalExt.sNalUnitHeader.eNalUnitType as u8;
     *pDstPointer = (nri << 5) | (utype & 0x1f);
     pDstPointer = pDstPointer.add(1);
 
     if kbNALExt {
-        let sNalExt = &*(pNalHeaderExt as *const SNalUnitHeaderExt);
+        // The C++ dereferenced its `void*` here unconditionally; every caller
+        // that emits a prefix or extension NAL passes the layer's header.
+        let sNalExt = ext.expect("a prefix or extension NAL is encoded with its SVC extension header");
 
         // Extension Byte 1: reserved_one_bit (0x80) | idr_flag (bit 6)
         *pDstPointer = 0x80 | ((sNalExt.bIdrFlag as u8) << 6);
@@ -463,8 +451,7 @@ pub unsafe extern "C" fn WelsEncodeNal(
     }
 
     // Emulation prevention escaping loop
-    while pSrcPointer < pSrcEnd {
-        let byte_val = *pSrcPointer;
+    for &byte_val in payload {
         if iZeroCount == 2 && byte_val <= 3 {
             // Add emulation prevention byte 0x03
             *pDstPointer = 3;
@@ -478,13 +465,9 @@ pub unsafe extern "C" fn WelsEncodeNal(
         }
         *pDstPointer = byte_val;
         pDstPointer = pDstPointer.add(1);
-        pSrcPointer = pSrcPointer.add(1);
     }
 
-    let iNalLength = pDstPointer.offset_from(pDstStart) as i32;
-    if !pDstLen.is_null() {
-        *pDstLen = iNalLength;
-    }
+    *out_len = pDstPointer.offset_from(pDstStart) as i32;
 
     ENC_RETURN_SUCCESS
 }
@@ -520,9 +503,8 @@ mod tests {
     
     #[test]
     fn test_wels_encode_nal_standard_avc() {
-        let mut raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
+        let raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
         let mut raw_nal = SWelsNalRaw::default();
-        raw_nal.pRawData = raw_payload.as_mut_ptr();
         raw_nal.iPayloadSize = raw_payload.len() as i32;
         raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
         raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGHEST as u8;
@@ -532,10 +514,11 @@ mod tests {
 
         let ret = unsafe {
             WelsEncodeNal(
-                &mut raw_nal,
-                core::ptr::null_mut(),
+                &raw_nal,
+                &raw_payload,
+                None,
+                dst_buffer.as_mut_ptr(),
                 dst_buffer.len() as i32,
-                dst_buffer.as_mut_ptr() as *mut c_void,
                 &mut dst_len,
             )
         };
@@ -561,9 +544,8 @@ mod tests {
 
     #[test]
     fn test_wels_encode_nal_svc_extension() {
-        let mut raw_payload = [0x12, 0x34];
+        let raw_payload = [0x12, 0x34];
         let mut raw_nal = SWelsNalRaw::default();
-        raw_nal.pRawData = raw_payload.as_mut_ptr();
         raw_nal.iPayloadSize = raw_payload.len() as i32;
         raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
         raw_nal.sNalExt.sNalUnitHeader.uiNalRefIdc = EWelsNalRefIdc::NRI_PRI_HIGH as u8;
@@ -579,10 +561,11 @@ mod tests {
 
         let ret = unsafe {
             WelsEncodeNal(
-                &mut raw_nal,
-                &mut ext_header as *mut _ as *mut c_void,
+                &raw_nal,
+                &raw_payload,
+                Some(&ext_header),
+                dst_buffer.as_mut_ptr(),
                 dst_buffer.len() as i32,
-                dst_buffer.as_mut_ptr() as *mut c_void,
                 &mut dst_len,
             )
         };
@@ -611,9 +594,8 @@ mod tests {
 
     #[test]
     fn test_wels_encode_nal_buffer_too_small() {
-        let mut raw_payload = [0x00; 100];
+        let raw_payload = [0x00; 100];
         let mut raw_nal = SWelsNalRaw::default();
-        raw_nal.pRawData = raw_payload.as_mut_ptr();
         raw_nal.iPayloadSize = 100;
         raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
 
@@ -622,10 +604,11 @@ mod tests {
 
         let ret = unsafe {
             WelsEncodeNal(
-                &mut raw_nal,
-                core::ptr::null_mut(),
+                &raw_nal,
+                &raw_payload,
+                None,
+                dst_buffer.as_mut_ptr(),
                 dst_buffer.len() as i32,
-                dst_buffer.as_mut_ptr() as *mut c_void,
                 &mut dst_len,
             )
         };

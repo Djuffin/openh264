@@ -67,7 +67,14 @@ assert_size!(SNalUnitHeaderExt, 24);
 // commit: each embedded an `SBitStringAux` by value and now embeds a `BsWriter`,
 // which is 32 bytes smaller. `SSlice` (1584, below) embeds `SWelsSliceBs` in turn,
 // so it lost the same 32.
-assert_size!(SWelsNalRaw, 40);
+//
+// `SWelsNalRaw`: 40 in the C++ (`uint8_t* pRawData; int32_t iPayloadSize;
+// SNalUnitHeaderExt sNalExt; int32_t iStartPos;`). Phase 6 session B deleted
+// `pRawData` — a cache of `buffer + iStartPos` that the encoder probe caught being
+// killed by the writer's `&mut sBsBuffer[..]` between load and encode; the record
+// keeps the offset and `WelsEncodeNal`'s caller names the buffer. Minus the
+// 8-byte pointer, and the struct's alignment drops from 8 to 4: 32.
+assert_size!(SWelsNalRaw, 32);
 
 // codec/encoder/core/inc/picture.h
 assert_size!(SPicture, 136);
