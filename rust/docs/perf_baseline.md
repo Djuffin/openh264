@@ -2336,3 +2336,63 @@ aliases. D-perf-4's +25% median tripwire remains unbreached. **No day two is
 owed**: the clause attaches to readings a decision rests on, and this one changes no
 disposition. Both binaries stay stashed (`.perfpair/y_head` = `dff3f78b`,
 `.perfpair/aa_head` = `2de8703f`).
+
+### Phase 6 session C's span — the hot path moved and the instrument reads *faster*
+
+`2666a83c` (session B's close, `.perfpair/c_base`) → `ae736b96` (session C's face-2
+close, `.perfpair/c_head`): **five commits**, the whole session — `SMB`'s five scratch
+arrays inline (T6.C1), the second encode probe and its two fixes (T6.C2), `SMbCache`'s
+eight buffers inline with three half-selectors (T6.C3), and the diffharness complexity
+knob. Both benches, machine otherwise idle, S1/S2 protocol through `perfpair.py`, null
+re-run at the verdict's own pair count.
+
+**This session owed a span and could not have skipped it** (S2b, D-gate-1): both faces
+move the per-macroblock hot path — mode decision, motion estimation, both entropy
+writers and deblocking read these arrays for every macroblock of every frame — and the
+structures they read from changed shape, not just spelling.
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `2666a83c` → `ae736b96` | **7** | +0.25% | +0.30% | +0.10% | **+0.25%** | **−0.97%** |
+| 7-pair null (`c_head` both slots) | **7** | +0.41% | +0.44% | −0.15% | **+0.41%** | **−0.27%** |
+
+Null bands at 7 pairs: decode **−0.15% … +0.44%** (0.59 points), encode **−2.99% …
++0.82%** (3.81 points — the encode bench's 28 rows are noisier than the decode bench's
+3, as they have been all phase).
+
+**Both medians are inside their bands, and the decode median is *below* the null's own
+median.** On the encode side the span reads −0.97% against a null of −0.27%: a hair
+faster, well inside the floor. One row of 28 sits outside — 1080p SMPTE Bars 1t at
+−3.47% against the null's −2.99% floor, 0.48 points out, with its own 4t twin at
+−2.81% *inside* — which is what a 3.81-point band at this row count looks like, not a
+finding.
+
+**The tripwire arithmetic, stated before and after** (D-perf-4: +25% *median* on any
+bench stream). Before: worst encode row at session B's close was inside the null.
+After: the worst single row this span produces is **+0.49%** and the worst decode row
+is **+0.30%**, so the tripwire is unbreached by ≈24.5 points. No face came near a park.
+
+**The cumulative position.** The encoder's cumulative deficit was ≈ **+11…+13%** at
+session B's close; ×0.9903 gives ≈ **+9.9…+11.9%**, so the ledger reads ≈ **+10…+12%**
+after this session. The ≈+23% stop-line is Phase 5's decode-side figure and is not what
+this row moves; D-perf-6 still sends recovery to the Phase 9 pass.
+
+**The brief's predicted mechanism did not appear, and that is the reading worth
+recording.** §3 named AoS locality as face 1's candidate cost — the neighbour reads now
+step through 208-byte `SMB` structs where the flat arrays put the same fields 24 and 64
+bytes apart — and named inline scratch as face 2's candidate gain, one fewer indirection
+per access. The measurement is neutral-to-faster on both benches, so the *candidate* for
+the small encode improvement is face 2's removed indirection (S33: a candidate, not a
+claim), and face 1's predicted cost is below this instrument's resolution at 7 pairs.
+
+**The fallback stays named and unexecuted.** The SoA shape — the five arrays as
+`MbArray`s owned by a Box-built struct behind one raw context field, banks and all
+(T3.6's `pOut` pattern) — is a **Phase 9 ledger item under D-perf-6** and nothing here
+argues for opening it: a face parks only if it *would cross* +25%, and this one reads
+−0.97%.
+
+**No day two is owed and none is taken.** S2b's clause attaches to readings a decision
+rests on; the only decision this reading could carry is whether to open the fallback,
+and at 26 points from the tripwire that decision does not turn on a second day's
+precision. Both binaries stay stashed (`.perfpair/c_base` = `2666a83c`,
+`.perfpair/c_head` = `ae736b96`), so session D chains from this close for free.
