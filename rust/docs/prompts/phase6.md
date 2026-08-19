@@ -440,17 +440,58 @@ at a family boundary, and only with a written reason):
   names in the output. **Miri ran once, at the close, on the steward's in-session direction
   (S30)**; face 0's reds predate it. **Drop-from-the-end was taken at the authorised boundary
   and nowhere else**: the `*mut SMB` (128 sites) and `*mut SMbCache` parameter families go to E.
-* **E** — the ME/MD/RC/CABAC records (6.3's scratch — `SWelsMD`, `SWelsME`,
-  `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, take-what-you-reach; `SMbCache`'s
-  fields moved to C, its `*mut` parameters stay here), and the third attempt at the
-  parked SIMD families (plan §4; SATD owes its own measurement).
+* **E** — **brief written** ([`phase6_session_e.md`](phase6_session_e.md), steward,
+  2026-08-19). The ME/MD/CABAC records (6.3's scratch — `SWelsMD` 53, `SWelsME` 39,
+  `SMVUnitXY` 65, `SMeRefinePointer` 17, `SCabacCtx` 25, take-what-you-reach) **and
+  the `*mut SMB` (128) / `*mut SMbCache` (96) parameter families D handed over**, cut
+  as three closures (syntax writers; MD; ME) with the dispatch-slot types retyped in
+  place. Two chores first: the `sl` sweep preset (F60's realloc path gets permanent
+  byte coverage — no existing configuration crosses `iMaxSliceNum` = 35) and the dead
+  screen-content *search* half (S18 — same `SCREEN_CONTENT_REAL_TIME` guard whose
+  preparation half D deleted; `SWelsME.pRefFeatureStorage` and
+  `SPicture.pScreenBlockFeatureStorage` go with it). Last and boxed, drop-from-the-end
+  first: the third attempt at the parked SAD/SATD families (plan §4 6.3) — SATD's owed
+  solo measurement, then direct dispatch at the converted call sites, ≤1.05x bar, one
+  dated verdict either way. Stays raw by settlement: `pMvdCost` (context's table, G),
+  the `SWelsME` plane cursors and `pEncSad` (F), `pEncCtx`/`pCurDqLayer` (G).
 * **F** — `wels_preprocess` + the plane families (6.2), the `common/` kernel
   callers (§3), **and 6.1's recon-pool alias family**, handed over by session B with
   its settlement written and its size measured (~184 sites, nine files).
-* **G** — the context flip and the deny sweep (6.6), then the phase close.
+* **G** — the context flip and the deny sweep (6.6), then the phase close. **Opens
+  with 6.5's fold** (steward, 2026-08-19): `au_set.rs` + `paraset_strategy.rs` R1
+  remnants and `rc.rs`'s 56 `*mut sWelsEncCtx` land here with the flip;
+  `wels_encoder_ext.rs` internals are Phase 8's boundary and are **not** this
+  session's. Close against §7's exit conditions, not against "the lint is on".
 
 **Seven sessions is the estimate, not the contract**; Phase 5 ran fourteen against
 a plan of nine to twelve, and the difference was discovery, which this phase has
 already done. A session that closes no family and moves no metric is a stall and
 says so — with session A the one exception, because its deliverable is coverage
 and a cost model, not a converted family.
+
+## 7. Exit conditions — written before G, not at the close (steward, 2026-08-19)
+
+Phase 5 ended with the lint on and **167 `#[allow(unsafe_code)]` items still
+standing**, and Phase 5b existed because "done" had been defined as the former.
+Phase 6's close is defined now, and it is the decoder's close, transposed:
+
+1. **`#![deny(unsafe_code)]` on every module of `src/encoder` + `src/processing`
+   except an enumerated MT set** — expected `slice_multi_threading.rs`,
+   `wels_task_management.rs`, and any file whose remaining unsafe is solely the
+   thread machinery — each exception named in the close log with **Phase 7** as its
+   owner. An exception is a file, never a blanket.
+2. **Every surviving `#[allow(unsafe_code)]` item under the denied modules is
+   enumerated by category with an owner**, and only three categories are lawful:
+   values crossing the C ABI (Phase 8), pool/allocator machinery carrying S28's
+   mandated Miri test, and an MT seam (Phase 7). "The lint is on" is not the test;
+   the enumeration is.
+3. **Encoder-side `raw_ptr` residue is enumerated by category**, code split from
+   prose (S16), the way 5b handed the decoder's 47+66 to Phase 8.
+4. **`exit` battery PASS**, and the cumulative perf position restated against
+   D-perf-4's tripwire and D-perf-6's parked recovery.
+5. **The handoffs are written**: Phase 7's (F61, F3's ablation close, F12,
+   `sSliceBs.pBs` and the thread-buffer ownership, the MT files), Phase 8's
+   (`wels_encoder_ext.rs` internals, the `c_void` C-ABI line, the encoder's
+   api-owned fields beside the decoder's twelve).
+
+Standing unless overruled; G's brief cites this section as its done-test.
