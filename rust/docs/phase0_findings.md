@@ -2034,3 +2034,51 @@ samples that would trigger it.
 
 Running total: **sixty-six measurements, twenty alternations, thirty-nine
 acquittals.**
+
+### Sixty-seventh measurement — 2026-08-19, Phase 6 session C's close: the alternation measurement 66 said was owed, run
+
+The `exit` battery at the session's close (all five commits in the tree) read **341/341
+release** and **340/341 debug**. The debug failure:
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600 cabac=0 rc=1 ::  C++ 40992   Rust 38203
+```
+
+`mt`, `sm=3`, `t=4`, wrong *length*, debug — the signature on every clause, and the
+second **gate** hit of this session after measurement 66's.
+
+**Step 0 does not apply**: every commit in the window moves encoder production code, and
+the two binaries hash differently (`fe63f4d4…` head, `35d114d4…` base `2666a83c`), which
+was measured rather than assumed.
+
+**Step 1 — the configuration re-run 5×, machine otherwise idle: `BYTE-IDENTICAL` all
+five**, 40992 bytes against 40992 every time, where the gate run produced 38203.
+
+**Step 2 — the alternation, run, because measurement 66 wrote down when it would be
+owed** ("the moment a gate sweep produces a second hit in this session"). Twelve whole
+`mt` presets per side, base `2666a83c` against head `bf884410`, both `rust_enc` binaries
+built once and swapped in place inside one loop, debug profile, machine otherwise idle:
+**2880 configurations, 1440 a side.**
+
+| side | presets | configurations | hits |
+|---|---|---|---|
+| base `2666a83c` | 12 | 1440 | **1** |
+| head `bf884410` | 12 | 1440 | **1** |
+
+```
+base round 5   mt CiscoVT2people_320x192_12fps t=2 sm=3 n=600 cabac=0 rc=1 ::  C++ 40809  Rust 0
+head round 8   mt CiscoVT2people_160x96_6fps   t=4 sm=3 n=600 cabac=1 rc=1 ::  C++ 42281  Rust 0
+```
+
+Both hits are inside the signature (`mt`, `sm=3`, `t∈{2,4}`, zero-length output), they
+land on different clips, different thread counts and different entropy coders, and
+neither side reproduces the other's. **HEAD is not worse than base — 1 against 1** — and
+the alternation is not 0/0, so S23b is satisfied and this one counts. Observed rate
+across the alternation ≈ **1/1440**, between the battery's ≈1/800 and this machine's
+quieter samples; the session's own three sweep batteries drew two hits over ~2000
+gate configurations.
+
+**Acquitted as F3, with the alternation this session owed now on the record.**
+
+Running total: **sixty-seven measurements, twenty-one alternations, forty
+acquittals.**
