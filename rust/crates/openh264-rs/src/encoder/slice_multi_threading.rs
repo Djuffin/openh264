@@ -107,9 +107,11 @@ pub unsafe fn WelsSetMemUint32_c(pDst: *mut u32, iValue: u32, iSizeOfData: i32) 
 ///
 /// # Safety
 /// `pDst` must point to at least `iSizeOfData * iDataLengthOfData` writable bytes, and
-/// `iDataLengthOfData` must be 1, 2 or 4.
+/// `iDataLengthOfData` must be 1, 2 or 4. (`*mut u16` since Phase 6 session B: the C++
+/// takes `void*`, and all four callers pass a `uint16_t` macroblock map with
+/// `iDataLengthOfData == 2`. The other two widths are the C++ macro's, kept.)
 pub unsafe fn WelsSetMemMultiplebytes_c(
-    pDst: *mut c_void,
+    pDst: *mut u16,
     iValue: u32,
     iSizeOfData: i32,
     iDataLengthOfData: i32,

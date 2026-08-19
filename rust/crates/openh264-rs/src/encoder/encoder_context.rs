@@ -533,9 +533,10 @@ impl Default for sWelsEncCtx {
 /// Initializes input source picture geometry, color planes, and line strides.
 ///
 /// # Safety
-/// `kpSrc` must point to a valid `SSourcePicture` struct or be null.
+/// `kpSrc` must point to a valid `SSourcePicture` struct or be null. (Typed since
+/// Phase 6 session B; the C++ takes `void*` and casts back here.)
 pub unsafe fn InitPic(
-    kpSrc: *const c_void,
+    kpSrc: *const SSourcePicture,
     kiColorspace: i32,
     kiWidth: i32,
     kiHeight: i32,
@@ -658,10 +659,6 @@ pub unsafe fn InitFunctionPointers(
         return ENC_RETURN_SUCCESS;
     }
     let pFuncList = (*pEncCtx).pFuncList;
-
-    (*pFuncList).pfSetMemZeroSize8 = Some(WelsSetMemZero_c_extern);
-    (*pFuncList).pfSetMemZeroSize64Aligned16 = Some(WelsSetMemZero_c_extern);
-    (*pFuncList).pfSetMemZeroSize64 = Some(WelsSetMemZero_c_extern);
 
     let bScreenContent = (*pParam).iUsageType == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
 
@@ -999,18 +996,22 @@ pub unsafe fn DecideFrameType(
     iFrameType
 }
 
-/// Portable C/C++ fallback for memory clearing.
+/// Zeroes `iSize` bytes at `pDst`.
+///
+/// **Was a three-slot dispatch** (`pfSetMemZeroSize8`, `pfSetMemZeroSize64`,
+/// `pfSetMemZeroSize64Aligned16`, type `PSetMemoryZero = fn(*mut c_void, i32)`),
+/// installed with this one `_c` body and nothing else on any target the port
+/// builds for — the C++ installs SIMD variants there. The slots, the fn type and
+/// the `extern "C"` thunk are deleted (S18, Phase 6 session B); the seven call
+/// sites call this directly, and each already had this exact fallback in its
+/// `else` arm.
 ///
 /// # Safety
 /// `pDst` must point to valid writable memory of at least `iSize` bytes.
-pub unsafe fn WelsSetMemZero_c(pDst: *mut c_void, iSize: i32) {
+pub unsafe fn WelsSetMemZero_c(pDst: *mut u8, iSize: i32) {
     if !pDst.is_null() && iSize > 0 {
-        std::ptr::write_bytes(pDst as *mut u8, 0, iSize as usize);
+        std::ptr::write_bytes(pDst, 0, iSize as usize);
     }
-}
-
-pub unsafe extern "C" fn WelsSetMemZero_c_extern(pDst: *mut c_void, iSize: i32) {
-    WelsSetMemZero_c(pDst, iSize);
 }
 
 // ============================================================================
@@ -1033,7 +1034,7 @@ mod tests {
         let mut src_pic = SSourcePicture::default();
         let ret = unsafe {
             InitPic(
-                &mut src_pic as *mut SSourcePicture as *mut c_void,
+                &src_pic,
                 VideoFormat::videoFormatI420 as i32,
                 640,
                 480,
@@ -1102,10 +1103,6 @@ mod tests {
 
             let ret = InitFunctionPointers(&mut ctx, &mut param, 0);
             assert_eq!(ret, ENC_RETURN_SUCCESS);
-
-            assert!(func_list.pfSetMemZeroSize8.is_some());
-            assert!(func_list.pfSetMemZeroSize64Aligned16.is_some());
-            assert!(func_list.pfSetMemZeroSize64.is_some());
 
             assert!(func_list.pfDctFourT4.is_some());
             assert!(func_list.pfIDctFourT4.is_some());

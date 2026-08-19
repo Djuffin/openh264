@@ -41,7 +41,6 @@
     unused_unsafe
 )]
 
-use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
 pub use crate::encoder::picture::SPicture;
@@ -470,11 +469,12 @@ pub struct SSampleDealingFunc {
     pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
-    pub pfIntra4x4Combined3Satd: *mut c_void,
-    pub pfIntra16x16Combined3Satd: *mut c_void,
-    pub pfIntra16x16Combined3Sad: *mut c_void,
-    pub pfIntra8x8Combined3Satd: *mut c_void,
-    pub pfIntra8x8Combined3Sad: *mut c_void,
+    // The five `pfIntra*Combined3*Satd`/`Sad` slots and the three
+    // `pfIntra*Combined3` they were copied into were here, all eight
+    // `*mut c_void`. The C++ leaves them NULL on every target this port builds
+    // for and the port never assigned them, so `assert_no_combined3` guarded
+    // three reads and the scalar branch was the only live one — S18: deleted
+    // with the guard and its call sites (Phase 6 session B).
     /// Which of the two sibling cost arrays mode decision reads. **Was
     /// `*mut Option<PSampleSadSatdCostFunc>` pointing into this same struct**,
     /// which is F13's fourth site: `SetFastCodingFunc` stored
@@ -488,9 +488,6 @@ pub struct SSampleDealingFunc {
     /// old null: the C++ leaves this unset outside the ME-capable
     /// configurations, and the port reproduced that with a null pointer.
     pub pfMeCost: CostFamily,
-    pub pfIntra16x16Combined3: *mut c_void,
-    pub pfIntra8x8Combined3: *mut c_void,
-    pub pfIntra4x4Combined3: *mut c_void,
 }
 
 impl Default for SSampleDealingFunc {
@@ -499,16 +496,8 @@ impl Default for SSampleDealingFunc {
             pfSampleSad: [None; BLOCK_SIZE_ALL],
             pfSampleSatd: [None; BLOCK_SIZE_ALL],
             pfSample4Sad: [None; BLOCK_SIZE_ALL],
-            pfIntra4x4Combined3Satd: std::ptr::null_mut(),
-            pfIntra16x16Combined3Satd: std::ptr::null_mut(),
-            pfIntra16x16Combined3Sad: std::ptr::null_mut(),
-            pfIntra8x8Combined3Satd: std::ptr::null_mut(),
-            pfIntra8x8Combined3Sad: std::ptr::null_mut(),
             pfMdCost: CostFamily::Unset,
             pfMeCost: CostFamily::Unset,
-            pfIntra16x16Combined3: std::ptr::null_mut(),
-            pfIntra8x8Combined3: std::ptr::null_mut(),
-            pfIntra4x4Combined3: std::ptr::null_mut(),
         }
     }
 }

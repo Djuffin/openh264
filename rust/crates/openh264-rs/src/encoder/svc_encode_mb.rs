@@ -46,7 +46,6 @@
 )]
 
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
-use std::ffi::c_void;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
@@ -298,7 +297,8 @@ pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
 pub type PIDctFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
 pub type PIDctI16x16DcFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
-pub type PSetMemoryZero = unsafe extern "C" fn(*mut c_void, i32);
+// `PSetMemoryZero = unsafe extern "C" fn(*mut c_void, i32)` was here; see
+// `encoder_context::WelsSetMemZero_c` for why the three slots that used it went.
 
 #[inline(always)]
 fn WelsClip1(val: i32) -> u8 {
@@ -706,8 +706,6 @@ pub unsafe fn WelsEncInterY(
     pMbCache: *mut SMbCache,
 ) {
     let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
-    let pfSetMemZeroSize8 = (*pFuncList).pfSetMemZeroSize8;
-    let pfSetMemZeroSize64 = (*pFuncList).pfSetMemZeroSize64;
     let pfScan4x4 = (*pFuncList).pfScan4x4;
     let pfCalculateSingleCtr4x4 = (*pFuncList).pfCalculateSingleCtr4x4;
     let pfGetNoneZeroCount = (*pFuncList).pfGetNoneZeroCount;
@@ -732,11 +730,7 @@ pub unsafe fn WelsEncInterY(
         for j in 0..4 {
             let max_val = aMax[(i << 2) + j];
             if max_val == 0 {
-                if let Some(func) = pfSetMemZeroSize8 {
-                    func(pBlock as *mut c_void, 32);
-                } else {
-                    core::ptr::write_bytes(pBlock, 0, 16);
-                }
+                crate::encoder::encoder_context::WelsSetMemZero_c(pBlock as *mut u8, 32);
             } else {
                 if let Some(func) = pfScan4x4 {
                     func(pBlock, pRes);
@@ -761,11 +755,7 @@ pub unsafe fn WelsEncInterY(
 
     if iSingleCtrMb < 6 {
         // JVT-O079 zero-residual early cutoff
-        if let Some(func) = pfSetMemZeroSize64 {
-            func(pRes as *mut c_void, 768);
-        } else {
-            core::ptr::write_bytes(pRes, 0, 384);
-        }
+        crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 768);
     } else {
         let mut kpNoneZeroCountIdx = 0usize;
         for i in 0..4 {
@@ -786,11 +776,7 @@ pub unsafe fn WelsEncInterY(
                 }
                 (*pCurMb).uiCbp |= 1 << i;
             } else {
-                if let Some(func) = pfSetMemZeroSize64 {
-                    func(pRes as *mut c_void, 128);
-                } else {
-                    core::ptr::write_bytes(pRes, 0, 64);
-                }
+                crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
                 kpNoneZeroCountIdx += 4;
                 pBlock = pBlock.add(64);
             }
@@ -813,8 +799,6 @@ pub unsafe fn WelsEncRecUV(
 ) {
     let pfQuantizationHadamard2x2 = (*pFuncList).pfQuantizationHadamard2x2;
     let pfQuantizationFour4x4Max = (*pFuncList).pfQuantizationFour4x4Max;
-    let pfSetMemZeroSize8 = (*pFuncList).pfSetMemZeroSize8;
-    let pfSetMemZeroSize64 = (*pFuncList).pfSetMemZeroSize64;
     let pfScan4x4Ac = (*pFuncList).pfScan4x4Ac;
     let pfCalculateSingleCtr4x4 = (*pFuncList).pfCalculateSingleCtr4x4;
     let pfGetNoneZeroCount = (*pFuncList).pfGetNoneZeroCount;
@@ -853,11 +837,7 @@ pub unsafe fn WelsEncRecUV(
 
     for j in 0..4 {
         if aMax[j] == 0 {
-            if let Some(func) = pfSetMemZeroSize8 {
-                func(pBlock as *mut c_void, 32);
-            } else {
-                core::ptr::write_bytes(pBlock, 0, 16);
-            }
+            crate::encoder::encoder_context::WelsSetMemZero_c(pBlock as *mut u8, 32);
         } else {
             if let Some(func) = pfScan4x4Ac {
                 func(pBlock, pRes);
@@ -880,11 +860,7 @@ pub unsafe fn WelsEncRecUV(
     pRes = pRes.sub(64);
 
     if iSingleCtr8x8 < 7 {
-        if let Some(func) = pfSetMemZeroSize64 {
-            func(pRes as *mut c_void, 128);
-        } else {
-            core::ptr::write_bytes(pRes, 0, 64);
-        }
+        crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
         *(*pCurMb).pNonZeroCount.add(16 + uiNoneZeroCountOffset) = 0;
         *(*pCurMb)
             .pNonZeroCount
@@ -960,11 +936,7 @@ pub unsafe fn WelsRecPskip(
             8,
         );
     }
-    if let Some(func) = (*pFuncList).pfSetMemZeroSize8 {
-        func((*pCurMb).pNonZeroCount as *mut c_void, 24);
-    } else {
-        core::ptr::write_bytes((*pCurMb).pNonZeroCount, 0, 24);
-    }
+    crate::encoder::encoder_context::WelsSetMemZero_c((*pCurMb).pNonZeroCount as *mut u8, 24);
 }
 
 /// Fast early-termination test evaluating whether Luma (Y) residual qualifies for `P_SKIP`.

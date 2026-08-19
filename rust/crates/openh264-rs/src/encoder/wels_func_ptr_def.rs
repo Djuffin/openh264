@@ -12,7 +12,6 @@
 //! members; it is 1280 bytes and every entry is dispatched through at encode time, so
 //! a missing member silently shifts every later one.
 
-use std::ffi::c_void;
 
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::{DeblockingFunc, PSetNoneZeroCountZeroFunc};
@@ -30,7 +29,7 @@ use crate::encoder::md::{
 };
 use crate::encoder::md::SMbCache;
 use crate::encoder::rc::SWelsRcFunc;
-use crate::encoder::svc_encode_mb::{PDeQuantizationFunc, PIDctFunc, PSetMemoryZero};
+use crate::encoder::svc_encode_mb::{PDeQuantizationFunc, PIDctFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
     PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
@@ -392,12 +391,12 @@ pub struct SWelsFuncPtrList {
     pub pfRc: SWelsRcFunc,
     pub pfAccumulateSadForRc: Option<PAccumulateSadFunc>,
 
-    /// for size is times to 8
-    pub pfSetMemZeroSize8: Option<PSetMemoryZero>,
-    /// for size is times of 64, and address is align to 16
-    pub pfSetMemZeroSize64Aligned16: Option<PSetMemoryZero>,
-    /// for size is times of 64, alignment unknown
-    pub pfSetMemZeroSize64: Option<PSetMemoryZero>,
+    // The three `pfSetMemZeroSize*` slots were here (`PSetMemoryZero`, i.e.
+    // `fn(*mut c_void, i32)`): sizes times 8, times 64, times 64 aligned to 16.
+    // All three were installed with the one `WelsSetMemZero_c` body and nothing
+    // else, so the dispatch had one arm — deleted with the type, and the seven
+    // call sites call `encoder_context::WelsSetMemZero_c` directly (S18, Phase 6
+    // session B).
 
     pub pfCavlcParamCal: Option<PCavlcParamCalFunc>,
 

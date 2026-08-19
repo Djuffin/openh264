@@ -112,7 +112,6 @@
     unused_unsafe
 )]
 
-use std::ffi::c_void;
 
 // ============================================================================
 // Constants & Bit-Width Definitions
@@ -816,13 +815,12 @@ pub fn WelsCabacInitContexts(
 /// whatever `SStateCtx::default()` gave.
 ///
 /// # Safety
-/// - `pCtx` must point to a valid `sWelsEncCtx`.
+/// - `pEncCtx` must point to a valid `sWelsEncCtx`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn WelsCabacInit(pCtx: *mut c_void) {
-    if pCtx.is_null() {
+pub unsafe extern "C" fn WelsCabacInit(pEncCtx: *mut crate::encoder::encoder_context::sWelsEncCtx) {
+    if pEncCtx.is_null() {
         return;
     }
-    let pEncCtx = pCtx as *mut crate::encoder::encoder_context::sWelsEncCtx;
     WelsCabacInitContexts(&mut (*pEncCtx).sWelsCabacContexts);
 }
 
@@ -867,7 +865,7 @@ pub unsafe fn WelsCabacContextInitFromContexts(
 /// - `pCbCtx` must point to a valid, writable `SCabacCtx` instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCabacContextInit(
-    pCtx: *mut c_void,
+    pCtx: *mut crate::encoder::encoder_context::sWelsEncCtx,
     pCbCtx: *mut SCabacCtx,
     iModel: i32,
 ) {
@@ -1132,16 +1130,10 @@ pub unsafe fn WelsCabacEncodePos(pCbCtx: *mut SCabacCtx) -> usize {
     }
 }
 
-/// Function pointer prototype for writing block residual transform coefficients via CABAC.
-pub type PWriteBlockResidualCabac = unsafe extern "C" fn(
-    pEncCtx: *mut c_void,
-    pCoffLevel: *mut i16,
-    iEndIdx: i32,
-    iCalRunLevelFlag: i32,
-    iResidualProperty: i32,
-    iNC: i8,
-    pBs: *mut c_void,
-) -> i32;
+// `PWriteBlockResidualCabac` was here — a function-pointer prototype for the CABAC
+// residual writers with no slot, no installer and no caller anywhere in the crate
+// (the writers are called directly). Deleted with the last `void*` in its
+// signature (S18, Phase 6 session B).
 
 // ============================================================================
 // Unit Tests

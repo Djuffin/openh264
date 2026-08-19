@@ -12,7 +12,6 @@
 //! Translated from `codec/encoder/core/inc/svc_mode_decision.h` and
 //! `codec/encoder/core/src/svc_mode_decision.cpp`.
 
-use std::ffi::c_void;
 
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
@@ -460,10 +459,7 @@ pub unsafe extern "C" fn WelsRecPskip(
     let copy8 = (*pFuncList).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
     copy8(pCsMb[1], iRecStride[1], (*pMbCache).pSkipMb.add(256), 8);
     copy8(pCsMb[2], iRecStride[2], (*pMbCache).pSkipMb.add(320), 8);
-    (*pFuncList).pfSetMemZeroSize8.expect("pfSetMemZeroSize8 unset")(
-        (*pCurMb).pNonZeroCount as *mut c_void,
-        24,
-    );
+    crate::encoder::encoder_context::WelsSetMemZero_c((*pCurMb).pNonZeroCount as *mut u8, 24);
 }
 
 /// Copies the current/reference luma & chroma blocks for a background MB into the VAA
@@ -1145,13 +1141,10 @@ pub unsafe extern "C" fn WelsMdI16x16(
     let iAvailCount = g_kiIntra16AvaliMode[iOffset][4] as usize;
     let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
 
-    // The `pfIntra16x16Combined3` fast path is not translated; see the module docs on
-    // `svc_base_layer_md.rs`. It is NULL in the C++ on every target this port builds
-    // for, and this port never assigns it.
-    crate::encoder::svc_base_layer_md::assert_no_combined3(
-        (*pFunc).sSampleDealingFuncs.pfIntra16x16Combined3,
-        "pfIntra16x16Combined3",
-    );
+    // The `pfIntra16x16Combined3` fast path is not translated (see the module docs
+    // on `svc_base_layer_md.rs`): NULL in the C++ on every target this port builds
+    // for, never assigned here, and the slot itself is deleted (S18). The scalar
+    // cost below is the only branch.
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. Hardcoding pfSampleSad
     // here silently forced the fast-mode choice in normal mode.
@@ -2082,12 +2075,11 @@ pub unsafe extern "C" fn MdInterSCDPskipProcess(
 }
 
 pub unsafe extern "C" fn SetBlockStaticIdcToMd(
-    pVaa: *mut c_void,
+    pVaaExt: *mut SVAAFrameInfoExt_t,
     pWelsMd: *mut SWelsMD,
     pCurMb: *mut SMB,
     pDqLayer: *mut SDqLayer,
 ) {
-    let pVaaExt = pVaa as *mut SVAAFrameInfoExt_t;
 
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
@@ -2115,7 +2107,7 @@ pub unsafe extern "C" fn WelsMdInterJudgeSCDPskip(
     pMbCache: *mut SMbCache,
 ) -> bool {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
-    SetBlockStaticIdcToMd((*pEncCtx).pVaa as *mut c_void, pWelsMd, pCurMb, pCurDqLayer);
+    SetBlockStaticIdcToMd((*pEncCtx).pVaa as *mut SVAAFrameInfoExt_t, pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, pMbCache, ESkipModes::STATIC) {
         return true;
