@@ -11499,3 +11499,46 @@ pins were the C++ `offsetof` values, and their job was to catch `wels_preprocess
 long-deleted fake 15-field context; they cannot be C++ offsets after this face and are
 re-pinned to measured values with the reason at the line. The property that made them worth
 having — a second declaration of the context is caught at compile time — is unchanged.
+
+### Face 1 breadcrumb — closed at `6576b120` (T6.C1, T6.C2)
+
+**`SMB` holds no raw pointer.** 142 consumer sites over nine files, the five context
+allocations/frees/wiring lines, `InitMbInfo`'s bank arithmetic and its `kiMaxMbNum`
+parameter, and the five `sWelsEncCtx` fields are gone; `deblocking.rs`'s dead `TagMB`
+duplicate went with them (S18). Three port-added null guards on pointers `InitMbInfo`
+always wired became unconditional. **Sizes measured and re-pinned in the same commit**:
+`SMB` 152 → **208**, `sWelsEncCtx` 97952 → **97912**, and all fifteen
+`assert_ctx_offset!` pins, which sat behind the deleted pointers and fall by 40 each
+from `iMvRange` on — they pin the port's layout from here, and the property they were
+written for (a second declaration of the context, read at the wrong offsets) is
+unchanged. `SMbCache` **576** and `SSlice` **1520** measured here as face 2's "before".
+
+**Two kernels and four helpers stopped taking a raw pointer for a whole row**:
+`PSetNoneZeroCountZeroFunc` → `&mut [i8; 24]`, `PUpdateMbMvFunc` →
+`&mut [SMVUnitXY; 16]` (both one-implementation `extern "C"` slots, both now safe
+`fn`), `MB_BS_MV`/`SMB_EDGE_MV`/`BS_EDGE`/`DeblockingBSInsideMB{Avsbase,Normal}` take
+the rows they read, and the last of those took `*mut SMB` for one field and takes the
+field. Two `LD32` motion-vector puns became the two `i16` halves they always were.
+
+**The toolchain enforced S28/S29 for free, and it is worth knowing**: rustc's
+`dangerous_implicit_autorefs` is deny-by-default here, so `(*p).array[a..b]` — the
+natural spelling for every slice copy this face introduced — is a *compile error*
+until the reference is explicit. Fifteen sites, each rewritten as a named row
+reference at the point of use.
+
+**The second probe found two reds on its first execution** (T6.C2, both fixed,
+red-before/green-after observed): the CAVLC writer's frame buffer and `sMbCacheInfo`
+held across the callee that re-derives them (session B's ordering class), and the Cr
+chroma cursor walking from a one-block tag (**S28**, the ninth cursor of the family
+session B closed — the Cb cursor eight lines above it was fixed then, this one needed
+a CAVLC probe to be visible). **Coverage measured, not argued**: 0/0 calls into
+`WelsMdIntraFinePartition`/`WelsSpatialWriteMbSyn` from the old probe, 6/18 from the
+new one. And the byte gate does not cover the complexity half at all — every one of
+the 341 sweep configurations is `LOW_COMPLEXITY`.
+
+**Gates at the face's close.** `gates.sh family`: tests **485 / 479 / 20** (the new
+probe), ratchet clean, census 58, sweep **debug 341/341**, sweep **release 340/341** —
+adjudicated to **F3, measurement 66** (signature on every clause; the configuration
+re-ran `BYTE-IDENTICAL` 6×; a fresh `mt` preset then read 119/120 on a *different*
+configuration with a zero-length output). Miri, `--lib` step flags: **both encode
+probes ok, 96.70 s for the pair**.
