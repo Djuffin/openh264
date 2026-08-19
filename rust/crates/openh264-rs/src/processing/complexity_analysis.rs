@@ -28,8 +28,7 @@
 //! (20 macroblocks * 256 samples * 255 = 1.3e6, squared = 1.7e12). The wrap is part
 //! of the result, so every one of these is a `u32` with `wrapping_*` here.
 
-use crate::encoder::wels_preprocess::{SComplexityAnalysisParam, SPixMap};
-use core::ffi::c_void;
+use crate::encoder::wels_preprocess::{SComplexityAnalysisParam, SPixMap, SVAACalcResult};
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -77,45 +76,36 @@ impl Default for CComplexityAnalysis {
 
 impl CComplexityAnalysis {
     /// `CComplexityAnalysis::Set` — copies the caller's parameter block in whole.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SComplexityAnalysisParam`.
-    pub unsafe fn Set(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        self.m_sComplexityAnalysisParam = *(pParam as *const SComplexityAnalysisParam);
+    /// Typed since Phase 6 session B (the `IWelsVP` vtable's `void*` is gone).
+    pub fn Set(&mut self, param: &SComplexityAnalysisParam) -> i32 {
+        self.m_sComplexityAnalysisParam = *param;
         RET_SUCCESS
     }
 
     /// `CComplexityAnalysis::Get` — writes back `iFrameComplexity` and nothing else.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SComplexityAnalysisParam`.
-    pub unsafe fn Get(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        (*(pParam as *mut SComplexityAnalysisParam)).iFrameComplexity =
-            self.m_sComplexityAnalysisParam.iFrameComplexity;
+    pub fn Get(&self, param: &mut SComplexityAnalysisParam) -> i32 {
+        param.iFrameComplexity = self.m_sComplexityAnalysisParam.iFrameComplexity;
         RET_SUCCESS
     }
 
-    /// `CComplexityAnalysis::Process`.
+    /// `CComplexityAnalysis::Process`. `calc` is the VAA statistics of this picture
+    /// pair, handed over at the call (the C++ stored `pCalcResult` in the parameter
+    /// block; take what you reach).
     ///
     /// # Safety
     /// The pointers stored by the preceding [`Set`](Self::Set) must still be valid,
-    /// and `pSrcPixMap` must describe the current picture.
+    /// `pSrcPixMap` must describe the current picture, and `calc`'s arrays must cover
+    /// its macroblocks.
     pub unsafe fn Process(
         &mut self,
-        _iType: i32,
-        pSrcPixMap: *mut SPixMap,
-        pRefPixMap: *mut SPixMap,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
     ) -> i32 {
         match self.m_sComplexityAnalysisParam.iComplexityAnalysisMode {
-            FRAME_SAD => self.AnalyzeFrameComplexityViaSad(pSrcPixMap, pRefPixMap),
-            GOM_SAD => self.AnalyzeGomComplexityViaSad(pSrcPixMap, pRefPixMap),
-            GOM_VAR => self.AnalyzeGomComplexityViaVar(pSrcPixMap, pRefPixMap),
+            FRAME_SAD => self.AnalyzeFrameComplexityViaSad(pSrcPixMap, pRefPixMap, calc),
+            GOM_SAD => self.AnalyzeGomComplexityViaSad(pSrcPixMap, pRefPixMap, calc),
+            GOM_VAR => self.AnalyzeGomComplexityViaVar(pSrcPixMap, pRefPixMap, calc),
             _ => return RET_INVALIDPARAM,
         }
         RET_SUCCESS
@@ -124,16 +114,17 @@ impl CComplexityAnalysis {
     /// `CComplexityAnalysis::AnalyzeFrameComplexityViaSad` — `ComplexityAnalysis.cpp:96`.
     unsafe fn AnalyzeFrameComplexityViaSad(
         &mut self,
-        pSrcPixMap: *mut SPixMap,
-        pRefPixMap: *mut SPixMap,
+        pSrcPixMap: &SPixMap,
+        pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
     ) {
-        let pVaaCalcResults = self.m_sComplexityAnalysisParam.pCalcResult;
+        let pVaaCalcResults: *const SVAACalcResult = calc;
         self.m_sComplexityAnalysisParam.iFrameComplexity = (*pVaaCalcResults).iFrameSad as i64;
 
         if self.m_sComplexityAnalysisParam.iCalcBgd {
             //BGD control
             self.m_sComplexityAnalysisParam.iFrameComplexity =
-                self.GetFrameSadExcludeBackground(pSrcPixMap, pRefPixMap) as i64;
+                self.GetFrameSadExcludeBackground(pSrcPixMap, pRefPixMap, calc) as i64;
         }
     }
 
@@ -144,11 +135,12 @@ impl CComplexityAnalysis {
     /// kept as-is.
     unsafe fn GetFrameSadExcludeBackground(
         &mut self,
-        pSrcPixMap: *mut SPixMap,
-        _pRefPixMap: *mut SPixMap,
+        pSrcPixMap: &SPixMap,
+        _pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
     ) -> i32 {
-        let iWidth = (*pSrcPixMap).sRect.iRectWidth;
-        let iHeight = (*pSrcPixMap).sRect.iRectHeight;
+        let iWidth = pSrcPixMap.sRect.iRectWidth;
+        let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iMbWidth = iWidth >> 4;
         let iMbHeight = iHeight >> 4;
         let iMbNum = iMbWidth * iMbHeight;
@@ -158,7 +150,7 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pVaaCalcResults = self.m_sComplexityAnalysisParam.pCalcResult;
+        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
 
         let mut uiFrameSad: u32 = 0;
@@ -189,11 +181,12 @@ impl CComplexityAnalysis {
     /// `iCalcBgd`; both are inlined below because the choice is a single predicate.
     unsafe fn AnalyzeGomComplexityViaSad(
         &mut self,
-        pSrcPixMap: *mut SPixMap,
-        _pRefPixMap: *mut SPixMap,
+        pSrcPixMap: &SPixMap,
+        _pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
     ) {
-        let iWidth = (*pSrcPixMap).sRect.iRectWidth;
-        let iHeight = (*pSrcPixMap).sRect.iRectHeight;
+        let iWidth = pSrcPixMap.sRect.iRectWidth;
+        let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iMbWidth = iWidth >> 4;
         let iMbHeight = iHeight >> 4;
         let iMbNum = iMbWidth * iMbHeight;
@@ -203,7 +196,7 @@ impl CComplexityAnalysis {
 
         let pBackgroundMbFlag = self.m_sComplexityAnalysisParam.pBackgroundMbFlag;
         let uiRefMbType = self.m_sComplexityAnalysisParam.uiRefMbType;
-        let pVaaCalcResults = self.m_sComplexityAnalysisParam.pCalcResult;
+        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomForegroundBlockNum = self.m_sComplexityAnalysisParam.pGomForegroundBlockNum;
         let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
 
@@ -262,11 +255,12 @@ impl CComplexityAnalysis {
     /// `CComplexityAnalysis::AnalyzeGomComplexityViaVar` — `ComplexityAnalysis.cpp:222`.
     unsafe fn AnalyzeGomComplexityViaVar(
         &mut self,
-        pSrcPixMap: *mut SPixMap,
-        _pRefPixMap: *mut SPixMap,
+        pSrcPixMap: &SPixMap,
+        _pRefPixMap: &SPixMap,
+        calc: &SVAACalcResult,
     ) {
-        let iWidth = (*pSrcPixMap).sRect.iRectWidth;
-        let iHeight = (*pSrcPixMap).sRect.iRectHeight;
+        let iWidth = pSrcPixMap.sRect.iRectWidth;
+        let iHeight = pSrcPixMap.sRect.iRectHeight;
         let iMbWidth = iWidth >> 4;
         let iMbHeight = iHeight >> 4;
         let iMbNum = iMbWidth * iMbHeight;
@@ -274,7 +268,7 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-        let pVaaCalcResults = self.m_sComplexityAnalysisParam.pCalcResult;
+        let pVaaCalcResults: *const SVAACalcResult = calc;
         let pGomComplexity = self.m_sComplexityAnalysisParam.pGomComplexity;
         let mut uiFrameSad: u32 = 0;
 

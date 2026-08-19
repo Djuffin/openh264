@@ -15,7 +15,7 @@
 //! never true of the file and would have sent a straggler sweep looking for four
 //! kernels that were already here.)
 
-use crate::encoder::wels_preprocess::{SVAACalcParam, SVAACalcResult};
+use crate::encoder::wels_preprocess::{SPixMap, SVAACalcParam, SVAACalcResult};
 
 /// `EResult` — `codec/processing/interface/IWelsVP.h:54`.
 pub const RET_SUCCESS: i32 = 0;
@@ -626,39 +626,30 @@ pub fn vaa_calc_sad_ssd_bgd(
 }
 
 impl CVAACalculation {
-    /// `CVAACalculation::Set` — copies the caller's parameter block.
-    ///
-    /// # Safety
-    /// `pParam` must point to a valid `SVAACalcParam`.
-    pub unsafe fn Set(&mut self, _iType: i32, pParam: *mut core::ffi::c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        self.m_sCalcParam = *(pParam as *mut SVAACalcParam);
+    /// `CVAACalculation::Set` — copies the caller's parameter block. Typed since
+    /// Phase 6 session B (the `IWelsVP` vtable's `void*` is gone).
+    pub fn Set(&mut self, param: &SVAACalcParam) -> i32 {
+        self.m_sCalcParam = *param;
         RET_SUCCESS
     }
 
-    /// `CVAACalculation::Process` — `vaacalculation.cpp:120`.
+    /// `CVAACalculation::Process` — `vaacalculation.cpp:120`. Reads the current
+    /// picture from `src` and the reference from `ref_pic` (the C++ passes the
+    /// reference as `pDstPixMap`), and writes into `result`, which the caller hands
+    /// over at the call rather than storing a pointer to it in the parameter block
+    /// (take what you reach — the C++'s `pCalcResult` was that stored pointer).
     ///
     /// # Safety
-    /// The pixel maps must describe readable planes, and `m_sCalcParam.pCalcResult`
-    /// must point at an `SVAACalcResult` whose `pSad8x8` has room for the picture.
-    pub unsafe fn Process(
-        &mut self,
-        _iType: i32,
-        pCurData: *mut u8,
-        pRefData: *mut u8,
-        iPicWidth: i32,
-        iPicHeight: i32,
-        iPicStride: i32,
-    ) -> i32 {
-        let pResult: *mut SVAACalcResult = self.m_sCalcParam.pCalcResult;
+    /// The pixel maps must describe readable luma planes of the stated geometry, and
+    /// `result`'s arrays (`pSad8x8`, ...) must have room for the picture.
+    pub unsafe fn Process(&mut self, src: &SPixMap, ref_pic: &SPixMap, result: &mut SVAACalcResult) -> i32 {
+        let pCurData = src.pPixel[0];
+        let pRefData = ref_pic.pPixel[0];
+        let (iPicWidth, iPicHeight, iPicStride) = (src.sRect.iRectWidth, src.sRect.iRectHeight, src.iStride[0]);
         if pCurData.is_null() || pRefData.is_null() {
             return RET_INVALIDPARAM;
         }
-        if pResult.is_null() {
-            return RET_INVALIDPARAM;
-        }
+        let pResult: *mut SVAACalcResult = result;
 
         (*pResult).pCurY = pCurData;
         (*pResult).pRefY = pRefData;

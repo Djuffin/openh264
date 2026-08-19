@@ -15,7 +15,6 @@
 //! The code is transcribed as written rather than specialised to that.
 
 use crate::encoder::wels_preprocess::{SBGDInterface, SPixMap, SVAACalcResult};
-use core::ffi::c_void;
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -60,7 +59,6 @@ struct vBGDParam {
     iStride: [i32; 3],
     pOU_array: Vec<SBackgroundOU>,
     pBackgroundMbFlag: *mut i8,
-    pCalcRes: *mut SVAACalcResult,
 }
 
 /// `CBackgroundDetection` — `BackgroundDetection.h:60`.
@@ -80,7 +78,6 @@ impl Default for CBackgroundDetection {
                 iStride: [0; 3],
                 pOU_array: Vec::new(),
                 pBackgroundMbFlag: std::ptr::null_mut(),
-                pCalcRes: std::ptr::null_mut(),
             },
             m_iLargestFrameSize: 0,
         }
@@ -106,48 +103,30 @@ fn WELS_MIN(a: i32, b: i32) -> i32 {
 }
 
 impl CBackgroundDetection {
-    /// `CBackgroundDetection::Set`.
-    ///
-    /// # Safety
-    /// `pParam` must point at an `SBGDInterface`.
-    pub unsafe fn Set(&mut self, _iType: i32, pParam: *mut c_void) -> i32 {
-        if pParam.is_null() {
-            return RET_INVALIDPARAM;
-        }
-        let pInterface = &*(pParam as *const SBGDInterface);
-        self.m_BgdParam.pBackgroundMbFlag = pInterface.pBackgroundMbFlag;
-        self.m_BgdParam.pCalcRes = pInterface.pCalcRes;
+    /// `CBackgroundDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
+    /// vtable's `void*` is gone). The C++ class has no `Get` override
+    /// (`IStrategy::Get` returned success without writing), and nothing called it.
+    pub fn Set(&mut self, param: &SBGDInterface) -> i32 {
+        self.m_BgdParam.pBackgroundMbFlag = param.pBackgroundMbFlag;
         RET_SUCCESS
     }
 
-    /// `CBackgroundDetection` has no `Get`; the C++ class does not override it, so
-    /// `IStrategy::Get` returns `RET_SUCCESS` without writing anything.
-    pub unsafe fn Get(&mut self, _iType: i32, _pParam: *mut c_void) -> i32 {
-        RET_SUCCESS
-    }
-
-    /// `CBackgroundDetection::Process` — `BackgroundDetection.cpp:63`.
+    /// `CBackgroundDetection::Process` — `BackgroundDetection.cpp:63`. `calc` is the
+    /// VAA statistics of this picture pair, handed over at the call (the C++ stored
+    /// `pCalcRes` in the parameter block; take what you reach).
     ///
     /// # Safety
-    /// Both pixel maps must describe readable Y/U/V planes, and the pointers stored
-    /// by the preceding [`Set`](Self::Set) must still be valid.
-    pub unsafe fn Process(
-        &mut self,
-        _iType: i32,
-        pSrcPixMap: *mut SPixMap,
-        pRefPixMap: *mut SPixMap,
-    ) -> i32 {
-        if pSrcPixMap.is_null() || pRefPixMap.is_null() {
-            return RET_INVALIDPARAM;
-        }
-
+    /// Both pixel maps must describe readable Y/U/V planes, the pointer stored by
+    /// the preceding [`Set`](Self::Set) must still be valid, and `calc`'s arrays must
+    /// cover the picture's macroblocks.
+    pub unsafe fn Process(&mut self, pSrcPixMap: &SPixMap, pRefPixMap: &SPixMap, calc: &SVAACalcResult) -> i32 {
         for i in 0..3 {
-            self.m_BgdParam.pCur[i] = (*pSrcPixMap).pPixel[i] as *mut u8;
-            self.m_BgdParam.pRef[i] = (*pRefPixMap).pPixel[i] as *mut u8;
-            self.m_BgdParam.iStride[i] = (*pSrcPixMap).iStride[i];
+            self.m_BgdParam.pCur[i] = pSrcPixMap.pPixel[i];
+            self.m_BgdParam.pRef[i] = pRefPixMap.pPixel[i];
+            self.m_BgdParam.iStride[i] = pSrcPixMap.iStride[i];
         }
-        self.m_BgdParam.iBgdWidth = (*pSrcPixMap).sRect.iRectWidth;
-        self.m_BgdParam.iBgdHeight = (*pSrcPixMap).sRect.iRectHeight;
+        self.m_BgdParam.iBgdWidth = pSrcPixMap.sRect.iRectWidth;
+        self.m_BgdParam.iBgdHeight = pSrcPixMap.sRect.iRectHeight;
 
         let iCurFrameSize = self.m_BgdParam.iBgdWidth * self.m_BgdParam.iBgdHeight;
         if self.m_BgdParam.pOU_array.is_empty() || iCurFrameSize > self.m_iLargestFrameSize {
@@ -162,7 +141,7 @@ impl CBackgroundDetection {
         }
 
         // 1st step: foreground/background coarse division
-        self.ForegroundBackgroundDivision();
+        self.ForegroundBackgroundDivision(calc);
         // 2nd step: foreground dilation and background erosion
         self.ForegroundDilationAndBackgroundErosion();
         RET_SUCCESS
@@ -170,7 +149,7 @@ impl CBackgroundDetection {
 
     /// `CBackgroundDetection::GetOUParameters` — `BackgroundDetection.cpp:114`.
     unsafe fn GetOUParameters(
-        sVaaCalcInfo: *mut SVAACalcResult,
+        sVaaCalcInfo: *const SVAACalcResult,
         iMbIndex: i32,
         pBgdOU: &mut SBackgroundOU,
     ) {
@@ -198,11 +177,11 @@ impl CBackgroundDetection {
     }
 
     /// `CBackgroundDetection::ForegroundBackgroundDivision` — `BackgroundDetection.cpp:157`.
-    unsafe fn ForegroundBackgroundDivision(&mut self) {
+    unsafe fn ForegroundBackgroundDivision(&mut self, calc: &SVAACalcResult) {
         let iPicWidthInOU = self.m_BgdParam.iBgdWidth >> LOG2_BGD_OU_SIZE;
         let iPicHeightInOU = self.m_BgdParam.iBgdHeight >> LOG2_BGD_OU_SIZE;
         let iPicWidthInMb = (15 + self.m_BgdParam.iBgdWidth) >> 4;
-        let pCalcRes = self.m_BgdParam.pCalcRes;
+        let pCalcRes: *const SVAACalcResult = calc;
 
         let mut ou = 0usize;
         for j in 0..iPicHeightInOU {

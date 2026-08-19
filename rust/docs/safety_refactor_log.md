@@ -11472,3 +11472,44 @@ nothing.
      shims dispatch on `pRec == pPred`, and the shims' doc — which had named that very caller as
      a witness for "disjoint" — corrected.
   **Green on the ninth run: 1 passed, Miri clock 80.53s (84.36s wall), three frames.**
+  `family` after the walk: **both sweeps 341/341**, ratchet clean, PASS — committed as **T6.B6**
+  (`8fe366fc`). Hot-path line moved (S2b): the two IDCT shims' in-place branch — the session span
+  is owed at the close.
+* **Face 1.4 — S32's frame-count clause, measured.** Same geometry at 2 / 3 / 6 frames:
+  **71.29 / 80.53 / 102.28 s** (`finished in`), a second 3-frame run **77.90 s**. Scaling, ≈ **7.7 s a
+  frame**, against session A's ≈ 31 s (virtual) initialisation floor — the encoder's frames cost about
+  four times the decoder's ≈ 2 s. Written into plan §7.6's S32 amendment, with the unit change that
+  came with it: `-Zmiri-disable-isolation` makes Miri's clock the host's, so the `--lib` step's
+  `finished in` is wall time now (the two 3-frame runs differ by 3.3% where session A's isolated
+  runs agreed to the hundredth). The probe stays at 3 frames (F34's floor plus one). **Two-probe
+  decision: both stay** — the initialisation probe is a strict subset by construction and costs
+  ≈ 19 s of host time, which does not matter against a `--lib` step of ≈ 15 minutes, and a red
+  there localises to init without waiting for three frames.
+* **Face 2 — the `c_void` clearing.** S24 at the open (`8fe366fc`): **268** occurrences over
+  `src/encoder src/processing src/common` (265 code, 3 prose), by file: `wels_preprocess.rs` 61,
+  `encoder_ext.rs` 45, `svc_encode_slice.rs` 26+1, `slice_multi_threading.rs` 19, `memory_align.rs`
+  16, `wels_encoder_ext.rs` 12, `processing/mod.rs` 11, `encoder_context.rs` 10+1, `md.rs` 9+1,
+  `svc_encode_mb.rs` 8, `svc_enc_slice_segment.rs` 8, `wels_common_defs.rs` 6, `svc_motion_estimate.rs`
+  5, `set_mb_syn_cabac.rs` 5, `svc_mode_decision.rs` 4, the five `processing/` plugins 3+3+3+3+1,
+  `svc_set_mb_syn_cabac.rs` 2, `param_svc.rs` 2, `wels_task_management.rs` 1, `wels_func_ptr_def.rs`
+  1, `svc_base_layer_md.rs` 1.
+  **3.1 — `IWelsVP` dissolved (T6.B7).** The struct and its three methods, `processing/mod.rs`'s
+  seven `WelsVp*` thunks and the create/destroy pair are gone; `CWelsPreProcess::m_pInterfaceVp: *mut
+  IWelsVP` → `m_vp: Box<SWelsVpContext>`. **S21 met by construction**: the object was `alloc_zeroed`
+  and its `Default` was `zeroed()`, which no `Box` field survives — `CreatePreProcess` now builds it
+  whole (`Box::new` + `Default`, every other field's zero written out), `Destroy` drops it
+  (`Box::from_raw`), and `WelsPreprocessCreate`/`Destroy` — the vtable's allocation pair, with
+  nothing left to do — went with their calls (S18); the unit test that exercised them checks the
+  constructed object instead. The thirteen `is_null()` guards died. Each plugin's `Set`/`Get`
+  is typed to the struct its cast named (`&SVAACalcParam`, `&SComplexityAnalysisParam`,
+  `&SAdaptiveQuantizationParam`, `&SBGDInterface`, `&SSceneChangeResult`); `Process` takes
+  `&SPixMap` pairs; the stored `pCalcResult`/`pCalcRes` pointer left all four parameter blocks
+  (checked: every plugin read it only during `Process`, from its own copy of the block, so it is
+  handed over at the call — take what you reach; `:1754`'s self-pointer inside `pVaaInfo` is gone
+  with it), and BGD's never-called `Get` was deleted. `SPixMap.pPixel: [*mut u8; 3]`. **The five
+  untranslated methods keep their behaviour exactly**: each site names the method, keeps the
+  `RET_NOTSUPPORTED` the dispatch returned and the skip that followed it, and builds no dead pixel
+  maps; no stub plugin exists. Four sizes re-pinned, measured: `SAdaptiveQuantizationParam` 40 → 32,
+  `SComplexityAnalysisParam` 64 → 56, `SVAAFrameInfo` 264 → 248 (embeds both), `SVAAFrameInfoExt`
+  1280 → 1264. Five VP-calling methods went `&self` → `&mut self` (their callers pass plain values).
+  `wels_preprocess.rs` 61 → 7 (`WelsFree` casts, 3.3), `processing/` 24 → 0.

@@ -260,7 +260,10 @@ pub struct SRect {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPixMap {
-    pub pPixel: [*mut c_void; 3],
+    /// `void*` in the C++ (`IWelsVP.h`); the three planes are bytes at every writer
+    /// and reader, so the erasure is gone (Phase 6 session B). The cursor
+    /// conversion is session F's.
+    pub pPixel: [*mut u8; 3],
     pub iSizeInBits: i32,
     pub iStride: [i32; 3],
     pub sRect: SRect,
@@ -350,7 +353,10 @@ pub struct SVAACalcParam {
     pub iCalcBgd: bool,
     pub iCalcSsd: bool,
     pub iReserved: i32,
-    pub pCalcResult: *mut SVAACalcResult,
+    // `pCalcResult: *mut SVAACalcResult` was here (C++ `SVAACalcParam`): the caller
+    // stored `&pVaaInfo->sVaaCalcInfo` in the block and the plugin read it during
+    // `Process`. It is handed over at the `Process` call now — take what you reach
+    // (Phase 6 session B). Same for the three sibling blocks below.
 }
 
 impl Default for SVAACalcParam {
@@ -360,7 +366,6 @@ impl Default for SVAACalcParam {
             iCalcBgd: false,
             iCalcSsd: false,
             iReserved: 0,
-            pCalcResult: std::ptr::null_mut(),
         }
     }
 }
@@ -369,14 +374,12 @@ impl Default for SVAACalcParam {
 #[derive(Debug, Copy, Clone)]
 pub struct SBGDInterface {
     pub pBackgroundMbFlag: *mut i8,
-    pub pCalcRes: *mut SVAACalcResult,
 }
 
 impl Default for SBGDInterface {
     fn default() -> Self {
         Self {
             pBackgroundMbFlag: std::ptr::null_mut(),
-            pCalcRes: std::ptr::null_mut(),
         }
     }
 }
@@ -392,7 +395,6 @@ pub struct SMotionTextureUnit {
 #[derive(Debug, Copy, Clone)]
 pub struct SAdaptiveQuantizationParam {
     pub iAdaptiveQuantMode: i32,
-    pub pCalcResult: *mut SVAACalcResult,
     pub pMotionTextureUnit: *mut SMotionTextureUnit,
     pub pMotionTextureIndexToDeltaQp: *mut i8,
     pub iAverMotionTextureIndexToDeltaQp: i32,
@@ -402,7 +404,6 @@ impl Default for SAdaptiveQuantizationParam {
     fn default() -> Self {
         Self {
             iAdaptiveQuantMode: 0,
-            pCalcResult: std::ptr::null_mut(),
             pMotionTextureUnit: std::ptr::null_mut(),
             pMotionTextureIndexToDeltaQp: std::ptr::null_mut(),
             iAverMotionTextureIndexToDeltaQp: 0,
@@ -421,7 +422,6 @@ pub struct SComplexityAnalysisParam {
     pub pGomForegroundBlockNum: *mut i32,
     pub pBackgroundMbFlag: *mut i8,
     pub uiRefMbType: *mut u32,
-    pub pCalcResult: *mut SVAACalcResult,
 }
 
 impl Default for SComplexityAnalysisParam {
@@ -435,7 +435,6 @@ impl Default for SComplexityAnalysisParam {
             pGomForegroundBlockNum: std::ptr::null_mut(),
             pBackgroundMbFlag: std::ptr::null_mut(),
             uiRefMbType: std::ptr::null_mut(),
-            pCalcResult: std::ptr::null_mut(),
         }
     }
 }
@@ -579,43 +578,13 @@ pub struct SPosOffset {
 pub use crate::encoder::encoder_context::{sWelsEncCtx, SSpatialPicIndex};
 pub use crate::common::wels_common_defs::EWelsSliceType;
 
-#[repr(C)]
-pub struct IWelsVP {
-    pub pCtx: *mut c_void,
-    pub Init: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32, pCfg: *mut c_void) -> i32>,
-    pub Uninit: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32) -> i32>,
-    pub Flush: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32) -> i32>,
-    pub Process: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32, pSrc: *mut SPixMap, pDst: *mut SPixMap) -> i32>,
-    pub Get: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32, pParam: *mut c_void) -> i32>,
-    pub Set: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32, pParam: *mut c_void) -> i32>,
-    pub SpecialFeature: Option<unsafe extern "C" fn(pCtx: *mut c_void, iType: i32, pIn: *mut c_void, pOut: *mut c_void) -> i32>,
-}
-
-impl IWelsVP {
-    pub unsafe fn Process(&self, iType: i32, pSrc: *mut SPixMap, pDst: *mut SPixMap) -> i32 {
-        if let Some(f) = self.Process {
-            f(self.pCtx, iType, pSrc, pDst)
-        } else {
-            0
-        }
-    }
-
-    pub unsafe fn Get(&self, iType: i32, pParam: *mut c_void) -> i32 {
-        if let Some(f) = self.Get {
-            f(self.pCtx, iType, pParam)
-        } else {
-            0
-        }
-    }
-
-    pub unsafe fn Set(&self, iType: i32, pParam: *mut c_void) -> i32 {
-        if let Some(f) = self.Set {
-            f(self.pCtx, iType, pParam)
-        } else {
-            0
-        }
-    }
-}
+// `IWelsVP` was here — the C++ video-processing vtable (`void* pCtx` plus seven
+// `extern "C"` function pointers dispatching on an `EMethods` id, each casting a
+// `void*` parameter back to the one struct its method takes). Phase 4b dissolved
+// the port's other vtables; this was the last, and it carried `*mut c_void` at
+// both ends of every call. `CWelsPreProcess::m_vp` owns the concrete
+// `processing::SWelsVpContext` and each plugin's `Set`/`Get`/`Process` is typed
+// (Phase 6 session B).
 
 // ============================================================================
 // Helper Memory & Padding Functions
@@ -969,7 +938,9 @@ pub unsafe fn FreeScaledPic(
 
 #[repr(C)]
 pub struct CWelsPreProcess {
-    pub m_pInterfaceVp: *mut IWelsVP,
+    /// The video-processing plugins, owned. Was `m_pInterfaceVp: *mut IWelsVP`, a
+    /// pointer to the dissolved vtable whose `pCtx` was this object behind a `void*`.
+    pub m_vp: Box<crate::processing::SWelsVpContext>,
     pub m_pEncCtx: *mut sWelsEncCtx,
     pub m_uiSpatialLayersInTemporal: [u8; MAX_DEPENDENCY_LAYER],
     pub m_sScaledPicture: Scaled_Picture,
@@ -982,8 +953,22 @@ pub struct CWelsPreProcess {
 }
 
 impl Default for CWelsPreProcess {
+    /// Field-wise, because `m_vp` is a `Box` and an all-zero `Box` is not a value
+    /// (S21). Every other field's zero is what the C++ constructor's zeroing meant:
+    /// null pictures, no layers, not initialised.
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        Self {
+            m_vp: Box::new(crate::processing::SWelsVpContext::default()),
+            m_pEncCtx: std::ptr::null_mut(),
+            m_uiSpatialLayersInTemporal: [0; MAX_DEPENDENCY_LAYER],
+            m_sScaledPicture: Scaled_Picture::default(),
+            m_pLastSpatialPicture: [[std::ptr::null_mut(); 2]; MAX_DEPENDENCY_LAYER],
+            m_bInitDone: false,
+            m_uiSpatialPicNum: [0; MAX_DEPENDENCY_LAYER],
+            m_pSpatialPic: [[std::ptr::null_mut(); MAX_REF_PIC_COUNT + 1]; MAX_DEPENDENCY_LAYER],
+            m_iAvaliableRefInSpatialPicList: 0,
+            m_eUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
+        }
     }
 }
 
@@ -994,18 +979,15 @@ impl CWelsPreProcess {
             return std::ptr::null_mut();
         }
 
-        let layout = std::alloc::Layout::new::<CWelsPreProcess>();
-        let p = std::alloc::alloc_zeroed(layout) as *mut CWelsPreProcess;
-        if p.is_null() {
-            return std::ptr::null_mut();
-        }
-
-        (*p).m_pInterfaceVp = std::ptr::null_mut();
-        (*p).m_bInitDone = false;
-        (*p).m_pEncCtx = pEncCtx;
-        (*p).m_eUsageType = (*(*pEncCtx).pSvcParam).iUsageType;
-
-        p
+        // Built whole and boxed (S21: the object owns a `Box` now, so a zeroed
+        // shell is not a valid intermediate). This used to `alloc_zeroed` and set
+        // three fields; `Default` is those zeros written out.
+        let p = Box::new(CWelsPreProcess {
+            m_pEncCtx: pEncCtx,
+            m_eUsageType: (*(*pEncCtx).pSvcParam).iUsageType,
+            ..Default::default()
+        });
+        Box::into_raw(p)
     }
 
     /// Destructor releasing allocated picture buffers and plugin interfaces.
@@ -1017,37 +999,19 @@ impl CWelsPreProcess {
                 std::ptr::null_mut()
             };
             FreeScaledPic(&mut (*pPreProcess).m_sScaledPicture, pMa);
-            (*pPreProcess).WelsPreprocessDestroy();
-            let layout = std::alloc::Layout::new::<CWelsPreProcess>();
-            std::alloc::dealloc(pPreProcess as *mut u8, layout);
+            // `WelsPreprocessDestroy` freed the vtable and its context here; the
+            // plugins are `m_vp` and drop with the object.
+            drop(Box::from_raw(pPreProcess));
         }
     }
 
-    /// `CWelsPreProcess::WelsPreprocessCreate` — `wels_preprocess.cpp:198`.
-    ///
-    /// This used to `alloc_zeroed` the `IWelsVP` and stop there, leaving every
-    /// method `None`. `IWelsVP::Process`/`Set`/`Get` then returned 0 (success)
-    /// without writing anything, so the whole video-analysis stage silently
-    /// produced zeros — see `crate::processing`.
-    pub unsafe fn WelsPreprocessCreate(&mut self) -> i32 {
-        if self.m_pInterfaceVp.is_null() {
-            let pVp = crate::processing::WelsCreateVpInterface();
-            if pVp.is_null() {
-                self.WelsPreprocessDestroy();
-                return 1;
-            }
-            self.m_pInterfaceVp = pVp;
-        }
-        0
-    }
-
-    pub unsafe fn WelsPreprocessDestroy(&mut self) -> i32 {
-        if !self.m_pInterfaceVp.is_null() {
-            crate::processing::WelsDestroyVpInterface(self.m_pInterfaceVp);
-            self.m_pInterfaceVp = std::ptr::null_mut();
-        }
-        0
-    }
+    // `WelsPreprocessCreate` / `WelsPreprocessDestroy` (`wels_preprocess.cpp:198`)
+    // were here: they allocated and freed the `IWelsVP` vtable and its `void*`
+    // context. The plugins are owned by `m_vp` from construction, so there is
+    // nothing left for either to do — deleted with their calls (S18, Phase 6
+    // session B). Their history: the create used to `alloc_zeroed` the vtable and
+    // stop, leaving every method `None` and the whole video-analysis stage
+    // silently producing zeros — see `crate::processing`.
 
     pub unsafe fn WelsPreprocessReset(
         &mut self,
@@ -1152,9 +1116,6 @@ impl CWelsPreProcess {
         *pSpatialNum = 0;
 
         if !self.m_bInitDone {
-            if self.WelsPreprocessCreate() != 0 {
-                return ENC_RETURN_MEMALLOCERR;
-            }
             if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
@@ -1164,10 +1125,6 @@ impl CWelsPreProcess {
             if self.WelsPreprocessReset(pCtx, iWidth, iHeight) != 0 {
                 return ENC_RETURN_MEMALLOCERR;
             }
-        }
-
-        if self.m_pInterfaceVp.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
         }
 
         if !(*pCtx).pVaa.is_null() {
@@ -1529,27 +1486,20 @@ impl CWelsPreProcess {
         0
     }
 
-    pub unsafe fn BilateralDenoising(&self, pSrc: *mut SPicture, kiWidth: i32, kiHeight: i32) {
-        if self.m_pInterfaceVp.is_null() || pSrc.is_null() {
+    /// `CWelsPreProcess::BilateralDenoising`. **`METHOD_DENOISE` is not translated**
+    /// (`crate::processing`): the C++ builds the source pixel map and runs the
+    /// denoise plugin in place here; the port's dispatch returned
+    /// `RET_NOTSUPPORTED`, which this caller never read, so nothing happened and
+    /// nothing happens. Gated by `bEnableDenoise`, off in every gate configuration.
+    pub unsafe fn BilateralDenoising(&mut self, pSrc: *mut SPicture, _kiWidth: i32, _kiHeight: i32) {
+        if pSrc.is_null() {
             return;
         }
-        let mut sSrcPixMap = SPixMap::default();
-        sSrcPixMap.pPixel[0] = (*pSrc).pData[0] as *mut c_void;
-        sSrcPixMap.pPixel[1] = (*pSrc).pData[1] as *mut c_void;
-        sSrcPixMap.pPixel[2] = (*pSrc).pData[2] as *mut c_void;
-        sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-        sSrcPixMap.sRect.iRectWidth = kiWidth;
-        sSrcPixMap.sRect.iRectHeight = kiHeight;
-        sSrcPixMap.iStride[0] = (*pSrc).iLineSize[0];
-        sSrcPixMap.iStride[1] = (*pSrc).iLineSize[1];
-        sSrcPixMap.iStride[2] = (*pSrc).iLineSize[2];
-        sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
-
-        (*self.m_pInterfaceVp).Process(EMethods::METHOD_DENOISE as i32, &mut sSrcPixMap, std::ptr::null_mut());
+        // METHOD_DENOISE: untranslated — no plugin runs (S18: no stub is invented).
     }
 
     pub unsafe fn DownsamplePadding(
-        &self,
+        &mut self,
         pSrc: *mut SPicture,
         pDstPic: *mut SPicture,
         iSrcWidth: i32,
@@ -1564,9 +1514,9 @@ impl CWelsPreProcess {
         let mut sSrcPixMap = SPixMap::default();
         let mut sDstPicMap = SPixMap::default();
 
-        sSrcPixMap.pPixel[0] = (*pSrc).pData[0] as *mut c_void;
-        sSrcPixMap.pPixel[1] = (*pSrc).pData[1] as *mut c_void;
-        sSrcPixMap.pPixel[2] = (*pSrc).pData[2] as *mut c_void;
+        sSrcPixMap.pPixel[0] = (*pSrc).pData[0];
+        sSrcPixMap.pPixel[1] = (*pSrc).pData[1];
+        sSrcPixMap.pPixel[2] = (*pSrc).pData[2];
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sSrcPixMap.sRect.iRectWidth = iSrcWidth;
         sSrcPixMap.sRect.iRectHeight = iSrcHeight;
@@ -1576,9 +1526,9 @@ impl CWelsPreProcess {
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
         if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy {
-            sDstPicMap.pPixel[0] = (*pDstPic).pData[0] as *mut c_void;
-            sDstPicMap.pPixel[1] = (*pDstPic).pData[1] as *mut c_void;
-            sDstPicMap.pPixel[2] = (*pDstPic).pData[2] as *mut c_void;
+            sDstPicMap.pPixel[0] = (*pDstPic).pData[0];
+            sDstPicMap.pPixel[1] = (*pDstPic).pData[1];
+            sDstPicMap.pPixel[2] = (*pDstPic).pData[2];
             sDstPicMap.iSizeInBits = g_kiPixMapSizeInBits;
             sDstPicMap.sRect.iRectWidth = iShrinkWidth;
             sDstPicMap.sRect.iRectHeight = iShrinkHeight;
@@ -1588,13 +1538,12 @@ impl CWelsPreProcess {
             sDstPicMap.eFormat = VideoFormat::videoFormatI420;
 
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
-                if !self.m_pInterfaceVp.is_null() {
-                    iRet = (*self.m_pInterfaceVp).Process(
-                        EMethods::METHOD_DOWNSAMPLE as i32,
-                        &mut sSrcPixMap,
-                        &mut sDstPicMap,
-                    );
-                }
+                // METHOD_DOWNSAMPLE: untranslated (`crate::processing`). The C++
+                // runs the downsampler here; the port's dispatch returned
+                // `RET_NOTSUPPORTED`, which is what `iRet` carries to the caller.
+                // Reached only with more than one spatial layer or a resized
+                // layer, off in every gate configuration (S18: no stub).
+                iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
             } else {
                 WelsMoveMemory_c(
                     (*pDstPic).pData[0],
@@ -1620,9 +1569,9 @@ impl CWelsPreProcess {
         iShrinkWidth -= iShrinkWidth & 1;
         iShrinkHeight -= iShrinkHeight & 1;
         self.Padding(
-            sDstPicMap.pPixel[0] as *mut u8,
-            sDstPicMap.pPixel[1] as *mut u8,
-            sDstPicMap.pPixel[2] as *mut u8,
+            sDstPicMap.pPixel[0],
+            sDstPicMap.pPixel[1],
+            sDstPicMap.pPixel[2],
             sDstPicMap.iStride[0],
             sDstPicMap.iStride[1],
             iShrinkWidth,
@@ -1635,7 +1584,7 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn VaaCalculation(
-        &self,
+        &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
@@ -1643,7 +1592,7 @@ impl CWelsPreProcess {
         bCalculateVar: bool,
         bCalculateBGD: bool,
     ) {
-        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() || self.m_pInterfaceVp.is_null() {
+        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() {
             return;
         }
         (*pVaaInfo).sVaaCalcInfo.pCurY = (*pCurPicture).pData[0];
@@ -1653,14 +1602,14 @@ impl CWelsPreProcess {
         let mut sRefPixMap = SPixMap::default();
         let mut calc_param = SVAACalcParam::default();
 
-        sCurPixMap.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
+        sCurPixMap.pPixel[0] = (*pCurPicture).pData[0];
         sCurPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sCurPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         sCurPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
         sCurPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
         sCurPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
+        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
@@ -1670,15 +1619,15 @@ impl CWelsPreProcess {
         calc_param.iCalcVar = bCalculateVar;
         calc_param.iCalcBgd = bCalculateBGD;
         calc_param.iCalcSsd = bCalculateSQDiff;
-        calc_param.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
 
-        let method = EMethods::METHOD_VAA_STATISTICS as i32;
-        (*self.m_pInterfaceVp).Set(method, &mut calc_param as *mut _ as *mut c_void);
-        (*self.m_pInterfaceVp).Process(method, &mut sCurPixMap, &mut sRefPixMap);
+        // METHOD_VAA_STATISTICS. The result is handed over at the call; the C++
+        // stored `&pVaaInfo->sVaaCalcInfo` in the parameter block.
+        self.m_vp.sVaaCalc.Set(&calc_param);
+        self.m_vp.sVaaCalc.Process(&sCurPixMap, &sRefPixMap, &mut (*pVaaInfo).sVaaCalcInfo);
     }
 
     pub unsafe fn BackgroundDetection(
-        &self,
+        &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
@@ -1687,7 +1636,7 @@ impl CWelsPreProcess {
         if pVaaInfo.is_null() || pCurPicture.is_null() {
             return;
         }
-        if bDetectFlag && !pRefPicture.is_null() && !self.m_pInterfaceVp.is_null() {
+        if bDetectFlag && !pRefPicture.is_null() {
             (*pVaaInfo).iPicWidth = (*pCurPicture).iWidthInPixel;
             (*pVaaInfo).iPicHeight = (*pCurPicture).iHeightInPixel;
             (*pVaaInfo).iPicStride = (*pCurPicture).iLineSize[0];
@@ -1703,9 +1652,9 @@ impl CWelsPreProcess {
             let mut sRefPixMap = SPixMap::default();
             let mut BGDParam = SBGDInterface::default();
 
-            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
-            sSrcPixMap.pPixel[1] = (*pCurPicture).pData[1] as *mut c_void;
-            sSrcPixMap.pPixel[2] = (*pCurPicture).pData[2] as *mut c_void;
+            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
+            sSrcPixMap.pPixel[1] = (*pCurPicture).pData[1];
+            sSrcPixMap.pPixel[2] = (*pCurPicture).pData[2];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
             sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
             sSrcPixMap.iStride[1] = (*pCurPicture).iLineSize[1];
@@ -1714,9 +1663,9 @@ impl CWelsPreProcess {
             sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
-            sRefPixMap.pPixel[1] = (*pRefPicture).pData[1] as *mut c_void;
-            sRefPixMap.pPixel[2] = (*pRefPicture).pData[2] as *mut c_void;
+            sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
+            sRefPixMap.pPixel[1] = (*pRefPicture).pData[1];
+            sRefPixMap.pPixel[2] = (*pRefPicture).pData[2];
             sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
             sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
             sRefPixMap.iStride[1] = (*pRefPicture).iLineSize[1];
@@ -1726,11 +1675,10 @@ impl CWelsPreProcess {
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
             BGDParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
-            BGDParam.pCalcRes = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
 
-            let method = EMethods::METHOD_BACKGROUND_DETECTION as i32;
-            (*self.m_pInterfaceVp).Set(method, &mut BGDParam as *mut _ as *mut c_void);
-            (*self.m_pInterfaceVp).Process(method, &mut sSrcPixMap, &mut sRefPixMap);
+            // METHOD_BACKGROUND_DETECTION; the VAA result handed over at the call.
+            self.m_vp.sBackgroundDetection.Set(&BGDParam);
+            self.m_vp.sBackgroundDetection.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
         } else if !(*pVaaInfo).pVaaBackgroundMbFlag.is_null() {
             let iPicWidthInMb = ((*pCurPicture).iWidthInPixel + 15) >> 4;
             let iPicHeightInMb = ((*pCurPicture).iHeightInPixel + 15) >> 4;
@@ -1743,39 +1691,41 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn AdaptiveQuantCalculation(
-        &self,
+        &mut self,
         pVaaInfo: *mut SVAAFrameInfo,
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
     ) {
-        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() || self.m_pInterfaceVp.is_null() {
+        if pVaaInfo.is_null() || pCurPicture.is_null() || pRefPicture.is_null() {
             return;
         }
-        (*pVaaInfo).sAdaptiveQuantParam.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
+        // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
+        // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
+        // handed over at the `Process` call instead.
         (*pVaaInfo).sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp = 0;
 
-        let method = EMethods::METHOD_ADAPTIVE_QUANT as i32;
         let mut pSrc = SPixMap::default();
         let mut pRef = SPixMap::default();
 
-        pSrc.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
+        pSrc.pPixel[0] = (*pCurPicture).pData[0];
         pSrc.iSizeInBits = g_kiPixMapSizeInBits;
         pSrc.iStride[0] = (*pCurPicture).iLineSize[0];
         pSrc.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         pSrc.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
         pSrc.eFormat = VideoFormat::videoFormatI420;
 
-        pRef.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
+        pRef.pPixel[0] = (*pRefPicture).pData[0];
         pRef.iSizeInBits = g_kiPixMapSizeInBits;
         pRef.iStride[0] = (*pRefPicture).iLineSize[0];
         pRef.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         pRef.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
         pRef.eFormat = VideoFormat::videoFormatI420;
 
-        (*self.m_pInterfaceVp).Set(method, &mut (*pVaaInfo).sAdaptiveQuantParam as *mut _ as *mut c_void);
-        let iRet = (*self.m_pInterfaceVp).Process(method, &mut pSrc, &mut pRef);
+        // METHOD_ADAPTIVE_QUANT.
+        self.m_vp.sAdaptiveQuant.Set(&(*pVaaInfo).sAdaptiveQuantParam);
+        let iRet = self.m_vp.sAdaptiveQuant.Process(&pSrc, &pRef, &(*pVaaInfo).sVaaCalcInfo);
         if iRet == 0 {
-            (*self.m_pInterfaceVp).Get(method, &mut (*pVaaInfo).sAdaptiveQuantParam as *mut _ as *mut c_void);
+            self.m_vp.sAdaptiveQuant.Get(&mut (*pVaaInfo).sAdaptiveQuantParam);
         }
     }
 
@@ -2034,32 +1984,32 @@ impl CWelsPreProcess {
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
     ) -> ESceneChangeIdc {
-        if self.m_pInterfaceVp.is_null() || pCurPicture.is_null() || pRefPicture.is_null() {
+        if pCurPicture.is_null() || pRefPicture.is_null() {
             return ESceneChangeIdc::SIMILAR_SCENE;
         }
 
-        let iMethodIdx = EMethods::METHOD_SCENE_CHANGE_DETECTION_VIDEO as i32;
+        // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();
         let mut sSrcPixMap = SPixMap::default();
         let mut sRefPixMap = SPixMap::default();
 
-        sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
+        sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
         sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
         sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
         sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
+        sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
         sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
         sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
         sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
         sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
         sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        let iRet = (*self.m_pInterfaceVp).Process(iMethodIdx, &mut sSrcPixMap, &mut sRefPixMap);
+        let iRet = self.m_vp.sSceneChangeDetection.Process(&sSrcPixMap, &sRefPixMap);
         if iRet == 0 {
-            (*self.m_pInterfaceVp).Get(iMethodIdx, &mut sSceneChangeDetectResult as *mut _ as *mut c_void);
+            self.m_vp.sSceneChangeDetection.Get(&mut sSceneChangeDetectResult);
         }
         sSceneChangeDetectResult.eSceneChangeIdc
     }
@@ -2138,7 +2088,8 @@ impl CWelsPreProcess {
             * STATIC_SCENE_MOTION_RATIO;
         let iNegligibleBlocks = iNegligibleMotionBlocks as i32;
 
-        let iSceneChangeMethodIdx = EMethods::METHOD_SCENE_CHANGE_DETECTION_SCREEN as i32;
+        // `iSceneChangeMethodIdx = METHOD_SCENE_CHANGE_DETECTION_SCREEN` was here;
+        // the method is untranslated and its sites below say so.
 
         for iScdIdx in 0..iAvailableRefNum {
             let pCurBlockStaticPointer = (*pVaaExt).pVaaBlockStaticIdc[iScdIdx as usize];
@@ -2158,12 +2109,14 @@ impl CWelsPreProcess {
                 let pScrollDetectInfo = &mut (*pVaaExt).sScrollDetectInfo;
                 *pScrollDetectInfo = SScrollDetectionParam::default();
 
-                let iMethodIdx = EMethods::METHOD_SCROLL_DETECTION as i32;
-                if !self.m_pInterfaceVp.is_null() {
-                    (*self.m_pInterfaceVp).Set(iMethodIdx, pScrollDetectInfo as *mut _ as *mut c_void);
-                    let ret = (*self.m_pInterfaceVp).Process(iMethodIdx, &mut sSrcMap, &mut sRefMap);
+                // METHOD_SCROLL_DETECTION: untranslated (`crate::processing`). The
+                // C++ runs the scroll detector here and clamps its vector; the port's
+                // dispatch returned `RET_NOTSUPPORTED` and this block was skipped, so
+                // `sScrollDetectInfo` stays at its default. Screen content only, off
+                // in every gate configuration (S18: no stub).
+                {
+                    let ret = crate::processing::vaacalc::RET_NOTSUPPORTED;
                     if ret == 0 {
-                        (*self.m_pInterfaceVp).Get(iMethodIdx, pScrollDetectInfo as *mut _ as *mut c_void);
                         if pScrollDetectInfo.bScrollDetectFlag {
                             pScrollDetectInfo.iScrollMvX = pScrollDetectInfo
                                 .iScrollMvX
@@ -2177,11 +2130,12 @@ impl CWelsPreProcess {
                 sSceneChangeResult.sScrollResult = (*pVaaExt).sScrollDetectInfo;
             }
 
-            if !self.m_pInterfaceVp.is_null() {
-                (*self.m_pInterfaceVp).Set(iSceneChangeMethodIdx, &mut sSceneChangeResult as *mut _ as *mut c_void);
-                let ret = (*self.m_pInterfaceVp).Process(iSceneChangeMethodIdx, &mut sSrcMap, &mut sRefMap);
+            // METHOD_SCENE_CHANGE_DETECTION_SCREEN: untranslated (`crate::processing`);
+            // the port's dispatch returned `RET_NOTSUPPORTED` and the block below was
+            // skipped. Screen content only, off in every gate configuration.
+            {
+                let ret = crate::processing::vaacalc::RET_NOTSUPPORTED;
                 if ret == 0 {
-                    (*self.m_pInterfaceVp).Get(iSceneChangeMethodIdx, &mut sSceneChangeResult as *mut _ as *mut c_void);
 
                     let iFrameComplexity = sSceneChangeResult.iFrameComplexity;
                     let iSceneDetectIdc = sSceneChangeResult.eSceneChangeIdc;
@@ -2239,9 +2193,9 @@ impl CWelsPreProcess {
 
     unsafe fn InitPixMap(&self, pPicture: *const SPicture, pPixMap: *mut SPixMap) {
         if !pPicture.is_null() && !pPixMap.is_null() {
-            (*pPixMap).pPixel[0] = (*pPicture).pData[0] as *mut c_void;
-            (*pPixMap).pPixel[1] = (*pPicture).pData[1] as *mut c_void;
-            (*pPixMap).pPixel[2] = (*pPicture).pData[2] as *mut c_void;
+            (*pPixMap).pPixel[0] = (*pPicture).pData[0];
+            (*pPixMap).pPixel[1] = (*pPicture).pData[1];
+            (*pPixMap).pPixel[2] = (*pPicture).pData[2];
             (*pPixMap).iSizeInBits = std::mem::size_of::<u8>() as i32;
             (*pPixMap).iStride[0] = (*pPicture).iLineSize[0];
             (*pPixMap).iStride[1] = (*pPicture).iLineSize[1];
@@ -2455,14 +2409,14 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn AnalyzePictureComplexity(
-        &self,
+        &mut self,
         pCtx: *mut sWelsEncCtx,
         pCurPicture: *mut SPicture,
         pRefPicture: *mut SPicture,
         kiDependencyId: i32,
         bCalculateBGD: bool,
     ) {
-        if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || pCurPicture.is_null() || self.m_pInterfaceVp.is_null() {
+        if pCtx.is_null() || (*pCtx).pSvcParam.is_null() || pCurPicture.is_null() {
             return;
         }
 
@@ -2504,31 +2458,15 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.sScrollResult.iScrollMvX = 0;
             sComplexityAnalysisParam.sScrollResult.iScrollMvY = 0;
 
-            let iMethodIdx = EMethods::METHOD_COMPLEXITY_ANALYSIS_SCREEN as i32;
-            let mut sSrcPixMap = SPixMap::default();
-            let mut sRefPixMap = SPixMap::default();
-
-            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
-            sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-            sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
-            sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
-            sSrcPixMap.sRect.iRectHeight = (*pCurPicture).iHeightInPixel;
-            sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
-
-            if !pRefPicture.is_null() {
-                sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
-                sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
-                sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
-                sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
-                sRefPixMap.sRect.iRectHeight = (*pRefPicture).iHeightInPixel;
-                sRefPixMap.eFormat = VideoFormat::videoFormatI420;
-            }
-
-            (*self.m_pInterfaceVp).Set(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
-            let iRet = (*self.m_pInterfaceVp).Process(iMethodIdx, &mut sSrcPixMap, &mut sRefPixMap);
-            if iRet == 0 {
-                (*self.m_pInterfaceVp).Get(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
-            }
+            // METHOD_COMPLEXITY_ANALYSIS_SCREEN: untranslated (`crate::processing`).
+            // The C++ builds the two pixel maps, hands the block above to the screen
+            // complexity plugin, runs it, and reads `iFrameComplexity` back on
+            // success; the port's dispatch returned `RET_NOTSUPPORTED` and the
+            // read-back was skipped, so the block keeps the values written into it
+            // above. Screen content only, off in every gate configuration (S18: no
+            // stub is invented, and the dead pixel maps are not built).
+            let iRet = crate::processing::vaacalc::RET_NOTSUPPORTED;
+            debug_assert_ne!(iRet, 0);
         } else {
             let pVaaInfo = (*pCtx).pVaa;
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
@@ -2549,7 +2487,6 @@ impl CWelsPreProcess {
             };
 
             sComplexityAnalysisParam.iComplexityAnalysisMode = iComplexityAnalysisMode;
-            sComplexityAnalysisParam.pCalcResult = std::ptr::addr_of_mut!((*pVaaInfo).sVaaCalcInfo);
             sComplexityAnalysisParam.pBackgroundMbFlag = (*pVaaInfo).pVaaBackgroundMbFlag;
             if !pRefPicture.is_null() {
                 self.SetRefMbType(
@@ -2580,11 +2517,11 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.pGomForegroundBlockNum = pWelsSvcRc.pGomForegroundBlockNum;
             sComplexityAnalysisParam.iMbNumInGom = pWelsSvcRc.iNumberMbGom;
 
-            let iMethodIdx = EMethods::METHOD_COMPLEXITY_ANALYSIS as i32;
+            // METHOD_COMPLEXITY_ANALYSIS; the VAA result handed over at the call.
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
 
-            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0] as *mut c_void;
+            sSrcPixMap.pPixel[0] = (*pCurPicture).pData[0];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
             sSrcPixMap.iStride[0] = (*pCurPicture).iLineSize[0];
             sSrcPixMap.sRect.iRectWidth = (*pCurPicture).iWidthInPixel;
@@ -2592,7 +2529,7 @@ impl CWelsPreProcess {
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
             if !pRefPicture.is_null() {
-                sRefPixMap.pPixel[0] = (*pRefPicture).pData[0] as *mut c_void;
+                sRefPixMap.pPixel[0] = (*pRefPicture).pData[0];
                 sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
                 sRefPixMap.iStride[0] = (*pRefPicture).iLineSize[0];
                 sRefPixMap.sRect.iRectWidth = (*pRefPicture).iWidthInPixel;
@@ -2600,10 +2537,11 @@ impl CWelsPreProcess {
                 sRefPixMap.eFormat = VideoFormat::videoFormatI420;
             }
 
-            (*self.m_pInterfaceVp).Set(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
-            let iRet = (*self.m_pInterfaceVp).Process(iMethodIdx, &mut sSrcPixMap, &mut sRefPixMap);
+            self.m_vp.sComplexityAnalysis.Set(sComplexityAnalysisParam);
+            let iRet =
+                self.m_vp.sComplexityAnalysis.Process(&sSrcPixMap, &sRefPixMap, &(*pVaaInfo).sVaaCalcInfo);
             if iRet == 0 {
-                (*self.m_pInterfaceVp).Get(iMethodIdx, sComplexityAnalysisParam as *mut _ as *mut c_void);
+                self.m_vp.sComplexityAnalysis.Get(sComplexityAnalysisParam);
             }
         }
     }
@@ -2642,25 +2580,19 @@ impl CWelsPreProcess {
         kpRefPic: *const SPicture,
         kpSrcPic: *const SPicture,
     ) -> i32 {
-        if self.m_pInterfaceVp.is_null() || kpRefPic.is_null() || kpSrcPic.is_null() {
+        if kpRefPic.is_null() || kpSrcPic.is_null() {
             return 1;
         }
 
-        let iSceneChangeMethodIdx = EMethods::METHOD_SCENE_CHANGE_DETECTION_SCREEN as i32;
-        let mut sSceneChangeResult = SSceneChangeResult::default();
-        sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer;
-
-        let mut sSrcMap = SPixMap::default();
-        let mut sRefMap = SPixMap::default();
-        self.InitPixMap(kpSrcPic, &mut sSrcMap);
-        self.InitPixMap(kpRefPic, &mut sRefMap);
-
-        (*self.m_pInterfaceVp).Set(iSceneChangeMethodIdx, &mut sSceneChangeResult as *mut _ as *mut c_void);
-        let iRet = (*self.m_pInterfaceVp).Process(iSceneChangeMethodIdx, &mut sSrcMap, &mut sRefMap);
-        if iRet == 0 {
-            (*self.m_pInterfaceVp).Get(iSceneChangeMethodIdx, &mut sSceneChangeResult as *mut _ as *mut c_void);
-        }
-        iRet
+        // METHOD_SCENE_CHANGE_DETECTION_SCREEN: untranslated (`crate::processing`).
+        // The C++ hands `pCurBlockStaticPointer` to the screen scene-change plugin
+        // through an `SSceneChangeResult`, runs it over the two pixel maps and reads
+        // the result back on success; the port's dispatch returned `RET_NOTSUPPORTED`,
+        // which is what the caller gets, and the read-back was skipped. Screen
+        // content only, off in every gate configuration (S18: no stub is invented,
+        // and the dead pixel maps are not built).
+        let _ = pCurBlockStaticPointer;
+        crate::processing::vaacalc::RET_NOTSUPPORTED
     }
 
     pub unsafe fn UpdateSrcList(
@@ -2742,26 +2674,18 @@ mod tests {
         assert_eq!(EMethods::default(), EMethods::METHOD_NULL);
     }
 
+    /// The pre-processor is constructed with its plugins in place — there is no
+    /// create/destroy pair for a vtable any more (`IWelsVP` dissolved, Phase 6
+    /// session B). This used to exercise `WelsPreprocessCreate`/`Destroy`.
     #[test]
     fn test_wels_preprocess_init_and_uninit() {
         let _align = CMemoryAlign::new(16);
-        let mut preprocess = CWelsPreProcess::default();
-        unsafe {
-            let mut param = SEncParamExt::default();
-            param.iPicWidth = 128;
-            param.iPicHeight = 128;
-            param.fMaxFrameRate = 30.0;
-            param.iSpatialLayerNum = 1;
-            param.sSpatialLayers[0].iVideoWidth = 128;
-            param.sSpatialLayers[0].iVideoHeight = 128;
-            param.sSpatialLayers[0].fFrameRate = 30.0;
-            assert_eq!(param.iPicWidth, 128);
-
-            let ret = preprocess.WelsPreprocessCreate();
-            assert_eq!(ret, ENC_RETURN_SUCCESS);
-
-            preprocess.WelsPreprocessDestroy();
-        }
+        let preprocess = CWelsPreProcess::default();
+        assert!(!preprocess.m_bInitDone);
+        assert!(preprocess.m_pEncCtx.is_null());
+        // The plugins are owned and start at their defaults.
+        assert!(!preprocess.m_vp.sVaaCalc.m_sCalcParam.iCalcBgd);
+        drop(preprocess);
     }
 
     #[test]
