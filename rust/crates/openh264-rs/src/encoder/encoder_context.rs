@@ -533,15 +533,22 @@ impl Default for sWelsEncCtx {
 /// Initializes input source picture geometry, color planes, and line strides.
 ///
 /// # Safety
-/// `kpSrc` must point to a valid `SSourcePicture` struct or be null. (Typed since
-/// Phase 6 session B; the C++ takes `void*` and casts back here.)
+/// `pSrcPic` must point to a valid, writable `SSourcePicture` or be null.
+///
+/// **`*mut`, not `*const`** (Phase 6 session B). The C++ signature is
+/// `InitPic(const void* kpSrc, …)` and its first act is
+/// `SSourcePicture* pSrcPic = (SSourcePicture*)kpSrc;` — it casts the `const`
+/// away and writes eight fields through it. Typing the parameter `*const` here
+/// preserved that lie, and the `exit` battery's Miri step caught what the lie
+/// costs in Rust: the unit test passed `&src_pic`, a *shared* reference, and the
+/// first write through the cast pointer is UB — "that tag only grants
+/// SharedReadOnly permission". A function that writes says `*mut`.
 pub unsafe fn InitPic(
-    kpSrc: *const SSourcePicture,
+    pSrcPic: *mut SSourcePicture,
     kiColorspace: i32,
     kiWidth: i32,
     kiHeight: i32,
 ) -> i32 {
-    let pSrcPic = kpSrc as *mut SSourcePicture;
 
     if pSrcPic.is_null() || kiWidth == 0 || kiHeight == 0 {
         return 1;
@@ -1034,7 +1041,7 @@ mod tests {
         let mut src_pic = SSourcePicture::default();
         let ret = unsafe {
             InitPic(
-                &src_pic,
+                &mut src_pic,
                 VideoFormat::videoFormatI420 as i32,
                 640,
                 480,
