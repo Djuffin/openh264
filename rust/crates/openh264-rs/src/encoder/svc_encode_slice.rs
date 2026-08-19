@@ -781,8 +781,12 @@ pub unsafe fn WelsMbToSliceIdc(pCurDq: *mut SDqLayer, kiMbXY: i32) -> u16 {
         return u16::MAX;
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
-    if kiMbXY >= 0 && kiMbXY < (*pSliceCtx).iMbNumInFrame && !(*pSliceCtx).pOverallMbMap.is_null() {
-        *(*pSliceCtx).pOverallMbMap.add(kiMbXY as usize)
+    let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
+    if kiMbXY >= 0 && kiMbXY < (*pSliceCtx).iMbNumInFrame {
+        match map.get(kiMbXY as usize) {
+            Some(&v) => v,
+            None => u16::MAX,
+        }
     } else {
         u16::MAX
     }
@@ -1310,9 +1314,11 @@ pub unsafe fn WelsGetNextMbOfSlice(pCurDq: *mut SDqLayer, kiMbXY: i32) -> i32 {
     } else if pSliceSeg.uiSliceMode != SliceMode::SM_RESERVED {
         let iNextMbIdx = kiMbXY + 1;
         if iNextMbIdx < pSliceSeg.iMbNumInFrame
-            && !pSliceSeg.pOverallMbMap.is_null()
-            && *pSliceSeg.pOverallMbMap.add(iNextMbIdx as usize)
-                == *pSliceSeg.pOverallMbMap.add(kiMbXY as usize)
+            && {
+                let map: &[u16] = &pSliceSeg.pOverallMbMap;
+                map.get(iNextMbIdx as usize).is_some()
+                    && map.get(iNextMbIdx as usize) == map.get(kiMbXY as usize)
+            }
         {
             iNextMbIdx
         } else {
@@ -2322,7 +2328,10 @@ pub unsafe fn AddSliceBoundary(
     let pSliceBuffer = (*pCurLayer).sSliceBufferInfo[buf_idx].pSliceBuffer;
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
     let iCurMbIdx = (*pCurMb).iMbXY;
-    let iCurSliceIdc = *(*pSliceCtx).pOverallMbMap.add(iCurMbIdx as usize);
+    let iCurSliceIdc = {
+        let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
+        map[iCurMbIdx as usize]
+    };
     let kiSliceIdxStep = (*pEncCtx).iActiveThreadsNum;
     let iNextSliceIdc = iCurSliceIdc + kiSliceIdxStep as u16;
 
@@ -2342,12 +2351,15 @@ pub unsafe fn AddSliceBoundary(
         // C++ calls WelsSetMemMultiplebytes_c, whose count is a signed int32_t; the
         // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
         // when the boundary landed past the end of the partition.
-        crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
-            (*pSliceCtx).pOverallMbMap.add(iFirstMbIdxOfNextSlice as usize),
-            iNextSliceIdc as u32,
-            kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1,
-            std::mem::size_of::<u16>() as i32,
-        );
+        {
+            let map: &mut Vec<u16> = &mut (*pSliceCtx).pOverallMbMap;
+            crate::encoder::slice_multi_threading::fill_mb_map(
+                map,
+                iFirstMbIdxOfNextSlice,
+                kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1,
+                iNextSliceIdc,
+            );
+        }
 
         UpdateMbNeighbourInfoForNextSlice(pCurLayer, mb_list_root(pCurLayer), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
@@ -2366,7 +2378,10 @@ pub unsafe fn DynSlcJudgeSliceBoundaryStepBack(
     let kiEndMbIdxOfPartition = (*(*pEncCtx).pCurDqLayer).EndMbIdxOfPartition[kiPartitionId];
 
     let kbCurMbNotFirstMbOfCurSlice = (iCurMbIdx > 0)
-        && (*(*pSliceCtx).pOverallMbMap.add(iCurMbIdx as usize) == *(*pSliceCtx).pOverallMbMap.add((iCurMbIdx - 1) as usize));
+        && {
+            let map: &[u16] = &(*pSliceCtx).pOverallMbMap;
+            map[iCurMbIdx as usize] == map[(iCurMbIdx - 1) as usize]
+        };
     let kbCurMbNotLastMbOfCurPartition = iCurMbIdx < kiEndMbIdxOfPartition;
 
     if (*pCurSlice).bDynamicSlicingSliceSizeCtrlFlag {

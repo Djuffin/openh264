@@ -1751,7 +1751,7 @@ mod tests {
             assert_eq!((*pDq).iMbHeight, 6);
             assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
             assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame, 1);
-            assert!(!(*pDq).sSliceEncCtx.pOverallMbMap.is_null());
+            assert_eq!((*pDq).sSliceEncCtx.pOverallMbMap.len(), 60);
             assert_eq!((*pDq).sMbDataP.dims().count(), 60);
 
             // InitMbInfo wired every macroblock to its slot in the context arrays.
@@ -2765,12 +2765,15 @@ pub unsafe fn UpdateSlicepEncCtxWithPartition(pCurDq: *mut SDqLayer, mut iPartit
         (*pCurDq).LastCodedMbIdxOfPartition[i] = 0;
         (*pCurDq).NumSliceCodedOfPartition[i] = 0;
 
-        crate::encoder::slice_multi_threading::WelsSetMemMultiplebytes_c(
-            (*pCurDq).sSliceEncCtx.pOverallMbMap.add(iFirstMbIdx as usize),
-            i as u32,
-            iCountMbNumInPartition,
-            std::mem::size_of::<u16>() as i32,
-        );
+        {
+            let map: &mut Vec<u16> = &mut (*pCurDq).sSliceEncCtx.pOverallMbMap;
+            crate::encoder::slice_multi_threading::fill_mb_map(
+                map,
+                iFirstMbIdx,
+                iCountMbNumInPartition,
+                i as u16,
+            );
+        }
 
         // for next partition (or pSlice)
         iFirstMbIdx += iCountMbNumInPartition;

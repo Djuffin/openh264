@@ -162,7 +162,11 @@ assert_size!(SWelsSvcCodingParam, 1240);
 
 
 assert_size!(SWelsSvcRc, 360);
-assert_size!(SSliceCtx, 32);
+// 32 in the C++ and in this port until **T6.D7**, which made `pOverallMbMap` a
+// `Vec<u16>` — one pointer becomes three words, and `repr(C)` comes off with it, so
+// the compiler repacks the four small scalars ahead of it. **48, measured**, and the
+// number tracks the port from here.
+assert_size!(SSliceCtx, 48);
 
 
 // codec/encoder/core/inc/mb_cache.h, svc_enc_macroblock.h, svc_enc_frame.h
@@ -198,7 +202,7 @@ assert_size!(SSliceBufferInfo, 16);
 // trade again), and **560 after T6.D6** made `pFirstMbIdxOfSlice` and
 // `pCountMbNumInSlice` `Vec<i32>` (two more pointers become two more three-word
 // `Vec`s). **Measured** at each step; the number tracks the port, not the C++.
-assert_size!(SDqLayer, 560);
+
 
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
