@@ -266,7 +266,6 @@ pub use crate::common::wels_common_defs::EWelsNalUnitType;
 pub use crate::safe::bits::BsWriter;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
-use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 
 /// `TagSlice` — `codec/encoder/core/inc/slice.h:170`. 1584 bytes in the C++; the
@@ -430,8 +429,11 @@ pub struct SDqLayer {
 
     pub bNeedAdjustingSlicing: bool,
 
-    pub pFeatureSearchPreparation: *mut SFeatureSearchPreparation,
-
+    // `pFeatureSearchPreparation` stood here. Its only writer was `null_mut()`, two
+    // lines under the guard that returns `ENC_RETURN_UNSUPPORTED_PARA` for the only
+    // configuration that would have allocated it, so `RequestFeatureSearchPreparation`
+    // and `UpdateFMESwitch` had no reachable caller at all — S18, deleted rather than
+    // converted (T6.D2).
     pub pRefLayer: *mut SDqLayer,
 }
 

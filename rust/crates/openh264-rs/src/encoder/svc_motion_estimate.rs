@@ -145,31 +145,6 @@ impl Default for SadPredISatdUnit {
 
 /// Reference frame screen block feature storage and hash lookup index.
 
-/// Frame-level feature search preparation buffer and FME adaptive switch state.
-#[repr(C)]
-#[derive(Debug)]
-pub struct SFeatureSearchPreparation {
-    pub pRefBlockFeature: *mut SScreenBlockFeatureStorage,
-    pub pFeatureOfBlock: *mut u16,
-    pub uiFeatureStrategyIndex: u8,
-    pub bFMESwitchFlag: bool,
-    pub uiFMEGoodFrameCount: u8,
-    pub iHighFreMbCount: i32,
-}
-
-impl Default for SFeatureSearchPreparation {
-    fn default() -> Self {
-        Self {
-            pRefBlockFeature: std::ptr::null_mut(),
-            pFeatureOfBlock: std::ptr::null_mut(),
-            uiFeatureStrategyIndex: 0,
-            bFMESwitchFlag: true,
-            uiFMEGoodFrameCount: FMESWITCH_DEFAULT_GOODFRAME_NUM,
-            iHighFreMbCount: 0,
-        }
-    }
-}
-
 /// Central working state structure passed across all motion estimation search routines.
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -1523,47 +1498,6 @@ pub unsafe extern "C" fn MotionEstimateFeatureFullSearch(
 // Adaptive FME Switch Management
 // ============================================================================
 
-unsafe fn CountFMECostDown(pCurLayer: *const SDqLayer) -> u32 {
-    unsafe {
-        let mut uiCostDownSum = 0u32;
-        let kiSliceCount = GetCurrentSliceNum(pCurLayer);
-        if kiSliceCount >= 1 && !(*pCurLayer).ppSliceInLayer.is_null() {
-            for iSliceIndex in 0..kiSliceCount as isize {
-                let pSlice = *(*pCurLayer).ppSliceInLayer.offset(iSliceIndex);
-                if !pSlice.is_null() {
-                    uiCostDownSum = uiCostDownSum.wrapping_add((*pSlice).uiSliceFMECostDown);
-                }
-            }
-        }
-        uiCostDownSum
-    }
-}
-
-fn UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown: u32, uiFMEGoodFrameCount: &mut u8) {
-    if iAvMBNormalizedRDcostDown > FMESWITCH_MBAVERCOSTSAVING_THRESHOLD {
-        if *uiFMEGoodFrameCount < FMESWITCH_GOODFRAMECOUNT_MAX {
-            *uiFMEGoodFrameCount += 1;
-        }
-    } else if *uiFMEGoodFrameCount > 0 {
-        *uiFMEGoodFrameCount -= 1;
-    }
-}
-
-pub unsafe extern "C" fn UpdateFMESwitch(pCurLayer: *mut SDqLayer) {
-    unsafe {
-        if pCurLayer.is_null() || (*pCurLayer).pFeatureSearchPreparation.is_null() {
-            return;
-        }
-        let iFMECost = CountFMECostDown(pCurLayer);
-        let mb_total = ((*pCurLayer).iMbWidth as u32) * ((*pCurLayer).iMbHeight as u32);
-        let iAvMBNormalizedRDcostDown = if mb_total > 0 { iFMECost / mb_total } else { 0 };
-        UpdateFMEGoodFrameCount(
-            iAvMBNormalizedRDcostDown,
-            &mut (*(*pCurLayer).pFeatureSearchPreparation).uiFMEGoodFrameCount,
-        );
-    }
-}
-
 /// Intentional no-op motion estimation FME switch callback.
 /// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
 pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
@@ -1572,60 +1506,13 @@ pub unsafe extern "C" fn UpdateFMESwitchNull(_pCurLayer: *mut SDqLayer) {}
 // Feature Storage Dynamic Allocation & Deallocation
 // ============================================================================
 
-pub unsafe extern "C" fn RequestFeatureSearchPreparation(
-    pMa: *mut CMemoryAlign,
-    kiFrameWidth: i32,
-    kiFrameHeight: i32,
-    iNeedFeatureStorage: i32,
-    pFeatureSearchPreparation: *mut SFeatureSearchPreparation,
-) -> i32 {
-    if pMa.is_null() || pFeatureSearchPreparation.is_null() {
-        return ENC_RETURN_UNEXPECTED;
-    }
-    unsafe {
-        let kiFeatureStrategyIndex = iNeedFeatureStorage >> 16;
-        let bFme8x8 = (iNeedFeatureStorage & 0x0000FF & (ME_FME as i32)) == (ME_FME as i32);
-        let kiMarginSize = if bFme8x8 { 8 } else { 16 };
-        let kiFrameSize = (kiFrameWidth - kiMarginSize) * (kiFrameHeight - kiMarginSize);
-
-        let iListOfFeatureOfBlock = if kiFeatureStrategyIndex == 0 {
-            std::mem::size_of::<u16>() * (kiFrameSize as usize)
-        } else {
-            std::mem::size_of::<u16>() * (kiFrameSize as usize)
-                + ((kiFrameWidth - kiMarginSize) as usize) * std::mem::size_of::<u32>()
-                + (kiFrameWidth as usize) * 8 * std::mem::size_of::<u8>()
-        };
-
-        let tag = b"pFeatureOfBlock\0".as_ptr() as *const c_char;
-        let pBuf = (*pMa).WelsMallocz(iListOfFeatureOfBlock as u32, tag) as *mut u16;
-        if pBuf.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-
-        (*pFeatureSearchPreparation).pFeatureOfBlock = pBuf;
-        (*pFeatureSearchPreparation).uiFeatureStrategyIndex = kiFeatureStrategyIndex as u8;
-        (*pFeatureSearchPreparation).bFMESwitchFlag = true;
-        (*pFeatureSearchPreparation).uiFMEGoodFrameCount = FMESWITCH_DEFAULT_GOODFRAME_NUM;
-        (*pFeatureSearchPreparation).iHighFreMbCount = 0;
-
-        ENC_RETURN_SUCCESS
-    }
-}
-
-pub unsafe extern "C" fn ReleaseFeatureSearchPreparation(
-    pMa: *mut CMemoryAlign,
-    pFeatureOfBlock: *mut *mut u16,
-) -> i32 {
-    if !pMa.is_null() && !pFeatureOfBlock.is_null() && !(*pFeatureOfBlock).is_null() {
-        unsafe {
-            let tag = b"pFeatureOfBlock\0".as_ptr() as *const c_char;
-            (*pMa).WelsFree(*pFeatureOfBlock as *mut std::ffi::c_void, tag);
-            *pFeatureOfBlock = std::ptr::null_mut();
-            return ENC_RETURN_SUCCESS;
-        }
-    }
-    ENC_RETURN_UNEXPECTED
-}
+// `RequestFeatureSearchPreparation` / `ReleaseFeatureSearchPreparation` and
+// `SFeatureSearchPreparation` itself stood here, with `UpdateFMESwitch`,
+// `CountFMECostDown` and `UpdateFMEGoodFrameCount` above. Nothing called any of
+// them: `pfUpdateFMESwitch` is unconditionally `UpdateFMESwitchNull`
+// (`WelsInitMeFunc`), and the layer field the rest reached through was written only
+// with `null_mut()`, under a guard that refuses screen content two lines earlier.
+// S18 — deleted, enumerated by strip-and-build (T6.D2).
 
 pub unsafe extern "C" fn RequestScreenBlockFeatureStorage(
     pMa: *mut CMemoryAlign,

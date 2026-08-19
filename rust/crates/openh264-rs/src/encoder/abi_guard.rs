@@ -188,7 +188,10 @@ assert_size!(SLayerInfo, 48);
 
 // codec/encoder/core/inc/svc_enc_frame.h
 assert_size!(SSliceBufferInfo, 16);
-assert_size!(SDqLayer, 512);
+// 512 in the C++ and in this port until **T6.D2**, which deleted the dead
+// `pFeatureSearchPreparation` pointer (S18): -8 bytes, no padding change.
+// **504, measured** — and the number tracks the port from here, not the C++.
+assert_size!(SDqLayer, 504);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
