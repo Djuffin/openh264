@@ -1554,12 +1554,7 @@ pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 /// `pDq` and `pMa` must be non-null.
 pub unsafe fn FreeSliceInLayer(pDq: *mut SDqLayer, pMa: *mut CMemoryAlign) {
     for iIdx in 0..MAX_THREADS_NUM {
-        crate::encoder::svc_encode_slice::FreeSliceBuffer(
-            &mut (*pDq).sSliceBufferInfo[iIdx].pSliceBuffer,
-            (*pDq).sSliceBufferInfo[iIdx].iMaxSliceNum,
-            pMa,
-            tag!("pSliceBuffer"),
-        );
+        crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx, pMa);
     }
 }
 
@@ -2891,9 +2886,10 @@ pub unsafe fn WelsCodeOnePicPartition(
 ) -> i32 {
     let pCurLayer = (*pCtx).pCurDqLayer;
     let uSlcBuffIdx = 0usize;
-    let pStartSlice = (*pCurLayer).sSliceBufferInfo[uSlcBuffIdx]
-        .pSliceBuffer
-        .add(iStartSliceIdx as usize);
+    let pStartSlice = crate::encoder::svc_encode_slice::slice_in_bank(pCurLayer, uSlcBuffIdx, iStartSliceIdx);
+    if pStartSlice.is_null() {
+        return ENC_RETURN_UNEXPECTED;
+    }
     let mut iNalIdxInLayer = *pNalIdxInLayer;
     let mut iSliceIdx = iStartSliceIdx;
     let kiSliceStep = (*pCtx).iActiveThreadsNum as i32;
@@ -2945,9 +2941,7 @@ pub unsafe fn WelsCodeOnePicPartition(
         }
 
         crate::encoder::nal_encap::WelsLoadNal((*pCtx).pOut, keNalType as i32, keNalRefIdc as i32);
-        let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[uSlcBuffIdx]
-            .pSliceBuffer
-            .add(iSliceIdx as usize);
+        let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank((*pCtx).pCurDqLayer, uSlcBuffIdx, iSliceIdx);
         (*pCurSlice).iSliceIdx = iSliceIdx;
 
         iReturn = crate::encoder::svc_encode_slice::WelsCodeOneSlice(
@@ -3288,7 +3282,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         if (*pParam).sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0].pSliceBuffer;
+            let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank((*pCtx).pCurDqLayer, 0, 0);
 
             if (*pCtx).bNeedPrefixNalFlag {
                 (*pCtx).iEncoderError = AddPrefixNal(
@@ -3503,9 +3497,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                     eNalRefIdc as i32,
                 );
 
-                let pCurSlice = (*(*pCtx).pCurDqLayer).sSliceBufferInfo[0]
-                    .pSliceBuffer
-                    .add(iSliceIdx as usize);
+                let pCurSlice = crate::encoder::svc_encode_slice::slice_in_bank((*pCtx).pCurDqLayer, 0, iSliceIdx);
                 debug_assert_eq!(iSliceIdx, (*pCurSlice).iSliceIdx);
                 (*pCtx).iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
                     (*pCtx).pCurDqLayer,

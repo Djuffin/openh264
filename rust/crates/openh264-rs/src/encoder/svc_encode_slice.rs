@@ -305,9 +305,62 @@ pub struct SSlice {
     pub sSlicingOverRc: SRCSlicing,
 }
 
+impl SSlice {
+    /// A slice exactly as `InitSliceThreadInfo` used to find it the moment
+    /// `WelsMallocz` returned — **T6.D8**, and it exists for the same reason the
+    /// layer's constructor does: the bank is a `Vec<SSlice>` now, so the slices are
+    /// built rather than handed a zeroed block.
+    ///
+    /// **Every field below is that block's zero**, and the port's own audit of the
+    /// pieces says so: `SMbCache::default()` is all-zero field by field (T6.C3),
+    /// `SCabacCtx::default()` likewise, and `SSliceHeaderExt`/`SRCSlicing`/`SMVUnitXY`
+    /// are plain POD. **The one exception is named**: `SWelsSliceBs::default()`
+    /// carries `BsWriter::default()`, whose `left_bits` is **32** where a zeroed
+    /// `SBitStringAux`'s `iLeftBits` is 0 — a difference `safe/bits.rs` already
+    /// settled in writing ("the C++ never uses that struct before calling
+    /// `InitBits`"), and `InitBitStream`/`WelsInitSliceCabac` establish the writer
+    /// before any slice writes a bit. The sweeps are the measurement.
+    pub fn new() -> Self {
+        Self {
+            // Per-macroblock scratch: 5600 bytes of inline arrays since T6.C3, and
+            // every one of them is written before it is read, per macroblock.
+            sMbCacheInfo: SMbCache::default(),
+            // The slice's own bitstream: `InitSliceBsBuffer` sets `uiSize` and either
+            // allocates `pBs` or leaves it null (the frame writer's slot).
+            sSliceBs: SWelsSliceBs::default(),
+            // Filled from the base slice by `InitSliceHeadWithBase` every frame.
+            sSliceHeaderExt: SSliceHeaderExt::default(),
+            // Motion-vector search bounds, recomputed per slice by `WelsSliceMdEnc`.
+            sMvStartMin: SMVUnitXY::default(),
+            sMvStartMax: SMVUnitXY::default(),
+            sMvc: [SMVUnitXY::default(); 5],
+            uiMvcNum: 0,
+            sScaleShift: 0,
+            // `InitSliceList` stamps the index; -1 means "not coded this frame" and is
+            // written there, not here, exactly as the C++ does after its memset.
+            iSliceIdx: 0,
+            uiBufferIdx: 0,
+            bSliceHeaderExtFlag: false,
+            uiLastMbQp: 0,
+            bDynamicSlicingSliceSizeCtrlFlag: false,
+            uiAssumeLog2BytePerMb: 0,
+            uiSliceFMECostDown: 0,
+            uiReservedFillByte: 0,
+            // CABAC state, re-initialised per slice by `WelsInitSliceCabac`.
+            sCabacCtx: SCabacCtx::default(),
+            iCabacInitIdc: 0,
+            iMbSkipRun: 0,
+            iCountMbNumInSlice: 0,
+            uiSliceConsumeTime: 0,
+            iSliceComplexRatio: 0,
+            sSlicingOverRc: SRCSlicing::default(),
+        }
+    }
+}
+
 impl Default for SSlice {
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        Self::new()
     }
 }
 
@@ -344,10 +397,12 @@ impl Default for SDynamicSlicingStack {
 
 
 
-#[repr(C)]
-/// `TagSliceBufferInfo` — `codec/encoder/core/inc/svc_enc_frame.h:71`. 16 bytes.
+/// `TagSliceBufferInfo` — `codec/encoder/core/inc/svc_enc_frame.h:71`. 16 bytes in
+/// the C++; not `repr(C)` since **T6.D8**, because `pSliceBuffer` is a `Vec<SSlice>`.
 pub struct SSliceBufferInfo {
-    pub pSliceBuffer: *mut SSlice,
+    /// The bank's slices, **owned since T6.D8**. `slice_in_layer` resolves a
+    /// `SliceIdx` against this, deriving from the bank's root (S28).
+    pub pSliceBuffer: Vec<SSlice>,
     pub iMaxSliceNum: i32,
     pub iCodedSliceNum: i32,
 }
@@ -357,7 +412,7 @@ impl Default for SSliceBufferInfo {
         Self {
             iMaxSliceNum: 0,
             iCodedSliceNum: 0,
-            pSliceBuffer: std::ptr::null_mut(),
+            pSliceBuffer: Vec::new(),
         }
     }
 }
@@ -458,11 +513,30 @@ pub unsafe fn slice_in_layer(pCurLayer: *mut SDqLayer, kiSliceIdx: i32) -> *mut 
     if s.offset < 0 || s.bank as usize >= MAX_THREADS_NUM {
         return std::ptr::null_mut();
     }
-    let pBank = (*pCurLayer).sSliceBufferInfo[s.bank as usize].pSliceBuffer;
-    if pBank.is_null() {
+    slice_in_bank(pCurLayer, s.bank as usize, s.offset)
+}
+
+/// The bank's slices as a raw pointer to their **root** — T6.D8, and S28's rule
+/// again: `AddSliceBoundary` and `ReOrderSliceInLayer` walk *neighbouring* slices out
+/// of the pointer they hold, so the pointer must carry the whole bank's provenance.
+/// Answers null for a bank that has not been sized.
+#[inline]
+pub unsafe fn slice_bank_root(pCurLayer: *mut SDqLayer, kiBank: usize) -> *mut SSlice {
+    let bank: &mut Vec<SSlice> = &mut (*pCurLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
+    if bank.is_empty() {
         return std::ptr::null_mut();
     }
-    pBank.add(s.offset as usize)
+    bank.as_mut_ptr()
+}
+
+/// The slice at `kiOffset` in bank `kiBank`, derived from the bank's root.
+#[inline]
+pub unsafe fn slice_in_bank(pCurLayer: *mut SDqLayer, kiBank: usize, kiOffset: i32) -> *mut SSlice {
+    let root = slice_bank_root(pCurLayer, kiBank);
+    if root.is_null() || kiOffset < 0 {
+        return std::ptr::null_mut();
+    }
+    root.add(kiOffset as usize)
 }
 
 /// The layer's macroblock array as a raw pointer to its **root** — T6.D5, and
@@ -2325,7 +2399,7 @@ pub unsafe fn AddSliceBoundary(
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let buf_idx = (*pCurSlice).uiBufferIdx as usize;
-    let pSliceBuffer = (*pCurLayer).sSliceBufferInfo[buf_idx].pSliceBuffer;
+    let pSliceBuffer = slice_bank_root(pCurLayer, buf_idx);
     let iCodedSliceNum = (*pCurLayer).sSliceBufferInfo[buf_idx].iCodedSliceNum;
     let iCurMbIdx = (*pCurMb).iMbXY;
     let iCurSliceIdc = {
@@ -2521,23 +2595,33 @@ pub unsafe fn InitSliceBsBuffer(
     ENC_RETURN_SUCCESS
 }
 
-pub unsafe fn FreeSliceBuffer(pSliceList: *mut *mut SSlice, kiMaxSliceNum: i32, pMa: *mut CMemoryAlign, kpTag: *const c_char) {
-    if !pSliceList.is_null() && !(*pSliceList).is_null() {
-        let slice_array = *pSliceList;
-        for iSliceIdx in 0..kiMaxSliceNum {
-            let pSlice = slice_array.add(iSliceIdx as usize);
-            if !(*pSlice).sSliceBs.pBs.is_null() {
-                (*pMa).WelsFree((*pSlice).sSliceBs.pBs as *mut c_void, c"sSliceBs.pBs".as_ptr());
-                (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
-            }
+/// Releases one slice bank — **T6.D8**.
+///
+/// The bank itself is a `Vec<SSlice>` now, so `clear()` is the old
+/// `WelsFree(slice_array)`. What still needs walking is `sSliceBs.pBs`: each slice's
+/// independent bitstream buffer is a `WelsMallocz` the slice holds by raw pointer,
+/// and that family is Phase 7's (`pThreadBsBuffer` and the thread-buffer redesign),
+/// so it is freed here exactly as before.
+pub unsafe fn FreeSliceBuffer(pDqLayer: *mut SDqLayer, kiBank: usize, pMa: *mut CMemoryAlign) {
+    let n = {
+        let bank: &Vec<SSlice> = &(*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
+        bank.len()
+    };
+    for iSliceIdx in 0..n {
+        let pSlice = slice_in_bank(pDqLayer, kiBank, iSliceIdx as i32);
+        if !pSlice.is_null() && !(*pSlice).sSliceBs.pBs.is_null() {
+            (*pMa).WelsFree((*pSlice).sSliceBs.pBs as *mut c_void, c"sSliceBs.pBs".as_ptr());
+            (*pSlice).sSliceBs.pBs = std::ptr::null_mut();
         }
-        (*pMa).WelsFree(slice_array as *mut c_void, kpTag);
-        *pSliceList = std::ptr::null_mut();
     }
+    let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
+    bank.clear();
+    bank.shrink_to_fit();
 }
 
 pub unsafe fn InitSliceList(
-    pSliceList: *mut SSlice,
+    pDqLayer: *mut SDqLayer,
+    kiBank: i32,
     kiMaxSliceNum: i32,
     kiMaxSliceBufferSize: i32,
     bIndependenceBsBuffer: bool,
@@ -2548,7 +2632,7 @@ pub unsafe fn InitSliceList(
     }
 
     for iSliceIdx in 0..kiMaxSliceNum {
-        let pSlice = pSliceList.add(iSliceIdx as usize);
+        let pSlice = slice_in_bank(pDqLayer, kiBank as usize, iSliceIdx);
         if pSlice.is_null() {
             return ENC_RETURN_MEMALLOCERR;
         }
@@ -2595,10 +2679,13 @@ pub unsafe fn InitOneSliceInThread(
     let pCurDq = (*pCtx).pCurDqLayer;
     let slc_ptr = if (*pCurDq).bThreadSlcBufferFlag {
         let kiCodedNumInThread = (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].iCodedSliceNum;
-        (*pCurDq).sSliceBufferInfo[kiSlcBuffIdx as usize].pSliceBuffer.add(kiCodedNumInThread as usize)
+        slice_in_bank(pCurDq, kiSlcBuffIdx as usize, kiCodedNumInThread)
     } else {
-        (*pCurDq).sSliceBufferInfo[0].pSliceBuffer.add(kiSliceIdx as usize)
+        slice_in_bank(pCurDq, 0, kiSliceIdx)
     };
+    if slc_ptr.is_null() {
+        return ENC_RETURN_UNEXPECTED;
+    }
 
     *pSlice = slc_ptr;
     (*slc_ptr).iSliceIdx = kiSliceIdx;
@@ -2635,14 +2722,17 @@ pub unsafe fn InitSliceThreadInfo(
     while iIdx < iSlcBufferNum {
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iMaxSliceNum = iMaxSliceNum;
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iCodedSliceNum = 0;
-        let pBuf = (*pMa).WelsMallocz((std::mem::size_of::<SSlice>() * iMaxSliceNum as usize) as u32, c"pSliceBuffer".as_ptr()) as *mut SSlice;
-        if pBuf.is_null() {
-            return ENC_RETURN_MEMALLOCERR;
-        }
-        (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer = pBuf;
+        // Built rather than handed a zeroed block: `SSlice::new` writes every field
+        // that block's zero stood for (T6.D8). Field-wise, not built-once-and-cloned —
+        // `SSlice` is 6544 bytes of mostly inline scratch since T6.C3 and carries no
+        // `Clone`, and the compiler can flatten a field-wise constructor into the
+        // `Vec`'s storage where a clone would build and copy.
+        (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer =
+            (0..iMaxSliceNum as usize).map(|_| SSlice::new()).collect();
 
         let iRet = InitSliceList(
-            pBuf,
+            pDqLayer,
+            iIdx,
             iMaxSliceNum,
             (*pCtx).iSliceBufferSize[kiDlayerIndex as usize],
             (*pDqLayer).bSliceBsBufferFlag,
@@ -2657,7 +2747,7 @@ pub unsafe fn InitSliceThreadInfo(
     while (iIdx as usize) < MAX_THREADS_NUM {
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iMaxSliceNum = 0;
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iCodedSliceNum = 0;
-        (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer = std::ptr::null_mut();
+        (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer = Vec::new();
         iIdx += 1;
     }
 
@@ -2764,15 +2854,36 @@ pub unsafe fn InitSliceRC(pSlice: *mut SSlice, kiGlobalQp: i32) -> i32 {
     ENC_RETURN_SUCCESS
 }
 
+/// `ReallocateSliceList` — svc_encode_slice.cpp:1206, as a **`resize`** since
+/// **T6.D8**, and a real defect closes with it.
+///
+/// **The defect** (handed over by session C, whose face 2 closed the `SMbCache`
+/// half of the same aliasing): the C++ allocated a new block,
+/// `copy_nonoverlapping`d the old slices into it — **their raw `sSliceBs.pBs`
+/// included** — and then, on any of three error paths, `FreeSliceBuffer`d the *new*
+/// list. Freeing the new list walks all `kiMaxSliceNumNew` entries and frees each
+/// `pBs`; the first `kiMaxSliceNumOld` of those pointers are the *old* list's, and
+/// the old list is still live and still owns them. Every one of those is a double
+/// free waiting for the caller to release the old bank.
+///
+/// **Under `Vec<SSlice>::resize_with` there is no second owner to free.** The
+/// existing slices *move* into the grown buffer rather than being copied beside a
+/// live original, so each `pBs` is held by exactly one `SSlice` at every point, and
+/// the error paths return the bank as it stands instead of freeing a list that
+/// shares pointers with a live one. The only reachable difference from the C++ is on
+/// an error path the gates cannot reach — allocation failure, or a negative global
+/// QP — where this leaves the bank grown with an uninitialised tail and the C++ left
+/// a double free; both then propagate `ENC_RETURN_*` to the same caller.
 pub unsafe fn ReallocateSliceList(
     pCtx: *mut sWelsEncCtx,
     pSliceArgument: *mut SSliceArgument,
-    pSliceList: *mut *mut SSlice,
+    pDqLayer: *mut SDqLayer,
+    kiBank: usize,
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
     let pMA = (*pCtx).pMemAlign;
-    if pSliceList.is_null() || (*pSliceList).is_null() || pSliceArgument.is_null() {
+    if pDqLayer.is_null() || pSliceArgument.is_null() || kiMaxSliceNumNew < kiMaxSliceNumOld {
         return ENC_RETURN_INVALIDINPUT;
     }
 
@@ -2781,24 +2892,21 @@ pub unsafe fn ReallocateSliceList(
     let bIndependenceBsBuffer = (*(*pCtx).pSvcParam).iMultipleThreadIdc > 1
         && (*pSliceArgument).uiSliceMode != SliceMode::SM_SINGLE_SLICE;
 
-    let pNewSliceList = (*pMA).WelsMallocz(
-        (std::mem::size_of::<SSlice>() * kiMaxSliceNumNew as usize) as u32,
-        c"pSliceBuffer".as_ptr(),
-    ) as *mut SSlice;
-    if pNewSliceList.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
+    {
+        let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
+        if bank.is_empty() {
+            return ENC_RETURN_INVALIDINPUT;
+        }
+        bank.resize_with(kiMaxSliceNumNew as usize, SSlice::new);
     }
 
-    // The copied slices carry their `sSliceBs.pBs` with them, and that is the
-    // whole of the buffer choice now; the C++ re-aimed each moved slice's
-    // `pSliceBsa` at its own relocated `sBsWrite` here, and there is nothing
-    // left to re-aim.
-    std::ptr::copy_nonoverlapping(*pSliceList, pNewSliceList, kiMaxSliceNumOld as usize);
-
-    let pBaseSlice = *pSliceList;
+    // Both are re-derived from the bank's root *after* the resize, because the resize
+    // is what moves it (S28, and the reason the pointer spelling needed re-stamping
+    // at all).
+    let pBaseSlice = slice_in_bank(pDqLayer, kiBank, 0);
 
     for iSliceIdx in kiMaxSliceNumOld..kiMaxSliceNumNew {
-        let pSlice = pNewSliceList.add(iSliceIdx as usize);
+        let pSlice = slice_in_bank(pDqLayer, kiBank, iSliceIdx);
         (*pSlice).iSliceIdx = -1;
         (*pSlice).uiBufferIdx = 0;
         (*pSlice).iCountMbNumInSlice = 0;
@@ -2806,8 +2914,6 @@ pub unsafe fn ReallocateSliceList(
 
         let mut iRet = InitSliceBsBuffer(pSlice, bIndependenceBsBuffer, iMaxSliceBufferSize, pMA);
         if iRet != ENC_RETURN_SUCCESS {
-            let mut tmp = pNewSliceList;
-            FreeSliceBuffer(&mut tmp, kiMaxSliceNumNew, pMA, c"pSliceBuffer".as_ptr());
             return iRet;
         }
 
@@ -2816,14 +2922,9 @@ pub unsafe fn ReallocateSliceList(
 
         iRet = InitSliceRC(pSlice, (*pCtx).iGlobalQp);
         if iRet != ENC_RETURN_SUCCESS {
-            let mut tmp = pNewSliceList;
-            FreeSliceBuffer(&mut tmp, kiMaxSliceNumNew, pMA, c"pSliceBuffer".as_ptr());
             return iRet;
         }
     }
-
-    (*pMA).WelsFree(*pSliceList as *mut c_void, c"pSliceBuffer".as_ptr());
-    *pSliceList = pNewSliceList;
 
     ENC_RETURN_SUCCESS
 }
@@ -2871,7 +2972,7 @@ pub unsafe fn ReallocateSliceInThread(
     let iMaxSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum;
     let iCodedSliceNum = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iCodedSliceNum;
     let mut iMaxSliceNumNew = 0;
-    let pLastCodedSlice = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].pSliceBuffer.add((iCodedSliceNum - 1) as usize);
+    let pLastCodedSlice = slice_in_bank(pDqLayer, KiSlcBuffIdx as usize, iCodedSliceNum - 1);
     let pSliceArgument = &mut (*(*pCtx).pSvcParam).sSpatialLayers[kiDlayerIdx as usize].sSliceArgument;
 
     let mut iRet = CalculateNewSliceNum(pCtx, pLastCodedSlice, iMaxSliceNum, &mut iMaxSliceNumNew);
@@ -2879,12 +2980,17 @@ pub unsafe fn ReallocateSliceInThread(
         return iRet;
     }
 
-    let mut slice_buf_ptr = (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].pSliceBuffer;
-    iRet = ReallocateSliceList(pCtx, pSliceArgument, &mut slice_buf_ptr, iMaxSliceNum, iMaxSliceNumNew);
+    iRet = ReallocateSliceList(
+        pCtx,
+        pSliceArgument,
+        pDqLayer,
+        KiSlcBuffIdx as usize,
+        iMaxSliceNum,
+        iMaxSliceNumNew,
+    );
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
-    (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].pSliceBuffer = slice_buf_ptr;
     (*pDqLayer).sSliceBufferInfo[KiSlcBuffIdx as usize].iMaxSliceNum = iMaxSliceNumNew;
 
     ENC_RETURN_SUCCESS
@@ -2928,7 +3034,7 @@ pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
     let iMaxSliceNumOld = (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
     let kiCurDid = (*pCtx).uiDependencyId as usize;
-    let pLastCodedSlice = (*pCurLayer).sSliceBufferInfo[0].pSliceBuffer.add((iMaxSliceNumOld - 1) as usize);
+    let pLastCodedSlice = slice_in_bank(pCurLayer, 0, iMaxSliceNumOld - 1);
     let pSliceArgument = &mut (*(*pCtx).pSvcParam).sSpatialLayers[kiCurDid].sSliceArgument;
 
     let mut iRet = CalculateNewSliceNum(pCtx, pLastCodedSlice, iMaxSliceNumOld, &mut iMaxSliceNumNew);
@@ -2936,12 +3042,10 @@ pub unsafe fn ReallocSliceBuffer(pCtx: *mut sWelsEncCtx) -> i32 {
         return iRet;
     }
 
-    let mut slice_buf_ptr = (*pCurLayer).sSliceBufferInfo[0].pSliceBuffer;
-    iRet = ReallocateSliceList(pCtx, pSliceArgument, &mut slice_buf_ptr, iMaxSliceNumOld, iMaxSliceNumNew);
+    iRet = ReallocateSliceList(pCtx, pSliceArgument, pCurLayer, 0, iMaxSliceNumOld, iMaxSliceNumNew);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
-    (*pCurLayer).sSliceBufferInfo[0].pSliceBuffer = slice_buf_ptr;
     (*pCurLayer).sSliceBufferInfo[0].iMaxSliceNum = iMaxSliceNumNew;
 
     iMaxSliceNumNew = 0;
@@ -3004,7 +3108,7 @@ pub unsafe fn ReOrderSliceInLayer(pCtx: *mut sWelsEncCtx, kuiSliceMode: SliceMod
     for iSlcBuffIdx in 0..kiThreadNum {
         let iSliceNumInThread = (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
         for iSliceIdx in 0..iSliceNumInThread {
-            let pSliceBuffer = (*pCurLayer).sSliceBufferInfo[iSlcBuffIdx as usize].pSliceBuffer.add(iSliceIdx as usize);
+            let pSliceBuffer = slice_in_bank(pCurLayer, iSlcBuffIdx as usize, iSliceIdx);
             if pSliceBuffer.is_null() {
                 return ENC_RETURN_UNEXPECTED;
             }

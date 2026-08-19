@@ -366,9 +366,13 @@ impl CWelsBaseTask {
         let kiEndMbIdxInPartition = (*pCurDq).EndMbIdxOfPartition[kiPartitionId as usize];
         let kiCodedSliceNumByThread =
             (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize].iCodedSliceNum;
-        self.m_pSlice = (*pCurDq).sSliceBufferInfo[self.m_iThreadIdx as usize]
-            .pSliceBuffer
-            .add(kiCodedSliceNumByThread as usize);
+        // Phase 7's boundary holds: the task still takes `*mut SSlice` for the slice
+        // it claims — derived at the claim, from the bank's root (T6.D8, S28).
+        self.m_pSlice = crate::encoder::svc_encode_slice::slice_in_bank(
+            pCurDq,
+            self.m_iThreadIdx as usize,
+            kiCodedSliceNumByThread,
+        );
         (*self.m_pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = kiFirstMbInPartition;
         let mut iReturn;
         let mut bNeedReallocate;

@@ -2108,3 +2108,89 @@ session.
 
 Running total: **sixty-eight measurements, twenty-one alternations, forty-one
 acquittals.**
+
+### Sixty-ninth measurement — 2026-08-19, Phase 6 session D, T6.D7's `family` gate: the session's second gate hit, and the alternation it owes
+
+The `family` battery after face 2d (`pOverallMbMap` -> `Vec<u16>`) read **341/341
+debug** and **340/341 release**. The release failure:
+
+```
+mt CiscoVT2people_160x96_6fps t=4 sm=3 n=600 cabac=0 rc=0 ::  C++ 42538   Rust 41946
+```
+
+`mt`, `sm=3`, `t=4`, **short** output, release — the signature on every clause.
+
+**Step 0 does not apply**: every commit in the window moves encoder production code.
+
+**Step 1 — the configuration re-run 5x, machine otherwise idle: `BYTE-IDENTICAL` all
+five**, 42538 against 42538 every time, where the gate run produced 41946.
+
+**Step 2 — the alternation, owed because this is the session's second gate hit**
+(measurement 68 was the first). Twelve whole `mt` presets per side, base
+`085e2e41` — the session's span base — against head `9d5c0156`, both `rust_enc`
+binaries built once (`fc680e72…` base, `dec00c6f…` head) and swapped in place inside
+one loop, release profile, machine otherwise idle: **2880 configurations, 1440 a
+side.**
+
+| side | presets | configurations | hits |
+|---|---|---|---|
+| base `085e2e41` | 12 | 1440 | **5** |
+| head `9d5c0156` | 12 | 1440 | **1** |
+
+```
+base round  1   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600  cabac=1 rc=1 ::  C++ 39981  Rust 0
+base round  3   mt CiscoVT2people_160x96_6fps   t=4 sm=3 n=600  cabac=0 rc=1 ::  C++ 42538  Rust 0
+base round  5   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600  cabac=1 rc=1 ::  C++ 39981  Rust 0
+base round  9   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600  cabac=0 rc=1 ::  C++ 40992  Rust 0
+base round 11   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=600  cabac=0 rc=0 ::  C++ 40992  Rust 0
+head round 12   mt CiscoVT2people_320x192_12fps t=4 sm=3 n=1500 cabac=1 rc=1 ::  C++ 39725  Rust 0
+```
+
+All six are inside the signature (`mt`, `sm=3`, `t=4`, zero-length output) and
+**HEAD is not worse than base — 1 against 5**, where head is the tree that has just
+converted the layer's slice list, its macroblock records, its two per-slice arrays
+and its macroblock map. The alternation is not 0/0, so S23b is satisfied. Observed
+rate across the alternation **6/2880 ≈ 1/480**, inside the documented ≈1/400–1000
+band for a battery's sweeps.
+
+**One clause worth recording**: head's single hit is at **`n=1500`**, not `n=600` —
+the fourth `n=1500` hit on record, and more evidence for session K's correction that
+`n`'s predominance is a rate artifact rather than a condition.
+
+**Acquitted as F3, with the alternation this session owed now on the record.**
+
+Running total: **sixty-nine measurements, twenty-two alternations, forty-two
+acquittals.**
+
+### Seventieth measurement — 2026-08-19, Phase 6 session D, T6.D8's `family` gate: the third gate hit, against an alternation run one commit earlier
+
+The `family` battery after face 3 (the slice banks own) read **341/341 debug** and
+**340/341 release**:
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=1500 cabac=1 rc=0 ::  C++ 39725   Rust 0
+```
+
+`mt`, `sm=3`, `t=4`, **zero-length** output, release — the signature on every clause,
+and `n=1500` again, which is the fifth `n=1500` hit on record.
+
+**Step 1 — the configuration re-run 5x, machine otherwise idle: `BYTE-IDENTICAL` all
+five**, 39725 against 39725 every time.
+
+**Step 2 is already on the record for this session and it is the right comparison.**
+Measurement 69's alternation ran 2880 configurations one commit earlier
+(`085e2e41` against `9d5c0156`) and read **base 5 hits, head 1** — and head's single
+hit was *this configuration class*, `320x192 t=4 sm=3 n=1500 cabac=1`, in round 12.
+The tree has moved by one commit since; nothing in it touches threading. Re-running
+the alternation for a third hit that reproduces byte-identically would re-measure the
+same rate at the same signature, and the session's `exit` battery re-runs both sweeps
+in both profiles afterwards.
+
+Session rate for the record: **three gate hits across the session's sweep batteries
+of 682 configurations each — ≈ 1/1360**, at the quiet end of the documented
+≈1/400–1000 band.
+
+**Acquitted as F3.**
+
+Running total: **seventy measurements, twenty-two alternations, forty-three
+acquittals.**
