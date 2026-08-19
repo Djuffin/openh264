@@ -11542,3 +11542,63 @@ adjudicated to **F3, measurement 66** (signature on every clause; the configurat
 re-ran `BYTE-IDENTICAL` 6×; a fresh `mt` preset then read 119/120 on a *different*
 configuration with a zero-length output). Miri, `--lib` step flags: **both encode
 probes ok, 96.70 s for the pair**.
+
+### Face 2's settlement — `SMbCache` owns its scratch (written before the first edit)
+
+**S24, re-derived at this face's open** (`8060d3f7`): `pCoeffLevel` **18**, `pSkipMb`
+**22**, `pMemPredMb` **8**, `pMemPredLuma` **12**, `pMemPredChroma` **17**,
+`pBestPredIntraChroma` **2**, `pMemPredBlk4` **10**, `pBestPredI4x4Blk4` **3**,
+`pBufferInterPredMe` **9**, `pPrevIntra4x4PredModeFlag` **9**,
+`pRemIntra4x4PredModeFlag` **9**, `pDct` **21**, `pEncSad` **10** — every count the
+brief carried, unmoved.
+
+**Eight owners inline**, each the exact size `AllocMbCacheAligned` asked for:
+`sMemPredMb: [u8; 2 * 256 + 16]`, `sCoeffLevel: [i16; MB_COEFF_LIST_SIZE]`,
+`sSkipMb: [u8; 384]`, `sMemPredBlk4: [u8; 2 * 16]`, `sBufferInterPredMe: [u8; 4 * 640]`,
+`bPrevIntra4x4PredModeFlag: [bool; 16]`, `iRemIntra4x4PredModeFlag: [i8; 16]`,
+`sDct: SDCTCoeff`. **F14's `+ 16` stays and its comment moves onto the field**: it is
+a soundness accommodation for a raw SAD kernel that forms a one-past-the-row pointer,
+and deleting it is red under `svc_mode_decision::tests::test_wels_md_i16x16_cost`
+in the Miri gate — measured, not assumed.
+
+**Four aliases become three selectors** (cache, not carrier — each is one bit the
+ping-pong already recomputes):
+
+| alias | was | becomes |
+|---|---|---|
+| `pMemPredLuma` / `pMemPredChroma` | the two 256-byte halves of `pMemPredMb`, swapped as a pair | `uiMemPredLumaHalf: u8`; chroma is `^ 1` |
+| `pBestPredIntraChroma` | one of two 128-byte halves *inside the chroma half* | `uiBestPredIntraChromaHalf: u8` |
+| `pBestPredI4x4Blk4` | one of two 16-byte halves of `pMemPredBlk4` | `uiBestPredI4x4Blk4Half: u8` |
+
+The chroma-best selector is **relative to the luma selector** — `pPredIntraChma[0]` is
+`pMemPredChroma`, which is itself whichever half lost the I16x16 ping-pong — so its
+accessor composes both bits rather than indexing `sMemPredMb` from 0.
+
+**The spelling, and it is S28/S29's** (session B's walk found this exact family nine
+times, and face 1's probe found a tenth): every accessor derives from the **array
+root**, `addr_of_mut!((*pMbCache).sMemPredMb).cast::<u8>().add(256 * half)` — never
+`(*pMbCache).sMemPredMb[a..].as_mut_ptr()`, which narrows the tag to the slice and is
+UB at the first read the kernel makes outside it. The prediction and copy kernels take
+`*mut u8` and stay as they are (theirs is session E/F's family), so the accessors hand
+them a root-derived pointer; sites that index in Rust take slices instead.
+
+**`pEncSad` stays a raw field.** It aliases a *picture* (`pDecPic->pMbSkipSad + kiMbXY`,
+`svc_base_layer_md.rs:886`) and the `SPicture` family is session F's; it is derived per
+macroblock exactly as today.
+
+**What goes with the pointers**: `AllocMbCacheAligned`, `FreeMbCache`, and
+`AllocateSliceMBBuffer` — which is a one-line forwarder to the first and becomes empty
+(S18). `SMbCache` keeps `Copy` only if something copies it; the compiler is the
+authority and a 5 KB by-value copy is a site to look at rather than a derive to keep.
+`assert_size!(SMbCache, 576)` is re-pinned to the measured size, and `SSlice` grows by
+the same amount — measured and recorded, and it is the same memory the C++ allocated
+per slice, one `WelsMallocz` per buffer instead of one block.
+
+**A latent defect closes with them, and its scope is exactly stated.**
+`ReallocateSliceList` (`svc_encode_slice.rs:2685`) `copy_nonoverlapping`s the old
+slices into the new list — every scratch pointer included — and its three error paths
+then `FreeSliceBuffer` the *new* list, whose first `kiMaxSliceNumOld` entries carry the
+**old** list's pointers, while the old list is still live and about to be used. Inline
+scratch removes the `SMbCache` half of that aliasing entirely. The `sSliceBs.pBs` half
+is unchanged and stays with the thread-buffer redesign (Phase 7, and session D's slice
+structures before it).
