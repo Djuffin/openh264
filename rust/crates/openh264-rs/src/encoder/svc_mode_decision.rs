@@ -2487,10 +2487,20 @@ mod tests {
 
             // The winning prediction lands in the luma half and the scratch half is
             // handed to the chroma search — one selector bit, two halves of one array.
-            let pPredBuf = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>();
+            //
+            // **Order matters and the `exit` battery is what said so.** Each accessor
+            // call retags the whole `SMbCache` (it takes a raw pointer, and passing
+            // `&mut mb_cache` is a `Unique` retag over all 5600 bytes), so a pointer
+            // derived from `sMemPredMb` *before* the calls is popped by them and reading
+            // through it afterwards is UB — the same class this session converted, in
+            // this test's own assertions. The accessor answers are taken first and the
+            // expectation is derived last, so the tag that reads the buffer is on top.
             assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
-            assert_eq!(crate::encoder::md::mem_pred_luma(&mut mb_cache), pPredBuf);
-            assert_eq!(crate::encoder::md::mem_pred_chroma(&mut mb_cache), pPredBuf.add(256));
+            let pLuma = crate::encoder::md::mem_pred_luma(&mut mb_cache);
+            let pChroma = crate::encoder::md::mem_pred_chroma(&mut mb_cache);
+            let pPredBuf = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>();
+            assert_eq!(pLuma, pPredBuf);
+            assert_eq!(pChroma, pPredBuf.add(256));
             assert!(std::slice::from_raw_parts(pPredBuf, 256).iter().all(|&b| b == 128));
         }
     }
