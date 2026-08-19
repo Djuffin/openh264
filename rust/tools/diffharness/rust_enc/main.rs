@@ -38,6 +38,9 @@ fn main() {
     let slicenum: i32 = if a.len() > 12 { a[12].parse().unwrap() } else { 1 };
     // Optional 13th: iMultipleThreadIdc. 1 (default) is single-threaded.
     let threads: i32 = if a.len() > 13 { a[13].parse().unwrap() } else { 1 };
+    // Optional 14th: iComplexityMode. 0 LOW (default, and what every sweep preset
+    // runs), 1 MEDIUM, 2 HIGH. See cxx_enc.cpp.
+    let complexity: i32 = if a.len() > 14 { a[14].parse().unwrap() } else { 0 };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -69,7 +72,11 @@ fn main() {
         p.fMaxFrameRate = 30.0;
         p.iTemporalLayerNum = 1;
         p.iSpatialLayerNum = 1;
-        p.iComplexityMode = ECOMPLEXITY_MODE::LOW_COMPLEXITY;
+        p.iComplexityMode = match complexity {
+            1 => ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY,
+            2 => ECOMPLEXITY_MODE::HIGH_COMPLEXITY,
+            _ => ECOMPLEXITY_MODE::LOW_COMPLEXITY,
+        };
         p.uiIntraPeriod = gop as u32;
         p.iNumRefFrame = AUTO_REF_PIC_COUNT;
         p.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
