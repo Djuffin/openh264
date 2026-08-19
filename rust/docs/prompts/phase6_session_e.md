@@ -1,178 +1,388 @@
 # Phase 6, session E — the records, the parameter families, and the third SAD/SATD attempt
 
-Rules by tag from plan §7.6; recipes from `phase6.md` §1. Gate rhythm per D-gate-1:
-`gates.sh commit` per commit, `family` per face, one `exit` at close. **Miri runs
-once, at the session close, as the `exit` battery's `--lib` step — not between faces**
-(direction, 2026-08-19; D's precedent held). S32's cost is why: the four encoder
-probes together are ≈460 s per run and the dynamic-slice probe alone ≈357 s.
+## What this session does, and why
 
-## 0. Starting position (verify before starting)
+After session D, every big encoder structure on the macroblock path **owns its
+storage**: the layer (`SDqLayer`) is `Box`-built and holds the macroblock records
+(`MbArray<SMB>`) and the slice banks (`Vec<SSlice>`); the slice holds its scratch
+(`SMbCache`, `SCabacCtx`) inline. What is still raw on that path is almost entirely
+**spelling**: functions take `*mut` to things that now have single owners, and a
+handful of small scratch records still carry raw pointer fields that are derivable
+from things already in scope.
 
-HEAD ≥ `a96cb999`, clean; session D's `exit` PASS 13/0/1. Encoder-side (`src/encoder`
-+ `src/processing`, ratchet patterns): `raw_ptr` 2331, `unsafe_fn` 684. Re-grep every
-count below before acting on it (S24). Sites by receiver file, measured 2026-08-19:
+This session:
+
+1. closes a **byte-coverage hole** in the differential sweep (the slice-realloc path
+   is exercised by no standing configuration),
+2. deletes a **dead screen-content search family** (~large, compiler-enumerated),
+3. converts the **record and parameter families** to references —
+   `SWelsMD`, `SWelsME`, `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, and the
+   `*mut SMB` / `*mut SMbCache` parameter spellings — as three signature closures,
+4. makes the **third, boxed attempt** at the parked SAD/SATD kernels, whose blocking
+   mechanism (per-call setup cost) is exactly what step 3's conversions remove.
+
+Everything reached through the encoder context stays raw (that flip is session G).
+Everything reached through pictures/planes stays raw (session F). The boundary list
+is at the end; when in doubt, check it before converting.
+
+**Execution order is the section order. If the session runs short, drop whole steps
+from the end** (step 5 first, then step 4) and say so in the log — never drop parts
+of a step.
+
+## Ground rules
+
+- **Gates**: `bash rust/tools/gates.sh commit` in every commit, `gates.sh family`
+  at each step's close (builds + tests + ratchet + census + both diffharness sweeps
+  in both profiles), one `gates.sh exit` at the session close.
+- **Miri runs once, at the session close, as the `exit` battery's `--lib` step —
+  not between steps.** Cost model: the four encoder probes are ≈460 s per run
+  (the dynamic-slice probe alone ≈357 s); the whole `--lib` step read 1432 s at
+  session D's close. Budget the close accordingly.
+- **Perf**: one measurement for the whole session — 7 pairs against the HEAD this
+  brief is committed at (`rust/tools/perfpair.py`), read against a fresh null band.
+  No stream measurements between steps. Step 5 uses its own microbench only.
+- **Re-grep every count in this brief before acting on it.** Counts below were
+  measured 2026-08-19; the grep is
+  `grep -rn '\*mut <T>\b' --include='*.rs' src/encoder src/processing`.
+- **Every struct whose layout changes re-pins its `assert_size!` in
+  `src/encoder/abi_guard.rs` in the same commit** — measure the new size, pin it.
+  Never delete an assertion; a diff that deletes one is a defect.
+- **Deletions are compiler-enumerated**: delete the root (a field, a function), let
+  the build name everything that dies with it, and list that in the commit message.
+- **Sweep flake protocol**: if exactly one sweep configuration fails with this
+  signature — `mt` preset, `sm=3`, `t` of 2 or 4, wrong output length, either
+  profile — re-run that exact configuration 5×. Byte-identical every time → a known
+  intermittent (F3): record it as a measurement in `rust/docs/phase0_findings.md`
+  and continue. Any other failure is yours: stop and fix.
+- The C++ tree is the behavioral reference. Byte parity against it is the gate;
+  its *pointer spellings* are not a constraint.
+
+## The map — where everything lives (verified 2026-08-19)
+
+| struct | defined | size (pinned in `abi_guard.rs`) | owner / instances |
+|---|---|---|---|
+| `SWelsMD` | `md.rs:194` | 4000 | **stack**: `let mut sMd = SWelsMD::default()` at `svc_encode_slice.rs:1450`, `:1566`, `:2076`, `:2090` — nowhere else |
+| `SWelsMD_sMe` | `md.rs:182` | (inside the 4000) | 41 inline `SWelsME`: `sMe16x16` + `sMe8x8[4]` + `sMe16x8[2]` + `sMe8x16[2]` + `sMe4x4[4][4]` + `sMe8x4[2][4]` + `sMe4x8[2][4]` |
+| `SWelsME` | `svc_motion_estimate.rs:151` | 96 | inside `SWelsMD.sMe` only |
+| `SMeRefinePointer` | `md.rs:260` | (pin if changed) | **stack**: one builder, `svc_base_layer_md.rs:1576` |
+| `SCabacCtx` | `set_mb_syn_cabac.rs:188` | 504 | `SSlice.sCabacCtx` (`svc_encode_slice.rs:299`) — **already pointer-free inside**: its buffer positions are `usize` offsets (`m_iBufStart`/`m_iBufEnd`/`m_iBufCur`) |
+| `SMVUnitXY` | `encoder_context.rs:107` | 4 (two `i16`) | value type; lives in `SMB.sMv: [SMVUnitXY; 16]`, in `SMbCache.sMvComponents: SMVComponentUnit` (`md.rs:371`, the `sMotionVectorCache` array), in `SWelsME.sMvp/sMvBase/sDirectionalMv/sMv`, in `SSlice.sMvStartMin/Max` |
+| `SMB` | `md.rs:298` | 208, `repr(C)` `Copy` | rows of the layer's `MbArray<SMB>` (`SDqLayer.sMbDataP`); raw access only via the root accessors `mb_list_root`/`mb_at` (`svc_encode_slice.rs`, top) |
+| `SMbCache` | `md.rs` (~354) | 5600, `repr(C, align(16))`, no `Copy` | `SSlice.sMbCacheInfo` (`svc_encode_slice.rs:277`) |
+
+Raw pointer fields **inside** the records, and their disposition:
+
+| field | what it points at | this session |
+|---|---|---|
+| `SWelsMD.pMvdCost`, `SWelsME.pMvdCost` (`*mut u16`) | a **row root** of the context's MVD cost table — set at `svc_encode_slice.rs:1418` as `pMvdCostTable.add(luma_qp * stride)`, copied into each `SWelsME` by `InitMe`; the table is one context-owned `WelsMallocz` block (`encoder_ext.rs:1293`, freed `:1857`); readers: `md.rs:706` (`MvdCost` accessor), `svc_motion_estimate.rs:550/:674/:835/:979–:1005` | **stays raw** — it aliases context-owned memory; converts at G when the table becomes owned |
+| `SWelsME.pEncMb/pRefMb/pColoRefMb` (`*mut u8`) | per-MB cursors into the encode/reference picture planes | **stay raw** — the picture family is session F's |
+| `SWelsME.pRefFeatureStorage` | dead screen-content machinery | **deleted in step 0b** |
+| `SMeRefinePointer`'s five `*mut u8` | fixed offsets into one `SMbCache` buffer (details in step 3) | **converted in step 3** |
+| `SMeRefinePointer.pfCopyBlockByMode` | fn pointer (params are planes) | stays a fn-pointer field |
+
+Parameter sites by family and receiver file (the work list; re-grep first):
 
 | family | total | where |
 |---|---|---|
 | `*mut SWelsMD` | 53 | svc_mode_decision 24, svc_base_layer_md 18, wels_func_ptr_def 7, svc_encode_slice 4 |
 | `*mut SWelsME` | 39 | svc_motion_estimate 21, svc_base_layer_md 12, svc_mode_decision 4, md 2 |
-| `*mut SMVUnitXY` | 65 | svc_base_layer_md 34, svc_mode_decision 27, svc_motion_estimate 2, **picture 1 + wels_preprocess 1 = session F's, do not touch** |
+| `*mut SMVUnitXY` | 65 | svc_base_layer_md 34, svc_mode_decision 27, svc_motion_estimate 2; **picture.rs 1 + wels_preprocess.rs 1 — session F's, leave** |
 | `*mut SMeRefinePointer` | 17 | svc_base_layer_md 14, md 3 |
 | `*mut SCabacCtx` | 25 | svc_set_mb_syn_cabac 13, set_mb_syn_cabac 12 |
-| `*mut SMB` | 128 | svc_mode_decision 37, svc_base_layer_md 18, svc_encode_slice 14, svc_set_mb_syn_cabac 13, deblocking 11, rc 9, wels_func_ptr_def 8, svc_encode_mb 7, svc_set_mb_syn_cavlc 4, md 4, encoder_ext 2, slice_multi_threading 1 (**MT file — leave, Phase 7**) |
+| `*mut SMB` | 128 | svc_mode_decision 37, svc_base_layer_md 18, svc_encode_slice 14, svc_set_mb_syn_cabac 13, deblocking 11, rc 9, wels_func_ptr_def 8, svc_encode_mb 7, svc_set_mb_syn_cavlc 4, md 4, encoder_ext 2, slice_multi_threading 1 (**MT file, Phase 7 — leave**) |
 | `*mut SMbCache` | 96 | svc_mode_decision 41, svc_base_layer_md 16, md 16, svc_set_mb_syn_cabac 8, svc_encode_mb 7, wels_func_ptr_def 5, svc_encode_slice 2, svc_set_mb_syn_cavlc 1 |
 
-Hosts, all owned already: `SWelsMD` is stack-built at four sites
-(`svc_encode_slice.rs:1450/:1566/:2076/:2090`), 4000 bytes, 41 inline `SWelsME` in
-`sMe`; `SMbCache` is `SSlice.sMbCacheInfo` (`svc_encode_slice.rs:277`); `SCabacCtx` is
-`SSlice.sCabacCtx` (`:299`), already pointer-free inside (offsets since 4b); `SMB` rows
-live in the layer's `MbArray<SMB>` (D), reached via `mb_at`/`mb_list_root`.
+Also in the same signatures, **not** targets this session but relevant to (g) below:
+`*mut SSlice` ≈103 encoder-side (svc_encode_slice 41, svc_mode_decision 17, rc 11, …)
+and `*mut SDqLayer` ≈78 (svc_encode_slice 30, svc_mode_decision 9, …).
 
-## Settlements (made by reading; do not re-litigate)
+## How to convert (applies to steps 1–4)
 
-**(a) The screen-content ME half is dead.** Parameter validation returns
-`ENC_RETURN_UNSUPPORTED_PARA` for `SCREEN_CONTENT_REAL_TIME` (T6.D2's guard — find the
-site, cite it in the commit; if it does not stand, stop and report instead). D deleted
-the *preparation* half; the *search* half is equally unreachable: the feature-search
-family in `svc_motion_estimate.rs`, `SWelsME.pRefFeatureStorage`, and
-`ref_list_mgr_svc.rs:1142`'s allocation branch.
+**(a) `*mut Record` parameter → `&mut Record`.** `&mut T` coerces to `*mut T` at a
+call site, so a converted caller feeds a not-yet-converted callee without churn —
+convert in whatever order the closure makes natural.
 
-**(b) `pMvdCost` stays raw this session** — both record fields (`SWelsMD`, `SWelsME`)
-alias the context's `pMvdCostTable` allocation (`encoder_ext.rs:1293`), the same
-argument that keeps `pEncSad` for F. The stored pointer is a **row root**
-(`svc_encode_slice.rs:1418`), not mid-table. P11's `(root, bias)` accessor executes at
-G when the table becomes owned.
+**(b) Caller-side casts just drop.** Most `SMVUnitXY` "pointers" are literally
+`&mut (*sMe16x8).sMvp as *mut SMVUnitXY` at the call site (34 of the 65 are in
+svc_base_layer_md in exactly this shape) — the fix is deleting the cast.
 
-**(c) `SWelsME.pEncMb`/`pRefMb`/`pColoRefMb` stay raw fields** — plane cursors into
-pictures, session F's family. Everything `*mut u8` + stride is out of scope except
-inside face 3's kernel boundary.
+**(c) A parameter that names what another parameter already reaches is a cache —
+delete it, derive in the callee.** The recurring pair is `pSlice` alongside
+`pMbCache`/`sMbCacheInfo` (which is `&mut (*pSlice).sMbCacheInfo`). Enumerate these
+pairs per step before editing. The aliasing rule, concretely:
 
-**(d) Dispatch-slot types retype in place and lose `extern "C"`.** The slot fn types
-in `wels_func_ptr_def.rs` naming `*mut SWelsMD`/`*mut SMB`/`*mut SMbCache` take the
-converted references instead. They are internal dispatch — no C caller exists, no
-installed fn is `no_mangle` (verify by grep before the commit). A slot whose params
-become references drops `extern "C"` (a non-`repr(C)`-safe reference behind `extern
-"C"` trips `improper_ctypes_definitions`); the table mechanism itself stays — G
-dissolves it.
+```rust
+// BAD — two live paths to one slice; the callee touches pSlice while the &mut lives:
+f(pSlice, &mut (*pSlice).sMbCacheInfo);
+// GOOD — one path in; the callee derives what it needs:
+f(pSlice);                         // inside f: let cache = &mut (*pSlice).sMbCacheInfo;
+// FINE — disjoint field borrows at one call site:
+g(&mut (*pSlice).sMvStartMin, &mut (*pSlice).sMvStartMax);
+```
 
-**(e) Port-added null guards delete with reference params.** `WelsMdP16x16`-style
-entry checks (`if pFunc.is_null() || …return i32::MAX`) have no C++ counterpart —
-verify each against the C++ before deleting (D-fid-1: deletion *restores* fidelity).
+**(d) A pointer into the middle of an array derives from the array root**:
+`addr_of_mut!((*m).arr).cast::<T>().add(k)`, never `(*m).arr[k..].as_mut_ptr()`
+(which narrows provenance to the slice and is UB at the first out-of-slice access).
+The deny-by-default `dangerous_implicit_autorefs` lint catches the worst spelling.
 
-**(f) A param that names what another param already reaches is a cache — delete it,
-derive in the callee** (session B's settlement (c) pattern). Applies to every
-signature carrying both `pSlice` and `pMbCache`/`sMbCacheInfo`/`sCabacCtx`: the cache
-param goes, the callee derives from the slice it already gets. Never a live `&mut`
-into a slice field alongside continued use of the same slice pointer (S25, F13's
-class). Enumerate the pairs per face before editing.
+**(e) Dispatch-table slot types retype in place.** The fn-pointer type aliases in
+`wels_func_ptr_def.rs` (slots at `:54–:121`, `:210`) name `*mut SWelsMD`/`*mut SMB`/
+`*mut SMbCache`; give them the converted reference types. They are internal dispatch
+— **verify no installed fn is `#[no_mangle]`** (grep before the commit) — and a slot
+whose params become references also **drops `extern "C"`** (a reference to a
+non-`repr(C)`-safe type behind `extern "C"` trips `improper_ctypes_definitions`).
+The table mechanism itself stays; G dissolves it.
 
-**(g) `pSlice`/`pCurLayer` params convert opportunistically, not by mandate.**
-Encoder-side `*mut SSlice` ≈103 and `*mut SDqLayer` ≈78 sit in the same signatures.
-Convert one only where the S25 audit is clean — the callee does not re-reach the same
-object through `pCtx` while the `&mut` lives. `&mut T` coerces to `*mut T` at call
-sites, so a converted caller feeds an unconverted callee without churn. Default: leave
-raw; enumerate survivors in the log for G. `pEncCtx`/`pFunc` params stay raw (G).
+**(f) Port-added null guards delete with the params.** Entry checks like
+`WelsMdP16x16`'s five-way `if pFunc.is_null() || … { return i32::MAX; }`
+(svc_mode_decision, right after `InitMe`) have **no C++ counterpart** — check each
+against the C++ function, then delete with the retyping.
 
-**(h) `SMeRefinePointer` is a derived cursor pack** — all five buffers are fixed
-offsets into `buffer_inter_pred_me(pMbCache)` (`md.rs:1242`), and
-`pQuarPixBest`/`pQuarPixTmp` ping-pong (session C's half-selector recipe). Fields
-become offsets/selectors; readers derive from the `&mut SMbCache` in scope. One
-builder (`svc_base_layer_md.rs:1576`). `pfCopyBlockByMode` stays a fn-pointer field
-(its params are F's plane family).
+**(g) `pSlice`/`pCurLayer` params convert opportunistically only.** Convert one only
+when the callee does not also re-reach the same object through `pCtx` while the
+borrow lives (that re-reach is the classic aliasing bug here). Default: leave raw
+and keep a survivor list for the close log. `pEncCtx`/`pFunc` params always stay raw.
 
-**(i) `*mut SMVUnitXY` params point into `SMbCache`'s MV/ref caches and `SMB.sMv`
-rows** — both inline since C/D. Retype to `&mut [SMVUnitXY]`/`&[SMVUnitXY; N]` or
-(host, index) from what the callee already receives; mid-array cursors re-derive from
-the array root (S28/S29 spelling, `dangerous_implicit_autorefs` enforces it).
+**(h) Derives are the compiler's call.** Drop `Copy`/`Clone` on `SWelsMD` (a 4000-byte
+memcpy) if nothing copies it by value; the build is the authority. Keep `repr(C)`
+unless a change forces otherwise.
 
-**(j) Derives are the compiler's call**: drop `Copy`/`Clone` on `SWelsMD` (4000 B) if
-nothing copies by value — C's `SMbCache` precedent. Keep `repr(C)` where no change
-forces otherwise; every layout change re-pins its `assert_size!` in the same commit
-(S36).
+**(i) Close each step with the grep**: the step's families read zero in the step's
+files, or the survivors are named in the commit message.
 
-## Face 0 — two chores before any conversion
+## Step 0a — give the slice-realloc path standing byte coverage
 
-**0a — the `sl` sweep preset** (F60's hole closes in the referee, not just the probe).
-Twelve rows ≈ T6.D1's `compare.sh` set: `st`, single-threaded, 320x192,
-`SM_SIZELIMITED_SLICE`, constraint values chosen so the coded slice count **crosses
-`iMaxSliceNum` = 35** (measure it; T6.D1 read 37 at the analogous constraint), both
-entropy coders, a couple of rc modes. Wire: `sweep.sh` gains the `sl` case and adds it
-to `all`; `gates.sh` `sweep_gate` runs `st mt def sl` (line ≈199; the tally parse is
-count-agnostic — nothing hardcodes 341). Record the new totals; every later gate quote
-uses them.
+**Goal**: the standing sweep gains a preset that drives `FrameBsRealloc`, so the
+path stays byte-checked forever, not just in session D's one-off runs.
 
-**0b — the dead screen-content search half (S18, strip-and-build enumerates).**
-Delete from the guard outward; expected set — `WelsMotionEstimateSearchStatic`,
-`WelsMotionEstimateSearchScrolled`, `WelsDiamondCrossFeatureSearch`,
-`FeatureSearchOne`, `SetFeatureSearchIn`, `SaveFeatureSearchOut`, `SFeatureSearchIn`,
-`SFeatureSearchOut`, `PerformFMEPreprocess`, `SWelsME.pRefFeatureStorage` with
-`InitMe`'s param (`svc_mode_decision.rs:1204`), `ref_list_mgr_svc.rs:1142`'s branch,
-and `SPicture.pScreenBlockFeatureStorage` with its `Reset` touch (`picture.rs:120`)
-once its last reader goes — let the compiler name the list; `uiSliceFMECostDown`
-**stays** (the real search writes it, D measured). The ref-strategy table's
-SCREEN_CONTENT rows stay — session F's file. Re-pin `SWelsME` (96 → expect 88),
-`SWelsMD` (4000 → expect 3672), `SPicture` if the field goes (S36); update phase6.md
-§5's `SPicture` row note — F's fourteen-row table loses the storage row. Run 0b
-**before** the conversions so no face converts dead code.
+**Facts**: `FrameBsRealloc` (svc_encode_slice.rs:3173) runs only when the coded
+slice count crosses `iMaxSliceNum`, which opens at 35. The existing size-limited
+sweep rows code at most 9 slices, so no standing configuration reaches it. Session D
+validated its fix out-of-band: `tools/diffharness/compare.sh`, `st` single-threaded,
+320x192, 12 configurations — 3 SIGBUS + 4 byte divergences before the fix, 12/12
+byte-identical after. At the probe's constraint (401 bytes), 112x96 codes 37 slices;
+48x32 codes 3, 96x64 codes 21, 96x96 codes 31.
 
-## Face 1 — the syntax-writer closure
+**Do**:
+1. Add preset `sl` to `rust/tools/diffharness/sweep.sh`: ~12 rows, `st`
+   single-threaded, 320x192, `SM_SIZELIMITED_SLICE`, constraint values small enough
+   that the coded slice count **crosses 35** (measure it — count output NALs or
+   instrument once), both entropy coders, at least two rc modes. The existing st
+   slice-row `check` invocation shows the argument shape:
+   `check "<label>" $yuv $W $H $frames 26 $cabac -1 0 0 $SM $SN 1`.
+2. Wire `sl` into the `all` case, and into `gates.sh`'s `sweep_gate` line (≈:199):
+   `sweep.sh st mt def` → `st mt def sl`. The pass/fail tally is parsed from the
+   `PASS=n FAIL=n` line — nothing hardcodes the configuration count.
+3. **Prove the preset sees the path**: temporarily revert the re-aim loop at the
+   bottom of `FrameBsRealloc` (the `for iBack in (0..=kiLayersBefore).rev()` loop) —
+   at least one `sl` row must fail; restore, re-run green. Record both runs.
 
-`set_mb_syn_cabac.rs` + `svc_set_mb_syn_cabac.rs` + `svc_set_mb_syn_cavlc.rs` +
-`svc_encode_mb.rs`: `SCabacCtx` 25, their `SMB` ~24, `SMbCache` ~16, one S20 closure.
-Settlement (f) drives the shape. Gate: `family`.
+**Check**: both profiles green at the new totals (341 + N); the totals and the
+red-proof go in the commit message, and every later gate quote uses the new totals.
 
-## Face 2 — the MD/ME closure, in three commits-groups
+## Step 0b — delete the dead screen-content search half
 
-**2a — MD**: `svc_mode_decision.rs` + `svc_base_layer_md.rs` + `md.rs` + the four
-`sMd` roots in `svc_encode_slice.rs`, with the dispatch slots (settlement d) and the
-guards (e). `&mut SWelsMD` chains from the stack roots; `sMe` sub-records become field
-borrows.
-**2b — ME**: `svc_motion_estimate.rs` + `InitMe` + `SMeRefinePointer` (h) +
-`SMVUnitXY` (i).
-**2c — the residue**: `deblocking.rs` 11, `rc.rs` 9, `encoder_ext.rs` 2 `*mut SMB`
-sites and stragglers the greps find — same recipes; rc's context pointers are G's, do
-not follow them.
+**Goal**: the feature-search machinery is unreachable; remove it so steps 2–3 don't
+convert dead code.
 
-## Face 3 — the third SAD/SATD attempt (boxed; drop-from-the-end starts here)
+**Facts**: parameter validation returns `ENC_RETURN_UNSUPPORTED_PARA` for
+`iUsageType == SCREEN_CONTENT_REAL_TIME` — **find the site and cite it in the
+commit; if it does not stand, stop and report instead of deleting.** Session D
+already deleted the *preparation* half behind the same guard
+(`SFeatureSearchPreparation`, `RequestFeatureSearchPreparation`,
+`ReleaseFeatureSearchPreparation`, `UpdateFMESwitch`, `CountFMECostDown`,
+`UpdateFMEGoodFrameCount`; `pfUpdateFMESwitch` is unconditionally
+`UpdateFMESwitchNull`, installed in `WelsInitMeFunc`,
+svc_motion_estimate.rs:473). The *search* half is equally dead.
 
-Preconditions: faces 1–2 landed. S3–S5/S10–S11 revive **for this face only**.
+**Do**: delete `SWelsME.pRefFeatureStorage` (svc_motion_estimate.rs:170) first and
+let the build enumerate. Expected to fall (verify against what the compiler names):
 
-1. **The owed SATD measurement first**: `encoder/sample.rs`'s 7 SATD kernels on the
-   L1-resident microbench (harness per `perf_baseline.md`'s parked-families ledger).
-   Record solo numbers — owed regardless of the attempt's outcome.
-2. **The attempt**: direct dispatch at the now-converted call sites (D-perf-3's
-   `mc.rs` precedent) — safe-signature kernels, slices built **once per partition
-   search**, not per call (D-perf-2: per-call cursor construction was the measured
-   cost); most call sites are fixed-`BLOCK_16x16`, so monomorphic calls are available.
-   Scope: SAD (14, `common/sad_common.rs`) + SATD (7). If one family clears and the
-   other does not, land the one.
-3. **Bar and exits, both acceptable**: bodies ≤1.05x L1-resident → swap lands, ledger
-   updated. Otherwise → third park, dated verdict, re-attempt named (Phase 9). Hard
-   stop at the face boundary — one attempt, one verdict (D-perf-2's clause). The
-   stream instrument stays the session span (D-gate-1); no mid-face stream reads.
+- `svc_motion_estimate.rs`: `WelsMotionEstimateSearchStatic` (:586),
+  `WelsMotionEstimateSearchScrolled` (:619), `WelsDiamondCrossFeatureSearch`
+  (:1076), `SetFeatureSearchIn` (:1321), `SaveFeatureSearchOut` (:1370),
+  `FeatureSearchOne` (:1383), `PerformFMEPreprocess` (:1296),
+  `SFeatureSearchIn` (:201), `SFeatureSearchOut` (:252)
+- `svc_mode_decision.rs`: `InitMe`'s `pRefFeatureStorage` parameter (≈:1204) and
+  the argument at every `InitMe` call
+- `ref_list_mgr_svc.rs:1142`: the allocation branch under
+  `iUsageType == SCREEN_CONTENT_REAL_TIME`
+- `picture.rs`: `SPicture.pScreenBlockFeatureStorage` (:101) with its `Reset` touch
+  (:120–:121), and `SScreenBlockFeatureStorage` itself (:30) once the last reader
+  is gone
+- `CalcFMESwitchFlag` (svc_motion_estimate.rs:441): delete **only if orphaned**.
 
-## Close
+**Keep**: `uiSliceFMECostDown` (the real motion search writes it — measured in D);
+the ref-strategy table rows naming `SCREEN_CONTENT_REAL_TIME`
+(ref_list_mgr_svc.rs:1658/:1662) — that file is session F's.
 
-Span: 7 pairs against the session-start HEAD, one span (D-gate-1); S14 for any F3
-hit. `exit` battery; log entry with: the family counts before/after (survivors
-enumerated — G's `pSlice`/`pCurLayer` leftovers, F's two `SMVUnitXY` sites, the MT
-file's one `SMB` site), sizes re-pinned, the sweep's new totals, the SATD verdict.
-Update plan §0 and phase6.md §6's E row.
+**Check**: build clean; `grep -rn 'FeatureSearch\|ScreenBlockFeatureStorage'` over
+`src/` reads zero code hits outside the kept strategy rows. Re-pin sizes in the same
+commit: `SWelsME` 96 → expect 88, `SWelsMD` 4000 → expect 3672 (41 × 8 less),
+`SPicture` re-measured. Note in the commit that session F's `SPicture` alias table
+loses its storage row.
 
-## Non-goals
+## Step 1 — the syntax-writer closure
 
-`pEncCtx`/`pCtx` params and everything context-reached (G); `pCurDqLayer` (G);
-`pMvdCost` fields and `pMvdCostTable` (G, P11); `pEncMb`/`pRefMb`/`pColoRefMb` fields,
-`pEncSad`, `SPicture` beyond 0b's dead field, SVAA, `picture.rs`/`wels_preprocess.rs`
-`SMVUnitXY` sites (all F); `wels_encoder_ext.rs` (Phase 8); MT files —
-`slice_multi_threading.rs`, `wels_task_management.rs`, `wels_thread_pool` (Phase 7);
-`sSliceBs.pBs` (Phase 7); no new `Vec` fields anywhere (S21 — no host changes this
-session); no sweep rows removed or reordered (0a only adds).
+**Goal**: zero `*mut SCabacCtx` anywhere; zero `*mut SMB`/`*mut SMbCache` in the
+four writer files.
+
+**Files and counts**: `set_mb_syn_cabac.rs` (12 SCabacCtx),
+`svc_set_mb_syn_cabac.rs` (13 SCabacCtx + 13 SMB + 8 SMbCache),
+`svc_set_mb_syn_cavlc.rs` (4 SMB + 1 SMbCache — the `sMbCacheInfo: *mut SMbCache`
+param at :773), `svc_encode_mb.rs` (7 SMB + 7 SMbCache).
+
+**Facts**: `SCabacCtx` needs no internal work — its buffer positions are already
+offsets. The flush site already spells the target:
+`WelsCabacEncodeFlush(buf, &mut (*pSlice).sCabacCtx)` (svc_encode_slice.rs:2370).
+
+**Do**: rules (a), (c), (f). Enumerate the `pSlice`-alongside-cache pairs in these
+files before editing; expect several — the writers get both today.
+
+**Check**: rule (i); `gates.sh family`.
+
+## Step 2 — the mode-decision closure
+
+**Goal**: `&mut SWelsMD` flows from the four stack roots down; `*mut SWelsMD`,
+`*mut SMB`, `*mut SMbCache` read zero in the MD files and the dispatch slots.
+
+**Files**: `svc_mode_decision.rs` (24 MD + 37 SMB + 41 SMbCache + 4 ME + 27
+SMVUnitXY), `svc_base_layer_md.rs` (18 MD + 18 SMB + 16 SMbCache), `md.rs` (16
+SMbCache + 4 SMB), `svc_encode_slice.rs` (4 MD + 14 SMB + 2 SMbCache — the four MB
+loops), `wels_func_ptr_def.rs` (7 MD + 8 SMB + 5 SMbCache slot types).
+
+**Do**: start at the four roots and walk down (rule (a) makes partial states
+compile). Sub-records are field borrows: `&mut sMd.sMe.sMe8x8[i]`. Retype the slots
+(rule (e)), delete the guards (rule (f)) — `WelsMdP16x16`'s shape recurs across the
+slot-installed functions. Apply (c) wherever a callee gets both a slice and its
+cache. `pSlice`/`pCurLayer`/`pEncCtx` params: rule (g).
+
+**Check**: rule (i); `gates.sh family`.
+
+## Step 3 — the motion-estimation closure
+
+**Goal**: `*mut SWelsME`, `*mut SMVUnitXY`, `*mut SMeRefinePointer` read zero
+(minus the two F-owned SMVUnitXY sites); `SMeRefinePointer` holds no raw pointer.
+
+**Files**: `svc_motion_estimate.rs` (21 ME + 2 SMVUnitXY), `svc_base_layer_md.rs`
+(12 ME + 34 SMVUnitXY + 14 MeRefine), `md.rs` (2 ME + 3 MeRefine),
+`svc_mode_decision.rs` (`InitMe` and its callers).
+
+**Facts, `SMeRefinePointer`**: `InitMeRefinePointer` (md.rs:1237) fills the fields
+as fixed offsets into **one** `SMbCache` buffer —
+`buffer_inter_pred_me(pMbCache).add(X + iStride)` with X = 0 (`pHalfPixH`), 640
+(`pHalfPixV`), 1280 (`pQuarPixBest`), 1920 (`pQuarPixTmp`). Two leads discovered
+reading it: **`pHalfPixHV` is not written there** — find its writer or it is dead
+(delete it, re-pin); and `pQuarPixBest`/`pQuarPixTmp` **ping-pong** during
+refinement — find the swap sites in `MeRefineQuarPixel`/its callers first, then
+convert the pair to one selector bit over {1280, 1920} (the same recipe that turned
+`SMbCache`'s prediction-buffer aliases into half-selectors in session C).
+
+**Do**:
+1. `SMeRefinePointer` → offsets/selector + `iStride`; readers derive from the
+   `&mut SMbCache` already in scope at each use (rule (d) for any raw tail handed
+   to a kernel). The struct is stack-local with one builder
+   (svc_base_layer_md.rs:1576).
+2. `InitMe` (post-0b: `iMbPixX, iMbPixY, pMvdCost, iBlockSize, pEnc, pRef,
+   sWelsMe`) — `sWelsMe` becomes `&mut SWelsME`; `pMvdCost`/`pEnc`/`pRef` stay raw
+   (boundary list).
+3. `SMVUnitXY`: drop the caller casts (rule (b)); single-element params →
+   `&mut SMVUnitXY`; array params → `&mut SMVComponentUnit` or
+   `&mut [SMVUnitXY; N]` from the host in scope.
+4. `SQuarRefineParams` (md.rs, below SMeRefinePointer): the `*mut SQuarRefineParams`
+   param → `&mut`; its `pRef`/`pSrcB[4]` plane fields **stay raw** (F). Keep
+   `MeRefineQuarPixel`'s `#[inline(always)]`.
+
+**Check**: rule (i); `gates.sh family`.
+
+## Step 4 — the residue
+
+**Goal**: the remaining `*mut SMB` sites outside the closures convert or are named.
+
+**Sites**: `deblocking.rs` 11, `rc.rs` 9, `encoder_ext.rs` 2.
+
+**Facts**: `deblocking.rs` reads **neighbours** — 18 pointer-arithmetic sites of the
+`pCurMb.offset(-1)` / `.offset(-iMbStride)` shape. A `&mut SMB` for the current MB
+cannot coexist with derivations of its neighbours from the same array, so its
+neighbour-walking core may keep **root-derived raw cursors** (via
+`mb_list_root`/`mb_at`) — convert the single-object signatures, and name the
+neighbour-walkers as survivors. `rc.rs`'s 9 are single-object (`pCurMb` beside a
+raw `pEncCtx` that stays); convert the SMB param only.
+
+**Check**: rule (i) with the survivor list; `gates.sh family`.
+
+## Step 5 — the third SAD/SATD attempt (boxed)
+
+**Goal**: one bounded attempt at un-parking the SAD/SATD kernel families, now that
+their callers' calling convention has changed; and the SATD solo measurement that
+is owed regardless.
+
+**Facts** (from the parked-families ledger, `rust/docs/perf_baseline.md` §Parked):
+- `common/sad_common.rs`: 14 safe kernels, proven byte-correct, **unswapped**.
+  First park 2026-08-09: ~7.0 ns/call L1-resident regardless of block shape;
+  swapped stream cost +16.8% median / +78% worst. Second park 2026-08-10 on a
+  rebuilt harness: 1.41x–4.94x across seven shapes against a ≤1.05x bar.
+- `encoder/sample.rs`: 7 safe SATD kernels, **never installed**, parked by
+  projection (SATD = SAD + a Hadamard butterfly, strictly more work) — **it has no
+  measurement of its own; this session owes one no matter what.**
+- The ledger's untested lead: "a real slices-and-offsets kernel" — per-call cursor
+  construction was the measured cost, and callers building slices **once per
+  partition search** is exactly what steps 2–3 make possible. Most call sites are
+  fixed-size (`pfSampleSatd[BLOCK_16x16]` at svc_mode_decision.rs:610 and the like),
+  so monomorphic direct calls can skip the `Option<fn>` table entirely — the same
+  direct-dispatch move that recovered `mc.rs`'s deficit in Phase 2.
+- Harness: `benches/sad_bodies_bench.rs` (`cargo bench --bench sad_bodies_bench`).
+
+**Do, in order**:
+1. Measure the 7 SATD kernels solo on the harness. Record the numbers.
+2. One attempt: safe-signature kernels (slices + offsets), slices built once per
+   partition search at the converted call sites, direct/monomorphic dispatch where
+   the block size is fixed. SAD and SATD judged separately — if one clears the bar
+   and the other does not, land the one.
+3. Verdict: bodies ≤1.05x on the L1-resident microbench → swap lands and the ledger
+   row closes. Otherwise → third park, dated verdict in the ledger, re-attempt
+   point named (Phase 9). **Hard stop at this step's boundary — one attempt, one
+   verdict.** The stream instrument stays the session span; no mid-step stream
+   reads.
+
+**If this step is dropped for budget**: the SATD solo measurement is still owed —
+record it as owed in the ledger row.
+
+## Step 6 — close
+
+1. The span: 7 pairs against the session-start HEAD, plus a fresh null band; the
+   tripwire is +25% on the median (cumulative encoder deficit stands at ≈+10…12%).
+2. `bash rust/tools/gates.sh exit` — includes the one Miri `--lib` run (all four
+   encoder probes must be green in its output) and both sweeps at the step-0a
+   totals in both profiles.
+3. Regenerate the ratchet baseline (`rust/tools/unsafe_ratchet.sh`) at the final
+   tree.
+4. Log entry (`rust/docs/safety_refactor_log.md`) with: family counts before/after;
+   the survivor list (rule (g) leftovers, deblocking's neighbour-walkers, the two
+   F-owned SMVUnitXY sites, the MT file's one SMB site); sizes re-pinned; the
+   sweep's new totals with the red-proof; the SATD numbers and the step-5 verdict;
+   the span. Update the session E rows in `rust/docs/safety_refactor_plan.md` §0
+   and `rust/docs/prompts/phase6.md` §6, and `rust/docs/perf_baseline.md`.
+
+## Stays raw this session — the boundary list
+
+| what | why | whose |
+|---|---|---|
+| `pEncCtx`/`pCtx`/`pFunc` params, everything `(*pCtx).…`-reached, `pCurDqLayer` (271 sites) | the context is `mem::zeroed`-built until its flip | G |
+| `pMvdCost` fields + `pMvdCostTable` | context-owned allocation (see the map) | G |
+| `SWelsME.pEncMb/pRefMb/pColoRefMb`, `pEncSad`, every `*mut u8` plane+stride param, `SQuarRefineParams.pRef/pSrcB` | picture/plane family | F |
+| `SPicture` (beyond 0b's dead field), SVAA, `picture.rs` + `wels_preprocess.rs` SMVUnitXY sites, ref-strategy table | preprocess/pool session | F |
+| `wels_encoder_ext.rs` | ABI boundary | Phase 8 |
+| `slice_multi_threading.rs`, `wels_task_management.rs`, `wels_thread_pool`, `sSliceBs.pBs` | thread machinery | Phase 7 |
+
+No new `Vec`/`Box` fields anywhere this session; no allocation changes; sweep
+changes are additive only.
 
 ## Done-test
 
-`*mut SWelsMD`/`SWelsME`/`SMVUnitXY`/`SMeRefinePointer`/`SCabacCtx`/`SMB`/`SMbCache`
-each read **0 code sites** in `src/encoder src/processing` except the enumerated
-survivors; the feature-search family is gone and sizes re-pinned; the `sl` preset runs
-in both profiles in `gates.sh`; the SATD solo measurement is recorded and the attempt
-has a dated verdict; span inside its null band, tripwire unbreached; `exit` PASS.
+- `grep -rn '\*mut SWelsMD\b\|\*mut SWelsME\b\|\*mut SMVUnitXY\b\|\*mut SMeRefinePointer\b\|\*mut SCabacCtx\b\|\*mut SMB\b\|\*mut SMbCache\b' --include='*.rs' src/encoder src/processing`
+  reads **zero code sites** except the enumerated survivors.
+- The feature-search family is gone, sizes re-pinned.
+- The `sl` preset runs in `gates.sh` in both profiles, with the red-proof recorded.
+- The SATD solo measurement exists; step 5 has a dated verdict (swap or third park).
+- The span is inside its null band; `gates.sh exit` reads PASS.
