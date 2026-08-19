@@ -223,6 +223,54 @@ this function moves.
 
 ---
 
+## F61 — the multi-threaded slice-bank growth never re-stamps the layer's slice list
+
+**Status: OPEN, owned by Phase 7 (`iMultipleThreadIdc > 1`).** Recorded, not fixed,
+at Phase 6 session D's face 1c — the face that made `ppSliceInLayer` a list of
+positions instead of a list of pointers, which removes the class this finding
+describes but not the ordering defect underneath it.
+
+### What it is
+
+A layer's slice list is one entry per slice in coding order; each entry names a
+slice inside `sSliceBufferInfo[bank].pSliceBuffer`. When a bank runs out, it is
+**grown by reallocation**: `ReallocateSliceList` allocates a new block, copies the
+old slices in, and frees the old block.
+
+The single-threaded path follows through. `ReallocSliceBuffer` grows bank 0, calls
+`ExtendLayerBuffer` for the list itself, and then **re-fills every entry** from the
+banks' new base pointers.
+
+The multi-threaded path does not. `ReallocateSliceInThread` grows bank
+`KiSlcBuffIdx`, stores the new `pSliceBuffer` and the new `iMaxSliceNum` — and
+returns. Every list entry naming that bank still holds a pointer into the block
+just freed, and stays that way until `ReOrderSliceInLayer` rebuilds the list at
+frame end.
+
+**The C++ has the same shape**, checked line by line: `ReallocateSliceInThread`
+(`svc_encode_slice.cpp:1325`) takes `SSlice*& pSliceList`, so the bank pointer is
+updated in place and nothing else is, and `ppSliceInLayer` is untouched. This is a
+shared latent defect, not a port divergence.
+
+### Why it is not fixed here
+
+Phase 6 converts *slice state*; Phase 7 rewrites *claiming*, and the window between
+the grow and the frame-end reorder is claiming's (`phase6.md` §3, F12/P10). Fixing
+it here would mean deciding what an MT worker may observe mid-frame, which is
+exactly the question Phase 7 owns.
+
+### What session D changed about it
+
+Under the position spelling (`SliceIdx { bank, offset }`, T6.D4) a stale entry is no
+longer a **dangling pointer** — it is a correct (bank, offset) pair resolved against
+whatever `pSliceBuffer` currently holds, so a read through it lands inside the live
+bank. The *ordering* question survives: between the grow and the reorder the entry
+may name a slice the other thread has not written yet. **The index spelling removes
+the memory-safety half of the class and leaves the synchronisation half**, which is
+the half Phase 7 is for.
+
+---
+
 ## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
 
 `phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the

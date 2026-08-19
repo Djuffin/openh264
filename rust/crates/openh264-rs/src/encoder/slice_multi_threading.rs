@@ -351,10 +351,6 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
         return;
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
-    let ppSliceInLayer = (*pCurDq).ppSliceInLayer;
-    if ppSliceInLayer.is_null() {
-        return;
-    }
     let mut iSumAv = 0i32;
     let kiSliceCount = pSliceCtx.iSliceNumInFrame;
     let mut iSliceIdx = 0i32;
@@ -366,7 +362,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
     WelsEmms();
 
     while iSliceIdx < kiSliceCount {
-        let pSlice = *ppSliceInLayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if !pSlice.is_null() {
             let consume_time = (*pSlice).uiSliceConsumeTime as i32;
             let mb_num = (*pSlice).iCountMbNumInSlice;
@@ -378,7 +374,7 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
 
     while iSliceIdx > 0 {
         iSliceIdx -= 1;
-        let pSlice = *ppSliceInLayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if !pSlice.is_null() {
             (*pSlice).iSliceComplexRatio =
                 WelsDivRound(INT_MULTIPLY * iAvI[iSliceIdx as usize], iSumAv);
@@ -388,8 +384,8 @@ pub unsafe fn CalcSliceComplexRatio(pCurDq: *mut SDqLayer) {
 
 /// Statistical decision engine that evaluates whether the timing variance across
 /// slices exceeds the core-dependent threshold to justify dynamic slicing.
-pub unsafe fn NeedDynamicAdjust(ppSliceInLayer: *mut *mut SSlice, iSliceNum: i32) -> i32 {
-    if ppSliceInLayer.is_null() || iSliceNum <= 0 {
+pub unsafe fn NeedDynamicAdjust(pCurDq: *mut SDqLayer, iSliceNum: i32) -> i32 {
+    if pCurDq.is_null() || iSliceNum <= 0 {
         return 0;
     }
 
@@ -400,7 +396,7 @@ pub unsafe fn NeedDynamicAdjust(ppSliceInLayer: *mut *mut SSlice, iSliceNum: i32
     WelsEmms();
 
     while iSliceIdx < iSliceNum {
-        let pSlice = *ppSliceInLayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if pSlice.is_null() {
             return 0;
         }
@@ -418,7 +414,7 @@ pub unsafe fn NeedDynamicAdjust(ppSliceInLayer: *mut *mut SSlice, iSliceNum: i32
     let kfMeanRatio = 1.0f32 / (iSliceNum as f32);
 
     loop {
-        let pSlice = *ppSliceInLayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         let fRatio = (*pSlice).uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
         let fDiffRatio = fRatio - kfMeanRatio;
         fRmse += fDiffRatio * fDiffRatio;
@@ -457,10 +453,6 @@ pub unsafe fn DynamicAdjustSlicing(
     }
 
     let pSliceCtx = &mut (*pCurDqLayer).sSliceEncCtx;
-    let ppSliceInLayer = (*pCurDqLayer).ppSliceInLayer;
-    if ppSliceInLayer.is_null() {
-        return;
-    }
     let kiCountSliceNum = pSliceCtx.iSliceNumInFrame;
     let kiCountNumMb = pSliceCtx.iMbNumInFrame;
     let mut iMinimalMbNum = pSliceCtx.iMbWidth as i32;
@@ -507,7 +499,7 @@ pub unsafe fn DynamicAdjustSlicing(
 
     iSliceIdx = 0;
     while iSliceIdx + 1 < kiCountSliceNum {
-        let pSlice = *ppSliceInLayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDqLayer, iSliceIdx);
         if pSlice.is_null() {
             return;
         }
@@ -746,18 +738,14 @@ pub unsafe fn AppendSliceToFrameBs(
         return 0;
     }
 
-    let ppSliceInlayer = (*(*pCtx).pCurDqLayer).ppSliceInLayer;
-    if ppSliceInlayer.is_null() {
-        return 0;
-    }
-
+    let pCurDq = (*pCtx).pCurDqLayer;
     let mut iLayerSize = 0i32;
     let mut iNalIdxBase = 0i32;
     (*pLbi).iNalCount = 0;
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
-        let pSlice = *ppSliceInlayer.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if !pSlice.is_null() {
             let pSliceBs = &mut (*pSlice).sSliceBs;
             if pSliceBs.uiBsPos > 0 {
@@ -879,10 +867,7 @@ pub unsafe fn AdjustBaseLayer(pCtx: *mut sWelsEncCtx) -> i32 {
 
     (*pCtx).pCurDqLayer = pCurDq;
 
-    let iNeedAdj = NeedDynamicAdjust(
-        (*pCurDq).ppSliceInLayer,
-        (*pCurDq).sSliceEncCtx.iSliceNumInFrame,
-    );
+    let iNeedAdj = NeedDynamicAdjust(pCurDq, (*pCurDq).sSliceEncCtx.iSliceNumInFrame);
 
     if iNeedAdj != 0 {
         DynamicAdjustSlicing(pCtx, pCurDq, 0);
@@ -917,7 +902,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
             return 0;
         }
         iNeedAdj = NeedDynamicAdjust(
-            (*pBaseLayer).ppSliceInLayer,
+            pBaseLayer,
             (*(*pCtx).pCurDqLayer).sSliceEncCtx.iSliceNumInFrame,
         );
         if iNeedAdj != 0 {
@@ -929,7 +914,7 @@ pub unsafe fn AdjustEnhanceLayer(pCtx: *mut sWelsEncCtx, iCurDid: i32) -> i32 {
             return 0;
         }
         iNeedAdj = NeedDynamicAdjust(
-            (*pCurLayer).ppSliceInLayer,
+            pCurLayer,
             (*(*pCtx).pCurDqLayer).sSliceEncCtx.iSliceNumInFrame,
         );
         if iNeedAdj != 0 {
@@ -968,34 +953,41 @@ mod tests {
         assert!(cores >= 1);
     }
 
+    /// A layer with one bank of `n` slices and `ppSliceInLayer` naming them in
+    /// order — the shape `InitSliceInLayer` builds, in the two lines a test needs.
+    /// The bank is returned so it outlives the layer that points into it.
+    fn layer_with_bank(n: usize) -> (SDqLayer, Vec<SSlice>) {
+        let mut bank: Vec<SSlice> = (0..n).map(|_| SSlice::default()).collect();
+        let mut dq_layer = SDqLayer::default();
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer = bank.as_mut_ptr();
+        dq_layer.sSliceBufferInfo[0].iMaxSliceNum = n as i32;
+        dq_layer.ppSliceInLayer = (0..n)
+            .map(|i| crate::encoder::svc_encode_slice::SliceIdx { bank: 0, offset: i as i32 })
+            .collect();
+        (dq_layer, bank)
+    }
+
     #[test]
     fn test_need_dynamic_adjust_zero_consume() {
-        let mut slice1 = SSlice::default();
-        let mut slice2 = SSlice::default();
-        let mut slices = [&mut slice1 as *mut SSlice, &mut slice2 as *mut SSlice];
-        let ret = unsafe { NeedDynamicAdjust(slices.as_mut_ptr(), 2) };
+        let (mut dq_layer, _bank) = layer_with_bank(2);
+        let ret = unsafe { NeedDynamicAdjust(&mut dq_layer, 2) };
         assert_eq!(ret, 0);
     }
 
     #[test]
     fn test_calc_slice_complex_ratio() {
-        let mut slice1 = SSlice::default();
-        let mut slice2 = SSlice::default();
-        slice1.iCountMbNumInSlice = 100;
-        slice1.uiSliceConsumeTime = 1000;
-        slice2.iCountMbNumInSlice = 100;
-        slice2.uiSliceConsumeTime = 1000;
-
-        let mut slices = [&mut slice1 as *mut SSlice, &mut slice2 as *mut SSlice];
-        let mut dq_layer = SDqLayer::default();
+        let (mut dq_layer, mut bank) = layer_with_bank(2);
+        for slice in bank.iter_mut() {
+            slice.iCountMbNumInSlice = 100;
+            slice.uiSliceConsumeTime = 1000;
+        }
         dq_layer.sSliceEncCtx.iSliceNumInFrame = 2;
-        dq_layer.ppSliceInLayer = slices.as_mut_ptr();
 
         unsafe {
             CalcSliceComplexRatio(&mut dq_layer);
         }
 
-        assert_eq!(slice1.iSliceComplexRatio, 50);
-        assert_eq!(slice2.iSliceComplexRatio, 50);
+        assert_eq!(bank[0].iSliceComplexRatio, 50);
+        assert_eq!(bank[1].iSliceComplexRatio, 50);
     }
 }

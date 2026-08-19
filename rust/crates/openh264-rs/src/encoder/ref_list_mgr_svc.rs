@@ -814,11 +814,11 @@ pub unsafe fn CheckCurMarkFrameNumUsed(pCtx: *mut sWelsEncCtx) -> bool {
 
 /// Replicates base slice header reference marking syntax across all slices.
 pub unsafe fn WelsMarkMMCORefInfoWithBase(
-    ppSliceList: *mut *mut SSlice,
+    pCurDq: *mut SDqLayer,
     pBaseSlice: *mut SSlice,
     kiCountSliceNum: i32,
 ) {
-    if ppSliceList.is_null() || pBaseSlice.is_null() {
+    if pCurDq.is_null() || pBaseSlice.is_null() {
         return;
     }
     // **Read the base out by value before the loop, and it is not a style
@@ -833,7 +833,7 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
     // first store is `base = base`.
     let kBaseMarking = (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
     for iSliceIdx in 0..kiCountSliceNum {
-        let pSlice = *ppSliceList.add(iSliceIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iSliceIdx);
         if !pSlice.is_null() {
             (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
         }
@@ -844,13 +844,13 @@ pub unsafe fn WelsMarkMMCORefInfoWithBase(
 pub unsafe fn WelsMarkMMCORefInfo(
     pCtx: *mut sWelsEncCtx,
     pLtr: *mut SLTRState,
-    ppSliceList: *mut *mut SSlice,
+    pCurDq: *mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    if pCtx.is_null() || pLtr.is_null() || ppSliceList.is_null() || kiCountSliceNum <= 0 {
+    if pCtx.is_null() || pLtr.is_null() || pCurDq.is_null() || kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = *ppSliceList.add(0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -889,7 +889,7 @@ pub unsafe fn WelsMarkMMCORefInfo(
         }
     }
 
-    WelsMarkMMCORefInfoWithBase(ppSliceList, pBaseSlice, kiCountSliceNum);
+    WelsMarkMMCORefInfoWithBase(pCurDq, pBaseSlice, kiCountSliceNum);
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
@@ -922,7 +922,7 @@ pub unsafe fn WelsMarkPic(pCtx: *mut sWelsEncCtx) {
     WelsMarkMMCORefInfo(
         pCtx,
         pLtr,
-        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        (*pCtx).pCurDqLayer,
         kiCountSliceNum,
     );
 }
@@ -1090,10 +1090,10 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
 pub unsafe fn WelsUpdateSliceHeaderSyntax(
     pCtx: *mut sWelsEncCtx,
     iAbsDiffPicNumMinus1: i32,
-    ppSliceList: *mut *mut SSlice,
+    pCurDq: *mut SDqLayer,
     uiFrameType: i32,
 ) {
-    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || ppSliceList.is_null() {
+    if pCtx.is_null() || (*pCtx).pCurDqLayer.is_null() || pCurDq.is_null() {
         return;
     }
     let kiCountSliceNum = (*(*pCtx).pCurDqLayer).iMaxSliceNum;
@@ -1101,7 +1101,7 @@ pub unsafe fn WelsUpdateSliceHeaderSyntax(
     let pLtr = &*(*pCtx).pLtr.add((uiDid) as usize);
 
     for iIdx in 0..kiCountSliceNum {
-        let pSlice = *ppSliceList.add(iIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
         if pSlice.is_null() {
             continue;
         }
@@ -1170,7 +1170,7 @@ pub unsafe fn WelsUpdateRefSyntax(pCtx: *mut sWelsEncCtx, kiPOC: i32, kiFrameTyp
     WelsUpdateSliceHeaderSyntax(
         pCtx,
         iAbsDiffPicNumMinus1,
-        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        (*pCtx).pCurDqLayer,
         kiFrameType,
     );
 }
@@ -1370,13 +1370,13 @@ pub fn IsValidFrameNum(kiFrameNum: i32) -> bool {
 pub unsafe fn WelsMarkMMCORefInfoScreen(
     pCtx: *mut sWelsEncCtx,
     pLtr: *mut SLTRState,
-    ppSliceList: *mut *mut SSlice,
+    pCurDq: *mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    if pCtx.is_null() || pLtr.is_null() || ppSliceList.is_null() || kiCountSliceNum <= 0 {
+    if pCtx.is_null() || pLtr.is_null() || pCurDq.is_null() || kiCountSliceNum <= 0 {
         return;
     }
-    let pBaseSlice = *ppSliceList.add(0);
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -1396,7 +1396,7 @@ pub unsafe fn WelsMarkMMCORefInfoScreen(
         pRefPicMark.uiMmcoCount += 1;
     }
 
-    WelsMarkMMCORefInfoWithBase(ppSliceList, pBaseSlice, kiCountSliceNum);
+    WelsMarkMMCORefInfoWithBase(pCurDq, pBaseSlice, kiCountSliceNum);
 }
 
 pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
@@ -1496,7 +1496,7 @@ pub unsafe fn WelsMarkPicScreen(pCtx: *mut sWelsEncCtx) {
     WelsMarkMMCORefInfoScreen(
         pCtx,
         pLtr,
-        (*(*pCtx).pCurDqLayer).ppSliceInLayer,
+        (*pCtx).pCurDqLayer,
         iSliceNum,
     );
 }

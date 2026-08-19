@@ -192,9 +192,10 @@ assert_size!(SSliceBufferInfo, 16);
 // pointer (S18), and **480 after T6.D3**, which made `pRefLayer` an
 // `Option<LayerIdx>` (8 bytes of address -> 2 of position), added the layer's own
 // 1-byte `iDqIdx`, and dropped `repr(C)` with them — so the compiler now packs the
-// struct's fifteen small scalars into the holes the C layout left. **Measured**;
-// the number tracks the port, not the C++.
-assert_size!(SDqLayer, 480);
+// struct's fifteen small scalars into the holes the C layout left, and **496 after
+// T6.D4** made `ppSliceInLayer` a `Vec<SliceIdx>` (one pointer becomes a three-word
+// `Vec`). **Measured** at each step; the number tracks the port, not the C++.
+assert_size!(SDqLayer, 496);
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
