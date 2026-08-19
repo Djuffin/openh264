@@ -886,7 +886,7 @@ pub unsafe fn WelsMdInterInit(
     iSliceFirstMbXY: i32,
 ) {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let kiMbX = (*pCurMb).iMbX as i32;
     let kiMbY = (*pCurMb).iMbY as i32;
     let kiMbXY = (*pCurMb).iMbXY;
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn WelsMdP16x8(
     pWelsMd: *mut SWelsMD,
     pSlice: *mut SSlice,
 ) -> i32 {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iStrideEnc = (*pCurDqLayer).iEncStride[0];
     let iStrideRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let mut iCostP16x8 = 0i32;
@@ -960,7 +960,9 @@ pub unsafe extern "C" fn WelsMdP16x8(
         let sMe16x8 = &mut (*pWelsMd).sMe.sMe16x8[i as usize] as *mut SWelsME;
         let iPixelY = i << 3;
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_16x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset((iPixelY * iStrideEnc) as isize),
             (*pMbCache).SPicData.pRefMb[0].offset((iPixelY * iStrideRef) as isize),
@@ -1002,13 +1004,15 @@ pub unsafe extern "C" fn WelsMdP8x16(
     pWelsMd: *mut SWelsMD,
     pSlice: *mut SSlice,
 ) -> i32 {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let mut iCostP8x16 = 0i32;
     for i in 0..2i32 {
         let iPixelX = i << 3;
         let sMe8x16 = &mut (*pWelsMd).sMe.sMe8x16[i as usize] as *mut SWelsME;
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_8x16 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iPixelX as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iPixelX as isize),
@@ -1051,7 +1055,7 @@ pub unsafe extern "C" fn WelsMdP4x4(
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let mut iCostP4x4 = 0i32;
@@ -1067,7 +1071,9 @@ pub unsafe extern "C" fn WelsMdP4x4(
         let sMe4x4 =
             &mut (*pWelsMd).sMe.sMe4x4[ki8x8Idx as usize][i4x4Idx as usize] as *mut SWelsME;
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_4x4 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
@@ -1117,7 +1123,7 @@ pub unsafe extern "C" fn WelsMdP8x4(
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let mut iCostP8x4 = 0i32;
@@ -1133,7 +1139,9 @@ pub unsafe extern "C" fn WelsMdP8x4(
         let sMe8x4 =
             &mut (*pWelsMd).sMe.sMe8x4[ki8x8Idx as usize][i8x4Idx as usize] as *mut SWelsME;
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_8x4 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
@@ -1183,7 +1191,7 @@ pub unsafe extern "C" fn WelsMdP4x8(
     pSlice: *mut SSlice,
     ki8x8Idx: i32,
 ) -> i32 {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = (*(*pCurDqLayer).pRefPic).iLineSize[0];
     let mut iCostP4x8 = 0i32;
@@ -1199,7 +1207,9 @@ pub unsafe extern "C" fn WelsMdP4x8(
         let sMe4x8 =
             &mut (*pWelsMd).sMe.sMe4x8[ki8x8Idx as usize][i4x8Idx as usize] as *mut SWelsME;
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_4x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
@@ -2123,10 +2133,11 @@ pub unsafe extern "C" fn WelsMdInterMb(
     _pUnused: *mut SMbCache,
 ) {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbWidth = (*pCurDqLayer).iMbWidth as i32;
-    let top_mb = pCurMb.offset(-(kiMbWidth as isize));
+    // F14's class: formed before the availability guards below, read only under them.
+    let top_mb = pCurMb.wrapping_offset(-(kiMbWidth as isize));
     let bMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS) != 0 {
         IS_SKIP((*pCurMb.offset(-1)).uiMbType)
     } else {

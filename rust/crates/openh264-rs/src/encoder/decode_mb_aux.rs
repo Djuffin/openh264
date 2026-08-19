@@ -135,6 +135,39 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
 ///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
+    let res = idct_t4_residual(dct);
+    for (dy, r) in res.iter().enumerate() {
+        let p: &[u8; 4] = pred.row(dy as isize, 0, 4).try_into().unwrap();
+        let out: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
+        for ((o, &pv), &v) in out.iter_mut().zip(p.iter()).zip(r.iter()) {
+            *o = WelsClip1(pv as i32 + ((v + 32) >> 6));
+        }
+    }
+}
+
+/// [`idct_t4_rec`] with the prediction already *in* `rec` — the inter-macroblock
+/// reconstruction, where the C++ passes the reconstruction plane as both `pRec`
+/// and `pPred` (`OutputPMbWithoutConstructCsRsNoCopy`, `svc_encode_slice.cpp`) and
+/// the kernel adds each residual to the sample it then overwrites. Element-wise
+/// that is well defined; as two Rust references over one span it is not, and the
+/// encoder aliasing probe caught the shim building exactly that pair (**F59**,
+/// Phase 6 session B). Same arithmetic, one cursor: the sample is read where
+/// [`idct_t4_rec`] reads `pred`, and written where it writes `rec`.
+pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
+    let res = idct_t4_residual(dct);
+    for (dy, r) in res.iter().enumerate() {
+        let out: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
+        for (o, &v) in out.iter_mut().zip(r.iter()) {
+            *o = WelsClip1(*o as i32 + ((v + 32) >> 6));
+        }
+    }
+}
+
+/// The transform half of [`idct_t4_rec`]: the 4x4 residual before the
+/// `+32 >> 6` rounding and the add to the prediction. Shared by the two-plane and
+/// the in-place reconstruction so the arithmetic exists once.
+#[inline]
+fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
     let mut tmp = [0i16; 16];
 
     for i in 0..4usize {
@@ -166,14 +199,7 @@ pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[
         res[2][i] = del_l - del_r;
         res[3][i] = sum_l - sum_r;
     }
-
-    for (dy, r) in res.iter().enumerate() {
-        let p: &[u8; 4] = pred.row(dy as isize, 0, 4).try_into().unwrap();
-        let out: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
-        for ((o, &pv), &v) in out.iter_mut().zip(p.iter()).zip(r.iter()) {
-            *o = WelsClip1(pv as i32 + ((v + 32) >> 6));
-        }
-    }
+    res
 }
 
 /// [`idct_t4_rec`] over the four 4x4 blocks of one 8x8 quadrant.
@@ -184,6 +210,15 @@ pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
         idct_t4_rec(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
+    }
+}
+
+/// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant (F59).
+pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
+    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        idct_t4_rec_in_place(&mut rec.reborrow(dx, dy), sub);
     }
 }
 

@@ -224,8 +224,9 @@ pub unsafe fn WelsCabacMbType(
     unsafe {
         if eSliceType == EWelsSliceType::I_SLICE {
             let uiNeighborAvail = (*pCurMb).uiNeighborAvail;
-            let pLeftMb = pCurMb.offset(-1);
-            let pTopMb = pCurMb.offset(-(iMbWidth as isize));
+            // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
+            let pLeftMb = pCurMb.wrapping_offset(-1);
+            let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
             let mut iCtx = 3;
 
             if (uiNeighborAvail & LEFT_MB_POS) != 0 && !IS_INTRA4x4((*pLeftMb).uiMbType) {
@@ -336,8 +337,9 @@ pub unsafe fn WelsCabacMbIntraChromaPredMode(
 ) {
     unsafe {
         let uiNeighborAvail = (*pCurMb).uiNeighborAvail;
-        let pLeftMb = pCurMb.offset(-1);
-        let pTopMb = pCurMb.offset(-(iMbWidth as isize));
+        // F14's class, as in `WelsCabacMbType`: formed before the guard, read only under it.
+        let pLeftMb = pCurMb.wrapping_offset(-1);
+        let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
 
         let iPredMode = g_kiMapModeIntraChroma[(*pMbCache).uiChmaI8x8Mode as usize] as i32;
         let mut iCtx = 64;
@@ -894,7 +896,7 @@ pub unsafe fn WelsWriteMbResidualCabac(
 ) -> i32 {
     unsafe {
         let uiMbType = (*pCurMb).uiMbType;
-        let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         let pNonZeroCoeffCount = (*pMbCache).iNonZeroCoeffCount.as_ptr();
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
@@ -1110,8 +1112,8 @@ pub unsafe fn WelsSpatialWriteMbSynCabac(
         // does. Session E's rule, second application: derive from the state
         // that recorded the decision, not from the inputs to it.
         let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
-        let pCabacCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
-        let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+        let pCabacCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
+        let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
         let uiMbType = (*pCurMb).uiMbType;
         let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
         let uiNumRefIdxL0Active = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;

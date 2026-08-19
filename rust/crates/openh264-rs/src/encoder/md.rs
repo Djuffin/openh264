@@ -709,10 +709,11 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
     _pVaaBgMbFlag: *mut i8,
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let pLeftMb = pCurMb.offset(-1);
-    let pTopMb = pCurMb.offset(-(iMbWidth as isize));
-    let pLeftTopMb = pCurMb.offset(-(iMbWidth as isize) - 1);
-    let iRightTopMb = pCurMb.offset(-(iMbWidth as isize) + 1);
+    // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
+    let pLeftMb = pCurMb.wrapping_offset(-1);
+    let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
+    let pLeftTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) - 1);
+    let iRightTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) + 1);
     let pMvComp = &mut (*pMbCache).sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftMb).uiMbType) {
@@ -838,10 +839,11 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
     pVaaBgMbFlag: *mut i8,
 ) {
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
-    let pLeftMb = pCurMb.offset(-1);
-    let pTopMb = pCurMb.offset(-(iMbWidth as isize));
-    let pLeftTopMb = pCurMb.offset(-(iMbWidth as isize) - 1);
-    let iRightTopMb = pCurMb.offset(-(iMbWidth as isize) + 1);
+    // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
+    let pLeftMb = pCurMb.wrapping_offset(-1);
+    let pTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize));
+    let pLeftTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) - 1);
+    let iRightTopMb = pCurMb.wrapping_offset(-(iMbWidth as isize) + 1);
     let pMvComp = &mut (*pMbCache).sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER((*pLeftMb).uiMbType) {

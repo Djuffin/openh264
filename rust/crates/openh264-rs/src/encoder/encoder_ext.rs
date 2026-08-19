@@ -2231,7 +2231,9 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     let pNalHdExt = &mut (*pCurDq).sLayerInfo.sNalHeaderExt;
     let pDqIdc = (*pCtx).pDqIdcMap.add(kiCurDid as usize);
     let iSliceCount = (*pCurDq).iMaxSliceNum;
-    let pParamInternal = (*pParam).sDependencyLayers.as_mut_ptr().add(kiCurDid as usize);
+    // S29 / F13's family: `addr_of_mut!` on the element, not `as_mut_ptr().add()` —
+    // the latter reborrows the whole array and a second such derivation pops the first.
+    let pParamInternal = std::ptr::addr_of_mut!((*pParam).sDependencyLayers[kiCurDid as usize]);
 
     (*pCurDq).pDecPic = pDecPic;
 
@@ -3215,7 +3217,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         }
     } else {
         for iDidIdx in 0..(*pSvcParam).iSpatialLayerNum as usize {
-            let pParamInternal = (*pSvcParam).sDependencyLayers.as_mut_ptr().add(iDidIdx);
+            let pParamInternal = std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[iDidIdx]);
             let iTemporalId = GetTemporalLevel(
                 pParamInternal,
                 (*pParamInternal).iCodingIndex,
@@ -3229,12 +3231,13 @@ pub unsafe fn WelsEncoderEncodeExt(
 
     while iSpatialIdx < iSpatialNum {
         iCurDid = (*pSpatialIndexMap.add(iSpatialIdx as usize)).iDid as i8;
+        // S29 / F13's family (the encode probe's sixth red, session B): `addr_of_mut!`
+        // on the element — `as_mut_ptr().add()` reborrowed the whole array, and the
+        // `.iPOC` reads below re-derived it and popped these.
         let pParam: *mut SSpatialLayerConfig =
-            (*pSvcParam).sSpatialLayers.as_mut_ptr().add(iCurDid as usize);
-        let pParamInternal = (*pSvcParam)
-            .sDependencyLayers
-            .as_mut_ptr()
-            .add(iCurDid as usize);
+            std::ptr::addr_of_mut!((*pSvcParam).sSpatialLayers[iCurDid as usize]);
+        let pParamInternal =
+            std::ptr::addr_of_mut!((*pSvcParam).sDependencyLayers[iCurDid as usize]);
         let iDecompositionStages = (*pParamInternal).iDecompositionStages as i32;
         (*pCtx).pCurDqLayer = *(*pCtx).ppDqLayerList.add(iCurDid as usize);
         (*pCtx).uiDependencyId = iCurDid as u8;
@@ -3270,7 +3273,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         pEncPic = (*pSpatialIndexMap.add(iSpatialIdx as usize)).pSrc;
         (*pCtx).pEncPic = pEncPic;
         (*pEncPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*pEncPic).iFramePoc = (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC;
+        (*pEncPic).iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
 
         iCurWidth = (*pParam).iVideoWidth;
         iCurHeight = (*pParam).iVideoHeight;
@@ -3343,13 +3346,13 @@ pub unsafe fn WelsEncoderEncodeExt(
         (*pCtx).pDecPic = (**(*pCtx).ppRefPicListExt.add(iCurDid as usize)).pNextBuffer;
         fsnr = (*pCtx).pDecPic;
         (*(*pCtx).pDecPic).iPictureType = (*pCtx).eSliceType as i32;
-        (*(*pCtx).pDecPic).iFramePoc = (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC;
+        (*(*pCtx).pDecPic).iFramePoc = (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC;
 
         WelsInitCurrentLayer(pCtx, iCurWidth, iCurHeight);
 
         let eRefStrategy = (*pCtx).eRefStrategy;
         eRefStrategy.MarkPic(pCtx);
-        if !eRefStrategy.BuildRefList(pCtx, (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC, 0) {
+        if !eRefStrategy.BuildRefList(pCtx, (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC, 0) {
             eFrameType = EVideoFrameType::videoFrameTypeIDR;
             (*pCtx).iEncoderError = ENC_RETURN_CORRECTED;
             break;
@@ -3376,7 +3379,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         // get reordering syntax used for writing the slice header
         crate::encoder::ref_list_mgr_svc::WelsUpdateRefSyntax(
             pCtx,
-            (*(*pSvcParam).sDependencyLayers.as_mut_ptr().add(iCurDid as usize)).iPOC,
+            (*pSvcParam).sDependencyLayers[iCurDid as usize].iPOC,
             eFrameType as i32,
         );
         // update reference picture for the current DQ layer
