@@ -11358,243 +11358,62 @@ nothing.
 
 ## Phase 6, session B — the encode probe goes live, and the clearing (2026-08-18)
 
-*Breadcrumbs, one per face as it closes (S31); compacted into the entry at the close.*
+**The settlements were the diagnosis, and the probe walked straight past session A's blocker.** All three cache-not-carrier readings held on contact: `SSlice.pSliceBsa` is one bit `sSliceBs.pBs`'s nullness already records (T6.B3 — `slice_writer` derives it fresh; the field, both `pBsWrite` parameters and `ReallocateSliceList`'s re-stamp loop go, and **no `bool` is added**), `SWelsNalRaw.pRawData` is `iStartPos` (T6.B4 — `WelsEncodeNal(raw, src, ext, dst, dst_len, out_len)` reads `src[iStartPos..]` and **the caller names the buffer**, which dissolves Phase 3's "one type cannot hold offsets into two owners"), `SWelsSliceBs.pBsBuffer` is `pThreadBsBuffer[uiBufferIdx]` (T6.B5 — `thread_bs_buffer` resolves the slot; `SetOneSliceBsBufferUnderMultithread` was left with a `uiBsPos = 0` its caller had already done and went with its call, S18). **The brief's execution order was wrong in one place and the tree said so**: `WelsLoadNalForSlice` is a *third* reader of `pBsBuffer`, through `pRawData`, so (c) had to precede (b). `SWelsNalRaw` 40 → **32** pinned, `SSlice` 1584 → **1520** measured; both `SHIM(phase3)` markers now name `pThreadBsBuffer` and **Phase 7** and nothing else.
 
-* **§0** — S27 open at `6cecbf51`: `commit` battery `OVERALL: PASS` (484 / 478 / 20, ratchet
-  clean, census 58). **T6.B0** (`ef8bf25b`): the initialisation probe's `PLACEHOLDER_REVERT`
-  replaced by the measured F21 sentence; `--skip encoder_ext` **deleted** — the filter matched
-  exactly two tests (`request_memory_svc_*`, no `wels_encoder_ext` test exists) and both ran
-  green under the step's flags (2 / 0, 16.92s Miri clock). The `--lib` step skips
-  `wels_thread_pool` (F12) and nothing else. Battery PASS.
-* **Face 0 — F52's six, adjudicated by reading (T6.B1).** Both lines of each opened: `Uninit`
-  / `InitFrame` / `ExecuteTasks` (`wels_task_management.rs:662–664`) and `OnTaskStop`
-  (`wels_thread_pool.rs:97`) are trait-method **declarations** — the sweep had scanned forward to
-  the next item's brace and scored the nothing between as an empty body; `WelsRcPostFrameSkipping`
-  (`rc.rs:1860`, `false`) is faithful to `ratectl.cpp:1015`'s `return false;` and `:651` is T4b's
-  `RCMode` dispatcher that calls it; `push_back` is `CWelsList<T>::` and `CWelsTaskList::`, two
-  types. **F52 closed** in `phase6_findings.md`, `phase5.md`'s open list and plan §0. The sweep
-  now skips a `fn` whose signature ends in `;` before any `{`: **22 → 18** candidate names,
-  measured (the brief's 21 → 17 was a lead, S24 — same code at both commits). Guard:
-  `--self-test` over a two-file fixture holding F52's own stub shape (five-line signature, body
-  `true`, beside the real body) plus a declaration beside its impl — the stub prints, the
-  declaration does not, and the array-type `;` in a signature is not a declaration; run against
-  the pre-session tool, the pre-F52 tool and a *contains*-`;` filter it FAILs on each, and PASSes
-  as shipped. Nothing in the encoder was converted before this face was recorded. Battery PASS.
-* **Face 1.1 — S29's stored class, respelled (T6.B2).** Nine `= &mut (*p).f` assignments into
-  struct fields (`au_set.rs:816`, `paraset_strategy.rs:419`, `encoder_ext.rs:2255` — `pSpsP`;
-  `wels_preprocess.rs:1673/1729/1754/2552` — `pCalcResult`/`pCalcRes`; `wels_task_management.rs:255/414`
-  — `m_pSliceBs`) → `addr_of_mut!`. Grep after: only the two `pSliceBsa` stamps remain
-  (`svc_encode_slice.rs:2306`, `:2613`), which 2.2(a) deletes. The narrower `let x = &mut (*p).f as
-  *mut T` shape (10 sites: `svc_mode_decision.rs` ×5, `svc_set_mb_syn_cavlc.rs` ×2,
-  `svc_enc_slice_segment.rs` ×2, `encoder_ext.rs:3522`) is one function's borrow each, not this
-  sweep's, and is left for the walk to fire on. No behaviour, no layout. Battery PASS.
-* **Face 1.2 — the three settlements, written before the first edit.** All three are
-  *cache, not carrier* (`phase6.md` §1), confirmed by reading at `8e23d488`:
-  **(a) `SSlice.pSliceBsa`** is a cache of one bit. `InitSliceBsBuffer` (`svc_encode_slice.rs:2294`)
-  aims it at the slice's own `sSliceBs.sBsWrite` exactly when it also allocates `sSliceBs.pBs`, and
-  at `pOut->sBsWrite` exactly when it leaves `pBs` null; `ReallocateSliceList`'s re-stamp loop
-  (`:2610–2615`) re-derives the same bit from `bIndependenceBsBuffer`, which is the same expression
-  (`iMultipleThreadIdc > 1 && uiSliceMode != SM_SINGLE_SLICE`) `bSliceBsBufferFlag` (`:2490`) fed
-  `InitSliceList`. So `!pBs.is_null()` *is* the choice, and it travels with the struct through
-  `copy_nonoverlapping` where the pointer had to be re-stamped. `slice_writer(pEncCtx, pSlice) ->
-  *mut BsWriter` beside `slice_bs_buffer` derives it fresh at every use (`addr_of_mut!` on either
-  parent), `slice_bs_buffer` takes the same discriminator, the twelve `let pBs = (*pSlice).pSliceBsa`
-  readers become `slice_writer(..)`, and the four without a ctx take the writer from callers that have
-  it (`StashMBStatusCavlc`/`StashPopMBStatusCavlc` through `EntropyCoder::StashMBStatus`/`StashPopMBStatus`,
-  `WelsWriteSliceEndSyn` from `WelsCodeOneSlice`, `GetBsPosCavlc` through `EntropyCoder::GetBsPosition`
-  — callers `rc.rs:2168`, `:2216`, `svc_encode_slice.rs:1332`, `:1711`, all with `pEncCtx`). The field,
-  both `pBsWrite` parameters and the re-stamp loop go. No `bool` is added.
-  **(c) `SWelsNalRaw.pRawData`** is redundant with `iStartPos`: `WelsLoadNal`/`WelsLoadNalForSlice`
-  stamp `buffer + iStartPos` and `WelsUnloadNal` re-derives exactly that (session A). The type keeps the
-  offset; the caller names the buffer: `WelsEncodeNal(raw: &SWelsNalRaw, src: &[u8], ext:
-  Option<&SNalUnitHeaderExt>, dst: *mut u8, dst_len: i32, out_len: &mut i32)` reads
-  `src[iStartPos..iStartPos+iPayloadSize]`. Eight production callers pass `&(*pOut).sBsBuffer[..]`
-  (`encoder_ext.rs` ×5, `wels_encoder_ext.rs` ×3), `WriteSliceBs` passes the thread buffer, three
-  `nal_encap.rs` tests pass their local payload with `iStartPos = 0`. `assert_size!(SWelsNalRaw, 40)`
-  re-pinned to the measured size. **Executed second, not third**: `WelsLoadNalForSlice`
-  (`nal_encap.rs:367`) is a *third* reader of `pBsBuffer`, through `pRawData`, that the brief's list
-  of two did not carry — (b) cannot delete the field while (c)'s stamp still needs it.
-  **(b) `SWelsSliceBs.pBsBuffer`** is a cache of `pThreadBsBuffer[uiBufferIdx]`: both stamps
-  (`svc_encode_slice.rs:2414`, `slice_multi_threading.rs:942`) write `pThreadBsBuffer[idx]` with the
-  `idx` `InitOneSliceInThread` stores in `uiBufferIdx` (`:2409`) — the task passes its `m_iThreadIdx`
-  to both. The readers (`slice_bs_buffer`'s first arm, `WritePrefixNal` at `wels_task_management.rs:313`,
-  and after (c) `WriteSliceBs`'s `src`) resolve `(*(*pCtx).pSliceThreading).pThreadBsBuffer[(*pSlice).uiBufferIdx]`
-  through `bs_buffer`, whose one job that remains is the thread pool's own buffers (Phase 7 — the
-  SHIM(phase3) docs at `nal_encap.rs:98` and `svc_encode_slice.rs:1877` say exactly that).
-  `WriteSliceBs` takes `pSlice: *mut SSlice` (both callers hold `self.m_pSlice`) to reach
-  `uiBufferIdx`. `SetOneSliceBsBufferUnderMultithread` is left with `uiBsPos = 0`, which
-  `InitOneSliceInThread` did one call earlier — deleted with its call (S18). `pThreadBsBuffer` itself
-  is Phase 7's (F12/P10). One commit each, `gates.sh commit` each, `family` after the third.
-  **Executed** — T6.B3 (`c9f3c28d`, a), T6.B4 (`2c253205`, c), T6.B5 (`ac5b06bf`, b), `gates.sh commit`
-  each; ratchet regenerated twice for S16's shared-helper shape (`slice_writer` +2/+1,
-  `thread_bs_buffer` +2/+1 in `svc_encode_slice.rs`, recorded in the commits) against a crate
-  `raw_ptr` 3264 → 3240 across the three. `SWelsNalRaw` 40 → **32** (pinned, measured), `SSlice`
-  1536 → **1520** (not pinned). **`family` after the third: both sweeps 341/341, PASS** — no encoded
-  byte moved. Both `SHIM(phase3)` markers now name `pThreadBsBuffer` and Phase 7 and nothing else.
-* **Face 1.3 — the attribute came off, and the walk (T6.B6).** `-Zmiri-disable-isolation` added to
-  the `--lib` step for `WelsTime()` (`SystemTime::now()`, the library's one clock site, called
-  around every frame), reason at the line; the forbidden list stands. The first run (via `--ignored`,
-  before the attribute went) walked straight past session A's blocker — the settlement was the
-  diagnosis — and the probe then went red **eight** times, each read, classified, fixed and observed
-  gone on the next run (Miri clock ≈ 62–66s a run; the runs are in the scratch logs):
-  1. `svc_encode_slice.rs:1973` — `WelsCodeOneSlice` held `&mut sLayerInfo.sNalHeaderExt` across the
-     header writer, whose bodies (`:816`, `:904`) derive their own; read at `:2026` through the dead
-     tag. **S29 nested** — `addr_of_mut!`.
-  2. `svc_encode_mb.rs:806` → `encode_mb_aux.rs:808` — `iChromaBlock[k].as_mut_ptr()` narrowed the
-     tag to one 32-byte block and the cursor walked into the next. **S28's class** (provenance of the
-     deriving expression). Nine walking cursors derived from the whole array instead
-     (`svc_encode_mb.rs` ×5, `svc_set_mb_syn_cavlc.rs` ×4); the per-block and whole-array
-     derivations were left as they are.
-  3. `svc_set_mb_syn_cabac.rs:227` — `pCurMb.offset(-1)` before the availability guard, at the first
-     macroblock. **F14's class**: twelve neighbour pointers formed up front in six functions
-     (`WelsCabacMbType`, `WelsCabacMbIntraChromaPredMode`, `md.rs`'s two inter neighbour caches,
-     `svc_mode_decision.rs:1449`, `svc_base_layer_md.rs:2129`) → `wrapping_offset`; the guarded
-     ones (`deblocking.rs`, `md.rs:644/674`, the rest of CABAC) unchanged.
-  4. `svc_encode_slice.rs:1143`/`:1225` vs `svc_set_mb_syn_cabac.rs:1116` — the slice loop's `&mut
-     (*pSlice).sMbCacheInfo` popped by the callee's `&mut … as *mut SMbCache`. **S29 nested + the
-     cast shape**: the six loop-level locals in the four MB loops raw, and the eighteen
-     `&mut (*pSlice).f as *mut T` sites (`svc_base_layer_md.rs` ×7, `svc_mode_decision.rs` ×5,
-     `svc_set_mb_syn_cabac.rs` ×3, `svc_set_mb_syn_cavlc.rs` ×2, `svc_encode_slice.rs`) →
-     `addr_of_mut!`.
-  5. `svc_encode_slice.rs:1984`/`:2042` — `buf = slice_bs_buffer(..)` (a `&mut` over the whole frame
-     buffer) held across the MB loop, whose every write derives its own. **S29's boundary, ordering**:
-     derived at the use in `WelsCodeOneSlice` and the two inter loops' trailing skip run; the dead
-     holder in `WelsISliceMdEncDynamic` deleted.
-  6. `encoder_ext.rs:3234`/`:3273`/`:3685` — `sDependencyLayers.as_mut_ptr().add(i)` popped by a
-     second such derivation. **F13's family** in the `as_mut_ptr()` spelling: eight sites →
-     `addr_of_mut!` on the element / a plain field read.
-  7. `svc_mode_decision.rs:1190`/`:1197` — `InitMe(&SWelsMD, …, *mut SWelsME)`: the C++
-     `const SWelsMD&` beside an `SWelsME&` that lives *inside* it; the protector on the shared
-     argument forbids the write. **Take what you reach**: three fields, seven callers.
-  8. `svc_encode_mb.rs:368` — `WelsIDctFourT4Rec_c` built `&mut [u8]` and `&[u8]` over one span:
-     the inter reconstruction is in place (`pDecY` as both `pRec` and `pPred`, as the C++). **New
-     class → F59** (`phase6_findings.md`): in-place kernels sharing the transform core, the two
-     shims dispatch on `pRec == pPred`, and the shims' doc — which had named that very caller as
-     a witness for "disjoint" — corrected.
-  **Green on the ninth run: 1 passed, Miri clock 80.53s (84.36s wall), three frames.**
-  `family` after the walk: **both sweeps 341/341**, ratchet clean, PASS — committed as **T6.B6**
-  (`8fe366fc`). Hot-path line moved (S2b): the two IDCT shims' in-place branch — the session span
-  is owed at the close.
-* **Face 1.4 — S32's frame-count clause, measured.** Same geometry at 2 / 3 / 6 frames:
-  **71.29 / 80.53 / 102.28 s** (`finished in`), a second 3-frame run **77.90 s**. Scaling, ≈ **7.7 s a
-  frame**, against session A's ≈ 31 s (virtual) initialisation floor — the encoder's frames cost about
-  four times the decoder's ≈ 2 s. Written into plan §7.6's S32 amendment, with the unit change that
-  came with it: `-Zmiri-disable-isolation` makes Miri's clock the host's, so the `--lib` step's
-  `finished in` is wall time now (the two 3-frame runs differ by 3.3% where session A's isolated
-  runs agreed to the hundredth). The probe stays at 3 frames (F34's floor plus one). **Two-probe
-  decision: both stay** — the initialisation probe is a strict subset by construction and costs
-  ≈ 19 s of host time, which does not matter against a `--lib` step of ≈ 15 minutes, and a red
-  there localises to init without waiting for three frames.
-* **Face 2 — the `c_void` clearing.** S24 at the open (`8fe366fc`): **268** occurrences over
-  `src/encoder src/processing src/common` (265 code, 3 prose), by file: `wels_preprocess.rs` 61,
-  `encoder_ext.rs` 45, `svc_encode_slice.rs` 26+1, `slice_multi_threading.rs` 19, `memory_align.rs`
-  16, `wels_encoder_ext.rs` 12, `processing/mod.rs` 11, `encoder_context.rs` 10+1, `md.rs` 9+1,
-  `svc_encode_mb.rs` 8, `svc_enc_slice_segment.rs` 8, `wels_common_defs.rs` 6, `svc_motion_estimate.rs`
-  5, `set_mb_syn_cabac.rs` 5, `svc_mode_decision.rs` 4, the five `processing/` plugins 3+3+3+3+1,
-  `svc_set_mb_syn_cabac.rs` 2, `param_svc.rs` 2, `wels_task_management.rs` 1, `wels_func_ptr_def.rs`
-  1, `svc_base_layer_md.rs` 1.
-  **3.1 — `IWelsVP` dissolved (T6.B7).** The struct and its three methods, `processing/mod.rs`'s
-  seven `WelsVp*` thunks and the create/destroy pair are gone; `CWelsPreProcess::m_pInterfaceVp: *mut
-  IWelsVP` → `m_vp: Box<SWelsVpContext>`. **S21 met by construction**: the object was `alloc_zeroed`
-  and its `Default` was `zeroed()`, which no `Box` field survives — `CreatePreProcess` now builds it
-  whole (`Box::new` + `Default`, every other field's zero written out), `Destroy` drops it
-  (`Box::from_raw`), and `WelsPreprocessCreate`/`Destroy` — the vtable's allocation pair, with
-  nothing left to do — went with their calls (S18); the unit test that exercised them checks the
-  constructed object instead. The thirteen `is_null()` guards died. Each plugin's `Set`/`Get`
-  is typed to the struct its cast named (`&SVAACalcParam`, `&SComplexityAnalysisParam`,
-  `&SAdaptiveQuantizationParam`, `&SBGDInterface`, `&SSceneChangeResult`); `Process` takes
-  `&SPixMap` pairs; the stored `pCalcResult`/`pCalcRes` pointer left all four parameter blocks
-  (checked: every plugin read it only during `Process`, from its own copy of the block, so it is
-  handed over at the call — take what you reach; `:1754`'s self-pointer inside `pVaaInfo` is gone
-  with it), and BGD's never-called `Get` was deleted. `SPixMap.pPixel: [*mut u8; 3]`. **The five
-  untranslated methods keep their behaviour exactly**: each site names the method, keeps the
-  `RET_NOTSUPPORTED` the dispatch returned and the skip that followed it, and builds no dead pixel
-  maps; no stub plugin exists. Four sizes re-pinned, measured: `SAdaptiveQuantizationParam` 40 → 32,
-  `SComplexityAnalysisParam` 64 → 56, `SVAAFrameInfo` 264 → 248 (embeds both), `SVAAFrameInfoExt`
-  1280 → 1264. Five VP-calling methods went `&self` → `&mut self` (their callers pass plain values).
-  `wels_preprocess.rs` 61 → 7 (`WelsFree` casts, 3.3), `processing/` 24 → 0.
-  **3.2 — the typed-at-both-ends casts deleted (T6.B8).** `WelsMdInterMbLoop`/`OverDynamicSlice`
-  (`pWelsMd`), `DynSlcJudgeSliceBoundaryStepBack` (both parameters), `WelsCabacInit`,
-  `WelsCabacContextInit`, `SetBlockStaticIdcToMd`, `AssignMbMapSingleSlice` and
-  `WelsSetMemMultiplebytes_c` (`*mut u16`, all four callers pass the macroblock map), `InitPic`
-  (`*const SSourcePicture`), `WelsCalcPsnr`'s pair (`*const u8`, six call sites). Deleted rather
-  than converted (S18): `InitSlicePEncCtx`'s unused `_pPpsArg` and the `pPps` cast that fed it;
-  `PWriteBlockResidualCabac`, a prototype with no slot, installer or caller; **the three
-  `pfSetMemZeroSize*` slots and `PSetMemoryZero`** — installed with the one `WelsSetMemZero_c` body
-  and nothing else, so the seven call sites call it directly and each already had that exact
-  fallback in its `else` arm; **the eight `pfIntra*Combined3*` fields, `assert_no_combined3` and its
-  three call sites** — never assigned on any target, and the scalar branch each guard protected is
-  now unconditional. Eight dead `c_void` imports went with them. Sizes re-pinned, measured:
-  `SSampleDealingFunc` 240 → **176**, `SWelsFuncPtrList` 1160 → **1072** (−64 Combined3, −24 the
-  three memset slots). **Face done-test: `c_void` 268 → 131 (122 code, 9 prose), and every code
-  occurrence is in one of 3.3's three lines** — the allocator and the `WelsFree` cascade
-  (`memory_align.rs` 16, and ~95 casts across `encoder_ext.rs`, `wels_preprocess.rs`,
-  `svc_encode_slice.rs`, `svc_motion_estimate.rs`, `svc_enc_slice_segment.rs`, `param_svc.rs`, each
-  dying with its allocation's ownership conversion — C/D/E/F/G, and **not** genericized, F19's check
-  at 6.6); the C ABI's `void*` (the log/trace callback `encoder_context.rs:89–91`,
-  `wels_encoder_ext.rs:235/246/266`, `SetOption`/`GetOption` at `:1945`, `:2318`, `:2483`, `:2492`,
-  `:2303` — Phase 8); MT plumbing (`pTaskManage`, `mutexEncoderError`, `slice_multi_threading.rs`'s
-  handles/events/mutexes/`pWelsPEncCtx`, `wels_task_management.rs` — Phase 7). `IWelsVP` = 0,
-  `Combined3` = 0. **`family` at the face's close: both sweeps 341/341, ratchet clean, PASS** — the
-  vtable, four dispatch families and 137 `c_void` occurrences left without moving an encoded byte.
-* **Face 3 — the `SPicture` settlement, written before the first edit** (read at `ffa78a87`; 59
-  `*mut SPicture` occurrences over `src/encoder src/common`, of which 17 are fields).
-  **Three owners, confirmed**: the **reconstruction pool** `SRefList.pRef[0..=iMaxNumRefFrame]`
-  (allocated `encoder_ext.rs:752`, freed `:1684`, one `SRefList` per dependency layer through
-  `ppRefPicListExt`); the **spatial source pool** `CWelsPreProcess.m_pSpatialPic[did][0..=MAX_REF_PIC_COUNT]`
-  (allocated `wels_preprocess.rs:1068`, freed `:1098`); and the **one scaled input picture**
-  `Scaled_Picture.pScaledInputPicture` (`:890`, freed with `FreeScaledPic`). Everything else that
-  stores `*mut SPicture` is an alias into one of the three.
-  **The alias table** (field → owner → what it becomes):
-  | field | owner | becomes |
-  |---|---|---|
-  | `sWelsEncCtx.pEncPic` (`encoder_context.rs:462`) | spatial | `Option<SrcPicId>` |
-  | `sWelsEncCtx.pDecPic` (`:463`) | recon (`pRef[0]` at `encoder_ext.rs:1364`, `pNextBuffer` at `:3343`/`ref_list_mgr_svc.rs:647`) | `Option<RecPicId>` |
-  | `sWelsEncCtx.pRefPic` (`:464`) | recon (`pRefList0[0]`, `encoder_ext.rs:2133`) | `Option<RecPicId>` |
-  | `sWelsEncCtx.pRefList0[16]` (`:468`) | recon | `[Option<RecPicId>; 16]` |
-  | `SRefList.pShortRefList[]`, `pLongRefList[]` (`:332`, `:333`) | recon | `[Option<RecPicId>; N]` |
-  | `SRefList.pNextBuffer` (`:334`) | recon | `Option<RecPicId>` |
-  | `SRefList.pRef[]` (`:335`) | **is** the recon pool | `Pool<Box<SPicture>>` |
-  | `SSpatialPicIndex.pSrc` (`:398`) | spatial | `Option<SrcPicId>` |
-  | `SDqLayer.pRefPic`, `pDecPic` (`svc_encode_slice.rs:417`, `:418`) | recon | `Option<RecPicId>` |
-  | `SDqLayer.pRefOri[]` (`:419`) | spatial (`ref_list_mgr_svc.rs:1023/1039/1321/1335`) | `[Option<SrcPicId>; N]` |
-  | `CWelsPreProcess.m_pSpatialPic[][]` (`wels_preprocess.rs:950`) | **is** the spatial pool | `Pool<Box<SPicture>>` + an id array |
-  | `CWelsPreProcess.m_pLastSpatialPicture[][2]` (`:947`) | spatial | `[[Option<SrcPicId>; 2]; N]` |
-  | `SRefInfoParam.pRefPicture` (`:234`) | spatial | `Option<SrcPicId>` |
-  | `Scaled_Picture.pScaledInputPicture` (`:194`) | **is** its own one-slot owner | `Option<Box<SPicture>>` |
-  **S34, measured**: the only permutation in either pool is `WelsExchangeSpatialPictures`
-  (`wels_preprocess.rs:1787`) — it swaps two `*mut SPicture` *slots* (`let tmp = *ppPic1; ...`),
-  called five times over `m_pSpatialPic[d][..]` and `m_pLastSpatialPicture[d][..]`
-  (`:1461`, `:1475`, `:1481`, `:2611`, `:2619`, `:2654`). The reference lists shift with explicit
-  index loops (`ref_list_mgr_svc.rs:273`, `:296` and their neighbours), also on the *pointer*
-  arrays. **No `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches a pool's storage anywhere**
-  — the pictures never move. So a *position* in `m_pSpatialPic` or a ref list is not an identity and
-  the pool slot is: `safe/pool.rs`'s `Pool<Box<SPicture>>` per owner (stable slots), the arrays hold
-  ids and permute freely, aliases become `Option<PicId>` with `None` where the C++ has null (F56's
-  rule: rule the zero, do not default it).
-  **Two id types, not one.** `pEncPic` (spatial) and `pDecPic`/`pRefPic` (recon) meet inside
-  `WelsEncoderEncodeExt` — `:3270` reads `pEncPic` from the spatial index map and `:3343` takes
-  `pDecPic` from the recon list, in the same loop iteration, and `UpdateOriginalPicInfo`
-  (`ref_list_mgr_svc.rs:1169`) takes one of each. One id type would let either be passed where the
-  other belongs, at no benefit: two types, `SrcPicId` and `RecPicId`, each resolved by its own pool.
-  **The ordering rule** (plan §4's 6.1-before-6.2), confirmed rather than re-derived: the aliases
-  become ids first, then the containers own — recon list before `SRefList.pRef` becomes the pool,
-  spatial aliases before `m_pSpatialPic` does.
-  **F42's arm**: no identity comparison between picture pointers exists anywhere in `src/encoder`
-  (grepped: no `==` between two `*mut SPicture`, no `same_picture`), and the sites where MC/VAA read
-  one picture and write another take `pDecPic` and `pRefPic`, which are **distinct pool slots by
-  construction** — `pDecPic` is `pNextBuffer`, chosen in `ref_list_mgr_svc.rs:628–643` as a slot
-  *not* in either ref list, and `pRefPic` is `pRefList0[0]`, which is in one. No site needs
-  `classify`.
-  **The head does not land, and the reason is a measured size.** 6.1's first move is the recon
-  pool's aliases becoming ids, and the consumer surface is **~184 sites across nine files**:
-  `pDecPic` 37, `pRefPic` 60 (of 90 `pRefPic` tokens — S24's unit clause again: 30 are
-  `wels_preprocess.rs` locals naming *spatial* pictures, and the wider token count is 232 because
-  `pRefPicture`/`pRefPicListExt`/`pRefPicMark` share the prefix), `pRefList0` 13, `pShortRefList` 20,
-  `pLongRefList` 28, `pNextBuffer` 12, `pRef[]` 14. They interconvert — a picture flows
-  `pRef` → `pNextBuffer` → `pShortRefList` → `pRefList0` → `pRefPic` — so the family converts whole
-  or not at all, and the deref-heavy consumers (`svc_base_layer_md.rs` 20, `svc_mode_decision.rs` 16)
-  read plane data through the alias and each needs a resolve while the container is still a raw
-  array. That is session P's shape on the decoder, which took a session. **Named for session F**
-  with the alias table above as its work list; every row is *not done*, and the settlement is what
-  lets it land in one pass.
+**Eight reds on the walk, all fixed, and no Phase 7 blocker was reached** (T6.B6; the attribute came off and the `--lib` step gained `-Zmiri-disable-isolation` for `WelsTime`, reason at the line, forbidden list intact). In order: S29's nested borrow across the header writer; **S28's provenance class** — `iChromaBlock[k].as_mut_ptr()` narrowing the tag to one block while the cursor walks the rest (nine cursors re-derived from the whole array); **F14's class** — twelve neighbour pointers formed before their availability guard, six functions, `wrapping_offset`; the slice loops' `&mut sMbCacheInfo` popped by callees' own `&mut … as *mut` (six loop locals, eighteen cast-shape sites); `slice_bs_buffer`'s frame-wide `&mut` held across the MB loop (derived at the use — ordering, not spelling); **F13's family in the `as_mut_ptr().add()` spelling** on the layer arrays, eight sites; `InitMe(&SWelsMD, …, *mut SWelsME)` — a protected shared borrow beside a write into the same struct, resolved by taking the three fields it reads; and **F59** (new): the IDCT-reconstruction shims built `&mut [u8]` and `&[u8]` over one span because the inter reconstruction is **in place** (`pDecY` as both `pRec` and `pPred`, as the C++ does) — while the shims' own precondition claimed the spans disjoint *and named that caller as its witness*. In-place kernels share the transform core; the shims dispatch on `pRec == pPred`. Green on the ninth run, three frames.
+
+**S32's second axis, measured, and it does not transfer.** Picture size was flat (session A); **frames are not**: 2 / 3 / 6 frames read **71.29 / 80.53 / 102.28 s**, ≈ **7.7 s a frame**, four times the decoder's ≈ 2 s. The probe stays at 3 (F34's floor plus one). And the unit moved under it: with isolation off, Miri's `finished in` **is** host time — two 3-frame runs differ 3.3% where session A's isolated runs agreed to the hundredth, so the virtual clock is no longer available for this step and §7.6 says so. **The budget**, in the only unit now comparable: `--lib` was **835 s wall** at session A's close (338 tests, 1381.33 s virtual); it is **1034.61 s** at this session's `exit` (341 tests — the encode probe plus F13's two unskipped ones), so **+200 s, +24%**, of which the encode probe is ~80 s and the two unskipped tests ~17 s; the rest is the same 338 tests costing more with host isolation off, and it is not separated further. **Both probes stay**: the initialisation probe is a strict subset by construction and costs ≈ 19 s of host time, which does not matter against a `--lib` step of this size, and a red there localises to init without waiting three frames.
+
+**The clearing: `c_void` 268 → 131 (122 code, 9 prose), every code occurrence enumerated.** `IWelsVP` dissolved (T6.B7) — the vtable, its seven thunks and its create/destroy pair gone, `m_vp: Box<SWelsVpContext>` owned, **S21 met by construction** (a `Box` field survives neither `alloc_zeroed` nor `mem::zeroed`, so the object is built whole and dropped as a `Box`), each plugin's `Set`/`Get`/`Process` typed to the struct its cast named, the stored `pCalcResult` gone from all four parameter blocks (handed over at the call — take what you reach), `SPixMap.pPixel: [*mut u8; 3]`, and **the five untranslated methods keeping their exact behaviour** with no stub invented. Then the typed-at-both-ends casts and **four dead dispatch families** (T6.B8): the three `pfSetMemZeroSize*` slots with `PSetMemoryZero` (one `_c` body, no other installer — the seven sites already carried that fallback), `PWriteBlockResidualCabac` (no slot, no caller), the eight `pfIntra*Combined3*` fields with `assert_no_combined3` (never assigned; the guarded scalar branch is now unconditional), and `InitSlicePEncCtx`'s unused `_pPpsArg`. Six sizes re-pinned, all measured. The residue is three lines: the allocator and the `WelsFree` cascade (each cast dying with its allocation's ownership conversion — **not** genericized, F19's check at 6.6), the C ABI's `void*` (**Phase 8**), MT plumbing (**Phase 7**).
+
+**F52 closed by reading** (T6.B1): four are trait-method *declarations* the sweep had scored as empty bodies, `WelsRcPostFrameSkipping` is faithful to `ratectl.cpp:1015` beside its `RCMode` dispatcher, `push_back` is two methods on two types. The sweep skips declarations (**22 → 18** names) and carries a `--self-test` over F52's own stub shape — FAIL under the pre-session tool, the pre-F52 tool and a sloppier filter, PASS as shipped. **`--skip encoder_ext` is deleted** (T6.B0): the filter matched exactly two tests, both green under the step's flags, so there was no backlog behind it — **F13 has no open site anywhere**.
+
+**The `exit` battery found a ninth red, and it was mine** (T6.B9). T6.B8 typed `InitPic`'s parameter
+`*const SSourcePicture` because the C++ writes `const void* kpSrc` — and then casts the `const` away
+and writes eight fields through it. The lie survives in C++ and does not in Rust: the unit test
+passed `&src_pic`, a *shared* reference, and Miri failed the first write ("that tag only grants
+SharedReadOnly permission"). A function that writes says `*mut`. **The instrument this session
+widened caught a defect this session introduced, at the gate that exists for it** — and the class is
+worth naming: a `void*` in a C signature carries no `const` information worth copying, so the
+conversion reads the *body*, not the prototype.
+
+**The metrics, encoder-side** (`src/encoder` + `src/processing`, from the ratchet's own baselines
+at `6cecbf51` and the close): `raw_ptr` **2668 → 2447 (−221)**, `unsafe_fn` **710 → 686 (−24)**,
+`unsafe_block` −2, `mem_zeroed` −1; crate-wide `raw_ptr` 3264 → 3038. Three per-file rises are prose
+(comments naming deleted pointer types — S16's floor), recorded in their commits, not hidden.
+
+**6.1's head is not started, and the settlement below is why it can land in one pass.** It measures **~184 consumer sites over nine files** and converts whole or not at all (session P's shape, which took a session): **named for session F**, with the alias table as its work list and every row not done. S24's unit clause earned its keep again — the `pRefPic` token reads 232 tree-wide, 90 as the bare field, 60 of those the recon alias.
+
+**Gates.** `exit` battery **`OVERALL: PASS` — 13 passed / 0 failed / 1 skipped** at `70b963b0`:
+tests **484 / 478 / 20**, ratchet clean, census **58**, **both sweeps 341/341 in both profiles with
+no F3 hit**, both benches bit-identical, Miri `--lib` **341 / 0** with *both* encoder probe names
+read out of the output (F17/F18: verified by reading, not by trusting the filter) and the
+differential targets **20 / 7 / 3**. The first `exit` run failed one step — the `--lib` Miri step,
+on T6.B9's defect — and is recorded above rather than hidden; the run quoted here is the one after
+the fix. Ten `gates.sh commit` batteries and three `family` runs across the faces, each in its
+commit. **No session span** (S2b): the one hot-path change is F59's in-place branch — a predicate on two pointers ahead of the same arithmetic — and the encoder bench is bit-identical, so a span over it would measure the bench's noise. **S14 step 0 does not apply**: every face moves encoder production code, so base and head cannot build the same `rust_enc` in either profile.
+
+### The `SPicture` settlement (face 3's deliverable; session F's work list)
+
+Read at `ffa78a87`; 59 `*mut SPicture` occurrences over `src/encoder src/common`, 17 of them fields. **Three owners**, confirmed at their allocation and free sites: the **reconstruction pool** `SRefList.pRef[0..=iMaxNumRefFrame]` (`encoder_ext.rs:752`, freed `:1684`, one `SRefList` per dependency layer through `ppRefPicListExt`); the **spatial source pool** `CWelsPreProcess.m_pSpatialPic[did][0..=MAX_REF_PIC_COUNT]` (`wels_preprocess.rs:1068`, freed `:1098`); the **one scaled input picture** `Scaled_Picture.pScaledInputPicture` (`:890`, freed by `FreeScaledPic`). Everything else that stores `*mut SPicture` is an alias into one of the three.
+
+| field | owner | becomes | sites |
+|---|---|---|---|
+| `sWelsEncCtx.pEncPic` (`encoder_context.rs:462`) | spatial | `Option<SrcPicId>` | 27 |
+| `sWelsEncCtx.pDecPic` (`:463`) | recon (`pRef[0]`, `pNextBuffer`) | `Option<RecPicId>` | 37 |
+| `sWelsEncCtx.pRefPic` (`:464`) | recon (`pRefList0[0]`) | `Option<RecPicId>` | 60 (with the layer's) |
+| `sWelsEncCtx.pRefList0[16]` (`:468`) | recon | `[Option<RecPicId>; 16]` | 13 |
+| `SRefList.pShortRefList[]`, `pLongRefList[]` (`:332`, `:333`) | recon | `[Option<RecPicId>; N]` | 48 |
+| `SRefList.pNextBuffer` (`:334`) | recon | `Option<RecPicId>` | 12 |
+| `SRefList.pRef[]` (`:335`) | **is** the recon pool | `Pool<Box<SPicture>>` | 14 |
+| `SSpatialPicIndex.pSrc` (`:398`) | spatial | `Option<SrcPicId>` | 2 |
+| `SDqLayer.pRefPic`, `pDecPic` (`svc_encode_slice.rs:417`, `:418`) | recon | `Option<RecPicId>` | — |
+| `SDqLayer.pRefOri[]` (`:419`) | spatial | `[Option<SrcPicId>; N]` | 6 |
+| `CWelsPreProcess.m_pSpatialPic[][]` (`wels_preprocess.rs:950`) | **is** the spatial pool | `Pool<Box<SPicture>>` + id array | 20 |
+| `CWelsPreProcess.m_pLastSpatialPicture[][2]` (`:947`) | spatial | `[[Option<SrcPicId>; 2]; N]` | 17 |
+| `SRefInfoParam.pRefPicture` (`:234`) | spatial | `Option<SrcPicId>` | — |
+| `Scaled_Picture.pScaledInputPicture` (`:194`) | its own one-slot owner | `Option<Box<SPicture>>` | — |
+
+**S34, measured.** The only permutation in either pool is `WelsExchangeSpatialPictures` (`:1787`), which swaps two `*mut SPicture` **slots** — five call sites over `m_pSpatialPic` and `m_pLastSpatialPicture` (`:1461`, `:1475`, `:1481`, `:2611`, `:2619`, `:2654`); the reference lists shift with explicit index loops over the pointer arrays (`ref_list_mgr_svc.rs:273`, `:296`). **No `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches a pool's storage anywhere** — the pictures never move. So a *position* is not an identity and the pool slot is: `safe/pool.rs`'s `Pool<Box<SPicture>>` per owner, arrays of ids that permute freely, aliases as `Option<PicId>` with `None` where the C++ has null (F56: rule the zero, do not default it).
+
+**Two id types, not one**, and the reading that decides it: `pEncPic` (spatial) and `pDecPic`/`pRefPic` (recon) meet in one `WelsEncoderEncodeExt` loop iteration (`encoder_ext.rs:3270` and `:3343`) and in `UpdateOriginalPicInfo` (`ref_list_mgr_svc.rs:1169`), so a single id type would let either be passed where the other belongs at no benefit. **The ordering rule** (plan §4's 6.1-before-6.2) confirmed, not re-derived: aliases become ids first, then each container owns. **F42's arm**: no identity comparison between picture pointers exists anywhere in `src/encoder` (no `==` between two `*mut SPicture`, no `same_picture`), and the MC/VAA sites that read one picture and write another use `pDecPic` — `pNextBuffer`, chosen in `ref_list_mgr_svc.rs:628–643` as a slot in *neither* ref list — against `pRefPic`, which is in one: **distinct slots by construction, so no site needs `classify`**.
