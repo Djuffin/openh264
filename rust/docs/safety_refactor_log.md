@@ -11417,3 +11417,85 @@ Read at `ffa78a87`; 59 `*mut SPicture` occurrences over `src/encoder src/common`
 **S34, measured.** The only permutation in either pool is `WelsExchangeSpatialPictures` (`:1787`), which swaps two `*mut SPicture` **slots** — five call sites over `m_pSpatialPic` and `m_pLastSpatialPicture` (`:1461`, `:1475`, `:1481`, `:2611`, `:2619`, `:2654`); the reference lists shift with explicit index loops over the pointer arrays (`ref_list_mgr_svc.rs:273`, `:296`). **No `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches a pool's storage anywhere** — the pictures never move. So a *position* is not an identity and the pool slot is: `safe/pool.rs`'s `Pool<Box<SPicture>>` per owner, arrays of ids that permute freely, aliases as `Option<PicId>` with `None` where the C++ has null (F56: rule the zero, do not default it).
 
 **Two id types, not one**, and the reading that decides it: `pEncPic` (spatial) and `pDecPic`/`pRefPic` (recon) meet in one `WelsEncoderEncodeExt` loop iteration (`encoder_ext.rs:3270` and `:3343`) and in `UpdateOriginalPicInfo` (`ref_list_mgr_svc.rs:1169`), so a single id type would let either be passed where the other belongs at no benefit. **The ordering rule** (plan §4's 6.1-before-6.2) confirmed, not re-derived: aliases become ids first, then each container owns. **F42's arm**: no identity comparison between picture pointers exists anywhere in `src/encoder` (no `==` between two `*mut SPicture`, no `same_picture`), and the MC/VAA sites that read one picture and write another use `pDecPic` — `pNextBuffer`, chosen in `ref_list_mgr_svc.rs:628–643` as a slot in *neither* ref list — against `pRefPic`, which is in one: **distinct slots by construction, so no site needs `classify`**.
+
+## Phase 6, session C — the scratch goes inline (2026-08-18)
+
+*(Entry written as the session runs; the per-face breadcrumbs are S31's, the summary
+is at the end.)*
+
+### Face 1's settlement — `SMB` stops pointing outward (written before the first edit)
+
+**The five fields, re-typed and renamed** (the rename is the enumerator; `sMv` keeps its
+C++ name and changes type, which the compiler catches just as loudly because an array
+has no `.add()`):
+
+| was | becomes | why that width |
+|---|---|---|
+| `sMv: *mut SMVUnitXY` | `sMv: [SMVUnitXY; MB_BLOCK4x4_NUM]` | `InitMbInfo` hands each MB a 16-entry row |
+| `pRefIndex: *mut i8` | `iRefIndex: [i8; MB_BLOCK8x8_NUM]` | 4 entries per MB, 8x8 granularity |
+| `pSadCost: *mut i32` | `iSadCost: i32` | one `i32` per MB — every site is `.add(0)`, measured |
+| `pIntra4x4PredMode: *mut i8` | `iIntra4x4PredMode: [i8; INTRA_4x4_MODE_NUM]` | 8 |
+| `pNonZeroCount: *mut i8` | `iNonZeroCount: [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]` | 24 |
+
+**The zero state is unchanged.** All five context arrays are `WelsMallocz`'d
+(`encoder_ext.rs:1162–1201`) and the `SMB` list block is `WelsMallocz`'d
+(`InitMbListD`), so today every macroblock starts at MV (0,0), ref 0, sad 0, mode 0,
+nzc 0 — and an inline POD array inside a zeroed block starts at exactly the same values
+(S21: all-integer state is valid at all-zero and the audit discharges by saying so).
+
+**The two banks are a ruling.** `pMvUnitBlock4x4` and `pRefIndexBlock4x4` are allocated
+at `2 * iCountMaxMbNum` rows and `InitMbInfo` selects a half by layer parity
+(`kiOffset = (kiDlayerId & 1) * kiMaxMbNum`, `encoder_ext.rs:563`), so a layer and the
+layer it predicts from never share slots. Inline storage gives every macroblock of every
+layer its own row, which is that guarantee and strictly more. The single observable
+difference — a same-parity layer two levels away reading a slot before rewriting it —
+needs **≥ 3 spatial layers of equal size**, and the port cannot run one: `METHOD_DOWNSAMPLE`
+is untranslated (`wels_preprocess.rs:1541`, returns `RET_NOTSUPPORTED`, "reached only with
+more than one spatial layer or a resized layer"), and every gate configuration is
+single-layer (`diffharness/cxx_enc.cpp:81`, `iSpatialLayerNum = 1`). **Ruled: inline.** If
+the downsampler is ever translated, that phase re-opens this line with a multi-layer sweep
+configuration beside it.
+
+**S24, re-derived at this face's open** (`2c11c61f`, over `src/encoder src/common src/api`):
+`.sMv` reads **107** — but **54** of them are `SMB` receivers (`pCurMb` 35, `pLeftMb` 8,
+`pTopMb` 4, `pLeftTopMb` 2, `iRightTopMb` 2, `pNeighMb`/`pMb`/`kpRefMb` 1 each) and the
+rest are `SWelsME.sMv`, a scalar. `pRefIndex` **42**, `pSadCost` **19**,
+`pIntra4x4PredMode` **4**, `pNonZeroCount` **23** — **142** sites, against the brief's
+~195; the brief's number counted the `SWelsME` receivers with them. Nine files, unchanged.
+
+**Two sites reach a neighbour by flat-array arithmetic**, exactly as the C++ does, and
+both become reads of the neighbour's own inline array (value-identical by `InitMbInfo`'s
+wiring): `md.rs:620` (`pNonZeroCount.offset(-24)` → left MB) and `md.rs:635`
+(`pIntra4x4PredMode.offset(-8)` → left MB). The other six `offset(…)` hits the grep finds
+are within-MB `.offset(0)`/`.offset(i)`.
+
+**Three kernels take the whole array as a raw pointer and stop doing so**: `pfSetNZCZero`
+(`PSetNoneZeroCountZeroFunc`, `deblocking.rs:292` → `WelsNonZeroCount_c`, `:643`) takes
+`&mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]`; `pfUpdateMbMv` (`PUpdateMbMvFunc`, `md.rs:427` →
+`UpdateMbMv_c`, `:965`) takes `&mut [SMVUnitXY; MB_BLOCK4x4_NUM]`; `MB_BS_MV`/`BS_EDGE`
+(`deblocking.rs:353`, `:388`) take `&[SMVUnitXY; MB_BLOCK4x4_NUM]`. Each has exactly one
+implementation and no C caller. Where a raw pointer must survive, it is
+`addr_of_mut!((*p).field).cast::<T>()` and never `(*p).field.as_mut_ptr()` (S29, and
+session B's walk found that exact family).
+
+**Port-added null guards go with the pointers**: `svc_mode_decision.rs:779`/`:784`
+(`if !(*pCurMb).sMv.is_null()`) and `svc_encode_slice.rs:551` (`if mb_nz.is_null() { return }`)
+guard fields the C++ never checks and `InitMbInfo` always wires; an inline array is never
+absent, so the guarded bodies become unconditional. The `pCurMb.is_null()` guards on the
+`SMB` pointer itself are a different question and stay.
+
+**A dead duplicate of `SMB` is in the way and goes in the same commit**: `deblocking.rs:223`
+declares `TagMB`, a field-for-field copy of `SMB` carrying all five raw pointers, with
+**zero references anywhere in the crate** and `pub use …::SMB` on the line below it. The
+name-matching census cannot see it (F43's class — a duplicate under a different name), and
+done-test 1 ("the five old field names read 0 in code") cannot hold while it stands. S18:
+deletion, not conversion.
+
+**The ABI pins that move, and they are more than the brief named.** `assert_size!(SMB, 152)`
+(`abi_guard.rs:170`) is re-pinned to the measured size in the same commit. But the five
+context fields leave `sWelsEncCtx` too, and they sit at offsets 32–96 — **ahead of all
+fifteen `assert_ctx_offset!` pins and of `assert_size!(sWelsEncCtx, 98008-64+8)`**. Those
+pins were the C++ `offsetof` values, and their job was to catch `wels_preprocess`'s
+long-deleted fake 15-field context; they cannot be C++ offsets after this face and are
+re-pinned to measured values with the reason at the line. The property that made them worth
+having — a second declaration of the context is caught at compile time — is unchanged.
