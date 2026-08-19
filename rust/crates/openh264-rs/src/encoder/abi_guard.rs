@@ -194,9 +194,11 @@ assert_size!(SSliceBufferInfo, 16);
 // 1-byte `iDqIdx`, and dropped `repr(C)` with them — so the compiler now packs the
 // struct's fifteen small scalars into the holes the C layout left, and **496 after
 // T6.D4** made `ppSliceInLayer` a `Vec<SliceIdx>` (one pointer becomes a three-word
-// `Vec`), and **528 after T6.D5** gave the layer its own `MbArray<SMB>` (the same
-// trade again). **Measured** at each step; the number tracks the port, not the C++.
-assert_size!(SDqLayer, 528);
+// `Vec`), **528 after T6.D5** gave the layer its own `MbArray<SMB>` (the same
+// trade again), and **560 after T6.D6** made `pFirstMbIdxOfSlice` and
+// `pCountMbNumInSlice` `Vec<i32>` (two more pointers become two more three-word
+// `Vec`s). **Measured** at each step; the number tracks the port, not the C++.
+assert_size!(SDqLayer, 560);
 
 
 // codec/encoder/core/inc/wels_func_ptr_def.h

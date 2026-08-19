@@ -1577,20 +1577,8 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
 
     // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4 — the layer's own `Drop`
     // releases it when the `Box` below goes.
-    if !(*p).pFirstMbIdxOfSlice.is_null() {
-        (*pMa).WelsFree(
-            (*p).pFirstMbIdxOfSlice as *mut c_void,
-            tag!("pFirstMbIdxOfSlice"),
-        );
-        (*p).pFirstMbIdxOfSlice = null_mut();
-    }
-    if !(*p).pCountMbNumInSlice.is_null() {
-        (*pMa).WelsFree(
-            (*p).pCountMbNumInSlice as *mut c_void,
-            tag!("pCountMbNumInSlice"),
-        );
-        (*p).pCountMbNumInSlice = null_mut();
-    }
+    // `pFirstMbIdxOfSlice` and `pCountMbNumInSlice` are `Vec<i32>` since T6.D6 — the
+    // layer's own `Drop` releases them with the `Box` below.
     crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(p, pMa);
     (*p).iMaxSliceNum = 0;
 
