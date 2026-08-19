@@ -543,31 +543,29 @@ pub unsafe fn GetMvMvdRange(
 
 /// `InitMbInfo` — encoder_ext.cpp:835 (file-static).
 ///
-/// Wires every `SMB` in a layer to its slot in the context-wide per-macroblock arrays
-/// and computes its neighbour-availability mask.
+/// Computes every `SMB`'s position and neighbour-availability mask.
+///
+/// **T6.C1 deleted the wiring half.** The C++ also points each macroblock's five
+/// scratch pointers at slots of five context-wide arrays, `pMvUnitBlock4x4` and
+/// `pRefIndexBlock4x4` in two banks selected by layer parity
+/// (`kiOffset = (kiDlayerId & 1) * kiMaxMbNum`) so that a layer and the layer it
+/// predicts from never share a slot. The five arrays are inline in `SMB` now, so
+/// every macroblock of every layer owns its own row — the banks' guarantee and
+/// more — and `kiDlayerId`/`kiMaxMbNum` no longer select anything. See the session
+/// C log entry for the ruling and the configuration it rests on.
 ///
 /// # Safety
-/// `pEnc` must have `pStrideTab`, `pMvUnitBlock4x4`, `pRefIndexBlock4x4`, `pSadCostMb`,
-/// `pIntra4x4PredModeBlocks` and `pNonZeroCountBlocks` allocated; `pList` must hold at
-/// least `iMbWidth * iMbHeight` entries.
+/// `pEnc` must have `pStrideTab` allocated; `pList` must hold at least
+/// `iMbWidth * iMbHeight` entries.
 unsafe fn InitMbInfo(
     pEnc: *mut sWelsEncCtx,
     pList: *mut SMB,
     pLayer: *mut SDqLayer,
     kiDlayerId: i32,
-    kiMaxMbNum: i32,
 ) {
     let iMbWidth = (*pLayer).iMbWidth as i32;
     let iMbHeight = (*pLayer).iMbHeight as i32;
     let iMbNum = iMbWidth * iMbHeight;
-    let kiOffset = (kiDlayerId & 0x01) * kiMaxMbNum;
-    // C++ reinterprets the flat arrays as [MB_BLOCK4x4_NUM] / [MB_BLOCK8x8_NUM] rows.
-    let pLayerMvUnitBlock4x4 = (*pEnc)
-        .pMvUnitBlock4x4
-        .add(MB_BLOCK4x4_NUM * kiOffset as usize);
-    let pLayerRefIndexBlock8x8 = (*pEnc)
-        .pRefIndexBlock4x4
-        .add(MB_BLOCK8x8_NUM * kiOffset as usize);
 
     for iIdx in 0..iMbNum as usize {
         let pMb = pList.add(iIdx);
@@ -611,14 +609,6 @@ unsafe fn InitMbInfo(
         // C++ recomputes uiNeighborAvail here for the base-MV neighbourhood, then
         // discards it — the result is never stored. Reproduced as a no-op comment
         // rather than dead code.
-
-        (*pMb).sMv = pLayerMvUnitBlock4x4.add(MB_BLOCK4x4_NUM * iIdx);
-        (*pMb).pRefIndex = pLayerRefIndexBlock8x8.add(MB_BLOCK8x8_NUM * iIdx);
-        (*pMb).pSadCost = (*pEnc).pSadCostMb.add(iIdx);
-        (*pMb).pIntra4x4PredMode = (*pEnc).pIntra4x4PredModeBlocks.add(iIdx * INTRA_4x4_MODE_NUM);
-        (*pMb).pNonZeroCount = (*pEnc)
-            .pNonZeroCountBlocks
-            .add(iIdx * MB_LUMA_CHROMA_BLOCK4x4_NUM);
     }
 }
 
@@ -659,13 +649,7 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
         return 1;
     }
     (**(**ppCtx).ppDqLayerList).sMbDataP = *(**ppCtx).ppMbListD;
-    InitMbInfo(
-        *ppCtx,
-        *(**ppCtx).ppMbListD,
-        *(**ppCtx).ppDqLayerList,
-        0,
-        iMbSize[(iNumDlayer - 1) as usize],
-    );
+    InitMbInfo(*ppCtx, *(**ppCtx).ppMbListD, *(**ppCtx).ppDqLayerList, 0);
     for i in 1..iNumDlayer as usize {
         *(**ppCtx).ppMbListD.add(i) = (*(**ppCtx).ppMbListD.add(i - 1)).add(iMbSize[i - 1] as usize);
         (**(**ppCtx).ppDqLayerList.add(i)).sMbDataP = *(**ppCtx).ppMbListD.add(i);
@@ -674,7 +658,6 @@ pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
             *(**ppCtx).ppMbListD.add(i),
             *(**ppCtx).ppDqLayerList.add(i),
             i as i32,
-            iMbSize[(iNumDlayer - 1) as usize],
         );
     }
 
@@ -1159,46 +1142,12 @@ pub unsafe fn RequestMemorySvc(
         (*pParam).bEnableLongTermReference,
     );
 
-    (**ppCtx).pIntra4x4PredModeBlocks = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as usize * INTRA_4x4_MODE_NUM) as u32,
-        tag!("pIntra4x4PredModeBlocks"),
-    ) as *mut i8;
-    if (**ppCtx).pIntra4x4PredModeBlocks.is_null() {
-        return 1;
-    }
-
-    (**ppCtx).pNonZeroCountBlocks = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as usize * MB_LUMA_CHROMA_BLOCK4x4_NUM) as u32,
-        tag!("pNonZeroCountBlocks"),
-    ) as *mut i8;
-    if (**ppCtx).pNonZeroCountBlocks.is_null() {
-        return 1;
-    }
-
-    (**ppCtx).pMvUnitBlock4x4 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as usize
-            * 2
-            * MB_BLOCK4x4_NUM
-            * std::mem::size_of::<crate::encoder::md::SMVUnitXY>()) as u32,
-        tag!("pMvUnitBlock4x4"),
-    ) as *mut crate::encoder::md::SMVUnitXY;
-    if (**ppCtx).pMvUnitBlock4x4.is_null() {
-        return 1;
-    }
-
-    (**ppCtx).pRefIndexBlock4x4 = (*pMa).WelsMallocz(
-        (iCountMaxMbNum as usize * 2 * MB_BLOCK8x8_NUM) as u32,
-        tag!("pRefIndexBlock4x4"),
-    ) as *mut i8;
-    if (**ppCtx).pRefIndexBlock4x4.is_null() {
-        return 1;
-    }
-
-    (**ppCtx).pSadCostMb =
-        (*pMa).WelsMallocz((iCountMaxMbNum as u32) * 4, tag!("pSadCostMb")) as *mut i32;
-    if (**ppCtx).pSadCostMb.is_null() {
-        return 1;
-    }
+    // encoder_ext.cpp:1141-1179 allocates five context-wide per-macroblock arrays
+    // here -- `pIntra4x4PredModeBlocks`, `pNonZeroCountBlocks`, `pMvUnitBlock4x4`
+    // (two banks), `pRefIndexBlock4x4` (two banks) and `pSadCostMb` -- and
+    // `InitMbInfo` points each `SMB`'s five pointers into them. **T6.C1** made all
+    // five inline arrays of `SMB`, which is allocated (and zeroed) by `InitMbListD`,
+    // so there is nothing left to allocate and nothing left to fail.
 
     (**ppCtx).iGlobalQp = 26; // global qp in default
 
@@ -1931,41 +1880,14 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).pSubsetArray as *mut c_void, tag!("pSubsetArray"));
             (*pCtx).pSubsetArray = null_mut();
         }
-        if !(*pCtx).pIntra4x4PredModeBlocks.is_null() {
-            (*pMa).WelsFree(
-                (*pCtx).pIntra4x4PredModeBlocks as *mut c_void,
-                tag!("pIntra4x4PredModeBlocks"),
-            );
-            (*pCtx).pIntra4x4PredModeBlocks = null_mut();
-        }
-        if !(*pCtx).pNonZeroCountBlocks.is_null() {
-            (*pMa).WelsFree(
-                (*pCtx).pNonZeroCountBlocks as *mut c_void,
-                tag!("pNonZeroCountBlocks"),
-            );
-            (*pCtx).pNonZeroCountBlocks = null_mut();
-        }
-        if !(*pCtx).pMvUnitBlock4x4.is_null() {
-            (*pMa).WelsFree((*pCtx).pMvUnitBlock4x4 as *mut c_void, tag!("pMvUnitBlock4x4"));
-            (*pCtx).pMvUnitBlock4x4 = null_mut();
-        }
-        if !(*pCtx).pRefIndexBlock4x4.is_null() {
-            (*pMa).WelsFree(
-                (*pCtx).pRefIndexBlock4x4 as *mut c_void,
-                tag!("pRefIndexBlock4x4"),
-            );
-            (*pCtx).pRefIndexBlock4x4 = null_mut();
-        }
+        // The five per-macroblock arrays freed here in encoder_ext.cpp:1932-1961 are
+        // inline in `SMB` since T6.C1 and go with the `SMB` list below.
         if !(*pCtx).ppMbListD.is_null() {
             if !(*(*pCtx).ppMbListD).is_null() {
                 (*pMa).WelsFree(*(*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD[0]"));
             }
             (*pMa).WelsFree((*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD"));
             (*pCtx).ppMbListD = null_mut();
-        }
-        if !(*pCtx).pSadCostMb.is_null() {
-            (*pMa).WelsFree((*pCtx).pSadCostMb as *mut c_void, tag!("pSadCostMb"));
-            (*pCtx).pSadCostMb = null_mut();
         }
         if !(*pCtx).pMvdCostTable.is_null() {
             (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));

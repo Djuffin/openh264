@@ -434,15 +434,16 @@ impl Default for SStrideTables {
 pub struct sWelsEncCtx {
     pub sLogCtx: SLogContext,
     pub pSvcParam: *mut SWelsSvcCodingParam,
-    pub pSadCostMb: *mut i32,
     pub iMvRange: i32,
     pub pMvdCostTable: *mut u16,
     pub iMvdCostTableSize: i32,
     pub iMvdCostTableStride: i32,
-    pub pMvUnitBlock4x4: *mut SMVUnitXY,
-    pub pRefIndexBlock4x4: *mut i8,
-    pub pNonZeroCountBlocks: *mut i8,
-    pub pIntra4x4PredModeBlocks: *mut i8,
+    // encoder_context.h:129-136 carries five per-macroblock scratch arrays here --
+    // `pMvUnitBlock4x4`, `pRefIndexBlock4x4`, `pNonZeroCountBlocks`,
+    // `pIntra4x4PredModeBlocks` and `pSadCostMb` (above). **T6.C1** moved all five
+    // into `SMB` as inline arrays, so the context neither allocates them, wires
+    // them, nor frees them; the two parity banks the first two carried are
+    // unnecessary once every macroblock owns its row.
     pub ppMbListD: *mut *mut SMB,
     pub pStrideTab: *mut SStrideTables,
     pub pFuncList: *mut SWelsFuncPtrList,

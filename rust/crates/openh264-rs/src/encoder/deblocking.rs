@@ -217,33 +217,13 @@ impl Default for TagDeblockingFilter {
     }
 }
 
-/// Macroblock context structure matching `TagMB` / `SMB` in `svc_enc_macroblock.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagMB {
-    pub uiMbType: u32,
-    pub uiSubMbType: [u8; 4],
-    pub iMbXY: i32,
-    pub iMbX: i16,
-    pub iMbY: i16,
-    pub uiNeighborAvail: u8,
-    pub uiCbp: u8,
-    pub sMv: *mut SMVUnitXY,
-    pub pRefIndex: *mut i8,
-    pub pSadCost: *mut i32,
-    pub pIntra4x4PredMode: *mut i8,
-    pub pNonZeroCount: *mut i8,
-    pub sP16x16Mv: SMVUnitXY,
-    pub uiLumaQp: u8,
-    pub uiChromaQp: u8,
-    pub uiSliceIdc: u16,
-    pub uiChromPredMode: u32,
-    pub iLumaDQp: i32,
-    pub sMvd: [SMVUnitXY; 16],
-    pub iCbpDc: i32,
-}
-
+// `TagMB` was declared here: a field-for-field second copy of `SMB` -- five raw
+// pointers included -- with no reference anywhere in the crate and the real type
+// re-exported on the next line. A census that matches on names could not see it
+// (F43's class, under a different name), and T6.C1 would have left it declaring
+// fields no live struct has. **S18: deleted, not converted.**
 pub use crate::encoder::svc_encode_slice::SMB;
+pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 pub type PMb = *mut SMB;
 
 // Function Pointer Typedefs
@@ -289,7 +269,10 @@ pub type PDeblockingBSCalc = unsafe extern "C" fn(
 pub type PDeblockingFilterSlice =
     unsafe extern "C" fn(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList, pSlice: *mut SSlice);
 
-pub type PSetNoneZeroCountZeroFunc = unsafe extern "C" fn(pNonZeroCount: *mut i8);
+/// **T6.C1**: the slot took `int8_t*` because the C++ passes `pCurMb->pNonZeroCount`,
+/// a pointer into a context-wide array. The array is inline in `SMB` now and every
+/// caller has the whole 24-entry row, so the slot takes the row.
+pub type PSetNoneZeroCountZeroFunc = fn(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]);
 
 /// Function pointer dispatch table for deblocking routines.
 #[repr(C)]
@@ -350,14 +333,14 @@ pub fn WelsClip1(x: i32) -> u8 {
 }
 
 #[inline(always)]
-pub unsafe fn MB_BS_MV(
-    sCurMv: *const SMVUnitXY,
-    sNeighMv: *const SMVUnitXY,
+pub fn MB_BS_MV(
+    sCurMv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
+    sNeighMv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
     uiBIdx: usize,
     uiBnIdx: usize,
 ) -> u8 {
-    let cur = *sCurMv.add(uiBIdx);
-    let neigh = *sNeighMv.add(uiBnIdx);
+    let cur = sCurMv[uiBIdx];
+    let neigh = sNeighMv[uiBnIdx];
     if (cur.iMvX as i32 - neigh.iMvX as i32).abs() >= 4
         || (cur.iMvY as i32 - neigh.iMvY as i32).abs() >= 4
     {
@@ -368,13 +351,13 @@ pub unsafe fn MB_BS_MV(
 }
 
 #[inline(always)]
-pub unsafe fn SMB_EDGE_MV(
-    sMotionVector: *const SMVUnitXY,
+pub fn SMB_EDGE_MV(
+    sMotionVector: &[SMVUnitXY; MB_BLOCK4x4_NUM],
     uiBIdx: usize,
     uiBnIdx: usize,
 ) -> u8 {
-    let cur = *sMotionVector.add(uiBIdx);
-    let neigh = *sMotionVector.add(uiBnIdx);
+    let cur = sMotionVector[uiBIdx];
+    let neigh = sMotionVector[uiBnIdx];
     let dx = (cur.iMvX as i32 - neigh.iMvX as i32).abs();
     let dy = (cur.iMvY as i32 - neigh.iMvY as i32).abs();
     if ((dx & !3) | (dy & !3)) != 0 {
@@ -385,9 +368,9 @@ pub unsafe fn SMB_EDGE_MV(
 }
 
 #[inline(always)]
-pub unsafe fn BS_EDGE(
+pub fn BS_EDGE(
     bsx1: u8,
-    sMotionVector: *const SMVUnitXY,
+    sMotionVector: &[SMVUnitXY; MB_BLOCK4x4_NUM],
     uiBIdx: usize,
     uiBnIdx: usize,
 ) -> u8 {
@@ -425,30 +408,30 @@ pub fn TC0_TBL_LOOKUP(iTc: &mut [i8; 4], iIdexA: i32, pBS: &[u8], bchroma: i8) {
 
 /// Computes internal boundary strength for 16x16 Inter macroblocks.
 #[inline(always)]
-pub unsafe fn DeblockingBSInsideMBAvsbase(
-    pNnzTab: *const i8,
+pub fn DeblockingBSInsideMBAvsbase(
+    pNnzTab: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
     uiBS: &mut [[[u8; 4]; 4]; 2],
     iLShiftFactor: i32,
 ) {
-    let n0 = *pNnzTab.add(0) as u8;
-    let n1 = *pNnzTab.add(1) as u8;
-    let n2 = *pNnzTab.add(2) as u8;
-    let n3 = *pNnzTab.add(3) as u8;
+    let n0 = pNnzTab[0] as u8;
+    let n1 = pNnzTab[1] as u8;
+    let n2 = pNnzTab[2] as u8;
+    let n3 = pNnzTab[3] as u8;
 
-    let n4 = *pNnzTab.add(4) as u8;
-    let n5 = *pNnzTab.add(5) as u8;
-    let n6 = *pNnzTab.add(6) as u8;
-    let n7 = *pNnzTab.add(7) as u8;
+    let n4 = pNnzTab[4] as u8;
+    let n5 = pNnzTab[5] as u8;
+    let n6 = pNnzTab[6] as u8;
+    let n7 = pNnzTab[7] as u8;
 
-    let n8 = *pNnzTab.add(8) as u8;
-    let n9 = *pNnzTab.add(9) as u8;
-    let n10 = *pNnzTab.add(10) as u8;
-    let n11 = *pNnzTab.add(11) as u8;
+    let n8 = pNnzTab[8] as u8;
+    let n9 = pNnzTab[9] as u8;
+    let n10 = pNnzTab[10] as u8;
+    let n11 = pNnzTab[11] as u8;
 
-    let n12 = *pNnzTab.add(12) as u8;
-    let n13 = *pNnzTab.add(13) as u8;
-    let n14 = *pNnzTab.add(14) as u8;
-    let n15 = *pNnzTab.add(15) as u8;
+    let n12 = pNnzTab[12] as u8;
+    let n13 = pNnzTab[13] as u8;
+    let n14 = pNnzTab[14] as u8;
+    let n15 = pNnzTab[15] as u8;
 
     // Vertical internal edges (dir = 0)
     uiBS[0][1][0] = (n0 | n1) << iLShiftFactor;
@@ -469,27 +452,28 @@ pub unsafe fn DeblockingBSInsideMBAvsbase(
 
     // Horizontal internal edges (dir = 1)
     for k in 0..4 {
-        uiBS[1][1][k] = (*pNnzTab.add(k) as u8 | *pNnzTab.add(4 + k) as u8) << iLShiftFactor;
-        uiBS[1][2][k] = (*pNnzTab.add(4 + k) as u8 | *pNnzTab.add(8 + k) as u8) << iLShiftFactor;
-        uiBS[1][3][k] = (*pNnzTab.add(8 + k) as u8 | *pNnzTab.add(12 + k) as u8) << iLShiftFactor;
+        uiBS[1][1][k] = (pNnzTab[k] as u8 | pNnzTab[4 + k] as u8) << iLShiftFactor;
+        uiBS[1][2][k] = (pNnzTab[4 + k] as u8 | pNnzTab[8 + k] as u8) << iLShiftFactor;
+        uiBS[1][3][k] = (pNnzTab[8 + k] as u8 | pNnzTab[12 + k] as u8) << iLShiftFactor;
     }
 }
 
 /// Computes internal boundary strength for normal partitioned Inter macroblocks.
+///
+/// **T6.C1**: took `pCurMb: *mut SMB` and read one field of it. It takes the field.
 #[inline(always)]
-pub unsafe fn DeblockingBSInsideMBNormal(
-    pCurMb: *mut SMB,
+pub fn DeblockingBSInsideMBNormal(
+    sMv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
     uiBS: &mut [[[u8; 4]; 4]; 2],
-    pNnzTab: *const i8,
+    pNnzTab: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
 ) {
-    let sMv = (*pCurMb).sMv;
 
     // Vertical internal edges (dir = 0)
     for j in 0..4 {
         let base = j * 4;
-        let bs0 = *pNnzTab.add(base) as u8 | *pNnzTab.add(base + 1) as u8;
-        let bs1 = *pNnzTab.add(base + 1) as u8 | *pNnzTab.add(base + 2) as u8;
-        let bs2 = *pNnzTab.add(base + 2) as u8 | *pNnzTab.add(base + 3) as u8;
+        let bs0 = pNnzTab[base] as u8 | pNnzTab[base + 1] as u8;
+        let bs1 = pNnzTab[base + 1] as u8 | pNnzTab[base + 2] as u8;
+        let bs2 = pNnzTab[base + 2] as u8 | pNnzTab[base + 3] as u8;
 
         uiBS[0][1][j] = BS_EDGE(bs0, sMv, base + 1, base);
         uiBS[0][2][j] = BS_EDGE(bs1, sMv, base + 2, base + 1);
@@ -498,9 +482,9 @@ pub unsafe fn DeblockingBSInsideMBNormal(
 
     // Horizontal internal edges (dir = 1)
     for k in 0..4 {
-        let bs0 = *pNnzTab.add(k) as u8 | *pNnzTab.add(4 + k) as u8;
-        let bs1 = *pNnzTab.add(4 + k) as u8 | *pNnzTab.add(8 + k) as u8;
-        let bs2 = *pNnzTab.add(8 + k) as u8 | *pNnzTab.add(12 + k) as u8;
+        let bs0 = pNnzTab[k] as u8 | pNnzTab[4 + k] as u8;
+        let bs1 = pNnzTab[4 + k] as u8 | pNnzTab[8 + k] as u8;
+        let bs2 = pNnzTab[8 + k] as u8 | pNnzTab[12 + k] as u8;
 
         uiBS[1][1][k] = BS_EDGE(bs0, sMv, 4 + k, k);
         uiBS[1][2][k] = BS_EDGE(bs1, sMv, 8 + k, 4 + k);
@@ -522,13 +506,13 @@ pub unsafe fn DeblockingBSMarginalMBAvcbase(
     for i in 0..4 {
         let bIdx = pBIdx[i] as usize;
         let bnIdx = pBnIdx[i] as usize;
-        let cur_nzc = *(*pCurMb).pNonZeroCount.add(bIdx);
-        let neigh_nzc = *(*pNeighMb).pNonZeroCount.add(bnIdx);
+        let cur_nzc = (*pCurMb).iNonZeroCount[bIdx];
+        let neigh_nzc = (*pNeighMb).iNonZeroCount[bnIdx];
 
         if (cur_nzc | neigh_nzc) != 0 {
             uiBSx4[i] = 2;
         } else {
-            uiBSx4[i] = MB_BS_MV((*pCurMb).sMv, (*pNeighMb).sMv, bIdx, bnIdx);
+            uiBSx4[i] = MB_BS_MV(&(*pCurMb).sMv, &(*pNeighMb).sMv, bIdx, bnIdx);
         }
     }
 
@@ -584,13 +568,13 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
         if !pFunc.is_null() {
             if let Some(set_nzc) = (*pFunc).pfSetNZCZero {
                 // deblocking.cpp:615 — one argument.
-                set_nzc((*pCurMb).pNonZeroCount);
+                set_nzc(&mut (*pCurMb).iNonZeroCount);
             }
         }
         if uiCurMbType == MB_TYPE_16x16 {
-            DeblockingBSInsideMBAvsbase((*pCurMb).pNonZeroCount, uiBS, 1);
+            DeblockingBSInsideMBAvsbase(&(*pCurMb).iNonZeroCount, uiBS, 1);
         } else {
-            DeblockingBSInsideMBNormal(pCurMb, uiBS, (*pCurMb).pNonZeroCount);
+            DeblockingBSInsideMBNormal(&(*pCurMb).sMv, uiBS, &(*pCurMb).iNonZeroCount);
         }
     } else {
         for dir in 0..2 {
@@ -632,21 +616,12 @@ pub use crate::common::deblocking_common::{
     DeblockLumaEq4H_c, DeblockLumaEq4V_c, DeblockLumaLt4H_c, DeblockLumaLt4V_c,
 };
 
-/// C++: `WelsNonZeroCount_c` — the encoder's copy, installed into
-/// `pfSetNZCZero` (`PSetNoneZeroCountZeroFunc`, an `extern "C"` slot). The
-/// common module's shim is a plain `unsafe fn` and cannot fill that slot, so
-/// this stays a distinct function; only its body moves to the safe kernel.
-///
-/// # Safety
-/// `pNonZeroCount` points at 24 writable `i8` — the per-macroblock non-zero
-/// count cache (16 luma + 8 chroma entries).
-pub unsafe extern "C" fn WelsNonZeroCount_c(pNonZeroCount: *mut i8) {
-    // SHIM(phase2) -> nonzero_count
-    unsafe {
-        let nzc: &mut [i8; 24] =
-            std::slice::from_raw_parts_mut(pNonZeroCount, 24).try_into().unwrap();
-        crate::common::deblocking_common::nonzero_count(nzc);
-    }
+/// C++: `WelsNonZeroCount_c` — the encoder's copy, installed into `pfSetNZCZero`.
+/// The common module's shim still takes a raw pointer (the decoder's callers hold
+/// one), so this stays a distinct function; it is the safe kernel's one-line
+/// forwarder since T6.C1 took the raw pointer out of the slot.
+pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]) {
+    crate::common::deblocking_common::nonzero_count(pNonZeroCount);
 }
 
 
@@ -1552,7 +1527,7 @@ mod tests {
             0, 0, 0, 0, 2, 0, 0, 0, 0, 7, 0, 0,
         ];
         unsafe {
-            WelsNonZeroCount_c(nzc.as_mut_ptr());
+            WelsNonZeroCount_c(&mut nzc);
         }
         for (i, &val) in nzc.iter().enumerate() {
             if [1, 3, 4, 7, 11, 16, 21].contains(&i) {

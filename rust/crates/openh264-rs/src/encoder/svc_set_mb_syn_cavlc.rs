@@ -452,12 +452,12 @@ pub unsafe fn WelsSpatialWriteMbPred(
 
         MB_TYPE_16x16 => {
             BsWriteUE(buf, &mut *pBs, 0);
-            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
+            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    *(*pCurMb).pRefIndex.add(0) as u32,
+                    (*pCurMb).iRefIndex[0] as u32,
                 );
             }
 
@@ -468,17 +468,17 @@ pub unsafe fn WelsSpatialWriteMbPred(
         MB_TYPE_16x8 => {
             BsWriteUE(buf, &mut *pBs, 1);
 
-            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv(*(*pCurMb).sMv.add(8), pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv((*pCurMb).sMv[8], pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    *(*pCurMb).pRefIndex.add(0) as u32,
+                    (*pCurMb).iRefIndex[0] as u32,
                 );
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    *(*pCurMb).pRefIndex.add(2) as u32,
+                    (*pCurMb).iRefIndex[2] as u32,
                 );
             }
             BsWriteSE(buf, &mut *pBs, sMvd[0].iMvX as i32);
@@ -490,17 +490,17 @@ pub unsafe fn WelsSpatialWriteMbPred(
         MB_TYPE_8x16 => {
             BsWriteUE(buf, &mut *pBs, 2);
 
-            sMvd[0].sDeltaMv(*(*pCurMb).sMv.add(0), pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv(*(*pCurMb).sMv.add(2), pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv((*pCurMb).sMv[2], pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    *(*pCurMb).pRefIndex.add(0) as u32,
+                    (*pCurMb).iRefIndex[0] as u32,
                 );
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    *(*pCurMb).pRefIndex.add(1) as u32,
+                    (*pCurMb).iRefIndex[1] as u32,
                 );
             }
             BsWriteSE(buf, &mut *pBs, sMvd[0].iMvX as i32);
@@ -531,7 +531,8 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
     let bSubRef0: bool;
     let mut kpScan4_idx = 0usize;
 
-    let ref_idx_u32 = std::ptr::read_unaligned((*pCurMb).pRefIndex as *const u32);
+    // `LD32 (pCurMb->pRefIndex)` — the four 8x8 reference indices as one word.
+    let ref_idx_u32 = u32::from_ne_bytes((*pCurMb).iRefIndex.map(|r| r as u8));
     if ref_idx_u32 == 0 {
         BsWriteUE(buf, &mut *pBs, 4);
         bSubRef0 = false;
@@ -563,19 +564,19 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
     if iNumRefIdxl0ActiveMinus1 > 0 && bSubRef0 {
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            *(*pCurMb).pRefIndex.add(0) as u32,
+            (*pCurMb).iRefIndex[0] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            *(*pCurMb).pRefIndex.add(1) as u32,
+            (*pCurMb).iRefIndex[1] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            *(*pCurMb).pRefIndex.add(2) as u32,
+            (*pCurMb).iRefIndex[2] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            *(*pCurMb).pRefIndex.add(3) as u32,
+            (*pCurMb).iRefIndex[3] as u32,
         );
     }
 
@@ -587,65 +588,65 @@ pub unsafe fn WelsSpatialWriteSubMbPred(
         let s2 = g_kuiMbCountScan4Idx[kpScan4_idx + 2] as usize;
         let s3 = g_kuiMbCountScan4Idx[kpScan4_idx + 3] as usize;
 
-        let cur_mv = (*pCurMb).sMv;
+        let cur_mv = &(*pCurMb).sMv;
 
         if SUB_MB_TYPE_8x8 == uiSubMbType {
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
+                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
+                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
             );
         } else if SUB_MB_TYPE_4x4 == uiSubMbType {
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
+                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
+                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s1)).iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
+                (cur_mv[s1].iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s1)).iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
+                (cur_mv[s1].iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s2)).iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
+                (cur_mv[s2].iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s2)).iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
+                (cur_mv[s2].iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s3)).iMvX - pMbCache.sMbMvp[s3].iMvX) as i32,
+                (cur_mv[s3].iMvX - pMbCache.sMbMvp[s3].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s3)).iMvY - pMbCache.sMbMvp[s3].iMvY) as i32,
+                (cur_mv[s3].iMvY - pMbCache.sMbMvp[s3].iMvY) as i32,
             );
         } else if SUB_MB_TYPE_8x4 == uiSubMbType {
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
+                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
+                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s2)).iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
+                (cur_mv[s2].iMvX - pMbCache.sMbMvp[s2].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s2)).iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
+                (cur_mv[s2].iMvY - pMbCache.sMbMvp[s2].iMvY) as i32,
             );
         } else if SUB_MB_TYPE_4x8 == uiSubMbType {
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
+                (cur_mv[s0].iMvX - pMbCache.sMbMvp[s0].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s0)).iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
+                (cur_mv[s0].iMvY - pMbCache.sMbMvp[s0].iMvY) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s1)).iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
+                (cur_mv[s1].iMvX - pMbCache.sMbMvp[s1].iMvX) as i32,
             );
             BsWriteSE(buf, &mut *pBs,
-                ((*cur_mv.add(s1)).iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
+                (cur_mv[s1].iMvY - pMbCache.sMbMvp[s1].iMvY) as i32,
             );
         }
         kpScan4_idx += 4;

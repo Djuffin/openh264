@@ -167,7 +167,13 @@ assert_size!(SSliceCtx, 32);
 
 // codec/encoder/core/inc/mb_cache.h, svc_enc_macroblock.h, svc_enc_frame.h
 assert_size!(SMbCache, 576);
-assert_size!(SMB, 152);
+// 152 in the C++ and in this port until **T6.C1**, which moved the five
+// per-macroblock scratch arrays the C++ reaches by pointer (`sMv`, `pRefIndex`,
+// `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`) into the struct as inline
+// arrays: -40 bytes of pointers, +104 bytes of rows, and -8 of padding as the
+// alignment falls from 8 to 4. **208, measured.** The number tracks the port from
+// here, exactly as `SWelsFuncPtrList`'s does.
+assert_size!(SMB, 208);
 assert_size!(SLayerInfo, 48);
 
 // codec/encoder/core/inc/slice.h. `assert_size!(SSlice, 1584)` was here — see the
@@ -212,7 +218,11 @@ assert_size!(SWelsFuncPtrList, 1072);
 assert_size!(crate::encoder::encoder_context::SParaSetOffset, 1180);
 assert_size!(crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics, 88);
 assert_size!(crate::encoder::encoder_context::SLogContext, 24);
-assert_size!(sWelsEncCtx, 98008 - 64 + 8);
+// **T6.C1**: -40, the five per-macroblock scratch pointers deleted with `SMB`'s
+// conversion (see `assert_size!(SMB, …)` above). Was `98008 - 64 + 8` = 97952, the
+// C++ size with this port's 8-byte mutex handle in place of `pthread_mutex_t`.
+// **97912, measured.**
+assert_size!(sWelsEncCtx, 97912);
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
 // offsets. `wels_preprocess.rs` used to declare its own 15-field `SWelsEncCtx` and
@@ -223,8 +233,18 @@ assert_size!(sWelsEncCtx, 98008 - 64 + 8);
 // was simply a different type), so the offsets are asserted directly.
 //
 // All fifteen are declared before `WELS_MUTEX mutexEncoderError` (encoder_context.h:230),
-// the one member this port models differently, so each number below is the unmodified
+// the one member this port models differently, so each number below *was* the unmodified
 // C++ `offsetof`, measured on darwin/arm64.
+//
+// **T6.C1 moved all fifteen and they are re-pinned to measured values.** Five raw
+// pointers (`pSadCostMb`, `pMvUnitBlock4x4`, `pRefIndexBlock4x4`,
+// `pNonZeroCountBlocks`, `pIntra4x4PredModeBlocks`) sat at offsets 32-96 -- ahead of
+// every pin below -- and their contents are inline in `SMB` now, so each offset from
+// `iMvRange` on falls by exactly 40 (`sLogCtx` and `pSvcParam` precede them and do not
+// move). These are the port's own layout from here, not the C++'s; what the pins still
+// catch is the thing they were written for -- a *second* declaration of this context,
+// which is how `wels_preprocess.rs` once read every one of these fields at the wrong
+// offset -- and that property does not depend on the numbers being the C++'s.
 macro_rules! assert_ctx_offset {
     ($field:ident, $off:expr) => {
         const _: () = assert!(std::mem::offset_of!(sWelsEncCtx, $field) == $off);
@@ -232,19 +252,19 @@ macro_rules! assert_ctx_offset {
 }
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
-assert_ctx_offset!(iMvRange, 40);
-assert_ctx_offset!(ppRefPicListExt, 184);
-assert_ctx_offset!(pLtr, 320);
-assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 328);
-assert_ctx_offset!(eSliceType, 332);
-assert_ctx_offset!(uiDependencyId, 361);
-assert_ctx_offset!(uiTemporalId, 362);
-assert_ctx_offset!(pWelsSvcRc, 368);
-assert_ctx_offset!(pVaa, 416);
-assert_ctx_offset!(pVpp, 424);
-assert_ctx_offset!(sSpatialIndexMap, 520);
-assert_ctx_offset!(bRefOfCurTidIsLtr, 600);
-assert_ctx_offset!(pMemAlign, 1824);
+assert_ctx_offset!(iMvRange, 32);
+assert_ctx_offset!(ppRefPicListExt, 144);
+assert_ctx_offset!(pLtr, 280);
+assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 288);
+assert_ctx_offset!(eSliceType, 292);
+assert_ctx_offset!(uiDependencyId, 321);
+assert_ctx_offset!(uiTemporalId, 322);
+assert_ctx_offset!(pWelsSvcRc, 328);
+assert_ctx_offset!(pVaa, 376);
+assert_ctx_offset!(pVpp, 384);
+assert_ctx_offset!(sSpatialIndexMap, 480);
+assert_ctx_offset!(bRefOfCurTidIsLtr, 560);
+assert_ctx_offset!(pMemAlign, 1784);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
@@ -252,3 +272,5 @@ assert_ctx_offset!(pMemAlign, 1824);
 assert_size!(SSpatialPicIndex, 16);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
+
+

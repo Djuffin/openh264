@@ -473,16 +473,13 @@ pub unsafe extern "C" fn WelsMdI4x4(
 /// `FillNeighborCacheIntra` can read them.
 #[inline]
 unsafe fn StoreIntra4x4PredModeToMb(pCurMb: *mut SMB, pMbCache: *mut SMbCache) {
-    let pIntra4x4PredMode = (*pCurMb).pIntra4x4PredMode;
     // ST32 (pCurMb->pIntra4x4PredMode, LD32 (&pMbCache->iIntraPredMode[33]));
-    core::ptr::copy_nonoverlapping(
-        (*pMbCache).iIntraPredMode.as_ptr().add(33),
-        pIntra4x4PredMode,
-        4,
-    );
-    *pIntra4x4PredMode.add(4) = (*pMbCache).iIntraPredMode[12];
-    *pIntra4x4PredMode.add(5) = (*pMbCache).iIntraPredMode[20];
-    *pIntra4x4PredMode.add(6) = (*pMbCache).iIntraPredMode[28];
+    let pMbMode = &mut (*pCurMb).iIntra4x4PredMode;
+    let pCacheMode = &(*pMbCache).iIntraPredMode;
+    pMbMode[0..4].copy_from_slice(&pCacheMode[33..37]);
+    (*pCurMb).iIntra4x4PredMode[4] = (*pMbCache).iIntraPredMode[12];
+    (*pCurMb).iIntra4x4PredMode[5] = (*pMbCache).iIntraPredMode[20];
+    (*pCurMb).iIntra4x4PredMode[6] = (*pMbCache).iIntraPredMode[28];
 }
 
 /// `svc_base_layer_md.cpp:548`. The `LOW_COMPLEXITY` I4x4 search: instead of scoring
@@ -1543,12 +1540,12 @@ unsafe fn AcceptPskip(
     let pFunc = (*pEncCtx).pFuncList;
 
     // ST32 (pCurMb->pRefIndex, 0)
-    ((*pCurMb).pRefIndex as *mut u32).write_unaligned(0);
-    (*pFunc).pfUpdateMbMv.expect("pfUpdateMbMv unset")((*pCurMb).sMv, *sMvp);
+    (*pCurMb).iRefIndex = [0; crate::encoder::md::MB_BLOCK8x8_NUM];
+    (*pFunc).pfUpdateMbMv.expect("pfUpdateMbMv unset")(&mut (*pCurMb).sMv, *sMvp);
 
     if (*pWelsMd).bMdUsingSad {
-        *(*pCurMb).pSadCost.add(0) = iSadCostLuma;
-        (*pWelsMd).iCostLuma = *(*pCurMb).pSadCost.add(0);
+        (*pCurMb).iSadCost = iSadCostLuma;
+        (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
         (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16]
             .expect("pfSampleSatd[BLOCK_16x16] unset")(
@@ -1753,7 +1750,7 @@ pub unsafe fn WelsMdInterMbRefinement(
             for i in 0..4usize {
                 let iBlk8Idx = (i as i32) << 2; //0, 4, 8, 12
 
-                *(*pCurMb).pRefIndex.add(i) = (*pWelsMd).uiRef as i8;
+                (*pCurMb).iRefIndex[i] = (*pWelsMd).uiRef as i8;
                 match (*pCurMb).uiSubMbType[i] {
                     SUB_MB_TYPE_8x8 => {
                         sMeRefine.pfCopyBlockByMode = (*pFunc).pfCopy8x8Aligned;
@@ -2053,7 +2050,7 @@ pub unsafe fn WelsMdInterMbRefinement(
         }
         _ => {}
     }
-    *(*pCurMb).pSadCost.add(0) = iBestSadCost;
+    (*pCurMb).iSadCost = iBestSadCost;
     if (*pWelsMd).bMdUsingSad {
         (*pWelsMd).iCostLuma = iBestSadCost;
     } else {
@@ -2099,7 +2096,7 @@ pub unsafe extern "C" fn WelsMdFirstIntraMode(
             WelsMdIntraChroma(pFunc, (*pEncCtx).pCurDqLayer, pMbCache, (*pWelsMd).iLambda);
         crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
         (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
-        *(*pCurMb).pSadCost.add(0) = 0;
+        (*pCurMb).iSadCost = 0;
         return true; //intra_mb_type is best
     }
 
@@ -2212,25 +2209,25 @@ pub unsafe extern "C" fn WelsMdInterMb(
 /// `pCurMb` and `pMbCache` must be valid.
 pub unsafe fn WelsMdInterDoubleCheckPskip(pCurMb: *mut SMB, pMbCache: *mut SMbCache) {
     if MB_TYPE_16x16 == (*pCurMb).uiMbType && 0 == (*pCurMb).uiCbp {
-        if 0 == *(*pCurMb).pRefIndex.add(0) {
+        if 0 == (*pCurMb).iRefIndex[0] {
             let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
 
             PredSkipMv(pMbCache, &mut sMvp as *mut SMVUnitXY);
-            if LD32_MV_PUB(&sMvp as *const SMVUnitXY) == LD32_MV_PUB((*pCurMb).sMv) {
+            if LD32_MV_PUB(&sMvp) == LD32_MV_PUB(&(*pCurMb).sMv[0]) {
                 (*pCurMb).uiMbType = MB_TYPE_SKIP;
             }
         }
-        (*pMbCache).bCollocatedPredFlag = LD32_MV_PUB((*pCurMb).sMv) == 0;
+        (*pMbCache).bCollocatedPredFlag = LD32_MV_PUB(&(*pCurMb).sMv[0]) == 0;
     }
 }
 
-/// `LD32` on a motion vector — the 32-bit word an `SMVUnitXY` occupies.
-///
-/// # Safety
-/// `pMv` must point to at least one readable `SMVUnitXY`.
+/// `LD32` on a motion vector — the 32-bit word an `SMVUnitXY` occupies. T6.C1 spells
+/// the pun as the two halves it is, rather than reading a `u32` through the pair.
 #[inline]
-unsafe fn LD32_MV_PUB(pMv: *const SMVUnitXY) -> u32 {
-    (pMv as *const u32).read_unaligned()
+fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
+    let x = pMv.iMvX.to_ne_bytes();
+    let y = pMv.iMvY.to_ne_bytes();
+    u32::from_ne_bytes([x[0], x[1], y[0], y[1]])
 }
 
 /// `svc_base_layer_md.cpp:1964`. Transforms, quantises and reconstructs the chosen

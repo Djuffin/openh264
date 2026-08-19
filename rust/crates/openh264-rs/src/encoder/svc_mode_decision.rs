@@ -37,6 +37,7 @@ pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::md::SMB;
+pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_BLOCK8x8_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -276,13 +277,16 @@ pub unsafe extern "C" fn WelsMdInterUpdatePskip(
     let kiChromaQpIndexOffset = (*(*pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset as i32;
     (*pCurMb).uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
         [WELS_CLIP3((*pCurMb).uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
-    (*pMbCache).bCollocatedPredFlag = LD32_MV((*pCurMb).sMv) == 0;
+    (*pMbCache).bCollocatedPredFlag = LD32_MV(&(*pCurMb).sMv[0]) == 0;
 }
 
-/// `LD32 (&pCurMb->sMv[0])` — the first motion vector read as one 32-bit word.
+/// `LD32 (&pCurMb->sMv[0])` — one motion vector read as a 32-bit word. T6.C1 spells
+/// the pun as the two halves it is, rather than reading a `u32` through the pair.
 #[inline]
-unsafe fn LD32_MV(pMv: *const SMVUnitXY) -> u32 {
-    (pMv as *const u32).read_unaligned()
+fn LD32_MV(pMv: &SMVUnitXY) -> u32 {
+    let x = pMv.iMvX.to_ne_bytes();
+    let y = pMv.iMvY.to_ne_bytes();
+    u32::from_ne_bytes([x[0], x[1], y[0], y[1]])
 }
 
 /// `svc_base_layer_md.cpp:1906`. Tries the ordinary P_SKIP.
@@ -431,7 +435,7 @@ pub unsafe extern "C" fn WelsMdIntraSecondaryModesEnc(
     //add pEnc&rec to MD--2010.3.15
     crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
     (*pCurMb).uiChromPredMode = (*pMbCache).uiChmaI8x8Mode as u32;
-    *(*pCurMb).pSadCost.add(0) = 0;
+    (*pCurMb).iSadCost = 0;
 }
 
 /// Reconstructs a **P_SKIP** macroblock by copying motion-compensated samples directly
@@ -459,7 +463,8 @@ pub unsafe extern "C" fn WelsRecPskip(
     let copy8 = (*pFuncList).pfCopy8x8Aligned.expect("pfCopy8x8Aligned unset");
     copy8(pCsMb[1], iRecStride[1], (*pMbCache).pSkipMb.add(256), 8);
     copy8(pCsMb[2], iRecStride[2], (*pMbCache).pSkipMb.add(320), 8);
-    crate::encoder::encoder_context::WelsSetMemZero_c((*pCurMb).pNonZeroCount as *mut u8, 24);
+    // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
+    (*pCurMb).iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
 
 /// Copies the current/reference luma & chroma blocks for a background MB into the VAA
@@ -547,7 +552,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     (*pCurMb).uiCbp = 0;
     (*pMbCache).bCollocatedPredFlag = true;
     (*pWelsMd).iCostLuma = 0; // BGD&RC integration
-    *(*pCurMb).pSadCost.offset(0) = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap()(
+    (*pCurMb).iSadCost = (*pFunc).sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap()(
         (*pMbCache).SPicData.pEncMb[0],
         (*pCurDqLayer).iEncStride[0],
         pRefLuma,
@@ -560,9 +565,9 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
         (*pCurMb).uiMbType = MB_TYPE_BACKGROUND;
 
         // update motion info to current MB
-        std::ptr::write_bytes((*pCurMb).pRefIndex, 0, 4);
+        (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];
         if let Some(pfUpdateMbMv) = (*pFunc).pfUpdateMbMv {
-            pfUpdateMbMv((*pCurMb).sMv, sMvp);
+            pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
         }
 
         (*pCurMb).uiLumaQp = (*pSlice).uiLastMbQp;
@@ -600,7 +605,7 @@ pub unsafe extern "C" fn WelsMdBackgroundMbEnc(
     );
 
     if (*pWelsMd).bMdUsingSad {
-        (*pWelsMd).iCostLuma = *(*pCurMb).pSadCost.offset(0);
+        (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
         (*pWelsMd).iCostLuma = (*pFunc).sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16].unwrap()(
             (*pMbCache).SPicData.pEncMb[0],
@@ -776,14 +781,13 @@ pub unsafe extern "C" fn UpdateP16x16MotionInfo(
         pMvComp.iRefIndexCache[g_kuiCache30ScanIdx[i] as usize] = kiRef;
         pMvComp.sMotionVectorCache[g_kuiCache30ScanIdx[i] as usize] = *pMv;
     }
-    if !(*pCurMb).sMv.is_null() {
-        for i in 0..16 {
-            *(*pCurMb).sMv.offset(i as isize) = *pMv;
-        }
+    // The two null guards that stood here were the port's own: the C++ writes both
+    // rows unconditionally and `InitMbInfo` never left either pointer null. An inline
+    // array cannot be absent.
+    for i in 0..MB_BLOCK4x4_NUM {
+        (*pCurMb).sMv[i] = *pMv;
     }
-    if !(*pCurMb).pRefIndex.is_null() {
-        std::ptr::write_bytes((*pCurMb).pRefIndex, kiRef as u8, 4);
-    }
+    (*pCurMb).iRefIndex = [kiRef; MB_BLOCK8x8_NUM];
 }
 
 // ============================================================================
@@ -819,6 +823,13 @@ unsafe fn st64_mv(pCache: *mut SMVUnitXY, k: usize, pMv: *const SMVUnitXY) {
     *pCache.add(k + 1) = *pMv;
 }
 
+/// The same `ST64`, into the macroblock's own MV row — an inline array since T6.C1.
+#[inline]
+fn st64_mv_mb(sMv: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], k: usize, mv: SMVUnitXY) {
+    sMv[k] = mv;
+    sMv[k + 1] = mv;
+}
+
 /// `mv_pred.cpp:195`. Updates ref index and MV in both `SMB` and the MB cache, P16x8.
 ///
 /// # Safety
@@ -836,11 +847,14 @@ pub unsafe extern "C" fn UpdateP16x8MotionInfo(
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
     let kuiRef16 = butterfly1x2_ref(kiRef);
 
-    // ST16 (&pCurMb->pRefIndex[kiPartIdx >> 2], kuiRef16)
-    ((*pCurMb).pRefIndex.add((kiPartIdx >> 2) as usize) as *mut u16).write_unaligned(kuiRef16);
+    // ST16 (&pCurMb->pRefIndex[kiPartIdx >> 2], kuiRef16) — two bytes of one value.
+    let kiBlk = (kiPartIdx >> 2) as usize;
+    let kaRef16 = kuiRef16.to_ne_bytes();
+    (*pCurMb).iRefIndex[kiBlk] = kaRef16[0] as i8;
+    (*pCurMb).iRefIndex[kiBlk + 1] = kaRef16[1] as i8;
     // memcpy (&pCurMb->sMv[kiScan4Idx], uiMvBuf, sizeof (uint64_t[4])) — 8 MVs
     for i in 0..8 {
-        *(*pCurMb).sMv.add(kiScan4Idx + i) = *pMv;
+        (*pCurMb).sMv[kiScan4Idx + i] = *pMv;
     }
 
     let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
@@ -878,13 +892,13 @@ pub unsafe extern "C" fn update_P8x16_motion_info(
     let kiBlkIdx = (kiPartIdx >> 2) as usize;
     let kuiRef16 = butterfly1x2_ref(kiRef);
 
-    *(*pCurMb).pRefIndex.add(kiBlkIdx) = kiRef;
-    *(*pCurMb).pRefIndex.add(2 + kiBlkIdx) = kiRef;
-    let pMbMv = (*pCurMb).sMv;
-    st64_mv(pMbMv, kiScan4Idx, pMv);
-    st64_mv(pMbMv, 4 + kiScan4Idx, pMv);
-    st64_mv(pMbMv, 8 + kiScan4Idx, pMv);
-    st64_mv(pMbMv, 12 + kiScan4Idx, pMv);
+    (*pCurMb).iRefIndex[kiBlkIdx] = kiRef;
+    (*pCurMb).iRefIndex[2 + kiBlkIdx] = kiRef;
+    let pMbMv = &mut (*pCurMb).sMv;
+    st64_mv_mb(pMbMv, kiScan4Idx, *pMv);
+    st64_mv_mb(pMbMv, 4 + kiScan4Idx, *pMv);
+    st64_mv_mb(pMbMv, 8 + kiScan4Idx, *pMv);
+    st64_mv_mb(pMbMv, 12 + kiScan4Idx, *pMv);
 
     let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
     *pRefCache.add(kiCacheIdx) = kiRef;
@@ -918,9 +932,9 @@ pub unsafe extern "C" fn UpdateP8x8MotionInfo(
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
-    let pMbMv = (*pCurMb).sMv;
-    st64_mv(pMbMv, kiScan4Idx, pMv);
-    st64_mv(pMbMv, 4 + kiScan4Idx, pMv);
+    let pMbMv = &mut (*pCurMb).sMv;
+    st64_mv_mb(pMbMv, kiScan4Idx, *pMv);
+    st64_mv_mb(pMbMv, 4 + kiScan4Idx, *pMv);
 
     let pRefCache = pMvComp.iRefIndexCache.as_mut_ptr();
     *pRefCache.add(kiCacheIdx) = kiRef;
@@ -950,7 +964,7 @@ pub unsafe extern "C" fn UpdateP4x4MotionInfo(
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
-    *(*pCurMb).sMv.add(kiScan4Idx) = *pMv;
+    (*pCurMb).sMv[kiScan4Idx] = *pMv;
     pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
     pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
 }
@@ -970,8 +984,8 @@ pub unsafe extern "C" fn UpdateP8x4MotionInfo(
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
-    *(*pCurMb).sMv.add(kiScan4Idx) = *pMv;
-    *(*pCurMb).sMv.add(1 + kiScan4Idx) = *pMv;
+    (*pCurMb).sMv[kiScan4Idx] = *pMv;
+    (*pCurMb).sMv[1 + kiScan4Idx] = *pMv;
     pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
     pMvComp.iRefIndexCache[1 + kiCacheIdx] = kiRef;
     pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
@@ -993,8 +1007,8 @@ pub unsafe extern "C" fn UpdateP4x8MotionInfo(
     let kiScan4Idx = g_kuiMbCountScan4Idx[kiPartIdx as usize] as usize;
     let kiCacheIdx = g_kuiCache30ScanIdx[kiPartIdx as usize] as usize;
 
-    *(*pCurMb).sMv.add(kiScan4Idx) = *pMv;
-    *(*pCurMb).sMv.add(4 + kiScan4Idx) = *pMv;
+    (*pCurMb).sMv[kiScan4Idx] = *pMv;
+    (*pCurMb).sMv[4 + kiScan4Idx] = *pMv;
     pMvComp.iRefIndexCache[kiCacheIdx] = kiRef;
     pMvComp.iRefIndexCache[6 + kiCacheIdx] = kiRef;
     pMvComp.sMotionVectorCache[kiCacheIdx] = *pMv;
@@ -1420,7 +1434,7 @@ pub unsafe extern "C" fn SetMvBaseEnhancelayer(
             ((((*pCurMb).iMbY as i32 & 0x01) << 1) + ((*pCurMb).iMbX as i32 & 0x01)) as usize;
         let iScan4RefPartIdx = g_kuiMbCountScan4Idx[iRefMbPartIdx << 2] as isize;
 
-        let ref_mv = *(*kpRefMb).sMv.offset(iScan4RefPartIdx);
+        let ref_mv = (*kpRefMb).sMv[(iScan4RefPartIdx) as usize];
         let sMv = SMVUnitXY {
             iMvX: ref_mv.iMvX * 2,
             iMvY: ref_mv.iMvY * 2,
@@ -1947,16 +1961,16 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
         pRefLuma.offset(iOffsetY as isize),
         iLineSizeY,
     );
-    *(*pCurMb).pSadCost.offset(0) = sad_cost;
+    (*pCurMb).iSadCost = sad_cost;
     (*pWelsMd).iCostSkipMb = sad_cost;
 
     (*pCurMb).sP16x16Mv = sCandidateMv;
     *(*(*pCurDqLayer).pDecPic).sMvList.offset((*pCurMb).iMbXY as isize) = sCandidateMv;
 
     if bQpSimilarFlag && bMbSkipFlag {
-        std::ptr::write_bytes((*pCurMb).pRefIndex, 0, 4);
+        (*pCurMb).iRefIndex = [0; MB_BLOCK8x8_NUM];
         if let Some(pfUpdateMbMv) = (*pFunc).pfUpdateMbMv {
-            pfUpdateMbMv((*pCurMb).sMv, sMvp);
+            pfUpdateMbMv(&mut (*pCurMb).sMv, sMvp);
         }
         (*pCurMb).uiMbType = MB_TYPE_SKIP;
         WelsRecPskip(pCurDqLayer, pFunc, pCurMb, pMbCache);
@@ -1979,7 +1993,7 @@ pub unsafe extern "C" fn SvcMdSCDMbEnc(
     UpdateP16x16MotionInfo(pMbCache, pCurMb, 0, &mut (*pWelsMd).sMe.sMe16x16.sMv);
 
     if (*pWelsMd).bMdUsingSad {
-        (*pWelsMd).iCostLuma = *(*pCurMb).pSadCost.offset(0);
+        (*pWelsMd).iCostLuma = (*pCurMb).iSadCost;
     } else {
         (*pWelsMd).iCostLuma = sad_16x16(
             (*pMbCache).SPicData.pEncMb[0],
@@ -2356,9 +2370,6 @@ mod tests {
                 ..Default::default()
             };
 
-            let mut mv_arr = [SMVUnitXY::default(); 16];
-            let mut ref_arr = [0u8; 4];
-
             let mut cur_mb = SMB {
                 uiMbType: MB_TYPE_16x16,
                 uiSubMbType: [0; 4],
@@ -2367,11 +2378,11 @@ mod tests {
                 iMbY: 0,
                 uiNeighborAvail: 0,
                 uiCbp: 0,
-                sMv: mv_arr.as_mut_ptr(),
-                pRefIndex: ref_arr.as_mut_ptr() as *mut i8,
-                pSadCost: std::ptr::null_mut(),
-                pIntra4x4PredMode: std::ptr::null_mut(),
-                pNonZeroCount: std::ptr::null_mut(),
+                sMv: [SMVUnitXY::default(); MB_BLOCK4x4_NUM],
+                iRefIndex: [0; MB_BLOCK8x8_NUM],
+                iSadCost: 0,
+                iIntra4x4PredMode: [0; crate::encoder::md::INTRA_4x4_MODE_NUM],
+                iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM],
                 sP16x16Mv: SMVUnitXY::default(),
                 uiLumaQp: 26,
                 uiChromaQp: 26,
@@ -2390,8 +2401,8 @@ mod tests {
                 &mut target_mv as *mut SMVUnitXY,
             );
 
-            assert_eq!(mv_arr[0], target_mv);
-            assert_eq!(ref_arr[0], 0);
+            assert_eq!(cur_mb.sMv[0], target_mv);
+            assert_eq!(cur_mb.iRefIndex[0], 0);
             assert_eq!(
                 mb_cache.sMvComponents.sMotionVectorCache[g_kuiCache30ScanIdx[0] as usize],
                 target_mv
