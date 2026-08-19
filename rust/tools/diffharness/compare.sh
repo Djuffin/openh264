@@ -1,7 +1,7 @@
 #!/bin/bash
 # Differential comparison: C++ reference encoder vs the Rust port, byte for byte.
 #
-#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads]
+#   usage: rust/tools/diffharness/compare.sh <yuv> <w> <h> <frames> <qp> <cabac> <gop> [rcmode] [baseinit] [slicemode] [slicenum] [threads] [complexity]
 #
 #   slicemode: 0 SM_SINGLE_SLICE (default), 1 SM_FIXEDSLCNUM_SLICE,
 #              2 SM_RASTER_SLICE, 3 SM_SIZELIMITED_SLICE.
@@ -36,12 +36,18 @@ RUST_ENC=$HERE/rust_enc/target/$PROFILE/rust_enc
 
 YUV=$1; W=$2; H=$3; N=$4; QP=$5; CABAC=$6; GOP=$7; RC=${8:-}; BASE=${9:-}
 SLM=${10:-}; SLN=${11:-}; THR=${12:-}
-TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}
+# 13th: iComplexityMode. 0 LOW (every sweep configuration, and the default), 1 MEDIUM,
+# 2 HIGH. LOW is `bFastMode`, which selects a *different mode-decision family*
+# (`SetFastCodingFunc` vs `SetNormalCodingFunc`, `encoder_ext.cpp:2665`) — so the
+# fine I4x4 partition search and its prediction ping-pong were reachable by no
+# configuration this harness could express until Phase 6 session C added this knob.
+CPX=${13:-}
+TAG=$(basename "$YUV" .yuv)_${W}x${H}_qp${QP}_cabac${CABAC}_gop${GOP}${RC:+_rc$RC}${BASE:+_base$BASE}${SLM:+_sm$SLM}${SLN:+n$SLN}${THR:+_t$THR}${CPX:+_cx$CPX}
 
 cd "$ROOT" || exit 1
-"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR 2>"$OUT/c_$TAG.log"
+"$HERE/cxx_enc"                        "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/c_$TAG.264"  $RC $BASE $SLM $SLN $THR $CPX 2>"$OUT/c_$TAG.log"
 cxx_rc=$?
-"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR 2>"$OUT/r_$TAG.log"
+"$RUST_ENC"                            "$YUV" "$W" "$H" "$N" "$QP" "$CABAC" "$GOP" "$OUT/r_$TAG.264" $RC $BASE $SLM $SLN $THR $CPX 2>"$OUT/r_$TAG.log"
 rust_rc=$?
 
 # A driver that aborts leaves a short file, which otherwise reads as an ordinary

@@ -45,6 +45,10 @@ int main (int argc, char** argv) {
   const int   kiSliceNum  = (argc > 12) ? atoi (argv[12]) : 1;
   // 13th: iMultipleThreadIdc. 1 (default) is single-threaded.
   const int   kiThreads   = (argc > 13) ? atoi (argv[13]) : 1;
+  // 14th: iComplexityMode. 0 LOW (default, and what every sweep preset runs),
+  // 1 MEDIUM, 2 HIGH. Anything but LOW turns `bFastMode` off in the encoder and
+  // selects the fine mode-decision family.
+  const int   kiComplexity = (argc > 14) ? atoi (argv[14]) : 0;
 
   ISVCEncoder* pEnc = NULL;
   if (WelsCreateSVCEncoder (&pEnc) != 0 || pEnc == NULL) {
@@ -79,7 +83,7 @@ int main (int argc, char** argv) {
   sParam.fMaxFrameRate              = 30.0f;
   sParam.iTemporalLayerNum          = 1;
   sParam.iSpatialLayerNum           = 1;
-  sParam.iComplexityMode            = LOW_COMPLEXITY;
+  sParam.iComplexityMode            = (ECOMPLEXITY_MODE) kiComplexity;
   sParam.uiIntraPeriod              = (unsigned int) kiGop;
   sParam.iNumRefFrame               = AUTO_REF_PIC_COUNT;
   sParam.eSpsPpsIdStrategy          = CONSTANT_ID;
