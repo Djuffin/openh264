@@ -335,8 +335,10 @@ pub unsafe fn UpdateMbListNeighborParallel(
     }
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbWidth = pSliceCtx.iMbWidth as i32;
-    let mut iIdx = *(*pCurDq).pFirstMbIdxOfSlice.add(kiSliceIdc as usize);
-    let kiEndMbInSlice = iIdx + *(*pCurDq).pCountMbNumInSlice.add(kiSliceIdc as usize) - 1;
+    let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
+    let count: &[i32] = &(*pCurDq).pCountMbNumInSlice;
+    let mut iIdx = first[kiSliceIdc as usize];
+    let kiEndMbInSlice = iIdx + count[kiSliceIdc as usize] - 1;
 
     while iIdx <= kiEndMbInSlice {
         crate::encoder::svc_encode_slice::UpdateMbNeighbor(pCurDq, pMbList.add(iIdx as usize), kiMbWidth, kiSliceIdc as u16);
@@ -551,9 +553,8 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
     let mut iSliceIdx = 0i32;
 
     while iSliceIdx < iCountSliceNumInFrame {
-        if *pRunLength.add(iSliceIdx as usize)
-            != *(*pCurDq).pFirstMbIdxOfSlice.add(iSliceIdx as usize)
-        {
+        let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
+        if *pRunLength.add(iSliceIdx as usize) != first[iSliceIdx as usize] {
             iSameRunLenFlag = 0;
             break;
         }
@@ -566,8 +567,12 @@ pub unsafe fn DynamicAdjustSlicePEncCtxAll(pCurDq: *mut SDqLayer, pRunLength: *m
     iSliceIdx = 0;
     while iSliceIdx < iCountSliceNumInFrame && iFirstMbIdx < iCountNumMbInFrame {
         let kiSliceRun = *pRunLength.add(iSliceIdx as usize);
-        *(*pCurDq).pFirstMbIdxOfSlice.add(iSliceIdx as usize) = iFirstMbIdx;
-        *(*pCurDq).pCountMbNumInSlice.add(iSliceIdx as usize) = kiSliceRun;
+        {
+            let first: &mut Vec<i32> = &mut (*pCurDq).pFirstMbIdxOfSlice;
+            first[iSliceIdx as usize] = iFirstMbIdx;
+            let count: &mut Vec<i32> = &mut (*pCurDq).pCountMbNumInSlice;
+            count[iSliceIdx as usize] = kiSliceRun;
+        }
 
         if !pSliceCtx.pOverallMbMap.is_null() {
             let map_ptr = pSliceCtx.pOverallMbMap.add(iFirstMbIdx as usize);

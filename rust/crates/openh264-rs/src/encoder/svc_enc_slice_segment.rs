@@ -658,11 +658,14 @@ pub unsafe fn UninitSlicePEncCtx(pCurDq: *mut SDqLayer, pMa: *mut CMemoryAlign) 
 /// # Safety
 /// `pCurLayer` may be null, which returns -1.
 pub unsafe fn WelsGetFirstMbOfSlice(pCurLayer: *mut SDqLayer, kuiSliceIdc: i32) -> i32 {
-    if pCurLayer.is_null() || (*pCurLayer).pFirstMbIdxOfSlice.is_null() {
+    if pCurLayer.is_null() {
         return -1;
     }
-
-    *(*pCurLayer).pFirstMbIdxOfSlice.add(kuiSliceIdc as usize)
+    let first: &[i32] = &(*pCurLayer).pFirstMbIdxOfSlice;
+    match first.get(kuiSliceIdc as usize) {
+        Some(&v) => v,
+        None => -1,
+    }
 }
 
 #[cfg(test)]

@@ -541,8 +541,11 @@ pub struct SDqLayer {
     pub LastCodedMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub FirstMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub EndMbIdxOfPartition: [i32; MAX_THREADS_NUM],
-    pub pFirstMbIdxOfSlice: *mut i32,
-    pub pCountMbNumInSlice: *mut i32,
+    /// The first macroblock and the macroblock count of each slice, by layer-order
+    /// position — **owned since T6.D6**, and grown by `ExtendLayerBuffer`'s `resize`
+    /// where the C++ ran a malloc/copy/free triple for each.
+    pub pFirstMbIdxOfSlice: Vec<i32>,
+    pub pCountMbNumInSlice: Vec<i32>,
 
     pub bNeedAdjustingSlicing: bool,
 
@@ -627,9 +630,10 @@ impl SDqLayer {
             LastCodedMbIdxOfPartition: [0; MAX_THREADS_NUM],
             FirstMbIdxOfPartition: [0; MAX_THREADS_NUM],
             EndMbIdxOfPartition: [0; MAX_THREADS_NUM],
-            // The two per-slice-index arrays, allocated by `InitSliceInLayer`.
-            pFirstMbIdxOfSlice: std::ptr::null_mut(),
-            pCountMbNumInSlice: std::ptr::null_mut(),
+            // The two per-slice-index arrays, sized by `InitSliceInLayer`; empty is
+            // the raw spelling's null.
+            pFirstMbIdxOfSlice: Vec::new(),
+            pCountMbNumInSlice: Vec::new(),
             // "The slicing does not need re-deriving"; `NeedDynamicAdjust` sets it.
             bNeedAdjustingSlicing: false,
             // No base layer until `WelsSwapDqLayers` names one — the raw spelling's
@@ -2443,8 +2447,10 @@ pub unsafe fn InitSliceBoundaryInfo(
             }
         }
 
-        *(*pCurLayer).pCountMbNumInSlice.add(iSliceIdx as usize) = iMbNumInSlice;
-        *(*pCurLayer).pFirstMbIdxOfSlice.add(iSliceIdx as usize) = iFirstMBInSlice;
+        let count: &mut Vec<i32> = &mut (*pCurLayer).pCountMbNumInSlice;
+        count[iSliceIdx as usize] = iMbNumInSlice;
+        let first: &mut Vec<i32> = &mut (*pCurLayer).pFirstMbIdxOfSlice;
+        first[iSliceIdx as usize] = iFirstMBInSlice;
     }
 
     ENC_RETURN_SUCCESS
@@ -2453,14 +2459,16 @@ pub unsafe fn InitSliceBoundaryInfo(
 pub unsafe fn SetSliceBoundaryInfo(pCurLayer: *mut SDqLayer, pSlice: *mut SSlice, kiSliceIdx: i32) -> i32 {
     if pCurLayer.is_null()
         || pSlice.is_null()
-        || (*pCurLayer).pFirstMbIdxOfSlice.is_null()
-        || (*pCurLayer).pCountMbNumInSlice.is_null()
+        || (*pCurLayer).pFirstMbIdxOfSlice.is_empty()
+        || (*pCurLayer).pCountMbNumInSlice.is_empty()
     {
         return ENC_RETURN_UNEXPECTED;
     }
 
-    (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = *(*pCurLayer).pFirstMbIdxOfSlice.add(kiSliceIdx as usize);
-    (*pSlice).iCountMbNumInSlice = *(*pCurLayer).pCountMbNumInSlice.add(kiSliceIdx as usize);
+    let first: &[i32] = &(*pCurLayer).pFirstMbIdxOfSlice;
+    let count: &[i32] = &(*pCurLayer).pCountMbNumInSlice;
+    (*pSlice).sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = first[kiSliceIdx as usize];
+    (*pSlice).iCountMbNumInSlice = count[kiSliceIdx as usize];
 
     ENC_RETURN_SUCCESS
 }
@@ -2678,17 +2686,8 @@ pub unsafe fn InitSliceInLayer(
     // and `SliceIdx::NONE` is that zero's meaning — "no slice at this position yet".
     (*pDqLayer).ppSliceInLayer = vec![SliceIdx::NONE; (*pDqLayer).iMaxSliceNum as usize];
 
-    let pFirstMb = (*pMa).WelsMallocz((std::mem::size_of::<i32>() * (*pDqLayer).iMaxSliceNum as usize) as u32, c"pFirstMbIdxOfSlice".as_ptr()) as *mut i32;
-    if pFirstMb.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-    (*pDqLayer).pFirstMbIdxOfSlice = pFirstMb;
-
-    let pCountMb = (*pMa).WelsMallocz((std::mem::size_of::<i32>() * (*pDqLayer).iMaxSliceNum as usize) as u32, c"pCountMbNumInSlice".as_ptr()) as *mut i32;
-    if pCountMb.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-    (*pDqLayer).pCountMbNumInSlice = pCountMb;
+    (*pDqLayer).pFirstMbIdxOfSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
+    (*pDqLayer).pCountMbNumInSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
 
     let iRet2 = InitSliceBoundaryInfo(pDqLayer, pSliceArgument, (*pDqLayer).iMaxSliceNum);
     if iRet2 != ENC_RETURN_SUCCESS {
@@ -2894,21 +2893,17 @@ pub unsafe fn ExtendLayerBuffer(
         slices.resize(kiMaxSliceNumNew as usize, SliceIdx::NONE);
     }
 
-    let pFirstMbIdxOfSlice = (*pMA).WelsMallocz((std::mem::size_of::<i32>() * kiMaxSliceNumNew as usize) as u32, c"pFirstMbIdxOfSlice".as_ptr()) as *mut i32;
-    if pFirstMbIdxOfSlice.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
+    // The two remaining triples — allocate, `copy_nonoverlapping` the first
+    // `kiMaxSliceNumOld` entries, free the old block — are one `resize` each, which
+    // keeps exactly the same guarantee: the existing entries survive at their indices
+    // and the new tail is zero, as `WelsMallocz` left it.
+    {
+        let first: &mut Vec<i32> = &mut (*pCurLayer).pFirstMbIdxOfSlice;
+        first.resize(kiMaxSliceNumNew as usize, 0);
+        let count: &mut Vec<i32> = &mut (*pCurLayer).pCountMbNumInSlice;
+        count.resize(kiMaxSliceNumNew as usize, 0);
     }
-    std::ptr::copy_nonoverlapping((*pCurLayer).pFirstMbIdxOfSlice, pFirstMbIdxOfSlice, kiMaxSliceNumOld as usize);
-    (*pMA).WelsFree((*pCurLayer).pFirstMbIdxOfSlice as *mut c_void, c"pFirstMbIdxOfSlice".as_ptr());
-    (*pCurLayer).pFirstMbIdxOfSlice = pFirstMbIdxOfSlice;
-
-    let pCountMbNumInSlice = (*pMA).WelsMallocz((std::mem::size_of::<i32>() * kiMaxSliceNumNew as usize) as u32, c"pCountMbNumInSlice".as_ptr()) as *mut i32;
-    if pCountMbNumInSlice.is_null() {
-        return ENC_RETURN_MEMALLOCERR;
-    }
-    std::ptr::copy_nonoverlapping((*pCurLayer).pCountMbNumInSlice, pCountMbNumInSlice, kiMaxSliceNumOld as usize);
-    (*pMA).WelsFree((*pCurLayer).pCountMbNumInSlice as *mut c_void, c"pCountMbNumInSlice".as_ptr());
-    (*pCurLayer).pCountMbNumInSlice = pCountMbNumInSlice;
+    let _ = (pMA, kiMaxSliceNumOld);
 
     ENC_RETURN_SUCCESS
 }
