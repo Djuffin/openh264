@@ -2355,11 +2355,12 @@ pub unsafe fn AddPrefixNal(
     }
 
     iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &mut (&mut *pOut).sNalList[(*pOut).iNalIndex as usize - 1],
-        &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+        &(&*pOut).sNalList[(*pOut).iNalIndex as usize - 1],
+        &(&*pOut).sBsBuffer[..],
+        Some(&(*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt),
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-        pNalLen.add(*pNalIdxInLayer as usize),
+        &mut *pNalLen.add(*pNalIdxInLayer as usize),
     );
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
@@ -2406,10 +2407,11 @@ pub unsafe fn WritePadding(pCtx: *mut sWelsEncCtx, iLen: i32, iSize: *mut i32) -
     crate::encoder::nal_encap::WelsUnloadNal(pOut);
 
     let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-        &mut (&mut *pOut).sNalList[iNal as usize],
-        null_mut(),
+        &(&*pOut).sNalList[iNal as usize],
+        &(&*pOut).sBsBuffer[..],
+        None,
+        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
         (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-        (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
         &mut iNalLen,
     );
     if iReturn != ENC_RETURN_SUCCESS {
@@ -3063,11 +3065,12 @@ pub unsafe fn WelsCodeOnePicPartition(
         crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
         iReturn = crate::encoder::nal_encap::WelsEncodeNal(
-            &mut (&mut *(*pCtx).pOut).sNalList[((*(*pCtx).pOut).iNalIndex - 1) as usize],
-            &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+            &(&*(*pCtx).pOut).sNalList[((*(*pCtx).pOut).iNalIndex - 1) as usize],
+            &(&*(*pCtx).pOut).sBsBuffer[..],
+            Some(&(*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt),
+            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
             (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-            (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-            (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+            &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
         );
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
@@ -3430,11 +3433,12 @@ pub unsafe fn WelsEncoderEncodeExt(
             crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
             (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                &mut (&mut *(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
-                &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+                &(&*(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
+                &(&*(*pCtx).pOut).sBsBuffer[..],
+                Some(&(*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt),
+                (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
                 (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-                (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-                (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+                &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
             );
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                 return (*pCtx).iEncoderError;
@@ -3624,11 +3628,12 @@ pub unsafe fn WelsEncoderEncodeExt(
                 crate::encoder::nal_encap::WelsUnloadNal((*pCtx).pOut);
 
                 (*pCtx).iEncoderError = crate::encoder::nal_encap::WelsEncodeNal(
-                    &mut (&mut *(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
-                    &mut (*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt as *mut _ as *mut c_void,
+                    &(&*(*pCtx).pOut).sNalList[(*(*pCtx).pOut).iNalIndex as usize - 1],
+                    &(&*(*pCtx).pOut).sBsBuffer[..],
+                    Some(&(*(*pCtx).pCurDqLayer).sLayerInfo.sNalHeaderExt),
+                    (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize),
                     (*pCtx).iFrameBsSize - (*pCtx).iPosBsBuffer,
-                    (*pCtx).pFrameBs.add((*pCtx).iPosBsBuffer as usize) as *mut c_void,
-                    (*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
+                    &mut *(*pLayerBsInfo).pNalLengthInByte.add(iNalIdxInLayer as usize),
                 );
                 if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                     return (*pCtx).iEncoderError;
