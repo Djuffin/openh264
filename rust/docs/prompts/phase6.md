@@ -281,7 +281,7 @@ analogue and the recipe that closed it:
 | `*mut u8` | 277 | the decoder's plane/scratch pointers | `PlaneCursor`/`PlaneCursorMut` (`safe/plane.rs`) — **eight encoder files already consume them** |
 | `*mut sWelsEncCtx` | 258 | `*mut SWelsDecoderContext` | the flip — **accessors first, view struct last** (X→Z's forced order: `deny` fires on the *call*, so callees convert first) |
 | `*mut SMB` + `SMB`'s five raw arrays (`sMv`, `pRefIndex`, `pSadCost`, `pIntra4x4PredMode`, `pNonZeroCount`, `md.rs:294–306`) | 131 | 5.2's `MbGrid` in spirit — **ruled inline at session C's brief** | the five arrays become inline POD arrays in `SMB` (S21: the `SMB` block is `WelsMallocz`'d, so an inline array is valid at zero and an `MbArray` field is not until 6.6); the `*mut SMB` list and parameter family go with the layer bracket (D) |
-| `*mut SSlice` 134 + `*mut SDqLayer` 72 | 206 | the layer/slice brackets | the bracket maneuver (5 applications) |
+| `*mut SSlice` 134 + `*mut SDqLayer` 72 | 206 | the layer/slice brackets | **session D**: the layer goes `Box`-built (T3.6's `pOut` precedent — S21 read the other way) and then owns; its stored aliases become ids first (the ordering rule); the slice banks follow as `Vec<SSlice>`; the `*mut` parameter families are E's |
 | `*mut SMbCache` (12 raw fields, `md.rs:354–375`) | 102 | `DqLayerState`'s scratch caches (session M's 45 params) | the eight malloc'd buffers go inline and the four ping-pong aliases become half-selectors (session C, same recipe as `SMB`); the `*mut SMbCache` parameters take-what-you-reach (E) |
 | `*mut SPicture` | 64 | `PPicture`/F42 | `Pool<Box<SPicture>>` + `classify` — `MarkPicAsRef` has the same shape (§0.1) |
 | `*mut SWelsFuncPtrList` | 57 | the dispatch tables | the table is already `Option<fn>` fields; the **pointer to it** is the residue |
@@ -398,15 +398,28 @@ at a family boundary, and only with a written reason):
   `--lib` **342/0**; its first two runs failed — once on this session's own covering
   test (T6.C4) and once on a prose `*mut ` in that fix's comment plus **F3 measurement
   67**, whose alternation (12 `mt` presets a side, 1 hit each) was run and acquitted.
-* **D — NEXT.** the slice/layer brackets (`SSlice`, `SDqLayer`), 6.4's slice state up
-  to Phase 7's boundary (`pBsBuffer` excepted by settlement); **the `SMB` list's
-  ownership goes here with the layer** (`sMbDataP`/`ppMbListD`, and the
-  `pCurMb: *mut SMB` parameter family with the bracket, joined by `SMbCache`'s own
-  `*mut` parameter family), and **the size-limited dynamic-slice path
-  (`WelsMdInterMbLoopOverDynamicSlice`) gets its probe here** — session C left it the
-  one encode path no probe drives, and both slices' `sSliceBs.pBs` half of
-  `ReallocateSliceList`'s error-path aliasing is still open. `SSlice` carries 5 KB of
-  inline scratch now (6544 bytes), which is the shape the bracket has to move.
+* **D — NEXT.** **The layer owns, and the slice banks with it** — brief:
+  [`phase6_session_d.md`](phase6_session_d.md). Session C's recipe one level up, and
+  the enabler is the same S21 argument read the other way: `SDqLayer` is reached only
+  through a *pointer* in the zeroed context, which is T3.6's `pOut` precedent — so the
+  layer becomes **`Box`-built** and may then own what an inline-in-a-zeroed-block
+  struct may not. Order: **the dynamic-slice probe first** (`SM_SIZELIMITED_SLICE`,
+  the one encode path no probe drives, and settled by reading as *single-threaded* —
+  `bThreadSlcBufferFlag`/`bSliceBsBufferFlag` both need `iMultipleThreadIdc > 1` — so
+  it stays out of Phase 7's way); then the layer's **stored aliases become ids**
+  (`pRefLayer` → a layer index, `ppSliceInLayer` → slice indices — the ordering rule,
+  and it removes a dangling class rather than an instance: `ReallocateSliceList` frees
+  a bank the pointer array still names, and only the single-threaded path re-stamps);
+  then **the layer owns** (`MbArray<SMB>` with `ppMbListD` deleted — `InitMbListD`
+  allocates *one* flat block and cuts it disjointly per layer, so neither field is a
+  carrier; the three per-slice `Vec`s, which delete `ExtendLayerBuffer`'s
+  malloc/copy/free triples; `pOverallMbMap` → `Vec<u16>`, plan §4's own line); then
+  **the slice banks own** (`Vec<SSlice>` — 6544 bytes of mostly inline scratch since
+  session C — `ReallocateSliceList` → a resize, closing the `sSliceBs.pBs` error-path
+  double free session C handed over). **`pCurDqLayer` is explicitly not here**: 271
+  sites and a *context* field, so the same S21 argument that lets the layer own
+  forbids the context to until 6.6. Drop-from-the-end is authorised at exactly one
+  boundary — the `*mut SMB`/`*mut SMbCache` parameter families to E.
 * **E** — the ME/MD/RC/CABAC records (6.3's scratch — `SWelsMD`, `SWelsME`,
   `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, take-what-you-reach; `SMbCache`'s
   fields moved to C, its `*mut` parameters stay here), and the third attempt at the
