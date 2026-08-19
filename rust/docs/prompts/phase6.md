@@ -398,28 +398,48 @@ at a family boundary, and only with a written reason):
   `--lib` **342/0**; its first two runs failed — once on this session's own covering
   test (T6.C4) and once on a prose `*mut ` in that fix's comment plus **F3 measurement
   67**, whose alternation (12 `mt` presets a side, 1 hit each) was run and acquitted.
-* **D — NEXT.** **The layer owns, and the slice banks with it** — brief:
-  [`phase6_session_d.md`](phase6_session_d.md). Session C's recipe one level up, and
-  the enabler is the same S21 argument read the other way: `SDqLayer` is reached only
-  through a *pointer* in the zeroed context, which is T3.6's `pOut` precedent — so the
-  layer becomes **`Box`-built** and may then own what an inline-in-a-zeroed-block
-  struct may not. Order: **the dynamic-slice probe first** (`SM_SIZELIMITED_SLICE`,
-  the one encode path no probe drives, and settled by reading as *single-threaded* —
-  `bThreadSlcBufferFlag`/`bSliceBsBufferFlag` both need `iMultipleThreadIdc > 1` — so
-  it stays out of Phase 7's way); then the layer's **stored aliases become ids**
-  (`pRefLayer` → a layer index, `ppSliceInLayer` → slice indices — the ordering rule,
-  and it removes a dangling class rather than an instance: `ReallocateSliceList` frees
-  a bank the pointer array still names, and only the single-threaded path re-stamps);
-  then **the layer owns** (`MbArray<SMB>` with `ppMbListD` deleted — `InitMbListD`
-  allocates *one* flat block and cuts it disjointly per layer, so neither field is a
-  carrier; the three per-slice `Vec`s, which delete `ExtendLayerBuffer`'s
-  malloc/copy/free triples; `pOverallMbMap` → `Vec<u16>`, plan §4's own line); then
-  **the slice banks own** (`Vec<SSlice>` — 6544 bytes of mostly inline scratch since
-  session C — `ReallocateSliceList` → a resize, closing the `sSliceBs.pBs` error-path
-  double free session C handed over). **`pCurDqLayer` is explicitly not here**: 271
-  sites and a *context* field, so the same S21 argument that lets the layer own
-  forbids the context to until 6.6. Drop-from-the-end is authorised at exactly one
-  boundary — the `*mut SMB`/`*mut SMbCache` parameter families to E.
+* **D — SPENT** (2026-08-19). **The layer owns, and the slice banks with it** — brief:
+  [`phase6_session_d.md`](phase6_session_d.md). Delivered, all five faces. **The enabler is
+  one argument used twice**: `SDqLayer` is reached only through a pointer in the zeroed
+  context (T3.6's `pOut` precedent), so it became **`Box`-built with a real constructor** and
+  could then own what a `WelsMallocz`'d struct may not — and **the order was forced rather
+  than chosen**, because a `Vec` field in a zeroed block is UB at its first drop (S21) and
+  `Option<LayerIdx>` has **no niche to borrow**, so its `None` cannot be inherited from a zero
+  image (F56 from the other side). The layer owns **`MbArray<SMB>`** (with `ppMbListD`
+  deleted — `InitMbListD` cut *one* flat block across the layers and stored the cuts twice,
+  so neither field was a carrier), **`Vec<SliceIdx>`** for its slice list, two **`Vec<i32>`**,
+  **`Vec<u16>`** for the macroblock map and **`Vec<SSlice>`** per bank; four malloc/copy/free
+  triples and eleven allocations went with them, and **`ReallocateSliceList` is a
+  `resize_with` that closes session C's handed-over `sSliceBs.pBs` double free** — a resize
+  *moves*, so each `pBs` is held once at every point. **The dynamic-slice probe found four
+  reds and the largest is byte-visible**: **F60**, `FrameBsRealloc` moving `pOut->sNalLen` and
+  never re-aiming the layers at it — **three SIGBUS crashes and four byte divergences against
+  the C++ before, all twelve configurations BYTE-IDENTICAL after** — on a path **no sweep
+  configuration reaches**, because `iMaxSliceNum` opens at `MAX_SLICES_NUM` = 35 and the
+  sweep's size-limited rows code at most nine slices. Non-vacuity and the realloc are
+  measured: **37 / 9 / 3** slices against **1 / 1 / 1** at the sweep's constraint, and 112x96
+  is the smallest geometry on the grid that crosses 35. Its solo cost is **≈ 357 s** in-step
+  (the `--lib` step reads 1432.01 s at 344 tests against session C's 1022.46 s at 342) — the
+  expensive probe, and 42 macroblocks against 6 is why. **F61 is recorded, not fixed**: the MT
+  bank growth never re-stamps the slice list and **the C++ has the same shape**, so it is
+  Phase 7's — and the position spelling removes the class's memory-safety half while leaving
+  the synchronisation half. `pFeatureSearchPreparation` and five functions behind it are
+  deleted (S18, enumerated by strip-and-build). Every raw pointer still handed out is
+  **root-derived** (S28) through five accessors, with the Miri test S28 mandates walking the
+  macroblock array's full reach in both directions. Encoder-side `raw_ptr` **2389 → 2331**,
+  `unsafe_block` **288 → 283**, **`unsafe_fn` 684 unmoved** — six new root accessors whose
+  signatures name raw pointers, against six deleted dead functions; `SDqLayer` **512 → 640**
+  across six measured steps, `SSliceCtx` **32 → 48**, `SSliceBufferInfo` **16 → 32**,
+  `sWelsEncCtx` **97912 → 97904**. **The span is flat**: 7 pairs, decode **−0.08%** and encode
+  **+0.00%**, both inside their own 7-pair null bands with the encode median *identical* to
+  the null's; worst row **+1.01%** against the +25% tripwire, cumulative ≈ **+10…+12%**
+  unmoved, and the brief's two named candidates are below the instrument's resolution so
+  neither is claimed. **F3 measurements 68–70**, all acquitted, with the alternation S14 owed:
+  base `085e2e41` **5 hits** against head **1** over 2880 configurations — HEAD is not worse.
+  `exit` **PASS 13/0/1 on its first run**, Miri `--lib` **344/0** with all four encoder probe
+  names in the output. **Miri ran once, at the close, on the steward's in-session direction
+  (S30)**; face 0's reds predate it. **Drop-from-the-end was taken at the authorised boundary
+  and nowhere else**: the `*mut SMB` (128 sites) and `*mut SMbCache` parameter families go to E.
 * **E** — the ME/MD/RC/CABAC records (6.3's scratch — `SWelsMD`, `SWelsME`,
   `SMVUnitXY`, `SMeRefinePointer`, `SCabacCtx`, take-what-you-reach; `SMbCache`'s
   fields moved to C, its `*mut` parameters stay here), and the third attempt at the
