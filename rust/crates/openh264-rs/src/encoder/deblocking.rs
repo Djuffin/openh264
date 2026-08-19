@@ -1308,14 +1308,17 @@ pub unsafe fn DeblockingMbAvcbase(
 // ============================================================================
 
 pub unsafe fn DeblockingFilterFrameAvcbase(pCurDq: *mut SDqLayer, pFunc: *mut SWelsFuncPtrList) {
-    if pCurDq.is_null() || (*pCurDq).ppSliceInLayer.is_null() || (*(*pCurDq).ppSliceInLayer).is_null() || (*pCurDq).sMbDataP.is_null() || (*pCurDq).pDecPic.is_null() {
+    if pCurDq.is_null() || (*pCurDq).sMbDataP.is_null() || (*pCurDq).pDecPic.is_null() {
+        return;
+    }
+    let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
+    if pSlice.is_null() {
         return;
     }
     let kiMbWidth = (*pCurDq).iMbWidth;
     let kiMbHeight = (*pCurDq).iMbHeight;
     let mut pCurrentMbBlock = (*pCurDq).sMbDataP;
 
-    let pSlice = *(*pCurDq).ppSliceInLayer;
     let sSliceHeaderExt = &(*pSlice).sSliceHeaderExt;
 
     if sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 {
@@ -1444,7 +1447,7 @@ pub unsafe extern "C" fn PerformDeblockingFilter(pEnc: *mut sWelsEncCtx) {
     } else if (*pCurLayer).iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(pCurLayer);
         for iSliceIdx in 0..iSliceCount {
-            let pSlice = *(*pCurLayer).ppSliceInLayer.add(iSliceIdx as usize);
+            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurLayer, iSliceIdx);
             if !pSlice.is_null() {
                 DeblockingFilterSliceAvcbase(pCurLayer, (*pEnc).pFuncList, pSlice);
             }

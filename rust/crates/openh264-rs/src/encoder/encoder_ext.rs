@@ -1584,10 +1584,8 @@ pub unsafe fn FreeDqLayer(pDq: *mut *mut SDqLayer, pMa: *mut CMemoryAlign) {
 
     FreeSliceInLayer(p, pMa);
 
-    if !(*p).ppSliceInLayer.is_null() {
-        (*pMa).WelsFree((*p).ppSliceInLayer as *mut c_void, tag!("ppSliceInLayer"));
-        (*p).ppSliceInLayer = null_mut();
-    }
+    // `ppSliceInLayer` is a `Vec<SliceIdx>` since T6.D4 — the layer's own `Drop`
+    // releases it when the `Box` below goes.
     if !(*p).pFirstMbIdxOfSlice.is_null() {
         (*pMa).WelsFree(
             (*p).pFirstMbIdxOfSlice as *mut c_void,
@@ -2064,7 +2062,7 @@ pub unsafe fn PrefetchReferencePicture(pCtx: *mut sWelsEncCtx, keFrameType: EVid
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
-        let pSlice = *(*(*pCtx).pCurDqLayer).ppSliceInLayer.add(iIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer((*pCtx).pCurDqLayer, iIdx);
         if !pSlice.is_null() {
             (*pSlice).sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
         }
@@ -2144,7 +2142,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
     if pCurDq.is_null() {
         return;
     }
-    let pBaseSlice = *(*pCurDq).ppSliceInLayer;
+    let pBaseSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, 0);
     if pBaseSlice.is_null() {
         return;
     }
@@ -2189,7 +2187,7 @@ pub unsafe fn WelsInitCurrentLayer(pCtx: *mut sWelsEncCtx, _kiWidth: i32, _kiHei
 
     let mut iIdx = 1;
     while iIdx < iSliceCount {
-        let pSlice = *(*pCurDq).ppSliceInLayer.add(iIdx as usize);
+        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer(pCurDq, iIdx);
         if !pSlice.is_null() {
             crate::encoder::svc_encode_slice::InitSliceHeadWithBase(pSlice, pBaseSlice);
         }
