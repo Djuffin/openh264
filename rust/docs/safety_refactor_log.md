@@ -11535,7 +11535,8 @@ nothing.
   `wels_encoder_ext.rs:235/246/266`, `SetOption`/`GetOption` at `:1945`, `:2318`, `:2483`, `:2492`,
   `:2303` — Phase 8); MT plumbing (`pTaskManage`, `mutexEncoderError`, `slice_multi_threading.rs`'s
   handles/events/mutexes/`pWelsPEncCtx`, `wels_task_management.rs` — Phase 7). `IWelsVP` = 0,
-  `Combined3` = 0.
+  `Combined3` = 0. **`family` at the face's close: both sweeps 341/341, ratchet clean, PASS** — the
+  vtable, four dispatch families and 137 `c_void` occurrences left without moving an encoded byte.
 * **Face 3 — the `SPicture` settlement, written before the first edit** (read at `ffa78a87`; 59
   `*mut SPicture` occurrences over `src/encoder src/common`, of which 17 are fields).
   **Three owners, confirmed**: the **reconstruction pool** `SRefList.pRef[0..=iMaxNumRefFrame]`
