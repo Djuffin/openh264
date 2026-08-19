@@ -2396,3 +2396,56 @@ rests on; the only decision this reading could carry is whether to open the fall
 and at 26 points from the tripwire that decision does not turn on a second day's
 precision. Both binaries stay stashed (`.perfpair/c_base` = `2666a83c`,
 `.perfpair/c_head` = `ae736b96`), so session D chains from this close for free.
+
+### Phase 6 session D's span — the layer and its slice banks own, and the instrument reads flat
+
+`085e2e41` (session C's close, `.perfpair/d_base`) → `592801b5` (session D's face-3
+close, `.perfpair/d_head`): **eight commits, the whole session** — the dynamic-slice
+probe with F60's fix (T6.D1), the dead screen-content field (T6.D2), `SDqLayer`
+`Box`-built with a real constructor and `pRefLayer` as a position (T6.D3), the slice
+list as positions (T6.D4), the layer's own `MbArray<SMB>` (T6.D5), the two per-slice
+`Vec`s (T6.D6), the macroblock map (T6.D7) and the slice banks (T6.D8). Both benches,
+machine otherwise idle, S1/S2 protocol through `perfpair.py`, null re-run at the
+verdict's own pair count.
+
+**This session owed a span and could not have skipped it** (S2b, D-gate-1): faces 2
+and 3 move per-macroblock addressing on the mode-decision, motion-estimation, entropy
+and deblocking paths — every `*mut SMB` in the tree is now derived from an `MbArray`
+root — and every slice reference is a position resolved against a bank rather than a
+stored pointer.
+
+| reading | pairs | CB (CAVLC) | Main | High | decode median | encode median |
+|---|---|---|---|---|---|---|
+| `085e2e41` → `592801b5` | **7** | −0.26% | +0.09% | −0.08% | **−0.08%** | **+0.00%** |
+| 7-pair null (`d_head` both slots) | **7** | −0.11% | +0.11% | −0.05% | **−0.05%** | **+0.00%** |
+
+Null bands at 7 pairs: decode **−0.11% … +0.11%** (0.22 points), encode **−3.14% …
++2.07%** (5.21 points — the encode bench's 28 rows are noisier than the decode
+bench's 3, as they have been all phase, and this null is wider than session C's 3.81).
+
+**Both medians are inside their bands, and the encode median is *identical* to the
+null's own.** The span's worst single encode row is **+1.01%** against the null's
+**+2.07%** ceiling, and its worst decode row **+0.09%** against the null's **+0.11%** —
+every row of both benches inside the floor the same binary produces against itself.
+
+**The tripwire arithmetic, stated before and after** (D-perf-4: +25% *median* on any
+bench stream). Before: the worst encode row at session C's close was +0.49%, inside
+its null. After: the worst single row this span produces is **+1.01%**, so the
+tripwire is unbreached by ≈**24 points**. No face came near a park.
+
+**The cumulative position.** The encoder's cumulative deficit was ≈ **+10…+12%** at
+session C's close; ×1.0000 leaves it ≈ **+10…+12%**, unmoved. The ≈+23% stop-line is
+Phase 5's decode-side figure and is not what this row moves; D-perf-6 still sends
+recovery to the Phase 9 pass.
+
+**Both of the brief's named candidates are below this instrument's resolution, and
+neither is claimed** (S33). §5 named `MbArray`'s bounds checks where pointer
+arithmetic was, and the slice indirection becoming an index. The measurement is
+exactly the null on both benches, so there is nothing to attribute — and the brief's
+own instruction was to predict nothing and measure first, which is what happened.
+
+**No day two is owed and none is taken.** S2b's clause attaches to readings a decision
+rests on; the only decision this reading could carry is whether to open perf recovery,
+and at +0.00% median against a 5.21-point encode band that decision does not turn on a
+second day's precision. Both binaries stay stashed (`.perfpair/d_base` = `085e2e41`,
+`.perfpair/d_head` = `592801b5`), so session E chains from this close for free.
