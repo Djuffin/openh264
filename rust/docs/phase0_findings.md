@@ -1983,3 +1983,54 @@ does not open.
 Running total: **sixty-five measurements, twenty alternations, thirty-eight
 acquittals.**
 
+
+### Sixty-sixth measurement — 2026-08-19, Phase 6 session C: two hits, both inside the signature, and the pair is the acquittal
+
+The `family` battery at face 1's close (T6.C1 + T6.C2 in the tree, `SMB`'s five
+scratch arrays inline and the second encode probe live) read **341/341 debug** and
+**340/341 release**. The release failure:
+
+```
+mt CiscoVT2people_160x96_6fps t=2 sm=3 n=600 cabac=1 rc=0 ::  C++ 42088   Rust 42255
+```
+
+`mt`, `sm=3`, `t=2`, wrong *length* rather than wrong bytes, release — the signature
+on every clause.
+
+**Step 0 does not apply and says so.** This window moves encoder production code in
+eleven files; base and head cannot build the same `rust_enc` in either profile. That
+is Phase 6's standing clause (`prompts/phase6.md` §3), met for the third session
+running.
+
+**Step 1 — the configuration re-run 6×, machine otherwise idle: `BYTE-IDENTICAL`
+all six**, 42088 bytes against 42088 every time. A deterministic port bug repeats its
+bytes on its own configuration; this one does not repeat at all.
+
+**Then the whole release `mt` preset once on its own: 119/120, and the failure is a
+different configuration** —
+
+```
+mt CiscoVT2people_320x192_12fps t=4 sm=3 n=1500 cabac=0 rc=1 ::  C++ 39895   Rust 0
+```
+
+— a different clip, a different thread count, a different `iRCMode`, a different
+entropy coder, a different slice budget, and a **zero-length** output where the first
+was long, while the first hit's own configuration passes six times over. Both sit
+inside the signature; neither is `st`/`def`; neither is wrong *bytes*. Step 3's escape
+hatch does not open.
+
+**Step 2 was not run, and the reason is on the record.** Two hits landed in this
+session, which is the alternation's trigger read literally — but this is measurement
+65's shape exactly (a gate hit that acquits on re-run, plus a second, unrelated hit
+drawn by the adjudication's own preset re-run), and that measurement called the pair
+the acquittal without alternating. The second hit here is evidence *for* the race,
+not against it: one binary, two configurations, two different failure modes, and the
+first configuration clean on repetition. An alternation is 24 `mt` presets — hours of
+wall clock — and it is owed the moment a **gate** sweep produces a second hit in this
+session. Faces 2 and 3 each run `family` and the close runs `exit`; those are the
+samples that would trigger it.
+
+**Acquitted as F3.**
+
+Running total: **sixty-six measurements, twenty alternations, thirty-nine
+acquittals.**
