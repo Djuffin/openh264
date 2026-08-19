@@ -2292,7 +2292,7 @@ fn nonzero_count_duplicates_agree() {
         let seed: Vec<i8> = (0..24).map(|_| rng.range_i32(-128, 127) as i8).collect();
         let mut a: [i8; 24] = seed.clone().try_into().unwrap();
         let mut c: [i8; 24] = seed.try_into().unwrap();
-        unsafe { encdeb::WelsNonZeroCount_c(a.as_mut_ptr()) };
+        encdeb::WelsNonZeroCount_c(&mut a);
         deb::nonzero_count(&mut c);
         assert_eq!(a, c, "encoder copy disagrees with the safe kernel");
     }

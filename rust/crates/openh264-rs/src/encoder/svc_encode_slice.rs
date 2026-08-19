@@ -547,21 +547,20 @@ pub unsafe fn UpdateNonZeroCountCache(pMb: *mut SMB, pMbCache: *mut SMbCache) {
     if pMb.is_null() || pMbCache.is_null() {
         return;
     }
-    let mb_nz = (*pMb).pNonZeroCount;
-    if mb_nz.is_null() {
-        return;
-    }
-    let cache_nz = (*pMbCache).iNonZeroCoeffCount.as_mut_ptr();
+    // The `mb_nz.is_null()` guard that stood here was the port's own; the row is an
+    // inline array and cannot be absent.
+    let mb_nz = &(*pMb).iNonZeroCount;
+    let cache_nz = &mut (*pMbCache).iNonZeroCoeffCount;
 
-    std::ptr::copy_nonoverlapping(mb_nz.add(0), cache_nz.add(9), 4);
-    std::ptr::copy_nonoverlapping(mb_nz.add(4), cache_nz.add(17), 4);
-    std::ptr::copy_nonoverlapping(mb_nz.add(8), cache_nz.add(25), 4);
-    std::ptr::copy_nonoverlapping(mb_nz.add(12), cache_nz.add(33), 4);
+    cache_nz[9..13].copy_from_slice(&mb_nz[0..4]);
+    cache_nz[17..21].copy_from_slice(&mb_nz[4..8]);
+    cache_nz[25..29].copy_from_slice(&mb_nz[8..12]);
+    cache_nz[33..37].copy_from_slice(&mb_nz[12..16]);
 
-    std::ptr::copy_nonoverlapping(mb_nz.add(16), cache_nz.add(14), 2);
-    std::ptr::copy_nonoverlapping(mb_nz.add(18), cache_nz.add(38), 2);
-    std::ptr::copy_nonoverlapping(mb_nz.add(20), cache_nz.add(22), 2);
-    std::ptr::copy_nonoverlapping(mb_nz.add(22), cache_nz.add(46), 2);
+    cache_nz[14..16].copy_from_slice(&mb_nz[16..18]);
+    cache_nz[38..40].copy_from_slice(&mb_nz[18..20]);
+    cache_nz[22..24].copy_from_slice(&mb_nz[20..22]);
+    cache_nz[46..48].copy_from_slice(&mb_nz[22..24]);
 }
 
 /// Computes the virtual slice identifier `uiSliceIdc` for a given macroblock linear index.
@@ -1391,7 +1390,7 @@ unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) 
     }
     let mut nzc = String::new();
     for di in 0..24 {
-        nzc.push_str(&format!("{},", *(*pCurMb).pNonZeroCount.add(di)));
+        nzc.push_str(&format!("{},", (*pCurMb).iNonZeroCount[di]));
     }
     eprintln!(
         "MB {:3} type={:08x} cbp={:02x} qp={:2} cqp={:2} sub={},{},{},{} \
@@ -1408,13 +1407,13 @@ unsafe fn mb_dump(pCurMb: *mut SMB, pMd: *const SWelsMD, pSlice: *const SSlice) 
         (*pMd).iCostLuma,
         (*pMd).iCostChroma,
         (*pMd).iCostSkipMb,
-        *(*pCurMb).pSadCost.add(0),
+        (*pCurMb).iSadCost,
         (*pCurMb).sP16x16Mv.iMvX,
         (*pCurMb).sP16x16Mv.iMvY,
-        *(*pCurMb).pRefIndex.add(0),
+        (*pCurMb).iRefIndex[0],
         nzc,
-        (*(*pCurMb).sMv.add(0)).iMvX,
-        (*(*pCurMb).sMv.add(0)).iMvY,
+        ((*pCurMb).sMv[0]).iMvX,
+        ((*pCurMb).sMv[0]).iMvY,
         (*pSlice).iMbSkipRun,
     );
 }

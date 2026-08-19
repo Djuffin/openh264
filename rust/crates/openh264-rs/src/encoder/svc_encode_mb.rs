@@ -554,7 +554,7 @@ pub unsafe fn WelsEncRecI16x16Y(
         };
         let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
         kpNoneZeroCountIdx += 1;
-        *(*pCurMb).pNonZeroCount.add(offset) = uiNoneZeroCount as i8;
+        (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
         uiNoneZeroCountMbAc += uiNoneZeroCount;
         pBlock = pBlock.add(16);
     }
@@ -679,7 +679,7 @@ pub unsafe fn WelsEncRecI4x4Y(
     } else {
         0
     };
-    *(*pCurMb).pNonZeroCount.add(uiOffset) = iNoneZeroCount as i8;
+    (*pCurMb).iNonZeroCount[uiOffset] = iNoneZeroCount as i8;
 
     let pPredI4x4 = pPred.offset(dec_block_offset);
     if iNoneZeroCount > 0 {
@@ -751,7 +751,8 @@ pub unsafe fn WelsEncInterY(
     pBlock = pBlock.sub(256);
     pRes = pRes.sub(256);
 
-    core::ptr::write_bytes((*pCurMb).pNonZeroCount, 0, 16);
+    // `WelsSetMemZero (pCurMb->pNonZeroCount, 16)` — the 16 luma entries only.
+    (&mut (*pCurMb).iNonZeroCount)[0..16].fill(0);
 
     if iSingleCtrMb < 6 {
         // JVT-O079 zero-residual early cutoff
@@ -768,7 +769,7 @@ pub unsafe fn WelsEncInterY(
                     };
                     let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
                     kpNoneZeroCountIdx += 1;
-                    *(*pCurMb).pNonZeroCount.add(offset) = iNoneZeroCount as i8;
+                    (*pCurMb).iNonZeroCount[offset] = iNoneZeroCount as i8;
                     pBlock = pBlock.add(16);
                 }
                 if let Some(func) = pfDequantizationFour4x4 {
@@ -861,14 +862,10 @@ pub unsafe fn WelsEncRecUV(
 
     if iSingleCtr8x8 < 7 {
         crate::encoder::encoder_context::WelsSetMemZero_c(pRes as *mut u8, 128);
-        *(*pCurMb).pNonZeroCount.add(16 + uiNoneZeroCountOffset) = 0;
-        *(*pCurMb)
-            .pNonZeroCount
-            .add(16 + uiNoneZeroCountOffset + 1) = 0;
-        *(*pCurMb).pNonZeroCount.add(20 + uiNoneZeroCountOffset) = 0;
-        *(*pCurMb)
-            .pNonZeroCount
-            .add(20 + uiNoneZeroCountOffset + 1) = 0;
+        (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
+        (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
+        (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset] = 0;
+        (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset + 1] = 0;
     } else {
         let mut kpNoneZeroCountIdx = uiSubMbIdx;
         pBlock = pBlock.sub(64);
@@ -880,7 +877,7 @@ pub unsafe fn WelsEncRecUV(
             };
             let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
             kpNoneZeroCountIdx += 1;
-            *(*pCurMb).pNonZeroCount.add(offset) = uiNoneZeroCount as i8;
+            (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
             pBlock = pBlock.add(16);
         }
         if let Some(func) = pfDequantizationFour4x4 {
@@ -936,7 +933,8 @@ pub unsafe fn WelsRecPskip(
             8,
         );
     }
-    crate::encoder::encoder_context::WelsSetMemZero_c((*pCurMb).pNonZeroCount as *mut u8, 24);
+    // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)` — the row is inline now.
+    (*pCurMb).iNonZeroCount = [0; crate::encoder::md::MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
 
 /// Fast early-termination test evaluating whether Luma (Y) residual qualifies for `P_SKIP`.
