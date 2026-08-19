@@ -202,6 +202,23 @@ impl<T> MbArray<T> {
         }
     }
 
+    /// The array's root as a raw pointer — **the shim boundary, and S28's rule**.
+    ///
+    /// Phase 6 session D's encoder callers still take `*mut SMB` and walk *backwards*
+    /// out of the macroblock they are handed (`pCurMb.offset(-1)` for the left
+    /// neighbour, `.offset(-iMbStride)` for the one above), so the pointer they get
+    /// must carry the whole array's provenance. This returns the `Vec`'s own stored
+    /// pointer, which does exactly that; a pointer taken through
+    /// `as_mut_slice()[xy..]` would have the right address and provenance for the
+    /// tail alone, which is S28's class and is invisible to every byte-level gate.
+    ///
+    /// Repeated calls are safe to interleave: `Vec::as_mut_ptr` reads the pointer the
+    /// allocation already holds rather than reborrowing the buffer, so a second call
+    /// does not invalidate the first one's result.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.data.as_mut_ptr()
+    }
+
     /// Adopts `data` as the per-macroblock array of `dims`.
     ///
     /// # Panics

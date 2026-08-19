@@ -444,7 +444,6 @@ pub struct sWelsEncCtx {
     // into `SMB` as inline arrays, so the context neither allocates them, wires
     // them, nor frees them; the two parity banks the first two carried are
     // unnecessary once every macroblock owns its row.
-    pub ppMbListD: *mut *mut SMB,
     pub pStrideTab: *mut SStrideTables,
     pub pFuncList: *mut SWelsFuncPtrList,
     pub pSliceThreading: *mut SSliceThreading,

@@ -194,8 +194,10 @@ assert_size!(SSliceBufferInfo, 16);
 // 1-byte `iDqIdx`, and dropped `repr(C)` with them — so the compiler now packs the
 // struct's fifteen small scalars into the holes the C layout left, and **496 after
 // T6.D4** made `ppSliceInLayer` a `Vec<SliceIdx>` (one pointer becomes a three-word
-// `Vec`). **Measured** at each step; the number tracks the port, not the C++.
-assert_size!(SDqLayer, 496);
+// `Vec`), and **528 after T6.D5** gave the layer its own `MbArray<SMB>` (the same
+// trade again). **Measured** at each step; the number tracks the port, not the C++.
+assert_size!(SDqLayer, 528);
+
 
 // codec/encoder/core/inc/wels_func_ptr_def.h
 // 1280 before Phase 4a; -8 for `SSampleDealingFunc`'s shrink above; -24 at T4b.1,
@@ -235,8 +237,11 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // **T6.C1**: -40, the five per-macroblock scratch pointers deleted with `SMB`'s
 // conversion (see `assert_size!(SMB, …)` above). Was `98008 - 64 + 8` = 97952, the
 // C++ size with this port's 8-byte mutex handle in place of `pthread_mutex_t`.
-// **97912, measured.**
-assert_size!(sWelsEncCtx, 97912);
+// **T6.D5**: -8 more, `ppMbListD` deleted — `InitMbListD` cut one flat block across
+// the layers and stored the cuts twice, and each layer owns its own `MbArray<SMB>`
+// now. **97904, measured.**
+assert_size!(sWelsEncCtx, 97904);
+
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
 // offsets. `wels_preprocess.rs` used to declare its own 15-field `SWelsEncCtx` and
@@ -250,7 +255,9 @@ assert_size!(sWelsEncCtx, 97912);
 // the one member this port models differently, so each number below *was* the unmodified
 // C++ `offsetof`, measured on darwin/arm64.
 //
-// **T6.C1 moved all fifteen and they are re-pinned to measured values.** Five raw
+// **T6.C1 moved all fifteen and they are re-pinned to measured values; T6.D5 moved
+// thirteen of them again**, by a further 8, deleting `ppMbListD` from ahead of them.
+// The two that do not move are the two that precede it.**T6.C1's account:** Five raw
 // pointers (`pSadCostMb`, `pMvUnitBlock4x4`, `pRefIndexBlock4x4`,
 // `pNonZeroCountBlocks`, `pIntra4x4PredModeBlocks`) sat at offsets 32-96 -- ahead of
 // every pin below -- and their contents are inline in `SMB` now, so each offset from
@@ -267,18 +274,18 @@ macro_rules! assert_ctx_offset {
 assert_ctx_offset!(sLogCtx, 0);
 assert_ctx_offset!(pSvcParam, 24);
 assert_ctx_offset!(iMvRange, 32);
-assert_ctx_offset!(ppRefPicListExt, 144);
-assert_ctx_offset!(pLtr, 280);
-assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 288);
-assert_ctx_offset!(eSliceType, 292);
-assert_ctx_offset!(uiDependencyId, 321);
-assert_ctx_offset!(uiTemporalId, 322);
-assert_ctx_offset!(pWelsSvcRc, 328);
-assert_ctx_offset!(pVaa, 376);
-assert_ctx_offset!(pVpp, 384);
-assert_ctx_offset!(sSpatialIndexMap, 480);
-assert_ctx_offset!(bRefOfCurTidIsLtr, 560);
-assert_ctx_offset!(pMemAlign, 1784);
+assert_ctx_offset!(ppRefPicListExt, 136);
+assert_ctx_offset!(pLtr, 272);
+assert_ctx_offset!(bCurFrameMarkedAsSceneLtr, 280);
+assert_ctx_offset!(eSliceType, 284);
+assert_ctx_offset!(uiDependencyId, 313);
+assert_ctx_offset!(uiTemporalId, 314);
+assert_ctx_offset!(pWelsSvcRc, 320);
+assert_ctx_offset!(pVaa, 368);
+assert_ctx_offset!(pVpp, 376);
+assert_ctx_offset!(sSpatialIndexMap, 472);
+assert_ctx_offset!(bRefOfCurTidIsLtr, 552);
+assert_ctx_offset!(pMemAlign, 1776);
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;

@@ -1428,7 +1428,7 @@ pub unsafe extern "C" fn GetRefMb(pEncCtx: *mut sWelsEncCtx, pCurMb: *mut SMB) -
     let kpRefLayer = *(*pEncCtx).ppDqLayerList.add(kRefIdx.get());
     let kiRefMbIdx =
         (((*pCurMb).iMbY as i32 >> 1) * (*kpRefLayer).iMbWidth as i32) + ((*pCurMb).iMbX as i32 >> 1);
-    (*kpRefLayer).sMbDataP.offset(kiRefMbIdx as isize)
+    crate::encoder::svc_encode_slice::mb_at(kpRefLayer, kiRefMbIdx)
 }
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.

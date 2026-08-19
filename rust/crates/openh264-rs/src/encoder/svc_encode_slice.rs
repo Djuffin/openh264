@@ -264,6 +264,7 @@ impl Default for SSliceHeaderExt {
 
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 pub use crate::safe::bits::BsWriter;
+use crate::safe::mb_grid::{MbArray, MbDims};
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 
@@ -464,6 +465,29 @@ pub unsafe fn slice_in_layer(pCurLayer: *mut SDqLayer, kiSliceIdx: i32) -> *mut 
     pBank.add(s.offset as usize)
 }
 
+/// The layer's macroblock array as a raw pointer to its **root** — T6.D5, and
+/// **S28 verbatim**.
+///
+/// Every `*mut SMB` consumer in the tree walks out of the macroblock it is handed:
+/// `pCurMb.offset(-1)` reaches the left neighbour, `.offset(-iMbStride)` the one
+/// above, and the mode-decision and deblocking paths do both for every macroblock
+/// of every frame. A pointer taken through a narrowing index
+/// (`as_mut_slice()[xy..].as_mut_ptr()`) has the correct *address* and provenance
+/// for the tail alone, so the first neighbour read walks out of it — safe code,
+/// correct output, and UB that no byte-level gate can see. This derives from the
+/// array's own root and every caller offsets from there.
+#[inline]
+pub unsafe fn mb_list_root(pCurLayer: *mut SDqLayer) -> *mut SMB {
+    let mb: &mut MbArray<SMB> = &mut (*pCurLayer).sMbDataP;
+    mb.as_mut_ptr()
+}
+
+/// The macroblock at `kiMbXY`, derived from the array's root — see [`mb_list_root`].
+#[inline]
+pub unsafe fn mb_at(pCurLayer: *mut SDqLayer, kiMbXY: i32) -> *mut SMB {
+    mb_list_root(pCurLayer).add(kiMbXY as usize)
+}
+
 /// Not `repr(C)`: `pRefLayer` is an `Option<LayerIdx>`, which has no C shape.
 /// `assert_size!(SDqLayer, ...)` is re-pinned to the measured size in the same
 /// commit (phase6.md §5).
@@ -485,7 +509,13 @@ pub struct SDqLayer {
     pub pEncData: [*mut u8; 3],
     pub iEncStride: [i32; 3],
 
-    pub sMbDataP: *mut SMB,
+    /// The layer's macroblock records, **owned** since T6.D5. `InitMbListD` used to
+    /// cut one flat `WelsMallocz` block across every layer and hand each its slice,
+    /// storing the same pointers a second time in the context's `ppMbListD`; neither
+    /// field was a carrier — they were one allocation, cut disjointly and
+    /// contiguously, each cut exactly `iMbWidth * iMbHeight`. So each layer owns its
+    /// own cut, and the second copy is gone.
+    pub sMbDataP: MbArray<SMB>,
     pub iMbWidth: i16,
     pub iMbHeight: i16,
 
@@ -562,8 +592,9 @@ impl SDqLayer {
             iCsStride: [0; 3],
             pEncData: [std::ptr::null_mut(); 3],
             iEncStride: [0; 3],
-            // The macroblock list, handed to the layer by `InitMbListD`.
-            sMbDataP: std::ptr::null_mut(),
+            // The macroblock records, sized by `InitMbListD` once the geometry is
+            // known; empty is the raw spelling's null.
+            sMbDataP: MbArray::empty(),
             // Overwritten by the caller on the next two lines; zero is "unsized".
             iMbWidth: 0,
             iMbHeight: 0,
@@ -1312,14 +1343,14 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         return ENC_RETURN_INVALIDINPUT;
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    if pCurLayer.is_null() || (*pCurLayer).sMbDataP.is_null() || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
+    if pCurLayer.is_null() || (*pCurLayer).sMbDataP.dims().count() == 0 || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     // S29: raw, not `&mut` — held across the MB loop, whose callees derive their
     // own borrows of the same fields (the encode probe's fourth red, session B).
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let pMbList = (*pCurLayer).sMbDataP;
+    let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -1434,7 +1465,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
-    let pMbList = (*pCurLayer).sMbDataP;
+    let pMbList = mb_list_root(pCurLayer);
     let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -1604,7 +1635,7 @@ pub unsafe fn WelsMdInterMbLoop(
     pWelsMd: *mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
@@ -1612,7 +1643,7 @@ pub unsafe fn WelsMdInterMbLoop(
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pMbList = (*pCurLayer).sMbDataP;
+    let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
@@ -1764,7 +1795,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     pWelsMd: *mut SWelsMD,
     kiSliceFirstMbXY: i32,
 ) -> i32 {
-    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.is_null() || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
+    if pEncCtx.is_null() || pSlice.is_null() || pWelsMd.is_null() || (*pEncCtx).pCurDqLayer.is_null() || (*(*pEncCtx).pCurDqLayer).sMbDataP.dims().count() == 0 || (*(*pEncCtx).pCurDqLayer).iMbWidth <= 0 || (*(*pEncCtx).pCurDqLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
@@ -1774,7 +1805,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let pSliceCtx = std::ptr::addr_of_mut!((*pCurLayer).sSliceEncCtx);
     let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
-    let pMbList = (*pCurLayer).sMbDataP;
+    let pMbList = mb_list_root(pCurLayer);
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -2314,7 +2345,7 @@ pub unsafe fn AddSliceBoundary(
             std::mem::size_of::<u16>() as i32,
         );
 
-        UpdateMbNeighbourInfoForNextSlice(pCurLayer, (*pCurLayer).sMbDataP, iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
+        UpdateMbNeighbourInfoForNextSlice(pCurLayer, mb_list_root(pCurLayer), iFirstMbIdxOfNextSlice, kiLastMbIdxInPartition);
     }
 }
 
@@ -3320,6 +3351,74 @@ mod tests {
              source did not move, so motion estimation did nothing",
             frames[1].bytes
         );
+    }
+
+    /// **S28's mandated test for [`mb_list_root`]** — Phase 6 session D, face 2.
+    ///
+    /// S28 says every accessor that hands a raw pointer out of a safe container gets
+    /// a Miri test that reads the pointer's **full legal reach in both directions**,
+    /// because that class is invisible to every byte-level gate: a pointer derived
+    /// through `as_mut_slice()[xy..].as_mut_ptr()` has the right address and
+    /// provenance for the tail alone, and nine gates passed on exactly that in Phase
+    /// 5 (T5.C3).
+    ///
+    /// The reach here is the whole macroblock array, and **backwards is the direction
+    /// that matters**: the encoder's neighbour reads are `pCurMb.offset(-1)` (left)
+    /// and `.offset(-iMbStride)` (above), so a pointer to the macroblock in the
+    /// middle of the grid must be able to walk to index 0 and to the last index.
+    /// Under the narrowing spelling the first backwards step is UB.
+    ///
+    /// It also exercises the second half of the accessor's contract: **two
+    /// derivations must coexist**. `mb_list_root` is called once per function in
+    /// production and `mb_at` calls it again, so the second call must not invalidate
+    /// the first one's pointer — which is why it reads the `Vec`'s own stored pointer
+    /// rather than reborrowing the buffer through `as_mut_slice()`.
+    #[test]
+    fn mb_list_root_reaches_the_whole_array_in_both_directions() {
+        use crate::encoder::svc_encode_slice::{mb_at, mb_list_root, SDqLayer};
+        use crate::encoder::md::SMB;
+        use crate::safe::mb_grid::{MbArray, MbDims};
+
+        let (w, h) = (5usize, 4usize);
+        let mut layer = SDqLayer::default();
+        layer.sMbDataP = MbArray::new(MbDims::new(w, h), SMB::default());
+        layer.iMbWidth = w as i16;
+        layer.iMbHeight = h as i16;
+        let p_layer: *mut SDqLayer = &mut layer;
+
+        unsafe {
+            // Stamp every macroblock through the root, so the writes below have
+            // something to disagree with.
+            let root = mb_list_root(p_layer);
+            for i in 0..(w * h) {
+                (*root.add(i)).iMbXY = i as i32;
+            }
+
+            // The middle of the grid, and its whole legal reach both ways.
+            let kiMid = (2 * w + 2) as i32;
+            let p_mid = mb_at(p_layer, kiMid);
+            let mut seen = 0i64;
+            for back in 1..=kiMid {
+                seen += (*p_mid.offset(-(back as isize))).iMbXY as i64;
+            }
+            for fwd in 1..((w * h) as i32 - kiMid) {
+                seen += (*p_mid.offset(fwd as isize)).iMbXY as i64;
+            }
+            let expected: i64 = (0..(w * h) as i64).sum::<i64>() - kiMid as i64;
+            assert_eq!(seen, expected, "the root-derived pointer did not reach every macroblock");
+
+            // The two neighbour derivations the encoder actually makes.
+            assert_eq!((*p_mid.offset(-1)).iMbXY, kiMid - 1, "left neighbour");
+            assert_eq!((*p_mid.offset(-(w as isize))).iMbXY, kiMid - w as i32, "top neighbour");
+
+            // A second derivation must not invalidate the first: write through the
+            // older pointer after taking a newer one, then read it back through the
+            // newer one.
+            let p_first = mb_list_root(p_layer);
+            let p_second = mb_at(p_layer, 7);
+            (*p_first.add(7)).iMbXY = -99;
+            assert_eq!((*p_second).iMbXY, -99, "the second derivation popped the first");
+        }
     }
 
     /// **The dynamic-slice probe — `SM_SIZELIMITED_SLICE`, Phase 6 session D,

@@ -47,6 +47,7 @@ use crate::encoder::wels_preprocess::AllocPicture;
 use crate::encoder::svc_encode_slice::{
     LayerIdx, SDqLayer, SMB, MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM,
 };
+use crate::safe::mb_grid::{MbArray, MbDims};
 use crate::encoder::svc_motion_estimate::{
     CAMERA_HIGHLAYER_MVD_RANGE, CAMERA_MVD_RANGE, CAMERA_STARTMV_RANGE, EXPANDED_MVD_RANGE,
     EXPANDED_MV_RANGE,
@@ -618,45 +619,35 @@ unsafe fn InitMbInfo(
 /// `ppCtx` must point to a live context with `ppDqLayerList` populated.
 pub unsafe fn InitMbListD(ppCtx: *mut *mut sWelsEncCtx) -> i32 {
     let iNumDlayer = (*(**ppCtx).pSvcParam).iSpatialLayerNum;
-    let mut iMbSize = [0i32; MAX_DEPENDENCY_LAYER];
-    let mut iOverallMbNum: i32 = 0;
 
     if iNumDlayer > MAX_DEPENDENCY_LAYER as i32 {
         return 1;
     }
 
+    // **One `MbArray` per layer, and that is not a change of ownership — T6.D5.**
+    // The C++ allocated *one* flat block of `sum(iMbWidth * iMbHeight)` records and
+    // cut it by cumulative size, handing each layer its cut as `sMbDataP` and
+    // storing the same pointers a second time in `ppMbListD`. The cuts are disjoint,
+    // contiguous, and exactly the layer's own macroblock count, so neither field was
+    // a carrier: each layer already had sole use of its cut. Each layer now owns it
+    // (`MbArray<SMB>`, `safe/mb_grid.rs`, legal because the layer is `Box`-built
+    // since T6.D3 and the dimensions are the allocation's own — T5.E2's rule), and
+    // `ppMbListD`, its two allocations and its free are gone.
     for i in 0..iNumDlayer as usize {
         let iMbWidth = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoWidth + 15) >> 4;
         let iMbHeight = ((*(**ppCtx).pSvcParam).sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        iMbSize[i] = iMbWidth * iMbHeight;
-        iOverallMbNum += iMbSize[i];
-    }
-
-    let pMa = (**ppCtx).pMemAlign;
-    (**ppCtx).ppMbListD = (*pMa).WelsMallocz(
-        (iNumDlayer as usize * std::mem::size_of::<*mut SMB>()) as u32,
-        tag!("ppMbListD"),
-    ) as *mut *mut SMB;
-    if (**ppCtx).ppMbListD.is_null() {
-        return 1;
-    }
-    *(**ppCtx).ppMbListD = null_mut();
-    *(**ppCtx).ppMbListD = (*pMa).WelsMallocz(
-        (iOverallMbNum as usize * std::mem::size_of::<SMB>()) as u32,
-        tag!("ppMbListD[0]"),
-    ) as *mut SMB;
-    if (*(**ppCtx).ppMbListD).is_null() {
-        return 1;
-    }
-    (**(**ppCtx).ppDqLayerList).sMbDataP = *(**ppCtx).ppMbListD;
-    InitMbInfo(*ppCtx, *(**ppCtx).ppMbListD, *(**ppCtx).ppDqLayerList, 0);
-    for i in 1..iNumDlayer as usize {
-        *(**ppCtx).ppMbListD.add(i) = (*(**ppCtx).ppMbListD.add(i - 1)).add(iMbSize[i - 1] as usize);
-        (**(**ppCtx).ppDqLayerList.add(i)).sMbDataP = *(**ppCtx).ppMbListD.add(i);
+        let pLayer = *(**ppCtx).ppDqLayerList.add(i);
+        if pLayer.is_null() {
+            return 1;
+        }
+        (*pLayer).sMbDataP = MbArray::new(
+            MbDims::new(iMbWidth as usize, iMbHeight as usize),
+            SMB::default(),
+        );
         InitMbInfo(
             *ppCtx,
-            *(**ppCtx).ppMbListD.add(i),
-            *(**ppCtx).ppDqLayerList.add(i),
+            crate::encoder::svc_encode_slice::mb_list_root(pLayer),
+            pLayer,
             i as i32,
         );
     }
@@ -1773,10 +1764,10 @@ mod tests {
             assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
             assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame, 1);
             assert!(!(*pDq).sSliceEncCtx.pOverallMbMap.is_null());
-            assert!(!(*pDq).sMbDataP.is_null());
+            assert_eq!((*pDq).sMbDataP.dims().count(), 60);
 
             // InitMbInfo wired every macroblock to its slot in the context arrays.
-            let pMb = (*pDq).sMbDataP;
+            let pMb = crate::encoder::svc_encode_slice::mb_list_root(pDq);
             assert_eq!((*pMb).iMbXY, 0);
             assert_eq!((*pMb).iMbX, 0);
             assert_eq!((*pMb).iMbY, 0);
@@ -1878,13 +1869,7 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
         }
         // The five per-macroblock arrays freed here in encoder_ext.cpp:1932-1961 are
         // inline in `SMB` since T6.C1 and go with the `SMB` list below.
-        if !(*pCtx).ppMbListD.is_null() {
-            if !(*(*pCtx).ppMbListD).is_null() {
-                (*pMa).WelsFree(*(*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD[0]"));
-            }
-            (*pMa).WelsFree((*pCtx).ppMbListD as *mut c_void, tag!("ppMbListD"));
-            (*pCtx).ppMbListD = null_mut();
-        }
+        // `ppMbListD` is gone: each layer owns its own `MbArray<SMB>` (T6.D5).
         if !(*pCtx).pMvdCostTable.is_null() {
             (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));
             (*pCtx).pMvdCostTable = null_mut();
@@ -2743,7 +2728,7 @@ pub unsafe fn WelsInitCurrentQBLayerMltslc(pCtx: *mut sWelsEncCtx) {
     // pData init
     let pCurDq = (*pCtx).pCurDqLayer;
     // mb_neighbor
-    DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, (*pCurDq).sMbDataP);
+    DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq, crate::encoder::svc_encode_slice::mb_list_root(pCurDq));
 }
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
