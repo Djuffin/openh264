@@ -1,10 +1,10 @@
 # Phase 6, session E — the records, the parameter families, and the third SAD/SATD attempt
 
 Rules by tag from plan §7.6; recipes from `phase6.md` §1. Gate rhythm per D-gate-1:
-`gates.sh commit` per commit, `family` per face, one `exit` at close. Miri: run the
-two cheap encode probes (≈105 s the pair, filter by name) at each conversion face's
-close; the full `--lib` step once, at the session close (S30, S32 — the dynamic-slice
-probe alone is ≈357 s).
+`gates.sh commit` per commit, `family` per face, one `exit` at close. **Miri runs
+once, at the session close, as the `exit` battery's `--lib` step — not between faces**
+(direction, 2026-08-19; D's precedent held). S32's cost is why: the four encoder
+probes together are ≈460 s per run and the dynamic-slice probe alone ≈357 s.
 
 ## 0. Starting position (verify before starting)
 
@@ -119,8 +119,7 @@ SCREEN_CONTENT rows stay — session F's file. Re-pin `SWelsME` (96 → expect 8
 
 `set_mb_syn_cabac.rs` + `svc_set_mb_syn_cabac.rs` + `svc_set_mb_syn_cavlc.rs` +
 `svc_encode_mb.rs`: `SCabacCtx` 25, their `SMB` ~24, `SMbCache` ~16, one S20 closure.
-Settlement (f) drives the shape. Gate: `family` + the two cheap encode probes (both
-writers are exactly what they cover).
+Settlement (f) drives the shape. Gate: `family`.
 
 ## Face 2 — the MD/ME closure, in three commits-groups
 
