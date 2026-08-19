@@ -695,9 +695,14 @@ pub unsafe fn WelsSpatialWriteMbSyn(
     pSlice: *mut SSlice,
     pCurMb: *mut SMB,
 ) -> i32 {
+    // **Derived at each use, not once at the top** — the ordering class session B
+    // closed for the other writers and the second encode probe (CAVLC + fine mode
+    // decision, T6.C2) found here on its first execution. `WelsSpatialWriteMbPred`
+    // and `WelsSpatialWriteSubMbPred` re-derive both the frame buffer and the
+    // slice's `sMbCacheInfo` for themselves, so a `&mut` of either taken before
+    // Step 1 is invalidated by Step 1 and used again in Steps 2-4. This is not a
+    // spelling: the borrow has to be taken after the call that pops it.
     let pBs = crate::encoder::svc_encode_slice::slice_writer(pEncCtx, pSlice);
-    let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
     let kuiChromaQpIndexOffset = (*(*(*pEncCtx).pCurDqLayer).sLayerInfo.pPpsP).uiChromaQpIndexOffset;
 
     if IS_SKIP((*pCurMb).uiMbType) {
@@ -709,6 +714,7 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         ENC_RETURN_SUCCESS
     } else {
         if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
             BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
             (*pSlice).iMbSkipRun = 0;
         }
@@ -722,8 +728,10 @@ pub unsafe fn WelsSpatialWriteMbSyn(
 
         // Step 2: write coded block pattern
         if IS_INTRA4x4((*pCurMb).uiMbType) {
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
             BsWriteUE(buf, &mut *pBs, g_kuiIntra4x4CbpMap[(*pCurMb).uiCbp as usize]);
         } else if !IS_INTRA16x16((*pCurMb).uiMbType) {
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
             BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[(*pCurMb).uiCbp as usize]);
         }
 
@@ -732,7 +740,13 @@ pub unsafe fn WelsSpatialWriteMbSyn(
             let kiDeltaQp = ((*pCurMb).uiLumaQp as i32) - ((*pSlice).uiLastMbQp as i32);
             (*pSlice).uiLastMbQp = (*pCurMb).uiLumaQp;
 
-            BsWriteSE(buf, &mut *pBs, kiDeltaQp);
+            BsWriteSE(
+                crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice),
+                &mut *pBs,
+                kiDeltaQp,
+            );
+            let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+            let buf = crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice);
             if WelsWriteMbResidual((*pEncCtx).pFuncList, pMbCache, pCurMb, buf, pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
@@ -746,7 +760,12 @@ pub unsafe fn WelsSpatialWriteMbSyn(
         }
 
         // Step 4: Check the left buffer
-        CheckBitstreamBuffer((*pSlice).iSliceIdx as u32, pEncCtx, buf, &*pBs)
+        CheckBitstreamBuffer(
+            (*pSlice).iSliceIdx as u32,
+            pEncCtx,
+            crate::encoder::svc_encode_slice::slice_bs_buffer(pEncCtx, pSlice),
+            &*pBs,
+        )
     }
 }
 
@@ -956,7 +975,14 @@ pub unsafe fn WelsWriteMbResidual(
                 pBlock = pBlock.add(16);
             }
 
-            pBlock = (*(*sMbCacheInfo).pDct).iChromaBlock[4].as_mut_ptr(); // Cr
+            // S28, and the ninth cursor of session B's family: this one walks the four
+            // Cr blocks with `pBlock.add(16)`, so `iChromaBlock[4].as_mut_ptr()`
+            // narrowed the tag to block 4 and the second iteration read outside it.
+            // Derived from the whole array, offset to block 4. **The CABAC/LOW probe
+            // could not see it** — only the CAVLC probe (T6.C2) reaches this line.
+            pBlock = std::ptr::addr_of_mut!((*(*sMbCacheInfo).pDct).iChromaBlock)
+                .cast::<i16>()
+                .add(4 * 16); // Cr
 
             for i in 0..4 {
                 let iIdx = 24 + (kCache48CountScan4Idx16base[i] as usize);

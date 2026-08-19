@@ -3022,7 +3022,8 @@ static MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 #[cfg(test)]
 mod tests {
     use crate::api::codec_api::EVideoFrameType;
-    use crate::api::codec_api::abi_test_driver::drive_encoder_over;
+    use crate::api::codec_api::ECOMPLEXITY_MODE;
+    use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
 
     /// **The encoder's aliasing probe** — Phase 6 session A, and the first Miri
     /// coverage the encode path has ever had.
@@ -3080,7 +3081,7 @@ mod tests {
     /// `sSpatialLayers` / `sDependencyLayers` `&mut`-through-a-raw-parent family.
     #[test]
     fn encoder_initialisation_runs_under_the_aliasing_checker() {
-        let (frames, dims) = drive_encoder_over(48, 32, 0);
+        let (frames, dims) = drive_encoder_over(48, 32, 0, EncoderProbeOptions::default());
         assert!(frames.is_empty(), "frames = 0 encodes nothing; this drives init only");
         assert_eq!(
             dims,
@@ -3112,7 +3113,75 @@ mod tests {
     /// checking are exactly what they were.
     #[test]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
-        let (frames, dims) = drive_encoder_over(48, 32, 3);
+        let (frames, dims) = drive_encoder_over(48, 32, 3, EncoderProbeOptions::default());
+
+        assert_eq!(
+            dims,
+            (48, 32),
+            "the encoder must be configured for a 3x2 macroblock grid; a picture \
+             without neighbours covers nothing this test exists for"
+        );
+        assert_eq!(frames.len(), 3, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            frames[0].kind,
+            EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert_eq!(
+            frames[1].kind,
+            EVideoFrameType::videoFrameTypeP,
+            "the second frame must be inter-coded, or no ME/MD path executes at all"
+        );
+        assert!(
+            frames[1].bytes > 200,
+            "the inter frame coded {} bytes, which is at the all-skip floor: the \
+             source did not move, so motion estimation did nothing",
+            frames[1].bytes
+        );
+    }
+
+    /// **The second encode probe — CAVLC and the fine mode-decision family, both
+    /// knobs flipped together** (Phase 6 session C, face 1).
+    ///
+    /// The probe above is CABAC over `LOW_COMPLEXITY`, and those two choices leave
+    /// two bodies of code dark under Miri: the CAVLC writers
+    /// (`svc_set_mb_syn_cavlc.rs`) and everything `bFastMode` switches off —
+    /// `WelsMdIntraFinePartition`, `WelsMdI4x4` and the `pMemPredBlk4` ping-pong
+    /// (`svc_base_layer_md.rs`). Session C converts sites in both, and **F47 is what
+    /// a probe gap costs**: real UB on the ordinary CAVLC path survived five phases
+    /// of green gates because no probe drove it.
+    ///
+    /// **The byte gate does not cover the complexity half either**, which is the
+    /// stronger reason this test exists: all 341 diffharness configurations set
+    /// `iComplexityMode = LOW_COMPLEXITY` (`diffharness/cxx_enc.cpp:81`) — CABAC vs
+    /// CAVLC is a sweep axis (`kiCabac`) but complexity is not — so the fine
+    /// partition search is checked by *neither* instrument today. This is the only
+    /// coverage it has.
+    ///
+    /// One test rather than two, per S32: each Miri probe pays a multi-MiB
+    /// `Initialize` under the interpreter, and the two knobs are independent code
+    /// selections that a single encode drives together. A third probe needs a number
+    /// behind it; the size-limited dynamic-slice path
+    /// (`WelsMdInterMbLoopOverDynamicSlice`) is named for session D with the slice
+    /// structures it converts.
+    ///
+    /// The assertions are the first probe's, for the first probe's reasons — the
+    /// 3x2 macroblock grid read back from the encoder (F34), three frames with the
+    /// second inter-coded, and an inter frame an order of magnitude above the
+    /// all-skip floor.
+    #[test]
+    fn encode_loop_runs_with_cavlc_and_fine_mode_decision_under_the_aliasing_checker() {
+        let (frames, dims) = drive_encoder_over(
+            48,
+            32,
+            3,
+            EncoderProbeOptions { cabac: false, complexity: ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY },
+        );
 
         assert_eq!(
             dims,
