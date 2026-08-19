@@ -11425,3 +11425,50 @@ nothing.
   `uiBufferIdx`. `SetOneSliceBsBufferUnderMultithread` is left with `uiBsPos = 0`, which
   `InitOneSliceInThread` did one call earlier — deleted with its call (S18). `pThreadBsBuffer` itself
   is Phase 7's (F12/P10). One commit each, `gates.sh commit` each, `family` after the third.
+  **Executed** — T6.B3 (`c9f3c28d`, a), T6.B4 (`2c253205`, c), T6.B5 (`ac5b06bf`, b), `gates.sh commit`
+  each; ratchet regenerated twice for S16's shared-helper shape (`slice_writer` +2/+1,
+  `thread_bs_buffer` +2/+1 in `svc_encode_slice.rs`, recorded in the commits) against a crate
+  `raw_ptr` 3264 → 3240 across the three. `SWelsNalRaw` 40 → **32** (pinned, measured), `SSlice`
+  1536 → **1520** (not pinned). **`family` after the third: both sweeps 341/341, PASS** — no encoded
+  byte moved. Both `SHIM(phase3)` markers now name `pThreadBsBuffer` and Phase 7 and nothing else.
+* **Face 1.3 — the attribute came off, and the walk (T6.B6).** `-Zmiri-disable-isolation` added to
+  the `--lib` step for `WelsTime()` (`SystemTime::now()`, the library's one clock site, called
+  around every frame), reason at the line; the forbidden list stands. The first run (via `--ignored`,
+  before the attribute went) walked straight past session A's blocker — the settlement was the
+  diagnosis — and the probe then went red **eight** times, each read, classified, fixed and observed
+  gone on the next run (Miri clock ≈ 62–66s a run; the runs are in the scratch logs):
+  1. `svc_encode_slice.rs:1973` — `WelsCodeOneSlice` held `&mut sLayerInfo.sNalHeaderExt` across the
+     header writer, whose bodies (`:816`, `:904`) derive their own; read at `:2026` through the dead
+     tag. **S29 nested** — `addr_of_mut!`.
+  2. `svc_encode_mb.rs:806` → `encode_mb_aux.rs:808` — `iChromaBlock[k].as_mut_ptr()` narrowed the
+     tag to one 32-byte block and the cursor walked into the next. **S28's class** (provenance of the
+     deriving expression). Nine walking cursors derived from the whole array instead
+     (`svc_encode_mb.rs` ×5, `svc_set_mb_syn_cavlc.rs` ×4); the per-block and whole-array
+     derivations were left as they are.
+  3. `svc_set_mb_syn_cabac.rs:227` — `pCurMb.offset(-1)` before the availability guard, at the first
+     macroblock. **F14's class**: twelve neighbour pointers formed up front in six functions
+     (`WelsCabacMbType`, `WelsCabacMbIntraChromaPredMode`, `md.rs`'s two inter neighbour caches,
+     `svc_mode_decision.rs:1449`, `svc_base_layer_md.rs:2129`) → `wrapping_offset`; the guarded
+     ones (`deblocking.rs`, `md.rs:644/674`, the rest of CABAC) unchanged.
+  4. `svc_encode_slice.rs:1143`/`:1225` vs `svc_set_mb_syn_cabac.rs:1116` — the slice loop's `&mut
+     (*pSlice).sMbCacheInfo` popped by the callee's `&mut … as *mut SMbCache`. **S29 nested + the
+     cast shape**: the six loop-level locals in the four MB loops raw, and the eighteen
+     `&mut (*pSlice).f as *mut T` sites (`svc_base_layer_md.rs` ×7, `svc_mode_decision.rs` ×5,
+     `svc_set_mb_syn_cabac.rs` ×3, `svc_set_mb_syn_cavlc.rs` ×2, `svc_encode_slice.rs`) →
+     `addr_of_mut!`.
+  5. `svc_encode_slice.rs:1984`/`:2042` — `buf = slice_bs_buffer(..)` (a `&mut` over the whole frame
+     buffer) held across the MB loop, whose every write derives its own. **S29's boundary, ordering**:
+     derived at the use in `WelsCodeOneSlice` and the two inter loops' trailing skip run; the dead
+     holder in `WelsISliceMdEncDynamic` deleted.
+  6. `encoder_ext.rs:3234`/`:3273`/`:3685` — `sDependencyLayers.as_mut_ptr().add(i)` popped by a
+     second such derivation. **F13's family** in the `as_mut_ptr()` spelling: eight sites →
+     `addr_of_mut!` on the element / a plain field read.
+  7. `svc_mode_decision.rs:1190`/`:1197` — `InitMe(&SWelsMD, …, *mut SWelsME)`: the C++
+     `const SWelsMD&` beside an `SWelsME&` that lives *inside* it; the protector on the shared
+     argument forbids the write. **Take what you reach**: three fields, seven callers.
+  8. `svc_encode_mb.rs:368` — `WelsIDctFourT4Rec_c` built `&mut [u8]` and `&[u8]` over one span:
+     the inter reconstruction is in place (`pDecY` as both `pRec` and `pPred`, as the C++). **New
+     class → F59** (`phase6_findings.md`): in-place kernels sharing the transform core, the two
+     shims dispatch on `pRec == pPred`, and the shims' doc — which had named that very caller as
+     a witness for "disjoint" — corrected.
+  **Green on the ninth run: 1 passed, Miri clock 80.53s (84.36s wall), three frames.**

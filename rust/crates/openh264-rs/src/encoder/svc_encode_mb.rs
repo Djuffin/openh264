@@ -319,9 +319,15 @@ fn WelsClip1(val: i32) -> u8 {
 ///   `[0, 3*iStride + 4)` from it must be readable and writable.
 /// * `pPred` points at sample `(0, 0)` of a 4x4 block; bytes
 ///   `[0, 3*iPredStride + 4)` from it must be readable. Only read.
-/// * Both reach forward only; strides `>= 4` and positive; the spans are
-///   disjoint (every caller pairs a recon plane or scratch with a separate
-///   prediction scratch, `svc_encode_mb.rs:713-723`, `svc_encode_slice.rs:1039`).
+/// * Both reach forward only; strides `>= 4` and positive; the spans are either
+///   disjoint (the intra callers pair a recon plane or scratch with a separate
+///   prediction scratch) or **identical** — `pRec == pPred`, same stride — which is
+///   the inter reconstruction (`OutputPMbWithoutConstructCsRsNoCopy` passes
+///   `pDecY` as both, as the C++ does), and takes the in-place kernel. This
+///   contract used to claim "disjoint" at every caller and named that very
+///   caller as one; the encoder aliasing probe read the two overlapping
+///   references as UB the first time it reached a P frame (**F59**, Phase 6
+///   session B). No other overlap is legal.
 /// * `pDct` points at 16 readable, `i16`-aligned `i16`, disjoint from both.
 /// * Any argument may be null, in which case nothing happens (the C++'s own
 ///   guard, kept).
@@ -337,9 +343,15 @@ pub unsafe extern "C" fn WelsIDctT4Rec_c(
         return;
     }
     let (rs, ps) = (iStride as usize, iPredStride as usize);
+    let dct: &[i16; 16] = std::slice::from_raw_parts(pDct, 16).try_into().unwrap();
+    if pRec == pPred && rs == ps {
+        // F59: the inter reconstruction is in place — one cursor, no aliasing pair.
+        let rec = std::slice::from_raw_parts_mut(pRec, 3 * rs + 4);
+        crate::encoder::decode_mb_aux::idct_t4_rec_in_place(&mut PlaneCursorMut::new(rec, 0, rs), dct);
+        return;
+    }
     let rec = std::slice::from_raw_parts_mut(pRec, 3 * rs + 4);
     let pred = std::slice::from_raw_parts(pPred, 3 * ps + 4);
-    let dct: &[i16; 16] = std::slice::from_raw_parts(pDct, 16).try_into().unwrap();
     crate::encoder::decode_mb_aux::idct_t4_rec(
         &mut PlaneCursorMut::new(rec, 0, rs),
         &PlaneCursor::new(pred, 0, ps),
@@ -365,9 +377,15 @@ pub unsafe extern "C" fn WelsIDctFourT4Rec_c(
         return;
     }
     let (rs, ps) = (iStride as usize, iPredStride as usize);
+    let dct: &[i16; 64] = std::slice::from_raw_parts(pDct, 64).try_into().unwrap();
+    if pRec == pPred && rs == ps {
+        // F59: the inter reconstruction is in place — one cursor, no aliasing pair.
+        let rec = std::slice::from_raw_parts_mut(pRec, 7 * rs + 8);
+        crate::encoder::decode_mb_aux::idct_four_t4_rec_in_place(&mut PlaneCursorMut::new(rec, 0, rs), dct);
+        return;
+    }
     let rec = std::slice::from_raw_parts_mut(pRec, 7 * rs + 8);
     let pred = std::slice::from_raw_parts(pPred, 7 * ps + 8);
-    let dct: &[i16; 64] = std::slice::from_raw_parts(pDct, 64).try_into().unwrap();
     crate::encoder::decode_mb_aux::idct_four_t4_rec(
         &mut PlaneCursorMut::new(rec, 0, rs),
         &PlaneCursor::new(pred, 0, ps),
@@ -474,7 +492,9 @@ pub unsafe fn WelsEncRecI16x16Y(
     let mut pRes = (*pMbCache).pCoeffLevel;
     let pPred = (*pMbCache).SPicData.pCsMb[0];
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
-    let mut pBlock = (*(*pMbCache).pDct).iLumaBlock[0].as_mut_ptr();
+    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
+    // every 4x4 block, and a tag narrowed to one block dies at the second.
+    let mut pBlock = std::ptr::addr_of_mut!((*(*pMbCache).pDct).iLumaBlock).cast::<i16>();
     let pBestPred = (*pMbCache).pMemPredLuma;
     let mut kpNoneZeroCountIdx = 0usize;
     let uiQp = (*pCurMb).uiLumaQp;
@@ -696,7 +716,9 @@ pub unsafe fn WelsEncInterY(
     let mut pRes = (*pMbCache).pCoeffLevel;
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
-    let mut pBlock = (*(*pMbCache).pDct).iLumaBlock[0].as_mut_ptr();
+    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
+    // every 4x4 block, and a tag narrowed to one block dies at the second.
+    let mut pBlock = std::ptr::addr_of_mut!((*(*pMbCache).pDct).iLumaBlock).cast::<i16>();
     let uiQp = (*pCurMb).uiLumaQp;
     let pMF = g_kiQuantMF[uiQp as usize].as_ptr();
     let pFF = g_kiQuantInterFF[uiQp as usize].as_ptr();
@@ -803,7 +825,10 @@ pub unsafe fn WelsEncRecUV(
     let uiNoneZeroCountOffset = ((iUV - 1) << 1) as usize;
     let uiSubMbIdx = (16 + ((iUV - 1) << 2)) as usize;
     let iChromaDc = (*(*pMbCache).pDct).iChromaDc[(iUV - 1) as usize].as_mut_ptr();
-    let mut pBlock = (*(*pMbCache).pDct).iChromaBlock[((iUV - 1) << 2) as usize].as_mut_ptr();
+    // S28: derived from the whole array (see `iLumaBlock` above); walks four blocks.
+    let mut pBlock = std::ptr::addr_of_mut!((*(*pMbCache).pDct).iChromaBlock)
+        .cast::<i16>()
+        .add((((iUV - 1) << 2) * 16) as usize);
     let mut aDct2x2 = [0i16; 4];
     let mut aMax = [0i16; 4];
     let mut iSingleCtr8x8 = 0i32;
@@ -958,7 +983,9 @@ pub unsafe fn WelsTryPYskip(
     let mut iSingleCtrMb = 0i32;
     let mut pRes = (*pMbCache).pCoeffLevel;
     let kuiQp = (*pCurMb).uiLumaQp;
-    let mut pBlock = (*(*pMbCache).pDct).iLumaBlock[0].as_mut_ptr();
+    // S28: derived from the whole array, not `[0].as_mut_ptr()` — this cursor walks
+    // every 4x4 block, and a tag narrowed to one block dies at the second.
+    let mut pBlock = std::ptr::addr_of_mut!((*(*pMbCache).pDct).iLumaBlock).cast::<i16>();
     let mut aMax = [0u16; 4];
     let pMF = g_kiQuantMF[kuiQp as usize].as_ptr();
     let pFF = g_kiQuantInterFF[kuiQp as usize].as_ptr();
@@ -1032,7 +1059,10 @@ pub unsafe fn WelsTryPUVskip(
     } else {
         let mut aMax = [0u16; 4];
         let mut iSingleCtrMb = 0i32;
-        let mut pBlock = (*(*pMbCache).pDct).iChromaBlock[((iUV - 1) << 2) as usize].as_mut_ptr();
+        // S28: derived from the whole array; walks four blocks.
+        let mut pBlock = std::ptr::addr_of_mut!((*(*pMbCache).pDct).iChromaBlock)
+            .cast::<i16>()
+            .add((((iUV - 1) << 2) * 16) as usize);
 
         if let Some(func) = (*(*pEncCtx).pFuncList).pfQuantizationFour4x4Max {
             func(pRes, pFF, pMF, aMax.as_mut_ptr() as *mut i16);

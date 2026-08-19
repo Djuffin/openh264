@@ -352,8 +352,18 @@ if [ "${LEVEL_DONE:-0}" != 1 ]; then
     # destructors the unit tests mostly do not call, so leak-checking a mid-refactor
     # transliteration reports the design rather than a defect. Phase 8 (the API layer)
     # is where ownership becomes Rust's and the leak check becomes meaningful.
+    #
+    # -Zmiri-disable-isolation: the encode-path probe
+    # (`encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`, live
+    # since Phase 6 session B) drives `WelsEncoderEncodeExt`, and `EncodeFrameInternal`
+    # calls `WelsTime()` — `SystemTime::now()`, the library's one clock site
+    # (`wels_encoder_ext.rs`) — around every frame. Under isolation that call is an
+    # error, so the probe cannot run without the flag. It disables host isolation
+    # and nothing else: aliasing (Stacked Borrows) and validity checking are exactly
+    # what they were. The forbidden list stands — `-Zmiri-disable-stacked-borrows`,
+    # `-Zmiri-disable-validation`, and anything else that weakens the checker.
     run_miri lib "--lib (whole library, minus the F12 skip)" \
-      "-Zmiri-ignore-leaks" --lib -- "${MIRI_SKIPS[@]}"
+      "-Zmiri-ignore-leaks -Zmiri-disable-isolation" --lib -- "${MIRI_SKIPS[@]}"
   fi
 fi
 

@@ -90,6 +90,54 @@ segfault, F14 behind F13's skip, and now this behind F57).
 
 ---
 
+## F59 — the IDCT-reconstruction shims built two references over one span: the inter reconstruction is in place
+
+**Status: FIXED 2026-08-18 (Phase 6 session B), by an in-place kernel.** Found by
+the encode-path probe (`encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`)
+the first time it reached a P frame — the eighth red of the walk, and the one that
+is a new class rather than a recurrence.
+
+### What it is
+
+`WelsIDctT4Rec_c` / `WelsIDctFourT4Rec_c` (`svc_encode_mb.rs`) are Phase 2's shims
+onto `decode_mb_aux::idct_t4_rec(rec: &mut PlaneCursorMut, pred: &PlaneCursor, dct)`.
+They build `rec` with `from_raw_parts_mut(pRec, ..)` and `pred` with
+`from_raw_parts(pPred, ..)`, and their doc said the two spans are **disjoint** at
+every caller — naming `svc_encode_slice.rs:1039` as one of them. That caller is
+`OutputPMbWithoutConstructCsRsNoCopy`, the inter-macroblock reconstruction, and it
+passes **`pDecY` as both `pRec` and `pPred`** — exactly as the C++ does
+(`WelsIDctT4RecOnMb (pDecY, kiDecStrideLuma, pDecY, kiDecStrideLuma, pScaledTcoeff)`):
+the residual is added to the prediction *in place*.
+
+Element-wise that is well defined (each sample is read, then overwritten). As a
+`&mut [u8]` and a `&[u8]` over the same bytes it is UB before the kernel runs a
+single add: Miri reports the `Unique` for `rec` "invalidated by a SharedReadOnly
+retag" at the very next line, and the first write through `rec` dies.
+
+### Why no gate has ever seen it
+
+The kernel reads `pred[y][x]` before it writes `rec[y][x]`, so the bytes it produces
+are the C++'s bytes; 341/341 has held over it since Phase 2. Only the aliasing
+checker can see a contract violated by two references that happen to be used in a
+benign order — and the encoder had no probe that reached a P frame until this
+session's settlements let this one through.
+
+### The fix
+
+`idct_t4_rec_in_place(rec, dct)` / `idct_four_t4_rec_in_place(rec, dct)` beside the
+two-plane kernels, sharing the transform core (`idct_t4_residual`) so the arithmetic
+exists once; the in-place body reads the sample where the two-plane body reads
+`pred` and writes it where that body writes `rec`. The shims dispatch on
+`pRec == pPred && iStride == iPredStride` and take one cursor; the doc now says which
+callers alias and that no other overlap is legal. Bit-exact by construction and by
+the sweeps.
+
+**The instrument, again**: the shim's own precondition named the offending caller as
+a witness for the opposite claim, and no reader caught it in four phases. A
+documented aliasing contract is a claim; the probe is the check.
+
+---
+
 ## F52's six — the Phase 6 close (adjudicated by reading, 2026-08-18, session B)
 
 `phase5_findings.md`'s F52 repaired `tools/find_shadowing_stubs.py` and left the

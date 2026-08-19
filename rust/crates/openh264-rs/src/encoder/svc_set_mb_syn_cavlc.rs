@@ -790,7 +790,8 @@ pub unsafe fn WelsWriteMbResidual(
 
         // AC Luma
         if kiCbpLuma != 0 {
-            pBlock = (*(*sMbCacheInfo).pDct).iLumaBlock[0].as_mut_ptr();
+            // S28: the cursor walks all sixteen blocks — derived from the whole array.
+            pBlock = std::ptr::addr_of_mut!((*(*sMbCacheInfo).pDct).iLumaBlock).cast::<i16>();
 
             for i in 0..16 {
                 let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
@@ -815,7 +816,8 @@ pub unsafe fn WelsWriteMbResidual(
     } else {
         // Luma DC AC
         if kiCbpLuma != 0 {
-            pBlock = (*(*sMbCacheInfo).pDct).iLumaBlock[0].as_mut_ptr();
+            // S28: the cursor walks all sixteen blocks — derived from the whole array.
+            pBlock = std::ptr::addr_of_mut!((*(*sMbCacheInfo).pDct).iLumaBlock).cast::<i16>();
 
             let mut i = 0usize;
             while i < 16 {
@@ -898,7 +900,8 @@ pub unsafe fn WelsWriteMbResidual(
 
     if kiCbpChroma != 0 {
         // Chroma DC residual present
-        pBlock = (*(*sMbCacheInfo).pDct).iChromaDc[0].as_mut_ptr(); // Cb
+        // S28: `.add(4)` below walks into `iChromaDc[1]` — derived from the whole array.
+        pBlock = std::ptr::addr_of_mut!((*(*sMbCacheInfo).pDct).iChromaDc).cast::<i16>(); // Cb
         if WriteBlockResidualCavlc(
             pFuncList,
             pBlock,
@@ -929,7 +932,8 @@ pub unsafe fn WelsWriteMbResidual(
         // Chroma AC residual present
         if (kiCbpChroma & 0x02) != 0 {
             let kCache48CountScan4Idx16base = &g_kuiCache48CountScan4Idx[16..];
-            pBlock = (*(*sMbCacheInfo).pDct).iChromaBlock[0].as_mut_ptr(); // Cb
+            // S28: walks all eight chroma blocks — derived from the whole array.
+            pBlock = std::ptr::addr_of_mut!((*(*sMbCacheInfo).pDct).iChromaBlock).cast::<i16>(); // Cb
 
             for i in 0..4 {
                 let iIdx = kCache48CountScan4Idx16base[i] as usize;
@@ -1041,7 +1045,7 @@ pub unsafe fn StashMBStatusCabac(
     if pDss.is_null() || pSlice.is_null() {
         return;
     }
-    let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
+    let pCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
     // `SCabacCtx` is `Copy` and, since T3.5, holds no pointers — so the whole
     // snapshot is this one assignment, the same shape the CAVLC twin above
     // reached in T3.4. What the two still do not share is the byte copy below:
@@ -1075,7 +1079,7 @@ pub unsafe fn StashPopMBStatusCabac(
     if pDss.is_null() || pSlice.is_null() {
         return 0;
     }
-    let pCtx = &mut (*pSlice).sCabacCtx as *mut SCabacCtx;
+    let pCtx = std::ptr::addr_of_mut!((*pSlice).sCabacCtx);
     *pCtx = (*pDss).sStoredCabac;
     // Write-extent audit site 3: the one write that is not at the cursor.
     if !(*pDss).pRestoreBuffer.is_null() {

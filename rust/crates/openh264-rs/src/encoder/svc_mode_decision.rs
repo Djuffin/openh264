@@ -1182,22 +1182,31 @@ pub unsafe extern "C" fn WelsMdI16x16(
 /// `svc_base_layer_md.cpp:964`, `static inline` in C++ so it is inlined here as a
 /// private helper rather than exported.
 ///
+/// Takes the three `SWelsMD` fields it reads rather than `&SWelsMD` (the C++ takes
+/// `const SWelsMD&`): every `sWelsMe` a caller passes lives *inside* that same
+/// `SWelsMD` (`sMe.sMe16x16`, `sMe.sMe16x8[i]`, ...), and a shared reference to the
+/// whole struct is a promise the callee breaks the moment it writes the search
+/// block — Miri's protector on the argument says so (the encode probe's seventh
+/// red, Phase 6 session B). Take what you reach.
+///
 /// # Safety
 /// `sWelsMe` must be valid; `pEnc`/`pRef` must point into the encode and reference
 /// planes for this partition.
 #[inline]
 pub(crate) unsafe fn InitMe(
-    sWelsMd: &SWelsMD,
+    iMbPixX: i32,
+    iMbPixY: i32,
+    pMvdCost: *mut u16,
     iBlockSize: i32,
     pEnc: *mut u8,
     pRef: *mut u8,
     pRefFeatureStorage: *mut SScreenBlockFeatureStorage,
     sWelsMe: *mut SWelsME,
 ) {
-    (*sWelsMe).iCurMeBlockPixX = sWelsMd.iMbPixX;
-    (*sWelsMe).iCurMeBlockPixY = sWelsMd.iMbPixY;
+    (*sWelsMe).iCurMeBlockPixX = iMbPixX;
+    (*sWelsMe).iCurMeBlockPixY = iMbPixY;
     (*sWelsMe).uiBlockSize = iBlockSize as u8;
-    (*sWelsMe).pMvdCost = sWelsMd.pMvdCost;
+    (*sWelsMe).pMvdCost = pMvdCost;
 
     (*sWelsMe).pEncMb = pEnc;
     (*sWelsMe).pRefMb = pRef;
@@ -1216,7 +1225,7 @@ pub unsafe extern "C" fn WelsMdP16x16(
     if pFunc.is_null() || pCurLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() || pCurMb.is_null() {
         return i32::MAX;
     }
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMe16x16 = &mut (*pWelsMd).sMe.sMe16x16 as *mut SWelsME;
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbWidth: i32 = (*pCurLayer).iMbWidth as i32;
@@ -1224,7 +1233,9 @@ pub unsafe extern "C" fn WelsMdP16x16(
     // `svc_base_layer_md.cpp:983`. This call was missing: without it the search block
     // kept the previous macroblock's pEncMb/pRefMb/uiBlockSize/pMvdCost.
     InitMe(
-        &*pWelsMd,
+        (*pWelsMd).iMbPixX,
+        (*pWelsMd).iMbPixY,
+        (*pWelsMd).pMvdCost,
         BLOCK_16x16 as i32,
         (*pMbCache).SPicData.pEncMb[0],
         (*pMbCache).SPicData.pRefMb[0],
@@ -1298,7 +1309,7 @@ pub unsafe extern "C" fn WelsMdP8x8(
     if pFunc.is_null() || pCurDqLayer.is_null() || pWelsMd.is_null() || pSlice.is_null() {
         return i32::MAX;
     }
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let iLineSizeEnc = (*pCurDqLayer).iEncStride[0];
     let iLineSizeRef = if !(*pCurDqLayer).pRefPic.is_null() {
         (*(*pCurDqLayer).pRefPic).iLineSize[0]
@@ -1320,7 +1331,9 @@ pub unsafe extern "C" fn WelsMdP8x8(
         // the SAD predictor, the sMvc seed, the static-idc-selected search function
         // and the cache update were all missing.
         InitMe(
-            &*pWelsMd,
+            (*pWelsMd).iMbPixX,
+            (*pWelsMd).iMbPixY,
+            (*pWelsMd).pMvdCost,
             BLOCK_8x8 as i32,
             (*pMbCache).SPicData.pEncMb[0].offset(iStrideEnc as isize),
             (*pMbCache).SPicData.pRefMb[0].offset(iStrideRef as isize),
@@ -1360,7 +1373,7 @@ pub unsafe extern "C" fn WelsInterMbEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *m
     if pEncCtx.is_null() || pSlice.is_null() || pCurMb.is_null() {
         return;
     }
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
     let pFuncList = (*pEncCtx).pFuncList;
     if pCurDqLayer.is_null() || pFuncList.is_null() {
@@ -1442,11 +1455,12 @@ pub unsafe extern "C" fn WelsMdSpatialelInterMbIlfmdNoilp(
     kuiRefMbType: Mb_Type,
 ) {
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
 
     let kuiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let kiMbWidth: i32 = (*pCurDqLayer).iMbWidth as i32;
-    let kpTopMb = pCurMb.offset(-(kiMbWidth as isize));
+    // F14's class: formed before the availability guards below, read only under them.
+    let kpTopMb = pCurMb.wrapping_offset(-(kiMbWidth as isize));
 
     let kbMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS as u32) != 0 {
         IS_SKIP((*pCurMb.offset(-1)).uiMbType)
@@ -2200,7 +2214,7 @@ pub unsafe extern "C" fn WelsMdInterFinePartitionVaaOnScreen(
     pCurMb: *mut SMB,
     mut iBestCost: i32,
 ) {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurDqLayer = (*pEncCtx).pCurDqLayer;
 
     let pSad8x8_ptr =

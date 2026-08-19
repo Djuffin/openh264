@@ -1018,7 +1018,7 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
-    let pMbCache = &mut (*pSlice).sMbCacheInfo as *mut SMbCache;
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pCurRS = (*pMbCache).pCoeffLevel.add(256);
     let pBestPred = (*pMbCache).pMemPredChroma;
 
@@ -1140,10 +1140,12 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
     if pCurLayer.is_null() || (*pCurLayer).sMbDataP.is_null() || (*pCurLayer).iMbWidth <= 0 || (*pCurLayer).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pSliceHdExt = &mut (*pSlice).sSliceHeaderExt;
+    // S29: raw, not `&mut` — held across the MB loop, whose callees derive their
+    // own borrows of the same fields (the encode probe's fourth red, session B).
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let pMbList = (*pCurLayer).sMbDataP;
-    let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
+    let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
@@ -1247,13 +1249,14 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         return ENC_RETURN_INVALIDINPUT;
     }
     let pBs = slice_writer(pEncCtx, pSlice);
-    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
-    let pSliceHdExt = &mut (*pSlice).sSliceHeaderExt;
+    // S29: raw, not `&mut` — held across the MB loop, whose callees derive their
+    // own borrows of the same fields (the encode probe's fourth red, session B).
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
+    let pSliceHdExt = std::ptr::addr_of_mut!((*pSlice).sSliceHeaderExt);
     let pMbList = (*pCurLayer).sMbDataP;
-    let kiSliceFirstMbXY = pSliceHdExt.sSliceHeader.iFirstMbInSlice;
+    let kiSliceFirstMbXY = (*pSliceHdExt).sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let mut iCurMbIdx: i32;
@@ -1427,9 +1430,9 @@ pub unsafe fn WelsMdInterMbLoop(
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = slice_writer(pEncCtx, pSlice);
-    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
+    // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = (*pCurLayer).sMbDataP;
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
@@ -1569,7 +1572,8 @@ pub unsafe fn WelsMdInterMbLoop(
     }
 
     if (*pSlice).iMbSkipRun > 0 {
-        BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
+        // Derived at the use, after the loop's own derivations (see `WelsCodeOneSlice`).
+        BsWriteUE(slice_bs_buffer(pEncCtx, pSlice), &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
     ENC_RETURN_SUCCESS
@@ -1586,10 +1590,10 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     }
     let pMd = pWelsMd as *mut SWelsMD;
     let pBs = slice_writer(pEncCtx, pSlice);
-    let buf = slice_bs_buffer(pEncCtx, pSlice);
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let pSliceCtx = &mut (*pCurLayer).sSliceEncCtx;
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
+    // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
+    let pMbCache = std::ptr::addr_of_mut!((*pSlice).sMbCacheInfo);
     let pMbList = (*pCurLayer).sMbDataP;
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -1760,7 +1764,8 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
     }
 
     if (*pSlice).iMbSkipRun > 0 {
-        BsWriteUE(buf, &mut *pBs, (*pSlice).iMbSkipRun as u32);
+        // Derived at the use, after the loop's own derivations (see `WelsCodeOneSlice`).
+        BsWriteUE(slice_bs_buffer(pEncCtx, pSlice), &mut *pBs, (*pSlice).iMbSkipRun as u32);
     }
 
     ENC_RETURN_SUCCESS
@@ -1970,9 +1975,11 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
         return ENC_RETURN_INVALIDINPUT;
     }
     let pCurLayer = (*pEncCtx).pCurDqLayer;
-    let pNalHeadExt = &mut (*pCurLayer).sLayerInfo.sNalHeaderExt;
+    // S29: raw, not `&mut` — this is held across `g_pWelsWriteSliceHeader`, whose
+    // two bodies derive `&mut` to the same field (`:816`, `:902`) and popped it
+    // (the encode probe's first red on the walk, Phase 6 session B).
+    let pNalHeadExt = std::ptr::addr_of_mut!((*pCurLayer).sLayerInfo.sNalHeaderExt);
     let pBs = slice_writer(pEncCtx, pCurSlice);
-    let buf = slice_bs_buffer(pEncCtx, pCurSlice);
 
     let kiDynamicSliceFlag = if !(*pEncCtx).pSvcParam.is_null() {
         let did = (*pEncCtx).uiDependencyId as usize;
@@ -1986,10 +1993,10 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     };
 
     if (*pEncCtx).eSliceType == EWelsSliceType::I_SLICE {
-        pNalHeadExt.bIdrFlag = true;
+        (*pNalHeadExt).bIdrFlag = true;
         (*pCurSlice).sScaleShift = 0;
     } else {
-        let kuiTemporalId = pNalHeadExt.uiTemporalId;
+        let kuiTemporalId = (*pNalHeadExt).uiTemporalId;
         let ref_temporal = if !(*pEncCtx).pRefPic.is_null() { (*(*pEncCtx).pRefPic).uiTemporalId } else { 0 };
         (*pCurSlice).sScaleShift = if kuiTemporalId != 0 { kuiTemporalId.saturating_sub(ref_temporal) } else { 0 };
     }
@@ -2023,14 +2030,23 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
-    let idr_idx = pNalHeadExt.bIdrFlag as usize;
+    let idr_idx = (*pNalHeadExt).bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
     let iEncReturn = func(pEncCtx, pCurSlice);
     if iEncReturn != ENC_RETURN_SUCCESS {
         return iEncReturn;
     }
 
-    WelsWriteSliceEndSyn(buf, pBs, pCurSlice, (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0);
+    // The buffer is derived here, at its use, and not at the top of the function:
+    // `slice_bs_buffer` hands back a `&mut` over the whole frame buffer, and every
+    // macroblock write inside `func` above derived its own — S29's boundary
+    // clause, only ordering fixes it (the encode probe's fifth red, session B).
+    WelsWriteSliceEndSyn(
+        slice_bs_buffer(pEncCtx, pCurSlice),
+        pBs,
+        pCurSlice,
+        (*(*pEncCtx).pSvcParam).iEntropyCodingModeFlag != 0,
+    );
 
     ENC_RETURN_SUCCESS
 }
@@ -3077,26 +3093,27 @@ mod tests {
         );
     }
 
-    /// **Blocked under Miri by the slice/bitstream-writer ownership, which is 6.4's.**
+    /// **The encode loop under the aliasing checker — live in the `--lib` Miri step
+    /// since Phase 6 session B.**
     ///
-    /// `InitSliceBsBuffer` caches the *shared* writer in every slice at init —
-    /// `(*pSlice).pSliceBsa = pBsWrite`, where `pBsWrite` is
-    /// `&mut (*(*pCtx).pOut).sBsWrite` — and `InitBitStream` then replaces that
-    /// writer wholesale on every frame (`encoder_context.rs:840`). The write through
-    /// the parent kills every slice's cached pointer, and `WelsSliceHeaderWrite`
-    /// reads through one at `svc_encode_slice.rs:815`. No spelling or ordering fix
-    /// reaches it: the other branch of `InitSliceBsBuffer` gives each slice its own
-    /// buffer but is only taken when `iMultipleThreadIdc > 1`, which is F12 and
-    /// Phase 7's. **This is `SWelsSliceBs.pBsBuffer`** — one of Phase 3's two
-    /// deliberate exclusions, inherited by 6.4 and guarded by the port's last two
-    /// phase-3 shim markers (`phase6.md` §3), and session B is already scheduled
-    /// to write its settlement.
+    /// Session A left this `#[cfg_attr(miri, ignore)]`, blocked at its first frame:
+    /// `InitSliceBsBuffer` cached the *shared* writer in every slice at init
+    /// (`SSlice.pSliceBsa = &pOut->sBsWrite`) and `InitBitStream` replaced that
+    /// writer wholesale every frame, so `WelsSliceHeaderWrite` read through a dead
+    /// pointer — a write through the parent, which no spelling fixes. Session B's
+    /// settlement (T6.B3): the pointer was a cache of one bit that `sSliceBs.pBs`'s
+    /// nullness already records, and `slice_writer` derives it fresh at each use.
+    /// The two neighbouring caches went with it — `SWelsSliceBs.pBsBuffer`
+    /// (T6.B5, `pThreadBsBuffer[uiBufferIdx]`) and `SWelsNalRaw.pRawData` (T6.B4,
+    /// `iStartPos`) — and the attribute came off. Every red the walk then found is
+    /// recorded in the session B log entry, red-before and green-after observed.
     ///
-    /// **The skip retires when that settlement lands**, and this test is the
-    /// instrument that says so: delete the attribute and run the `--lib` Miri step.
-    /// It runs in the ordinary suite meanwhile, and it is green there.
+    /// The `--lib` step runs this with `-Zmiri-disable-isolation`, for `WelsTime()`
+    /// (`SystemTime::now()`, the library's one clock site, called by
+    /// `EncodeFrameInternal` around every frame; it does not reach the bitstream).
+    /// That flag disables host isolation and nothing else — aliasing and validity
+    /// checking are exactly what they were.
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         let (frames, dims) = drive_encoder_over(48, 32, 3);
 
