@@ -1462,7 +1462,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
         }
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
@@ -1508,7 +1508,7 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
             }
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                pCurMb as *mut _,
+                &mut *pCurMb,
                 sMd.iCostLuma,
                 pSlice as *mut _,
             );
@@ -1574,7 +1574,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
                 .StashMBStatus(slice_bs_buffer(pEncCtx, pSlice), slice_writer(pEncCtx, pSlice), &mut sDss, pSlice, 0);
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
@@ -1644,7 +1644,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                pCurMb as *mut _,
+                &mut *pCurMb,
                 sMd.iCostLuma,
                 pSlice as *mut _,
             );
@@ -1765,7 +1765,7 @@ pub unsafe fn WelsMdInterMbLoop(
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
         }
 
         //step (2). save some value for future use, initial pWelsMd
@@ -1842,7 +1842,7 @@ pub unsafe fn WelsMdInterMbLoop(
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                pCurMb as *mut _,
+                &mut *pCurMb,
                 (*pMd).iCostLuma,
                 pSlice as *mut _,
             );
@@ -1925,7 +1925,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list
                 .pfRc
-                .WelsRcMbInit(pEncCtx as *mut _, pCurMb as *mut _, pSlice as *mut _);
+                .WelsRcMbInit(pEncCtx as *mut _, &mut *pCurMb, pSlice as *mut _);
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
@@ -2033,7 +2033,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx as *mut _,
-                pCurMb as *mut _,
+                &mut *pCurMb,
                 (*pMd).iCostLuma,
                 pSlice as *mut _,
             );

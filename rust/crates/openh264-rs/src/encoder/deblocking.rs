@@ -494,11 +494,7 @@ pub fn DeblockingBSInsideMBNormal(
 
 /// Computes marginal boundary strength vector for macroblock boundary edges (edge 0).
 #[inline(always)]
-pub unsafe fn DeblockingBSMarginalMBAvcbase(
-    pCurMb: *mut SMB,
-    pNeighMb: *mut SMB,
-    iEdge: usize,
-) -> u32 {
+pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize) -> u32 {
     let mut uiBSx4: [u8; 4] = [0; 4];
     let pBIdx = &g_kuiTableBIdx[iEdge][0..4];
     let pBnIdx = &g_kuiTableBIdx[iEdge][4..8];
@@ -506,13 +502,13 @@ pub unsafe fn DeblockingBSMarginalMBAvcbase(
     for i in 0..4 {
         let bIdx = pBIdx[i] as usize;
         let bnIdx = pBnIdx[i] as usize;
-        let cur_nzc = (*pCurMb).iNonZeroCount[bIdx];
-        let neigh_nzc = (*pNeighMb).iNonZeroCount[bnIdx];
+        let cur_nzc = pCurMb.iNonZeroCount[bIdx];
+        let neigh_nzc = pNeighMb.iNonZeroCount[bnIdx];
 
         if (cur_nzc | neigh_nzc) != 0 {
             uiBSx4[i] = 2;
         } else {
-            uiBSx4[i] = MB_BS_MV(&(*pCurMb).sMv, &(*pNeighMb).sMv, bIdx, bnIdx);
+            uiBSx4[i] = MB_BS_MV(&pCurMb.sMv, &pNeighMb.sMv, bIdx, bnIdx);
         }
     }
 
@@ -545,7 +541,7 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
         let val = if IS_INTRA((*leftMb).uiMbType) {
             0x04040404u32
         } else {
-            DeblockingBSMarginalMBAvcbase(pCurMb, leftMb, 0)
+            DeblockingBSMarginalMBAvcbase(&*pCurMb, &*leftMb, 0)
         };
         uiBS[0][0] = val.to_ne_bytes();
     } else {
@@ -557,7 +553,7 @@ pub unsafe extern "C" fn DeblockingBSCalc_c(
         let val = if IS_INTRA((*topMb).uiMbType) {
             0x04040404u32
         } else {
-            DeblockingBSMarginalMBAvcbase(pCurMb, topMb, 1)
+            DeblockingBSMarginalMBAvcbase(&*pCurMb, &*topMb, 1)
         };
         uiBS[1][0] = val.to_ne_bytes();
     } else {
