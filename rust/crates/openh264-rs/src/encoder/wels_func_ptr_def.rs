@@ -53,7 +53,7 @@ pub type PIntraFineMdFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
@@ -70,7 +70,7 @@ pub type PInterMdFirstIntraModeFunc = unsafe extern "C" fn(
     pEncCtx: *mut sWelsEncCtx,
     pWelsMd: &mut SWelsMD,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:111`
@@ -87,7 +87,6 @@ pub type PInterMdBackgroundDecisionFunc = unsafe extern "C" fn(
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
     pKeepPskip: *mut bool,
 ) -> bool;
 
@@ -105,7 +104,6 @@ pub type PInterMdScrollingPSkipDecisionFunc = unsafe extern "C" fn(
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
 ) -> bool;
 
 /// `wels_func_ptr_def.h:123`
@@ -118,7 +116,6 @@ pub type PInterMdFunc = unsafe extern "C" fn(
     pWelsMd: &mut SWelsMD,
     slice: *mut SSlice,
     pCurMb: *mut SMB,
-    pMbCache: *mut SMbCache,
 );
 
 /// `wels_func_ptr_def.h:64`

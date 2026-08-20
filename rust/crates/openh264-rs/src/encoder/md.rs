@@ -483,6 +483,22 @@ impl Default for SMbCache {
 /// The prediction, copy and DCT kernels take `*mut u8` / `*mut i16` and keep doing so
 /// (that family is session E's and F's), so these hand them exactly what they took
 /// before: the same address, with the whole array's provenance.
+///
+/// **T6.E2c — why these ten keep their raw parameter while every caller's became a
+/// reference.** A caller now receives `pMbCache: &mut SMbCache` and opens with
+///
+/// ```text
+/// let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
+/// ```
+///
+/// That single line is the whole discipline. The cursors these accessors return —
+/// `pRes`, `pBlock`, `pPred`, the `SPicData` pointers — routinely live across a
+/// *later* accessor call on the same cache, and every access made through a `&mut`
+/// (a direct `(*p).field`, or re-coercing it for the next accessor) is an access
+/// through the Unique tag, which pops every raw child taken before it. Spending the
+/// reference exactly once, at the top, is what keeps those cursors alive; taking
+/// these ten to `&mut` would move the retag *inside* the loop and break the very
+/// rule this block exists to state.
 #[inline]
 pub unsafe fn coeff_level(pMbCache: *mut SMbCache) -> *mut i16 {
     std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>()
@@ -543,7 +559,7 @@ pub unsafe fn dct(pMbCache: *mut SMbCache) -> *mut SDCTCoeff {
 }
 
 pub type PFillInterNeighborCacheFunc = unsafe extern "C" fn(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
@@ -738,10 +754,11 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 
 // Function Implementations
 pub unsafe extern "C" fn FillNeighborCacheIntra(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
 ) {
+    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
 
@@ -830,11 +847,12 @@ pub unsafe extern "C" fn FillNeighborCacheIntra(
 }
 
 pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     _pVaaBgMbFlag: *mut i8,
 ) {
+    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);
@@ -961,11 +979,12 @@ pub unsafe extern "C" fn FillNeighborCacheInterWithoutBGD(
 }
 
 pub unsafe extern "C" fn FillNeighborCacheInterWithBGD(
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     pCurMb: *mut SMB,
     iMbWidth: i32,
     pVaaBgMbFlag: *mut i8,
 ) {
+    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     let uiNeighborAvail = (*pCurMb).uiNeighborAvail as u32;
     // F14's class: a neighbour pointer formed before its availability guard, dereferenced only under it — `wrapping_offset` keeps the arithmetic defined off the edge of the MB array (the encode probe, Phase 6 session B).
     let pLeftMb = pCurMb.wrapping_offset(-1);
@@ -1235,9 +1254,10 @@ pub unsafe extern "C" fn MdIntraAnalysisVaaInfo(
 
 pub unsafe extern "C" fn InitMeRefinePointer(
     pMeRefine: *mut SMeRefinePointer,
-    pMbCache: *mut SMbCache,
+    pMbCache: &mut SMbCache,
     iStride: i32,
 ) {
+    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
     (*pMeRefine).pHalfPixH = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(iStride as usize);
     (*pMeRefine).pHalfPixV = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(640 + iStride as usize);
     (*pMeRefine).pQuarPixBest = crate::encoder::md::buffer_inter_pred_me(pMbCache).add(1280 + iStride as usize);

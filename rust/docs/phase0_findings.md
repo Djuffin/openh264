@@ -2235,3 +2235,60 @@ band, and the same end session D measured.
 
 Running total: **seventy-one measurements, twenty-two alternations, forty-four
 acquittals.**
+
+### Seventy-second measurement — 2026-08-19, Phase 6 session E, step 2's `family` gate: the second hit of the session, and the alternation it owed
+
+The `family` battery after step 2's Group A/B (the mode-decision cache parameters —
+fourteen deleted as caches of `pSlice`, forty-three converted to `&mut SMbCache`)
+read **353/353 debug** and **352/353 release**:
+
+```
+mt Static_152_100 t=4 sm=3 n=600 cabac=0 rc=1 ::  C++ 29375   Rust 0
+```
+
+`mt`, `sm=3`, `t=4`, **zero-length**, release — the signature on every clause.
+
+**Step 1 did not clear it.** The configuration re-run 5x came back
+**4 BYTE-IDENTICAL, 1 DIFFER** (run 4, 0 bytes) — not the 5/5 the protocol asks
+for. That is the escalation condition, and it is the second hit of the session, so
+the alternation was owed twice over.
+
+**Step 2 — the alternation, HEAD against control in ONE loop.** Control is
+`4caf198d` (session E's last committed tree, whose own `family` gate was green);
+HEAD is the working tree with Group A/B applied. Both `rust_enc` release binaries
+were built and kept, the C++ reference generated once (29375 bytes,
+deterministic), and the two binaries alternated inside a single loop — sequential
+sampling of a load-sensitive race is not a comparison.
+
+```
+idle machine,  60 rounds each:  head 0   ctl 0
+under load,   100 rounds each:  head 1   ctl 0
+under load,   300 rounds each:  head 2   ctl 1
+                                -------  -----
+              400 rounds each:  head 3   ctl 1     (4 hits / 800 encodes ~ 1/200)
+```
+
+Three readings worth keeping:
+
+- **Load is the variable, not the tree.** 120 alternated encodes on an idle machine
+  drew nothing at all; the same loop with six CPU burners running drew four. This is
+  the sharpest demonstration on record of why S14 requires the alternation to be one
+  loop, and why "a clean sweep is a sample, not a signal" (session G).
+- **The control hits it too** — `4caf198d`, a tree whose sweeps were green in both
+  profiles an hour earlier. The mechanism predates this session's diff, which touches
+  no threading machinery, no slice-list growth and no allocation: Group A/B changes
+  parameter *types* on the mode-decision path and deletes fourteen parameters that
+  were caches of `pSlice`.
+- **3 against 1 is noise.** With four events split between two equal arms,
+  P(one arm draws >= 3) = 5/16 ~ 0.31 under the null. The observed ~1/200 on this
+  configuration sits inside the documented ~1/100-150 band for susceptible
+  configurations.
+
+**One clause worth recording**: two of head's three hits were **short** (27792 of
+29375), not zero-length. The signature's output clause is "zero-byte or short" and
+the short arm is the rarer one on this ledger.
+
+**Acquitted as F3, with the alternation this session owed now on the record.**
+
+Running total: **seventy-two measurements, twenty-three alternations, forty-five
+acquittals.**
