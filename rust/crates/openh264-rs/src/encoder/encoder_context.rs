@@ -1084,8 +1084,12 @@ pub struct sWelsEncCtx {
     /// `RequestMemorySvc` and freed in the cascade; `SDqIdc` is four bytes of POD and
     /// its derived `Default` *is* the memset image. Root: [`ctx_dq_idc_map`].
     pub pDqIdcMap: Vec<SDqIdc>,
+    /// The C++ declares a companion `SParaSetOffset*` beside this one, pointing
+    /// either here or at the caller's vector. **T6.I0 deleted that pointer**: in
+    /// the whole port it was declared, null-initialised, and listed in the
+    /// equality instrument — never read, never assigned anywhere. This field,
+    /// held by value, is the vector.
     pub sPSOVector: SParaSetOffset,
-    pub pPSOVector: *mut SParaSetOffset,
     pub pMemAlign: *mut CMemoryAlign,
     pub uiStartTimestamp: i64,
     pub sEncoderStatistics: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
@@ -1253,13 +1257,12 @@ impl sWelsEncCtx {
 
             pDqIdcMap: Vec::new(),
 
-            // `sPSOVector` is held **by value** and `pPSOVector` points either at it
-            // or at the caller's, so the value's zero has to be the zero of the
-            // pointer's target. `SParaSetOffset::default()` is all-zero throughout
-            // (its own impl, field for field), which is the id-strategy's "no id has
-            // been handed out yet".
+            // `sPSOVector` is held **by value**, and it is the only one: the C++'s
+            // companion pointer is deleted at T6.I0 (see the field's doc comment).
+            // `SParaSetOffset::default()` is all-zero throughout (its own impl,
+            // field for field), which is the id-strategy's "no id has been handed
+            // out yet".
             sPSOVector: SParaSetOffset::default(),
-            pPSOVector: std::ptr::null_mut(),
 
             pMemAlign: std::ptr::null_mut(),
 
@@ -2210,12 +2213,12 @@ mod tests {
         iSubsetSpsNum, iPpsNum, pOut,
         pFrameBs, iFrameBsSize, iPosBsBuffer, sSpatialIndexMap,
         iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
-        pDqIdcMap, sPSOVector, pPSOVector, pMemAlign,
+        pDqIdcMap, sPSOVector, pMemAlign,
         uiStartTimestamp, sEncoderStatistics, iStatisticsLogInterval, iLastStatisticsLogTs,
         iEncoderError, mutexEncoderError, bDeliveryFlag, sWelsCabacContexts,
         uiLastTimestamp, pDynamicBsBuffer,
         ];
-        assert_eq!(extents.len(), 69, "a field was added or removed without updating this list");
+        assert_eq!(extents.len(), 68, "a field was added or removed without updating this list");
 
         let b = shell.as_ptr().cast::<u8>();
 

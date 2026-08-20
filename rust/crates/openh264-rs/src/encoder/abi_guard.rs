@@ -371,7 +371,13 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 24);
 // `Option<PpsId>` (2 and 4 bytes against 8 apiece) and `pSubsetSps` is deleted
 // outright — the C++ declares it, nothing ever read or wrote it. Only the three pins
 // after the parameter-set block move.
-assert_size_by_profile!(sWelsEncCtx, debug 98032, release 97944);
+// **T6.I0**: **-8 both profiles.** `pPSOVector` — the C++'s `SParaSetOffset*`
+// companion to the by-value `sPSOVector` — is deleted: declared, null-initialised,
+// listed in the equality instrument, and never read or assigned anywhere in the
+// port. It sits after all but one of the pinned offsets below, so **only
+// `pMemAlign` moves**; the session brief predicted all fifteen would, and the
+// measurement says otherwise (S36 again — 14 of the 15 pins precede the field).
+assert_size_by_profile!(sWelsEncCtx, debug 98024, release 97936);
 
 
 // The fifteen `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
@@ -416,7 +422,7 @@ assert_ctx_offset_by_profile!(pVaa, debug 440, release 368);
 assert_ctx_offset_by_profile!(pVpp, debug 448, release 376);
 assert_ctx_offset_by_profile!(sSpatialIndexMap, debug 600, release 528);
 assert_ctx_offset_by_profile!(bRefOfCurTidIsLtr, debug 664, release 576);
-assert_ctx_offset_by_profile!(pMemAlign, debug 1904, release 1816);
+assert_ctx_offset_by_profile!(pMemAlign, debug 1896, release 1808);   // T6.I0: -8, the deleted pointer
 
 // encoder_context.h:198 -- the element type of `sSpatialIndexMap`. `wels_preprocess.rs`
 // carried a byte-identical copy of this under the invented name `SSpatialIndexMap`;
