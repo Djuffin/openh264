@@ -447,23 +447,34 @@ at a family boundary, and only with a written reason):
   `SWelsMD` 51 → 0 (and `Copy`/`Clone` dropped off the 4000-byte record — nothing
   copied it by value), `SWelsME` 39 → 0, `SMeRefinePointer` 17 → 0,
   `SQuarRefineParams` 1 → 0; `SMVUnitXY` 65 → **2**, both the F-owned
-  `SPicture.sMvList` sites on the boundary list. **`SMbCache` has zero parameters
-  left** (96 → 0): fourteen were deleted outright as caches of `pSlice` (rule (c) —
-  `WelsWriteMbResidualCabac` took `pSlice`, `sMbCacheInfo` *and* `pCabacCtx` while
-  its body wrote `(*pSlice).uiLastMbQp` between uses of them), 43 became
-  `&mut SMbCache`, and what the grep still reads is ten accessor signatures plus one
-  entry-reborrow line per converted body. **`SMeRefinePointer` holds no pointer**:
+  `SPicture.sMvList` sites on the boundary list. **`SMbCache` is 96 → 72, and the
+  retreat is the session's most useful finding.** Fourteen parameters were deleted
+  outright as caches of `pSlice` (rule (c) — `WelsWriteMbResidualCabac` took
+  `pSlice`, `sMbCacheInfo` *and* `pCabacCtx` while its body wrote
+  `(*pSlice).uiLastMbQp` between uses of them). The other 62 were retyped to
+  `&mut SMbCache` and **the `exit` battery's Miri step rejected that, correctly**:
+  `SMbCache` is an *arena*, its consumers hold several raw cursors into different
+  parts of it across calls, and a `&mut` covering all 5600 bytes invalidates every
+  one of them — including the caller's. `WelsEncRecUV(pFunc, pCurMb, pMbCache,
+  pRes, iUV)` takes the arena *and* a cursor into it in one call, so no argument
+  ordering works. Reverted; the deletions stand, because **deleting the second path
+  is what an arena wants and typing it is not**. Two further findings from the same
+  battery: the neighbour classifier propagated through *named* callees and missed a
+  forward into the `pfFillInterNeighborCache` **slot** (replaced by a type-driven
+  checker), and `&mut *pCurMb` passed where `*mut SMB` is expected **silently
+  re-narrows** — so every reborrow spelling was stripped and re-derived from the
+  compiler's own type errors, closing the class rather than the instances. **`SMeRefinePointer` holds no pointer**:
   its five `*mut u8` were four fixed offsets into one `SMbCache` buffer plus an
   alias slot, so it is `iStride` + `iHalfPixHV` + a `bQuarPixSwapped` selector that
   replaced the `pQuarPixBest`/`pQuarPixTmp` `mem::swap` — **48 → 32 bytes, newly
   pinned**.
-  **`*mut SMB` is 125 → 46, and the shortfall is the session's main finding.** A
+  **`*mut SMB` is 125 → 48, and the shortfall is a finding rather than a debt.** A
   macroblock parameter converts only if the function (1) does no cursor arithmetic
   on it and (2) does not re-reach the array through another parameter — both clauses
   are provenance, and the second is F13's shape. Classified mechanically over every
   `src/encoder/*.rs`, then applied: 68 converted (svc_mode_decision 31,
   svc_base_layer_md 15, rc.rs 9, svc_encode_slice 5, deblocking 2, plus 7 slot
-  types), 46 named as survivors in four groups — neighbour-walkers (the CABAC
+  types), 48 named as survivors in four groups — neighbour-walkers (the CABAC
   writers' 11, deblocking's 9 with 18 arithmetic sites, md's `FillNeighborCache*`),
   array-owners (svc_encode_slice 8, encoder_ext 2), slot entry points
   (svc_set_mb_syn_cavlc 3), and Phase 7's one. **The brief's step-4 note about
@@ -486,8 +497,8 @@ at a family boundary, and only with a written reason):
   call-site rearrangement.
   **The span is flat**: 7 pairs, encode median **+0.00%** (max +1.52%) against a
   +0.16%/+1.52% null, decode **−0.24%**; cumulative ≈ **+10…+12%** unmoved and the
-  +25% tripwire untouched. Encoder-side `raw_ptr` **2331 → 2003 (−328)**,
-  `unsafe_fn` 684 → 679. **F3 measurements 71, 72 and 73**, with the alternation the
+  +25% tripwire untouched. Encoder-side `raw_ptr` **2331 → 2015 (−316)**,
+  `unsafe_fn` 684 → 679. **F3 measurements 71-74**, with the alternation the
   second owed: **head 3 / control 1 over 800 encodes under load, and 0/0 over 120 on
   an idle machine** — the sharpest demonstration on record that load is the variable,
   not the tree.
