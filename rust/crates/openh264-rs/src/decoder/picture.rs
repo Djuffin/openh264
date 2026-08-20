@@ -592,6 +592,20 @@ impl SPicture {
     /// because the slicing hands out provenance over `[origin..]` only. Miri named
     /// it here on the first run against the test below. S15's sentence, collected in
     /// the commit that quotes it: byte-exactness does not imply soundness.
+    ///
+    /// # And the aliasing, which is a second subtlety S28 does not cover
+    ///
+    /// `plane.as_mut_slice().as_mut_ptr()` fixes the provenance and is **still**
+    /// wrong: `as_mut_slice` is `&mut self.buf`, a `Unique` retag over the whole
+    /// allocation, so every call pops the cursor the previous call returned. This
+    /// accessor carried that spelling until Phase 6 session G and passed only
+    /// because no decoder caller re-derives while a cursor is live — an accident of
+    /// the call graph, not a property of the accessor. `root_ptr` reads the address
+    /// out of the `Vec`'s own header with no reference formed, so repeated calls are
+    /// sibling `SharedReadWrite` derivations that coexist, which is what every raw
+    /// cursor here assumes. That is **S40**, earned by F63 on the encoder's side of
+    /// the same `PaddedPlane`, and `data_ptr_twice_leaves_the_first_cursor_usable`
+    /// is the test that stops it being re-assumed.
     #[inline]
     pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
         let plane = &mut self.planes[i];
@@ -599,7 +613,7 @@ impl SPicture {
             return std::ptr::null_mut();
         }
         let origin = plane.origin();
-        plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
+        plane.root_ptr().wrapping_add(origin)
     }
 
     // **T5b.7, S18: `data_ptr_ref` stood here.** It was `data_ptr`'s shared form,
@@ -756,6 +770,57 @@ mod tests {
 
         assert_eq!(pic.linesize(0), stride as i32);
         assert_eq!(pic.linesize(1), (stride / 2) as i32);
+    }
+
+    /// **S40: the accessor is asked twice and the first cursor is used after the
+    /// second call.** `data_ptr` hands out a raw cursor the caller keeps, so its
+    /// spelling has to be retag-stable, and that is a *different* property from the
+    /// provenance the test above pins — F63 (session F) is the whole reason it has
+    /// its own test: `plane.as_mut_slice().as_mut_ptr()` derives from the allocation
+    /// root and answers S28 perfectly, while `&mut self.buf` is a `Unique` retag over
+    /// that same allocation, so each call pops the pointer the previous call returned.
+    ///
+    /// The encoder's `PaddedPlane` hit that for real (twice a frame, `WelsInitCurrentLayer`
+    /// then `AnalyzePictureComplexity`). Nothing in the decoder re-derives while a
+    /// cursor is live *today* — `DecodeFrameConstruction`'s three `ppDst[i]` writes are
+    /// the one production caller and it takes all three, uses them, and drops them.
+    /// That is an accident of the current call graph, not a property of the accessor,
+    /// and S40's sentence is that an accessor surviving on "no caller re-derives yet"
+    /// inherits the test rather than the assumption. So this is written against
+    /// `data_ptr`'s contract, and it is why the body reads the address out of the
+    /// `Vec`'s header (`PaddedPlane::root_ptr`) instead of through a slice.
+    ///
+    /// Red-proofed at the commit that added it: restoring
+    /// `plane.as_mut_slice().as_mut_ptr()` fails this test under Miri with
+    /// "attempting a write access using <tag> but that tag does not exist in the
+    /// borrow stack", and passes every other test in the file.
+    #[test]
+    #[allow(unsafe_code)]
+    fn data_ptr_twice_leaves_the_first_cursor_usable() {
+        let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
+        let mut pic = SPicture::with_planes([
+            PaddedPlane::new(w, h, pad, stride),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+        ], MbDims::none());
+
+        let first = pic.data_ptr(0);
+        let second = pic.data_ptr(0);
+        assert_eq!(first, second, "the same plane resolves to the same address");
+
+        // The use that matters: the FIRST cursor, after the second derivation.
+        unsafe { *first = 0x5A };
+        assert_eq!(unsafe { *second }, 0x5A, "sibling cursors read each other's writes");
+        // And the reverse order, so neither derivation is merely tolerated as dead.
+        unsafe { *second = 0xC3 };
+        assert_eq!(unsafe { *first }, 0xC3);
+
+        // A cursor into a *different* plane is live across a re-derivation of this one.
+        let chroma = pic.data_ptr(1);
+        let luma_again = pic.data_ptr(0);
+        unsafe { *chroma = 0x7E };
+        assert_eq!(unsafe { *chroma }, 0x7E);
+        assert_eq!(unsafe { *luma_again }, 0xC3, "re-deriving plane 0 did not disturb it");
     }
 
     /// The recycling predicate `PrefetchPic` scans on, in its own right — the test
