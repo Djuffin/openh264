@@ -688,15 +688,16 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
         let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
+        let sDec = pDecPic.planes();
         if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: the `pFuncList` null guard went with the table it guarded.
             // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
             // here unconditionally, so dropping it is the closer reading.
             ExpandReferencingPicture(
-                &pDecPic.pData,
+                &sDec.pData,
                 pDecPic.iWidthInPixel,
                 pDecPic.iHeightInPixel,
-                &pDecPic.iLineSize,
+                &sDec.iLineSize,
             );
         }
 
@@ -709,7 +710,7 @@ pub unsafe fn WelsUpdateRefList(pCtx: *mut sWelsEncCtx) -> bool {
                     for i in 0..w {
                         x = x
                             .wrapping_mul(31)
-                            .wrapping_add(*pDecPic.pData[pl].offset((y * pDecPic.iLineSize[pl] + i) as isize) as u32);
+                            .wrapping_add(*sDec.pData[pl].offset((y * sDec.iLineSize[pl] + i) as isize) as u32);
                         sum = sum.wrapping_add(x);
                     }
                 }
@@ -1112,11 +1113,11 @@ pub unsafe fn UpdateBlockStatic(pCtx: *mut sWelsEncCtx) {
         };
         // Two pools again: the reference is a reconstruction picture, the current one
         // a spatial source picture. Both are copied to geometry before the call.
-        let sRef = (*pRefList).pic(idRef).planes();
+        let sRef = (*pRefList).pic_mut(idRef).planes();
         if (*pVaaExt).iVaaBestRefFrameNum != (*pRefList).pic(idRef).iFrameNum {
             let sSrc = (*pCtx)
                 .pEncPic
-                .map(|id| (*(*pCtx).pVpp).src_id(id).planes());
+                .map(|id| (*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(id).planes());
             (*(*pCtx).pVpp).UpdateBlockIdcForScreen(
                 (*pVaaExt).pVaaBestBlockStaticIdc,
                 Some(&sRef),
@@ -1306,14 +1307,15 @@ pub unsafe fn WelsUpdateRefListScreen(pCtx: *mut sWelsEncCtx) -> bool {
         // reads its geometry or writes its own fields, and the borrow ends before the
         // reference-list shifts that would touch the pool again.
         let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
+        let sDec = pDecPic.planes();
         if (*pParamD).iHighestTemporalId == 0 || (kuiTid as i32) < (*pParamD).iHighestTemporalId as i32 {
             // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
             // encoder's two identical expand sites.
             ExpandReferencingPicture(
-                &pDecPic.pData,
+                &sDec.pData,
                 pDecPic.iWidthInPixel,
                 pDecPic.iHeightInPixel,
-                &pDecPic.iLineSize,
+                &sDec.iLineSize,
             );
         }
 

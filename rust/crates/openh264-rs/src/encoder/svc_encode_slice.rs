@@ -586,6 +586,31 @@ pub unsafe fn ctx_ref_pic<'a>(pCtx: *mut sWelsEncCtx) -> Option<&'a SPicture> {
 /// # Safety
 /// As [`ctx_ref_pic`].
 #[inline]
+pub unsafe fn ctx_pic_ref_mut<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a mut SPicture> {
+    match r {
+        PicRef::Rec(id) => {
+            let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
+            if pRefList.is_null() {
+                None
+            } else {
+                Some((*pRefList).pic_mut(id))
+            }
+        }
+        PicRef::Src(id) => {
+            if (*pCtx).pVpp.is_null() {
+                None
+            } else {
+                Some((*(*pCtx).pVpp).m_pSpatialPicPool.get_mut(id))
+            }
+        }
+    }
+}
+
+/// Shared form of [`ctx_pic_ref_mut`].
+///
+/// # Safety
+/// As [`ctx_ref_pic`].
+#[inline]
 pub unsafe fn ctx_pic_ref<'a>(pCtx: *mut sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
         PicRef::Rec(id) => {
@@ -626,6 +651,21 @@ pub unsafe fn layer_ref_pic<'a>(pLayer: *mut SDqLayer) -> Option<&'a SPicture> {
         return None;
     }
     Some((*pRefList).pic(id))
+}
+
+/// Mutable form of [`layer_ref_pic`] — for the plane roots, which are handed out from
+/// the owning buffer and so need `&mut` (S28, [`SPicture::data_ptr`]).
+///
+/// # Safety
+/// As [`layer_ref_pic`], and no other borrow of the same pool may be live.
+#[inline]
+pub unsafe fn layer_ref_pic_mut<'a>(pLayer: *mut SDqLayer) -> Option<&'a mut SPicture> {
+    let id = (*pLayer).pRefPic?;
+    let pRefList = (*pLayer).pRefList;
+    if pRefList.is_null() {
+        return None;
+    }
+    Some((*pRefList).pic_mut(id))
 }
 
 /// The reconstruction picture this layer is **decoding into** — see [`layer_ref_pic`].
@@ -1436,7 +1476,7 @@ pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *
         let pDecU = (*pMbCache).SPicData.pDecMb[1];
         let pDecV = (*pMbCache).SPicData.pDecMb[2];
         let pScaledTcoeff = crate::encoder::md::coeff_level(pMbCache);
-        let sDec = layer_dec_pic(pDq)
+        let sDec = layer_dec_pic_mut(pDq)
             .expect("the layer's reconstruction picture is bound for this frame")
             .planes();
         let kiDecStrideLuma = sDec.iLineSize[0];

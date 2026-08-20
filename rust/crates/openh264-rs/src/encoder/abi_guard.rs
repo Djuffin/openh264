@@ -122,7 +122,11 @@ assert_size!(SWelsNalRaw, 32);
 // pointers for 4 fat pointers (+48) and loses `#[repr(C)]` with them; Rust then packs
 // the six one-byte flags into the hole after `iFrameAverageQp`, so the measured total
 // is 192 rather than the 200 a `repr(C)` layout would give. Measured, not predicted.
-assert_size!(SPicture, 192);
+// **T6.F2**: +152. `pBuffer` + `pData[3]` + `iLineSize[3]` (44 bytes, 48 padded) are
+// three owned `PaddedPlane`s (`Vec` + stride + origin + width + height + pad = 64
+// bytes each, 192 total). The picture owns every byte it has, and `CMemoryAlign` has
+// nothing left to allocate for one. **344, measured.**
+assert_size!(SPicture, 344);
 assert_size!(SScreenBlockFeatureStorage, 88);
 
 // codec/encoder/core/inc/parameter_sets.h

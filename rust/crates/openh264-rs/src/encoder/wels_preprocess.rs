@@ -733,8 +733,7 @@ pub unsafe fn JudgeNeedOfScaling(
 /// # Safety
 /// `pMa` must be a valid `CMemoryAlign`. The returned picture must be released with
 /// [`FreePicture`] against the same allocator.
-pub unsafe fn AllocPicture(
-    pMa: *mut CMemoryAlign,
+pub fn AllocPicture(
     kiWidth: i32,
     kiHeight: i32,
     bNeedMbInfo: bool,
@@ -742,87 +741,18 @@ pub unsafe fn AllocPicture(
 ) -> Option<Box<SPicture>> {
     // `RequestScreenBlockFeatureStorage` is part of the screen-content path, which is
     // outside the gate configuration and unported; refuse rather than hand back a
-    // picture whose storage the caller believes exists. **Hoisted above the
-    // allocations at T6.F0** — the old body built the whole picture and then unwound
-    // it through `FreePicture`; the answer is the same null either way, and refusing
-    // first is one path instead of two.
+    // picture whose storage the caller believes exists.
     if iNeedFeatureStorage != 0 {
         return None;
     }
 
-    // **T6.F0**: the struct, and the four per-macroblock side arrays with it, come
-    // from `SPicture::new` rather than `WelsMallocz` + four more `WelsMallocz`es. Only
-    // the plane buffer is still the allocator's; that is step 2's.
-    let mut pPic = SPicture::new(kiWidth, kiHeight, bNeedMbInfo);
-
-    // with width of horizon / height of vertical
-    let mut iPicWidth = WELS_ALIGN(kiWidth, MB_WIDTH_LUMA) + (PADDING_LENGTH << 1);
-    let iPicHeight = WELS_ALIGN(kiHeight, MB_HEIGHT_LUMA) + (PADDING_LENGTH << 1);
-    let mut iPicChromaWidth = iPicWidth >> 1;
-    let iPicChromaHeight = iPicHeight >> 1;
-    // 32 (or 16 for chroma below) to match original imp. here instead of cache_line_size
-    iPicWidth = WELS_ALIGN(iPicWidth, 32);
-    iPicChromaWidth = WELS_ALIGN(iPicChromaWidth, 16);
-    let iLumaSize = iPicWidth * iPicHeight;
-    let iChromaSize = iPicChromaWidth * iPicChromaHeight;
-
-    // **F58, and it is F14/F57's accommodation a third time.** `WelsMallocz`, where
-    // the C++ (`picture_handle.cpp:76`) and this port both had `WelsMalloc`: on the
-    // **first** frame `AnalyzeSpatialPic` hands `VaaCalculation` a reference picture
-    // that nothing has written yet — `wels_preprocess.cpp:289` does the same — and
-    // `VAACalcSad` reads its *visible* luma. Reading uninitialised bytes is
-    // indeterminate-but-tolerated in C and **Undefined Behaviour in Rust**, so the
-    // port cannot transliterate it. Zeroing is the smallest thing that makes the
-    // read defined, and it is what both implementations observe in practice: a
-    // fresh 18 KB `malloc` is served from zero pages, which is why 341/341 has
-    // always agreed. Found by the encoder aliasing probe, Phase 6 session A, at
-    // `processing/vaacalc.rs:307`.
-    pPic.pBuffer =
-        (*pMa).WelsMallocz((iLumaSize + (iChromaSize << 1)) as u32, tag!("pPic->pBuffer")) as *mut u8;
-    if pPic.pBuffer.is_null() {
-        // `pPic` drops here, and the side arrays with it.
-        return None;
-    }
-    pPic.iLineSize[0] = iPicWidth;
-    pPic.iLineSize[1] = iPicChromaWidth;
-    pPic.iLineSize[2] = iPicChromaWidth;
-    pPic.pData[0] = pPic.pBuffer.add(((1 + pPic.iLineSize[0]) * PADDING_LENGTH) as usize);
-    pPic.pData[1] = pPic
-        .pBuffer
-        .add(iLumaSize as usize + ((((1 + pPic.iLineSize[1]) * PADDING_LENGTH) >> 1) as usize));
-    pPic.pData[2] = pPic.pBuffer.add(
-        (iLumaSize + iChromaSize) as usize
-            + ((((1 + pPic.iLineSize[2]) * PADDING_LENGTH) >> 1) as usize),
-    );
-
-    // `iWidthInPixel`, `iHeightInPixel`, `iFrameNum`, `bIsLongRef`, `iLongTermPicNum`,
-    // `uiRecieveConfirmed` and `iMarkFrameNum` are `SPicture::new`'s — it writes the
-    // same seven fields `picture_handle.cpp` writes over its zeroed block.
-    // SCREEN_CONTENT(dormant: Phase 10) — refused above, so the slot stays null.
-
-    Some(pPic)
-}
-
-/// `picture_handle.cpp:129`, what is left of it. Releases the one block
-/// [`AllocPicture`] still takes from `pMa`; the picture itself, its side arrays and
-/// its box are Rust's and drop with the owner.
-///
-/// **Transitional (T6.F1), and it dies in T6.F2** with the last raw plane. Its two
-/// callers are the scaled-input slot and, through
-/// [`SrcPicPool::free_planes_and_clear`]/[`RecPicPool::free_planes_and_clear`], the
-/// two pools; the field-by-field reset the C++ does before `WelsFree` was never
-/// observable (nothing reads a picture between free and reuse) and went with the
-/// four `WelsFree`s it stood among.
-///
-/// # Safety
-/// `pMa` must be the allocator the picture was built with.
-pub unsafe fn FreePicturePlanes(pMa: *mut CMemoryAlign, pPic: &mut SPicture) {
-    if !pPic.pBuffer.is_null() {
-        (*pMa).WelsFree(pPic.pBuffer as *mut c_void, tag!("pPic->pBuffer"));
-        pPic.pBuffer = std::ptr::null_mut();
-    }
-    pPic.pData = [std::ptr::null_mut(); 3];
-    pPic.iLineSize = [0; 3];
+    // **T6.F2**: what is left of `picture_handle.cpp:51`. The struct, its four
+    // per-macroblock side arrays *and* its three planes are all `SPicture::new`'s
+    // now — the geometry, the padding, the stride alignment and the zeroing moved
+    // there with them, and this function is the refusal plus a constructor call.
+    // `CMemoryAlign` has nothing left to allocate for a picture, so the parameter is
+    // gone and `FreePicture` with it: a picture is released by dropping it.
+    Some(SPicture::new(kiWidth, kiHeight, bNeedMbInfo))
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
@@ -834,7 +764,6 @@ pub unsafe fn WelsInitScaledPic(
     let bInputPicNeedScaling = JudgeNeedOfScaling(pParam, pScaledPicture);
     if bInputPicNeedScaling {
         (*pScaledPicture).pScaledInputPicture = AllocPicture(
-            pMemoryAlign,
             (*pParam).SUsedPicRect.iWidth,
             (*pParam).SUsedPicRect.iHeight,
             false,
@@ -846,8 +775,9 @@ pub unsafe fn WelsInitScaledPic(
 
         let pPic = (*pScaledPicture)
             .pScaledInputPicture
-            .as_deref()
-            .expect("just allocated");
+            .as_deref_mut()
+            .expect("just allocated")
+            .planes();
         ClearEndOfLinePadding(
             pPic.pData[0],
             pPic.iLineSize[0],
@@ -870,16 +800,11 @@ pub unsafe fn WelsInitScaledPic(
     0
 }
 
-/// Releases the scaled picture memory.
-pub unsafe fn FreeScaledPic(
-    pScaledPicture: *mut Scaled_Picture,
-    pMemoryAlign: *mut CMemoryAlign,
-) {
+/// Releases the scaled picture. **Since T6.F2 that is a drop** — the picture owns
+/// every byte it has, so `CMemoryAlign` is not involved and neither is a free walk.
+pub unsafe fn FreeScaledPic(pScaledPicture: *mut Scaled_Picture) {
     if pScaledPicture.is_null() {
         return;
-    }
-    if let Some(pPic) = (*pScaledPicture).pScaledInputPicture.as_deref_mut() {
-        FreePicturePlanes(pMemoryAlign, pPic);
     }
     (*pScaledPicture).pScaledInputPicture = None;
 }
@@ -1031,12 +956,7 @@ impl CWelsPreProcess {
     /// Destructor releasing allocated picture buffers and plugin interfaces.
     pub unsafe fn Destroy(pPreProcess: *mut CWelsPreProcess) {
         if !pPreProcess.is_null() {
-            let pMa = if !(*pPreProcess).m_pEncCtx.is_null() {
-                (*(*pPreProcess).m_pEncCtx).pMemAlign
-            } else {
-                std::ptr::null_mut()
-            };
-            FreeScaledPic(&mut (*pPreProcess).m_sScaledPicture, pMa);
+            FreeScaledPic(&mut (*pPreProcess).m_sScaledPicture);
             // `WelsPreprocessDestroy` freed the vtable and its context here; the
             // plugins are `m_vp` and drop with the object.
             drop(Box::from_raw(pPreProcess));
@@ -1071,7 +991,7 @@ impl CWelsPreProcess {
             return -1;
         }
 
-        FreeScaledPic(&mut self.m_sScaledPicture, (*pCtx).pMemAlign);
+        FreeScaledPic(&mut self.m_sScaledPicture);
         self.InitLastSpatialPictures(pCtx);
         WelsInitScaledPic((*pCtx).pSvcParam, &mut self.m_sScaledPicture, (*pCtx).pMemAlign)
     }
@@ -1103,7 +1023,7 @@ impl CWelsPreProcess {
             self.m_uiSpatialPicNum[idx] = kuiRefNumInTemporal;
             let mut i: u8 = 0;
             while i < kuiRefNumInTemporal {
-                let Some(pPic) = AllocPicture(pMa, kiPicWidth, kiPicHeight, false, 0) else {
+                let Some(pPic) = AllocPicture(kiPicWidth, kiPicHeight, false, 0) else {
                     return 1;
                 };
                 // The pool is flat across layers; `m_pSpatialPic[did][i]` keeps the
@@ -1150,7 +1070,8 @@ impl CWelsPreProcess {
             j += 1;
         }
         self.m_pLastSpatialPicture = [[None; 2]; MAX_DEPENDENCY_LAYER];
-        self.m_pSpatialPicPool.free_planes_and_clear(pMa);
+        // T6.F2: the pool owns its pictures whole, so releasing them is dropping them.
+        self.m_pSpatialPicPool = SrcPicPool::empty();
     }
 
     pub unsafe fn BuildSpatialPicList(
@@ -1450,7 +1371,8 @@ impl CWelsPreProcess {
         {
             let v = &*(*pCtx).pVaa;
             let sCurGeom = self
-                .src_id(pCurPic.expect("the spatial pool is allocated"))
+                .m_pSpatialPicPool
+                .get_mut(pCurPic.expect("the spatial pool is allocated"))
                 .planes();
             let iMbNum = ((sCurGeom.iWidthInPixel + 15) >> 4)
                 * ((sCurGeom.iHeightInPixel + 15) >> 4);
@@ -1612,8 +1534,8 @@ impl CWelsPreProcess {
         // S37: resolve both pictures to their plane roots up front and work through
         // raw cursors from here — `srcRef` and `dstRef` are frequently *the same*
         // picture (no scaling configured), which no pair of references could express.
-        let pSrc = self.src(srcRef).planes();
-        let pDstPic = self.src(dstRef).planes();
+        let pSrc = self.src_mut(srcRef).planes();
+        let pDstPic = self.src_mut(dstRef).planes();
 
         sSrcPixMap.pPixel[0] = pSrc.pData[0];
         sSrcPixMap.pPixel[1] = pSrc.pData[1];
@@ -1701,8 +1623,8 @@ impl CWelsPreProcess {
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        let sCur = self.src_id(idCur).planes();
-        let sRef = self.src_id(idRef).planes();
+        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
+        let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
         (*pVaaInfo).sVaaCalcInfo.pCurY = sCur.pData[0];
         (*pVaaInfo).sVaaCalcInfo.pRefY = sRef.pData[0];
 
@@ -1748,8 +1670,8 @@ impl CWelsPreProcess {
             return;
         };
         // S37 again — resolved once, then raw cursors.
-        let sCur = self.src_id(idCur).planes();
-        let sRef = pRefPicture.map(|id| self.src_id(id).planes());
+        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
+        let sRef = pRefPicture.map(|id| self.m_pSpatialPicPool.get_mut(id).planes());
         if let (true, Some(sRef)) = (bDetectFlag, sRef) {
             (*pVaaInfo).iPicWidth = sCur.iWidthInPixel;
             (*pVaaInfo).iPicHeight = sCur.iHeightInPixel;
@@ -1818,8 +1740,8 @@ impl CWelsPreProcess {
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        let sCur = self.src_id(idCur).planes();
-        let sRef = self.src_id(idRef).planes();
+        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
+        let sRef = self.m_pSpatialPicPool.get_mut(idRef).planes();
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
         // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
         // handed over at the `Process` call instead.
@@ -1946,7 +1868,7 @@ impl CWelsPreProcess {
     }
 
     pub unsafe fn WelsMoveMemoryWrapper(
-        &self,
+        &mut self,
         pSvcParam: *mut SWelsSvcCodingParam,
         pDstRef: SrcPicRef,
         kpSrc: *const SSourcePicture,
@@ -1958,7 +1880,7 @@ impl CWelsPreProcess {
         }
 
         // S37: the destination resolved once to its plane roots.
-        let pDstPic = self.src(pDstRef).planes();
+        let pDstPic = self.src_mut(pDstRef).planes();
 
         let mut iSrcWidth = (*kpSrc).iPicWidth;
         let mut iSrcHeight = (*kpSrc).iPicHeight;
@@ -2112,8 +2034,8 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::SIMILAR_SCENE;
         };
         // S37: resolved once, raw cursors after.
-        let sCur = self.src(pCurPicture).planes();
-        let sRef = self.src(pRefPicture).planes();
+        let sCur = self.src_mut(pCurPicture).planes();
+        let sRef = self.src_mut(pRefPicture).planes();
 
         // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();
@@ -2209,7 +2131,7 @@ impl CWelsPreProcess {
         let mut iNumOfLargeChange = 0;
         let mut iNumOfMediumChangeToLtr = 0;
 
-        let sCur = self.src(pCurPicture).planes();
+        let sCur = self.src_mut(pCurPicture).planes();
         Self::InitPixMap(&sCur, &mut sSrcMap);
         self.InitRefJudgement(&mut sLtrJudgement);
         self.InitRefJudgement(&mut sSceneLtrJudgement);
@@ -2232,7 +2154,7 @@ impl CWelsPreProcess {
             let Some(idRefPic) = pRefPicInfo.pRefPicture else {
                 continue;
             };
-            let sRefGeom = self.src_id(idRefPic).planes();
+            let sRefGeom = self.m_pSpatialPicPool.get_mut(idRefPic).planes();
             Self::InitPixMap(&sRefGeom, &mut sRefMap);
 
             let bIsClosestLtrFrame =
@@ -2567,10 +2489,10 @@ impl CWelsPreProcess {
         // both `SPicture*` in C++, so nothing there says the two arguments come from
         // different owners. S37: each resolved once in its own pool, to geometry.
         let pRefList = *(*pCtx).ppRefPicListExt.add((*pCtx).uiDependencyId as usize);
-        let sCur = self.src_id(idCur).planes();
+        let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRefPic = pRefPicture.filter(|_| !pRefList.is_null());
         let sRef = sRefPic
-            .map(|id| (*pRefList).pic(id).planes())
+            .map(|id| (*pRefList).pic_mut(id).planes())
             .unwrap_or(sCur);
 
         let pSvcParam = (*pCtx).pSvcParam;
