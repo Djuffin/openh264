@@ -233,6 +233,30 @@ impl PaddedPlane {
         &mut self.buf
     }
 
+    /// The buffer's **root address**, without taking a slice of it.
+    ///
+    /// **This is not a convenience over `as_mut_slice().as_mut_ptr()`; it is a
+    /// different aliasing statement, and Phase 6 session F's exit battery is what
+    /// made the difference visible.** `&mut self.buf` deref-coerces to `&mut [u8]`
+    /// and that is a **`Unique` retag over the whole allocation**, so it pops every
+    /// pointer previously derived from this plane. A caller that hands out a raw
+    /// cursor, keeps it, and later asks the same plane for another one therefore
+    /// invalidates its own first cursor — which is exactly what the encoder does
+    /// (`WelsInitCurrentLayer` stamps `pEncData` from the source picture's planes,
+    /// and `AnalyzePictureComplexity` asks the same picture for its planes again
+    /// later in the same frame).
+    ///
+    /// `Vec::as_mut_ptr` reads the pointer out of the `Vec`'s own header instead, so
+    /// repeated calls are sibling `SharedReadWrite` derivations that coexist — which
+    /// is the C's behaviour and the behaviour every raw cursor here assumes.
+    ///
+    /// Still `&mut self`, because the pointer is writable and the borrow checker is
+    /// the thing keeping a `&[u8]` from being live at the same time.
+    #[inline]
+    pub fn root_ptr(&mut self) -> *mut u8 {
+        self.buf.as_mut_ptr()
+    }
+
     /// Sample at logical `(x, y)`; negative coordinates read the padding.
     #[inline]
     pub fn at(&self, x: isize, y: isize) -> u8 {

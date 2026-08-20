@@ -251,6 +251,17 @@ impl SPicture {
     /// writes the whole frame. Deriving from the allocation root and *offsetting*
     /// keeps the provenance of the whole plane. No byte-level gate can see the
     /// difference; the Miri test at the bottom of this file is the instrument.
+    ///
+    /// **And the root must be taken without slicing, which cost this session a
+    /// second Miri failure.** `plane.as_mut_slice().as_mut_ptr()` has the right
+    /// *provenance* — the whole allocation — but `&mut self.buf` is a `Unique` retag,
+    /// so the **next** call on the same plane pops the pointer the previous one
+    /// handed out. The encoder does exactly that within one frame:
+    /// `WelsInitCurrentLayer` stamps `pEncData` from the source picture, and
+    /// `AnalyzePictureComplexity` asks the same picture for its planes again a few
+    /// hundred lines later, after which `WelsMdI16x16`'s SAD reads through the first
+    /// cursor. [`PaddedPlane::root_ptr`] reads the address out of the `Vec` header
+    /// instead, so repeated calls are siblings rather than a stack.
     #[inline]
     pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
         let plane = &mut self.planes[i];
@@ -258,7 +269,7 @@ impl SPicture {
             return std::ptr::null_mut();
         }
         let origin = plane.origin();
-        plane.as_mut_slice().as_mut_ptr().wrapping_add(origin)
+        plane.root_ptr().wrapping_add(origin)
     }
 
     /// Plane `i`'s stride — the C++'s `iLineSize[i]`.

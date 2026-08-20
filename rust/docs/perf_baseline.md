@@ -2579,3 +2579,81 @@ no ledger row to open.
 
 **S33 applies**: nothing here is claimed as a speed-up. Both medians are inside the
 floor, and a reading inside the floor is a non-finding in both directions.
+
+---
+
+## Phase 6 session F — the picture id flip, and the first session-scale encode cost this phase has recorded (2026-08-20)
+
+**7 pairs, `4bb9c77a` → `23fe9bb0`, against a 7-pair same-binary null taken the same
+day on the same machine.** Two readings are kept because the first one was **acted
+on**: the span breached its null, the cost was attributed step by step, and a fix went
+in before the close.
+
+| | null (7 pairs) | span, first reading | span, after T6.F5 |
+|---|---|---|---|
+| decode median | +0.08% | +0.00% | **+0.13%** |
+| encode median | +0.00% | **+4.67%** | **+2.72%** |
+| encode min | −1.46% | +0.77% | +0.22% |
+| encode max | +1.45% | +7.69% | **+6.67%** |
+| encode rows over +5% | 0 | 12 | **4** |
+
+**Decode is flat and that is by construction** — this session changed no decoder code
+(`git diff -- src/decoder` is empty apart from `SPicture::expand_as_reference`'s
+sibling comment). Both decode readings sit inside the null.
+
+**Encode is not flat, and the brief's contingency turned out to be aimed at the wrong
+step.** The brief made step 2 (the planes) separable "because it is the hot-path risk"
+and said to revert it if the span breached. It breached, so the cost was **attributed
+before anything was reverted** — three-pair medians, commit by commit:
+
+| hop | what landed | encode median |
+|---|---|---|
+| `4bb9c77a` → `bf3488d3` | the LTR harness and F62 | +0.58% |
+| `bf3488d3` → `77df072f` | **the picture id flip** | **+1.45%** |
+| `77df072f` → `6ead14ee` | the planes become owned | +0.24% |
+| `6ead14ee` → `7a135935` | VAA arrays, expand | +0.05% |
+
+**Step 2 measured clean and reverting it would have fixed nothing.** The cost was the
+*flip*: every per-macroblock read of a reference stride or plane root became a handle
+resolution — read the `Option`, read the layer's reference list, null-check it,
+bounds-check the pool slot, follow `Vec` → `Box` → `SPicture`, five dependent loads
+where the C++ has one, at ~30 sites inside the macroblock loop.
+
+**T6.F5 is the fix and it recovered about two of the four points**: `SDqLayer` carries
+`sRefPicView`/`sDecPicView`, stamped once a frame at the two points either handle is
+assigned, exactly as it has always carried `pEncData`/`pCsData`. Median +4.67% →
+**+2.72%**, rows over 5% **12 → 4**, worst row 7.69% → 6.67%.
+
+**The row pattern is the diagnosis, and it is worth keeping.** Sorted by content
+rather than by size, the remaining cost separates cleanly:
+
+| content | rows | delta |
+|---|---|---|
+| Mandelbrot (QVGA → 1080p) | 8 | +0.22 … +1.37% |
+| Testsrc 1080p | 2 | +1.50 … +1.72% |
+| SMPTE Bars / PAL 75% / RGB Test / YUV Space | 12 | +3.04 … +6.67% |
+
+Mandelbrot is dense, high-entropy content where the mode search does real work per
+macroblock. The bar and colour-space patterns are flat, mostly-skip content where a
+macroblock costs almost nothing. **A fixed per-macroblock overhead is invisible in the
+first group and dominant in the second**, which is exactly the shape a handle
+resolution has — and it says the residue is *still* resolution, not the plane
+ownership (which would scale with pixels, i.e. with picture size, and does not: 1080p
+Mandelbrot is +1.37%, QVGA Mandelbrot +0.45%).
+
+**What is left, named.** Roughly ten per-macroblock resolutions survive T6.F5, all of
+them reaching the four per-macroblock *side arrays* the views deliberately do not
+carry — `pMbSkipSad` (handed whole to `pfFillInterNeighborCache` once per macroblock),
+`uiRefMbType`, `pRefMbQp` and `sMvList`. Stamping raw roots for those on the layer
+would recover more and would re-introduce exactly the stored raw aliases into
+picture-owned storage that this session removed. **Not taken**, and the trade is
+recorded here rather than made quietly: **Phase 9** should take it as part of the
+kernel-signature work, where the side arrays can arrive as slices instead of as
+addresses.
+
+**Verdict.** D-perf-4's **+25% median** tripwire is unbreached by ~22 points. Cumulative
+encoder deficit moves from ≈ **+10…+12%** to ≈ **+13…+15%** — the first
+session-scale encode cost Phase 6 has recorded, and it buys 59 stored raw picture
+pointers becoming handles with two types that do not convert. **S33 in reverse**: this
+one *is* claimed, because it is outside the floor in every row and the attribution
+reproduces.

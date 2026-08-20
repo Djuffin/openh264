@@ -11746,3 +11746,184 @@ prose `*mut ` in T6.C4's own comment, S16's floor) and the debug sweep (measurem
 **The battery ran twice and the first run failed, on this session's own conversion.** That is the third consecutive session in which `exit` caught a defect the session introduced, and the second in which the defect was in the session's headline change rather than at its edges. The correction is above; what is worth carrying forward is that **the byte gates could not have found it** — 353/353 in both profiles, both benches bit-identical, on a tree with 58 aliasing violations in it. Miri is the only instrument in this battery that sees this class, and the brief's decision to run it once at the close (S30) is what made the failure arrive at the end of the session rather than the middle of it.
 
 **Session F inherits, named**: the two `SMVUnitXY` sites (`SPicture.sMvList` and its allocation cast), the `SWelsME` plane cursors (`pEncMb`/`pRefMb`/`pColoRefMb`), `SQuarRefineParams.pRef`/`pSrcB`, `pEncSad`, and every `*mut u8` plane+stride parameter — all unchanged and all on the boundary list. **Session G inherits**: `pMvdCost` and `pMvdCostTable` (a context-owned allocation), `pEncCtx`/`pCtx`/`pFunc` and `pCurDqLayer`. **Phase 7**: `slice_multi_threading.rs`'s one `*mut SMB`. **Phase 10**: the 16 tagged screen-content items. **Phase 9**: the third SAD/SATD re-attempt, with its two leads written into the ledger — `PlaneCursor::advance` is fixable in isolation and would move every row in the amortised table, and 4x4/8x4 are where to start.
+
+## Phase 6, session F — the pictures: two pools, two id types, and the cost of asking through a handle (2026-08-20)
+
+**All five steps landed, none dropped, and the session's most useful result is a
+measurement it was not looking for.** `*mut SPicture` reads **59 → 0** code sites
+crate-wide; `pEncSad`, `pBuffer` and `*mut SMVUnitXY` read **0** each. The encoder's
+three picture owners own: `SRefList::pRef` is a `RecPicPool`, `CWelsPreProcess::
+m_pSpatialPicPool` a `SrcPicPool`, and the scaled input an `Option<Box<SPicture>>`.
+Fourteen alias fields are handles. **And the closing span says the flip costs +2.72%
+on encode**, attributed commit by commit, with two of the original four points already
+recovered.
+
+**The coverage check came first, and it found a defect before a line was converted.**
+The brief's step 1 opens with "check the harness can reach the long-term reference
+paths". It could not: both differential drivers hard-coded
+`bEnableLongTermReference = false`, so `LTRMarkProcess`, `DeleteInvalidLTR`,
+`DeleteLTRFromLongList`, `HandleLTRMarkFeedback`, `FilterLTRMarkingFeedback`,
+`FilterLTRRecoveryRequest`, `WelsBuildRefList`'s long arm, `SetRefMbType`'s long half
+and **every `pLongRefList` shift** had no byte coverage in any preset in any profile —
+F60's shape exactly. Preset `ltr`, 16 configurations, sweeps **353 → 369**. **Two
+knobs were needed, not one**: `ltr` alone reaches marking and the shifts, but without
+`ENCODER_LTR_MARKING_FEEDBACK` the mark is never confirmed so `DeleteLTRFromLongList`
+never runs, and without `ENCODER_LTR_RECOVERY_REQUEST` `bReceivedT0LostFlag` is never
+set so the long arm is unreachable. Measured entry counts and four *different* stream
+sizes per feedback value are in [`phase0_findings.md`](phase0_findings.md) under
+**F62** — which is what the coverage found: `ParamTranscode` transcribed
+`iLTRRefNum = (bEnableLongTermReference ? pCodingParam.iLTRRefNum : 0)` as
+`if bEnableLongTermReference { 0 } else { 0 }`. Masked (`WelsCheckNumRefSetting`
+overwrites the field on every path that reads it) and **measured both ways**: 16/16
+byte-identical with the defect in and 16/16 with it out. Fixed as a transcription.
+The feedback packets have to quote the encoder's own `uiIdrPicId` back or
+`FilterLTRMarkingFeedback` drops them — the first draft sent 0, the encoder wanted 1,
+and the whole axis was silently inert.
+
+**The two id types earned themselves twice, in places the C++ cannot express.** They
+exist because `pEncPic` (source) and `pDecPic`/`pRefPic` (reconstruction) meet in one
+`WelsEncoderEncodeExt` iteration; what they actually caught was two *crossings*.
+(1) **`SDqLayer::pRefOri` holds both kinds** — `WelsBuildRefList` (camera) stores
+reconstruction pictures in it, `WelsBuildRefListScreen` stores spatial source pictures
+(`GetRefFrameInfo` reads `m_pSpatialPic`). Both are `SPicture*` in C++, so nothing
+there says so. It is `Option<PicRef>`, an enum over both, and the camera path's writes
+are dead stores on the reachable path — transcribed rather than narrowed, because that
+is a behaviour question. (2) **`AnalyzePictureComplexity` takes a source picture and a
+*reconstruction* reference** (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`); the
+compiler produced that as a type error and the signature says it now.
+
+**F42's arm in the encoder is one line, and session B's grep could not have found
+it.** The settlement said no pointer-identity comparison between pictures exists.
+`AnalyzeSpatialPic` has one, asked as `pLastPic->pData[0] == pRefPic->pData[0]` — two
+*plane roots*, not two `SPicture*`. Two slots hold two buffers, so equal roots is equal
+slots: `pLastPic == pRefPic`. The lesson is about the instrument: **a grep for a type
+finds the places that name the type, and identity can be asked about anything the
+object owns.**
+
+**S37 shaped every consumer and one new field.** Nothing holds `&mut SPicture` across a
+call that resolves another handle: per-frame steps resolve once into
+`SPicture::planes()` — roots, strides and geometry by value — and walk raw cursors from
+there; the per-macroblock family resolves through five accessors. `SDqLayer` gained
+one raw field, `pRefList`, because the mode-decision family reaches the reference
+picture through `pCurDqLayer` alone (`WelsMdP16x16`, `WelsMdUpdateBGDInfo` and the
+motion search take no context), so without it a handle there would name a pool nothing
+in scope could open. Same class as `ppRefPicListExt`: the pointee owns, the pointer
+does not.
+
+**The size pins split by profile, and the split is the finding.** `Option<PicId>` is
+**4 bytes in release and 8 in debug** — `pool::Id` carries its generation counter under
+`debug_assertions`, which is the staleness instrument. So `SSpatialPicIndex` is 12/8,
+`SDqLayer` 840/768, `sWelsEncCtx` 97888/97792, `SRefList` (newly pinned) 240/120, and
+twelve `assert_ctx_offset!` values have two numbers each. The alternative was giving
+`Id` a generation in both profiles, which costs the *decoder's* per-macroblock
+`[[Option<PicId>; 16]; 2]` deblocking arrays their niche — a measured decoder cost to
+keep an assertion one line shorter, which is the wrong trade. Everything else measured
+and re-pinned: `SPicture` **136 → 192 → 344**, `SMbCache` **5600 → 5584**,
+`SVAACalcResult` **72 → 168**, `SVAAFrameInfo` **248 → 352**, `SVAAFrameInfoExt`
+**1264 → 1368**.
+
+**`CMemoryAlign` no longer allocates anything for a picture or for the VAA block.**
+Step 0 took the four per-macroblock side arrays, step 2 the three planes, step 3 the
+seven VAA result arrays. `FreePicture`, `FreePicturePlanes`, the pools' plane-free
+walks, `WelsInitScaledPic`'s allocator parameter and `wels_preprocess.rs`'s `tag!`
+macro all went with them; `AllocPicture` is not even `unsafe` any more. Step 4 finished
+the sentence `decoder/picture.rs` left for this phase — with both codecs' pictures
+owning their planes, `common::expand_pic::ExpandReferencingPicture` has no caller and
+is deleted, and **nothing in the port rebuilds an allocation out of a mid-plane pointer
+any more** except the two `_c` kernels the differential test drives.
+
+**S28's mandated test is measured, not asserted.** `SPicture::data_ptr` derives from
+the allocation root; the Miri test walks both of the encoder's backward reaches (intra
+prediction's `pRef[-iLineSize - 1]` on the top-left macroblock, and
+`ExpandReferencingPicture`'s whole `pad*stride + pad` walk). **Red-proofed**: written
+the narrowing way (`as_mut_slice()[origin..].as_mut_ptr()`) it fails under Miri with
+`attempting a read access using <tag> ... but that tag does not exist in the borrow
+stack`; written the root way it passes. 369/369 either way — no byte gate can tell
+them apart.
+
+**And the `exit` battery then failed, on the same accessor, for a different reason —
+[F63](phase6_findings.md), the fourth consecutive session in which that battery caught
+a defect the session introduced.** The S28-correct spelling
+`plane.as_mut_slice().as_mut_ptr()` gets *provenance* right and *aliasing* wrong:
+`&mut self.buf` is a **`Unique` retag over the whole allocation**, so the next call on
+the same plane pops the pointer the previous one handed out. **The encoder asks
+twice a frame** — `WelsInitCurrentLayer` stamps `pEncData` from the source picture,
+`AnalyzePictureComplexity` asks the same picture again a few hundred lines later, and
+`WelsMdI16x16`'s SAD reads through the first cursor. `PaddedPlane::root_ptr` reads the
+address out of the `Vec` header instead, so repeated calls are sibling
+`SharedReadWrite` derivations; three encode probes go from **aborting** to **3 passed /
+0 failed**. Three things carry: **S28 answers provenance, not aliasing**, and the two
+traps look identical at the call site while needing different fixes; **no byte gate
+sees either** (369/369 in both profiles, both benches bit-identical, with this in the
+tree); and **the decoder's `data_ptr` has the same spelling and passes**, because its
+callers do not re-derive while a cursor lives — a property of that call graph, not of
+the accessor, and worth re-checking there if a decoder caller ever gains a second
+derivation.
+
+**The span, and the brief's contingency aimed at the wrong step.** The brief made step
+2 separable "because it is the hot-path risk" and said to revert it if the span
+breached. It breached — **+4.67% encode against a +0.00% null** — so the cost was
+attributed before anything was reverted: LTR commit **+0.58%**, **id flip +1.45%**,
+planes **+0.24%**, VAA and expand **+0.05%**. Step 2 measured clean; reverting it would
+have fixed nothing. **T6.F5** stamps `sRefPicView`/`sDecPicView` on the layer once a
+frame — `pEncData`/`pCsData`'s own idiom applied to the other two pictures, with the
+handles still the truth and the views re-derived at both points either handle is
+assigned — and took the median to **+2.72%**, rows over 5% from 12 to 4. The residue's
+shape is diagnostic and is written into [`perf_baseline.md`](perf_baseline.md):
+Mandelbrot rows +0.22…1.37%, flat mostly-skip content +3.04…6.67%. **A fixed
+per-macroblock overhead is invisible where a macroblock costs a lot and dominant where
+it costs nothing**, which says the residue is still resolution rather than plane
+ownership — and names Phase 9's kernel-signature work as where the four per-macroblock
+side arrays should arrive as slices. Cumulative encoder deficit ≈ **+13…+15%**;
+D-perf-4's +25% tripwire unbreached by ~22 points.
+
+**Metrics** (`src/encoder` + `src/processing`), `4bb9c77a` → close: `raw_ptr`
+**2015 → 1888 (−127)**, `unsafe_fn` **679 → 684 (+5)**, `unsafe_block` **283 → 288
+(+5, all five inside the S28 Miri test)**. Crate-wide `raw_ptr` **2608 → 2481**,
+`unsafe_fn` 799 → 803. The five accessors and `StampLayerPictureViews` are what the
+`unsafe_fn` rise is; they concentrate what ~180 raw dereferences used to spell inline.
+`processing/`: `complexity_analysis.rs` and `scene_change_detection.rs` read **0**;
+survivors are 7 in `adaptive_quantization.rs` and 4 in `background_detection.rs` (all
+per-macroblock plane cursors and kernel out-pointers, Phase 9's) and 42 in
+`vaacalc.rs` (the five C-shaped differential shims and their docs).
+
+**Gates.** `family` at every step's close. **The `exit` battery ran twice: the first
+run failed on Miri `--lib`** — F63, above — **and that is the fourth consecutive
+session in which it caught a defect the session introduced.** The second reads **12
+passed / 2 failed**, both failures adjudicated: Miri `--lib` **347 passed / 0 failed**
+at 1348.85 s with **all four encoder probe names read out of the output** (F17/F18),
+`kernels_differential_phase2` 20/0, `safe_bits_differential` 7/0,
+`safe_plane_differential` 3/0, tests **490 / 484 / 20**, both benches bit-identical,
+release sweep **369/369**, census 58. The two failures are the **ratchet**
+(`safe/plane.rs` `raw_ptr` 0 → 1 — `root_ptr`'s return type, in a
+`#![forbid(unsafe_code)]` module; re-baselined) and the **debug sweep at 367/369**,
+**F3 measurement 79**.
+
+**F3 measurements 75 through 79, and three of them refined the protocol.** 75 hit
+**two** configurations in one battery where the retry rule is written for one, so it
+bought an alternation: base **5** / head **2** over **720 configurations a side**. 76
+was the ordinary single hit, 5/5 clean. **77 did not clear on re-run — 1 failure in
+5 — which is the escalation condition**, and the comparison settled it: **head 1/25
+against 4/25 on the tree before that face**, same command line, same machine, with the
+failure's own account captured for the first time (`EncodeFrame failed at 1: 2`, the
+`SM_SIZELIMITED_SLICE` + 4-thread path, F61's class and Phase 7's). Its refinement:
+**a tight re-run loop is not a quiet run** — it is precisely the back-to-back load F3
+needs — so a hit inside the retry loop needs the comparison, not a verdict. **78's
+refinement is smaller and sharper: the first retry loop reported 5/5 on both
+configurations and the loop was wrong**, `set -- $cfg` in zsh, which does not
+word-split unquoted expansions; the single runs were byte-identical. That is the trap
+`sweep.sh`'s own header has warned about since Phase 1, and a wrong retry loop looks
+exactly like a reproducible regression. **79 measured the same configuration a third
+time and the rate had moved without the tree moving** — 1/25, 1/25, then **2/25 run
+immediately after a full `exit` battery** — which is this finding's own 2026-08-07
+sentence about load in its practical form: *a retry loop run straight after the battery
+that reported the failure is the worst place to measure it*, and the only reading that
+settles anything is the same loop against a tree without the change.
+
+**What session G and Phase 9 inherit, named.** The remaining ~10 per-macroblock handle
+resolutions, all reaching the four side arrays, with the trade written down. The
+boundary list is otherwise untouched: `pEncCtx`/`pCtx`, `pCurDqLayer`, the per-MB
+kernel signatures, the screen-content family (now including `SVAAFrameInfoExt` and
+`SVAAFrameInfoExt_t`, newly tagged), `sSliceBs.pBs` and the MT files,
+`wels_encoder_ext.rs`'s internals, and session E's named `*mut SMB` 48 /
+`*mut SMbCache` 72.
