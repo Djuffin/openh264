@@ -40,15 +40,18 @@
 //! Phase 6 session G's step 4 was "sweep `rc.rs`'s remaining single-object
 //! parameters". The sweep found **none left to take**, and that is a result rather
 //! than an omission, so it is written down here where the next session will see it.
-//! All **93** occurrences of `*mut`/`*const` in this file, by who owns them:
+//! All **93** occurrences of `*mut`/`*const` in this file, by who owns them (counted
+//! at session G's close; **T6.H6 spent the two rows marked below, and the count is 84**
+//! — the nineteen the rc blocks cost, minus the five accessors' signatures and the
+//! `CMemoryAlign` parameters that went with them):
 //!
 //! | count | what | whose |
 //! |---|---|---|
 //! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
-//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **session H** — the rc blocks become owned containers there |
+//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_temporal_over` and its four siblings |
 //! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
 //! |  6 | `(*pEncCtx).pVaa` cast to a raw `SVAAFrameInfoExt` | **Phase 10** — the `SCREEN_CONTENT(dormant)` family, fenced |
-//! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **session H** — `CMemoryAlign` dies with it |
+//! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
 //!
 //! **The one that looks convertible and is not.** `GomRCInitForOneSlice` takes a raw
 //! `SSlice` and nothing else but an integer: a plain function with a single caller and
@@ -72,7 +75,6 @@
     unused_unsafe
 )]
 
-use crate::common::memory_align::CMemoryAlign;
 use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
 use crate::encoder::svc_encode_slice::layer_pps;
@@ -94,6 +96,7 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+use crate::encoder::encoder_context::{ctx_rc, ctx_rc_at};
 
 // ============================================================================
 // Constants and Macros
@@ -302,8 +305,13 @@ pub struct SRCTemporal {
 }
 
 /// Spatial dependency layer rate control state machine (`TagWelsRc`).
+///
+/// **No longer `Copy`** — T6.H6. The five arrays below are owned, so a bit-copy of
+/// this struct would be a second owner of five allocations. Nothing copied it: the
+/// only by-value use in the tree was `Default`, and the three `let r = &*pWelsSvcRc`
+/// bindings take a reference, not a copy.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct SWelsSvcRc {
     pub iRcVaryPercentage: i32,
     pub iRcVaryRatio: i32,
@@ -332,10 +340,14 @@ pub struct SWelsSvcRc {
     pub iFrameDqBits: i32,
 
     pub bGomRC: bool,
-    pub pGomComplexity: *mut f64,
-    pub pGomForegroundBlockNum: *mut i32,
-    pub pCurrentFrameGomSad: *mut i32,
-    pub pGomCost: *mut i32,
+    // **T6.H6 — the four GOM arrays and `pTemporalOverRc` below are owned.** They
+    // were five raw pointers into one `CMemoryAlign` block `RcInitLayerMemory` cut
+    // and `RcFreeLayerMemory` released; see [`rc_gom_complexity`] for what replaced
+    // them and why they are five containers rather than one arena.
+    pub pGomComplexity: Vec<f64>,
+    pub pGomForegroundBlockNum: Vec<i32>,
+    pub pCurrentFrameGomSad: Vec<i32>,
+    pub pGomCost: Vec<i32>,
 
     pub bEnableGomQp: i32,
     pub iAverageFrameQp: i32,
@@ -374,7 +386,9 @@ pub struct SWelsSvcRc {
     pub iPaddingBitrateStat: i32,
     pub bSkipFlag: bool,
     pub iContinualSkipFrames: i32,
-    pub pTemporalOverRc: *mut SRCTemporal,
+    /// **T6.H6 — owned**; the head of the block the other four hung off. See
+    /// [`rc_temporal_over`].
+    pub pTemporalOverRc: Vec<SRCTemporal>,
 
     pub iAvgCost2Bits: i64,
     pub iCost2BitsIntra: i64,
@@ -411,10 +425,10 @@ impl Default for SWelsSvcRc {
             iRemainingWeights: 0,
             iFrameDqBits: 0,
             bGomRC: false,
-            pGomComplexity: std::ptr::null_mut(),
-            pGomForegroundBlockNum: std::ptr::null_mut(),
-            pCurrentFrameGomSad: std::ptr::null_mut(),
-            pGomCost: std::ptr::null_mut(),
+            pGomComplexity: Vec::new(),
+            pGomForegroundBlockNum: Vec::new(),
+            pCurrentFrameGomSad: Vec::new(),
+            pGomCost: Vec::new(),
             bEnableGomQp: 1,
             iAverageFrameQp: 0,
             iMinFrameQp: 0,
@@ -448,7 +462,7 @@ impl Default for SWelsSvcRc {
             iPaddingBitrateStat: 0,
             bSkipFlag: false,
             iContinualSkipFrames: 0,
-            pTemporalOverRc: std::ptr::null_mut(),
+            pTemporalOverRc: Vec::new(),
             iAvgCost2Bits: 1,
             iCost2BitsIntra: 1,
             iBaseQp: 0,
@@ -704,61 +718,100 @@ impl SWelsRcFunc {
 // Core Rate Control Functions
 // ============================================================================
 
-/// Allocates contiguous layer rate control buffers for temporal layers and GOM arrays.
-pub unsafe fn RcInitLayerMemory(
-    pWelsSvcRc: *mut SWelsSvcRc,
-    pMA: *mut CMemoryAlign,
-    kiMaxTl: i32,
-) {
+/// Builds a spatial layer's rate-control arrays — **T6.H6.**
+///
+/// The C++ (and this port until now) took **one** `CMemoryAlign` block and cut five
+/// regions out of it: `SRCTemporal[kiMaxTl]`, then three or four GOM-sized arrays.
+/// Here it is five owned containers, and unlike `SStrideTables` — the session's other
+/// arena — that is the right shape rather than a shortcut: **no two of these regions
+/// are ever named by the same pointer, and nothing walks from one into the next.**
+/// The single block bought the C++ one `malloc` per spatial layer at init; the
+/// aliasing that made `SStrideTables` an arena is simply absent here.
+///
+/// `pMA` is gone with the block, and with it the `alloc_zeroed` fallback the port had
+/// grown for the null-`pMA` test path — one divergence fewer between the two.
+///
+/// The C++ takes the block with `WelsMalloc` (uninitialized) and every consumer
+/// either writes before reading or is guarded by `bGomRC`; the containers are
+/// zero-filled, which the port's own fallback path already did.
+pub unsafe fn RcInitLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, kiMaxTl: i32) {
     if pWelsSvcRc.is_null() {
         return;
     }
-    let kiGomSize = (*pWelsSvcRc).iGomSize;
-    let kiGomSizeD = kiGomSize as usize * std::mem::size_of::<f64>();
-    let kiGomSizeI = kiGomSize as usize * std::mem::size_of::<i32>();
-    let kiLayerRcSize =
-        kiGomSizeD + (kiGomSizeI * 3) + std::mem::size_of::<SRCTemporal>() * kiMaxTl as usize;
-
-    let pBaseMem: *mut u8 = if !pMA.is_null() {
-        (*pMA).WelsMalloc(
-            kiLayerRcSize as u32,
-            b"pWelsSvcRc->pTemporalOverRc\0".as_ptr() as *const _,
-        ) as *mut u8
-    } else {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align_unchecked(kiLayerRcSize, 16))
-    };
-
-    if pBaseMem.is_null() {
-        return;
-    }
-
-    let mut ptr = pBaseMem;
-    (*pWelsSvcRc).pTemporalOverRc = ptr as *mut SRCTemporal;
-    ptr = ptr.add(std::mem::size_of::<SRCTemporal>() * kiMaxTl as usize);
-    (*pWelsSvcRc).pGomComplexity = ptr as *mut f64;
-    ptr = ptr.add(kiGomSizeD);
-    (*pWelsSvcRc).pGomForegroundBlockNum = ptr as *mut i32;
-    ptr = ptr.add(kiGomSizeI);
-    (*pWelsSvcRc).pCurrentFrameGomSad = ptr as *mut i32;
-    ptr = ptr.add(kiGomSizeI);
-    (*pWelsSvcRc).pGomCost = ptr as *mut i32;
+    let kiGomSize = (*pWelsSvcRc).iGomSize.max(0) as usize;
+    (*pWelsSvcRc).pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
+    (*pWelsSvcRc).pGomComplexity = vec![0.0f64; kiGomSize];
+    (*pWelsSvcRc).pGomForegroundBlockNum = vec![0i32; kiGomSize];
+    (*pWelsSvcRc).pCurrentFrameGomSad = vec![0i32; kiGomSize];
+    (*pWelsSvcRc).pGomCost = vec![0i32; kiGomSize];
 }
 
-/// Frees the contiguous memory buffer allocated for a spatial layer.
-pub unsafe fn RcFreeLayerMemory(pWelsSvcRc: *mut SWelsSvcRc, pMA: *mut CMemoryAlign) {
-    if !pWelsSvcRc.is_null() && !(*pWelsSvcRc).pTemporalOverRc.is_null() {
-        if !pMA.is_null() {
-            (*pMA).WelsFree(
-                (*pWelsSvcRc).pTemporalOverRc as *mut _,
-                b"pWelsSvcRc->pTemporalOverRc\0".as_ptr() as *const _,
-            );
-        }
-        (*pWelsSvcRc).pTemporalOverRc = std::ptr::null_mut();
-        (*pWelsSvcRc).pGomComplexity = std::ptr::null_mut();
-        (*pWelsSvcRc).pGomForegroundBlockNum = std::ptr::null_mut();
-        (*pWelsSvcRc).pCurrentFrameGomSad = std::ptr::null_mut();
-        (*pWelsSvcRc).pGomCost = std::ptr::null_mut();
+/// The **root** of a layer's `pTemporalOverRc` — S40's spelling, as everywhere in
+/// this family: `Vec::as_mut_ptr` reads the header, so repeated calls are siblings
+/// and a caller may hold one cursor across another. Empty answers the null the raw
+/// field held before `RcInitLayerMemory` ran, which every consumer's guard reads.
+///
+/// # Safety
+/// `pRc` must point to a live `SWelsSvcRc`.
+#[inline]
+pub unsafe fn rc_temporal_over(pRc: *mut SWelsSvcRc) -> *mut SRCTemporal {
+    let v: &mut Vec<SRCTemporal> = &mut (*pRc).pTemporalOverRc;
+    if v.is_empty() {
+        return std::ptr::null_mut();
     }
+    v.as_mut_ptr()
+}
+
+/// The **root** of a layer's `pGomComplexity` — see [`rc_temporal_over`].
+///
+/// # Safety
+/// As [`rc_temporal_over`].
+#[inline]
+pub unsafe fn rc_gom_complexity(pRc: *mut SWelsSvcRc) -> *mut f64 {
+    let v: &mut Vec<f64> = &mut (*pRc).pGomComplexity;
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    v.as_mut_ptr()
+}
+
+/// The **root** of a layer's `pGomForegroundBlockNum` — see [`rc_temporal_over`].
+///
+/// # Safety
+/// As [`rc_temporal_over`].
+#[inline]
+pub unsafe fn rc_gom_fg_blocks(pRc: *mut SWelsSvcRc) -> *mut i32 {
+    let v: &mut Vec<i32> = &mut (*pRc).pGomForegroundBlockNum;
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    v.as_mut_ptr()
+}
+
+/// The **root** of a layer's `pCurrentFrameGomSad` — see [`rc_temporal_over`].
+///
+/// # Safety
+/// As [`rc_temporal_over`].
+#[inline]
+pub unsafe fn rc_gom_sad(pRc: *mut SWelsSvcRc) -> *mut i32 {
+    let v: &mut Vec<i32> = &mut (*pRc).pCurrentFrameGomSad;
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    v.as_mut_ptr()
+}
+
+/// The **root** of a layer's `pGomCost` — see [`rc_temporal_over`].
+///
+/// # Safety
+/// As [`rc_temporal_over`].
+#[inline]
+pub unsafe fn rc_gom_cost(pRc: *mut SWelsSvcRc) -> *mut i32 {
+    let v: &mut Vec<i32> = &mut (*pRc).pGomCost;
+    if v.is_empty() {
+        return std::ptr::null_mut();
+    }
+    v.as_mut_ptr()
 }
 
 /// Converts a quantization parameter ($QP$) to its scaled quantization step size ($Q_{\text{step}}$).
@@ -784,7 +837,7 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
     let spatial_layer_num = (*pSvcParam).iSpatialLayerNum;
 
     for j in 0..spatial_layer_num as usize {
-        let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(j);
+        let pWelsSvcRc = ctx_rc_at(pEncCtx, j);
         let pDLayerParam = &(*pSvcParam).sSpatialLayers[j];
         let iMbWidth = pDLayerParam.iVideoWidth >> 4;
         (*pWelsSvcRc).iNumberMbFrame = iMbWidth * (pDLayerParam.iVideoHeight >> 4);
@@ -850,7 +903,6 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
 
         RcInitLayerMemory(
             pWelsSvcRc,
-            (*pEncCtx).pMemAlign,
             1 + (*pSvcParam).sDependencyLayers[j].iHighestTemporalId as i32,
         );
 
@@ -866,8 +918,8 @@ pub unsafe fn RcInitSequenceParameter(pEncCtx: *mut sWelsEncCtx) {
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
 pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc;
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did];
     let kiDecompositionStages = pDLayerParam.iDecompositionStages as usize;
     let kiHighestTid = pDLayerParam.iHighestTemporalId;
@@ -911,8 +963,8 @@ pub unsafe fn RcInitTlWeight(pEncCtx: *mut sWelsEncCtx) {
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
 pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc;
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc);
 
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did];
@@ -972,8 +1024,8 @@ pub unsafe fn RcUpdateBitrateFps(pEncCtx: *mut sWelsEncCtx) {
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
 pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(kiDid);
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc;
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let kiHighestTid = (*(*pEncCtx).pSvcParam).sDependencyLayers[kiDid].iHighestTemporalId;
     let fix_rc_overshoot = (*(*pEncCtx).pSvcParam).bFixRCOverShoot;
 
@@ -1007,8 +1059,8 @@ pub unsafe fn RcInitVGop(pEncCtx: *mut sWelsEncCtx) {
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
 pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(kiDid);
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc;
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[kiDid];
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[kiDid];
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
@@ -1041,13 +1093,9 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
     (*pWelsSvcRc).iPreviousBitrate = pDLayerParam.iSpatialBitrate;
     (*pWelsSvcRc).dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
 
-    if !(*pWelsSvcRc).pCurrentFrameGomSad.is_null() {
-        std::ptr::write_bytes(
-            (*pWelsSvcRc).pCurrentFrameGomSad,
-            0,
-            (*pWelsSvcRc).iGomSize as usize,
-        );
-    }
+    // T6.H6: `write_bytes` through the raw cursor became a slice fill — the array is
+    // owned, so its length is the bound rather than `iGomSize` restated.
+    (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
 
     RcInitTlWeight(pEncCtx);
     RcUpdateBitrateFps(pEncCtx);
@@ -1057,7 +1105,7 @@ pub unsafe fn RcInitRefreshParameter(pEncCtx: *mut sWelsEncCtx) {
 /// Checks whether user bitrate or framerate settings have changed at runtime.
 pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
     let iCurDid = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(iCurDid);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid);
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[iCurDid];
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[iCurDid];
 
@@ -1074,7 +1122,7 @@ pub unsafe fn RcJudgeBitrateFpsUpdate(pEncCtx: *mut sWelsEncCtx) -> bool {
 /// Updates base temporal layer boundaries (`uiTemporalId == 0`).
 pub unsafe fn RcUpdateTemporalZero(pEncCtx: *mut sWelsEncCtx) {
     let kiDid = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(kiDid);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, kiDid);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sDependencyLayers[kiDid];
     let kiGopSize = 1 << pDLayerParam.iDecompositionStages;
 
@@ -1114,7 +1162,7 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
     }
 
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did];
 
@@ -1194,9 +1242,9 @@ pub unsafe fn RcCalculateIdrQp(pEncCtx: *mut sWelsEncCtx) {
 /// Calculates the base quantization parameter for Inter P-frames.
 pub unsafe fn RcCalculatePictureQp(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iTl = (*pEncCtx).uiTemporalId as usize;
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc.add(iTl);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
 
     let mut iLumaQp: i32;
     let mut iDeltaQpTemporal: i32 = 0;
@@ -1294,7 +1342,7 @@ pub unsafe fn GomRCInitForOneSlice(pSlice: *mut SSlice, kiBitsPerMb: i32) {
 pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
 
     (*pWelsSvcRc).iBitsPerMb = WELS_DIV_ROUND64(
@@ -1321,9 +1369,9 @@ pub unsafe fn RcInitSliceInformation(pEncCtx: *mut sWelsEncCtx) {
 /// Allocates the target bit budget `iTargetBits` for the current frame.
 pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let tid = (*pEncCtx).uiTemporalId as usize;
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc.add(tid);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(tid);
 
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
     let fix_rc_overshoot = (*(*pEncCtx).pSvcParam).bFixRCOverShoot;
@@ -1366,10 +1414,10 @@ pub unsafe fn RcDecideTargetBits(pEncCtx: *mut sWelsEncCtx) {
 /// Target bit allocation routine used under `RC_TIMESTAMP_MODE`.
 pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let iTl = (*pEncCtx).uiTemporalId as usize;
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc.add(iTl);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(iTl);
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
 
     let iBufferTh = ((*pWelsSvcRc).iBufferSizeSkip as i64 - (*pWelsSvcRc).iBufferFullnessSkip) as i32;
@@ -1429,7 +1477,7 @@ pub unsafe fn RcDecideTargetBitsTimestamp(pEncCtx: *mut sWelsEncCtx) {
 pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
     let kiGlobalQp = (*pEncCtx).iGlobalQp;
 
@@ -1441,26 +1489,14 @@ pub unsafe fn RcInitGomParameters(pEncCtx: *mut sWelsEncCtx) {
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
     }
 
-    if !(*pWelsSvcRc).pGomComplexity.is_null() {
-        std::ptr::write_bytes(
-            (*pWelsSvcRc).pGomComplexity,
-            0,
-            (*pWelsSvcRc).iGomSize as usize,
-        );
-    }
-    if !(*pWelsSvcRc).pGomCost.is_null() {
-        std::ptr::write_bytes(
-            (*pWelsSvcRc).pGomCost,
-            0,
-            (*pWelsSvcRc).iGomSize as usize,
-        );
-    }
+    (*pWelsSvcRc).pGomComplexity.fill(0.0);
+    (*pWelsSvcRc).pGomCost.fill(0);
 }
 
 /// Assigns final macroblock luma and chroma QPs.
 pub unsafe fn RcCalculateMbQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let mut iLumaQp = pSOverRc.iCalculatedQpSlice;
@@ -1491,8 +1527,8 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
     }
     let pDlpBaseInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did - 1];
     if (*pEncCtx).uiTemporalId as i32 <= pDlpBaseInternal.iDecompositionStages {
-        let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-        let pWelsSvcRc_Base = (*pEncCtx).pWelsSvcRc.add(did - 1);
+        let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+        let pWelsSvcRc_Base = ctx_rc_at(pEncCtx, did - 1);
         let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
         let pDlpBase = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did - 1];
 
@@ -1512,7 +1548,7 @@ pub unsafe fn RcJudgeBaseUsability(pEncCtx: *mut sWelsEncCtx) -> *mut SWelsSvcRc
 /// Distributes slice bit budget to the upcoming GOM unit.
 pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice;
@@ -1539,14 +1575,13 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
         let mut iSumSad: i32 = 0;
         for i in (kiComplexityIndex + 1)..=iLastGomIndex {
             iSumSad =
-                iSumSad.wrapping_add(*(*pWelsSvcRc_Base).pCurrentFrameGomSad.add(i as usize));
+                iSumSad.wrapping_add(*rc_gom_sad(pWelsSvcRc_Base).add(i as usize));
         }
 
         let iAllocateBits = if iSumSad == 0 {
             WELS_DIV_ROUND(iLeftBits, iLastGomIndex - kiComplexityIndex)
         } else {
-            let sad_val = *(*pWelsSvcRc_Base)
-                .pCurrentFrameGomSad
+            let sad_val = *rc_gom_sad(pWelsSvcRc_Base)
                 .add((kiComplexityIndex + 1) as usize);
             WELS_DIV_ROUND64(iLeftBits as i64 * sad_val as i64, iSumSad as i64) as i32
         };
@@ -1557,7 +1592,7 @@ pub unsafe fn RcGomTargetBits(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) {
 /// Dynamically adjusts slice QP at GOM boundaries.
 pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _pCurMb: &mut SMB) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
 
     let iLeftBits = (pSOverRc.iTargetBitsSlice - pSOverRc.iFrameBitsSlice) as i64;
@@ -1596,8 +1631,8 @@ pub unsafe fn RcCalculateGomQp(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice, _
 /// Updates virtual buffer fullness after encoding a frame.
 pub unsafe fn RcVBufferCalculationSkip(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc;
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
 
@@ -1636,7 +1671,7 @@ pub unsafe extern "C" fn CheckFrameSkipBasedMaxbr(
     _uiTimeStamp: i64,
     iDidIdx: i32,
 ) {
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(iDidIdx as usize);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, iDidIdx as usize);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize];
 
     if !(*(*pEncCtx).pSvcParam).bEnableFrameSkip {
@@ -1730,7 +1765,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
         (*(*pEncCtx).pFuncList)
             .pfRc
             .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
-        if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+        if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
             bSkipMustFlag = true;
         }
 
@@ -1741,13 +1776,13 @@ pub unsafe fn WelsRcCheckFrameStatus(
             (*(*pEncCtx).pFuncList)
                 .pfRc
                 .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
-            if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+            if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
                 bSkipMustFlag = true;
             }
         }
 
         if bSkipMustFlag {
-            let pRc = (*pEncCtx).pWelsSvcRc.add(iDidIdx as usize);
+            let pRc = ctx_rc_at(pEncCtx, iDidIdx as usize);
             (*pRc).uiLastTimeStamp = uiTimeStamp;
             (*pRc).bSkipFlag = false;
             (*pRc).iContinualSkipFrames += 1;
@@ -1759,7 +1794,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
             (*(*pEncCtx).pFuncList)
                 .pfRc
                 .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
-            if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+            if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
                 bSkipMustFlag = true;
             }
 
@@ -1770,7 +1805,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
                 (*(*pEncCtx).pFuncList)
                     .pfRc
                     .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
-                if (*(*pEncCtx).pWelsSvcRc.add(iDidIdx as usize)).bSkipFlag {
+                if (*ctx_rc_at(pEncCtx, iDidIdx as usize)).bSkipFlag {
                     bSkipMustFlag = true;
                 }
             }
@@ -1782,7 +1817,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
         if bSkipMustFlag {
             for i in 0..iSpatialNum as usize {
                 let iDidIdx = (*pEncCtx).sSpatialIndexMap[i].iDid;
-                let pRc = (*pEncCtx).pWelsSvcRc.add(iDidIdx as usize);
+                let pRc = ctx_rc_at(pEncCtx, iDidIdx as usize);
                 (*pRc).uiLastTimeStamp = uiTimeStamp;
                 (*pRc).bSkipFlag = false;
                 (*pRc).iContinualSkipFrames += 1;
@@ -1795,7 +1830,7 @@ pub unsafe fn WelsRcCheckFrameStatus(
 
 /// Adjusts virtual buffer fullness and bit quotas when a frame is skipped.
 pub unsafe extern "C" fn UpdateBufferWhenFrameSkipped(pEncCtx: *mut sWelsEncCtx, iCurDid: i32) {
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(iCurDid as usize);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, iCurDid as usize);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
 
@@ -1831,7 +1866,7 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
         (*pEncCtx).bCheckWindowStatusRefreshFlag = true;
         for i in 0..iSpatialNum as usize {
             let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
-            let pRc = (*pEncCtx).pWelsSvcRc.add(iCurDid);
+            let pRc = ctx_rc_at(pEncCtx, iCurDid);
             (*pRc).iBufferFullnessSkip = 0;
             (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
             (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
@@ -1849,7 +1884,7 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
         (*pEncCtx).bCheckWindowShiftResetFlag = true;
         for i in 0..iSpatialNum as usize {
             let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
-            let pRc = (*pEncCtx).pWelsSvcRc.add(iCurDid);
+            let pRc = ctx_rc_at(pEncCtx, iCurDid);
             if (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0
                 && (*pRc).iBufferMaxBRFullness[ODD_TIME_WINDOW] != (*pRc).iBufferMaxBRFullness[0]
             {
@@ -1875,7 +1910,7 @@ pub unsafe extern "C" fn UpdateMaxBrCheckWindowStatus(
         (*pEncCtx).bCheckWindowShiftResetFlag = false;
         for i in 0..iSpatialNum as usize {
             let iCurDid = (*pEncCtx).sSpatialIndexMap[i].iDid as usize;
-            let pRc = (*pEncCtx).pWelsSvcRc.add(iCurDid);
+            let pRc = ctx_rc_at(pEncCtx, iCurDid);
             if (*pRc).iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0 {
                 (*pRc).bNeedShiftWindowCheck[ODD_TIME_WINDOW] = true;
             } else {
@@ -1903,7 +1938,7 @@ pub unsafe fn WelsRcPostFrameSkippedUpdate(_pCtx: *mut sWelsEncCtx, _iDid: i32) 
 /// Evaluates virtual buffer underflow and calculates required padding bits.
 pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiBufferThreshold = WELS_DIV_ROUND(
         PADDING_THRESHOLD * (-(*pWelsSvcRc).iBufferSizePadding),
@@ -1924,7 +1959,7 @@ pub unsafe fn RcVBufferCalculationPadding(pEncCtx: *mut sWelsEncCtx) {
 /// Logs frame bit rate control telemetry.
 pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     if (*pWelsSvcRc).iPredFrameBit != 0 {
         (*pWelsSvcRc).iPredFrameBit = (LAST_FRAME_PREDICT_WEIGHT
             * (*pWelsSvcRc).iFrameDqBits as f64
@@ -1939,7 +1974,7 @@ pub unsafe fn RcTraceFrameBits(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64, _iF
 pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) {
     let pCurDq = current_layer(pEncCtx);
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pCurSliceCtx = &(*current_layer(pEncCtx)).sSliceEncCtx;
     let mut iTotalQp = 0;
     let mut iTotalMb = 0;
@@ -1967,13 +2002,13 @@ pub unsafe fn RcUpdatePictureQpBits(pEncCtx: *mut sWelsEncCtx, iCodedBits: i32) 
     (*pWelsSvcRc).iLastCalculatedQScale = (*pWelsSvcRc).iAverageFrameQp;
 
     let tid = (*pEncCtx).uiTemporalId as usize;
-    (*(*pWelsSvcRc).pTemporalOverRc.add(tid)).iGopBitsDq += (*pWelsSvcRc).iFrameDqBits;
+    (*rc_temporal_over(pWelsSvcRc).add(tid)).iGopBitsDq += (*pWelsSvcRc).iFrameDqBits;
 }
 
 /// Updates the exponential moving average of Intra frame complexity.
 pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iQStep = RcConvertQp2QStep((*pWelsSvcRc).iAverageFrameQp);
     let iIntraCmplx = iQStep as i64 * (*pWelsSvcRc).iFrameDqBits as i64;
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
@@ -2008,9 +2043,9 @@ pub unsafe fn RcUpdateIntraComplexity(pEncCtx: *mut sWelsEncCtx) {
 /// Updates the exponential moving average of Inter P-frame linear complexity.
 pub unsafe fn RcUpdateFrameComplexity(pEncCtx: *mut sWelsEncCtx) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiTl = (*pEncCtx).uiTemporalId as usize;
-    let pTOverRc = (*pWelsSvcRc).pTemporalOverRc.add(kiTl);
+    let pTOverRc = rc_temporal_over(pWelsSvcRc).add(kiTl);
 
     let mut iFrameComplexity = (*(*pEncCtx).pVaa).sComplexityAnalysisParam.iFrameComplexity;
     if (*(*pEncCtx).pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
@@ -2066,7 +2101,7 @@ pub unsafe fn RcCalculateCascadingQp(pEncCtx: *mut sWelsEncCtx, iQp: i32) -> i32
 
 pub unsafe extern "C" fn WelsRcPictureInitGom(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let kiSliceNum = (*current_layer(pEncCtx)).iMaxSliceNum;
     (*pWelsSvcRc).iContinualSkipFrames = 0;
 
@@ -2149,7 +2184,7 @@ static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: *mut sWelsEncCtx, iLayerSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iCodedBits = iLayerSize << 3;
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
@@ -2191,7 +2226,7 @@ pub unsafe extern "C" fn WelsRcMbInitGom(
     pSlice: *mut SSlice,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
@@ -2240,7 +2275,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pSlice: *mut SSlice,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pSOverRc = &mut (*pSlice).sSlicingOverRc;
     let kiComplexityIndex = pSOverRc.iComplexityIndexSlice as usize;
 
@@ -2249,8 +2284,8 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
 
-    if !(*pWelsSvcRc).pGomCost.is_null() {
-        *(*pWelsSvcRc).pGomCost.add(kiComplexityIndex) += iCostLuma;
+    if !rc_gom_cost(pWelsSvcRc).is_null() {
+        *rc_gom_cost(pWelsSvcRc).add(kiComplexityIndex) += iCostLuma;
     }
     if iCurMbBits > 0 {
         pSOverRc.iTotalQpSlice += (*pCurMb).uiLumaQp as i32;
@@ -2260,7 +2295,7 @@ pub unsafe extern "C" fn WelsRcMbInfoUpdateGom(
 
 pub unsafe extern "C" fn WelsRcPictureInitDisable(pEncCtx: *mut sWelsEncCtx, _uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pDLayerParam = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let kiQp = pDLayerParam.iDLayerQp;
 
@@ -2293,7 +2328,7 @@ pub unsafe extern "C" fn WelsRcMbInitDisable(
 ) {
     let mut iLumaQp = (*pEncCtx).iGlobalQp;
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pCurLayer = current_layer(pEncCtx);
     let kuiChromaQpIndexOffset = (*layer_pps(pEncCtx, pCurLayer)).uiChromaQpIndexOffset;
 
@@ -2330,7 +2365,7 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
 ) {
     let pVaa = (*pEncCtx).pVaa;
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
 
     let mut iMinQp = (*(*pEncCtx).pSvcParam).iMinQp;
     if (*pVaa).eSceneChangeIdc as i32 == LARGE_CHANGED_SCENE {
@@ -2352,7 +2387,7 @@ pub unsafe extern "C" fn WelRcPictureInitBufferBasedQp(
 
 pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let pVaa = (*pEncCtx).pVaa as *mut SVAAFrameInfoExt;
     let pDLayerConfig = &(*(*pEncCtx).pSvcParam).sSpatialLayers[did];
     let pDLayerParamInternal = &(*(*pEncCtx).pSvcParam).sDependencyLayers[did];
@@ -2433,14 +2468,14 @@ pub unsafe extern "C" fn WelRcPictureInitScc(pEncCtx: *mut sWelsEncCtx, uiTimeSt
 }
 
 pub unsafe fn WelsRcDropFrameUpdate(pEncCtx: *mut sWelsEncCtx, iDropSize: u32) {
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc;
+    let pWelsSvcRc = ctx_rc(pEncCtx);
     (*pWelsSvcRc).iBufferFullnessSkip -= iDropSize as i64;
     (*pWelsSvcRc).iBufferFullnessSkip = WELS_MAX(0, (*pWelsSvcRc).iBufferFullnessSkip);
 }
 
 pub unsafe extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: *mut sWelsEncCtx, iNalSize: i32) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iFrameBits = iNalSize << 3;
     (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
 
@@ -2481,7 +2516,7 @@ pub unsafe extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     uiTimeStamp: i64,
     iDidIdx: i32,
 ) {
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(iDidIdx as usize);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, iDidIdx as usize);
     let pDLayerConfig = &(*(*pEncCtx).pSvcParam).sSpatialLayers[iDidIdx as usize];
 
     let iBitRate = pDLayerConfig.iSpatialBitrate;
@@ -2533,7 +2568,7 @@ pub unsafe extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
     iLayerSize: i32,
 ) {
     let did = (*pEncCtx).uiDependencyId as usize;
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(did);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, did);
     let iCodedBits = iLayerSize << 3;
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
@@ -2576,17 +2611,13 @@ pub unsafe fn WelsRcInitModule(pEncCtx: *mut sWelsEncCtx, iRcMode: RCMode) {
     RcInitSequenceParameter(pEncCtx);
 }
 
-/// Deallocates rate control memory across all active spatial dependency layers.
-pub unsafe fn WelsRcFreeMemory(pEncCtx: *mut sWelsEncCtx) {
-    if pEncCtx.is_null() || (*pEncCtx).pSvcParam.is_null() {
-        return;
-    }
-    let layer_num = (*(*pEncCtx).pSvcParam).iSpatialLayerNum;
-    for i in 0..layer_num as usize {
-        let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add(i);
-        RcFreeLayerMemory(pWelsSvcRc, (*pEncCtx).pMemAlign);
-    }
-}
+// **T6.H6**: `WelsRcFreeMemory` and `RcFreeLayerMemory` stood here. They walked the
+// spatial layers releasing each one's rate-control block, and `WelsUninitEncoderExt`
+// had to call the pair *before* releasing `pWelsSvcRc` itself, because the blocks
+// hung off the array being freed. The five containers are the layer's own, the layers
+// are the context's `Vec`, and the whole cascade is one drop — so both functions are
+// deleted rather than converted, and the ordering constraint they documented is gone
+// with them.
 
 /// Computes a monotonically increasing timestamp for rate control.
 #[inline]

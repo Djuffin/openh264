@@ -73,7 +73,8 @@ pub const MAX_REF_PIC_COUNT: usize = 16;
 // MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
 // let the `WelsPreprocess` unref loop read one past `pShortRefList`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::ctx_ltr_at;
+use crate::encoder::encoder_context::{ctx_ltr_at, ctx_rc_at};
+use crate::encoder::rc::{rc_gom_fg_blocks, rc_gom_sad};
 pub use crate::encoder::encoder_context::SRefList;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
@@ -2533,7 +2534,7 @@ impl CWelsPreProcess {
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let pVaaExt = (*pCtx).pVaa as *mut SVAAFrameInfoExt;
             let sComplexityAnalysisParam = &mut (*pVaaExt).sComplexityScreenParam;
-            let pWelsSvcRc = &mut *(*pCtx).pWelsSvcRc.offset(kiDependencyId as isize);
+            let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
             let _iComplexityAnalysisMode = if (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
                 GOM_SAD
@@ -2543,24 +2544,12 @@ impl CWelsPreProcess {
                 return;
             };
 
-            if !pWelsSvcRc.pGomForegroundBlockNum.is_null() {
-                std::ptr::write_bytes(
-                    pWelsSvcRc.pGomForegroundBlockNum as *mut u8,
-                    0,
-                    pWelsSvcRc.iGomSize as usize * std::mem::size_of::<i32>(),
-                );
-            }
-            if !pWelsSvcRc.pCurrentFrameGomSad.is_null() {
-                std::ptr::write_bytes(
-                    pWelsSvcRc.pCurrentFrameGomSad as *mut u8,
-                    0,
-                    pWelsSvcRc.iGomSize as usize * std::mem::size_of::<i32>(),
-                );
-            }
+            (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
+            (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
 
             sComplexityAnalysisParam.iFrameComplexity = 0;
-            sComplexityAnalysisParam.pGomComplexity = pWelsSvcRc.pCurrentFrameGomSad;
-            sComplexityAnalysisParam.iGomNumInFrame = pWelsSvcRc.iGomSize;
+            sComplexityAnalysisParam.pGomComplexity = rc_gom_sad(pWelsSvcRc);
+            sComplexityAnalysisParam.iGomNumInFrame = (*pWelsSvcRc).iGomSize;
             sComplexityAnalysisParam.iIdrFlag = if (*pCtx).eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
             sComplexityAnalysisParam.iMbRowInGom = GOM_H_SCC;
             sComplexityAnalysisParam.sScrollResult.bScrollDetectFlag = false;
@@ -2579,7 +2568,7 @@ impl CWelsPreProcess {
         } else {
             let pVaaInfo = (*pCtx).pVaa;
             let sComplexityAnalysisParam = &mut (*pVaaInfo).sComplexityAnalysisParam;
-            let pWelsSvcRc = &mut *(*pCtx).pWelsSvcRc.offset(kiDependencyId as isize);
+            let pWelsSvcRc = ctx_rc_at(pCtx, kiDependencyId as usize);
 
             let iComplexityAnalysisMode = if (*pSvcParam).iRCMode as i32 == RC_QUALITY_MODE && (*pCtx).eSliceType == EWelsSliceType::P_SLICE {
                 FRAME_SAD
@@ -2609,24 +2598,14 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
             sComplexityAnalysisParam.iFrameComplexity = 0;
 
-            if !pWelsSvcRc.pGomForegroundBlockNum.is_null() {
-                std::ptr::write_bytes(
-                    pWelsSvcRc.pGomForegroundBlockNum as *mut u8,
-                    0,
-                    pWelsSvcRc.iGomSize as usize * std::mem::size_of::<i32>(),
-                );
-            }
-            if iComplexityAnalysisMode != FRAME_SAD && !pWelsSvcRc.pCurrentFrameGomSad.is_null() {
-                std::ptr::write_bytes(
-                    pWelsSvcRc.pCurrentFrameGomSad as *mut u8,
-                    0,
-                    pWelsSvcRc.iGomSize as usize * std::mem::size_of::<i32>(),
-                );
+            (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
+            if iComplexityAnalysisMode != FRAME_SAD {
+                (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
             }
 
-            sComplexityAnalysisParam.pGomComplexity = pWelsSvcRc.pCurrentFrameGomSad;
-            sComplexityAnalysisParam.pGomForegroundBlockNum = pWelsSvcRc.pGomForegroundBlockNum;
-            sComplexityAnalysisParam.iMbNumInGom = pWelsSvcRc.iNumberMbGom;
+            sComplexityAnalysisParam.pGomComplexity = rc_gom_sad(pWelsSvcRc);
+            sComplexityAnalysisParam.pGomForegroundBlockNum = rc_gom_fg_blocks(pWelsSvcRc);
+            sComplexityAnalysisParam.iMbNumInGom = (*pWelsSvcRc).iNumberMbGom;
 
             // METHOD_COMPLEXITY_ANALYSIS; the VAA result handed over at the call.
             let mut sSrcPixMap = SPixMap::default();

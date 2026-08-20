@@ -27,6 +27,7 @@ use crate::common::memory_align::CMemoryAlign;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_frame_bs, ctx_frame_bs_at, ctx_ltr_at, ctx_mb_index_x, ctx_mb_index_y,
+    ctx_rc_at,
     ctx_pps_array, ctx_sps_array,
     ctx_stride_enc_block_offset,
     ctx_subset_array,
@@ -1167,14 +1168,12 @@ pub unsafe fn RequestMemorySvc(
     }
 
     // Rate control module memory allocation; only malloc once for RC data (12/14/2009)
-    (**ppCtx).pWelsSvcRc = (*pMa).WelsMallocz(
-        (kiNumDependencyLayers as usize * std::mem::size_of::<crate::encoder::rc::SWelsSvcRc>())
-            as u32,
-        tag!("pWelsSvcRc"),
-    ) as *mut crate::encoder::rc::SWelsSvcRc;
-    if (**ppCtx).pWelsSvcRc.is_null() {
-        return 1;
-    }
+    // **T6.H6**: and one `Vec` for the states, which now own the five arrays
+    // `RcInitLayerMemory` used to cut out of a second block each.
+    (**ppCtx).pWelsSvcRc = vec![
+        crate::encoder::rc::SWelsSvcRc::default();
+        kiNumDependencyLayers as usize
+    ];
 
     // pVaa memory allocation
     if (*pParam).iUsageType == SCREEN_CONTENT_REAL_TIME {
@@ -1793,14 +1792,12 @@ pub unsafe fn WelsUninitEncoderExt(ppCtx: *mut *mut sWelsEncCtx) {
             (*pMa).WelsFree((*pCtx).pMvdCostTable as *mut c_void, tag!("pMvdCostTable"));
             (*pCtx).pMvdCostTable = null_mut();
         }
-        // rate control module memory free. encoder_ext.cpp:1982 calls WelsRcFreeMemory
-        // *before* releasing pWelsSvcRc itself: the per-layer pTemporalOverRc blocks hang
-        // off the array being freed here, so dropping the array first leaks them.
-        if !(*pCtx).pWelsSvcRc.is_null() {
-            crate::encoder::rc::WelsRcFreeMemory(pCtx);
-            (*pMa).WelsFree((*pCtx).pWelsSvcRc as *mut c_void, tag!("pWelsSvcRc"));
-            (*pCtx).pWelsSvcRc = null_mut();
-        }
+        // **T6.H6**: this entry was the cascade's one *ordered* pair —
+        // `WelsRcFreeMemory(pCtx)` had to run before the `WelsFree` below it, because
+        // the per-layer blocks hung off the array being freed. Ownership is what that
+        // ordering was expressing, and now the types say it: each `SWelsSvcRc` owns
+        // its five arrays, the context owns the layers, and the order is the drop
+        // glue's. Both calls are deleted, and so is `WelsRcFreeMemory`.
         // **T6.H5**: `pLtr`'s `WelsFree` stood here; the `Vec` is the context's.
         // DQ layers list
         if !(*pCtx).ppDqLayerList.is_null() && !(*pCtx).pSvcParam.is_null() {
@@ -3544,7 +3541,7 @@ pub unsafe fn WelsEncoderEncodeExt(
         if let Some(id) = (*pCtx).pDecPic {
             (**(*pCtx).ppRefPicListExt.add(iCurDid as usize))
                 .pic_mut(id)
-                .iFrameAverageQp = (*(*pCtx).pWelsSvcRc.add(iCurDid as usize)).iAverageFrameQp;
+                .iFrameAverageQp = (*ctx_rc_at(pCtx, iCurDid as usize)).iAverageFrameQp;
         }
 
         // update scc related
@@ -3626,11 +3623,11 @@ pub unsafe fn WelsEncoderEncodeExt(
             (*pPrev).pNalLengthInByte.add(iCountNal as usize);
 
         if (*pSvcParam).iPaddingFlag != 0
-            && (*(*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize)).iPaddingSize > 0
+            && (*ctx_rc_at(pCtx, (*pCtx).uiDependencyId as usize)).iPaddingSize > 0
         {
             let mut iPaddingNalSize = 0i32;
             let iPaddingSize =
-                (*(*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize)).iPaddingSize;
+                (*ctx_rc_at(pCtx, (*pCtx).uiDependencyId as usize)).iPaddingSize;
             (*pCtx).iEncoderError = WritePadding(pCtx, iPaddingSize, &mut iPaddingNalSize);
             if (*pCtx).iEncoderError != ENC_RETURN_SUCCESS {
                 return (*pCtx).iEncoderError;
@@ -3640,7 +3637,7 @@ pub unsafe fn WelsEncoderEncodeExt(
                 return ENC_RETURN_UNEXPECTED;
             }
 
-            let pRc = (*pCtx).pWelsSvcRc.add((*pCtx).uiDependencyId as usize);
+            let pRc = ctx_rc_at(pCtx, (*pCtx).uiDependencyId as usize);
             (*pRc).iPaddingBitrateStat += (*pRc).iPaddingSize;
             (*pRc).iPaddingSize = 0;
 

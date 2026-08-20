@@ -62,7 +62,7 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 // by the context now, so the two `pFrameBs` spellings in this file become the two
 // accessors. Field spellings only — no body in this file is touched, and the
 // thread machinery is Phase 7's.
-use crate::encoder::encoder_context::{ctx_frame_bs, ctx_frame_bs_at};
+use crate::encoder::encoder_context::{ctx_frame_bs, ctx_frame_bs_at, ctx_rc, ctx_rc_at};
 
 // ============================================================================
 // Constants and Thresholds
@@ -503,10 +503,10 @@ pub unsafe fn DynamicAdjustSlicing(
     let rc_mode = (*pSvcParam).iRCMode;
     let mut iNumMbInEachGom = 0i32;
     if rc_mode != RCMode::RC_OFF_MODE {
-        if (*pCtx).pWelsSvcRc.is_null() {
+        if ctx_rc(pCtx).is_null() {
             return;
         }
-        let pWelsSvcRc = (*pCtx).pWelsSvcRc.add(iCurDid as usize);
+        let pWelsSvcRc = ctx_rc_at(pCtx, iCurDid as usize);
         iNumMbInEachGom = (*pWelsSvcRc).iNumberMbGom;
 
         if iNumMbInEachGom <= 0 {

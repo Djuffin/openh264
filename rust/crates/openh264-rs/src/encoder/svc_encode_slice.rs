@@ -59,7 +59,7 @@ use crate::{
 // ============================================================================
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
-use crate::encoder::encoder_context::{ctx_pps_array, ctx_sps_array, ctx_subset_array};
+use crate::encoder::encoder_context::{ctx_pps_array, ctx_rc_at, ctx_sps_array, ctx_subset_array};
 
 pub const P_SLICE: i32 = 0;
 pub const B_SLICE: i32 = 1;
@@ -1979,7 +1979,7 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
-            let max_qp = (*(*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize)).iMaxQp;
+            let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
             (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
@@ -2336,7 +2336,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         }
 
         if (*pSlice).bDynamicSlicingSliceSizeCtrlFlag {
-            let max_qp = (*(*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize)).iMaxQp;
+            let max_qp = (*ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize)).iMaxQp;
             (*pCurMb).uiLumaQp = max_qp as u8;
             (*pCurMb).uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
@@ -2702,7 +2702,7 @@ pub unsafe fn WelsCodeOneSlice(pEncCtx: *mut sWelsEncCtx, pCurSlice: *mut SSlice
     WelsSliceHeaderExtInit(pEncCtx, pCurLayer, pCurSlice);
 
     //RomRC init slice by slice
-    let pWelsSvcRc = (*pEncCtx).pWelsSvcRc.add((*pEncCtx).uiDependencyId as usize);
+    let pWelsSvcRc = ctx_rc_at(pEncCtx, (*pEncCtx).uiDependencyId as usize);
     if !pWelsSvcRc.is_null() && (*pWelsSvcRc).bGomRC {
         crate::encoder::rc::GomRCInitForOneSlice(pCurSlice, (*pWelsSvcRc).iBitsPerMb);
     }
