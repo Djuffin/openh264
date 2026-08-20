@@ -12373,3 +12373,196 @@ which are `unsafe` per assertion by construction. **As in session G, the metric 
 see this face's real win**: `(*pCtx).pSpsArray` never contained the token it counts,
 and 256 of those became a call into one audited body — the number that moved is the
 *allocator* census, 45 → 15.
+
+
+## Phase 6, session I — the table owns, and the deny sweep gets measured instead of attempted (2026-08-20)
+
+**The phase does not close, and the reason is a number rather than a shortfall of
+effort.** Steps 0 and 1 landed in full. Step 2 was not begun. Step 3 was **measured
+and not attempted**, and that measurement (F65) says §7's exit condition 2 is
+unreachable in this phase by construction. The session stopped at a whole-closure
+boundary and left the phase open rather than weakening a condition to close it
+(hard rule 9).
+
+Start `036e18c0`, HEAD `8ffdd064`, three commits, tree clean.
+
+### T6.I0 — `pPSOVector` deleted (`f4429e03`)
+
+The context's one dead field. `SParaSetOffset*` beside the by-value `sPSOVector`;
+in the C++ it points at that member or at the caller's and the id strategy follows
+whichever it finds. The port never made the choice: three code sites — declaration,
+`null_mut()` in `new()`, a row in the equality instrument — and no read, no write,
+no address-of anywhere in the crate.
+
+Layout, **re-measured in both profiles rather than predicted**:
+
+```
+sWelsEncCtx   98032 -> 98024 debug,  97944 -> 97936 release   (-8)
+pMemAlign      1904 ->  1896 debug,   1816 ->  1808 release   (-8)
+```
+
+and nothing else moves. **The brief predicted all fifteen `assert_ctx_offset!` pins
+would shift; fourteen are declared ahead of the deleted field, so only `pMemAlign`
+does.** Hard rule 4 — the measurement wins over the anchor, and the log says so.
+
+### T6.I1 — `pFuncList` becomes `Box<SWelsFuncPtrList>` (`2731f465`)
+
+The context's last unowned member, and three of the fifteen remaining allocator
+call sites. **Allocator hits 15 -> 12**, which is exactly the 4 Phase-7 hits
+(`DynamicSliceBs` x2, `sSliceBs.pBs` x2) and the 8 dormant screen-content ones —
+nothing this phase owns is left.
+
+A plain `Box`, not `Option<Box<_>>`: the table has no "not built yet" state worth
+modelling, its `Default` is every slot `None`, and that is bit-for-bit the image
+`WelsMallocz` handed back. Five null checks on the *field* die with the null.
+
+The zeroed `Default` is **written out field by field, all 63**. It was sound and
+said so (S21) — but soundness was an argument re-made in a comment on every change,
+and the member that would break it is exactly the one nobody would notice adding.
+The three `init_fills_*` tests are unmodified across the commit and are the proof.
+Five more `mem::zeroed` fixtures of this type convert with it: **encoder-side
+`mem_zeroed` 19 -> 14**.
+
+**F19 stops being a hand-written line.** `WelsUninitEncoderExt` carried an explicit
+`pParametersetStrategy.take()` because the raw-allocated table never ran its own
+drop glue, so the strategy object leaked on every teardown. The glue runs now and
+the `take()` is deleted rather than converted.
+
+**One defect found and fixed inside the commit, and it is the transferable lesson.**
+The 109 field reads were rewritten to the new `ctx_func_list` accessor by pattern,
+and the pattern rewrote the accessor's own body:
+
+```rust
+pub unsafe fn ctx_func_list(pCtx: *mut sWelsEncCtx) -> *mut SWelsFuncPtrList {
+    &raw mut *ctx_func_list(pCtx)      // was: &raw mut *(*pCtx).pFuncList
+}
+```
+
+Infinite recursion, **tail-call-optimised into a tight loop** — so it did not
+overflow the stack, it *spun*, and five tests hung rather than failed. The gate
+reported it as a 30-minute `cargo test (debug)` with no output, which is a shape
+neither PASS nor FAIL covers. `sample(1)` attributed the PC to `WelsInitEncoderExt`
+with everything inlined and was actively misleading; statement-level `eprintln`
+bisection found it in three rounds. **A mechanical rewrite must exclude the
+definition of the thing it rewrites to**, and a hang is a failure mode the battery
+can only report as slowness.
+
+### T6.I2 — the table's parameters re-spell, 22 survivors enumerated (`8ffdd064`)
+
+26 of 48 functions taking `*mut SWelsFuncPtrList` now take a reference — 12 `&mut`
+(the installers), 14 `&` (the readers). **`*mut SWelsFuncPtrList` 57 -> 28.**
+
+**Session E's type-driven checker, retargeted, found a structural blocker the
+brief's premise did not anticipate.** The brief's claim — readers copy `Option<fn>`
+values out, nobody holds a pointer into the table across a call — is true of the
+readers. What it misses is that the table is a **self-referential dispatch**: five
+function-pointer slot *types* name `*mut SWelsFuncPtrList` in their own signatures
+(`PDeblockingBSCalc`, `PDeblockingFilterSlice`, `PMotionSearchFunc`,
+`PSearchMethodFunc`, `PLineFullSearchFunc`), and `DeblockingBSCalc_c` reaches
+`(*pFunc).pfSetNZCZero` through the pointer it is handed. A function installed into
+such a slot has its signature fixed by the slot; a function calling through one has
+to produce a `*mut`. **22 survivors**, all category `cursor`, listed in the commit
+message and reproducible by re-running the checker. Retiring them means
+de-virtualizing those five slot types the way Phase 4a de-virtualized `pfMdCost` —
+not this session's, and now named for whoever takes it.
+
+**The two derivation points are the change.** `InitFunctionPointers` and
+`PreprocessSliceCoding` each take **one** `&mut` from the owner and reborrow per
+call, instead of minting a fresh `&mut *pFuncList` at each of fourteen call sites —
+the shape that compiles and is UB (rule 6), because each one pops the raw the next
+call re-uses.
+
+### Step 3 was measured, not attempted — F65
+
+`#![deny(unsafe_code)]` went onto all **36** non-MT modules of `src/encoder` +
+`src/processing` at once, the crate was built, the compiler's diagnostics counted,
+and the experiment reverted. **894 items** need an `#[allow(unsafe_code)]` — 612
+`unsafe fn` declarations, 177 `unsafe` blocks, 92 `unsafe` method impls, and the
+rest — and 894 is a **lower bound**, because 17 files also failed to parse the
+attribute's position and stopped before their own items were counted.
+
+Then the number that matters: of the **709** `unsafe fn` declarations in those
+files, **272** name `*mut sWelsEncCtx` but only **117** have it as their *only* raw
+parameter type. A perfect step 2 therefore converts **at most 117 of 612** and
+leaves ~780 allow items standing — dominated by `*mut u8` (177), `SSlice` (105),
+`SDqLayer` (79), `SMbCache` (66), `SMB` (45): **every large row is on this
+session's own do-not-touch table, owned by Phase 7 or Phase 9.**
+
+Condition 2 does not ask for the lint to be on; it asks that every survivor be one
+of four categories. Several hundred of those ~780 are none of them —
+`WelsMdI16x16` taking `*mut SMbCache` is not C-ABI, not a cursor, not a thread seam
+and not screen content. Tagging it as one would be false, and the condition's own
+sentence is that the enumeration is the test. **F65 states the two ways out (a
+fifth residue category naming an owning phase, or deferring condition 2 past Phases
+7-10) and picks neither** — that is the steward's call, and it should be made with
+the numbers in front of it rather than discovered at a close that cannot happen.
+
+### The arc this exposes
+
+Encoder-side, across the whole of Phase 6 so far:
+
+```
+raw_ptr       2669 -> 1849   (-31%)
+unsafe_fn      710 ->  709   (-1)
+```
+
+**Phase 6 has been taking raw pointers out of struct *fields* and has barely
+touched function *signatures*.** That is not a criticism of the phase — owning the
+context's members is what its sessions were briefed to do, and they did it. It is
+the explanation for F65: `deny(unsafe_code)` counts signatures, so the sweep's cost
+never moved while the phase's headline metric fell by a third. Nobody could have
+seen that without either running the sweep or counting signatures, and no session
+before this one did either.
+
+### Gates
+
+`commit` green on all three commits. `family` at step 1's close; **`full` with
+`MIRI_SCOPE=encoder` at T6.I2** — tests **496 / 490 / 20 ignored**, ratchet clean,
+census 58, both benches bit-identical, **Miri `--lib` 252 passed / 0 failed with
+all four encoder probes read out of the run by name** (F17/F18). **No unscoped
+`exit` battery was run: that is the phase's handoff gate and the phase is not
+handing off.**
+
+**Sweeps 368/369 in both profiles in both batteries — four hits, all F3.** All
+`mt` `sm=3` `t=4`, all wrong-length. **F3 measurement 86** ran the two-hit protocol
+to completion: the failing configuration 5x per profile (10/10 clean), a 288-run
+sample over the whole signature subset, then the alternation the gate prescribes —
+HEAD against `036e18c0` **interleaved run-for-run**, 48 runs per arm — reading
+**HEAD 6/48, control 3/48**, the same shapes (zero-byte and short) on both arms.
+Not a distinguishable rate. Acquitted.
+
+The alternation's by-product is worth more than the acquittal: `CiscoVT2people_320x192_12fps
+sm=3 n=600 t=4 cabac=1` fails **~1 in 11** under load against F3's recorded ~1/800,
+which makes it **the most susceptible configuration on record by an order of
+magnitude** and the place Phase 7 should open F3's ablation.
+
+### Perf
+
+One span, `036e18c0` -> `8ffdd064`, 7 pairs each way plus a 7-pair null floor
+(`perf_baseline.md`, this session's section):
+
+| | span | null floor |
+|---|---|---|
+| decode, 3 rows | median **+0.18%** (−0.14 … +0.53%) | median −0.25% (−0.32 … +0.09%) |
+| encode, 28 rows | median **+0.00%** (−1.35 … +0.77%) | median +0.00% (−1.35 … +1.56%) |
+
+**Inside the floor on both benches**, and on encode inside it on every statistic at
+once — same median, same minimum, and a narrower maximum than the null run's own.
+No breach, so no bisection (`Spatial Ramps` excluded per S2; it read +12.6/+14.5%
+and is the row that has moved ±38%, −11% and +226% between runs of one binary).
+
+**Cumulative encoder deficit ≈ +15…+17%, unmoved. D-perf-4's tripwire is +25%
+median — unbreached by roughly 8-10 points.**
+
+### Session J scope
+
+1. **The condition-2 decision** (F65) — steward's, and everything below is cheaper
+   once it is made.
+2. **Step 2**, the context parameters, root-down from `WelsInitEncoderExt` /
+   `WelsEncoderEncodeExt`: ~270 lines, 272 functions, of which **117** can become
+   safe `fn` and 155 cannot until Phases 7/9 move. Not started, deliberately: a
+   half-done root-down conversion is the exact UB shape rule 6 forbids, and
+   starting one with no time to finish its closure is worse than not starting.
+3. **Step 3**, the deny sweep — 894+ items, scoped by whatever (1) decides.
+4. **Steps 4 and 5**, the exit conditions and the close, including the one unscoped
+   `exit` battery (349 tests, ~1411 s) that D-gate-2 reserves for the phase exit.
