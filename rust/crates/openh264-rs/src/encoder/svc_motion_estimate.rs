@@ -1096,7 +1096,7 @@ pub unsafe extern "C" fn WelsDiamondCrossFeatureSearch(
             let mut sFeatureSearchIn = SFeatureSearchIn::default();
             if SetFeatureSearchIn(
                 pFunc,
-                &*pMe,
+                pMe,
                 &*pSlice,
                 (*pMe).pRefFeatureStorage,
                 kiEncStride,

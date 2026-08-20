@@ -2527,3 +2527,44 @@ rests on; the only decision this reading could carry is whether to open perf rec
 and at +0.00% median against a 5.21-point encode band that decision does not turn on a
 second day's precision. Both binaries stay stashed (`.perfpair/d_base` = `085e2e41`,
 `.perfpair/d_head` = `592801b5`), so session E chains from this close for free.
+
+
+## Phase 6 session E — the records become references (2026-08-19)
+
+**Instrument**: `perfpair.py`, A = `e_base` (`d7af280d`, the commit session E's brief
+was written at), B = `e_head` (`52814bb5`), both bench binaries built and kept on
+disk, `FFMPEG` set, **7 interleaved pairs** (S1).
+
+**Fresh null band first** (S2, `e_head` in both slots, 3 pairs): decode median
+**-0.11%** (min -0.27%, max -0.08%); encode median **+0.16%**, min -0.81%, max
+**+1.52%**, zero rows over 5%. `Spatial Ramps` read -14.98 / -16.43% against itself
+and is excluded from every statistic, as always.
+
+**The span, 7 pairs:**
+
+| | decode | encode |
+|---|---|---|
+| rows | 3 | 28 |
+| median | **-0.24%** | **+0.00%** |
+| min | -0.26% | -1.33% |
+| max | +0.18% | +1.52% |
+| rows over +5% | 0 | 0 |
+
+Both medians are inside their own null band, and the encode maximum is **exactly**
+the null's maximum: +1.52%, on `320x240 QVGA PAL 75%` — the null put it on that
+clip's 1-thread row and the span on its 4-thread row, which is the resolution this
+instrument has on a 0.066 ms row (one 0.001 ms tick is 1.5%). Worst single row +1.52%
+against D-perf-4's **+25% median** tripwire — unbreached by ~23 points. Cumulative
+encoder deficit **≈ +10…+12%, unmoved**.
+
+**What the session did, for the record**: it retyped ~350 parameters across the
+mode-decision, motion-estimation and syntax-writer paths (raw pointers to
+references), deleted 14 parameters that were caches of `pSlice`, and turned
+`SMeRefinePointer`'s five `*mut u8` into two offsets and a selector bit. **None of
+that was expected to move a stream**, and none of it did — which is the useful
+reading: the offsets-and-selector rewrite of the ME refinement record sits in
+`MeRefineFracPixel`, called once per partition per macroblock, and it costs nothing
+measurable. No swap landed in step 5, so there is no ledger row to open.
+
+**S33 applies**: nothing here is claimed as a speed-up. Both medians are inside the
+floor, and a reading inside the floor is a non-finding in both directions.

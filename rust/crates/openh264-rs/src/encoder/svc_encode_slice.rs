@@ -828,8 +828,7 @@ pub use crate::encoder::vlc_encoder::{
 
 /// Copies non-zero coefficient counts from `SMB` into the slice's `SMbCache`.
 #[inline]
-pub unsafe fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
+pub unsafe fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: *mut SMbCache) {
     // The `mb_nz.is_null()` guard that stood here was the port's own; the row is an
     // inline array and cannot be absent.
     let mb_nz = &(*pMb).iNonZeroCount;
@@ -1260,8 +1259,7 @@ pub unsafe fn WelsSliceHeaderExtWrite(
 // quantisation and reconstruction entirely. It was dead, but one unqualified
 // call in this file would have silently activated it.
 
-pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
-    let pMbCache: *mut SMbCache = pMbCache; // one entry retag — md.rs's accessor note
+pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, pMbCache: *mut SMbCache) {
     let pCurLayer = (*pEncCtx).pCurDqLayer;
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let kiCsStride = (*pCurLayer).iCsStride[1];
@@ -1281,7 +1279,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
 
     //cb
     pfDctFourT4(pCurRS, (*pMbCache).SPicData.pEncMb[1], kiEncStride, pBestPred, 8);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, &mut *pCurMb, &mut *pMbCache, pCurRS, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
     pfIDctFourT4(pCsCb, kiCsStride, pBestPred, 8, pCurRS);
 
     //cr
@@ -1292,7 +1290,7 @@ pub unsafe fn WelsIMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pCurMb: &mut SMB, p
         pBestPred.add(64),
         8,
     );
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, &mut *pCurMb, &mut *pMbCache, pCurRS.add(64), 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
     pfIDctFourT4(pCsCr, kiCsStride, pBestPred.add(64), 8, pCurRS.add(64));
 }
 
@@ -1312,8 +1310,8 @@ pub unsafe fn WelsPMbChromaEncode(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice
     // Both calls were missing, so a P macroblock's chroma reached the reconstruction
     // holding raw DCT coefficients and never set its chroma CBP bits — the same
     // defect Phase 4.5 found in `WelsIMbChromaEncode`.
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, &mut *pCurMb, &mut *pMbCache, pCurRS, 1);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, &mut *pCurMb, &mut *pMbCache, pCurRS.add(64), 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, pCurRS.add(64), 2);
 }
 
 pub unsafe fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: *mut sWelsEncCtx, pDq: *mut SDqLayer, pSlice: *mut SSlice, pMb: *mut SMB) {
@@ -1467,15 +1465,15 @@ pub unsafe fn WelsISliceMdEnc(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSlice) ->
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
-            &mut *pMbCache,
+            pMbCache,
             kiSliceFirstMbXY,
         );
 
         // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1585,15 +1583,15 @@ pub unsafe fn WelsISliceMdEncDynamic(pEncCtx: *mut sWelsEncCtx, pSlice: *mut SSl
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
-            &mut *pMbCache,
+            pMbCache,
             kiSliceFirstMbXY,
         );
 
         // TRY_REENCODING
         loop {
             sMd.iLambda = g_kiQpCostTable[(*pCurMb).uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, &mut *pMbCache);
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, &mut *pCurMb, pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1772,13 +1770,13 @@ pub unsafe fn WelsMdInterMbLoop(
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
-            &mut *pMbCache,
+            pMbCache,
             kiSliceFirstMbXY,
         );
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            &mut *pCurMb,
+            pCurMb,
             kiSliceFirstMbXY,
         );
 
@@ -1792,7 +1790,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 //step (4): save from the MD process for future use
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                     (*(*pCurLayer).pDecPic).uiRefMbType,
-                    &mut *pMbCache,
+                    pMbCache,
                     pCurMb,
                     pMd,
                 );
@@ -1808,7 +1806,7 @@ pub unsafe fn WelsMdInterMbLoop(
                 mb_dump(&*pCurMb, pMd, pSlice);
             }
             //step (5): update cache
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
@@ -1940,13 +1938,13 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
             pCurMb,
-            &mut *pMbCache,
+            pMbCache,
             kiSliceFirstMbXY,
         );
         crate::encoder::svc_base_layer_md::WelsMdInterInit(
             pEncCtx,
             pSlice,
-            &mut *pCurMb,
+            pCurMb,
             kiSliceFirstMbXY,
         );
 
@@ -1961,7 +1959,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
             // step (4): save from the MD process for future use
             crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                 (*(*pCurLayer).pDecPic).uiRefMbType,
-                &mut *pMbCache,
+                pMbCache,
                 pCurMb,
                 pMd,
             );
@@ -1975,7 +1973,7 @@ pub unsafe fn WelsMdInterMbLoopOverDynamicSlice(
                     );
                 }
             }
-            UpdateNonZeroCountCache(&*pCurMb, &mut *pMbCache);
+            UpdateNonZeroCountCache(&*pCurMb, pMbCache);
 
             let mut iEncReturn = ENC_RETURN_SUCCESS;
             if let Some(func_list) = (*pEncCtx).pFuncList.as_ref() {
